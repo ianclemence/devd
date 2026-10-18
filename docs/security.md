@@ -1,0 +1,246 @@
+# Security
+
+A tool that manages databases, web servers and certificates, and that an AI agent
+can drive, is a tool that can destroy work and publish secrets. This document is
+the threat model and the specific protections, including the places where `devd`
+deliberately does *not* go.
+
+## The model
+
+The thing being defended against is not a stranger on the network. It is:
+
+1. **An agent that is confident and wrong** — instructed to "clean up the
+   repository" and deciding that discarding uncommitted work is a reasonable
+   reading of that.
+2. **An agent that has been manipulated** — by a file, an issue, a commit
+   message or a web page it read, into treating text as an instruction.
+3. **A user in a hurry** — who runs a destructive command from a script without
+   reading it, and finds out afterwards.
+4. **A tool that leaks** — credentials into a config file, a log, a snapshot, an
+   audit row, or a message shown on screen.
+
+The design answer to all four is the same: make the dangerous thing require a
+decision that only a human can make, make that decision visible before it is
+taken, and record what happened.
+
+## Enforced in code, not in a prompt
+
+The single most important property is that **none of these protections is a
+sentence in a system prompt**. A prompt is a request. The registry is a gate.
+
+| Protection | Enforced by |
+| --- | --- |
+| A destructive action needs approval | `Tier::requires_approval()` checked in `Registry::dispatch_inner`, before the handler is called |
+| A remote action needs approval | `Tier::Remote`, same check |
+| An agent cannot approve its own action | The approval check refuses when `Actor::is_agent()`; no interface can pass an approval on an agent's behalf, because the dispatcher is the only entry point |
+| Some operations are human-only | `human_only` is checked *before* the approval check, so an approval cannot unlock it |
+| A refusal is not local to a surface | Every surface calls the same dispatcher; there is no second path |
+| A declined action does not run | `Approval::Denied` returns before the handler, and the attempt is still audited |
+| A dry run changes nothing | The plan calls the capability's *planner*, never its handler |
+| A capability that needs approval can always explain itself | A test asserts `requires_approval` implies `supports_dry_run` for every capability |
+| A plan cannot contradict itself | `Plan::destructive(true)` also sets `requires_approval` |
+
+An agent's request for a destructive operation is therefore a well-formed
+request that fails. That failure is the feature.
+
+## Approvals
+
+Approval is a value the operator produced — `Approval::Granted`, usually after
+reading a plan — not a value a caller can assert. `devd --yes` is the CLI's
+deliberate, explicit form. `devd --plan` prints the plan and exits without
+asking, because a plan is not an approval.
+
+Every approval shows, before the decision: the repository, the branch, the
+target, and the affected files. For a hard reset, the plan names the mode and
+says the working tree is discarded. For a force push, it names the remote and
+the branch. For a conflict resolution, it says the other side is discarded.
+
+## Protected Git operations
+
+These cannot execute without a human approval:
+
+| Operation | Why |
+| --- | --- |
+| `git.discard` | Destroys uncommitted work, which is the only copy. |
+| `git.reset` (`hard`) | Destroys uncommitted work and moves the branch. |
+| `git.rebase` | Rewrites commit identity. |
+| `git.squash` | Rewrites commit identity. |
+| `git.cherry.pick`, `git.revert` | Can conflict, can rewrite the tree. |
+| `git.branch.delete` | A branch can be the only reference to a commit. Force is required for an unmerged one. |
+| `git.tag.delete` | A published tag may be someone's release. |
+| `git.stash.drop` | The last reference to shelved work. |
+| `git.worktree.remove` | Refuses a worktree with uncommitted work unless forced. |
+| `git.conflicts.resolve` | Taking one side discards the other from the working tree. |
+| `git.push` | Publishes to a machine `devd` does not own. |
+| `git.push.force` | Overwrites history on a machine `devd` does not own. |
+| `git.clean`-like effects | There is no capability that removes ignored or untracked files in bulk; the pattern is never written into a `git clean` invocation. |
+
+Two decisions are worth stating plainly.
+
+**Force push is a separate capability, not a flag.** `Agit push --force` and a
+force push being reachable as a boolean on the ordinary push path are very
+different. Here there is no `force` property in `git.push`'s schema at all, so
+no code path — not the CLI, not the GUI, not an agent through MCP — can construct
+a forced update without going through a capability whose tier demands approval.
+A test asserts that the ordinary push schema has no `force` field.
+
+**A denial cannot be routed around.** If `git.discard` is denied, the workaround
+would be a hard reset, which is a *different* capability that demands its own
+approval and is refused too. There is no general-purpose "run a command"
+capability anywhere in the registry, so there is no escape hatch to lower into.
+
+## Input never becomes a shell string
+
+Every external command is an `argv` array. There is no `format!`-into-a-shell
+anywhere in the codebase, and `git` is invoked with `Command::new(path).args(…)`.
+
+On top of that, the pieces that could be mistaken for options are validated:
+
+* **Revisions and refs** are refused if they start with `-` or contain control
+  characters or whitespace, so a branch named `--upload-pack=…` is an error
+  rather than an option.
+* **Repository-relative paths** are refused if they are absolute, contain a null
+  byte, or escape the repository with `..`.
+* **Config keys** must look like `section.name` and may not start with `-`.
+* **Config values** may not start with `--`, so a value cannot become a flag.
+* **Remote URLs** must use a scheme `devd` understands, and are refused if they
+  carry a password or begin with `-`.
+
+The `--` separator is used before positionals in clone and apply invocations so
+that a path or URL cannot be read as an option.
+
+## Credentials and secrets
+
+These rules are absolute:
+
+* **A remote URL that embeds a password is refused.** `https://user:pw@host/x`
+  would be written to `.git/config` in plain text, and Git would echo it in
+  error messages. A bare username is allowed, because that is how SSH and many
+  hosts address a repository and it carries no secret.
+* **Configuration keys that exist to hold a credential are refused**:
+  anything containing `extraheader`, and any key whose last segment is
+  `password`, `passwd`, `token`, `secret`, `apikey`, `api_key` or `credential`.
+  The error says what to use instead: a credential helper, an SSH key, or the OS
+  credential store.
+* **Certificate verification cannot be turned off.** `http.sslVerify` (including
+  the per-URL form) may not be set to a false value. `devd` never weakens
+  transport security to make a connection succeed.
+* **Messages are redacted.** Any URL in an error or a log line is passed through
+  a redactor that replaces userinfo with `[redacted]` before it is returned or
+  recorded.
+* **Audit arguments are redacted.** A secret-looking field in an invocation's
+  arguments is replaced before the row is written, so an interface that leaks a
+  secret into an argument object cannot leak it into the audit file.
+* **Git cannot prompt.** `GIT_TERMINAL_PROMPT=0` is set for every invocation, so
+  a command fails rather than blocking on a credential prompt nobody can answer.
+
+Credentials are never stored by `devd` in a configuration file, a log, an audit
+row, or an MCP response. Authentication is Git's own: credential helpers, the OS
+credential store, and the SSH agent.
+
+## Output handling
+
+* `LC_ALL=C` is forced, so messages and dates have one shape.
+* The pager is disabled (`GIT_PAGER`, `PAGER`), so a command cannot block
+  waiting for a reader.
+* Output is size-capped, so a repository with an enormous diff cannot exhaust
+  memory.
+* Every external call takes a timeout, so a wedged process cannot hang a
+  request.
+* The process tree is killed on stop — `taskkill /T /F` on Windows, a process
+  group on Linux — so an interrupted operation does not leave a server running.
+* `GIT_ADVICE=0` and `GIT_OPTIONAL_LOCKS=0` keep output and locking behaviour
+  stable and non-interactive.
+
+## Interrupted operations
+
+An interrupted merge, rebase, cherry-pick or revert is a state, not a failure.
+`git.status` reports it, `git.op.continue` resumes it and `git.op.abort` restores
+the previous state.
+
+The property that matters is tested explicitly: **aborting must not remove work
+the user had not committed in files the operation did not touch.** The lifecycle
+suite makes an uncommitted change, forces a conflict, aborts, and asserts both
+that the conflict is gone and that the unrelated uncommitted file is byte-for-byte
+intact. `devd git undo` prefers to abort rather than to reset, because aborting
+is the reversible option.
+
+## Git hooks
+
+`devd` does not install hooks, does not create a `hooksPath`, and does not run
+anything from a repository merely because it opened it. Opening, inspecting and
+diffing a repository are `Tier::Read` and execute no repository content.
+
+Hooks that already exist in the repository a user is working in *do* run when
+Git runs them during a commit, because that is Git's own semantics and a user's
+commits are expected to respect their repository's hooks. `devd` disables
+Git's *editors* (`GIT_EDITOR`, `GIT_SEQUENCE_EDITOR`) so an unattended command
+cannot hang, but it does not silently bypass verification a repository asks for.
+If you are inspecting a repository you do not trust, use the read-tier
+operations — `status`, `diff`, `log`, `show`, `blame`, `conflicts` — none of
+which execute repository content.
+
+An explicit switch for this, so a user can choose a strict no-hooks mode, is a
+candidate for a later milestone rather than a silent default either way.
+
+## Git configuration as a code path
+
+A Git config file can name a program to run: `core.sshCommand`, `core.pager`,
+`core.editor`, `core.hooksPath`, `core.fsmonitor`, and aliases. Writing Git
+configuration is therefore not a benign operation, which is why
+`git.config.set` is `human_only`: an agent cannot call it, with or without an
+approval. A human editing their own repository's configuration is choosing
+their own tooling, and `devd` records the change.
+
+## Windows and Linux
+
+Differences are stated rather than hidden:
+
+* Process trees are killed with `taskkill /T /F` on Windows and a process group
+  on Linux. A Windows Job Object would be stronger and is not implemented.
+* Locations differ (`%LOCALAPPDATA%` versus `~/.local/share`), resolved through
+  one `Paths` type rather than scattered string building.
+* Line endings are the repository's business, not `devd`'s. `devd` never changes
+  a user's `core.autocrlf`. Parsers trim line-ending artefacts so that output
+  from either platform is read the same way.
+* Paths containing spaces are covered by test, because passing each argument as
+  an `argv` element is the whole point.
+* There is no macOS support in this version.
+
+## Audit
+
+Every attempt is recorded: the actor (human, agent or daemon), the surface (CLI,
+TUI, GUI, HTTP, MCP or daemon), the capability, the tier, the redacted arguments,
+whether it succeeded, and the message. **A refused operation is recorded too** —
+a refusal is a fact, and a trail that only records successes cannot answer the
+question "did anything try?".
+
+`devd audit -n 20` reads the trail. The store is SQLite with a versioned schema
+and an integrity check, so a corrupted database is reported rather than silently
+trusted.
+
+## Snapshots
+
+Point-in-time snapshots and a receipts directory are part of the layout the core
+defines, so that a change to a site, a certificate or a service configuration can
+be reversed. The snapshot itself is not implemented at this milestone; it is
+named here as designed-but-absent rather than implied to exist.
+
+## What is not protected
+
+Honesty matters more than a longer list.
+
+* **A human who passes `--yes` without reading** is trusted. The plan is printed;
+  whether it is read is the operator's responsibility.
+* **A human who is deceived into approving** is out of scope. The gate ensures a
+  human decided, not that the human was right.
+* **A compromised `git` executable** on `PATH` defeats every argument validation.
+  `devd` runs the tool the user has installed, deliberately, and reports which
+  one via `devd doctor`.
+* **The state database is not encrypted.** It holds audit rows and an index, not
+  credentials. If a token somehow reached an argument object, redaction keeps it
+  out of the row, but a filesystem-level attacker with read access is out of
+  scope.
+* **No sandbox.** `devd` runs services as the invoking user, on the machine,
+  without containers. This is a deliberate design decision — containers are not
+  the substrate — and it means `devd` inherits that user's privileges.
