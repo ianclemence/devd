@@ -24,6 +24,7 @@ These are designed and partially scaffolded, but there is no working code:
 | SSH control of a remote host, deploy | Not started. |
 | Snapshots and receipts | The layout defines the directories; no snapshot is taken. |
 | Licensing / redistribution checks | Not started. |
+| Self-update and upgrade check | Not started. Nothing in `devd` contacts GitHub. The release list the mechanism will read is public and reachable (`GET /repos/ianclemence/devd/releases?per_page=3`), and the releases carry the source archives GitHub generates, but no code reads them yet. |
 
 **Consequence.** A user can manage Git through `devd` today and nothing else. The
 CLI's `capabilities` listing shows the whole surface, which currently consists of
