@@ -1,0 +1,21 @@
+[package]
+name = "devd-cli"
+description = "The `devd` command-line interface."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "devd"
+path = "src/main.rs"
+
+[dependencies]
+devd-core = { workspace = true }
+devd-git = { path = "../devd-git" }
+
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
