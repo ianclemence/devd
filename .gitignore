@@ -1,0 +1,22 @@
+# Build output
+/target
+
+# Rust backup files
+**/*.rs.bk
+*.pdb
+*.exp
+*.lib
+
+# Build and test logs
+.build.log
+*.log
+
+# Local devd state, if DEVD_HOME is ever pointed at the repository
+/.devd
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
