@@ -1,0 +1,2 @@
+# Shell scripts run on Linux, where a carriage return is not whitespace.
+*.sh text eol=lf

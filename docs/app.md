@@ -167,7 +167,7 @@ risk of what you are about to run.
 | Capabilities | the registry |
 | Activity | the audit table |
 | System | the shared doctor checks, paths, settings |
-| Services, sites, runtimes | **not yet implemented** — the panel says so |
+| Services, sites, runtimes | reachable through the capability inspector; there are no dedicated panels yet |
 
 Every panel reads a real capability. There are no placeholder controls, because a
 switch that does nothing is worse than an honest empty state.

@@ -362,14 +362,16 @@ corrupted database is reported rather than silently trusted.
 
 ## Snapshots
 
-Point-in-time snapshots and a receipts directory are part of the layout the core
-defines, so that a change to a site, a certificate or a service configuration can
-be reversed. The snapshot itself is not implemented at this milestone; it is
-named here as designed-but-absent rather than implied to exist.
+`hosts.sync` copies the hosts file to `snapshots/` before it writes, and records
+the copy in the store, so the one file `devd` changes outside its own directory
+can be recovered. Nothing else is snapshotted yet: there is no capability that
+restores a snapshot, and changing a site, a certificate or a service
+configuration is not reversible through `devd`.
 
 ## What is not protected
 
-Honesty matters more than a longer list.
+The following are outside the model, stated so that no protection is assumed
+that does not exist.
 
 * **A human who passes `--yes` without reading** is trusted. The plan is printed;
   whether it is read is the operator's responsibility.

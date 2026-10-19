@@ -1,6 +1,9 @@
 # Build output
 /target
 
+# Release artifacts produced by scripts/
+/dist
+
 # Rust backup files
 **/*.rs.bk
 *.pdb

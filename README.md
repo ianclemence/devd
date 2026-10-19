@@ -1,461 +1,310 @@
 # devd
 
-A local development environment manager, written in Rust, whose every action is
-a **capability** — a typed, permissioned, auditable operation reachable from the
-CLI, a terminal UI, a desktop app, an HTTP API and an MCP server, all of which
-are thin projections of one core.
+A local development environment manager, written in Rust. It installs and runs
+the services a PHP or Node project needs — nginx, MariaDB, PHP, Node.js, Go —
+creates virtual hosts served over HTTPS under a local domain, and exposes every
+operation as a typed, permissioned capability reachable from the CLI, a terminal
+dashboard, a web interface, an HTTP API and an MCP server for agents.
 
-`devd` is a ground-up replacement for the Windows-only Laragon stack: nginx and
-Apache, several PHP versions side by side, MySQL/MariaDB, Redis, Mailpit, Node
-and Go, automatic local HTTPS, hosts and virtual hosts, and per-project
-isolation — on Windows and Linux.
+devd replaces Windows-only stacks such as Laragon and XAMPP. It is built on two
+rules:
 
-> **Project status.** This repository is at **M4**: the foundation, the complete
-> Git integration, the CLI, the **local application** (a loopback HTTP API plus
-> the interface it serves), the **MCP server**, the **terminal dashboard**, the
-> **runtime installers**, the **service stack** (nginx, MariaDB, php-cgi) and
-> **sites served over internal HTTPS** are implemented and tested. Apache, Redis,
-> Mailpit, a DNS server and SSH/deploy are designed but **not yet built**, and the
-> service layer is Windows-only in this milestone. See [Status](#status) for
-> exactly what works today, and [`CHANGELOG.md`](CHANGELOG.md) for what landed in
-> each milestone.
+- **One implementation.** Every action is declared once, in a capability
+  registry. The interfaces are projections of that registry; none of them holds
+  business logic of its own.
+- **Approval is enforced, not suggested.** Destructive, privileged and remote
+  operations return a plan and require an explicit human decision before they
+  run. An agent cannot approve its own action, and a declined operation never
+  executes — from any interface.
 
----
+## Requirements
 
-## Why capabilities
+- **Windows 10/11 x64** or **Linux x64**.
+- The prebuilt Windows binary needs nothing else.
+- Building from source needs Rust 1.99 or newer and a C compiler (`cc`) for the
+  bundled SQLite.
+- Git must be on `PATH` (or named in `git_executable`) for the Git capabilities.
 
-Most tools expose a command line, and then each new interface re-implements the
-same logic slightly differently — which is where the safety bugs live. `devd`
-has one registry. A capability declares what it does, how risky it is, whether a
-dry run is possible, whether an agent may invoke it, and what its arguments look
-like as JSON Schema. Every surface reads that declaration instead of inventing
-its own rules.
+Service management is available on Windows. On Linux the core, Git, the CLI,
+the dashboard, the web application, MCP, and the Node.js and Go runtimes work;
+nginx and MariaDB installation is not available yet because devd manages the
+vendors' Windows archives. See [`docs/limitations.md`](docs/limitations.md).
 
-The consequences are enforced in code, not in prompt text:
-
-| Guarantee | How it is enforced |
-| --- | --- |
-| A destructive action cannot run without approval | `Tier::Destructive` / `Tier::Remote` are checked in `Registry::dispatch`, before the handler |
-| An agent cannot approve its own action | `Actor::is_agent()` fails the approval check unconditionally; there is no agent-supplied approval path |
-| Some operations are reserved for humans | `human_only` is checked before approval is even considered |
-| A declined action does not run | `Approval::Denied` short-circuits the dispatcher, and the attempt is still audited |
-| A refusal cannot be bypassed from another surface | Every surface calls the same dispatcher; the "workaround" is a different capability with its own tier |
-| A force push cannot be reached by accident | It is a separate capability (`git.push.force`), not a flag, so no code path can build a forced update |
-| Secrets do not reach the audit trail | Argument objects are redacted before being recorded |
-| Input never becomes a shell string | Arguments are typed structs turned into `argv` arrays; branches and paths are validated against option injection |
-
-## What works today
-
-```text
-crates/
-  devd-core/     the capability registry, the state store, paths, settings, events
-  devd-git/      64 Git capabilities and the typed Git service beneath them
-  devd-runtime/  PHP, Node and Go installers, verified against the vendor's digest
-  devd-services/ nginx, MariaDB, php-cgi, TLS and the service stack
-  devd-sites/    sites, their generated vhosts and the managed hosts block
-  devd-server/   the loopback HTTP API and the application interface it serves
-  devd-mcp/      the Model Context Protocol server for agents
-  devd-tui/      the terminal dashboard
-  devd-cli/      the `devd` command
-```
-
-* **98 capabilities** across 20 discoverable groups. The 64 Git ones are listed
-  below; the rest are `runtime`, `service`, `web`, `stack`, `tls`, `db`, `site`
-  and `hosts`.
-* **64 Git capabilities** across 12 discoverable groups (`git.repo`,
-  `git.changes`, `git.commits`, `git.history`, `git.branches`, `git.tags`,
-  `git.remotes`, `git.merge`, `git.stashes`, `git.worktrees`, `git.config`,
-  `git.recovery`).
-* **A typed Git service** that drives the user's own `git` executable through
-  `argv` arrays — because rebase, bisect, worktrees, submodules, LFS, credential
-  helpers and hooks are only faithful when Git itself performs them.
-* **Runtime installers** (`devd runtime install php`) that read the vendor's own
-  catalogue, check the digest the vendor publishes, unpack in-process, and
-  configure what they installed — PHP's extensions are enabled one at a time and
-  any that cannot load are switched back off and reported.
-* **A service stack** (`devd service`, `devd web`, `devd stack`): nginx and
-  MariaDB from their vendors, `php-cgi` from the installed PHP runtime, started
-  detached, tracked by pid file and process image, and confirmed listening on
-  their port before the command reports success. `nginx.conf` is rendered from
-  the site table; it is output, not configuration you edit.
-* **Sites over HTTPS** (`devd site`) from an internal certificate authority
-  created on first use — an ECDSA P-256 CA and leaf, a full chain for nginx, and
-  `devd tls trust` to put the CA in the operating system's trust store. No
-  `openssl` binary, no bundled certificate files.
-* **A managed hosts block** (`devd hosts`) that preserves every line it did not
-  write, byte for byte, snapshots the file first, and is idempotent.
-* **An application** (`devd ui`) — a window onto a loopback HTTP API that is a
-  pure projection of the same registry. Projects, the working tree, history,
-  branches, tags, remotes, stashes, worktrees, conflicts and recovery, plus the
-  capability inspector, the audit trail and the environment check.
-* **An MCP server** (`devd mcp`) — the same registry, published to agents as five
-  discovery tools rather than one tool per capability, so the list does not grow
-  as the product does. An agent can explore the catalogue and run read-tier
-  capabilities; an operation that needs approval is refused, recorded, and
-  returned with the plan and an explicit instruction not to claim it happened.
-* **A terminal dashboard** (`devd tui`) for the console and for SSH. Nine views,
-  the same Git actions as the CLI, the whole registry filterable, the audit
-  trail and the doctor. A destructive key raises the registry's own plan and runs
-  nothing until you approve it; declining records the refusal in the audit trail.
-* **Two-step approvals** that survive review: a destructive operation returns a
-  plan and a single-use token, changes nothing, and only runs when that token is
-  approved. The client never asserts the approval.
-* **A test suite** that proves a declined operation did not execute, that
-  uncommitted work survives a decline, an abort and a branch switch, that `/api`
-  rejects a bad token, a foreign `Host`, a foreign `Origin` and every `OPTIONS`
-  preflight, that an agent is refused a destructive operation and handed its plan
-  instead, that a dashboard keystroke changes the real index while a declined one
-  changes nothing at all, and that a generated vhost names the files that exist —
-  including the certificate paths, whose dots are not an extension.
-* **`devd doctor`**, which checks the layout, the store, the Git discovery and
-  the environment before anything else is attempted — and now reports the
-  installed runtimes, services and sites.
-
-## Status
-
-| Area | State |
-| --- | --- |
-| Capability registry, tiers, approvals, audit, store | **Done** (M0) |
-| Git service, capabilities, CLI, tests | **Done** (M0) |
-| CLI | **Done** for capabilities, Git, services, sites, audit and doctor |
-| Local application (`devd ui`, HTTP API, interface) | **Done** (M1) |
-| MCP server (`devd mcp`) | **Done** (M2) |
-| TUI (`devd tui`) | **Done** (M3) |
-| Runtime installers: PHP, Node, Go | **Done** (M4) |
-| Services: nginx, MariaDB, php-cgi FastCGI; stack lifecycle | **Done** (M4) |
-| Sites: vhosts, internal TLS, hosts block | **Done** (M4) |
-| Services still to come: Apache, Redis, Mailpit | Planned, **not built** |
-| DNS server, SSH/deploy, mail capture | Planned, **not built** |
-| Runtime, service and site panels in the app and the TUI | Planned, **not built** — the CLI and the capability API cover them |
-
-Nothing above is claimed as finished when it is not. The registry, the tier
-model and the audit trail were built first precisely so the remaining surfaces
-can be added without re-deciding any of the safety rules.
-
-## Download
-
-| Platform | What you get |
-| --- | --- |
-| Windows x86_64 | A prebuilt `devd.exe` attached to each release — no Rust toolchain needed. |
-| Linux x86_64 | Build from source: no tested Linux binary is published for this release. |
+## Install
 
 ### Windows
 
-Download the binary and its checksum from https://github.com/ianclemence/devd/releases/latest:
+Download the binary and its checksum from the
+[latest release](https://github.com/ianclemence/devd/releases/latest):
 
 ```powershell
 curl.exe -LO https://github.com/ianclemence/devd/releases/download/v0.5.0/devd-v0.5.0-x86_64-pc-windows-gnu.exe
 curl.exe -LO https://github.com/ianclemence/devd/releases/download/v0.5.0/SHA256SUMS.txt
-
-# the checksum must match the line in SHA256SUMS.txt
 certutil -hashfile devd-v0.5.0-x86_64-pc-windows-gnu.exe SHA256
+```
 
-Rename-Item devd-v0.5.0-x86_64-pc-windows-gnu.exe devd.exe
+Compare the result with the line in `SHA256SUMS.txt`, rename the file to
+`devd.exe`, put it on `PATH`, and run:
+
+```powershell
 devd doctor
 ```
 
-Put `devd.exe` anywhere on `PATH`. It is built from the tagged source on a
-Windows machine with the GNU toolchain, links only Windows system DLLs (no
-MinGW, no Visual C++ runtime), and is **not code-signed** — which is why the
-checksum is published beside it. Windows SmartScreen will warn about an
-unsigned executable the first time it runs.
+The binary is self-contained: it links only Windows system libraries, so it
+needs no Rust toolchain, MinGW or Visual C++ runtime. It is not code-signed, so
+SmartScreen warns once on first run; that is why the checksum is published.
 
-### Linux
-
-The project is developed on Windows, so a Linux binary built here could not be
-run here. Publishing an executable that nobody has executed would contradict
-the rule the rest of the product follows, so v0.5.0 ships source for Linux:
+### From source
 
 ```bash
 git clone https://github.com/ianclemence/devd.git
 cd devd
 cargo build --release
-./target/release/devd doctor
+./target/release/devd doctor      # devd.exe on Windows
 ```
 
-You need `rustc`/`cargo` and a C compiler (`cc`) — SQLite is compiled into the
-binary. Nothing else is required: PHP, nginx and MariaDB are downloaded on
-first use, never bundled.
+The binary is `target/release/devd`. Put it on `PATH`.
 
-## Install from source
+No Linux binary is attached to the current release: an artifact is published
+only after it has been executed on its target platform, and the release is built
+on Windows. To produce one, run `scripts/release-linux.sh` on Linux, or
+`scripts/release-linux.ps1` from Windows through WSL or Docker. Both are
+described in [`docs/releasing.md`](docs/releasing.md).
 
-The same build works on Windows if you prefer it to the attached binary:
+## Quick start
 
 ```bash
-git clone https://github.com/ianclemence/devd.git
-cd devd
-cargo build --release
+devd runtime install php          # newest stable PHP, digest-verified
+devd service install nginx
+devd service install mariadb
+devd stack up                     # php-cgi, then MariaDB, then nginx
+
+devd site create blog             # directory, starter page, vhost, certificate
+devd hosts sync -y                # publish blog.test in the hosts file
+devd tls trust -y                 # add devd's CA to the OS trust store
 ```
 
-The binary is `target/release/devd` (`devd.exe` on Windows). Put it on `PATH`
-and run ``devd doctor``.
+`devd site create` prints the URL. On the defaults that is
+`https://blog.test`, served by nginx, executed by PHP over FastCGI, with a
+certificate issued by devd's own authority.
 
-There is no bundled PHP, nginx or database: those are downloaded on first run,
-so the repository and its license stay free of third-party binaries. What
-`devd` downloads is checked against the digest the vendor publishes, with
-nginx's missing checksum called out in the install output and in
-[`docs/limitations.md`](docs/limitations.md).
+Two of those commands change machine-level state and are therefore separate,
+explicitly approved operations rather than side effects of creating a site:
+writing the hosts file (elevation required on Windows) and adding the CA to the
+trust store.
 
-### Upgrading
+## Command reference
 
-There is no self-update yet. An upgrade is a source upgrade:
+`devd <command> --help` documents every flag. The typed commands map one-to-one
+onto capabilities; `devd call <id>` reaches any capability directly.
+
+### Runtimes
 
 ```bash
-git pull
-cargo build --release
-devd doctor            # the layout and store are checked before anything runs
-devd stack down && devd stack up   # if services were running
+devd runtime available php        # what the vendor publishes, and its digest
+devd runtime install php@8.3
+devd runtime install node@lts
+devd runtime install go@latest
+devd runtime list
+devd runtime verify php
+devd runtime use php@8.4          # the version new sites use
+devd runtime remove php@8.2       # destructive: asks for approval
 ```
 
-The state store carries a schema version and is migrated on open, so an older
-installation's sites, services and audit rows are kept. Downloaded runtimes and
-services are cached by digest under the data directory and are not re-fetched.
-
-## Using the CLI
+### Services
 
 ```bash
-devd doctor                       # check the environment
-devd capabilities                 # every capability, grouped
-devd capabilities --group git.changes
-devd capabilities commit          # search across ids and summaries
-devd describe git.reset           # summary, tier, arguments, JSON Schema
-devd call git.status --arg repo=.
-devd --plan git discard a.txt     # show what would happen; change nothing
+devd service available nginx
+devd service install nginx
+devd service install mariadb --port 3306
+devd service start nginx
+devd service status nginx
+devd service logs nginx
+devd service stop nginx
+devd service remove mariadb       # destructive: keeps the data directory
+```
+
+`service start` does not report success until the port is open. A service that
+fails to start is killed, its run is recorded as failed, and the error includes
+the tail of its own log.
+
+### Sites, hosts and the web server
+
+```bash
+devd site create blog             # --php, --host, --tls, --dir
+devd site list
+devd site remove blog             # destructive; keeps files unless --delete-files
+
+devd hosts show                   # what a sync would change
+devd hosts sync                   # admin: writes the managed block
+
+devd web render                   # rebuild nginx.conf from the site table
+devd web test                     # nginx -t
+devd web reload
+```
+
+`nginx.conf` is generated. The site table is the source of truth, so edits to
+the generated file are overwritten rather than merged.
+
+### Stack
+
+```bash
+devd stack up                     # start every enabled service, in order
+devd stack down                   # stop every running service
+```
+
+### TLS
+
+```bash
+devd tls ca                       # create the local authority if missing
+devd tls show                     # the CA certificate, for a browser
+devd tls trust                    # admin: add it to the system trust store
+devd tls untrust
+devd tls issue blog.test
+devd tls list
+```
+
+Certificates are issued in-process: an ECDSA P-256 authority, and per-host leaf
+certificates written as a full chain for nginx. The CA key never leaves
+`certs/devd-ca.key` and is never returned by a capability.
+
+### Databases
+
+```bash
+devd db list
+devd db create blog
+devd db drop blog                 # destructive: everything in it is deleted
 ```
 
 ### Git
 
-The Git commands read like Git, and keep Git's vocabulary:
+The Git commands keep Git's own vocabulary.
 
 ```bash
-devd git status                   # branch, upstream, ahead/behind, changed files
-devd git stage .                  # stage everything
-devd git diff --staged            # review, then
+devd git status
+devd git stage .
+devd git diff --staged
 devd git commit -m "message"
 devd git log -n 5
 
 devd git branch list
 devd git switch feature
-devd git fetch
-devd git pull
+devd git fetch && devd git pull
 devd git push
 
 devd git stash push -m "wip"
 devd git worktree add ../wt feature
-devd git undo                     # recover from a bad reset via the reflog
-```
-
-Repositories, history rewriting and recovery:
-
-```bash
-devd git repo init D:\code\new --initial-branch main
-devd git repo track .
-devd git repo list
-
 devd git rebase --onto main
-devd git rebase --root --autosquash
-devd git squash 3 -m "one commit"
 devd git bisect start HEAD v1.0.0
+devd git undo                     # recover a bad reset through the reflog
 ```
 
-### Runtimes, services and sites
+Every Git command is one of 64 capabilities grouped under `git.repo`,
+`git.changes`, `git.commits`, `git.history`, `git.branches`, `git.tags`,
+`git.remotes`, `git.merge`, `git.stashes`, `git.worktrees`, `git.config` and
+`git.recovery`. See [`docs/git-cli.md`](docs/git-cli.md) for the full mapping.
+
+### Interfaces
 
 ```bash
-devd runtime available php          # what the vendor publishes, and where
-devd runtime install php            # newest stable; digest-checked, then verified
-devd runtime list
+devd ui            # the web interface, opened as a window
+devd serve         # the HTTP API only, on loopback
+devd tui           # the terminal dashboard
+devd mcp           # MCP on stdin/stdout, for agents
 
-devd service available nginx
-devd service install nginx
-devd service install mariadb --port 3306
-devd stack up                       # php-cgi, then mariadb, then nginx
-devd service status nginx
-
-devd site create blog               # directory, starter page, vhost, certificate
-devd site list
-devd hosts sync -y                  # one approval: write the managed block
-devd tls ca show                    # the CA to trust, and where it is
-devd tls trust -y                   # add it to the OS trust store
-
-devd db create blog
-devd db list
-devd db drop blog -y                # destructive: plan first, then approval
+devd capabilities  # the whole registry
+devd describe git.reset
+devd doctor
+devd audit -n 20
 ```
 
-`devd site create` prints the URL. The two pieces that need a privilege — the
-hosts file and the trust store — are separate, explicitly approved capabilities,
-never a side effect of creating a site.
+## Configuration
 
-## Using the app
-
-```bash
-devd ui            # opens the application window
-devd ui --no-open  # serves it without opening a window
-devd serve         # headless: the API only, no window
-```
-
-`devd ui` starts an HTTP API on `127.0.0.1` and serves the interface from inside
-the binary. It is a browser engine in application mode — no installer, no
-`node_modules`, no build step. If a `devd` instance is already running, the
-command reopens that one instead of starting a second server.
-
-The window is a pure client of the same registry the CLI uses: every panel calls
-`/api/invoke` with real capability ids. There are no placeholder controls. The
-services, sites and runtimes panels say plainly that they are not implemented
-yet rather than showing switches that do nothing.
-
-Inside it:
-
-* **Projects** — every repository `devd` knows about, with live branch, upstream
-  and dirty state.
-* **Changes** — staged and unstaged files, per-file diffs, stage, unstage,
-  discard, commit (with amend), and a warning if a staged file looks like it
-  contains a credential.
-* **History** — the log, commit inspection, and revert or cherry-pick.
-* **Branches, Tags, Remotes** — create, switch (with the real overwrite check
-  first), merge, rename, delete; fetch, pull, push, force-push, tags.
-* **Stashes, Worktrees** — the full lifecycle.
-* **Recover** — unmerged conflicts with resolution, the reflog, reset modes,
-  squash, bisect, and continue/abort for an interrupted operation.
-* **Capabilities** — search the whole registry, read a declaration, run it with
-  edited JSON arguments at your own risk tier.
-* **Activity** — the audit trail, with plan, applied and refused marked
-  separately.
-* **System** — the same checks as `devd doctor`.
-
-`Ctrl+K` opens a command palette backed by the registry's own ranked search, so
-the palette cannot offer an action the CLI cannot perform.
-
-A destructive action in the window shows the server's plan and a countdown, and
-the confirm button is red. Approving replays the server's stored arguments, never
-the client's — see [`docs/app.md`](docs/app.md) for why that distinction matters
-and for the four loopback defences that were verified against a real socket.
-
-## Using the dashboard
-
-```bash
-devd tui
-```
-
-For the console, and for an SSH session with nothing forwarded. Nine views —
-projects, changes, history, branches, the whole registry, the audit trail, the
-doctor — with `1`–`9` to jump and `Tab` to cycle.
+State lives in `%LOCALAPPDATA%\devd` on Windows and `$XDG_DATA_HOME/devd`
+(usually `~/.local/share/devd`) on Linux. `DEVD_HOME` overrides the location,
+which is useful for a portable installation.
 
 ```text
- ┌ Changes - main: 1 staged, 2 unstaged, 1 untracked in C:/code/devd ──────────────┐
- │M staged     README.md                                                           │
- │M unstaged   README.md                                                           │
- │M unstaged   crates/devd-core/src/lib.rs                                         │
- │? untracked  NOTES.md                                                            │
- └─────────────────────────────────────────────────────────────────────────────────┘
-  Enter stage/unstage   s stage   u unstage   d discard   a stage all   c commit   r refresh   ? help   q quit
+settings.toml     preferences
+state.db          sites, services, runtimes and the audit trail
+www/              projects
+runtimes/         PHP, Node.js and Go
+services/         nginx and MariaDB
+etc/              generated configuration and MariaDB data
+certs/            the authority and per-site certificates
+logs/             service logs
+snapshots/        copies taken before a file devd did not write is changed
+cache/            verified downloads
 ```
 
-`s` stages, `u` unstages, `a` stages everything, `c` commits, `Enter` toggles a
-file in or out of the index, `n` creates a branch, `t` tracks a repository, `/`
-searches the registry and `x` runs any capability in it.
+`settings.toml` is created on first run and is safe to edit:
 
-`d` discards, so it does not run: the registry's own plan is shown — the files,
-and the sentence that says the content is not recoverable from Git — and nothing
-happens until `y`. Declining records the refusal in the audit trail rather than
-dismissing it. A branch switch that would overwrite local work becomes the same
-kind of confirm, using the registry's own overwrite check.
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `tld` | `test` | Suffix for new site hostnames. |
+| `http_port` | `80` | Port for plain HTTP, which redirects to HTTPS for TLS sites. |
+| `https_port` | `443` | Port for TLS. |
+| `www_root` | `<data>/www` | Where new projects are created. |
+| `web_server` | `nginx` | Web server driver. |
+| `dns_mode` | `hosts` | How local hostnames are published. |
+| `auto_start_services` | `false` | Start enabled services when a long-lived surface opens. |
+| `primary_php` | newest installed | PHP version new sites use. |
+| `git_executable` | `git` on `PATH` | Git binary to drive. |
+| `git_protect_uncommitted` | `true` | Refuse branch switches that would overwrite local work. |
+| `git_default_branch` | `main` | Name given to a new repository's first branch. |
 
-It refuses to start when it has no terminal, and says what to use instead. A
-branch name containing an escape sequence cannot reach your console: control
-characters are replaced before anything is drawn.
+Environment variables:
 
-See [`docs/tui.md`](docs/tui.md) for the keys, the approval transcript, and how
-each claim above is tested.
-
-## Using devd from an agent
-
-```bash
-devd mcp                   # serve the Model Context Protocol on stdio
-devd mcp --client claude-code
-devd mcp --list            # print the tool list
-```
-
-```json
-{ "mcpServers": { "devd": { "command": "devd", "args": ["mcp", "--client", "claude-code"] } } }
-```
-
-The server publishes **five discovery tools**, not one tool per capability:
-`devd_groups`, `devd_capabilities`, `devd_describe`, `devd_invoke`,
-`devd_doctor`. The catalogue is explored at call time, so a capability added
-tomorrow is discoverable immediately and the tool list never grows. A test
-asserts that two servers over registries of different sizes publish an identical
-list.
-
-An agent reads the registry and runs read-tier capabilities. An operation that
-needs approval is **refused**, recorded in the audit trail, and returned to the
-agent *with the plan* and an explicit instruction not to report it as having
-happened — because the failure being defended against is an agent that
-confidently describes work it was not allowed to do. A `human_only` operation is
-refused for an agent even if an approval is presented.
-
-See [`docs/mcp.md`](docs/mcp.md) for the tool contract, the intended call
-sequence, and the transcript of a real session.
-
-### Approvals
-
-Operations that rewrite history, discard work, or touch a remote require
-approval. Interactively you are shown a plan — the repository, the branch, the
-target and the affected files — and asked. Non-interactively the command fails
-rather than guessing:
-
-```console
-$ devd git discard app.txt
-discard 1 path(s)
-  - paths: app.txt
-  DESTRUCTIVE: this can destroy data
-  requires explicit approval
-devd: approval required for 'git.discard': ... re-run interactively, or pass --yes to approve it deliberately
-$ echo $?
-3
-```
-
-`--yes` is the deliberate, explicit form of that approval. `--plan` shows the
-plan and stops. Passing `--yes` to a *dry run* is meaningless, and the tool does
-not do anything without one of these two.
-
-Exit codes are stable so scripts can branch on the reason:
-
-| Code | Meaning |
+| Variable | Purpose |
 | --- | --- |
-| 2 | invalid arguments, or unsupported |
-| 3 | approval required, or denied |
-| 4 | not found |
-| 5 | conflict |
-| 1 | anything else |
+| `DEVD_HOME` | Data directory, instead of the default. |
+| `DEVD_HOSTS_FILE` | The file `hosts sync` manages. Useful for testing without elevation. |
+| `DEVD_MYSQL_ROOT_PASSWORD` | Password given to MariaDB `root` when its data directory is first created. |
+
+## How it works
+
+Every operation is a capability: an identifier, a summary, a permission tier, a
+JSON Schema for its arguments, and a handler. The handler is the only code that
+touches the outside world, and it is reachable only through the dispatcher.
+
+| Guarantee | How it is enforced |
+| --- | --- |
+| A destructive action cannot run without approval | `Tier::Destructive` and `Tier::Remote` are checked in `Registry::dispatch`, before the handler |
+| An agent cannot approve its own action | `Actor::is_agent()` fails the approval check unconditionally; there is no agent-supplied approval path |
+| Some operations are reserved for humans | `human_only` is checked before approval is considered |
+| A declined action does not run | `Approval::Denied` short-circuits the dispatcher, and the attempt is still audited |
+| A refusal cannot be bypassed from another interface | Every interface calls the same dispatcher |
+| Input never becomes a shell string | Arguments are typed structs turned into `argv` arrays; branches, paths and hostnames are validated against option injection |
+| Secrets do not reach the audit trail | Argument objects are redacted before being recorded |
+
+Approval is two-step. A privileged operation returns its plan and a single-use
+token and changes nothing; the plan is what the human approves, and the
+operation runs only when that token is presented back. The CLI calls this
+`--plan` and `--yes`, the dashboard shows the plan and waits for `y`, and the
+HTTP API returns `approval_required` with a token. In every case the refusal is
+recorded.
+
+For the threat model, the loopback API's defences, and the Git-specific
+protections, see [`docs/security.md`](docs/security.md).
 
 ## Documentation
 
-* [`docs/architecture.md`](docs/architecture.md) — the core, the registry, tiers,
-  the store, and how each surface projects it.
-* [`docs/app.md`](docs/app.md) — the interface decision, the loopback hardening,
-  the two-step approval flow, and what was observed when it ran.
-* [`docs/mcp.md`](docs/mcp.md) — the agent surface: the five discovery tools, why
-  the list is small, and what an agent is handed when it is refused.
-* [`docs/tui.md`](docs/tui.md) — the terminal dashboard: the views, the keys, the
-  approval prompt, and the tests behind each claim.
-* [`docs/git-cli.md`](docs/git-cli.md) — every Git command, mapped to the
-  capability it calls.
-* [`docs/security.md`](docs/security.md) — the threat model and the specific
-  protections, including what Git offers and where `devd` deliberately does not
-  go.
-* [`docs/limitations.md`](docs/limitations.md) — what is missing, what is
-  weaker than intended, and why.
-* [`CHANGELOG.md`](CHANGELOG.md) — what landed in each milestone.
+| Document | Contents |
+| --- | --- |
+| [`docs/architecture.md`](docs/architecture.md) | The registry, the dispatcher, the state store, and the skill crates. |
+| [`docs/security.md`](docs/security.md) | The threat model and the specific protections. |
+| [`docs/app.md`](docs/app.md) | The web interface, the loopback API and the approval flow. |
+| [`docs/tui.md`](docs/tui.md) | The terminal dashboard. |
+| [`docs/mcp.md`](docs/mcp.md) | The agent surface and its five discovery tools. |
+| [`docs/git-cli.md`](docs/git-cli.md) | Every Git command and the capability it calls. |
+| [`docs/limitations.md`](docs/limitations.md) | What is not implemented, and what is weaker than intended. |
+| [`docs/releasing.md`](docs/releasing.md) | How a release is built, verified and published. |
+| [`CHANGELOG.md`](CHANGELOG.md) | Release history. |
 
 ## License
 
 MIT. See [`LICENSE`](LICENSE).
 
-`devd` ships no third-party runtime binaries. nginx, Apache, PHP, MySQL,
-MariaDB, Redis, Mailpit, Node and Go are downloaded at the user's request, from
-their upstream distributions, under their own licenses. Nothing copyleft is
-linked into a `devd` binary.
-
-"devd" is a working name and is not derived from, and does not use, any third
-party's trademark.
+devd bundles no third-party binaries. PHP, Node.js, Go, nginx and MariaDB are
+downloaded from their vendors on first use and verified against the digest the
+vendor publishes; where a vendor publishes no digest, the install says so.
