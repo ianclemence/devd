@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="devd-token" content="__DEVD_TOKEN__">
+<title>devd</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="shell">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-name">devd</span>
+    </div>
+    <div class="crumbs" id="crumbs"></div>
+    <div class="topbar-actions">
+      <button type="button" class="search-trigger" data-action="palette">
+        <span class="search-label">Search capabilities</span>
+        <kbd>Ctrl K</kbd>
+      </button>
+      <button type="button" class="pill pill-quiet" id="health-pill" data-action="nav" data-view="system">checking</button>
+      <button type="button" class="btn btn-ghost" data-action="refresh">Refresh</button>
+    </div>
+  </header>
+
+  <aside class="rail">
+    <nav class="rail-nav" id="rail"></nav>
+    <div class="rail-foot" id="rail-foot"></div>
+  </aside>
+
+  <main class="main" id="main">
+    <div class="loading">Loading</div>
+  </main>
+
+  <footer class="statusbar" id="statusbar"></footer>
+</div>
+
+<div class="overlay" id="palette" hidden>
+  <div class="palette" role="dialog" aria-modal="true" aria-label="Capability search">
+    <div class="palette-head">
+      <input type="text" id="palette-input" placeholder="Search 0 capabilities" autocomplete="off" spellcheck="false" aria-label="Search capabilities">
+      <kbd>Esc</kbd>
+    </div>
+    <div class="palette-list" id="palette-list"></div>
+    <div class="palette-foot" id="palette-foot"></div>
+  </div>
+</div>
+
+<div class="overlay" id="modal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-head">
+      <div>
+        <div class="modal-kicker" id="modal-kicker"></div>
+        <h2 id="modal-title"></h2>
+      </div>
+      <span class="pill" id="modal-tier"></span>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-foot">
+      <div class="modal-expiry" id="modal-expiry"></div>
+      <div class="modal-buttons">
+        <button type="button" class="btn" id="modal-cancel">Cancel</button>
+        <button type="button" class="btn btn-go" id="modal-confirm">Approve and run</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="drawer" id="drawer" hidden>
+  <div class="drawer-head">
+    <span class="drawer-title" id="drawer-title"></span>
+    <button type="button" class="btn btn-ghost" data-action="close-drawer">Close</button>
+  </div>
+  <div class="drawer-body" id="drawer-body"></div>
+</div>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<script src="/app.js" defer></script>
+</body>
+</html>

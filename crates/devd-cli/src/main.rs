@@ -10,12 +10,12 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 use devd_core::config::Settings;
 use devd_core::paths::Paths;
-use devd_core::state::Store;
 use devd_core::{DevdError, Result};
-use devd_git::GitService;
 
 mod app;
 mod gitcat;
+mod web;
+mod window;
 
 use app::{exit_code_for, merge_args, App};
 
@@ -85,6 +85,21 @@ pub(crate) enum Command {
         /// How many entries to show.
         #[arg(short = 'n', long, default_value_t = 20)]
         limit: u32,
+    },
+    /// Open the devd application: projects, Git and the capability registry.
+    Ui {
+        /// Port to listen on. Defaults to the last used port, then 8787 upward.
+        #[arg(long)]
+        port: Option<u16>,
+        /// Start the interface without opening a window.
+        #[arg(long)]
+        no_open: bool,
+    },
+    /// Run the local interface without opening a window, for scripts and tests.
+    Serve {
+        /// Port to listen on. Defaults to the last used port, then 8787 upward.
+        #[arg(long)]
+        port: Option<u16>,
     },
     /// Check the environment for problems.
     Doctor,
@@ -691,6 +706,17 @@ fn run(cli: Cli) -> Result<i32> {
             Ok(0)
         }
         Command::Doctor => unreachable!("handled before bootstrap"),
+        Command::Ui { port, no_open } => {
+            web::serve(app, port, !no_open)?;
+            Ok(0)
+        }
+        Command::Serve { port } => {
+            let started = web::serve(app, port, false)?;
+            if started.reused {
+                println!("attached to the instance already on port {}", started.port);
+            }
+            Ok(0)
+        }
     }
 }
 
@@ -745,125 +771,27 @@ fn list_capabilities(app: &App, group: Option<&str>, query: Option<&str>) -> Res
 
 /// Environment check. Independent of the capability registry so that it can
 /// report the registry's own preconditions as broken rather than failing.
+///
+/// The checks themselves live in `devd-core`, and the Git check is appended
+/// here, because that is the single split that lets `devd doctor` and the
+/// application's System panel report identical results: the core contributes
+/// what it can see, and each entry point adds what only it can reach.
 fn doctor(json: bool) -> Result<i32> {
-    struct Check {
-        name: &'static str,
-        ok: bool,
-        detail: String,
-    }
-
-    let mut checks: Vec<Check> = Vec::new();
-
     let paths = Paths::discover()?;
-    checks.push(Check {
-        name: "home",
-        ok: true,
-        detail: paths.root().display().to_string(),
-    });
+    let settings = Settings::load(&paths.settings_file()).unwrap_or_default();
 
-    match paths.ensure() {
-        Ok(()) => checks.push(Check {
-            name: "layout",
-            ok: true,
-            detail: "all directories exist".to_string(),
-        }),
-        Err(e) => checks.push(Check {
-            name: "layout",
-            ok: false,
-            detail: e.to_string(),
-        }),
-    }
+    let mut checks = devd_core::doctor::core_checks(&paths, &settings);
+    checks.push(app::git_check(settings.git_executable.as_deref()));
 
-    let settings = match Settings::load(&paths.settings_file()) {
-        Ok(s) => {
-            match s.validate() {
-                Ok(()) => checks.push(Check {
-                    name: "settings",
-                    ok: true,
-                    detail: format!("tld=.{}, http={}, https={}", s.tld, s.http_port, s.https_port),
-                }),
-                Err(e) => checks.push(Check {
-                    name: "settings",
-                    ok: false,
-                    detail: e.to_string(),
-                }),
-            }
-            s
-        }
-        Err(e) => {
-            checks.push(Check {
-                name: "settings",
-                ok: false,
-                detail: e.to_string(),
-            });
-            Settings::default()
-        }
-    };
-
-    match Store::open(&paths.state_db()).and_then(|s| {
-        s.migrate()?;
-        let version = s.schema_version()?;
-        let integrity = s.integrity_check()?;
-        Ok((version, integrity))
-    }) {
-        Ok((version, integrity)) => {
-            let ok = integrity == "ok";
-            checks.push(Check {
-                name: "state",
-                ok,
-                detail: format!("schema v{version}, integrity {integrity}"),
-            });
-        }
-        Err(e) => checks.push(Check {
-            name: "state",
-            ok: false,
-            detail: e.to_string(),
-        }),
-    }
-
-    match GitService::discover(settings.git_executable.as_deref()) {
-        Ok(git) => checks.push(Check {
-            name: "git",
-            ok: true,
-            detail: format!("{} at {}", git.version(), git.git_path().display()),
-        }),
-        Err(e) => checks.push(Check {
-            name: "git",
-            ok: false,
-            detail: e.to_string(),
-        }),
-    }
-
-    for (label, port) in [("http", settings.http_port), ("https", settings.https_port)] {
-        let free = devd_core::ports::is_free(port);
-        checks.push(Check {
-            name: if label == "http" { "port 80" } else { "port 443" },
-            // An occupied port is not a failure: something may already be
-            // serving, and devd only fails when it must bind and cannot.
-            ok: true,
-            detail: if free {
-                format!("{port} is free")
-            } else {
-                format!("{port} is already in use (fine unless devd must bind it)")
-            },
-        });
-    }
-
-    let failures = checks.iter().filter(|c| !c.ok).count();
+    let failures = checks.iter().filter(|c| c.is_fail()).count();
 
     if json {
-        let payload: Vec<_> = checks
-            .iter()
-            .map(|c| {
-                serde_json::json!({ "check": c.name, "ok": c.ok, "detail": c.detail })
-            })
-            .collect();
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
                 "ok": failures == 0,
                 "failures": failures,
-                "checks": payload,
+                "checks": checks,
             }))
             .map_err(|e| DevdError::internal(e.to_string()))?
         );
@@ -871,7 +799,11 @@ fn doctor(json: bool) -> Result<i32> {
         for check in &checks {
             println!(
                 "{} {:<10} {}",
-                if check.ok { "ok  " } else { "FAIL" },
+                match check.level {
+                    devd_core::Level::Fail => "FAIL",
+                    devd_core::Level::Info => "info",
+                    devd_core::Level::Ok => "ok  ",
+                },
                 check.name,
                 check.detail
             );

@@ -46,7 +46,21 @@ pub struct App {
 impl App {
     /// Resolve the layout, open the store, discover Git and build the registry.
     pub fn bootstrap(json: bool, plan_only: bool, assume_yes: bool) -> Result<Self> {
-        let paths = Paths::discover()?;
+        Self::bootstrap_at(Paths::discover()?, json, plan_only, assume_yes)
+    }
+
+    /// The same bootstrap against an explicit layout.
+    ///
+    /// Separated from [`App::bootstrap`] so that a caller which needs a
+    /// throwaway installation - a test, or a future `--root` flag - does not
+    /// have to mutate `DEVD_HOME` in the process environment, which is global
+    /// state and therefore a source of test flakiness.
+    pub fn bootstrap_at(
+        paths: Paths,
+        json: bool,
+        plan_only: bool,
+        assume_yes: bool,
+    ) -> Result<Self> {
         paths.ensure()?;
 
         let settings = Settings::load(&paths.settings_file())?;
@@ -337,9 +351,24 @@ pub fn print_value(value: &Value, indent: usize) {
     }
 }
 
+/// The Git component of the environment check.
+///
+/// Contributed by whichever entry point can reach the Git backend, so that
+/// `devd doctor` and the application's System panel report the same thing
+/// without `devd-core` - which must not depend on a Git implementation - having
+/// to know about one.
+pub fn git_check(configured: Option<&str>) -> devd_core::Check {
+    match GitService::discover(configured) {
+        Ok(git) => devd_core::Check::ok(
+            "git",
+            format!("{} at {}", git.version(), git.git_path().display()),
+        ),
+        Err(e) => devd_core::Check::fail("git", e.to_string()),
+    }
+}
+
 /// Parse `--arg key=value` pairs and a `--args` JSON object into one object.
-pub fn merge_args(args: Option<String>, sets: Vec<String>) -> Result<Value> {
-    let mut out = match args {
+pub fn merge_args(args: Option<String>, sets: Vec<String>) -> Result<Value> {    let mut out = match args {
         Some(text) => {
             let v: Value = serde_json::from_str(&text)
                 .map_err(|e| DevdError::invalid(format!("--args is not valid JSON: {e}")))?;

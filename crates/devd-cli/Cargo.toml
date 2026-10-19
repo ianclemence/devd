@@ -15,7 +15,10 @@ path = "src/main.rs"
 [dependencies]
 devd-core = { workspace = true }
 devd-git = { path = "../devd-git" }
+devd-server = { path = "../devd-server" }
 
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tokio = { workspace = true }
+open = { workspace = true }
