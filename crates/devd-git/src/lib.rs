@@ -1833,10 +1833,26 @@ fn is_conflicted(x: char, y: char) -> bool {
 
 fn command_failed(args: &[String], out: &CommandOutput) -> DevdError {
     let program = args.first().cloned().unwrap_or_else(|| "git".to_string());
+    // Git writes a good number of its failures to *stdout*: "nothing to
+    // commit, working tree clean", "Your branch is up to date", the advice that
+    // accompanies a rejected push. Reporting an empty message because the words
+    // landed in the other stream turns a real, explainable cause into a
+    // mystery, which is worse than useless when the reader is an agent deciding
+    // what to do next.
+    let detail = if out.stderr.trim().is_empty() {
+        &out.stdout
+    } else {
+        &out.stderr
+    };
+    let detail = if detail.trim().is_empty() {
+        format!("`git {program}` exited with code {} and produced no output", out.code)
+    } else {
+        util::truncate(&redact_url(detail), 2000)
+    };
     DevdError::Command {
         program: format!("git {program}"),
         code: out.code,
-        stderr: util::truncate(&redact_url(&out.stderr), 2000),
+        stderr: detail,
     }
 }
 
@@ -2139,6 +2155,43 @@ mod tests {
         assert!(!config_disables_verification("http.sslVerify", "true"));
         assert!(!config_disables_verification("http.proxy", "false"));
         assert!(!config_disables_verification("core.autocrlf", "false"));
+    }
+
+    #[test]
+    fn a_failure_with_no_stderr_reports_what_git_said_on_stdout() {
+        // "nothing to commit, working tree clean" arrives on stdout with exit
+        // code 1. Reporting an empty message would hide the actual reason.
+        let out = CommandOutput {
+            code: 1,
+            stdout: "nothing to commit, working tree clean\n".to_string(),
+            stderr: String::new(),
+            duration_ms: 0,
+        };
+        let err = command_failed(&["commit".to_string(), "-m".to_string(), "x".to_string()], &out);
+        let text = err.to_string();
+        assert!(text.contains("nothing to commit"), "{text}");
+
+        // Genuine silence still says something useful rather than nothing.
+        let quiet = CommandOutput {
+            code: 128,
+            stdout: String::new(),
+            stderr: String::new(),
+            duration_ms: 0,
+        };
+        let err = command_failed(&["push".to_string()], &quiet);
+        assert!(err.to_string().contains("128"), "{err}");
+    }
+
+    #[test]
+    fn a_failure_still_redacts_credentials_from_either_stream() {
+        let out = CommandOutput {
+            code: 128,
+            stdout: "fatal: could not read from https://user:ghp_secret@github.com/a/b.git".to_string(),
+            stderr: String::new(),
+            duration_ms: 0,
+        };
+        let err = command_failed(&["fetch".to_string()], &out);
+        assert!(!err.to_string().contains("ghp_secret"), "{err}");
     }
 
     #[test]
