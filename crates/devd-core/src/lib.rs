@@ -9,6 +9,7 @@
 
 pub mod capability;
 pub mod config;
+pub mod doctor;
 pub mod events;
 pub mod health;
 pub mod paths;
@@ -23,6 +24,7 @@ pub use capability::{
     Plan, Surface, Tier,
 };
 pub use config::Settings;
+pub use doctor::{Check, Level};
 pub use error::{DevdError, Result};
 pub use events::{Event, EventBus};
 pub use paths::Paths;

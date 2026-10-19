@@ -267,12 +267,20 @@ impl Store {
     }
 
     /// Open a private in-memory database, for tests.
+    ///
+    /// Migrated, like [`Store::open`]. An in-memory store with no schema is a
+    /// trap rather than a convenience: every table read fails with "no such
+    /// table", which looks like a bug in the caller rather than in the setup.
+    /// There is no persisted state to protect here, so there is nothing to be
+    /// careful about.
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
-        Ok(Self {
+        let store = Self {
             conn: Mutex::new(conn),
-        })
+        };
+        store.migrate()?;
+        Ok(store)
     }
 
     fn with<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {

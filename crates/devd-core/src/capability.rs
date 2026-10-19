@@ -140,8 +140,22 @@ impl Surface {
     }
 
     /// Whether this surface is a human at a keyboard.
+    ///
+    /// Note that this is about *who* is typing, not about whether a question can
+    /// be asked; see [`Surface::can_prompt`] for the latter.
     pub fn is_human(self) -> bool {
         matches!(self, Self::Cli | Self::Tui | Self::Gui)
+    }
+
+    /// Whether this surface can put a question to a person and wait.
+    ///
+    /// The local HTTP surface counts, because it *is* the application window:
+    /// the same person is looking at it, and the server can hold a request open
+    /// until they answer. MCP, the embedded agent and the daemon cannot, which
+    /// is what makes this distinction worth having - a capability that needs a
+    /// decision can refuse an unattended caller without refusing the app.
+    pub fn can_prompt(self) -> bool {
+        matches!(self, Self::Cli | Self::Tui | Self::Gui | Self::Http)
     }
 }
 
@@ -254,9 +268,10 @@ impl Ctx {
         }
     }
 
-    /// Reject the call unless the caller is on an interactive surface.
+    /// Reject the call unless the caller is on a surface that can ask a person
+    /// a question and wait for the answer.
     pub fn require_interactive(&self) -> Result<()> {
-        if self.actor.surface.is_human() {
+        if self.actor.surface.can_prompt() {
             Ok(())
         } else {
             Err(DevdError::denied(
