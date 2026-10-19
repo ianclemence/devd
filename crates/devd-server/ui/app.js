@@ -478,21 +478,6 @@
     var running = server.services.filter(function (s) { return s.running; }).length;
     var groups = [
       {
-        label: "Server",
-        items: [
-          { view: "overview", label: "Overview" },
-          { view: "sites", label: "Sites", count: server.sites.length || null },
-          {
-            view: "services",
-            label: "Services",
-            count: server.services.length ? running + "/" + server.services.length : null
-          },
-          { view: "runtimes", label: "Runtimes", count: server.runtimes.length || null },
-          { view: "certificates", label: "Certificates" },
-          { view: "hosts", label: "Hosts" }
-        ]
-      },
-      {
         label: "Workspace",
         items: [
           { view: "projects", label: "Projects", count: state.projects.length || null },
@@ -507,6 +492,21 @@
             label: "System",
             count: state.health && state.health.ok === false ? "!" : null
           }
+        ]
+      },
+      {
+        label: "Server",
+        items: [
+          { view: "overview", label: "Overview" },
+          { view: "sites", label: "Sites", count: server.sites.length || null },
+          {
+            view: "services",
+            label: "Services",
+            count: server.services.length ? running + "/" + server.services.length : null
+          },
+          { view: "runtimes", label: "Runtimes", count: server.runtimes.length || null },
+          { view: "certificates", label: "Certificates" },
+          { view: "hosts", label: "Hosts" }
         ]
       }
     ];
