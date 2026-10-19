@@ -10,6 +10,86 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.3.0] - 2026-10-19 — M2: the agent surface
+
+The third milestone adds the Model Context Protocol server. It is the third
+projection of the same registry, after the CLI and the application window, and it
+makes the product's premise checkable: an agent driving `devd` reaches the same
+functions as a person, with the same permission checks.
+
+### Added
+
+**The MCP server (`devd-mcp`)**
+
+* `devd mcp` serves the Model Context Protocol on stdin/stdout;
+  `devd mcp --client <name>` names the caller in the audit trail;
+  `devd mcp --list` prints the tool list.
+* **Five discovery tools instead of one tool per capability**:
+  * `devd_groups` — the domains and their sizes;
+  * `devd_capabilities` — search by text, by domain, or both, with a true total;
+  * `devd_describe` — one capability, with the JSON Schema of its arguments;
+  * `devd_invoke` — run one by id, optionally as a dry run;
+  * `devd_doctor` — the environment check.
+  A capability added later is discoverable and invocable without changing this
+  crate, and a test asserts that two servers over registries of different sizes
+  publish an identical tool list.
+* The protocol handles `initialize`, `ping`, `tools/list`, `tools/call`, and
+  answers `resources/list`, `resources/templates/list` and `prompts/list` with
+  empty lists, because clients probe them. A notification is never answered. An
+  unknown method is `-32601`; an unknown tool names `tools/list`; a missing
+  required argument is `-32602`; malformed input is `-32700`.
+
+### Safety
+
+* **The actor is forced.** `McpServer::new` discards the actor in the context it
+  is handed and installs an agent actor, so a caller cannot present a human
+  context and inherit a human's authority. A test asserts it.
+* **A refused operation hands the agent its plan.** When an approval-gated
+  operation is refused, the server asks the registry for a plan — itself a dry
+  run, recorded as a plan rather than an application — and returns it with the
+  refusal, the error code, and an explicit instruction not to report the
+  operation as having happened. That instruction exists because the failure mode
+  being defended against is an agent that confidently describes work it was not
+  allowed to do.
+* **A capability that cannot describe itself gets no invented plan**, and the
+  message says so. Both branches are covered by tests.
+* `human_only` is refused for an agent before approval is considered, so an
+  approval could never unlock it.
+* Tool results are data, never instructions: the only text that reaches a model
+  is written by the registry or by this crate, never echoed from repository
+  content.
+* The refusal tests assert against a counter incremented by the handler, so
+  "nothing ran" is a measurement rather than an inference.
+
+### Changed
+
+* The Git doctor check moves from `devd-cli` to `devd-git`
+  (`devd_git::doctor_check`), so the CLI, the application and the MCP server
+  share one implementation instead of three that could disagree.
+* `App::registry` is now an `Arc<Registry>`, because two surfaces move it into a
+  long-lived task while the CLI still holds the application.
+
+### Tests
+
+169 tests, all passing (up from 148):
+
+* `devd-mcp`: 21 — the protocol, the five-tool surface and the assertion that it
+  does not grow with the registry, the forced actor, discovery, and the refusal
+  paths (destructive, `human_only`, cannot-plan, dry run, unknown capability,
+  unknown tool, missing argument) plus the doctor.
+
+Verified over a real pipe against the built binary as well: the transcript and
+the resulting audit rows are in [`docs/mcp.md`](docs/mcp.md#observed).
+
+### Known limitations (at 0.3.0)
+
+* The TUI is still not built.
+* Services, sites, runtimes, DNS and TLS remain designed only.
+* There is no conversational agent inside the application; an agent connects from
+  outside over MCP, which is the same registry either way.
+
+---
+
 ## [0.2.0] - 2026-10-18 — M1: the application
 
 The second milestone turns the core into something a person can actually use: a
@@ -273,5 +353,6 @@ a real, stateful, destructive domain rather than a toy one.
 
 ---
 
+[0.3.0]: https://github.com/ianclemence/devd/releases/tag/v0.3.0
 [0.2.0]: https://github.com/ianclemence/devd/releases/tag/v0.2.0
 [0.1.0]: https://github.com/ianclemence/devd/releases/tag/v0.1.0

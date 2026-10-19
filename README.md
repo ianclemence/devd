@@ -10,11 +10,11 @@ Apache, several PHP versions side by side, MySQL/MariaDB, Redis, Mailpit, Node
 and Go, automatic local HTTPS, hosts and virtual hosts, and per-project
 isolation — on Windows and Linux.
 
-> **Project status.** This repository is at **M1**: the foundation, the complete
-> Git integration, the CLI and the **local application** (a loopback HTTP API plus
-> the interface it serves) are implemented and tested. The service-management,
-> site, DNS, TLS, TUI and MCP layers are designed but **not yet built**. See
-> [Status](#status) for exactly what works today, and
+> **Project status.** This repository is at **M2**: the foundation, the complete
+> Git integration, the CLI, the **local application** (a loopback HTTP API plus
+> the interface it serves) and the **MCP server** are implemented and tested. The
+> service-management, site, DNS, TLS and TUI layers are designed but **not yet
+> built**. See [Status](#status) for exactly what works today, and
 > [`CHANGELOG.md`](CHANGELOG.md) for what landed in each milestone.
 
 ---
@@ -48,6 +48,7 @@ crates/
   devd-core/    the capability registry, the state store, paths, settings, events
   devd-git/     64 Git capabilities and the typed Git service beneath them
   devd-server/  the loopback HTTP API and the application interface it serves
+  devd-mcp/     the Model Context Protocol server for agents
   devd-cli/     the `devd` command
 ```
 
@@ -62,13 +63,19 @@ crates/
   pure projection of the same registry. Projects, the working tree, history,
   branches, tags, remotes, stashes, worktrees, conflicts and recovery, plus the
   capability inspector, the audit trail and the environment check.
+* **An MCP server** (`devd mcp`) — the same registry, published to agents as five
+  discovery tools rather than one tool per capability, so the list does not grow
+  as the product does. An agent can explore the catalogue and run read-tier
+  capabilities; an operation that needs approval is refused, recorded, and
+  returned with the plan and an explicit instruction not to claim it happened.
 * **Two-step approvals** that survive review: a destructive operation returns a
   plan and a single-use token, changes nothing, and only runs when that token is
   approved. The client never asserts the approval.
-* **148 tests**, including the ones that prove a declined operation did not
+* **169 tests**, including the ones that prove a declined operation did not
   execute, that uncommitted work survives a decline, an abort and a branch
-  switch, and that `/api` rejects a bad token, a foreign `Host`, a foreign
-  `Origin` and every `OPTIONS` preflight.
+  switch, that `/api` rejects a bad token, a foreign `Host`, a foreign `Origin`
+  and every `OPTIONS` preflight, and that an agent is refused a destructive
+  operation and handed its plan instead.
 * **`devd doctor`**, which checks the layout, the store, the Git discovery and
   the environment before anything else is attempted.
 
@@ -80,7 +87,8 @@ crates/
 | Git service, capabilities, CLI, tests | **Done** (M0) |
 | CLI | **Done** for capabilities, Git, audit and doctor |
 | Local application (`devd ui`, HTTP API, interface) | **Done** (M1) |
-| TUI, MCP server | Designed, **not built** |
+| MCP server (`devd mcp`) | **Done** (M2) |
+| TUI | Designed, **not built** |
 | Runtime installers (PHP, Node, Go), services (nginx, Apache, MySQL, Redis, Mailpit), sites, DNS, TLS, SSH/deploy | Designed, **not built** |
 
 Nothing above is claimed as finished when it is not. The registry, the tier
@@ -195,6 +203,35 @@ the confirm button is red. Approving replays the server's stored arguments, neve
 the client's — see [`docs/app.md`](docs/app.md) for why that distinction matters
 and for the four loopback defences that were verified against a real socket.
 
+## Using devd from an agent
+
+```bash
+devd mcp                   # serve the Model Context Protocol on stdio
+devd mcp --client claude-code
+devd mcp --list            # print the tool list
+```
+
+```json
+{ "mcpServers": { "devd": { "command": "devd", "args": ["mcp", "--client", "claude-code"] } } }
+```
+
+The server publishes **five discovery tools**, not one tool per capability:
+`devd_groups`, `devd_capabilities`, `devd_describe`, `devd_invoke`,
+`devd_doctor`. The catalogue is explored at call time, so a capability added
+tomorrow is discoverable immediately and the tool list never grows. A test
+asserts that two servers over registries of different sizes publish an identical
+list.
+
+An agent reads the registry and runs read-tier capabilities. An operation that
+needs approval is **refused**, recorded in the audit trail, and returned to the
+agent *with the plan* and an explicit instruction not to report it as having
+happened — because the failure being defended against is an agent that
+confidently describes work it was not allowed to do. A `human_only` operation is
+refused for an agent even if an approval is presented.
+
+See [`docs/mcp.md`](docs/mcp.md) for the tool contract, the intended call
+sequence, and the transcript of a real session.
+
 ### Approvals
 
 Operations that rewrite history, discard work, or touch a remote require
@@ -233,6 +270,8 @@ Exit codes are stable so scripts can branch on the reason:
   the store, and how each surface projects it.
 * [`docs/app.md`](docs/app.md) — the interface decision, the loopback hardening,
   the two-step approval flow, and what was observed when it ran.
+* [`docs/mcp.md`](docs/mcp.md) — the agent surface: the five discovery tools, why
+  the list is small, and what an agent is handed when it is refused.
 * [`docs/git-cli.md`](docs/git-cli.md) — every Git command, mapped to the
   capability it calls.
 * [`docs/security.md`](docs/security.md) — the threat model and the specific

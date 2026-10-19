@@ -4,7 +4,7 @@ This document exists so that the gaps are stated rather than discovered. Nothing
 here is a surprise waiting for a user; each entry says what is missing, what the
 consequence is, and what would close it.
 
-The current release is milestone **M1**, which adds the local application. See
+The current release is milestone **M2**, which adds the MCP server. See
 [`CHANGELOG.md`](../CHANGELOG.md) for what is implemented.
 
 ## Not implemented at all
@@ -14,7 +14,6 @@ These are designed and partially scaffolded, but there is no working code:
 | Area | State |
 | --- | --- |
 | TUI | Not started. |
-| MCP server | Not started. No agent can yet discover or invoke a capability. |
 | Runtime installers (PHP, Node, Go) | Not started. No `php.new`-style install yet. |
 | Services (nginx, Apache, MySQL/MariaDB, Redis, Mailpit) | Not started. |
 | Sites, hosts generation, virtual hosts | Not started. |
@@ -104,9 +103,15 @@ and are recorded so they are not rediscovered:
   exercised against local bare repositories and `file://` URLs, and failure is
   exercised against a loopback address that refuses the connection. A real
   authentication failure against a real host is not covered by an automated test.
+* **The MCP path is tested in-process and once over a real pipe.** 21 tests drive
+  `McpServer::handle` directly, and a full session — initialize, discover,
+  describe, invoke a read operation, invoke a destructive one, doctor — was run
+  against the built binary through stdin/stdout with the audit rows checked
+  afterwards. What is not covered is a specific third-party MCP client's
+  behaviour, since that is the client's to test.
+* **No headless-browser test of the interface.** The UI is checked by
+  construction (a test asserts the shell carries no inline script, style or
+  handler) and by hand.
 * **No fuzzing** of the Git output parsers.
 * **No long-running soak test** of service supervision, because services are not
   implemented yet.
-* **The MCP path is untested end to end** because the MCP server does not exist.
-  The registry-level policy tests stand in for it: they drive
-  `Registry::dispatch` with an agent actor and assert the refusals.

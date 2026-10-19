@@ -96,6 +96,27 @@ A test suite drives the real router for each defence, and the same checks were
 run against the release binary on a socket; the observed results are recorded in
 [`app.md`](app.md#what-was-actually-observed).
 
+## The agent surface
+
+An agent connecting over MCP is treated as what it is: a caller that is
+untrusted, not because it is hostile but because it can be *confident and wrong*.
+
+* **The actor is forced to an agent.** The MCP server discards whatever actor it
+  is handed and installs its own, for the same reason the HTTP server does: a
+  claim is not evidence, and the tier model must not rest on one.
+* **A refusal is recorded and explained.** An approval-gated operation is
+  refused and written to the audit trail. The agent is handed the plan plus an
+  explicit instruction not to report the operation as having happened, because
+  the realistic failure is an agent that describes work it was not permitted to
+  do as though it were done.
+* **`human_only` cannot be unlocked by an approval an agent holds**, since
+  `Approval::Granted` is only produced by a human decision and the agent surface
+  has no way to produce one.
+* **Tool results are data.** Repository content — commit messages, file names,
+  diff text — is never turned into a capability call, and never echoed back as an
+  instruction. The only instructions a model receives are written by the
+  registry or by the MCP crate.
+
 ## Protected Git operations
 
 These cannot execute without a human approval:

@@ -207,8 +207,8 @@ merge base instead of the two commits, and `%1f` is literal in `git stash list`.
 
 The registry, the tier model and the audit trail were built first so that the
 remaining work is additive: a new skill registers capabilities, and a new
-surface renders them. The TUI and the MCP server, and the runtime, service, site,
-DNS and TLS skills, are all still to come. The application window is a browser
-engine in application mode rather than a native shell; Tauri is the intended
-eventual wrapper, and the interface does not change when that happens because it
-speaks only to the local API. See [`../CHANGELOG.md`](../CHANGELOG.md).
+surface renders them. The TUI, and the runtime, service, site, DNS and TLS
+skills, are all still to come. The application window is a browser engine in
+application mode rather than a native shell; Tauri is the intended eventual
+wrapper, and the interface does not change when that happens because it speaks
+only to the local API. See [`../CHANGELOG.md`](../CHANGELOG.md).

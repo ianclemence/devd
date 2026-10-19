@@ -1,0 +1,159 @@
+# The MCP server
+
+`devd mcp` serves the Model Context Protocol on stdin/stdout. It is the third
+projection of the same registry, after the CLI and the application window, and it
+makes the product's premise checkable: an agent driving `devd` reaches exactly
+the same functions as a person, with exactly the same permission checks.
+
+```bash
+devd mcp                  # serve on stdio
+devd mcp --client claude-code   # name the caller in the audit trail
+devd mcp --list           # print the tool list and exit
+```
+
+A client configuration looks like this:
+
+```json
+{
+  "mcpServers": {
+    "devd": {
+      "command": "devd",
+      "args": ["mcp", "--client", "claude-code"]
+    }
+  }
+}
+```
+
+## Five tools, and they do not grow
+
+The obvious design is one MCP tool per capability. That is the design that gets
+worse every time the product gets better: 64 Git capabilities today, and
+services, sites, runtimes, DNS, TLS, agents and deployment still to come, would
+be a tool list hundreds of entries long, loaded into every conversation whether
+or not it is relevant, and regenerated whenever the registry changed.
+
+`devd` publishes **discovery** tools that read the registry instead:
+
+| Tool | Arguments | Purpose |
+| --- | --- | --- |
+| `devd_groups` | none | The domains, and how many capabilities each contains |
+| `devd_capabilities` | `query`, `group`, `limit` | Search within a domain or across all of them |
+| `devd_describe` | `id` | One capability: tier, risk flags, and the JSON Schema of its arguments |
+| `devd_invoke` | `id`, `args`, `dry_run` | Run one by id |
+| `devd_doctor` | none | The environment check |
+
+A capability registered tomorrow is discoverable and invocable immediately,
+with no change to this crate. A test asserts that two servers over registries of
+different sizes publish an identical tool list — the surface is a constant, not
+a function of the catalogue.
+
+The intended call sequence is `devd_groups` → `devd_capabilities` → `devd_describe`
+→ `devd_invoke`, and the `next_step` field of each result says so. That is what
+the requirement meant by *discoverable domains rather than a huge always-loaded
+tool list*.
+
+## The agent actor is not negotiable
+
+`McpServer::new` **discards** the actor in the context it is handed and installs
+an agent actor. A caller cannot present a context claiming to be a human,
+because a claim is not evidence, and the entire tier model exists so that the
+decision does not rest on a claim. A test asserts that a server constructed with
+a human context reports an agent actor.
+
+The consequence is the product's central promise, now enforced on the agent
+surface:
+
+* An operation in a tier that requires approval is **refused**, and the refusal
+  is written to the audit trail.
+* An operation marked `human_only` is refused for an agent *even when an
+  approval is presented*, because `Approval::Granted` is only ever produced by a
+  human decision and the agent surface has no way to produce one.
+* There is no general-purpose "run this command" capability, so a refused
+  operation cannot be routed around by asking for something lower-level.
+
+## What the agent gets instead of a success it did not earn
+
+When an approval-gated operation is refused, the server does not simply fail. It
+asks the registry for the **plan** — which changes nothing and is itself recorded
+as a plan, not as an application — and returns it with the refusal:
+
+```json
+{
+  "ok": false,
+  "error": { "code": "approval_required", "message": "…" },
+  "plan": {
+    "summary": "reset Hard to HEAD",
+    "steps": [
+      "HEAD, the index AND the working tree are reset",
+      "uncommitted changes to tracked files are DISCARDED"
+    ],
+    "destructive": true
+  },
+  "next_step": "A human must approve `git.reset` before it can run. Ask them to approve it in the devd application or with the devd CLI. An agent cannot approve its own operation, and you must not report this operation as having happened."
+}
+```
+
+That field exists because the failure mode being defended against is an agent
+that is *confident and wrong*: it will describe an operation it was refused as
+though it had happened, unless it is told, in the result it is reading, not to.
+An operation that cannot describe itself in advance gets no invented plan; the
+`next_step` says so plainly.
+
+`dry_run: true` on `devd_invoke` produces a plan and changes nothing, which is
+the correct way for an agent to answer "what would this do?".
+
+## Output is data, never an instruction
+
+MCP results are inserted into a model's context, and a repository contains text
+an attacker may control: commit messages, file names, branch names, diff
+content. Nothing in this crate turns that text into a capability call. The tools
+take a capability id and arguments; the only text that reaches the model is a
+description the registry itself wrote, a value the registry returned, or an
+error message. A `next_step` is generated by this crate, never echoed from a
+repository.
+
+Arguments are redacted before they are recorded, as on every other surface, so a
+value the model supplies that looks like a credential does not reach the audit
+file.
+
+## Observed
+
+Run against the release binary with a real repository, over a real pipe:
+
+```
+initialize        → devd 0.2.0, protocol 2025-06-18, 5 tools
+tools/list        → devd_groups, devd_capabilities, devd_describe, devd_invoke, devd_doctor
+devd_groups       → 64 capabilities in 12 domains
+devd_describe     → git.reset: tier destructive, requires_approval true, arguments mode/repo/rev
+devd_invoke       → git.status: ok, branch main, clean true
+devd_invoke       → git.reset mode=hard: isError true, approval_required, plan handed over
+devd_doctor       → ok, 8 checks including git 2.46.0
+```
+
+The audit trail after that session:
+
+```
+agent:claude-code  git.status   read         ok
+agent:claude-code  git.reset    destructive  FAILED     <- the refusal
+agent:claude-code  git.reset    destructive  ok         <- the plan, dry run
+```
+
+and `HEAD` was unchanged by the attempt.
+
+## Testing
+
+21 tests in `devd-mcp`, none of which need a subprocess:
+
+* the protocol: `initialize` (including echoing an unknown version), notifications
+  getting no reply, an unknown method, a missing required argument;
+* the surface: five tools, each with a schema and a real description; and the
+  assertion that the list does not grow with the registry;
+* the actor: a human context is discarded;
+* discovery: group counts, search, domain filtering, describe;
+* refusal: a destructive operation does not run and its plan is returned; an
+  operation that cannot plan says so; a `human_only` operation is refused; a dry
+  run changes nothing;
+* `devd_doctor`, including an appended check and the `ok` computation.
+
+The refusal tests assert against a counter incremented by the handler, so
+"nothing ran" is a measurement rather than an inference.
