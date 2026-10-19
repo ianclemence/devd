@@ -1,0 +1,22 @@
+# Build configuration for the whole workspace.
+#
+# The only entry here exists to fix a link-time problem on the machine this was
+# developed on, and it is deliberately scoped to one target triple so it cannot
+# affect anybody building with MSVC.
+#
+# On `x86_64-pc-windows-gnu` (no MSVC build tools installed), rustc's default
+# linker for the target is `cc`. On this machine `cc` is a launcher that forwards
+# to the Zig compiler, and when Zig links the final `devd` executable the result
+# crashes at startup with `0xc0000005` in release mode — the binary faults inside
+# its own code before `main` runs, with no output at all. The same source in the
+# same build produces a working binary when Rust's own linker is used.
+#
+# `rust-lld` is the linker Rust ships and tests with for this target, and rustc
+# resolves it from its own sysroot, so no external toolchain is needed. C sources
+# (the bundled SQLite inside `libsqlite3-sys`) are still compiled by `cc`; only
+# the final link changes, and only for this target.
+#
+# Verified: `cargo test --workspace` and the release binary both build and run
+# with this setting, and crash without it.
+[target.x86_64-pc-windows-gnu]
+linker = "rust-lld"
