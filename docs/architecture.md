@@ -13,10 +13,10 @@ afterwards. The shells own presentation only.
    MCP server  ──────┤   audit trail + state store           │
                     └───────────────┬──────────────────────┘
                                     │  the only path to a side effect
-                    ┌───────────────▼──────────────────────┐
-                    │  skill crates: devd-git, (devd-sites, │
-                    │  devd-runtime, devd-dns, devd-tls, …) │
-                    └───────────────┬──────────────────────┘
+                    ┌───────────────▼──────────────────────────┐
+                    │  skill crates: devd-git, devd-runtime,   │
+                    │  devd-services, devd-sites               │
+                    └───────────────┬──────────────────────────┘
                                     │  argv arrays, validated input
                     ┌───────────────▼──────────────────────┐
                     │  the system: git, nginx, php, mysql…  │
@@ -209,6 +209,50 @@ stopping it kills the whole process tree — `taskkill /T /F` on Windows, a
 process group on Linux. A background service is recorded by pid so a later run
 can find it.
 
+Services add three rules on top:
+
+* **They outlive the command that started them.** Each is spawned detached, so
+  `devd service start nginx` can finish and nginx keeps running. Ownership is
+  recorded in `<install dir>/devd.pid` and the pid is checked against the
+  process image before it is believed, because Windows recycles pids and a
+  recycled pid would make `devd` kill a stranger.
+* **A start is verified, not assumed.** The port is polled until it opens or the
+  service's own startup window expires. If it never opens, the process is
+  killed, its run row is closed as failed, and the error carries the tail of the
+  service's own log — a command that says "started" and leaves a dead service
+  behind is worse than one that fails.
+* **They do not inherit the caller's handles.** See
+  [`limitations.md`](limitations.md#environment-specific-notes) — without this,
+  a piped `devd stack up` waited for nginx to exit.
+
+## Services, sites and generated configuration
+
+The dependency direction is one-way: `devd-sites` depends on `devd-services`,
+never the reverse.
+
+```text
+devd-core  ←  devd-runtime  ←  devd-services  ←  devd-sites
+             (PHP, Node, Go)   (nginx, MariaDB,   (sites, vhosts,
+                                php-cgi, TLS)      hosts block)
+```
+
+* `devd-services` owns the service model, the catalogues, `nginx.conf` rendering,
+  the internal certificate authority and MariaDB. TLS lives here rather than in a
+  `devd-tls` crate because the site pipeline is its only consumer; a crate is
+  split out when a second consumer appears, not in anticipation of one.
+* `devd-sites` owns sites, the managed hosts block, and the calls into services
+  that make a site real. There is no `devd-dns`: with the hosts file as the only
+  resolver, the block is a few hundred lines and belongs where its only caller
+  is.
+* **`nginx.conf` is generated output.** The store is the source of truth: the
+  renderer reads the site table and writes a complete file, so a hand edit is
+  overwritten rather than merged. Config *content* uses forward slashes (nginx
+  treats `\` as an escape); `argv` uses native paths, because arguments are
+  passed as an array and never through a shell.
+* **`php-cgi` is not downloaded.** It is the `php-cgi.exe` of the primary PHP
+  runtime, turned into a service row on demand — by `service start php-cgi`, by
+  installing nginx, or by `stack up`. One FastCGI upstream serves every site.
+
 ## Skill crates
 
 A skill crate registers capabilities and nothing else. `devd-git` is the
@@ -217,9 +261,26 @@ whose handlers call a typed `GitService`. The service is where Git knowledge
 lives — how to parse `for-each-ref`, that `git stash list` needs `%x1f` while
 `for-each-ref` needs `%1f`, which reset mode means what.
 
-The remaining skills follow the same shape. Their capabilities will appear in
-the same list, with the same tiers and the same audit, without any new safety
-decision being made.
+The other three follow the same shape and the same pattern of a typed service
+under a thin capability layer: `devd-runtime` (catalogues, digests, PHP
+configuration), `devd-services` (service lifecycle, nginx rendering, TLS, MariaDB)
+and `devd-sites` (site lifecycle, hosts file). They register 34 more
+capabilities, and they appear in the CLI, the dashboard, the application window
+and the agent surface with no new safety decision being made, because all four
+read the same declarations.
+
+## Downloads and verification
+
+Nothing is bundled. A runtime or service is downloaded from its vendor when it is
+first installed, in-process with `ureq` + `rustls`, and the digest the vendor
+publishes is checked before anything is unpacked. Archives are extracted to a
+temporary directory and moved into place, so a failed install never leaves a
+half-populated install directory that later looks installed.
+
+Where a vendor publishes no digest — nginx is the only one — the install says so
+in its own output instead of implying a verification that did not happen. Sizes
+are a sanity check only: vendors round them, so a size within 5% is accepted and
+the digest is what decides.
 
 ## Why Git shells out
 
@@ -239,9 +300,9 @@ merge base instead of the two commits, and `%1f` is literal in `git stash list`.
 
 The registry, the tier model and the audit trail were built first so that the
 remaining work is additive: a new skill registers capabilities, and a new
-surface renders them. The runtime, service, site, DNS and TLS skills are still to
-come — and when they land, their capabilities will appear in the CLI, the
-dashboard, the application window and the agent surface without a new safety
+surface renders them. Apache, Redis, Mailpit, a DNS server and SSH/deploy are
+still to come — and when they land, their capabilities will appear in the CLI,
+the dashboard, the application window and the agent surface without a new safety
 decision being made, because all four read the same declarations. The application
 window is a browser engine in application mode rather than a native shell; Tauri
 is the intended eventual wrapper, and the interface does not change when that

@@ -277,12 +277,64 @@ configuration is therefore not a benign operation, which is why
 approval. A human editing their own repository's configuration is choosing
 their own tooling, and `devd` records the change.
 
+## Services, TLS and the database
+
+A service runs as the invoking user, so what it is allowed to do is the user's
+own authority. The protections are about what `devd` writes and who can reach it.
+
+* **Nothing is bundled and everything is fetched over HTTPS.** Runtimes and
+  services are downloaded from the vendor when installed, checked against the
+  digest the vendor publishes, extracted in-process, and moved into place only
+  after the digest matches. nginx publishes only a PGP signature, so its install
+  reports that it could verify length and not content — the gap is in
+  [`limitations.md`](limitations.md) and in the install output itself.
+* **Hostnames are validated before they reach a file.** `util::validate_hostname`
+  rejects anything that is not a lowercase DNS label sequence, so a site name
+  cannot inject a directive into `nginx.conf` or a path into `certs/`.
+* **Configuration is generated, not executed.** `nginx.conf` is rendered from the
+  site table, and a service is started with an `argv` array. There is no path by
+  which a site name, a path or a model's output becomes a shell string.
+* **Listeners.** nginx listens on the configured HTTP and HTTPS ports on all
+  interfaces, because a site may need to be reachable from another device on the
+  LAN; MariaDB binds `127.0.0.1` only. `php-cgi` is a FastCGI listener on
+  `127.0.0.1:9000` with **no authentication of its own** — any local user who can
+  connect to that port can execute PHP as the user running `devd`. That is
+  inherent to FastCGI, not something `devd` introduces, and it is why the
+  listener is bound to loopback.
+* **The CA key never leaves the machine and never enters a response.** `devd`
+  writes `certs/devd-ca.key` when it creates the authority; `tls.ca.show` returns
+  the certificate, never the key; the key is not logged and no capability returns
+  it. Leaf keys are written with owner-only permissions on Unix.
+* **Trusting the CA is a separate, human-approved operation.** `tls.trust` is
+  `Tier::Admin`, prints the exact `certutil`/`trust` command's effect before it
+  runs, and changes the machine's trust store. `devd` never disables certificate
+  verification anywhere.
+* **Hosts writes are `Tier::Admin` and snapshotted.** The managed block preserves
+  every line `devd` did not write, the file is copied to `snapshots/` before the
+  write, and the operation is separate from creating a site.
+* **The database password is not stored.** `root` is passwordless and bound to
+  loopback by default, and the install says so. If
+  `DEVD_MYSQL_ROOT_PASSWORD` is set it is passed to the one-time bootstrap on its
+  command line and to clients through `MYSQL_PWD`, never written to `my.ini`,
+  `settings.toml`, the audit row or a log. A generated password held in the
+  operating system's credential store is the next step, not a claim of this one.
+* **A fresh MariaDB data directory has its `test` schema removed.** MariaDB's
+  bootstrap creates a world-writable database; `devd` deletes it while the server
+  is still stopped, and never touches an existing data directory.
+
 ## Windows and Linux
 
 Differences are stated rather than hidden:
 
 * Process trees are killed with `taskkill /T /F` on Windows and a process group
   on Linux. A Windows Job Object would be stronger and is not implemented.
+* Certificates are trusted with `certutil -addstore` on Windows and `trust
+  anchor` on Linux; on Linux without p11-kit the command prints the manual
+  `update-ca-certificates` recipe instead of pretending it worked.
+* **Only Windows has a service provider in this release.** nginx publishes a
+  Windows zip and no Linux binary; MariaDB publishes `winx64` archives. On Linux
+  the service catalogues are therefore empty rather than guessing at a
+  distribution's package manager. See [`limitations.md`](limitations.md).
 * Locations differ (`%LOCALAPPDATA%` versus `~/.local/share`), resolved through
   one `Paths` type rather than scattered string building.
 * Line endings are the repository's business, not `devd`'s. `devd` never changes

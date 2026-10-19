@@ -27,10 +27,11 @@ A client configuration looks like this:
 ## Five tools, and they do not grow
 
 The obvious design is one MCP tool per capability. That is the design that gets
-worse every time the product gets better: 64 Git capabilities today, and
-services, sites, runtimes, DNS, TLS, agents and deployment still to come, would
-be a tool list hundreds of entries long, loaded into every conversation whether
-or not it is relevant, and regenerated whenever the registry changed.
+worse every time the product gets better: 98 capabilities today, across Git,
+runtimes, services, sites, TLS, the database and hosts, with DNS, agents and
+deployment still to come, would be a tool list hundreds of entries long, loaded
+into every conversation whether or not it is relevant, and regenerated whenever
+the registry changed.
 
 `devd` publishes **discovery** tools that read the registry instead:
 

@@ -10,13 +10,15 @@ Apache, several PHP versions side by side, MySQL/MariaDB, Redis, Mailpit, Node
 and Go, automatic local HTTPS, hosts and virtual hosts, and per-project
 isolation — on Windows and Linux.
 
-> **Project status.** This repository is at **M3**: the foundation, the complete
+> **Project status.** This repository is at **M4**: the foundation, the complete
 > Git integration, the CLI, the **local application** (a loopback HTTP API plus
-> the interface it serves), the **MCP server** and the **terminal dashboard**
-> are implemented and tested. The service-management, site, DNS, TLS and SSH
-> layers are designed but **not yet built**. See [Status](#status) for exactly
-> what works today, and [`CHANGELOG.md`](CHANGELOG.md) for what landed in each
-> milestone.
+> the interface it serves), the **MCP server**, the **terminal dashboard**, the
+> **runtime installers**, the **service stack** (nginx, MariaDB, php-cgi) and
+> **sites served over internal HTTPS** are implemented and tested. Apache, Redis,
+> Mailpit, a DNS server and SSH/deploy are designed but **not yet built**, and the
+> service layer is Windows-only in this milestone. See [Status](#status) for
+> exactly what works today, and [`CHANGELOG.md`](CHANGELOG.md) for what landed in
+> each milestone.
 
 ---
 
@@ -46,14 +48,20 @@ The consequences are enforced in code, not in prompt text:
 
 ```text
 crates/
-  devd-core/    the capability registry, the state store, paths, settings, events
-  devd-git/     64 Git capabilities and the typed Git service beneath them
-  devd-server/  the loopback HTTP API and the application interface it serves
-  devd-mcp/     the Model Context Protocol server for agents
-  devd-tui/     the terminal dashboard
-  devd-cli/     the `devd` command
+  devd-core/     the capability registry, the state store, paths, settings, events
+  devd-git/      64 Git capabilities and the typed Git service beneath them
+  devd-runtime/  PHP, Node and Go installers, verified against the vendor's digest
+  devd-services/ nginx, MariaDB, php-cgi, TLS and the service stack
+  devd-sites/    sites, their generated vhosts and the managed hosts block
+  devd-server/   the loopback HTTP API and the application interface it serves
+  devd-mcp/      the Model Context Protocol server for agents
+  devd-tui/      the terminal dashboard
+  devd-cli/      the `devd` command
 ```
 
+* **98 capabilities** across 20 discoverable groups. The 64 Git ones are listed
+  below; the rest are `runtime`, `service`, `web`, `stack`, `tls`, `db`, `site`
+  and `hosts`.
 * **64 Git capabilities** across 12 discoverable groups (`git.repo`,
   `git.changes`, `git.commits`, `git.history`, `git.branches`, `git.tags`,
   `git.remotes`, `git.merge`, `git.stashes`, `git.worktrees`, `git.config`,
@@ -61,6 +69,21 @@ crates/
 * **A typed Git service** that drives the user's own `git` executable through
   `argv` arrays — because rebase, bisect, worktrees, submodules, LFS, credential
   helpers and hooks are only faithful when Git itself performs them.
+* **Runtime installers** (`devd runtime install php`) that read the vendor's own
+  catalogue, check the digest the vendor publishes, unpack in-process, and
+  configure what they installed — PHP's extensions are enabled one at a time and
+  any that cannot load are switched back off and reported.
+* **A service stack** (`devd service`, `devd web`, `devd stack`): nginx and
+  MariaDB from their vendors, `php-cgi` from the installed PHP runtime, started
+  detached, tracked by pid file and process image, and confirmed listening on
+  their port before the command reports success. `nginx.conf` is rendered from
+  the site table; it is output, not configuration you edit.
+* **Sites over HTTPS** (`devd site`) from an internal certificate authority
+  created on first use — an ECDSA P-256 CA and leaf, a full chain for nginx, and
+  `devd tls trust` to put the CA in the operating system's trust store. No
+  `openssl` binary, no bundled certificate files.
+* **A managed hosts block** (`devd hosts`) that preserves every line it did not
+  write, byte for byte, snapshots the file first, and is idempotent.
 * **An application** (`devd ui`) — a window onto a loopback HTTP API that is a
   pure projection of the same registry. Projects, the working tree, history,
   branches, tags, remotes, stashes, worktrees, conflicts and recovery, plus the
@@ -77,14 +100,16 @@ crates/
 * **Two-step approvals** that survive review: a destructive operation returns a
   plan and a single-use token, changes nothing, and only runs when that token is
   approved. The client never asserts the approval.
-* **226 tests**, including the ones that prove a declined operation did not
-  execute, that uncommitted work survives a decline, an abort and a branch
-  switch, that `/api` rejects a bad token, a foreign `Host`, a foreign `Origin`
-  and every `OPTIONS` preflight, that an agent is refused a destructive
-  operation and handed its plan instead, and that a dashboard keystroke changes
-  the real index while a declined one changes nothing at all.
+* **A test suite** that proves a declined operation did not execute, that
+  uncommitted work survives a decline, an abort and a branch switch, that `/api`
+  rejects a bad token, a foreign `Host`, a foreign `Origin` and every `OPTIONS`
+  preflight, that an agent is refused a destructive operation and handed its plan
+  instead, that a dashboard keystroke changes the real index while a declined one
+  changes nothing at all, and that a generated vhost names the files that exist —
+  including the certificate paths, whose dots are not an extension.
 * **`devd doctor`**, which checks the layout, the store, the Git discovery and
-  the environment before anything else is attempted.
+  the environment before anything else is attempted — and now reports the
+  installed runtimes, services and sites.
 
 ## Status
 
@@ -92,11 +117,16 @@ crates/
 | --- | --- |
 | Capability registry, tiers, approvals, audit, store | **Done** (M0) |
 | Git service, capabilities, CLI, tests | **Done** (M0) |
-| CLI | **Done** for capabilities, Git, audit and doctor |
+| CLI | **Done** for capabilities, Git, services, sites, audit and doctor |
 | Local application (`devd ui`, HTTP API, interface) | **Done** (M1) |
 | MCP server (`devd mcp`) | **Done** (M2) |
 | TUI (`devd tui`) | **Done** (M3) |
-| Runtime installers (PHP, Node, Go), services (nginx, Apache, MySQL, Redis, Mailpit), sites, DNS, TLS, SSH/deploy | Designed, **not built** |
+| Runtime installers: PHP, Node, Go | **Done** (M4) |
+| Services: nginx, MariaDB, php-cgi FastCGI; stack lifecycle | **Done** (M4) |
+| Sites: vhosts, internal TLS, hosts block | **Done** (M4) |
+| Services still to come: Apache, Redis, Mailpit | Planned, **not built** |
+| DNS server, SSH/deploy, mail capture | Planned, **not built** |
+| Runtime, service and site panels in the app and the TUI | Planned, **not built** — the CLI and the capability API cover them |
 
 Nothing above is claimed as finished when it is not. The registry, the tier
 model and the audit trail were built first precisely so the remaining surfaces
@@ -116,7 +146,25 @@ The binary is `target/release/devd` (`devd.exe` on Windows). Put it on `PATH`
 and run ``devd doctor``.
 
 There is no bundled PHP, nginx or database: those are downloaded on first run,
-so the repository and its license stay free of third-party binaries.
+so the repository and its license stay free of third-party binaries. What
+`devd` downloads is checked against the digest the vendor publishes, with
+nginx's missing checksum called out in the install output and in
+[`docs/limitations.md`](docs/limitations.md).
+
+### Upgrading
+
+There is no self-update yet. An upgrade is a source upgrade:
+
+```bash
+git pull
+cargo build --release
+devd doctor            # the layout and store are checked before anything runs
+devd stack down && devd stack up   # if services were running
+```
+
+The state store carries a schema version and is migrated on open, so an older
+installation's sites, services and audit rows are kept. Downloaded runtimes and
+services are cached by digest under the data directory and are not re-fetched.
 
 ## Using the CLI
 
@@ -164,6 +212,34 @@ devd git rebase --root --autosquash
 devd git squash 3 -m "one commit"
 devd git bisect start HEAD v1.0.0
 ```
+
+### Runtimes, services and sites
+
+```bash
+devd runtime available php          # what the vendor publishes, and where
+devd runtime install php            # newest stable; digest-checked, then verified
+devd runtime list
+
+devd service available nginx
+devd service install nginx
+devd service install mariadb --port 3306
+devd stack up                       # php-cgi, then mariadb, then nginx
+devd service status nginx
+
+devd site create blog               # directory, starter page, vhost, certificate
+devd site list
+devd hosts sync -y                  # one approval: write the managed block
+devd tls ca show                    # the CA to trust, and where it is
+devd tls trust -y                   # add it to the OS trust store
+
+devd db create blog
+devd db list
+devd db drop blog -y                # destructive: plan first, then approval
+```
+
+`devd site create` prints the URL. The two pieces that need a privilege — the
+hosts file and the trust store — are separate, explicitly approved capabilities,
+never a side effect of creating a site.
 
 ## Using the app
 

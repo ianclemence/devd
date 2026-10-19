@@ -10,6 +10,125 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.5.0] - 2026-10-19 — M4: a real site over HTTPS
+
+The fifth milestone is the first one where `devd` does what the product is for:
+it installs a runtime, installs a web server and a database, creates a site, and
+serves it over TLS with a chain that verifies. Everything is downloaded from the
+vendor, checked against a digest, and started and confirmed by the same
+capability dispatcher that has been underneath every surface since M0.
+
+### Added
+
+**Runtimes (`devd-runtime`)**
+
+* `runtime.available`, `runtime.install`, `runtime.remove`, `runtime.verify`,
+  `runtime.list` and `runtime.set_primary`, plus `devd runtime …` on the CLI.
+* PHP from `windows.php.net`'s `releases.json`, Node from `nodejs.org/dist` with
+  its `SHASUMS256.txt`, Go from `go.dev/dl/?mode=json`. Downloads are in-process
+  (`ureq` + `rustls`), digest-verified, extracted in-process (`zip`, `tar`,
+  `flate2`), and moved into place only after the digest matches. Nothing is
+  bundled and no external `curl` is used.
+* PHP is configured after it is unpacked: the curated extension list is
+  intersected with the DLLs the build actually ships, `opcache` is enabled as a
+  `zend_extension`, the interpreter is run, anything that reports "Unable to
+  load dynamic library" is commented out, and it is run again. The install
+  reports what was enabled and what was switched back off.
+
+**Services (`devd-services`)**
+
+* Nine service capabilities — install, start, stop, restart, status, list, logs,
+  remove and available — for nginx and MariaDB, plus `web.render`, `web.test`,
+  `web.reload`, `stack.up`, `stack.down`, six `tls.*` and three `db.*`.
+* nginx from nginx.org; MariaDB from `archive.mariadb.org` with the per-file
+  SHA-256 from MariaDB's release API. MariaDB is initialised by its own
+  `mysql_install_db.exe`, without registering a Windows service, with its data
+  directory outside the install directory.
+* `php-cgi` as a service built from the installed PHP runtime, and `stack up`
+  creates it if it is missing.
+* Detached supervision: a pid file plus a process-image check, and a start is
+  confirmed by the port opening before the command reports success. A failure
+  kills the process and returns the tail of its own log.
+* `nginx.conf` rendered from the site table: a PHP upstream, a default server
+  that returns an explanatory 404, per-site HTTP→HTTPS redirect and TLS server
+  blocks, and per-host access logs. Config content uses forward slashes; `argv`
+  uses native paths.
+
+**Sites and TLS (`devd-sites`, `devd-services::tls`)**
+
+* `site.list`, `site.create`, `site.remove`, `hosts.show` and `hosts.sync`.
+* An internal ECDSA P-256 certificate authority created on first use, leaves
+  valid 397 days and a full chain for nginx, all issued in-process with `rcgen`.
+  The CA key never enters a response or a log.
+* `tls.issue`, `tls.list`, `tls.ca.show`, `tls.trust`, `tls.untrust` and
+  `tls.leaf.remove`; trusting the CA is `Tier::Admin` and uses `certutil` on
+  Windows or `trust anchor` on Linux.
+* A managed hosts block that snapshots the file, preserves every line it did not
+  write byte for byte (including CRLF endings), and is idempotent.
+
+**CLI**
+
+* `devd runtime`, `devd service`, `devd site`, `devd hosts`, `devd web`,
+  `devd stack`, `devd tls` and `devd db`, each mapping one-to-one onto
+  capabilities. 98 capabilities in 20 groups, up from 64 in 12.
+
+### Safety
+
+* Hostnames are validated before they can reach a config file or a path;
+  `site.remove` refuses to delete a directory outside the `www` root.
+* Publishing a name and trusting a CA are separate, explicitly approved
+  capabilities — never side effects of creating a site.
+* The database password is passed to the one-time bootstrap on its command line
+  and to clients through `MYSQL_PWD`, and is never written to a file `devd` owns.
+  `root` is passwordless and bound to loopback by default, which the install
+  warns about.
+* A fresh MariaDB data directory has its world-writable `test` schema removed.
+* nginx publishes no digest; its install says so rather than implying a
+  verification that did not happen.
+
+### Fixed
+
+* `Path::with_extension` collapsed `certs/blog.test.crt` and
+  `certs/blog.test.key` onto `certs/blog.test`, so nginx was told to load a
+  certificate that `devd` had never written and refused to start.
+* A detached service inherited `devd`'s stdout, so `devd stack up | Tee-Object`
+  printed its result and then hung until it was killed. `devd` now clears the
+  inheritance flag on its own standard handles before spawning a service.
+* The debug binary overflowed the 1 MB Windows main-thread stack while parsing
+  the grown command line, so even `devd --help` died before running. The stack
+  reserve for this target is now 8 MB, matching Linux.
+* `mysql_install_db.exe` was given `--basedir`, which it does not accept; it
+  exited 7 and created nothing.
+* `mysql --batch` printed a header row, which made `schema_name` appear as a
+  database in `db list`.
+* The MariaDB catalogue resolved `latest` to a preview series with no Windows
+  package; it now reads MariaDB's release API, offers only Stable series that
+  have a `winx64.zip`, and knows each file's digest before downloading it.
+* The MariaDB provisioning report — data directory, whether it was initialised,
+  the password warning — was collected at install time and then dropped.
+* `php-cgi` was reported as "unknown version" by `service list` and `doctor`.
+
+### Tests
+
+See the line below; the numbers are from the run recorded in
+[`docs/releases/v0.5.0.md`](docs/releases/v0.5.0.md). The suite covers the
+generated vhost and its certificate paths, the hosts block's preservation and
+idempotence, hostname validation before a write, the refusal to delete outside
+the `www` root, the chain verifying against the CA, and re-issuance replacing the
+leaf without replacing the CA. The live downloads are `#[ignore]` tests.
+
+### Known limitations (at 0.5.0)
+
+* Apache, Redis and Mailpit are not implemented; there is no DNS server, SSH or
+  deploy.
+* Services are Windows-only: the vendor archives used here are Windows builds.
+* nginx has no published digest.
+* One `php-cgi` listener serves every site, so per-site PHP versions are recorded
+  but not routed.
+* The application and the dashboard have no Runtimes, Services or Sites panels.
+
+---
+
 ## [0.4.0] - 2026-10-19 — M3: the terminal dashboard
 
 The fourth milestone adds the surface that works where the others cannot: a
@@ -79,7 +198,9 @@ against the real registry and a real repository — including that staging from
 the dashboard changes the real index, and that a declined discard leaves the file
 on disk with the refusal in the audit table.
 
+---
 
+## [0.3.0] - 2026-10-18 — M2: the agent surface
 
 The third milestone adds the Model Context Protocol server. It is the third
 projection of the same registry, after the CLI and the application window, and it
