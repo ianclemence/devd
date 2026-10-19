@@ -1831,6 +1831,21 @@ fn is_conflicted(x: char, y: char) -> bool {
     )
 }
 
+/// A `devd doctor` check for the Git backend.
+///
+/// Lives here, beside the service it checks, so that the CLI, the application's
+/// System panel and the MCP server all report the same thing from one
+/// implementation instead of three that can disagree.
+pub fn doctor_check(configured: Option<&str>) -> devd_core::Check {
+    match GitService::discover(configured) {
+        Ok(git) => devd_core::Check::ok(
+            "git",
+            format!("{} at {}", git.version(), git.git_path().display()),
+        ),
+        Err(e) => devd_core::Check::fail("git", e.to_string()),
+    }
+}
+
 fn command_failed(args: &[String], out: &CommandOutput) -> DevdError {
     let program = args.first().cloned().unwrap_or_else(|| "git".to_string());
     // Git writes a good number of its failures to *stdout*: "nothing to
