@@ -10,12 +10,13 @@ Apache, several PHP versions side by side, MySQL/MariaDB, Redis, Mailpit, Node
 and Go, automatic local HTTPS, hosts and virtual hosts, and per-project
 isolation — on Windows and Linux.
 
-> **Project status.** This repository is at **M2**: the foundation, the complete
+> **Project status.** This repository is at **M3**: the foundation, the complete
 > Git integration, the CLI, the **local application** (a loopback HTTP API plus
-> the interface it serves) and the **MCP server** are implemented and tested. The
-> service-management, site, DNS, TLS and TUI layers are designed but **not yet
-> built**. See [Status](#status) for exactly what works today, and
-> [`CHANGELOG.md`](CHANGELOG.md) for what landed in each milestone.
+> the interface it serves), the **MCP server** and the **terminal dashboard**
+> are implemented and tested. The service-management, site, DNS, TLS and SSH
+> layers are designed but **not yet built**. See [Status](#status) for exactly
+> what works today, and [`CHANGELOG.md`](CHANGELOG.md) for what landed in each
+> milestone.
 
 ---
 
@@ -49,6 +50,7 @@ crates/
   devd-git/     64 Git capabilities and the typed Git service beneath them
   devd-server/  the loopback HTTP API and the application interface it serves
   devd-mcp/     the Model Context Protocol server for agents
+  devd-tui/     the terminal dashboard
   devd-cli/     the `devd` command
 ```
 
@@ -68,14 +70,19 @@ crates/
   as the product does. An agent can explore the catalogue and run read-tier
   capabilities; an operation that needs approval is refused, recorded, and
   returned with the plan and an explicit instruction not to claim it happened.
+* **A terminal dashboard** (`devd tui`) for the console and for SSH. Nine views,
+  the same Git actions as the CLI, the whole registry filterable, the audit
+  trail and the doctor. A destructive key raises the registry's own plan and runs
+  nothing until you approve it; declining records the refusal in the audit trail.
 * **Two-step approvals** that survive review: a destructive operation returns a
   plan and a single-use token, changes nothing, and only runs when that token is
   approved. The client never asserts the approval.
-* **169 tests**, including the ones that prove a declined operation did not
+* **226 tests**, including the ones that prove a declined operation did not
   execute, that uncommitted work survives a decline, an abort and a branch
   switch, that `/api` rejects a bad token, a foreign `Host`, a foreign `Origin`
-  and every `OPTIONS` preflight, and that an agent is refused a destructive
-  operation and handed its plan instead.
+  and every `OPTIONS` preflight, that an agent is refused a destructive
+  operation and handed its plan instead, and that a dashboard keystroke changes
+  the real index while a declined one changes nothing at all.
 * **`devd doctor`**, which checks the layout, the store, the Git discovery and
   the environment before anything else is attempted.
 
@@ -88,7 +95,7 @@ crates/
 | CLI | **Done** for capabilities, Git, audit and doctor |
 | Local application (`devd ui`, HTTP API, interface) | **Done** (M1) |
 | MCP server (`devd mcp`) | **Done** (M2) |
-| TUI | Designed, **not built** |
+| TUI (`devd tui`) | **Done** (M3) |
 | Runtime installers (PHP, Node, Go), services (nginx, Apache, MySQL, Redis, Mailpit), sites, DNS, TLS, SSH/deploy | Designed, **not built** |
 
 Nothing above is claimed as finished when it is not. The registry, the tier
@@ -203,6 +210,43 @@ the confirm button is red. Approving replays the server's stored arguments, neve
 the client's — see [`docs/app.md`](docs/app.md) for why that distinction matters
 and for the four loopback defences that were verified against a real socket.
 
+## Using the dashboard
+
+```bash
+devd tui
+```
+
+For the console, and for an SSH session with nothing forwarded. Nine views —
+projects, changes, history, branches, the whole registry, the audit trail, the
+doctor — with `1`–`9` to jump and `Tab` to cycle.
+
+```text
+ ┌ Changes - main: 1 staged, 2 unstaged, 1 untracked in C:/code/devd ──────────────┐
+ │M staged     README.md                                                           │
+ │M unstaged   README.md                                                           │
+ │M unstaged   crates/devd-core/src/lib.rs                                         │
+ │? untracked  NOTES.md                                                            │
+ └─────────────────────────────────────────────────────────────────────────────────┘
+  Enter stage/unstage   s stage   u unstage   d discard   a stage all   c commit   r refresh   ? help   q quit
+```
+
+`s` stages, `u` unstages, `a` stages everything, `c` commits, `Enter` toggles a
+file in or out of the index, `n` creates a branch, `t` tracks a repository, `/`
+searches the registry and `x` runs any capability in it.
+
+`d` discards, so it does not run: the registry's own plan is shown — the files,
+and the sentence that says the content is not recoverable from Git — and nothing
+happens until `y`. Declining records the refusal in the audit trail rather than
+dismissing it. A branch switch that would overwrite local work becomes the same
+kind of confirm, using the registry's own overwrite check.
+
+It refuses to start when it has no terminal, and says what to use instead. A
+branch name containing an escape sequence cannot reach your console: control
+characters are replaced before anything is drawn.
+
+See [`docs/tui.md`](docs/tui.md) for the keys, the approval transcript, and how
+each claim above is tested.
+
 ## Using devd from an agent
 
 ```bash
@@ -272,6 +316,8 @@ Exit codes are stable so scripts can branch on the reason:
   the two-step approval flow, and what was observed when it ran.
 * [`docs/mcp.md`](docs/mcp.md) — the agent surface: the five discovery tools, why
   the list is small, and what an agent is handed when it is refused.
+* [`docs/tui.md`](docs/tui.md) — the terminal dashboard: the views, the keys, the
+  approval prompt, and the tests behind each claim.
 * [`docs/git-cli.md`](docs/git-cli.md) — every Git command, mapped to the
   capability it calls.
 * [`docs/security.md`](docs/security.md) — the threat model and the specific

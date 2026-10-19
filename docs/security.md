@@ -96,6 +96,29 @@ A test suite drives the real router for each defence, and the same checks were
 run against the release binary on a socket; the observed results are recorded in
 [`app.md`](app.md#what-was-actually-observed).
 
+## The terminal dashboard
+
+A terminal is an output device that executes control sequences, which makes it a
+place repository content must not be written raw. A branch name or a path
+containing `ESC [ 2 J` is not text at that point; it is a command to clear the
+reader's screen. Every string the dashboard draws passes through one function
+that replaces control characters, and a test renders a branch named
+`evil\u{1b}[2Jbranch` and asserts that no escape reached the buffer.
+
+The dashboard is a client of the dispatcher and nothing else, so the tiers,
+the approvals and the audit apply unchanged. Two details of its own:
+
+* **A modal owns every key while it is open**, so a keystroke cannot both answer
+  a prompt and act on the view behind it, and `Esc` on an approval means *no*
+  rather than *dismiss the question*.
+* **A decline is dispatched, not dismissed.** `n` calls the dispatcher with
+  `Approval::Denied`, so the refusal is a row in the audit trail instead of a
+  keystroke that vanished.
+
+It refuses to start without an interactive terminal rather than attempting raw
+mode on a handle that cannot support it — an attempt that took the process down
+with `0xc0000005` and no output on Windows before the guard existed.
+
 ## The agent surface
 
 An agent connecting over MCP is treated as what it is: a caller that is

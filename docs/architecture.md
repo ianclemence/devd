@@ -169,6 +169,38 @@ allow-list, an `Origin` check, a refusal of every `OPTIONS` request, and a
 256-bit bearer token. [`app.md`](app.md) records the details, why each one is
 there, and the results observed against the running binary.
 
+## Surfaces: the terminal dashboard
+
+`devd tui` is a projection in the same sense: `Surface::Tui` and
+`Actor::human(Surface::Tui)` go to the dispatcher, and every row on screen came
+out of a capability. It exists because the application window needs a browser and
+an SSH session does not have one.
+
+It is deliberately split so that nothing that matters needs a terminal:
+
+| Part | What it is |
+| --- | --- |
+| `state` | Plain data: the view, the cursor, and typed rows parsed from capability results. No terminal types. |
+| `controller` | Keystrokes in, capability calls out, over a `Backend` trait. |
+| `view` | A pure function from the state to a frame. It reads and never writes. |
+| `run` | Owns raw mode, the event loop and the terminal, and nothing else. |
+
+The reason for the split is that the interesting behaviour is "a destructive key
+must not run until it is approved, and declining must be recorded", and that
+should be provable in a test rather than watched for by hand. A fake backend that
+*counts what ran* makes it a measurement.
+
+The approval flow is arrived at independently from the HTTP API's token and is
+the same shape, which is the point: the dashboard calls `dispatch` with no
+approval, reacts to `approval_required`, asks the registry for the plan, and
+replays the exact request it already built when the answer is yes. The refusal
+path dispatches with `Approval::Denied` rather than closing the prompt, so a
+decline reaches the audit trail.
+
+`view` being a pure function of the state is also what makes the frames
+testable: the tests draw into `ratatui`'s `TestBackend` and assert on the
+resulting buffer.
+
 ## Process execution
 
 A child process is started with an `argv` array; the runner never builds a
@@ -207,8 +239,11 @@ merge base instead of the two commits, and `%1f` is literal in `git stash list`.
 
 The registry, the tier model and the audit trail were built first so that the
 remaining work is additive: a new skill registers capabilities, and a new
-surface renders them. The TUI, and the runtime, service, site, DNS and TLS
-skills, are all still to come. The application window is a browser engine in
-application mode rather than a native shell; Tauri is the intended eventual
-wrapper, and the interface does not change when that happens because it speaks
-only to the local API. See [`../CHANGELOG.md`](../CHANGELOG.md).
+surface renders them. The runtime, service, site, DNS and TLS skills are still to
+come — and when they land, their capabilities will appear in the CLI, the
+dashboard, the application window and the agent surface without a new safety
+decision being made, because all four read the same declarations. The application
+window is a browser engine in application mode rather than a native shell; Tauri
+is the intended eventual wrapper, and the interface does not change when that
+happens because it speaks only to the local API. See
+[`../CHANGELOG.md`](../CHANGELOG.md).

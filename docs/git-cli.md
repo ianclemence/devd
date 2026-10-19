@@ -2,8 +2,8 @@
 
 `devd git` keeps Git's vocabulary, because the people who use it already know
 Git and should not have to translate. Every command below is a thin shell over a
-capability — the same capability the TUI, the desktop app, the HTTP API and an
-MCP server will call.
+capability — the same capability the dashboard, the application window, the HTTP
+API and an MCP server call.
 
 Nothing in this surface does work of its own. Each command shapes typed
 arguments and dispatches a capability, which means the CLI cannot do anything

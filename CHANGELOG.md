@@ -10,7 +10,76 @@ may change capability identifiers where the design was wrong.
 
 ---
 
-## [0.3.0] - 2026-10-19 — M2: the agent surface
+## [0.4.0] - 2026-10-19 — M3: the terminal dashboard
+
+The fourth milestone adds the surface that works where the others cannot: a
+console with no browser to open, and an SSH session with nothing forwarded. It is
+the third projection of the same registry, and it changes nothing about how the
+product decides what may happen.
+
+### Added
+
+**The terminal dashboard (`devd-tui`, `devd tui`)**
+
+* Nine views — Dashboard, Projects, Changes, History, Branches, Capabilities,
+  Activity, Doctor, Help — reachable by digit (`1`–`9`) or by `Tab`.
+* Git actions from the keyboard without a second implementation: `s` stage, `u`
+  unstage, `a` stage all, `c` commit, `Enter` toggle a file in or out of the
+  index, `n` new branch, `t` track a repository by path, `/` search the registry,
+  `x` run any capability with arguments typed as JSON.
+* A frame is a pure function of the state, which is what lets the tests render
+  one and assert on the buffer.
+* **An approval prompt that is the operation.** `d` (discard) is
+  `Tier::Destructive`, so the dashboard asks the registry for the plan, shows it
+  verbatim, and keeps the `InvokeRequest` it built. `y` replays *that* request,
+  never a rebuild from the screen. `n` dispatches the same request as refused, so
+  the refusal is recorded rather than discarded — the same two-step principle as
+  the CLI and the application window.
+* **A branch switch that would lose work becomes a confirm**, with the list of
+  files at risk taken from `git.switch.check`.
+* `devd tui` refuses to start when stdin or stdout is not a terminal, and says
+  what to use instead. Entering raw mode on a pipe killed the process with
+  `0xc0000005` and no output on Windows; that is now a sentence and exit code 2.
+
+### Safety
+
+* **Control characters are neutralised before they reach the terminal.** A branch
+  name or path containing an escape sequence is a command being sent to the
+  reader's console, not text. One function replaces them, and a test renders a
+  branch named with `ESC [ 2 J` and asserts nothing reached the buffer.
+* **A modal owns every key**, so a keystroke cannot both answer a prompt and act
+  on the view behind it. `Esc` on an approval means *no*, not *cancel the
+  question*.
+* **The dashboard has no path to a shell.** It calls capabilities, and
+  capabilities are typed structs turned into `argv` arrays.
+* **A plan is not counted as an action.** The Activity view labels a dry run
+  `plan`, an application `applied` and a refusal `refused`.
+
+### Changed
+
+* The footer's first line is the message line and starts empty, rather than
+  defaulting to a hint; each view's key hints now carry the common tail.
+
+### Fixed
+
+* **The release binary linked by Zig crashed at startup.** On this
+  `x86_64-pc-windows-gnu` host the final link goes through a `cc` that forwards
+  to Zig, and the result faulted at `0xc0000005` inside its own code before
+  `main` ran — release only, with no output, while debug and the test suite were
+  fine. `.cargo/config.toml` now pins `linker = "rust-lld"` for that target
+  alone, with the reason recorded beside it. C sources are still compiled by
+  `cc`, and MSVC builds are unaffected.
+
+### Tests
+
+**226 tests pass** (up from 169), zero warnings, in debug and in release. The 57
+new ones are in `devd-tui`: 52 unit tests driving the controller with real
+keystrokes against a backend that counts what ran, and 5 integration tests
+against the real registry and a real repository — including that staging from
+the dashboard changes the real index, and that a declined discard leaves the file
+on disk with the refusal in the audit table.
+
+
 
 The third milestone adds the Model Context Protocol server. It is the third
 projection of the same registry, after the CLI and the application window, and it

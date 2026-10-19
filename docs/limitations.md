@@ -4,7 +4,7 @@ This document exists so that the gaps are stated rather than discovered. Nothing
 here is a surprise waiting for a user; each entry says what is missing, what the
 consequence is, and what would close it.
 
-The current release is milestone **M2**, which adds the MCP server. See
+The current release is milestone **M3**, which adds the terminal dashboard. See
 [`CHANGELOG.md`](../CHANGELOG.md) for what is implemented.
 
 ## Not implemented at all
@@ -13,7 +13,6 @@ These are designed and partially scaffolded, but there is no working code:
 
 | Area | State |
 | --- | --- |
-| TUI | Not started. |
 | Runtime installers (PHP, Node, Go) | Not started. No `php.new`-style install yet. |
 | Services (nginx, Apache, MySQL/MariaDB, Redis, Mailpit) | Not started. |
 | Sites, hosts generation, virtual hosts | Not started. |
@@ -22,11 +21,22 @@ These are designed and partially scaffolded, but there is no working code:
 | Snapshots and receipts | The layout defines the directories; no snapshot is taken. |
 | Licensing / redistribution checks | Not started. |
 | Self-update and upgrade check | Not started. Nothing in `devd` contacts GitHub. The release list the mechanism will read is public and reachable (`GET /repos/ianclemence/devd/releases?per_page=3`), and the releases carry the source archives GitHub generates, but no code reads them yet. |
+| An in-app conversational agent | Not started. The MCP server is the agent surface today. |
 
-**Consequence.** A user can manage Git through `devd` — from the CLI and from the
-application window — and nothing else. The Services, Sites and Runtimes pages say
-plainly that they are not implemented rather than offering switches that do
-nothing.
+**Consequence.** A user can manage Git through `devd` — from the CLI, the
+application window and the terminal dashboard — and nothing else. The Services,
+Sites and Runtimes pages say plainly that they are not implemented rather than
+offering switches that do nothing.
+
+## The terminal dashboard
+
+| Item | What it is | What it would be |
+| --- | --- | --- |
+| The interactive path | The state, the controller, the frames and the refusals are covered by 57 automated tests, but crossterm's raw mode, the event loop and the drawing to a real console are exercised only by hand | A pty-based test that drives the real event loop and asserts on what a terminal receives |
+| Mouse | Keyboard only, deliberately | Mouse selection would add a code path with no safety value |
+| Long rows | A long path is truncated with an ellipsis; the full value is in the detail overlay | Horizontal scrolling, or a wrapped row |
+| Detail overlays | Vertically scrollable, horizontally clipped | Wrapped JSON, which is easier to read in the application window's inspector |
+| Interactive rebase | The same no-op sequence editor as everywhere else, so `--autosquash` works but commits cannot be reordered or dropped | A sequence-editor screen inside the dashboard |
 
 ## The application
 
@@ -62,6 +72,10 @@ nothing.
 * **`devd ui` needs a browser engine.** It prefers a Chromium-family browser in
   `--app` mode and otherwise falls back to the default browser or the system
   opener. `devd serve` needs none of that; it is the API alone.
+* **`devd tui` needs an interactive terminal.** With no terminal on stdin or
+  stdout it exits with a one-line explanation and code 2 rather than starting.
+  Entering raw mode on a pipe is not a condition crossterm reports on Windows,
+  and the attempt killed the process outright before this guard existed.
 
 ## Environment-specific notes
 
@@ -86,6 +100,14 @@ and are recorded so they are not rediscovered:
   a commit. `devd` does not install, bypass or disable them. Read-tier
   operations execute no repository content. An explicit strict mode is a
   candidate for a later milestone.
+* **The final link must not go through Zig on this host.** With no MSVC build
+  tools, the GNU target's default linker here is a `cc` that forwards to Zig.
+  Linking the release `devd` that way produced a binary that faulted at
+  `0xc0000005` inside its own code before `main`, with no output — release only,
+  while debug and the whole test suite were fine. `.cargo/config.toml` pins
+  `linker = "rust-lld"` for `x86_64-pc-windows-gnu` alone, with the reason
+  recorded beside it. C sources are still compiled by `cc`, and a build on MSVC
+  never reads that section.
 
 ## Testing gaps
 
@@ -109,9 +131,13 @@ and are recorded so they are not rediscovered:
   against the built binary through stdin/stdout with the audit rows checked
   afterwards. What is not covered is a specific third-party MCP client's
   behaviour, since that is the client's to test.
-* **No headless-browser test of the interface.** The UI is checked by
-  construction (a test asserts the shell carries no inline script, style or
-  handler) and by hand.
+* **The dashboard is tested without a terminal.** 52 unit tests drive the
+  controller with real keystrokes against a fake backend, and 5 integration tests
+  drive it against the real registry and a real repository, rendering frames into
+  `ratatui`'s `TestBackend` and asserting on the buffer. What is not covered is
+  the part that needs a real console — raw mode, the event queue, the actual
+  drawing — because this project has no way to attach a pty in its test
+  environment. That path was run by hand.
 * **No fuzzing** of the Git output parsers.
 * **No long-running soak test** of service supervision, because services are not
   implemented yet.
