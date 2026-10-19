@@ -4,8 +4,8 @@ This document exists so that the gaps are stated rather than discovered. Nothing
 here is a surprise waiting for a user; each entry says what is missing, what the
 consequence is, and what would close it.
 
-The current release is milestone **M0**. See [`CHANGELOG.md`](../CHANGELOG.md) for
-what is implemented.
+The current release is milestone **M1**, which adds the local application. See
+[`CHANGELOG.md`](../CHANGELOG.md) for what is implemented.
 
 ## Not implemented at all
 
@@ -14,8 +14,6 @@ These are designed and partially scaffolded, but there is no working code:
 | Area | State |
 | --- | --- |
 | TUI | Not started. |
-| Desktop GUI (Tauri v2) | Not started. The capability JSON Schemas it needs exist. |
-| HTTP API | Not started. |
 | MCP server | Not started. No agent can yet discover or invoke a capability. |
 | Runtime installers (PHP, Node, Go) | Not started. No `php.new`-style install yet. |
 | Services (nginx, Apache, MySQL/MariaDB, Redis, Mailpit) | Not started. |
@@ -26,9 +24,19 @@ These are designed and partially scaffolded, but there is no working code:
 | Licensing / redistribution checks | Not started. |
 | Self-update and upgrade check | Not started. Nothing in `devd` contacts GitHub. The release list the mechanism will read is public and reachable (`GET /repos/ianclemence/devd/releases?per_page=3`), and the releases carry the source archives GitHub generates, but no code reads them yet. |
 
-**Consequence.** A user can manage Git through `devd` today and nothing else. The
-CLI's `capabilities` listing shows the whole surface, which currently consists of
-Git.
+**Consequence.** A user can manage Git through `devd` — from the CLI and from the
+application window — and nothing else. The Services, Sites and Runtimes pages say
+plainly that they are not implemented rather than offering switches that do
+nothing.
+
+## The application
+
+| Item | What it is | What it would be |
+| --- | --- | --- |
+| Window shell | A browser engine in `--app` mode, opened by `devd ui`, falling back to the default browser | A Tauri v2 window. The interface does not change, because it speaks only to the local API. |
+| Capability arguments | Edited as JSON in the inspector, seeded from the argument schema | A generated form per schema. |
+| Native window chrome | None in application mode; the window is chrome-less | A native title bar and menu, which Tauri would provide. |
+| Browser availability | `devd ui` needs a Chromium-family browser or a default browser to open a window; `devd serve` needs neither | A bundled webview. |
 
 ## Partial or weaker than intended
 
@@ -36,11 +44,12 @@ Git.
 | --- | --- | --- |
 | Windows process-tree termination | `taskkill /PID <pid> /T /F`, with a 15-second timeout | A Windows Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, which would also guarantee children die when the daemon is terminated abruptly. Today, every ordinary start/stop/restart and clean shutdown path is covered; `TerminateProcess` on the daemon is not. |
 | Interactive rebase | Driven by a no-op sequence editor (`GIT_SEQUENCE_EDITOR=true`), so `--autosquash` works but a user cannot reorder, drop or edit commits interactively | A real sequence-editor UI in the TUI and the GUI, which is where interactive rebase belongs. |
-| Hunk-level staging | Available as `git.stage.patch` with a unified diff; not exposed as a CLI subcommand | A GUI hunk selector, which is the natural home for it. The capability and the tests exist today. |
+| Hunk-level staging | `git.stage.patch` with a unified diff, used by the application's per-hunk controls | A graphical hunk selector in the desktop shell. The capability and the tests exist today. |
 | Repository index labels | A repository is labelled by its directory name | A user-settable display name. |
 | `devd git repo prune`-style index cleanup | There is no capability that removes index entries whose directory has disappeared | A prune for the index itself. This is separate from `git.repo.prune`, which deletes merged branches. |
 | Audit retention | The audit table grows without bound; `devd audit -n` reads the tail | A retention policy and rotation. |
-| Secret scanning | A warning when staged content looks like a credential is specified | Not implemented. Previewing a staged diff before a commit currently shows the content but does not flag it. |
+| Secret scanning | A warning when staged content looks like a credential is specified | Not implemented. Previewing a staged diff before a commit shows the content but does not flag it. |
+| Instance discovery | `devd ui` finds a running instance by probing the remembered port and the next few for the `X-Devd-App` header | A lock file or a named pipe, which would be exact rather than a scan. |
 
 ## Platform limits
 
@@ -51,6 +60,9 @@ Git.
   `devd` starts runs with that user's privileges.
 * **`git` must be on `PATH`** (or named in `git_executable` in settings). `devd`
   drives the user's own Git rather than bundling one.
+* **`devd ui` needs a browser engine.** It prefers a Chromium-family browser in
+  `--app` mode and otherwise falls back to the default browser or the system
+  opener. `devd serve` needs none of that; it is the API alone.
 
 ## Environment-specific notes
 
@@ -81,6 +93,13 @@ and are recorded so they are not rediscovered:
 * **No CI.** There are no GitHub Actions workflows in this repository, by
   decision. Every result quoted in the changelog was produced by running the
   suite locally and is reproducible with `cargo test`.
+* **The HTTP API is tested in-process and once on a socket.** The test suite
+  drives the real router with `tower::ServiceExt::oneshot`, and the loopback
+  defences and the approval flow were additionally exercised against the release
+  binary with `curl`. There is no automated test that binds a port, and no
+  browser-automation test of the interface itself: the UI is checked by
+  construction (a test asserts the shell carries no inline script, style or
+  handler) and by hand, not by a headless browser.
 * **No controlled remote fixture over the network.** Remote synchronisation is
   exercised against local bare repositories and `file://` URLs, and failure is
   exercised against a loopback address that refuses the connection. A real

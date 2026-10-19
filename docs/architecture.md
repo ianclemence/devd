@@ -133,6 +133,42 @@ Settings are layered — defaults, then a file, then the environment — so a
 machine can be configured without editing a checked-in default. `devd doctor`
 reports the resolved values instead of assuming them.
 
+## Surfaces: the HTTP API and the application window
+
+The application is the first surface that is not a terminal. It is a **loopback
+HTTP API plus a client of that API**, and the API is a projection of the registry
+in the same sense the CLI is: `GET /api/capabilities` calls `Registry::search`,
+`POST /api/invoke` calls `Registry::dispatch`, and there is no endpoint that
+holds business logic of its own. There is deliberately no `/api/git/status`
+route, because that would be a second implementation of `git.status` that could
+disagree with the CLI.
+
+Two things had to be decided rather than inherited.
+
+**Who the actor is.** A browser can claim anything, so the server **overrides**
+the actor to `human:http`. A caller cannot choose to be an agent, and therefore
+cannot escape the agent restrictions by claiming to be a person.
+
+**What an approval is.** The naive design is `POST /api/invoke { approve: true }`,
+which makes the approval a boolean the *client* asserts. That is the exact
+property the product exists to prevent, so it is not the design. Instead,
+`POST /api/invoke` for a destructive capability returns a plan and a single-use
+token and **changes nothing**; `POST /api/approve { token }` then replays the
+server's own stored record of the invocation — the capability, the arguments, the
+actor — through the dispatcher with `Approval::Granted`. What was displayed and
+what executes cannot differ, because the executing arguments never came back from
+the client.
+
+`POST /api/deny { token }` is a first-class outcome: it dispatches with
+`Approval::Denied`, so the refusal reaches the dispatcher, the audit trail and
+the event stream. A declined operation is therefore never indistinguishable from
+one that never arrived.
+
+The loopback boundary is defended in the server, not in the page: a `Host`
+allow-list, an `Origin` check, a refusal of every `OPTIONS` request, and a
+256-bit bearer token. [`app.md`](app.md) records the details, why each one is
+there, and the results observed against the running binary.
+
 ## Process execution
 
 A child process is started with an `argv` array; the runner never builds a
@@ -171,6 +207,8 @@ merge base instead of the two commits, and `%1f` is literal in `git stash list`.
 
 The registry, the tier model and the audit trail were built first so that the
 remaining work is additive: a new skill registers capabilities, and a new
-surface renders them. The TUI, the desktop GUI, the HTTP API, the MCP server,
-and the runtime, service, site, DNS and TLS skills are all still to come. See
-[`../CHANGELOG.md`](../CHANGELOG.md).
+surface renders them. The TUI and the MCP server, and the runtime, service, site,
+DNS and TLS skills, are all still to come. The application window is a browser
+engine in application mode rather than a native shell; Tauri is the intended
+eventual wrapper, and the interface does not change when that happens because it
+speaks only to the local API. See [`../CHANGELOG.md`](../CHANGELOG.md).

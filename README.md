@@ -10,10 +10,11 @@ Apache, several PHP versions side by side, MySQL/MariaDB, Redis, Mailpit, Node
 and Go, automatic local HTTPS, hosts and virtual hosts, and per-project
 isolation — on Windows and Linux.
 
-> **Project status.** This repository is at **M0**: the foundation and the
-> complete Git integration are implemented and tested. The service-management,
-> site, DNS, TLS, TUI, GUI and MCP layers are designed but **not yet built**.
-> See [Status](#status) for exactly what works today, and
+> **Project status.** This repository is at **M1**: the foundation, the complete
+> Git integration, the CLI and the **local application** (a loopback HTTP API plus
+> the interface it serves) are implemented and tested. The service-management,
+> site, DNS, TLS, TUI and MCP layers are designed but **not yet built**. See
+> [Status](#status) for exactly what works today, and
 > [`CHANGELOG.md`](CHANGELOG.md) for what landed in each milestone.
 
 ---
@@ -44,9 +45,10 @@ The consequences are enforced in code, not in prompt text:
 
 ```text
 crates/
-  devd-core/   the capability registry, the state store, paths, settings, events
-  devd-git/    64 Git capabilities and the typed Git service beneath them
-  devd-cli/    the `devd` command
+  devd-core/    the capability registry, the state store, paths, settings, events
+  devd-git/     64 Git capabilities and the typed Git service beneath them
+  devd-server/  the loopback HTTP API and the application interface it serves
+  devd-cli/     the `devd` command
 ```
 
 * **64 Git capabilities** across 12 discoverable groups (`git.repo`,
@@ -56,9 +58,17 @@ crates/
 * **A typed Git service** that drives the user's own `git` executable through
   `argv` arrays — because rebase, bisect, worktrees, submodules, LFS, credential
   helpers and hooks are only faithful when Git itself performs them.
-* **Registry-level policy tests**: 98 tests, including the ones that prove a
-  declined operation did not execute and that uncommitted work survives a
-  decline, an abort and a branch switch.
+* **An application** (`devd ui`) — a window onto a loopback HTTP API that is a
+  pure projection of the same registry. Projects, the working tree, history,
+  branches, tags, remotes, stashes, worktrees, conflicts and recovery, plus the
+  capability inspector, the audit trail and the environment check.
+* **Two-step approvals** that survive review: a destructive operation returns a
+  plan and a single-use token, changes nothing, and only runs when that token is
+  approved. The client never asserts the approval.
+* **148 tests**, including the ones that prove a declined operation did not
+  execute, that uncommitted work survives a decline, an abort and a branch
+  switch, and that `/api` rejects a bad token, a foreign `Host`, a foreign
+  `Origin` and every `OPTIONS` preflight.
 * **`devd doctor`**, which checks the layout, the store, the Git discovery and
   the environment before anything else is attempted.
 
@@ -69,7 +79,8 @@ crates/
 | Capability registry, tiers, approvals, audit, store | **Done** (M0) |
 | Git service, capabilities, CLI, tests | **Done** (M0) |
 | CLI | **Done** for capabilities, Git, audit and doctor |
-| TUI, desktop GUI, HTTP API, MCP server | Designed, **not built** |
+| Local application (`devd ui`, HTTP API, interface) | **Done** (M1) |
+| TUI, MCP server | Designed, **not built** |
 | Runtime installers (PHP, Node, Go), services (nginx, Apache, MySQL, Redis, Mailpit), sites, DNS, TLS, SSH/deploy | Designed, **not built** |
 
 Nothing above is claimed as finished when it is not. The registry, the tier
@@ -139,6 +150,51 @@ devd git squash 3 -m "one commit"
 devd git bisect start HEAD v1.0.0
 ```
 
+## Using the app
+
+```bash
+devd ui            # opens the application window
+devd ui --no-open  # serves it without opening a window
+devd serve         # headless: the API only, no window
+```
+
+`devd ui` starts an HTTP API on `127.0.0.1` and serves the interface from inside
+the binary. It is a browser engine in application mode — no installer, no
+`node_modules`, no build step. If a `devd` instance is already running, the
+command reopens that one instead of starting a second server.
+
+The window is a pure client of the same registry the CLI uses: every panel calls
+`/api/invoke` with real capability ids. There are no placeholder controls. The
+services, sites and runtimes panels say plainly that they are not implemented
+yet rather than showing switches that do nothing.
+
+Inside it:
+
+* **Projects** — every repository `devd` knows about, with live branch, upstream
+  and dirty state.
+* **Changes** — staged and unstaged files, per-file diffs, stage, unstage,
+  discard, commit (with amend), and a warning if a staged file looks like it
+  contains a credential.
+* **History** — the log, commit inspection, and revert or cherry-pick.
+* **Branches, Tags, Remotes** — create, switch (with the real overwrite check
+  first), merge, rename, delete; fetch, pull, push, force-push, tags.
+* **Stashes, Worktrees** — the full lifecycle.
+* **Recover** — unmerged conflicts with resolution, the reflog, reset modes,
+  squash, bisect, and continue/abort for an interrupted operation.
+* **Capabilities** — search the whole registry, read a declaration, run it with
+  edited JSON arguments at your own risk tier.
+* **Activity** — the audit trail, with plan, applied and refused marked
+  separately.
+* **System** — the same checks as `devd doctor`.
+
+`Ctrl+K` opens a command palette backed by the registry's own ranked search, so
+the palette cannot offer an action the CLI cannot perform.
+
+A destructive action in the window shows the server's plan and a countdown, and
+the confirm button is red. Approving replays the server's stored arguments, never
+the client's — see [`docs/app.md`](docs/app.md) for why that distinction matters
+and for the four loopback defences that were verified against a real socket.
+
 ### Approvals
 
 Operations that rewrite history, discard work, or touch a remote require
@@ -175,6 +231,8 @@ Exit codes are stable so scripts can branch on the reason:
 
 * [`docs/architecture.md`](docs/architecture.md) — the core, the registry, tiers,
   the store, and how each surface projects it.
+* [`docs/app.md`](docs/app.md) — the interface decision, the loopback hardening,
+  the two-step approval flow, and what was observed when it ran.
 * [`docs/git-cli.md`](docs/git-cli.md) — every Git command, mapped to the
   capability it calls.
 * [`docs/security.md`](docs/security.md) — the threat model and the specific

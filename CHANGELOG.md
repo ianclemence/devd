@@ -10,6 +10,133 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.2.0] - 2026-10-18 — M1: the application
+
+The second milestone turns the core into something a person can actually use: a
+local application served by the `devd` binary on loopback, opened as a
+chrome-less window. It adds a surface, not a second implementation — the server
+is generic over the registry, and the interface is a pure client of it.
+
+### Added
+
+**The local application (`devd-server`)**
+
+* `devd ui` starts an HTTP API on `127.0.0.1` and serves the interface from
+  inside the binary, then opens it in an application window (Chromium in
+  `--app` mode where available, otherwise the default browser). `devd serve`
+  runs the API headless.
+* If a `devd` instance is already running, `devd ui` probes for it, through the
+  `X-Devd-App` response header, and **reopens it** rather than starting a second
+  server. A port held by an unrelated program is left alone and the next port is
+  tried. The chosen port is remembered in the settings table.
+* Twelve pages, all composed in the browser from `/api/invoke` calls: Projects,
+  a project workspace with Changes, History, Branches, Tags, Remotes, Stashes,
+  Worktrees and Recover, plus Capabilities, Activity and System.
+* A `Ctrl+K` command palette backed by the registry's own ranked search
+  (`/api/capabilities?q=`), which runs read-tier capabilities inline and opens
+  the inspector for everything else.
+* Per-file diff rendering, hunk-level staging and reversing, commit with amend, a
+  credential-looking-staged-file warning, branch switching that consults
+  `git.switch.check` first, conflict resolution, the reflog, reset modes, squash,
+  bisect, and continue/abort for an interrupted operation.
+* An approval modal that renders the server's plan with a countdown, a red
+  confirm button for destructive and remote tiers, and the arguments shown as
+  the server recorded them.
+* A **Quit devd** action calling `POST /api/shutdown`, so closing the window and
+  stopping the process are not the same confusing thing.
+
+**Two-step approvals over HTTP**
+
+* `POST /api/invoke` returns `{ approval_required, plan, token, tier,
+  expires_in_ms, args_hash }` and **changes nothing**.
+* `POST /api/approve { token }` replays the **server's own stored arguments**
+  with `Approval::Granted`. The client cannot assert an approval.
+* `POST /api/deny { token }` dispatches with `Approval::Denied`, so a refusal is
+  audited rather than invisible.
+* A token is single-use, lives 120 seconds, is bounded to a fixed number of
+  pending decisions, and is bound to the capability, the arguments and the actor.
+
+**Loopback hardening**
+
+* `Host` allow-list (`127.0.0.1:P`, `localhost:P`, `[::1]:P`) that defuses DNS
+  rebinding, refused with `403`.
+* `OPTIONS` is refused with `405` before any other check, so no cross-origin
+  caller can complete a preflight.
+* A foreign `Origin` is refused with `403`.
+* A 256-bit session token, generated at startup, injected into the served HTML
+  and required on every `/api` request with a constant-time comparison. It is
+  never written to disk and no endpoint returns it.
+* The actor for every request is forced to `human:http` by the server; a caller
+  cannot choose its own actor.
+
+**The interface itself**
+
+* Three files — `index.html`, `app.js`, `style.css` — embedded with
+  `include_str!`. No build step, no framework, no `node_modules`.
+* A Content-Security-Policy of `default-src 'none'` with same-origin script,
+  style and connect, and a test asserting the shell contains no inline script,
+  no `style=` attribute and no `on*=` handler.
+* Dark, calm, keyboard-first; monospace for machine data; reduced
+  `prefers-reduced-motion` respected.
+
+**Shared environment checks**
+
+* The doctor checks move into `devd-core::doctor`, so the CLI and the server
+  report the same thing from the same code. `devd`'s contribution is the Git
+  check; the server appends nothing the CLI lacks.
+
+### Changed
+
+* `Surface::can_prompt()` distinguishes a surface that can *answer* a prompt from
+  one that is a *person*. The application can answer prompts without being
+  treated as an interactive human, and an agent cannot.
+* `Store::open_in_memory()` now migrates, so an in-memory store is usable
+  immediately instead of failing every table read.
+* A Git command that fails now reports what Git said on **stdout** when stderr is
+  empty. Git writes "nothing to commit" and similar to stdout, so the previous
+  behaviour turned a real, explainable cause into an empty message.
+
+### Safety
+
+* A destructive operation over HTTP returns a plan and changes nothing until it
+  is approved; the arguments that run are the ones the server stored, never the
+  ones the client sent a second time.
+* A declined operation is recorded with the actor, the tier, the redacted
+  arguments and the reason, and its token cannot be replayed.
+* The application never receives a capability it could not reach from the CLI,
+  and the CLI never gains a rule the application lacks.
+
+### Tests
+
+148 tests, all passing (up from 98):
+
+* `devd-server` unit: 17, covering the approval store (single use, expiry,
+  capacity, binding to capability and arguments) and the request guards.
+* `devd-server` HTTP: 22, driving the real router: the four loopback defences,
+  the token requirement, capability search and description, an approval-gated
+  invocation that changes nothing until approved, a decline that is audited and
+  applies nothing, token replay, and the error envelope.
+* `devd-cli`: 4, including port selection.
+* `devd-core` and `devd-git` as before, plus the new doctor and failure-reporting
+  tests.
+
+Verified against the running release binary as well, not only in tests: the
+security matrix and the Git approval flow in
+[`docs/app.md`](docs/app.md#what-was-actually-observed).
+
+### Known limitations (at 0.2.0)
+
+* The TUI and the MCP server are still not built.
+* Services, sites, runtimes, DNS and TLS remain designed only, and the
+  corresponding panels say so instead of offering controls that do nothing.
+* The window is a browser engine in application mode, not a native shell. Tauri
+  remains the intended eventual wrapper; the UI code does not change when that
+  happens, because it speaks only to the local API.
+* A capability's arguments are edited as JSON in the inspector rather than by a
+  generated form.
+
+---
+
 ## [0.1.0] - 2026-10-18 — M0: foundation and Git
 
 The first milestone. It delivers the part of the product that everything else
@@ -146,4 +273,5 @@ a real, stateful, destructive domain rather than a toy one.
 
 ---
 
+[0.2.0]: https://github.com/ianclemence/devd/releases/tag/v0.2.0
 [0.1.0]: https://github.com/ianclemence/devd/releases/tag/v0.1.0

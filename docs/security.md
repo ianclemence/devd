@@ -55,6 +55,47 @@ target, and the affected files. For a hard reset, the plan names the mode and
 says the working tree is discarded. For a force push, it names the remote and
 the branch. For a conflict resolution, it says the other side is discarded.
 
+## The local HTTP surface
+
+The application window speaks to a loopback HTTP API, which adds a threat this
+product would not otherwise have: **a web page the user happens to have open can
+send requests to `http://127.0.0.1:<port>`.** It cannot read our responses
+without our cooperation, but it can send. Four defences are enforced in the
+server, in this order:
+
+1. **`Host` allow-list.** Only `127.0.0.1:<port>`, `localhost:<port>` and
+   `[::1]:<port>` are accepted. This is the defence against DNS rebinding: a
+   hostile page can point its own hostname at `127.0.0.1` and reach us, but it
+   cannot make the `Host` header it sends be a loopback name. A mismatch is
+   `403 forbidden_host`.
+2. **`OPTIONS` is refused with `405`, before anything else.** There is no CORS
+   negotiation, so no cross-origin caller can complete a preflight. Reordering
+   this ahead of the origin check makes the answer deterministic regardless of
+   what `Origin` says.
+3. **Foreign `Origin` is refused with `403 forbidden_origin`.**
+4. **A 256-bit bearer token** is required on every `/api` request, compared in
+   constant time. The token is generated at startup, injected into the served
+   HTML, never written to disk, and returned by no endpoint. A page from another
+   origin cannot read our HTML and therefore cannot learn the token.
+
+The bind is loopback only, with no configuration that serves the interface to a
+network. The server also **forces the actor** of every request to `human:http`,
+so a caller cannot claim to be an agent or a daemon to escape a restriction, and
+cannot claim to be a human to unlock an agent-only path.
+
+Approvals over HTTP are two-step, and this is a security property rather than a
+convenience: `POST /api/invoke` returns a plan and a token and changes nothing;
+`POST /api/approve { token }` replays **the server's own stored arguments**. A
+client cannot assert `approve: true`, and what was displayed cannot differ from
+what executes. A token is single-use, expires after 120 seconds, is bounded to a
+fixed number of pending decisions, and is bound to the capability, the arguments
+and the actor. A declined operation is dispatched with `Approval::Denied`, so it
+reaches the audit trail rather than vanishing.
+
+A test suite drives the real router for each defence, and the same checks were
+run against the release binary on a socket; the observed results are recorded in
+[`app.md`](app.md#what-was-actually-observed).
+
 ## Protected Git operations
 
 These cannot execute without a human approval:
@@ -215,9 +256,13 @@ whether it succeeded, and the message. **A refused operation is recorded too** �
 a refusal is a fact, and a trail that only records successes cannot answer the
 question "did anything try?".
 
-`devd audit -n 20` reads the trail. The store is SQLite with a versioned schema
-and an integrity check, so a corrupted database is reported rather than silently
-trusted.
+`devd audit -n 20` reads the trail, and the Activity page in the application
+window shows the same rows. A row is marked as a *plan* when it was a preview
+that changed nothing, and as *refused* when it was declined or blocked, so a
+preview is never mistaken for an applied operation.
+
+The store is SQLite with a versioned schema and an integrity check, so a
+corrupted database is reported rather than silently trusted.
 
 ## Snapshots
 
@@ -244,3 +289,11 @@ Honesty matters more than a longer list.
 * **No sandbox.** `devd` runs services as the invoking user, on the machine,
   without containers. This is a deliberate design decision — containers are not
   the substrate — and it means `devd` inherits that user's privileges.
+* **Another process on the machine that can read the browser's memory or the
+  served page** could learn the session token. The defences above stop a *web
+  page*; they do not stop a local attacker with the user's own privileges, and
+  nothing on a single-user machine can.
+* **A malicious browser extension** in the window that has been granted access to
+  the page can act with the token. The window is opened in application mode
+  without extensions in the recommended launcher, but the fallback is the user's
+  ordinary browser.
