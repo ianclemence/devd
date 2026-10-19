@@ -132,9 +132,54 @@ Nothing above is claimed as finished when it is not. The registry, the tier
 model and the audit trail were built first precisely so the remaining surfaces
 can be added without re-deciding any of the safety rules.
 
-## Install (from source)
+## Download
 
-Windows or Linux, with a Rust toolchain and `git` on `PATH`:
+| Platform | What you get |
+| --- | --- |
+| Windows x86_64 | A prebuilt `devd.exe` attached to each release — no Rust toolchain needed. |
+| Linux x86_64 | Build from source: no tested Linux binary is published for this release. |
+
+### Windows
+
+Download the binary and its checksum from https://github.com/ianclemence/devd/releases/latest:
+
+```powershell
+curl.exe -LO https://github.com/ianclemence/devd/releases/download/v0.5.0/devd-v0.5.0-x86_64-pc-windows-gnu.exe
+curl.exe -LO https://github.com/ianclemence/devd/releases/download/v0.5.0/SHA256SUMS.txt
+
+# the checksum must match the line in SHA256SUMS.txt
+certutil -hashfile devd-v0.5.0-x86_64-pc-windows-gnu.exe SHA256
+
+Rename-Item devd-v0.5.0-x86_64-pc-windows-gnu.exe devd.exe
+devd doctor
+```
+
+Put `devd.exe` anywhere on `PATH`. It is built from the tagged source on a
+Windows machine with the GNU toolchain, links only Windows system DLLs (no
+MinGW, no Visual C++ runtime), and is **not code-signed** — which is why the
+checksum is published beside it. Windows SmartScreen will warn about an
+unsigned executable the first time it runs.
+
+### Linux
+
+The project is developed on Windows, so a Linux binary built here could not be
+run here. Publishing an executable that nobody has executed would contradict
+the rule the rest of the product follows, so v0.5.0 ships source for Linux:
+
+```bash
+git clone https://github.com/ianclemence/devd.git
+cd devd
+cargo build --release
+./target/release/devd doctor
+```
+
+You need `rustc`/`cargo` and a C compiler (`cc`) — SQLite is compiled into the
+binary. Nothing else is required: PHP, nginx and MariaDB are downloaded on
+first use, never bundled.
+
+## Install from source
+
+The same build works on Windows if you prefer it to the attached binary:
 
 ```bash
 git clone https://github.com/ianclemence/devd.git
