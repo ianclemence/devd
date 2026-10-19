@@ -21,7 +21,7 @@ rules:
 
 - **Windows 10/11 x64** or **Linux x64**.
 - The prebuilt Windows binary needs nothing else.
-- Building from source needs Rust 1.99 or newer and a C compiler (`cc`) for the
+- Building from source needs Rust 1.77 or newer and a C compiler (`cc`) for the
   bundled SQLite.
 - Git must be on `PATH` (or named in `git_executable`) for the Git capabilities.
 
@@ -80,7 +80,7 @@ devd service install mariadb
 devd stack up                     # php-cgi, then MariaDB, then nginx
 
 devd site create blog             # directory, starter page, vhost, certificate
-devd hosts sync -y                # publish blog.test in the hosts file
+devd hosts sync -y                # publish blog.test (elevated shell on Windows)
 devd tls trust -y                 # add devd's CA to the OS trust store
 ```
 
