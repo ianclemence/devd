@@ -131,7 +131,7 @@ the tail of its own log.
 ### Sites, hosts and the web server
 
 ```bash
-devd site create blog             # --php, --host, --tls, --dir
+devd site create blog             # --host and --root override the defaults
 devd site list
 devd site remove blog             # destructive; keeps files unless --delete-files
 
