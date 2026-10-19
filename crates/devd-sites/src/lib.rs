@@ -85,9 +85,15 @@ pub struct Created {
     pub warnings: Vec<String>,
 }
 
+/// The directory projects are created in: `www_root` when it is set, otherwise
+/// the layout's own `www`.
+pub fn www_root(ctx: &Ctx) -> PathBuf {
+    ctx.settings.effective_www_root(&ctx.paths.www())
+}
+
 /// The default project directory for a site.
 pub fn default_directory(ctx: &Ctx, name: &str) -> PathBuf {
-    ctx.paths.www().join(name)
+    www_root(ctx).join(name)
 }
 
 /// The URL a site is served at.
@@ -336,16 +342,17 @@ pub fn remove(ctx: &Ctx, name: &str, delete_files: bool) -> Result<serde_json::V
     let mut bytes = 0u64;
     if delete_files {
         let root = PathBuf::from(&site.root);
-        // The project directory is removed only when it is inside the layout's
-        // www directory. A site pointed at an arbitrary path - a repository
-        // somewhere else - must never take that directory with it.
-        let inside_www = root.starts_with(ctx.paths.www());
+        // The project directory is removed only when it is inside the
+        // configured projects directory. A site pointed at an arbitrary path -
+        // a repository somewhere else - must never take that directory with it.
+        let base = www_root(ctx);
+        let inside_www = root.starts_with(&base);
         if !inside_www {
             return Err(DevdError::denied(format!(
                 "the project directory {} is outside {}, so it will not be deleted; \
                  remove it yourself if that is what you want",
                 root.display(),
-                ctx.paths.www().display()
+                base.display()
             )));
         }
         if root.is_dir() {
@@ -617,6 +624,24 @@ mod tests {
             std::fs::read_to_string(dir.join("index.php")).unwrap(),
             "<?php echo 'mine';",
             "the starter page must not replace an existing one"
+        );
+        let _ = std::fs::remove_dir_all(c.paths.root());
+    }
+
+    #[test]
+    fn www_root_moves_where_projects_are_created() {
+        let mut c = ctx("wwwroot");
+        let custom = c.paths.root().join("code");
+        let mut settings = (*c.settings).clone();
+        settings.www_root = Some(custom.clone());
+        c.settings = Arc::new(settings);
+
+        let created = create(&c, &request("app")).unwrap();
+        assert_eq!(PathBuf::from(&created.directory), custom.join("app"));
+        assert!(custom.join("app").join("index.php").is_file());
+        assert!(
+            !c.paths.www().join("app").exists(),
+            "the layout's own www is not used when www_root is set"
         );
         let _ = std::fs::remove_dir_all(c.paths.root());
     }

@@ -35,22 +35,6 @@ impl Default for WebServer {
     }
 }
 
-/// How `<project>.<tld>` hostnames resolve.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum DnsMode {
-    /// Managed block in the system hosts file. No background resolver.
-    Hosts,
-    /// Optional local resolver on `127.0.0.1:53` (wildcard subdomains).
-    Resolver,
-}
-
-impl Default for DnsMode {
-    fn default() -> Self {
-        Self::Hosts
-    }
-}
-
 /// Which model provider backs the conversational agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -83,10 +67,6 @@ pub struct Settings {
     pub www_root: Option<std::path::PathBuf>,
     /// Default web server for new sites.
     pub web_server: WebServer,
-    /// Hostname resolution strategy.
-    pub dns_mode: DnsMode,
-    /// Start enabled services when the daemon starts.
-    pub auto_start_services: bool,
     /// PHP version used when a site does not pin one.
     pub primary_php: Option<String>,
     /// Override for the `git` executable. Discovered from `PATH` when unset.
@@ -114,8 +94,6 @@ impl Default for Settings {
             https_port: 443,
             www_root: None,
             web_server: WebServer::default(),
-            dns_mode: DnsMode::default(),
-            auto_start_services: false,
             primary_php: None,
             git_executable: None,
             git_protect_uncommitted: true,

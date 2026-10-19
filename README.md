@@ -237,7 +237,8 @@ snapshots/        copies taken before a file devd did not write is changed
 cache/            verified downloads
 ```
 
-`settings.toml` is created on first run and is safe to edit:
+`settings.toml` lives in the data directory and is read on every run. It is
+written when `devd` changes a setting; missing keys take the default below.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -246,8 +247,6 @@ cache/            verified downloads
 | `https_port` | `443` | Port for TLS. |
 | `www_root` | `<data>/www` | Where new projects are created. |
 | `web_server` | `nginx` | Web server driver. |
-| `dns_mode` | `hosts` | How local hostnames are published. |
-| `auto_start_services` | `false` | Start enabled services when a long-lived surface opens. |
 | `primary_php` | newest installed | PHP version new sites use. |
 | `git_executable` | `git` on `PATH` | Git binary to drive. |
 | `git_protect_uncommitted` | `true` | Refuse branch switches that would overwrite local work. |
