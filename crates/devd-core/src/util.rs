@@ -207,17 +207,73 @@ pub fn validate_name(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Validate a hostname that will reach a configuration file, a certificate or
+/// the hosts file.
+///
+/// Stricter than `validate_name` in one direction and looser in another: it
+/// permits a fully qualified name with several labels, and it refuses anything
+/// that is not a plain DNS name. That matters because a hostname is written into
+/// nginx configuration, into an X.509 `subjectAltName` and into a system file -
+/// a newline or a `;` in a name is a configuration injection, and validation is
+/// the place to stop it, before any of those are written.
+pub fn validate_hostname(host: &str) -> Result<()> {
+    let host = host.trim();
+    if host.is_empty() {
+        return Err(DevdError::invalid("a hostname is required"));
+    }
+    if host.len() > 253 {
+        return Err(DevdError::invalid(
+            "hostname must be 253 characters or fewer",
+        ));
+    }
+    if host.ends_with('.') {
+        return Err(DevdError::invalid(
+            "hostname may not end with a dot",
+        ));
+    }
+    for label in host.split('.') {
+        if label.is_empty() {
+            return Err(DevdError::invalid(format!(
+                "`{host}` has an empty label; check for a doubled dot"
+            )));
+        }
+        if label.len() > 63 {
+            return Err(DevdError::invalid(format!(
+                "the label `{label}` in `{host}` is longer than 63 characters"
+            )));
+        }
+        if label.starts_with('-') || label.ends_with('-') {
+            return Err(DevdError::invalid(format!(
+                "the label `{label}` in `{host}` may not start or end with a hyphen"
+            )));
+        }
+        if !label
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        {
+            return Err(DevdError::invalid(format!(
+                "`{host}` may only contain lowercase letters, digits, '-' and '.'"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Write a file atomically: write a sibling temp file, then rename over the
 /// target. Prevents half-written configuration if the process dies mid-write.
 pub fn atomic_write(path: &Path, contents: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let tmp = path.with_extension(format!(
-        "{}.tmp{}",
-        path.extension().and_then(|e| e.to_str()).unwrap_or(""),
-        std::process::id()
-    ));
+    // The temporary name is derived from the whole file name, not from its
+    // extension: `Path::with_extension` replaces everything after the last dot,
+    // which would turn `blog.test.crt` and `blog.test.key` into the same
+    // temporary file.
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("devd-write");
+    let tmp = path.with_file_name(format!(".{name}.tmp{}", std::process::id()));
     std::fs::write(&tmp, contents)?;
     std::fs::rename(&tmp, path)?;
     Ok(())
@@ -326,6 +382,28 @@ mod tests {
         atomic_write(&f, "two").unwrap();
         assert_eq!(std::fs::read_to_string(&f).unwrap(), "two");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hostname_validation_rules() {
+        assert!(validate_hostname("blog.test").is_ok());
+        assert!(validate_hostname("a.b.c.test").is_ok());
+        assert!(validate_hostname("my-app.test").is_ok());
+        assert!(validate_hostname("localhost").is_ok());
+        assert!(validate_hostname("").is_err());
+        assert!(validate_hostname("Blog.test").is_err(), "uppercase is not a DNS name");
+        assert!(validate_hostname("blog..test").is_err());
+        assert!(validate_hostname("-blog.test").is_err());
+        assert!(validate_hostname("blog-.test").is_err());
+        assert!(validate_hostname("blog.test.").is_err());
+        assert!(validate_hostname(&format!("{}.test", "x".repeat(64))).is_err());
+        // The reason this function exists: a name is written into a
+        // configuration file and a certificate, so nothing that could end a line
+        // or start a directive may pass.
+        assert!(validate_hostname("blog.test\nserver { listen 1; }").is_err());
+        assert!(validate_hostname("blog.test; deny all").is_err());
+        assert!(validate_hostname("blog.test<script>").is_err());
+        assert!(validate_hostname("blog\ttest").is_err());
     }
 
     #[test]

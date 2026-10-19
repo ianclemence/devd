@@ -84,6 +84,55 @@ pub struct Supervisor {
     procs: Mutex<HashMap<String, ManagedProcess>>,
 }
 
+/// Stop children from inheriting this process's own standard handles.
+///
+/// A service is started **detached** so that it outlives the command that started
+/// it. On Windows such a child would otherwise inherit the console - or, worse,
+/// the pipe a script is capturing `devd`'s output through - and a shell that
+/// waits for that pipe to reach end-of-file then waits for nginx to exit, which
+/// is never. The symptom is a command that has printed its result and appears to
+/// hang; `devd stack up | Tee-Object out.txt` is the plain case, and an editor's
+/// integrated terminal is the common one.
+///
+/// Every child `devd` starts is given its handles explicitly - a log file for a
+/// service, a fresh pipe inside [`crate::util::run`] for a one-shot command - so
+/// clearing the inherit flag on our own handles costs nothing. Nothing outside
+/// this process is modified: handle flags live in this process's handle table.
+#[cfg(windows)]
+pub fn isolate_standard_handles() {
+    use core::ffi::c_void;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetStdHandle(which: u32) -> *mut c_void;
+        fn SetHandleInformation(handle: *mut c_void, mask: u32, flags: u32) -> i32;
+    }
+
+    const STD_INPUT_HANDLE: u32 = (-10i32) as u32;
+    const STD_OUTPUT_HANDLE: u32 = (-11i32) as u32;
+    const STD_ERROR_HANDLE: u32 = (-12i32) as u32;
+    const HANDLE_FLAG_INHERIT: u32 = 1;
+
+    for which in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+        // SAFETY: both calls take a handle value and bit flags. Nothing is
+        // dereferenced, the handles are borrowed from the operating system for
+        // the duration of the call, and a failure - a null or invalid handle,
+        // which happens when a surface has no console at all - is ignored
+        // because there is then nothing to inherit in the first place.
+        unsafe {
+            let handle = GetStdHandle(which);
+            if !handle.is_null() && handle as isize != -1 {
+                SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0);
+            }
+        }
+    }
+}
+
+/// Nothing to do where the operating system gives a child only the descriptors
+/// it was passed explicitly.
+#[cfg(not(windows))]
+pub fn isolate_standard_handles() {}
+
 impl Supervisor {
     /// An idle supervisor.
     pub fn new() -> Self {
@@ -128,6 +177,10 @@ impl Supervisor {
             const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
             cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
         }
+
+        // The service is about to be started detached; make sure it cannot hold
+        // the shell that launched devd open. See `isolate_standard_handles`.
+        isolate_standard_handles();
 
         let child = cmd.spawn().map_err(|e| {
             DevdError::Io(std::io::Error::new(
@@ -314,6 +367,84 @@ pub fn kill_tree(pid: u32) {
 extern "C" {
     #[link_name = "kill"]
     fn libc_kill(pid: i32, sig: i32) -> i32;
+}
+
+/// The supervisor shared by every capability in this process.
+///
+/// `devd` does not require a background daemon for services to run. A one-shot
+/// `devd service start nginx` starts nginx detached and records its pid, so the
+/// process outlives the command that started it. The shared supervisor matters
+/// for the long-lived surfaces - the application window and `devd serve` - which
+/// start services *and* keep the handles, so they can wait for a clean exit on
+/// shutdown instead of killing by pid.
+pub fn shared() -> std::sync::Arc<Supervisor> {
+    static SHARED: std::sync::OnceLock<std::sync::Arc<Supervisor>> = std::sync::OnceLock::new();
+    SHARED
+        .get_or_init(|| std::sync::Arc::new(Supervisor::new()))
+        .clone()
+}
+
+/// Image name of a running process, without a path or extension.
+///
+/// Used to confirm that a pid read back from a pid file is still the process it
+/// claims to be: process ids are reused, and killing a recycled pid would
+/// terminate something that has nothing to do with `devd`.
+pub fn process_image(pid: u32) -> Option<String> {
+    if pid == 0 {
+        return None;
+    }
+    #[cfg(windows)]
+    {
+        let tasklist = util::which("tasklist")?;
+        let args = vec![
+            "/FI".to_string(),
+            format!("PID eq {pid}"),
+            "/FO".to_string(),
+            "CSV".to_string(),
+            "/NH".to_string(),
+        ];
+        let out = util::run(
+            &tasklist,
+            &args,
+            None,
+            &[],
+            Some(std::time::Duration::from_secs(10)),
+        )
+        .ok()?;
+        let first_line = out.stdout.lines().next()?.trim();
+        if first_line.is_empty() || first_line.starts_with("INFO:") {
+            return None;
+        }
+        // `"nginx.exe","11844","Console","1","5,120 K"`
+        let name = first_line.split(',').next()?.trim_matches('"');
+        let stem = name
+            .rsplit(['\\', '/'])
+            .next()
+            .unwrap_or(name)
+            .trim_end_matches(".exe")
+            .to_string();
+        if stem.is_empty() {
+            None
+        } else {
+            Some(stem)
+        }
+    }
+    #[cfg(unix)]
+    {
+        let path = format!("/proc/{pid}/comm");
+        let text = std::fs::read_to_string(path).ok()?;
+        let name = text.trim().to_string();
+        if name.is_empty() {
+            None
+        } else {
+            Some(name)
+        }
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        let _ = pid;
+        None
+    }
 }
 
 /// Whether a process id is alive. Used to detect orphans after a crash.

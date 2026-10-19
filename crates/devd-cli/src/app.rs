@@ -18,6 +18,7 @@ use devd_core::paths::Paths;
 use devd_core::state::Store;
 use devd_core::{DevdError, Registry, Result};
 use devd_git::{caps as git_caps, GitService};
+use devd_runtime::caps as runtime_caps;
 
 /// Everything a subcommand needs, assembled once.
 pub struct App {
@@ -77,6 +78,9 @@ impl App {
 
         let mut registry = Registry::new();
         git_caps::register(&mut registry, git.clone())?;
+        runtime_caps::register(&mut registry)?;
+        devd_services::caps::register(&mut registry)?;
+        devd_sites::caps::register(&mut registry)?;
 
         Ok(Self {
             paths,

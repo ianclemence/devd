@@ -630,6 +630,24 @@ impl Store {
         })
     }
 
+    /// Remove a service and the runs recorded for it.
+    ///
+    /// The run history goes with it: `service_runs` is a log of what this
+    /// installation did, and a log about a service that no longer exists is
+    /// noise. Nothing outside the store is touched - deleting files is the
+    /// caller's decision, and for MariaDB the data directory is deliberately not
+    /// part of the installation.
+    pub fn delete_service(&self, name: &str) -> Result<bool> {
+        self.with(|conn| {
+            let n = conn.execute("DELETE FROM services WHERE name = ?1", params![name])?;
+            conn.execute(
+                "DELETE FROM service_runs WHERE service_id NOT IN (SELECT id FROM services)",
+                [],
+            )?;
+            Ok(n > 0)
+        })
+    }
+
     /// Record a service run starting.
     pub fn start_service_run(&self, service_id: &str, pid: Option<u32>, restart_count: i64) -> Result<String> {
         let id = util::new_id();

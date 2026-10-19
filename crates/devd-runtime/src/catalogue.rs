@@ -77,7 +77,7 @@ pub fn version_key(version: &str) -> Vec<u32> {
 }
 
 /// The release series a version belongs to (`8.3.35` -> `8.3`).
-fn series_of(version: &str) -> String {
+pub fn series_of(version: &str) -> String {
     let parts: Vec<&str> = version.split('.').collect();
     if parts.len() >= 2 {
         format!("{}.{}", parts[0], parts[1])

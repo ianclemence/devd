@@ -19,6 +19,16 @@ pub enum WebServer {
     Apache,
 }
 
+impl WebServer {
+    /// Stable lowercase name, as stored on a site row.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Nginx => "nginx",
+            Self::Apache => "apache",
+        }
+    }
+}
+
 impl Default for WebServer {
     fn default() -> Self {
         Self::Nginx

@@ -16,6 +16,8 @@ use devd_core::{DevdError, Result};
 
 mod app;
 mod gitcat;
+mod runtimecat;
+mod stackcat;
 mod web;
 mod window;
 
@@ -26,7 +28,7 @@ use app::{exit_code_for, git_check, merge_args, App};
     name = "devd",
     version,
     about = "Agent-native local development environment manager",
-    long_about = "devd manages local runtimes, sites, DNS and TLS, and gives humans and \
+    long_about = "devd manages local runtimes, services, sites, hosts and TLS, and gives humans and \
                   agents one capability API over all of it - including a first-class Git \
                   integration.\n\nEverything devd can do is declared once, with a permission \
                   tier. Sensitive operations ask a human to approve them, and a declined \
@@ -81,6 +83,46 @@ pub(crate) enum Command {
     Git {
         #[command(subcommand)]
         cmd: GitCommand,
+    },
+    /// Install and manage runtimes: PHP, Node and Go.
+    Runtime {
+        #[command(subcommand)]
+        cmd: RuntimeCommand,
+    },
+    /// Install, start and stop services: nginx, the PHP listener and MariaDB.
+    Service {
+        #[command(subcommand)]
+        cmd: ServiceCommand,
+    },
+    /// Projects served over a local hostname.
+    Site {
+        #[command(subcommand)]
+        cmd: SiteCommand,
+    },
+    /// The managed block in the system hosts file.
+    Hosts {
+        #[command(subcommand)]
+        cmd: HostsCommand,
+    },
+    /// The generated web server configuration.
+    Web {
+        #[command(subcommand)]
+        cmd: WebCommand,
+    },
+    /// Start or stop every service together.
+    Stack {
+        #[command(subcommand)]
+        cmd: StackCommand,
+    },
+    /// The local certificate authority and site certificates.
+    Tls {
+        #[command(subcommand)]
+        cmd: TlsCommand,
+    },
+    /// Databases on the local MariaDB server.
+    Db {
+        #[command(subcommand)]
+        cmd: DbCommand,
     },
     /// Show recent audit entries.
     Audit {
@@ -372,6 +414,209 @@ pub(crate) enum GitCommand {
     Repo {
         #[command(subcommand)]
         cmd: RepoCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum RuntimeCommand {
+    /// List installed runtimes.
+    List,
+    /// Show the builds the vendor publishes, and the digest each is checked against.
+    Available {
+        /// Runtime kind: `php`, `node` or `go`.
+        #[arg(default_value = "php")]
+        kind: String,
+        /// Prefer the thread-safe PHP build, which the Apache module requires.
+        #[arg(long)]
+        thread_safe: bool,
+    },
+    /// Install a runtime, e.g. `php@8.3`, `node@lts`, `go@latest`.
+    Install {
+        /// Kind and version joined by `@`; the version may be a series (`8.3`),
+        /// a full version (`8.3.35`), `latest` or a channel (`lts`).
+        spec: String,
+        /// Prefer the thread-safe PHP build.
+        #[arg(long)]
+        thread_safe: bool,
+        /// Reinstall over an existing copy of the same version.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Run an installed runtime and report its version.
+    Verify {
+        /// Kind and version, e.g. `php@8.3.35`.
+        spec: String,
+    },
+    /// Remove an installed runtime. This deletes files.
+    Remove {
+        /// Kind and version, e.g. `php@8.3.14`.
+        spec: String,
+    },
+    /// Choose the PHP version new sites use.
+    Use {
+        /// An installed version, e.g. `8.3.35`.
+        version: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum ServiceCommand {
+    /// List every service with a live check of what is really running.
+    List,
+    /// Show the builds the vendor publishes for a service.
+    Available {
+        /// Service name: `nginx` or `mariadb`.
+        name: String,
+    },
+    /// Download, verify and install a service.
+    Install {
+        /// Service name: `nginx` or `mariadb`.
+        name: String,
+        /// Version, series or `latest`.
+        #[arg(long, default_value = "latest")]
+        version: String,
+        /// Port it should listen on. MariaDB defaults to 3306, nginx to the
+        /// configured HTTP port.
+        #[arg(long)]
+        port: Option<u16>,
+        /// Replace an existing installation of a different version.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Start a service and confirm it answers.
+    Start {
+        /// Service name, e.g. `nginx`, `php-cgi`, `mariadb`.
+        name: String,
+    },
+    /// Stop a service.
+    Stop {
+        /// Service name.
+        name: String,
+    },
+    /// Stop and start a service.
+    Restart {
+        /// Service name.
+        name: String,
+    },
+    /// Show one service's state.
+    Status {
+        /// Service name.
+        name: String,
+    },
+    /// Show the tail of a service's own log.
+    Logs {
+        /// Service name.
+        name: String,
+        /// How many lines.
+        #[arg(short = 'n', long, default_value_t = 40)]
+        lines: u32,
+    },
+    /// Uninstall a service. This deletes files.
+    Remove {
+        /// Service name.
+        name: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum SiteCommand {
+    /// List the sites.
+    List,
+    /// Create a site: directory, certificate, record and web server block.
+    Create {
+        /// Project name, used for the directory and, by default, the hostname.
+        name: String,
+        /// Fully qualified hostname. Defaults to `<name>.<tld>`.
+        #[arg(long)]
+        host: Option<String>,
+        /// Project directory. Defaults to `<www>/<name>`.
+        #[arg(long)]
+        root: Option<String>,
+        /// Serve over plain HTTP and issue no certificate.
+        #[arg(long)]
+        no_tls: bool,
+        /// Create a database named after the site, when MariaDB is running.
+        #[arg(long)]
+        db: bool,
+    },
+    /// Remove a site. This can delete the project directory.
+    Remove {
+        /// Project name.
+        name: String,
+        /// Also delete the project directory, which must be inside the www root.
+        #[arg(long)]
+        delete_files: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum HostsCommand {
+    /// Show what devd has in the hosts file, and what a sync would change.
+    Show,
+    /// Write the managed block in the hosts file. Needs an elevated shell on
+    /// Windows.
+    Sync,
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum WebCommand {
+    /// Rebuild the web server configuration from the state store.
+    Render,
+    /// Check the configuration with `nginx -t`.
+    Test,
+    /// Check and then reload the running web server.
+    Reload,
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum StackCommand {
+    /// Start every enabled service, in dependency order.
+    Up,
+    /// Stop every running service.
+    Down,
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum TlsCommand {
+    /// Create the local certificate authority if it does not exist.
+    Ca,
+    /// Print the authority certificate, for importing into a browser.
+    Show,
+    /// Add the authority to the system trust store. Needs approval.
+    Trust {
+        /// Add it to the machine-wide store instead of this user's. Needs an
+        /// elevated shell.
+        #[arg(long)]
+        machine: bool,
+    },
+    /// Remove the authority from the system trust store.
+    Untrust {
+        /// Remove it from the machine-wide store.
+        #[arg(long)]
+        machine: bool,
+    },
+    /// Issue a certificate for a hostname.
+    Issue {
+        /// The hostname, e.g. `blog.test`.
+        host: String,
+    },
+    /// List issued certificates.
+    List,
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum DbCommand {
+    /// List the databases.
+    List,
+    /// Create a database with the utf8mb4 character set.
+    Create {
+        /// Database name.
+        name: String,
+    },
+    /// Drop a database and everything in it.
+    Drop {
+        /// Database name.
+        name: String,
     },
 }
 
@@ -694,6 +939,38 @@ fn run(cli: Cli) -> Result<i32> {
             gitcat::run(&app, cmd)?;
             Ok(0)
         }
+        Command::Runtime { cmd } => {
+            runtimecat::run(&app, cmd)?;
+            Ok(0)
+        }
+        Command::Service { cmd } => {
+            stackcat::service(&app, cmd)?;
+            Ok(0)
+        }
+        Command::Site { cmd } => {
+            stackcat::site(&app, cmd)?;
+            Ok(0)
+        }
+        Command::Hosts { cmd } => {
+            stackcat::hosts(&app, cmd)?;
+            Ok(0)
+        }
+        Command::Web { cmd } => {
+            stackcat::web(&app, cmd)?;
+            Ok(0)
+        }
+        Command::Stack { cmd } => {
+            stackcat::stack(&app, cmd)?;
+            Ok(0)
+        }
+        Command::Tls { cmd } => {
+            stackcat::tls(&app, cmd)?;
+            Ok(0)
+        }
+        Command::Db { cmd } => {
+            stackcat::db(&app, cmd)?;
+            Ok(0)
+        }
         Command::Audit { limit } => {
             let rows = app.store.list_audit(limit)?;
             if app.json {
@@ -823,6 +1100,9 @@ fn doctor(json: bool) -> Result<i32> {
 
     let mut checks = devd_core::doctor::core_checks(&paths, &settings);
     checks.push(app::git_check(settings.git_executable.as_deref()));
+    checks.extend(devd_runtime::doctor_check(&paths));
+    checks.extend(devd_services::doctor_check(&paths));
+    checks.extend(devd_sites::doctor_check(&paths));
 
     let failures = checks.iter().filter(|c| c.is_fail()).count();
 

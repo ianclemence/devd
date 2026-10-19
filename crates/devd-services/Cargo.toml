@@ -1,0 +1,20 @@
+[package]
+name = "devd-services"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Managed services for devd: nginx, the PHP FastCGI listener, MariaDB, the local certificate authority and generated web server configuration."
+
+[dependencies]
+devd-core = { path = "../devd-core" }
+devd-runtime = { path = "../devd-runtime" }
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+rcgen = { workspace = true, features = ["x509-parser"] }
+uuid.workspace = true
+hex.workspace = true
+time = { workspace = true, features = ["formatting"] }
+
+[dev-dependencies]
+tempfile.workspace = true

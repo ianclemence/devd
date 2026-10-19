@@ -1,0 +1,17 @@
+[package]
+name = "devd-sites"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Sites for devd: project directories, hostnames, certificates, the managed hosts-file block and web server reconciliation."
+
+[dependencies]
+devd-core = { path = "../devd-core" }
+devd-runtime = { path = "../devd-runtime" }
+devd-services = { path = "../devd-services" }
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

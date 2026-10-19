@@ -20,3 +20,12 @@
 # with this setting, and crash without it.
 [target.x86_64-pc-windows-gnu]
 linker = "rust-lld"
+# The generated command line has grown to the point where the single frame that
+# clap's derive macro builds is larger than the 1 MB Windows reserves for the
+# main thread in an unoptimised build. The debug binary therefore overflowed its
+# stack while parsing arguments, before any of devd's own code ran; the release
+# build was unaffected because the optimiser reuses those slots. 8 MB is what a
+# Linux main thread gets by default and what Rust gives a spawned thread, so the
+# debug binary now behaves the same way everywhere. The reserve is address space,
+# not memory that is committed on startup.
+rustflags = ["-C", "link-arg=--stack=8388608"]
