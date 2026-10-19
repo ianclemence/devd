@@ -7,9 +7,11 @@
 //! logic, and no interface can bypass the permission checks enforced by
 //! [`Registry::dispatch`].
 
+pub mod archive;
 pub mod capability;
 pub mod config;
 pub mod doctor;
+pub mod download;
 pub mod events;
 pub mod health;
 pub mod paths;
@@ -19,12 +21,14 @@ pub mod registry;
 pub mod state;
 pub mod util;
 
+pub use archive::{extract, Format};
 pub use capability::{
     Actor, Approval, Capability, Ctx, Effect, Handler, InvokeRequest, InvokeResult, Outcome,
     Plan, Surface, Tier,
 };
 pub use config::Settings;
 pub use doctor::{Check, Level};
+pub use download::{Artifact, Fetched, Progress};
 pub use error::{DevdError, Result};
 pub use events::{Event, EventBus};
 pub use paths::Paths;

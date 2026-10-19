@@ -137,6 +137,21 @@ fn read_all(pipe: &mut Option<impl Read>) -> String {
     String::from_utf8_lossy(&buf).to_string()
 }
 
+/// Total size of every file under `path`, in bytes.
+///
+/// Used by plans that say how much disk an operation will free, and by the
+/// application's overview panel. A path that does not exist is zero bytes
+/// rather than an error: "nothing there" is a legitimate answer.
+pub fn directory_size(path: &Path) -> u64 {
+    walkdir::WalkDir::new(path)
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+        .filter_map(|entry| entry.metadata().ok())
+        .map(|meta| meta.len())
+        .sum()
+}
+
 /// Locate an executable on `PATH` (appending `.exe` on Windows).
 pub fn which(program: &str) -> Option<PathBuf> {
     let path_var = std::env::var_os("PATH")?;

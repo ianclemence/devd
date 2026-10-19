@@ -20,6 +20,10 @@ hex.workspace = true
 walkdir.workspace = true
 rusqlite.workspace = true
 rand.workspace = true
+ureq.workspace = true
+zip.workspace = true
+tar.workspace = true
+flate2.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
