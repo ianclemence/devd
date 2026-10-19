@@ -1,0 +1,17 @@
+[package]
+name = "devd-tui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "The devd terminal dashboard: a keyboard-first view of projects, Git and the capability registry."
+
+[dependencies]
+devd-core = { workspace = true }
+devd-git = { path = "../devd-git" }
+
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+serde_json = { workspace = true }

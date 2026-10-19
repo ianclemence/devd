@@ -17,6 +17,7 @@ devd-core = { workspace = true }
 devd-git = { path = "../devd-git" }
 devd-server = { path = "../devd-server" }
 devd-mcp = { path = "../devd-mcp" }
+devd-tui = { path = "../devd-tui" }
 
 clap = { workspace = true }
 serde = { workspace = true }

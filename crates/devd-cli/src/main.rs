@@ -103,6 +103,8 @@ pub(crate) enum Command {
         #[arg(long)]
         port: Option<u16>,
     },
+    /// Open the terminal dashboard.
+    Tui,
     /// Serve the Model Context Protocol on stdin/stdout, for agents.
     Mcp {
         /// Name reported to the audit trail for the calling client.
@@ -717,6 +719,13 @@ fn run(cli: Cli) -> Result<i32> {
             Ok(0)
         }
         Command::Doctor => unreachable!("handled before bootstrap"),
+        Command::Tui => {
+            let git_executable = app.settings.git_executable.clone();
+            let extra: Vec<devd_tui::ExtraChecks> =
+                vec![Arc::new(move || vec![git_check(git_executable.as_deref())])];
+            devd_tui::run(app.registry.clone(), app.ctx(), extra)?;
+            Ok(0)
+        }
         Command::Mcp { client, list } => {
             if list {
                 let tools = devd_mcp::tools();
