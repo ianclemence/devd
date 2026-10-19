@@ -32,7 +32,11 @@ pub struct App {
     /// Git backend.
     pub git: Arc<GitService>,
     /// The shared capability registry.
-    pub registry: Registry,
+    ///
+    /// Shared rather than owned because the MCP server and the HTTP server each
+    /// need to move it into a long-lived task while the CLI may still hold the
+    /// application.
+    pub registry: Arc<Registry>,
     /// Whether to emit JSON.
     pub json: bool,
     /// Whether to plan only.
@@ -80,7 +84,7 @@ impl App {
             settings: Arc::new(settings),
             events: EventBus::new(),
             git,
-            registry,
+            registry: Arc::new(registry),
             json,
             plan_only,
             assume_yes,
@@ -354,21 +358,15 @@ pub fn print_value(value: &Value, indent: usize) {
 /// The Git component of the environment check.
 ///
 /// Contributed by whichever entry point can reach the Git backend, so that
-/// `devd doctor` and the application's System panel report the same thing
-/// without `devd-core` - which must not depend on a Git implementation - having
-/// to know about one.
-pub fn git_check(configured: Option<&str>) -> devd_core::Check {
-    match GitService::discover(configured) {
-        Ok(git) => devd_core::Check::ok(
-            "git",
-            format!("{} at {}", git.version(), git.git_path().display()),
-        ),
-        Err(e) => devd_core::Check::fail("git", e.to_string()),
-    }
-}
+/// `devd doctor`, the application's System panel and the MCP server report the
+/// same thing without `devd-core` - which must not depend on a Git
+/// implementation - having to know about one. Lives in `devd-git` so all three
+/// callers share one implementation rather than three copies.
+pub use devd_git::doctor_check as git_check;
 
 /// Parse `--arg key=value` pairs and a `--args` JSON object into one object.
-pub fn merge_args(args: Option<String>, sets: Vec<String>) -> Result<Value> {    let mut out = match args {
+pub fn merge_args(args: Option<String>, sets: Vec<String>) -> Result<Value> {
+    let mut out = match args {
         Some(text) => {
             let v: Value = serde_json::from_str(&text)
                 .map_err(|e| DevdError::invalid(format!("--args is not valid JSON: {e}")))?;

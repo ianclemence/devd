@@ -16,6 +16,7 @@ path = "src/main.rs"
 devd-core = { workspace = true }
 devd-git = { path = "../devd-git" }
 devd-server = { path = "../devd-server" }
+devd-mcp = { path = "../devd-mcp" }
 
 clap = { workspace = true }
 serde = { workspace = true }

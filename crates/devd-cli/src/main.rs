@@ -6,6 +6,8 @@
 //! path as the desktop GUI and the MCP server, which is what makes the security
 //! properties of the product checkable rather than merely documented.
 
+use std::sync::Arc;
+
 use clap::{Parser, Subcommand, ValueEnum};
 
 use devd_core::config::Settings;
@@ -17,7 +19,7 @@ mod gitcat;
 mod web;
 mod window;
 
-use app::{exit_code_for, merge_args, App};
+use app::{exit_code_for, git_check, merge_args, App};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -100,6 +102,15 @@ pub(crate) enum Command {
         /// Port to listen on. Defaults to the last used port, then 8787 upward.
         #[arg(long)]
         port: Option<u16>,
+    },
+    /// Serve the Model Context Protocol on stdin/stdout, for agents.
+    Mcp {
+        /// Name reported to the audit trail for the calling client.
+        #[arg(long, default_value = "mcp-client")]
+        client: String,
+        /// Print the tool list and exit, instead of serving.
+        #[arg(long)]
+        list: bool,
     },
     /// Check the environment for problems.
     Doctor,
@@ -706,6 +717,27 @@ fn run(cli: Cli) -> Result<i32> {
             Ok(0)
         }
         Command::Doctor => unreachable!("handled before bootstrap"),
+        Command::Mcp { client, list } => {
+            if list {
+                let tools = devd_mcp::tools();
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&tools)
+                        .map_err(|e| DevdError::internal(e.to_string()))?
+                );
+                return Ok(0);
+            }
+            // The Git probe is contributed here, as it is for the HTTP server,
+            // because `devd-mcp` must not depend on one backend.
+            let git_executable = app.settings.git_executable.clone();
+            let extra: Vec<devd_mcp::ExtraChecks> =
+                vec![Arc::new(move || vec![git_check(git_executable.as_deref())])];
+            let server = devd_mcp::McpServer::new(app.registry.clone(), app.ctx(), client)
+                .with_extra_checks(extra);
+            // Nothing but protocol traffic may reach stdout.
+            server.serve_stdio()?;
+            Ok(0)
+        }
         Command::Ui { port, no_open } => {
             web::serve(app, port, !no_open)?;
             Ok(0)

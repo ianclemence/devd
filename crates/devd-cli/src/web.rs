@@ -61,7 +61,7 @@ pub fn serve(app: App, requested: Option<u16>, open: bool) -> Result<Started, De
     // moved out of it immediately afterwards.
     let ctx = app.ctx();
     let git_executable = app.settings.git_executable.clone();
-    let registry = Arc::new(app.registry);
+    let registry = app.registry.clone();
 
     // The Git probe is contributed from here rather than from `devd-server`
     // because the server must not depend on any particular backend. Each entry

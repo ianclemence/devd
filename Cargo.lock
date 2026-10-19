@@ -279,11 +279,12 @@ dependencies = [
 
 [[package]]
 name = "devd-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "clap",
  "devd-core",
  "devd-git",
+ "devd-mcp",
  "devd-server",
  "open",
  "serde",
@@ -293,7 +294,7 @@ dependencies = [
 
 [[package]]
 name = "devd-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "hex",
@@ -314,7 +315,7 @@ dependencies = [
 
 [[package]]
 name = "devd-git"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "devd-core",
  "schemars",
@@ -324,8 +325,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "devd-mcp"
+version = "0.3.0"
+dependencies = [
+ "devd-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "devd-server"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "axum",
  "devd-core",
