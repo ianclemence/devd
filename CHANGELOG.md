@@ -10,6 +10,56 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.7.0] - 2026-10-20 — agents in the window, and a built-in browser
+
+The application window now runs the coding agent you already use and shows the
+site you are building, without leaving the app.
+
+### Added
+
+**Agents**
+
+* An **Agents** view that starts Claude Code, OpenCode or a plain shell in the
+  selected project directory.
+* A real PTY per terminal: full-screen harness interfaces, colours, keyboard
+  shortcuts and resizing work. Output is polled over the loopback API; keystrokes
+  go back the same way.
+* The harness runs with its own models, credentials and permission prompts.
+  devd does not proxy the model, store the conversation or mediate file edits.
+* Harness detection is honest: a card says "not installed" when the CLI is not
+  on `PATH`, and nothing pretends to be the tool.
+
+**Preview**
+
+* A **Preview** view that embeds the running site in the window, with a site
+  picker, reload and open-externally.
+* The iframe is sandboxed, so the previewed page cannot navigate the window.
+
+**Design**
+
+* A new palette: warm graphite surfaces and a single terracotta accent instead
+  of the blue-grey default, with larger page titles and a calmer rail.
+* The terminal theme matches the window.
+
+### Security
+
+* Every terminal endpoint sits behind the same bearer token and loopback
+  defences as the rest of the API. The working directory must exist.
+* The preview iframe is sandboxed (`allow-scripts`, `allow-same-origin`,
+  `allow-forms`, `allow-popups`, `allow-downloads`, `allow-modals`) and cannot
+  navigate the top window.
+* The CSP now allows framing HTTP(S) for the preview and still denies
+  everything else by default.
+
+### Known limitations
+
+* One agent terminal at a time; reloading the window loses the handle while the
+  PTY keeps running.
+* Terminal output is polled, not archived.
+* Preview refuses sites that send `X-Frame-Options` or `frame-ancestors`.
+
+---
+
 ## [0.6.0] - 2026-10-20 — the server dashboard
 
 The application window now shows the machine, not just repositories: the

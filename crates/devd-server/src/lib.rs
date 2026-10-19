@@ -1,4 +1,4 @@
-﻿//! The `devd` application: a loopback HTTP API and the window that talks to it.
+//! The `devd` application: a loopback HTTP API and the window that talks to it.
 //!
 //! # One more projection, not one more implementation
 //!
@@ -43,6 +43,7 @@
 
 pub mod api;
 pub mod approval;
+pub mod terminal;
 pub mod ui;
 
 use std::net::{Ipv4Addr, SocketAddr};
@@ -115,6 +116,8 @@ pub struct AppState {
     pub extra_checks: Vec<ExtraChecks>,
     /// When this process started serving, for the uptime readout.
     pub started: Instant,
+    /// Coding-agent terminals, each with a real PTY.
+    pub terminals: terminal::Terminals,
     /// Signals graceful shutdown when the user quits the application.
     shutdown: watch::Sender<bool>,
 }
@@ -146,6 +149,7 @@ impl AppState {
             approvals: ApprovalStore::new(),
             extra_checks,
             started: Instant::now(),
+            terminals: terminal::Terminals::default(),
             shutdown,
         });
         (state, receiver)
@@ -179,6 +183,12 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/audit", get(api::audit))
         .route("/api/doctor", get(api::doctor))
         .route("/api/shutdown", post(api::shutdown))
+        .route("/api/terminal/harnesses", get(api::terminal_harnesses))
+        .route("/api/terminal/start", post(api::terminal_start))
+        .route("/api/terminal/output", post(api::terminal_output))
+        .route("/api/terminal/input", post(api::terminal_input))
+        .route("/api/terminal/resize", post(api::terminal_resize))
+        .route("/api/terminal/stop", post(api::terminal_stop))
         .with_state(state.clone());
 
     let pages = Router::new()
@@ -186,6 +196,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/app.js", get(ui::script))
         .route("/style.css", get(ui::style))
         .route("/favicon.svg", get(ui::favicon))
+        .route("/vendor/xterm.js", get(ui::xterm_js))
+        .route("/vendor/xterm.css", get(ui::xterm_css))
+        .route("/vendor/addon-fit.js", get(ui::xterm_fit))
         .with_state(state.clone());
 
     api.merge(pages)

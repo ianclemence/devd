@@ -105,6 +105,17 @@ string.
 | Secret scanning | A warning when staged content looks like a credential is specified | Not implemented. Previewing a staged diff before a commit shows the content but does not flag it. |
 | Instance discovery | `devd ui` finds a running instance by probing the remembered port and the next few for the `X-Devd-App` header | A lock file or a named pipe, which would be exact rather than a scan. |
 
+## Agent terminals and preview
+
+| Item | What it is | What it would be |
+| --- | --- | --- |
+| Agent harnesses | The terminal runs `claude`, `opencode` or a shell as installed on the machine. There is no bundled agent, no model proxy and no API key stored by devd. | Additional harnesses by command template, and per-project harness presets. |
+| Sessions | One agent terminal at a time in the window. Its id lives in the page, so reloading the window loses the handle while the PTY keeps running until it exits or the server stops. | A session list with reattach, and adoption after a reload. |
+| Output | Polled over the loopback API every 80ms, with 2 MB of scrollback in memory. It is not archived. | A WebSocket transport, and saved transcripts. |
+| Permissions | The harness's own prompts are the authority. devd does not mediate file edits or commands the agent runs. | Nothing — proxying those would make the agent's guarantees devd's problem. |
+| Preview | The site is embedded in an iframe with `sandbox` set. A site that sends `X-Frame-Options` or a `frame-ancestors` policy will refuse to render; devd's generated vhosts do not. | A per-site "block embedding" switch, and a device-size preview. |
+| Preview certificates | An HTTPS site renders without a warning only after the local authority is trusted. The page says when it is not. | A one-click trust from the preview, which exists but is the same admin action. |
+
 ## Platform limits
 
 * **No macOS.** Windows and Linux are the targets. Nothing is designed in a way

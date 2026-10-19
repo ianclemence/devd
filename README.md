@@ -2,9 +2,10 @@
 
 A local development environment manager, written in Rust. It installs and runs
 the services a PHP or Node project needs — nginx, MariaDB, PHP, Node.js, Go —
-creates virtual hosts served over HTTPS under a local domain, and exposes every
-operation as a typed, permissioned capability reachable from the CLI, a terminal
-dashboard, an application window and an MCP server for agents.
+creates virtual hosts served over HTTPS under a local domain, previews them
+inside the application window, and exposes every operation as a typed,
+permissioned capability reachable from the CLI, a terminal dashboard, the
+application window and an MCP server.
 
 devd replaces Windows-only stacks such as Laragon and XAMPP. It is built on two
 rules:
@@ -252,6 +253,28 @@ the same API without a window for scripts and tests. There is no second
 graphical toolkit to keep in step, and a later native shell wraps the same
 assets rather than reimplementing them.
 
+### Agents
+
+The window can run the coding-agent CLI you already use inside the project. It
+is a real terminal, not a chat facade: the harness keeps its own model,
+credentials and permission prompts.
+
+* **Agents** lists the harnesses found on this machine — Claude Code, OpenCode
+  and a plain shell — and starts the one you choose in the selected project
+  directory.
+* The terminal is a PTY, so full-screen interfaces, colours and keyboard
+  shortcuts work. Stopping it kills the process.
+* devd does not proxy the model, store prompts or read the conversation. The
+  agent's own tools act on the project with the permissions that harness asks
+  for.
+
+### Preview
+
+**Preview** embeds the running site in the window: pick a site, see it render,
+reload it, or open it in the system browser. The certificate authority has to be
+trusted for an HTTPS site to render without a warning, and the page says so when
+it is not.
+
 ## Configuration
 
 State lives in `%LOCALAPPDATA%\devd` on Windows and `$XDG_DATA_HOME/devd`
@@ -341,3 +364,7 @@ MIT. See [`LICENSE`](LICENSE).
 devd bundles no third-party binaries. PHP, Node.js, Go, nginx and MariaDB are
 downloaded from their vendors on first use and verified against the digest the
 vendor publishes; where a vendor publishes no digest, the install says so.
+
+The application window vendors xterm.js and its fit addon (both MIT) for the
+agent terminal; their license files are in
+[`crates/devd-server/ui/vendor/`](crates/devd-server/ui/vendor/).

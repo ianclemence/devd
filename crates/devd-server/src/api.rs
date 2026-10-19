@@ -402,3 +402,111 @@ mod tests {
         assert_eq!(parsed.unwrap().token, "abc");
     }
 }
+
+// ---------------------------------------------------------------- terminals
+
+/// `GET /api/terminal/harnesses` - the coding-agent CLIs found on this machine.
+pub async fn terminal_harnesses() -> Response {
+    Json(crate::terminal::harnesses()).into_response()
+}
+
+#[derive(Deserialize)]
+pub struct TerminalStart {
+    pub kind: String,
+    pub cwd: Option<String>,
+    pub cols: Option<u16>,
+    pub rows: Option<u16>,
+}
+
+/// `POST /api/terminal/start` - run a harness in a real PTY.
+pub async fn terminal_start(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<TerminalStart>,
+) -> Response {
+    let cols = req.cols.unwrap_or(100);
+    let rows = req.rows.unwrap_or(30);
+    let kind = req.kind;
+    let cwd = req.cwd;
+    let task = state.clone();
+    match tokio::task::spawn_blocking(move || {
+        task.terminals.start(&kind, cwd.as_deref(), cols, rows)
+    })
+    .await
+    {
+        Ok(Ok(id)) => Json(json!({ "id": id })).into_response(),
+        Ok(Err(message)) => refuse(StatusCode::BAD_REQUEST, "terminal", &message),
+        Err(e) => refuse(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal",
+            &format!("the terminal task failed: {e}"),
+        ),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct TerminalOutput {
+    pub id: String,
+    pub cursor: Option<u64>,
+}
+
+/// `POST /api/terminal/output` - bytes since the caller's cursor, base64.
+pub async fn terminal_output(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<TerminalOutput>,
+) -> Response {
+    match state.terminals.output(&req.id, req.cursor.unwrap_or(0)) {
+        Ok(value) => Json(value).into_response(),
+        Err(message) => refuse(StatusCode::NOT_FOUND, "not_found", &message),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct TerminalInput {
+    pub id: String,
+    pub data: String,
+}
+
+/// `POST /api/terminal/input` - keystrokes or pasted text.
+pub async fn terminal_input(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<TerminalInput>,
+) -> Response {
+    match state.terminals.write(&req.id, &req.data) {
+        Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(message) => refuse(StatusCode::NOT_FOUND, "not_found", &message),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct TerminalResize {
+    pub id: String,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+/// `POST /api/terminal/resize` - keep curses programs drawing correctly.
+pub async fn terminal_resize(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<TerminalResize>,
+) -> Response {
+    match state.terminals.resize(&req.id, req.cols, req.rows) {
+        Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(message) => refuse(StatusCode::NOT_FOUND, "not_found", &message),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct TerminalStop {
+    pub id: String,
+}
+
+/// `POST /api/terminal/stop` - kill the harness and forget the terminal.
+pub async fn terminal_stop(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<TerminalStop>,
+) -> Response {
+    match state.terminals.stop(&req.id) {
+        Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(message) => refuse(StatusCode::NOT_FOUND, "not_found", &message),
+    }
+}

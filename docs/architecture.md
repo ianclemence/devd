@@ -218,6 +218,17 @@ The terminal dashboard is the deliberate second surface: a different medium for
 a different situation (SSH, a console without a browser), not a copy of the
 same screens.
 
+**The window contains a browser, not a website.** Preview embeds the running
+site in an iframe, so the page you are building is one click from the page you
+are editing. The iframe is sandboxed and cannot navigate the window.
+
+**Agents are wrapped, not reimplemented.** Agent terminals run the harness
+installed on the machine — Claude Code, OpenCode, or a shell — behind a real
+PTY. devd supplies the directory, the terminal and the process; it does not
+proxy the model, hold the conversation, or stand between the harness and its
+provider. That is why a new model or a harness feature arrives without a devd
+release, and why the agent's own permission prompts remain the authority.
+
 ## Process execution
 
 A child process is started with an `argv` array; the runner never builds a

@@ -158,7 +158,21 @@
       loaded: false
     },
     siteFormOpen: false,
-    certFormOpen: false
+    certFormOpen: false,
+    harnesses: [],
+    agent: {
+      id: null,
+      kind: null,
+      term: null,
+      fit: null,
+      timer: null,
+      cursor: 0,
+      exited: false,
+      code: null,
+      starting: false,
+      cwd: null
+    },
+    preview: { site: null }
   };
 
   // ------------------------------------------------------------------ helpers
@@ -481,6 +495,7 @@
         label: "Workspace",
         items: [
           { view: "projects", label: "Projects", count: state.projects.length || null },
+          { view: "agents", label: "Agents" },
           {
             view: "capabilities",
             label: "Capabilities",
@@ -499,6 +514,7 @@
         items: [
           { view: "overview", label: "Overview" },
           { view: "sites", label: "Sites", count: server.sites.length || null },
+          { view: "preview", label: "Preview" },
           {
             view: "services",
             label: "Services",
@@ -546,6 +562,8 @@
     var labels = {
       overview: "Overview",
       sites: "Sites",
+      preview: "Preview",
+      agents: "Agents",
       services: "Services",
       runtimes: "Runtimes",
       certificates: "Certificates",
@@ -596,7 +614,7 @@
 
   // -------------------------------------------------------------------- server
 
-  var SERVER_VIEWS = ["overview", "sites", "services", "runtimes", "certificates", "hosts"];
+  var SERVER_VIEWS = ["overview", "sites", "preview", "services", "runtimes", "certificates", "hosts"];
 
   var KNOWN_SERVICES = [
     { name: "nginx", label: "nginx", note: "web server" },
@@ -1182,6 +1200,289 @@
       '<button type="button" class="btn btn-primary" data-action="sync-hosts"' +
         (pending ? "" : " disabled") + ">Sync hosts</button>",
       head + changes + published
+    );
+  }
+
+  // -------------------------------------------------------------------- agents
+
+  function post(path, body) {
+    return request(path, { method: "POST", body: JSON.stringify(body || {}) });
+  }
+
+  function loadAgents() {
+    return request("/api/terminal/harnesses")
+      .then(function (res) {
+        state.harnesses = res.ok && Array.isArray(res.body) ? res.body : [];
+      })
+      .catch(function () {
+        state.harnesses = [];
+      });
+  }
+
+  function cwdChoices() {
+    var out = [];
+    state.projects.forEach(function (p) { out.push({ path: p.path, label: p.name }); });
+    state.server.sites.forEach(function (row) {
+      out.push({ path: row.document_root, label: row.site.name + " (site)" });
+    });
+    if (state.session) out.push({ path: state.session.paths.www, label: "www" });
+    var seen = {};
+    return out.filter(function (c) {
+      if (!c.path || seen[c.path]) return false;
+      seen[c.path] = true;
+      return true;
+    });
+  }
+
+  function agentLabel(kind) {
+    var found = state.harnesses.filter(function (h) { return h.kind === kind; })[0];
+    return found ? found.label : kind;
+  }
+
+  function renderAgents() {
+    var a = state.agent;
+    if (a.starting) {
+      el("main").innerHTML = page(
+        "Agents",
+        "Starting the harness…",
+        "",
+        '<div class="loading">Starting the harness…</div>'
+      );
+      return;
+    }
+
+    if (a.id) {
+      el("main").innerHTML = page(
+        "Agents",
+        "A real terminal running " + agentLabel(a.kind) + " in your project. Its own models, credentials and permission prompts apply.",
+        '<span class="pill ' + (a.exited ? "" : "pill-ok") + '" id="agent-status">' + (a.exited ? "exited" : "running") + "</span>" +
+          '<button type="button" class="btn" data-action="stop-agent">Stop</button>',
+        '<div class="panel"><div class="panel-head"><span>' + esc(agentLabel(a.kind)) + "</span>" +
+          '<span class="panel-note mono">' + esc(a.cwd || "") + "</span></div>" +
+          '<div class="panel-body"><div class="terminal-shell" id="terminal-slot"></div></div></div>'
+      );
+      mountTerminal();
+      return;
+    }
+
+    var choices = cwdChoices();
+    var options = choices
+      .map(function (c) {
+        return (
+          '<option value="' + attr(c.path) + '"' + (a.cwd === c.path ? " selected" : "") + ">" +
+          esc(c.label) + " — " + esc(c.path) + "</option>"
+        );
+      })
+      .join("");
+
+    var cards = state.harnesses
+      .map(function (h) {
+        return (
+          '<div class="card agent-card">' +
+          '<div class="card-title">' + esc(h.label) + "</div>" +
+          '<div class="card-meta">' + (h.available ? "installed" : "not installed") + "</div>" +
+          '<div class="agent-detail">' + esc(h.detail) + "</div>" +
+          '<div class="card-actions">' +
+          (h.available
+            ? '<button type="button" class="btn btn-primary" data-action="start-agent" data-kind="' + attr(h.kind) + '">Start</button>'
+            : '<button type="button" class="btn" disabled>Not found</button>') +
+          "</div></div>"
+        );
+      })
+      .join("");
+
+    el("main").innerHTML = page(
+      "Agents",
+      "Run the coding agent you already use inside this project. devd does not proxy the model: the terminal is the harness's own.",
+      "",
+      '<div class="panel"><div class="panel-head"><span>Working directory</span></div>' +
+        '<div class="panel-body"><select class="select mono" id="agent-cwd">' + options + "</select>" +
+        '<div class="row-sub" style="margin-top:8px">The harness starts here and can use its own tools on these files.</div></div></div>' +
+        '<div class="grid grid-3">' + cards + "</div>"
+    );
+  }
+
+  function mountTerminal() {
+    var a = state.agent;
+    var slot = el("terminal-slot");
+    if (!slot) return;
+
+    // The view was rebuilt; the terminal's DOM is gone but the PTY is not.
+    // Recreate the emulator and replay the session from the start.
+    if (a.term && a.term.element && !document.body.contains(a.term.element)) {
+      try { a.term.dispose(); } catch (e) {}
+      a.term = null;
+      a.fit = null;
+      a.cursor = 0;
+    }
+
+    if (!a.term) {
+      a.term = new window.Terminal({
+        fontFamily: 'ui-monospace, "Cascadia Mono", Consolas, monospace',
+        fontSize: 12,
+        lineHeight: 1.35,
+        cursorBlink: true,
+        scrollback: 5000,
+        theme: {
+          background: "#0a0a0b",
+          foreground: "#e7e5e4",
+          cursor: "#e07856",
+          selectionBackground: "#3a2a22",
+          black: "#1c1917",
+          red: "#f0a58c",
+          green: "#9ac9a0",
+          yellow: "#e6c07b",
+          blue: "#8ab4d8",
+          magenta: "#c9a3d8",
+          cyan: "#8fc7c7",
+          white: "#e7e5e4"
+        }
+      });
+      a.fit = new window.FitAddon.FitAddon();
+      a.term.loadAddon(a.fit);
+      a.term.onData(function (data) {
+        if (!a.id) return;
+        post("/api/terminal/input", { id: a.id, data: data });
+      });
+      a.term.onResize(function (size) {
+        if (!a.id) return;
+        post("/api/terminal/resize", { id: a.id, cols: size.cols, rows: size.rows });
+      });
+    }
+
+    a.term.open(slot);
+    try { a.fit.fit(); } catch (e) {}
+    a.term.focus();
+    startPolling();
+  }
+
+  function startPolling() {
+    var a = state.agent;
+    if (a.timer || !a.id) return;
+    a.timer = setInterval(function () {
+      if (!a.id) return;
+      post("/api/terminal/output", { id: a.id, cursor: a.cursor })
+        .then(function (res) {
+          if (!res.ok || !res.body) return;
+          var body = res.body;
+          if (body.reset && a.term) a.term.reset();
+          if (body.data && a.term) {
+            var raw = atob(body.data);
+            var bytes = new Uint8Array(raw.length);
+            for (var i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+            a.term.write(bytes);
+          }
+          a.cursor = body.cursor;
+          if (body.exited) {
+            a.exited = true;
+            a.code = body.code;
+            if (a.timer) {
+              clearInterval(a.timer);
+              a.timer = null;
+            }
+            var status = el("agent-status");
+            if (status) status.textContent = "exited";
+          }
+        })
+        .catch(function () {});
+    }, 80);
+  }
+
+  function startAgent(kind) {
+    var a = state.agent;
+    var cwd = readInput("agent-cwd");
+    a.cwd = cwd || (cwdChoices()[0] && cwdChoices()[0].path) || null;
+    a.starting = true;
+    a.kind = kind;
+    render();
+    post("/api/terminal/start", { kind: kind, cwd: a.cwd, cols: 100, rows: 30 }).then(function (res) {
+      a.starting = false;
+      if (!res.ok || !res.body || !res.body.id) {
+        toast("error", errorOf(res.body, "could not start " + kind));
+        a.kind = null;
+        render();
+        return;
+      }
+      a.id = res.body.id;
+      a.cursor = 0;
+      a.exited = false;
+      a.code = null;
+      render();
+    });
+  }
+
+  function stopAgent() {
+    var a = state.agent;
+    if (a.timer) {
+      clearInterval(a.timer);
+      a.timer = null;
+    }
+    if (a.id) post("/api/terminal/stop", { id: a.id });
+    if (a.term) {
+      try { a.term.dispose(); } catch (e) {}
+    }
+    state.agent = {
+      id: null,
+      kind: null,
+      term: null,
+      fit: null,
+      timer: null,
+      cursor: 0,
+      exited: false,
+      code: null,
+      starting: false,
+      cwd: a.cwd
+    };
+    render();
+  }
+
+  // ------------------------------------------------------------------- preview
+
+  function renderPreview() {
+    var sites = state.server.sites;
+    if (!sites.length) {
+      el("main").innerHTML = page(
+        "Preview",
+        "The site you are working on, inside the window.",
+        "",
+        '<div class="panel"><div class="empty"><div class="empty-title">No sites to preview</div>' +
+          "<div>Create a site and it appears here.</div>" +
+          '<div class="inline" style="margin-top:12px"><button type="button" class="btn btn-primary" data-action="nav" data-view="sites">Create a site</button></div>' +
+          "</div></div>"
+      );
+      return;
+    }
+
+    var name = state.preview.site;
+    var row =
+      sites.filter(function (s) { return s.site.name === name; })[0] || sites[0];
+    state.preview.site = row.site.name;
+
+    var options = sites
+      .map(function (s) {
+        return (
+          '<option value="' + attr(s.site.name) + '"' + (s.site.name === row.site.name ? " selected" : "") + ">" +
+          esc(s.site.name) + " — " + esc(s.url) + "</option>"
+        );
+      })
+      .join("");
+
+    var notice = caTrusted()
+      ? ""
+      : '<div class="notice" style="margin-bottom:12px"><div class="grow">The certificate authority is not trusted yet, so an HTTPS preview may show a warning.</div>' +
+        '<button type="button" class="btn btn-mini" data-action="ca-trust" data-machine="false">Trust the CA</button></div>';
+
+    el("main").innerHTML = page(
+      "Preview",
+      "The running site, inside the window.",
+      '<button type="button" class="btn" data-action="reload-preview">Reload</button>' +
+        '<button type="button" class="btn" data-action="open-url" data-url="' + attr(row.url) + '">Open externally</button>',
+      notice +
+        '<div class="panel"><div class="panel-head">' +
+        '<select class="select" id="preview-site">' + options + "</select>" +
+        '<span class="panel-note mono">' + esc(row.url) + "</span></div>" +
+        '<div class="panel-body flush"><iframe id="preview-frame" class="preview-frame" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads allow-modals" src="' +
+        attr(row.url) + '" title="' + attr(row.site.name) + '"></iframe></div></div>'
     );
   }
 
@@ -2067,6 +2368,7 @@
         .then(function () { return loadTab(state.tab); })
         .then(render);
     }
+    if (state.view === "agents") return loadAgents().then(render);
     if (state.view === "capabilities") return loadCapabilities().then(render);
     if (state.view === "activity") return loadActivity().then(render);
     if (state.view === "system") return loadSystem().then(render);
@@ -2092,11 +2394,13 @@
       if (!state.server.loaded) return renderLoading();
       if (state.view === "overview") renderOverview();
       else if (state.view === "sites") renderSites();
+      else if (state.view === "preview") renderPreview();
       else if (state.view === "services") renderServices();
       else if (state.view === "runtimes") renderRuntimes();
       else if (state.view === "certificates") renderCertificates();
       else if (state.view === "hosts") renderHosts();
-    } else if (state.view === "projects") renderProjects();
+    } else if (state.view === "agents") renderAgents();
+    else if (state.view === "projects") renderProjects();
     else if (state.view === "project") renderProject();
     else if (state.view === "capabilities") renderCapabilities();
     else if (state.view === "activity") renderActivity();
@@ -2236,6 +2540,15 @@
       act("hosts.sync", {}).then(function (outcome) {
         if (outcome) render();
       });
+    },
+
+    "start-agent": function (node) { startAgent(node.dataset.kind); },
+
+    "stop-agent": function () { stopAgent(); },
+
+    "reload-preview": function () {
+      var frame = el("preview-frame");
+      if (frame) frame.src = frame.src;
     },
 
     "track-path": function () {
@@ -2702,6 +3015,13 @@
     }
   });
 
+  document.addEventListener("change", function (event) {
+    if (event.target.id === "preview-site") {
+      state.preview.site = event.target.value;
+      render();
+    }
+  });
+
   el("modal-cancel").addEventListener("click", function () { decideModal(false); });
   el("modal-confirm").addEventListener("click", function () { decideModal(true); });
   el("palette").addEventListener("click", function (event) {
@@ -2720,6 +3040,7 @@
     return loadSession()
       .then(loadServer)
       .then(render)
+      .then(loadAgents)
       .then(loadDoctor)
       .then(render)
       .then(loadProjects)
