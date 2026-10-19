@@ -1,0 +1,167 @@
+; devd installer.
+;
+; Per-user install: no administrator prompt, everything under
+; %LOCALAPPDATA%\Programs\devd, shortcuts and an uninstall entry in HKCU.
+;
+; Built by scripts/release-installer.ps1, which passes VERSION, SOURCE and
+; OUTFILE on the makensis command line.
+
+Unicode true
+!include "MUI2.nsh"
+
+!ifndef VERSION
+  !define VERSION "0.0.0"
+!endif
+!ifndef SOURCE
+  !define SOURCE "target\release\devd.exe"
+!endif
+!ifndef ROOT
+  !define ROOT ".."
+!endif
+!ifndef OUTFILE
+  !define OUTFILE "dist\devd-setup.exe"
+!endif
+
+!define APPNAME "devd"
+!define UNINSTKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\devd"
+
+Name "${APPNAME} ${VERSION}"
+OutFile "${OUTFILE}"
+InstallDir "$LOCALAPPDATA\Programs\devd"
+InstallDirRegKey HKCU "Software\devd" "InstallDir"
+RequestExecutionLevel user
+SetCompressor /SOLID lzma
+ShowInstDetails show
+ShowUninstDetails show
+
+VIProductVersion "${VERSION}.0"
+VIAddVersionKey "ProductName" "devd"
+VIAddVersionKey "FileDescription" "devd installer"
+VIAddVersionKey "FileVersion" "${VERSION}"
+VIAddVersionKey "ProductVersion" "${VERSION}"
+VIAddVersionKey "LegalCopyright" "MIT"
+
+!define MUI_ABORTWARNING
+!define MUI_WELCOMEPAGE_TITLE "devd ${VERSION}"
+!define MUI_WELCOMEPAGE_TEXT "devd is a local development environment: PHP, Node.js, Go, nginx, MariaDB and HTTPS sites, with one permissioned interface for people and agents.$\r$\n$\r$\nThis installs for the current user only. No administrator password is required.$\r$\n$\r$\nPHP, nginx and MariaDB are downloaded from their vendors on first start, never bundled."
+!insertmacro MUI_PAGE_WELCOME
+!insertmacro MUI_PAGE_DIRECTORY
+!insertmacro MUI_PAGE_COMPONENTS
+!insertmacro MUI_PAGE_INSTFILES
+
+!define MUI_FINISHPAGE_RUN "$INSTDIR\launch.vbs"
+!define MUI_FINISHPAGE_RUN_TEXT "Set up devd and open it"
+!define MUI_FINISHPAGE_TEXT "devd is installed.$\r$\n$\r$\nThe first start downloads PHP, nginx and MariaDB (about 140 MB), starts them, creates a site and opens the application. This can take a few minutes and shows progress in a console window."
+!insertmacro MUI_PAGE_FINISH
+
+!insertmacro MUI_LANGUAGE "English"
+
+Function .onInit
+  ; Refuse to install over a running copy: its files are locked and its
+  ; services would keep the old binaries. Failures here are expected on a
+  ; fresh install.
+  IfFileExists "$INSTDIR\devd.exe" 0 done
+    nsExec::ExecToLog '"$INSTDIR\devd.exe" stack down'
+    nsExec::ExecToLog 'taskkill /F /IM devd.exe'
+    Sleep 800
+  done:
+FunctionEnd
+
+Section "devd (required)" SecMain
+  SectionIn RO
+  SetOutPath "$INSTDIR"
+  File "${SOURCE}"
+  File "${ROOT}\LICENSE"
+  File "${ROOT}\README.md"
+
+  WriteUninstaller "$INSTDIR\uninstall.exe"
+
+  ; Launcher: set up on first run, then open the application without a console.
+  ; `app` is expanded here, at install time, so the VBScript contains a literal
+  ; path and no nested quoting.
+  FileOpen $9 "$INSTDIR\launch.vbs" w
+  FileWrite $9 'Dim fso, sh, app, home, code$\r$\n'
+  FileWrite $9 'Set fso = CreateObject("Scripting.FileSystemObject")$\r$\n'
+  FileWrite $9 'Set sh = CreateObject("WScript.Shell")$\r$\n'
+  FileWrite $9 'app = "$INSTDIR"$\r$\n'
+  FileWrite $9 'home = sh.ExpandEnvironmentStrings("%LOCALAPPDATA%") & "\devd"$\r$\n'
+  FileWrite $9 'If Not fso.FileExists(home & "\services\nginx\nginx.exe") Then$\r$\n'
+  FileWrite $9 '  code = sh.Run("""" & app & "\devd.exe"" setup --yes", 1, True)$\r$\n'
+  FileWrite $9 '  If code <> 0 Then$\r$\n'
+  FileWrite $9 '    MsgBox "devd could not finish setting up." & vbCrLf & vbCrLf & "Open PowerShell and run:" & vbCrLf & "  """ & app & "\devd.exe"" setup", 16, "devd"$\r$\n'
+  FileWrite $9 '    WScript.Quit 1$\r$\n'
+  FileWrite $9 '  End If$\r$\n'
+  FileWrite $9 'End If$\r$\n'
+  FileWrite $9 'Call sh.Run("""" & app & "\devd.exe"" ui", 0, False)$\r$\n'
+  FileClose $9
+
+  ; PATH helpers, so `devd` works in a new terminal.
+  FileOpen $9 "$INSTDIR\add-to-path.ps1" w
+  FileWrite $9 '$$dir = Split-Path -Parent $$MyInvocation.MyCommand.Path$\r$\n'
+  FileWrite $9 '$$p = [Environment]::GetEnvironmentVariable("Path", "User")$\r$\n'
+  FileWrite $9 '$$parts = @($$p -split ";" | Where-Object { $$_ -ne "" })$\r$\n'
+  FileWrite $9 'if ($$parts -notcontains $$dir) { [Environment]::SetEnvironmentVariable("Path", ((@($$parts) + $$dir) -join ";"), "User") }$\r$\n'
+  FileClose $9
+
+  FileOpen $9 "$INSTDIR\remove-from-path.ps1" w
+  FileWrite $9 '$$dir = Split-Path -Parent $$MyInvocation.MyCommand.Path$\r$\n'
+  FileWrite $9 '$$p = [Environment]::GetEnvironmentVariable("Path", "User")$\r$\n'
+  FileWrite $9 '$$parts = @($$p -split ";" | Where-Object { $$_ -ne "" -and $$_ -ne $$dir })$\r$\n'
+  FileWrite $9 '[Environment]::SetEnvironmentVariable("Path", ($$parts -join ";"), "User")$\r$\n'
+  FileClose $9
+
+  nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\add-to-path.ps1"'
+
+  CreateDirectory "$SMPROGRAMS\devd"
+  CreateShortcut "$SMPROGRAMS\devd\devd.lnk" "wscript.exe" '"$INSTDIR\launch.vbs"' "$INSTDIR\devd.exe" 0
+  CreateShortcut "$SMPROGRAMS\devd\devd terminal.lnk" "$SYSDIR\cmd.exe" '/k ""$INSTDIR\devd.exe" doctor"' "$INSTDIR\devd.exe" 0
+  CreateShortcut "$SMPROGRAMS\devd\Uninstall devd.lnk" "$INSTDIR\uninstall.exe"
+
+  WriteRegStr HKCU "Software\devd" "InstallDir" "$INSTDIR"
+  WriteRegStr HKCU "${UNINSTKEY}" "DisplayName" "devd"
+  WriteRegStr HKCU "${UNINSTKEY}" "DisplayVersion" "${VERSION}"
+  WriteRegStr HKCU "${UNINSTKEY}" "Publisher" "ianclemence"
+  WriteRegStr HKCU "${UNINSTKEY}" "InstallLocation" "$INSTDIR"
+  WriteRegStr HKCU "${UNINSTKEY}" "DisplayIcon" "$INSTDIR\devd.exe"
+  WriteRegStr HKCU "${UNINSTKEY}" "UninstallString" '"$INSTDIR\uninstall.exe"'
+  WriteRegDWORD HKCU "${UNINSTKEY}" "NoModify" 1
+  WriteRegDWORD HKCU "${UNINSTKEY}" "NoRepair" 1
+  WriteRegDWORD HKCU "${UNINSTKEY}" "EstimatedSize" 12000
+SectionEnd
+
+Section "Desktop shortcut" SecDesktop
+  CreateShortcut "$DESKTOP\devd.lnk" "wscript.exe" '"$INSTDIR\launch.vbs"' "$INSTDIR\devd.exe" 0
+SectionEnd
+
+!insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecMain} "devd, its uninstaller and the Start Menu entries."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecDesktop} "A shortcut on the desktop."
+!insertmacro MUI_FUNCTION_DESCRIPTION_END
+
+Section "Uninstall"
+  ; Stop the application and the services it started. User data in
+  ; %LOCALAPPDATA%\devd is deliberately kept; the README says where it is.
+  nsExec::ExecToLog '"$INSTDIR\devd.exe" stack down'
+  nsExec::ExecToLog 'taskkill /F /IM devd.exe'
+  Sleep 500
+
+  nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\remove-from-path.ps1"'
+
+  Delete "$SMPROGRAMS\devd\devd.lnk"
+  Delete "$SMPROGRAMS\devd\devd terminal.lnk"
+  Delete "$SMPROGRAMS\devd\Uninstall devd.lnk"
+  RMDir "$SMPROGRAMS\devd"
+  Delete "$DESKTOP\devd.lnk"
+
+  Delete "$INSTDIR\devd.exe"
+  Delete "$INSTDIR\LICENSE"
+  Delete "$INSTDIR\README.md"
+  Delete "$INSTDIR\launch.vbs"
+  Delete "$INSTDIR\add-to-path.ps1"
+  Delete "$INSTDIR\remove-from-path.ps1"
+  Delete "$INSTDIR\uninstall.exe"
+  RMDir "$INSTDIR"
+
+  DeleteRegKey HKCU "${UNINSTKEY}"
+  DeleteRegKey HKCU "Software\devd"
+SectionEnd

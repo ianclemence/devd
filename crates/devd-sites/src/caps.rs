@@ -73,7 +73,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
                         row.site.name, row.site.root
                     ));
                 }
-                if !row.in_hosts {
+                if !row.in_hosts && !crate::resolves_without_hosts(&row.site.host) {
                     outcome = outcome.warn(format!(
                         "{} does not resolve yet; `devd hosts sync` adds it",
                         row.site.host

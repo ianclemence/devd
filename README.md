@@ -20,7 +20,7 @@ rules:
 ## Requirements
 
 - **Windows 10/11 x64** or **Linux x64**.
-- The prebuilt Windows binary needs nothing else.
+- The Windows installer needs nothing else: no Rust, no administrator rights.
 - Building from source needs Rust 1.77 or newer and a C compiler (`cc`) for the
   bundled SQLite.
 - Git must be on `PATH` (or named in `git_executable`) for the Git capabilities.
@@ -34,25 +34,41 @@ vendors' Windows archives. See [`docs/limitations.md`](docs/limitations.md).
 
 ### Windows
 
-Download the binary and its checksum from the
+Download and run the installer from the
 [latest release](https://github.com/ianclemence/devd/releases/latest):
 
 ```powershell
-curl.exe -LO https://github.com/ianclemence/devd/releases/download/v0.5.0/devd-v0.5.0-x86_64-pc-windows-gnu.exe
-curl.exe -LO https://github.com/ianclemence/devd/releases/download/v0.5.0/SHA256SUMS.txt
-certutil -hashfile devd-v0.5.0-x86_64-pc-windows-gnu.exe SHA256
+curl.exe -LO https://github.com/ianclemence/devd/releases/download/v0.5.1/devd-setup-0.5.1.exe
+.\devd-setup-0.5.1.exe
 ```
 
-Compare the result with the line in `SHA256SUMS.txt`, rename the file to
-`devd.exe`, put it on `PATH`, and run:
+It installs for the current user only — no administrator prompt — adds `devd`
+to `PATH`, and creates a Start Menu entry. On the last page, **Set up devd and
+open it** downloads PHP, nginx and MariaDB (about 140 MB), starts them, creates
+a site at `https://localhost:<port>` and opens the application.
+
+Uninstalling keeps your sites and data in `%LOCALAPPDATA%\devd`.
+
+The installer is not code-signed, so Windows SmartScreen warns once. The
+published `SHA256SUMS.txt` lets you check what you downloaded.
+
+### Portable binary
+
+The same binary is attached as a standalone executable if you would rather not
+install anything. Download it, verify it, and put it on `PATH`:
 
 ```powershell
-devd doctor
+curl.exe -LO https://github.com/ianclemence/devd/releases/download/v0.5.1/devd-v0.5.1-x86_64-pc-windows-gnu.exe
+curl.exe -LO https://github.com/ianclemence/devd/releases/download/v0.5.1/SHA256SUMS.txt
+certutil -hashfile devd-v0.5.1-x86_64-pc-windows-gnu.exe SHA256
+
+Rename-Item devd-v0.5.1-x86_64-pc-windows-gnu.exe devd.exe
+devd setup --yes
+devd ui
 ```
 
-The binary is self-contained: it links only Windows system libraries, so it
-needs no Rust toolchain, MinGW or Visual C++ runtime. It is not code-signed, so
-SmartScreen warns once on first run; that is why the checksum is published.
+It is self-contained: it links only Windows system libraries, so it needs no
+Rust toolchain, MinGW or Visual C++ runtime.
 
 ### From source
 
@@ -73,15 +89,26 @@ described in [`docs/releasing.md`](docs/releasing.md).
 
 ## Quick start
 
-```bash
-devd runtime install php          # newest stable PHP, digest-verified
-devd service install nginx
-devd service install mariadb
-devd stack up                     # php-cgi, then MariaDB, then nginx
+The installer runs this for you on first start. From a portable build or a
+source checkout, the same step is one command:
 
-devd site create blog             # directory, starter page, vhost, certificate
-devd hosts sync -y                # publish blog.test (elevated shell on Windows)
-devd tls trust -y                 # add devd's CA to the OS trust store
+```bash
+devd setup --yes
+```
+
+It installs PHP, nginx and MariaDB if they are missing, starts them, and creates
+a site at `https://localhost:<https-port>`. Then open the application:
+
+```bash
+devd ui
+```
+
+From there, a normal project site is three commands:
+
+```bash
+devd site create blog            # directory, starter page, vhost, certificate
+devd hosts sync -y               # publish blog.test (elevated shell on Windows)
+devd tls trust -y                # add devd's CA to the OS trust store
 ```
 
 `devd site create` prints the URL. On the defaults that is

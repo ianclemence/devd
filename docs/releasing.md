@@ -31,6 +31,22 @@ dist/devd-v0.5.0-x86_64-pc-windows-gnu.exe
 dist/SHA256SUMS.txt
 ```
 
+The installer is a second artifact:
+
+```powershell
+.\scripts\release-installer.ps1
+```
+
+It rebuilds the release binary, then compiles `installer/devd.nsi` into
+`dist/devd-setup-<version>.exe` and rewrites the checksum file. NSIS 3 is
+required; pass `-Nsis <path to makensis.exe>` when it is not at the default
+location.
+
+The installer must be exercised, not just built: install it, let the finish page
+run `devd setup`, check the shortcut opens the application, and uninstall it.
+The per-user install and its uninstaller are both reversible without
+administrator rights.
+
 The binary is built for `x86_64-pc-windows-gnu` with `rust-lld`, as configured in
 `.cargo/config.toml`; it links only Windows system libraries, so it needs no
 Rust toolchain, MinGW or Visual C++ runtime at run time. It is not code-signed,
@@ -77,14 +93,15 @@ gh release upload v<version> dist/*
 
 Then verify what a user would get:
 
-```bash
-curl -LO https://github.com/ianclemence/devd/releases/download/v<version>/SHA256SUMS.txt
-curl -LO https://github.com/ianclemence/devd/releases/download/v<version>/devd-v<version>-x86_64-pc-windows-gnu.exe
-certutil -hashfile devd-v<version>-x86_64-pc-windows-gnu.exe SHA256
+```powershell
+curl.exe -LO https://github.com/ianclemence/devd/releases/download/v<version>/devd-setup-<version>.exe
+curl.exe -LO https://github.com/ianclemence/devd/releases/download/v<version>/SHA256SUMS.txt
+certutil -hashfile devd-setup-<version>.exe SHA256
 ```
 
-The hash must match the published file, and the downloaded binary must report
-`devd <version>`.
+The hash must match, and running the installer from that download must produce a
+working application. The standalone binary is verified the same way: hash, run,
+`devd --version`.
 
 ```bash
 gh api "repos/ianclemence/devd/releases?per_page=3"

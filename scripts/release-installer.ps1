@@ -1,0 +1,51 @@
+# Builds the Windows installer.
+#
+# The installer is per-user: it needs no administrator rights, installs under
+# %LOCALAPPDATA%\Programs\devd, and writes its shortcuts and uninstall entry to
+# the current user's registry. The first start runs `devd setup`, which
+# downloads PHP, nginx and MariaDB and creates a site.
+#
+# Usage:
+#   .\scripts\release-installer.ps1
+#   .\scripts\release-installer.ps1 -Nsis "C:\Program Files (x86)\NSIS\makensis.exe"
+#
+# Requires NSIS 3 (makensis). The release binary is built first.
+
+[CmdletBinding()]
+param(
+    [string]$Nsis = "D:\tools\nsis\nsis-3.10\makensis.exe"
+)
+
+$ErrorActionPreference = "Continue"
+$repo = Split-Path -Parent $PSScriptRoot
+Set-Location $repo
+
+if (-not (Test-Path $Nsis)) {
+    throw "makensis was not found at '$Nsis'. Install NSIS 3 or pass -Nsis <path to makensis.exe>."
+}
+
+$version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"' |
+    Select-Object -First 1).Matches[0].Groups[1].Value
+if (-not $version) { throw "could not read the version from Cargo.toml" }
+
+Write-Host "==> cargo build --release" -ForegroundColor Cyan
+cargo build --release -p devd-cli
+if ($LASTEXITCODE -ne 0) { throw "the release build failed" }
+
+$source = Join-Path $repo "target\release\devd.exe"
+if (-not (Test-Path $source)) { throw "the build did not produce $source" }
+
+New-Item -ItemType Directory -Force dist | Out-Null
+$out = Join-Path $repo "dist\devd-setup-$version.exe"
+
+Write-Host "==> makensis" -ForegroundColor Cyan
+& $Nsis "/DVERSION=$version" "/DSOURCE=$source" "/DOUTFILE=$out" "/DROOT=$repo" "installer\devd.nsi"
+if ($LASTEXITCODE -ne 0) { throw "makensis failed" }
+if (-not (Test-Path $out)) { throw "the installer was not produced at $out" }
+
+$sha = (Get-FileHash $out -Algorithm SHA256).Hash.ToLower()
+"$sha  devd-setup-$version.exe" | Out-File -Encoding ascii "dist\SHA256SUMS.txt"
+
+Write-Host ""
+Write-Host "wrote dist\devd-setup-$version.exe" -ForegroundColor Green
+Get-Content "dist\SHA256SUMS.txt"

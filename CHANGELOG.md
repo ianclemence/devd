@@ -10,6 +10,52 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.5.1] - 2026-10-19 — a Windows installer
+
+`devd` now installs like an application: download one executable, click through
+the installer, and the app opens with a site already served.
+
+### Added
+
+**The installer (`devd-setup-<version>.exe`, `installer/devd.nsi`)**
+
+* Per-user install under `%LOCALAPPDATA%\Programs\devd`; no administrator prompt.
+* Adds `devd` to the user's `PATH`, creates Start Menu entries (the application,
+  a terminal, the uninstaller) and an optional desktop shortcut, and registers
+  itself in *Apps & features*.
+* The last page runs `devd setup` in a console with visible progress, then opens
+  the application without a console window.
+* Uninstall stops the services, removes files, shortcuts, `PATH` entry and
+  registry key, and keeps the data directory.
+
+**`devd setup`**
+
+* Idempotent first-run provisioning: install PHP, nginx and MariaDB when
+  missing, start the stack, create the first site, trust the CA for the current
+  user with `--yes`.
+* If ports 80/443 are held by another program it moves the listeners to
+  8080/8443 and persists the choice.
+* The first site is `localhost`, so it needs no hosts entry and no elevation.
+
+**`scripts/release-installer.ps1`** builds the installer with NSIS; the release
+scripts are local by decision, with no CI pipeline.
+
+### Fixed
+
+* `www_root` is honoured when creating sites and by the `--delete-files` guard;
+  it previously only affected the doctor check.
+* `dns_mode` and `auto_start_services` were serialised into `settings.toml` and
+  read by nothing; removed.
+* A site whose host is `localhost` no longer warns that its name does not
+  resolve.
+
+### Changed
+
+* The README leads with the installer; the standalone binary and the source
+  build are the alternatives.
+
+---
+
 ## [0.5.0] - 2026-10-19 — M4: a real site over HTTPS
 
 The fifth milestone is the first one where `devd` does what the product is for:

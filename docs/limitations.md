@@ -109,6 +109,11 @@ string.
 
 * **No macOS.** Windows and Linux are the targets. Nothing is designed in a way
   that forbids macOS, but it is untested and unsupported.
+* **The installer is Windows x64 and per-user.** There is no ARM64 build and no
+  machine-wide install: it writes to `%LOCALAPPDATA%\Programs\devd`, the current
+  user's `PATH` and `HKCU`. It is unsigned, so SmartScreen warns once; the
+  published `SHA256SUMS.txt` covers the download. Uninstalling keeps the data
+  directory.
 * **No containers as the substrate.** `devd` runs services as the invoking user
   on the host. This is a deliberate decision, not a gap, but it means a service
   `devd` starts runs with that user's privileges.

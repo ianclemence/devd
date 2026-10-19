@@ -17,6 +17,7 @@ use devd_core::{DevdError, Result};
 mod app;
 mod gitcat;
 mod runtimecat;
+mod setup;
 mod stackcat;
 mod web;
 mod window;
@@ -130,6 +131,12 @@ pub(crate) enum Command {
         #[arg(short = 'n', long, default_value_t = 20)]
         limit: u32,
     },
+    /// Prepare this installation: runtimes, services and a first site.
+    ///
+    /// Safe to run again; steps that are already done are skipped. Without
+    /// `--yes` it stops before anything that needs approval, which today is
+    /// trusting the local certificate authority.
+    Setup,
     /// Open the devd application: projects, Git and the capability registry.
     Ui {
         /// Port to listen on. Defaults to the last used port, then 8787 upward.
@@ -1024,6 +1031,7 @@ fn run(cli: Cli) -> Result<i32> {
             server.serve_stdio()?;
             Ok(0)
         }
+        Command::Setup => setup::run(cli.json, cli.plan, cli.yes),
         Command::Ui { port, no_open } => {
             web::serve(app, port, !no_open)?;
             Ok(0)

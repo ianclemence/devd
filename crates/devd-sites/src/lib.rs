@@ -96,6 +96,16 @@ pub fn default_directory(ctx: &Ctx, name: &str) -> PathBuf {
     www_root(ctx).join(name)
 }
 
+/// Whether a hostname resolves without an entry in the hosts file.
+///
+/// `localhost` and its subdomains are mapped to loopback by the operating
+/// system and by browsers, so a site published there needs no elevation. This
+/// is why the first-run site uses it.
+pub fn resolves_without_hosts(host: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    host == "localhost" || host.ends_with(".localhost")
+}
+
 /// The URL a site is served at.
 pub fn url_for(ctx: &Ctx, site: &Site) -> String {
     let tls = Tls::parse(&site.tls_mode);
@@ -219,9 +229,11 @@ pub fn create(ctx: &Ctx, request: &CreateRequest) -> Result<Created> {
     let reloaded = reconcile(ctx, &mut warnings)?;
 
     // The hosts file is deliberately not written here; say so rather than leaving
-    // the user with a name that does not resolve and no explanation.
+    // the user with a name that does not resolve and no explanation. `localhost`
+    // and its subdomains are exempt: they resolve without a hosts entry, which is
+    // why the first-run site uses one.
     let managed = hosts::current_entries()?;
-    if !managed.iter().any(|e| e.host.eq_ignore_ascii_case(&host)) {
+    if !resolves_without_hosts(&host) && !managed.iter().any(|e| e.host.eq_ignore_ascii_case(&host)) {
         warnings.push(format!(
             "{host} does not resolve on this machine yet; `devd hosts sync` adds it to {}",
             hosts::path().display()
@@ -624,6 +636,21 @@ mod tests {
             std::fs::read_to_string(dir.join("index.php")).unwrap(),
             "<?php echo 'mine';",
             "the starter page must not replace an existing one"
+        );
+        let _ = std::fs::remove_dir_all(c.paths.root());
+    }
+
+    #[test]
+    fn localhost_needs_no_hosts_entry() {
+        let c = ctx("localhost");
+        let mut req = request("welcome");
+        req.host = Some("localhost".to_string());
+        let created = create(&c, &req).unwrap();
+        assert_eq!(created.url, "https://localhost:8443");
+        assert!(
+            !created.warnings.iter().any(|w| w.contains("hosts sync")),
+            "localhost resolves without the hosts file: {:?}",
+            created.warnings
         );
         let _ = std::fs::remove_dir_all(c.paths.root());
     }
