@@ -85,9 +85,14 @@ fn default_path() -> PathBuf {
 }
 
 /// Every site that should resolve to the loopback address.
+///
+/// `localhost` and its subdomains are left out: they already resolve, and
+/// writing them into the hosts file would be a change the user has to approve
+/// for no benefit.
 pub fn entries_for(sites: &[Site]) -> Vec<Entry> {
     let mut entries: Vec<Entry> = sites
         .iter()
+        .filter(|s| !crate::resolves_without_hosts(&s.host))
         .map(|s| Entry {
             address: "127.0.0.1".to_string(),
             host: s.host.clone(),

@@ -201,6 +201,23 @@ decline reaches the audit trail.
 testable: the tests draw into `ratatui`'s `TestBackend` and assert on the
 resulting buffer.
 
+## One graphical surface
+
+The graphical interface is one application window, not a website and not a
+second native implementation. `devd ui` serves the interface from a loopback
+server and opens it in a window; the server binds `127.0.0.1`, requires a bearer
+token minted per process, and cannot be reached from another machine.
+
+A native toolkit beside the HTML interface would be a second implementation of
+every list, table, diff and consent screen, and the two would drift the first
+time a capability changed. Wrapping the same assets in a native webview adds a
+window without adding a second UI; that is the planned direction, and the
+interface does not change when it happens.
+
+The terminal dashboard is the deliberate second surface: a different medium for
+a different situation (SSH, a console without a browser), not a copy of the
+same screens.
+
 ## Process execution
 
 A child process is started with an `argv` array; the runner never builds a

@@ -4,7 +4,7 @@ A local development environment manager, written in Rust. It installs and runs
 the services a PHP or Node project needs — nginx, MariaDB, PHP, Node.js, Go —
 creates virtual hosts served over HTTPS under a local domain, and exposes every
 operation as a typed, permissioned capability reachable from the CLI, a terminal
-dashboard, a web interface, an HTTP API and an MCP server for agents.
+dashboard, an application window and an MCP server for agents.
 
 devd replaces Windows-only stacks such as Laragon and XAMPP. It is built on two
 rules:
@@ -26,7 +26,7 @@ rules:
 - Git must be on `PATH` (or named in `git_executable`) for the Git capabilities.
 
 Service management is available on Windows. On Linux the core, Git, the CLI,
-the dashboard, the web application, MCP, and the Node.js and Go runtimes work;
+the dashboard, the application window, MCP, and the Node.js and Go runtimes work;
 nginx and MariaDB installation is not available yet because devd manages the
 vendors' Windows archives. See [`docs/limitations.md`](docs/limitations.md).
 
@@ -234,8 +234,8 @@ Every Git command is one of 64 capabilities grouped under `git.repo`,
 ### Interfaces
 
 ```bash
-devd ui            # the web interface, opened as a window
-devd serve         # the HTTP API only, on loopback
+devd ui            # the application window
+devd serve         # the loopback API only, for scripts and tests
 devd tui           # the terminal dashboard
 devd mcp           # MCP on stdin/stdout, for agents
 
@@ -244,6 +244,13 @@ devd describe git.reset
 devd doctor
 devd audit -n 20
 ```
+
+The graphical surface is one application window, not a website: `devd ui`
+starts a loopback server and opens the interface in a window. The server binds
+`127.0.0.1` only and requires a per-process bearer token; `devd serve` exposes
+the same API without a window for scripts and tests. There is no second
+graphical toolkit to keep in step, and a later native shell wraps the same
+assets rather than reimplementing them.
 
 ## Configuration
 
@@ -319,7 +326,7 @@ protections, see [`docs/security.md`](docs/security.md).
 | --- | --- |
 | [`docs/architecture.md`](docs/architecture.md) | The registry, the dispatcher, the state store, and the skill crates. |
 | [`docs/security.md`](docs/security.md) | The threat model and the specific protections. |
-| [`docs/app.md`](docs/app.md) | The web interface, the loopback API and the approval flow. |
+| [`docs/app.md`](docs/app.md) | The application window, the loopback API and the approval flow. |
 | [`docs/tui.md`](docs/tui.md) | The terminal dashboard. |
 | [`docs/mcp.md`](docs/mcp.md) | The agent surface and its five discovery tools. |
 | [`docs/git-cli.md`](docs/git-cli.md) | Every Git command and the capability it calls. |

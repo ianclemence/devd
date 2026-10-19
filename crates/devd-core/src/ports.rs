@@ -87,10 +87,35 @@ fn listeners_windows() -> Result<Vec<Listener>> {
             protocol: "tcp".to_string(),
             address: cols[1].to_string(),
             pid,
-            program: pid.and_then(program_name),
+            // Resolved in one pass below: asking `tasklist` once per socket
+            // turned a one-second check into a forty-second one on a machine
+            // with a few dozen listeners.
+            program: None,
         });
     }
+
+    let pids: Vec<u32> = seen.iter().filter_map(|l| l.pid).collect();
+    let names = process_names(&pids);
+    for listener in &mut seen {
+        listener.program = listener.pid.and_then(|pid| names.get(&pid).cloned());
+    }
     Ok(seen)
+}
+
+/// Resolve process image names for many pids without starting a process per
+/// socket. `tasklist` takes over a second on a busy machine; the kernel answers
+/// each query in microseconds.
+#[cfg(windows)]
+fn process_names(pids: &[u32]) -> std::collections::HashMap<u32, String> {
+    use std::collections::HashMap;
+
+    let mut map = HashMap::new();
+    for pid in pids {
+        if let Some(stem) = crate::process::process_image(*pid) {
+            map.insert(*pid, format!("{stem}.exe"));
+        }
+    }
+    map
 }
 
 fn listeners_linux() -> Result<Vec<Listener>> {

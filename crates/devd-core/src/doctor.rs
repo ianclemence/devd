@@ -135,14 +135,28 @@ fn state_check(paths: &Paths) -> Check {
 
 fn port_checks(settings: &Settings) -> Vec<Check> {
     let mut checks = Vec::new();
+    // One listener table for both ports: enumerating it twice doubles the cost
+    // of every environment check for no extra information.
+    let listeners = match crate::ports::listeners() {
+        Ok(list) => Some(list),
+        Err(e) => {
+            checks.push(Check::fail(
+                "port.http",
+                format!("cannot inspect listening ports: {e}"),
+            ));
+            None
+        }
+    };
+
     for (label, port) in [("http", settings.http_port), ("https", settings.https_port)] {
         let name = format!("port.{label}");
-        match crate::ports::find_listener(port) {
-            Ok(None) => checks.push(Check::ok(name, format!("{port} is free"))),
-            Ok(Some(l)) => {
-                let owner = match (l.program, l.pid) {
+        let Some(list) = &listeners else { continue };
+        match list.iter().find(|l| l.port == port) {
+            None => checks.push(Check::ok(name, format!("{port} is free"))),
+            Some(l) => {
+                let owner = match (&l.program, l.pid) {
                     (Some(p), Some(pid)) => format!("{p} (pid {pid})"),
-                    (Some(p), None) => p,
+                    (Some(p), None) => p.clone(),
                     (None, Some(pid)) => format!("pid {pid}"),
                     (None, None) => "another process".to_string(),
                 };
@@ -151,7 +165,6 @@ fn port_checks(settings: &Settings) -> Vec<Check> {
                     format!("{port} is held by {owner} on {}", l.address),
                 ));
             }
-            Err(e) => checks.push(Check::fail(name, format!("cannot inspect port {port}: {e}"))),
         }
     }
     checks

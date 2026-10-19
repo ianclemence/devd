@@ -25,6 +25,32 @@ use serde::Serialize;
 use crate::error::{DevdError, Result};
 use crate::util;
 
+/// Windows process queries.
+///
+/// `tasklist` is the portable answer, but it starts a process per call - about
+/// half a second each - which made a service list with three services take
+/// several seconds. These are the same questions asked of the kernel directly.
+#[cfg(windows)]
+mod win {
+    use core::ffi::c_void;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        pub fn OpenProcess(access: u32, inherit: i32, pid: u32) -> *mut c_void;
+        pub fn GetExitCodeProcess(handle: *mut c_void, code: *mut u32) -> i32;
+        pub fn QueryFullProcessImageNameW(
+            handle: *mut c_void,
+            flags: u32,
+            buffer: *mut u16,
+            size: *mut u32,
+        ) -> i32;
+        pub fn CloseHandle(handle: *mut c_void) -> i32;
+    }
+
+    pub const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    pub const STILL_ACTIVE: u32 = 259;
+}
+
 /// A running managed process.
 struct ManagedProcess {
     name: String,
@@ -395,38 +421,26 @@ pub fn process_image(pid: u32) -> Option<String> {
     }
     #[cfg(windows)]
     {
-        let tasklist = util::which("tasklist")?;
-        let args = vec![
-            "/FI".to_string(),
-            format!("PID eq {pid}"),
-            "/FO".to_string(),
-            "CSV".to_string(),
-            "/NH".to_string(),
-        ];
-        let out = util::run(
-            &tasklist,
-            &args,
-            None,
-            &[],
-            Some(std::time::Duration::from_secs(10)),
-        )
-        .ok()?;
-        let first_line = out.stdout.lines().next()?.trim();
-        if first_line.is_empty() || first_line.starts_with("INFO:") {
-            return None;
-        }
-        // `"nginx.exe","11844","Console","1","5,120 K"`
-        let name = first_line.split(',').next()?.trim_matches('"');
-        let stem = name
-            .rsplit(['\\', '/'])
-            .next()
-            .unwrap_or(name)
-            .trim_end_matches(".exe")
-            .to_string();
-        if stem.is_empty() {
-            None
-        } else {
-            Some(stem)
+        unsafe {
+            let handle = win::OpenProcess(win::PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle.is_null() {
+                return None;
+            }
+            let mut buf = vec![0u16; 32 * 1024];
+            let mut len = buf.len() as u32;
+            let ok = win::QueryFullProcessImageNameW(handle, 0, buf.as_mut_ptr(), &mut len);
+            win::CloseHandle(handle);
+            if ok == 0 {
+                return None;
+            }
+            let path = String::from_utf16_lossy(&buf[..len as usize]);
+            let name = path.rsplit(['\\', '/']).next().unwrap_or(&path);
+            let stem = name.trim_end_matches(".exe");
+            if stem.is_empty() {
+                None
+            } else {
+                Some(stem.to_string())
+            }
         }
     }
     #[cfg(unix)]
@@ -454,13 +468,19 @@ pub fn pid_alive(pid: u32) -> bool {
     }
     #[cfg(windows)]
     {
-        if let Some(tasklist) = util::which("tasklist") {
-            let args = vec!["/FI".to_string(), format!("PID eq {pid}"), "/NH".to_string()];
-            if let Ok(out) = util::run(&tasklist, &args, None, &[], Some(std::time::Duration::from_secs(10))) {
-                return out.stdout.contains(&pid.to_string()) && !out.stdout.contains("No tasks");
+        // `tasklist` costs about half a second per call, which turned a status
+        // page into a multi-second wait once there were a few services. The
+        // process handle answers the same question in microseconds.
+        unsafe {
+            let handle = win::OpenProcess(win::PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle.is_null() {
+                return false;
             }
+            let mut code = 0u32;
+            let ok = win::GetExitCodeProcess(handle, &mut code);
+            win::CloseHandle(handle);
+            ok != 0 && code == win::STILL_ACTIVE
         }
-        false
     }
     #[cfg(unix)]
     {

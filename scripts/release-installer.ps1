@@ -13,15 +13,19 @@
 
 [CmdletBinding()]
 param(
-    [string]$Nsis = "D:\tools\nsis\nsis-3.10\makensis.exe"
+    [string]$Nsis
 )
 
 $ErrorActionPreference = "Continue"
 $repo = Split-Path -Parent $PSScriptRoot
 Set-Location $repo
 
-if (-not (Test-Path $Nsis)) {
-    throw "makensis was not found at '$Nsis'. Install NSIS 3 or pass -Nsis <path to makensis.exe>."
+if (-not $Nsis) {
+    $found = Get-Command makensis -ErrorAction SilentlyContinue
+    if ($found) { $Nsis = $found.Source }
+}
+if (-not $Nsis -or -not (Test-Path $Nsis)) {
+    throw "makensis was not found. Install NSIS 3 (https://nsis.sourceforge.io) or pass -Nsis <path to makensis.exe>."
 }
 
 $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"' |

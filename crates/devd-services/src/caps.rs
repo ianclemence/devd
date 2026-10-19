@@ -620,6 +620,42 @@ fn register_tls(reg: &mut Registry) -> Result<()> {
 
     add::<NoArgs, _, _>(
         reg,
+        "tls.ca.status",
+        "Report whether the authority is trusted",
+        "Checks the operating system's certificate stores for the authority devd created. \
+         A user-scope trust needs no administrator; a machine-scope one does. Nothing is \
+         changed by checking.",
+        "tls",
+        Tier::Read,
+        Effect::Read,
+        true,
+        false,
+        true,
+        |_, _| Ok(Plan::new("tls.ca.status", "check the trust stores for the devd authority")),
+        |ctx, _| {
+            let status = services::tls::trust_status(ctx)?;
+            let message = match (status.user, status.machine) {
+                (_, true) => "the devd certificate authority is trusted machine-wide",
+                (true, false) => "the devd certificate authority is trusted for this user",
+                (false, false) if !services::tls::ca_exists(ctx) => {
+                    "no certificate authority has been created yet"
+                }
+                (false, false) => "the devd certificate authority is not trusted",
+            };
+            Ok(Outcome::with_data(
+                message,
+                json!({
+                    "exists": services::tls::ca_exists(ctx),
+                    "user": status.user,
+                    "machine": status.machine,
+                    "certificate": services::tls::ca_cert_path(ctx).display().to_string(),
+                }),
+            ))
+        },
+    )?;
+
+    add::<NoArgs, _, _>(
+        reg,
         "tls.ca.show",
         "Show the local certificate authority",
         "The public certificate of the authority that signs site certificates. This is the \

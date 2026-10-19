@@ -483,7 +483,13 @@ pub fn doctor_check(paths: &Paths) -> Vec<Check> {
         .collect();
     let unmanaged: Vec<&str> = sites
         .iter()
-        .filter(|s| !hosts::is_managed(&std::fs::read_to_string(hosts::path()).unwrap_or_default(), &s.host))
+        .filter(|s| {
+            !resolves_without_hosts(&s.host)
+                && !hosts::is_managed(
+                    &std::fs::read_to_string(hosts::path()).unwrap_or_default(),
+                    &s.host,
+                )
+        })
         .map(|s| s.host.as_str())
         .collect();
 

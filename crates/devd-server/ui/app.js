@@ -131,7 +131,7 @@
   // -------------------------------------------------------------------- state
 
   var state = {
-    view: "projects",
+    view: "overview",
     session: null,
     doctor: null,
     health: null,
@@ -146,7 +146,19 @@
     capArgs: {},
     audit: [],
     palette: { open: false, items: [], index: 0 },
-    busy: false
+    busy: false,
+    server: {
+      services: [],
+      sites: [],
+      runtimes: [],
+      certs: [],
+      hosts: null,
+      ca: null,
+      trust: null,
+      loaded: false
+    },
+    siteFormOpen: false,
+    certFormOpen: false
   };
 
   // ------------------------------------------------------------------ helpers
@@ -462,45 +474,93 @@
   // -------------------------------------------------------------------- views
 
   function rail() {
-    var items = [
-      { view: "projects", label: "Projects", count: state.projects.length || null },
-      { view: "capabilities", label: "Capabilities", count: (state.session && state.session.registry.capabilities) || null },
-      { view: "activity", label: "Activity", count: null },
-      { view: "system", label: "System", count: state.health && state.health.ok === false ? "!" : null }
+    var server = state.server;
+    var running = server.services.filter(function (s) { return s.running; }).length;
+    var groups = [
+      {
+        label: "Server",
+        items: [
+          { view: "overview", label: "Overview" },
+          { view: "sites", label: "Sites", count: server.sites.length || null },
+          {
+            view: "services",
+            label: "Services",
+            count: server.services.length ? running + "/" + server.services.length : null
+          },
+          { view: "runtimes", label: "Runtimes", count: server.runtimes.length || null },
+          { view: "certificates", label: "Certificates" },
+          { view: "hosts", label: "Hosts" }
+        ]
+      },
+      {
+        label: "Workspace",
+        items: [
+          { view: "projects", label: "Projects", count: state.projects.length || null },
+          {
+            view: "capabilities",
+            label: "Capabilities",
+            count: (state.session && state.session.registry.capabilities) || null
+          },
+          { view: "activity", label: "Activity", count: null },
+          {
+            view: "system",
+            label: "System",
+            count: state.health && state.health.ok === false ? "!" : null
+          }
+        ]
+      }
     ];
-    el("rail").innerHTML =
-      '<div class="rail-section">Workspace</div>' +
-      items
-        .map(function (i) {
-          return (
-            '<button type="button" class="rail-item' + (state.view === i.view ? " active" : "") +
-            '" data-action="nav" data-view="' + i.view + '">' +
-            "<span>" + esc(i.label) + "</span>" +
-            (i.count !== null && i.count !== undefined
-              ? '<span class="rail-count">' + esc(i.count) + "</span>"
-              : "") +
-            "</button>"
-          );
-        })
-        .join("");
+
+    el("rail").innerHTML = groups
+      .map(function (group) {
+        return (
+          '<div class="rail-section">' + esc(group.label) + "</div>" +
+          group.items
+            .map(function (i) {
+              return (
+                '<button type="button" class="rail-item' +
+                (state.view === i.view || (state.view === "project" && i.view === "projects") ? " active" : "") +
+                '" data-action="nav" data-view="' + i.view + '">' +
+                "<span>" + esc(i.label) + "</span>" +
+                (i.count !== null && i.count !== undefined
+                  ? '<span class="rail-count">' + esc(i.count) + "</span>"
+                  : "") +
+                "</button>"
+              );
+            })
+            .join("")
+        );
+      })
+      .join("");
 
     var foot = [];
     if (state.session) {
       foot.push('<div class="mono nowrap" title="' + attr(state.session.paths.root) + '">' +
         esc(state.session.paths.root) + "</div>");
     }
-    foot.push('<div>viewport: ' + esc((state.session && state.session.version) || "?") + "</div>");
+    foot.push('<div>version: ' + esc((state.session && state.session.version) || "?") + "</div>");
     el("rail-foot").innerHTML = foot.join("");
   }
 
   function crumbs() {
+    var labels = {
+      overview: "Overview",
+      sites: "Sites",
+      services: "Services",
+      runtimes: "Runtimes",
+      certificates: "Certificates",
+      hosts: "Hosts",
+      projects: "Projects",
+      capabilities: "Capabilities",
+      activity: "Activity",
+      system: "System"
+    };
     var parts = [];
     if (state.view === "project" && state.project) {
       parts.push('<button type="button" data-action="nav" data-view="projects">Projects</button>');
       parts.push('<span class="sep">/</span>');
       parts.push("<span>" + esc(state.project.name) + "</span>");
     } else {
-      var labels = { projects: "Projects", capabilities: "Capabilities", activity: "Activity", system: "System" };
       parts.push("<span>" + esc(labels[state.view] || state.view) + "</span>");
     }
     el("crumbs").innerHTML = parts.join("");
@@ -518,12 +578,611 @@
       if (st.ahead) bits.push(st.ahead + " ahead");
       if (st.behind) bits.push(st.behind + " behind");
     }
+    if (state.server.loaded) {
+      var total = state.server.services.length;
+      var up = state.server.services.filter(function (s) { return s.running; }).length;
+      if (total) bits.push(up + "/" + total + " services");
+      if (state.server.sites.length) {
+        bits.push(state.server.sites.length + (state.server.sites.length === 1 ? " site" : " sites"));
+      }
+    }
     if (state.session) {
       bits.push(esc(state.session.registry.capabilities) + " capabilities");
       bits.push("api :" + esc(state.session.port));
     }
     if (state.pending_approvals) bits.push(state.pending_approvals + " pending");
     el("statusbar").innerHTML = bits.join("<span> </span>");
+  }
+
+  // -------------------------------------------------------------------- server
+
+  var SERVER_VIEWS = ["overview", "sites", "services", "runtimes", "certificates", "hosts"];
+
+  var KNOWN_SERVICES = [
+    { name: "nginx", label: "nginx", note: "web server" },
+    { name: "mariadb", label: "MariaDB", note: "database" },
+    { name: "php-cgi", label: "php-cgi", note: "PHP FastCGI listener, built from the installed runtime" }
+  ];
+
+  var RUNTIME_KINDS = [
+    { kind: "php", label: "PHP", note: "8.x, downloaded from windows.php.net" },
+    { kind: "node", label: "Node.js", note: "LTS and current releases" },
+    { kind: "go", label: "Go", note: "the official toolchain" }
+  ];
+
+  function page(title, sub, actions, body) {
+    return (
+      '<div class="page">' +
+      '<div class="page-head"><div>' +
+      '<h1 class="page-title">' + esc(title) + "</h1>" +
+      '<div class="page-sub">' + esc(sub) + "</div></div>" +
+      '<div class="page-actions">' + (actions || "") + "</div>" +
+      "</div>" + body + "</div>"
+    );
+  }
+
+  function dot(on, warn) {
+    return '<span class="dot ' + (on ? "dot-ok" : warn ? "dot-warn" : "dot-off") + '" aria-hidden="true"></span>';
+  }
+
+  function statCard(label, value, sub) {
+    return (
+      '<div class="stat">' +
+      '<div class="stat-label">' + esc(label) + "</div>" +
+      '<div class="stat-value">' + esc(value) + "</div>" +
+      '<div class="stat-sub">' + esc(sub) + "</div>" +
+      "</div>"
+    );
+  }
+
+  function notice(text, label, action, view) {
+    return (
+      '<div class="notice">' +
+      '<div class="grow">' + esc(text) + "</div>" +
+      '<button type="button" class="btn btn-mini' + (action === "ca-trust" ? " btn-primary" : "") + '" data-action="' + action + '"' +
+      (view ? ' data-view="' + view + '"' : "") + ">" + esc(label) + "</button>" +
+      "</div>"
+    );
+  }
+
+  function servicePorts(svc) {
+    if (svc.kind === "nginx" && state.session && state.session.settings) {
+      return "http " + state.session.settings.http_port + " · https " + state.session.settings.https_port;
+    }
+    return svc.port ? "port " + svc.port : "";
+  }
+
+  function phpPrimary() {
+    var php = state.server.runtimes.filter(function (r) { return r.runtime.kind === "php"; });
+    var primary = php.filter(function (r) { return r.primary; })[0];
+    if (primary) return primary.runtime.version;
+    return php.length ? php[0].runtime.version : null;
+  }
+
+  /* Whether the operating system trusts devd's authority, as reported by the
+   * server. The check does not change anything. */
+  function caTrusted() {
+    var t = state.server.trust;
+    return !!(t && (t.user || t.machine));
+  }
+
+  function caTrustLabel() {
+    var t = state.server.trust;
+    if (t && t.machine) return "trusted machine-wide";
+    if (t && t.user) return "trusted for this user";
+    return "not trusted yet";
+  }
+
+  function loadServer() {
+    return Promise.all([
+      read("service.list").catch(function () { return []; }),
+      read("site.list").catch(function () { return []; }),
+      read("runtime.list").catch(function () { return []; }),
+      read("tls.list").catch(function () { return []; }),
+      read("tls.ca.show").catch(function () { return null; }),
+      read("hosts.show").catch(function () { return null; }),
+      read("tls.ca.status").catch(function () { return null; })
+    ]).then(function (r) {
+      state.server.services = Array.isArray(r[0]) ? r[0] : [];
+      state.server.sites = Array.isArray(r[1]) ? r[1] : [];
+      state.server.runtimes = Array.isArray(r[2]) ? r[2] : [];
+      state.server.certs = Array.isArray(r[3]) ? r[3] : [];
+      state.server.ca = r[4];
+      state.server.hosts = r[5];
+      state.server.trust = r[6];
+      state.server.loaded = true;
+    });
+  }
+
+  // ------------------------------------------------------------------ overview
+
+  function renderOverview() {
+    var s = state.server;
+    var total = s.services.length;
+    var up = s.services.filter(function (x) { return x.running; }).length;
+    var healthy = total > 0 && up === total;
+    var hosts = s.hosts || {};
+    var pending = (hosts.adding || []).length + (hosts.removing || []).length;
+    var php = phpPrimary();
+
+    var banner =
+      '<div class="banner ' + (healthy ? "banner-ok" : "banner-warn") + '">' +
+      dot(healthy, total > 0 && !healthy) +
+      '<div class="banner-main">' +
+      '<div class="banner-title">' +
+      (healthy ? "Server running" : total ? "Server needs attention" : "Nothing installed yet") +
+      "</div>" +
+      '<div class="banner-sub">' +
+      (total ? up + " of " + total + " services running" : "Install PHP, nginx and MariaDB to serve sites") +
+      (state.session && state.session.settings
+        ? " · HTTP " + state.session.settings.http_port + " · HTTPS " + state.session.settings.https_port
+        : "") +
+      "</div></div>" +
+      '<div class="banner-actions">' +
+      '<button type="button" class="btn btn-primary" data-action="stack-up">Start all</button>' +
+      '<button type="button" class="btn" data-action="stack-down"' + (up ? "" : " disabled") + ">Stop all</button>" +
+      "</div></div>";
+
+    var stats =
+      '<div class="stat-grid">' +
+      statCard("Services", up + " / " + total, total ? "running" : "none installed") +
+      statCard("Sites", String(s.sites.length), s.sites.length ? "served" : "none yet") +
+      statCard("PHP", php || "none", php ? "primary runtime" : "not installed") +
+      statCard("Certificates", String(s.certs.length), "issued by devd") +
+      "</div>";
+
+    var sitesPanel =
+      '<div class="panel"><div class="panel-head"><span>Sites</span>' +
+      '<span class="panel-note">' + s.sites.length + "</span></div>" +
+      (s.sites.length
+        ? '<div class="rows">' +
+          s.sites
+            .map(function (row) {
+              var meta =
+                '<span class="pill">' + (row.site.tls_mode === "off" ? "http" : "https") + "</span>" +
+                (row.site.php ? ' <span class="pill">PHP ' + esc(row.site.php) + "</span>" : "");
+              return (
+                '<div class="svc">' + dot(row.server_running) +
+                '<div class="svc-main"><div class="svc-name">' + esc(row.site.name) + " " + meta + "</div>" +
+                '<div class="svc-sub mono">' + esc(row.url) + "</div></div>" +
+                '<div class="svc-actions">' +
+                '<button type="button" class="btn btn-mini" data-action="open-url" data-url="' + attr(row.url) + '">Open</button>' +
+                "</div></div>"
+              );
+            })
+            .join("") + "</div>"
+        : '<div class="panel-body empty-inline">No sites yet. ' +
+          '<button type="button" class="btn btn-mini" data-action="nav" data-view="sites">Create one</button></div>') +
+      "</div>";
+
+    var servicesPanel =
+      '<div class="panel"><div class="panel-head"><span>Services</span>' +
+      '<span class="panel-note">' + up + " / " + total + "</span></div>" +
+      (total
+        ? '<div class="rows">' +
+          s.services
+            .map(function (svc) {
+              return (
+                '<div class="svc">' + dot(svc.running) +
+                '<div class="svc-main"><div class="svc-name">' + esc(svc.name) + "</div>" +
+                '<div class="svc-sub mono">' + esc(servicePorts(svc)) + "</div></div>" +
+                '<div class="svc-actions">' +
+                (svc.running
+                  ? '<button type="button" class="btn btn-mini" data-action="restart-service" data-name="' + attr(svc.name) + '">Restart</button>' +
+                    '<button type="button" class="btn btn-mini" data-action="stop-service" data-name="' + attr(svc.name) + '">Stop</button>'
+                  : '<button type="button" class="btn btn-mini btn-primary" data-action="start-service" data-name="' + attr(svc.name) + '">Start</button>') +
+                "</div></div>"
+              );
+            })
+            .join("") + "</div>"
+        : '<div class="panel-body empty-inline">Nothing installed. ' +
+          '<button type="button" class="btn btn-mini" data-action="nav" data-view="services">Install services</button></div>') +
+      "</div>";
+
+    var notices = [];
+    if (!total) {
+      notices.push(
+        notice(
+          "No services are installed. devd installs PHP, nginx and MariaDB from their vendors.",
+          "Open services",
+          "nav",
+          "services"
+        )
+      );
+    }
+    if (pending) {
+      notices.push(
+        notice(
+          (pending === 1
+            ? "1 hostname is not published, so a site on .test does not resolve."
+            : pending + " hostnames are not published, so sites on .test do not resolve."),
+          "Review hosts",
+          "nav",
+          "hosts"
+        )
+      );
+    }
+    if (s.certs.length && !caTrusted()) {
+      notices.push(
+        notice(
+          "Sites use certificates from devd's local authority. Trust it once so browsers stop warning.",
+          "Trust the CA",
+          "ca-trust"
+        )
+      );
+    }
+
+    var hostsData = s.hosts || {};
+    var published = (hostsData.entries || []).length;
+    var pendingNames = (hostsData.adding || []).length + (hostsData.removing || []).length;
+    var hostsPanel =
+      '<div class="panel"><div class="panel-head"><span>Hosts</span>' +
+      '<span class="panel-note">' + published + " published</span></div>" +
+      '<div class="panel-body"><div class="inline"><span class="grow dim">' +
+      (pendingNames
+        ? (pendingNames === 1
+            ? "1 change is waiting to be written to the hosts file."
+            : pendingNames + " changes are waiting to be written to the hosts file.")
+        : "Everything resolves: no site needs a hosts entry.") +
+      "</span>" +
+      (pendingNames
+        ? '<button type="button" class="btn btn-mini" data-action="nav" data-view="hosts">Review</button>'
+        : "") +
+      "</div></div></div>";
+
+    var certsPanel =
+      '<div class="panel"><div class="panel-head"><span>Certificates</span>' +
+      '<span class="panel-note">' + s.certs.length + " issued</span></div>" +
+      '<div class="panel-body"><div class="inline"><span class="grow dim">' +
+      (caTrusted()
+        ? "The local authority is trusted by this user."
+        : "Trust the local authority once so browsers stop warning.") +
+      "</span>" +
+      (!caTrusted() && s.certs.length
+        ? '<button type="button" class="btn btn-mini" data-action="ca-trust" data-machine="false">Trust</button>'
+        : '<button type="button" class="btn btn-mini" data-action="nav" data-view="certificates">Manage</button>') +
+      "</div></div></div>";
+
+    el("main").innerHTML = page(
+      "Overview",
+      "Local services, sites and the state of this machine.",
+      '<button type="button" class="btn" data-action="nav" data-view="sites">Sites</button>' +
+        '<button type="button" class="btn btn-primary" data-action="new-site">New site</button>',
+      banner + stats +
+        (notices.length ? '<div class="notice-stack">' + notices.join("") + "</div>" : "") +
+        '<div class="overview-grid">' +
+        '<div class="overview-stack">' + sitesPanel + hostsPanel + certsPanel + "</div>" +
+        servicesPanel +
+        "</div>"
+    );
+  }
+
+  // --------------------------------------------------------------------- sites
+
+  function siteForm() {
+    return (
+      '<div class="panel"><div class="panel-head"><span>New site</span></div>' +
+      '<div class="panel-body">' +
+      '<div class="form-grid">' +
+      '<label class="field"><span class="field-label">Name</span>' +
+      '<input class="input mono" id="site-name" placeholder="blog" autocomplete="off" spellcheck="false"></label>' +
+      '<label class="field"><span class="field-label">Hostname, optional</span>' +
+      '<input class="input mono" id="site-host" placeholder="blog.test" autocomplete="off" spellcheck="false"></label>' +
+      "</div>" +
+      '<div class="inline" style="margin-top:12px">' +
+      '<label class="check"><input type="checkbox" id="site-tls" checked> HTTPS with a local certificate</label>' +
+      '<label class="check"><input type="checkbox" id="site-db"> Create a database</label>' +
+      '<span class="grow"></span>' +
+      '<button type="button" class="btn" data-action="new-site">Cancel</button>' +
+      '<button type="button" class="btn btn-primary" data-action="create-site">Create site</button>' +
+      "</div></div></div>"
+    );
+  }
+
+  function renderSites() {
+    var s = state.server;
+    var rows = s.sites.map(function (row) {
+      var site = row.site;
+      return (
+        "<tr>" +
+        '<td><div class="cell-strong">' + esc(site.name) + "</div>" +
+        (row.present ? "" : '<div class="cell-warn">directory missing</div>') + "</td>" +
+        '<td class="cell-mono"><a href="' + attr(row.url) + '" target="_blank" rel="noreferrer">' + esc(row.url) + "</a></td>" +
+        "<td>" + esc(site.php || phpPrimary() || "—") + "</td>" +
+        "<td>" +
+        (site.tls_mode === "off"
+          ? '<span class="pill">http</span>'
+          : '<span class="pill ' + (row.certificate ? "pill-ok" : "pill-warn") + '">' +
+            (row.certificate ? "https" : "no certificate") + "</span>") +
+        "</td>" +
+        '<td class="cell-mono nowrap" title="' + attr(row.document_root) + '">' + esc(row.document_root) + "</td>" +
+        '<td class="cell-actions">' +
+        '<button type="button" class="btn btn-mini" data-action="open-url" data-url="' + attr(row.url) + '">Open</button>' +
+        '<button type="button" class="btn btn-mini btn-ghost" data-action="remove-site" data-name="' + attr(site.name) + '">Remove</button>' +
+        "</td></tr>"
+      );
+    });
+
+    var body = state.siteFormOpen ? siteForm() : "";
+    if (s.sites.length) {
+      body +=
+        '<div class="panel"><div class="panel-head"><span>Sites</span>' +
+        '<span class="panel-note">' + s.sites.length + "</span></div>" +
+        '<div class="panel-body flush"><table class="table"><thead><tr>' +
+        "<th>Site</th><th>URL</th><th>PHP</th><th>TLS</th><th>Directory</th><th></th>" +
+        "</tr></thead><tbody>" + rows.join("") + "</tbody></table></div></div>";
+    } else if (!state.siteFormOpen) {
+      body +=
+        '<div class="panel"><div class="empty">' +
+        '<div class="empty-title">No sites yet</div>' +
+        "<div>A site is a project directory, a hostname, a certificate and a URL.</div>" +
+        '<div class="inline" style="margin-top:12px">' +
+        '<button type="button" class="btn btn-primary" data-action="new-site">Create a site</button>' +
+        "</div></div></div>";
+    }
+
+    el("main").innerHTML = page(
+      "Sites",
+      "Projects served over local hostnames.",
+      '<button type="button" class="btn btn-primary" data-action="new-site">New site</button>',
+      body
+    );
+  }
+
+  // ------------------------------------------------------------------ services
+
+  function renderServices() {
+    var rows = state.server.services;
+    var byName = {};
+    rows.forEach(function (r) { byName[r.name] = r; });
+    var up = rows.filter(function (r) { return r.running; }).length;
+
+    var body = "";
+    if (rows.length) {
+      body +=
+        '<div class="panel"><div class="panel-head"><span>Installed</span>' +
+        '<span class="panel-note">' + up + " of " + rows.length + " running</span></div>" +
+        '<div class="panel-body flush"><table class="table"><thead><tr>' +
+        "<th>Service</th><th>Version</th><th>Ports</th><th>Status</th><th>PID</th><th></th>" +
+        "</tr></thead><tbody>" +
+        rows
+          .map(function (svc) {
+            return (
+              "<tr>" +
+              '<td><div class="cell-strong">' + dot(svc.running) + " " + esc(svc.name) + "</div>" +
+              '<div class="cell-dim">' + esc(svc.kind) + "</div></td>" +
+              '<td class="cell-mono">' + esc(svc.version || "—") + "</td>" +
+              '<td class="cell-mono">' + esc(servicePorts(svc)) + "</td>" +
+              "<td>" +
+              (svc.running
+                ? '<span class="pill pill-ok">running</span>'
+                : '<span class="pill">' + (svc.installed ? "stopped" : "files missing") + "</span>") +
+              "</td>" +
+              '<td class="cell-mono">' + (svc.pid || "—") + "</td>" +
+              '<td class="cell-actions">' +
+              (svc.running
+                ? '<button type="button" class="btn btn-mini" data-action="stop-service" data-name="' + attr(svc.name) + '">Stop</button>' +
+                  '<button type="button" class="btn btn-mini" data-action="restart-service" data-name="' + attr(svc.name) + '">Restart</button>'
+                : svc.installed
+                  ? '<button type="button" class="btn btn-mini btn-primary" data-action="start-service" data-name="' + attr(svc.name) + '">Start</button>'
+                  : '<button type="button" class="btn btn-mini btn-primary" data-action="install-service" data-name="' + attr(svc.name) + '">Install</button>') +
+              '<button type="button" class="btn btn-mini" data-action="service-logs" data-name="' + attr(svc.name) + '">Logs</button>' +
+              '<button type="button" class="btn btn-mini btn-ghost" data-action="remove-service" data-name="' + attr(svc.name) + '">Remove</button>' +
+              "</td></tr>"
+            );
+          })
+          .join("") +
+        "</tbody></table></div></div>";
+    }
+
+    var missing = KNOWN_SERVICES.filter(function (k) { return !byName[k.name]; });
+    if (missing.length) {
+      body +=
+        '<div class="panel"><div class="panel-head"><span>Available</span>' +
+        '<span class="panel-note">downloaded from the vendor when installed</span></div>' +
+        '<div class="panel-body"><div class="grid grid-3">' +
+        missing
+          .map(function (k) {
+            return (
+              '<div class="card">' +
+              '<div class="card-title">' + esc(k.label) + "</div>" +
+              '<div class="card-meta">' + esc(k.note) + "</div>" +
+              '<div class="card-actions">' +
+              (k.name === "php-cgi"
+                ? '<button type="button" class="btn btn-mini" data-action="nav" data-view="runtimes">Install a PHP runtime</button>'
+                : '<button type="button" class="btn btn-mini btn-primary" data-action="install-service" data-name="' + attr(k.name) + '">Install</button>') +
+              "</div></div>"
+            );
+          })
+          .join("") +
+        "</div></div></div>";
+    }
+
+    if (!body) {
+      body =
+        '<div class="panel"><div class="empty">' +
+        '<div class="empty-title">No services</div>' +
+        "<div>Install nginx, MariaDB and a PHP runtime to serve sites.</div></div></div>";
+    }
+
+    el("main").innerHTML = page(
+      "Services",
+      "The processes that serve your sites, with their ports, logs and state.",
+      '<button type="button" class="btn" data-action="stack-down">Stop all</button>' +
+        '<button type="button" class="btn btn-primary" data-action="stack-up">Start all</button>',
+      body
+    );
+  }
+
+  // ------------------------------------------------------------------ runtimes
+
+  function renderRuntimes() {
+    var cards = RUNTIME_KINDS.map(function (kind) {
+      var installed = state.server.runtimes.filter(function (r) { return r.runtime.kind === kind.kind; });
+      var list = installed.length
+        ? '<div class="rows">' +
+          installed
+            .map(function (r) {
+              var rt = r.runtime;
+              return (
+                '<div class="svc">' +
+                '<div class="svc-main"><div class="svc-name">' + esc(rt.version) +
+                (r.primary ? ' <span class="pill pill-accent">primary</span>' : "") + "</div>" +
+                '<div class="svc-sub mono nowrap" title="' + attr(rt.path) + '">' + esc(rt.path) + "</div></div>" +
+                '<div class="svc-actions">' +
+                (kind.kind === "php" && !r.primary
+                  ? '<button type="button" class="btn btn-mini" data-action="use-runtime" data-version="' + attr(rt.version) + '">Use for new sites</button>'
+                  : "") +
+                '<button type="button" class="btn btn-mini btn-danger" data-action="remove-runtime" data-kind="' + attr(kind.kind) + '" data-version="' + attr(rt.version) + '">Remove</button>' +
+                "</div></div>"
+              );
+            })
+            .join("") + "</div>"
+        : '<div class="panel-body empty-inline">Not installed.</div>';
+
+      return (
+        '<div class="panel"><div class="panel-head"><span>' + esc(kind.label) + "</span>" +
+        '<span class="panel-note">' + installed.length + " installed</span></div>" +
+        list +
+        '<div class="panel-body panel-foot"><div class="inline">' +
+        '<span class="dim grow">' + esc(kind.note) + "</span>" +
+        '<button type="button" class="btn btn-primary" data-action="install-runtime" data-kind="' + attr(kind.kind) + '">Install latest</button>' +
+        "</div></div></div>"
+      );
+    });
+
+    el("main").innerHTML = page(
+      "Runtimes",
+      "Interpreters installed on this machine, downloaded from their vendors and verified against a published digest.",
+      "",
+      cards.join("")
+    );
+  }
+
+  // -------------------------------------------------------------- certificates
+
+  function renderCertificates() {
+    var s = state.server;
+    var ca = s.ca;
+    var form = state.certFormOpen
+      ? '<div class="panel"><div class="panel-head"><span>Issue a certificate</span></div>' +
+        '<div class="panel-body"><div class="inline">' +
+        '<input class="input mono grow" id="cert-host" placeholder="blog.test" spellcheck="false">' +
+        '<button type="button" class="btn" data-action="cert-form">Cancel</button>' +
+        '<button type="button" class="btn btn-primary" data-action="issue-cert">Issue</button>' +
+        "</div></div></div>"
+      : "";
+
+    var caPanel =
+      '<div class="panel"><div class="panel-head"><span>Local certificate authority</span>' +
+      '<span class="panel-note">' + caTrustLabel() + "</span></div>" +
+      '<div class="panel-body">' +
+      (ca
+        ? '<div class="kv"><dt>Certificate</dt><dd>' + esc(ca.path) + "</dd></div>" +
+          '<div class="inline" style="margin-top:12px">' +
+          '<button type="button" class="btn btn-primary" data-action="ca-trust" data-machine="false">Trust for this user</button>' +
+          '<button type="button" class="btn" data-action="ca-trust" data-machine="true">Trust for all users</button>' +
+          '<button type="button" class="btn btn-ghost" data-action="ca-untrust">Remove trust</button>' +
+          "</div>" +
+          '<div class="row-sub" style="margin-top:8px">Trusting adds the certificate to the Windows certificate store. ' +
+          "The machine-wide option needs an administrator; the per-user option does not.</div>"
+        : '<div class="notice notice-warn">No certificate authority yet. Creating an HTTPS site makes one.</div>') +
+      "</div></div>";
+
+    var rows = s.certs
+      .map(function (c) {
+        return (
+          "<tr><td class=\"cell-strong\">" + esc(c.host) + "</td>" +
+          '<td class="cell-mono nowrap">' + esc(c.cert) + "</td>" +
+          "<td>" + (c.key_present
+            ? '<span class="pill pill-ok">key present</span>'
+            : '<span class="pill pill-bad">key missing</span>') + "</td></tr>"
+        );
+      })
+      .join("");
+
+    var issued =
+      '<div class="panel"><div class="panel-head"><span>Issued certificates</span>' +
+      '<span class="panel-note">' + s.certs.length + "</span></div>" +
+      (rows
+        ? '<div class="panel-body flush"><table class="table"><thead><tr>' +
+          "<th>Host</th><th>Chain</th><th>Key</th></tr></thead><tbody>" + rows + "</tbody></table></div>"
+        : '<div class="panel-body empty-inline">No certificates yet. An HTTPS site issues one.</div>') +
+      "</div>";
+
+    el("main").innerHTML = page(
+      "Certificates",
+      "devd runs its own authority. Every HTTPS site gets a certificate signed by it.",
+      '<button type="button" class="btn" data-action="cert-form">Issue for a hostname</button>',
+      form + caPanel + issued
+    );
+  }
+
+  // --------------------------------------------------------------------- hosts
+
+  function renderHosts() {
+    var data = state.server.hosts || { adding: [], removing: [], entries: [], file: "", changes: false };
+    var adding = data.adding || [];
+    var removing = data.removing || [];
+    var entries = data.entries || [];
+    var pending = adding.length + removing.length;
+
+    var head =
+      '<div class="panel"><div class="panel-head"><span>Hosts file</span>' +
+      '<span class="panel-note">' + pending + " change(s) pending</span></div>" +
+      '<div class="panel-body"><div class="kv">' +
+      "<dt>Path</dt><dd>" + esc(data.file) + "</dd>" +
+      "<dt>Published</dt><dd>" + entries.length + " name(s)</dd>" +
+      "</div>" +
+      '<div class="row-sub" style="margin-top:8px">Writing the hosts file needs an elevated shell on Windows. ' +
+      "devd snapshots it first and preserves every line it did not write.</div></div></div>";
+
+    var changes = "";
+    if (pending) {
+      changes =
+        '<div class="panel"><div class="panel-head"><span>Pending changes</span>' +
+        '<span class="panel-note">' + pending + "</span></div>" +
+        '<div class="panel-body flush"><table class="table"><thead><tr>' +
+        "<th></th><th>Address</th><th>Host</th></tr></thead><tbody>" +
+        adding
+          .map(function (e) {
+            return '<tr><td><span class="tag tag-add">add</span></td>' +
+              '<td class="cell-mono">' + esc(e.address) + "</td>" +
+              '<td class="cell-mono">' + esc(e.host) + "</td></tr>";
+          })
+          .join("") +
+        removing
+          .map(function (e) {
+            return '<tr><td><span class="tag tag-del">remove</span></td>' +
+              '<td class="cell-mono">' + esc(e.address) + "</td>" +
+              '<td class="cell-mono">' + esc(e.host) + "</td></tr>";
+          })
+          .join("") +
+        "</tbody></table></div></div>";
+    }
+
+    var published = entries.length
+      ? '<div class="panel"><div class="panel-head"><span>Published names</span>' +
+        '<span class="panel-note">' + entries.length + "</span></div>" +
+        '<div class="panel-body flush"><table class="table"><thead><tr>' +
+        "<th>Address</th><th>Host</th></tr></thead><tbody>" +
+        entries
+          .map(function (e) {
+            return '<tr><td class="cell-mono">' + esc(e.address) + "</td>" +
+              '<td class="cell-mono">' + esc(e.host) + "</td></tr>";
+          })
+          .join("") +
+        "</tbody></table></div></div>"
+      : '<div class="panel"><div class="panel-body empty-inline">No names published. ' +
+        "Sites on localhost resolve without one.</div></div>";
+
+    el("main").innerHTML = page(
+      "Hosts",
+      "Names on .test resolve through a managed block in the system hosts file.",
+      '<button type="button" class="btn btn-primary" data-action="sync-hosts"' +
+        (pending ? "" : " disabled") + ">Sync hosts</button>",
+      head + changes + published
+    );
   }
 
   // ------------------------------------------------------------------ projects
@@ -1371,31 +2030,36 @@
       "</div>";
   }
 
-  function loadSystem() {
-    return Promise.all([
-      request("/api/doctor"),
-      request("/api/session")
-    ]).then(function (both) {
-      if (both[0].ok) state.doctor = both[0].body;
-      if (both[1].ok) {
-        state.session = both[1].body;
-        state.pending_approvals = both[1].body.pending_approvals || 0;
-      }
+  function loadSession() {
+    return request("/api/session").then(function (res) {
+      if (!res.ok) return;
+      state.session = res.body;
+      state.pending_approvals = res.body.pending_approvals || 0;
+    });
+  }
+
+  function loadDoctor() {
+    return request("/api/doctor").then(function (res) {
+      if (!res.ok) return;
+      state.doctor = res.body;
       state.health = state.doctor;
       var pill = el("health-pill");
-      if (state.doctor) {
-        pill.textContent = state.doctor.ok ? "healthy" : "attention needed";
-        pill.className = "pill " + (state.doctor.ok ? "pill-ok" : "pill-bad");
-        pill.setAttribute("data-action", "nav");
-        pill.setAttribute("data-view", "system");
-      }
+      pill.textContent = state.doctor.ok ? "healthy" : "attention needed";
+      pill.className = "pill " + (state.doctor.ok ? "pill-ok" : "pill-bad");
+      pill.setAttribute("data-action", "nav");
+      pill.setAttribute("data-view", "system");
     });
+  }
+
+  function loadSystem() {
+    return Promise.all([loadDoctor(), loadSession()]);
   }
 
   // ------------------------------------------------------------------- refresh
 
   function refresh() {
     state.tabs = state.tabs || {};
+    if (SERVER_VIEWS.indexOf(state.view) !== -1) return loadServer().then(render);
     if (state.view === "projects") return loadProjects().then(render);
     if (state.view === "project") {
       state.tabs = {};
@@ -1415,11 +2079,24 @@
     return refresh();
   }
 
+  function renderLoading() {
+    el("main").innerHTML =
+      '<div class="page"><div class="loading">Reading services, sites and certificates…</div></div>';
+  }
+
   function render() {
     rail();
     crumbs();
     statusbar();
-    if (state.view === "projects") renderProjects();
+    if (SERVER_VIEWS.indexOf(state.view) !== -1) {
+      if (!state.server.loaded) return renderLoading();
+      if (state.view === "overview") renderOverview();
+      else if (state.view === "sites") renderSites();
+      else if (state.view === "services") renderServices();
+      else if (state.view === "runtimes") renderRuntimes();
+      else if (state.view === "certificates") renderCertificates();
+      else if (state.view === "hosts") renderHosts();
+    } else if (state.view === "projects") renderProjects();
     else if (state.view === "project") renderProject();
     else if (state.view === "capabilities") renderCapabilities();
     else if (state.view === "activity") renderActivity();
@@ -1464,6 +2141,102 @@
     },
 
     "add-cancel": function () { state.addOpen = false; renderProjects(); },
+
+    "stack-up": function () { act("stack.up", {}); },
+
+    "stack-down": function () { act("stack.down", {}); },
+
+    "install-service": function (node) {
+      toast("info", "installing " + node.dataset.name + " — the vendor download can take a minute");
+      act("service.install", { name: node.dataset.name, version: null });
+    },
+
+    "start-service": function (node) { act("service.start", { name: node.dataset.name }); },
+
+    "stop-service": function (node) { act("service.stop", { name: node.dataset.name }); },
+
+    "restart-service": function (node) { act("service.restart", { name: node.dataset.name }); },
+
+    "remove-service": function (node) { act("service.remove", { name: node.dataset.name }); },
+
+    "service-logs": function (node) {
+      var name = node.dataset.name;
+      openDrawer("service.logs " + name, '<div class="dim">reading the log</div>');
+      read("service.logs", { name: name, lines: 400 })
+        .then(function (data) {
+          var lines = (data && data.lines) || [];
+          var text = lines.length ? lines.join("\n") : "The log is empty.";
+          openDrawer("service.logs " + name, '<pre class="log-block">' + esc(text) + "</pre>");
+        })
+        .catch(function (e) {
+          openDrawer("service.logs " + name, '<div class="notice notice-bad">' + esc(e.message) + "</div>");
+        });
+    },
+
+    "new-site": function () {
+      state.siteFormOpen = !state.siteFormOpen;
+      render();
+      if (state.siteFormOpen && el("site-name")) el("site-name").focus();
+    },
+
+    "create-site": function () {
+      var name = readInput("site-name");
+      if (!name) return toast("error", "a site needs a name");
+      var host = readInput("site-host");
+      var args = { name: name, host: host || null, tls: checked("site-tls"), db: checked("site-db") };
+      act("site.create", args).then(function (outcome) {
+        if (outcome) {
+          state.siteFormOpen = false;
+          render();
+        }
+      });
+    },
+
+    "remove-site": function (node) { act("site.remove", { name: node.dataset.name }); },
+
+    "open-url": function (node) { window.open(node.dataset.url, "_blank", "noopener"); },
+
+    "install-runtime": function (node) {
+      toast("info", "installing " + node.dataset.kind + " — the vendor download can take a minute");
+      act("runtime.install", { kind: node.dataset.kind, version: "latest" });
+    },
+
+    "remove-runtime": function (node) {
+      act("runtime.remove", { kind: node.dataset.kind, version: node.dataset.version });
+    },
+
+    "use-runtime": function (node) { act("runtime.use", { version: node.dataset.version }); },
+
+    "ca-trust": function (node) {
+      act("tls.trust", { machine: node.dataset.machine === "true" });
+    },
+
+    "ca-untrust": function () {
+      act("tls.untrust", { machine: false });
+    },
+
+    "cert-form": function () {
+      state.certFormOpen = !state.certFormOpen;
+      render();
+      if (state.certFormOpen && el("cert-host")) el("cert-host").focus();
+    },
+
+    "issue-cert": function () {
+      var host = readInput("cert-host");
+      if (!host) return toast("error", "a certificate needs a hostname");
+      act("tls.issue", { host: host }).then(function (outcome) {
+        if (outcome) {
+          state.certFormOpen = false;
+          render();
+        }
+      });
+    },
+
+    "sync-hosts": function () {
+      act("hosts.sync", {}).then(function (outcome) {
+        if (outcome) render();
+      });
+    },
 
     "track-path": function () {
       var path = readInput("add-path");
@@ -1942,12 +2715,20 @@
 
   function boot() {
     render();
-    return Promise.all([loadSystem(), loadProjects()]).then(function () {
-      render();
-      if (!state.session) return;
-      var pending = state.session.pending_approvals;
-      if (pending) toast("warn", pending + " operations are awaiting a decision");
-    });
+    // Session first, then the server data, then the environment check. The
+    // dashboard must not wait for a slow doctor run to show what is running.
+    return loadSession()
+      .then(loadServer)
+      .then(render)
+      .then(loadDoctor)
+      .then(render)
+      .then(loadProjects)
+      .then(render)
+      .then(function () {
+        if (!state.session) return;
+        var pending = state.session.pending_approvals;
+        if (pending) toast("warn", pending + " operations are awaiting a decision");
+      });
   }
 
   boot();

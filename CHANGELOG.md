@@ -10,6 +10,63 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.6.0] - 2026-10-20 — the server dashboard
+
+The application window now shows the machine, not just repositories: the
+services, the sites, the runtimes, the certificates and the hosts file, with
+controls for each and a live overview.
+
+### Added
+
+**The server views**
+
+* **Overview**: a status banner (running, ports, start/stop all), four counters
+  (services, sites, PHP, certificates), and panels for sites, services, hosts
+  and the certificate authority.
+* **Sites**: the table (URL, PHP, TLS, directory), a create form with hostname,
+  HTTPS and database options, open and remove. Removal is destructive and goes
+  through the approval dialog.
+* **Services**: version, ports, state and PID per service, with start, stop,
+  restart, logs in a drawer, and remove. Missing services offer install.
+* **Runtimes**: installed PHP, Node.js and Go with their primary marker,
+  "install latest", "use for new sites" and remove.
+* **Certificates**: the local authority, its trust state, trust for the user or
+  the machine, remove trust, and the issued certificates.
+* **Hosts**: the managed file, pending additions and removals, what is
+  published, and sync behind the approval dialog.
+
+**`tls.ca.status`** reports whether the authority is in the user and machine
+stores, by asking `certutil` rather than remembering it in the browser. The
+overview's trust notice is now a fact rather than a guess.
+
+**Design pass**, following Emil Kowalski's design engineering principles: press
+feedback on buttons (`scale(0.97)`), a visible focus ring on every control,
+custom easing curves instead of the built-in ones, no entrance animation on the
+command palette (it is opened from the keyboard many times a day), a 200ms
+entrance for the modal, tabular numerals for ports and counts, and a responsive
+three-to-two-to-one column grid.
+
+### Fixed
+
+* **The environment check took 40 seconds.** Every liveness check and every port
+  lookup started a `tasklist` process; a machine with a few dozen listeners
+  meant a few dozen of them. Process state and image names are now asked of the
+  kernel (`OpenProcess`, `GetExitCodeProcess`,
+  `QueryFullProcessImageNameW`), and the listener table is read once per check.
+  `devd doctor` went from ~45s to ~3s, and the service list from ~5s to under
+  100ms.
+* The hosts block no longer proposes entries for `localhost` and its
+  subdomains, which resolve without the file. `hosts.show`, `hosts.sync` and the
+  overview therefore agree with `site.create`.
+
+### Changed
+
+* The graphical surface is described as one application window, not a website.
+  The loopback API remains as the window's transport and for scripts; a native
+  webview wrapper is the planned shell, with no second UI implementation.
+
+---
+
 ## [0.5.1] - 2026-10-19 — a Windows installer
 
 `devd` now installs like an application: download one executable, click through

@@ -24,6 +24,7 @@
 //! capability - only the public certificate is.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use devd_core::capability::Ctx;
 use devd_core::util;
@@ -377,6 +378,79 @@ pub fn trust(ctx: &Ctx, machine: bool) -> Result<devd_core::capability::Outcome>
         Err(DevdError::unsupported(
             "trusting a certificate authority is not implemented on this platform",
         ))
+    }
+}
+
+/// Whether the authority is present in the operating system's trust stores.
+#[derive(Debug, Clone, Serialize)]
+pub struct TrustStatus {
+    /// Present in the current user's store.
+    pub user: bool,
+    /// Present in the machine-wide store.
+    pub machine: bool,
+}
+
+/// Check the trust stores without changing them.
+///
+/// `certutil -store` exits successfully when the certificate is present and
+/// with a "not found" status when it is not, which is the check this uses. A
+/// missing `certutil` (an unusual Windows install) reports "not trusted" rather
+/// than failing: the answer is unknown, and claiming trust would be worse.
+pub fn trust_status(ctx: &Ctx) -> Result<TrustStatus> {
+    if !ca_exists(ctx) {
+        return Ok(TrustStatus {
+            user: false,
+            machine: false,
+        });
+    }
+
+    #[cfg(windows)]
+    {
+        let Some(certutil) = util::which("certutil") else {
+            return Ok(TrustStatus {
+                user: false,
+                machine: false,
+            });
+        };
+        let present = |machine: bool| -> bool {
+            let mut args = Vec::new();
+            if !machine {
+                args.push("-user".to_string());
+            }
+            args.push("-store".to_string());
+            args.push("Root".to_string());
+            args.push(CA_COMMON_NAME.to_string());
+            util::run(&certutil, &args, None, &[], Some(Duration::from_secs(20)))
+                .map(|out| out.ok())
+                .unwrap_or(false)
+        };
+        Ok(TrustStatus {
+            user: present(false),
+            machine: present(true),
+        })
+    }
+
+    #[cfg(not(windows))]
+    {
+        let Some(trust) = util::which("trust") else {
+            return Ok(TrustStatus {
+                user: false,
+                machine: false,
+            });
+        };
+        let found = util::run(
+            &trust,
+            &["list".to_string()],
+            None,
+            &[],
+            Some(Duration::from_secs(20)),
+        )
+        .map(|out| out.stdout.contains(CA_COMMON_NAME))
+        .unwrap_or(false);
+        Ok(TrustStatus {
+            user: found,
+            machine: found,
+        })
     }
 }
 
