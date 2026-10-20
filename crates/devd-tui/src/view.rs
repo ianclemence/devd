@@ -31,31 +31,31 @@ fn cursor() -> Style {
 }
 /// A section heading.
 fn heading() -> Style {
-    Style::new().fg(Color::Rgb(107, 149, 255)).add_modifier(Modifier::BOLD)
+    Style::new().fg(Color::Rgb(242, 242, 242)).add_modifier(Modifier::BOLD)
 }
 /// Machine data: paths, hashes, capability ids.
 fn data() -> Style {
-    Style::new().fg(Color::Rgb(34, 211, 238))
+    Style::new().fg(Color::Rgb(124, 245, 192))
 }
 /// A failure.
 fn fail() -> Style {
-    Style::new().fg(Color::Rgb(251, 113, 133)).add_modifier(Modifier::BOLD)
+    Style::new().fg(Color::Rgb(255, 107, 107)).add_modifier(Modifier::BOLD)
 }
 /// Something that needs the reader's attention but is not a failure.
 fn warn() -> Style {
-    Style::new().fg(Color::Rgb(251, 191, 36))
+    Style::new().fg(Color::Rgb(250, 204, 21))
 }
 /// A success.
 fn ok() -> Style {
-    Style::new().fg(Color::Rgb(52, 211, 153))
+    Style::new().fg(Color::Rgb(74, 222, 128))
 }
 /// Secondary text.
 fn quiet() -> Style {
-    Style::new().fg(Color::Rgb(116, 128, 176))
+    Style::new().fg(Color::Rgb(118, 118, 118))
 }
 /// The current tab.
 fn tab_active() -> Style {
-    Style::new().fg(Color::Rgb(167, 139, 250)).add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+    Style::new().fg(Color::Rgb(124, 245, 192)).add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
 }
 
 /// Draw one frame.

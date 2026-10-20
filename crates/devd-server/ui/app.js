@@ -1454,18 +1454,18 @@
       cursorBlink: true,
       scrollback: 5000,
       theme: {
-        background: "#060914",
-        foreground: "#e8ecff",
-        cursor: "#22d3ee",
-        selectionBackground: "#243a7a",
-        black: "#111733",
-        red: "#fb7185",
-        green: "#34d399",
-        yellow: "#fbbf24",
-        blue: "#6b95ff",
-        magenta: "#a78bfa",
-        cyan: "#22d3ee",
-        white: "#e8ecff"
+        background: "#000000",
+        foreground: "#f2f2f2",
+        cursor: "#7cf5c0",
+        selectionBackground: "#1f4a38",
+        black: "#171717",
+        red: "#ff6b6b",
+        green: "#4ade80",
+        yellow: "#facc15",
+        blue: "#9ad0ff",
+        magenta: "#c8b6ff",
+        cyan: "#7cf5c0",
+        white: "#f2f2f2"
       }
     });
     var fit = new window.FitAddon.FitAddon();
