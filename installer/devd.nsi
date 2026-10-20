@@ -147,8 +147,10 @@ Section "devd (required)" SecMain
 
   CreateDirectory "$SMPROGRAMS\devd"
   CreateShortcut "$SMPROGRAMS\devd\devd.lnk" "$INSTDIR\devd-desktop.exe" "" "$INSTDIR\devd-desktop.exe" 0
+  ; The terminal shortcut runs cmd.exe, so it is given the devd icon: every
+  ; entry in the Start menu should carry the same mark.
   CreateShortcut "$SMPROGRAMS\devd\devd terminal.lnk" "$SYSDIR\cmd.exe" '/k ""$INSTDIR\devd.exe" doctor"' "$INSTDIR\devd.exe" 0
-  CreateShortcut "$SMPROGRAMS\devd\Uninstall devd.lnk" "$INSTDIR\uninstall.exe"
+  CreateShortcut "$SMPROGRAMS\devd\Uninstall devd.lnk" "$INSTDIR\uninstall.exe" "" "$INSTDIR\uninstall.exe" 0
 
   WriteRegStr HKCU "Software\devd" "InstallDir" "$INSTDIR"
   WriteRegStr HKCU "${UNINSTKEY}" "DisplayName" "devd"

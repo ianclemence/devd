@@ -522,7 +522,7 @@ code, kbd, pre, samp { font-family: var(--mono); }
 .input::placeholder, .textarea::placeholder { color: var(--fg-dim); }
 .input.mono, .textarea.mono { font-family: var(--mono); font-size: var(--text-sm); }
 .textarea { min-height: 76px; resize: vertical; line-height: 1.55; }
-.select { width: auto; }
+.select { width: auto; max-width: 100%; }
 .select.compact { height: 24px; min-height: 24px; padding: 1px 6px; font-size: var(--text-xs); }
 select.input { appearance: auto; }
 
@@ -1796,6 +1796,7 @@ pre.code {
     font-size: 16px;
     line-height: 1.4;
   }
+  .select { width: 100%; }
   .input.mono,
   .textarea.mono {
     font-size: 15px;
