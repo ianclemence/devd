@@ -11,6 +11,7 @@ pub mod exec;
 pub mod init;
 pub mod matrix;
 pub mod model;
+pub mod reconcile;
 pub mod registry;
 pub mod tasks;
 pub mod template;

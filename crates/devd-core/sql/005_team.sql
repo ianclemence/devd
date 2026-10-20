@@ -24,8 +24,8 @@ CREATE TABLE IF NOT EXISTS model_roles (
 -- What a person decided about a tool or service found on this machine.
 CREATE TABLE IF NOT EXISTS service_decisions (
     tool       TEXT PRIMARY KEY,
-    mode       TEXT NOT NULL,              -- adopt | observe | isolate | managed | ignore
-    port       INTEGER,                    -- the port devd uses for an isolated instance
+    mode       TEXT NOT NULL,              -- adopt | observe | external | ignore
+    port       INTEGER,                    -- the port of an instance the person runs themselves
     note       TEXT,
     decided_by TEXT NOT NULL,
     decided_at TEXT NOT NULL

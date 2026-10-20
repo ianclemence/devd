@@ -302,6 +302,8 @@ pub fn tools(app: &App, cmd: ToolsCommand) -> Result<()> {
         ToolsCommand::Restart { tool } => app.invoke("toolchain.service", json!({ "tool": tool, "action": "restart" })),
         ToolsCommand::Logs { tool } => app.invoke("toolchain.logs", json!({ "tool": tool })),
         ToolsCommand::Devices => app.invoke("toolchain.devices", json!({})),
+        ToolsCommand::Services => app.invoke("services.inventory", json!({})),
+        ToolsCommand::Decide { tool, mode, port, clear } => app.invoke("services.decide", json!({ "tool": tool, "mode": mode, "port": port, "clear": clear })),
     }
 }
 

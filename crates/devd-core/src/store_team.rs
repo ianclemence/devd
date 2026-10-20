@@ -43,9 +43,9 @@ pub struct RoleModel {
 pub struct ServiceDecision {
     /// Tool id.
     pub tool: String,
-    /// `adopt`, `observe`, `isolate`, `managed` or `ignore`.
+    /// `adopt`, `observe`, `external` or `ignore`.
     pub mode: String,
-    /// Port for an isolated instance.
+    /// Port of an instance the person runs themselves.
     pub port: Option<i64>,
     /// Why.
     pub note: Option<String>,

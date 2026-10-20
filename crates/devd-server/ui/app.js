@@ -855,8 +855,10 @@
       read("tls.list").catch(function () { return []; }),
       read("tls.ca.show").catch(function () { return null; }),
       read("hosts.show").catch(function () { return null; }),
-      read("tls.ca.status").catch(function () { return null; })
+      read("tls.ca.status").catch(function () { return null; }),
+      read("services.inventory").catch(function () { return null; })
     ]).then(function (r) {
+      state.server.inventory = r[7] && r[7].services ? r[7].services : [];
       state.server.services = Array.isArray(r[0]) ? r[0] : [];
       state.server.sites = Array.isArray(r[1]) ? r[1] : [];
       state.server.runtimes = Array.isArray(r[2]) ? r[2] : [];
@@ -1105,13 +1107,40 @@
 
   // ------------------------------------------------------------------ services
 
+
+  // Services already on the machine: detected, never assumed healthy, never replaced.
+  var INV_LABEL = { ready: "Ready", installed_stopped: "Installed, not running", port_conflict: "Port taken by something else", not_operational: "Not operational", limited: "Detected, limited control", missing: "Not installed" };
+
+  function inventoryPanel() {
+    var inv = state.server.inventory || [];
+    if (!inv.length) return "";
+    var rows = inv.map(function (v) {
+      var dec = v.decision ? '<span class="pill pill-accent">' + esc(v.decision.mode) + (v.decision.port ? " :" + v.decision.port : "") + "</span>" : "";
+      var tone = v.status === "ready" ? "ok" : v.status === "missing" ? "" : v.status === "installed_stopped" ? "warn" : "bad";
+      var rec = v.recommendation || {};
+      var btns = v.options.filter(function (o) { return o.available && o.action !== "ignore"; }).map(function (o) {
+        var recd = o.action === rec.action;
+        var cls = "btn btn-mini" + (recd ? " btn-primary" : o.risk === "destructive" ? " btn-danger" : "");
+        return '<button type="button" class="' + cls + '" data-action="svc-option" data-tool="' + attr(v.tool) + '" data-opt="' + attr(o.action) + '" title="' + attr((o.why_not || "") + (o.risk === "approval" ? " Asks you first." : "")) + '">' + esc(o.action === "adopt" ? "Use it" : o.action === "observe" ? "Only watch" : o.action === "external" ? "Use my own instance" : o.action === "start" ? "Start" : o.action === "install" ? "Install" : o.action === "logs" ? "Logs" : o.action === "remove" ? "Remove…" : o.label) + "</button>";
+      }).join("");
+      var need = v.required ? '<span class="pill pill-warn" title="' + attr(v.required_by.map(function (r) { return r.project; }).join(", ")) + '">needed by ' + v.required_by.length + "</span>" : "";
+      return '<div class="inv"><span class="health-dot hstate-' + (v.status === "ready" ? "healthy" : v.status === "installed_stopped" ? "degraded" : v.status === "missing" ? "setup_incomplete" : "critical") + '"></span><div class="grow">' +
+        '<div class="hrow-title">' + esc(v.name) + ' <span class="pill ' + (tone ? "pill-" + tone : "") + '">' + esc(INV_LABEL[v.status]) + "</span> " + dec + " " + need + "</div>" +
+        '<div class="row-sub">' + esc(v.headline) + (v.path ? " · " + esc(v.path) : "") + (v.port_owner && v.port_owner.program ? " · port held by " + esc(v.port_owner.program) + (v.port_owner.pid ? " (pid " + v.port_owner.pid + ")" : "") : "") + "</div>" +
+        '<div class="row-sub">' + esc(rec.why || "") + "</div></div><div class=\"inline\">" + btns +
+        (v.decision ? '<button type="button" class="btn btn-mini btn-ghost" data-action="svc-option" data-tool="' + attr(v.tool) + '" data-opt="clear">Reset</button>' : "") + "</div></div>";
+    }).join("");
+    return '<div class="panel"><div class="panel-head"><span>Found on this machine</span><span class="panel-note">detected, not assumed: a service is Ready only after it answers</span></div><div class="panel-body">' + rows +
+      '<div class="row-sub" style="margin-top:8px">devd never replaces an installed service. Using, watching or hiding one only records your choice. Starting, installing or removing asks for approval and keeps your data.</div></div></div>';
+  }
+
   function renderServices() {
     var rows = state.server.services;
     var byName = {};
     rows.forEach(function (r) { byName[r.name] = r; });
     var up = rows.filter(function (r) { return r.running; }).length;
 
-    var body = "";
+    var body = inventoryPanel();
     if (rows.length) {
       body +=
         '<div class="panel"><div class="panel-head"><span>Installed</span>' +
@@ -4068,6 +4097,21 @@
       navigate(v);
     },
 
+    "svc-option": function (n) {
+      var tool = n.dataset.tool, opt = n.dataset.opt;
+      var done = function (o) { if (o) refresh(); };
+      if (opt === "clear") return run("services.decide", { tool: tool, clear: true }).then(done);
+      if (opt === "adopt" || opt === "observe" || opt === "ignore") return run("services.decide", { tool: tool, mode: opt }).then(done);
+      if (opt === "external") {
+        var port = parseInt(window.prompt("Which port does your own " + tool + " instance listen on?", ""), 10);
+        if (!port) return;
+        return run("services.decide", { tool: tool, mode: "external", port: port }).then(done);
+      }
+      if (opt === "start") return run("toolchain.service", { tool: tool, action: "start" }).then(done);
+      if (opt === "install") return run("toolchain.install", { tool: tool }).then(done);
+      if (opt === "remove") return run("toolchain.remove", { tool: tool }).then(done);
+      if (opt === "logs") return read("toolchain.logs", { tool: tool }).then(function (d) { openDrawer(tool + " logs", '<pre class="log-block">' + esc((d.lines || []).join("\n") || "(no log lines)") + "</pre>"); }).catch(function (e) { toast("error", e.message); });
+    },
     // ---- assistant era
     "health-open": function () { openHealth(); loadHealth().then(function () { healthChip(); if (!el("drawer").hidden) openHealth(); }); },
     "health-recheck": function () { AI.healthLoading = true; if (!el("drawer").hidden) openHealth(); loadHealth().then(function () { healthChip(); if (!el("drawer").hidden) openHealth(); if (state.view === "home") loadHome().then(render); }); },

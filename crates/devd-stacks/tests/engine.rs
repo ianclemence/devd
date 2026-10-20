@@ -316,3 +316,56 @@ fn toolchain_plans_never_pretend() {
     let tools = l["data"]["tools"].as_array().unwrap();
     assert!(tools.iter().all(|t| t["tool"]["category"] == "database") && tools.len() >= 4);
 }
+
+#[test]
+fn services_found_on_the_machine_are_never_called_healthy_without_an_answer() {
+    let d = tempfile::tempdir().unwrap();
+    let ctx = ctx_with(d.path(), Actor::human(Surface::Cli));
+    ctx.store
+        .upsert_stack_project(&devd_core::store_stacks::StackProject {
+            path: d.path().join("blog").display().to_string(),
+            name: "blog".into(),
+            stack_id: Some("laravel".into()),
+            package_manager: None,
+            source: "import".into(),
+            context: json!({ "services": [{ "tool": "redis", "why": "queue driver" }] }).to_string(),
+            created_at: devd_core::util::now(),
+            updated_at: devd_core::util::now(),
+        })
+        .unwrap();
+    let inv = devd_stacks::reconcile::inventory(&ctx, StackRegistry::builtin()).unwrap();
+    let rows = inv["services"].as_array().unwrap();
+    assert!(rows.len() >= 4, "databases and docker are inspected");
+    for r in rows {
+        let status = r["status"].as_str().unwrap();
+        if status == "ready" {
+            assert!(r["installed"] == true && r["healthy"] == true && r["running"] == true, "{r}");
+        }
+        if r["healthy"] == true {
+            assert_eq!(r["running"], true, "healthy needs an answering port: {r}");
+        }
+        assert!(!r["options"].as_array().unwrap().is_empty());
+        // Replacement is never the recommendation.
+        assert_ne!(r["recommendation"]["action"], "remove");
+        if r["installed"] == false {
+            assert_eq!(status, "missing");
+        }
+    }
+    let redis = rows.iter().find(|r| r["tool"] == "redis").unwrap();
+    assert_eq!(redis["required"], true);
+    assert_eq!(redis["required_by"][0]["project"], "blog");
+}
+
+#[test]
+fn a_decision_to_only_observe_stops_devd_controlling_the_service() {
+    let d = tempfile::tempdir().unwrap();
+    let ctx = ctx_with(d.path(), Actor::human(Surface::Cli));
+    assert!(devd_stacks::reconcile::control_allowed(&ctx, "postgresql").is_ok());
+    ctx.store.set_service_decision("postgresql", "observe", None, None, "human:cli").unwrap();
+    let why = devd_stacks::reconcile::control_allowed(&ctx, "postgresql").unwrap_err();
+    assert!(why.contains("only watch"), "{why}");
+    ctx.store.set_service_decision("postgresql", "adopt", None, None, "human:cli").unwrap();
+    assert!(devd_stacks::reconcile::control_allowed(&ctx, "postgresql").is_ok());
+    ctx.store.set_service_decision("redis", "external", Some(6380), None, "human:cli").unwrap();
+    assert!(devd_stacks::reconcile::control_allowed(&ctx, "redis").is_err());
+}

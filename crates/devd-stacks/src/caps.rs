@@ -27,6 +27,7 @@ use crate::detect::{self, ProjectContext};
 use crate::exec::{self, runs};
 use crate::init::{self, InitRequest};
 use crate::model::Risk;
+use crate::reconcile;
 use crate::registry::StackRegistry;
 use crate::tasks::{self, RunTask, TaskInfo};
 use crate::toolchain;
@@ -38,6 +39,24 @@ fn stacks(ctx: &Ctx) -> StackRegistry {
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct NoArgs {}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct DecideService {
+    /// Tool id of a service, e.g. `postgresql`.
+    tool: String,
+    /// `adopt`, `observe`, `external` or `ignore`.
+    #[serde(default)]
+    mode: Option<String>,
+    /// Port of your own instance (required for `external`).
+    #[serde(default)]
+    port: Option<u16>,
+    /// Why.
+    #[serde(default)]
+    note: Option<String>,
+    /// Forget the decision.
+    #[serde(default)]
+    clear: Option<bool>,
+}
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct ListArgs {
@@ -678,6 +697,40 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             })?;
     }
 
+    add::<NoArgs, _, _>(reg, "services.inventory", "Services found on this machine",
+        "Every database and service devd knows (MySQL, MariaDB, PostgreSQL, Redis, Docker): whether it is installed, whether it is actually answering (a detected service is never called healthy), who holds its port, which of your projects need it, what you decided about it, the one recommended next step and every option with its risk. Changes nothing.",
+        Tier::Read, Effect::Read, true, false, true,
+        |_, _| read_plan("services.inventory", "inspect the services on this machine"),
+        |ctx, _| {
+            let r = stacks(ctx);
+            let v = reconcile::inventory(ctx, &r)?;
+            let n = v["services"].as_array().map(|a| a.len()).unwrap_or(0);
+            let ready = v["services"].as_array().map(|a| a.iter().filter(|s| s["status"] == "ready").count()).unwrap_or(0);
+            Ok(Outcome::with_data(format!("{ready} of {n} services ready"), v))
+        })?;
+
+    add::<DecideService, _, _>(reg, "services.decide", "Decide how devd treats a service",
+        "Records whether devd should adopt an existing service (use and control it as it is), only observe it, treat an instance you run yourself as the project's service, or ignore it. Records a decision only: nothing is installed, stopped, replaced or reconfigured, and data is never touched. Use clear=true to forget the decision.",
+        Tier::Write, Effect::Write, false, false, true,
+        |_, a| {
+            if !a.clear.unwrap_or(false) && !reconcile::MODES.contains(&a.mode.as_deref().unwrap_or("")) { return Err(DevdError::invalid("mode must be adopt, observe, external or ignore")); }
+            Ok(Plan::new("services.decide", format!("{} {}", if a.clear.unwrap_or(false) { "forget the decision about".to_string() } else { format!("record `{}` for", a.mode.clone().unwrap_or_default()) }, a.tool)).effect("no installation, process or data is changed"))
+        },
+        |ctx, a| {
+            let r = stacks(ctx);
+            let t = r.tool(&a.tool).ok_or_else(|| DevdError::not_found(format!("no tool `{}`", a.tool)))?;
+            if t.service.is_none() { return Err(DevdError::unsupported(format!("{} is not a service", t.name))); }
+            if a.clear.unwrap_or(false) {
+                ctx.store.clear_service_decision(&a.tool)?;
+                return Ok(Outcome::ok(format!("forgot the decision about {}", t.name)));
+            }
+            let mode = a.mode.clone().unwrap_or_default();
+            if !reconcile::MODES.contains(&mode.as_str()) { return Err(DevdError::invalid("mode must be adopt, observe, external or ignore")); }
+            if mode == "external" && a.port.is_none() { return Err(DevdError::invalid("external needs the port your instance listens on")); }
+            ctx.store.set_service_decision(&a.tool, &mode, a.port.map(|p| p as i64), a.note.as_deref(), &ctx.actor.label())?;
+            Ok(Outcome::ok(format!("{}: {mode}", t.name)))
+        })?;
+
     add::<ToolArgs, _, _>(reg, "toolchain.status", "Service status",
         "State of a service tool: installed, listening, healthy, which unit controls it, port conflicts, data and log locations and its security defaults.",
         Tier::Read, Effect::Read, true, false, true,
@@ -712,6 +765,9 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         |ctx, a| {
             if !["start", "stop", "restart"].contains(&a.action.as_str()) { return Err(DevdError::invalid("action must be start, stop or restart")); }
             let r = stacks(ctx);
+            {
+                if let Err(why) = reconcile::control_allowed(ctx, &a.tool) { return Err(DevdError::conflict(why)); }
+            }
             let s = toolchain::control(ctx, &r, &a.tool, &a.action)?;
             Ok(Outcome::with_data(s.detail.clone(), serde_json::to_value(&s)?))
         })?;

@@ -301,6 +301,20 @@ pub(crate) enum ToolsCommand {
     Logs { tool: String },
     /// Connected Android devices and emulators (adb).
     Devices,
+    /// Databases and services already on this machine: what is installed, what answers, what needs them.
+    Services,
+    /// Decide how devd treats a service found on this machine (changes nothing on the machine).
+    Decide {
+        tool: String,
+        /// adopt, observe, external or ignore.
+        mode: Option<String>,
+        /// Port of your own instance (for external).
+        #[arg(long)]
+        port: Option<u16>,
+        /// Forget the decision.
+        #[arg(long)]
+        clear: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
