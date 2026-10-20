@@ -12,6 +12,27 @@ may change capability identifiers where the design was wrong.
 
 ## Unreleased
 
+### Changed
+
+- **One logo, everywhere, generated from one file.** The artwork now lives in
+  `assets/devd-logo.png` and nothing else is a source of truth. `scripts/make-icons.py`
+  generates the desktop icons (16 to 512, and a `.ico` with every size Windows asks
+  for), the favicon and the brand mark in the window from that one file, so the icon
+  on the taskbar, the mark in the sidebar and the favicon are the same picture
+  instead of three near-copies. A test keeps them that way.
+- **Motion, rethought against a stricter bar.** Hover states only apply to a device
+  that can really hover, so they no longer stick after a tap on a phone. Buttons
+  press with a scale rather than a nudge, dialogs and drawers settle with a
+  transition instead of a keyframe, toasts can be interrupted and retargeted, the
+  spinner turns faster, and reduced motion keeps the fades that explain a change
+  while dropping the movement.
+- **Phone behaviour.** No grey tap flash, no 300ms tap delay, no pull-to-refresh
+  hijacking the scroll, fields large enough that the browser does not zoom into
+  them, and content that stays clear of the notch and the home indicator.
+- **Worst-case content.** Long names truncate with the full value in the title,
+  identifiers and paths wrap instead of pushing the layout apart, and numbers
+  that change do not shift the row they sit in.
+
 ### Added
 
 - **Requirements, asked for at the right moment.** One capability (`setup.requirements`)

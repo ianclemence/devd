@@ -325,9 +325,18 @@
       (detail ? '<div class="toast-detail">' + esc(detail) + "</div>" : "") +
       '</div><button type="button" data-action="dismiss-toast" aria-label="Dismiss">x</button>';
     el("toasts").appendChild(node);
-    setTimeout(function () {
-      if (node.parentNode) node.parentNode.removeChild(node);
-    }, kind === "error" ? 9000 : 4200);
+    // The entrance is a transition, so it can be interrupted and retargeted.
+    requestAnimationFrame(function () { node.classList.add("toast-in"); });
+    node.dataset.timer = String(setTimeout(function () { dismissToast(node); }, kind === "error" ? 9000 : 4200));
+  }
+
+  function dismissToast(node) {
+    if (!node || node.dataset.leaving) return;
+    node.dataset.leaving = "1";
+    if (node.dataset.timer) clearTimeout(Number(node.dataset.timer));
+    node.classList.remove("toast-in");
+    node.classList.add("toast-out");
+    setTimeout(function () { if (node.parentNode) node.parentNode.removeChild(node); }, 200);
   }
 
   function copyText(text, done) {
@@ -4699,8 +4708,7 @@
     "palette-pick": function (node) { paletteActivate(Number(node.dataset.index)); },
 
     "dismiss-toast": function (node) {
-      var t = node.closest(".toast");
-      if (t && t.parentNode) t.parentNode.removeChild(t);
+      dismissToast(node.closest(".toast"));
     },
 
     "close-drawer": function () { closeDrawer(); },

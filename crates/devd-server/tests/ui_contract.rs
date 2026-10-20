@@ -89,6 +89,26 @@ fn the_sidebar_is_short_and_search_is_not_about_capabilities() {
 }
 
 #[test]
+fn every_icon_comes_from_the_same_logo() {
+    // The artwork has one source: `assets/devd-logo.png`. Everything else is
+    // generated from it by `scripts/make-icons.py`, so the mark in the window,
+    // the icon on the taskbar and the favicon are the same picture.
+    let desktop = include_bytes!("../../devd-desktop/icons/128x128.png");
+    let marker = "data:image/png;base64,";
+    let start = HTML.find(marker).expect("inline logo") + marker.len();
+    let end = HTML[start..].find('"').expect("inline logo end") + start;
+    let inline = &HTML[start..end];
+    let encoded = base64::engine::general_purpose::STANDARD.encode(desktop);
+    assert_eq!(inline, encoded, "the in-app mark is not the desktop icon");
+
+    assert_eq!(&desktop[1..4], b"PNG");
+    let width = u32::from_be_bytes(desktop[16..20].try_into().unwrap());
+    let height = u32::from_be_bytes(desktop[20..24].try_into().unwrap());
+    assert_eq!((width, height), (128, 128));
+    assert_eq!(desktop[25], 2, "the artwork is opaque: colour type 2 (RGB)");
+}
+
+#[test]
 fn the_logo_has_no_transparent_padding_and_is_square() {
     let marker = "data:image/png;base64,";
     let start = HTML.find(marker).expect("inline logo") + marker.len();

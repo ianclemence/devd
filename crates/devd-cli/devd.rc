@@ -1,0 +1,5 @@
+/* The devd icon, in the command line executable.
+ *
+ * The path is relative to this file, which is the crate root.
+ */
+1 ICON "../devd-desktop/icons/icon.ico"

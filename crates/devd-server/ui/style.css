@@ -92,8 +92,10 @@
 
   --fast: 110ms;
   --base: 160ms;
+  --slow: 240ms;
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
 
   --shadow-float: 0 18px 48px rgba(0, 0, 0, 0.55);
   --focus-ring: 0 0 0 3px rgba(124, 245, 192, 0.16);
@@ -105,8 +107,18 @@
   *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
+    transition-duration: 120ms !important;
     scroll-behavior: auto !important;
+  }
+  /* Movement goes; the fade stays, because it is what explains the change. */
+  .btn:active:not(:disabled),
+  .toast,
+  .toast.toast-in,
+  .toast.toast-out,
+  .drawer,
+  .modal,
+  .overlay {
+    transform: none !important;
   }
 }
 
@@ -132,7 +144,6 @@ h1, h2, h3, h4, p, ul, ol, figure, pre { margin: 0; }
 ul, ol { padding: 0; list-style: none; }
 img, svg, video, canvas { max-width: 100%; }
 a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; text-underline-offset: 2px; }
 button { font: inherit; color: inherit; }
 code, kbd, pre, samp { font-family: var(--mono); }
 
@@ -149,7 +160,6 @@ code, kbd, pre, samp { font-family: var(--mono); }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--line-strong); border: 3px solid transparent; background-clip: padding-box; border-radius: 999px; }
-::-webkit-scrollbar-thumb:hover { background: #4a4a54; background-clip: padding-box; }
 
 /* --------------------------------------------------------- helpers, a11y */
 
@@ -187,7 +197,6 @@ code, kbd, pre, samp { font-family: var(--mono); }
 .inline { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
 .grow { flex: 1; min-width: 0; }
 .link { color: var(--accent); text-decoration: none; }
-.link:hover { text-decoration: underline; }
 
 .icon {
   width: 16px;
@@ -268,7 +277,6 @@ code, kbd, pre, samp { font-family: var(--mono); }
 .sb-left b { color: var(--fg-mute); font-weight: 500; }
 .sb-sep { color: var(--line-strong); }
 .sb-link { background: none; border: 0; padding: 0; font: inherit; cursor: pointer; color: inherit; }
-.sb-link:hover { color: var(--fg); }
 .sb-warn { color: var(--warn); }
 .sb-bad { color: var(--danger); }
 
@@ -315,7 +323,6 @@ code, kbd, pre, samp { font-family: var(--mono); }
   cursor: pointer;
   transition: border-color var(--fast), color var(--fast), background var(--fast);
 }
-.search-trigger:hover { border-color: var(--line-strong); background: var(--bg-raised); color: var(--fg); }
 .search-trigger .icon { width: 14px; height: 14px; }
 .search-label { flex: 1; min-width: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .search-trigger kbd { flex: none; margin-left: auto; }
@@ -356,8 +363,6 @@ code, kbd, pre, samp { font-family: var(--mono); }
   transition: background var(--fast), color var(--fast);
 }
 .rail-item .icon { width: 17px; height: 17px; color: var(--fg-dim); transition: color var(--fast); }
-.rail-item:hover { background: var(--bg-hover); color: var(--fg); }
-.rail-item:hover .icon { color: var(--fg-mute); }
 .rail-item.active { background: var(--accent-quiet); color: var(--fg); box-shadow: inset 2px 0 0 var(--accent); }
 .rail-item.active .icon { color: var(--accent); }
 .rail-item:focus-visible { outline-offset: -2px; }
@@ -404,7 +409,6 @@ code, kbd, pre, samp { font-family: var(--mono); }
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.crumbs button:hover { background: var(--bg-hover); color: var(--fg); }
 .crumbs .sep { color: var(--line-strong); }
 
 .subnav {
@@ -438,7 +442,6 @@ code, kbd, pre, samp { font-family: var(--mono); }
   white-space: nowrap;
   transition: color var(--fast), border-color var(--fast);
 }
-.subtab:hover { color: var(--fg); }
 .subtab.active { color: var(--fg); border-bottom-color: var(--accent); }
 
 .page {
@@ -487,22 +490,17 @@ code, kbd, pre, samp { font-family: var(--mono); }
   line-height: 1;
   white-space: nowrap;
   cursor: pointer;
-  transition: background var(--fast) var(--ease-out), border-color var(--fast) var(--ease-out), color var(--fast) var(--ease-out);
+  transition: background var(--fast) var(--ease-out), border-color var(--fast) var(--ease-out), color var(--fast) var(--ease-out), transform var(--fast) var(--ease-out);
 }
-.btn:hover:not(:disabled) { background: var(--bg-hover); border-color: #4a4a55; }
-.btn:active:not(:disabled) { transform: translateY(1px); }
+.btn:active:not(:disabled) { transform: scale(0.97); }
 .btn:disabled, .btn[disabled] { opacity: 0.45; cursor: not-allowed; }
 .btn .icon { width: 14px; height: 14px; }
 
 .btn-mini { height: 24px; padding: 0 8px; font-size: 11.5px; border-radius: var(--radius-sm); }
 .btn-primary { background: var(--accent-quiet); border-color: var(--accent-line); color: var(--accent-text); }
-.btn-primary:hover:not(:disabled) { background: #153528; border-color: var(--accent); }
 .btn-go { background: var(--accent); border-color: var(--accent); color: #052a1c; font-weight: 600; }
-.btn-go:hover:not(:disabled) { background: var(--accent-strong); border-color: var(--accent-strong); }
 .btn-danger { background: var(--danger-quiet); border-color: var(--danger-line); color: #ffc9c9; }
-.btn-danger:hover:not(:disabled) { background: #2f1719; border-color: var(--danger); }
 .btn-ghost { background: transparent; border-color: transparent; color: var(--fg-mute); }
-.btn-ghost:hover:not(:disabled) { background: var(--bg-hover); color: var(--fg); border-color: transparent; }
 
 .input, .textarea, .select {
   width: 100%;
@@ -576,7 +574,6 @@ kbd {
   white-space: nowrap;
 }
 .pill-quiet { background: none; cursor: pointer; }
-.pill-quiet:hover { color: var(--fg); border-color: var(--accent); }
 .pill-ok { color: var(--ok); border-color: var(--ok-line); background: var(--ok-quiet); }
 .pill-warn { color: var(--warn); border-color: var(--warn-line); background: var(--warn-quiet); }
 .pill-bad { color: var(--danger); border-color: var(--danger-line); background: var(--danger-quiet); }
@@ -680,7 +677,6 @@ kbd {
   transition: border-color var(--fast), background var(--fast);
 }
 .card-link { display: block; width: 100%; text-align: left; cursor: pointer; }
-.card-link:hover { border-color: var(--accent-line); background: var(--bg-raised); }
 .card-title { font-size: var(--text-md); font-weight: 600; }
 .card-meta { margin-top: 2px; color: var(--fg-dim); font-family: var(--mono); font-size: var(--text-xs); }
 .card-stats { display: flex; gap: var(--s2); flex-wrap: wrap; margin-top: var(--s3); }
@@ -805,11 +801,10 @@ kbd {
   border-bottom: 1px solid var(--line);
 }
 .row:last-child { border-bottom: 0; }
-.row:hover { background: var(--bg-hover); }
 .row.selected { background: var(--accent-quiet); }
 .row-main { flex: 1; min-width: 0; font-family: var(--mono); font-size: var(--text-sm); }
 .row-actions { display: flex; gap: var(--s1); flex: 0 0 auto; opacity: 0; transition: opacity var(--fast); }
-.row:hover .row-actions, .row.selected .row-actions, .row-actions:focus-within { opacity: 1; }
+.row.selected .row-actions, .row-actions:focus-within { opacity: 1; }
 .row-sub { color: var(--fg-dim); font-size: var(--text-xs); line-height: 1.5; }
 .row-meta { flex: 0 0 auto; color: var(--fg-dim); font-family: var(--mono); font-size: var(--text-xs); }
 
@@ -853,7 +848,6 @@ kbd {
 .table td.cell-actions, .table th:last-child { white-space: nowrap; }
 .table td.cell-actions { width: 1%; }
 .table tbody tr:last-child td { border-bottom: 0; }
-.table tbody tr:hover td { background: rgba(255, 255, 255, 0.025); }
 .table .cell-mono, .cell-mono { color: var(--fg-mute); font-family: var(--mono); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
 .cell-strong { color: var(--fg); font-weight: 500; }
 .cell-dim { color: var(--fg-dim); font-size: var(--text-xs); }
@@ -885,7 +879,6 @@ kbd {
   white-space: nowrap;
   transition: color var(--fast), border-color var(--fast);
 }
-.tab:hover { color: var(--fg); }
 .tab.active { color: var(--fg); border-bottom-color: var(--accent); }
 .tab .tab-count { margin-left: 5px; color: var(--fg-dim); font-family: var(--mono); font-size: var(--text-2xs); }
 
@@ -911,7 +904,6 @@ kbd {
   font-size: var(--text-sm);
   cursor: pointer;
 }
-.seg:hover { background: var(--bg-hover); color: var(--fg); }
 .seg.active { background: var(--bg-raised); color: var(--fg); }
 
 /* ------------------------------------------------------- diffs and logs */
@@ -973,7 +965,7 @@ kbd {
   padding: 9vh var(--s4) var(--s4);
   background: rgba(0, 0, 0, 0.66);
   backdrop-filter: blur(2px);
-  animation: fade 120ms var(--ease-out);
+  animation: fade var(--fast) var(--ease-out);
   overflow-y: auto;
 }
 .overlay[hidden] { display: none; }
@@ -986,13 +978,22 @@ kbd {
   box-shadow: var(--shadow-float);
   overflow: hidden;
 }
+/* The command palette is opened from the keyboard many times a day, so it
+   appears at once: an animation there makes it feel slow. */
 #palette.overlay, #palette .palette { animation: none; }
-.modal { width: min(580px, 96vw); animation: rise 180ms var(--ease-out); }
-@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
-@keyframes rise {
-  from { opacity: 0; transform: translateY(-6px) scale(0.99); }
-  to { opacity: 1; transform: none; }
+
+/* A dialog is occasional, so it may move - but it starts from a shape, never
+   from nothing, and it settles with an ease-out. */
+.modal {
+  width: min(580px, 96vw);
+  opacity: 0;
+  transform: translateY(-6px) scale(0.98);
+  transition: opacity var(--slow) var(--ease-out), transform var(--slow) var(--ease-out);
 }
+@starting-style {
+  .modal { opacity: 1; transform: none; }
+}
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
 
 .palette-head {
   display: flex;
@@ -1092,10 +1093,14 @@ kbd {
   background: var(--bg-surface);
   border-left: 1px solid var(--line-strong);
   box-shadow: var(--shadow-float);
-  animation: slide var(--base) var(--ease-out);
+  opacity: 0;
+  transform: translateX(16px);
+  transition: opacity var(--slow) var(--ease-drawer), transform var(--slow) var(--ease-drawer);
 }
 .drawer[hidden] { display: none; }
-@keyframes slide { from { transform: translateX(16px); opacity: 0; } to { transform: none; opacity: 1; } }
+@starting-style {
+  .drawer { opacity: 1; transform: none; }
+}
 .drawer-head {
   display: flex;
   align-items: center;
@@ -1123,6 +1128,8 @@ kbd {
   gap: var(--s2);
   width: min(380px, 92vw);
 }
+/* Toasts arrive and leave often, and a reader may dismiss one halfway
+   through its entrance. A transition retargets; a keyframe restarts. */
 .toast {
   display: flex;
   align-items: flex-start;
@@ -1134,8 +1141,12 @@ kbd {
   border-radius: var(--radius);
   box-shadow: var(--shadow-float);
   font-size: var(--text-sm);
-  animation: rise var(--base) var(--ease-out);
+  opacity: 0;
+  transform: translateY(8px) scale(0.98);
+  transition: opacity var(--base) var(--ease-out), transform var(--base) var(--ease-out);
 }
+.toast.toast-in { opacity: 1; transform: none; }
+.toast.toast-out { opacity: 0; transform: translateY(4px) scale(0.99); transition-duration: var(--fast); }
 .toast-ok { border-left-color: var(--ok); }
 .toast-error { border-left-color: var(--danger); }
 .toast-warn { border-left-color: var(--warn); }
@@ -1143,7 +1154,6 @@ kbd {
 .toast .toast-msg { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .toast .toast-detail { margin-top: 3px; color: var(--fg-dim); font-family: var(--mono); font-size: var(--text-xs); }
 .toast button { padding: 0 2px; background: none; border: 0; color: var(--fg-dim); cursor: pointer; }
-.toast button:hover { color: var(--fg); }
 
 /* -------------------------------------------------------------- dashboard */
 
@@ -1161,7 +1171,7 @@ kbd {
 .svc { display: flex; align-items: center; gap: var(--s3); padding: var(--s3) var(--s4); border-bottom: 1px solid var(--line); }
 .svc:last-child { border-bottom: 0; }
 button.svc { width: 100%; background: none; border: 0; border-bottom: 1px solid var(--line); color: inherit; text-align: left; cursor: pointer; }
-button.svc:hover, .svc.active { background: var(--bg-hover); }
+.svc.active { background: var(--bg-hover); }
 .svc-main { flex: 1; min-width: 0; }
 .svc-name { font-size: var(--text-md); font-weight: 550; }
 .svc-sub { margin-top: 1px; color: var(--fg-dim); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
@@ -1208,7 +1218,6 @@ button.svc:hover, .svc.active { background: var(--bg-hover); }
   cursor: pointer;
   transition: border-color var(--fast), background var(--fast);
 }
-.quick:hover, .preset:hover { border-color: var(--accent-line); background: var(--bg-raised); }
 .quick b, .preset b { font-weight: 600; font-size: var(--text-sm); }
 .quick span, .preset span { color: var(--fg-dim); font-size: var(--text-xs); line-height: 1.45; }
 
@@ -1313,7 +1322,6 @@ button.svc:hover, .svc.active { background: var(--bg-hover); }
   cursor: pointer;
   transition: background var(--fast), color var(--fast);
 }
-.thread:hover { background: var(--bg-raised); color: var(--fg); }
 .thread.active { background: var(--accent-quiet); color: var(--fg); box-shadow: inset 2px 0 0 var(--accent); }
 
 .chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
@@ -1412,7 +1420,6 @@ pre.code {
   border-radius: var(--radius);
   overflow: hidden;
 }
-.step:hover { border-color: var(--line-strong); }
 .step.step-bad { border-left-color: var(--danger); }
 .step-head {
   display: flex;
@@ -1428,7 +1435,6 @@ pre.code {
   text-align: left;
   cursor: pointer;
 }
-.step-head:hover { background: var(--bg-raised); color: var(--fg); }
 .step-title { color: var(--fg); font-family: var(--mono); font-size: var(--text-sm); }
 .step-toggle { color: var(--fg-dim); font-size: var(--text-xs); }
 .step-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--fg-dim); }
@@ -1484,7 +1490,6 @@ pre.code {
   cursor: pointer;
   transition: background var(--fast);
 }
-.session-row:hover { background: var(--bg-hover); }
 .session-row.active { background: var(--accent-quiet); box-shadow: inset 2px 0 0 var(--accent); }
 .session-row-top { display: flex; align-items: center; gap: var(--s2); min-width: 0; }
 .session-name { font-size: var(--text-sm); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1515,7 +1520,6 @@ pre.code {
   text-overflow: ellipsis;
   cursor: pointer;
 }
-.term-tab:hover { background: var(--bg-raised); color: var(--fg); }
 .term-tab.active { background: var(--bg-raised); border-color: var(--line-strong); color: var(--fg); }
 .term-tab .tab-state { color: var(--fg-dim); font-size: var(--text-2xs); }
 
@@ -1582,7 +1586,6 @@ pre.code {
   text-align: left;
   cursor: pointer;
 }
-.note-row:hover { background: var(--bg-hover); }
 .note-row.active { background: var(--accent-quiet); box-shadow: inset 2px 0 0 var(--accent); }
 .note-editor { display: flex; flex-direction: column; gap: var(--s2); }
 .note-editor-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); }
@@ -1623,7 +1626,6 @@ pre.code {
   cursor: pointer;
   transition: background var(--fast);
 }
-.health:hover { background: var(--bg-hover); }
 .health-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
 .health-title { font-size: var(--text-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .health-sub { font-size: var(--text-2xs); color: var(--fg-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1672,7 +1674,7 @@ pre.code {
 }
 .provider.is-default { border-color: var(--accent-line); }
 .provider-name { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; font-size: var(--text-md); font-weight: 600; }
-.provider-meta { margin-top: 2px; color: var(--fg-dim); font-family: var(--mono); font-size: var(--text-xs); overflow-wrap: anywhere; }
+.provider-meta { margin-top: 2px; color: var(--fg-dim); font-family: var(--mono); font-size: var(--text-xs); overflow-wrap: anywhere; word-break: break-all; }
 .provider-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--s2) var(--s3); margin-top: var(--s3); }
 .provider-fact { min-width: 0; }
 .provider-fact dt { color: var(--fg-dim); font-size: var(--text-2xs); font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; }
@@ -1748,19 +1750,21 @@ pre.code {
   .rail-foot { justify-content: center; padding: var(--s2) 0; }
   .health { justify-content: center; padding: 6px; }
   .health-text, .health-go { display: none; }
-  .rail-item:hover::after {
-    content: attr(data-label);
-    position: fixed;
-    left: 74px;
-    z-index: 20;
-    padding: 4px 8px;
-    background: var(--bg-raised);
-    border: 1px solid var(--line-strong);
-    border-radius: var(--radius-sm);
-    color: var(--fg);
-    font-size: var(--text-xs);
-    box-shadow: var(--shadow-float);
-    pointer-events: none;
+  @media (hover: hover) and (pointer: fine) {
+    .rail-item:hover::after { content: attr(data-label); position: fixed; left: 74px; z-index: 20; padding: 4px 8px; background: var(--bg-raised); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); color: var(--fg); font-size: var(--text-xs); box-shadow: var(--shadow-float); pointer-events: none; {
+        content: attr(data-label);
+        position: fixed;
+        left: 74px;
+        z-index: 20;
+        padding: 4px 8px;
+        background: var(--bg-raised);
+        border: 1px solid var(--line-strong);
+        border-radius: var(--radius-sm);
+        color: var(--fg);
+        font-size: var(--text-xs);
+        box-shadow: var(--shadow-float);
+        pointer-events: none;
+    }
   }
 }
 
@@ -1784,6 +1788,18 @@ pre.code {
 /* Phones: the rail becomes a top strip. The same destinations, the same
    labels, scrolled horizontally instead of stacked. */
 @media (max-width: 720px) {
+  /* iOS zooms into a focused field smaller than 16px and never zooms back
+     out, so the fields are 16px on a phone. */
+  .input,
+  .textarea,
+  .select {
+    font-size: 16px;
+    line-height: 1.4;
+  }
+  .input.mono,
+  .textarea.mono {
+    font-size: 15px;
+  }
   .shell {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr) var(--status-h);
@@ -1818,7 +1834,11 @@ pre.code {
   .rail-item .rail-label { display: block; }
   .rail-item .icon { width: 15px; height: 15px; }
   .rail-item .rail-count { position: static; margin-left: 2px; min-width: 0; height: auto; padding: 0; background: none; font-size: var(--text-2xs); line-height: 1; }
-  .rail-item:hover::after { display: none; }
+  @media (hover: hover) and (pointer: fine) {
+    .rail-item:hover::after {
+      display: none;
+    }
+  }
   .rail-foot { flex: none; margin-left: auto; padding: 0 var(--s2); border-top: 0; border-left: 1px solid var(--line); }
   .health { padding: 6px; }
   .health-text { display: none; }
@@ -1892,4 +1912,220 @@ pre.code {
 @media (forced-colors: active) {
   .btn, .panel, .card, .input, .select, .textarea, .pill, .notice, .provider, .tcard { border: 1px solid CanvasText; }
   .rail-item.active { outline: 2px solid Highlight; }
+}
+
+/* ------------------------------------------------- platform behaviour (touch) */
+
+html {
+  /* The browser paints a grey flash over anything tapped. Our own press
+     feedback replaces it, so the flash is only noise. */
+  -webkit-tap-highlight-color: transparent;
+  /* Safari inflates text in landscape unless it is told not to. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+html, body {
+  /* Pull-to-refresh hijacks the scroll of a page that has nothing to scroll. */
+  overscroll-behavior: none;
+}
+
+button,
+a,
+[role="button"],
+input,
+select,
+textarea,
+.tab,
+.subtab,
+.rail-item,
+.row,
+.palette-item {
+  /* A tap should act on the finger, not 300ms later. */
+  touch-action: manipulation;
+  /* A long press on a control should not select its label. */
+  user-select: none;
+}
+
+/* Phones with a notch or a home indicator keep their content clear of it. */
+.rail { padding-left: env(safe-area-inset-left); }
+.statusbar {
+  padding-left: calc(var(--s3) + env(safe-area-inset-left));
+  padding-right: calc(var(--s3) + env(safe-area-inset-right));
+}
+.toasts {
+  right: calc(var(--s4) + env(safe-area-inset-right));
+  bottom: calc(var(--status-h) + var(--s3) + env(safe-area-inset-bottom));
+}
+.content { padding-bottom: env(safe-area-inset-bottom); }
+
+/* The panels of a page settle in one after another, so the eye lands on the
+   top of the page instead of on everything at once. The delays are short:
+   stagger is decoration, and it must never hold up the interface. */
+.page > .panel,
+.page > .home-grid,
+.page > .two-col,
+.page > .columns {
+  animation: settle var(--slow) var(--ease-out) both;
+}
+.page > *:nth-child(2) { animation-delay: 40ms; }
+.page > *:nth-child(3) { animation-delay: 80ms; }
+.page > *:nth-child(4) { animation-delay: 120ms; }
+@keyframes settle {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* ------------------------------------------------ worst-case content, handled */
+
+/* A long name must not push the layout apart; it truncates, and the full
+   value stays in the title. */
+.rail-label,
+.proj-name,
+.card-title,
+.session-name,
+.req-title,
+.pill {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rail-label { white-space: nowrap; }
+
+/* Identifiers and paths are long by nature: they wrap rather than push. */
+.pi-id,
+.cell-mono,
+.row-main,
+.feed .mono,
+.patch-block,
+.log-block {
+  overflow-wrap: anywhere;
+}
+
+/* A number that changes must not shift the row it sits in. */
+.stat-value,
+.count,
+.rail-count,
+.cell-mono {
+  font-variant-numeric: tabular-nums;
+}
+
+
+/* Pointer-only hover states.
+   Touch screens fake :hover on the first tap and leave it there, so a
+   hover style sticks after the tap. These rules only apply to a device
+   that can really hover. */
+@media (hover: hover) and (pointer: fine) {
+  a:hover {
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #4a4a54;
+    background-clip: padding-box;
+  }
+  .link:hover {
+    text-decoration: underline;
+  }
+  .sb-link:hover {
+    color: var(--fg);
+  }
+  .search-trigger:hover {
+    border-color: var(--line-strong);
+    background: var(--bg-raised);
+    color: var(--fg);
+  }
+  .rail-item:hover {
+    background: var(--bg-hover);
+    color: var(--fg);
+  }
+  .rail-item:hover .icon {
+    color: var(--fg-mute);
+  }
+  .crumbs button:hover {
+    background: var(--bg-hover);
+    color: var(--fg);
+  }
+  .subtab:hover {
+    color: var(--fg);
+  }
+  .btn:hover:not(:disabled) {
+    background: var(--bg-hover);
+    border-color: #4a4a55;
+  }
+  .btn-primary:hover:not(:disabled) {
+    background: #153528;
+    border-color: var(--accent);
+  }
+  .btn-go:hover:not(:disabled) {
+    background: var(--accent-strong);
+    border-color: var(--accent-strong);
+  }
+  .btn-danger:hover:not(:disabled) {
+    background: #2f1719;
+    border-color: var(--danger);
+  }
+  .btn-ghost:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--fg);
+    border-color: transparent;
+  }
+  .pill-quiet:hover {
+    color: var(--fg);
+    border-color: var(--accent);
+  }
+  .card-link:hover {
+    border-color: var(--accent-line);
+    background: var(--bg-raised);
+  }
+  .row:hover {
+    background: var(--bg-hover);
+  }
+  .row:hover .row-actions {
+    opacity: 1;
+  }
+  .table tbody tr:hover td {
+    background: rgba(255, 255, 255, 0.025);
+  }
+  .tab:hover {
+    color: var(--fg);
+  }
+  .seg:hover {
+    background: var(--bg-hover);
+    color: var(--fg);
+  }
+  .toast button:hover {
+    color: var(--fg);
+  }
+  button.svc:hover {
+    background: var(--bg-hover);
+  }
+  .quick:hover, .preset:hover {
+    border-color: var(--accent-line);
+    background: var(--bg-raised);
+  }
+  .thread:hover {
+    background: var(--bg-raised);
+    color: var(--fg);
+  }
+  .step:hover {
+    border-color: var(--line-strong);
+  }
+  .step-head:hover {
+    background: var(--bg-raised);
+    color: var(--fg);
+  }
+  .session-row:hover {
+    background: var(--bg-hover);
+  }
+  .term-tab:hover {
+    background: var(--bg-raised);
+    color: var(--fg);
+  }
+  .note-row:hover {
+    background: var(--bg-hover);
+  }
+  .health:hover {
+    background: var(--bg-hover);
+  }
 }

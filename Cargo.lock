@@ -931,6 +931,7 @@ dependencies = [
  "devd-stacks",
  "devd-tui",
  "devd-workspace",
+ "embed-resource",
  "open",
  "serde",
  "serde_json",
