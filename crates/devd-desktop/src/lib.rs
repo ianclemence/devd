@@ -142,8 +142,12 @@ fn run_with(boot: Bootstrap) -> tauri::Result<()> {
                 let port = bound.port;
                 WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
                     .title("devd")
-                    .inner_size(1280.0, 860.0)
-                    .min_inner_size(900.0, 600.0)
+                    // Big enough for the three-column workspace, small enough
+                    // that the same responsive UI is reachable by resizing the
+                    // native window on a laptop.
+                    .inner_size(1360.0, 900.0)
+                    .min_inner_size(720.0, 520.0)
+                    .theme(Some(tauri::Theme::Dark))
                     .center()
                     .on_navigation(move |url| {
                         let text = url.as_str();

@@ -27,11 +27,26 @@ its tool loop; its own agent runs through the providers you configure.
 
 ## Providers and models
 
-`provider.*` stores providers (Anthropic, OpenAI, Gemini through its
-OpenAI-compatible endpoint, OpenRouter, Groq, Ollama, LM Studio, any
-OpenAI-compatible URL). Keys live in owner-only files or are read from an
+`provider.*` stores providers. The presets are Anthropic, OpenAI, DeepSeek,
+Moonshot AI (Kimi), Zhipu AI (GLM), Google Gemini, xAI, Mistral, Groq, Together,
+Fireworks, OpenRouter, Ollama, LM Studio, and any OpenAI-compatible URL, in that
+order of usefulness. Keys live in owner-only files or are read from an
 environment variable; they are never in the database, logs, API responses or
 model context.
+
+How models are found depends on the vendor, and devd asks each one in its own
+way: Anthropic's `GET /v1/models`, the OpenAI-compatible `GET /models`, Ollama's
+native `GET /api/tags` (which works even when the compatibility layer is
+missing), and a maintained catalogue for vendors whose chat API has no listing
+endpoint. `provider.discover_local` finds a running Ollama or LM Studio on this
+machine without sending anything outside it.
+
+`provider.test` checks the key and the endpoint. `provider.verify` runs one
+real request that must call a named tool, so devd only says a model can use
+tools when the provider actually returned a tool call. Failures say what is
+wrong: a rejected key, an exhausted quota, an unpaid balance, a rate limit and
+its retry window, a context window that is too small, or a model this account
+cannot use.
 
 Two different questions, two different sources:
 

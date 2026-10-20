@@ -473,7 +473,7 @@ impl Hub {
                     last_err = format!("{} has no API key. Add one in Models (or set {}).", provider.label, provider.key_env.clone().unwrap_or_else(|| "its key variable".into()));
                     continue;
                 }
-                let request = ChatRequest { model: model.clone(), system: system.clone(), messages: messages.clone(), tools: tools.clone(), max_tokens: 16_000 };
+                let request = ChatRequest { model: model.clone(), system: system.clone(), messages: messages.clone(), tools: tools.clone(), tool_choice: None, max_tokens: 16_000 };
                 match providers::chat(provider, key.as_deref(), &request) {
                     Ok(r) => {
                         if i > 0 {

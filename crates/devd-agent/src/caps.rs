@@ -91,6 +91,15 @@ struct SaveProvider {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct VerifyProvider {
+    /// Provider id.
+    id: String,
+    /// Model to test. Defaults to the model chosen for the provider.
+    #[serde(default)]
+    model: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct SearchArgs {
     /// What to look for. Every word must match.
     query: String,
@@ -429,6 +438,8 @@ struct FsDelete {
 
 fn provider_view(ctx: &Ctx, p: &Provider) -> Value {
     let key = secrets::read_key(&ctx.paths, p);
+    let pre = providers::preset(&p.id);
+    let loopback = p.base_url.contains("localhost") || p.base_url.contains("127.0.0.1") || p.base_url.contains("[::1]");
     json!({
         "id": p.id, "kind": p.kind, "label": p.label, "base_url": p.base_url,
         "key_env": p.key_env, "default_model": p.default_model,
@@ -436,7 +447,14 @@ fn provider_view(ctx: &Ctx, p: &Provider) -> Value {
         "key_source": secrets::key_source(&ctx.paths, p),
         "key_hint": key.as_deref().map(secrets::mask),
         "has_key": key.is_some(),
-        "needs_key": p.kind != "openai-compatible" || !p.base_url.contains("localhost") && !p.base_url.contains("127.0.0.1"),
+        "needs_key": pre.as_ref().map(|x| x.requires_key).unwrap_or(!loopback),
+        "category": pre.as_ref().map(|x| x.category.clone()).unwrap_or_else(|| if loopback { "local".into() } else { "custom".into() }),
+        "tools": pre.as_ref().map(|x| x.tools.clone()).unwrap_or_else(|| "model".into()),
+        "discovery": pre.as_ref().map(|x| x.discovery.clone()).unwrap_or_else(|| "openai".into()),
+        "suggested_model": pre.as_ref().and_then(|x| x.suggested_model.clone()),
+        "key_url": pre.as_ref().and_then(|x| x.key_url.clone()),
+        "docs_url": pre.as_ref().map(|x| x.docs_url.clone()),
+        "models_from": pre.as_ref().map(|x| x.models_from.clone()),
         "created_at": p.created_at, "updated_at": p.updated_at,
     })
 }
@@ -671,7 +689,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
         })?;
 
     // ----------------------------------------------------------- providers
-    add::<NoArgs, _, _>(reg, "provider.presets", "Provider presets", "Ready-made configurations for Anthropic, OpenAI, Gemini, OpenRouter, Groq, Ollama, LM Studio and any OpenAI-compatible endpoint, with where to get a key, the API documentation and how models are listed.",
+    add::<NoArgs, _, _>(reg, "provider.presets", "Provider presets", "Ready-made configurations, in the order they are most useful here: Anthropic, OpenAI, DeepSeek, Moonshot AI (Kimi), Zhipu AI (GLM), Google Gemini, xAI, Mistral, Groq, Together, Fireworks, OpenRouter, Ollama and LM Studio, plus any OpenAI-compatible endpoint. Each carries where to get a key, the API documentation, how its models are discovered (live list, Ollama's native list, or a maintained catalogue), the tool-calling the vendor documents, and whether it runs locally.",
         Tier::Read, Effect::Read, true, false,
         |_, _| simple("provider.presets", "list provider presets"),
         |_, _| Ok(Outcome::with_data("provider presets", serde_json::to_value(providers::presets())?)))?;
@@ -746,7 +764,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             Ok(Outcome::ok(format!("removed {}", a.id)))
         })?;
 
-    add::<IdArgs, _, _>(reg, "provider.test", "Test a provider", "Checks that the base URL is reachable and the key is accepted by asking the provider for its model list. Reports the actual error (bad key, rate limit, unreachable host) rather than a generic failure.",
+    add::<IdArgs, _, _>(reg, "provider.test", "Test a provider", "Checks that the base URL is reachable and the key is accepted by asking for the model list. Reports the actual error (bad key, quota, rate limit, unreachable host, wrong base URL) rather than a generic failure. It does not run a completion; provider.verify does that and checks tool calling.",
         Tier::Exec, Effect::Remote, false, false,
         |_, a| simple("provider.test", format!("contact `{}` and list its models", a.id)),
         |ctx, a| {
@@ -759,7 +777,22 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             Ok(o)
         })?;
 
-    add::<IdArgs, _, _>(reg, "provider.models", "Fetch a provider's models", "Reads the provider's own model list with its key (Anthropic GET /v1/models, others GET /models) and caches it. This is authoritative for the account: it shows exactly what this key may use.",
+    add::<VerifyProvider, _, _>(reg, "provider.verify", "Prove one model works", "Runs one short, real request against the chosen model and forces a named tool call. Reports whether text came back and whether the model actually called the tool; tool use is only marked verified when the provider returned a tool call. Costs a few tokens. The result is cached in the provider's check.",
+        Tier::Exec, Effect::Remote, false, false,
+        |_, a| simple("provider.verify", format!("send one test request to `{}`", a.id)),
+        |ctx, a| {
+            let p = find_provider(ctx, &a.id)?;
+            let key = secrets::read_key(&ctx.paths, &p);
+            let model = a.model.clone().or_else(|| p.default_model.clone()).unwrap_or_default();
+            let r = providers::verify(&p, key.as_deref(), &model);
+            let summary = format!("{} — {}", if r.model.is_empty() { p.label.clone() } else { r.model.clone() }, r.message);
+            let _ = ctx.store.set_provider_check(&p.id, r.ok, &summary, None);
+            let mut o = Outcome::with_data(r.message.clone(), serde_json::to_value(&r)?);
+            o.ok = r.ok;
+            Ok(o)
+        })?;
+
+    add::<IdArgs, _, _>(reg, "provider.models", "Fetch a provider's models", "Reads the provider's model list with its key and caches it. Anthropic uses GET /v1/models; OpenAI-compatible providers use GET /models; Ollama falls back to its native GET /api/tags; Zhipu uses devd's maintained list because its chat API has no listing endpoint. This is authoritative for the account: it shows exactly what this key may use.",
         Tier::Exec, Effect::Remote, false, false,
         |_, a| simple("provider.models", format!("list the models `{}` offers", a.id)),
         |ctx, a| {
@@ -775,6 +808,15 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             let _ = ctx.store.set_provider_check(&p.id, true, &format!("{} model(s) listed", models.len()), Some(models.len() as i64));
             ctx.store.replace_catalogue(&format!("provider:{}", p.id), &models)?;
             Ok(Outcome::with_data(format!("{} model(s) from {}", models.len(), p.label), serde_json::to_value(&models)?))
+        })?;
+
+    add::<NoArgs, _, _>(reg, "provider.discover_local", "Find local model servers", "Probes Ollama on 127.0.0.1:11434 and LM Studio on 127.0.0.1:1234. Nothing leaves the machine. Reports whether each is running and how many models it has; it installs or starts nothing.",
+        Tier::Read, Effect::Read, true, false,
+        |_, _| simple("provider.discover_local", "probe local model servers"),
+        |_, _| {
+            let found = providers::discover_local();
+            let running = found.iter().filter(|f| f.running).count();
+            Ok(Outcome::with_data(format!("{} local server(s) answering", running), serde_json::to_value(&found)?))
         })?;
 
     add::<NoArgs, _, _>(reg, "models.refresh_official", "Fetch Anthropic's official model list", "Reads the Claude models overview in Anthropic's documentation and caches each model's API id, description, pricing, context window, maximum output and retirement date. Needs no API key.",

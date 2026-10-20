@@ -16,7 +16,7 @@
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::state::{Overlay, PromptKind, State, View};
@@ -25,37 +25,65 @@ use crate::state::{Overlay, PromptKind, State, View};
 ///
 /// These are functions rather than constants because a `Style` with a modifier
 /// is built by method calls, which cannot run in a `const` initialiser.
+/// Whether the reader asked for no colour (`NO_COLOR`, the convention most
+/// terminals and CLIs honour). Meaning then has to come from words, symbols and
+/// weight alone, which is also the accessible default.
+fn monochrome() -> bool {
+    std::env::var_os("NO_COLOR")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false)
+}
+
+fn tone(colour: Color) -> Color {
+    if monochrome() {
+        Color::Reset
+    } else {
+        colour
+    }
+}
+
 /// The cursor row.
 fn cursor() -> Style {
     Style::new().add_modifier(Modifier::REVERSED)
 }
 /// A section heading.
 fn heading() -> Style {
-    Style::new().fg(Color::Rgb(242, 242, 242)).add_modifier(Modifier::BOLD)
+    Style::new()
+        .fg(tone(Color::Rgb(237, 237, 240)))
+        .add_modifier(Modifier::BOLD)
 }
 /// Machine data: paths, hashes, capability ids.
 fn data() -> Style {
-    Style::new().fg(Color::Rgb(124, 245, 192))
+    Style::new().fg(tone(Color::Rgb(124, 245, 192)))
 }
 /// A failure.
 fn fail() -> Style {
-    Style::new().fg(Color::Rgb(255, 107, 107)).add_modifier(Modifier::BOLD)
+    Style::new()
+        .fg(tone(Color::Rgb(255, 122, 122)))
+        .add_modifier(Modifier::BOLD)
 }
 /// Something that needs the reader's attention but is not a failure.
 fn warn() -> Style {
-    Style::new().fg(Color::Rgb(250, 204, 21))
+    Style::new().fg(tone(Color::Rgb(242, 201, 76)))
 }
 /// A success.
 fn ok() -> Style {
-    Style::new().fg(Color::Rgb(74, 222, 128))
+    Style::new().fg(tone(Color::Rgb(86, 217, 138)))
 }
 /// Secondary text.
 fn quiet() -> Style {
-    Style::new().fg(Color::Rgb(118, 118, 118))
+    if monochrome() {
+        Style::new().add_modifier(Modifier::DIM)
+    } else {
+        Style::new().fg(Color::Rgb(138, 138, 148))
+    }
 }
-/// The current tab.
+/// The current tab. Reverse video works on every terminal and does not depend
+/// on the reader being able to tell two colours apart.
 fn tab_active() -> Style {
-    Style::new().fg(Color::Rgb(124, 245, 192)).add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+    Style::new()
+        .fg(tone(Color::Rgb(124, 245, 192)))
+        .add_modifier(Modifier::BOLD | Modifier::REVERSED)
 }
 
 /// Draw one frame.
@@ -75,6 +103,10 @@ pub fn render(frame: &mut Frame, state: &State) {
 }
 
 fn render_header(frame: &mut Frame, state: &State, area: Rect) {
+    let [top, tabs_area] =
+        Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(area);
+    let width = area.width as usize;
+
     let mut tabs: Vec<Span> = Vec::new();
     for view in View::ALL {
         let style = if view == state.view {
@@ -88,17 +120,45 @@ fn render_header(frame: &mut Frame, state: &State, area: Rect) {
         ));
     }
 
+    // Identity on the left, the state of the selected repository on the right.
+    // The right side is what a reader checks first, so it is allowed to win the
+    // space: the home path is shortened rather than pushing it off-screen.
+    let summary = match (&state.status, &state.repo) {
+        (Some(status), Some(repo)) => format!(
+            "{}  {}",
+            truncate(repo, 28),
+            status.summary()
+        ),
+        (Some(status), None) => status.summary(),
+        _ => "no repository selected".to_string(),
+    };
+    let summary_width = summary.chars().count().min(width / 2);
+    let left_width = width.saturating_sub(summary_width + 1);
+    let [left, right] = Layout::horizontal([
+        Constraint::Length(left_width as u16),
+        Constraint::Min(1),
+    ])
+    .areas(top);
+    let prefix = format!(" devd {}  ", state.version);
+    let suffix = format!("  git {}", state.git_version);
+    let room = left_width.saturating_sub(prefix.chars().count() + suffix.chars().count());
     let identity = Line::from(vec![
         Span::styled(" devd ", heading()),
         Span::styled(state.version.clone(), data()),
         Span::raw("  "),
-        Span::styled(sanitise(&state.home), quiet()),
-        Span::raw("  git "),
-        Span::styled(sanitise(&state.git_version), quiet()),
+        Span::styled(truncate(&state.home, room.max(8)), quiet()),
+        Span::styled(suffix, quiet()),
     ]);
-
-    let paragraph = Paragraph::new(vec![identity, Line::from(tabs)]);
-    frame.render_widget(paragraph, area);
+    frame.render_widget(Paragraph::new(identity), left);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            format!("{summary} "),
+            quiet(),
+        )))
+        .alignment(ratatui::layout::Alignment::Right),
+        right,
+    );
+    frame.render_widget(Paragraph::new(Line::from(tabs)), tabs_area);
 }
 
 fn render_body(frame: &mut Frame, state: &State, area: Rect) {
@@ -333,6 +393,7 @@ fn render_body(frame: &mut Frame, state: &State, area: Rect) {
 
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
         .title(format!(" {title} "));
 
     if state.view == View::Dashboard || state.view == View::Help {
@@ -363,9 +424,38 @@ fn render_body(frame: &mut Frame, state: &State, area: Rect) {
 fn list(state: &State, title: &str, rows: Vec<Line<'static>>) -> (String, Vec<Line<'static>>) {
     let title = format!("{title} ({})", rows.len());
     if rows.is_empty() {
-        return (title, vec![empty_line(state)]);
+        return (
+            title,
+            vec![
+                empty_line(state),
+                Line::from(""),
+                Line::from(Span::styled(
+                    format!("  {}", empty_hint(state)),
+                    quiet(),
+                )),
+            ],
+        );
     }
     (title, rows)
+}
+
+/// A second line for an empty panel: what to press, not just what is missing.
+fn empty_hint(state: &State) -> &'static str {
+    match state.view {
+        View::Projects => "press t to track a repository by path",
+        View::Changes if state.repo.is_none() => "press 2 to choose a project, or t to add one",
+        View::Changes => "nothing to stage; press c to commit the last state",
+        View::History if state.repo.is_none() => "press 2 to choose a project first",
+        View::History => "commits appear here after the first one",
+        View::Branches if state.repo.is_none() => "press 2 to choose a project first",
+        View::Branches => "press n to create a branch",
+        View::Capabilities => "press / and type part of a capability id",
+        View::Activity => "operations are recorded as they run",
+        View::Team => "devd team start \"what you want built\" begins one",
+        View::Inbox => "approvals and questions from agents arrive here",
+        View::Doctor => "press r to run the checks again",
+        _ => "press ? for the keys that apply here",
+    }
 }
 
 fn empty_line(state: &State) -> Line<'static> {
@@ -440,6 +530,20 @@ fn dashboard(state: &State) -> (String, Vec<Line<'static>>) {
     let mut lines: Vec<Line> = Vec::new();
 
     let failing = state.failing_checks();
+    // One sentence first: what a reader wants to know before anything else.
+    let (summary, summary_style) = if state.checks.is_empty() {
+        ("environment not checked yet".to_string(), quiet())
+    } else if failing > 0 {
+        (format!("{failing} check(s) need attention"), fail())
+    } else {
+        ("environment is healthy".to_string(), ok())
+    };
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(summary, summary_style),
+    ]));
+    lines.push(Line::from(""));
+
     lines.push(Line::from(Span::styled("Environment", heading())));
     if state.checks.is_empty() {
         lines.push(Line::from(Span::styled("  no checks have run", quiet())));
@@ -565,13 +669,22 @@ fn help_lines() -> Vec<Line<'static>> {
 }
 
 fn render_footer(frame: &mut Frame, state: &State, area: Rect) {
-    let style = if state.message_is_error {
-        fail()
+    let width = area.width as usize;
+    let (glyph, style) = if state.message_is_error {
+        ("!", fail())
     } else {
-        quiet()
+        ("·", quiet())
     };
-    let message = Line::from(Span::styled(format!(" {}", state.message), style));
-    let hints = Line::from(Span::styled(format!(" {}", hints_for(state.view)), quiet()));
+    // One line for what just happened, one for what can be pressed next. Both
+    // are cut to the terminal width rather than wrapping into the hint line.
+    let message = Line::from(vec![
+        Span::styled(format!(" {glyph} "), style),
+        Span::styled(truncate(&state.message, width.saturating_sub(3)), style),
+    ]);
+    let hints = Line::from(Span::styled(
+        format!(" {}", truncate(hints_for(state.view), width.saturating_sub(2))),
+        quiet(),
+    ));
     frame.render_widget(Paragraph::new(vec![message, hints]), area);
 }
 
@@ -611,6 +724,7 @@ fn render_overlay(frame: &mut Frame, state: &State, area: Rect) {
             };
             let block = Block::default()
                 .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
                 .title(format!(" {} ", kind.title()));
             frame.render_widget(
                 Paragraph::new(vec![
@@ -631,7 +745,8 @@ fn render_overlay(frame: &mut Frame, state: &State, area: Rect) {
             body.push(Line::from(vec![Span::styled(" > ", data()), Span::raw(input.clone()), Span::styled("_", quiet())]));
             body.push(Line::from(Span::styled(" Enter accept (blank keeps the default)   Esc cancel", quiet())));
             frame.render_widget(
-                Paragraph::new(body).wrap(Wrap { trim: false }).block(Block::default().borders(Borders::ALL).title(format!(" {title} "))),
+                Paragraph::new(body).wrap(Wrap { trim: false }).block(Block::default().borders(Borders::ALL)
+        .border_type(BorderType::Rounded).title(format!(" {title} "))),
                 rect,
             );
         }
@@ -649,6 +764,7 @@ fn render_overlay(frame: &mut Frame, state: &State, area: Rect) {
             let rendered: Vec<Line> = lines.iter().map(|l| Line::from(l.clone())).collect();
             let block = Block::default()
                 .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
                 .title(format!(" {title} - j/k scroll, Esc to close "));
             frame.render_widget(
                 Paragraph::new(rendered)
@@ -709,6 +825,7 @@ fn render_overlay(frame: &mut Frame, state: &State, area: Rect) {
 
             let block = Block::default()
                 .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
                 .title(if destructive {
                     " Confirm a destructive operation "
                 } else {

@@ -699,7 +699,10 @@ fn parallel_implementers_work_in_their_own_copies_and_are_merged() {
     for k in ["alpha", "beta"] {
         let t = tasks.iter().find(|t| t["key"] == k).unwrap();
         assert!(t["branch"].as_str().unwrap().starts_with("devd/"), "{t}");
-        assert!(t["workdir"].as_str().unwrap().contains(".devd/worktrees"), "isolated: {t}");
+        // The worktree path is built with the host's separator, so compare it
+        // in one form on every platform.
+        let workdir = t["workdir"].as_str().unwrap().replace('\\', "/");
+        assert!(workdir.contains(".devd/worktrees"), "isolated: {t}");
     }
     let log = std::process::Command::new("git").args(["log", "--oneline"]).current_dir(&dir).output().unwrap();
     assert!(String::from_utf8_lossy(&log.stdout).matches("Merge ").count() >= 2, "{}", String::from_utf8_lossy(&log.stdout));

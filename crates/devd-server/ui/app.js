@@ -212,6 +212,15 @@
     return esc(value);
   }
 
+  /* Long tool output is bounded once, at render time, with a note that says so.
+     The complete text stays in the transcript; the page never tries to lay out
+     a megabyte of monospace. */
+  function clip(text, max) {
+    var s = String(text == null ? "" : text);
+    if (s.length <= max) return s;
+    return s.slice(0, max) + "\n… " + (s.length - max) + " more characters (full output is in the transcript)";
+  }
+
   function el(id) {
     return document.getElementById(id);
   }
@@ -319,6 +328,30 @@
     setTimeout(function () {
       if (node.parentNode) node.parentNode.removeChild(node);
     }, kind === "error" ? 9000 : 4200);
+  }
+
+  function copyText(text, done) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, function () { legacyCopy(text, done); });
+    } else {
+      legacyCopy(text, done);
+    }
+  }
+
+  function legacyCopy(text, done) {
+    var area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "");
+    area.style.cssText = "position:fixed;top:0;left:0;opacity:0";
+    document.body.appendChild(area);
+    area.select();
+    try {
+      document.execCommand("copy");
+      done();
+    } catch (e) {
+      toast("error", "The browser refused clipboard access");
+    }
+    document.body.removeChild(area);
   }
 
   // ------------------------------------------------------------------- drawer
@@ -671,6 +704,12 @@
     }).join("");
   }
 
+  var RAIL_ICON = {
+    home: "i-home", inbox: "i-inbox", assistant: "i-spark", projects: "i-folder",
+    agents: "i-terminal", processes: "i-pulse", overview: "i-server", providers: "i-sliders",
+    activity: "i-clock", system: "i-check-circle", capabilities: "i-code"
+  };
+
   function rail() {
     var server = state.server;
     var running = server.services.filter(function (s) { return s.running; }).length;
@@ -702,8 +741,10 @@
       return (group.label ? '<div class="rail-section">' + esc(group.label) + "</div>" : "") +
         group.items.map(function (i) {
           var active = areaOf(state.view) === areaOf(i.view);
-          return '<button type="button" class="rail-item' + (active ? " active" : "") + '" data-action="nav" data-view="' + i.view + '"' + (active ? ' aria-current="page"' : "") + ">" +
-            "<span>" + esc(i.label) + "</span>" +
+          var icon = RAIL_ICON[i.view] || "i-code";
+          return '<button type="button" class="rail-item' + (active ? " active" : "") + '" data-action="nav" data-view="' + i.view + '" data-label="' + attr(i.label) + '" title="' + attr(i.label) + '"' + (active ? ' aria-current="page"' : "") + ">" +
+            '<svg class="icon" aria-hidden="true"><use href="#' + icon + '"></use></svg>' +
+            '<span class="rail-label">' + esc(i.label) + "</span>" +
             (i.count !== null && i.count !== undefined ? '<span class="rail-count' + (i.hot ? " rail-count-hot" : "") + '">' + esc(i.count) + "</span>" : "") + "</button>";
         }).join("");
     }).join("");
@@ -1548,11 +1589,14 @@
           '<div class="card-actions"><span class="btn btn-primary">Start</span></div></button>';
       }).join("");
       terminal =
-        '<div class="panel"><div class="panel-head"><span>Start a session</span></div>' +
-        '<div class="panel-body"><label class="field-label" for="agent-new-cwd">Working directory</label>' +
-        '<select class="select mono" id="agent-new-cwd">' + options + "</select>" +
-        '<div class="row-sub" style="margin-top:8px">Each session is its own real process and PTY. Switching tabs, sections or reloading the window does not stop it.</div>' +
-        '<div class="grid grid-3" style="margin-top:14px">' + cards + "</div></div></div>";
+        '<div class="panel"><div class="panel-head"><span>Start a session</span><span class="panel-note">a real PTY, owned by this process</span></div>' +
+        '<div class="panel-body">' +
+        (choices.length
+          ? '<div class="field"><label class="field-label" for="agent-new-cwd">Working directory</label><select class="select mono" id="agent-new-cwd">' + options + "</select></div>"
+          : '<div class="notice">There is no working directory to start in yet. Create a project or a site first; each session runs in one.</div>') +
+        '<div class="row-sub">Switching tabs, sections or reloading the window does not stop a session.</div>' +
+        (cards ? '<div class="grid grid-3" style="margin-top:14px">' + cards + "</div>" : '<div class="empty-inline">No harnesses were found on this machine.</div>') +
+        "</div></div>";
     }
 
     var taskRows = state.tasks.length
@@ -1579,7 +1623,8 @@
         '<aside class="panel session-side">' +
         '<div class="panel-head"><span>Sessions</span><span class="panel-note">' + state.sessions.length + "</span></div>" +
         '<div class="session-list">' + rows + "</div>" +
-        '<div class="session-side-foot"><select class="select mono" id="agent-side-cwd">' + options + "</select>" +
+        '<div class="session-side-foot">' +
+        (choices.length ? '<select class="select mono" id="agent-side-cwd" aria-label="Working directory">' + options + "</select>" : '<div class="row-sub">No working directory yet.</div>') +
         '<div class="inline" style="margin-top:8px">' +
         state.harnesses.map(function (h) {
           return '<button type="button" class="btn btn-mini" data-action="new-session" data-kind="' + attr(h.kind) + '"' +
@@ -1587,7 +1632,7 @@
         }).join("") +
         "</div></div></aside>" +
         '<section class="session-main">' +
-        '<div class="term-tabs">' + (tabs || '<span class="faint">No tabs</span>') + "</div>" +
+        (tabs ? '<div class="term-tabs">' + tabs + "</div>" : "") +
         terminal +
         '<div class="panel"><div class="panel-head"><span>Delegated tasks</span><span class="panel-note">' +
         state.tasks.filter(function (t) { return t.state === "running" || t.state === "starting"; }).length + " running</span></div>" +
@@ -1979,7 +2024,7 @@
       loadProcesses().then(renderProcesses);
     }
     if (p.loading && !p.plan) {
-      el("main").innerHTML = page("Processes", "Supervised project processes from devd.yml.", "", '<div class="loading">Reading the manifest…</div>');
+      el("main").innerHTML = page("Processes", "Supervised project processes from devd.yml.", "", '<div class="loading">Loading…</div>');
       return;
     }
 
@@ -3074,12 +3119,14 @@
       '<div class="page-head"><div><h1 class="page-title">Capabilities</h1>' +
       '<div class="page-sub">' + state.caps.total + " of " +
       ((state.session && state.session.registry.capabilities) || 0) +
-      " - the same registry the CLI and the agent use.</div></div>" +
-      '<div class="page-actions"><input class="input mono" id="cap-search" placeholder="Search" value="' +
-      attr(state.caps.q) + '" style="width:260px"></div></div>' +
+      " - the same registry the CLI and the agent use.</div></div></div>" +
       '<div class="columns">' +
-      '<div class="panel"><div class="panel-body flush"><div class="rows">' +
-      (rows || '<div class="empty">No matches</div>') +
+      '<div class="panel"><div class="panel-head"><span>Registry</span><span class="panel-note">' +
+      state.caps.items.length + " shown</span>" +
+      '<input class="input mono cap-search" id="cap-search" placeholder="Filter capabilities" value="' +
+      attr(state.caps.q) + '" aria-label="Filter capabilities"></div>' +
+      '<div class="panel-body flush"><div class="rows">' +
+      (rows || '<div class="empty-inline">No capability matches that filter.</div>') +
       "</div></div></div>" +
       "<div>" + inspector + "</div>" +
       "</div></div>";
@@ -3110,7 +3157,7 @@
           : '<span class="pill pill-bad">refused</span>';
         return (
           "<tr>" +
-          '<td class="cell-mono">' + esc(a.at) + "</td>" +
+          '<td class="cell-mono" title="' + attr(a.at) + '">' + esc(stamp(a.at)) + "</td>" +
           "<td>" + esc(a.actor) + "</td>" +
           '<td class="cell-mono">' + esc(a.capability) + "</td>" +
           '<td class="cell-mono">' + esc(a.tier) + "</td>" +
@@ -3548,6 +3595,18 @@
     return relativeTime(Math.floor(t / 1000));
   }
 
+  /* A timestamp a person can scan: the clock time for today, the date and the
+     time for anything older. The full value stays in the title. */
+  function stamp(iso) {
+    var t = Date.parse(iso);
+    if (!t) return iso || "";
+    var d = new Date(t), now = new Date();
+    var time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    if (d.toDateString() === now.toDateString()) return time;
+    return d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " +
+      d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+
   /* A small, safe Markdown renderer: code fences, inline code, bold, lists, links. */
   function md(text) {
     var parts = String(text || "").split(/```/);
@@ -3576,7 +3635,7 @@
     health: null, healthOpen: false,
     counts: { approvals: 0, questions: 0 },
     home: null, askText: "", askProject: "",
-    providers: null, presets: null, catalogue: null, provForm: null, provBusy: {},
+    providers: null, presets: null, catalogue: null, provForm: null, provBusy: {}, localFound: null,
     threads: null, thread: null, events: [], pending: [], running: false, lastId: 0,
     composer: "", project: "", timer: null, openSteps: {},
     inbox: null, requests: null, history: null
@@ -3720,8 +3779,8 @@
         return '<div class="proj"><span class="step-dot ' + (x.done ? "ok" : "run") + '" style="animation:none"></span><div class="proj-main"><div class="proj-name">' + esc(x.t) + '</div><div class="proj-path">' + esc(x.s) + "</div></div>" +
           (x.done ? '<span class="dim">done</span>' : '<button type="button" class="btn btn-mini btn-primary" data-action="nav" data-view="' + x.v + '">Open</button>') + "</div>";
       }).join("") + "</div>";
-    var needsHtml = started + (needs.length
-      ? '<div class="section-title">Needs you <span class="count">' + needs.length + "</span></div>" + needs.join("")
+    var needsHtml = started + '<div class="section-title">Needs you' + (needs.length ? ' <span class="count">' + needs.length + "</span>" : "") + "</div>" + (needs.length
+      ? needs.join("")
       : '<div class="calm"><span class="health-dot"></span><div><b>Nothing needs you.</b><div class="row-sub">No approvals waiting, no questions from agents, nothing broken.</div></div></div>');
 
     // Projects
@@ -3730,7 +3789,7 @@
         '</div><div class="proj-path mono nowrap" title="' + attr(p.path) + '">' + esc(p.path) + '</div></div><div class="proj-actions">' +
         '<button type="button" class="btn btn-mini" data-action="home-open" data-path="' + attr(p.path) + '">Develop</button>' +
         (ready ? '<button type="button" class="btn btn-mini" data-action="home-chat" data-path="' + attr(p.path) + '">Ask</button>' : "") + "</div></div>";
-    }).join("") || '<div class="empty-inline">No projects yet.</div>';
+    }).join("") || '<div class="empty"><div class="empty-title">No projects yet</div><div class="empty-hint">Create one from a stack, or point devd at a repository that already exists on disk.</div><div class="empty-actions"><button type="button" class="btn btn-primary btn-mini" data-action="nav" data-view="create">Create a project</button><button type="button" class="btn btn-mini" data-action="nav" data-view="projects">Import</button></div></div>';
 
     // Working now
     var live = [];
@@ -3809,84 +3868,145 @@
       var cell = function (i) {
         var a = mine[i] || {};
         var opts = '<option value="">' + (i ? "no fallback" : "use the default provider") + "</option>" + provs.map(function (p) { return '<option value="' + attr(p.id) + '"' + (a.provider === p.id ? " selected" : "") + ">" + esc(p.label) + "</option>"; }).join("");
-        return '<select class="input" id="rm-' + role + "-p" + i + '" style="max-width:150px">' + opts + '</select><input class="input mono" list="rm-models" id="rm-' + role + "-m" + i + '" value="' + attr(a.model || "") + '" placeholder="model" spellcheck="false" style="max-width:220px">' +
-          (a.model ? '<span class="pill ' + (a.status === "available" ? "pill-ok" : a.status === "missing" ? "pill-bad" : "") + '" title="' + (a.status === "available" ? "This provider's own list includes it" : a.status === "missing" ? "Not in the list this key can see. Fetch the provider's models to refresh it." : "Fetch the provider's models to check this account can use it") + '">' + esc(a.status) + "</span>" : "");
+        return '<div class="inline"><select class="input role-provider" id="rm-' + role + "-p" + i + '" aria-label="Provider for ' + attr(role) + '">' + opts + '</select><input class="input mono role-model" list="rm-models" id="rm-' + role + "-m" + i + '" value="' + attr(a.model || "") + '" placeholder="model" spellcheck="false" aria-label="Model for ' + attr(role) + '">' +
+          (a.model ? '<span class="pill ' + (a.status === "available" ? "pill-ok" : a.status === "missing" ? "pill-bad" : "") + '" title="' + (a.status === "available" ? "This provider's own list includes it" : a.status === "missing" ? "Not in the list this key can see. Fetch the provider's models to refresh it." : "Fetch the provider's models to check this account can use it") + '">' + esc(a.status) + "</span>" : "") + "</div>";
       };
       var i = info[role] || { title: "Everything else", summary: "Used when a kind of work has no model of its own, and for the assistant." };
-      return '<tr><td><div class="cell-strong">' + esc(i.title || role) + '</div><div class="cell-dim">' + esc(i.summary) + "</div></td><td><div class=\"inline\">" + cell(0) + "</div></td><td><div class=\"inline\">" + cell(1) + '</div></td><td><button type="button" class="btn btn-mini btn-primary" data-action="role-save" data-role="' + attr(role) + '">Save</button></td></tr>';
+      return '<tr><td><div class="cell-strong">' + esc(i.title || role) + '</div><div class="cell-dim">' + esc(i.summary) + "</div></td><td>" + cell(0) + "</td><td>" + cell(1) + '</td><td><button type="button" class="btn btn-mini btn-primary" data-action="role-save" data-role="' + attr(role) + '">Save</button></td></tr>';
     }).join("");
     var all = {}; (AI.catalogue || []).forEach(function (m) { all[m.model_id] = 1; });
-    return '<div class="section-title">Which model does which work</div><div class="panel"><div class="panel-body flush"><table class="table"><thead><tr><th>Work</th><th>First choice</th><th>Fallback if it fails</th><th></th></tr></thead><tbody>' + rows + "</tbody></table><datalist id=\"rm-models\">" + Object.keys(all).map(function (m) { return '<option value="' + attr(m) + '"></option>'; }).join("") + "</datalist></div>" +
+    return '<div class="section-title">Which model does which work</div><div class="panel"><div class="table-wrap"><table class="table roles-table"><thead><tr><th>Work</th><th>First choice</th><th>Fallback if it fails</th><th></th></tr></thead><tbody>' + rows + "</tbody></table><datalist id=\"rm-models\">" + Object.keys(all).map(function (m) { return '<option value="' + attr(m) + '"></option>'; }).join("") + "</datalist></div>" +
       '<div class="panel-body panel-foot row-sub">The fallback is used only when the first choice fails, and only the providers you list here are ever used. A conversation where you pick a model yourself never falls back. Each reply records which model answered and why.</div></div>';
+  }
+
+  function providerChips(p) {
+    var out = [];
+    if (p.category === "local") out.push('<span class="cap cap-accent">local</span>');
+    else if (p.category === "aggregator") out.push('<span class="cap">aggregator</span>');
+    if (p.tools === "documented") out.push('<span class="cap cap-ok">tools documented</span>');
+    else if (p.tools === "none") out.push('<span class="cap cap-warn">no tool API</span>');
+    else out.push('<span class="cap">tools: model-dependent</span>');
+    if (p.discovery === "catalog") out.push('<span class="cap">maintained list</span>');
+    if (p.discovery === "ollama") out.push('<span class="cap">native discovery</span>');
+    if (p.needs_key && !p.has_key) out.push('<span class="cap cap-warn">no key</span>');
+    if (!p.needs_key) out.push('<span class="cap">no key needed</span>');
+    return '<div class="caps">' + out.join("") + "</div>";
+  }
+
+  function providerCard(p) {
+    var busy = AI.provBusy[p.id];
+    var models = modelOptions(p.id);
+    var source = p.key_source === "env" ? "from " + p.key_env : p.has_key ? "stored privately" : "";
+    var keyState = p.has_key
+      ? '<span class="pill pill-ok" title="' + attr(source) + '">key ' + esc(p.key_hint || "") + "</span>"
+      : p.needs_key ? '<span class="pill pill-warn">no key</span>' : '<span class="pill">none needed</span>';
+    var opts = models.map(function (m) { return '<option value="' + attr(m.model_id) + '"></option>'; }).join("");
+    var result = AI.provBusy[p.id + ":msg"];
+    return '<article class="provider' + (p.is_default ? " is-default" : "") + '">' +
+      "<div>" +
+        '<div class="provider-name">' + esc(p.label) +
+          (p.is_default ? ' <span class="pill pill-accent">default</span>' : "") +
+          (p.enabled ? "" : ' <span class="pill">disabled</span>') +
+          ' <span class="pill">' + esc(p.kind) + "</span></div>" +
+        '<div class="provider-meta">' + esc(p.base_url) + "</div>" +
+        providerChips(p) +
+        '<dl class="provider-facts">' +
+          '<div class="provider-fact"><dt>Model</dt><dd><input class="input mono" list="models-' + attr(p.id) + '" data-prov-model="' + attr(p.id) + '" value="' + attr(p.default_model || "") + '" placeholder="choose a model" spellcheck="false" aria-label="Default model for ' + attr(p.label) + '"><datalist id="models-' + attr(p.id) + '">' + opts + "</datalist></dd></div>" +
+          '<div class="provider-fact"><dt>API key</dt><dd>' + keyState + "</dd></div>" +
+          '<div class="provider-fact"><dt>Model list</dt><dd>' + (models.length ? models.length + " known" : "not fetched") + "</dd></div>" +
+          '<div class="provider-fact"><dt>Discovery</dt><dd>' + esc(p.models_from || p.discovery) + "</dd></div>" +
+        "</dl>" +
+        (result ? '<div class="notice ' + (AI.provBusy[p.id + ":ok"] ? "notice-ok" : "notice-bad") + ' provider-note">' + esc(result) + "</div>" : "") +
+      "</div>" +
+      '<div class="provider-actions">' +
+        '<button type="button" class="btn btn-mini" data-action="prov-test" data-id="' + attr(p.id) + '"' + (busy ? " disabled" : "") + ">Test</button>" +
+        '<button type="button" class="btn btn-mini" data-action="prov-models" data-id="' + attr(p.id) + '"' + (busy ? " disabled" : "") + ">Fetch models</button>" +
+        '<button type="button" class="btn btn-mini btn-primary" data-action="prov-verify" data-id="' + attr(p.id) + '"' + (busy || !p.default_model ? " disabled" : "") + ' title="' + attr(p.default_model ? "Run one real request against " + p.default_model + " and force a tool call" : "Choose a model first") + '">Verify model</button>' +
+        '<button type="button" class="btn btn-mini" data-action="prov-edit" data-id="' + attr(p.id) + '">Edit</button>' +
+        (p.is_default ? "" : '<button type="button" class="btn btn-mini" data-action="prov-default" data-id="' + attr(p.id) + '">Make default</button>') +
+        '<button type="button" class="btn btn-mini btn-danger" data-action="prov-remove" data-id="' + attr(p.id) + '">Remove</button>' +
+      "</div></article>";
+  }
+
+  function providerForm(f) {
+    var pr = (AI.presets || []).filter(function (x) { return x.id === f.preset; })[0] || {};
+    return '<div class="panel"><div class="panel-head"><span>' + (f.editing ? "Edit " : "Add ") + esc(f.label || pr.label || "provider") + '</span><button type="button" class="btn btn-ghost btn-mini" data-action="prov-cancel">Close</button></div><div class="panel-body two-col">' +
+      "<div>" +
+      '<div class="field"><label class="field-label" for="pf-id">Id</label><input class="input mono" id="pf-id" data-pf="id" value="' + attr(f.id) + '"' + (f.editing ? " disabled" : "") + ' spellcheck="false"></div>' +
+      '<div class="field"><label class="field-label" for="pf-base">Base URL</label><input class="input mono" id="pf-base" data-pf="base_url" value="' + attr(f.base_url) + '" spellcheck="false"><div class="row-sub">https only (plain http is allowed for localhost). The key is sent here, so check it.</div></div>' +
+      '<div class="field"><label class="field-label" for="pf-kind">Wire format</label><select class="input" id="pf-kind" data-pf="kind"><option value="openai-compatible"' + (f.kind !== "anthropic" && f.kind !== "openai" ? " selected" : "") + '>OpenAI-compatible chat</option><option value="openai"' + (f.kind === "openai" ? " selected" : "") + ">OpenAI</option><option value=\"anthropic\"" + (f.kind === "anthropic" ? " selected" : "") + ">Anthropic Messages</option></select></div>" +
+      '<div class="field"><label class="field-label" for="pf-key">API key' + (f.editing ? " (leave empty to keep the current one)" : "") + '</label><input class="input mono" id="pf-key" type="password" autocomplete="off" data-pf="api_key" value="" placeholder="' + (pr.requires_key === false ? "not needed for local servers" : "paste your key") + '"><div class="row-sub">Stored in a file only you can read, never in the database, logs or responses. Or leave empty and set the environment variable below.</div></div>' +
+      '<div class="field"><label class="field-label" for="pf-keyenv">…or read the key from an environment variable</label><input class="input mono" id="pf-keyenv" data-pf="key_env" value="' + attr(f.key_env || "") + '" placeholder="' + attr(pr.key_env || "MY_API_KEY") + '" spellcheck="false"></div>' +
+      '<div class="field"><label class="field-label" for="pf-model">Default model</label><input class="input mono" id="pf-model" list="pf-models" data-pf="default_model" value="' + attr(f.default_model || "") + '" spellcheck="false"><datalist id="pf-models">' + modelOptions(f.id).map(function (m) { return '<option value="' + attr(m.model_id) + '"></option>'; }).join("") + "</datalist></div>" +
+      '<label class="check"><input type="checkbox" data-pf="make_default"' + (f.make_default ? " checked" : "") + "> Use for new conversations</label>" +
+      '<div class="inline" style="margin-top:14px"><button type="button" class="btn btn-primary" data-action="prov-save">' + (f.editing ? "Save" : "Add provider") + "</button></div></div>" +
+      '<div><div class="field-label">API setup</div>' +
+      (pr.key_url ? '<div class="row-sub">1. Create a key: <a class="link" href="' + attr(pr.key_url) + '" target="_blank" rel="noopener noreferrer">' + esc(pr.key_url) + "</a></div>" : '<div class="row-sub">No key is needed for a local server. Make sure it is running.</div>') +
+      '<div class="row-sub">2. Paste it here, or export it: <span class="mono">export ' + esc(pr.key_env || "API_KEY") + "=…</span></div>" +
+      '<div class="row-sub">3. Test the connection, fetch the model list, pick a default model.</div>' +
+      '<div class="row-sub">Docs: <a class="link" href="' + attr(pr.docs_url || "#") + '" target="_blank" rel="noopener noreferrer">' + esc(pr.docs_url || "") + "</a></div>" +
+      '<div class="row-sub">Models come from: ' + esc(pr.models_from || "") + "</div>" +
+      (pr.notes ? '<div class="notice" style="margin-top:8px">' + esc(pr.notes) + "</div>" : "") +
+      '<div class="field-label" style="margin-top:12px">The request devd sends</div><pre class="log-block">' + esc(curlExample(f.kind, f.base_url || pr.base_url, pr.key_env)) + "</pre></div></div></div>";
+  }
+
+  function localPanel() {
+    if (!AI.localFound) return "";
+    var rows = AI.localFound.map(function (f) {
+      var have = (AI.providers || []).some(function (p) { return p.id === f.preset; });
+      return '<div class="live"><span class="dot ' + (f.running ? "dot-ok" : "dot-off") + '"></span><span class="grow"><b>' + esc(f.label) + '</b> <span class="dim">' + esc(f.message) + "</span></span>" +
+        (f.running && !have ? '<button type="button" class="btn btn-mini btn-primary" data-action="prov-new" data-preset="' + attr(f.preset) + '">Add it</button>' : "") + "</div>";
+    }).join("");
+    return '<div class="section-title">On this machine</div><div class="panel">' + rows + "</div>";
+  }
+
+  function modelPanels() {
+    var official = (AI.catalogue || []).filter(function (m) { return m.source === "anthropic-docs"; });
+    var offRows = official.map(function (m) {
+      return '<tr><td class="cell-mono">' + esc(m.model_id) + '</td><td class="cell-strong">' + esc(m.display) + "</td><td>" + tok(m.context_window) + "</td><td>" + tok(m.max_output) + "</td><td>" + money(m.input_price) + " / " + money(m.output_price) + '</td><td class="dim">' + esc(m.retirement || "") + "</td>" +
+        '<td><button type="button" class="btn btn-mini" data-action="prov-use-model" data-model="' + attr(m.model_id) + '">Use</button></td></tr>';
+    }).join("");
+    var out = '<div class="panel"><div class="panel-head"><span>Official Claude models</span><span class="panel-note">' + (official.length ? "fetched " + esc(ago(official[0].fetched_at)) + " from " + '<a class="link" target="_blank" rel="noopener noreferrer" href="https://platform.claude.com/docs/en/about-claude/models/overview">Anthropic docs</a>' : "not fetched yet") + "</span></div>" +
+      (offRows ? '<div class="table-wrap"><table class="table"><thead><tr><th>API id</th><th>Name</th><th>Context</th><th>Max output</th><th>$/MTok in / out</th><th>Retirement</th><th></th></tr></thead><tbody>' + offRows + "</tbody></table></div>" : '<div class="panel-body empty-inline">The official list is read from Anthropic\'s documentation and needs no API key.</div>') +
+      '<div class="panel-body panel-foot"><button type="button" class="btn btn-primary btn-mini" data-action="models-refresh">' + (official.length ? "Refresh from Anthropic" : "Fetch the official list") + "</button></div></div>";
+    out += AI.providers.map(function (p) {
+      var ms = (AI.catalogue || []).filter(function (m) { return m.source === "provider:" + p.id; });
+      if (!ms.length) return "";
+      return '<div class="panel"><div class="panel-head"><span>Models available to ' + esc(p.label) + '</span><span class="panel-note">' + ms.length + " · fetched " + esc(ago(ms[0].fetched_at)) + '</span></div><div class="table-wrap"><table class="table"><tbody>' +
+        ms.slice(0, 60).map(function (m) { return '<tr><td class="cell-mono">' + esc(m.model_id) + '</td><td class="dim">' + esc(m.display === m.model_id ? "" : m.display) + "</td><td>" + tok(m.context_window) + '</td><td><button type="button" class="btn btn-mini" data-action="prov-pick" data-id="' + attr(p.id) + '" data-model="' + attr(m.model_id) + '">Use</button></td></tr>'; }).join("") +
+        (ms.length > 60 ? '<tr><td colspan="4" class="cell-dim">' + (ms.length - 60) + " more models are in the catalogue; the API lists all of them.</td></tr>" : "") +
+        "</tbody></table></div></div>";
+    }).join("");
+    return out;
   }
 
   function renderProviders() {
     if (!AI.providers) return renderLoading();
-    var cards = AI.providers.map(function (p) {
-      var keyState = p.has_key ? pill("ok", p.key_source === "env" ? "key from " + p.key_env : "key " + p.key_hint) : (p.needs_key ? pill("bad", "no key") : pill("", "no key needed"));
-      var busy = AI.provBusy[p.id];
-      var opts = modelOptions(p.id).map(function (m) { return '<option value="' + attr(m.model_id) + '"></option>'; }).join("");
-      return '<div class="panel"><div class="panel-head"><span>' + esc(p.label) + (p.is_default ? ' <span class="pill pill-accent">default</span>' : "") + (p.enabled ? "" : ' <span class="pill">disabled</span>') +
-        '</span><span class="panel-note">' + esc(p.kind) + "</span></div><div class=\"panel-body\">" +
-        '<div class="kv"><dt>Endpoint</dt><dd class="mono">' + esc(p.base_url) + '</dd></div><div class="kv"><dt>API key</dt><dd>' + keyState + "</dd></div>" +
-        '<div class="kv"><dt>Default model</dt><dd><input class="input mono" list="models-' + attr(p.id) + '" data-prov-model="' + attr(p.id) + '" value="' + attr(p.default_model || "") + '" placeholder="choose a model" spellcheck="false" style="width:260px"><datalist id="models-' + attr(p.id) + '">' + opts + "</datalist></dd></div>" +
-        '<div class="inline" style="margin-top:12px">' +
-        '<button type="button" class="btn btn-mini btn-primary" data-action="prov-test" data-id="' + attr(p.id) + '"' + (busy ? " disabled" : "") + ">Test connection</button>" +
-        '<button type="button" class="btn btn-mini" data-action="prov-models" data-id="' + attr(p.id) + '"' + (busy ? " disabled" : "") + ">Fetch models</button>" +
-        '<button type="button" class="btn btn-mini" data-action="prov-edit" data-id="' + attr(p.id) + '">Edit</button>' +
-        (p.is_default ? "" : '<button type="button" class="btn btn-mini" data-action="prov-default" data-id="' + attr(p.id) + '">Make default</button>') +
-        '<button type="button" class="btn btn-mini btn-danger" data-action="prov-remove" data-id="' + attr(p.id) + '">Remove</button></div>' +
-        (AI.provBusy[p.id + ":msg"] ? '<div class="notice ' + (AI.provBusy[p.id + ":ok"] ? "notice-ok" : "notice-bad") + '" style="margin-top:10px">' + esc(AI.provBusy[p.id + ":msg"]) + "</div>" : "") + "</div></div>";
-    }).join("");
-
+    var cards = AI.providers.map(providerCard).join("");
     var presetCards = (AI.presets || []).map(function (pr) {
-      return '<button type="button" class="preset" data-action="prov-new" data-preset="' + attr(pr.id) + '"><b>' + esc(pr.label) + "</b><span>" + esc(pr.requires_key ? "API key" : "runs locally") + " · " + esc(pr.kind) + "</span></button>";
+      var cat = pr.category === "local" ? "local" : pr.category === "aggregator" ? "aggregator" : "cloud";
+      return '<button type="button" class="preset" data-action="prov-new" data-preset="' + attr(pr.id) + '">' +
+        '<span class="preset-head"><b>' + esc(pr.label) + '</b><span class="preset-cat">' + esc(cat) + "</span></span>" +
+        "<span>" + esc(pr.requires_key ? "Needs an API key" : "No key") + " · " + esc(pr.tools === "documented" ? "tool calling" : "tools depend on the model") + "</span>" +
+        "<small>" + esc(pr.models_from || "") + "</small></button>";
     }).join("");
+    var empty = '<div class="panel"><div class="empty"><div class="empty-icon"><svg class="icon" aria-hidden="true"><use href="#i-sliders"></use></svg></div>' +
+      '<div class="empty-title">No model provider yet</div>' +
+      '<div class="empty-hint">Connect Anthropic, OpenAI, DeepSeek, Kimi, GLM, Gemini, OpenRouter, a local Ollama instance, or any OpenAI-compatible endpoint. Keys are stored privately and never returned by the API.</div>' +
+      '<div class="empty-actions"><a class="btn btn-primary" href="#add-provider">Choose a provider</a></div></div></div>';
 
-    var f = AI.provForm, form = "";
-    if (f) {
-      var pr = (AI.presets || []).filter(function (x) { return x.id === f.preset; })[0] || {};
-      form = '<div class="panel"><div class="panel-head"><span>' + (f.editing ? "Edit " : "Add ") + esc(f.label || pr.label || "provider") + '</span><button type="button" class="btn btn-ghost btn-mini" data-action="prov-cancel">Close</button></div><div class="panel-body two-col">' +
-        "<div>" +
-        '<div class="field"><label class="field-label">Id</label><input class="input mono" data-pf="id" value="' + attr(f.id) + '"' + (f.editing ? " disabled" : "") + ' spellcheck="false"></div>' +
-        '<div class="field"><label class="field-label">Base URL</label><input class="input mono" data-pf="base_url" value="' + attr(f.base_url) + '" spellcheck="false"><div class="row-sub">https only (plain http is allowed for localhost). The key is sent here, so check it.</div></div>' +
-        '<div class="field"><label class="field-label">API key' + (f.editing ? " (leave empty to keep the current one)" : "") + '</label><input class="input mono" type="password" autocomplete="off" data-pf="api_key" value="" placeholder="' + (pr.requires_key === false ? "not needed for local servers" : "paste your key") + '"><div class="row-sub">Stored in a file only you can read, never in the database, logs or responses. Or leave empty and set the environment variable below.</div></div>' +
-        '<div class="field"><label class="field-label">…or read the key from an environment variable</label><input class="input mono" data-pf="key_env" value="' + attr(f.key_env || "") + '" placeholder="' + attr(pr.key_env || "MY_API_KEY") + '" spellcheck="false"></div>' +
-        '<div class="field"><label class="field-label">Default model</label><input class="input mono" list="pf-models" data-pf="default_model" value="' + attr(f.default_model || "") + '" spellcheck="false"><datalist id="pf-models">' + modelOptions(f.id).map(function (m) { return '<option value="' + attr(m.model_id) + '"></option>'; }).join("") + "</datalist></div>" +
-        '<label class="check"><input type="checkbox" data-pf="make_default"' + (f.make_default ? " checked" : "") + "> Use for new conversations</label>" +
-        '<div class="inline" style="margin-top:14px"><button type="button" class="btn btn-primary" data-action="prov-save">' + (f.editing ? "Save" : "Add provider") + "</button></div></div>" +
-        '<div><div class="field-label">API setup</div>' +
-        (pr.key_url ? '<div class="row-sub">1. Create a key: <a class="link" href="' + attr(pr.key_url) + '" target="_blank" rel="noopener noreferrer">' + esc(pr.key_url) + "</a></div>" : '<div class="row-sub">No key is needed for a local server. Make sure it is running.</div>') +
-        '<div class="row-sub">2. Paste it here, or export it: <span class="mono">export ' + esc(pr.key_env || "API_KEY") + "=…</span></div>" +
-        '<div class="row-sub">3. Test the connection, fetch the model list, pick a default model.</div>' +
-        '<div class="row-sub">Docs: <a class="link" href="' + attr(pr.docs_url || "#") + '" target="_blank" rel="noopener noreferrer">' + esc(pr.docs_url || "") + "</a></div>" +
-        '<div class="row-sub">Models come from: ' + esc(pr.models_from || "") + "</div>" +
-        (pr.notes ? '<div class="notice" style="margin-top:8px">' + esc(pr.notes) + "</div>" : "") +
-        '<div class="field-label" style="margin-top:12px">The request devd sends</div><pre class="log-block">' + esc(curlExample(f.kind, f.base_url || pr.base_url, pr.key_env)) + "</pre></div></div></div>";
-    }
-
-    // official catalogue
-    var official = (AI.catalogue || []).filter(function (m) { return m.source === "anthropic-docs"; });
-    var offRows = official.map(function (m) {
-      return "<tr><td class=\"cell-mono\">" + esc(m.model_id) + '</td><td class="cell-strong">' + esc(m.display) + "</td><td>" + tok(m.context_window) + "</td><td>" + tok(m.max_output) + "</td><td>" + money(m.input_price) + " / " + money(m.output_price) + '</td><td class="dim">' + esc(m.retirement || "") + "</td>" +
-        '<td><button type="button" class="btn btn-mini" data-action="prov-use-model" data-model="' + attr(m.model_id) + '">Use</button></td></tr>';
-    }).join("");
-    var offPanel = '<div class="panel"><div class="panel-head"><span>Official Claude models</span><span class="panel-note">' + (official.length ? "fetched " + esc(ago(official[0].fetched_at)) + " from " + '<a class="link" target="_blank" rel="noopener noreferrer" href="https://platform.claude.com/docs/en/about-claude/models/overview">Anthropic docs</a>' : "not fetched yet") + "</span></div>" +
-      (offRows ? '<div class="panel-body flush"><table class="table"><thead><tr><th>API id</th><th>Name</th><th>Context</th><th>Max output</th><th>$/MTok in / out</th><th>Retirement</th><th></th></tr></thead><tbody>' + offRows + "</tbody></table></div>" : '<div class="panel-body empty-inline">The official list is read from Anthropic\'s documentation and needs no API key.</div>') +
-      '<div class="panel-body panel-foot"><button type="button" class="btn btn-primary btn-mini" data-action="models-refresh">' + (official.length ? "Refresh from Anthropic" : "Fetch the official list") + "</button></div></div>";
-
-    var perProvider = AI.providers.map(function (p) {
-      var ms = (AI.catalogue || []).filter(function (m) { return m.source === "provider:" + p.id; });
-      if (!ms.length) return "";
-      return '<div class="panel"><div class="panel-head"><span>Models available to ' + esc(p.label) + '</span><span class="panel-note">' + ms.length + " · fetched " + esc(ago(ms[0].fetched_at)) + "</span></div><div class=\"panel-body flush\"><table class=\"table\"><tbody>" +
-        ms.slice(0, 60).map(function (m) { return '<tr><td class="cell-mono">' + esc(m.model_id) + '</td><td class="dim">' + esc(m.display === m.model_id ? "" : m.display) + "</td><td>" + tok(m.context_window) + '</td><td><button type="button" class="btn btn-mini" data-action="prov-pick" data-id="' + attr(p.id) + '" data-model="' + attr(m.model_id) + '">Use</button></td></tr>'; }).join("") + "</tbody></table></div></div>";
-    }).join("");
-
-    el("main").innerHTML = page("Providers and models",
-      "Where the built-in assistant gets its intelligence. Add a provider, give it a key, choose a model. Keys never leave your machine except to that provider.", "",
-      (cards || '<div class="panel"><div class="panel-body"><b>No provider yet.</b><div class="row-sub">Pick one below. Anthropic is the one the assistant is tuned for.</div></div></div>') +
-      form +
-      rolesPanel() + '<div class="section-title">Add a provider</div><div class="presets">' + presetCards + "</div>" + offPanel + perProvider);
+    el("main").innerHTML = page("Models and providers",
+      "One place to add, test and choose the models the assistant and the agent team use. Test checks the key and lists models; Verify runs one real request and proves whether the model can call tools.",
+      '<button type="button" class="btn" data-action="prov-discover">Find local servers</button>' +
+        '<button type="button" class="btn" data-action="models-refresh">Refresh Claude list</button>',
+      (cards ? '<div class="provider-list">' + cards + "</div>" : empty) +
+      (AI.provForm ? providerForm(AI.provForm) : "") +
+      localPanel() +
+      '<div class="notice">Test and Verify talk only to the provider you configured. Local servers (Ollama, LM Studio) are contacted on this machine only. Nothing is sent to a provider until you run a request.</div>' +
+      rolesPanel() +
+      '<div class="section-title" id="add-provider">Add a provider</div>' +
+      '<div class="preset-grid">' + presetCards + "</div>" +
+      '<div class="section-title">Model catalogue</div>' + modelPanels());
   }
 
   // --------------------------------------------------------------- assistant
@@ -3899,11 +4019,35 @@
   }
   function loadProvidersIfNeeded() { return AI.providers && AI.catalogue ? Promise.resolve() : loadProviders(); }
 
+  /* One sentence for a screen reader when something new arrives. The stream
+     itself is a log that is re-rendered on every poll, so it deliberately does
+     not announce its whole contents again. */
+  function announceEvent(e) {
+    var text = "";
+    if (e.kind === "assistant") {
+      text = (e.data.content || [])
+        .filter(function (b) { return b.type === "text"; })
+        .map(function (b) { return b.text; })
+        .join(" ");
+    } else if (e.kind === "error") {
+      text = e.data.message || "The assistant failed.";
+    } else if (e.kind === "notice") {
+      text = e.data.text || "";
+    }
+    if (!text) return;
+    var node = el("announcer");
+    if (node) node.textContent = "devd: " + clip(text, 300);
+  }
+
   function pollThread(full) {
     if (!AI.thread) return Promise.resolve();
     return read("chat.get", { thread: AI.thread.id, after: full ? 0 : AI.lastId }).then(function (d) {
       if (full) AI.events = [];
-      d.events.forEach(function (e) { AI.events.push(e); AI.lastId = e.id; });
+      d.events.forEach(function (e) {
+        AI.events.push(e);
+        AI.lastId = e.id;
+        if (!full) announceEvent(e);
+      });
       AI.thread = d.thread; AI.pending = d.pending || []; AI.running = d.running;
       var idx = (AI.threads || []).map(function (t) { return t.id; }).indexOf(d.thread.id);
       if (idx >= 0) AI.threads[idx] = d.thread;
@@ -3940,15 +4084,31 @@
     AI.pending.forEach(function (r) { pendingByTool[r.tool_use_id] = r; });
     var html = "";
     AI.events.forEach(function (e) {
-      if (e.kind === "user") html += '<div class="msg msg-user"><div class="bubble">' + md(e.data.text) + "</div></div>";
-      else if (e.kind === "assistant") {
+      var when = shortTime(e.created_at);
+      if (e.kind === "user") {
+        html += '<div class="msg msg-user"><div><div class="bubble">' + md(e.data.text) + '</div><div class="msg-meta">You' + (when ? " · " + when : "") + "</div></div></div>";
+      } else if (e.kind === "assistant") {
         (e.data.content || []).forEach(function (b) {
-          if (b.type === "text" && b.text.trim()) html += '<div class="msg msg-agent"><div class="avatar">d</div><div class="bubble">' + md(b.text) + "</div></div>";
-          else if (b.type === "tool_use") {
+          if (b.type === "text" && b.text.trim()) {
+            html += '<div class="msg msg-agent"><div class="avatar" aria-hidden="true">d</div><div><div class="bubble">' + md(b.text) + '</div><div class="msg-meta">devd' + (when ? " · " + when : "") + "</div></div></div>";
+          } else if (b.type === "tool_use") {
             var c = summarizeCall(b), r = results[b.id], open = AI.openSteps[b.id];
             var pend = pendingByTool[b.id];
-            html += '<div class="step' + (r && r.is_error ? " step-bad" : "") + '"><button type="button" class="step-head" data-action="step-toggle" data-id="' + attr(b.id) + '"><span class="step-dot ' + (pend ? "wait" : r ? (r.is_error ? "bad" : "ok") : "run") + '"></span><span class="mono step-title">' + esc(c.title) + '</span><span class="dim nowrap grow">' + esc(c.detail) + "</span><span>" + (open ? "▾" : "▸") + "</span></button>" +
-              (open ? '<div class="step-body"><div class="field-label">Input</div><pre class="log-block">' + esc(JSON.stringify(b.input, null, 2)) + "</pre>" + (r ? '<div class="field-label">Result</div><pre class="log-block">' + esc(r.content) + "</pre>" : "") + "</div>" : "") + "</div>";
+            var out = r ? clip(String(r.content == null ? "" : r.content), 20000) : "";
+            html += '<div class="step' + (r && r.is_error ? " step-bad" : "") + '">' +
+              '<button type="button" class="step-head" data-action="step-toggle" data-id="' + attr(b.id) + '" aria-expanded="' + (open ? "true" : "false") + '">' +
+              '<span class="step-dot ' + (pend ? "wait" : r ? (r.is_error ? "bad" : "ok") : "run") + '" aria-hidden="true"></span>' +
+              '<span class="step-title">' + esc(c.title) + '</span>' +
+              '<span class="dim nowrap grow">' + esc(c.detail) + "</span>" +
+              '<span class="step-toggle">' + (open ? "Hide" : "Details") + "</span></button>" +
+              (open
+                ? '<div class="step-body"><div class="field-label">Input</div><pre class="log-block">' + esc(JSON.stringify(b.input, null, 2)) + "</pre>" +
+                  (r
+                    ? '<div class="inline"><div class="field-label grow">Result</div><button type="button" class="btn btn-mini btn-ghost" data-action="copy-output" data-id="out-' + attr(b.id) + '">Copy</button></div><pre class="log-block" id="out-' + attr(b.id) + '">' + esc(out) + "</pre>"
+                    : "") +
+                  "</div>"
+                : "") +
+              "</div>";
           }
         });
       } else if (e.kind === "approval") {
@@ -3957,14 +4117,18 @@
       } else if (e.kind === "notice") html += '<div class="msg-note">' + esc(e.data.text) + "</div>";
       else if (e.kind === "error") html += '<div class="msg-note msg-error">' + esc(e.data.message) + "</div>";
     });
-    if (AI.thread && (AI.thread.state === "running" || AI.running)) html += '<div class="msg msg-agent"><div class="avatar">d</div><div class="bubble typing"><span></span><span></span><span></span></div></div>';
-    return html || '<div class="chat-empty"><div class="chat-empty-title">What should we build?</div><div class="row-sub">Describe a task. The assistant discovers what devd can do, works in small steps, checks its work by running your tests, and asks you before anything risky.</div></div>';
+    if (AI.thread && (AI.thread.state === "running" || AI.running)) {
+      html += '<div class="msg msg-agent"><div class="avatar" aria-hidden="true">d</div><div class="bubble typing" role="status" aria-label="devd is working"><span></span><span></span><span></span></div></div>';
+    }
+    return html || '<div class="chat-empty"><div class="empty-icon"><svg class="icon" aria-hidden="true"><use href="#i-spark"></use></svg></div><div class="chat-empty-title">What should we build?</div><div class="empty-hint">Describe a task. The assistant discovers what devd can do, works in small steps, checks its work by running your tests, and asks you before anything risky.</div></div>';
   }
 
   function paintChat() {
     var box = el("chat-stream");
     if (!box) return;
     var near = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+    var busy = AI.thread && (AI.thread.state === "running" || AI.running);
+    box.setAttribute("aria-busy", busy ? "true" : "false");
     box.innerHTML = chatHtml();
     if (near) box.scrollTop = box.scrollHeight;
     var t = AI.thread;
@@ -4004,11 +4168,11 @@
       '<div class="assistant"><aside class="threads"><div class="threads-head"><b>Conversations</b><button type="button" class="btn btn-mini btn-primary" data-action="chat-new">New</button></div><div id="thread-list"></div></aside>' +
       '<section class="chat">' +
       (AI.thread ? '<div class="chat-head" id="chat-head"></div>' : '<div class="chat-head"><div class="grow"><div class="chat-title">Assistant</div><div class="dim">Claude Code-style, built into your server</div></div></div>') +
-      (!ready ? '<div class="notice notice-warn" style="margin:12px 16px">No usable AI provider yet. <button type="button" class="btn btn-mini btn-primary" data-action="nav" data-view="providers">Set one up</button></div>' : "") +
-      '<div class="chat-stream" id="chat-stream"></div>' +
-      '<div class="composer"><div class="inline">' + (AI.thread ? "" : '<select class="input" id="chat-project">' + projOpts + "</select>") +
-      '<span class="grow dim" style="font-size:11px">Enter to send · Shift+Enter for a new line' + (AI.thread && AI.thread.project ? " · working in " + esc(dirName(AI.thread.project)) : "") + "</span></div>" +
-      '<div class="inline"><textarea class="input grow" id="chat-input" rows="2" placeholder="Ask for something…">' + esc(AI.composer) + '</textarea><button type="button" class="btn btn-primary" id="chat-send" data-action="chat-send">Send</button></div></div></section></div>';
+      (!ready ? '<div class="notice notice-warn chat-notice">No usable AI provider yet. <button type="button" class="btn btn-mini btn-primary" data-action="nav" data-view="providers">Set one up</button></div>' : "") +
+      '<div class="chat-stream" id="chat-stream" role="log" aria-live="off" aria-label="Conversation"></div>' +
+      '<div class="composer"><div class="inline">' + (AI.thread ? "" : '<select class="input" id="chat-project" aria-label="Project">' + projOpts + "</select>") +
+      '<span class="grow hint">Enter to send · Shift+Enter for a new line' + (AI.thread && AI.thread.project ? " · working in " + esc(dirName(AI.thread.project)) : "") + "</span></div>" +
+      '<div class="inline"><textarea class="input grow" id="chat-input" rows="2" placeholder="Ask for something…" aria-label="Message">' + esc(AI.composer) + '</textarea><button type="button" class="btn btn-primary" id="chat-send" data-action="chat-send">Send</button></div></div></section></div>';
     paintThreads(); paintChat();
     var box = el("chat-stream"); if (box) box.scrollTop = box.scrollHeight;
     startThreadTimer();
@@ -4193,7 +4357,22 @@
 
   function renderLoading() {
     el("main").innerHTML =
-      '<div class="page"><div class="loading">Reading services, sites and certificates…</div></div>';
+      '<div class="page"><div class="loading">Loading…</div></div>';
+  }
+
+  /* Tables are the one element that cannot shrink below its content. Wrapping
+     every rendered table makes a narrow window scroll the table instead of the
+     page. The observer catches views that repaint a panel in place. */
+  function wrapTables() {
+    var main = el("main");
+    if (!main) return;
+    Array.prototype.forEach.call(main.querySelectorAll("table.table"), function (table) {
+      if (table.parentElement && table.parentElement.classList.contains("table-wrap")) return;
+      var wrap = document.createElement("div");
+      wrap.className = "table-wrap";
+      table.parentNode.insertBefore(wrap, table);
+      wrap.appendChild(table);
+    });
   }
 
   function render() {
@@ -4227,6 +4406,7 @@
     else if (state.view === "capabilities") renderCapabilities();
     else if (state.view === "activity") renderActivity();
     else if (state.view === "system") renderSystem();
+    wrapTables();
   }
 
   // -------------------------------------------------------------------- actions
@@ -4294,6 +4474,11 @@
       var text = (el("home-ask").value || "").trim(), p = el("home-project").value;
       TEAM.form.goal = text; if (p) TEAM.form.project = p;
       TEAM.sel = null; TEAM.data = null; navigate("team");
+    },
+    "copy-output": function (n) {
+      var pre = n.dataset.id ? el(n.dataset.id) : null;
+      if (!pre) return;
+      copyText(pre.textContent || "", function () { toast("ok", "Copied to the clipboard"); });
     },
     "role-save": function (n) {
       var role = n.dataset.role, models = [];
@@ -4371,7 +4556,7 @@
     "prov-save": function () {
       var f = AI.provForm; if (!f) return;
       var q = function (k) { var e = document.querySelector('[data-pf="' + k + '"]'); return e ? (e.type === "checkbox" ? e.checked : e.value.trim()) : ""; };
-      var args = { id: f.editing ? f.id : q("id"), preset: f.preset, kind: f.kind, label: f.label, base_url: q("base_url"), default_model: q("default_model"), make_default: q("make_default") };
+      var args = { id: f.editing ? f.id : q("id"), preset: f.preset, kind: q("kind") || f.kind, label: f.label, base_url: q("base_url"), default_model: q("default_model"), make_default: q("make_default") };
       if (q("key_env")) args.key_env = q("key_env");
       var key = document.querySelector('[data-pf="api_key"]'); if (key && key.value) args.api_key = key.value;
       run("provider.save", args).then(function (o) {
@@ -4383,6 +4568,20 @@
     },
     "prov-test": function (n) { providerCall(n.dataset.id, "provider.test"); },
     "prov-models": function (n) { providerCall(n.dataset.id, "provider.models"); },
+    "prov-verify": function (n) {
+      var p = (AI.providers || []).filter(function (x) { return x.id === n.dataset.id; })[0];
+      if (!p) return;
+      if (!p.default_model) return toast("warn", "Choose a model for this provider first");
+      providerCall(p.id, "provider.verify", { model: p.default_model });
+    },
+    "prov-discover": function () {
+      read("provider.discover_local").then(function (found) {
+        AI.localFound = found || [];
+        renderProviders();
+        var up = AI.localFound.filter(function (f) { return f.running; }).length;
+        toast(up ? "ok" : "info", up ? up + " local server(s) found" : "No local model server is running");
+      }).catch(function (e) { toast("error", e.message); });
+    },
     "prov-default": function (n) { run("provider.default", { id: n.dataset.id }).then(function () { return loadProviders(); }).then(renderProviders); },
     "prov-remove": function (n) { run("provider.remove", { id: n.dataset.id }).then(function (o) { if (o) return loadProviders().then(function () { renderProviders(); loadHealth().then(healthChip); }); }); },
     "prov-pick": function (n) { setProviderModel(n.dataset.id, n.dataset.model); },
@@ -4475,7 +4674,7 @@
 
     "service-logs": function (node) {
       var name = node.dataset.name;
-      openDrawer("service.logs " + name, '<div class="dim">reading the log</div>');
+      openDrawer("service.logs " + name, '<div class="dim">Loading…</div>');
       read("service.logs", { name: name, lines: 400 })
         .then(function (data) {
           var lines = (data && data.lines) || [];
@@ -5045,6 +5244,20 @@
       event.preventDefault();
       return decideModal(true);
     }
+    // Keep Tab inside a dialog: focus that escapes behind a modal is the most
+    // common keyboard trap in a single-page app.
+    if (event.key === "Tab") {
+      var dialog = !el("modal").hidden ? el("modal") : state.palette.open ? document.querySelector("#palette .palette") : null;
+      if (!dialog) return;
+      var focusables = Array.prototype.filter.call(
+        dialog.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'),
+        function (node) { return node.offsetParent !== null; }
+      );
+      if (!focusables.length) return;
+      var first = focusables[0], last = focusables[focusables.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    }
   });
 
   document.addEventListener("input", function (event) {
@@ -5126,11 +5339,13 @@
     });
   }
 
-  function providerCall(id, cap) {
+  function providerCall(id, cap, extra) {
+    var args = { id: id };
+    Object.keys(extra || {}).forEach(function (k) { args[k] = extra[k]; });
     AI.provBusy[id] = true; delete AI.provBusy[id + ":msg"]; renderProviders();
-    read(cap, { id: id }).then(function (d) {
+    read(cap, args).then(function (d) {
       AI.provBusy[id + ":ok"] = true;
-      AI.provBusy[id + ":msg"] = d && d.message ? d.message : (cap === "provider.test" ? "Connection works" : "Models updated");
+      AI.provBusy[id + ":msg"] = d && d.message ? d.message : (cap === "provider.test" ? "Connection works" : cap === "provider.verify" ? "The model answered" : "Models updated");
     }).catch(function (e) {
       AI.provBusy[id + ":ok"] = false; AI.provBusy[id + ":msg"] = e.message;
     }).then(function () { AI.provBusy[id] = false; return loadProviders(); }).then(function () { renderProviders(); loadHealth().then(healthChip); });
@@ -5187,8 +5402,12 @@
       .then(render)
       .then(loadAgents)
       .then(render)
-      .then(loadDoctor)
+      // The home page needs the assistant and health, not a full doctor run.
+      // Diagnostics can take seconds on a cold machine; it must not hold the
+      // first screen hostage.
       .then(function () { return state.view === "home" ? loadHome() : loadHealth(); })
+      .then(render)
+      .then(loadDoctor)
       .then(render)
       .then(function () {
         if (!state.session) return;
@@ -5222,6 +5441,13 @@
     if (document.hidden) return;
     loadHealth().then(function () { healthChip(); rail(); statusbar(); });
   }, 30000);
+
+  // Views that repaint a panel in place (the assistant poll, provider actions)
+  // bypass render(), so a small observer keeps their tables scrollable too.
+  var mainNode = el("main");
+  if (mainNode && window.MutationObserver) {
+    new MutationObserver(function () { wrapTables(); }).observe(mainNode, { childList: true, subtree: true });
+  }
 
   boot();
 })();

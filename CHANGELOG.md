@@ -14,6 +14,17 @@ may change capability identifiers where the design was wrong.
 
 ### Added
 
+- **Model providers, completed.** Presets for Anthropic, OpenAI, DeepSeek, Moonshot AI
+  (Kimi), Zhipu AI (GLM), Google Gemini, xAI, Mistral, Groq, Together, Fireworks,
+  OpenRouter, Ollama, LM Studio and any OpenAI-compatible endpoint, in that order of
+  usefulness. Each preset carries where to get a key, how its models are discovered
+  (the vendor's own list, Ollama's native `/api/tags`, or a maintained catalogue for
+  vendors without a listing API), and whether it runs locally. `provider.verify` runs
+  one real request that must call a named tool, so "tool use works" is only claimed
+  when the provider actually returned a tool call. `provider.discover_local` finds a
+  running Ollama or LM Studio on this machine. Errors now say what is wrong: a
+  rejected key, an exhausted quota, an unpaid balance, a rate limit with its retry
+  window, a context window that is too small, or a model the account cannot use.
 - **Agent team** (`team.*`): describe a goal, a planner proposes tasks with owners,
   dependencies and acceptance criteria, you approve the plan, and specialists
   (architect, researcher, implementer, QA, reviewer, infra, docs) work in parallel
@@ -71,6 +82,22 @@ may change capability identifiers where the design was wrong.
 
 ### Changed
 
+- **One design system across the window, the browser and the terminal.** The web and
+  desktop interface is rebuilt on tokens: a single spacing scale, a type scale with
+  a defined role for every size, semantic status colours that are always paired with
+  a word, and one set of control styles for buttons, inputs, pills, tabs, tables and
+  dialogs. The shell has an icon rail that collapses to icons on narrow windows and
+  becomes a scrollable strip on a phone; every page has one heading, one action row
+  and a content width that stops stretching on a wide display. The agent conversation
+  is the workspace it should be: messages, tool executions, results and errors each
+  have their own treatment, tool output is collapsed by default and can be copied,
+  and the composer keeps the project selector on small screens. Tables scroll
+  themselves instead of the page. Focus is visible, dialogs keep Tab inside them,
+  the conversation announces new replies once instead of re-reading itself, and
+  reduced-motion and forced-colour modes are honoured.
+- **The terminal dashboard** now has a header that shows the repository state beside
+  the identity, a footer that is cut to the terminal width rather than wrapping, empty
+  panels that say which key to press, rounded frames, and `NO_COLOR` support.
 - New visual identity: midnight-blue surfaces, azure/cyan/violet accents and a
   halftone dot-matrix logo, in the window, the terminal dashboard and the desktop
   icons.

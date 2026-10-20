@@ -12,6 +12,31 @@
 <link rel="stylesheet" href="/vendor/xterm.css">
 </head>
 <body>
+<a class="skip-link" href="#main">Skip to content</a>
+<svg class="sprite" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M10 21v-6h4v6"/></symbol>
+    <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M3 13h4l2 3h6l2-3h4"/><path d="M5 13V6a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v7"/><path d="M5 13v6a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-6"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M18 16l.8 2.2L21 19l-2.2.8L18 22l-.8-2.2L15 19l2.2-.8z"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3"/><path d="M13 15h4"/></symbol>
+    <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M3 12h4l2-6 4 12 2-6h6"/></symbol>
+    <symbol id="i-server" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-check-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></symbol>
+    <symbol id="i-code" viewBox="0 0 24 24"><path d="M9 8l-4 4 4 4"/><path d="M15 8l4 4-4 4"/><path d="M13 5l-2 14"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12l4 4L19 6"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3l9 16H3z"/><path d="M12 9v4M12 16h.01"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></symbol>
+  </defs>
+</svg>
 <div class="shell">
   <aside class="rail">
     <div class="brand">
@@ -21,11 +46,12 @@
         <span class="brand-tag">small, and capable</span>
       </div>
     </div>
-    <button type="button" class="search-trigger" data-action="palette">
+    <button type="button" class="search-trigger" data-action="palette" aria-label="Search or run anything">
+      <svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg>
       <span class="search-label">Search or run anything</span>
       <kbd>Ctrl K</kbd>
     </button>
-    <nav class="rail-nav" id="rail"></nav>
+    <nav class="rail-nav" id="rail" aria-label="Main"></nav>
     <div class="rail-foot">
       <button type="button" class="health health-checking" id="health-chip" data-action="health-open" title="System health"></button>
     </div>
@@ -34,7 +60,7 @@
   <div class="content">
     <div class="crumbs" id="crumbs"></div>
     <nav class="subnav" id="subnav" hidden></nav>
-    <main class="main" id="main">
+    <main class="main" id="main" tabindex="-1">
       <div class="loading">Loading</div>
     </main>
   </div>
@@ -73,7 +99,7 @@
   </div>
 </div>
 
-<div class="drawer" id="drawer" hidden>
+<div class="drawer" id="drawer" role="dialog" aria-label="Details" hidden>
   <div class="drawer-head">
     <span class="drawer-title" id="drawer-title"></span>
     <button type="button" class="btn btn-ghost" data-action="close-drawer">Close</button>
@@ -81,7 +107,8 @@
   <div class="drawer-body" id="drawer-body"></div>
 </div>
 
-<div class="toasts" id="toasts" aria-live="polite"></div>
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+<div class="sr-only" id="announcer" aria-live="polite" aria-atomic="true"></div>
 
 <script src="/vendor/xterm.js" defer></script>
 <script src="/vendor/addon-fit.js" defer></script>
