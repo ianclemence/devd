@@ -44,6 +44,11 @@ invoking it. Important domains: project (detect, tasks, run, exec, init, import)
 search, write, edit, move, delete), git, stacks, toolchain (install tools, start databases), \
 todo and scratch (shared notes the person can see), inbox (message the person), approval.
 
+## Skills and the team
+devd has skills: short playbooks, techniques and principles you load only when needed. The index is at the end of this prompt; read one with devd_invoke skills.get {name} (start with `work` when unsure which applies). \
+For a large piece of work that benefits from a planner, parallel implementers and an independent review, hand it to the agent team with team.start; a person approves its plan before anything runs. For \
+facts about outside tools or frameworks, read official documentation with docs.fetch rather than relying on memory.
+
 ## How to work
 1. Understand before acting. For a project, call project.detect first: it gives the stack, package \
 manager, required runtimes, the tasks you can run, services and missing tools. Read the project's \
@@ -346,6 +351,74 @@ impl Hub {
         Ok(())
     }
 
+    /// Start a conversation for the agent team. The directory was authorised when
+    /// the run started; the thread is not a person's chat, and says so.
+    pub fn open_thread(self: &Arc<Self>, project: &str, title: &str, message: &str) -> Result<ChatThread> {
+        let thread = self.ctx.store.create_thread(title, Some(project), None, None)?;
+        self.log(&thread.id, "user", json!({ "text": message, "from": "devd-team" }))?;
+        self.ctx.store.set_thread_state(&thread.id, "running", None)?;
+        self.spawn(&thread.id);
+        Ok(self.ctx.store.get_thread(&thread.id)?.expect("exists"))
+    }
+
+    /// Say something more to a conversation that has stopped, and let it continue.
+    pub fn follow_up(self: &Arc<Self>, tid: &str, message: &str) -> Result<()> {
+        if self.is_running(tid) {
+            return Err(DevdError::conflict("the agent is still working"));
+        }
+        self.log(tid, "user", json!({ "text": message, "from": "devd-team" }))?;
+        self.ctx.store.set_thread_state(tid, "running", None)?;
+        self.spawn(tid);
+        Ok(())
+    }
+
+    /// The models to try for a conversation, best first. An explicit choice on
+    /// the conversation is never replaced by a fallback; a role's configured
+    /// chain is.
+    fn candidates(&self, t: &ChatThread, role: Option<&str>) -> Result<Vec<(Provider, Option<String>, String, String)>> {
+        let mut out: Vec<(Provider, Option<String>, String, String)> = Vec::new();
+        if t.provider_id.is_some() || t.model.is_some() {
+            let (p, key) = self.provider_for(t)?;
+            let model = t.model.clone().or_else(|| p.default_model.clone()).ok_or_else(|| DevdError::conflict(format!("no model is chosen for {}. Pick one in Models or in the conversation header.", p.label)))?;
+            out.push((p, key, model, "chosen for this conversation".into()));
+            return Ok(out);
+        }
+        let assignments = self.ctx.store.list_role_models()?;
+        let project_scope = t.project.as_ref().map(|p| format!("project:{p}")).unwrap_or_default();
+        let mut chains: Vec<(String, &str)> = Vec::new();
+        if let Some(r) = role {
+            chains.push((project_scope.clone(), r));
+        }
+        chains.push((String::new(), role.unwrap_or("default")));
+        if role.is_some() {
+            chains.push((String::new(), "default"));
+        }
+        for (scope, r) in chains {
+            let mut rows: Vec<_> = assignments.iter().filter(|a| a.role == r && a.scope == scope).collect();
+            rows.sort_by_key(|a| a.position);
+            for a in rows {
+                if let Some(p) = self.ctx.store.get_provider(&a.provider_id)?.filter(|p| p.enabled) {
+                    let key = secrets::read_key(&self.ctx.paths, &p);
+                    if key.is_none() && p.kind != "openai-compatible" {
+                        continue;
+                    }
+                    if !out.iter().any(|(q, _, m, _)| q.id == p.id && *m == a.model) {
+                        out.push((p, key, a.model.clone(), format!("{} model for {}{}", if scope.is_empty() { "your" } else { "this project's" }, r, if out.is_empty() { "" } else { " (fallback)" })));
+                    }
+                }
+            }
+            if !out.is_empty() {
+                break;
+            }
+        }
+        if out.is_empty() {
+            let (p, key) = self.provider_for(t)?;
+            let model = p.default_model.clone().ok_or_else(|| DevdError::conflict(format!("no model is chosen for {}. Pick one in Models.", p.label)))?;
+            out.push((p, key, model, "the default provider's default model".into()));
+        }
+        Ok(out)
+    }
+
     fn brief(&self, t: &ChatThread) -> String {
         let Some(project) = &t.project else {
             return "No project directory was chosen. Use project.list to see projects, or ask which one.".to_string();
@@ -367,7 +440,7 @@ impl Hub {
     }
 
     fn system_prompt(&self, t: &ChatThread) -> String {
-        format!("{PROMPT}\n\n## Context\nToday is {}.\n{}", &util::now()[..10], self.brief(t))
+        format!("{PROMPT}\n\n{}\n\n## Skills\n{}\n## Context\nToday is {}.\n{}", crate::skills::CORE, crate::skills::index_for(&self.ctx.paths, None), &util::now()[..10], self.brief(t))
     }
 
     fn run(&self, tid: &str, cancel: &AtomicBool) -> Result<()> {
@@ -381,26 +454,44 @@ impl Hub {
                 return Ok(());
             }
             let thread = self.ctx.store.get_thread(tid)?.ok_or_else(|| DevdError::not_found("the conversation was deleted"))?;
-            let (provider, key) = match self.provider_for(&thread) {
-                Ok(x) => x,
+            let binding = self.ctx.store.task_of_thread(tid)?;
+            let role = binding.as_ref().map(|b| b.role.clone());
+            let candidates = match self.candidates(&thread, role.as_deref()) {
+                Ok(c) => c,
                 Err(e) => return self.fail(tid, &e.to_string()),
             };
-            let model = match thread.model.clone().or_else(|| provider.default_model.clone()) {
-                Some(m) => m,
-                None => return self.fail(tid, &format!("no model is chosen for {}. Pick one in Providers or in the conversation header.", provider.label)),
-            };
-            if key.is_none() && provider.kind != "openai-compatible" {
-                return self.fail(tid, &format!("{} has no API key. Add one in Providers (or set {}).", provider.label, provider.key_env.clone().unwrap_or_else(|| "its key variable".into())));
-            }
             let events = self.ctx.store.list_events(tid, 0, 100_000)?;
             let messages = build_messages(&events);
-            let request = ChatRequest { model: model.clone(), system: self.system_prompt(&thread), messages, tools: tools.clone(), max_tokens: 16_000 };
-            let response = match providers::chat(&provider, key.as_deref(), &request) {
-                Ok(r) => r,
-                Err(e) => return self.fail(tid, &e.to_string()),
+            let system = match &binding {
+                Some(b) => format!("{}\n\n{}\n\n## Skills for your role\nLoad one with devd_invoke skills.get before you start the work it covers.\n{}", crate::team::system_prompt(&self.ctx.store, b), crate::skills::CORE, crate::skills::index_for(&self.ctx.paths, Some(&b.role))),
+                None => self.system_prompt(&thread),
             };
+            let mut chosen = None;
+            let mut last_err = String::new();
+            for (i, (provider, key, model, why)) in candidates.iter().enumerate() {
+                if key.is_none() && provider.kind != "openai-compatible" {
+                    last_err = format!("{} has no API key. Add one in Models (or set {}).", provider.label, provider.key_env.clone().unwrap_or_else(|| "its key variable".into()));
+                    continue;
+                }
+                let request = ChatRequest { model: model.clone(), system: system.clone(), messages: messages.clone(), tools: tools.clone(), max_tokens: 16_000 };
+                match providers::chat(provider, key.as_deref(), &request) {
+                    Ok(r) => {
+                        if i > 0 {
+                            self.log(tid, "notice", json!({ "text": format!("Used {} ({}) after the first choice failed: {}", model, provider.label, last_err) }))?;
+                        }
+                        chosen = Some((r, model.clone(), provider.id.clone(), why.clone()));
+                        break;
+                    }
+                    Err(e) => {
+                        last_err = e.to_string();
+                        let _ = self.ctx.store.set_provider_check(&provider.id, false, &last_err, None);
+                    }
+                }
+            }
+            let Some((response, model, provider_id, why)) = chosen else { return self.fail(tid, &last_err) };
+            let _ = provider_id;
             self.ctx.store.add_thread_usage(tid, response.input_tokens, response.output_tokens)?;
-            self.log(tid, "assistant", json!({ "content": response.content, "stop_reason": response.stop_reason, "model": model, "usage": { "input": response.input_tokens, "output": response.output_tokens } }))?;
+            self.log(tid, "assistant", json!({ "content": response.content, "stop_reason": response.stop_reason, "model": model, "routing": why, "usage": { "input": response.input_tokens, "output": response.output_tokens } }))?;
 
             let calls: Vec<&Value> = response.content.iter().filter(|b| b["type"] == "tool_use").collect();
             if calls.is_empty() {
@@ -415,6 +506,13 @@ impl Hub {
                 let id = call["id"].as_str().unwrap_or("").to_string();
                 let name = call["name"].as_str().unwrap_or("").to_string();
                 let input = call["input"].clone();
+                let mut input = input;
+                if name == "devd_invoke" {
+                    if let Err(msg) = self.gate(binding.as_ref(), &mut input) {
+                        self.log(tid, "tool_result", json!({ "tool_use_id": id, "content": json!({ "ok": false, "error": { "code": "not_allowed_for_this_task", "message": msg } }).to_string(), "is_error": true, "tool": name }))?;
+                        continue;
+                    }
+                }
                 let (is_err, text) = mcp.call(&name, &input);
                 if is_err && name == "devd_invoke" {
                     if let Some(body) = serde_json::from_str::<Value>(&text).ok().filter(|b| b["error"]["code"] == "approval_required") {
@@ -437,6 +535,45 @@ impl Hub {
         }
         self.log(tid, "notice", json!({ "text": format!("Paused after {MAX_TURNS} steps. Say \"continue\" to keep going.") }))?;
         self.ctx.store.set_thread_state(tid, "idle", None)?;
+        Ok(())
+    }
+
+    /// Team members work inside their task: a role ceiling on what they may
+    /// invoke, a directory they cannot leave, and the task id is supplied by
+    /// the harness (a model never names its own task).
+    fn gate(&self, binding: Option<&devd_core::TeamTask>, input: &mut Value) -> std::result::Result<(), String> {
+        let Some(task) = binding else { return Ok(()) };
+        let cap_id = input["id"].as_str().unwrap_or("").to_string();
+        let role = crate::roles::get(&task.role).ok_or_else(|| "unknown role".to_string())?;
+        let registry = self.registry.get().ok_or_else(|| "registry not attached".to_string())?;
+        let Some(cap) = registry.get(&cap_id) else { return Ok(()) };
+        crate::roles::allows(role, &cap)?;
+        if cap_id.starts_with("team.") {
+            if !input["args"].is_object() {
+                input["args"] = json!({});
+            }
+            input["args"]["task"] = json!(task.id);
+        }
+        if role.id != "planner" {
+            if let Some(work) = &task.workdir {
+                let root = devd_stacks::authz::normalise(std::path::Path::new(work));
+                let project = self.ctx.store.get_run(&task.run_id).ok().flatten().and_then(|r| r.project);
+                if let Some(args) = input["args"].as_object() {
+                    for key in ["path", "from", "to", "cwd", "destination"] {
+                        if let Some(v) = args.get(key).and_then(|v| v.as_str()) {
+                            let p = std::path::Path::new(v);
+                            if p.is_absolute() {
+                                let n = devd_stacks::authz::normalise(p);
+                                let bootstrap_ok = project.as_deref().map(|pr| n == devd_stacks::authz::normalise(std::path::Path::new(pr)) && !n.exists()).unwrap_or(false);
+                                if !n.starts_with(&root) && !bootstrap_ok {
+                                    return Err(format!("this task is confined to {}; `{v}` is outside it", root.display()));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         Ok(())
     }
 

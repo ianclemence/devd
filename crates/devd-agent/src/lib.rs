@@ -28,11 +28,16 @@
 
 pub mod caps;
 pub mod chat;
+pub mod docs;
 pub mod fs;
 pub mod health;
 pub mod providers;
 pub mod search;
+pub mod roles;
 pub mod secrets;
+pub mod skills;
+pub mod skills_data;
+pub mod team;
 
 pub use chat::Hub;
 

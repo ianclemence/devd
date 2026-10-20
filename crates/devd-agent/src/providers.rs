@@ -153,7 +153,16 @@ fn bypass_proxy(host: &str) -> bool {
     list.split(',').map(|e| e.trim().trim_start_matches("*.").trim_start_matches('.')).filter(|e| !e.is_empty()).any(|e| e == "*" || host == e || host.ends_with(&format!(".{e}")))
 }
 
-fn agent_for(url: &str) -> ureq::Agent {
+pub(crate) fn agent_for(url: &str) -> ureq::Agent {
+    build_agent(url, true)
+}
+
+/// The same client, but a redirect is returned to the caller so it can be checked.
+pub(crate) fn agent_no_redirect(url: &str) -> ureq::Agent {
+    build_agent(url, false)
+}
+
+fn build_agent(url: &str, follow: bool) -> ureq::Agent {
     let host = host_of(url).split(':').next().unwrap_or("").to_string();
     let mut b = ureq::AgentBuilder::new();
     if !bypass_proxy(&host) {
@@ -165,8 +174,11 @@ fn agent_for(url: &str) -> ureq::Agent {
     if let Some(cfg) = tls_config() {
         b = b.tls_config(cfg);
     }
+    if !follow {
+        b = b.redirects(0);
+    }
     b.timeout_connect(Duration::from_secs(15))
-        .timeout_read(Duration::from_secs(300))
+        .timeout_read(Duration::from_secs(if follow { 300 } else { 30 }))
         .timeout_write(Duration::from_secs(60))
         .user_agent(&format!("devd/{}", env!("CARGO_PKG_VERSION")))
         .build()

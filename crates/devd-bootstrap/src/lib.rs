@@ -75,9 +75,18 @@ impl Bootstrap {
             actor: devd_core::capability::Actor::system(),
             dry_run: false,
         });
-        devd_agent::caps::register(&mut registry, hub.clone())?;
+        let team = devd_agent::team::Team::new(hub.clone(), devd_core::capability::Ctx {
+            store: workspace.store().clone(),
+            paths: Arc::new(paths.clone()),
+            settings: settings.clone(),
+            events: events.clone(),
+            actor: devd_core::capability::Actor::system(),
+            dry_run: false,
+        });
+        devd_agent::caps::register(&mut registry, hub.clone(), team.clone())?;
         let registry = Arc::new(registry);
         hub.attach(registry.clone());
+        team.attach(registry.clone());
 
         Ok(Self {
             paths,
