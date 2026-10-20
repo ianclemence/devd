@@ -79,15 +79,32 @@ New-Item -ItemType Directory -Force dist | Out-Null
 Copy-Item $bin "dist/$name" -Force
 $desktopName = "devd-desktop-v$version-$target.exe"
 Copy-Item $desktopBin "dist/$desktopName" -Force
+$webview2 = "target/release/WebView2Loader.dll"
+if (-not (Test-Path $webview2)) { throw "the build did not produce $webview2" }
+
+$zipName = "devd-desktop-v$version-$target.zip"
+$staging = Join-Path ([System.IO.Path]::GetTempPath()) ("devd-desktop-" + [guid]::NewGuid())
+New-Item -ItemType Directory -Path $staging | Out-Null
+try {
+    Copy-Item $desktopBin (Join-Path $staging "devd-desktop.exe")
+    Copy-Item $webview2 (Join-Path $staging "WebView2Loader.dll")
+    Compress-Archive -Path (Join-Path $staging "*") -DestinationPath "dist/$zipName" -Force
+}
+finally {
+    Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
+}
 
 $sha = (Get-FileHash "dist/$name" -Algorithm SHA256).Hash.ToLower()
 $desktopSha = (Get-FileHash "dist/$desktopName" -Algorithm SHA256).Hash.ToLower()
+$zipSha = (Get-FileHash "dist/$zipName" -Algorithm SHA256).Hash.ToLower()
 @(
     "$sha  $name"
     "$desktopSha  $desktopName"
+    "$zipSha  $zipName"
 ) | Out-File -Encoding ascii "dist/SHA256SUMS.txt"
 
 Write-Host ""
 Write-Host "wrote dist/$name" -ForegroundColor Green
 Write-Host "wrote dist/$desktopName" -ForegroundColor Green
+Write-Host "wrote dist/$zipName" -ForegroundColor Green
 Get-Content "dist/SHA256SUMS.txt"

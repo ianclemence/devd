@@ -40,12 +40,14 @@ $source = Join-Path $repo "target\release\devd.exe"
 if (-not (Test-Path $source)) { throw "the build did not produce $source" }
 $desktop = Join-Path $repo "target\release\devd-desktop.exe"
 if (-not (Test-Path $desktop)) { throw "the build did not produce $desktop" }
+$webview2 = Join-Path $repo "target\release\WebView2Loader.dll"
+if (-not (Test-Path $webview2)) { throw "the build did not produce $webview2" }
 
 New-Item -ItemType Directory -Force dist | Out-Null
 $out = Join-Path $repo "dist\devd-setup-$version.exe"
 
 Write-Host "==> makensis" -ForegroundColor Cyan
-& $Nsis "/DVERSION=$version" "/DSOURCE=$source" "/DDESKTOP=$desktop" "/DOUTFILE=$out" "/DROOT=$repo" "installer\devd.nsi"
+& $Nsis "/DVERSION=$version" "/DSOURCE=$source" "/DDESKTOP=$desktop" "/DWEBVIEW2=$webview2" "/DOUTFILE=$out" "/DROOT=$repo" "installer\devd.nsi"
 if ($LASTEXITCODE -ne 0) { throw "makensis failed" }
 if (-not (Test-Path $out)) { throw "the installer was not produced at $out" }
 

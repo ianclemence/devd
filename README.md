@@ -75,14 +75,15 @@ devd ui
 It is self-contained: it links only Windows system libraries, so it needs no
 Rust toolchain, MinGW or Visual C++ runtime.
 
-The native window is also published as a portable executable:
+The native window is also published as a portable zip:
 
 ```powershell
-curl.exe -LO https://github.com/ianclemence/devd/releases/download/v0.8.0/devd-desktop-v0.8.0-x86_64-pc-windows-gnu.exe
-Rename-Item devd-desktop-v0.8.0-x86_64-pc-windows-gnu.exe devd-desktop.exe
-.\devd-desktop.exe
+curl.exe -LO https://github.com/ianclemence/devd/releases/download/v0.8.0/devd-desktop-v0.8.0-x86_64-pc-windows-gnu.zip
+Expand-Archive devd-desktop-v0.8.0-x86_64-pc-windows-gnu.zip -DestinationPath devd-desktop
+.\devd-desktop\devd-desktop.exe
 ```
 
+The zip contains `devd-desktop.exe` and `WebView2Loader.dll`; keep them together.
 It starts its own backend and needs WebView2 (present with current Edge).
 
 ### From source

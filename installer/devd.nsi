@@ -18,6 +18,9 @@ Unicode true
 !ifndef DESKTOP
   !define DESKTOP "target\release\devd-desktop.exe"
 !endif
+!ifndef WEBVIEW2
+  !define WEBVIEW2 "target\release\WebView2Loader.dll"
+!endif
 !ifndef ROOT
   !define ROOT ".."
 !endif
@@ -76,6 +79,7 @@ Section "devd (required)" SecMain
   SetOutPath "$INSTDIR"
   File "${SOURCE}"
   File "${DESKTOP}"
+  File "${WEBVIEW2}"
   File "${ROOT}\LICENSE"
   File "${ROOT}\README.md"
 
@@ -161,6 +165,7 @@ Section "Uninstall"
 
   Delete "$INSTDIR\devd.exe"
   Delete "$INSTDIR\devd-desktop.exe"
+  Delete "$INSTDIR\WebView2Loader.dll"
   Delete "$INSTDIR\LICENSE"
   Delete "$INSTDIR\README.md"
   Delete "$INSTDIR\launch.vbs"

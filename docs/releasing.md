@@ -29,12 +29,15 @@ Output:
 ```text
 dist/devd-v0.8.0-x86_64-pc-windows-gnu.exe
 dist/devd-desktop-v0.8.0-x86_64-pc-windows-gnu.exe
+dist/devd-desktop-v0.8.0-x86_64-pc-windows-gnu.zip
 dist/SHA256SUMS.txt
 ```
 
 `devd-desktop.exe` is the native Tauri shell and contains its own backend; it
-does not need the CLI binary at run time. Building it needs the WebView2 headers
-used by Tauri, which the Rust crates provide, and a C compiler for SQLite.
+does not need the CLI binary at run time. It does need `WebView2Loader.dll` in
+the same directory, which is why the zip carries both. Building it needs the
+WebView2 headers used by Tauri, which the Rust crates provide, and a C compiler
+for SQLite.
 
 The installer is a second artifact:
 

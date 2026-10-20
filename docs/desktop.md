@@ -82,8 +82,10 @@ load the bundled copy: it loads the server's `/` with the token injected.
 `target/<triple>/release/bundle/` when the required bundler is available. The
 repository's own installer script (`scripts/release-installer.ps1`) builds the
 release binaries and compiles `installer/devd.nsi` with NSIS 3, installing
-`devd.exe`, `devd-desktop.exe`, the launcher, shortcuts and the uninstaller under
-`%LOCALAPPDATA%\Programs\devd`.
+`devd.exe`, `devd-desktop.exe`, `WebView2Loader.dll`, the launcher, shortcuts and
+the uninstaller under `%LOCALAPPDATA%\Programs\devd`. The portable zip carries
+the desktop executable and the loader DLL together; the executable will not start
+without the DLL beside it.
 
 ## Known limitations
 
