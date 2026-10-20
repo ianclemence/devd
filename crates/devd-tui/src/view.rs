@@ -31,31 +31,31 @@ fn cursor() -> Style {
 }
 /// A section heading.
 fn heading() -> Style {
-    Style::new().add_modifier(Modifier::BOLD)
+    Style::new().fg(Color::Rgb(242, 242, 242)).add_modifier(Modifier::BOLD)
 }
 /// Machine data: paths, hashes, capability ids.
 fn data() -> Style {
-    Style::new().fg(Color::Cyan)
+    Style::new().fg(Color::Rgb(124, 245, 192))
 }
 /// A failure.
 fn fail() -> Style {
-    Style::new().fg(Color::Red).add_modifier(Modifier::BOLD)
+    Style::new().fg(Color::Rgb(255, 107, 107)).add_modifier(Modifier::BOLD)
 }
 /// Something that needs the reader's attention but is not a failure.
 fn warn() -> Style {
-    Style::new().fg(Color::Yellow)
+    Style::new().fg(Color::Rgb(250, 204, 21))
 }
 /// A success.
 fn ok() -> Style {
-    Style::new().fg(Color::Green)
+    Style::new().fg(Color::Rgb(74, 222, 128))
 }
 /// Secondary text.
 fn quiet() -> Style {
-    Style::new().fg(Color::DarkGray)
+    Style::new().fg(Color::Rgb(118, 118, 118))
 }
 /// The current tab.
 fn tab_active() -> Style {
-    Style::new().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+    Style::new().fg(Color::Rgb(124, 245, 192)).add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
 }
 
 /// Draw one frame.
@@ -173,6 +173,51 @@ fn render_body(frame: &mut Frame, state: &State, area: Rect) {
                 })
                 .collect(),
         ),
+        View::Create => list(
+            state,
+            "Create a project - Enter to start",
+            state
+                .stacks
+                .iter()
+                .map(|s| {
+                    Line::from(vec![
+                        Span::raw(format!("{:<20}", truncate(&s.name, 20))),
+                        Span::styled(format!("{:<12}", truncate(&s.language, 12)), data()),
+                        Span::styled(format!("{:<10}", truncate(&s.category, 10)), quiet()),
+                        Span::raw(truncate(&s.summary, 70)),
+                    ])
+                })
+                .collect(),
+        ),
+        View::Toolchain => list(
+            state,
+            "Toolchain",
+            state
+                .tools
+                .iter()
+                .map(|t| {
+                    let (mark, style) = if !t.installed {
+                        ("missing  ", warn())
+                    } else if t.outdated {
+                        ("outdated ", warn())
+                    } else {
+                        ("installed", ok())
+                    };
+                    let service = match (t.service_healthy, t.port) {
+                        (Some(true), Some(p)) => format!("running :{p}"),
+                        (Some(false), Some(p)) if t.installed => format!("stopped :{p}"),
+                        _ => String::new(),
+                    };
+                    Line::from(vec![
+                        Span::raw(format!("{:<24}", truncate(&t.name, 24))),
+                        Span::styled(format!("{mark:<10}"), style),
+                        Span::styled(format!("{:<12}", truncate(t.version.as_deref().unwrap_or("-"), 12)), data()),
+                        Span::styled(format!("{:<16}", truncate(&service, 16)), if service.starts_with("running") { ok() } else { quiet() }),
+                        Span::styled(truncate(&t.category, 16), quiet()),
+                    ])
+                })
+                .collect(),
+        ),
         View::Capabilities => list(
             state,
             &format!("Capabilities matching `{}`", state.capability_query),
@@ -194,6 +239,43 @@ fn render_body(frame: &mut Frame, state: &State, area: Rect) {
                             .to_string(),
                             style,
                         ),
+                    ])
+                })
+                .collect(),
+        ),
+        View::Team => list(
+            state,
+            "Team runs",
+            state
+                .runs
+                .iter()
+                .map(|r| {
+                    let st = r["state"].as_str().unwrap_or("");
+                    let style = match st {
+                        "done" => ok(),
+                        "failed" => fail(),
+                        "awaiting_plan" | "paused" => warn(),
+                        _ => quiet(),
+                    };
+                    Line::from(vec![
+                        Span::styled(format!("{:<14}", st.replace('_', " ")), style),
+                        Span::styled(format!("{:>3}/{:<3} ", r["tasks_done"], r["tasks_total"]), data()),
+                        Span::raw(truncate(r["title"].as_str().unwrap_or(""), 70)),
+                    ])
+                })
+                .collect(),
+        ),
+        View::Inbox => list(
+            state,
+            "Waiting for you",
+            state
+                .inbox
+                .iter()
+                .map(|r| {
+                    Line::from(vec![
+                        Span::styled(format!("{:<10}", r["kind"].as_str().unwrap_or("")), warn()),
+                        Span::styled(format!("{:<28}", truncate(r["title"].as_str().unwrap_or(""), 28)), data()),
+                        Span::raw(truncate(r["detail"].as_str().unwrap_or(""), 70)),
                     ])
                 })
                 .collect(),
@@ -299,6 +381,8 @@ fn empty_line(state: &State) -> Line<'static> {
         View::Branches => "No branches".to_string(),
         View::Capabilities => "No capability matches - press / to search again".to_string(),
         View::Activity => "Nothing has happened yet".to_string(),
+        View::Team => "No team runs yet. Start one with `devd team start \"what you want built\"` or in the app.".to_string(),
+        View::Inbox => "Nothing is waiting for you.".to_string(),
         View::Doctor => "No checks ran".to_string(),
         _ => "Nothing to show".to_string(),
     };
@@ -444,7 +528,10 @@ fn dashboard(state: &State) -> (String, Vec<Line<'static>>) {
 
 fn help_lines() -> Vec<Line<'static>> {
     let rows: Vec<(&str, &str)> = vec![
-        ("1..9", "jump to a view"),
+        ("1..9, 0, -", "jump to a view (0 = Create, - = Toolchain)"),
+        ("Create view", "Enter starts a guided flow for the stack; every question comes from its definition, and the exact command is shown before anything runs"),
+        ("Toolchain view", "i install, x remove, s start, t stop, l logs; installs ask first"),
+        ("Projects view", "d detect the stack and tasks, m import for agents"),
         ("Tab / Shift+Tab", "next / previous view"),
         ("j / k, arrows", "move the cursor"),
         (
@@ -490,13 +577,17 @@ fn render_footer(frame: &mut Frame, state: &State, area: Rect) {
 
 fn hints_for(view: View) -> &'static str {
     match view {
-        View::Projects => "t add   Enter open   r refresh   ? help   q quit",
+        View::Projects => "t add   Enter open   d detect   m import   r refresh   ? help   q quit",
         View::Changes => {
             "Enter stage/unstage   s stage   u unstage   d discard   a stage all   c commit   r refresh   ? help   q quit"
         }
         View::History => "Enter show   j/k move   r refresh   ? help   q quit",
         View::Branches => "Enter switch   n new branch   r refresh   ? help   q quit",
         View::Capabilities => "/ search   Enter describe   x run   r refresh   ? help   q quit",
+        View::Create => "Enter create from this stack   r refresh   ? help   q quit",
+        View::Toolchain => "Enter details   i install   x remove   s start   t stop   l logs   r refresh   q quit",
+        View::Team => "Enter details   a approve plan   p pause/resume   c cancel   r refresh   ? help   q quit",
+        View::Inbox => "Enter details   a approve   d decline   r refresh   ? help   q quit",
         _ => "j/k move   Tab next view   r refresh   ? help   q quit",
     }
 }
@@ -528,6 +619,19 @@ fn render_overlay(frame: &mut Frame, state: &State, area: Rect) {
                     Line::from(Span::styled(format!(" {hint}"), quiet())),
                 ])
                 .block(block),
+                rect,
+            );
+        }
+        Overlay::Form { title, lines, input } => {
+            let height = (lines.len() as u16 + 6).min(area.height.saturating_sub(2));
+            let rect = centered(area, area.width.saturating_sub(8).min(100), height);
+            frame.render_widget(Clear, rect);
+            let mut body: Vec<Line> = lines.iter().map(|l| Line::from(format!(" {l}"))).collect();
+            body.push(Line::from(""));
+            body.push(Line::from(vec![Span::styled(" > ", data()), Span::raw(input.clone()), Span::styled("_", quiet())]));
+            body.push(Line::from(Span::styled(" Enter accept (blank keeps the default)   Esc cancel", quiet())));
+            frame.render_widget(
+                Paragraph::new(body).wrap(Wrap { trim: false }).block(Block::default().borders(Borders::ALL).title(format!(" {title} "))),
                 rect,
             );
         }

@@ -838,6 +838,11 @@ fn tags_cherry_pick_and_revert() {
         .create_branch(&fx.repo, "target", None, true)
         .unwrap();
     fx.git.reset(&fx.repo, ResetMode::Hard, "HEAD~1").unwrap();
+    // Give the target its own history first. A commit with the same parent,
+    // tree, author and (to the second) time as the original would hash
+    // identically, which made this assertion depend on the clock.
+    fx.write("c.txt", "three\n");
+    fx.commit_all("third");
     fx.git.cherry_pick(&fx.repo, &second, false).unwrap();
     assert!(fx.path("b.txt").exists());
     assert_ne!(fx.git.rev_parse(&fx.repo, "HEAD").unwrap(), second);

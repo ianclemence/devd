@@ -1,0 +1,79 @@
+id: nextjs
+name: Next.js
+language: javascript
+category: web
+summary: React framework with routing, server rendering and a build pipeline.
+description: Created with the official create-next-app. Every flag below is one create-next-app documents in its --help output.
+docs:
+  - {title: Installation, url: "https://nextjs.org/docs/app/getting-started/installation"}
+  - {title: create-next-app CLI, url: "https://nextjs.org/docs/app/api-reference/cli/create-next-app"}
+verified: {method: cli-help, against: "create-next-app 16.4.2", date: "2026-10-20"}
+runtime: node
+package_managers: [npm, pnpm, yarn, bun]
+name_hint: Lowercase letters, digits, dots, hyphens and underscores (an npm package name).
+versions:
+  - {id: "16", label: Next.js 16 (latest), value: latest, default: true, requires: [{tool: node, min: "20.9", why: "Next.js 16 requires Node.js 20.9 or newer"}]}
+options:
+  - {id: language, label: Language, kind: select, default: ts, help: TypeScript adds type checking; JavaScript is plain., choices: [{value: ts, label: TypeScript}, {value: js, label: JavaScript}], flag: "--ts / --js"}
+  - {id: linter, label: Linter, kind: select, default: eslint, help: Code-quality tooling set up in the project., choices: [{value: eslint, label: ESLint}, {value: biome, label: Biome (lint and format)}, {value: none, label: None}], flag: "--eslint / --biome / --no-eslint"}
+  - {id: tailwind, label: Tailwind CSS, kind: bool, default: true, help: Utility-first CSS framework., flag: "--tailwind / --no-tailwind"}
+  - {id: src_dir, label: "Use a src/ directory", kind: bool, default: false, help: Keep application code under src/ instead of the project root., flag: "--src-dir / --no-src-dir"}
+  - {id: import_alias, label: Import alias, kind: text, default: "@/*", pattern: '^[^\s]+/\*$', help: "Alias for imports from the project root, such as @/* ."}
+  - {id: react_compiler, label: React Compiler, kind: bool, default: false, advanced: true, help: Enables the React Compiler for automatic memoisation., flag: "--react-compiler"}
+  - {id: agents_md, label: AGENTS.md for coding agents, kind: bool, default: true, advanced: true, help: Adds an AGENTS.md describing how to write current Next.js code., flag: "--agents-md / --no-agents-md"}
+init:
+  install_toggle: true
+  steps:
+    - id: scaffold
+      title: Create the app with create-next-app
+      network: true
+      extensible: true
+      needs: [node]
+      run:
+        - "{pm.dlx}"
+        - "create-next-app@{version}"
+        - "{name}"
+        - {when: {option: language, equals: ts}, args: [--ts], else: [--js]}
+        - {when: {option: linter, equals: eslint}, args: [--eslint]}
+        - {when: {option: linter, equals: biome}, args: [--biome]}
+        - {when: {option: linter, equals: none}, args: [--no-eslint]}
+        - {when: {option: tailwind, equals: true}, args: [--tailwind], else: [--no-tailwind]}
+        - {when: {option: src_dir, equals: true}, args: [--src-dir], else: [--no-src-dir]}
+        - --app
+        - --import-alias
+        - "{opt.import_alias}"
+        - {when: {option: react_compiler, equals: true}, args: [--react-compiler]}
+        - {when: {option: agents_md, equals: false}, args: [--no-agents-md]}
+        - "--use-{pm}"
+        - {when: {option: install, equals: false}, args: [--skip-install]}
+        - --disable-git
+        - --yes
+verify:
+  files: [package.json, next.config.ts]
+  commands:
+    - {title: Production build, needs_install: true, needs: [node], run: ["{pm.run}", build]}
+tasks:
+  - {id: dev, title: Start the development server, kind: dev, long_running: true, port: 3000, run: ["{pm.run}", dev], requires_script: dev}
+  - {id: build, title: Production build, kind: build, run: ["{pm.run}", build], requires_script: build}
+  - {id: start, title: Start the production server, kind: dev, long_running: true, port: 3000, run: ["{pm.run}", start], requires_script: start}
+  - {id: lint, title: Lint, kind: lint, run: ["{pm.run}", lint], requires_script: lint}
+  - {id: test, title: Run tests, kind: test, run: ["{pm.run}", test], requires_script: test}
+  - {id: typecheck, title: Type-check, kind: typecheck, run: ["{pm.exec}", tsc, --noEmit], requires_file: tsconfig.json}
+  - {id: install, title: Install dependencies, kind: install, risk: mutating, run: ["{pm.install}"]}
+detect:
+  rules:
+    - {dependency: next, weight: 6, evidence: next is a dependency}
+    - {file: next.config.js, weight: 3, evidence: next.config.js}
+    - {file: next.config.mjs, weight: 3, evidence: next.config.mjs}
+    - {file: next.config.ts, weight: 3, evidence: next.config.ts}
+    - {file: .next, weight: 1, evidence: ".next build output"}
+env:
+  - {name: NEXT_PUBLIC_*, help: "Variables prefixed NEXT_PUBLIC_ are embedded in the browser bundle; never put secrets in them."}
+structure: [app/ or src/app/, public/, next.config.*, package.json]
+conventions:
+  - "App Router: routes are folders under app/ with page.tsx and layout.tsx."
+  - "Server Components by default; add \"use client\" only where needed."
+  - "Run the build before reporting a change complete; it type-checks routes."
+exec:
+  programs: [node, npx, next]
+  destructive_args: []

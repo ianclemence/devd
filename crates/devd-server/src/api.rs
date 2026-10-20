@@ -197,7 +197,15 @@ pub async fn invoke(State(state): State<Arc<AppState>>, body: String) -> Respons
             args: body.args.clone(),
             dry_run: body.dry_run,
         };
-        return match state.registry.dispatch(&state.ctx, &req, Approval::None) {
+        // Stack operations run for minutes; dispatch off the async workers so a
+        // long initialisation never starves the requests that poll its progress.
+        let st = state.clone();
+        let dispatched = tokio::task::spawn_blocking(move || st.registry.dispatch(&st.ctx, &req, Approval::None)).await;
+        let dispatched = match dispatched {
+            Ok(r) => r,
+            Err(e) => return error_response(&DevdError::internal(format!("the operation panicked: {e}"))),
+        };
+        return match dispatched {
             Ok(result) => Json(json!({
                 "capability": result.capability,
                 "dry_run": result.dry_run,
@@ -268,7 +276,12 @@ pub async fn approve(State(state): State<Arc<AppState>>, body: String) -> Respon
         dry_run: false,
     };
 
-    match state.registry.dispatch(&state.ctx, &req, Approval::Granted) {
+    let st = state.clone();
+    let dispatched = match tokio::task::spawn_blocking(move || st.registry.dispatch(&st.ctx, &req, Approval::Granted)).await {
+        Ok(r) => r,
+        Err(e) => return error_response(&DevdError::internal(format!("the operation panicked: {e}"))),
+    };
+    match dispatched {
         Ok(result) => Json(json!({
             "capability": result.capability,
             "approved_by": record.actor,

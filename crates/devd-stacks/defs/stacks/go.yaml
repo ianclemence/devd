@@ -1,0 +1,116 @@
+id: go
+name: Go
+language: go
+category: language
+summary: A Go module with a command-line or HTTP entry point.
+docs:
+  - {title: Tutorial - Get started with Go, url: "https://go.dev/doc/tutorial/getting-started"}
+  - {title: Go modules reference, url: "https://go.dev/ref/mod"}
+  - {title: Tutorial - Create a module, url: "https://go.dev/doc/tutorial/create-module"}
+verified: {method: docs, against: "go 1.22+ `go mod init`, `go test`, `go vet`", date: "2026-10-20"}
+runtime: go
+package_managers: [go]
+name_pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'
+name_hint: Used as the directory name; the module path is a separate option.
+versions:
+  - {id: toolchain, label: Installed Go toolchain, value: "", default: true, requires: [{tool: go, min: "1.22", why: "supported Go releases"}]}
+options:
+  - {id: module, label: Module path, kind: text, default: "example.com/{name}", pattern: '^[A-Za-z0-9._~/-]+$', help: "The import path of the module, usually your repository URL such as github.com/you/project. Public modules must match where they are hosted."}
+  - {id: kind, label: Entry point, kind: select, default: cli, choices: [{value: cli, label: Command-line program}, {value: http, label: HTTP server (net/http)}]}
+init:
+  creates_dir: true
+  install_toggle: false
+  steps:
+    - id: mod-init
+      title: Initialise the module
+      cwd: project
+      needs: [go]
+      extensible: true
+      run: [go, mod, init, "{opt.module}"]
+    - id: main-cli
+      title: Write main.go
+      kind: write
+      cwd: project
+      path: main.go
+      when: {option: kind, equals: cli}
+      content: |
+        package main
+
+        import "fmt"
+
+        func main() {
+        	fmt.Println("Hello from {name}")
+        }
+    - id: main-http
+      title: Write main.go
+      kind: write
+      cwd: project
+      path: main.go
+      when: {option: kind, equals: http}
+      content: |
+        package main
+
+        import (
+        	"fmt"
+        	"log"
+        	"net/http"
+        )
+
+        func main() {
+        	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+        		fmt.Fprintln(w, "Hello from {name}")
+        	})
+        	log.Println("listening on http://127.0.0.1:8080")
+        	log.Fatal(http.ListenAndServe("127.0.0.1:8080", nil))
+        }
+    - id: test
+      title: Write main_test.go
+      kind: write
+      cwd: project
+      path: main_test.go
+      content: |
+        package main
+
+        import "testing"
+
+        func TestPlaceholder(t *testing.T) {
+        	if testing.Short() {
+        		t.Log("short mode")
+        	}
+        }
+    - id: gitignore
+      title: Write .gitignore
+      kind: write
+      cwd: project
+      path: .gitignore
+      content: |
+        /bin/
+        /{name}
+        /{name}.exe
+        *.test
+        .env
+verify:
+  files: [go.mod, main.go]
+  commands:
+    - {title: Vet, needs: [go], run: [go, vet, ./...]}
+    - {title: Test, needs: [go], run: [go, test, ./...]}
+tasks:
+  - {id: run, title: Run the program, kind: dev, long_running: true, port: 8080, run: [go, run, .], requires_file: go.mod}
+  - {id: build, title: Build all packages, kind: build, run: [go, build, ./...], requires_file: go.mod}
+  - {id: test, title: Run tests, kind: test, run: [go, test, ./...], requires_file: go.mod}
+  - {id: vet, title: Vet, kind: lint, run: [go, vet, ./...], requires_file: go.mod}
+  - {id: fmt-check, title: List files that are not gofmt-formatted, kind: lint, run: [gofmt, -l, .], requires_file: go.mod}
+  - {id: fmt, title: Format with gofmt, kind: format, risk: mutating, run: [go, fmt, ./...], requires_file: go.mod}
+  - {id: tidy, title: Tidy go.mod and go.sum, kind: install, risk: mutating, run: [go, mod, tidy], requires_file: go.mod}
+  - {id: install, title: Download modules, kind: install, risk: mutating, run: [go, mod, download], requires_file: go.mod}
+detect:
+  rules:
+    - {file: go.mod, weight: 5, evidence: go.mod}
+    - {file: go.work, weight: 1, evidence: go.work}
+structure: [go.mod, go.sum, main.go, internal/, cmd/]
+conventions:
+  - "Format with gofmt; run go vet and go test ./... before reporting a change complete."
+  - "Keep packages small; put private code under internal/."
+exec:
+  programs: [go, gofmt, golangci-lint, staticcheck]
+  destructive_args: ["clean -modcache"]

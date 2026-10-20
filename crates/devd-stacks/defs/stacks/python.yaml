@@ -1,0 +1,94 @@
+id: python
+name: Python
+language: python
+category: language
+summary: A plain Python project (uv or venv + pip).
+docs:
+  - {title: Python tutorial - virtual environments, url: "https://docs.python.org/3/tutorial/venv.html"}
+  - {title: uv - working on projects, url: "https://docs.astral.sh/uv/guides/projects/"}
+verified: {method: cli-help, against: "uv 0.11 init --help; python -m venv --help (3.13)", date: "2026-10-20"}
+runtime: python
+package_managers: [uv, pip]
+name_pattern: '^[a-z][a-z0-9_-]{0,63}$'
+name_hint: Lowercase letters, digits, hyphens and underscores, starting with a letter.
+versions:
+  - {id: py3, label: Python 3, value: "3", default: true, requires: [{tool: python, min: "3.9"}]}
+options:
+  - {id: kind, label: Project kind, kind: select, default: app, choices: [{value: app, label: Application}, {value: lib, label: Library (packaged)}], flag: "uv init --app / --lib"}
+init:
+  creates_dir: true
+  install_toggle: false
+  steps:
+    - id: uv-init
+      title: Create the project with uv
+      cwd: project
+      when: {option: package_manager, equals: uv}
+      needs: [uv]
+      extensible: true
+      run:
+        - uv
+        - init
+        - --no-workspace
+        - --vcs
+        - none
+        - --name
+        - "{name_kebab}"
+        - {when: {option: kind, equals: lib}, args: [--lib], else: [--app]}
+    - id: venv
+      title: Create a virtual environment
+      cwd: project
+      when: {option: package_manager, equals: pip}
+      needs: [python]
+      run: ["{python}", -m, venv, .venv]
+    - id: main
+      title: Write main.py
+      kind: write
+      cwd: project
+      path: main.py
+      when: {option: package_manager, equals: pip}
+      content: |
+        def main():
+            print("Hello from {name}")
+
+
+        if __name__ == "__main__":
+            main()
+    - id: requirements
+      title: Write requirements.txt
+      kind: write
+      cwd: project
+      path: requirements.txt
+      when: {option: package_manager, equals: pip}
+      content: |
+        # Add dependencies here, then run: .venv/bin/python -m pip install -r requirements.txt
+    - id: gitignore
+      title: Write .gitignore
+      kind: write
+      cwd: project
+      path: .gitignore
+      content: |
+        .venv/
+        __pycache__/
+        *.pyc
+        .env
+verify:
+  files: [".gitignore"]
+  commands:
+    - {title: Run the entry point, run: ["{py}", main.py], needs: [python]}
+tasks:
+  - {id: run, title: Run the app, kind: dev, run: ["{py}", main.py], requires_file: main.py}
+  - {id: test, title: Run pytest, kind: test, run: ["{py}", -m, pytest], requires_file: tests}
+  - {id: install, title: Install dependencies, kind: install, risk: mutating, run: ["{pm.install}"]}
+detect:
+  min_score: 2
+  rules:
+    - {file: pyproject.toml, weight: 2, evidence: pyproject.toml}
+    - {file: requirements.txt, weight: 2, evidence: requirements.txt}
+    - {file: uv.lock, weight: 1, evidence: uv.lock}
+    - {file: setup.py, weight: 2, evidence: setup.py}
+structure: [pyproject.toml or requirements.txt, main.py, .venv/]
+conventions:
+  - "Work inside the project's virtual environment; never pip install into the system interpreter."
+exec:
+  programs: [python, python3, uv, pip, pytest, ruff, mypy]
+  destructive_args: []

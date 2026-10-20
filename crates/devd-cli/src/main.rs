@@ -14,7 +14,9 @@ use devd_core::config::Settings;
 use devd_core::paths::Paths;
 use devd_core::{DevdError, Result};
 
+mod aicat;
 mod app;
+mod devcat;
 mod gitcat;
 mod runtimecat;
 mod setup;
@@ -152,6 +154,55 @@ pub(crate) enum Command {
         #[arg(long)]
         port: Option<u16>,
     },
+    /// Create a new project from a stack (guided when run in a terminal).
+    New(NewArgs),
+    /// Browse the supported stacks, their options and the compatibility matrix.
+    Stacks {
+        #[command(subcommand)]
+        cmd: StacksCommand,
+    },
+    /// Detect, install, remove and run the tools and services projects need.
+    Tools {
+        #[command(subcommand)]
+        cmd: ToolsCommand,
+    },
+    /// Understand, import and work on projects: detect, tasks, run, exec.
+    Project {
+        #[command(subcommand)]
+        cmd: ProjectCommand,
+    },
+    /// Talk to devd's built-in agent, which can use every capability devd has.
+    Chat(ChatArgs),
+    /// The agent team: describe a goal, review the plan, follow the work, see the evidence.
+    Team {
+        #[command(subcommand)]
+        cmd: TeamCommand,
+    },
+    /// Skills agents load: playbooks, techniques and principles.
+    Skills {
+        #[command(subcommand)]
+        cmd: SkillsCommand,
+    },
+    /// Model providers and API keys for the built-in agent.
+    Provider {
+        #[command(subcommand)]
+        cmd: ProviderCommand,
+    },
+    /// The model catalogue, from the vendors' own documentation and APIs.
+    Models {
+        #[command(subcommand)]
+        cmd: ModelsCommand,
+    },
+    /// Messages agents left for you.
+    Inbox {
+        #[command(subcommand)]
+        cmd: InboxCommand,
+    },
+    /// Operations agents asked you to approve.
+    Approvals {
+        #[command(subcommand)]
+        cmd: ApprovalsCommand,
+    },
     /// Open the terminal dashboard.
     Tui,
     /// Serve the Model Context Protocol on stdin/stdout, for agents.
@@ -165,6 +216,362 @@ pub(crate) enum Command {
     },
     /// Check the environment for problems.
     Doctor,
+}
+
+#[derive(clap::Args, Debug)]
+pub(crate) struct NewArgs {
+    /// Stack id, e.g. `laravel` or `nextjs` (see `devd stacks list`).
+    pub stack: Option<String>,
+    /// Project name; also the directory name.
+    pub name: Option<String>,
+    /// Directory to create the project in. Defaults to the projects root.
+    #[arg(long)]
+    pub dest: Option<String>,
+    /// Framework version id, e.g. `12` for Laravel 12.
+    #[arg(long = "stack-version")]
+    pub stack_version: Option<String>,
+    /// Package manager, e.g. `pnpm`.
+    #[arg(long)]
+    pub pm: Option<String>,
+    /// A stack option as `key=value`, e.g. `-o database=pgsql`. Repeatable.
+    #[arg(short = 'o', long = "option", value_name = "KEY=VALUE")]
+    pub option: Vec<String>,
+    /// Do not initialise a git repository.
+    #[arg(long)]
+    pub no_git: bool,
+    /// Do not install dependencies.
+    #[arg(long)]
+    pub no_install: bool,
+    /// Extra argument appended to the scaffolding command. Repeatable.
+    #[arg(long = "extra", allow_hyphen_values = true)]
+    pub extra: Vec<String>,
+    /// Ask the guided questions even though a stack and name were given.
+    #[arg(long)]
+    pub interactive: bool,
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum StacksCommand {
+    /// List the supported stacks.
+    List {
+        /// web, frontend, backend, mobile or language.
+        #[arg(long)]
+        category: Option<String>,
+    },
+    /// Show one stack: versions, options, tasks, services, documentation.
+    Show { id: String },
+    /// Print the JSON Schemas of requests, plans, reports and project context.
+    Schema,
+    /// Print the compatibility matrix.
+    Matrix {
+        /// Emit the Markdown used for docs/stacks.md.
+        #[arg(long)]
+        markdown: bool,
+    },
+    /// Show recent initialisations, tasks and tool changes.
+    Runs { subject: Option<String> },
+    /// Cancel a running operation by its run id.
+    Cancel { run_id: String },
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum ToolsCommand {
+    /// List every tool and service with a live check.
+    List {
+        #[arg(long)]
+        category: Option<String>,
+    },
+    /// Check whether this machine satisfies a stack.
+    Check {
+        stack: String,
+        #[arg(long = "stack-version")]
+        version: Option<String>,
+        #[arg(long)]
+        pm: Option<String>,
+    },
+    /// Show exactly what installing or removing a tool would do.
+    Plan {
+        tool: String,
+        #[arg(long)]
+        remove: bool,
+    },
+    /// Install a tool (asks for approval).
+    Install { tool: String },
+    /// Remove a tool (asks for approval; data is kept).
+    Remove { tool: String },
+    /// Show a service's state and health.
+    Status { tool: String },
+    /// Start a service and wait until it answers.
+    Start { tool: String },
+    /// Stop a service.
+    Stop { tool: String },
+    /// Restart a service.
+    Restart { tool: String },
+    /// Recent service log lines.
+    Logs { tool: String },
+    /// Connected Android devices and emulators (adb).
+    Devices,
+    /// Databases and services already on this machine: what is installed, what answers, what needs them.
+    Services,
+    /// Decide how devd treats a service found on this machine (changes nothing on the machine).
+    Decide {
+        tool: String,
+        /// adopt, observe, external or ignore.
+        mode: Option<String>,
+        /// Port of your own instance (for external).
+        #[arg(long)]
+        port: Option<u16>,
+        /// Forget the decision.
+        #[arg(long)]
+        clear: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum ProjectCommand {
+    /// Inspect a directory: stack, package manager, runtimes, tasks, services, docs.
+    Detect {
+        #[arg(default_value = ".")]
+        path: String,
+        /// Treat the project as this stack instead of detecting it.
+        #[arg(long)]
+        stack: Option<String>,
+    },
+    /// Register an existing project without changing it.
+    Import {
+        #[arg(default_value = ".")]
+        path: String,
+        #[arg(long)]
+        stack: Option<String>,
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// List projects devd knows.
+    List,
+    /// Unregister a project (files are kept).
+    Forget { path: String },
+    /// List a project's tasks.
+    Tasks {
+        #[arg(default_value = ".")]
+        path: String,
+    },
+    /// Run a task, e.g. `devd project run . test`.
+    Run {
+        path: String,
+        task: String,
+        /// Start in the background.
+        #[arg(long)]
+        background: bool,
+        /// Wait for it even if it is a long-running task.
+        #[arg(long, conflicts_with = "background")]
+        foreground: bool,
+        /// Arguments passed to the task.
+        #[arg(last = true)]
+        args: Vec<String>,
+    },
+    /// Run an allow-listed framework command, e.g. `devd project exec . -- php artisan route:list`.
+    Exec {
+        path: String,
+        #[arg(long)]
+        timeout: Option<u64>,
+        #[arg(last = true, required = true)]
+        argv: Vec<String>,
+    },
+    /// List background tasks.
+    Ps,
+    /// Stop a background task.
+    Stop { name: String },
+    /// Show a background task's log.
+    Logs {
+        name: String,
+        #[arg(long)]
+        lines: Option<usize>,
+    },
+}
+
+#[derive(clap::Args, Debug)]
+pub(crate) struct ChatArgs {
+    /// What to ask. Omit in a terminal for an interactive conversation.
+    pub message: Option<String>,
+    /// Continue an earlier conversation.
+    #[arg(long)]
+    pub thread: Option<String>,
+    /// Project directory the agent works in.
+    #[arg(long)]
+    pub project: Option<String>,
+    /// Provider id (see `devd provider list`).
+    #[arg(long)]
+    pub provider: Option<String>,
+    /// Model id (see `devd models list`).
+    #[arg(long)]
+    pub model: Option<String>,
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum ProviderCommand {
+    /// List configured providers (keys are never shown).
+    List,
+    /// Show the ready-made provider presets and where to get keys.
+    Presets,
+    /// Add or update a provider. The key comes from DEVD_API_KEY or a prompt.
+    Add {
+        /// Provider id, e.g. `anthropic`.
+        id: String,
+        /// Start from a preset: anthropic, openai, gemini, openrouter, groq, ollama, lm-studio, custom.
+        #[arg(long)]
+        preset: Option<String>,
+        #[arg(long)]
+        base_url: Option<String>,
+        /// Read the key from this environment variable instead of storing it.
+        #[arg(long)]
+        key_env: Option<String>,
+        /// Default model id.
+        #[arg(long)]
+        model: Option<String>,
+        /// Use for new conversations.
+        #[arg(long)]
+        default: bool,
+    },
+    /// Check the URL and key by listing the provider's models.
+    Test { id: String },
+    /// Fetch and cache the models this provider offers.
+    Models { id: String },
+    /// Use this provider for new conversations.
+    Default { id: String },
+    /// Remove a provider and its stored key.
+    Remove { id: String },
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum TeamCommand {
+    /// Start a run. Waits for you to approve the plan unless you pass --yes-plan.
+    Start {
+        /// What to build or change.
+        goal: String,
+        /// Existing project directory.
+        #[arg(long)]
+        project: Option<String>,
+        /// Or the name of a new project.
+        #[arg(long)]
+        new: Option<String>,
+        /// Tasks that may run side by side.
+        #[arg(long, default_value_t = 2)]
+        parallel: i64,
+        /// Do not ask for plan approval.
+        #[arg(long)]
+        yes_plan: bool,
+        /// Return immediately instead of following the run.
+        #[arg(long)]
+        detach: bool,
+    },
+    /// List runs.
+    List,
+    /// Show a run: plan, tasks, evidence and log. Follows it with --follow.
+    Show {
+        run: String,
+        #[arg(long)]
+        follow: bool,
+    },
+    /// The specialists, what each may do and what each must prove.
+    Roles,
+    /// Approve the plan; the work starts.
+    Approve { run: String },
+    /// Give the team a new instruction.
+    Say { run: String, text: String },
+    /// Pause a run.
+    Pause { run: String },
+    /// Resume a paused run.
+    Resume { run: String },
+    /// Stop a run.
+    Cancel { run: String },
+    /// Run a failed, blocked or unverified task again.
+    Retry {
+        task: String,
+        #[arg(long)]
+        note: Option<String>,
+    },
+    /// Accept a task without the required proof (recorded as accepted by hand).
+    Accept { task: String },
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum SkillsCommand {
+    /// List skills.
+    List {
+        query: Option<String>,
+        #[arg(long)]
+        role: Option<String>,
+        #[arg(long)]
+        kind: Option<String>,
+    },
+    /// Print one skill.
+    Show { name: String },
+    /// Add your own skill from a Markdown file (the body).
+    Add {
+        name: String,
+        #[arg(long)]
+        description: String,
+        #[arg(long, default_value = "technique")]
+        kind: String,
+        #[arg(long)]
+        roles: Vec<String>,
+        /// File containing the instructions.
+        file: String,
+    },
+    /// Remove one of your own skills.
+    Remove { name: String },
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum ModelsCommand {
+    /// Which model does which kind of work.
+    Roles,
+    /// Choose the models for a kind of work, first choice first (provider:model ...).
+    Assign {
+        role: String,
+        /// Entries like `anthropic:claude-opus-5-5`; none clears the role.
+        models: Vec<String>,
+        /// Only for this project directory.
+        #[arg(long)]
+        project: Option<String>,
+    },
+    /// Show cached models.
+    List {
+        /// `anthropic-docs` or `provider:<id>`.
+        #[arg(long)]
+        source: Option<String>,
+    },
+    /// Fetch the official Claude model list from Anthropic's documentation.
+    Refresh,
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum InboxCommand {
+    /// Show messages from agents.
+    List {
+        /// Include resolved ones.
+        #[arg(long)]
+        all: bool,
+    },
+    /// Answer a message.
+    Reply {
+        id: String,
+        /// Your answer; empty just resolves it.
+        text: Vec<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum ApprovalsCommand {
+    /// Show requests waiting for you.
+    List {
+        #[arg(long)]
+        all: bool,
+    },
+    /// Approve and run a request.
+    Approve { id: String },
+    /// Decline a request.
+    Decline { id: String },
 }
 
 #[derive(Subcommand, Debug)]
@@ -942,6 +1349,50 @@ fn run(cli: Cli) -> Result<i32> {
             app.invoke(&id, value)?;
             Ok(0)
         }
+        Command::New(a) => {
+            devcat::new_project(&app, a)?;
+            Ok(0)
+        }
+        Command::Chat(a) => {
+            aicat::chat(&app, a)?;
+            Ok(0)
+        }
+        Command::Team { cmd } => {
+            aicat::team(&app, cmd)?;
+            Ok(0)
+        }
+        Command::Skills { cmd } => {
+            aicat::skills(&app, cmd)?;
+            Ok(0)
+        }
+        Command::Provider { cmd } => {
+            aicat::provider(&app, cmd)?;
+            Ok(0)
+        }
+        Command::Models { cmd } => {
+            aicat::models(&app, cmd)?;
+            Ok(0)
+        }
+        Command::Inbox { cmd } => {
+            aicat::inbox(&app, cmd)?;
+            Ok(0)
+        }
+        Command::Approvals { cmd } => {
+            aicat::approvals(&app, cmd)?;
+            Ok(0)
+        }
+        Command::Stacks { cmd } => {
+            devcat::stacks(&app, cmd)?;
+            Ok(0)
+        }
+        Command::Tools { cmd } => {
+            devcat::tools(&app, cmd)?;
+            Ok(0)
+        }
+        Command::Project { cmd } => {
+            devcat::project(&app, cmd)?;
+            Ok(0)
+        }
         Command::Git { cmd } => {
             gitcat::run(&app, cmd)?;
             Ok(0)
@@ -1025,8 +1476,17 @@ fn run(cli: Cli) -> Result<i32> {
             let git_executable = app.settings.git_executable.clone();
             let extra: Vec<devd_mcp::ExtraChecks> =
                 vec![Arc::new(move || vec![git_check(git_executable.as_deref())])];
+            let queue_store = app.store.clone();
+            let actor_label = format!("agent:{client}");
+            let queue: devd_mcp::ApprovalQueue = Arc::new(move |cap, args, plan| {
+                queue_store
+                    .create_request(&actor_label, cap, args, plan, None, None)
+                    .ok()
+                    .map(|r| r.id)
+            });
             let server = devd_mcp::McpServer::new(app.registry.clone(), app.ctx(), client)
-                .with_extra_checks(extra);
+                .with_extra_checks(extra)
+                .with_approval_queue(queue);
             // Nothing but protocol traffic may reach stdout.
             server.serve_stdio()?;
             Ok(0)

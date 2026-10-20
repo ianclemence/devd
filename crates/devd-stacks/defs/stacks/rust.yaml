@@ -1,0 +1,58 @@
+id: rust
+name: Rust
+language: rust
+category: language
+summary: A Cargo package, binary or library.
+docs:
+  - {title: The Cargo Book - Creating a new package, url: "https://doc.rust-lang.org/cargo/guide/creating-a-new-project.html"}
+  - {title: cargo new, url: "https://doc.rust-lang.org/cargo/commands/cargo-new.html"}
+verified: {method: cli-help, against: "cargo 1.97.0 `cargo new --help`", date: "2026-10-20"}
+runtime: rust
+package_managers: [cargo]
+name_pattern: '^[A-Za-z][A-Za-z0-9_-]{0,63}$'
+name_hint: Letters, digits, hyphens and underscores, starting with a letter.
+versions:
+  - {id: stable, label: Installed Rust toolchain, value: "", default: true, requires: [{tool: rust, min: "1.85", why: "Rust 2024 edition needs 1.85; choose 2021 for older toolchains"}]}
+options:
+  - {id: kind, label: Package kind, kind: select, default: bin, flag: "--bin / --lib", choices: [{value: bin, label: Binary (application)}, {value: lib, label: Library}]}
+  - {id: edition, label: Edition, kind: select, default: "2024", flag: "--edition", choices: [{value: "2024", label: "2024 (Rust 1.85+)"}, {value: "2021", label: "2021"}, {value: "2018", label: "2018"}]}
+init:
+  install_toggle: false
+  steps:
+    - id: scaffold
+      title: Create the package with cargo new
+      extensible: true
+      needs: [rust]
+      run:
+        - cargo
+        - new
+        - "{name}"
+        - "--{opt.kind}"
+        - --edition
+        - "{opt.edition}"
+        - --vcs
+        - {when: {option: git, equals: true}, args: [git], else: [none]}
+verify:
+  files: [Cargo.toml]
+  commands:
+    - {title: cargo check, needs: [rust], run: [cargo, check]}
+tasks:
+  - {id: run, title: Run the binary, kind: dev, run: [cargo, run], requires_file: Cargo.toml}
+  - {id: build, title: Build, kind: build, run: [cargo, build], requires_file: Cargo.toml}
+  - {id: release, title: Build optimised, kind: build, run: [cargo, build, --release], requires_file: Cargo.toml}
+  - {id: check, title: Type-check without producing binaries, kind: typecheck, run: [cargo, check], requires_file: Cargo.toml}
+  - {id: test, title: Run tests, kind: test, run: [cargo, test], requires_file: Cargo.toml}
+  - {id: lint, title: Lint with clippy, kind: lint, run: [cargo, clippy, --all-targets], requires_file: Cargo.toml}
+  - {id: fmt-check, title: Check formatting, kind: lint, run: [cargo, fmt, --check], requires_file: Cargo.toml}
+  - {id: fmt, title: Format, kind: format, risk: mutating, run: [cargo, fmt], requires_file: Cargo.toml}
+  - {id: install, title: Fetch dependencies, kind: install, risk: mutating, run: [cargo, fetch], requires_file: Cargo.toml}
+detect:
+  rules:
+    - {file: Cargo.toml, weight: 5, evidence: Cargo.toml}
+    - {file: Cargo.lock, weight: 1, evidence: Cargo.lock}
+structure: [Cargo.toml, src/main.rs or src/lib.rs, tests/]
+conventions:
+  - "Run cargo fmt, cargo clippy and cargo test before reporting a change complete."
+exec:
+  programs: [cargo, rustc, rustup, rustfmt]
+  destructive_args: [clean, publish, yank]

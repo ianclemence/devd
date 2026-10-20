@@ -19,6 +19,9 @@ pub mod ports;
 pub mod process;
 pub mod registry;
 pub mod state;
+pub mod store_ai;
+pub mod store_team;
+pub mod store_stacks;
 pub mod store_work;
 pub mod util;
 
@@ -35,6 +38,9 @@ pub use events::{Event, EventBus};
 pub use paths::Paths;
 pub use registry::Registry;
 pub use state::Store;
+pub use store_ai::{AgentRequest, CatalogueModel, ChatEvent, ChatThread, InboxMessage, Provider};
+pub use store_team::{ProviderCheck, RoleModel, ServiceDecision, TeamEvent, TeamRun, TeamTask};
+pub use store_stacks::{StackProject, StackRun};
 pub use store_work::{AgentSession, AgentTask, ProjectProcess, Scratchpad, Todo, TodoEvent};
 
 /// Error type shared across the workspace.

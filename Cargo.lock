@@ -880,14 +880,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "devd-agent"
+version = "0.8.0"
+dependencies = [
+ "base64 0.22.1",
+ "devd-core",
+ "devd-git",
+ "devd-mcp",
+ "devd-services",
+ "devd-stacks",
+ "regex",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "ureq",
+ "walkdir",
+ "webpki-roots 0.26.11",
+]
+
+[[package]]
 name = "devd-bootstrap"
 version = "0.8.0"
 dependencies = [
+ "devd-agent",
  "devd-core",
  "devd-git",
  "devd-runtime",
  "devd-services",
  "devd-sites",
+ "devd-stacks",
  "devd-workspace",
  "serde",
  "serde_json",
@@ -906,6 +928,7 @@ dependencies = [
  "devd-server",
  "devd-services",
  "devd-sites",
+ "devd-stacks",
  "devd-tui",
  "devd-workspace",
  "open",
@@ -1033,6 +1056,20 @@ dependencies = [
  "schemars 0.8.22",
  "serde",
  "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "devd-stacks"
+version = "0.8.0"
+dependencies = [
+ "devd-core",
+ "devd-runtime",
+ "regex",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "serde_yaml",
  "tempfile",
 ]
 

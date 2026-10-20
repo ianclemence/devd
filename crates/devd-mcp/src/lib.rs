@@ -69,17 +69,29 @@ you know the tier and the exact argument shape. Read-tier capabilities run \
 directly. An operation that needs human approval is refused here and recorded; \
 a human approves it in the devd application or the CLI, never an agent. Use \
 devd_invoke with dry_run true to see what an operation would do without doing \
-it. Git capabilities operate on a repository the user has added to devd with \
+it. To work on any project, call project.detect first: it reports the stack, \
+package manager, required runtimes, the tasks you can run (project.run), \
+services and missing tools (toolchain.install asks a human to approve). Verify \
+changes by running the project's own test/build tasks and report their real \
+output. Git capabilities operate on a repository the user has added to devd with \
 git.repo.track, or on any absolute path supplied in the `repo` argument.";
 
 /// A function producing environment checks that only some callers can perform.
 pub type ExtraChecks = Arc<dyn Fn() -> Vec<Check> + Send + Sync>;
+
+/// Called when an agent asks for an operation that needs a person's approval.
+///
+/// Receives the capability id, its arguments and the plan, and returns the id of
+/// the queued request so the agent can poll for the decision. The queue lives
+/// outside this crate, which owns no storage.
+pub type ApprovalQueue = Arc<dyn Fn(&str, &Value, Option<&Value>) -> Option<String> + Send + Sync>;
 
 /// The MCP server over the shared registry.
 pub struct McpServer {
     registry: Arc<Registry>,
     ctx: Ctx,
     extra_checks: Vec<ExtraChecks>,
+    approval_queue: Option<ApprovalQueue>,
 }
 
 /// The outcome of a tool call.
@@ -103,6 +115,24 @@ impl McpServer {
             registry,
             ctx,
             extra_checks: Vec::new(),
+            approval_queue: None,
+        }
+    }
+
+    /// Queue operations that need approval so a person can decide them in the
+    /// application, the dashboard or the CLI instead of re-asking the agent.
+    pub fn with_approval_queue(mut self, queue: ApprovalQueue) -> Self {
+        self.approval_queue = Some(queue);
+        self
+    }
+
+    /// Run one tool and return `(is_error, text)`, for callers that host the
+    /// tools themselves rather than speaking JSON-RPC (the built-in agent).
+    pub fn call(&self, name: &str, args: &Value) -> (bool, String) {
+        match self.call_tool(name, args) {
+            ToolOutcome::Content(t) => (false, t),
+            ToolOutcome::Failed(t) => (true, t),
+            ToolOutcome::Protocol(_, m) => (true, m),
         }
     }
 
@@ -335,7 +365,25 @@ impl McpServer {
                 } else {
                     None
                 };
-                ToolOutcome::Failed(pretty(&error_body(&e, plan, Some(id))))
+                let mut body = error_body(&e, plan.clone(), Some(id));
+                if e.code() == "approval_required" && !dry_run {
+                    let queueable = self
+                        .registry
+                        .get(id)
+                        .map(|c| c.agent_safe && !c.human_only)
+                        .unwrap_or(false);
+                    if let (true, Some(queue)) = (queueable, &self.approval_queue) {
+                        if let Some(request_id) = queue(id, &cap_args, plan.as_ref()) {
+                            body["request_id"] = json!(request_id);
+                            body["next_step"] = json!(format!(
+                                "The request was queued as {request_id} and shows in the devd inbox for a person to approve or decline. \
+                                 Poll it with the approval.get capability instead of asking again, carry on with other work meanwhile, \
+                                 and do not report the operation as having happened until its state is `approved`."
+                            ));
+                        }
+                    }
+                }
+                ToolOutcome::Failed(pretty(&body))
             }
         }
     }

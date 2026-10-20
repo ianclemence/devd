@@ -186,6 +186,15 @@ impl SessionManager {
         }
 
         let (program, mut args) = resolve(&opts)?;
+        // Claude Code gets devd as an MCP server automatically, so a session
+        // started from devd can use project.detect, project.run, the inbox and
+        // approvals without the person wiring anything up.
+        if opts.harness == "claude" && opts.command.is_none() {
+            if let Some(config) = devd_mcp_config(&self.paths) {
+                args.push("--mcp-config".to_string());
+                args.push(config);
+            }
+        }
         args.extend(opts.args.clone());
         let cols = opts.cols.max(20);
         let rows = opts.rows.max(8);
@@ -204,6 +213,13 @@ impl SessionManager {
         command.cwd(&dir);
         command.env("TERM", "xterm-256color");
         command.env("COLORTERM", "truecolor");
+        // Tell the agent where it is and how to learn the project, rather than
+        // leaving it to guess the stack from file names.
+        command.env("DEVD_PROJECT_DIR", dir.to_string_lossy().to_string());
+        command.env(
+            "DEVD_AGENT_HINT",
+            "Call the devd MCP tool project.detect with this directory for the stack, package manager, runtimes, tasks and services; project.run and project.exec to run commands; toolchain.install to request missing tools.",
+        );
 
         let mut child = pair
             .slave
@@ -818,6 +834,24 @@ fn read_tail(path: &Path, max: u64) -> Result<Vec<u8>> {
     file.read_to_end(&mut out)
         .map_err(|e| DevdError::internal(format!("cannot read the transcript: {e}")))?;
     Ok(out)
+}
+
+/// The inline MCP configuration that points an agent at this devd installation.
+fn devd_mcp_config(paths: &Paths) -> Option<String> {
+    let name = if cfg!(windows) { "devd.exe" } else { "devd" };
+    let exe = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(|d| d.join(name)))
+        .filter(|p| p.is_file())
+        .or_else(|| util::which("devd"))?;
+    Some(
+        json!({ "mcpServers": { "devd": {
+            "command": exe.to_string_lossy(),
+            "args": ["mcp", "--client", "claude-code"],
+            "env": { "DEVD_HOME": paths.root().to_string_lossy() },
+        } } })
+        .to_string(),
+    )
 }
 
 /// Resolve a harness to a program and fixed arguments.

@@ -1,0 +1,59 @@
+id: nuxt
+name: Nuxt
+language: javascript
+category: web
+summary: Vue framework with server rendering, file-based routing and modules.
+docs:
+  - {title: Installation, url: "https://nuxt.com/docs/getting-started/installation"}
+  - {title: nuxi init, url: "https://nuxt.com/docs/api/commands/init"}
+verified: {method: cli-help, against: "nuxi 4.0.1 / nuxt 4.6.2", date: "2026-10-20"}
+runtime: node
+package_managers: [npm, pnpm, yarn, bun]
+versions:
+  - {id: "4", label: Nuxt 4 (latest), value: latest, default: true, requires: [{tool: node, min: "22.22.3", why: "Nuxt 4.6 requires Node.js ^22.22.3, ^24.15 or 26+"}]}
+options:
+  - {id: template, label: Starter template, kind: select, default: minimal, help: The official starter to copy., choices: [{value: minimal, label: Minimal}]}
+  - {id: modules, label: Modules, kind: text, default: "", pattern: '^[a-z0-9@/._,-]*$', help: "Nuxt modules to install, comma separated without spaces, e.g. @nuxt/ui,@nuxt/content.", flag: "-M / --modules"}
+init:
+  install_toggle: true
+  steps:
+    - id: scaffold
+      title: Create the app with nuxi init
+      network: true
+      extensible: true
+      needs: [node]
+      run:
+        - "{pm.dlx}"
+        - "nuxi@{version}"
+        - init
+        - "{name}"
+        - --template
+        - "{opt.template}"
+        - "--packageManager={pm}"
+        - {when: {option: modules, nonempty: true}, args: ["--modules={opt.modules}"]}
+        - {when: {option: install, equals: false}, args: [--no-install]}
+        - {when: {option: git, equals: true}, args: [--gitInit], else: [--no-gitInit]}
+verify:
+  files: [package.json, nuxt.config.ts]
+tasks:
+  - {id: dev, title: Start the development server, kind: dev, long_running: true, port: 3000, run: ["{pm.run}", dev], requires_script: dev}
+  - {id: build, title: Production build, kind: build, run: ["{pm.run}", build], requires_script: build}
+  - {id: preview, title: Preview the production build, kind: dev, long_running: true, port: 3000, run: ["{pm.run}", preview], requires_script: preview}
+  - {id: generate, title: Generate a static site, kind: build, run: ["{pm.run}", generate], requires_script: generate}
+  - {id: typecheck, title: Type-check, kind: typecheck, run: ["{pm.exec}", nuxt, typecheck]}
+  - {id: lint, title: Lint, kind: lint, run: ["{pm.run}", lint], requires_script: lint}
+  - {id: test, title: Run tests, kind: test, run: ["{pm.run}", test], requires_script: test}
+  - {id: install, title: Install dependencies, kind: install, risk: mutating, run: ["{pm.install}"]}
+detect:
+  rules:
+    - {dependency: nuxt, weight: 6, evidence: nuxt is a dependency}
+    - {file: nuxt.config.ts, weight: 3, evidence: nuxt.config.ts}
+    - {file: nuxt.config.js, weight: 3, evidence: nuxt.config.js}
+structure: [app/ (Nuxt 4) or pages/, server/, public/, nuxt.config.ts]
+conventions:
+  - "Nuxt 4 puts application code under app/; server routes live in server/."
+  - "Auto-imports are on; do not add manual imports for composables and components."
+  - "Run `nuxt typecheck` after changing types."
+exec:
+  programs: [node, npx, nuxt, nuxi]
+  destructive_args: []

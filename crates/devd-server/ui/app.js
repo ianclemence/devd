@@ -131,7 +131,7 @@
   // -------------------------------------------------------------------- state
 
   var state = {
-    view: "overview",
+    view: "home",
     session: null,
     doctor: null,
     health: null,
@@ -438,14 +438,154 @@
 
   // ------------------------------------------------------------------ palette
 
-  function paletteSearch(query) {
-    return request("/api/capabilities?limit=60&q=" + encodeURIComponent(query || ""))
-      .then(function (res) {
-        if (!res.ok) return;
-        state.palette.items = res.body.items || [];
-        state.palette.index = 0;
-        renderPalette();
-      });
+  // ------------------------------------------------------------- global search
+  //
+  // One box for what a developer reaches for: places, projects, files, text in
+  // a project, conversations, models, services, and things to do. Nothing is
+  // pre-indexed; slow sources are queried live and the footer says what was and
+  // was not searched. Prefixes narrow it: > do, / files, ~ text, @ projects,
+  // # conversations, ? ask the assistant.
+
+  var PAL = { seq: 0, timer: null, sources: [], recents: [] };
+
+  function palRecents() {
+    try { return JSON.parse(localStorage.getItem("devd.recents") || "[]"); } catch (e) { return []; }
+  }
+  function palRemember(item) {
+    try {
+      var list = palRecents().filter(function (r) { return r.key !== item.key; });
+      list.unshift({ key: item.key, title: item.title, detail: item.detail || "", group: item.group });
+      localStorage.setItem("devd.recents", JSON.stringify(list.slice(0, 8)));
+    } catch (e) { /* storage may be blocked; recents are a convenience */ }
+  }
+
+  var GO_TO = [
+    ["home", "Home", "what needs you, what is running"], ["inbox", "Inbox", "approvals and questions from agents"],
+    ["assistant", "Assistant", "talk to the built-in agent"], ["projects", "Projects", "repositories and stacks"],
+    ["create", "New project", "start from a stack"], ["develop", "Stacks and tasks", "detect and run project tasks"],
+    ["agents", "Sessions", "Claude Code and shell sessions"], ["shared", "Shared notes", "notes agents share"],
+    ["processes", "Processes", "supervised project processes and logs"], ["overview", "Server", "local web server overview"],
+    ["services", "Services", "nginx, PHP, MariaDB and others"], ["sites", "Sites", "projects served on local hostnames"],
+    ["toolchain", "Tools", "languages, package managers, databases"], ["runtimes", "Runtimes", "PHP, Node and Go versions"],
+    ["preview", "Preview", "see a site in the browser"], ["certificates", "Certificates", "local HTTPS"], ["hosts", "Hosts", "hostname entries"],
+    ["providers", "Models", "AI providers, keys and models"], ["activity", "Activity", "what was done, by whom"],
+    ["system", "Diagnostics", "health checks and fixes"], ["capabilities", "API and tools", "every capability, for scripts and agents"]
+  ];
+
+  function palActions(q) {
+    var acts = [
+      { key: "a:new", title: "Create a project", detail: "from 24 stacks", run: function () { navigate("create"); } },
+      { key: "a:import", title: "Import an existing project", detail: "detect its stack and tasks", run: function () { navigate("develop"); } },
+      { key: "a:provider", title: "Add an AI provider", detail: "key and default model", run: function () { navigate("providers"); } },
+      { key: "a:models", title: "Refresh the official model list", detail: "reads Anthropic's documentation", run: function () { run("models.refresh_official", {}); } },
+      { key: "a:health", title: "Check system health", detail: "re-runs every check", run: function () { ACTIONS["health-recheck"](); } },
+      { key: "a:up", title: "Start all services", detail: "asks you first", ask: true, run: function () { act("stack.up", {}); } },
+      { key: "a:down", title: "Stop all services", detail: "asks you first", ask: true, run: function () { act("stack.down", {}); } },
+      { key: "a:newchat", title: "New assistant conversation", detail: "", run: function () { ACTIONS["chat-new"](); navigate("assistant"); } }
+    ];
+    return acts.map(function (a) { a.group = "Do"; return a; });
+  }
+
+  function palLocal(q) {
+    var toks = q.toLowerCase().split(/\s+/).filter(Boolean);
+    function hit(text, name) {
+      var h = text.toLowerCase(), n = name.toLowerCase(), sc = 0;
+      for (var i = 0; i < toks.length; i++) {
+        var t = toks[i];
+        if (n === t) sc += 100; else if (n.indexOf(t) === 0) sc += 80; else if (n.indexOf(t) >= 0) sc += 60; else if (h.indexOf(t) >= 0) sc += 30; else return -1;
+      }
+      return toks.length ? sc : 0;
+    }
+    var out = [];
+    GO_TO.forEach(function (g) {
+      var sc = hit(g[1] + " " + g[2], g[1]);
+      if (sc >= 0) out.push({ key: "g:" + g[0], group: "Go to", title: g[1], detail: g[2], score: sc + 5, run: function () { navigate(g[0]); } });
+    });
+    palActions(q).forEach(function (a) {
+      var sc = hit(a.title + " " + a.detail, a.title);
+      if (sc >= 0) { a.score = sc; out.push(a); }
+    });
+    state.server.services.forEach(function (sv) {
+      var sc = hit(sv.name, sv.name);
+      if (sc >= 0 && toks.length) out.push({ key: "svc:" + sv.name, group: "Services", title: sv.name, detail: sv.running ? "running" : "stopped", score: sc + 10, run: function () { navigate("services"); } });
+    });
+    state.server.sites.forEach(function (st) {
+      var nm = st.name || st.host || "";
+      var sc = hit(nm + " " + (st.host || ""), nm);
+      if (sc >= 0 && toks.length) out.push({ key: "site:" + nm, group: "Sites", title: nm, detail: st.host || "", score: sc + 10, run: function () { navigate("sites"); } });
+    });
+    state.sessions.forEach(function (x) {
+      var sc = hit((x.label || "") + " " + x.harness, x.label || x.harness);
+      if (sc >= 0 && toks.length) out.push({ key: "sess:" + x.id, group: "Sessions", title: x.label || x.harness, detail: x.live_state, score: sc + 10, run: function () { navigate("agents"); } });
+    });
+    return out;
+  }
+
+  function palRemote(r) {
+    var out = [];
+    r.results.forEach(function (x) {
+      var base = { key: x.kind + ":" + (x.path || x.id || x.title), title: x.title, detail: x.detail, score: x.score };
+      if (x.kind === "project") out.push(Object.assign(base, { group: "Projects", run: function () { DEV.path = x.path; DEV.ctx = null; DEV.detect = null; navigate("develop"); } }));
+      else if (x.kind === "file" || x.kind === "text") out.push(Object.assign(base, { group: x.kind === "file" ? "Files" : "Text in project", title: x.kind === "text" ? x.title : x.title, run: function () {
+        read("fs.read", { path: x.path, offset: Math.max(1, (x.line || 1) - 5), limit: 80 }).then(function (d) { openDrawer(x.path.split(/[\\/]/).pop(), '<div class="mono dim nowrap" title="' + attr(x.path) + '">' + esc(x.path) + '</div><pre class="log-block">' + esc(d.content || JSON.stringify(d, null, 2)) + "</pre>"); }).catch(function (e) { toast("error", e.message); });
+      } }));
+      else if (x.kind === "conversation") out.push(Object.assign(base, { group: "Conversations", run: function () { ACTIONS["open-thread"]({ dataset: { id: x.id } }); } }));
+      else if (x.kind === "provider") out.push(Object.assign(base, { group: "Models", run: function () { navigate("providers"); } }));
+      else if (x.kind === "model") out.push(Object.assign(base, { group: "Models", run: function () { navigate("providers"); } }));
+      else if (x.kind === "task") out.push(Object.assign(base, { group: "Tasks", run: function () { navigate("develop"); } }));
+      else if (x.kind === "activity") out.push(Object.assign(base, { group: "Activity", run: function () { navigate("activity"); } }));
+    });
+    return out;
+  }
+
+  function palContext() { return DEV.path || (state.project && state.project.path) || (state.projects[0] && state.projects[0].path) || ""; }
+
+  function palParse(raw) {
+    var m = /^([>\/~@#?])\s*(.*)$/.exec(raw);
+    if (!m) return { mode: "all", q: raw.trim() };
+    return { mode: { ">": "do", "/": "files", "~": "text", "@": "projects", "#": "conversations", "?": "ask" }[m[1]], q: m[2].trim() };
+  }
+
+  function paletteSearch(raw) {
+    var p = palParse(raw || ""), seq = ++PAL.seq;
+    clearTimeout(PAL.timer);
+    var items = [];
+    PAL.sources = [];
+    PAL.note = "";
+    if (p.mode === "ask") {
+      items.push({ key: "ask", group: "Ask", title: p.q ? "Ask the assistant: " + p.q : "Type what you want done", detail: "opens a conversation; it asks before anything risky", run: function () { if (p.q) startChat(p.q, palContext()); } });
+    } else if (!p.q && p.mode === "all") {
+      palRecents().forEach(function (r) { items.push({ key: "r:" + r.key, group: "Recent", title: r.title, detail: r.detail, recent: r.key }); });
+      items = items.concat(palActions("").slice(0, 5)).concat(palLocal("").filter(function (x) { return x.group === "Go to"; }).slice(0, 8));
+      // recents replay by key against the live sources below
+    } else {
+      if (p.mode === "all" || p.mode === "do") items = items.concat(palLocal(p.q).filter(function (x) { return p.mode === "all" || x.group === "Do"; }));
+    }
+    state.palette.items = items; state.palette.index = 0; renderPalette();
+    if (p.mode === "do" || p.mode === "ask" || (!p.q && p.mode === "all")) return;
+    if (!p.q && p.mode !== "all") { PAL.note = ({ files: "Type part of a file name.", text: "Type the text to find in the current project.", projects: "Type a project name.", conversations: "Type part of a conversation title." })[p.mode] || ""; return renderPalette(); }
+    PAL.timer = setTimeout(function () {
+      var scopes = { all: ["projects", "files", "conversations", "models", "tasks"], files: ["files"], text: ["content"], projects: ["projects"], conversations: ["conversations"] }[p.mode];
+      var args = { query: p.q, scopes: scopes, limit: 15 };
+      if (p.mode === "text") { args.project = palContext(); if (!args.project) { PAL.note = "Text search needs a project. Add one first."; return renderPalette(); } }
+      var caps = p.mode === "all" ? request("/api/capabilities?limit=8&q=" + encodeURIComponent(p.q)) : Promise.resolve(null);
+      Promise.all([read("search.query", args), caps]).then(function (r) {
+        if (seq !== PAL.seq) return;
+        var more = palRemote(r[0]);
+        if (r[1] && r[1].ok) (r[1].body.items || []).forEach(function (c) {
+          more.push({ key: "cap:" + c.id, group: "Capabilities", title: c.id, detail: c.summary, score: 1, tier: c.tier, ask: c.requires_approval, run: function () {
+            if (c.tier === "read" && !c.requires_approval) read(c.id, {}).then(function (d) { openDrawer(c.id, renderPatch(JSON.stringify(d, null, 2), 2000)); }).catch(function () { openCapability(c.id); });
+            else openCapability(c.id);
+          } });
+        });
+        more.sort(function (a, b) { return (b.score || 0) - (a.score || 0); });
+        var all = state.palette.items.concat(more);
+        // keep group order: Go to / Do first when they matched, then projects etc.
+        var order = ["Do", "Go to", "Projects", "Sessions", "Services", "Sites", "Files", "Text in project", "Conversations", "Models", "Tasks", "Activity", "Capabilities"];
+        all.sort(function (a, b) { return order.indexOf(a.group) - order.indexOf(b.group) || (b.score || 0) - (a.score || 0); });
+        state.palette.items = all; PAL.sources = r[0].sources; state.palette.index = 0; renderPalette();
+      }).catch(function (e) { if (seq === PAL.seq) { PAL.note = e.message; renderPalette(); } });
+    }, 120);
   }
 
   function openPalette() {
@@ -453,8 +593,7 @@
     el("palette").hidden = false;
     var input = el("palette-input");
     input.value = "";
-    input.placeholder =
-      "Search " + ((state.session && state.session.registry.capabilities) || 0) + " capabilities";
+    input.placeholder = "Search projects, files, conversations, models… or type > to do something, ? to ask";
     input.focus();
     paletteSearch("");
   }
@@ -468,128 +607,119 @@
     var items = state.palette.items;
     var list = el("palette-list");
     if (!items.length) {
-      list.innerHTML = '<div class="empty">No capability matches that</div>';
+      list.innerHTML = '<div class="empty">' + esc(PAL.note || (el("palette-input").value.trim() ? "Nothing matches. Prefix with ? to ask the assistant." : "Start typing")) + "</div>";
     } else {
-      list.innerHTML = items
-        .map(function (c, i) {
-          var hint = c.requires_approval ? "approval required" : c.tier === "read" ? "Enter runs it" : "Enter inspects it";
-          return (
-            '<button type="button" class="palette-item' + (i === state.palette.index ? " active" : "") +
-            '" data-action="palette-pick" data-index="' + i + '">' +
-            '<span><span class="pi-id">' + esc(c.id) + '</span>' +
-            '<div class="pi-sum">' + esc(c.summary) + "</div></span>" +
-            '<span class="pi-group">' + esc(c.tier) + "</span>" +
-            '<span class="pi-group">' + esc(hint) + "</span>" +
-            "</button>"
-          );
-        })
-        .join("");
+      var last = "";
+      list.innerHTML = items.map(function (c, i) {
+        var head = c.group !== last ? '<div class="pi-head">' + esc(c.group) + "</div>" : "";
+        last = c.group;
+        return head + '<button type="button" class="palette-item' + (i === state.palette.index ? " active" : "") + '" data-action="palette-pick" data-index="' + i + '">' +
+          '<span class="pi-main"><span class="pi-id">' + esc(c.title) + '</span><span class="pi-sum">' + esc(c.detail || "") + "</span></span>" +
+          (c.ask ? '<span class="pill pill-warn">asks first</span>' : "") + (c.tier && c.tier !== "read" ? '<span class="pi-group">' + esc(c.tier) + "</span>" : "") + "</button>";
+      }).join("");
       var active = list.querySelector(".palette-item.active");
       if (active && active.scrollIntoView) active.scrollIntoView({ block: "nearest" });
     }
-    el("palette-foot").innerHTML =
-      "<span>Up/Down to move</span><span>Enter to act</span><span>Esc to close</span>";
+    var src = (PAL.sources || []).map(function (s) {
+      return s.searched ? s.source + (s.complete === false ? " (partial)" : "") : s.source + " (not searched: " + s.note + ")";
+    }).join(" · ");
+    el("palette-foot").innerHTML = '<span>↑↓ move</span><span>Enter open</span><span>Esc close</span>' + (src ? '<span class="grow nowrap" title="' + attr(src) + '">searched: ' + esc(src) + "</span>" : '<span class="grow dim nowrap">> do · / files · ~ text · @ projects · # conversations · ? ask</span>');
   }
 
   function paletteActivate(index) {
-    var cap = state.palette.items[index];
-    if (!cap) return;
+    var item = state.palette.items[index];
+    if (!item) return;
     closePalette();
-    if (cap.tier === "read" && !cap.requires_approval) {
-      read(cap.id, {})
-        .then(function (data) {
-          openDrawer(cap.id, renderPatch(JSON.stringify(data, null, 2), 2000));
-        })
-        .catch(function (e) {
-          toast("error", e.message);
-          openCapability(cap.id);
-        });
-    } else {
-      openCapability(cap.id);
+    if (item.recent) {
+      // a recent entry is replayed as a search for the same words
+      openPalette(); el("palette-input").value = item.title; return paletteSearch(item.title);
     }
+    palRemember(item);
+    if (item.run) item.run();
   }
 
   // -------------------------------------------------------------------- views
 
+  // The sidebar answers "what am I doing": things that need me, the work, the
+  // machine it runs on, and the settings behind it. Related pages share one
+  // entry and appear as tabs, so the rail stays short.
+  var AREA = {
+    assistant: "assistant", team: "assistant",
+    projects: "projects", project: "projects", create: "projects", develop: "projects",
+    agents: "agents", shared: "agents",
+    overview: "server", services: "server", sites: "server", toolchain: "server", runtimes: "server",
+    preview: "server", certificates: "server", hosts: "server"
+  };
+  var TABS = {
+    assistant: [["assistant", "Chat"], ["team", "Team runs"]],
+    projects: [["projects", "Projects"], ["create", "New project"], ["develop", "Stacks and tasks"]],
+    agents: [["agents", "Sessions"], ["shared", "Shared notes"]],
+    server: [["overview", "Overview"], ["services", "Services"], ["sites", "Sites"], ["toolchain", "Tools"], ["runtimes", "Runtimes"], ["preview", "Preview"], ["certificates", "Certificates"], ["hosts", "Hosts"]]
+  };
+  var AREA_HOME = { assistant: "assistant", projects: "projects", agents: "agents", server: "overview" };
+
+  function areaOf(view) { return AREA[view] || view; }
+
+  function subnav() {
+    var area = AREA[state.view];
+    var tabs = area && TABS[area];
+    var box = el("subnav");
+    if (!tabs || state.view === "project") { box.hidden = true; box.innerHTML = ""; return; }
+    box.hidden = false;
+    box.innerHTML = tabs.map(function (t) {
+      return '<button type="button" class="subtab' + (state.view === t[0] ? " active" : "") + '" data-action="nav" data-view="' + t[0] + '">' + esc(t[1]) + "</button>";
+    }).join("");
+  }
+
   function rail() {
     var server = state.server;
     var running = server.services.filter(function (s) { return s.running; }).length;
+    var attention = (AI.counts.approvals + AI.counts.questions) || null;
+    var working = AI.threads ? (AI.threads.filter(function (t) { return t.state === "running"; }).length || null) : null;
+    var live = state.sessions.filter(function (s) { return s.live_state === "running"; }).length || null;
     var groups = [
-      {
-        label: "Workspace",
-        items: [
-          { view: "projects", label: "Projects", count: state.projects.length || null },
-          { view: "agents", label: "Agents", count: state.sessions.filter(function (s) { return s.live_state === "running"; }).length || null },
-          { view: "processes", label: "Processes" },
-          { view: "shared", label: "Shared" },
-          {
-            view: "capabilities",
-            label: "Capabilities",
-            count: (state.session && state.session.registry.capabilities) || null
-          },
-          { view: "activity", label: "Activity", count: null },
-          {
-            view: "system",
-            label: "System",
-            count: state.health && state.health.ok === false ? "!" : null
-          }
-        ]
-      },
-      {
-        label: "Server",
-        items: [
-          { view: "overview", label: "Overview" },
-          { view: "sites", label: "Sites", count: server.sites.length || null },
-          { view: "preview", label: "Preview" },
-          {
-            view: "services",
-            label: "Services",
-            count: server.services.length ? running + "/" + server.services.length : null
-          },
-          { view: "runtimes", label: "Runtimes", count: server.runtimes.length || null },
-          { view: "certificates", label: "Certificates" },
-          { view: "hosts", label: "Hosts" }
-        ]
-      }
+      { label: null, items: [
+        { view: "home", label: "Home" },
+        { view: "inbox", label: "Inbox", count: attention, hot: !!attention }
+      ] },
+      { label: "Work", items: [
+        { view: "assistant", label: "Assistant", count: working },
+        { view: "projects", label: "Projects", count: state.projects.length || null },
+        { view: "agents", label: "Sessions", count: live },
+        { view: "processes", label: "Processes" }
+      ] },
+      { label: "Run", items: [
+        { view: "overview", label: "Server", count: server.services.length ? running + "/" + server.services.length : null }
+      ] },
+      { label: "Manage", items: [
+        { view: "providers", label: "Models" },
+        { view: "activity", label: "Activity" },
+        { view: "system", label: "Diagnostics" },
+        { view: "capabilities", label: "API and tools" }
+      ] }
     ];
-
-    el("rail").innerHTML = groups
-      .map(function (group) {
-        return (
-          '<div class="rail-section">' + esc(group.label) + "</div>" +
-          group.items
-            .map(function (i) {
-              return (
-                '<button type="button" class="rail-item' +
-                (state.view === i.view || (state.view === "project" && i.view === "projects") ? " active" : "") +
-                '" data-action="nav" data-view="' + i.view + '">' +
-                "<span>" + esc(i.label) + "</span>" +
-                (i.count !== null && i.count !== undefined
-                  ? '<span class="rail-count">' + esc(i.count) + "</span>"
-                  : "") +
-                "</button>"
-              );
-            })
-            .join("")
-        );
-      })
-      .join("");
-
-    var foot = [];
-    if (state.session) {
-      foot.push('<div class="mono nowrap" title="' + attr(state.session.paths.root) + '">' +
-        esc(state.session.paths.root) + "</div>");
-    }
-    foot.push('<div>version: ' + esc((state.session && state.session.version) || "?") + "</div>");
-    el("rail-foot").innerHTML = foot.join("");
+    el("rail").innerHTML = groups.map(function (group) {
+      return (group.label ? '<div class="rail-section">' + esc(group.label) + "</div>" : "") +
+        group.items.map(function (i) {
+          var active = areaOf(state.view) === areaOf(i.view);
+          return '<button type="button" class="rail-item' + (active ? " active" : "") + '" data-action="nav" data-view="' + i.view + '"' + (active ? ' aria-current="page"' : "") + ">" +
+            "<span>" + esc(i.label) + "</span>" +
+            (i.count !== null && i.count !== undefined ? '<span class="rail-count' + (i.hot ? " rail-count-hot" : "") + '">' + esc(i.count) + "</span>" : "") + "</button>";
+        }).join("");
+    }).join("");
   }
 
   function crumbs() {
     var labels = {
-      overview: "Overview",
+      home: "Home",
+      team: "Team runs",
+      assistant: "Assistant",
+      inbox: "Inbox",
+      providers: "Models",
+      overview: "Server",
       sites: "Sites",
       preview: "Preview",
-      agents: "Agents",
+      agents: "Sessions",
       processes: "Processes",
       shared: "Shared",
       services: "Services",
@@ -597,9 +727,12 @@
       certificates: "Certificates",
       hosts: "Hosts",
       projects: "Projects",
-      capabilities: "Capabilities",
+      create: "Create a project",
+      develop: "Develop",
+      toolchain: "Toolchain",
+      capabilities: "API and tools",
       activity: "Activity",
-      system: "System"
+      system: "Diagnostics"
     };
     var parts = [];
     if (state.view === "project" && state.project) {
@@ -613,33 +746,30 @@
   }
 
   function statusbar() {
-    var bits = [];
-    if (state.project && state.project.status) {
+    var left = [], right = [];
+    if (state.project && state.project.status && state.view === "project") {
       var st = state.project.status;
-      bits.push("branch " + esc(st.branch || "(detached)"));
-      bits.push(st.staged.length + " staged");
-      bits.push(st.unstaged.length + " modified");
-      bits.push(st.untracked.length + " untracked");
-      if (st.conflicted.length) bits.push('<span style="color:var(--danger)">' + st.conflicted.length + " conflicted</span>");
-      if (st.ahead) bits.push(st.ahead + " ahead");
-      if (st.behind) bits.push(st.behind + " behind");
+      left.push("<b>" + esc(state.project.name) + "</b> on " + esc(st.branch || "(detached)"));
+      var dirty = st.staged.length + st.unstaged.length + st.untracked.length;
+      left.push(dirty ? dirty + " changed" : "clean");
+      if (st.conflicted.length) left.push('<span class="sb-bad">' + st.conflicted.length + " conflicted</span>");
+      if (st.ahead) left.push(st.ahead + " ahead");
+      if (st.behind) left.push(st.behind + " behind");
     }
     if (state.server.loaded) {
       var total = state.server.services.length;
       var up = state.server.services.filter(function (s) { return s.running; }).length;
-      if (total) bits.push(up + "/" + total + " services");
-      if (state.server.sites.length) {
-        bits.push(state.server.sites.length + (state.server.sites.length === 1 ? " site" : " sites"));
-      }
+      if (total) left.push(up + "/" + total + " services up");
     }
-    if (state.session) {
-      var runningSessions = state.sessions.filter(function (s) { return s.live_state === "running"; }).length;
-      if (runningSessions) bits.push(runningSessions + " agent" + (runningSessions === 1 ? "" : "s"));
-      bits.push(esc(state.session.registry.capabilities) + " capabilities");
-      bits.push("api :" + esc(state.session.port));
-    }
-    if (state.pending_approvals) bits.push(state.pending_approvals + " pending");
-    el("statusbar").innerHTML = bits.join("<span> </span>");
+    var live = state.sessions.filter(function (s) { return s.live_state === "running"; }).length;
+    var chats = AI.threads ? AI.threads.filter(function (t) { return t.state === "running"; }).length : 0;
+    if (live + chats) left.push((live + chats) + " agent" + (live + chats === 1 ? "" : "s") + " working");
+    var wait = AI.counts.approvals + AI.counts.questions;
+    if (wait) left.push('<button type="button" class="sb-link sb-warn" data-action="nav" data-view="inbox">' + wait + " waiting for you</button>");
+    var prod = AI.env && AI.env.mode === "production";
+    right.push(prod ? '<span class="sb-bad" title="Production mode: agents need your approval for every change">production</span>' : '<span title="devd only changes this machine. Switch to production mode in Diagnostics to require approval for every agent change.">local</span>');
+    if (state.session) right.push('<span title="The address agents and scripts use">api :' + esc(state.session.port) + "</span>");
+    el("statusbar").innerHTML = '<div class="sb-left">' + (left.join('<span class="sb-sep">·</span>') || "Ready") + '</div><div class="sb-right">' + right.join('<span class="sb-sep">·</span>') + "</div>";
   }
 
   // -------------------------------------------------------------------- server
@@ -729,8 +859,10 @@
       read("tls.list").catch(function () { return []; }),
       read("tls.ca.show").catch(function () { return null; }),
       read("hosts.show").catch(function () { return null; }),
-      read("tls.ca.status").catch(function () { return null; })
+      read("tls.ca.status").catch(function () { return null; }),
+      read("services.inventory").catch(function () { return null; })
     ]).then(function (r) {
+      state.server.inventory = r[7] && r[7].services ? r[7].services : [];
       state.server.services = Array.isArray(r[0]) ? r[0] : [];
       state.server.sites = Array.isArray(r[1]) ? r[1] : [];
       state.server.runtimes = Array.isArray(r[2]) ? r[2] : [];
@@ -979,13 +1111,40 @@
 
   // ------------------------------------------------------------------ services
 
+
+  // Services already on the machine: detected, never assumed healthy, never replaced.
+  var INV_LABEL = { ready: "Ready", installed_stopped: "Installed, not running", port_conflict: "Port taken by something else", not_operational: "Not operational", limited: "Detected, limited control", missing: "Not installed" };
+
+  function inventoryPanel() {
+    var inv = state.server.inventory || [];
+    if (!inv.length) return "";
+    var rows = inv.map(function (v) {
+      var dec = v.decision ? '<span class="pill pill-accent">' + esc(v.decision.mode) + (v.decision.port ? " :" + v.decision.port : "") + "</span>" : "";
+      var tone = v.status === "ready" ? "ok" : v.status === "missing" ? "" : v.status === "installed_stopped" ? "warn" : "bad";
+      var rec = v.recommendation || {};
+      var btns = v.options.filter(function (o) { return o.available && o.action !== "ignore"; }).map(function (o) {
+        var recd = o.action === rec.action;
+        var cls = "btn btn-mini" + (recd ? " btn-primary" : o.risk === "destructive" ? " btn-danger" : "");
+        return '<button type="button" class="' + cls + '" data-action="svc-option" data-tool="' + attr(v.tool) + '" data-opt="' + attr(o.action) + '" title="' + attr((o.why_not || "") + (o.risk === "approval" ? " Asks you first." : "")) + '">' + esc(o.action === "adopt" ? "Use it" : o.action === "observe" ? "Only watch" : o.action === "external" ? "Use my own instance" : o.action === "start" ? "Start" : o.action === "install" ? "Install" : o.action === "logs" ? "Logs" : o.action === "remove" ? "Remove…" : o.label) + "</button>";
+      }).join("");
+      var need = v.required ? '<span class="pill pill-warn" title="' + attr(v.required_by.map(function (r) { return r.project; }).join(", ")) + '">needed by ' + v.required_by.length + "</span>" : "";
+      return '<div class="inv"><span class="health-dot hstate-' + (v.status === "ready" ? "healthy" : v.status === "installed_stopped" ? "degraded" : v.status === "missing" ? "setup_incomplete" : "critical") + '"></span><div class="grow">' +
+        '<div class="hrow-title">' + esc(v.name) + ' <span class="pill ' + (tone ? "pill-" + tone : "") + '">' + esc(INV_LABEL[v.status]) + "</span> " + dec + " " + need + "</div>" +
+        '<div class="row-sub">' + esc(v.headline) + (v.path ? " · " + esc(v.path) : "") + (v.port_owner && v.port_owner.program ? " · port held by " + esc(v.port_owner.program) + (v.port_owner.pid ? " (pid " + v.port_owner.pid + ")" : "") : "") + "</div>" +
+        '<div class="row-sub">' + esc(rec.why || "") + "</div></div><div class=\"inline\">" + btns +
+        (v.decision ? '<button type="button" class="btn btn-mini btn-ghost" data-action="svc-option" data-tool="' + attr(v.tool) + '" data-opt="clear">Reset</button>' : "") + "</div></div>";
+    }).join("");
+    return '<div class="panel"><div class="panel-head"><span>Found on this machine</span><span class="panel-note">detected, not assumed: a service is Ready only after it answers</span></div><div class="panel-body">' + rows +
+      '<div class="row-sub" style="margin-top:8px">devd never replaces an installed service. Using, watching or hiding one only records your choice. Starting, installing or removing asks for approval and keeps your data.</div></div></div>';
+  }
+
   function renderServices() {
     var rows = state.server.services;
     var byName = {};
     rows.forEach(function (r) { byName[r.name] = r; });
     var up = rows.filter(function (r) { return r.running; }).length;
 
-    var body = "";
+    var body = inventoryPanel();
     if (rows.length) {
       body +=
         '<div class="panel"><div class="panel-head"><span>Installed</span>' +
@@ -1448,18 +1607,18 @@
       cursorBlink: true,
       scrollback: 5000,
       theme: {
-        background: "#0a0a0b",
-        foreground: "#e7e5e4",
-        cursor: "#e07856",
-        selectionBackground: "#3a2a22",
-        black: "#1c1917",
-        red: "#f0a58c",
-        green: "#9ac9a0",
-        yellow: "#e6c07b",
-        blue: "#8ab4d8",
-        magenta: "#c9a3d8",
-        cyan: "#8fc7c7",
-        white: "#e7e5e4"
+        background: "#000000",
+        foreground: "#f2f2f2",
+        cursor: "#7cf5c0",
+        selectionBackground: "#1f4a38",
+        black: "#171717",
+        red: "#ff6b6b",
+        green: "#4ade80",
+        yellow: "#facc15",
+        blue: "#9ad0ff",
+        magenta: "#c8b6ff",
+        cyan: "#7cf5c0",
+        white: "#f2f2f2"
       }
     });
     var fit = new window.FitAddon.FitAddon();
@@ -3013,14 +3172,16 @@
 
     el("main").innerHTML =
       '<div class="page">' +
-      '<div class="page-head"><div><h1 class="page-title">System</h1>' +
-      '<div class="page-sub">The same checks `devd doctor` reports, from the same code.</div></div>' +
+      '<div class="page-head"><div><h1 class="page-title">Diagnostics</h1>' +
+      '<div class="page-sub">What devd checked, what it means for you, and how to fix it. The raw environment checks (`devd doctor`) are below.</div></div>' +
       '<div class="page-actions">' +
       '<button type="button" class="btn" data-action="refresh">Re-check</button>' +
       '<button type="button" class="btn btn-danger" data-action="quit">Quit devd</button>' +
       "</div></div>" +
-      '<div class="panel"><div class="panel-head"><span>Environment</span>' +
-      '<span class="panel-note">' + (state.doctor && state.doctor.ok ? "healthy" : "attention needed") + "</span></div>" +
+      '<div class="panel"><div class="panel-head"><span>Status</span><span class="panel-note">' + esc(AI.health ? AI.health.state.replace("_", " ") : "unknown") + '</span></div><div class="panel-body">' + healthBody(false) + "</div></div>" +
+      '<div class="panel"><div class="panel-head"><span>Environment</span><span class="panel-note">' + esc((AI.env && AI.env.mode) || "local") + '</span></div><div class="panel-body"><div class="row-sub">' + ((AI.env && AI.env.mode === "production") ? "Production mode is on. Agents need your approval for every change, plan approval cannot be skipped, and devd never deploys or opens ports by itself." : "Local mode. Agents work freely inside authorised project folders; anything destructive or system-wide still asks you. Turn production mode on for a machine that runs something real.") + '</div><div class="inline" style="margin-top:10px"><button type="button" class="btn ' + ((AI.env && AI.env.mode === "production") ? "" : "btn-danger") + '" data-action="env-toggle">' + ((AI.env && AI.env.mode === "production") ? "Switch to local (asks first)" : "Switch to production mode") + "</button></div></div></div>" +
+      '<div class="panel"><div class="panel-head"><span>Raw environment checks</span>' +
+      '<span class="panel-note">' + (state.doctor && state.doctor.ok ? "no failures" : "see levels") + "</span></div>" +
       '<div class="panel-body flush">' +
       '<table class="table"><thead><tr><th>Check</th><th>Level</th><th>Detail</th></tr></thead>' +
       "<tbody>" + checkRows + "</tbody></table>" +
@@ -3064,16 +3225,933 @@
       if (!res.ok) return;
       state.doctor = res.body;
       state.health = state.doctor;
-      var pill = el("health-pill");
-      pill.textContent = state.doctor.ok ? "healthy" : "attention needed";
-      pill.className = "pill " + (state.doctor.ok ? "pill-ok" : "pill-bad");
-      pill.setAttribute("data-action", "nav");
-      pill.setAttribute("data-view", "system");
     });
   }
 
   function loadSystem() {
-    return Promise.all([loadDoctor(), loadSession()]);
+    return Promise.all([loadDoctor(), loadSession(), loadHealth()]);
+  }
+
+
+  // ------------------------------------------------------------ stacks: create
+
+  var CREATE = {
+    stacks: null, id: null, def: null, form: {}, advanced: false,
+    plan: null, planError: null, timer: null, seq: 0,
+    running: false, runId: null, log: [], logTimer: null, report: null,
+    importPath: "", importCtx: null
+  };
+
+  function loadCreate() {
+    if (CREATE.stacks) return Promise.resolve();
+    return read("stacks.list").then(function (d) { CREATE.stacks = d || []; }).catch(function (e) {
+      CREATE.stacks = [];
+      toast("error", e.message);
+    });
+  }
+
+  function pickStack(id) {
+    return read("stacks.describe", { stack: id }).then(function (d) {
+      CREATE.id = id;
+      CREATE.def = d.stack;
+      CREATE.report = null;
+      CREATE.log = [];
+      var f = { name: "", destination: "", version: d.stack.versions.filter(function (v) { return v.default; })[0].id,
+        package_manager: (d.stack.package_managers || [])[0] || "", git: true, install: true, extra: "", options: {} };
+      (d.stack.options || []).forEach(function (o) { f.options[o.id] = o.default; });
+      CREATE.form = f;
+      scheduleValidate();
+      renderCreate();
+    }).catch(function (e) { toast("error", e.message); });
+  }
+
+  function createRequest() {
+    var f = CREATE.form;
+    var req = { stack: CREATE.id, name: f.name, version: f.version, git: f.git, install: f.install, options: f.options };
+    if (f.package_manager) req.package_manager = f.package_manager;
+    if (f.destination) req.destination = f.destination;
+    var extra = f.extra.trim() ? f.extra.trim().split(/\s+/) : [];
+    if (extra.length) req.extra_args = extra;
+    return req;
+  }
+
+  function scheduleValidate() {
+    clearTimeout(CREATE.timer);
+    var seq = ++CREATE.seq;
+    CREATE.timer = setTimeout(function () {
+      if (!CREATE.id) return;
+      read("stacks.validate", createRequest()).then(function (p) {
+        if (seq !== CREATE.seq) return;
+        CREATE.plan = p; CREATE.planError = null; paintReview();
+      }).catch(function (e) {
+        if (seq !== CREATE.seq) return;
+        CREATE.plan = null; CREATE.planError = e.message; paintReview();
+      });
+    }, 350);
+  }
+
+  function pill(kind, text) { return '<span class="pill pill-' + kind + '">' + esc(text) + "</span>"; }
+
+  function docLinks(docs) {
+    return (docs || []).map(function (d) {
+      return '<a class="link" href="' + attr(d.url) + '" target="_blank" rel="noopener noreferrer">' + esc(d.title) + "</a>";
+    }).join(" · ");
+  }
+
+  function renderCreate() {
+    if (!CREATE.stacks) return renderLoading();
+    if (!CREATE.id) {
+      var cats = {};
+      CREATE.stacks.filter(function (s) { return s.creatable; }).forEach(function (s) {
+        (cats[s.category] = cats[s.category] || []).push(s);
+      });
+      var order = ["web", "backend", "frontend", "mobile", "language"];
+      var html = order.filter(function (c) { return cats[c]; }).map(function (c) {
+        return '<div class="panel"><div class="panel-head"><span>' + esc(c) + "</span></div>" +
+          '<div class="panel-body flush"><table class="table"><tbody>' +
+          cats[c].map(function (s) {
+            return '<tr><td class="cell-strong">' + esc(s.name) + '</td><td class="dim">' + esc(s.language) + "</td>" +
+              "<td>" + esc(s.summary) + '</td><td class="nowrap">' + docLinks(s.docs.slice(0, 1)) + "</td>" +
+              '<td><button type="button" class="btn btn-primary btn-mini" data-action="create-pick" data-id="' + attr(s.id) + '">Create</button></td></tr>';
+          }).join("") + "</tbody></table></div></div>";
+      }).join("");
+      el("main").innerHTML = page("Create a project",
+        "Pick a stack. devd runs the framework's official scaffolder with the options you choose - the same engine the terminal, the dashboard and agents use.",
+        '<button type="button" class="btn" data-action="nav" data-view="develop">Import an existing project</button>', html);
+      return;
+    }
+    var d = CREATE.def, f = CREATE.form;
+    var fld = function (label, help, control) {
+      return '<div class="field"><label class="field-label">' + esc(label) + "</label>" + control +
+        (help ? '<div class="row-sub">' + esc(help) + "</div>" : "") + "</div>";
+    };
+    var sel = function (key, items, value, isOpt) {
+      return '<select class="input" data-create="' + attr(key) + '"' + (isOpt ? ' data-opt="1"' : "") + ">" +
+        items.map(function (i) { return '<option value="' + attr(i.value) + '"' + (i.value === value ? " selected" : "") + ">" + esc(i.label) + "</option>"; }).join("") + "</select>";
+    };
+    var fields = [];
+    fields.push(fld("Project name", d.name_hint, '<input class="input mono" data-create="name" value="' + attr(f.name) + '" placeholder="my-app" spellcheck="false">'));
+    fields.push(fld("Create in", "Leave blank for the projects root.", '<input class="input mono" data-create="destination" value="' + attr(f.destination) + '" placeholder="projects root" spellcheck="false">'));
+    if (d.versions.length > 1) fields.push(fld("Version", "", sel("version", d.versions.map(function (v) { return { value: v.id, label: v.label + (v.default ? " (default)" : "") }; }), f.version)));
+    if ((d.package_managers || []).length > 1) fields.push(fld("Package manager", "", sel("package_manager", d.package_managers.map(function (p) { return { value: p, label: p }; }), f.package_manager)));
+    (d.options || []).forEach(function (o) {
+      if (o.advanced && !CREATE.advanced) return;
+      var v = f.options[o.id], ctl = "";
+      var flag = o.flag ? " (" + o.flag + ")" : "";
+      if (o.kind === "bool") ctl = '<label class="check"><input type="checkbox" data-create="' + attr(o.id) + '" data-opt="1"' + (v ? " checked" : "") + "> Enabled</label>";
+      else if (o.kind === "select") ctl = sel(o.id, o.choices.map(function (c) { return { value: c.value, label: c.label }; }), v, true);
+      else if (o.kind === "multi") ctl = o.choices.map(function (c) {
+        return '<label class="check"><input type="checkbox" data-create="' + attr(o.id) + '" data-multi="' + attr(c.value) + '" data-opt="1"' + ((v || []).indexOf(c.value) >= 0 ? " checked" : "") + "> " + esc(c.label) + "</label>";
+      }).join(" ");
+      else ctl = '<input class="input mono" data-create="' + attr(o.id) + '" data-opt="1" value="' + attr(v) + '" spellcheck="false">';
+      fields.push(fld(o.label + flag, o.help, ctl));
+    });
+    fields.push(fld("Git", "", '<label class="check"><input type="checkbox" data-create="git"' + (f.git ? " checked" : "") + "> Initialise a repository</label>"));
+    if (d.init.install_toggle) fields.push(fld("Dependencies", "", '<label class="check"><input type="checkbox" data-create="install"' + (f.install ? " checked" : "") + "> Install now</label>"));
+    var hasAdv = (d.options || []).some(function (o) { return o.advanced; });
+    var adv = '<div class="field"><label class="check"><input type="checkbox" data-create="__advanced"' + (CREATE.advanced ? " checked" : "") + "> Show advanced options</label></div>";
+    if (CREATE.advanced) fields.push(fld("Extra arguments", "Appended exactly as typed to the scaffolding command shown in the review.", '<input class="input mono" data-create="extra" value="' + attr(f.extra) + '" placeholder="--flag value" spellcheck="false">'));
+
+    var form = '<div class="panel"><div class="panel-head"><span>' + esc(d.name) + '</span><span class="panel-note">' + docLinks(d.docs) + "</span></div>" +
+      '<div class="panel-body">' + '<div class="row-sub" style="margin-bottom:12px">' + esc(d.summary) + "</div>" + fields.join("") + (hasAdv || true ? adv : "") + "</div></div>";
+    var review = '<div class="panel" id="create-review"></div>';
+    var progress = '<div id="create-progress"></div>';
+    el("main").innerHTML = page("Create " + d.name + " project", d.description || d.summary,
+      '<button type="button" class="btn" data-action="create-back">Back to stacks</button>',
+      '<div class="two-col"><div>' + form + "</div><div>" + review + progress + "</div></div>");
+    paintReview();
+    paintProgress();
+  }
+
+  function paintReview() {
+    var box = el("create-review");
+    if (!box) return;
+    if (CREATE.planError) { box.innerHTML = '<div class="panel-head"><span>Review</span></div><div class="panel-body notice notice-bad">' + esc(CREATE.planError) + "</div>"; return; }
+    var p = CREATE.plan;
+    if (!p) { box.innerHTML = '<div class="panel-head"><span>Review</span></div><div class="panel-body dim">Checking…</div>'; return; }
+    var h = '<div class="panel-head"><span>Review</span><span class="panel-note">' + (p.valid ? (p.ready ? pill("ok", "ready") : pill("warn", "prerequisites missing")) : pill("bad", "needs attention")) + "</span></div><div class=\"panel-body\">";
+    (p.issues || []).forEach(function (i) { h += '<div class="notice notice-bad"><b>' + esc(i.field) + "</b>: " + esc(i.message) + "</div>"; });
+    if (p.valid) {
+      h += '<div class="kv"><dt>Directory</dt><dd class="mono">' + esc(p.project_dir) + "</dd></div>";
+      h += '<div class="field-label" style="margin-top:12px">Command devd will run</div><pre class="log-block">' + esc(p.command) + "</pre>";
+      if ((p.steps || []).length > 1) h += '<div class="row-sub">' + p.steps.map(function (s) { return esc(s.title); }).join(" → ") + "</div>";
+    }
+    h += '<div class="field-label" style="margin-top:12px">Prerequisites</div>';
+    (p.prerequisites || []).forEach(function (q) {
+      var ok = q.status === "ok" || q.status === "unknown_version";
+      h += '<div class="inline" style="margin:4px 0">' + pill(ok ? "ok" : "bad", ok ? "ok" : q.status.replace("_", " ")) + "<span>" + esc(q.name) + " " + esc(q.found || "") + (q.min ? ' <span class="dim">needs ≥ ' + esc(q.min) + "</span>" : "") + "</span>" +
+        (!ok && q.status === "missing" ? '<button type="button" class="btn btn-mini" data-action="tool-install" data-id="' + attr(q.tool) + '">Install</button>' : "") + "</div>" +
+        (!ok && q.fix ? '<div class="row-sub">' + esc(q.fix) + "</div>" : "");
+    });
+    (p.services || []).forEach(function (sv) { h += '<div class="row-sub">Needs ' + esc(sv.tool) + " (" + esc(sv.why) + "): " + (sv.running ? "running" : sv.installed ? "installed, not running" : "not installed") + "</div>"; });
+    (p.warnings || []).forEach(function (w) { h += '<div class="notice notice-warn">' + esc(w) + "</div>"; });
+    h += '<div class="inline" style="margin-top:14px"><button type="button" class="btn btn-go" data-action="create-run"' + (p.valid && p.ready && !CREATE.running ? "" : " disabled") + ">Create project</button></div>";
+    h += "</div>";
+    box.innerHTML = h;
+  }
+
+  function paintProgress() {
+    var box = el("create-progress");
+    if (!box) return;
+    var h = "";
+    if (CREATE.running || CREATE.log.length) {
+      h += '<div class="panel"><div class="panel-head"><span>Progress</span><span class="panel-note">' +
+        (CREATE.running ? '<button type="button" class="btn btn-mini btn-danger" data-action="create-cancel">Cancel</button>' : "") + "</span></div>" +
+        '<div class="panel-body"><pre class="log-block">' + esc(CREATE.log.slice(-60).join("\n")) + "</pre></div></div>";
+    }
+    var r = CREATE.report;
+    if (r) {
+      var kind = r.status === "ok" ? "ok" : r.status === "partial" ? "warn" : "bad";
+      h += '<div class="panel"><div class="panel-head"><span>Result</span><span class="panel-note">' + pill(kind, r.status) + "</span></div><div class=\"panel-body\">";
+      if (r.error) h += '<div class="notice notice-' + (r.status === "partial" ? "warn" : "bad") + '">' + esc(r.error) + "</div>";
+      (r.steps || []).forEach(function (st) { h += '<div class="inline">' + pill(st.status === "ok" || st.status === "skipped" ? "ok" : st.status === "warning" ? "warn" : "bad", st.status) + "<span>" + esc(st.title) + "</span></div>" + (st.status === "failed" ? '<pre class="log-block">' + esc(st.detail) + "</pre>" : ""); });
+      (r.checks || []).forEach(function (c) { h += '<div class="inline">' + pill(c.status === "ok" ? "ok" : c.status === "skipped" ? "" : "bad", c.status) + "<span>" + esc(c.title) + "</span></div>"; });
+      (r.next || []).forEach(function (n) { h += '<div class="row-sub">' + esc(n) + "</div>"; });
+      if (r.status === "ok" || r.status === "partial") h += '<div class="inline" style="margin-top:12px"><button type="button" class="btn btn-primary" data-action="open-develop" data-path="' + attr(r.project_dir) + '">Open in Develop</button></div>';
+      h += "</div></div>";
+    }
+    box.innerHTML = h;
+  }
+
+  function pollCreateLog() {
+    clearInterval(CREATE.logTimer);
+    CREATE.logTimer = setInterval(function () {
+      if (!CREATE.running) return clearInterval(CREATE.logTimer);
+      read("stacks.log", { run_id: CREATE.runId, lines: 80 }).then(function (d) { CREATE.log = d.lines || []; paintProgress(); }).catch(function () {});
+    }, 800);
+  }
+
+  // ------------------------------------------------------------ stacks: develop
+
+  var DEV = { projects: null, path: null, ctx: null, busy: false, procs: [], log: null, importPath: "", detect: null, error: null };
+
+  function loadDevelop() {
+    return Promise.all([read("project.list").catch(function () { return []; }), read("task.list").catch(function () { return []; })]).then(function (r) {
+      DEV.projects = r[0] || []; DEV.procs = r[1] || [];
+    }).then(function () { return DEV.path && !DEV.ctx ? openProject(DEV.path, true) : null; });
+  }
+
+  function openProject(path, quiet) {
+    DEV.path = path; DEV.busy = true; DEV.error = null;
+    return read("project.detect", { path: path }).then(function (c) { DEV.ctx = c; DEV.busy = false; if (!quiet) renderDevelop(); })
+      .catch(function (e) { DEV.busy = false; DEV.ctx = null; DEV.error = e.message; if (!quiet) renderDevelop(); });
+  }
+
+  function renderDevelop() {
+    if (!DEV.projects) return renderLoading();
+    var list = DEV.projects.map(function (p) {
+      return '<button type="button" class="svc ' + (DEV.path === p.path ? "active" : "") + '" data-action="dev-open" data-path="' + attr(p.path) + '" style="width:100%;text-align:left">' +
+        '<div class="svc-main"><div class="svc-name">' + esc(p.name) + '</div><div class="svc-sub mono nowrap">' + esc(p.stack || "unknown stack") + " · " + esc(p.path) + "</div></div></button>";
+    }).join("") || '<div class="panel-body empty-inline">No projects yet. Create one or import a checkout.</div>';
+    var imp = '<div class="panel"><div class="panel-head"><span>Import an existing project</span></div><div class="panel-body">' +
+      '<div class="inline"><input class="input mono grow" id="dev-import" placeholder="/path/to/checkout" value="' + attr(DEV.importPath) + '" spellcheck="false">' +
+      '<button type="button" class="btn" data-action="dev-detect">Detect</button><button type="button" class="btn btn-primary" data-action="dev-import">Import</button></div>' +
+      '<div class="row-sub">Nothing is changed in the project. Clone a repository first with <span class="mono">git clone</span> or the Projects view.</div></div></div>';
+    el("main").innerHTML = page("Develop", "Detect any project's stack, run its tasks, and make it available to agents.", "",
+      '<div class="two-col"><div><div class="panel"><div class="panel-head"><span>Projects</span><span class="panel-note">' + DEV.projects.length + "</span></div>" + list + "</div>" + imp + procPanel() + "</div><div>" + devDetail() + "</div></div>");
+  }
+
+  function procPanel() {
+    if (!DEV.procs.length) return "";
+    return '<div class="panel"><div class="panel-head"><span>Running tasks</span></div>' + DEV.procs.map(function (p) {
+      return '<div class="svc"><div class="svc-main"><div class="svc-name">' + dot(p.running) + " " + esc(p.name) + '</div><div class="svc-sub mono">pid ' + esc(p.pid) + (p.running ? "" : " · exited " + esc(p.exit_code)) + "</div></div>" +
+        '<div class="svc-actions"><button type="button" class="btn btn-mini" data-action="proc-log" data-name="' + attr(p.name) + '">Log</button>' +
+        '<button type="button" class="btn btn-mini btn-danger" data-action="proc-stop" data-name="' + attr(p.name) + '">Stop</button></div></div>';
+    }).join("") + "</div>";
+  }
+
+  function devDetail() {
+    if (DEV.busy) return '<div class="panel"><div class="panel-body dim">Inspecting…</div></div>';
+    if (DEV.error) return '<div class="panel"><div class="panel-body notice notice-bad">' + esc(DEV.error) + "</div></div>";
+    var c = DEV.detect || DEV.ctx;
+    if (!c) return '<div class="panel"><div class="panel-body empty-inline">Select a project.</div></div>';
+    var h = '<div class="panel"><div class="panel-head"><span>' + esc(c.name) + '</span><span class="panel-note mono">' + esc(c.path) + "</span></div><div class=\"panel-body\">";
+    if (c.ambiguous) h += '<div class="notice notice-warn">' + esc(c.ambiguity) + "</div>";
+    h += '<div class="kv"><dt>Stack</dt><dd>' + (c.stacks.length ? c.stacks.map(function (s, i) { return (i === 0 ? "<b>" : "") + esc(s.name) + " " + pill(s.confidence === "high" ? "ok" : "warn", s.confidence) + (i === 0 ? "</b>" : ""); }).join(" · ") : "unknown") + "</dd></div>";
+    if (c.stacks.length) h += '<div class="row-sub">' + esc(c.stacks[0].evidence.join("; ")) + "</div>";
+    h += '<div class="kv"><dt>Package manager</dt><dd>' + esc(c.package_manager || "-") + ' <span class="dim">' + esc(c.package_manager_evidence || "") + "</span></dd></div>";
+    (c.runtimes || []).forEach(function (r) { h += '<div class="kv"><dt>' + esc(r.tool) + '</dt><dd>wants ' + esc(r.constraint) + ' <span class="dim">(' + esc(r.source) + ")</span> - installed " + esc(r.installed || "none") + " " + (r.satisfied === true ? pill("ok", "satisfied") : r.satisfied === false ? pill("bad", "not satisfied") : "") + "</dd></div>"; });
+    (c.missing || []).forEach(function (m) { h += '<div class="notice notice-warn"><b>' + esc(m.tool) + "</b>: " + esc(m.why) + ' <button type="button" class="btn btn-mini" data-action="tool-install" data-id="' + attr(m.tool) + '">Install</button></div>'; });
+    (c.services || []).forEach(function (sv) { h += '<div class="kv"><dt>Service</dt><dd>' + esc(sv.tool) + " " + (sv.running ? pill("ok", "running") : sv.installed ? pill("warn", "stopped") : pill("bad", "missing")) + ' <span class="dim">' + esc(sv.why) + "</span></dd></div>"; });
+    if (c.env && c.env.keys.length) h += '<div class="kv"><dt>Environment</dt><dd>' + c.env.keys.length + " variables in " + esc(c.env.example_files.join(", ")) + (c.env.unset_keys.length ? "; unset: " + esc(c.env.unset_keys.join(", ")) : "") + ' <span class="dim">(values are never shown)</span></dd></div>';
+    if (c.docs.length) h += '<div class="kv"><dt>Docs</dt><dd class="mono">' + esc(c.docs.join(", ")) + "</dd></div>";
+    if (c.official_docs.length) h += '<div class="kv"><dt>Official docs</dt><dd>' + docLinks(c.official_docs) + "</dd></div>";
+    h += "</div></div>";
+    h += '<div class="panel"><div class="panel-head"><span>Tasks</span><span class="panel-note">' + c.tasks.length + "</span></div><div class=\"panel-body flush\"><table class=\"table\"><tbody>" +
+      c.tasks.map(function (t) {
+        return "<tr><td class=\"cell-strong\">" + esc(t.id) + '</td><td class="cell-mono">' + esc(t.command) + "</td><td>" + pill(t.risk === "safe" ? "ok" : t.risk === "mutating" ? "warn" : "bad", t.risk) + "</td><td>" +
+          (t.available ? '<button type="button" class="btn btn-mini' + (t.risk === "destructive" ? " btn-danger" : " btn-primary") + '" data-action="task-run" data-task="' + attr(t.id) + '" data-risk="' + attr(t.risk) + '">' + (t.long_running ? "Start" : "Run") + "</button>" : '<span class="dim" title="' + attr(t.unavailable_reason) + '">unavailable</span>') + "</td></tr>";
+      }).join("") + "</tbody></table></div></div>";
+    if (DEV.log) h += '<div class="panel"><div class="panel-head"><span>Output</span></div><div class="panel-body"><pre class="log-block">' + esc(DEV.log) + "</pre></div></div>";
+    return h;
+  }
+
+  // -------------------------------------------------------------- toolchain
+
+  var TC = { data: null, devices: null };
+
+  function loadToolchain() {
+    return read("toolchain.list").then(function (d) { TC.data = d; });
+  }
+
+  function renderToolchain() {
+    if (!TC.data) return renderLoading();
+    var host = TC.data.host, tools = TC.data.tools;
+    var cats = {};
+    tools.forEach(function (t) { (cats[t.tool.category] = cats[t.tool.category] || []).push(t); });
+    var notes = [];
+    if (!host.root && !host.sudo && host.os === "linux") notes.push("devd has neither root nor passwordless sudo, so package installs show the exact command to run yourself.");
+    if (!host.managers.length) notes.push("No supported package manager was found; installs will show manual steps.");
+    var html = '<div class="panel"><div class="panel-body"><div class="kv"><dt>Machine</dt><dd>' + esc(host.os) + " " + esc(host.arch) + " · package managers: " + esc(host.managers.join(", ") || "none") + " · " + (host.root ? "running as root" : host.sudo ? "passwordless sudo available" : "unprivileged") + "</dd></div>" +
+      notes.map(function (n) { return '<div class="notice notice-warn">' + esc(n) + "</div>"; }).join("") + "</div></div>";
+    Object.keys(cats).forEach(function (c) {
+      html += '<div class="panel"><div class="panel-head"><span>' + esc(c) + "</span></div>" + cats[c].map(function (t) {
+        var st = t.status, sv = t.service, id = t.tool.id;
+        var state = st.installed ? (st.outdated ? pill("warn", "outdated") : pill("ok", "installed")) : (t.tool.per_project ? pill("", "per project") : pill("bad", "missing"));
+        var acts = "";
+        if (!t.tool.per_project) acts += '<button type="button" class="btn btn-mini" data-action="tool-plan" data-id="' + attr(id) + '" data-act="' + (st.installed ? "remove" : "install") + '">Plan</button>';
+        if (!st.installed && !t.tool.per_project) acts += '<button type="button" class="btn btn-mini btn-primary" data-action="tool-install" data-id="' + attr(id) + '">Install</button>';
+        if (st.installed && !t.tool.per_project) acts += '<button type="button" class="btn btn-mini btn-danger" data-action="tool-remove" data-id="' + attr(id) + '">Remove</button>';
+        var svc = "";
+        if (sv && st.installed) {
+          svc = '<div class="row-sub">' + dot(sv.healthy, sv.listening) + " " + esc(sv.detail) + (sv.port_conflict ? " - port held by " + esc(sv.port_conflict) : "") + "</div>";
+          acts += sv.healthy ? '<button type="button" class="btn btn-mini" data-action="svc" data-act="stop" data-id="' + attr(id) + '">Stop</button><button type="button" class="btn btn-mini" data-action="svc" data-act="restart" data-id="' + attr(id) + '">Restart</button>' : '<button type="button" class="btn btn-mini btn-go" data-action="svc" data-act="start" data-id="' + attr(id) + '">Start</button>';
+          acts += '<button type="button" class="btn btn-mini" data-action="svc-logs" data-id="' + attr(id) + '">Logs</button>';
+        }
+        if (id === "adb" && st.installed) acts += '<button type="button" class="btn btn-mini" data-action="devices">Devices</button>';
+        return '<div class="svc"><div class="svc-main"><div class="svc-name">' + esc(t.tool.name) + " " + state + ' <span class="dim mono">' + esc(st.version || "") + '</span></div><div class="svc-sub">' + esc(t.tool.purpose) + "</div>" + svc +
+          (!st.installed && st.problem && !t.tool.per_project ? '<div class="row-sub">' + esc(st.problem) + "</div>" : "") + '</div><div class="svc-actions">' + acts + "</div></div>";
+      }).join("") + "</div>";
+    });
+    el("main").innerHTML = page("Toolchain", "Languages, package managers, databases and mobile tooling on this machine. Installs show their commands and source first and need your approval.", '<button type="button" class="btn" data-action="refresh">Re-check</button>', html);
+  }
+
+  function showPlanDrawer(p, title) {
+    var h = '<div class="kv"><dt>Manager</dt><dd>' + esc(p.manager || "none") + (p.privileged ? " (needs administrator rights)" : "") + "</dd></div>";
+    h += '<div class="field-label">Commands</div><pre class="log-block">' + esc((p.display || []).join("\n") || "(none)") + "</pre>";
+    (p.blockers || []).forEach(function (b) { h += '<div class="notice notice-warn">' + esc(b) + "</div>"; });
+    if (p.manual) h += '<div class="notice">' + esc(p.manual) + "</div>";
+    h += '<div class="kv"><dt>Source</dt><dd>' + esc(p.trust) + "</dd></div>";
+    if (p.upgrade) h += '<div class="kv"><dt>Upgrades</dt><dd>' + esc(p.upgrade) + "</dd></div>";
+    if (p.data_note) h += '<div class="notice">' + esc(p.data_note) + "</div>";
+    openDrawer(title, h);
+  }
+
+
+  // ============================================================ assistant era
+  // Home, the assistant, the inbox, providers and the health indicator. They
+  // only call capabilities; every decision is made by the registry.
+
+  function ago(iso) {
+    var t = Date.parse(iso);
+    if (!t) return "";
+    return relativeTime(Math.floor(t / 1000));
+  }
+
+  /* A small, safe Markdown renderer: code fences, inline code, bold, lists, links. */
+  function md(text) {
+    var parts = String(text || "").split(/```/);
+    return parts.map(function (part, i) {
+      if (i % 2 === 1) {
+        var nl = part.indexOf("\n");
+        var body = nl >= 0 ? part.slice(nl + 1) : part;
+        return '<pre class="code">' + esc(body.replace(/\n$/, "")) + "</pre>";
+      }
+      var html = esc(part)
+        .replace(/`([^`\n]+)`/g, "<code>$1</code>")
+        .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+        .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a class="link" href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+      var out = [], list = false;
+      html.split("\n").forEach(function (line) {
+        var m = /^\s*[-*]\s+(.*)$/.exec(line);
+        if (m) { if (!list) { out.push("<ul>"); list = true; } out.push("<li>" + m[1] + "</li>"); }
+        else { if (list) { out.push("</ul>"); list = false; } out.push(line.trim() ? "<p>" + line + "</p>" : ""); }
+      });
+      if (list) out.push("</ul>");
+      return out.join("");
+    }).join("");
+  }
+
+  var AI = {
+    health: null, healthOpen: false,
+    counts: { approvals: 0, questions: 0 },
+    home: null, askText: "", askProject: "",
+    providers: null, presets: null, catalogue: null, provForm: null, provBusy: {},
+    threads: null, thread: null, events: [], pending: [], running: false, lastId: 0,
+    composer: "", project: "", timer: null, openSteps: {},
+    inbox: null, requests: null, history: null
+  };
+
+  // ------------------------------------------------------------------ health
+
+  var HEALTH_WORD = { healthy: "Healthy", degraded: "Degraded", starting: "Starting", unavailable: "Unavailable", critical: "Critical", setup_incomplete: "Setup incomplete", unknown: "Unknown" };
+
+  function loadHealth() {
+    AI.healthLoading = true;
+    var timeout = new Promise(function (_, rej) { setTimeout(function () { rej(new Error("health check timed out after 15 s")); }, 15000); });
+    return Promise.race([read("health.status"), timeout]).then(function (h) {
+      AI.health = h; AI.healthError = null; AI.healthAt = Date.now();
+      read("environment.get").then(function (e) { AI.env = e; }).catch(function () {});
+      return Promise.all([read("approval.list", { pending_only: true }), read("inbox.list", { open_only: true })]).then(function (r) {
+        AI.counts.approvals = (r[0] || []).length;
+        AI.counts.questions = (r[1] || []).filter(function (m) { return m.needs_reply; }).length;
+      });
+    }).catch(function (e) { AI.healthError = e.message; }).then(function () { AI.healthLoading = false; });
+  }
+
+  function healthStale() { return AI.health && Date.now() - AI.healthAt > 90000; }
+
+  function healthChip() {
+    var h = AI.health, chip = el("health-chip");
+    var st = AI.healthError && !h ? "unknown" : h ? h.state : "checking";
+    if (healthStale() || (AI.healthError && h)) st = "stale";
+    var title, sub;
+    if (st === "checking") { title = "Checking…"; sub = ""; }
+    else if (st === "stale") { title = "Status is old"; sub = AI.healthError ? "last check failed" : "checked " + Math.round((Date.now() - AI.healthAt) / 60000) + " min ago"; }
+    else if (!h) { title = "Cannot check"; sub = AI.healthError; }
+    else { title = HEALTH_WORD[h.state] || h.state; sub = h.state === "healthy" ? (h.notes ? h.notes + " optional note" + (h.notes === 1 ? "" : "s") : "") : h.headline; }
+    chip.className = "health health-" + st;
+    chip.innerHTML = '<span class="health-dot" aria-hidden="true"></span><span class="health-text"><span class="health-title">' + esc(title) + '</span>' + (sub ? '<span class="health-sub">' + esc(sub) + "</span>" : "") + "</span>";
+    chip.setAttribute("aria-label", "devd status: " + title + (sub ? ", " + sub : ""));
+  }
+
+  function healthRow(c) {
+    var bad = c.state !== "healthy", fix = c.fix || {};
+    var btn = !bad ? "" : fix.capability
+      ? '<button type="button" class="btn btn-mini btn-primary" data-action="health-fix" data-cap="' + attr(fix.capability) + '" data-args="' + attr(JSON.stringify(fix.args || {})) + '">' + esc(fix.label) + "</button>"
+      : fix.view ? '<button type="button" class="btn btn-mini" data-action="health-go" data-view="' + attr(fix.view) + '">' + esc(fix.label) + "</button>" : "";
+    return '<div class="hrow hstate-' + c.state + '"><span class="health-dot"></span><div class="grow"><div class="hrow-title">' + esc(c.label) + ' <span class="pill">' + esc(HEALTH_WORD[c.state] || c.state) + "</span>" + (c.required ? "" : ' <span class="dim">optional</span>') +
+      '</div><div class="row-sub">' + esc(c.detail) + "</div>" + (bad ? '<div class="row-sub">' + esc(c.meaning) + "</div>" : "") + "</div>" + btn + "</div>";
+  }
+
+  function healthBody(withClose) {
+    var h = AI.health;
+    if (!h) return '<div class="notice notice-warn">' + esc(AI.healthError || "Not checked yet") + '</div><div class="inline"><button type="button" class="btn" data-action="health-recheck">Try again</button></div>';
+    var order = { critical: 0, unavailable: 1, degraded: 2, starting: 3, unknown: 4, setup_incomplete: 5, healthy: 6 };
+    var rows = h.checks.slice().sort(function (a, b) { return order[a.state] - order[b.state]; }).map(healthRow).join("");
+    var tone = h.state === "healthy" ? "notice-ok" : h.state === "critical" || h.state === "degraded" ? "notice-bad" : "notice-warn";
+    return '<div class="notice ' + tone + '"><b>' + esc(h.headline) + ".</b> Checked " + esc(ago(h.checked_at) || "just now") + " in " + h.took_ms + " ms." + (healthStale() ? " This is out of date." : "") + (AI.healthError ? " The last re-check failed: " + esc(AI.healthError) : "") + "</div>" +
+      (h.attention.length ? '<div class="section-title">Waiting for you</div>' + h.attention.map(function (a) { return '<div class="hrow"><span class="health-dot" style="background:var(--warn)"></span><div class="grow">' + esc(a.label) + '</div><button type="button" class="btn btn-mini" data-action="health-go" data-view="' + attr(a.view) + '">Open</button></div>'; }).join("") : "") +
+      '<div class="section-title">Components</div>' + rows +
+      '<div class="inline" style="margin-top:14px"><button type="button" class="btn" data-action="health-recheck"' + (AI.healthLoading ? " disabled" : "") + ">" + (AI.healthLoading ? "Checking…" : "Check again") + "</button>" + (withClose ? '<button type="button" class="btn btn-ghost" data-action="health-go" data-view="system">Open diagnostics</button>' : "") + "</div>";
+  }
+
+  function openHealth() { openDrawer("devd status", healthBody(true)); }
+
+  // -------------------------------------------------------------------- home
+
+  function loadHome() {
+    return Promise.all([
+      loadHealth(),
+      read("project.list").catch(function () { return []; }),
+      read("approval.list", { pending_only: true }).catch(function () { return []; }),
+      read("inbox.list", { open_only: true }).catch(function () { return []; }),
+      read("chat.list").catch(function () { return []; }),
+      read("task.list").catch(function () { return []; }),
+      read("provider.list").catch(function () { return []; }),
+      read("team.list").catch(function () { return []; }),
+      request("/api/audit?limit=40").then(function (r) { return r.ok ? r.body.items || [] : []; }),
+      state.server.loaded ? Promise.resolve() : loadServer()
+    ]).then(function (r) {
+      AI.home = { projects: r[1], approvals: r[2], inbox: r[3], threads: r[4], tasks: r[5], providers: r[6], teamRuns: r[7], audit: r[8] };
+      AI.providers = r[6];
+    });
+  }
+
+  function greeting() {
+    var h = new Date().getHours();
+    return h < 5 ? "Working late" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
+  }
+
+  function approvalCard(r, compact) {
+    var steps = (r.plan && r.plan.steps || []).slice(0, compact ? 3 : 12).map(function (x) { return "<li>" + esc(x) + "</li>"; }).join("");
+    var effects = (r.plan && r.plan.effects || []).slice(0, 4).map(function (x) { return '<li class="warn-text">' + esc(x) + "</li>"; }).join("");
+    return '<div class="ask ask-approval"><div class="ask-head"><span class="pill pill-warn">approval</span><b>' + esc(r.capability) + '</b><span class="dim">' + esc(r.actor.replace("agent:", "")) + " · " + esc(ago(r.created_at)) + "</span></div>" +
+      ((r.plan && r.plan.summary) ? '<div class="ask-body">' + esc(r.plan.summary) + "</div>" : "") +
+      (steps || effects ? '<ul class="ask-steps">' + steps + effects + "</ul>" : "") +
+      '<div class="mono ask-args nowrap" title="' + attr(JSON.stringify(r.args)) + '">' + esc(JSON.stringify(r.args)) + "</div>" +
+      '<div class="inline"><button type="button" class="btn btn-go btn-mini" data-action="req-decide" data-id="' + attr(r.id) + '" data-approve="1">Approve and run</button>' +
+      '<button type="button" class="btn btn-mini btn-danger" data-action="req-decide" data-id="' + attr(r.id) + '" data-approve="0">Decline</button></div></div>';
+  }
+
+  function messageCard(m) {
+    return '<div class="ask"><div class="ask-head"><span class="pill ' + (m.needs_reply ? "pill-accent" : "") + '">' + (m.needs_reply ? "question" : "message") + "</span><b>" + esc(m.subject) + '</b><span class="dim">' + esc(m.from_actor.replace("agent:", "")) + " · " + esc(ago(m.created_at)) + "</span></div>" +
+      '<div class="ask-body">' + md(m.body) + "</div>" +
+      (m.needs_reply ? '<div class="inline"><input class="input grow" id="reply-' + attr(m.id) + '" placeholder="Your answer"><button type="button" class="btn btn-primary btn-mini" data-action="inbox-reply" data-id="' + attr(m.id) + '">Send</button></div>'
+        : '<div class="inline"><button type="button" class="btn btn-mini" data-action="inbox-reply" data-id="' + attr(m.id) + '" data-resolve="1">Mark as read</button></div>') + "</div>";
+  }
+
+  function renderHome() {
+    var d = AI.home;
+    if (!d) return renderLoading();
+    var h = AI.health || { level: "checking", checks: [], headline: "" };
+    var hasProvider = d.providers.some(function (p) { return p.enabled; });
+    var ready = d.providers.some(function (p) { return p.enabled && p.has_key; }) || d.providers.some(function (p) { return p.enabled && !p.needs_key; });
+    var projOptions = '<option value="">No project</option>' + d.projects.map(function (p) { return '<option value="' + attr(p.path) + '"' + (AI.askProject === p.path ? " selected" : "") + ">" + esc(p.name) + "</option>"; }).join("");
+    var ask = ready
+      ? '<div class="ask-box"><textarea id="home-ask" class="input" rows="2" placeholder="Ask devd to do something…  e.g. “Create a Laravel app called blog with PostgreSQL” or “Run the tests and fix what fails”">' + esc(AI.askText) + "</textarea>" +
+        '<div class="inline"><select class="input" id="home-project">' + projOptions + "</select><span class=\"grow\"></span>" +
+        '<button type="button" class="btn" data-action="home-team" title="A planner, specialists working in parallel, and proof before anything counts as done">Build with the team</button><button type="button" class="btn btn-primary" data-action="home-ask">Ask the assistant</button></div></div>'
+      : '<div class="ask-box ask-setup"><div><b>Connect an AI provider to talk to devd.</b><div class="row-sub">The built-in assistant can create projects, edit code, run tests and manage your tools, with your approval for anything risky. It needs a model provider and an API key. Nothing else in devd depends on it.</div></div>' +
+        '<button type="button" class="btn btn-primary" data-action="nav" data-view="providers">' + (hasProvider ? "Finish setup" : "Set up a provider") + "</button></div>";
+
+    // Needs you
+    var needs = [];
+    (d.teamRuns || []).filter(function (t) { return t.state === "awaiting_plan"; }).forEach(function (t) {
+      needs.push('<div class="ask ask-approval"><div class="ask-head"><span class="pill pill-warn">plan</span><b>' + esc(t.title) + '</b><span class="dim">team · ' + esc(ago(t.updated_at)) + '</span></div><div class="ask-body">The team has a plan with ' + t.tasks_total + ' task(s). Nothing runs until you approve it.</div><div class="inline"><button type="button" class="btn btn-primary btn-mini" data-action="team-open-from" data-id="' + attr(t.id) + '">Review the plan</button></div></div>');
+    });
+    (d.teamRuns || []).filter(function (t) { return t.state === "paused" && t.error; }).forEach(function (t) {
+      needs.push('<div class="ask ask-warn"><div class="ask-head"><span class="pill pill-warn">paused</span><b>' + esc(t.title) + '</b></div><div class="ask-body">' + esc(t.error) + '</div><div class="inline"><button type="button" class="btn btn-mini" data-action="team-open-from" data-id="' + attr(t.id) + '">Open</button></div></div>');
+    });
+    d.approvals.slice(0, 4).forEach(function (r) { needs.push(approvalCard(r, true)); });
+    d.inbox.slice(0, 3).forEach(function (m) { needs.push(messageCard(m)); });
+    (h.checks || []).filter(function (c) { return c.required && c.state !== "healthy" && c.state !== "starting"; }).forEach(function (c) {
+      var f = c.fix || {}, bad = c.state === "critical" || c.state === "unavailable" || c.state === "degraded";
+      needs.push('<div class="ask ask-' + (bad ? "bad" : "warn") + '"><div class="ask-head"><span class="pill ' + (bad ? "pill-bad" : "pill-warn") + '">' + esc(HEALTH_WORD[c.state]) + "</span><b>" + esc(c.label) + '</b><span class="dim">' + esc(c.detail) + '</span></div><div class="ask-body">' + esc(c.meaning) + "</div>" +
+        (f.capability ? '<div class="inline"><button type="button" class="btn btn-primary btn-mini" data-action="health-fix" data-cap="' + attr(f.capability) + '" data-args="' + attr(JSON.stringify(f.args || {})) + '">' + esc(f.label) + "</button></div>" : f.view ? '<div class="inline"><button type="button" class="btn btn-mini" data-action="health-go" data-view="' + attr(f.view) + '">' + esc(f.label) + "</button></div>" : "") + "</div>");
+    });
+    var steps = [
+      { done: ready, t: "Connect an AI provider", s: "So the assistant and agent team can work", v: "providers" },
+      { done: d.projects.length > 0, t: "Add your first project", s: "Create one from a stack, or import a repository", v: d.projects.length ? "projects" : "create" },
+      { done: state.server.services.some(function (x) { return x.installed || x.running; }), t: "Set up local services (optional)", s: "Web server, database; existing installs are detected first", v: "services" }
+    ];
+    var started = steps.every(function (x) { return x.done; }) ? "" :
+      '<div class="section-title">Get started</div><div class="panel">' + steps.map(function (x, i) {
+        return '<div class="proj"><span class="step-dot ' + (x.done ? "ok" : "run") + '" style="animation:none"></span><div class="proj-main"><div class="proj-name">' + esc(x.t) + '</div><div class="proj-path">' + esc(x.s) + "</div></div>" +
+          (x.done ? '<span class="dim">done</span>' : '<button type="button" class="btn btn-mini btn-primary" data-action="nav" data-view="' + x.v + '">Open</button>') + "</div>";
+      }).join("") + "</div>";
+    var needsHtml = started + (needs.length
+      ? '<div class="section-title">Needs you <span class="count">' + needs.length + "</span></div>" + needs.join("")
+      : '<div class="calm"><span class="health-dot"></span><div><b>Nothing needs you.</b><div class="row-sub">No approvals waiting, no questions from agents, nothing broken.</div></div></div>');
+
+    // Projects
+    var projects = d.projects.slice(0, 6).map(function (p) {
+      return '<div class="proj"><div class="proj-main"><div class="proj-name">' + esc(p.name) + (p.stack ? ' <span class="pill pill-accent">' + esc(p.stack) + "</span>" : "") +
+        '</div><div class="proj-path mono nowrap" title="' + attr(p.path) + '">' + esc(p.path) + '</div></div><div class="proj-actions">' +
+        '<button type="button" class="btn btn-mini" data-action="home-open" data-path="' + attr(p.path) + '">Develop</button>' +
+        (ready ? '<button type="button" class="btn btn-mini" data-action="home-chat" data-path="' + attr(p.path) + '">Ask</button>' : "") + "</div></div>";
+    }).join("") || '<div class="empty-inline">No projects yet.</div>';
+
+    // Working now
+    var live = [];
+    d.threads.filter(function (t) { return t.state === "running" || t.state === "waiting_approval"; }).forEach(function (t) {
+      live.push('<div class="live"><span class="dot dot-ok"></span><span class="grow nowrap">' + esc(t.title) + '</span><span class="dim">' + (t.state === "running" ? "assistant working" : "waiting for you") + '</span><button type="button" class="btn btn-mini" data-action="open-thread" data-id="' + attr(t.id) + '">Open</button></div>');
+    });
+    state.sessions.filter(function (x) { return x.live_state === "running"; }).forEach(function (x) {
+      live.push('<div class="live"><span class="dot dot-ok"></span><span class="grow nowrap">' + esc(x.label || x.harness) + '</span><span class="dim">' + esc(x.harness) + ' session</span><button type="button" class="btn btn-mini" data-action="nav" data-view="agents">Open</button></div>');
+    });
+    d.tasks.filter(function (t) { return t.running; }).forEach(function (t) {
+      live.push('<div class="live"><span class="dot dot-ok"></span><span class="grow nowrap mono">' + esc(t.name) + '</span><span class="dim">background task</span><button type="button" class="btn btn-mini" data-action="nav" data-view="develop">Open</button></div>');
+    });
+    var svcUp = state.server.services.filter(function (x) { return x.running; });
+    if (svcUp.length) live.push('<div class="live"><span class="dot dot-ok"></span><span class="grow">' + svcUp.length + " service" + (svcUp.length === 1 ? "" : "s") + ' running</span><span class="dim nowrap">' + esc(svcUp.map(function (x) { return x.name; }).join(", ")) + '</span><button type="button" class="btn btn-mini" data-action="nav" data-view="services">Open</button></div>');
+
+    (d.teamRuns || []).filter(function (t) { return ["planning", "running", "awaiting_plan", "paused"].indexOf(t.state) >= 0; }).forEach(function (t) {
+      live.push('<div class="live"><span class="dot ' + (t.state === "running" || t.state === "planning" ? "dot-ok" : "dot-warn") + '"></span><span class="grow nowrap">' + esc(t.title) + '</span><span class="dim">team · ' + esc(RUN_WORD[t.state]) + " " + t.tasks_done + "/" + t.tasks_total + '</span><button type="button" class="btn btn-mini" data-action="team-open-from" data-id="' + attr(t.id) + '">Open</button></div>');
+    });
+    var feed = d.audit.filter(function (a) { return !a.dry_run && a.tier !== "read"; }).slice(0, 7).map(function (a) {
+      var agent = a.actor.indexOf("agent") === 0;
+      return '<div class="feed"><span class="feed-who ' + (agent ? "feed-agent" : "") + '">' + esc(a.actor.replace("human:", "").replace("agent:", "")) + '</span><span class="mono grow nowrap">' + esc(a.capability) + "</span>" +
+        (a.ok ? "" : '<span class="pill pill-bad">refused</span>') + '<span class="dim">' + esc(ago(a.at)) + "</span></div>";
+    }).join("") || '<div class="empty-inline">Nothing yet.</div>';
+
+    var quick = [
+      { v: "create", t: "Create a project", s: "From 24 stacks" },
+      { v: "develop", t: "Import a project", s: "Detect and work on it" },
+      { v: "toolchain", t: "Install tools", s: "Languages and databases" },
+      { v: "agents", t: "Open an agent session", s: "Claude Code, shell" }
+    ].map(function (q) { return '<button type="button" class="quick" data-action="nav" data-view="' + q.v + '"><b>' + esc(q.t) + "</b><span>" + esc(q.s) + "</span></button>"; }).join("");
+
+    el("main").innerHTML =
+      '<div class="page home">' +
+      '<div class="home-head"><div><h1 class="page-title">' + greeting() + '</h1><div class="page-sub">' + new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" }) + " · " + d.projects.length + " project" + (d.projects.length === 1 ? "" : "s") + "</div></div></div>" +
+      ask +
+      '<div class="quick-row">' + quick + "</div>" +
+      '<div class="home-grid"><div class="home-col">' + needsHtml + "</div>" +
+      '<div class="home-col"><div class="section-title">Projects</div><div class="panel">' + projects + '</div>' +
+      '<div class="section-title">Working now</div><div class="panel">' + (live.join("") || '<div class="empty-inline">Nothing is running.</div>') + "</div>" +
+      '<div class="section-title">Recent activity</div><div class="panel">' + feed + "</div></div></div></div>";
+  }
+
+  // ------------------------------------------------------------- providers
+
+  function loadProviders() {
+    return Promise.all([read("provider.list"), read("provider.presets"), read("models.catalogue"), read("models.roles"), read("team.roles")]).then(function (r) {
+      AI.providers = r[0]; AI.presets = r[1]; AI.catalogue = r[2]; AI.roleAssign = r[3]; AI.teamRoles = r[4];
+    });
+  }
+
+  function money(v) { return v === null || v === undefined ? "–" : "$" + (v < 1 ? v.toFixed(2) : String(v)); }
+  function tok(v) { return !v ? "–" : v >= 1000000 ? (v / 1000000) + "M" : Math.round(v / 1000) + "K"; }
+
+  function curlExample(kind, base, env) {
+    if (kind === "anthropic") return 'curl ' + base + '/v1/messages \\\n  -H "x-api-key: $' + (env || "ANTHROPIC_API_KEY") + '" \\\n  -H "anthropic-version: 2023-06-01" \\\n  -H "content-type: application/json" \\\n  -d \'{"model":"MODEL","max_tokens":256,"messages":[{"role":"user","content":"Hello"}]}\'';
+    return 'curl ' + base + '/chat/completions \\\n  -H "Authorization: Bearer $' + (env || "API_KEY") + '" \\\n  -H "content-type: application/json" \\\n  -d \'{"model":"MODEL","messages":[{"role":"user","content":"Hello"}]}\'';
+  }
+
+  function modelOptions(providerId) {
+    var seen = {}, out = [];
+    (AI.catalogue || []).filter(function (m) { return m.source === "provider:" + providerId || (m.source === "anthropic-docs" && providerKind(providerId) === "anthropic"); }).forEach(function (m) {
+      if (!seen[m.model_id]) { seen[m.model_id] = 1; out.push(m); }
+    });
+    return out;
+  }
+  function providerKind(id) { var p = (AI.providers || []).filter(function (x) { return x.id === id; })[0]; return p ? p.kind : ""; }
+
+
+  function rolesPanel() {
+    var provs = (AI.providers || []).filter(function (p) { return p.enabled; });
+    if (!provs.length) return "";
+    var info = {};
+    (AI.teamRoles || []).forEach(function (r) { info[r.id] = r; });
+    var rows = ["default"].concat((AI.teamRoles || []).map(function (r) { return r.id; })).map(function (role) {
+      var mine = (AI.roleAssign ? AI.roleAssign.assignments : []).filter(function (a) { return a.role === role && !a.scope; }).sort(function (a, b) { return a.position - b.position; });
+      var cell = function (i) {
+        var a = mine[i] || {};
+        var opts = '<option value="">' + (i ? "no fallback" : "use the default provider") + "</option>" + provs.map(function (p) { return '<option value="' + attr(p.id) + '"' + (a.provider === p.id ? " selected" : "") + ">" + esc(p.label) + "</option>"; }).join("");
+        return '<select class="input" id="rm-' + role + "-p" + i + '" style="max-width:150px">' + opts + '</select><input class="input mono" list="rm-models" id="rm-' + role + "-m" + i + '" value="' + attr(a.model || "") + '" placeholder="model" spellcheck="false" style="max-width:220px">' +
+          (a.model ? '<span class="pill ' + (a.status === "available" ? "pill-ok" : a.status === "missing" ? "pill-bad" : "") + '" title="' + (a.status === "available" ? "This provider's own list includes it" : a.status === "missing" ? "Not in the list this key can see. Fetch the provider's models to refresh it." : "Fetch the provider's models to check this account can use it") + '">' + esc(a.status) + "</span>" : "");
+      };
+      var i = info[role] || { title: "Everything else", summary: "Used when a kind of work has no model of its own, and for the assistant." };
+      return '<tr><td><div class="cell-strong">' + esc(i.title || role) + '</div><div class="cell-dim">' + esc(i.summary) + "</div></td><td><div class=\"inline\">" + cell(0) + "</div></td><td><div class=\"inline\">" + cell(1) + '</div></td><td><button type="button" class="btn btn-mini btn-primary" data-action="role-save" data-role="' + attr(role) + '">Save</button></td></tr>';
+    }).join("");
+    var all = {}; (AI.catalogue || []).forEach(function (m) { all[m.model_id] = 1; });
+    return '<div class="section-title">Which model does which work</div><div class="panel"><div class="panel-body flush"><table class="table"><thead><tr><th>Work</th><th>First choice</th><th>Fallback if it fails</th><th></th></tr></thead><tbody>' + rows + "</tbody></table><datalist id=\"rm-models\">" + Object.keys(all).map(function (m) { return '<option value="' + attr(m) + '"></option>'; }).join("") + "</datalist></div>" +
+      '<div class="panel-body panel-foot row-sub">The fallback is used only when the first choice fails, and only the providers you list here are ever used. A conversation where you pick a model yourself never falls back. Each reply records which model answered and why.</div></div>';
+  }
+
+  function renderProviders() {
+    if (!AI.providers) return renderLoading();
+    var cards = AI.providers.map(function (p) {
+      var keyState = p.has_key ? pill("ok", p.key_source === "env" ? "key from " + p.key_env : "key " + p.key_hint) : (p.needs_key ? pill("bad", "no key") : pill("", "no key needed"));
+      var busy = AI.provBusy[p.id];
+      var opts = modelOptions(p.id).map(function (m) { return '<option value="' + attr(m.model_id) + '"></option>'; }).join("");
+      return '<div class="panel"><div class="panel-head"><span>' + esc(p.label) + (p.is_default ? ' <span class="pill pill-accent">default</span>' : "") + (p.enabled ? "" : ' <span class="pill">disabled</span>') +
+        '</span><span class="panel-note">' + esc(p.kind) + "</span></div><div class=\"panel-body\">" +
+        '<div class="kv"><dt>Endpoint</dt><dd class="mono">' + esc(p.base_url) + '</dd></div><div class="kv"><dt>API key</dt><dd>' + keyState + "</dd></div>" +
+        '<div class="kv"><dt>Default model</dt><dd><input class="input mono" list="models-' + attr(p.id) + '" data-prov-model="' + attr(p.id) + '" value="' + attr(p.default_model || "") + '" placeholder="choose a model" spellcheck="false" style="width:260px"><datalist id="models-' + attr(p.id) + '">' + opts + "</datalist></dd></div>" +
+        '<div class="inline" style="margin-top:12px">' +
+        '<button type="button" class="btn btn-mini btn-primary" data-action="prov-test" data-id="' + attr(p.id) + '"' + (busy ? " disabled" : "") + ">Test connection</button>" +
+        '<button type="button" class="btn btn-mini" data-action="prov-models" data-id="' + attr(p.id) + '"' + (busy ? " disabled" : "") + ">Fetch models</button>" +
+        '<button type="button" class="btn btn-mini" data-action="prov-edit" data-id="' + attr(p.id) + '">Edit</button>' +
+        (p.is_default ? "" : '<button type="button" class="btn btn-mini" data-action="prov-default" data-id="' + attr(p.id) + '">Make default</button>') +
+        '<button type="button" class="btn btn-mini btn-danger" data-action="prov-remove" data-id="' + attr(p.id) + '">Remove</button></div>' +
+        (AI.provBusy[p.id + ":msg"] ? '<div class="notice ' + (AI.provBusy[p.id + ":ok"] ? "notice-ok" : "notice-bad") + '" style="margin-top:10px">' + esc(AI.provBusy[p.id + ":msg"]) + "</div>" : "") + "</div></div>";
+    }).join("");
+
+    var presetCards = (AI.presets || []).map(function (pr) {
+      return '<button type="button" class="preset" data-action="prov-new" data-preset="' + attr(pr.id) + '"><b>' + esc(pr.label) + "</b><span>" + esc(pr.requires_key ? "API key" : "runs locally") + " · " + esc(pr.kind) + "</span></button>";
+    }).join("");
+
+    var f = AI.provForm, form = "";
+    if (f) {
+      var pr = (AI.presets || []).filter(function (x) { return x.id === f.preset; })[0] || {};
+      form = '<div class="panel"><div class="panel-head"><span>' + (f.editing ? "Edit " : "Add ") + esc(f.label || pr.label || "provider") + '</span><button type="button" class="btn btn-ghost btn-mini" data-action="prov-cancel">Close</button></div><div class="panel-body two-col">' +
+        "<div>" +
+        '<div class="field"><label class="field-label">Id</label><input class="input mono" data-pf="id" value="' + attr(f.id) + '"' + (f.editing ? " disabled" : "") + ' spellcheck="false"></div>' +
+        '<div class="field"><label class="field-label">Base URL</label><input class="input mono" data-pf="base_url" value="' + attr(f.base_url) + '" spellcheck="false"><div class="row-sub">https only (plain http is allowed for localhost). The key is sent here, so check it.</div></div>' +
+        '<div class="field"><label class="field-label">API key' + (f.editing ? " (leave empty to keep the current one)" : "") + '</label><input class="input mono" type="password" autocomplete="off" data-pf="api_key" value="" placeholder="' + (pr.requires_key === false ? "not needed for local servers" : "paste your key") + '"><div class="row-sub">Stored in a file only you can read, never in the database, logs or responses. Or leave empty and set the environment variable below.</div></div>' +
+        '<div class="field"><label class="field-label">…or read the key from an environment variable</label><input class="input mono" data-pf="key_env" value="' + attr(f.key_env || "") + '" placeholder="' + attr(pr.key_env || "MY_API_KEY") + '" spellcheck="false"></div>' +
+        '<div class="field"><label class="field-label">Default model</label><input class="input mono" list="pf-models" data-pf="default_model" value="' + attr(f.default_model || "") + '" spellcheck="false"><datalist id="pf-models">' + modelOptions(f.id).map(function (m) { return '<option value="' + attr(m.model_id) + '"></option>'; }).join("") + "</datalist></div>" +
+        '<label class="check"><input type="checkbox" data-pf="make_default"' + (f.make_default ? " checked" : "") + "> Use for new conversations</label>" +
+        '<div class="inline" style="margin-top:14px"><button type="button" class="btn btn-primary" data-action="prov-save">' + (f.editing ? "Save" : "Add provider") + "</button></div></div>" +
+        '<div><div class="field-label">API setup</div>' +
+        (pr.key_url ? '<div class="row-sub">1. Create a key: <a class="link" href="' + attr(pr.key_url) + '" target="_blank" rel="noopener noreferrer">' + esc(pr.key_url) + "</a></div>" : '<div class="row-sub">No key is needed for a local server. Make sure it is running.</div>') +
+        '<div class="row-sub">2. Paste it here, or export it: <span class="mono">export ' + esc(pr.key_env || "API_KEY") + "=…</span></div>" +
+        '<div class="row-sub">3. Test the connection, fetch the model list, pick a default model.</div>' +
+        '<div class="row-sub">Docs: <a class="link" href="' + attr(pr.docs_url || "#") + '" target="_blank" rel="noopener noreferrer">' + esc(pr.docs_url || "") + "</a></div>" +
+        '<div class="row-sub">Models come from: ' + esc(pr.models_from || "") + "</div>" +
+        (pr.notes ? '<div class="notice" style="margin-top:8px">' + esc(pr.notes) + "</div>" : "") +
+        '<div class="field-label" style="margin-top:12px">The request devd sends</div><pre class="log-block">' + esc(curlExample(f.kind, f.base_url || pr.base_url, pr.key_env)) + "</pre></div></div></div>";
+    }
+
+    // official catalogue
+    var official = (AI.catalogue || []).filter(function (m) { return m.source === "anthropic-docs"; });
+    var offRows = official.map(function (m) {
+      return "<tr><td class=\"cell-mono\">" + esc(m.model_id) + '</td><td class="cell-strong">' + esc(m.display) + "</td><td>" + tok(m.context_window) + "</td><td>" + tok(m.max_output) + "</td><td>" + money(m.input_price) + " / " + money(m.output_price) + '</td><td class="dim">' + esc(m.retirement || "") + "</td>" +
+        '<td><button type="button" class="btn btn-mini" data-action="prov-use-model" data-model="' + attr(m.model_id) + '">Use</button></td></tr>';
+    }).join("");
+    var offPanel = '<div class="panel"><div class="panel-head"><span>Official Claude models</span><span class="panel-note">' + (official.length ? "fetched " + esc(ago(official[0].fetched_at)) + " from " + '<a class="link" target="_blank" rel="noopener noreferrer" href="https://platform.claude.com/docs/en/about-claude/models/overview">Anthropic docs</a>' : "not fetched yet") + "</span></div>" +
+      (offRows ? '<div class="panel-body flush"><table class="table"><thead><tr><th>API id</th><th>Name</th><th>Context</th><th>Max output</th><th>$/MTok in / out</th><th>Retirement</th><th></th></tr></thead><tbody>' + offRows + "</tbody></table></div>" : '<div class="panel-body empty-inline">The official list is read from Anthropic\'s documentation and needs no API key.</div>') +
+      '<div class="panel-body panel-foot"><button type="button" class="btn btn-primary btn-mini" data-action="models-refresh">' + (official.length ? "Refresh from Anthropic" : "Fetch the official list") + "</button></div></div>";
+
+    var perProvider = AI.providers.map(function (p) {
+      var ms = (AI.catalogue || []).filter(function (m) { return m.source === "provider:" + p.id; });
+      if (!ms.length) return "";
+      return '<div class="panel"><div class="panel-head"><span>Models available to ' + esc(p.label) + '</span><span class="panel-note">' + ms.length + " · fetched " + esc(ago(ms[0].fetched_at)) + "</span></div><div class=\"panel-body flush\"><table class=\"table\"><tbody>" +
+        ms.slice(0, 60).map(function (m) { return '<tr><td class="cell-mono">' + esc(m.model_id) + '</td><td class="dim">' + esc(m.display === m.model_id ? "" : m.display) + "</td><td>" + tok(m.context_window) + '</td><td><button type="button" class="btn btn-mini" data-action="prov-pick" data-id="' + attr(p.id) + '" data-model="' + attr(m.model_id) + '">Use</button></td></tr>'; }).join("") + "</tbody></table></div></div>";
+    }).join("");
+
+    el("main").innerHTML = page("Providers and models",
+      "Where the built-in assistant gets its intelligence. Add a provider, give it a key, choose a model. Keys never leave your machine except to that provider.", "",
+      (cards || '<div class="panel"><div class="panel-body"><b>No provider yet.</b><div class="row-sub">Pick one below. Anthropic is the one the assistant is tuned for.</div></div></div>') +
+      form +
+      rolesPanel() + '<div class="section-title">Add a provider</div><div class="presets">' + presetCards + "</div>" + offPanel + perProvider);
+  }
+
+  // --------------------------------------------------------------- assistant
+
+  function loadAssistant() {
+    return Promise.all([read("chat.list"), loadProvidersIfNeeded(), state.projects.length ? Promise.resolve() : loadProjects()]).then(function (r) {
+      AI.threads = r[0] || [];
+      if (AI.thread) return pollThread(true);
+    });
+  }
+  function loadProvidersIfNeeded() { return AI.providers && AI.catalogue ? Promise.resolve() : loadProviders(); }
+
+  function pollThread(full) {
+    if (!AI.thread) return Promise.resolve();
+    return read("chat.get", { thread: AI.thread.id, after: full ? 0 : AI.lastId }).then(function (d) {
+      if (full) AI.events = [];
+      d.events.forEach(function (e) { AI.events.push(e); AI.lastId = e.id; });
+      AI.thread = d.thread; AI.pending = d.pending || []; AI.running = d.running;
+      var idx = (AI.threads || []).map(function (t) { return t.id; }).indexOf(d.thread.id);
+      if (idx >= 0) AI.threads[idx] = d.thread;
+    });
+  }
+
+  function startThreadTimer() {
+    clearInterval(AI.timer);
+    AI.timer = setInterval(function () {
+      if (state.view !== "assistant") return clearInterval(AI.timer);
+      if (!AI.thread) return;
+      var busy = AI.thread.state === "running" || AI.running;
+      pollThread(false).then(function () {
+        var was = busy, now = AI.thread.state === "running" || AI.running;
+        paintChat();
+        if (was && !now) { read("chat.list").then(function (t) { AI.threads = t; paintThreads(); }); loadHealth().then(healthChip); }
+      }).catch(function () {});
+    }, 800);
+  }
+
+  function summarizeCall(b) {
+    var i = b.input || {};
+    if (b.name === "devd_invoke") return { title: i.id || "invoke", detail: i.args ? JSON.stringify(i.args) : "" };
+    if (b.name === "devd_describe") return { title: "describe " + (i.id || ""), detail: "" };
+    if (b.name === "devd_capabilities") return { title: "search capabilities", detail: [i.group, i.query].filter(Boolean).join(" ") };
+    if (b.name === "devd_groups") return { title: "list domains", detail: "" };
+    return { title: b.name, detail: JSON.stringify(i) };
+  }
+
+  function chatHtml() {
+    var results = {};
+    AI.events.forEach(function (e) { if (e.kind === "tool_result") results[e.data.tool_use_id] = e.data; });
+    var pendingByTool = {};
+    AI.pending.forEach(function (r) { pendingByTool[r.tool_use_id] = r; });
+    var html = "";
+    AI.events.forEach(function (e) {
+      if (e.kind === "user") html += '<div class="msg msg-user"><div class="bubble">' + md(e.data.text) + "</div></div>";
+      else if (e.kind === "assistant") {
+        (e.data.content || []).forEach(function (b) {
+          if (b.type === "text" && b.text.trim()) html += '<div class="msg msg-agent"><div class="avatar">d</div><div class="bubble">' + md(b.text) + "</div></div>";
+          else if (b.type === "tool_use") {
+            var c = summarizeCall(b), r = results[b.id], open = AI.openSteps[b.id];
+            var pend = pendingByTool[b.id];
+            html += '<div class="step' + (r && r.is_error ? " step-bad" : "") + '"><button type="button" class="step-head" data-action="step-toggle" data-id="' + attr(b.id) + '"><span class="step-dot ' + (pend ? "wait" : r ? (r.is_error ? "bad" : "ok") : "run") + '"></span><span class="mono step-title">' + esc(c.title) + '</span><span class="dim nowrap grow">' + esc(c.detail) + "</span><span>" + (open ? "▾" : "▸") + "</span></button>" +
+              (open ? '<div class="step-body"><div class="field-label">Input</div><pre class="log-block">' + esc(JSON.stringify(b.input, null, 2)) + "</pre>" + (r ? '<div class="field-label">Result</div><pre class="log-block">' + esc(r.content) + "</pre>" : "") + "</div>" : "") + "</div>";
+          }
+        });
+      } else if (e.kind === "approval") {
+        var req = AI.pending.filter(function (r) { return r.id === e.data.request_id; })[0];
+        if (req) html += approvalCard(req, false);
+      } else if (e.kind === "notice") html += '<div class="msg-note">' + esc(e.data.text) + "</div>";
+      else if (e.kind === "error") html += '<div class="msg-note msg-error">' + esc(e.data.message) + "</div>";
+    });
+    if (AI.thread && (AI.thread.state === "running" || AI.running)) html += '<div class="msg msg-agent"><div class="avatar">d</div><div class="bubble typing"><span></span><span></span><span></span></div></div>';
+    return html || '<div class="chat-empty"><div class="chat-empty-title">What should we build?</div><div class="row-sub">Describe a task. The assistant discovers what devd can do, works in small steps, checks its work by running your tests, and asks you before anything risky.</div></div>';
+  }
+
+  function paintChat() {
+    var box = el("chat-stream");
+    if (!box) return;
+    var near = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+    box.innerHTML = chatHtml();
+    if (near) box.scrollTop = box.scrollHeight;
+    var t = AI.thread;
+    var head = el("chat-head");
+    if (head && t) head.innerHTML = chatHeadHtml();
+    var send = el("chat-send");
+    if (send) { var busy = t && (t.state === "running" || AI.running); send.textContent = busy ? "Stop" : "Send"; send.setAttribute("data-action", busy ? "chat-stop" : "chat-send"); send.className = "btn " + (busy ? "btn-danger" : "btn-primary"); }
+  }
+
+  function chatHeadHtml() {
+    var t = AI.thread;
+    var provs = (AI.providers || []).filter(function (p) { return p.enabled; });
+    var cur = t.provider_id || (provs.filter(function (p) { return p.is_default; })[0] || provs[0] || {}).id;
+    var opts = provs.map(function (p) { return '<option value="' + attr(p.id) + '"' + (p.id === cur ? " selected" : "") + ">" + esc(p.label) + "</option>"; }).join("");
+    var models = modelOptions(cur).map(function (m) { return '<option value="' + attr(m.model_id) + '"></option>'; }).join("");
+    var p = (AI.providers || []).filter(function (x) { return x.id === cur; })[0];
+    return '<div class="grow"><div class="chat-title">' + esc(t.title) + '</div><div class="dim mono nowrap">' + esc(t.project || "no project") + " · " + t.input_tokens + " in / " + t.output_tokens + " out tokens</div></div>" +
+      '<select class="input" data-chat="provider">' + opts + "</select>" +
+      '<input class="input mono" list="chat-models" data-chat="model" value="' + attr(t.model || (p && p.default_model) || "") + '" placeholder="model" spellcheck="false" style="width:200px"><datalist id="chat-models">' + models + "</datalist>" +
+      '<span class="pill ' + (t.state === "error" ? "pill-bad" : t.state === "idle" ? "" : "pill-accent") + '">' + esc(t.state.replace("_", " ")) + "</span>";
+  }
+
+  function paintThreads() {
+    var box = el("thread-list");
+    if (!box) return;
+    box.innerHTML = (AI.threads || []).map(function (t) {
+      return '<button type="button" class="thread' + (AI.thread && AI.thread.id === t.id ? " active" : "") + '" data-action="open-thread" data-id="' + attr(t.id) + '"><span class="dot ' + (t.state === "running" ? "dot-ok" : t.state === "waiting_approval" ? "dot-warn" : t.state === "error" ? "dot-bad" : "dot-off") + '"></span><span class="grow nowrap">' + esc(t.title) + '</span><span class="dim">' + esc(ago(t.updated_at)) + "</span></button>";
+    }).join("") || '<div class="empty-inline">No conversations yet.</div>';
+  }
+
+  function renderAssistant() {
+    if (!AI.threads) return renderLoading();
+    var ready = (AI.providers || []).some(function (p) { return p.enabled && (p.has_key || !p.needs_key); });
+    var projOpts = '<option value="">No project</option>' + state.projects.map(function (p) { return '<option value="' + attr(p.path) + '"' + (AI.project === p.path ? " selected" : "") + ">" + esc(p.name || dirName(p.path)) + "</option>"; }).join("") +
+      (DEV.projects || []).map(function (p) { return '<option value="' + attr(p.path) + '"' + (AI.project === p.path ? " selected" : "") + ">" + esc(p.name) + "</option>"; }).join("");
+    el("main").innerHTML =
+      '<div class="assistant"><aside class="threads"><div class="threads-head"><b>Conversations</b><button type="button" class="btn btn-mini btn-primary" data-action="chat-new">New</button></div><div id="thread-list"></div></aside>' +
+      '<section class="chat">' +
+      (AI.thread ? '<div class="chat-head" id="chat-head"></div>' : '<div class="chat-head"><div class="grow"><div class="chat-title">Assistant</div><div class="dim">Claude Code-style, built into your server</div></div></div>') +
+      (!ready ? '<div class="notice notice-warn" style="margin:12px 16px">No usable AI provider yet. <button type="button" class="btn btn-mini btn-primary" data-action="nav" data-view="providers">Set one up</button></div>' : "") +
+      '<div class="chat-stream" id="chat-stream"></div>' +
+      '<div class="composer"><div class="inline">' + (AI.thread ? "" : '<select class="input" id="chat-project">' + projOpts + "</select>") +
+      '<span class="grow dim" style="font-size:11px">Enter to send · Shift+Enter for a new line' + (AI.thread && AI.thread.project ? " · working in " + esc(dirName(AI.thread.project)) : "") + "</span></div>" +
+      '<div class="inline"><textarea class="input grow" id="chat-input" rows="2" placeholder="Ask for something…">' + esc(AI.composer) + '</textarea><button type="button" class="btn btn-primary" id="chat-send" data-action="chat-send">Send</button></div></div></section></div>';
+    paintThreads(); paintChat();
+    var box = el("chat-stream"); if (box) box.scrollTop = box.scrollHeight;
+    startThreadTimer();
+  }
+
+
+  // -------------------------------------------------------------------- team
+
+  var TEAM = { runs: null, sel: null, data: null, timer: null, form: { goal: "", project: "", name: "", parallel: 2 }, say: "", open: {} };
+  var TASK_WORD = { pending: "waiting", ready: "ready", running: "working", waiting_approval: "needs your approval", done: "done", unverified: "not accepted", failed: "failed", cancelled: "cancelled", skipped: "accepted by hand", blocked: "blocked" };
+  var RUN_WORD = { planning: "planning", awaiting_plan: "plan needs your approval", running: "working", paused: "paused", done: "done", failed: "failed", cancelled: "cancelled" };
+
+  function loadTeam() {
+    return Promise.all([read("team.list"), state.projects.length ? Promise.resolve() : loadProjects(), loadProvidersIfNeeded()]).then(function (r) {
+      TEAM.runs = r[0] || [];
+      if (!TEAM.sel && TEAM.runs.length) TEAM.sel = TEAM.runs[0].id;
+      return TEAM.sel ? read("team.get", { run: TEAM.sel }).then(function (d) { TEAM.data = d; }).catch(function () { TEAM.data = null; }) : null;
+    });
+  }
+
+  function startTeamTimer() {
+    clearInterval(TEAM.timer);
+    TEAM.timer = setInterval(function () {
+      if (state.view !== "team") return clearInterval(TEAM.timer);
+      read("team.list").then(function (runs) {
+        TEAM.runs = runs;
+        return TEAM.sel ? read("team.get", { run: TEAM.sel }) : null;
+      }).then(function (d) { if (d) TEAM.data = d; paintTeam(); }).catch(function () {});
+    }, 1200);
+  }
+
+  function renderTeam() {
+    if (!TEAM.runs) return renderLoading();
+    var ready = (AI.providers || []).some(function (p) { return p.enabled && (p.has_key || !p.needs_key); });
+    var projOpts = '<option value="">Choose a project…</option>' + state.projects.map(function (p) { return '<option value="' + attr(p.path) + '"' + (TEAM.form.project === p.path ? " selected" : "") + ">" + esc(p.name || dirName(p.path)) + "</option>"; }).join("") + '<option value="__new"' + (TEAM.form.project === "__new" ? " selected" : "") + ">A new project…</option>";
+    el("main").innerHTML =
+      '<div class="assistant"><aside class="threads"><div class="threads-head"><b>Runs</b><button type="button" class="btn btn-mini btn-primary" data-action="team-new">New</button></div><div id="team-list"></div></aside>' +
+      '<section class="chat"><div id="team-detail" class="team-detail"></div></section></div>';
+    TEAM.ready = ready; TEAM.projOpts = projOpts;
+    paintTeam();
+    startTeamTimer();
+  }
+
+  function paintTeam() {
+    var list = el("team-list"), box = el("team-detail");
+    if (!list || !box) return;
+    list.innerHTML = (TEAM.runs || []).map(function (r) {
+      return '<button type="button" class="thread' + (TEAM.sel === r.id ? " active" : "") + '" data-action="team-open" data-id="' + attr(r.id) + '"><span class="dot ' + (r.state === "running" || r.state === "planning" ? "dot-ok" : r.state === "awaiting_plan" || r.state === "paused" ? "dot-warn" : r.state === "failed" ? "dot-bad" : "dot-off") + '"></span><span class="grow nowrap">' + esc(r.title) + '</span><span class="dim">' + r.tasks_done + "/" + r.tasks_total + "</span></button>";
+    }).join("") || '<div class="empty-inline">No runs yet.</div>';
+    if (!TEAM.sel || !TEAM.data) { box.innerHTML = teamForm(); return; }
+    var focus = document.activeElement && document.activeElement.id;
+    var val = focus === "team-say" ? document.activeElement.value : null;
+    box.innerHTML = teamDetail(TEAM.data);
+    if (val !== null) { var i = el("team-say"); if (i) { i.value = val; i.focus(); } }
+  }
+
+  function teamForm() {
+    var f = TEAM.form;
+    return '<div class="team-new"><div class="chat-title">Describe what you want built</div>' +
+      '<div class="row-sub">A planner turns this into tasks. You review the plan and approve it before anything runs. Specialists then work in parallel where it is safe, and a task only counts as done when devd can see the proof.</div>' +
+      (TEAM.ready ? "" : '<div class="notice notice-warn" style="margin-top:12px">No usable AI provider yet. <button type="button" class="btn btn-mini btn-primary" data-action="nav" data-view="providers">Set one up</button></div>') +
+      '<div class="field" style="margin-top:14px"><label class="field-label">Goal</label><textarea class="input" id="team-goal" rows="5" placeholder="e.g. Add password reset by email to the app, with tests. Or: Build a small Laravel blog with posts and comments.">' + esc(f.goal) + "</textarea></div>" +
+      '<div class="inline" style="margin-top:10px"><select class="input" id="team-project" style="max-width:280px">' + TEAM.projOpts + "</select>" +
+      (f.project === "__new" ? '<input class="input mono" id="team-name" placeholder="new-project-name" value="' + attr(f.name) + '" style="max-width:220px" spellcheck="false">' : "") +
+      '<label class="field-label">At most</label><select class="input" id="team-parallel" style="max-width:110px">' + [1, 2, 3, 4].map(function (n) { return '<option value="' + n + '"' + (f.parallel === n ? " selected" : "") + ">" + n + " at once</option>"; }).join("") + "</select>" +
+      '<span class="grow"></span><button type="button" class="btn btn-primary" data-action="team-start"' + (TEAM.ready ? "" : " disabled") + ">Start the team</button></div></div>";
+  }
+
+  function evidenceLine(t) {
+    var ev = t.evidence || [];
+    if (!ev.length) return "";
+    var ch = ev.filter(function (f) { return f.kind === "change" && f.ok; }).length;
+    var vp = ev.filter(function (f) { return f.kind === "verify" && f.ok; }).length, vf = ev.filter(function (f) { return f.kind === "verify" && !f.ok; }).length;
+    var rd = ev.filter(function (f) { return f.kind === "read" && f.ok; }).length, cm = ev.filter(function (f) { return f.kind === "command"; }).length;
+    return [ch ? ch + " change" + (ch === 1 ? "" : "s") : "", vp ? vp + " check" + (vp === 1 ? "" : "s") + " passed" : "", vf ? vf + " failed" : "", rd ? rd + " read" : "", cm ? cm + " command" + (cm === 1 ? "" : "s") : ""].filter(Boolean).join(" · ");
+  }
+
+  function teamDetail(d) {
+    var r = d.run, tasks = d.tasks, events = d.events;
+    var planner = tasks.filter(function (t) { return t.role === "planner"; })[0];
+    var work = tasks.filter(function (t) { return t.role !== "planner"; });
+    var actions = "";
+    if (r.state === "awaiting_plan") actions += '<button type="button" class="btn btn-go" data-action="team-approve" data-id="' + attr(r.id) + '">Approve plan and start</button>';
+    if (r.state === "running") actions += '<button type="button" class="btn" data-action="team-pause" data-id="' + attr(r.id) + '">Pause</button>';
+    if (r.state === "paused") actions += '<button type="button" class="btn btn-primary" data-action="team-resume" data-id="' + attr(r.id) + '">Resume</button>';
+    if (["planning", "awaiting_plan", "running", "paused"].indexOf(r.state) >= 0) actions += '<button type="button" class="btn btn-danger" data-action="team-cancel" data-id="' + attr(r.id) + '">Cancel</button>';
+    var head = '<div class="chat-head"><div class="grow"><div class="chat-title">' + esc(r.title) + '</div><div class="dim mono nowrap">' + esc(r.project || "") + ' · started by ' + esc((r.created_by || "").replace("human:", "")) + " " + esc(ago(r.created_at)) + '</div></div><span class="pill ' + (r.state === "failed" ? "pill-bad" : r.state === "done" ? "pill-ok" : r.state === "awaiting_plan" || r.state === "paused" ? "pill-warn" : "pill-accent") + '">' + esc(RUN_WORD[r.state] || r.state) + "</span>" + actions + "</div>";
+    var note = r.error ? '<div class="notice notice-warn" style="margin:12px 16px"><b>Needs you.</b> ' + esc(r.error) + "</div>" : "";
+    if (r.state === "planning") note += '<div class="notice" style="margin:12px 16px">The planner is reading the project and writing the plan' + (planner && planner.state === "waiting_approval" ? ", and is waiting for you to approve something" : "") + ".</div>";
+    var cards = work.map(function (t) {
+      var open = TEAM.open[t.id], dep = t.depends_on.length ? "after " + t.depends_on.join(", ") : "starts first";
+      var btns = "";
+      if (["unverified", "blocked", "failed"].indexOf(t.state) >= 0) btns = '<button type="button" class="btn btn-mini btn-primary" data-action="team-retry" data-id="' + attr(t.id) + '">Retry</button><button type="button" class="btn btn-mini" data-action="team-accept" data-id="' + attr(t.id) + '" title="Accept it without the proof devd asked for. This is recorded.">Accept as is</button>';
+      if (t.thread_id) btns += '<button type="button" class="btn btn-mini btn-ghost" data-action="open-thread" data-id="' + attr(t.thread_id) + '">Conversation</button>';
+      return '<div class="tcard tstate-' + t.state + '"><div class="tcard-head"><span class="step-dot ' + (t.state === "done" || t.state === "skipped" ? "ok" : t.state === "running" ? "run" : t.state === "waiting_approval" ? "wait" : ["failed", "unverified", "blocked"].indexOf(t.state) >= 0 ? "bad" : "") + '"></span><b>' + esc(t.title) + '</b><span class="pill">' + esc(t.role) + '</span><span class="pill ' + (t.state === "done" ? "pill-ok" : ["failed", "unverified", "blocked"].indexOf(t.state) >= 0 ? "pill-bad" : t.state === "running" ? "pill-accent" : "") + '">' + esc(TASK_WORD[t.state] || t.state) + '</span><span class="grow"></span><button type="button" class="btn btn-mini btn-ghost" data-action="team-toggle" data-id="' + attr(t.id) + '">' + (open ? "Hide" : "Details") + "</button></div>" +
+        '<div class="row-sub">' + esc(dep) + (t.attempts > 1 ? " · attempt " + t.attempts : "") + (t.branch ? " · own copy on " + esc(t.branch) : "") + (evidenceLine(t) ? " · " + esc(evidenceLine(t)) : "") + "</div>" +
+        (t.error && ["unverified", "blocked", "failed"].indexOf(t.state) >= 0 ? '<div class="row-sub warn-text">' + esc(t.error) + "</div>" : "") +
+        (open ? '<div class="field-label" style="margin-top:8px">Instructions</div><div class="ask-body">' + md(t.instructions) + (t.result ? '<div class="field-label" style="margin-top:8px">What it reported</div>' + md(t.result) : "") + '<div class="field-label" style="margin-top:8px">Evidence devd recorded</div>' + ((t.evidence || []).length ? '<table class="table"><tbody>' + t.evidence.map(function (f) { return "<tr><td><span class=\"pill " + (f.ok ? "pill-ok" : "pill-bad") + '">' + esc(f.kind) + '</span></td><td class="cell-mono">' + esc(f.capability) + '</td><td class="cell-mono nowrap">' + esc(f.summary || "") + "</td></tr>"; }).join("") + "</tbody></table>" : '<div class="empty-inline">None yet.</div>') + "</div>" : "") +
+        (btns ? '<div class="inline" style="margin-top:8px">' + btns + "</div>" : "") + "</div>";
+    }).join("") || (r.state === "planning" ? "" : '<div class="empty-inline">No tasks yet.</div>');
+    var approvals = (d.approvals || []).map(function (a) { return approvalCard(a, false); }).join("");
+    var log = events.filter(function (e) { return ["started", "plan", "plan_approved", "report", "accepted", "rejected", "unverified", "blocked", "merge_blocked", "failed", "retrying", "retry", "direction", "paused", "resumed", "cancelled", "accepted_by_hand", "needs_person", "done", "note", "recovered", "waiting_approval"].indexOf(e.kind) >= 0; }).slice(-60).reverse().map(function (e) {
+      var x = e.data || {}, text = "";
+      switch (e.kind) {
+        case "started": text = x.task ? "started " + x.task + " (" + x.role + ")" : "run started"; break;
+        case "plan": text = "plan: " + (x.tasks || []).length + " task(s)"; break;
+        case "report": text = x.task + " reported " + x.status + ": " + String(x.summary || "").split("\n")[0]; break;
+        case "accepted": text = "accepted " + x.task + (x.verified ? " (" + x.verified + " passing check" + (x.verified === 1 ? "" : "s") + ")" : ""); break;
+        case "rejected": case "unverified": text = "not accepted " + x.task + ": " + x.why; break;
+        case "direction": text = "you said: " + x.text; break;
+        case "note": text = x.text; break;
+        default: text = e.kind.replace(/_/g, " ") + (x.task ? " " + x.task : "") + (x.why ? ": " + x.why : "");
+      }
+      return '<div class="feed"><span class="dim mono">' + esc(ago(e.at)) + '</span><span class="grow">' + esc(text) + "</span></div>";
+    }).join("");
+    var summary = r.summary ? '<div class="section-title">Result</div><div class="panel"><div class="panel-body ask-body">' + md(r.summary) + "</div></div>" : "";
+    var say = ["done", "failed", "cancelled"].indexOf(r.state) < 0 ? '<div class="composer"><div class="inline"><input class="input grow" id="team-say" placeholder="Tell the team something new (new requirement, a correction)…"><button type="button" class="btn btn-primary" data-action="team-say" data-id="' + attr(r.id) + '">Send</button></div></div>' : "";
+    return head + '<div class="team-scroll">' + note + approvals + (summary) + '<div class="section-title" style="margin:16px 16px 8px">Tasks <span class="count">' + work.length + "</span></div>" + '<div class="tlist">' + cards + "</div>" + '<div class="section-title" style="margin:16px 16px 8px">Log</div><div class="panel" style="margin:0 16px 16px">' + (log || '<div class="empty-inline">Nothing yet.</div>') + "</div></div>" + say;
+  }
+
+  // ------------------------------------------------------------------- inbox
+
+  function loadInbox() {
+    return Promise.all([read("approval.list", { pending_only: true }), read("inbox.list", { open_only: true }), read("approval.list", { pending_only: false }), read("inbox.list", { open_only: false })]).then(function (r) {
+      AI.requests = r[0]; AI.inbox = r[1];
+      AI.history = { requests: (r[2] || []).filter(function (x) { return x.state !== "pending"; }).slice(0, 15), messages: (r[3] || []).filter(function (x) { return x.state === "resolved"; }).slice(0, 15) };
+      return loadHealth();
+    });
+  }
+
+  function renderInbox() {
+    if (!AI.requests) return renderLoading();
+    var a = AI.requests.map(function (r) { return approvalCard(r, false); }).join("");
+    var m = AI.inbox.map(messageCard).join("");
+    var hist = AI.history.requests.map(function (r) {
+      return '<div class="feed"><span class="pill ' + (r.state === "approved" ? "pill-ok" : r.state === "failed" ? "pill-bad" : "") + '">' + esc(r.state) + '</span><span class="mono grow nowrap">' + esc(r.capability) + '</span><span class="dim">' + esc(r.actor.replace("agent:", "")) + " · " + esc(ago(r.decided_at || r.created_at)) + "</span></div>";
+    }).join("") + AI.history.messages.map(function (x) {
+      return '<div class="feed"><span class="pill">answered</span><span class="grow nowrap">' + esc(x.subject) + '</span><span class="dim">' + esc(x.reply ? "“" + x.reply + "”" : "read") + "</span></div>";
+    }).join("");
+    el("main").innerHTML = page("Inbox", "How agents reach you. They queue operations that need your approval and leave questions here; you decide, and they carry on.", "",
+      '<div class="section-title">Waiting for your approval <span class="count">' + AI.requests.length + "</span></div>" + (a || '<div class="calm"><span class="health-dot"></span><div>Nothing to approve.</div></div>') +
+      '<div class="section-title">Messages from agents <span class="count">' + AI.inbox.length + "</span></div>" + (m || '<div class="calm"><span class="health-dot"></span><div>No messages.</div></div>') +
+      '<div class="section-title">Recently decided</div><div class="panel">' + (hist || '<div class="empty-inline">Nothing yet.</div>') + "</div>");
   }
 
   // ------------------------------------------------------------------- refresh
@@ -3088,6 +4166,14 @@
         .then(function () { return loadTab(state.tab); })
         .then(render);
     }
+    if (state.view === "home") return loadHome().then(render);
+    if (state.view === "assistant") return loadAssistant().then(render);
+    if (state.view === "team") return loadTeam().then(render);
+    if (state.view === "inbox") return loadInbox().then(render);
+    if (state.view === "providers") return loadProviders().then(render);
+    if (state.view === "create") return loadCreate().then(render);
+    if (state.view === "develop") return loadDevelop().then(render);
+    if (state.view === "toolchain") return loadToolchain().then(render);
     if (state.view === "agents") return loadAgents().then(render);
     if (state.view === "processes") return loadProcesses().then(render);
     if (state.view === "shared") return loadShared().then(render);
@@ -3099,6 +4185,7 @@
 
   function navigate(view) {
     if (state.view === "agents" && view !== "agents") stopAgentTimer();
+    if (AREA[view]) { state.areaTab = state.areaTab || {}; state.areaTab[AREA[view]] = view; }
     state.view = view;
     render();
     return refresh();
@@ -3111,8 +4198,10 @@
 
   function render() {
     rail();
+    subnav();
     crumbs();
     statusbar();
+    healthChip();
     if (SERVER_VIEWS.indexOf(state.view) !== -1) {
       if (!state.server.loaded) return renderLoading();
       if (state.view === "overview") renderOverview();
@@ -3122,7 +4211,15 @@
       else if (state.view === "runtimes") renderRuntimes();
       else if (state.view === "certificates") renderCertificates();
       else if (state.view === "hosts") renderHosts();
-    } else if (state.view === "agents") renderAgents();
+    } else if (state.view === "home") renderHome();
+    else if (state.view === "assistant") renderAssistant();
+    else if (state.view === "team") renderTeam();
+    else if (state.view === "inbox") renderInbox();
+    else if (state.view === "providers") renderProviders();
+    else if (state.view === "create") renderCreate();
+    else if (state.view === "develop") renderDevelop();
+    else if (state.view === "toolchain") renderToolchain();
+    else if (state.view === "agents") renderAgents();
     else if (state.view === "processes") renderProcesses();
     else if (state.view === "shared") renderShared();
     else if (state.view === "projects") renderProjects();
@@ -3149,7 +4246,195 @@
   }
 
   var ACTIONS = {
-    nav: function (node) { navigate(node.dataset.view); },
+    nav: function (node) {
+      var v = node.dataset.view, area = AREA[v];
+      if (node.classList.contains("rail-item") && area && AREA[state.view] !== area && state.areaTab && state.areaTab[area]) v = state.areaTab[area];
+      navigate(v);
+    },
+
+    "svc-option": function (n) {
+      var tool = n.dataset.tool, opt = n.dataset.opt;
+      var done = function (o) { if (o) refresh(); };
+      if (opt === "clear") return run("services.decide", { tool: tool, clear: true }).then(done);
+      if (opt === "adopt" || opt === "observe" || opt === "ignore") return run("services.decide", { tool: tool, mode: opt }).then(done);
+      if (opt === "external") {
+        var port = parseInt(window.prompt("Which port does your own " + tool + " instance listen on?", ""), 10);
+        if (!port) return;
+        return run("services.decide", { tool: tool, mode: "external", port: port }).then(done);
+      }
+      if (opt === "start") return run("toolchain.service", { tool: tool, action: "start" }).then(done);
+      if (opt === "install") return run("toolchain.install", { tool: tool }).then(done);
+      if (opt === "remove") return run("toolchain.remove", { tool: tool }).then(done);
+      if (opt === "logs") return read("toolchain.logs", { tool: tool }).then(function (d) { openDrawer(tool + " logs", '<pre class="log-block">' + esc((d.lines || []).join("\n") || "(no log lines)") + "</pre>"); }).catch(function (e) { toast("error", e.message); });
+    },
+    "team-new": function () { TEAM.sel = null; TEAM.data = null; paintTeam(); },
+    "team-open": function (n) { TEAM.sel = n.dataset.id; read("team.get", { run: TEAM.sel }).then(function (d) { TEAM.data = d; paintTeam(); }); },
+    "team-toggle": function (n) { TEAM.open[n.dataset.id] = !TEAM.open[n.dataset.id]; paintTeam(); },
+    "team-start": function () {
+      var f = TEAM.form;
+      if (!f.goal.trim()) return toast("warn", "Describe what you want first");
+      if (!f.project) return toast("warn", "Choose a project, or a new one");
+      var args = { goal: f.goal.trim(), parallel: f.parallel };
+      if (f.project === "__new") { if (!f.name.trim()) return toast("warn", "Name the new project"); args.new_project = f.name.trim(); } else args.project = f.project;
+      run("team.start", args).then(function (o) {
+        if (!o) return;
+        TEAM.sel = o.data.id; TEAM.form.goal = ""; TEAM.data = null;
+        return loadTeam().then(paintTeam);
+      });
+    },
+    "team-approve": function (n) { run("team.approve_plan", { run: n.dataset.id }).then(function () { return read("team.get", { run: n.dataset.id }); }).then(function (d) { TEAM.data = d; paintTeam(); loadHealth().then(function () { rail(); }); }); },
+    "team-pause": function (n) { run("team.pause", { run: n.dataset.id }); },
+    "team-resume": function (n) { run("team.resume", { run: n.dataset.id }); },
+    "team-cancel": function (n) { run("team.cancel", { run: n.dataset.id }); },
+    "team-retry": function (n) { var note = window.prompt("What should it do differently? (optional)", ""); if (note === null) return; run("team.retry", { task: n.dataset.id, note: note || undefined }); },
+    "team-accept": function (n) { if (window.confirm("Accept this task without the proof devd asked for? The final report will say it was accepted by hand.")) run("team.accept", { task: n.dataset.id }); },
+    "team-say": function (n) { var i = el("team-say"); if (!i.value.trim()) return; var t = i.value.trim(); i.value = ""; run("team.say", { run: n.dataset.id, text: t }); },
+    "team-open-from": function (n) { TEAM.sel = n.dataset.id; TEAM.data = null; navigate("team"); },
+    "home-team": function () {
+      var text = (el("home-ask").value || "").trim(), p = el("home-project").value;
+      TEAM.form.goal = text; if (p) TEAM.form.project = p;
+      TEAM.sel = null; TEAM.data = null; navigate("team");
+    },
+    "role-save": function (n) {
+      var role = n.dataset.role, models = [];
+      [0, 1].forEach(function (i) {
+        var p = el("rm-" + role + "-p" + i).value, m = el("rm-" + role + "-m" + i).value.trim();
+        if (p && m) models.push({ provider: p, model: m });
+      });
+      run("models.assign", { role: role, models: models }).then(function (o) { if (o) return loadProviders().then(renderProviders); });
+    },
+    "env-toggle": function () {
+      var to = AI.env && AI.env.mode === "production" ? "local" : "production";
+      run("environment.set", { mode: to }).then(function (o) { if (o) return loadHealth().then(function () { return read("environment.get"); }).then(function (e) { AI.env = e; render(); }); });
+    },
+    // ---- assistant era
+    "health-open": function () { openHealth(); loadHealth().then(function () { healthChip(); if (!el("drawer").hidden) openHealth(); }); },
+    "health-recheck": function () { AI.healthLoading = true; if (!el("drawer").hidden) openHealth(); loadHealth().then(function () { healthChip(); if (!el("drawer").hidden) openHealth(); if (state.view === "home") loadHome().then(render); }); },
+    "health-go": function (n) { closeDrawer(); navigate(n.dataset.view); },
+    "health-fix": function (n) {
+      var args = {}; try { args = JSON.parse(n.dataset.args || "{}"); } catch (e) {}
+      run(n.dataset.cap, args).then(function (o) { if (o) loadHealth().then(function () { healthChip(); openHealth(); }); });
+    },
+    "home-open": function (n) { DEV.path = n.dataset.path; DEV.ctx = null; DEV.detect = null; navigate("develop"); },
+    "home-chat": function () { AI.thread = null; AI.events = []; navigate("assistant"); },
+    "home-ask": function () {
+      var text = (el("home-ask").value || "").trim();
+      if (!text) return toast("warn", "Write what you want done first");
+      startChat(text, el("home-project").value);
+    },
+    "open-thread": function (n) {
+      AI.thread = { id: n.dataset.id, title: "", state: "idle", input_tokens: 0, output_tokens: 0 }; AI.lastId = 0; AI.events = []; AI.pending = [];
+      if (state.view !== "assistant") { state.view = "assistant"; render(); }
+      pollThread(true).then(function () { renderAssistant(); });
+    },
+    "chat-new": function () { AI.thread = null; AI.events = []; AI.pending = []; AI.lastId = 0; renderAssistant(); },
+    "chat-send": function () {
+      var inp = el("chat-input"); var text = (inp.value || "").trim();
+      if (!text) return;
+      inp.value = ""; AI.composer = "";
+      if (AI.thread && AI.thread.id) return sendChat({ message: text, thread: AI.thread.id });
+      var sel = el("chat-project"); startChat(text, sel ? sel.value : "");
+    },
+    "chat-stop": function () { if (AI.thread) run("chat.stop", { thread: AI.thread.id }).then(function () { pollThread(false).then(paintChat); }); },
+    "step-toggle": function (n) { AI.openSteps[n.dataset.id] = !AI.openSteps[n.dataset.id]; paintChat(); },
+    "req-decide": function (n) {
+      var approve = n.dataset.approve === "1";
+      n.disabled = true;
+      run("approval.decide", { id: n.dataset.id, approve: approve }).then(function () {
+        return loadHealth();
+      }).then(function () {
+        if (state.view === "inbox") return loadInbox().then(render);
+        if (state.view === "home") return loadHome().then(render);
+        if (AI.thread) return pollThread(false).then(paintChat);
+      });
+    },
+    "inbox-reply": function (n) {
+      var inp = el("reply-" + n.dataset.id);
+      var args = { id: n.dataset.id };
+      if (inp) { if (!inp.value.trim()) return toast("warn", "Write an answer first"); args.reply = inp.value.trim(); }
+      run("inbox.reply", args).then(function () { return loadHealth(); }).then(function () { return state.view === "home" ? loadHome().then(render) : loadInbox().then(render); });
+    },
+    "prov-new": function (n) {
+      var pr = (AI.presets || []).filter(function (x) { return x.id === n.dataset.preset; })[0] || {};
+      var taken = (AI.providers || []).map(function (p) { return p.id; });
+      var id = pr.id || "provider", k = 2; while (taken.indexOf(id) !== -1) id = (pr.id || "provider") + "-" + k++;
+      AI.provForm = { preset: pr.id, kind: pr.kind, label: pr.label, id: id, base_url: pr.base_url || "", key_env: pr.key_env || "", default_model: pr.default_model || "", make_default: !(AI.providers || []).length, editing: false };
+      renderProviders();
+      var f = document.querySelector('[data-pf="api_key"]'); if (f) f.focus();
+    },
+    "prov-edit": function (n) {
+      var p = (AI.providers || []).filter(function (x) { return x.id === n.dataset.id; })[0]; if (!p) return;
+      AI.provForm = { preset: p.preset || p.id, kind: p.kind, label: p.label, id: p.id, base_url: p.base_url, key_env: p.key_env || "", default_model: p.default_model || "", make_default: false, editing: true };
+      renderProviders();
+    },
+    "prov-cancel": function () { AI.provForm = null; renderProviders(); },
+    "prov-save": function () {
+      var f = AI.provForm; if (!f) return;
+      var q = function (k) { var e = document.querySelector('[data-pf="' + k + '"]'); return e ? (e.type === "checkbox" ? e.checked : e.value.trim()) : ""; };
+      var args = { id: f.editing ? f.id : q("id"), preset: f.preset, kind: f.kind, label: f.label, base_url: q("base_url"), default_model: q("default_model"), make_default: q("make_default") };
+      if (q("key_env")) args.key_env = q("key_env");
+      var key = document.querySelector('[data-pf="api_key"]'); if (key && key.value) args.api_key = key.value;
+      run("provider.save", args).then(function (o) {
+        if (key) key.value = "";
+        if (!o) return;
+        AI.provForm = null;
+        return loadProviders().then(function () { renderProviders(); loadHealth().then(healthChip); });
+      });
+    },
+    "prov-test": function (n) { providerCall(n.dataset.id, "provider.test"); },
+    "prov-models": function (n) { providerCall(n.dataset.id, "provider.models"); },
+    "prov-default": function (n) { run("provider.default", { id: n.dataset.id }).then(function () { return loadProviders(); }).then(renderProviders); },
+    "prov-remove": function (n) { run("provider.remove", { id: n.dataset.id }).then(function (o) { if (o) return loadProviders().then(function () { renderProviders(); loadHealth().then(healthChip); }); }); },
+    "prov-pick": function (n) { setProviderModel(n.dataset.id, n.dataset.model); },
+    "prov-use-model": function (n) {
+      var d = (AI.providers || []).filter(function (p) { return p.kind === "anthropic"; })[0];
+      if (!d) return toast("warn", "Add an Anthropic provider first");
+      setProviderModel(d.id, n.dataset.model);
+    },
+    "models-refresh": function () { run("models.refresh_official", {}).then(function () { return loadProviders(); }).then(renderProviders); },
+    "create-pick": function (n) { pickStack(n.dataset.id); },
+    "create-back": function () { CREATE.id = null; CREATE.def = null; CREATE.plan = null; renderCreate(); },
+    "create-run": function () {
+      if (CREATE.running) return;
+      CREATE.running = true; CREATE.report = null; CREATE.log = ["starting…"]; CREATE.runId = "ui-" + Date.now().toString(36);
+      var req = createRequest(); req.run_id = CREATE.runId;
+      paintReview(); paintProgress(); pollCreateLog();
+      request("/api/invoke", { method: "POST", body: JSON.stringify({ id: "project.init", args: req, dry_run: false }) }).then(function (res) {
+        CREATE.running = false;
+        if (!res.ok) { CREATE.report = { status: "failed", error: errorOf(res.body, "project.init failed"), steps: [], checks: [], next: [] }; }
+        else { CREATE.report = res.body.outcome.data; }
+        return read("stacks.log", { run_id: CREATE.runId, lines: 80 }).then(function (d) { CREATE.log = d.lines || CREATE.log; }).catch(function () {});
+      }).then(function () { toast(CREATE.report.status === "ok" ? "ok" : "error", "project.init: " + CREATE.report.status); paintReview(); paintProgress(); });
+    },
+    "create-cancel": function () { act("stacks.cancel", { run_id: CREATE.runId }); },
+    "open-develop": function (n) { DEV.path = n.dataset.path; DEV.ctx = null; DEV.detect = null; navigate("develop"); },
+    "tool-install": function (n) { act("toolchain.install", { tool: n.dataset.id }).then(function () { if (state.view === "create") scheduleValidate(); }); },
+    "tool-remove": function (n) { act("toolchain.remove", { tool: n.dataset.id }); },
+    "tool-plan": function (n) { read("toolchain.plan", { tool: n.dataset.id, action: n.dataset.act }).then(function (p) { showPlanDrawer(p, n.dataset.act + " " + n.dataset.id); }).catch(function (e) { toast("error", e.message); }); },
+    "svc": function (n) { act("toolchain.service", { tool: n.dataset.id, action: n.dataset.act }); },
+    "svc-logs": function (n) { read("toolchain.logs", { tool: n.dataset.id }).then(function (d) { openDrawer(n.dataset.id + " logs", '<pre class="log-block">' + esc((d.lines || []).join("\n") || "empty") + "</pre>"); }).catch(function (e) { toast("error", e.message); }); },
+    "devices": function () { read("toolchain.devices").then(function (d) { openDrawer("Android devices", d.length ? d.map(function (x) { return '<div class="kv"><dt class="mono">' + esc(x.serial) + "</dt><dd>" + esc(x.state) + " " + esc(x.note) + "</dd></div>"; }).join("") : '<div class="empty">No devices. Connect one with USB debugging enabled, or start an emulator.</div>'); }).catch(function (e) { toast("error", e.message); }); },
+    "dev-open": function (n) { openProject(n.dataset.path); },
+    "dev-detect": function () {
+      var p = readInput("dev-import"); DEV.importPath = p; if (!p) return;
+      DEV.busy = true; renderDevelop();
+      read("project.detect", { path: p }).then(function (c) { DEV.detect = c; DEV.path = p; DEV.busy = false; renderDevelop(); }).catch(function (e) { DEV.busy = false; DEV.error = e.message; renderDevelop(); });
+    },
+    "dev-import": function () {
+      var p = readInput("dev-import"); DEV.importPath = p; if (!p) return;
+      act("project.import", { path: p }).then(function (o) { if (o) { DEV.detect = null; DEV.ctx = null; DEV.path = p; return loadDevelop().then(renderDevelop); } });
+    },
+    "task-run": function (n) {
+      var id = n.dataset.task, destructive = n.dataset.risk === "destructive";
+      DEV.log = "running " + id + "…"; renderDevelop();
+      run(destructive ? "project.run_destructive" : "project.run", { path: DEV.path, task: id }).then(function (o) {
+        if (o && o.data) DEV.log = (o.data.output_tail || []).join("\n") || o.message; else DEV.log = null;
+        return loadDevelop();
+      }).then(renderDevelop);
+    },
+    "proc-log": function (n) { read("task.logs", { name: n.dataset.name }).then(function (d) { openDrawer(n.dataset.name, '<pre class="log-block">' + esc(d.lines.join("\n") || "empty") + "</pre>"); }).catch(function (e) { toast("error", e.message); }); },
+    "proc-stop": function (n) { act("task.stop", { name: n.dataset.name }); },
+
 
     refresh: function () { refresh(); },
 
@@ -3824,6 +5109,71 @@
     if (event.target === el("modal")) decideModal(false);
   });
 
+
+  function startChat(text, project) {
+    AI.project = project || "";
+    sendChat({ message: text, project: project || undefined });
+  }
+
+  function sendChat(args) {
+    run("chat.send", args).then(function (o) {
+      if (!o) return;
+      var id = (o.data && (o.data.id || o.data.thread)) || args.thread;
+      if (!id) return;
+      AI.thread = { id: id, title: "", state: "running", input_tokens: 0, output_tokens: 0 }; AI.lastId = 0; AI.events = []; AI.pending = [];
+      state.view = "assistant"; render();
+      read("chat.list").then(function (t) { AI.threads = t; return pollThread(true); }).then(renderAssistant);
+    });
+  }
+
+  function providerCall(id, cap) {
+    AI.provBusy[id] = true; delete AI.provBusy[id + ":msg"]; renderProviders();
+    read(cap, { id: id }).then(function (d) {
+      AI.provBusy[id + ":ok"] = true;
+      AI.provBusy[id + ":msg"] = d && d.message ? d.message : (cap === "provider.test" ? "Connection works" : "Models updated");
+    }).catch(function (e) {
+      AI.provBusy[id + ":ok"] = false; AI.provBusy[id + ":msg"] = e.message;
+    }).then(function () { AI.provBusy[id] = false; return loadProviders(); }).then(function () { renderProviders(); loadHealth().then(healthChip); });
+  }
+
+  function setProviderModel(id, model) {
+    run("provider.save", { id: id, default_model: model }).then(function (o) { if (o) return loadProviders().then(renderProviders); });
+  }
+
+  document.addEventListener("input", function (e) {
+    var t = e.target;
+    if (t.id === "home-ask") AI.askText = t.value;
+    else if (t.id === "chat-input") AI.composer = t.value;
+  });
+  document.addEventListener("change", function (e) {
+    var t = e.target;
+    if (t.id === "home-project") AI.askProject = t.value;
+    if (t.id === "chat-project") AI.project = t.value;
+    if (t.dataset && t.dataset.chat && AI.thread) {
+      var args = { thread: AI.thread.id };
+      args[t.dataset.chat] = t.value;
+      run("chat.update", args).then(function () { return pollThread(false); }).then(paintChat);
+    }
+    if (t.dataset && t.dataset.provModel !== undefined && t.dataset.provModel !== "") setProviderModel(t.dataset.provModel, t.value.trim());
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.target.id === "chat-input" && e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      var b = el("chat-send"); if (b) b.click();
+    }
+    if (e.target.id === "home-ask" && e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); ACTIONS["home-ask"](); }
+  });
+
+  document.addEventListener("input", function (e) {
+    var t = e.target;
+    if (t.id === "team-goal") TEAM.form.goal = t.value;
+    if (t.id === "team-name") TEAM.form.name = t.value;
+  });
+  document.addEventListener("change", function (e) {
+    var t = e.target;
+    if (t.id === "team-project") { TEAM.form.project = t.value; paintTeam(); }
+    if (t.id === "team-parallel") TEAM.form.parallel = parseInt(t.value, 10);
+  });
   // ----------------------------------------------------------------------- boot
 
   function boot() {
@@ -3838,6 +5188,7 @@
       .then(loadAgents)
       .then(render)
       .then(loadDoctor)
+      .then(function () { return state.view === "home" ? loadHome() : loadHealth(); })
       .then(render)
       .then(function () {
         if (!state.session) return;
@@ -3845,6 +5196,32 @@
         if (pending) toast("warn", pending + " operations are awaiting a decision");
       });
   }
+
+
+  document.addEventListener("input", onCreateInput);
+  document.addEventListener("change", onCreateInput);
+  function onCreateInput(event) {
+    var t = event.target;
+    if (!t.dataset || t.dataset.create === undefined) return;
+    if (event.type === "input" && (t.type === "checkbox" || t.tagName === "SELECT")) return;
+    var key = t.dataset.create, f = CREATE.form;
+    if (key === "__advanced") { CREATE.advanced = t.checked; renderCreate(); return; }
+    var val = t.type === "checkbox" ? t.checked : t.value;
+    if (t.dataset.multi !== undefined) {
+      var cur = (f.options[key] || []).slice(), i = cur.indexOf(t.dataset.multi);
+      if (t.checked && i < 0) cur.push(t.dataset.multi);
+      if (!t.checked && i >= 0) cur.splice(i, 1);
+      f.options[key] = cur;
+    } else if (t.dataset.opt) f.options[key] = val;
+    else f[key] = val;
+    scheduleValidate();
+    if (event.type === "change" && (key === "version" || key === "package_manager")) { /* values only; review repaints */ }
+  }
+
+  setInterval(function () {
+    if (document.hidden) return;
+    loadHealth().then(function () { healthChip(); rail(); statusbar(); });
+  }, 30000);
 
   boot();
 })();

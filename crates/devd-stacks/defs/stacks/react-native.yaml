@@ -1,0 +1,65 @@
+id: react-native
+name: React Native (CLI)
+language: javascript
+category: mobile
+summary: React Native app with native Android and iOS projects, created by the React Native Community CLI.
+description: The React Native documentation recommends starting with a framework such as Expo. This stack is for projects that need direct control of the native projects. Android builds need the JDK and Android SDK; iOS builds need macOS and Xcode.
+docs:
+  - {title: Set up your environment, url: "https://reactnative.dev/docs/set-up-your-development-environment"}
+  - {title: Get started without a framework, url: "https://reactnative.dev/docs/getting-started-without-a-framework"}
+  - {title: Community CLI, url: "https://github.com/react-native-community/cli/blob/main/docs/commands.md"}
+verified: {method: cli-help, against: "@react-native-community/cli 20.2.0 `init --help`", date: "2026-10-20"}
+runtime: node
+package_managers: [npm, yarn, bun]
+name_pattern: '^[A-Za-z][A-Za-z0-9]{0,63}$'
+name_hint: Letters and digits only, starting with a letter (it becomes the native project name).
+versions:
+  - {id: latest, label: React Native (latest), value: "", default: true, requires: [{tool: node, min: "22.13", why: "React Native 0.88 requires Node.js 22.13+"}]}
+options:
+  - {id: package_name, label: Application identifier, kind: text, default: "com.example.{name_lower}", pattern: '^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$', flag: "--package-name", help: Android package name and iOS bundle id, e.g. com.yourcompany.app.}
+  - {id: title, label: App title, kind: text, default: "{name}", pattern: '^[^\n]{1,64}$', flag: "--title", help: The name shown under the app icon.}
+init:
+  install_toggle: true
+  steps:
+    - id: scaffold
+      title: Create the app with the React Native Community CLI
+      network: true
+      extensible: true
+      needs: [node]
+      run:
+        - npx
+        - --yes
+        - "@react-native-community/cli@latest"
+        - init
+        - "{name}"
+        - --pm
+        - "{pm}"
+        - --package-name
+        - "{opt.package_name}"
+        - --title
+        - "{opt.title}"
+        - {when: {option: install, equals: false}, args: [--skip-install]}
+        - --skip-git-init
+verify:
+  files: [package.json, android, App.tsx]
+tasks:
+  - {id: dev, title: Start the Metro bundler, kind: dev, long_running: true, port: 8081, run: ["{pm.exec}", react-native, start], needs: [node]}
+  - {id: android, title: Build and run on Android, kind: build, long_running: true, run: ["{pm.exec}", react-native, run-android], needs: [node, java, android-sdk, adb]}
+  - {id: test, title: Run Jest, kind: test, run: ["{pm.run}", test], requires_script: test}
+  - {id: lint, title: Lint, kind: lint, run: ["{pm.run}", lint], requires_script: lint}
+  - {id: doctor, title: Check the development environment, kind: lint, run: ["{pm.exec}", react-native, doctor], needs: [node]}
+  - {id: install, title: Install dependencies, kind: install, risk: mutating, run: ["{pm.install}"]}
+detect:
+  rules:
+    - {dependency: react-native, weight: 6, evidence: react-native is a dependency}
+    - {file: android, weight: 1, evidence: android/ project}
+    - {file: ios, weight: 1, evidence: ios/ project}
+env:
+  - {name: ANDROID_HOME, help: Android SDK location.}
+structure: [App.tsx, android/, ios/, index.js, package.json, metro.config.js]
+conventions:
+  - "Native dependencies need a rebuild of the app, not just a Metro reload."
+  - "iOS builds are only possible on macOS."
+exec:
+  programs: [node, npx, react-native, adb]
+  destructive_args: [clean]

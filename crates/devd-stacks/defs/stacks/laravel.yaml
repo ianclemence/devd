@@ -1,0 +1,106 @@
+id: laravel
+name: Laravel
+language: php
+category: web
+summary: Full-stack PHP framework with routing, Eloquent ORM, queues and Artisan.
+description: Created with `composer create-project laravel/laravel`, the method the Laravel installation guide documents. Composer runs Laravel's own post-create scripts, which copy .env and generate the application key.
+docs:
+  - {title: Installation, url: "https://laravel.com/docs/installation"}
+  - {title: Database, url: "https://laravel.com/docs/database"}
+  - {title: Artisan console, url: "https://laravel.com/docs/artisan"}
+verified: {method: cli-help, against: "composer 2.x create-project; laravel/laravel v13.11 / v12.12 / v11.6 on Packagist", date: "2026-10-20"}
+runtime: php
+package_managers: [composer]
+name_hint: Lowercase letters, digits, dots, hyphens and underscores.
+versions:
+  - {id: "13", label: Laravel 13 (latest), value: "^13.0", default: true, requires: [{tool: php, min: "8.3", why: "Laravel 13 requires PHP 8.3+"}, {tool: composer, min: "2.2"}]}
+  - {id: "12", label: Laravel 12, value: "^12.0", requires: [{tool: php, min: "8.2", why: "Laravel 12 requires PHP 8.2+"}, {tool: composer, min: "2.2"}]}
+  - {id: "11", label: Laravel 11, value: "^11.0", note: Security fixes only., requires: [{tool: php, min: "8.2", why: "Laravel 11 requires PHP 8.2+"}, {tool: composer, min: "2.2"}]}
+options:
+  - id: database
+    label: Database
+    kind: select
+    default: sqlite
+    help: Written to .env as DB_CONNECTION. SQLite needs no server. The others need the server running and credentials in .env.
+    choices:
+      - {value: sqlite, label: SQLite}
+      - {value: mysql, label: MySQL}
+      - {value: mariadb, label: MariaDB}
+      - {value: pgsql, label: PostgreSQL}
+init:
+  install_toggle: true
+  steps:
+    - id: scaffold
+      title: Create the project with Composer
+      network: true
+      extensible: true
+      needs: [php, composer]
+      env: {COMPOSER_NO_INTERACTION: "1"}
+      run:
+        - composer
+        - create-project
+        - --prefer-dist
+        - --no-interaction
+        - {when: {option: install, equals: false}, args: [--no-install]}
+        - laravel/laravel
+        - "{name}"
+        - "{version}"
+    - id: database
+      title: Point .env at the chosen database
+      kind: env
+      cwd: project
+      path: .env
+      when: {option: database, in: [mysql, mariadb, pgsql]}
+      set:
+        DB_CONNECTION: "{opt.database}"
+        DB_HOST: "127.0.0.1"
+        DB_DATABASE: "{name_snake}"
+    - id: database-sqlite
+      title: Point .env at SQLite
+      kind: env
+      cwd: project
+      path: .env
+      when: {option: database, equals: sqlite}
+      set:
+        DB_CONNECTION: sqlite
+verify:
+  files: [artisan, composer.json, bootstrap/app.php]
+  commands:
+    - {title: Artisan boots, needs_install: true, needs: [php], run: [php, artisan, --version]}
+tasks:
+  - {id: dev, title: Start the PHP development server, kind: dev, long_running: true, port: 8000, run: [php, artisan, serve], requires_file: artisan}
+  - {id: dev-all, title: "Start server, queue, logs and Vite together (composer run dev)", kind: dev, long_running: true, port: 8000, run: [composer, run, dev], requires_file: composer.json, help: "Laravel's composer 'dev' script; present in new projects."}
+  - {id: test, title: Run tests, kind: test, run: [php, artisan, test], requires_file: artisan}
+  - {id: migrate, title: Run pending migrations, kind: migrate, risk: mutating, run: [php, artisan, migrate], requires_file: artisan}
+  - {id: migrate-status, title: Show migration status, kind: migrate, run: [php, artisan, migrate:status], requires_file: artisan}
+  - {id: migrate-fresh, title: Drop all tables and re-run migrations, kind: migrate, risk: destructive, run: [php, artisan, migrate:fresh], requires_file: artisan}
+  - {id: seed, title: Run database seeders, kind: migrate, risk: mutating, run: [php, artisan, db:seed], requires_file: artisan}
+  - {id: routes, title: List routes, kind: other, run: [php, artisan, route:list], requires_file: artisan}
+  - {id: queue, title: Run the queue worker, kind: dev, long_running: true, run: [php, artisan, queue:work], requires_file: artisan}
+  - {id: format, title: Format with Pint, kind: format, risk: mutating, run: [vendor/bin/pint], requires_file: vendor/bin/pint}
+  - {id: lint, title: Check style with Pint, kind: lint, run: [vendor/bin/pint, --test], requires_file: vendor/bin/pint}
+  - {id: install, title: Install PHP dependencies, kind: install, risk: mutating, run: [composer, install], requires_file: composer.json}
+  - {id: frontend-install, title: Install JavaScript dependencies, kind: install, risk: mutating, run: [npm, install], requires_file: package.json}
+  - {id: frontend-build, title: Build front-end assets, kind: build, run: [npm, run, build], requires_file: package.json}
+detect:
+  rules:
+    - {dependency: laravel/framework, weight: 7, evidence: laravel/framework is a Composer dependency}
+    - {file: artisan, weight: 3, evidence: artisan entry point}
+    - {file: bootstrap/app.php, weight: 1, evidence: bootstrap/app.php}
+services:
+  - {tool: mysql, when: {option: database, equals: mysql}, why: DB_CONNECTION=mysql}
+  - {tool: mariadb, when: {option: database, equals: mariadb}, why: DB_CONNECTION=mariadb}
+  - {tool: postgresql, when: {option: database, equals: pgsql}, why: DB_CONNECTION=pgsql}
+env:
+  - {name: APP_KEY, required: true, secret: true, help: "Generated by `php artisan key:generate`; never commit it."}
+  - {name: DB_CONNECTION, help: "sqlite, mysql, mariadb, pgsql or sqlsrv."}
+  - {name: DB_PASSWORD, secret: true, help: Database password. Set it in .env, which is git-ignored.}
+structure: [app/, routes/web.php, database/migrations/, resources/views/, tests/, artisan, .env]
+conventions:
+  - "Generate code with `php artisan make:*` rather than creating files by hand."
+  - "Schema changes are new migrations; never edit a migration that has been committed and run."
+  - "Run `php artisan test` after changes; tests use an in-memory database by default."
+  - "Never read or print .env values; refer to variables by name."
+exec:
+  programs: [php, composer, vendor/bin/pint, vendor/bin/phpunit, vendor/bin/pest, npm, npx]
+  destructive_args: [migrate:fresh, migrate:reset, db:wipe, migrate:rollback, "--force"]

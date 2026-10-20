@@ -211,6 +211,14 @@ impl Supervisor {
             cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
         }
 
+        // Give the child its own process group so `kill_tree` can signal the
+        // whole tree (a dev server and the workers it forks) on Unix.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
+
         // The service is about to be started detached; make sure it cannot hold
         // the shell that launched devd open. See `isolate_standard_handles`.
         isolate_standard_handles();

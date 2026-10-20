@@ -60,21 +60,33 @@ pub enum View {
     History,
     /// Branches.
     Branches,
+    /// Create a project from a stack.
+    Create,
+    /// Tools, runtimes, databases and services.
+    Toolchain,
     /// The capability registry.
     Capabilities,
     /// The audit trail.
     Activity,
     /// The environment check.
     Doctor,
+    /// The agent team's runs.
+    Team,
+    /// What agents are waiting on you for.
+    Inbox,
     /// Key reference.
     Help,
 }
 
 impl View {
     /// Every view, in tab order.
-    pub const ALL: [View; 9] = [
+    pub const ALL: [View; 13] = [
         View::Dashboard,
         View::Projects,
+        View::Create,
+        View::Toolchain,
+        View::Team,
+        View::Inbox,
         View::Changes,
         View::History,
         View::Branches,
@@ -92,9 +104,13 @@ impl View {
             View::Changes => "Changes",
             View::History => "History",
             View::Branches => "Branches",
+            View::Create => "Create",
+            View::Toolchain => "Toolchain",
             View::Capabilities => "Capabilities",
             View::Activity => "Activity",
             View::Doctor => "Doctor",
+            View::Team => "Team",
+            View::Inbox => "Inbox",
             View::Help => "Help",
         }
     }
@@ -111,6 +127,10 @@ impl View {
             View::Activity => '7',
             View::Doctor => '8',
             View::Help => '9',
+            View::Create => '0',
+            View::Toolchain => '-',
+            View::Team => '=',
+            View::Inbox => '+',
         }
     }
 
@@ -384,6 +404,98 @@ pub struct CapRow {
     pub agent_safe: bool,
 }
 
+/// A stack that can be created.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StackRow {
+    /// Stack id.
+    pub id: String,
+    /// Display name.
+    pub name: String,
+    /// Language.
+    pub language: String,
+    /// Category.
+    pub category: String,
+    /// One line.
+    pub summary: String,
+    /// Can be created (not detect-only).
+    pub creatable: bool,
+}
+
+impl StackRow {
+    /// Parse the payload of `stacks.list`.
+    pub fn list_from_json(value: &Value) -> Vec<Self> {
+        value
+            .as_array()
+            .map(|rows| {
+                rows.iter()
+                    .map(|r| Self {
+                        id: string(r, "id").unwrap_or_default(),
+                        name: string(r, "name").unwrap_or_default(),
+                        language: string(r, "language").unwrap_or_default(),
+                        category: string(r, "category").unwrap_or_default(),
+                        summary: string(r, "summary").unwrap_or_default(),
+                        creatable: boolean(r, "creatable"),
+                    })
+                    .filter(|r| r.creatable && !r.id.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
+/// A tool or service on the machine.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ToolRow {
+    /// Tool id.
+    pub id: String,
+    /// Display name.
+    pub name: String,
+    /// Category.
+    pub category: String,
+    /// Installed and running.
+    pub installed: bool,
+    /// Version reported.
+    pub version: Option<String>,
+    /// Below the supported minimum.
+    pub outdated: bool,
+    /// Why it is unusable.
+    pub problem: Option<String>,
+    /// For services: `Some(true)` when healthy, `Some(false)` when not.
+    pub service_healthy: Option<bool>,
+    /// For services: the port.
+    pub port: Option<u64>,
+}
+
+impl ToolRow {
+    /// Parse the payload of `toolchain.list`.
+    pub fn list_from_json(value: &Value) -> Vec<Self> {
+        value
+            .get("tools")
+            .and_then(Value::as_array)
+            .map(|rows| {
+                rows.iter()
+                    .map(|r| {
+                        let st = r.get("status").cloned().unwrap_or(Value::Null);
+                        let tool = r.get("tool").cloned().unwrap_or(Value::Null);
+                        let svc = r.get("service").filter(|s| !s.is_null());
+                        Self {
+                            id: string(&tool, "id").unwrap_or_default(),
+                            name: string(&tool, "name").unwrap_or_default(),
+                            category: string(&tool, "category").unwrap_or_default(),
+                            installed: boolean(&st, "installed"),
+                            version: string(&st, "version"),
+                            outdated: boolean(&st, "outdated"),
+                            problem: string(&st, "problem"),
+                            service_healthy: svc.map(|s| boolean(s, "healthy")),
+                            port: svc.and_then(|s| s.get("port").and_then(Value::as_u64)),
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
 /// One audit row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditRow {
@@ -476,6 +588,15 @@ pub enum Overlay {
     },
     /// A destructive or remote operation awaiting approval.
     Approval(Pending),
+    /// One question of a guided flow, with the explanation above the input.
+    Form {
+        /// What is being asked.
+        title: String,
+        /// Explanation, choices and defaults.
+        lines: Vec<String>,
+        /// The answer so far.
+        input: String,
+    },
 }
 
 /// Everything the dashboard needs to draw one frame.
@@ -505,6 +626,14 @@ pub struct State {
     pub audit: Vec<AuditRow>,
     /// Environment checks.
     pub checks: Vec<CheckRow>,
+    /// Stacks that can be created.
+    pub stacks: Vec<StackRow>,
+    /// Tools and services.
+    pub tools: Vec<ToolRow>,
+    /// Agent team runs (as `team.list` returns them).
+    pub runs: Vec<Value>,
+    /// Waiting items: approvals and questions, as `{kind, id, title, detail}`.
+    pub inbox: Vec<Value>,
     /// Status line text.
     pub message: String,
     /// Whether the status line is reporting a failure.
@@ -536,6 +665,10 @@ impl Default for State {
             capability_query: String::new(),
             audit: Vec::new(),
             checks: Vec::new(),
+            stacks: Vec::new(),
+            tools: Vec::new(),
+            runs: Vec::new(),
+            inbox: Vec::new(),
             message: String::new(),
             message_is_error: false,
             overlay: Overlay::None,
@@ -563,7 +696,21 @@ impl State {
             View::Capabilities => self.capabilities.len(),
             View::Activity => self.audit.len(),
             View::Doctor => self.checks.len(),
+            View::Create => self.stacks.len(),
+            View::Toolchain => self.tools.len(),
+            View::Team => self.runs.len(),
+            View::Inbox => self.inbox.len(),
         }
+    }
+
+    /// The stack under the cursor, if any.
+    pub fn selected_stack(&self) -> Option<&StackRow> {
+        self.stacks.get(self.cursor)
+    }
+
+    /// The tool under the cursor, if any.
+    pub fn selected_tool(&self) -> Option<&ToolRow> {
+        self.tools.get(self.cursor)
     }
 
     /// The working-tree item under the cursor, if the cursor is on one.
@@ -797,6 +944,6 @@ mod tests {
         for view in View::ALL {
             assert_eq!(View::from_digit(view.shortcut()), Some(view));
         }
-        assert_eq!(View::from_digit('0'), None);
+        assert_eq!(View::from_digit('x'), None);
     }
 }

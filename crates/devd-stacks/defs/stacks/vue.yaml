@@ -1,0 +1,77 @@
+id: vue
+name: Vue
+language: javascript
+category: frontend
+summary: A Vue 3 single-page app built with Vite, created by create-vue.
+docs:
+  - {title: Quick Start, url: "https://vuejs.org/guide/quick-start.html"}
+verified: {method: cli-help, against: "create-vue 3.24.0", date: "2026-10-20"}
+runtime: node
+package_managers: [npm, pnpm, yarn, bun]
+versions:
+  - {id: latest, label: Vue 3 (latest), value: latest, default: true, requires: [{tool: node, min: "22.18", why: "create-vue requires Node.js 22.18+ or 24.12+"}]}
+options:
+  - {id: typescript, label: TypeScript, kind: bool, default: true, help: Type checking with vue-tsc., flag: "--ts"}
+  - {id: jsx, label: JSX support, kind: bool, default: false, flag: "--jsx"}
+  - {id: router, label: Vue Router, kind: bool, default: true, help: Routing for single-page apps., flag: "--router"}
+  - {id: pinia, label: Pinia, kind: bool, default: true, help: State management., flag: "--pinia"}
+  - {id: vitest, label: Vitest, kind: bool, default: true, help: Unit testing., flag: "--vitest"}
+  - {id: e2e, label: End-to-end testing, kind: select, default: none, choices: [{value: none, label: None}, {value: playwright, label: Playwright}, {value: cypress, label: Cypress}], flag: "--playwright / --cypress"}
+  - {id: eslint, label: ESLint, kind: bool, default: true, flag: "--eslint"}
+  - {id: prettier, label: Prettier, kind: bool, default: true, flag: "--prettier"}
+  - {id: bare, label: Skip example code, kind: bool, default: false, advanced: true, flag: "--bare"}
+init:
+  install_toggle: true
+  steps:
+    - id: scaffold
+      title: Create the app with create-vue
+      network: true
+      extensible: true
+      needs: [node]
+      run:
+        - "{pm.dlx}"
+        - "create-vue@{version}"
+        - "{name}"
+        - --default
+        - {when: {option: typescript, equals: true}, args: [--ts]}
+        - {when: {option: jsx, equals: true}, args: [--jsx]}
+        - {when: {option: router, equals: true}, args: [--router]}
+        - {when: {option: pinia, equals: true}, args: [--pinia]}
+        - {when: {option: vitest, equals: true}, args: [--vitest]}
+        - {when: {option: e2e, equals: playwright}, args: [--playwright]}
+        - {when: {option: e2e, equals: cypress}, args: [--cypress]}
+        - {when: {option: eslint, equals: true}, args: [--eslint]}
+        - {when: {option: prettier, equals: true}, args: [--prettier]}
+        - {when: {option: bare, equals: true}, args: [--bare]}
+    - id: install
+      title: Install dependencies
+      cwd: project
+      network: true
+      when: {option: install, equals: true}
+      needs: [node]
+      run: ["{pm.install}"]
+verify:
+  files: [package.json, index.html, src/main.ts]
+  commands:
+    - {title: Production build, needs_install: true, needs: [node], run: ["{pm.run}", build]}
+tasks:
+  - {id: dev, title: Start the Vite dev server, kind: dev, long_running: true, port: 5173, run: ["{pm.run}", dev], requires_script: dev}
+  - {id: build, title: Production build, kind: build, run: ["{pm.run}", build], requires_script: build}
+  - {id: preview, title: Preview the build, kind: dev, long_running: true, port: 4173, run: ["{pm.run}", preview], requires_script: preview}
+  - {id: test, title: Unit tests, kind: test, run: ["{pm.run}", test:unit, --, --run], requires_script: "test:unit"}
+  - {id: lint, title: Lint, kind: lint, run: ["{pm.run}", lint], requires_script: lint}
+  - {id: format, title: Format, kind: format, risk: mutating, run: ["{pm.run}", format], requires_script: format}
+  - {id: typecheck, title: Type-check, kind: typecheck, run: ["{pm.run}", type-check], requires_script: type-check}
+  - {id: install, title: Install dependencies, kind: install, risk: mutating, run: ["{pm.install}"]}
+detect:
+  rules:
+    - {dependency: vue, weight: 5, evidence: vue is a dependency}
+    - {file: vite.config.ts, weight: 1, evidence: vite.config.ts}
+    - {file: vite.config.js, weight: 1, evidence: vite.config.js}
+structure: [index.html, src/main.ts, src/App.vue, src/components/, vite.config.ts]
+conventions:
+  - "Single-file components use <script setup>."
+  - "Run type-check and unit tests before reporting a change complete."
+exec:
+  programs: [node, npx, vite, vue-tsc, vitest]
+  destructive_args: []

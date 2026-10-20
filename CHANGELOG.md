@@ -10,6 +10,83 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## Unreleased
+
+### Added
+
+- **Agent team** (`team.*`): describe a goal, a planner proposes tasks with owners,
+  dependencies and acceptance criteria, you approve the plan, and specialists
+  (architect, researcher, implementer, QA, reviewer, infra, docs) work in parallel
+  where it is safe, in isolated git worktrees that are merged only after the task is
+  accepted. A task is accepted only when the tool results prove it (files changed
+  and a verification that passed, where the role requires it); otherwise it is
+  `unverified` and the run pauses for you. Runs persist and resume after a restart.
+  GUI (Assistant > Team runs), terminal dashboard (Team and Inbox views), CLI
+  (`devd team`) and API share one backend. See `docs/agents.md`.
+- **Skills** (`skills.*`): 55 playbooks, techniques and principles agents load on
+  demand, plus your own in `<home>/skills/`. `devd skills`.
+- **Built-in assistant** with provider management (Anthropic, OpenAI, Gemini, local
+  runtimes, any OpenAI-compatible endpoint), official Claude model discovery from
+  Anthropic's documentation, per-key model lists, model choices per kind of work
+  with fallbacks, an approval queue and an inbox, `docs.fetch` and `search.query`.
+- **Operational health model** (`health.status`): healthy, degraded, starting,
+  setup incomplete, unknown, critical, per component, with what each means and the fix.
+- **Services already on the machine** (`services.inventory`, `services.decide`):
+  installed, running, required and managed are kept apart; adopt, observe, use your
+  own instance, or ignore. Nothing is replaced as a side effect.
+- **Production mode** (`environment.set`): every agent change needs approval.
+- Global search and command palette; rebuilt Home; 12-entry sidebar with tabs;
+  new logo asset that fits its container exactly.
+
+### Added (earlier in this release)
+
+- **A shared stack engine** (`devd-stacks`). Stacks are structured YAML definitions
+  validated when they load: 26 stacks (Next.js, Nuxt, Astro, React/Vite, Vue,
+  SvelteKit, Express, Node.js, Laravel, Symfony, CodeIgniter, CakePHP, Slim, Django,
+  Flask, FastAPI, Python, Rails, Go, Rust, Spring Boot, ASP.NET Core, Expo, React
+  Native, plus detect-only Ruby and Java), 40 tools and 14 package managers. Each
+  stack carries its official documentation, version requirements, options mapped to
+  the scaffolder's real flags, tasks, services, conventions and where its commands
+  were verified. Add a stack by dropping a YAML file in `<devd home>/stacks/`.
+- **One initialisation engine** behind `project.init` for the CLI (`devd new`, with a
+  guided flow), the terminal dashboard (Create view), the window (Create view), the
+  HTTP API and MCP: validation with field-level issues, prerequisite and version
+  checks, exact commands shown first, progress events, cancellation, post-creation
+  verification (files, git, a build or check command) and honest `ok`/`partial`/
+  `failed`/`cancelled` results.
+- **Existing projects**: `project.detect` weighs manifests, lockfiles, entry points and
+  config to report stack, package manager, required runtimes, tasks, services,
+  environment variable names (never values) and missing tools; `project.import`
+  registers a checkout without touching it. Ambiguity is reported, not hidden.
+- **Task runner**: `project.tasks`, `project.run`, `project.exec`, background dev
+  servers with logs (`task.*`). Destructive tasks and commands need a human's
+  approval and are refused to agents.
+- **Toolchain management**: `toolchain.*` lists, plans, installs, removes and
+  controls tools and services (Git, Node.js, PHP, Composer, Python, Ruby, Go, Java,
+  .NET, Rust, MySQL, MariaDB, PostgreSQL, Redis, SQLite, Docker, GitHub CLI, adb,
+  Android SDK, EAS and more) through the host's package manager. Success is verified
+  by running the tool and checking service health, never by an exit code.
+- `docs/stacks.md` (generated compatibility matrix, tested for staleness) and
+  `docs/stacks-engine.md`.
+
+### Changed
+
+- New visual identity: midnight-blue surfaces, azure/cyan/violet accents and a
+  halftone dot-matrix logo, in the window, the terminal dashboard and the desktop
+  icons.
+- The HTTP API runs capabilities off the async workers so long operations never block
+  the requests that poll their progress.
+- Agent sessions start with `DEVD_PROJECT_DIR` and a hint to call `project.detect`.
+
+### Fixed
+
+- `devd-core` did not compile on Linux (a Windows-only function was called
+  unconditionally).
+- Port checks now work on hosts without `ss` by reading `/proc/net/tcp`.
+- Processes started by devd get their own process group on Unix so stopping them
+  stops their children too.
+
+
 ## [0.8.0] - 2026-10-20 - persistent agents, project processes, shared state and a native shell
 
 The v0.7 roadmap is complete: sessions survive the window, agents can delegate

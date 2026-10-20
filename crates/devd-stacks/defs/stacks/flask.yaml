@@ -1,0 +1,137 @@
+id: flask
+name: Flask
+language: python
+category: backend
+summary: Lightweight Python web framework.
+docs:
+  - {title: Installation, url: "https://flask.palletsprojects.com/en/stable/installation/"}
+  - {title: Quickstart, url: "https://flask.palletsprojects.com/en/stable/quickstart/"}
+  - {title: Testing, url: "https://flask.palletsprojects.com/en/stable/testing/"}
+verified: {method: docs, against: "Flask 3.1.3 on PyPI (Requires-Python >=3.9)", date: "2026-10-20"}
+runtime: python
+package_managers: [pip, uv]
+name_pattern: '^[a-z][a-z0-9_-]{0,63}$'
+name_hint: Lowercase letters, digits, hyphens and underscores, starting with a letter.
+versions:
+  - {id: "3.1", label: Flask 3.1 (latest), value: "3.1.*", default: true, requires: [{tool: python, min: "3.9", why: "Flask 3.1 requires Python 3.9+"}]}
+options:
+  - {id: pytest, label: pytest with a starter test, kind: bool, default: true, help: Adds pytest and tests/test_app.py using Flask's test client.}
+init:
+  creates_dir: true
+  install_toggle: false
+  steps:
+    - id: requirements
+      title: Write requirements.txt
+      kind: write
+      cwd: project
+      path: requirements.txt
+      when: [{option: package_manager, equals: pip}, {option: pytest, equals: false}]
+      content: |
+        Flask=={version}
+    - id: requirements-pytest
+      title: Add pytest to requirements.txt
+      kind: write
+      cwd: project
+      path: requirements.txt
+      when: [{option: package_manager, equals: pip}, {option: pytest, equals: true}]
+      content: |
+        Flask=={version}
+        pytest
+    - id: venv
+      title: Create a virtual environment
+      cwd: project
+      when: {option: package_manager, equals: pip}
+      needs: [python]
+      run: ["{python}", -m, venv, .venv]
+    - id: pip-install
+      title: Install Flask into the environment
+      cwd: project
+      network: true
+      when: {option: package_manager, equals: pip}
+      needs: [python]
+      run: ["{venv_python}", -m, pip, install, -r, requirements.txt]
+    - id: uv-init
+      title: Create the uv project
+      cwd: project
+      when: {option: package_manager, equals: uv}
+      needs: [uv]
+      run: [uv, init, --bare, --no-workspace, --vcs, none, --name, "{name_kebab}"]
+    - id: uv-add
+      title: Add Flask with uv
+      cwd: project
+      network: true
+      when: {option: package_manager, equals: uv}
+      needs: [uv]
+      run: [uv, add, "flask=={version}"]
+    - id: uv-pytest
+      title: Add pytest with uv
+      cwd: project
+      network: true
+      when: [{option: package_manager, equals: uv}, {option: pytest, equals: true}]
+      needs: [uv]
+      run: [uv, add, --dev, pytest]
+    - id: app
+      title: Write app.py
+      kind: write
+      cwd: project
+      path: app.py
+      content: |
+        from flask import Flask
+
+        app = Flask(__name__)
+
+
+        @app.get("/")
+        def index():
+            return "Hello from {name}"
+    - id: test
+      title: Write tests/test_app.py
+      kind: write
+      cwd: project
+      path: tests/test_app.py
+      when: {option: pytest, equals: true}
+      content: |
+        from app import app
+
+
+        def test_index():
+            client = app.test_client()
+            response = client.get("/")
+            assert response.status_code == 200
+            assert b"Hello" in response.data
+    - id: gitignore
+      title: Write .gitignore
+      kind: write
+      cwd: project
+      path: .gitignore
+      content: |
+        .venv/
+        __pycache__/
+        *.pyc
+        .env
+        instance/
+verify:
+  files: [app.py]
+  commands:
+    - {title: Import the app, run: ["{py}", -c, "import app"]}
+tasks:
+  - {id: dev, title: Start the development server with the debugger, kind: dev, long_running: true, port: 5000, run: ["{py}", -m, flask, --app, app, run, --debug], requires_file: app.py}
+  - {id: run, title: Start the server without the debugger, kind: dev, long_running: true, port: 5000, run: ["{py}", -m, flask, --app, app, run], requires_file: app.py}
+  - {id: routes, title: List routes, kind: other, run: ["{py}", -m, flask, --app, app, routes], requires_file: app.py}
+  - {id: test, title: Run pytest, kind: test, run: ["{py}", -m, pytest], requires_file: tests}
+  - {id: install, title: Install dependencies, kind: install, risk: mutating, run: ["{pm.install}"]}
+detect:
+  rules:
+    - {dependency: flask, weight: 6, evidence: Flask is a declared dependency}
+    - {text: "from flask import", in_file: app.py, weight: 3, evidence: app.py imports Flask}
+    - {text: "import flask", in_file: app.py, weight: 3, evidence: app.py imports Flask}
+env:
+  - {name: FLASK_APP, help: Application module; the tasks pass --app explicitly.}
+  - {name: SECRET_KEY, secret: true, help: Needed for sessions; set via the environment.}
+structure: [app.py, tests/, requirements.txt or pyproject.toml, .venv/]
+conventions:
+  - "Use the test client in tests; do not start a server in tests."
+  - "Debug mode is for development only."
+exec:
+  programs: [python, python3, flask, pytest, uv, pip]
+  destructive_args: []

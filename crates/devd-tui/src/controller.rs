@@ -25,6 +25,7 @@ use devd_core::doctor::{self, Check, Level};
 use devd_core::{Registry, Result};
 
 use crate::state::{
+    StackRow, ToolRow,
     AuditRow, BranchRow, CapRow, CheckRow, CommitRow, Key, Overlay, Pending, PromptKind, RepoRow,
     State, StatusData, View,
 };
@@ -176,6 +177,42 @@ pub struct Controller {
     /// What to draw.
     pub state: State,
     backend: Box<dyn Backend>,
+    /// The guided project-creation flow in progress, if any.
+    wizard: Option<Wizard>,
+}
+
+/// One question of the guided creation flow.
+#[derive(Debug, Clone)]
+struct WizField {
+    target: Target,
+    label: String,
+    kind: String,
+    choices: Vec<(String, String)>,
+    default: Value,
+    help: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Target {
+    Name,
+    Destination,
+    Version,
+    PackageManager,
+    Option(String),
+    Git,
+    Install,
+    Extra,
+}
+
+/// The state of the guided flow. Every question is generated from the stack's
+/// own definition, so a new stack needs no code here.
+#[derive(Debug, Clone)]
+struct Wizard {
+    stack_name: String,
+    fields: Vec<WizField>,
+    index: usize,
+    request: serde_json::Map<String, Value>,
+    options: serde_json::Map<String, Value>,
 }
 
 impl Controller {
@@ -184,7 +221,7 @@ impl Controller {
         let mut state = State::default();
         state.home = backend.home();
         state.git_version = backend.git_version();
-        Self { state, backend }
+        Self { state, backend, wizard: None }
     }
 
     /// Reload whatever the current view shows.
@@ -249,6 +286,29 @@ impl Controller {
                 };
                 return true;
             }
+            Overlay::Form { title, lines, mut input } => {
+                match key {
+                    Key::Esc => {
+                        self.state.overlay = Overlay::None;
+                        self.wizard = None;
+                        self.state.say("cancelled; nothing was created");
+                    }
+                    Key::Enter => {
+                        self.state.overlay = Overlay::None;
+                        self.submit_form(input);
+                    }
+                    Key::Backspace => {
+                        input.pop();
+                        self.state.overlay = Overlay::Form { title, lines, input };
+                    }
+                    Key::Char(c) => {
+                        input.push(c);
+                        self.state.overlay = Overlay::Form { title, lines, input };
+                    }
+                    _ => {}
+                }
+                return true;
+            }
             Overlay::Approval(_) => {
                 match key {
                     Key::Char('y') | Key::Char('Y') => self.approve(),
@@ -301,6 +361,18 @@ impl Controller {
             Key::Char('t') if self.state.view == View::Projects => {
                 self.open_prompt(PromptKind::TrackPath, String::new());
             }
+            Key::Char('d') if self.state.view == View::Projects => self.detect_selected(),
+            Key::Char('m') if self.state.view == View::Projects => self.import_selected(),
+            Key::Char('i') if self.state.view == View::Toolchain => self.tool_action("toolchain.install"),
+            Key::Char('x') if self.state.view == View::Toolchain => self.tool_action("toolchain.remove"),
+            Key::Char('s') if self.state.view == View::Toolchain => self.service_action("start"),
+            Key::Char('t') if self.state.view == View::Toolchain => self.service_action("stop"),
+            Key::Char('l') if self.state.view == View::Toolchain => self.tool_logs(),
+            Key::Char('a') if self.state.view == View::Team => self.team_action("team.approve_plan"),
+            Key::Char('c') if self.state.view == View::Team => self.team_action("team.cancel"),
+            Key::Char('p') if self.state.view == View::Team => self.team_action("pause-resume"),
+            Key::Char('a') if self.state.view == View::Inbox => self.inbox_decide(true),
+            Key::Char('d') if self.state.view == View::Inbox => self.inbox_decide(false),
             _ => {}
         }
         true
@@ -339,6 +411,10 @@ impl Controller {
             View::Capabilities => self.load_capabilities(),
             View::Activity => self.load_audit(),
             View::Doctor => self.load_checks(),
+            View::Create => self.load_stacks(),
+            View::Toolchain => self.load_tools(),
+            View::Team => self.load_team(),
+            View::Inbox => self.load_inbox(),
             View::Help => {}
         }
         let height = 20;
@@ -411,11 +487,22 @@ impl Controller {
         self.state.overlay = Overlay::None;
         match self.backend.invoke(&pending.request, Approval::Granted) {
             Ok(result) => {
-                let message = result
-                    .outcome
-                    .map(|o| o.message)
-                    .unwrap_or_else(|| format!("{} ran", pending.id));
-                self.state.say(message);
+                let (message, data, ok) = match result.outcome {
+                    Some(o) => (o.message, o.data, o.ok),
+                    None => (format!("{} ran", pending.id), Value::Null, true),
+                };
+                // Creation and tool changes produce a report worth reading, not a
+                // one-line toast: steps, checks, warnings and what to do next.
+                if matches!(pending.id.as_str(), "project.init" | "toolchain.install" | "toolchain.remove" | "toolchain.service") && !data.is_null() {
+                    let mut lines = vec![message.clone(), String::new()];
+                    lines.extend(value_lines(&data));
+                    self.state.overlay = Overlay::Detail { title: pending.id.clone(), lines, scroll: 0 };
+                }
+                if ok {
+                    self.state.say(message);
+                } else {
+                    self.state.fail(message);
+                }
             }
             Err(e) => self.state.fail(e.to_string()),
         }
@@ -517,6 +604,129 @@ impl Controller {
         }
     }
 
+    fn load_stacks(&mut self) {
+        match self.call("stacks.list", json!({})) {
+            Call::Data(data) => self.state.stacks = StackRow::list_from_json(&data),
+            Call::Failed(message) => {
+                self.state.stacks.clear();
+                self.state.fail(message);
+            }
+            _ => {}
+        }
+    }
+
+    fn load_tools(&mut self) {
+        match self.call("toolchain.list", json!({})) {
+            Call::Data(data) => {
+                self.state.tools = ToolRow::list_from_json(&data);
+                let missing = self.state.tools.iter().filter(|t| !t.installed && t.category != "mobile").count();
+                self.state.say(format!("{} tools, {} not installed", self.state.tools.len(), missing));
+            }
+            Call::Failed(message) => {
+                self.state.tools.clear();
+                self.state.fail(message);
+            }
+            _ => {}
+        }
+    }
+
+    fn load_team(&mut self) {
+        match self.call("team.list", json!({})) {
+            Call::Data(d) => {
+                self.state.runs = d.as_array().cloned().unwrap_or_default();
+                self.state.say(format!("{} run(s)", self.state.runs.len()));
+            }
+            Call::Failed(m) => {
+                self.state.runs.clear();
+                self.state.fail(m);
+            }
+            _ => {}
+        }
+    }
+
+    fn team_detail(&mut self) {
+        let Some(r) = self.state.runs.get(self.state.cursor).cloned() else { return };
+        let id = r["id"].as_str().unwrap_or("").to_string();
+        match self.call("team.get", json!({ "run": id })) {
+            Call::Data(d) => {
+                let mut lines = vec![format!("{} [{}]", d["run"]["title"].as_str().unwrap_or(""), d["run"]["state"].as_str().unwrap_or(""))];
+                if let Some(e) = d["run"]["error"].as_str() {
+                    lines.push(format!("needs you: {e}"));
+                }
+                lines.push(String::new());
+                for t in d["tasks"].as_array().cloned().unwrap_or_default() {
+                    let ev = t["evidence"].as_array().cloned().unwrap_or_default();
+                    let passed = ev.iter().filter(|f| f["kind"] == "verify" && f["ok"] == true).count();
+                    lines.push(format!("{:<16} {:<12} {:<14} {}{}", t["state"].as_str().unwrap_or(""), t["role"].as_str().unwrap_or(""), t["key"].as_str().unwrap_or(""), t["title"].as_str().unwrap_or(""), if passed > 0 { format!("  ({passed} check(s) passed)") } else { String::new() }));
+                    if matches!(t["state"].as_str(), Some("unverified" | "blocked" | "failed")) {
+                        lines.push(format!("                 {}", t["error"].as_str().unwrap_or("")));
+                    }
+                }
+                if let Some(s) = d["run"]["summary"].as_str() {
+                    lines.push(String::new());
+                    lines.extend(s.lines().map(str::to_string));
+                }
+                self.state.overlay = Overlay::Detail { title: "Team run".into(), lines, scroll: 0 };
+            }
+            Call::Failed(m) => self.state.fail(m),
+            _ => {}
+        }
+    }
+
+    fn team_action(&mut self, id: &str) {
+        let Some(r) = self.state.runs.get(self.state.cursor).cloned() else { return };
+        let run = r["id"].as_str().unwrap_or("").to_string();
+        let id = if id == "pause-resume" { if r["state"] == "paused" { "team.resume" } else { "team.pause" } } else { id };
+        match self.call(id, json!({ "run": run })) {
+            Call::Data(_) | Call::Nothing => {
+                self.state.say(format!("{id} done"));
+                self.load_team();
+            }
+            Call::NeedsApproval => {}
+            Call::Failed(m) => self.state.fail(m),
+        }
+    }
+
+    fn load_inbox(&mut self) {
+        let mut rows = Vec::new();
+        if let Call::Data(d) = self.call("approval.list", json!({ "pending_only": true })) {
+            for r in d.as_array().cloned().unwrap_or_default() {
+                rows.push(json!({ "kind": "approval", "id": r["id"], "title": r["capability"], "detail": format!("{} asks: {}", r["actor"].as_str().unwrap_or("").replace("agent:", ""), r["plan"]["summary"].as_str().unwrap_or("")), "raw": r }));
+            }
+        }
+        if let Call::Data(d) = self.call("inbox.list", json!({ "open_only": true })) {
+            for m in d.as_array().cloned().unwrap_or_default() {
+                rows.push(json!({ "kind": if m["needs_reply"] == true { "question" } else { "message" }, "id": m["id"], "title": m["subject"], "detail": m["body"], "raw": m }));
+            }
+        }
+        self.state.inbox = rows;
+        self.state.say(format!("{} waiting", self.state.inbox.len()));
+    }
+
+    fn inbox_detail(&mut self) {
+        let Some(r) = self.state.inbox.get(self.state.cursor).cloned() else { return };
+        let mut lines = vec![format!("{}: {}", r["kind"].as_str().unwrap_or(""), r["title"].as_str().unwrap_or(""))];
+        lines.push(String::new());
+        lines.extend(value_lines(&r["raw"]));
+        self.state.overlay = Overlay::Detail { title: "Waiting for you".into(), lines, scroll: 0 };
+    }
+
+    fn inbox_decide(&mut self, approve: bool) {
+        let Some(r) = self.state.inbox.get(self.state.cursor).cloned() else { return };
+        if r["kind"] != "approval" {
+            self.state.fail("questions are answered in the app or with `devd inbox reply`".to_string());
+            return;
+        }
+        match self.call("approval.decide", json!({ "id": r["id"], "approve": approve })) {
+            Call::Data(_) | Call::Nothing => {
+                self.state.say(if approve { "approved and run" } else { "declined" }.to_string());
+                self.load_inbox();
+            }
+            Call::NeedsApproval => {}
+            Call::Failed(m) => self.state.fail(m),
+        }
+    }
+
     fn load_audit(&mut self) {
         match self.backend.audit(200) {
             Ok(rows) => self.state.audit = rows,
@@ -570,6 +780,297 @@ impl Controller {
             View::History => self.show_commit(),
             View::Branches => self.switch_branch(),
             View::Capabilities => self.describe_selected(),
+            View::Create => self.start_wizard(),
+            View::Toolchain => self.tool_detail(),
+            View::Team => self.team_detail(),
+            View::Inbox => self.inbox_detail(),
+            _ => {}
+        }
+    }
+
+    // ---- creation wizard -------------------------------------------------
+
+    fn start_wizard(&mut self) {
+        let Some(stack) = self.state.selected_stack().cloned() else {
+            return;
+        };
+        let desc = match self.call("stacks.describe", json!({ "stack": stack.id })) {
+            Call::Data(d) => d,
+            Call::Failed(m) => {
+                self.state.fail(m);
+                return;
+            }
+            _ => return,
+        };
+        let def = &desc["stack"];
+        let mut fields = vec![
+            WizField { target: Target::Name, label: "Project name".into(), kind: "text".into(), choices: vec![], default: json!(""), help: def["name_hint"].as_str().unwrap_or("").to_string() },
+            WizField { target: Target::Destination, label: "Create it in".into(), kind: "text".into(), choices: vec![], default: json!(""), help: "A directory. Blank uses the projects root.".into() },
+        ];
+        let versions = def["versions"].as_array().cloned().unwrap_or_default();
+        if versions.len() > 1 {
+            fields.push(WizField {
+                target: Target::Version,
+                label: "Version".into(),
+                kind: "select".into(),
+                choices: versions.iter().map(|v| (v["id"].as_str().unwrap_or("").to_string(), v["label"].as_str().unwrap_or("").to_string())).collect(),
+                default: versions.iter().find(|v| v["default"] == true).map(|v| v["id"].clone()).unwrap_or(json!("")),
+                help: String::new(),
+            });
+        }
+        let pms = def["package_managers"].as_array().cloned().unwrap_or_default();
+        if pms.len() > 1 {
+            fields.push(WizField {
+                target: Target::PackageManager,
+                label: "Package manager".into(),
+                kind: "select".into(),
+                choices: pms.iter().map(|p| (p.as_str().unwrap_or("").to_string(), p.as_str().unwrap_or("").to_string())).collect(),
+                default: pms[0].clone(),
+                help: String::new(),
+            });
+        }
+        for o in def["options"].as_array().cloned().unwrap_or_default() {
+            if o["advanced"] == true {
+                continue;
+            }
+            fields.push(WizField {
+                target: Target::Option(o["id"].as_str().unwrap_or("").to_string()),
+                label: o["label"].as_str().unwrap_or("").to_string(),
+                kind: o["kind"].as_str().unwrap_or("text").to_string(),
+                choices: o["choices"].as_array().map(|c| c.iter().map(|x| (x["value"].as_str().unwrap_or("").to_string(), x["label"].as_str().unwrap_or("").to_string())).collect()).unwrap_or_default(),
+                default: o["default"].clone(),
+                help: o["help"].as_str().unwrap_or("").to_string(),
+            });
+        }
+        fields.push(WizField { target: Target::Git, label: "Initialise a git repository".into(), kind: "bool".into(), choices: vec![], default: json!(true), help: String::new() });
+        if def["init"]["install_toggle"] == true {
+            fields.push(WizField { target: Target::Install, label: "Install dependencies".into(), kind: "bool".into(), choices: vec![], default: json!(true), help: String::new() });
+        }
+        fields.push(WizField { target: Target::Extra, label: "Extra arguments for the scaffolding command (advanced)".into(), kind: "text".into(), choices: vec![], default: json!(""), help: "Space separated; appended exactly as typed. Blank for none.".into() });
+        let mut request = serde_json::Map::new();
+        request.insert("stack".into(), json!(stack.id));
+        self.wizard = Some(Wizard { stack_name: stack.name.clone(), fields, index: 0, request, options: serde_json::Map::new() });
+        self.show_field();
+    }
+
+    fn show_field(&mut self) {
+        let Some(w) = &self.wizard else { return };
+        let Some(f) = w.fields.get(w.index) else { return };
+        let mut lines = Vec::new();
+        if !f.help.is_empty() {
+            lines.push(f.help.clone());
+        }
+        for (i, (v, label)) in f.choices.iter().enumerate() {
+            let mark = if f.default.as_str() == Some(v.as_str()) { "*" } else { " " };
+            lines.push(format!("{mark}{}) {} ({})", i + 1, label, v));
+        }
+        let dflt = match &f.default {
+            Value::String(s) if !s.is_empty() => format!("default: {s}"),
+            Value::Bool(b) => format!("default: {}", if *b { "yes" } else { "no" }),
+            Value::Array(a) if !a.is_empty() => format!("default: {}", a.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(",")),
+            _ => String::new(),
+        };
+        if !dflt.is_empty() {
+            lines.push(dflt);
+        }
+        if f.kind == "multi" {
+            lines.push("comma separated values".to_string());
+        }
+        if f.kind == "bool" {
+            lines.push("answer y or n".to_string());
+        }
+        self.state.overlay = Overlay::Form {
+            title: format!("{} ({}/{}): {}", w.stack_name, w.index + 1, w.fields.len(), f.label),
+            lines,
+            input: String::new(),
+        };
+    }
+
+    fn submit_form(&mut self, input: String) {
+        let Some(mut w) = self.wizard.take() else { return };
+        let Some(f) = w.fields.get(w.index).cloned() else { return };
+        let text = input.trim().to_string();
+        let value: Option<Value> = match f.kind.as_str() {
+            "bool" => match text.to_ascii_lowercase().as_str() {
+                "" => Some(f.default.clone()),
+                "y" | "yes" | "true" => Some(json!(true)),
+                "n" | "no" | "false" => Some(json!(false)),
+                _ => None,
+            },
+            "select" => {
+                if text.is_empty() {
+                    Some(f.default.clone())
+                } else if let Some(c) = text.parse::<usize>().ok().and_then(|n| f.choices.get(n.wrapping_sub(1))) {
+                    Some(json!(c.0))
+                } else {
+                    f.choices.iter().find(|c| c.0 == text).map(|c| json!(c.0))
+                }
+            }
+            "multi" => Some(if text.is_empty() { f.default.clone() } else { json!(text) }),
+            _ => Some(if text.is_empty() { f.default.clone() } else { json!(text) }),
+        };
+        if f.target == Target::Name && text.is_empty() {
+            self.wizard = Some(w);
+            self.state.fail("a project name is required");
+            self.show_field();
+            return;
+        }
+        let Some(value) = value else {
+            self.wizard = Some(w);
+            self.state.fail("that is not one of the choices; try again");
+            self.show_field();
+            return;
+        };
+        match &f.target {
+            Target::Name => {
+                w.request.insert("name".into(), value);
+            }
+            Target::Destination => {
+                if value.as_str().map(|s| !s.is_empty()).unwrap_or(false) {
+                    w.request.insert("destination".into(), value);
+                }
+            }
+            Target::Version => {
+                w.request.insert("version".into(), value);
+            }
+            Target::PackageManager => {
+                w.request.insert("package_manager".into(), value);
+            }
+            Target::Option(id) => {
+                w.options.insert(id.clone(), value);
+            }
+            Target::Git => {
+                w.request.insert("git".into(), value);
+            }
+            Target::Install => {
+                w.request.insert("install".into(), value);
+            }
+            Target::Extra => {
+                let args: Vec<String> = value.as_str().unwrap_or("").split_whitespace().map(|s| s.to_string()).collect();
+                if !args.is_empty() {
+                    w.request.insert("extra_args".into(), json!(args));
+                }
+            }
+        }
+        w.index += 1;
+        if w.index < w.fields.len() {
+            self.wizard = Some(w);
+            self.show_field();
+            return;
+        }
+        w.request.insert("options".into(), Value::Object(w.options.clone()));
+        self.finish_wizard(Value::Object(w.request));
+    }
+
+    fn finish_wizard(&mut self, request: Value) {
+        let plan = match self.call("stacks.validate", request.clone()) {
+            Call::Data(d) => d,
+            Call::Failed(m) => {
+                self.state.fail(m);
+                return;
+            }
+            _ => return,
+        };
+        if plan["valid"] != true || plan["ready"] != true {
+            let mut lines = Vec::new();
+            for i in plan["issues"].as_array().cloned().unwrap_or_default() {
+                lines.push(format!("PROBLEM {}: {}", i["field"].as_str().unwrap_or(""), i["message"].as_str().unwrap_or("")));
+            }
+            for p in plan["prerequisites"].as_array().cloned().unwrap_or_default() {
+                if p["status"] != "ok" {
+                    lines.push(format!("PREREQUISITE {} is {} - {}", p["name"].as_str().unwrap_or(""), p["status"].as_str().unwrap_or(""), p["fix"].as_str().unwrap_or("")));
+                }
+            }
+            lines.push(String::new());
+            lines.push("Nothing was created. Fix the above (the Toolchain view installs tools) and try again.".into());
+            self.state.overlay = Overlay::Detail { title: "Cannot create the project yet".into(), lines, scroll: 0 };
+            return;
+        }
+        // Review the exact commands with the same overlay approvals use.
+        let req = InvokeRequest { id: "project.init".into(), args: request, dry_run: false };
+        let plan = self.backend.plan(&req).ok().flatten();
+        self.state.overlay = Overlay::Approval(Pending { id: "project.init".into(), plan, request: req });
+    }
+
+    // ---- toolchain and projects -----------------------------------------
+
+    fn tool_detail(&mut self) {
+        let Some(t) = self.state.selected_tool().cloned() else { return };
+        let (id, args) = if t.installed && t.service_healthy.is_some() {
+            ("toolchain.status", json!({ "tool": t.id }))
+        } else {
+            ("toolchain.plan", json!({ "tool": t.id, "action": if t.installed { "remove" } else { "install" } }))
+        };
+        match self.call(id, args) {
+            Call::Data(d) => {
+                let mut lines = vec![format!("{} - {}", t.name, if t.installed { "installed" } else { "not installed" })];
+                if let Some(p) = &t.problem {
+                    lines.push(format!("problem: {p}"));
+                }
+                lines.push(String::new());
+                lines.extend(value_lines(&d));
+                self.state.overlay = Overlay::Detail { title: t.name.clone(), lines, scroll: 0 };
+            }
+            Call::Failed(m) => self.state.fail(m),
+            _ => {}
+        }
+    }
+
+    fn tool_action(&mut self, id: &str) {
+        let Some(t) = self.state.selected_tool().cloned() else { return };
+        match self.call(id, json!({ "tool": t.id })) {
+            Call::Data(_) | Call::Nothing => {
+                self.state.say(format!("{id} {}", t.id));
+                self.load_tools();
+            }
+            Call::NeedsApproval => {}
+            Call::Failed(m) => self.state.fail(m),
+        }
+    }
+
+    fn service_action(&mut self, action: &str) {
+        let Some(t) = self.state.selected_tool().cloned() else { return };
+        if t.service_healthy.is_none() {
+            self.state.fail(format!("{} is not a service", t.name));
+            return;
+        }
+        match self.call("toolchain.service", json!({ "tool": t.id, "action": action })) {
+            Call::Data(_) | Call::Nothing => {
+                self.state.say(format!("{action} {}", t.id));
+                self.load_tools();
+            }
+            Call::NeedsApproval => {}
+            Call::Failed(m) => self.state.fail(m),
+        }
+    }
+
+    fn tool_logs(&mut self) {
+        let Some(t) = self.state.selected_tool().cloned() else { return };
+        match self.call("toolchain.logs", json!({ "tool": t.id })) {
+            Call::Data(d) => {
+                self.state.overlay = Overlay::Detail { title: format!("{} logs", t.name), lines: value_lines(&d), scroll: 0 };
+            }
+            Call::Failed(m) => self.state.fail(m),
+            _ => {}
+        }
+    }
+
+    fn detect_selected(&mut self) {
+        let Some(p) = self.state.selected_project().cloned() else { return };
+        match self.call("project.detect", json!({ "path": p.path })) {
+            Call::Data(d) => {
+                self.state.overlay = Overlay::Detail { title: format!("{} - detected", p.name), lines: value_lines(&d), scroll: 0 };
+            }
+            Call::Failed(m) => self.state.fail(m),
+            _ => {}
+        }
+    }
+
+    fn import_selected(&mut self) {
+        let Some(p) = self.state.selected_project().cloned() else { return };
+        match self.call("project.import", json!({ "path": p.path })) {
+            Call::Data(_) | Call::Nothing => self.state.say(format!("imported {} for agents and tasks", p.name)),
+            Call::Failed(m) => self.state.fail(m),
             _ => {}
         }
     }
@@ -1512,5 +2013,109 @@ mod tests {
                 "missing `{expected}` in:\n{joined}"
             );
         }
+    }
+
+    fn stack_controller() -> (Controller, Calls) {
+        let mut fake = Fake::default();
+        fake.answers.insert(
+            "stacks.list".to_string(),
+            json!([
+                { "id": "laravel", "name": "Laravel", "language": "php", "category": "web", "summary": "PHP framework", "creatable": true },
+                { "id": "ruby", "name": "Ruby", "language": "ruby", "category": "language", "summary": "detect only", "creatable": false }
+            ]),
+        );
+        fake.answers.insert(
+            "stacks.describe".to_string(),
+            json!({ "stack": {
+                "id": "laravel", "name": "Laravel", "name_hint": "lowercase",
+                "versions": [{ "id": "13", "label": "Laravel 13", "default": true }, { "id": "12", "label": "Laravel 12", "default": false }],
+                "package_managers": ["composer"],
+                "options": [
+                    { "id": "database", "label": "Database", "kind": "select", "default": "sqlite", "choices": [{ "value": "sqlite", "label": "SQLite" }, { "value": "mysql", "label": "MySQL" }] },
+                    { "id": "debug_tools", "label": "Debug tools", "kind": "bool", "default": false, "advanced": true }
+                ],
+                "init": { "install_toggle": true }
+            }}),
+        );
+        fake.answers.insert("stacks.validate".to_string(), json!({ "valid": true, "ready": true, "issues": [], "prerequisites": [] }));
+        fake.answers.insert(
+            "toolchain.list".to_string(),
+            json!({ "host": {}, "tools": [
+                { "tool": { "id": "git", "name": "Git", "category": "vcs" }, "status": { "installed": true, "version": "2.43.0", "outdated": false }, "service": null },
+                { "tool": { "id": "redis", "name": "Redis", "category": "database" }, "status": { "installed": false, "version": null, "outdated": false, "problem": "not found" }, "service": null }
+            ]}),
+        );
+        fake.approval_required.push("toolchain.install".to_string());
+        let calls = fake.calls();
+        (Controller::new(Box::new(fake)), calls)
+    }
+
+    fn type_text(c: &mut Controller, text: &str) {
+        for ch in text.chars() {
+            c.handle_key(Key::Char(ch));
+        }
+        c.handle_key(Key::Enter);
+    }
+
+    #[test]
+    fn the_create_view_lists_only_stacks_devd_can_create() {
+        let (mut c, _) = stack_controller();
+        c.handle_key(key('0'));
+        assert_eq!(c.state.view, View::Create);
+        assert_eq!(c.state.stacks.len(), 1);
+        assert_eq!(c.state.stacks[0].id, "laravel");
+    }
+
+    #[test]
+    fn the_guided_flow_asks_each_question_then_shows_the_plan_before_creating() {
+        let (mut c, calls) = stack_controller();
+        c.handle_key(key('0'));
+        c.handle_key(Key::Enter); // start the wizard
+        assert!(matches!(c.state.overlay, Overlay::Form { .. }));
+        type_text(&mut c, "blog"); // name
+        type_text(&mut c, ""); // destination: default
+        type_text(&mut c, "2"); // version 12
+        type_text(&mut c, "2"); // database mysql
+        type_text(&mut c, "y"); // git
+        type_text(&mut c, "n"); // install
+        type_text(&mut c, ""); // extra args
+        // Nothing has been created; the person is shown the plan and must say yes.
+        assert!(matches!(c.state.overlay, Overlay::Approval(_)));
+        assert_eq!(calls.ran("project.init"), 0);
+        if let Overlay::Approval(p) = &c.state.overlay {
+            assert_eq!(p.request.args["name"], "blog");
+            assert_eq!(p.request.args["version"], "12");
+            assert_eq!(p.request.args["options"]["database"], "mysql");
+            assert_eq!(p.request.args["install"], false);
+        }
+        c.handle_key(key('y'));
+        assert_eq!(calls.ran("project.init"), 1);
+    }
+
+    #[test]
+    fn an_invalid_answer_is_asked_again_and_escape_creates_nothing() {
+        let (mut c, calls) = stack_controller();
+        c.handle_key(key('0'));
+        c.handle_key(Key::Enter);
+        type_text(&mut c, ""); // an empty name is refused
+        assert!(c.state.message_is_error);
+        assert!(matches!(c.state.overlay, Overlay::Form { .. }));
+        c.handle_key(Key::Esc);
+        assert!(matches!(c.state.overlay, Overlay::None));
+        assert_eq!(calls.ran("project.init"), 0);
+    }
+
+    #[test]
+    fn the_toolchain_view_installs_only_after_approval() {
+        let (mut c, calls) = stack_controller();
+        c.handle_key(key('-'));
+        assert_eq!(c.state.view, View::Toolchain);
+        assert_eq!(c.state.tools.len(), 2);
+        c.handle_key(Key::Down); // Redis, not installed
+        c.handle_key(key('i'));
+        assert!(matches!(c.state.overlay, Overlay::Approval(_)));
+        assert_eq!(calls.ran("toolchain.install"), 0);
+        c.handle_key(key('y'));
+        assert_eq!(calls.ran("toolchain.install"), 1);
     }
 }

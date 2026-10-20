@@ -1,0 +1,53 @@
+id: astro
+name: Astro
+language: javascript
+category: web
+summary: Content-focused web framework that ships little JavaScript.
+docs:
+  - {title: Install Astro, url: "https://docs.astro.build/en/install-and-setup/"}
+  - {title: create astro CLI, url: "https://docs.astro.build/en/install-and-setup/#install-from-the-cli-wizard"}
+verified: {method: cli-help, against: "create-astro 5.3.0", date: "2026-10-20"}
+runtime: node
+package_managers: [npm, pnpm, yarn, bun]
+versions:
+  - {id: latest, label: Astro (latest), value: latest, default: true, requires: [{tool: node, min: "22.22", why: "Astro 7 requires Node.js 22.22 or newer"}]}
+options:
+  - {id: template, label: Starter template, kind: select, default: basics, help: Official starter from the Astro examples., choices: [{value: basics, label: Basics}, {value: blog, label: Blog}, {value: minimal, label: Minimal}], flag: "--template"}
+  - {id: integrations, label: Integrations, kind: text, default: "", pattern: '^[a-z0-9@/._,-]*$', help: "Integrations to add, comma separated, e.g. react,tailwind.", flag: "--add"}
+init:
+  install_toggle: true
+  steps:
+    - id: scaffold
+      title: Create the site with create-astro
+      network: true
+      extensible: true
+      needs: [node]
+      run:
+        - "{pm.dlx}"
+        - "create-astro@{version}"
+        - "{name}"
+        - --template
+        - "{opt.template}"
+        - {when: {option: integrations, nonempty: true}, args: [--add, "{opt.integrations}"]}
+        - {when: {option: install, equals: true}, args: [--install], else: [--no-install]}
+        - {when: {option: git, equals: true}, args: [--git], else: [--no-git]}
+        - --yes
+verify:
+  files: [package.json, astro.config.mjs]
+tasks:
+  - {id: dev, title: Start the development server, kind: dev, long_running: true, port: 4321, run: ["{pm.run}", dev], requires_script: dev}
+  - {id: build, title: Production build (includes astro check when configured), kind: build, run: ["{pm.run}", build], requires_script: build}
+  - {id: preview, title: Preview the build, kind: dev, long_running: true, port: 4321, run: ["{pm.run}", preview], requires_script: preview}
+  - {id: check, title: Type-check with astro check, kind: typecheck, run: ["{pm.exec}", astro, check]}
+  - {id: install, title: Install dependencies, kind: install, risk: mutating, run: ["{pm.install}"]}
+detect:
+  rules:
+    - {dependency: astro, weight: 6, evidence: astro is a dependency}
+    - {file: astro.config.mjs, weight: 3, evidence: astro.config.mjs}
+    - {file: astro.config.ts, weight: 3, evidence: astro.config.ts}
+structure: [src/pages/, src/components/, public/, astro.config.*]
+conventions:
+  - "Pages are files under src/pages; .astro components render to HTML with no client JavaScript unless a client: directive is used."
+exec:
+  programs: [node, npx, astro]
+  destructive_args: []

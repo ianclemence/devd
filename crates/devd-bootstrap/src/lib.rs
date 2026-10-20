@@ -61,14 +61,40 @@ impl Bootstrap {
         devd_services::caps::register(&mut registry)?;
         devd_sites::caps::register(&mut registry)?;
         devd_workspace::caps::register(&mut registry, workspace.clone())?;
+        devd_stacks::caps::register(&mut registry)?;
+
+        // The built-in agent needs the shared store, settings and event bus, and
+        // - once it exists - the registry it acts through.
+        let events = EventBus::new();
+        let settings = Arc::new(settings);
+        let hub = devd_agent::Hub::new(devd_core::capability::Ctx {
+            store: workspace.store().clone(),
+            paths: Arc::new(paths.clone()),
+            settings: settings.clone(),
+            events: events.clone(),
+            actor: devd_core::capability::Actor::system(),
+            dry_run: false,
+        });
+        let team = devd_agent::team::Team::new(hub.clone(), devd_core::capability::Ctx {
+            store: workspace.store().clone(),
+            paths: Arc::new(paths.clone()),
+            settings: settings.clone(),
+            events: events.clone(),
+            actor: devd_core::capability::Actor::system(),
+            dry_run: false,
+        });
+        devd_agent::caps::register(&mut registry, hub.clone(), team.clone())?;
+        let registry = Arc::new(registry);
+        hub.attach(registry.clone());
+        team.attach(registry.clone());
 
         Ok(Self {
             paths,
             store: workspace.store().clone(),
-            settings: Arc::new(settings),
-            events: EventBus::new(),
+            settings,
+            events,
             git,
-            registry: Arc::new(registry),
+            registry,
             workspace,
         })
     }

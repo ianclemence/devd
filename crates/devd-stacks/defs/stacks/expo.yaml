@@ -1,0 +1,77 @@
+id: expo
+name: Expo (React Native)
+language: javascript
+category: mobile
+summary: React Native apps with Expo Router, development builds and over-the-air tooling.
+description: Created with create-expo-app, the command the Expo documentation recommends. Develop on a device with Expo Go or a development build; running on an Android emulator or device needs the Android SDK and adb.
+docs:
+  - {title: Create a project, url: "https://docs.expo.dev/get-started/create-a-project/"}
+  - {title: Set up your environment, url: "https://docs.expo.dev/get-started/set-up-your-environment/"}
+  - {title: Expo CLI, url: "https://docs.expo.dev/more/expo-cli/"}
+  - {title: app.json configuration, url: "https://docs.expo.dev/versions/latest/config/app/"}
+verified: {method: cli-help, against: "create-expo-app 5.0.0 / expo 58", date: "2026-10-20"}
+runtime: node
+package_managers: [npm, pnpm, yarn, bun]
+versions:
+  - {id: latest, label: Expo SDK (latest), value: latest, default: true, requires: [{tool: node, min: "22.13", why: "Expo SDK 58 requires Node.js 22.13+"}]}
+options:
+  - {id: template, label: Template, kind: select, default: default, flag: "--template", help: The official project template., choices: [{value: default, label: Default (Expo Router, TypeScript)}, {value: blank, label: Blank}, {value: blank-typescript, label: Blank (TypeScript)}, {value: tabs, label: Tabs (Expo Router)}, {value: bare-minimum, label: Bare minimum (native folders)}]}
+  - {id: bundle_id, label: Application identifier, kind: text, default: "com.example.{name_flat}", pattern: '^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$', help: "Android package and iOS bundle identifier written to app.json, e.g. com.yourcompany.app. Cannot be changed once published."}
+  - {id: agents_md, label: AGENTS.md for coding agents, kind: bool, default: true, advanced: true, flag: "--no-agents-md"}
+init:
+  install_toggle: true
+  steps:
+    - id: scaffold
+      title: Create the app with create-expo-app
+      network: true
+      extensible: true
+      needs: [node]
+      run:
+        - "{pm.dlx}"
+        - "create-expo-app@{version}"
+        - "{name}"
+        - --template
+        - "{opt.template}"
+        - {when: {option: install, equals: false}, args: [--no-install]}
+        - {when: {option: agents_md, equals: false}, args: [--no-agents-md]}
+        - --yes
+    - id: identifiers
+      title: Set the application identifiers in app.json
+      kind: json
+      cwd: project
+      path: app.json
+      set:
+        expo.ios.bundleIdentifier: "{opt.bundle_id}"
+        expo.android.package: "{opt.bundle_id}"
+verify:
+  files: [package.json, app.json]
+tasks:
+  - {id: dev, title: Start the Expo development server, kind: dev, long_running: true, port: 8081, run: ["{pm.exec}", expo, start], needs: [node]}
+  - {id: android, title: Start and open on Android, kind: dev, long_running: true, port: 8081, run: ["{pm.exec}", expo, start, --android], needs: [node, adb]}
+  - {id: web, title: Start and open in the browser, kind: dev, long_running: true, port: 8081, run: ["{pm.exec}", expo, start, --web], needs: [node]}
+  - {id: tunnel, title: Start with a tunnel for devices on other networks, kind: dev, long_running: true, port: 8081, run: ["{pm.exec}", expo, start, --tunnel], needs: [node]}
+  - {id: run-android, title: Build and run a development build on Android, kind: build, long_running: true, run: ["{pm.exec}", expo, "run:android"], needs: [node, java, android-sdk, adb], help: Needs the Android SDK and a device or emulator.}
+  - {id: prebuild, title: Generate the native android and ios folders, kind: build, risk: mutating, run: ["{pm.exec}", expo, prebuild], needs: [node]}
+  - {id: doctor, title: Diagnose project and dependency problems, kind: lint, run: ["{pm.dlx}", expo-doctor], needs: [node]}
+  - {id: check-deps, title: Check dependency versions match the SDK, kind: lint, run: ["{pm.exec}", expo, install, --check], needs: [node]}
+  - {id: export, title: Export for web or updates, kind: build, risk: mutating, run: ["{pm.exec}", expo, export], needs: [node]}
+  - {id: lint, title: Lint, kind: lint, run: ["{pm.run}", lint], requires_script: lint}
+  - {id: test, title: Run tests, kind: test, run: ["{pm.run}", test], requires_script: test}
+  - {id: install, title: Install dependencies, kind: install, risk: mutating, run: ["{pm.install}"]}
+detect:
+  rules:
+    - {dependency: expo, weight: 7, evidence: expo is a dependency}
+    - {file: app.json, weight: 1, evidence: app.json}
+    - {file: eas.json, weight: 1, evidence: eas.json}
+    - {dependency: expo-router, weight: 1, evidence: Expo Router}
+env:
+  - {name: EXPO_PUBLIC_*, help: Variables prefixed EXPO_PUBLIC_ are embedded in the app bundle; never put secrets in them.}
+  - {name: ANDROID_HOME, help: Android SDK location, needed for run:android.}
+structure: [app/ (Expo Router), assets/, app.json, package.json]
+conventions:
+  - "Install native-aware dependencies with `npx expo install <pkg>` so versions match the SDK."
+  - "Run `npx expo-doctor` after dependency changes."
+  - "Expo Go cannot run custom native code; use a development build for that."
+exec:
+  programs: [node, npx, expo, eas, adb]
+  destructive_args: ["prebuild --clean"]

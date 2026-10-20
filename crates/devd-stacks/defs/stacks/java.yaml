@@ -1,0 +1,33 @@
+id: java
+name: Java (Maven / Gradle)
+language: java
+category: language
+summary: A Java or Kotlin project built with Maven or Gradle (detection and workflows; create Spring Boot projects with the spring-boot stack).
+docs:
+  - {title: Maven in 5 minutes, url: "https://maven.apache.org/guides/getting-started/maven-in-five-minutes.html"}
+  - {title: Gradle user guide, url: "https://docs.gradle.org/current/userguide/userguide.html"}
+verified: {method: docs, against: "Maven 3.9 / Gradle 8", date: "2026-10-20"}
+runtime: java
+package_managers: [maven, gradle]
+versions:
+  - {id: any, label: Installed JDK, value: "", default: true, requires: [{tool: java, min: "17"}]}
+init: {steps: []}
+tasks:
+  - {id: build, title: Package (Maven wrapper), kind: build, run: [./mvnw, -B, package], requires_file: mvnw, needs: [java]}
+  - {id: test, title: Run tests (Maven wrapper), kind: test, run: [./mvnw, -B, test], requires_file: mvnw, needs: [java]}
+  - {id: build-mvn, title: Package (system Maven), kind: build, run: [mvn, -B, package], requires_file: pom.xml, needs: [java, maven]}
+  - {id: test-mvn, title: Run tests (system Maven), kind: test, run: [mvn, -B, test], requires_file: pom.xml, needs: [java, maven]}
+  - {id: build-gradle, title: Build (Gradle wrapper), kind: build, run: [./gradlew, build], requires_file: gradlew, needs: [java]}
+  - {id: test-gradle, title: Run tests (Gradle wrapper), kind: test, run: [./gradlew, test], requires_file: gradlew, needs: [java]}
+detect:
+  min_score: 2
+  rules:
+    - {file: pom.xml, weight: 2, evidence: pom.xml}
+    - {file: build.gradle, weight: 2, evidence: build.gradle}
+    - {file: build.gradle.kts, weight: 2, evidence: build.gradle.kts}
+structure: [pom.xml or build.gradle(.kts), src/main/java, src/test/java]
+conventions:
+  - "Prefer the project's ./mvnw or ./gradlew wrapper over a system install."
+exec:
+  programs: [java, ./mvnw, ./gradlew, mvn, gradle]
+  destructive_args: [deploy, publish]
