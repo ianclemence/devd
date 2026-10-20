@@ -368,6 +368,11 @@ impl Controller {
             Key::Char('s') if self.state.view == View::Toolchain => self.service_action("start"),
             Key::Char('t') if self.state.view == View::Toolchain => self.service_action("stop"),
             Key::Char('l') if self.state.view == View::Toolchain => self.tool_logs(),
+            Key::Char('a') if self.state.view == View::Team => self.team_action("team.approve_plan"),
+            Key::Char('c') if self.state.view == View::Team => self.team_action("team.cancel"),
+            Key::Char('p') if self.state.view == View::Team => self.team_action("pause-resume"),
+            Key::Char('a') if self.state.view == View::Inbox => self.inbox_decide(true),
+            Key::Char('d') if self.state.view == View::Inbox => self.inbox_decide(false),
             _ => {}
         }
         true
@@ -408,6 +413,8 @@ impl Controller {
             View::Doctor => self.load_checks(),
             View::Create => self.load_stacks(),
             View::Toolchain => self.load_tools(),
+            View::Team => self.load_team(),
+            View::Inbox => self.load_inbox(),
             View::Help => {}
         }
         let height = 20;
@@ -623,6 +630,103 @@ impl Controller {
         }
     }
 
+    fn load_team(&mut self) {
+        match self.call("team.list", json!({})) {
+            Call::Data(d) => {
+                self.state.runs = d.as_array().cloned().unwrap_or_default();
+                self.state.say(format!("{} run(s)", self.state.runs.len()));
+            }
+            Call::Failed(m) => {
+                self.state.runs.clear();
+                self.state.fail(m);
+            }
+            _ => {}
+        }
+    }
+
+    fn team_detail(&mut self) {
+        let Some(r) = self.state.runs.get(self.state.cursor).cloned() else { return };
+        let id = r["id"].as_str().unwrap_or("").to_string();
+        match self.call("team.get", json!({ "run": id })) {
+            Call::Data(d) => {
+                let mut lines = vec![format!("{} [{}]", d["run"]["title"].as_str().unwrap_or(""), d["run"]["state"].as_str().unwrap_or(""))];
+                if let Some(e) = d["run"]["error"].as_str() {
+                    lines.push(format!("needs you: {e}"));
+                }
+                lines.push(String::new());
+                for t in d["tasks"].as_array().cloned().unwrap_or_default() {
+                    let ev = t["evidence"].as_array().cloned().unwrap_or_default();
+                    let passed = ev.iter().filter(|f| f["kind"] == "verify" && f["ok"] == true).count();
+                    lines.push(format!("{:<16} {:<12} {:<14} {}{}", t["state"].as_str().unwrap_or(""), t["role"].as_str().unwrap_or(""), t["key"].as_str().unwrap_or(""), t["title"].as_str().unwrap_or(""), if passed > 0 { format!("  ({passed} check(s) passed)") } else { String::new() }));
+                    if matches!(t["state"].as_str(), Some("unverified" | "blocked" | "failed")) {
+                        lines.push(format!("                 {}", t["error"].as_str().unwrap_or("")));
+                    }
+                }
+                if let Some(s) = d["run"]["summary"].as_str() {
+                    lines.push(String::new());
+                    lines.extend(s.lines().map(str::to_string));
+                }
+                self.state.overlay = Overlay::Detail { title: "Team run".into(), lines, scroll: 0 };
+            }
+            Call::Failed(m) => self.state.fail(m),
+            _ => {}
+        }
+    }
+
+    fn team_action(&mut self, id: &str) {
+        let Some(r) = self.state.runs.get(self.state.cursor).cloned() else { return };
+        let run = r["id"].as_str().unwrap_or("").to_string();
+        let id = if id == "pause-resume" { if r["state"] == "paused" { "team.resume" } else { "team.pause" } } else { id };
+        match self.call(id, json!({ "run": run })) {
+            Call::Data(_) | Call::Nothing => {
+                self.state.say(format!("{id} done"));
+                self.load_team();
+            }
+            Call::NeedsApproval => {}
+            Call::Failed(m) => self.state.fail(m),
+        }
+    }
+
+    fn load_inbox(&mut self) {
+        let mut rows = Vec::new();
+        if let Call::Data(d) = self.call("approval.list", json!({ "pending_only": true })) {
+            for r in d.as_array().cloned().unwrap_or_default() {
+                rows.push(json!({ "kind": "approval", "id": r["id"], "title": r["capability"], "detail": format!("{} asks: {}", r["actor"].as_str().unwrap_or("").replace("agent:", ""), r["plan"]["summary"].as_str().unwrap_or("")), "raw": r }));
+            }
+        }
+        if let Call::Data(d) = self.call("inbox.list", json!({ "open_only": true })) {
+            for m in d.as_array().cloned().unwrap_or_default() {
+                rows.push(json!({ "kind": if m["needs_reply"] == true { "question" } else { "message" }, "id": m["id"], "title": m["subject"], "detail": m["body"], "raw": m }));
+            }
+        }
+        self.state.inbox = rows;
+        self.state.say(format!("{} waiting", self.state.inbox.len()));
+    }
+
+    fn inbox_detail(&mut self) {
+        let Some(r) = self.state.inbox.get(self.state.cursor).cloned() else { return };
+        let mut lines = vec![format!("{}: {}", r["kind"].as_str().unwrap_or(""), r["title"].as_str().unwrap_or(""))];
+        lines.push(String::new());
+        lines.extend(value_lines(&r["raw"]));
+        self.state.overlay = Overlay::Detail { title: "Waiting for you".into(), lines, scroll: 0 };
+    }
+
+    fn inbox_decide(&mut self, approve: bool) {
+        let Some(r) = self.state.inbox.get(self.state.cursor).cloned() else { return };
+        if r["kind"] != "approval" {
+            self.state.fail("questions are answered in the app or with `devd inbox reply`".to_string());
+            return;
+        }
+        match self.call("approval.decide", json!({ "id": r["id"], "approve": approve })) {
+            Call::Data(_) | Call::Nothing => {
+                self.state.say(if approve { "approved and run" } else { "declined" }.to_string());
+                self.load_inbox();
+            }
+            Call::NeedsApproval => {}
+            Call::Failed(m) => self.state.fail(m),
+        }
+    }
+
     fn load_audit(&mut self) {
         match self.backend.audit(200) {
             Ok(rows) => self.state.audit = rows,
@@ -678,6 +782,8 @@ impl Controller {
             View::Capabilities => self.describe_selected(),
             View::Create => self.start_wizard(),
             View::Toolchain => self.tool_detail(),
+            View::Team => self.team_detail(),
+            View::Inbox => self.inbox_detail(),
             _ => {}
         }
     }

@@ -766,7 +766,8 @@
     if (live + chats) left.push((live + chats) + " agent" + (live + chats === 1 ? "" : "s") + " working");
     var wait = AI.counts.approvals + AI.counts.questions;
     if (wait) left.push('<button type="button" class="sb-link sb-warn" data-action="nav" data-view="inbox">' + wait + " waiting for you</button>");
-    right.push('<span title="devd only changes this machine unless you connect a remote target">local</span>');
+    var prod = AI.env && AI.env.mode === "production";
+    right.push(prod ? '<span class="sb-bad" title="Production mode: agents need your approval for every change">production</span>' : '<span title="devd only changes this machine. Switch to production mode in Diagnostics to require approval for every agent change.">local</span>');
     if (state.session) right.push('<span title="The address agents and scripts use">api :' + esc(state.session.port) + "</span>");
     el("statusbar").innerHTML = '<div class="sb-left">' + (left.join('<span class="sb-sep">·</span>') || "Ready") + '</div><div class="sb-right">' + right.join('<span class="sb-sep">·</span>') + "</div>";
   }
@@ -3178,6 +3179,7 @@
       '<button type="button" class="btn btn-danger" data-action="quit">Quit devd</button>' +
       "</div></div>" +
       '<div class="panel"><div class="panel-head"><span>Status</span><span class="panel-note">' + esc(AI.health ? AI.health.state.replace("_", " ") : "unknown") + '</span></div><div class="panel-body">' + healthBody(false) + "</div></div>" +
+      '<div class="panel"><div class="panel-head"><span>Environment</span><span class="panel-note">' + esc((AI.env && AI.env.mode) || "local") + '</span></div><div class="panel-body"><div class="row-sub">' + ((AI.env && AI.env.mode === "production") ? "Production mode is on. Agents need your approval for every change, plan approval cannot be skipped, and devd never deploys or opens ports by itself." : "Local mode. Agents work freely inside authorised project folders; anything destructive or system-wide still asks you. Turn production mode on for a machine that runs something real.") + '</div><div class="inline" style="margin-top:10px"><button type="button" class="btn ' + ((AI.env && AI.env.mode === "production") ? "" : "btn-danger") + '" data-action="env-toggle">' + ((AI.env && AI.env.mode === "production") ? "Switch to local (asks first)" : "Switch to production mode") + "</button></div></div></div>" +
       '<div class="panel"><div class="panel-head"><span>Raw environment checks</span>' +
       '<span class="panel-note">' + (state.doctor && state.doctor.ok ? "no failures" : "see levels") + "</span></div>" +
       '<div class="panel-body flush">' +
@@ -3589,6 +3591,7 @@
     var timeout = new Promise(function (_, rej) { setTimeout(function () { rej(new Error("health check timed out after 15 s")); }, 15000); });
     return Promise.race([read("health.status"), timeout]).then(function (h) {
       AI.health = h; AI.healthError = null; AI.healthAt = Date.now();
+      read("environment.get").then(function (e) { AI.env = e; }).catch(function () {});
       return Promise.all([read("approval.list", { pending_only: true }), read("inbox.list", { open_only: true })]).then(function (r) {
         AI.counts.approvals = (r[0] || []).length;
         AI.counts.questions = (r[1] || []).filter(function (m) { return m.needs_reply; }).length;
@@ -4299,6 +4302,10 @@
         if (p && m) models.push({ provider: p, model: m });
       });
       run("models.assign", { role: role, models: models }).then(function (o) { if (o) return loadProviders().then(renderProviders); });
+    },
+    "env-toggle": function () {
+      var to = AI.env && AI.env.mode === "production" ? "local" : "production";
+      run("environment.set", { mode: to }).then(function (o) { if (o) return loadHealth().then(function () { return read("environment.get"); }).then(function (e) { AI.env = e; render(); }); });
     },
     // ---- assistant era
     "health-open": function () { openHealth(); loadHealth().then(function () { healthChip(); if (!el("drawer").hidden) openHealth(); }); },

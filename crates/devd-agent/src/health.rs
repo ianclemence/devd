@@ -144,6 +144,10 @@ pub fn status(ctx: &Ctx) -> Result<Value> {
         }
     }
 
+    if ctx.store.environment_mode() == "production" {
+        comps.push(Component::new("environment", "Environment", "core", "healthy", false, "production mode: agents need approval for every change"));
+    }
+
     // ---- roll up
     let required: Vec<&Component> = comps.iter().filter(|c| c.required).collect();
     let any = |states: &[&str]| required.iter().any(|c| states.contains(&c.state));

@@ -14,6 +14,32 @@ may change capability identifiers where the design was wrong.
 
 ### Added
 
+- **Agent team** (`team.*`): describe a goal, a planner proposes tasks with owners,
+  dependencies and acceptance criteria, you approve the plan, and specialists
+  (architect, researcher, implementer, QA, reviewer, infra, docs) work in parallel
+  where it is safe, in isolated git worktrees that are merged only after the task is
+  accepted. A task is accepted only when the tool results prove it (files changed
+  and a verification that passed, where the role requires it); otherwise it is
+  `unverified` and the run pauses for you. Runs persist and resume after a restart.
+  GUI (Assistant > Team runs), terminal dashboard (Team and Inbox views), CLI
+  (`devd team`) and API share one backend. See `docs/agents.md`.
+- **Skills** (`skills.*`): 55 playbooks, techniques and principles agents load on
+  demand, plus your own in `<home>/skills/`. `devd skills`.
+- **Built-in assistant** with provider management (Anthropic, OpenAI, Gemini, local
+  runtimes, any OpenAI-compatible endpoint), official Claude model discovery from
+  Anthropic's documentation, per-key model lists, model choices per kind of work
+  with fallbacks, an approval queue and an inbox, `docs.fetch` and `search.query`.
+- **Operational health model** (`health.status`): healthy, degraded, starting,
+  setup incomplete, unknown, critical, per component, with what each means and the fix.
+- **Services already on the machine** (`services.inventory`, `services.decide`):
+  installed, running, required and managed are kept apart; adopt, observe, use your
+  own instance, or ignore. Nothing is replaced as a side effect.
+- **Production mode** (`environment.set`): every agent change needs approval.
+- Global search and command palette; rebuilt Home; 12-entry sidebar with tabs;
+  new logo asset that fits its container exactly.
+
+### Added (earlier in this release)
+
 - **A shared stack engine** (`devd-stacks`). Stacks are structured YAML definitions
   validated when they load: 26 stacks (Next.js, Nuxt, Astro, React/Vite, Vue,
   SvelteKit, Express, Node.js, Laravel, Symfony, CodeIgniter, CakePHP, Slim, Django,

@@ -243,6 +243,43 @@ fn render_body(frame: &mut Frame, state: &State, area: Rect) {
                 })
                 .collect(),
         ),
+        View::Team => list(
+            state,
+            "Team runs",
+            state
+                .runs
+                .iter()
+                .map(|r| {
+                    let st = r["state"].as_str().unwrap_or("");
+                    let style = match st {
+                        "done" => ok(),
+                        "failed" => fail(),
+                        "awaiting_plan" | "paused" => warn(),
+                        _ => quiet(),
+                    };
+                    Line::from(vec![
+                        Span::styled(format!("{:<14}", st.replace('_', " ")), style),
+                        Span::styled(format!("{:>3}/{:<3} ", r["tasks_done"], r["tasks_total"]), data()),
+                        Span::raw(truncate(r["title"].as_str().unwrap_or(""), 70)),
+                    ])
+                })
+                .collect(),
+        ),
+        View::Inbox => list(
+            state,
+            "Waiting for you",
+            state
+                .inbox
+                .iter()
+                .map(|r| {
+                    Line::from(vec![
+                        Span::styled(format!("{:<10}", r["kind"].as_str().unwrap_or("")), warn()),
+                        Span::styled(format!("{:<28}", truncate(r["title"].as_str().unwrap_or(""), 28)), data()),
+                        Span::raw(truncate(r["detail"].as_str().unwrap_or(""), 70)),
+                    ])
+                })
+                .collect(),
+        ),
         View::Activity => list(
             state,
             "Activity",
@@ -344,6 +381,8 @@ fn empty_line(state: &State) -> Line<'static> {
         View::Branches => "No branches".to_string(),
         View::Capabilities => "No capability matches - press / to search again".to_string(),
         View::Activity => "Nothing has happened yet".to_string(),
+        View::Team => "No team runs yet. Start one with `devd team start \"what you want built\"` or in the app.".to_string(),
+        View::Inbox => "Nothing is waiting for you.".to_string(),
         View::Doctor => "No checks ran".to_string(),
         _ => "Nothing to show".to_string(),
     };
@@ -547,6 +586,8 @@ fn hints_for(view: View) -> &'static str {
         View::Capabilities => "/ search   Enter describe   x run   r refresh   ? help   q quit",
         View::Create => "Enter create from this stack   r refresh   ? help   q quit",
         View::Toolchain => "Enter details   i install   x remove   s start   t stop   l logs   r refresh   q quit",
+        View::Team => "Enter details   a approve plan   p pause/resume   c cancel   r refresh   ? help   q quit",
+        View::Inbox => "Enter details   a approve   d decline   r refresh   ? help   q quit",
         _ => "j/k move   Tab next view   r refresh   ? help   q quit",
     }
 }

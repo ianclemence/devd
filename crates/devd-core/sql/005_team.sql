@@ -78,3 +78,9 @@ CREATE TABLE IF NOT EXISTS team_events (
     at      TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_team_events_run ON team_events(run_id, id);
+
+-- Small switches that change at run time, such as local versus production.
+CREATE TABLE IF NOT EXISTS kv (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);

@@ -706,3 +706,26 @@ fn parallel_implementers_work_in_their_own_copies_and_are_merged() {
     let status = std::process::Command::new("git").args(["status", "--porcelain"]).current_dir(&dir).output().unwrap();
     assert!(String::from_utf8_lossy(&status.stdout).trim().is_empty(), "the project is clean: {}", String::from_utf8_lossy(&status.stdout));
 }
+
+#[test]
+fn production_mode_makes_every_agent_change_wait_for_a_person() {
+    let e = env();
+    let f = e.root.join("www/proj/note.txt").display().to_string();
+    // Local: an agent may write inside an authorised project.
+    call(&e, &e.agent, "fs.write", json!({ "path": f, "content": "a" }), Approval::None).unwrap();
+    assert_eq!(call(&e, &e.agent, "environment.set", json!({ "mode": "production" }), Approval::Granted).unwrap_err().code(), "permission_denied", "an agent cannot change the mode");
+    assert_eq!(call(&e, &e.human, "environment.set", json!({ "mode": "production" }), Approval::None).unwrap_err().code(), "approval_required");
+    call(&e, &e.human, "environment.set", json!({ "mode": "production" }), Approval::Granted).unwrap();
+    assert_eq!(call(&e, &e.agent, "environment.get", json!({}), Approval::None).unwrap()["mode"], "production");
+    // Production: the same write now needs approval; reads and notes do not.
+    assert_eq!(call(&e, &e.agent, "fs.write", json!({ "path": f, "content": "b" }), Approval::None).unwrap_err().code(), "approval_required");
+    assert!(call(&e, &e.agent, "fs.read", json!({ "path": f }), Approval::None).is_ok());
+    assert!(call(&e, &e.agent, "inbox.post", json!({ "subject": "s", "body": "b" }), Approval::None).is_ok());
+    assert_eq!(std::fs::read_to_string(&f).unwrap(), "a");
+    // A person's approval lets that one operation through.
+    call(&e, &e.agent, "fs.write", json!({ "path": f, "content": "b" }), Approval::Granted).unwrap();
+    // Plan approval cannot be waived.
+    assert_eq!(call(&e, &e.human, "team.start", json!({ "goal": "x y z", "project": e.root.join("www/proj").display().to_string(), "auto_approve": true }), Approval::None).unwrap_err().code(), "permission_denied");
+    let health = call(&e, &e.human, "health.status", json!({}), Approval::None).unwrap();
+    assert!(health["checks"].as_array().unwrap().iter().any(|c| c["name"] == "environment"));
+}

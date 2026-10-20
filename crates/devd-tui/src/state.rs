@@ -70,17 +70,23 @@ pub enum View {
     Activity,
     /// The environment check.
     Doctor,
+    /// The agent team's runs.
+    Team,
+    /// What agents are waiting on you for.
+    Inbox,
     /// Key reference.
     Help,
 }
 
 impl View {
     /// Every view, in tab order.
-    pub const ALL: [View; 11] = [
+    pub const ALL: [View; 13] = [
         View::Dashboard,
         View::Projects,
         View::Create,
         View::Toolchain,
+        View::Team,
+        View::Inbox,
         View::Changes,
         View::History,
         View::Branches,
@@ -103,6 +109,8 @@ impl View {
             View::Capabilities => "Capabilities",
             View::Activity => "Activity",
             View::Doctor => "Doctor",
+            View::Team => "Team",
+            View::Inbox => "Inbox",
             View::Help => "Help",
         }
     }
@@ -121,6 +129,8 @@ impl View {
             View::Help => '9',
             View::Create => '0',
             View::Toolchain => '-',
+            View::Team => '=',
+            View::Inbox => '+',
         }
     }
 
@@ -620,6 +630,10 @@ pub struct State {
     pub stacks: Vec<StackRow>,
     /// Tools and services.
     pub tools: Vec<ToolRow>,
+    /// Agent team runs (as `team.list` returns them).
+    pub runs: Vec<Value>,
+    /// Waiting items: approvals and questions, as `{kind, id, title, detail}`.
+    pub inbox: Vec<Value>,
     /// Status line text.
     pub message: String,
     /// Whether the status line is reporting a failure.
@@ -653,6 +667,8 @@ impl Default for State {
             checks: Vec::new(),
             stacks: Vec::new(),
             tools: Vec::new(),
+            runs: Vec::new(),
+            inbox: Vec::new(),
             message: String::new(),
             message_is_error: false,
             overlay: Overlay::None,
@@ -682,6 +698,8 @@ impl State {
             View::Doctor => self.checks.len(),
             View::Create => self.stacks.len(),
             View::Toolchain => self.tools.len(),
+            View::Team => self.runs.len(),
+            View::Inbox => self.inbox.len(),
         }
     }
 

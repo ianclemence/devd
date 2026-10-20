@@ -25,6 +25,15 @@ rules:
 devd creates, imports and runs projects across languages, driven by structured stack definitions with official documentation links:
 `devd new` (guided), `devd project detect|import|tasks|run|exec`, `devd tools list|install|start`, and the same operations in the window (Create, Develop, Toolchain), the terminal dashboard and MCP. See [`docs/stacks-engine.md`](docs/stacks-engine.md) and the generated [compatibility matrix](docs/stacks.md).
 
+## An agent team that works and proves it
+
+Describe what you want built (`devd team start "..." --project .`, or Assistant > Team
+runs in the window). A planner proposes tasks; you approve the plan; specialists work
+in parallel in isolated copies of the project; a task counts only when devd can see
+the files changed and a check that passed. Configure providers and which model does
+which work under **Models**, see what is on your machine under **Server > Services**,
+and read how it all fits together in [docs/agents.md](docs/agents.md).
+
 ## Requirements
 
 - **Windows 10/11 x64** or **Linux x64**.
@@ -419,6 +428,8 @@ For the threat model, the loopback API's defences, and the Git-specific
 protections, see [`docs/security.md`](docs/security.md).
 
 ## Documentation
+
+- [Agents, the team, skills and models](docs/agents.md) and the [product audit](docs/audit.md)
 
 | Document | Contents |
 | --- | --- |

@@ -165,6 +165,25 @@ fn row_task(r: &rusqlite::Row) -> rusqlite::Result<TeamTask> {
 }
 
 impl Store {
+    // ---------------------------------------------------------- environment
+
+    /// `local` (the default) or `production`.
+    pub fn environment_mode(&self) -> String {
+        self.with(|c| Ok(c.query_row("SELECT value FROM kv WHERE key='environment.mode'", [], |r| r.get::<_, String>(0)).optional()?))
+            .ok()
+            .flatten()
+            .filter(|m| m == "production")
+            .unwrap_or_else(|| "local".to_string())
+    }
+
+    /// Switch between `local` and `production`.
+    pub fn set_environment_mode(&self, mode: &str) -> Result<()> {
+        self.with(|c| {
+            c.execute("INSERT INTO kv (key,value) VALUES ('environment.mode',?1) ON CONFLICT(key) DO UPDATE SET value=?1", params![mode])?;
+            Ok(())
+        })
+    }
+
     // ------------------------------------------------------- provider checks
 
     /// Record the outcome of testing a provider.

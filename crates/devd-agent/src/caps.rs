@@ -106,6 +106,12 @@ struct SearchArgs {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct EnvSet {
+    /// `local` or `production`.
+    mode: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct TeamStart {
     /// What to build or change, in plain words.
     goal: String,
@@ -450,6 +456,31 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             Ok(Outcome::with_data(format!("{} result(s)", v["results"].as_array().map(|r| r.len()).unwrap_or(0)), v))
         })?;
 
+    // ---------------------------------------------------------- environment
+    add::<NoArgs, _, _>(reg, "environment.get", "Local or production", "Which environment devd is treating this machine as, and what that changes. In production mode an agent changes nothing without a person's approval, the team cannot skip plan approval, and the status bar says so everywhere.",
+        Tier::Read, Effect::Read, true, false,
+        |_, _| simple("environment.get", "read the environment mode"),
+        |ctx, _| {
+            let mode = ctx.store.environment_mode();
+            Ok(Outcome::with_data(mode.clone(), json!({ "mode": mode, "production_rules": [
+                "Agents need a person's approval for every operation above read, including writing files and running tasks.",
+                "Agent team plans must be approved by a person; approval cannot be waived.",
+                "Destructive, remote and admin operations always need approval, in either mode.",
+                "devd never deploys, opens ports, or changes a production database by itself: those are not capabilities agents have.",
+            ] })))
+        })?;
+    add::<EnvSet, _, _>(reg, "environment.set", "Switch between local and production", "Marks this machine as `production` or `local`. Production adds safeguards for agents; switching either way needs approval and a person.",
+        Tier::Admin, Effect::System, false, true,
+        |_, a| Ok(Plan::new("environment.set", format!("treat this machine as {}", a.mode)).effect(if a.mode == "local" { "agents regain their normal permissions" } else { "agents will need approval for every change" })),
+        |ctx, a| {
+            if !matches!(a.mode.as_str(), "local" | "production") {
+                return Err(DevdError::invalid("mode is `local` or `production`"));
+            }
+            ctx.store.set_environment_mode(&a.mode)?;
+            ctx.events.emit_with("environment.changed", a.mode.clone(), json!({ "mode": a.mode }));
+            Ok(Outcome::ok(format!("this machine is now treated as {}", a.mode)))
+        })?;
+
     // ------------------------------------------------------------- the team
     {
         let t = team.clone();
@@ -461,6 +492,9 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             move |ctx, a| {
                 if a.auto_approve.unwrap_or(false) && ctx.actor.is_agent() {
                     return Err(DevdError::denied("only a person can waive plan approval"));
+                }
+                if a.auto_approve.unwrap_or(false) && ctx.store.environment_mode() == "production" {
+                    return Err(DevdError::denied("plan approval cannot be waived in production mode"));
                 }
                 let run = t.start(ctx, &a.goal, a.project.as_deref(), a.new_project.as_deref(), a.parallel.unwrap_or(2), a.auto_approve.unwrap_or(false))?;
                 Ok(Outcome::with_data("the planner is working; you will be asked to approve the plan", serde_json::to_value(&run)?))

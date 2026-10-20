@@ -20,6 +20,10 @@ pub struct Registry {
     caps: BTreeMap<String, Arc<Capability>>,
 }
 
+/// What an agent may still do on its own in production mode: write notes,
+/// report to its team, and read documentation.
+const PRODUCTION_FREE: &[&str] = &["team.report", "team.plan_submit", "inbox.post", "scratch.", "todo.", "docs.fetch", "search.", "approval.get"];
+
 impl Registry {
     /// An empty registry.
     pub fn new() -> Self {
@@ -192,6 +196,22 @@ impl Registry {
                 "`{}` is not available to agents in this configuration",
                 cap.id
             )));
+        }
+
+        // 2b. In production mode an agent changes nothing without a person's
+        //     approval, however low the capability's tier. Notes, plans and
+        //     reads stay free so the agent can still work out what to ask for.
+        if ctx.actor.is_agent()
+            && !req.dry_run
+            && approval != Approval::Granted
+            && cap.tier != crate::capability::Tier::Read
+            && !PRODUCTION_FREE.iter().any(|p| cap.id == *p || (p.ends_with('.') && cap.id.starts_with(p)))
+            && ctx.store.environment_mode() == "production"
+        {
+            return Err(DevdError::ApprovalRequired {
+                capability: cap.id.clone(),
+                reason: format!("devd is in production mode: `{}` changes things, and an agent needs a person's approval for every change here", cap.id),
+            });
         }
 
         // 3. Sensitive tiers require an approval that a human granted.

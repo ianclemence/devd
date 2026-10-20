@@ -220,3 +220,39 @@ and are recorded so they are not rediscovered:
 | Tauri packaging | `cargo build` produces the portable executable; the NSIS installer script installs both binaries. The build is not code-signed and requires WebView2 (present with current Edge). | Code signing and an MSI/NSIS bundle produced by `cargo tauri build` in CI. |
 | Tauri and `devd ui` at once | Each starts its own backend. Sessions and processes are not shared; each reports the other's resources as unavailable/unsupervised. | A single-instance handshake that hands the window to an existing backend (the token would then need a secure handoff). |
 | Shared-state access control | Project-scoped by canonical path, not by per-user ACL. A local user who can read `state.db` can read every note. | Per-user encryption or an OS credential-store key. |
+
+## Agents, team, search, services (what is not done)
+
+Stated plainly, so nothing is assumed:
+
+* **The team's isolation is git worktrees.** Without git, or before the first
+  commit (devd makes one), writing tasks run one at a time. Dependencies are not
+  shared across worktrees: an implementer installs what it needs in its own copy.
+* **Merges are plain `git merge --no-ff`.** A conflict blocks the task for a person;
+  devd does not resolve conflicts or rebase.
+* **Evidence is read from `project.run` and file capabilities.** Work an agent does
+  by other means (for example a long shell session in Claude Code) is not counted;
+  those sessions are not governed by the team scheduler.
+* **Team tasks use the providers you configured.** Gemini and local runtimes go
+  through their OpenAI-compatible endpoints; there is no native Gemini adapter, and
+  model capabilities beyond what a provider lists (tool support, modalities) are not
+  tracked per model. The official list devd fetches itself is Anthropic's.
+* **The model fallback chain is per role.** There is no cost or privacy policy
+  engine; the only guard is that fallbacks use only providers you listed.
+* **No deployment.** devd prepares and verifies; it has no deploy capability, no
+  rollback, no production secret manager, and does not manage remote hosts.
+  Production mode is a set of safeguards on this machine, not a deployment target.
+* **Service adoption records decisions; it does not migrate or isolate.** `external`
+  points devd at an instance you run; devd does not start a second managed copy on
+  another port, and does not compare a service's version with a project's needs
+  (stacks do not declare service versions). The devd-managed nginx/MariaDB/PHP
+  (`service.*`) and the host-managed catalogue (`toolchain.*`) are still two
+  managers, reconciled in `services.inventory` but not merged.
+* **Search is live, not indexed.** File search is by path (30,000 entries per
+  query), text search is literal and per project, and neither covers logs or remote
+  repositories. Conversation search covers titles.
+* **The terminal dashboard** shows team runs and the inbox but approves plans only;
+  creating a run, steering it (`team.say`) and answering questions are CLI/window
+  actions.
+* **`docs.fetch` checks the address before connecting;** a hostile DNS server could
+  still answer differently between that check and the connection.
