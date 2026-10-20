@@ -17,12 +17,11 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use devd_core::capability::{Capability, Ctx, Effect, Outcome, Plan, Tier};
-use devd_core::doctor::{self, Level};
 use devd_core::{util, DevdError, Provider, Registry, Result};
 
 use crate::chat::{Hub, SendRequest};
 use crate::providers;
-use crate::{fs, secrets};
+use crate::{fs, health, search, secrets};
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct NoArgs {}
@@ -88,6 +87,21 @@ struct SaveProvider {
     /// Enabled (default true).
     #[serde(default)]
     enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct SearchArgs {
+    /// What to look for. Every word must match.
+    query: String,
+    /// Where to look: projects, files, content, conversations, models, tasks, activity. Default: all but content and activity.
+    #[serde(default)]
+    scopes: Option<Vec<String>>,
+    /// Absolute project directory; limits files and is required for content.
+    #[serde(default)]
+    project: Option<String>,
+    /// Results per source (default 20).
+    #[serde(default)]
+    limit: Option<usize>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -296,26 +310,16 @@ fn find_provider(ctx: &Ctx, id: &str) -> Result<Provider> {
 }
 
 /// What a health check means and what to do about it.
-fn explain(name: &str, level: &str, detail: &str) -> (String, Value) {
-    let (text, fix): (String, Value) = match name {
-        "git" => ("Git is needed for every repository feature.".into(), json!({ "label": "Install Git", "capability": "toolchain.install", "args": { "tool": "git" } })),
-        n if n.starts_with("port.") => (
-            "Something else is using a port devd would serve sites on. Sites still work on the ports devd is configured for once the other program stops; nothing is broken in devd itself.".into(),
-            json!({ "label": "See what is using it", "view": "system" }),
-        ),
-        "state" => (format!("devd's database could not be opened or is damaged ({detail}). Nothing is saved until this is fixed. Check free disk space and permissions on the devd directory."), json!({ "label": "Open system details", "view": "system" })),
-        "settings" => ("The settings file is invalid, so defaults are being used. Fix the file named in the detail.".into(), json!({ "label": "Open system details", "view": "system" })),
-        "layout" => ("devd cannot use its data directory. Check that it exists and is writable.".into(), json!({ "label": "Open system details", "view": "system" })),
-        "ai.provider" => ("The assistant and in-app agents need a model provider. Add one and an API key to use them. Nothing else depends on it.".into(), json!({ "label": "Set up a provider", "view": "providers" })),
-        "inbox.approvals" => ("Agents are waiting for you to approve or decline operations. They carry on with other work meanwhile.".into(), json!({ "label": "Review", "view": "inbox" })),
-        "inbox.messages" => ("An agent asked you something and is waiting for the answer.".into(), json!({ "label": "Reply", "view": "inbox" })),
-        _ => (if level == "fail" { "This check failed; see the detail.".into() } else { "For information.".into() }, json!({ "label": "Open system details", "view": "system" })),
-    };
-    (text, fix)
-}
-
 /// Register everything.
 pub fn register(reg: &mut Registry, hub: Arc<Hub>) -> Result<()> {
+    add::<SearchArgs, _, _>(reg, "search.query", "Search projects, files, text, conversations, models, tasks and activity", "Searches what devd can see: project names, file paths (walked live, not indexed), literal text inside a project, conversations, the model catalogue, background tasks and the audit trail. Each response lists which sources were searched, how, and whether the search was cut short, so an empty result is never mistaken for a complete search.",
+        Tier::Read, Effect::Read, true, false,
+        |_, a| simple("search.query", format!("search for `{}`", a.query)),
+        |ctx, a| {
+            let v = search::query(ctx, &a.query, a.scopes.as_deref().unwrap_or(&[]), a.project.as_deref(), a.limit.unwrap_or(20).clamp(1, 100))?;
+            Ok(Outcome::with_data(format!("{} result(s)", v["results"].as_array().map(|r| r.len()).unwrap_or(0)), v))
+        })?;
+
     // ----------------------------------------------------------- providers
     add::<NoArgs, _, _>(reg, "provider.presets", "Provider presets", "Ready-made configurations for Anthropic, OpenAI, Gemini, OpenRouter, Groq, Ollama, LM Studio and any OpenAI-compatible endpoint, with where to get a key, the API documentation and how models are listed.",
         Tier::Read, Effect::Read, true, false,
@@ -399,6 +403,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>) -> Result<()> {
             let p = find_provider(ctx, &a.id)?;
             let key = secrets::read_key(&ctx.paths, &p);
             let r = providers::test(&p, key.as_deref());
+            let _ = ctx.store.set_provider_check(&p.id, r.ok, &r.message, None);
             let mut o = Outcome::with_data(r.message.clone(), serde_json::to_value(&r)?);
             o.ok = r.ok;
             Ok(o)
@@ -410,7 +415,14 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>) -> Result<()> {
         |ctx, a| {
             let p = find_provider(ctx, &a.id)?;
             let key = secrets::read_key(&ctx.paths, &p);
-            let models = providers::list_models(&p, key.as_deref())?;
+            let models = match providers::list_models(&p, key.as_deref()) {
+                Ok(m) => m,
+                Err(e) => {
+                    let _ = ctx.store.set_provider_check(&p.id, false, &e.to_string(), None);
+                    return Err(e);
+                }
+            };
+            let _ = ctx.store.set_provider_check(&p.id, true, &format!("{} model(s) listed", models.len()), Some(models.len() as i64));
             ctx.store.replace_catalogue(&format!("provider:{}", p.id), &models)?;
             Ok(Outcome::with_data(format!("{} model(s) from {}", models.len(), p.label), serde_json::to_value(&models)?))
         })?;
@@ -586,44 +598,12 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>) -> Result<()> {
         |ctx, a| Ok(Outcome::with_data("deleted", fs::delete(ctx, &a.path, a.recursive.unwrap_or(false))?)))?;
 
     // ------------------------------------------------------------ health
-    add::<NoArgs, _, _>(reg, "health.status", "Health summary", "One verdict - ok, attention or problem - with every check, what it means in plain words and the fix to offer: environment checks, whether an AI provider is configured, and what is waiting for a person (approvals, agent questions).",
+    add::<NoArgs, _, _>(reg, "health.status", "Operational health", "Whether devd can be relied on right now. A state (healthy, degraded, starting, setup_incomplete, unknown or critical), a headline, every component with its own state, whether devd needs it, what it means and the fix to offer, plus setup steps and what is waiting for a person. Detection is never reported as health: a service counts as healthy only after it answers.",
         Tier::Read, Effect::Read, true, false,
         |_, _| simple("health.status", "check health"),
         |ctx, _| {
-            let mut checks = doctor::core_checks(&ctx.paths, &ctx.settings);
-            checks.push(devd_git::doctor_check(ctx.settings.git_executable.as_deref()));
-            let providers = ctx.store.list_providers()?;
-            let provider_check = match providers.iter().find(|p| p.is_default && p.enabled).or_else(|| providers.iter().find(|p| p.enabled)) {
-                None => doctor::Check::info("ai.provider", "no AI provider configured"),
-                Some(p) if secrets::read_key(&ctx.paths, p).is_none() && p.kind != "openai-compatible" => doctor::Check::info("ai.provider", format!("{} has no API key", p.label)),
-                Some(p) => doctor::Check::ok("ai.provider", format!("{} ready", p.label)),
-            };
-            checks.push(provider_check);
-            let pending = ctx.store.list_requests(true, None, 200)?.len();
-            if pending > 0 {
-                checks.push(doctor::Check::info("inbox.approvals", format!("{pending} operation(s) waiting for your approval")));
-            }
-            let asks = ctx.store.list_inbox(true, 200)?.iter().filter(|m| m.needs_reply).count();
-            if asks > 0 {
-                checks.push(doctor::Check::info("inbox.messages", format!("{asks} agent question(s) waiting for your reply")));
-            }
-            let failing = checks.iter().filter(|c| c.level == Level::Fail).count();
-            let attention = checks.iter().filter(|c| c.level == Level::Info).count();
-            let level = if failing > 0 { "problem" } else if attention > 0 { "attention" } else { "ok" };
-            let rows: Vec<Value> = checks
-                .iter()
-                .map(|c| {
-                    let lvl = serde_json::to_value(c.level).ok().and_then(|v| v.as_str().map(|s| s.to_string())).unwrap_or_default();
-                    let (meaning, fix) = explain(&c.name, &lvl, &c.detail);
-                    json!({ "name": c.name, "level": lvl, "detail": c.detail, "meaning": meaning, "fix": fix })
-                })
-                .collect();
-            let headline = match level {
-                "ok" => "Everything is working".to_string(),
-                "attention" => format!("{attention} thing(s) need a look"),
-                _ => format!("{failing} problem(s) need fixing"),
-            };
-            Ok(Outcome::with_data(headline.clone(), json!({ "level": level, "headline": headline, "failing": failing, "attention": attention, "checks": rows })))
+            let v = health::status(ctx)?;
+            Ok(Outcome::with_data(v["headline"].as_str().unwrap_or("health").to_string(), v))
         })?;
 
     Ok(())

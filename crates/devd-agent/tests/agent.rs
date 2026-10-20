@@ -351,7 +351,7 @@ fn the_inbox_is_a_two_way_channel_between_agents_and_the_person() {
     assert_eq!(all[0]["reply"], "Postgres");
     assert_eq!(all[0]["from_actor"], "agent:claude-code");
     let health = call(&e, &e.human, "health.status", json!({}), Approval::None).unwrap();
-    assert!(health["checks"].as_array().unwrap().iter().all(|c| c["name"] != "inbox.messages"), "a resolved question no longer needs attention");
+    assert!(health["attention"].as_array().unwrap().iter().all(|c| c["id"] != "questions"), "a resolved question no longer needs attention");
 }
 
 #[test]
@@ -380,13 +380,31 @@ fn mcp_agents_get_their_approvals_queued() {
 fn health_says_what_is_wrong_and_what_to_do() {
     let e = env();
     let h = call(&e, &e.human, "health.status", json!({}), Approval::None).unwrap();
-    assert_eq!(h["level"], "attention", "{h}");
+    // No provider is an optional, unfinished setup step: not a failure, and not "healthy" either.
+    assert_ne!(h["state"], "critical", "{h}");
     let provider = h["checks"].as_array().unwrap().iter().find(|c| c["name"] == "ai.provider").unwrap().clone();
+    assert_eq!(provider["state"], "setup_incomplete");
+    assert_eq!(provider["required"], false);
     assert_eq!(provider["fix"]["view"], "providers");
-    assert!(provider["meaning"].as_str().unwrap().contains("provider"));
+    assert!(h["setup"].as_array().unwrap().iter().any(|x| x["id"] == "ai.provider"));
     for c in h["checks"].as_array().unwrap() {
-        assert!(c["meaning"].as_str().is_some() && c["fix"].is_object(), "every check explains itself: {c}");
+        assert!(c["meaning"].as_str().is_some() && c["fix"].is_object() && c["state"].is_string(), "every check explains itself: {c}");
     }
+}
+
+#[test]
+fn a_failed_provider_test_is_reported_as_unavailable_not_healthy() {
+    let e = env();
+    let m = mock(|_, _| (401, r#"{"error":{"message":"invalid x-api-key"}}"#.into()));
+    call(&e, &e.human, "provider.save", json!({ "id": "anthropic", "preset": "anthropic", "base_url": m.base, "api_key": "sk-test-1234", "default_model": "claude-x", "make_default": true }), Approval::None).unwrap();
+    let before = call(&e, &e.human, "health.status", json!({}), Approval::None).unwrap();
+    let p = before["checks"].as_array().unwrap().iter().find(|c| c["name"] == "ai.provider").unwrap().clone();
+    assert_eq!(p["state"], "unknown", "a key that was never tested is not proven: {p}");
+    let _ = call(&e, &e.human, "provider.test", json!({ "id": "anthropic" }), Approval::None);
+    let after = call(&e, &e.human, "health.status", json!({}), Approval::None).unwrap();
+    let p = after["checks"].as_array().unwrap().iter().find(|c| c["name"] == "ai.provider").unwrap().clone();
+    assert_eq!(p["state"], "unavailable", "{p}");
+    assert!(!after.to_string().contains("sk-test-1234"));
 }
 
 /// Reads the real documentation page. Run with `cargo test -p devd-agent -- --ignored`.

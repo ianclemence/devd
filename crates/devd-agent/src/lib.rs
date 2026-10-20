@@ -29,7 +29,9 @@
 pub mod caps;
 pub mod chat;
 pub mod fs;
+pub mod health;
 pub mod providers;
+pub mod search;
 pub mod secrets;
 
 pub use chat::Hub;

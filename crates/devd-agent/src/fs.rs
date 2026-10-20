@@ -25,7 +25,7 @@ use devd_stacks::authz;
 
 const MAX_READ_BYTES: u64 = 2_000_000;
 const MAX_WRITE_BYTES: usize = 2_000_000;
-const SKIP_DIRS: &[&str] = &[".git", "node_modules", "target", "vendor", ".venv", "venv", "__pycache__", ".next", ".nuxt", "dist", "build", ".gradle", ".idea"];
+pub(crate) const SKIP_DIRS: &[&str] = &[".git", "node_modules", "target", "vendor", ".venv", "venv", "__pycache__", ".next", ".nuxt", "dist", "build", ".gradle", ".idea"];
 
 /// Whether a file name conventionally holds secrets.
 pub fn is_secret_file(path: &Path) -> bool {
