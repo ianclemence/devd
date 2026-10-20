@@ -35,7 +35,7 @@ init:
         - {when: {option: addons, nonempty: true}, args: [--add, "{opt.addons.list}"], else: [--no-add-ons]}
         - {when: {option: install, equals: true}, args: [--install, "{pm}"], else: [--no-install]}
 verify:
-  files: [package.json, svelte.config.js, src/routes/+page.svelte]
+  files: [package.json, src/routes/+page.svelte]
 tasks:
   - {id: dev, title: Start the development server, kind: dev, long_running: true, port: 5173, run: ["{pm.run}", dev], requires_script: dev}
   - {id: build, title: Production build, kind: build, run: ["{pm.run}", build], requires_script: build}

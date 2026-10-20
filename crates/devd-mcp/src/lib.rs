@@ -69,7 +69,11 @@ you know the tier and the exact argument shape. Read-tier capabilities run \
 directly. An operation that needs human approval is refused here and recorded; \
 a human approves it in the devd application or the CLI, never an agent. Use \
 devd_invoke with dry_run true to see what an operation would do without doing \
-it. Git capabilities operate on a repository the user has added to devd with \
+it. To work on any project, call project.detect first: it reports the stack, \
+package manager, required runtimes, the tasks you can run (project.run), \
+services and missing tools (toolchain.install asks a human to approve). Verify \
+changes by running the project's own test/build tasks and report their real \
+output. Git capabilities operate on a repository the user has added to devd with \
 git.repo.track, or on any absolute path supplied in the `repo` argument.";
 
 /// A function producing environment checks that only some callers can perform.

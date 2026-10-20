@@ -519,6 +519,8 @@
         label: "Workspace",
         items: [
           { view: "projects", label: "Projects", count: state.projects.length || null },
+          { view: "create", label: "Create" },
+          { view: "develop", label: "Develop" },
           { view: "agents", label: "Agents", count: state.sessions.filter(function (s) { return s.live_state === "running"; }).length || null },
           { view: "processes", label: "Processes" },
           { view: "shared", label: "Shared" },
@@ -547,6 +549,7 @@
             count: server.services.length ? running + "/" + server.services.length : null
           },
           { view: "runtimes", label: "Runtimes", count: server.runtimes.length || null },
+          { view: "toolchain", label: "Toolchain" },
           { view: "certificates", label: "Certificates" },
           { view: "hosts", label: "Hosts" }
         ]
@@ -597,6 +600,9 @@
       certificates: "Certificates",
       hosts: "Hosts",
       projects: "Projects",
+      create: "Create a project",
+      develop: "Develop",
+      toolchain: "Toolchain",
       capabilities: "Capabilities",
       activity: "Activity",
       system: "System"
@@ -1448,18 +1454,18 @@
       cursorBlink: true,
       scrollback: 5000,
       theme: {
-        background: "#0a0a0b",
-        foreground: "#e7e5e4",
-        cursor: "#e07856",
-        selectionBackground: "#3a2a22",
-        black: "#1c1917",
-        red: "#f0a58c",
-        green: "#9ac9a0",
-        yellow: "#e6c07b",
-        blue: "#8ab4d8",
-        magenta: "#c9a3d8",
-        cyan: "#8fc7c7",
-        white: "#e7e5e4"
+        background: "#060914",
+        foreground: "#e8ecff",
+        cursor: "#22d3ee",
+        selectionBackground: "#243a7a",
+        black: "#111733",
+        red: "#fb7185",
+        green: "#34d399",
+        yellow: "#fbbf24",
+        blue: "#6b95ff",
+        magenta: "#a78bfa",
+        cyan: "#22d3ee",
+        white: "#e8ecff"
       }
     });
     var fit = new window.FitAddon.FitAddon();
@@ -3076,6 +3082,311 @@
     return Promise.all([loadDoctor(), loadSession()]);
   }
 
+
+  // ------------------------------------------------------------ stacks: create
+
+  var CREATE = {
+    stacks: null, id: null, def: null, form: {}, advanced: false,
+    plan: null, planError: null, timer: null, seq: 0,
+    running: false, runId: null, log: [], logTimer: null, report: null,
+    importPath: "", importCtx: null
+  };
+
+  function loadCreate() {
+    if (CREATE.stacks) return Promise.resolve();
+    return read("stacks.list").then(function (d) { CREATE.stacks = d || []; }).catch(function (e) {
+      CREATE.stacks = [];
+      toast("error", e.message);
+    });
+  }
+
+  function pickStack(id) {
+    return read("stacks.describe", { stack: id }).then(function (d) {
+      CREATE.id = id;
+      CREATE.def = d.stack;
+      CREATE.report = null;
+      CREATE.log = [];
+      var f = { name: "", destination: "", version: d.stack.versions.filter(function (v) { return v.default; })[0].id,
+        package_manager: (d.stack.package_managers || [])[0] || "", git: true, install: true, extra: "", options: {} };
+      (d.stack.options || []).forEach(function (o) { f.options[o.id] = o.default; });
+      CREATE.form = f;
+      scheduleValidate();
+      renderCreate();
+    }).catch(function (e) { toast("error", e.message); });
+  }
+
+  function createRequest() {
+    var f = CREATE.form;
+    var req = { stack: CREATE.id, name: f.name, version: f.version, git: f.git, install: f.install, options: f.options };
+    if (f.package_manager) req.package_manager = f.package_manager;
+    if (f.destination) req.destination = f.destination;
+    var extra = f.extra.trim() ? f.extra.trim().split(/\s+/) : [];
+    if (extra.length) req.extra_args = extra;
+    return req;
+  }
+
+  function scheduleValidate() {
+    clearTimeout(CREATE.timer);
+    var seq = ++CREATE.seq;
+    CREATE.timer = setTimeout(function () {
+      if (!CREATE.id) return;
+      read("stacks.validate", createRequest()).then(function (p) {
+        if (seq !== CREATE.seq) return;
+        CREATE.plan = p; CREATE.planError = null; paintReview();
+      }).catch(function (e) {
+        if (seq !== CREATE.seq) return;
+        CREATE.plan = null; CREATE.planError = e.message; paintReview();
+      });
+    }, 350);
+  }
+
+  function pill(kind, text) { return '<span class="pill pill-' + kind + '">' + esc(text) + "</span>"; }
+
+  function docLinks(docs) {
+    return (docs || []).map(function (d) {
+      return '<a class="link" href="' + attr(d.url) + '" target="_blank" rel="noopener noreferrer">' + esc(d.title) + "</a>";
+    }).join(" · ");
+  }
+
+  function renderCreate() {
+    if (!CREATE.stacks) return renderLoading();
+    if (!CREATE.id) {
+      var cats = {};
+      CREATE.stacks.filter(function (s) { return s.creatable; }).forEach(function (s) {
+        (cats[s.category] = cats[s.category] || []).push(s);
+      });
+      var order = ["web", "backend", "frontend", "mobile", "language"];
+      var html = order.filter(function (c) { return cats[c]; }).map(function (c) {
+        return '<div class="panel"><div class="panel-head"><span>' + esc(c) + "</span></div>" +
+          '<div class="panel-body flush"><table class="table"><tbody>' +
+          cats[c].map(function (s) {
+            return '<tr><td class="cell-strong">' + esc(s.name) + '</td><td class="dim">' + esc(s.language) + "</td>" +
+              "<td>" + esc(s.summary) + '</td><td class="nowrap">' + docLinks(s.docs.slice(0, 1)) + "</td>" +
+              '<td><button type="button" class="btn btn-primary btn-mini" data-action="create-pick" data-id="' + attr(s.id) + '">Create</button></td></tr>';
+          }).join("") + "</tbody></table></div></div>";
+      }).join("");
+      el("main").innerHTML = page("Create a project",
+        "Pick a stack. devd runs the framework's official scaffolder with the options you choose - the same engine the terminal, the dashboard and agents use.",
+        '<button type="button" class="btn" data-action="nav" data-view="develop">Import an existing project</button>', html);
+      return;
+    }
+    var d = CREATE.def, f = CREATE.form;
+    var fld = function (label, help, control) {
+      return '<div class="field"><label class="field-label">' + esc(label) + "</label>" + control +
+        (help ? '<div class="row-sub">' + esc(help) + "</div>" : "") + "</div>";
+    };
+    var sel = function (key, items, value, isOpt) {
+      return '<select class="input" data-create="' + attr(key) + '"' + (isOpt ? ' data-opt="1"' : "") + ">" +
+        items.map(function (i) { return '<option value="' + attr(i.value) + '"' + (i.value === value ? " selected" : "") + ">" + esc(i.label) + "</option>"; }).join("") + "</select>";
+    };
+    var fields = [];
+    fields.push(fld("Project name", d.name_hint, '<input class="input mono" data-create="name" value="' + attr(f.name) + '" placeholder="my-app" spellcheck="false">'));
+    fields.push(fld("Create in", "Leave blank for the projects root.", '<input class="input mono" data-create="destination" value="' + attr(f.destination) + '" placeholder="projects root" spellcheck="false">'));
+    if (d.versions.length > 1) fields.push(fld("Version", "", sel("version", d.versions.map(function (v) { return { value: v.id, label: v.label + (v.default ? " (default)" : "") }; }), f.version)));
+    if ((d.package_managers || []).length > 1) fields.push(fld("Package manager", "", sel("package_manager", d.package_managers.map(function (p) { return { value: p, label: p }; }), f.package_manager)));
+    (d.options || []).forEach(function (o) {
+      if (o.advanced && !CREATE.advanced) return;
+      var v = f.options[o.id], ctl = "";
+      var flag = o.flag ? " (" + o.flag + ")" : "";
+      if (o.kind === "bool") ctl = '<label class="check"><input type="checkbox" data-create="' + attr(o.id) + '" data-opt="1"' + (v ? " checked" : "") + "> Enabled</label>";
+      else if (o.kind === "select") ctl = sel(o.id, o.choices.map(function (c) { return { value: c.value, label: c.label }; }), v, true);
+      else if (o.kind === "multi") ctl = o.choices.map(function (c) {
+        return '<label class="check"><input type="checkbox" data-create="' + attr(o.id) + '" data-multi="' + attr(c.value) + '" data-opt="1"' + ((v || []).indexOf(c.value) >= 0 ? " checked" : "") + "> " + esc(c.label) + "</label>";
+      }).join(" ");
+      else ctl = '<input class="input mono" data-create="' + attr(o.id) + '" data-opt="1" value="' + attr(v) + '" spellcheck="false">';
+      fields.push(fld(o.label + flag, o.help, ctl));
+    });
+    fields.push(fld("Git", "", '<label class="check"><input type="checkbox" data-create="git"' + (f.git ? " checked" : "") + "> Initialise a repository</label>"));
+    if (d.init.install_toggle) fields.push(fld("Dependencies", "", '<label class="check"><input type="checkbox" data-create="install"' + (f.install ? " checked" : "") + "> Install now</label>"));
+    var hasAdv = (d.options || []).some(function (o) { return o.advanced; });
+    var adv = '<div class="field"><label class="check"><input type="checkbox" data-create="__advanced"' + (CREATE.advanced ? " checked" : "") + "> Show advanced options</label></div>";
+    if (CREATE.advanced) fields.push(fld("Extra arguments", "Appended exactly as typed to the scaffolding command shown in the review.", '<input class="input mono" data-create="extra" value="' + attr(f.extra) + '" placeholder="--flag value" spellcheck="false">'));
+
+    var form = '<div class="panel"><div class="panel-head"><span>' + esc(d.name) + '</span><span class="panel-note">' + docLinks(d.docs) + "</span></div>" +
+      '<div class="panel-body">' + '<div class="row-sub" style="margin-bottom:12px">' + esc(d.summary) + "</div>" + fields.join("") + (hasAdv || true ? adv : "") + "</div></div>";
+    var review = '<div class="panel" id="create-review"></div>';
+    var progress = '<div id="create-progress"></div>';
+    el("main").innerHTML = page("Create " + d.name + " project", d.description || d.summary,
+      '<button type="button" class="btn" data-action="create-back">Back to stacks</button>',
+      '<div class="two-col"><div>' + form + "</div><div>" + review + progress + "</div></div>");
+    paintReview();
+    paintProgress();
+  }
+
+  function paintReview() {
+    var box = el("create-review");
+    if (!box) return;
+    if (CREATE.planError) { box.innerHTML = '<div class="panel-head"><span>Review</span></div><div class="panel-body notice notice-bad">' + esc(CREATE.planError) + "</div>"; return; }
+    var p = CREATE.plan;
+    if (!p) { box.innerHTML = '<div class="panel-head"><span>Review</span></div><div class="panel-body dim">Checking…</div>'; return; }
+    var h = '<div class="panel-head"><span>Review</span><span class="panel-note">' + (p.valid ? (p.ready ? pill("ok", "ready") : pill("warn", "prerequisites missing")) : pill("bad", "needs attention")) + "</span></div><div class=\"panel-body\">";
+    (p.issues || []).forEach(function (i) { h += '<div class="notice notice-bad"><b>' + esc(i.field) + "</b>: " + esc(i.message) + "</div>"; });
+    if (p.valid) {
+      h += '<div class="kv"><dt>Directory</dt><dd class="mono">' + esc(p.project_dir) + "</dd></div>";
+      h += '<div class="field-label" style="margin-top:12px">Command devd will run</div><pre class="log-block">' + esc(p.command) + "</pre>";
+      if ((p.steps || []).length > 1) h += '<div class="row-sub">' + p.steps.map(function (s) { return esc(s.title); }).join(" → ") + "</div>";
+    }
+    h += '<div class="field-label" style="margin-top:12px">Prerequisites</div>';
+    (p.prerequisites || []).forEach(function (q) {
+      var ok = q.status === "ok" || q.status === "unknown_version";
+      h += '<div class="inline" style="margin:4px 0">' + pill(ok ? "ok" : "bad", ok ? "ok" : q.status.replace("_", " ")) + "<span>" + esc(q.name) + " " + esc(q.found || "") + (q.min ? ' <span class="dim">needs ≥ ' + esc(q.min) + "</span>" : "") + "</span>" +
+        (!ok && q.status === "missing" ? '<button type="button" class="btn btn-mini" data-action="tool-install" data-id="' + attr(q.tool) + '">Install</button>' : "") + "</div>" +
+        (!ok && q.fix ? '<div class="row-sub">' + esc(q.fix) + "</div>" : "");
+    });
+    (p.services || []).forEach(function (sv) { h += '<div class="row-sub">Needs ' + esc(sv.tool) + " (" + esc(sv.why) + "): " + (sv.running ? "running" : sv.installed ? "installed, not running" : "not installed") + "</div>"; });
+    (p.warnings || []).forEach(function (w) { h += '<div class="notice notice-warn">' + esc(w) + "</div>"; });
+    h += '<div class="inline" style="margin-top:14px"><button type="button" class="btn btn-go" data-action="create-run"' + (p.valid && p.ready && !CREATE.running ? "" : " disabled") + ">Create project</button></div>";
+    h += "</div>";
+    box.innerHTML = h;
+  }
+
+  function paintProgress() {
+    var box = el("create-progress");
+    if (!box) return;
+    var h = "";
+    if (CREATE.running || CREATE.log.length) {
+      h += '<div class="panel"><div class="panel-head"><span>Progress</span><span class="panel-note">' +
+        (CREATE.running ? '<button type="button" class="btn btn-mini btn-danger" data-action="create-cancel">Cancel</button>' : "") + "</span></div>" +
+        '<div class="panel-body"><pre class="log-block">' + esc(CREATE.log.slice(-60).join("\n")) + "</pre></div></div>";
+    }
+    var r = CREATE.report;
+    if (r) {
+      var kind = r.status === "ok" ? "ok" : r.status === "partial" ? "warn" : "bad";
+      h += '<div class="panel"><div class="panel-head"><span>Result</span><span class="panel-note">' + pill(kind, r.status) + "</span></div><div class=\"panel-body\">";
+      if (r.error) h += '<div class="notice notice-' + (r.status === "partial" ? "warn" : "bad") + '">' + esc(r.error) + "</div>";
+      (r.steps || []).forEach(function (st) { h += '<div class="inline">' + pill(st.status === "ok" || st.status === "skipped" ? "ok" : st.status === "warning" ? "warn" : "bad", st.status) + "<span>" + esc(st.title) + "</span></div>" + (st.status === "failed" ? '<pre class="log-block">' + esc(st.detail) + "</pre>" : ""); });
+      (r.checks || []).forEach(function (c) { h += '<div class="inline">' + pill(c.status === "ok" ? "ok" : c.status === "skipped" ? "" : "bad", c.status) + "<span>" + esc(c.title) + "</span></div>"; });
+      (r.next || []).forEach(function (n) { h += '<div class="row-sub">' + esc(n) + "</div>"; });
+      if (r.status === "ok" || r.status === "partial") h += '<div class="inline" style="margin-top:12px"><button type="button" class="btn btn-primary" data-action="open-develop" data-path="' + attr(r.project_dir) + '">Open in Develop</button></div>';
+      h += "</div></div>";
+    }
+    box.innerHTML = h;
+  }
+
+  function pollCreateLog() {
+    clearInterval(CREATE.logTimer);
+    CREATE.logTimer = setInterval(function () {
+      if (!CREATE.running) return clearInterval(CREATE.logTimer);
+      read("stacks.log", { run_id: CREATE.runId, lines: 80 }).then(function (d) { CREATE.log = d.lines || []; paintProgress(); }).catch(function () {});
+    }, 800);
+  }
+
+  // ------------------------------------------------------------ stacks: develop
+
+  var DEV = { projects: null, path: null, ctx: null, busy: false, procs: [], log: null, importPath: "", detect: null, error: null };
+
+  function loadDevelop() {
+    return Promise.all([read("project.list").catch(function () { return []; }), read("task.list").catch(function () { return []; })]).then(function (r) {
+      DEV.projects = r[0] || []; DEV.procs = r[1] || [];
+    }).then(function () { return DEV.path && !DEV.ctx ? openProject(DEV.path, true) : null; });
+  }
+
+  function openProject(path, quiet) {
+    DEV.path = path; DEV.busy = true; DEV.error = null;
+    return read("project.detect", { path: path }).then(function (c) { DEV.ctx = c; DEV.busy = false; if (!quiet) renderDevelop(); })
+      .catch(function (e) { DEV.busy = false; DEV.ctx = null; DEV.error = e.message; if (!quiet) renderDevelop(); });
+  }
+
+  function renderDevelop() {
+    if (!DEV.projects) return renderLoading();
+    var list = DEV.projects.map(function (p) {
+      return '<button type="button" class="svc ' + (DEV.path === p.path ? "active" : "") + '" data-action="dev-open" data-path="' + attr(p.path) + '" style="width:100%;text-align:left">' +
+        '<div class="svc-main"><div class="svc-name">' + esc(p.name) + '</div><div class="svc-sub mono nowrap">' + esc(p.stack || "unknown stack") + " · " + esc(p.path) + "</div></div></button>";
+    }).join("") || '<div class="panel-body empty-inline">No projects yet. Create one or import a checkout.</div>';
+    var imp = '<div class="panel"><div class="panel-head"><span>Import an existing project</span></div><div class="panel-body">' +
+      '<div class="inline"><input class="input mono grow" id="dev-import" placeholder="/path/to/checkout" value="' + attr(DEV.importPath) + '" spellcheck="false">' +
+      '<button type="button" class="btn" data-action="dev-detect">Detect</button><button type="button" class="btn btn-primary" data-action="dev-import">Import</button></div>' +
+      '<div class="row-sub">Nothing is changed in the project. Clone a repository first with <span class="mono">git clone</span> or the Projects view.</div></div></div>';
+    el("main").innerHTML = page("Develop", "Detect any project's stack, run its tasks, and make it available to agents.", "",
+      '<div class="two-col"><div><div class="panel"><div class="panel-head"><span>Projects</span><span class="panel-note">' + DEV.projects.length + "</span></div>" + list + "</div>" + imp + procPanel() + "</div><div>" + devDetail() + "</div></div>");
+  }
+
+  function procPanel() {
+    if (!DEV.procs.length) return "";
+    return '<div class="panel"><div class="panel-head"><span>Running tasks</span></div>' + DEV.procs.map(function (p) {
+      return '<div class="svc"><div class="svc-main"><div class="svc-name">' + dot(p.running) + " " + esc(p.name) + '</div><div class="svc-sub mono">pid ' + esc(p.pid) + (p.running ? "" : " · exited " + esc(p.exit_code)) + "</div></div>" +
+        '<div class="svc-actions"><button type="button" class="btn btn-mini" data-action="proc-log" data-name="' + attr(p.name) + '">Log</button>' +
+        '<button type="button" class="btn btn-mini btn-danger" data-action="proc-stop" data-name="' + attr(p.name) + '">Stop</button></div></div>';
+    }).join("") + "</div>";
+  }
+
+  function devDetail() {
+    if (DEV.busy) return '<div class="panel"><div class="panel-body dim">Inspecting…</div></div>';
+    if (DEV.error) return '<div class="panel"><div class="panel-body notice notice-bad">' + esc(DEV.error) + "</div></div>";
+    var c = DEV.detect || DEV.ctx;
+    if (!c) return '<div class="panel"><div class="panel-body empty-inline">Select a project.</div></div>';
+    var h = '<div class="panel"><div class="panel-head"><span>' + esc(c.name) + '</span><span class="panel-note mono">' + esc(c.path) + "</span></div><div class=\"panel-body\">";
+    if (c.ambiguous) h += '<div class="notice notice-warn">' + esc(c.ambiguity) + "</div>";
+    h += '<div class="kv"><dt>Stack</dt><dd>' + (c.stacks.length ? c.stacks.map(function (s, i) { return (i === 0 ? "<b>" : "") + esc(s.name) + " " + pill(s.confidence === "high" ? "ok" : "warn", s.confidence) + (i === 0 ? "</b>" : ""); }).join(" · ") : "unknown") + "</dd></div>";
+    if (c.stacks.length) h += '<div class="row-sub">' + esc(c.stacks[0].evidence.join("; ")) + "</div>";
+    h += '<div class="kv"><dt>Package manager</dt><dd>' + esc(c.package_manager || "-") + ' <span class="dim">' + esc(c.package_manager_evidence || "") + "</span></dd></div>";
+    (c.runtimes || []).forEach(function (r) { h += '<div class="kv"><dt>' + esc(r.tool) + '</dt><dd>wants ' + esc(r.constraint) + ' <span class="dim">(' + esc(r.source) + ")</span> - installed " + esc(r.installed || "none") + " " + (r.satisfied === true ? pill("ok", "satisfied") : r.satisfied === false ? pill("bad", "not satisfied") : "") + "</dd></div>"; });
+    (c.missing || []).forEach(function (m) { h += '<div class="notice notice-warn"><b>' + esc(m.tool) + "</b>: " + esc(m.why) + ' <button type="button" class="btn btn-mini" data-action="tool-install" data-id="' + attr(m.tool) + '">Install</button></div>'; });
+    (c.services || []).forEach(function (sv) { h += '<div class="kv"><dt>Service</dt><dd>' + esc(sv.tool) + " " + (sv.running ? pill("ok", "running") : sv.installed ? pill("warn", "stopped") : pill("bad", "missing")) + ' <span class="dim">' + esc(sv.why) + "</span></dd></div>"; });
+    if (c.env && c.env.keys.length) h += '<div class="kv"><dt>Environment</dt><dd>' + c.env.keys.length + " variables in " + esc(c.env.example_files.join(", ")) + (c.env.unset_keys.length ? "; unset: " + esc(c.env.unset_keys.join(", ")) : "") + ' <span class="dim">(values are never shown)</span></dd></div>';
+    if (c.docs.length) h += '<div class="kv"><dt>Docs</dt><dd class="mono">' + esc(c.docs.join(", ")) + "</dd></div>";
+    if (c.official_docs.length) h += '<div class="kv"><dt>Official docs</dt><dd>' + docLinks(c.official_docs) + "</dd></div>";
+    h += "</div></div>";
+    h += '<div class="panel"><div class="panel-head"><span>Tasks</span><span class="panel-note">' + c.tasks.length + "</span></div><div class=\"panel-body flush\"><table class=\"table\"><tbody>" +
+      c.tasks.map(function (t) {
+        return "<tr><td class=\"cell-strong\">" + esc(t.id) + '</td><td class="cell-mono">' + esc(t.command) + "</td><td>" + pill(t.risk === "safe" ? "ok" : t.risk === "mutating" ? "warn" : "bad", t.risk) + "</td><td>" +
+          (t.available ? '<button type="button" class="btn btn-mini' + (t.risk === "destructive" ? " btn-danger" : " btn-primary") + '" data-action="task-run" data-task="' + attr(t.id) + '" data-risk="' + attr(t.risk) + '">' + (t.long_running ? "Start" : "Run") + "</button>" : '<span class="dim" title="' + attr(t.unavailable_reason) + '">unavailable</span>') + "</td></tr>";
+      }).join("") + "</tbody></table></div></div>";
+    if (DEV.log) h += '<div class="panel"><div class="panel-head"><span>Output</span></div><div class="panel-body"><pre class="log-block">' + esc(DEV.log) + "</pre></div></div>";
+    return h;
+  }
+
+  // -------------------------------------------------------------- toolchain
+
+  var TC = { data: null, devices: null };
+
+  function loadToolchain() {
+    return read("toolchain.list").then(function (d) { TC.data = d; });
+  }
+
+  function renderToolchain() {
+    if (!TC.data) return renderLoading();
+    var host = TC.data.host, tools = TC.data.tools;
+    var cats = {};
+    tools.forEach(function (t) { (cats[t.tool.category] = cats[t.tool.category] || []).push(t); });
+    var notes = [];
+    if (!host.root && !host.sudo && host.os === "linux") notes.push("devd has neither root nor passwordless sudo, so package installs show the exact command to run yourself.");
+    if (!host.managers.length) notes.push("No supported package manager was found; installs will show manual steps.");
+    var html = '<div class="panel"><div class="panel-body"><div class="kv"><dt>Machine</dt><dd>' + esc(host.os) + " " + esc(host.arch) + " · package managers: " + esc(host.managers.join(", ") || "none") + " · " + (host.root ? "running as root" : host.sudo ? "passwordless sudo available" : "unprivileged") + "</dd></div>" +
+      notes.map(function (n) { return '<div class="notice notice-warn">' + esc(n) + "</div>"; }).join("") + "</div></div>";
+    Object.keys(cats).forEach(function (c) {
+      html += '<div class="panel"><div class="panel-head"><span>' + esc(c) + "</span></div>" + cats[c].map(function (t) {
+        var st = t.status, sv = t.service, id = t.tool.id;
+        var state = st.installed ? (st.outdated ? pill("warn", "outdated") : pill("ok", "installed")) : (t.tool.per_project ? pill("", "per project") : pill("bad", "missing"));
+        var acts = "";
+        if (!t.tool.per_project) acts += '<button type="button" class="btn btn-mini" data-action="tool-plan" data-id="' + attr(id) + '" data-act="' + (st.installed ? "remove" : "install") + '">Plan</button>';
+        if (!st.installed && !t.tool.per_project) acts += '<button type="button" class="btn btn-mini btn-primary" data-action="tool-install" data-id="' + attr(id) + '">Install</button>';
+        if (st.installed && !t.tool.per_project) acts += '<button type="button" class="btn btn-mini btn-danger" data-action="tool-remove" data-id="' + attr(id) + '">Remove</button>';
+        var svc = "";
+        if (sv && st.installed) {
+          svc = '<div class="row-sub">' + dot(sv.healthy, sv.listening) + " " + esc(sv.detail) + (sv.port_conflict ? " - port held by " + esc(sv.port_conflict) : "") + "</div>";
+          acts += sv.healthy ? '<button type="button" class="btn btn-mini" data-action="svc" data-act="stop" data-id="' + attr(id) + '">Stop</button><button type="button" class="btn btn-mini" data-action="svc" data-act="restart" data-id="' + attr(id) + '">Restart</button>' : '<button type="button" class="btn btn-mini btn-go" data-action="svc" data-act="start" data-id="' + attr(id) + '">Start</button>';
+          acts += '<button type="button" class="btn btn-mini" data-action="svc-logs" data-id="' + attr(id) + '">Logs</button>';
+        }
+        if (id === "adb" && st.installed) acts += '<button type="button" class="btn btn-mini" data-action="devices">Devices</button>';
+        return '<div class="svc"><div class="svc-main"><div class="svc-name">' + esc(t.tool.name) + " " + state + ' <span class="dim mono">' + esc(st.version || "") + '</span></div><div class="svc-sub">' + esc(t.tool.purpose) + "</div>" + svc +
+          (!st.installed && st.problem && !t.tool.per_project ? '<div class="row-sub">' + esc(st.problem) + "</div>" : "") + '</div><div class="svc-actions">' + acts + "</div></div>";
+      }).join("") + "</div>";
+    });
+    el("main").innerHTML = page("Toolchain", "Languages, package managers, databases and mobile tooling on this machine. Installs show their commands and source first and need your approval.", '<button type="button" class="btn" data-action="refresh">Re-check</button>', html);
+  }
+
+  function showPlanDrawer(p, title) {
+    var h = '<div class="kv"><dt>Manager</dt><dd>' + esc(p.manager || "none") + (p.privileged ? " (needs administrator rights)" : "") + "</dd></div>";
+    h += '<div class="field-label">Commands</div><pre class="log-block">' + esc((p.display || []).join("\n") || "(none)") + "</pre>";
+    (p.blockers || []).forEach(function (b) { h += '<div class="notice notice-warn">' + esc(b) + "</div>"; });
+    if (p.manual) h += '<div class="notice">' + esc(p.manual) + "</div>";
+    h += '<div class="kv"><dt>Source</dt><dd>' + esc(p.trust) + "</dd></div>";
+    if (p.upgrade) h += '<div class="kv"><dt>Upgrades</dt><dd>' + esc(p.upgrade) + "</dd></div>";
+    if (p.data_note) h += '<div class="notice">' + esc(p.data_note) + "</div>";
+    openDrawer(title, h);
+  }
+
   // ------------------------------------------------------------------- refresh
 
   function refresh() {
@@ -3088,6 +3399,9 @@
         .then(function () { return loadTab(state.tab); })
         .then(render);
     }
+    if (state.view === "create") return loadCreate().then(render);
+    if (state.view === "develop") return loadDevelop().then(render);
+    if (state.view === "toolchain") return loadToolchain().then(render);
     if (state.view === "agents") return loadAgents().then(render);
     if (state.view === "processes") return loadProcesses().then(render);
     if (state.view === "shared") return loadShared().then(render);
@@ -3122,7 +3436,10 @@
       else if (state.view === "runtimes") renderRuntimes();
       else if (state.view === "certificates") renderCertificates();
       else if (state.view === "hosts") renderHosts();
-    } else if (state.view === "agents") renderAgents();
+    } else if (state.view === "create") renderCreate();
+    else if (state.view === "develop") renderDevelop();
+    else if (state.view === "toolchain") renderToolchain();
+    else if (state.view === "agents") renderAgents();
     else if (state.view === "processes") renderProcesses();
     else if (state.view === "shared") renderShared();
     else if (state.view === "projects") renderProjects();
@@ -3150,6 +3467,49 @@
 
   var ACTIONS = {
     nav: function (node) { navigate(node.dataset.view); },
+    "create-pick": function (n) { pickStack(n.dataset.id); },
+    "create-back": function () { CREATE.id = null; CREATE.def = null; CREATE.plan = null; renderCreate(); },
+    "create-run": function () {
+      if (CREATE.running) return;
+      CREATE.running = true; CREATE.report = null; CREATE.log = ["starting…"]; CREATE.runId = "ui-" + Date.now().toString(36);
+      var req = createRequest(); req.run_id = CREATE.runId;
+      paintReview(); paintProgress(); pollCreateLog();
+      request("/api/invoke", { method: "POST", body: JSON.stringify({ id: "project.init", args: req, dry_run: false }) }).then(function (res) {
+        CREATE.running = false;
+        if (!res.ok) { CREATE.report = { status: "failed", error: errorOf(res.body, "project.init failed"), steps: [], checks: [], next: [] }; }
+        else { CREATE.report = res.body.outcome.data; }
+        return read("stacks.log", { run_id: CREATE.runId, lines: 80 }).then(function (d) { CREATE.log = d.lines || CREATE.log; }).catch(function () {});
+      }).then(function () { toast(CREATE.report.status === "ok" ? "ok" : "error", "project.init: " + CREATE.report.status); paintReview(); paintProgress(); });
+    },
+    "create-cancel": function () { act("stacks.cancel", { run_id: CREATE.runId }); },
+    "open-develop": function (n) { DEV.path = n.dataset.path; DEV.ctx = null; DEV.detect = null; navigate("develop"); },
+    "tool-install": function (n) { act("toolchain.install", { tool: n.dataset.id }).then(function () { if (state.view === "create") scheduleValidate(); }); },
+    "tool-remove": function (n) { act("toolchain.remove", { tool: n.dataset.id }); },
+    "tool-plan": function (n) { read("toolchain.plan", { tool: n.dataset.id, action: n.dataset.act }).then(function (p) { showPlanDrawer(p, n.dataset.act + " " + n.dataset.id); }).catch(function (e) { toast("error", e.message); }); },
+    "svc": function (n) { act("toolchain.service", { tool: n.dataset.id, action: n.dataset.act }); },
+    "svc-logs": function (n) { read("toolchain.logs", { tool: n.dataset.id }).then(function (d) { openDrawer(n.dataset.id + " logs", '<pre class="log-block">' + esc((d.lines || []).join("\n") || "empty") + "</pre>"); }).catch(function (e) { toast("error", e.message); }); },
+    "devices": function () { read("toolchain.devices").then(function (d) { openDrawer("Android devices", d.length ? d.map(function (x) { return '<div class="kv"><dt class="mono">' + esc(x.serial) + "</dt><dd>" + esc(x.state) + " " + esc(x.note) + "</dd></div>"; }).join("") : '<div class="empty">No devices. Connect one with USB debugging enabled, or start an emulator.</div>'); }).catch(function (e) { toast("error", e.message); }); },
+    "dev-open": function (n) { openProject(n.dataset.path); },
+    "dev-detect": function () {
+      var p = readInput("dev-import"); DEV.importPath = p; if (!p) return;
+      DEV.busy = true; renderDevelop();
+      read("project.detect", { path: p }).then(function (c) { DEV.detect = c; DEV.path = p; DEV.busy = false; renderDevelop(); }).catch(function (e) { DEV.busy = false; DEV.error = e.message; renderDevelop(); });
+    },
+    "dev-import": function () {
+      var p = readInput("dev-import"); DEV.importPath = p; if (!p) return;
+      act("project.import", { path: p }).then(function (o) { if (o) { DEV.detect = null; DEV.ctx = null; DEV.path = p; return loadDevelop().then(renderDevelop); } });
+    },
+    "task-run": function (n) {
+      var id = n.dataset.task, destructive = n.dataset.risk === "destructive";
+      DEV.log = "running " + id + "…"; renderDevelop();
+      run(destructive ? "project.run_destructive" : "project.run", { path: DEV.path, task: id }).then(function (o) {
+        if (o && o.data) DEV.log = (o.data.output_tail || []).join("\n") || o.message; else DEV.log = null;
+        return loadDevelop();
+      }).then(renderDevelop);
+    },
+    "proc-log": function (n) { read("task.logs", { name: n.dataset.name }).then(function (d) { openDrawer(n.dataset.name, '<pre class="log-block">' + esc(d.lines.join("\n") || "empty") + "</pre>"); }).catch(function (e) { toast("error", e.message); }); },
+    "proc-stop": function (n) { act("task.stop", { name: n.dataset.name }); },
+
 
     refresh: function () { refresh(); },
 
@@ -3844,6 +4204,27 @@
         var pending = state.session.pending_approvals;
         if (pending) toast("warn", pending + " operations are awaiting a decision");
       });
+  }
+
+
+  document.addEventListener("input", onCreateInput);
+  document.addEventListener("change", onCreateInput);
+  function onCreateInput(event) {
+    var t = event.target;
+    if (!t.dataset || t.dataset.create === undefined) return;
+    if (event.type === "input" && (t.type === "checkbox" || t.tagName === "SELECT")) return;
+    var key = t.dataset.create, f = CREATE.form;
+    if (key === "__advanced") { CREATE.advanced = t.checked; renderCreate(); return; }
+    var val = t.type === "checkbox" ? t.checked : t.value;
+    if (t.dataset.multi !== undefined) {
+      var cur = (f.options[key] || []).slice(), i = cur.indexOf(t.dataset.multi);
+      if (t.checked && i < 0) cur.push(t.dataset.multi);
+      if (!t.checked && i >= 0) cur.splice(i, 1);
+      f.options[key] = cur;
+    } else if (t.dataset.opt) f.options[key] = val;
+    else f[key] = val;
+    scheduleValidate();
+    if (event.type === "change" && (key === "version" || key === "package_manager")) { /* values only; review repaints */ }
   }
 
   boot();

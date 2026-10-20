@@ -204,6 +204,13 @@ impl SessionManager {
         command.cwd(&dir);
         command.env("TERM", "xterm-256color");
         command.env("COLORTERM", "truecolor");
+        // Tell the agent where it is and how to learn the project, rather than
+        // leaving it to guess the stack from file names.
+        command.env("DEVD_PROJECT_DIR", dir.to_string_lossy().to_string());
+        command.env(
+            "DEVD_AGENT_HINT",
+            "Call the devd MCP tool project.detect with this directory for the stack, package manager, runtimes, tasks and services; project.run and project.exec to run commands; toolchain.install to request missing tools.",
+        );
 
         let mut child = pair
             .slave

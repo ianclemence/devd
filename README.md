@@ -20,6 +20,11 @@ rules:
   run. An agent cannot approve its own action, and a declined operation never
   executes — from any interface.
 
+## Projects for any stack
+
+devd creates, imports and runs projects across languages, driven by structured stack definitions with official documentation links:
+`devd new` (guided), `devd project detect|import|tasks|run|exec`, `devd tools list|install|start`, and the same operations in the window (Create, Develop, Toolchain), the terminal dashboard and MCP. See [`docs/stacks-engine.md`](docs/stacks-engine.md) and the generated [compatibility matrix](docs/stacks.md).
+
 ## Requirements
 
 - **Windows 10/11 x64** or **Linux x64**.

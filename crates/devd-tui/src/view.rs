@@ -31,31 +31,31 @@ fn cursor() -> Style {
 }
 /// A section heading.
 fn heading() -> Style {
-    Style::new().add_modifier(Modifier::BOLD)
+    Style::new().fg(Color::Rgb(107, 149, 255)).add_modifier(Modifier::BOLD)
 }
 /// Machine data: paths, hashes, capability ids.
 fn data() -> Style {
-    Style::new().fg(Color::Cyan)
+    Style::new().fg(Color::Rgb(34, 211, 238))
 }
 /// A failure.
 fn fail() -> Style {
-    Style::new().fg(Color::Red).add_modifier(Modifier::BOLD)
+    Style::new().fg(Color::Rgb(251, 113, 133)).add_modifier(Modifier::BOLD)
 }
 /// Something that needs the reader's attention but is not a failure.
 fn warn() -> Style {
-    Style::new().fg(Color::Yellow)
+    Style::new().fg(Color::Rgb(251, 191, 36))
 }
 /// A success.
 fn ok() -> Style {
-    Style::new().fg(Color::Green)
+    Style::new().fg(Color::Rgb(52, 211, 153))
 }
 /// Secondary text.
 fn quiet() -> Style {
-    Style::new().fg(Color::DarkGray)
+    Style::new().fg(Color::Rgb(116, 128, 176))
 }
 /// The current tab.
 fn tab_active() -> Style {
-    Style::new().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+    Style::new().fg(Color::Rgb(167, 139, 250)).add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
 }
 
 /// Draw one frame.
@@ -169,6 +169,51 @@ fn render_body(frame: &mut Frame, state: &State, area: Rect) {
                                 .unwrap_or_default(),
                             quiet(),
                         ),
+                    ])
+                })
+                .collect(),
+        ),
+        View::Create => list(
+            state,
+            "Create a project - Enter to start",
+            state
+                .stacks
+                .iter()
+                .map(|s| {
+                    Line::from(vec![
+                        Span::raw(format!("{:<20}", truncate(&s.name, 20))),
+                        Span::styled(format!("{:<12}", truncate(&s.language, 12)), data()),
+                        Span::styled(format!("{:<10}", truncate(&s.category, 10)), quiet()),
+                        Span::raw(truncate(&s.summary, 70)),
+                    ])
+                })
+                .collect(),
+        ),
+        View::Toolchain => list(
+            state,
+            "Toolchain",
+            state
+                .tools
+                .iter()
+                .map(|t| {
+                    let (mark, style) = if !t.installed {
+                        ("missing  ", warn())
+                    } else if t.outdated {
+                        ("outdated ", warn())
+                    } else {
+                        ("installed", ok())
+                    };
+                    let service = match (t.service_healthy, t.port) {
+                        (Some(true), Some(p)) => format!("running :{p}"),
+                        (Some(false), Some(p)) if t.installed => format!("stopped :{p}"),
+                        _ => String::new(),
+                    };
+                    Line::from(vec![
+                        Span::raw(format!("{:<24}", truncate(&t.name, 24))),
+                        Span::styled(format!("{mark:<10}"), style),
+                        Span::styled(format!("{:<12}", truncate(t.version.as_deref().unwrap_or("-"), 12)), data()),
+                        Span::styled(format!("{:<16}", truncate(&service, 16)), if service.starts_with("running") { ok() } else { quiet() }),
+                        Span::styled(truncate(&t.category, 16), quiet()),
                     ])
                 })
                 .collect(),
@@ -444,7 +489,10 @@ fn dashboard(state: &State) -> (String, Vec<Line<'static>>) {
 
 fn help_lines() -> Vec<Line<'static>> {
     let rows: Vec<(&str, &str)> = vec![
-        ("1..9", "jump to a view"),
+        ("1..9, 0, -", "jump to a view (0 = Create, - = Toolchain)"),
+        ("Create view", "Enter starts a guided flow for the stack; every question comes from its definition, and the exact command is shown before anything runs"),
+        ("Toolchain view", "i install, x remove, s start, t stop, l logs; installs ask first"),
+        ("Projects view", "d detect the stack and tasks, m import for agents"),
         ("Tab / Shift+Tab", "next / previous view"),
         ("j / k, arrows", "move the cursor"),
         (
@@ -490,13 +538,15 @@ fn render_footer(frame: &mut Frame, state: &State, area: Rect) {
 
 fn hints_for(view: View) -> &'static str {
     match view {
-        View::Projects => "t add   Enter open   r refresh   ? help   q quit",
+        View::Projects => "t add   Enter open   d detect   m import   r refresh   ? help   q quit",
         View::Changes => {
             "Enter stage/unstage   s stage   u unstage   d discard   a stage all   c commit   r refresh   ? help   q quit"
         }
         View::History => "Enter show   j/k move   r refresh   ? help   q quit",
         View::Branches => "Enter switch   n new branch   r refresh   ? help   q quit",
         View::Capabilities => "/ search   Enter describe   x run   r refresh   ? help   q quit",
+        View::Create => "Enter create from this stack   r refresh   ? help   q quit",
+        View::Toolchain => "Enter details   i install   x remove   s start   t stop   l logs   r refresh   q quit",
         _ => "j/k move   Tab next view   r refresh   ? help   q quit",
     }
 }
@@ -528,6 +578,19 @@ fn render_overlay(frame: &mut Frame, state: &State, area: Rect) {
                     Line::from(Span::styled(format!(" {hint}"), quiet())),
                 ])
                 .block(block),
+                rect,
+            );
+        }
+        Overlay::Form { title, lines, input } => {
+            let height = (lines.len() as u16 + 6).min(area.height.saturating_sub(2));
+            let rect = centered(area, area.width.saturating_sub(8).min(100), height);
+            frame.render_widget(Clear, rect);
+            let mut body: Vec<Line> = lines.iter().map(|l| Line::from(format!(" {l}"))).collect();
+            body.push(Line::from(""));
+            body.push(Line::from(vec![Span::styled(" > ", data()), Span::raw(input.clone()), Span::styled("_", quiet())]));
+            body.push(Line::from(Span::styled(" Enter accept (blank keeps the default)   Esc cancel", quiet())));
+            frame.render_widget(
+                Paragraph::new(body).wrap(Wrap { trim: false }).block(Block::default().borders(Borders::ALL).title(format!(" {title} "))),
                 rect,
             );
         }

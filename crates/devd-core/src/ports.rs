@@ -43,6 +43,13 @@ pub fn is_free(port: u16) -> bool {
     if matches!(find_listener(port), Ok(Some(_))) {
         return false;
     }
+    // Where the listener table is unavailable (no `ss` in a minimal container)
+    // or a wildcard bind succeeds beside a loopback listener, an actual
+    // connection attempt is the honest test.
+    let addr: std::net::SocketAddr = ([127, 0, 0, 1], port).into();
+    if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).is_ok() {
+        return false;
+    }
     can_bind(port)
 }
 
@@ -127,7 +134,7 @@ fn process_names(pids: &[u32]) -> std::collections::HashMap<u32, String> {
 #[cfg(not(windows))]
 fn listeners_linux() -> Result<Vec<Listener>> {
     let Some(ss) = util::which("ss") else {
-        return Ok(Vec::new());
+        return Ok(listeners_proc());
     };
     let out = util::run(
         &ss,
@@ -163,6 +170,33 @@ fn listeners_linux() -> Result<Vec<Listener>> {
         });
     }
     Ok(seen)
+}
+
+/// Listening TCP sockets from the kernel's own table, for hosts without `ss`.
+/// Process ids are not available this way, so `pid` and `program` are `None`.
+#[cfg(not(windows))]
+fn listeners_proc() -> Vec<Listener> {
+    let mut out = Vec::new();
+    for (file, proto) in [("/proc/net/tcp", "tcp"), ("/proc/net/tcp6", "tcp6")] {
+        let Ok(text) = std::fs::read_to_string(file) else { continue };
+        for line in text.lines().skip(1) {
+            let cols: Vec<&str> = line.split_whitespace().collect();
+            // local_address is col 1 (ADDR:PORT in hex); st is col 3, 0A = LISTEN.
+            if cols.len() < 4 || cols[3] != "0A" {
+                continue;
+            }
+            let Some((addr, port_hex)) = cols[1].rsplit_once(':') else { continue };
+            let Ok(port) = u16::from_str_radix(port_hex, 16) else { continue };
+            out.push(Listener {
+                port,
+                protocol: proto.to_string(),
+                address: format!("{addr}:{port}"),
+                pid: None,
+                program: None,
+            });
+        }
+    }
+    out
 }
 
 fn port_of(addr: &str) -> Option<u16> {
