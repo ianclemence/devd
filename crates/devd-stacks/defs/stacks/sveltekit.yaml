@@ -1,0 +1,58 @@
+id: sveltekit
+name: SvelteKit
+language: javascript
+category: web
+summary: Svelte application framework with routing and server rendering.
+docs:
+  - {title: Creating a project, url: "https://svelte.dev/docs/kit/creating-a-project"}
+  - {title: sv create, url: "https://svelte.dev/docs/cli/sv-create"}
+verified: {method: cli-help, against: "sv 1.1.1", date: "2026-10-20"}
+runtime: node
+package_managers: [npm, pnpm, yarn, bun]
+versions:
+  - {id: latest, label: SvelteKit (latest), value: latest, default: true, requires: [{tool: node, min: "20", why: "current Svelte tooling targets maintained Node.js releases"}]}
+options:
+  - {id: template, label: Template, kind: select, default: minimal, choices: [{value: minimal, label: Minimal skeleton}, {value: demo, label: Demo app}, {value: library, label: Library}], flag: "--template"}
+  - {id: types, label: Type checking, kind: select, default: ts, choices: [{value: ts, label: TypeScript}, {value: jsdoc, label: JSDoc in JavaScript}], flag: "--types"}
+  - {id: addons, label: Add-ons, kind: multi, default: [eslint, prettier, vitest], help: Official add-ons applied by sv., choices: [{value: eslint, label: ESLint}, {value: prettier, label: Prettier}, {value: vitest, label: Vitest}, {value: playwright, label: Playwright}, {value: tailwindcss, label: Tailwind CSS}, {value: mdsvex, label: mdsvex (Markdown)}, {value: storybook, label: Storybook}], flag: "--add"}
+init:
+  install_toggle: true
+  steps:
+    - id: scaffold
+      title: Create the app with sv create
+      network: true
+      extensible: true
+      needs: [node]
+      run:
+        - "{pm.dlx}"
+        - "sv@{version}"
+        - create
+        - "{name}"
+        - --template
+        - "{opt.template}"
+        - --types
+        - "{opt.types}"
+        - {when: {option: addons, nonempty: true}, args: [--add, "{opt.addons.list}"], else: [--no-add-ons]}
+        - {when: {option: install, equals: true}, args: [--install, "{pm}"], else: [--no-install]}
+verify:
+  files: [package.json, svelte.config.js, src/routes/+page.svelte]
+tasks:
+  - {id: dev, title: Start the development server, kind: dev, long_running: true, port: 5173, run: ["{pm.run}", dev], requires_script: dev}
+  - {id: build, title: Production build, kind: build, run: ["{pm.run}", build], requires_script: build}
+  - {id: preview, title: Preview the build, kind: dev, long_running: true, port: 4173, run: ["{pm.run}", preview], requires_script: preview}
+  - {id: check, title: Type-check with svelte-check, kind: typecheck, run: ["{pm.run}", check], requires_script: check}
+  - {id: test, title: Run tests, kind: test, run: ["{pm.run}", test], requires_script: test}
+  - {id: lint, title: Lint, kind: lint, run: ["{pm.run}", lint], requires_script: lint}
+  - {id: format, title: Format, kind: format, risk: mutating, run: ["{pm.run}", format], requires_script: format}
+  - {id: install, title: Install dependencies, kind: install, risk: mutating, run: ["{pm.install}"]}
+detect:
+  rules:
+    - {dependency: "@sveltejs/kit", weight: 6, evidence: "@sveltejs/kit is a dependency"}
+    - {file: svelte.config.js, weight: 2, evidence: svelte.config.js}
+structure: [src/routes/, src/lib/, static/, svelte.config.js]
+conventions:
+  - "Routes are folders under src/routes with +page.svelte, +layout.svelte and +server.ts files."
+  - "Run `check` (svelte-check) before reporting a change complete."
+exec:
+  programs: [node, npx, svelte-kit, vite]
+  destructive_args: []

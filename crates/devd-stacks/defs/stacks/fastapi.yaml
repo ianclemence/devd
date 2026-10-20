@@ -1,0 +1,136 @@
+id: fastapi
+name: FastAPI
+language: python
+category: backend
+summary: Modern, fast Python API framework with automatic OpenAPI docs.
+docs:
+  - {title: Virtual environments, url: "https://fastapi.tiangolo.com/virtual-environments/"}
+  - {title: First steps, url: "https://fastapi.tiangolo.com/tutorial/first-steps/"}
+  - {title: Testing, url: "https://fastapi.tiangolo.com/tutorial/testing/"}
+verified: {method: docs, against: "fastapi 0.150.0 on PyPI (Requires-Python >=3.10); the `fastapi` CLI ships with fastapi[standard]", date: "2026-10-20"}
+runtime: python
+package_managers: [pip, uv]
+name_pattern: '^[a-z][a-z0-9_-]{0,63}$'
+name_hint: Lowercase letters, digits, hyphens and underscores, starting with a letter.
+versions:
+  - {id: latest, label: FastAPI (latest), value: ">=0.115", default: true, requires: [{tool: python, min: "3.10", why: "FastAPI requires Python 3.10+"}]}
+options:
+  - {id: pytest, label: pytest with a starter test, kind: bool, default: true, help: Adds pytest and tests/test_main.py using FastAPI's TestClient.}
+init:
+  creates_dir: true
+  install_toggle: false
+  steps:
+    - id: requirements
+      title: Write requirements.txt
+      kind: write
+      cwd: project
+      path: requirements.txt
+      when: [{option: package_manager, equals: pip}, {option: pytest, equals: false}]
+      content: |
+        fastapi[standard]{version}
+    - id: requirements-pytest
+      title: Write requirements.txt with pytest
+      kind: write
+      cwd: project
+      path: requirements.txt
+      when: [{option: package_manager, equals: pip}, {option: pytest, equals: true}]
+      content: |
+        fastapi[standard]{version}
+        pytest
+    - id: venv
+      title: Create a virtual environment
+      cwd: project
+      when: {option: package_manager, equals: pip}
+      needs: [python]
+      run: ["{python}", -m, venv, .venv]
+    - id: pip-install
+      title: Install FastAPI into the environment
+      cwd: project
+      network: true
+      when: {option: package_manager, equals: pip}
+      needs: [python]
+      run: ["{venv_python}", -m, pip, install, -r, requirements.txt]
+    - id: uv-init
+      title: Create the uv project
+      cwd: project
+      when: {option: package_manager, equals: uv}
+      needs: [uv]
+      run: [uv, init, --bare, --no-workspace, --vcs, none, --name, "{name_kebab}"]
+    - id: uv-add
+      title: Add FastAPI with uv
+      cwd: project
+      network: true
+      when: {option: package_manager, equals: uv}
+      needs: [uv]
+      run: [uv, add, "fastapi[standard]{version}"]
+    - id: uv-pytest
+      title: Add pytest with uv
+      cwd: project
+      network: true
+      when: [{option: package_manager, equals: uv}, {option: pytest, equals: true}]
+      needs: [uv]
+      run: [uv, add, --dev, pytest]
+    - id: main
+      title: Write main.py
+      kind: write
+      cwd: project
+      path: main.py
+      content: |
+        from fastapi import FastAPI
+
+        app = FastAPI(title="{name}")
+
+
+        @app.get("/")
+        def read_root():
+            return {"message": "Hello from {name}"}
+    - id: test
+      title: Write tests/test_main.py
+      kind: write
+      cwd: project
+      path: tests/test_main.py
+      when: {option: pytest, equals: true}
+      content: |
+        from fastapi.testclient import TestClient
+
+        from main import app
+
+        client = TestClient(app)
+
+
+        def test_read_root():
+            response = client.get("/")
+            assert response.status_code == 200
+            assert "Hello" in response.json()["message"]
+    - id: gitignore
+      title: Write .gitignore
+      kind: write
+      cwd: project
+      path: .gitignore
+      content: |
+        .venv/
+        __pycache__/
+        *.pyc
+        .env
+verify:
+  files: [main.py]
+  commands:
+    - {title: Import the app, run: ["{py}", -c, "import main"]}
+tasks:
+  - {id: dev, title: Start the development server with reload, kind: dev, long_running: true, port: 8000, run: ["{py}", -m, fastapi, dev, main.py], requires_file: main.py}
+  - {id: run, title: Start the production server, kind: dev, long_running: true, port: 8000, run: ["{py}", -m, fastapi, run, main.py], requires_file: main.py}
+  - {id: test, title: Run pytest, kind: test, run: ["{py}", -m, pytest], requires_file: tests}
+  - {id: install, title: Install dependencies, kind: install, risk: mutating, run: ["{pm.install}"]}
+detect:
+  rules:
+    - {dependency: fastapi, weight: 7, evidence: fastapi is a declared dependency}
+    - {text: "from fastapi import", in_file: main.py, weight: 3, evidence: main.py imports FastAPI}
+env:
+  - {name: DATABASE_URL, secret: true, help: Connection string if the app uses a database; contains credentials.}
+structure: [main.py, tests/, requirements.txt or pyproject.toml, .venv/]
+conventions:
+  - "Interactive API docs are served at /docs while the server runs."
+  - "Use pydantic models for request and response bodies."
+exec:
+  programs: [python, python3, fastapi, uvicorn, pytest, uv, pip]
+  destructive_args: []

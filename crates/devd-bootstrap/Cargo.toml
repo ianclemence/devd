@@ -12,6 +12,7 @@ authors.workspace = true
 devd-core = { workspace = true }
 devd-git = { path = "../devd-git" }
 devd-runtime = { path = "../devd-runtime" }
+devd-stacks = { path = "../devd-stacks" }
 devd-services = { path = "../devd-services" }
 devd-sites = { path = "../devd-sites" }
 devd-workspace = { path = "../devd-workspace" }

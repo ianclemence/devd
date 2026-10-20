@@ -53,13 +53,17 @@ pub fn can_bind(port: u16) -> bool {
 
 /// Every listening TCP socket the platform will report.
 pub fn listeners() -> Result<Vec<Listener>> {
-    if cfg!(windows) {
+    #[cfg(windows)]
+    {
         listeners_windows()
-    } else {
+    }
+    #[cfg(not(windows))]
+    {
         listeners_linux()
     }
 }
 
+#[cfg(windows)]
 fn listeners_windows() -> Result<Vec<Listener>> {
     let Some(netstat) = util::which("netstat") else {
         return Ok(Vec::new());
@@ -120,6 +124,7 @@ fn process_names(pids: &[u32]) -> std::collections::HashMap<u32, String> {
     map
 }
 
+#[cfg(not(windows))]
 fn listeners_linux() -> Result<Vec<Listener>> {
     let Some(ss) = util::which("ss") else {
         return Ok(Vec::new());

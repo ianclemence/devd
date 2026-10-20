@@ -1,0 +1,88 @@
+id: rails
+name: Ruby on Rails
+language: ruby
+category: web
+summary: Full-stack Ruby web framework.
+description: Created with `rails new`. The generator must be the Rails version you want, so devd checks the installed `rails` gem against the selected version; install another with `gem install rails -v X`.
+docs:
+  - {title: Getting started, url: "https://guides.rubyonrails.org/getting_started.html"}
+  - {title: Command line, url: "https://guides.rubyonrails.org/command_line.html"}
+  - {title: rails new options, url: "https://guides.rubyonrails.org/command_line.html#rails-new"}
+verified: {method: cli-help, against: "rails 8.1.4 `rails new --help`", date: "2026-10-20"}
+runtime: ruby
+package_managers: [bundler]
+name_pattern: '^[a-z][a-z0-9_]{0,63}$'
+name_hint: Lowercase letters, digits and underscores, starting with a letter.
+versions:
+  - {id: "8.1", label: Rails 8.1 (latest), value: "8.1", default: true, requires: [{tool: ruby, min: "3.2", why: "Rails 8 requires Ruby 3.2+"}, {tool: rails, min: "8.1", max: "8.1", why: "the installed rails generator decides the version"}]}
+  - {id: "8.0", label: Rails 8.0, value: "8.0", requires: [{tool: ruby, min: "3.2"}, {tool: rails, min: "8.0", max: "8.0"}]}
+  - {id: "7.2", label: Rails 7.2, value: "7.2", requires: [{tool: ruby, min: "3.1"}, {tool: rails, min: "7.2", max: "7.2"}]}
+options:
+  - {id: database, label: Database, kind: select, default: sqlite3, flag: "--database", choices: [{value: sqlite3, label: SQLite}, {value: postgresql, label: PostgreSQL}, {value: mysql, label: MySQL}, {value: trilogy, label: MySQL (Trilogy adapter)}, {value: mariadb-mysql, label: MariaDB}, {value: mariadb-trilogy, label: MariaDB (Trilogy adapter)}]}
+  - {id: api, label: API only, kind: bool, default: false, flag: "--api", help: A smaller stack without views or asset handling.}
+  - {id: css, label: CSS processor, kind: select, default: none, flag: "--css", choices: [{value: none, label: None}, {value: tailwind, label: Tailwind}, {value: bootstrap, label: Bootstrap}, {value: bulma, label: Bulma}, {value: postcss, label: PostCSS}, {value: sass, label: Sass}]}
+  - {id: javascript, label: JavaScript approach, kind: select, default: importmap, flag: "--javascript", choices: [{value: importmap, label: Import maps}, {value: bun, label: Bun}, {value: webpack, label: Webpack}, {value: esbuild, label: esbuild}, {value: rollup, label: Rollup}]}
+  - {id: skip_test, label: Skip the default test framework, kind: bool, default: false, advanced: true, flag: "--skip-test"}
+  - {id: skip_docker, label: Skip Dockerfile, kind: bool, default: false, advanced: true, flag: "--skip-docker"}
+  - {id: skip_kamal, label: Skip Kamal deployment, kind: bool, default: false, advanced: true, flag: "--skip-kamal"}
+  - {id: skip_ci, label: Skip GitHub CI files, kind: bool, default: false, advanced: true, flag: "--skip-ci"}
+  - {id: skip_rubocop, label: Skip RuboCop, kind: bool, default: false, advanced: true, flag: "--skip-rubocop"}
+init:
+  install_toggle: true
+  steps:
+    - id: scaffold
+      title: Generate the application with rails new
+      extensible: true
+      network: true
+      needs: [ruby, rails]
+      run:
+        - rails
+        - new
+        - "{name}"
+        - --database={opt.database}
+        - {when: {option: api, equals: true}, args: [--api]}
+        - {when: {option: css, in: [tailwind, bootstrap, bulma, postcss, sass]}, args: ["--css={opt.css}"]}
+        - {when: {option: api, equals: false}, args: ["--javascript={opt.javascript}"]}
+        - {when: {option: skip_test, equals: true}, args: [--skip-test]}
+        - {when: {option: skip_docker, equals: true}, args: [--skip-docker]}
+        - {when: {option: skip_kamal, equals: true}, args: [--skip-kamal]}
+        - {when: {option: skip_ci, equals: true}, args: [--skip-ci]}
+        - {when: {option: skip_rubocop, equals: true}, args: [--skip-rubocop]}
+        - {when: {option: git, equals: false}, args: [--skip-git]}
+        - {when: {option: install, equals: false}, args: [--skip-bundle]}
+verify:
+  files: [Gemfile, bin/rails, config/application.rb]
+  commands:
+    - {title: Rails boots, needs_install: true, needs: [ruby], run: [ruby, bin/rails, --version]}
+tasks:
+  - {id: dev, title: Start the Rails server, kind: dev, long_running: true, port: 3000, run: [ruby, bin/rails, server], requires_file: bin/rails}
+  - {id: test, title: Run the test suite, kind: test, run: [ruby, bin/rails, test], requires_file: bin/rails}
+  - {id: db-prepare, title: Create the database if needed and migrate, kind: migrate, risk: mutating, run: [ruby, bin/rails, db:prepare], requires_file: bin/rails}
+  - {id: migrate, title: Run pending migrations, kind: migrate, risk: mutating, run: [ruby, bin/rails, db:migrate], requires_file: bin/rails}
+  - {id: migrate-status, title: Show migration status, kind: migrate, run: [ruby, bin/rails, db:migrate:status], requires_file: bin/rails}
+  - {id: seed, title: Run db/seeds.rb, kind: migrate, risk: mutating, run: [ruby, bin/rails, db:seed], requires_file: bin/rails}
+  - {id: db-reset, title: Drop, recreate and seed the database, kind: migrate, risk: destructive, run: [ruby, bin/rails, db:reset], requires_file: bin/rails}
+  - {id: db-drop, title: Drop the database, kind: migrate, risk: destructive, run: [ruby, bin/rails, db:drop], requires_file: bin/rails}
+  - {id: routes, title: List routes, kind: other, run: [ruby, bin/rails, routes], requires_file: bin/rails}
+  - {id: lint, title: Lint with RuboCop, kind: lint, run: [ruby, bin/rubocop], requires_file: bin/rubocop}
+  - {id: install, title: Install gems, kind: install, risk: mutating, run: [bundle, install], requires_file: Gemfile}
+detect:
+  rules:
+    - {dependency: rails, weight: 7, evidence: rails is in the Gemfile}
+    - {file: bin/rails, weight: 3, evidence: bin/rails}
+    - {file: config/application.rb, weight: 2, evidence: config/application.rb}
+services:
+  - {tool: postgresql, when: {option: database, equals: postgresql}, why: "--database=postgresql"}
+  - {tool: mysql, when: {option: database, in: [mysql, trilogy]}, why: "--database=mysql"}
+  - {tool: mariadb, when: {option: database, in: [mariadb-mysql, mariadb-trilogy]}, why: "--database=mariadb"}
+env:
+  - {name: RAILS_MASTER_KEY, secret: true, help: Decrypts config/credentials.yml.enc; never commit config/master.key.}
+  - {name: DATABASE_URL, secret: true, help: Overrides config/database.yml; contains credentials.}
+structure: [app/models, app/controllers, app/views, config/routes.rb, db/migrate, test/, bin/rails]
+conventions:
+  - "Generate code with `bin/rails generate` so naming conventions and tests are created together."
+  - "Schema changes are migrations; never edit a migration that has run in a shared environment."
+  - "Run `bin/rails test` after changes."
+exec:
+  programs: [ruby, bundle, rails, rake, bin/rails, bin/rubocop]
+  destructive_args: [db:drop, db:reset, db:schema:load, db:setup, db:migrate:reset, "--force"]

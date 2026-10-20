@@ -1,0 +1,108 @@
+id: django
+name: Django
+language: python
+category: web
+summary: Batteries-included Python web framework.
+docs:
+  - {title: Tutorial - writing your first app, url: "https://docs.djangoproject.com/en/stable/intro/tutorial01/"}
+  - {title: django-admin and manage.py, url: "https://docs.djangoproject.com/en/stable/ref/django-admin/"}
+  - {title: Supported Python versions, url: "https://docs.djangoproject.com/en/stable/faq/install/#what-python-version-can-i-use-with-django"}
+verified: {method: docs, against: "Django 5.2.18 / 6.0.9 / 6.1.2 on PyPI (Requires-Python read from PyPI)", date: "2026-10-20"}
+runtime: python
+package_managers: [pip, uv]
+name_pattern: '^[A-Za-z_][A-Za-z0-9_]{0,63}$'
+name_hint: A valid Python identifier; Django forbids names that clash with Python modules (such as `test`).
+versions:
+  - {id: "6.1", label: Django 6.1 (latest), value: "6.1.*", default: true, requires: [{tool: python, min: "3.12", why: "Django 6.1 requires Python 3.12+"}]}
+  - {id: "5.2", label: Django 5.2 (LTS), value: "5.2.*", requires: [{tool: python, min: "3.10", why: "Django 5.2 requires Python 3.10+"}]}
+  - {id: "4.2", label: Django 4.2 (LTS, extended support), value: "4.2.*", note: Ends extended support in April 2026., requires: [{tool: python, min: "3.8"}]}
+init:
+  creates_dir: true
+  install_toggle: false
+  steps:
+    - id: requirements
+      title: Write requirements.txt
+      kind: write
+      cwd: project
+      path: requirements.txt
+      when: {option: package_manager, equals: pip}
+      content: |
+        Django=={version}
+    - id: venv
+      title: Create a virtual environment
+      cwd: project
+      when: {option: package_manager, equals: pip}
+      needs: [python]
+      run: ["{python}", -m, venv, .venv]
+    - id: pip-install
+      title: Install Django into the environment
+      cwd: project
+      network: true
+      when: {option: package_manager, equals: pip}
+      needs: [python]
+      run: ["{venv_python}", -m, pip, install, -r, requirements.txt]
+    - id: uv-init
+      title: Create the uv project
+      cwd: project
+      when: {option: package_manager, equals: uv}
+      needs: [uv]
+      run: [uv, init, --bare, --no-workspace, --vcs, none, --name, "{name_kebab}"]
+    - id: uv-add
+      title: Add Django with uv
+      cwd: project
+      network: true
+      when: {option: package_manager, equals: uv}
+      needs: [uv]
+      run: [uv, add, "django=={version}"]
+    - id: startproject
+      title: Create the Django project
+      cwd: project
+      extensible: true
+      run:
+        - "{py}"
+        - -m
+        - django
+        - startproject
+        - "{name}"
+        - "."
+    - id: gitignore
+      title: Write .gitignore
+      kind: write
+      cwd: project
+      path: .gitignore
+      content: |
+        .venv/
+        __pycache__/
+        *.pyc
+        db.sqlite3
+        .env
+verify:
+  files: [manage.py, "{name}/settings.py", "{name}/urls.py"]
+  commands:
+    - {title: Django system check, run: ["{py}", manage.py, check]}
+tasks:
+  - {id: dev, title: Start the development server, kind: dev, long_running: true, port: 8000, run: ["{py}", manage.py, runserver], requires_file: manage.py}
+  - {id: check, title: Run the system check framework, kind: lint, run: ["{py}", manage.py, check], requires_file: manage.py}
+  - {id: test, title: Run tests, kind: test, run: ["{py}", manage.py, test], requires_file: manage.py}
+  - {id: makemigrations, title: Create migrations from model changes, kind: migrate, risk: mutating, run: ["{py}", manage.py, makemigrations], requires_file: manage.py}
+  - {id: migrate, title: Apply migrations, kind: migrate, risk: mutating, run: ["{py}", manage.py, migrate], requires_file: manage.py}
+  - {id: showmigrations, title: Show migration status, kind: migrate, run: ["{py}", manage.py, showmigrations], requires_file: manage.py}
+  - {id: flush, title: Delete all data from the database, kind: migrate, risk: destructive, run: ["{py}", manage.py, flush, --no-input], requires_file: manage.py}
+  - {id: collectstatic, title: Collect static files, kind: build, risk: mutating, run: ["{py}", manage.py, collectstatic, --no-input], requires_file: manage.py}
+  - {id: install, title: Install dependencies, kind: install, risk: mutating, run: ["{pm.install}"]}
+detect:
+  rules:
+    - {file: manage.py, weight: 4, evidence: manage.py entry point}
+    - {dependency: django, weight: 5, evidence: Django is a declared dependency}
+    - {text: DJANGO_SETTINGS_MODULE, in_file: manage.py, weight: 3, evidence: manage.py sets DJANGO_SETTINGS_MODULE}
+env:
+  - {name: DJANGO_SETTINGS_MODULE, help: Dotted path of the settings module.}
+  - {name: SECRET_KEY, secret: true, help: "Set via environment in production; the generated settings.py contains an insecure development key."}
+structure: [manage.py, "<project>/settings.py", "<project>/urls.py", requirements.txt or pyproject.toml, .venv/]
+conventions:
+  - "Use `manage.py startapp` for new apps and add them to INSTALLED_APPS."
+  - "Any model change needs `makemigrations`; commit the migration files."
+  - "Run in the project's virtual environment; do not install packages globally."
+exec:
+  programs: [python, python3, django-admin, uv, pip]
+  destructive_args: [flush, sqlmigrate-never, reset_db, "--force"]

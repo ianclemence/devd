@@ -61,6 +61,7 @@ impl Bootstrap {
         devd_services::caps::register(&mut registry)?;
         devd_sites::caps::register(&mut registry)?;
         devd_workspace::caps::register(&mut registry, workspace.clone())?;
+        devd_stacks::caps::register(&mut registry)?;
 
         Ok(Self {
             paths,

@@ -1,0 +1,44 @@
+id: slim
+name: Slim
+language: php
+category: backend
+summary: Micro-framework for PHP APIs and small apps.
+docs:
+  - {title: Slim installation, url: "https://www.slimframework.com/docs/v4/start/installation.html"}
+verified: {method: docs, against: "slim/slim-skeleton 4.5 on Packagist", date: "2026-10-20"}
+runtime: php
+package_managers: [composer]
+versions:
+  - {id: "4", label: Slim 4, value: "^4.0", default: true, requires: [{tool: php, min: "7.4"}, {tool: composer, min: "2.2"}]}
+init:
+  install_toggle: true
+  steps:
+    - id: scaffold
+      title: Create the skeleton with Composer
+      network: true
+      extensible: true
+      needs: [php, composer]
+      env: {COMPOSER_NO_INTERACTION: "1"}
+      run:
+        - composer
+        - create-project
+        - --no-interaction
+        - {when: {option: install, equals: false}, args: [--no-install]}
+        - slim/slim-skeleton
+        - "{name}"
+        - "{version}"
+verify:
+  files: [composer.json, public/index.php]
+tasks:
+  - {id: dev, title: Start the PHP built-in server, kind: dev, long_running: true, port: 8080, run: [php, -S, "localhost:8080", -t, public], requires_file: public/index.php}
+  - {id: test, title: Run PHPUnit, kind: test, run: [vendor/bin/phpunit], requires_file: vendor/bin/phpunit}
+  - {id: install, title: Install dependencies, kind: install, risk: mutating, run: [composer, install], requires_file: composer.json}
+detect:
+  rules:
+    - {dependency: slim/slim, weight: 6, evidence: slim/slim is a Composer dependency}
+structure: [app/, public/index.php, src/, tests/]
+conventions:
+  - "Routes are registered in app/routes.php."
+exec:
+  programs: [php, composer]
+  destructive_args: []

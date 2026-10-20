@@ -22,6 +22,7 @@ use crate::util;
 const MIGRATIONS: &[(i32, &str)] = &[
     (1, include_str!("../sql/001_init.sql")),
     (2, include_str!("../sql/002_work.sql")),
+    (3, include_str!("../sql/003_stacks.sql")),
 ];
 
 /// One audit row. Every capability attempt, successful or not, writes one.

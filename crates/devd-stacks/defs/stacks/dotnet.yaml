@@ -1,0 +1,79 @@
+id: aspnet-core
+name: ASP.NET Core
+language: csharp
+category: web
+summary: Cross-platform .NET web framework (APIs, MVC, Razor Pages, Blazor).
+docs:
+  - {title: Tutorial - Create a web API, url: "https://learn.microsoft.com/aspnet/core/tutorials/first-web-api"}
+  - {title: dotnet new, url: "https://learn.microsoft.com/dotnet/core/tools/dotnet-new"}
+  - {title: dotnet CLI, url: "https://learn.microsoft.com/dotnet/core/tools/"}
+verified: {method: docs, against: "dotnet new templates (webapi, mvc, webapp, blazor, console, classlib)", date: "2026-10-20"}
+runtime: dotnet
+package_managers: [dotnet]
+name_pattern: '^[A-Za-z][A-Za-z0-9_.]{0,63}$'
+name_hint: Letters, digits, dots and underscores, starting with a letter; used as the namespace and project name.
+versions:
+  - {id: "10", label: .NET 10 (LTS), value: net10.0, default: true, requires: [{tool: dotnet, min: "10.0", why: "targets net10.0"}]}
+  - {id: "9", label: .NET 9, value: net9.0, requires: [{tool: dotnet, min: "9.0"}]}
+  - {id: "8", label: .NET 8 (LTS), value: net8.0, requires: [{tool: dotnet, min: "8.0"}]}
+options:
+  - {id: template, label: Template, kind: select, default: webapi, choices: [{value: webapi, label: Web API}, {value: web, label: Empty ASP.NET Core}, {value: mvc, label: MVC}, {value: webapp, label: Razor Pages}, {value: blazor, label: Blazor Web App}, {value: console, label: Console app}, {value: classlib, label: Class library}], flag: "dotnet new <template>"}
+  - {id: use_controllers, label: Use controllers, kind: bool, default: false, help: "Web API only: use controller classes instead of minimal APIs.", flag: "--use-controllers"}
+init:
+  install_toggle: true
+  steps:
+    - id: scaffold
+      title: Create the project with dotnet new
+      extensible: true
+      needs: [dotnet]
+      env: {DOTNET_CLI_TELEMETRY_OPTOUT: "1", DOTNET_NOLOGO: "1"}
+      run:
+        - dotnet
+        - new
+        - "{opt.template}"
+        - -n
+        - "{name}"
+        - -o
+        - "{name}"
+        - -f
+        - "{version}"
+        - {when: [{option: template, equals: webapi}, {option: use_controllers, equals: true}], args: [--use-controllers]}
+    - id: gitignore
+      title: Add a .gitignore
+      cwd: project
+      needs: [dotnet]
+      run: [dotnet, new, gitignore]
+    - id: restore
+      title: Restore packages
+      cwd: project
+      network: true
+      when: {option: install, equals: true}
+      needs: [dotnet]
+      run: [dotnet, restore]
+verify:
+  files: [".gitignore"]
+  commands:
+    - {title: Build, needs_install: true, needs: [dotnet], run: [dotnet, build, --no-restore]}
+tasks:
+  - {id: dev, title: Run with hot reload, kind: dev, long_running: true, port: 5000, run: [dotnet, watch, run], needs: [dotnet]}
+  - {id: run, title: Run, kind: dev, long_running: true, port: 5000, run: [dotnet, run], needs: [dotnet]}
+  - {id: build, title: Build, kind: build, run: [dotnet, build], needs: [dotnet]}
+  - {id: test, title: Run tests, kind: test, run: [dotnet, test], needs: [dotnet]}
+  - {id: format, title: Format with dotnet format, kind: format, risk: mutating, run: [dotnet, format], needs: [dotnet]}
+  - {id: restore, title: Restore packages, kind: install, risk: mutating, run: [dotnet, restore], needs: [dotnet]}
+detect:
+  rules:
+    - {text: Microsoft.NET.Sdk.Web, in_file: "*.csproj", weight: 7, evidence: a project uses the Web SDK}
+    - {file: "*.sln", weight: 2, evidence: solution file}
+    - {file: "*.csproj", weight: 3, evidence: C# project file}
+    - {file: global.json, weight: 1, evidence: global.json pins the SDK}
+env:
+  - {name: ASPNETCORE_ENVIRONMENT, help: "Development, Staging or Production."}
+  - {name: ConnectionStrings__Default, secret: true, help: Connection string; contains credentials.}
+structure: ["<project>.csproj", Program.cs, appsettings.json, Properties/launchSettings.json]
+conventions:
+  - "Keep secrets out of appsettings.json; use `dotnet user-secrets` for development."
+  - "Run dotnet build and dotnet test before reporting a change complete."
+exec:
+  programs: [dotnet]
+  destructive_args: ["ef database drop", "database drop"]

@@ -1,0 +1,71 @@
+id: node
+name: Node.js
+language: javascript
+category: language
+summary: A plain Node.js project with a package.json and an entry point.
+docs:
+  - {title: Node.js documentation, url: "https://nodejs.org/docs/latest/api/"}
+  - {title: package.json, url: "https://docs.npmjs.com/cli/configuring-npm/package-json"}
+verified: {method: docs, against: "npm 10 / Node.js 22", date: "2026-10-20"}
+runtime: node
+package_managers: [npm, pnpm, yarn, bun]
+versions:
+  - {id: lts, label: Node.js LTS, value: lts, default: true, requires: [{tool: node, min: "20", why: "maintained release lines"}]}
+options:
+  - {id: module_type, label: Module system, kind: select, default: module, help: ES modules use import/export; CommonJS uses require., choices: [{value: module, label: ES modules}, {value: commonjs, label: CommonJS}]}
+init:
+  creates_dir: true
+  install_toggle: false
+  steps:
+    - id: manifest
+      title: Write package.json
+      kind: write
+      cwd: project
+      path: package.json
+      content: |
+        {
+          "name": "{name}",
+          "version": "0.1.0",
+          "private": true,
+          "type": "{opt.module_type}",
+          "scripts": {
+            "start": "node index.js",
+            "test": "node --test"
+          }
+        }
+    - id: entry
+      title: Write index.js
+      kind: write
+      cwd: project
+      path: index.js
+      content: |
+        console.log("Hello from {name}");
+    - id: gitignore
+      title: Write .gitignore
+      kind: write
+      cwd: project
+      path: .gitignore
+      content: |
+        node_modules/
+        .env
+verify:
+  files: [package.json, index.js]
+  commands:
+    - {title: Run the entry point, needs: [node], run: [node, index.js]}
+tasks:
+  - {id: start, title: Run the app, kind: dev, run: ["{pm.run}", start], requires_script: start}
+  - {id: dev, title: Run the dev script, kind: dev, long_running: true, run: ["{pm.run}", dev], requires_script: dev}
+  - {id: build, title: Build, kind: build, run: ["{pm.run}", build], requires_script: build}
+  - {id: test, title: Run tests, kind: test, run: ["{pm.run}", test], requires_script: test}
+  - {id: lint, title: Lint, kind: lint, run: ["{pm.run}", lint], requires_script: lint}
+  - {id: install, title: Install dependencies, kind: install, risk: mutating, run: ["{pm.install}"]}
+detect:
+  min_score: 2
+  rules:
+    - {file: package.json, weight: 2, evidence: package.json}
+structure: [package.json, index.js]
+conventions:
+  - "Scripts in package.json are the entry points; prefer them to ad hoc commands."
+exec:
+  programs: [node, npx]
+  destructive_args: []

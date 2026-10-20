@@ -1,0 +1,55 @@
+id: express
+name: Express
+language: javascript
+category: backend
+summary: Minimal Node.js web framework, generated with express-generator.
+description: express-generator (the generator the Express documentation describes) currently produces an Express 4 application. If you need Express 5, create a Node.js project and add express@5.
+docs:
+  - {title: Installing Express, url: "https://expressjs.com/en/starter/installing.html"}
+  - {title: Express application generator, url: "https://expressjs.com/en/starter/generator.html"}
+verified: {method: cli-help, against: "express-generator 4.16.1", date: "2026-10-20"}
+runtime: node
+package_managers: [npm, pnpm, yarn, bun]
+versions:
+  - {id: generator, label: express-generator (Express 4), value: latest, default: true, requires: [{tool: node, min: "18", why: "run the generated app on a maintained Node.js"}]}
+options:
+  - {id: view, label: Template engine, kind: select, default: pug, choices: [{value: pug, label: Pug}, {value: ejs, label: EJS}, {value: hbs, label: Handlebars}, {value: twig, label: Twig}, {value: none, label: "None (static HTML)"}], flag: "--view / --no-view"}
+  - {id: css, label: Stylesheet engine, kind: select, default: css, choices: [{value: css, label: Plain CSS}, {value: less, label: Less}, {value: stylus, label: Stylus}, {value: sass, label: Sass}], flag: "--css"}
+init:
+  install_toggle: true
+  steps:
+    - id: scaffold
+      title: Generate the app with express-generator
+      network: true
+      extensible: true
+      needs: [node]
+      run:
+        - "{pm.dlx}"
+        - "express-generator@{version}"
+        - {when: {option: view, equals: none}, args: [--no-view], else: ["--view={opt.view}"]}
+        - {when: {option: css, equals: css}, args: [], else: ["--css={opt.css}"]}
+        - --git
+        - "{name}"
+    - id: install
+      title: Install dependencies
+      cwd: project
+      network: true
+      when: {option: install, equals: true}
+      needs: [node]
+      run: ["{pm.install}"]
+verify:
+  files: [package.json, app.js, bin/www]
+tasks:
+  - {id: start, title: Start the server, kind: dev, long_running: true, port: 3000, run: ["{pm.run}", start], requires_script: start}
+  - {id: install, title: Install dependencies, kind: install, risk: mutating, run: ["{pm.install}"]}
+  - {id: test, title: Run tests, kind: test, run: ["{pm.run}", test], requires_script: test}
+detect:
+  rules:
+    - {dependency: express, weight: 5, evidence: express is a dependency}
+structure: [app.js, bin/www, routes/, views/, public/]
+conventions:
+  - "Routes live in routes/; register them in app.js."
+  - "The generator has no test script; add a test runner before relying on tests."
+exec:
+  programs: [node, npx]
+  destructive_args: []

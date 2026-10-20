@@ -1,0 +1,30 @@
+id: ruby
+name: Ruby
+language: ruby
+category: language
+summary: A Ruby project managed with Bundler (detection and workflows; create new apps with Rails).
+docs:
+  - {title: Ruby documentation, url: "https://www.ruby-lang.org/en/documentation/"}
+  - {title: Bundler, url: "https://bundler.io/guides/getting_started.html"}
+verified: {method: docs, against: "bundler 4.0", date: "2026-10-20"}
+runtime: ruby
+package_managers: [bundler]
+versions:
+  - {id: any, label: Installed Ruby, value: "", default: true, requires: [{tool: ruby, min: "3.1"}]}
+init: {steps: []}
+tasks:
+  - {id: install, title: Install gems, kind: install, risk: mutating, run: [bundle, install], requires_file: Gemfile}
+  - {id: test-rake, title: Run rake test, kind: test, run: [bundle, exec, rake, test], requires_file: Rakefile}
+  - {id: test-rspec, title: Run RSpec, kind: test, run: [bundle, exec, rspec], requires_file: .rspec}
+  - {id: lint, title: Lint with RuboCop, kind: lint, run: [bundle, exec, rubocop], requires_file: .rubocop.yml}
+detect:
+  min_score: 2
+  rules:
+    - {file: Gemfile, weight: 2, evidence: Gemfile}
+    - {file: Gemfile.lock, weight: 1, evidence: Gemfile.lock}
+structure: [Gemfile, lib/, spec/ or test/]
+conventions:
+  - "Run commands through `bundle exec` so the locked gem versions are used."
+exec:
+  programs: [ruby, bundle, rake, rspec, rubocop]
+  destructive_args: []

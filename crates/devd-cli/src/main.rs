@@ -15,6 +15,7 @@ use devd_core::paths::Paths;
 use devd_core::{DevdError, Result};
 
 mod app;
+mod devcat;
 mod gitcat;
 mod runtimecat;
 mod setup;
@@ -152,6 +153,23 @@ pub(crate) enum Command {
         #[arg(long)]
         port: Option<u16>,
     },
+    /// Create a new project from a stack (guided when run in a terminal).
+    New(NewArgs),
+    /// Browse the supported stacks, their options and the compatibility matrix.
+    Stacks {
+        #[command(subcommand)]
+        cmd: StacksCommand,
+    },
+    /// Detect, install, remove and run the tools and services projects need.
+    Tools {
+        #[command(subcommand)]
+        cmd: ToolsCommand,
+    },
+    /// Understand, import and work on projects: detect, tasks, run, exec.
+    Project {
+        #[command(subcommand)]
+        cmd: ProjectCommand,
+    },
     /// Open the terminal dashboard.
     Tui,
     /// Serve the Model Context Protocol on stdin/stdout, for agents.
@@ -165,6 +183,163 @@ pub(crate) enum Command {
     },
     /// Check the environment for problems.
     Doctor,
+}
+
+#[derive(clap::Args, Debug)]
+pub(crate) struct NewArgs {
+    /// Stack id, e.g. `laravel` or `nextjs` (see `devd stacks list`).
+    pub stack: Option<String>,
+    /// Project name; also the directory name.
+    pub name: Option<String>,
+    /// Directory to create the project in. Defaults to the projects root.
+    #[arg(long)]
+    pub dest: Option<String>,
+    /// Framework version id, e.g. `12` for Laravel 12.
+    #[arg(long = "stack-version")]
+    pub stack_version: Option<String>,
+    /// Package manager, e.g. `pnpm`.
+    #[arg(long)]
+    pub pm: Option<String>,
+    /// A stack option as `key=value`, e.g. `-o database=pgsql`. Repeatable.
+    #[arg(short = 'o', long = "option", value_name = "KEY=VALUE")]
+    pub option: Vec<String>,
+    /// Do not initialise a git repository.
+    #[arg(long)]
+    pub no_git: bool,
+    /// Do not install dependencies.
+    #[arg(long)]
+    pub no_install: bool,
+    /// Extra argument appended to the scaffolding command. Repeatable.
+    #[arg(long = "extra", allow_hyphen_values = true)]
+    pub extra: Vec<String>,
+    /// Ask the guided questions even though a stack and name were given.
+    #[arg(long)]
+    pub interactive: bool,
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum StacksCommand {
+    /// List the supported stacks.
+    List {
+        /// web, frontend, backend, mobile or language.
+        #[arg(long)]
+        category: Option<String>,
+    },
+    /// Show one stack: versions, options, tasks, services, documentation.
+    Show { id: String },
+    /// Print the JSON Schemas of requests, plans, reports and project context.
+    Schema,
+    /// Print the compatibility matrix.
+    Matrix {
+        /// Emit the Markdown used for docs/stacks.md.
+        #[arg(long)]
+        markdown: bool,
+    },
+    /// Show recent initialisations, tasks and tool changes.
+    Runs { subject: Option<String> },
+    /// Cancel a running operation by its run id.
+    Cancel { run_id: String },
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum ToolsCommand {
+    /// List every tool and service with a live check.
+    List {
+        #[arg(long)]
+        category: Option<String>,
+    },
+    /// Check whether this machine satisfies a stack.
+    Check {
+        stack: String,
+        #[arg(long = "stack-version")]
+        version: Option<String>,
+        #[arg(long)]
+        pm: Option<String>,
+    },
+    /// Show exactly what installing or removing a tool would do.
+    Plan {
+        tool: String,
+        #[arg(long)]
+        remove: bool,
+    },
+    /// Install a tool (asks for approval).
+    Install { tool: String },
+    /// Remove a tool (asks for approval; data is kept).
+    Remove { tool: String },
+    /// Show a service's state and health.
+    Status { tool: String },
+    /// Start a service and wait until it answers.
+    Start { tool: String },
+    /// Stop a service.
+    Stop { tool: String },
+    /// Restart a service.
+    Restart { tool: String },
+    /// Recent service log lines.
+    Logs { tool: String },
+    /// Connected Android devices and emulators (adb).
+    Devices,
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum ProjectCommand {
+    /// Inspect a directory: stack, package manager, runtimes, tasks, services, docs.
+    Detect {
+        #[arg(default_value = ".")]
+        path: String,
+        /// Treat the project as this stack instead of detecting it.
+        #[arg(long)]
+        stack: Option<String>,
+    },
+    /// Register an existing project without changing it.
+    Import {
+        #[arg(default_value = ".")]
+        path: String,
+        #[arg(long)]
+        stack: Option<String>,
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// List projects devd knows.
+    List,
+    /// Unregister a project (files are kept).
+    Forget { path: String },
+    /// List a project's tasks.
+    Tasks {
+        #[arg(default_value = ".")]
+        path: String,
+    },
+    /// Run a task, e.g. `devd project run . test`.
+    Run {
+        path: String,
+        task: String,
+        /// Start in the background.
+        #[arg(long)]
+        background: bool,
+        /// Wait for it even if it is a long-running task.
+        #[arg(long, conflicts_with = "background")]
+        foreground: bool,
+        /// Arguments passed to the task.
+        #[arg(last = true)]
+        args: Vec<String>,
+    },
+    /// Run an allow-listed framework command, e.g. `devd project exec . -- php artisan route:list`.
+    Exec {
+        path: String,
+        #[arg(long)]
+        timeout: Option<u64>,
+        #[arg(last = true, required = true)]
+        argv: Vec<String>,
+    },
+    /// List background tasks.
+    Ps,
+    /// Stop a background task.
+    Stop { name: String },
+    /// Show a background task's log.
+    Logs {
+        name: String,
+        #[arg(long)]
+        lines: Option<usize>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -940,6 +1115,22 @@ fn run(cli: Cli) -> Result<i32> {
         Command::Call { id, args, set } => {
             let value = merge_args(args, set)?;
             app.invoke(&id, value)?;
+            Ok(0)
+        }
+        Command::New(a) => {
+            devcat::new_project(&app, a)?;
+            Ok(0)
+        }
+        Command::Stacks { cmd } => {
+            devcat::stacks(&app, cmd)?;
+            Ok(0)
+        }
+        Command::Tools { cmd } => {
+            devcat::tools(&app, cmd)?;
+            Ok(0)
+        }
+        Command::Project { cmd } => {
+            devcat::project(&app, cmd)?;
             Ok(0)
         }
         Command::Git { cmd } => {

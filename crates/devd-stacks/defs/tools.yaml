@@ -1,0 +1,752 @@
+# The tool catalogue: what devd can detect, install, remove and (for services)
+# run. Every entry names its trust model; install recipes use the host's own
+# package manager or a digest-verified devd runtime download.
+package_managers:
+  - {id: npm, name: npm, ecosystem: node, tool: npm, run: [npm, run], install: [npm, install], add: [npm, install], exec: [npx, --no-install], dlx: [npx, --yes], lockfiles: [package-lock.json, npm-shrinkwrap.json], docs: "https://docs.npmjs.com/cli/"}
+  - {id: pnpm, name: pnpm, ecosystem: node, tool: pnpm, run: [pnpm, run], install: [pnpm, install], add: [pnpm, add], exec: [pnpm, exec], dlx: [pnpm, dlx], lockfiles: [pnpm-lock.yaml], markers: [pnpm-workspace.yaml], docs: "https://pnpm.io/cli/install"}
+  - {id: yarn, name: Yarn, ecosystem: node, tool: yarn, run: [yarn, run], install: [yarn, install], add: [yarn, add], exec: [yarn], dlx: [yarn, dlx], lockfiles: [yarn.lock], markers: [.yarnrc.yml], docs: "https://yarnpkg.com/cli"}
+  - {id: bun, name: Bun, ecosystem: node, tool: bun, run: [bun, run], install: [bun, install], add: [bun, add], exec: [bunx], dlx: [bunx], lockfiles: [bun.lock, bun.lockb], markers: [bunfig.toml], docs: "https://bun.sh/docs/cli/install"}
+  - {id: composer, name: Composer, ecosystem: php, tool: composer, run: [composer, run-script], install: [composer, install], add: [composer, require], exec: [php], dlx: [composer, create-project], lockfiles: [composer.lock], markers: [composer.json], docs: "https://getcomposer.org/doc/"}
+  - {id: pip, name: pip + venv, ecosystem: python, tool: python, run: ["{py}", -m], install: ["{py}", -m, pip, install, -r, requirements.txt], add: ["{py}", -m, pip, install], exec: ["{py}", -m], dlx: ["{py}", -m], lockfiles: [], markers: [requirements.txt, .venv], docs: "https://docs.python.org/3/library/venv.html"}
+  - {id: uv, name: uv, ecosystem: python, tool: uv, run: [uv, run], install: [uv, sync], add: [uv, add], exec: [uv, run], dlx: [uvx], lockfiles: [uv.lock], docs: "https://docs.astral.sh/uv/"}
+  - {id: poetry, name: Poetry, ecosystem: python, tool: poetry, run: [poetry, run], install: [poetry, install], add: [poetry, add], exec: [poetry, run], dlx: [poetry, run], lockfiles: [poetry.lock], docs: "https://python-poetry.org/docs/"}
+  - {id: bundler, name: Bundler, ecosystem: ruby, tool: bundler, run: [bundle, exec], install: [bundle, install], add: [bundle, add], exec: [bundle, exec], dlx: [bundle, exec], lockfiles: [Gemfile.lock], markers: [Gemfile], docs: "https://bundler.io/guides/"}
+  - {id: go, name: Go modules, ecosystem: go, tool: go, run: [go, run], install: [go, mod, download], add: [go, get], exec: [go, run], dlx: [go, run], lockfiles: [go.sum], markers: [go.mod], docs: "https://go.dev/ref/mod"}
+  - {id: cargo, name: Cargo, ecosystem: rust, tool: rust, run: [cargo, run], install: [cargo, fetch], add: [cargo, add], exec: [cargo, run], dlx: [cargo, run], lockfiles: [Cargo.lock], markers: [Cargo.toml], docs: "https://doc.rust-lang.org/cargo/"}
+  - {id: maven, name: Maven, ecosystem: java, tool: maven, run: [mvn], install: [mvn, dependency:resolve], add: [mvn], exec: [mvn], dlx: [mvn], lockfiles: [], markers: [pom.xml], docs: "https://maven.apache.org/guides/"}
+  - {id: gradle, name: Gradle, ecosystem: java, tool: gradle, run: [gradle], install: [gradle, dependencies], add: [gradle], exec: [gradle], dlx: [gradle], lockfiles: [gradle.lockfile], markers: [build.gradle, build.gradle.kts], docs: "https://docs.gradle.org/current/userguide/userguide.html"}
+  - {id: dotnet, name: dotnet CLI, ecosystem: dotnet, tool: dotnet, run: [dotnet], install: [dotnet, restore], add: [dotnet, add, package], exec: [dotnet], dlx: [dotnet], lockfiles: [packages.lock.json], docs: "https://learn.microsoft.com/dotnet/core/tools/"}
+
+tools:
+  - id: git
+    name: Git
+    category: vcs
+    purpose: Version control; used by every project and by devd's Git integration.
+    exes: [git]
+    version_regex: 'git version (\d+\.\d+(?:\.\d+)?)'
+    supported_min: "2.30"
+    docs: [{title: Git documentation, url: "https://git-scm.com/doc"}]
+    install:
+      - {manager: apt, packages: [git]}
+      - {manager: dnf, packages: [git]}
+      - {manager: pacman, packages: [git]}
+      - {manager: brew, packages: [git]}
+      - {manager: winget, packages: [Git.Git]}
+    remove:
+      - {manager: apt, packages: [git]}
+      - {manager: dnf, packages: [git]}
+      - {manager: brew, packages: [git]}
+      - {manager: winget, packages: [Git.Git]}
+    trust: The distribution's signed package repository, Homebrew's core formulae, or the winget community repository (Git.Git is published by the Git for Windows project).
+    upgrade: Upgrade with the same package manager; Git keeps repository formats compatible across 2.x releases.
+
+  - id: node
+    name: Node.js
+    category: runtime
+    purpose: JavaScript runtime for Next.js, Nuxt, Astro, Vue, Svelte, Express, Expo and React Native.
+    exes: [node]
+    version_regex: 'v(\d+\.\d+\.\d+)'
+    supported_min: "20.9"
+    docs: [{title: Node.js documentation, url: "https://nodejs.org/docs/latest/api/"}, {title: Download, url: "https://nodejs.org/en/download"}]
+    install:
+      - {manager: devd-runtime, packages: [node], note: "Downloaded from nodejs.org and verified against the published SHA-256; installed under the devd directory with no administrator rights."}
+      - {manager: brew, packages: [node]}
+      - {manager: winget, packages: [OpenJS.NodeJS.LTS]}
+      - {manager: apt, packages: [nodejs, npm]}
+      - {manager: dnf, packages: [nodejs, npm]}
+      - {manager: pacman, packages: [nodejs, npm]}
+    remove:
+      - {manager: brew, packages: [node]}
+      - {manager: winget, packages: [OpenJS.NodeJS.LTS]}
+      - {manager: apt, packages: [nodejs]}
+      - {manager: dnf, packages: [nodejs]}
+    trust: nodejs.org releases verified by SHA-256 (devd runtime), or the host package manager. Distribution packages often lag behind the versions modern frameworks require.
+    upgrade: Install a newer version alongside (devd keeps versions side by side); remove the old one afterwards. Check each project's engines field first.
+
+  - id: npm
+    name: npm
+    category: package-manager
+    purpose: Node.js package manager; ships with Node.js.
+    exes: [npm]
+    version_regex: '(\d+\.\d+\.\d+)'
+    docs: [{title: npm CLI, url: "https://docs.npmjs.com/cli/"}]
+    depends: [node]
+    install: [{manager: manual, note: "npm is installed with Node.js; install Node.js instead."}]
+    trust: Bundled with Node.js releases.
+    upgrade: Upgrades with Node.js.
+
+  - id: pnpm
+    name: pnpm
+    category: package-manager
+    purpose: Fast, disk-efficient Node.js package manager.
+    exes: [pnpm]
+    version_regex: '(\d+\.\d+\.\d+)'
+    docs: [{title: pnpm installation, url: "https://pnpm.io/installation"}]
+    depends: [node]
+    install:
+      - {manager: npm, packages: [pnpm]}
+      - {manager: brew, packages: [pnpm]}
+      - {manager: winget, packages: [pnpm.pnpm]}
+    remove:
+      - {manager: npm, packages: [pnpm]}
+      - {manager: brew, packages: [pnpm]}
+    trust: The npm registry package published by the pnpm project, or Homebrew/winget.
+    upgrade: "`npm install -g pnpm@latest`; projects can pin a version with the packageManager field."
+
+  - id: yarn
+    name: Yarn
+    category: package-manager
+    purpose: Node.js package manager (classic 1.x or Berry).
+    exes: [yarn]
+    version_regex: '(\d+\.\d+\.\d+)'
+    docs: [{title: Yarn installation, url: "https://yarnpkg.com/getting-started/install"}]
+    depends: [node]
+    install:
+      - {manager: npm, packages: [yarn]}
+      - {manager: brew, packages: [yarn]}
+      - {manager: winget, packages: [Yarn.Yarn]}
+    remove:
+      - {manager: npm, packages: [yarn]}
+      - {manager: brew, packages: [yarn]}
+    trust: The npm registry package, Homebrew or winget. The npm package installs Yarn Classic 1.x; Berry is enabled per project with corepack.
+    upgrade: Berry versions are pinned per project (packageManager field).
+
+  - id: bun
+    name: Bun
+    category: package-manager
+    purpose: JavaScript runtime and package manager.
+    exes: [bun]
+    version_regex: '(\d+\.\d+\.\d+)'
+    docs: [{title: Bun installation, url: "https://bun.sh/docs/installation"}]
+    install:
+      - {manager: brew, packages: ["oven-sh/bun/bun"]}
+      - {manager: winget, packages: [Oven-sh.Bun]}
+      - {manager: npm, packages: [bun]}
+    remove:
+      - {manager: brew, packages: [bun]}
+      - {manager: winget, packages: [Oven-sh.Bun]}
+      - {manager: npm, packages: [bun]}
+    trust: Homebrew tap and winget package published by the Bun project, or its npm package.
+    upgrade: "`bun upgrade`."
+
+  - id: php
+    name: PHP
+    category: runtime
+    purpose: PHP runtime for Laravel, Symfony, CodeIgniter, CakePHP and Slim.
+    exes: [php]
+    version_regex: 'PHP (\d+\.\d+\.\d+)'
+    supported_min: "8.1"
+    docs: [{title: PHP manual, url: "https://www.php.net/manual/en/"}]
+    install:
+      - {manager: devd-runtime, packages: [php], note: "Windows builds from windows.php.net, verified by SHA-256."}
+      - {manager: apt, packages: [php-cli, php-mbstring, php-xml, php-curl, php-zip, php-sqlite3, unzip]}
+      - {manager: dnf, packages: [php-cli, php-mbstring, php-xml, php-json, php-pdo, unzip]}
+      - {manager: pacman, packages: [php]}
+      - {manager: brew, packages: [php]}
+    remove:
+      - {manager: apt, packages: [php-cli]}
+      - {manager: dnf, packages: [php-cli]}
+      - {manager: brew, packages: [php]}
+    trust: windows.php.net digests (devd runtime) or the host package manager. Laravel needs the mbstring, xml, curl and zip extensions.
+    upgrade: Distribution repositories ship one PHP series; use the vendor's PHP repository or Homebrew versioned formulae for others. Check each framework version's PHP range before upgrading.
+
+  - id: composer
+    name: Composer
+    category: package-manager
+    purpose: PHP dependency manager; creates Laravel, Symfony and CakePHP projects.
+    exes: [composer]
+    version_regex: 'Composer version (\d+\.\d+\.\d+)'
+    supported_min: "2.2"
+    docs: [{title: Composer documentation, url: "https://getcomposer.org/doc/"}]
+    depends: [php]
+    env: [COMPOSER_ALLOW_SUPERUSER]
+    install:
+      - {manager: apt, packages: [composer]}
+      - {manager: dnf, packages: [composer]}
+      - {manager: pacman, packages: [composer]}
+      - {manager: brew, packages: [composer]}
+      - {manager: winget, packages: [Composer.Composer]}
+    remove:
+      - {manager: apt, packages: [composer]}
+      - {manager: dnf, packages: [composer]}
+      - {manager: brew, packages: [composer]}
+      - {manager: winget, packages: [Composer.Composer]}
+    trust: Package-manager builds. The installer on getcomposer.org verifies a published signature if you install by hand.
+    upgrade: "`composer self-update` for manual installs."
+
+  - id: python
+    name: Python
+    category: runtime
+    purpose: Python interpreter with venv and pip, for Django, Flask and FastAPI.
+    exes: [python3, python]
+    version_regex: 'Python (\d+\.\d+\.\d+)'
+    supported_min: "3.9"
+    docs: [{title: Python documentation, url: "https://docs.python.org/3/"}, {title: venv, url: "https://docs.python.org/3/library/venv.html"}]
+    install:
+      - {manager: apt, packages: [python3, python3-venv, python3-pip]}
+      - {manager: dnf, packages: [python3, python3-pip]}
+      - {manager: pacman, packages: [python, python-pip]}
+      - {manager: brew, packages: [python]}
+      - {manager: winget, packages: [Python.Python.3.13]}
+    remove:
+      - {manager: apt, packages: [python3-venv]}
+      - {manager: brew, packages: [python]}
+      - {manager: winget, packages: [Python.Python.3.13]}
+    trust: Host package manager; python.org publishes the Windows installer behind winget.
+    upgrade: Virtual environments are tied to the interpreter that created them; recreate them after a minor-version upgrade. Do not remove the system Python on Linux.
+
+  - id: uv
+    name: uv
+    category: package-manager
+    purpose: Fast Python package and project manager.
+    exes: [uv]
+    version_regex: 'uv (\d+\.\d+\.\d+)'
+    docs: [{title: uv documentation, url: "https://docs.astral.sh/uv/"}]
+    install:
+      - {manager: brew, packages: [uv]}
+      - {manager: winget, packages: [astral-sh.uv]}
+      - {manager: manual, note: "Use the official standalone installer from the uv documentation, or pipx install uv.", url: "https://docs.astral.sh/uv/getting-started/installation/"}
+    remove:
+      - {manager: brew, packages: [uv]}
+      - {manager: winget, packages: [astral-sh.uv]}
+    trust: Homebrew/winget builds of the Astral project; devd does not pipe downloaded scripts into a shell.
+    upgrade: "`uv self update` for standalone installs."
+
+  - id: poetry
+    name: Poetry
+    category: package-manager
+    purpose: Python dependency and packaging manager.
+    exes: [poetry]
+    version_regex: 'Poetry \(version (\d+\.\d+\.\d+)\)'
+    docs: [{title: Poetry documentation, url: "https://python-poetry.org/docs/"}]
+    depends: [python]
+    install:
+      - {manager: brew, packages: [poetry]}
+      - {manager: manual, note: "Install with pipx (`pipx install poetry`) or the official installer; devd does not pipe downloaded scripts into a shell.", url: "https://python-poetry.org/docs/#installation"}
+    remove:
+      - {manager: brew, packages: [poetry]}
+    trust: Homebrew, or PyPI through pipx.
+    upgrade: "`poetry self update`."
+
+  - id: ruby
+    name: Ruby
+    category: runtime
+    purpose: Ruby runtime for Rails and gems.
+    exes: [ruby]
+    version_regex: 'ruby (\d+\.\d+\.\d+)'
+    supported_min: "3.1"
+    docs: [{title: Ruby documentation, url: "https://www.ruby-lang.org/en/documentation/"}]
+    install:
+      - {manager: apt, packages: [ruby-full, build-essential]}
+      - {manager: dnf, packages: [ruby, ruby-devel, gcc, make]}
+      - {manager: pacman, packages: [ruby]}
+      - {manager: brew, packages: [ruby]}
+      - {manager: winget, packages: [RubyInstallerTeam.RubyWithDevKit.3.3]}
+    remove:
+      - {manager: apt, packages: [ruby-full]}
+      - {manager: dnf, packages: [ruby]}
+      - {manager: brew, packages: [ruby]}
+      - {manager: winget, packages: [RubyInstallerTeam.RubyWithDevKit.3.3]}
+    trust: Host package manager. Rails 8 needs Ruby 3.2 or newer; distribution Ruby may be older, in which case use rbenv or ruby-install.
+    upgrade: Reinstall gems after a minor-version change.
+
+  - id: bundler
+    name: Bundler
+    category: package-manager
+    purpose: Ruby dependency manager.
+    exes: [bundle]
+    version_regex: '(\d+\.\d+\.\d+)'
+    docs: [{title: Bundler guides, url: "https://bundler.io/guides/"}]
+    depends: [ruby]
+    install:
+      - {manager: gem, packages: [bundler]}
+    remove:
+      - {manager: gem, packages: [bundler]}
+    trust: RubyGems.org.
+    upgrade: "`gem update bundler`."
+
+  - id: rails
+    name: Rails
+    category: package-manager
+    purpose: The `rails` command used to generate Rails applications.
+    exes: [rails]
+    version_args: [--version]
+    version_regex: 'Rails (\d+\.\d+\.\d+)'
+    docs: [{title: Rails guides, url: "https://guides.rubyonrails.org/getting_started.html"}]
+    depends: [ruby]
+    install:
+      - {manager: gem, packages: [rails]}
+    remove:
+      - {manager: gem, packages: [rails]}
+    trust: RubyGems.org.
+    upgrade: Applications pin their own Rails in the Gemfile; the global gem only generates new apps.
+
+  - id: go
+    name: Go
+    category: runtime
+    purpose: The Go toolchain.
+    exes: [go]
+    version_args: [version]
+    version_regex: 'go(\d+\.\d+(?:\.\d+)?)'
+    supported_min: "1.22"
+    docs: [{title: Go documentation, url: "https://go.dev/doc/"}, {title: Download, url: "https://go.dev/dl/"}]
+    install:
+      - {manager: devd-runtime, packages: [go], note: "Downloaded from go.dev and verified against the published SHA-256."}
+      - {manager: brew, packages: [go]}
+      - {manager: winget, packages: [GoLang.Go]}
+      - {manager: apt, packages: [golang-go]}
+      - {manager: dnf, packages: [golang]}
+      - {manager: pacman, packages: [go]}
+    remove:
+      - {manager: brew, packages: [go]}
+      - {manager: winget, packages: [GoLang.Go]}
+      - {manager: apt, packages: [golang-go]}
+      - {manager: dnf, packages: [golang]}
+    trust: go.dev releases verified by SHA-256 (devd runtime), or the host package manager.
+    upgrade: Go 1.21+ downloads the toolchain a module's go.mod asks for; installing a newer Go is backward compatible.
+
+  - id: java
+    name: JDK
+    category: runtime
+    purpose: Java Development Kit for Spring Boot, Gradle and Android builds.
+    exes: [java]
+    version_args: [-version]
+    version_regex: 'version "(\d+(?:\.\d+)*)'
+    supported_min: "17"
+    docs: [{title: OpenJDK, url: "https://openjdk.org/"}, {title: Adoptium Temurin, url: "https://adoptium.net/"}]
+    install:
+      - {manager: apt, packages: [default-jdk]}
+      - {manager: dnf, packages: [java-latest-openjdk-devel]}
+      - {manager: pacman, packages: [jdk-openjdk]}
+      - {manager: brew, packages: [openjdk]}
+      - {manager: winget, packages: [EclipseAdoptium.Temurin.21.JDK]}
+    remove:
+      - {manager: apt, packages: [default-jdk]}
+      - {manager: brew, packages: [openjdk]}
+      - {manager: winget, packages: [EclipseAdoptium.Temurin.21.JDK]}
+    trust: Host package manager or Adoptium. Spring Boot 3 requires Java 17+; Android Gradle Plugin 8 requires 17.
+    upgrade: Several JDKs can coexist; select one with JAVA_HOME.
+    env: [JAVA_HOME]
+
+  - id: maven
+    name: Maven
+    category: build
+    purpose: Java build tool.
+    exes: [mvn]
+    version_regex: 'Apache Maven (\d+\.\d+\.\d+)'
+    docs: [{title: Maven guides, url: "https://maven.apache.org/guides/"}]
+    depends: [java]
+    install:
+      - {manager: apt, packages: [maven]}
+      - {manager: dnf, packages: [maven]}
+      - {manager: pacman, packages: [maven]}
+      - {manager: brew, packages: [maven]}
+      - {manager: manual, note: "Download the binary archive from maven.apache.org and add bin to PATH. Spring Boot projects include ./mvnw, which needs no installation.", url: "https://maven.apache.org/download.cgi"}
+    remove:
+      - {manager: apt, packages: [maven]}
+      - {manager: brew, packages: [maven]}
+    trust: Host package manager; Apache publishes checksums and signatures for manual downloads.
+    upgrade: Projects using the Maven wrapper pin their own version.
+
+  - id: gradle
+    name: Gradle
+    category: build
+    purpose: Java/Kotlin/Android build tool.
+    exes: [gradle]
+    version_regex: 'Gradle (\d+\.\d+(?:\.\d+)?)'
+    docs: [{title: Gradle user guide, url: "https://docs.gradle.org/current/userguide/userguide.html"}]
+    depends: [java]
+    install:
+      - {manager: apt, packages: [gradle]}
+      - {manager: dnf, packages: [gradle]}
+      - {manager: pacman, packages: [gradle]}
+      - {manager: brew, packages: [gradle]}
+      - {manager: winget, packages: [Gradle.Gradle]}
+    remove:
+      - {manager: apt, packages: [gradle]}
+      - {manager: brew, packages: [gradle]}
+      - {manager: winget, packages: [Gradle.Gradle]}
+    trust: Host package manager. Projects should use their ./gradlew wrapper, which pins the version.
+    upgrade: "`./gradlew wrapper --gradle-version X` per project."
+
+  - id: dotnet
+    name: .NET SDK
+    category: runtime
+    purpose: .NET SDK for ASP.NET Core.
+    exes: [dotnet]
+    version_regex: '(\d+\.\d+\.\d+)'
+    supported_min: "8.0"
+    docs: [{title: .NET documentation, url: "https://learn.microsoft.com/dotnet/core/"}, {title: Install .NET, url: "https://learn.microsoft.com/dotnet/core/install/"}]
+    install:
+      - {manager: winget, packages: [Microsoft.DotNet.SDK.9]}
+      - {manager: brew, packages: [dotnet]}
+      - {manager: apt, packages: [dotnet-sdk-8.0]}
+      - {manager: dnf, packages: [dotnet-sdk-9.0]}
+    remove:
+      - {manager: winget, packages: [Microsoft.DotNet.SDK.9]}
+      - {manager: brew, packages: [dotnet]}
+      - {manager: apt, packages: [dotnet-sdk-8.0]}
+      - {manager: dnf, packages: [dotnet-sdk-9.0]}
+    trust: Microsoft's packages in the distribution archive, Homebrew or winget.
+    upgrade: SDKs install side by side; global.json pins the SDK a project uses.
+    env: [DOTNET_CLI_TELEMETRY_OPTOUT]
+
+  - id: rust
+    name: Rust (cargo)
+    category: runtime
+    purpose: Rust compiler and Cargo.
+    exes: [cargo]
+    version_regex: 'cargo (\d+\.\d+\.\d+)'
+    supported_min: "1.75"
+    docs: [{title: The Cargo Book, url: "https://doc.rust-lang.org/cargo/"}, {title: Install Rust, url: "https://www.rust-lang.org/tools/install"}]
+    depends: []
+    install:
+      - {manager: brew, packages: [rust]}
+      - {manager: winget, packages: [Rustlang.Rustup]}
+      - {manager: apt, packages: [cargo, rustc]}
+      - {manager: dnf, packages: [cargo, rust]}
+      - {manager: pacman, packages: [rust]}
+    remove:
+      - {manager: brew, packages: [rust]}
+      - {manager: winget, packages: [Rustlang.Rustup]}
+      - {manager: apt, packages: [cargo, rustc]}
+      - {manager: dnf, packages: [cargo, rust]}
+    trust: Host package manager. The Rust project recommends rustup (rust-lang.org/tools/install) for toolchain switching; distribution packages are older.
+    upgrade: With rustup, `rustup update`; distribution packages follow the distribution.
+
+  - id: mariadb
+    name: MariaDB
+    category: database
+    purpose: MySQL-compatible relational database.
+    exes: [mariadb, mysql]
+    version_regex: 'Distrib (\d+\.\d+\.\d+)|Ver (\d+\.\d+(?:\.\d+)?)'
+    docs: [{title: MariaDB documentation, url: "https://mariadb.com/kb/en/documentation/"}]
+    install:
+      - {manager: apt, packages: [mariadb-server]}
+      - {manager: dnf, packages: [mariadb-server]}
+      - {manager: pacman, packages: [mariadb]}
+      - {manager: brew, packages: [mariadb]}
+      - {manager: winget, packages: [MariaDB.Server]}
+    remove:
+      - {manager: apt, packages: [mariadb-server]}
+      - {manager: dnf, packages: [mariadb-server]}
+      - {manager: brew, packages: [mariadb]}
+      - {manager: winget, packages: [MariaDB.Server]}
+    trust: Host package manager or the MariaDB Foundation's winget package.
+    upgrade: Take a dump before major upgrades; downgrades are unsupported by MariaDB.
+    service:
+      units: [mariadb, mysql, mysqld]
+      port: 3306
+      data_dir: /var/lib/mysql
+      logs: "journalctl -u mariadb, or /var/log/mysql/"
+      security: Binds to localhost by default on distribution packages; root authenticates over the unix socket. Do not expose port 3306 beyond localhost.
+
+  - id: mysql
+    name: MySQL
+    category: database
+    purpose: Relational database.
+    exes: [mysql]
+    version_regex: 'Distrib (\d+\.\d+\.\d+)|Ver (\d+\.\d+(?:\.\d+)?)'
+    docs: [{title: MySQL reference manual, url: "https://dev.mysql.com/doc/refman/en/"}]
+    install:
+      - {manager: apt, packages: [mysql-server]}
+      - {manager: dnf, packages: [mysql-server]}
+      - {manager: brew, packages: [mysql]}
+      - {manager: winget, packages: [Oracle.MySQL]}
+    remove:
+      - {manager: apt, packages: [mysql-server]}
+      - {manager: dnf, packages: [mysql-server]}
+      - {manager: brew, packages: [mysql]}
+      - {manager: winget, packages: [Oracle.MySQL]}
+    trust: Host package manager. MySQL and MariaDB both use port 3306; run only one at a time or change a port.
+    upgrade: Dump before upgrading; MySQL does not support downgrades.
+    service:
+      units: [mysql, mysqld]
+      port: 3306
+      data_dir: /var/lib/mysql
+      logs: "journalctl -u mysql, or /var/log/mysql/"
+      security: Localhost-only by default on distribution packages.
+
+  - id: postgresql
+    name: PostgreSQL
+    category: database
+    purpose: Relational database.
+    exes: [psql]
+    version_regex: 'psql \(PostgreSQL\) (\d+(?:\.\d+)*)'
+    docs: [{title: PostgreSQL documentation, url: "https://www.postgresql.org/docs/current/"}]
+    install:
+      - {manager: apt, packages: [postgresql, postgresql-client]}
+      - {manager: dnf, packages: [postgresql-server, postgresql]}
+      - {manager: pacman, packages: [postgresql]}
+      - {manager: brew, packages: ["postgresql@17"]}
+      - {manager: winget, packages: [PostgreSQL.PostgreSQL.17]}
+    remove:
+      - {manager: apt, packages: [postgresql, postgresql-client]}
+      - {manager: dnf, packages: [postgresql-server]}
+      - {manager: brew, packages: ["postgresql@17"]}
+      - {manager: winget, packages: [PostgreSQL.PostgreSQL.17]}
+    trust: Host package manager. On Fedora/RHEL run `postgresql-setup --initdb` once after installing.
+    upgrade: Major versions need pg_upgrade or dump/restore; Debian packages allow several clusters side by side.
+    service:
+      units: [postgresql]
+      port: 5432
+      health: [pg_isready, -h, 127.0.0.1, -p, "5432"]
+      data_dir: /var/lib/postgresql
+      logs: "journalctl -u postgresql, or /var/log/postgresql/"
+      security: pg_hba.conf limits local connections by default; do not widen listen_addresses without a firewall.
+
+  - id: redis
+    name: Redis
+    category: database
+    purpose: In-memory data store used for caches and queues.
+    exes: [redis-server]
+    version_regex: 'v=(\d+\.\d+\.\d+)'
+    docs: [{title: Redis documentation, url: "https://redis.io/docs/latest/"}]
+    install:
+      - {manager: apt, packages: [redis-server]}
+      - {manager: dnf, packages: [redis]}
+      - {manager: pacman, packages: [redis]}
+      - {manager: brew, packages: [redis]}
+      - {manager: manual, note: "Redis has no native Windows build; use WSL or a Redis-compatible Windows service.", url: "https://redis.io/docs/latest/operate/oss_and_stack/install/install-redis/"}
+    remove:
+      - {manager: apt, packages: [redis-server]}
+      - {manager: dnf, packages: [redis]}
+      - {manager: brew, packages: [redis]}
+    trust: Host package manager.
+    upgrade: Persistence files (RDB/AOF) are forward compatible within a major version.
+    service:
+      units: [redis-server, redis]
+      port: 6379
+      health: [redis-cli, -h, 127.0.0.1, ping]
+      direct_start: [redis-server, --daemonize, "yes", --bind, 127.0.0.1, --protected-mode, "yes"]
+      direct_stop: [redis-cli, -h, 127.0.0.1, shutdown]
+      data_dir: /var/lib/redis
+      logs: "journalctl -u redis-server, or /var/log/redis/"
+      security: Binds to 127.0.0.1 with protected mode on. Never expose Redis without a password and a firewall.
+
+  - id: sqlite
+    name: SQLite
+    category: database
+    purpose: Embedded database and its command-line shell.
+    exes: [sqlite3]
+    version_regex: '(\d+\.\d+\.\d+)'
+    docs: [{title: SQLite documentation, url: "https://www.sqlite.org/docs.html"}]
+    install:
+      - {manager: apt, packages: [sqlite3, libsqlite3-dev]}
+      - {manager: dnf, packages: [sqlite, sqlite-devel]}
+      - {manager: pacman, packages: [sqlite]}
+      - {manager: brew, packages: [sqlite]}
+      - {manager: manual, note: "Download the sqlite-tools bundle from sqlite.org and add it to PATH.", url: "https://www.sqlite.org/download.html"}
+    remove:
+      - {manager: apt, packages: [sqlite3]}
+      - {manager: dnf, packages: [sqlite]}
+      - {manager: brew, packages: [sqlite]}
+    trust: Host package manager; sqlite.org publishes SHA3 hashes for manual downloads.
+    upgrade: Database files are forward and backward compatible.
+
+  - id: docker
+    name: Docker
+    category: container
+    purpose: Container runtime for Dockerfiles and compose projects.
+    exes: [docker]
+    version_regex: 'Docker version (\d+\.\d+\.\d+)'
+    docs: [{title: Docker documentation, url: "https://docs.docker.com/"}, {title: Install Docker Engine, url: "https://docs.docker.com/engine/install/"}]
+    install:
+      - {manager: apt, packages: [docker.io]}
+      - {manager: dnf, packages: [moby-engine]}
+      - {manager: pacman, packages: [docker]}
+      - {manager: brew-cask, packages: [docker]}
+      - {manager: winget, packages: [Docker.DockerDesktop]}
+    remove:
+      - {manager: apt, packages: [docker.io]}
+      - {manager: dnf, packages: [moby-engine]}
+      - {manager: brew-cask, packages: [docker]}
+      - {manager: winget, packages: [Docker.DockerDesktop]}
+    trust: Distribution packages. Docker's own apt repository (docs.docker.com/engine/install) carries newer builds and must be added by you. Docker group membership is root-equivalent.
+    upgrade: Images and volumes survive engine upgrades.
+    service:
+      units: [docker]
+      port: 2375
+      health: [docker, info]
+      data_dir: /var/lib/docker
+      logs: "journalctl -u docker"
+      security: The daemon socket is root-equivalent. Port 2375 is only probed for conflicts; devd never enables the unauthenticated TCP socket.
+
+  - id: nginx
+    name: nginx
+    category: utility
+    purpose: Web server used by devd sites on Linux and macOS.
+    exes: [nginx]
+    version_args: [-v]
+    version_regex: 'nginx/(\d+\.\d+\.\d+)'
+    docs: [{title: nginx documentation, url: "https://nginx.org/en/docs/"}]
+    install:
+      - {manager: apt, packages: [nginx]}
+      - {manager: dnf, packages: [nginx]}
+      - {manager: pacman, packages: [nginx]}
+      - {manager: brew, packages: [nginx]}
+    remove:
+      - {manager: apt, packages: [nginx]}
+      - {manager: dnf, packages: [nginx]}
+      - {manager: brew, packages: [nginx]}
+    trust: Host package manager. On Windows devd manages nginx itself (`devd service install nginx`).
+    upgrade: "`nginx -t` before reloading after an upgrade."
+
+  - id: gh
+    name: GitHub CLI
+    category: vcs
+    purpose: Pull requests, issues and authentication for GitHub.
+    exes: [gh]
+    version_regex: 'gh version (\d+\.\d+\.\d+)'
+    docs: [{title: GitHub CLI manual, url: "https://cli.github.com/manual/"}]
+    install:
+      - {manager: apt, packages: [gh]}
+      - {manager: dnf, packages: [gh]}
+      - {manager: pacman, packages: [github-cli]}
+      - {manager: brew, packages: [gh]}
+      - {manager: winget, packages: [GitHub.cli]}
+    remove:
+      - {manager: apt, packages: [gh]}
+      - {manager: dnf, packages: [gh]}
+      - {manager: brew, packages: [gh]}
+      - {manager: winget, packages: [GitHub.cli]}
+    trust: Host package manager; GitHub also publishes its own signed apt/dnf repositories.
+    upgrade: "Run `gh auth status` after upgrading; credentials are kept in the system keyring."
+
+  - id: adb
+    name: Android Debug Bridge
+    category: mobile
+    purpose: Connects to Android devices and emulators.
+    exes: [adb]
+    version_regex: 'Android Debug Bridge version (\d+\.\d+\.\d+)'
+    docs: [{title: adb, url: "https://developer.android.com/tools/adb"}]
+    install:
+      - {manager: apt, packages: [adb]}
+      - {manager: dnf, packages: [android-tools]}
+      - {manager: pacman, packages: [android-tools]}
+      - {manager: brew-cask, packages: [android-platform-tools]}
+      - {manager: winget, packages: [Google.PlatformTools]}
+    remove:
+      - {manager: apt, packages: [adb]}
+      - {manager: dnf, packages: [android-tools]}
+      - {manager: brew-cask, packages: [android-platform-tools]}
+      - {manager: winget, packages: [Google.PlatformTools]}
+    trust: Host package manager; Google publishes platform-tools at developer.android.com.
+    upgrade: Use an adb version at least as new as the device's platform tools.
+
+  - id: android-sdk
+    name: Android SDK command-line tools
+    category: mobile
+    purpose: sdkmanager, build-tools and platforms for Android builds (Expo prebuild, React Native).
+    exes: [sdkmanager]
+    version_regex: '(\d+\.\d+(?:\.\d+)?)'
+    docs: [{title: Android command-line tools, url: "https://developer.android.com/tools"}, {title: Expo Android environment, url: "https://docs.expo.dev/get-started/set-up-your-environment/?platform=android"}]
+    depends: [java]
+    env: [ANDROID_HOME, ANDROID_SDK_ROOT]
+    install:
+      - {manager: brew-cask, packages: [android-commandlinetools]}
+      - {manager: winget, packages: [Google.AndroidStudio]}
+      - {manager: manual, note: "Download the command-line tools from developer.android.com, unpack to $ANDROID_HOME/cmdline-tools/latest, then run `sdkmanager --licenses` and install platform-tools, a platform and build-tools.", url: "https://developer.android.com/tools"}
+    remove:
+      - {manager: brew-cask, packages: [android-commandlinetools]}
+      - {manager: winget, packages: [Google.AndroidStudio]}
+    trust: Google downloads only; accepting SDK licences is a human decision devd never makes for you.
+    upgrade: "`sdkmanager --update`; build-tools versions install side by side."
+
+  - id: expo
+    name: Expo CLI
+    category: mobile
+    purpose: Run, build and inspect Expo apps. It is a project dependency invoked as `npx expo`; nothing is installed on the machine.
+    per_project: true
+    docs: [{title: Expo CLI, url: "https://docs.expo.dev/more/expo-cli/"}]
+    trust: The `expo` package from the npm registry, versioned with the project's Expo SDK.
+    upgrade: "`npx expo install expo@latest` then `npx expo install --fix`."
+
+  - id: eas-cli
+    name: EAS CLI
+    category: mobile
+    purpose: Expo Application Services builds and submissions.
+    exes: [eas]
+    version_regex: 'eas-cli/(\d+\.\d+\.\d+)'
+    docs: [{title: EAS CLI, url: "https://docs.expo.dev/eas/"}]
+    depends: [node]
+    install:
+      - {manager: npm, packages: [eas-cli]}
+    remove:
+      - {manager: npm, packages: [eas-cli]}
+    trust: The npm registry package published by Expo.
+    upgrade: "`npm install -g eas-cli`."
+
+  - id: build-tools
+    name: C/C++ build tools
+    category: build
+    purpose: Compiler and make, needed by native extensions (gems, Python wheels, Node addons).
+    exes: [gcc, cc]
+    version_regex: '(\d+\.\d+\.\d+)'
+    docs: [{title: GNU Compiler Collection, url: "https://gcc.gnu.org/onlinedocs/"}]
+    install:
+      - {manager: apt, packages: [build-essential]}
+      - {manager: dnf, packages: [gcc, gcc-c++, make]}
+      - {manager: pacman, packages: [base-devel]}
+      - {manager: manual, note: "macOS: run `xcode-select --install`. Windows: install Visual Studio Build Tools.", url: "https://visualstudio.microsoft.com/downloads/"}
+    remove:
+      - {manager: apt, packages: [build-essential]}
+    trust: Host package manager.
+    upgrade: Follows the distribution.
+
+  - id: unzip
+    name: Archive tools (zip/unzip)
+    category: utility
+    purpose: Needed by Composer to unpack some packages quickly.
+    exes: [unzip]
+    version_regex: 'UnZip (\d+\.\d+)'
+    docs: [{title: Info-ZIP, url: "https://infozip.sourceforge.net/"}]
+    install:
+      - {manager: apt, packages: [unzip, zip]}
+      - {manager: dnf, packages: [unzip, zip]}
+      - {manager: pacman, packages: [unzip, zip]}
+      - {manager: brew, packages: [unzip]}
+    remove:
+      - {manager: apt, packages: [unzip, zip]}
+    trust: Host package manager.
+    upgrade: Follows the distribution.
+
+  - id: imagemagick
+    name: ImageMagick
+    category: utility
+    purpose: Image processing used by PHP's imagick extension and many CMS plugins.
+    exes: [magick, convert]
+    version_regex: 'ImageMagick (\d+\.\d+\.\d+)'
+    docs: [{title: ImageMagick, url: "https://imagemagick.org/script/command-line-processing.php"}]
+    install:
+      - {manager: apt, packages: [imagemagick]}
+      - {manager: dnf, packages: [ImageMagick]}
+      - {manager: pacman, packages: [imagemagick]}
+      - {manager: brew, packages: [imagemagick]}
+      - {manager: winget, packages: [ImageMagick.ImageMagick]}
+    remove:
+      - {manager: apt, packages: [imagemagick]}
+      - {manager: dnf, packages: [ImageMagick]}
+      - {manager: brew, packages: [imagemagick]}
+      - {manager: winget, packages: [ImageMagick.ImageMagick]}
+    trust: Host package manager.
+    upgrade: Follows the distribution.
+
+  - id: libvips
+    name: libvips
+    category: utility
+    purpose: Fast image processing used by Next.js image optimisation (sharp) and Rails Active Storage.
+    exes: [vips]
+    version_regex: 'vips-(\d+\.\d+\.\d+)'
+    docs: [{title: libvips, url: "https://www.libvips.org/install.html"}]
+    install:
+      - {manager: apt, packages: [libvips-tools]}
+      - {manager: dnf, packages: [vips-tools]}
+      - {manager: pacman, packages: [libvips]}
+      - {manager: brew, packages: [vips]}
+    remove:
+      - {manager: apt, packages: [libvips-tools]}
+      - {manager: dnf, packages: [vips-tools]}
+      - {manager: brew, packages: [vips]}
+    trust: Host package manager.
+    upgrade: Follows the distribution.

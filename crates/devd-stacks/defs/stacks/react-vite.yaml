@@ -1,0 +1,65 @@
+id: react-vite
+name: React (Vite)
+language: javascript
+category: frontend
+summary: A React single-page app built and served by Vite.
+description: Uses create-vite, the scaffolder Vite documents. The React documentation recommends a framework such as Next.js for full applications; this is the from-scratch option.
+docs:
+  - {title: Vite - Scaffolding your first project, url: "https://vite.dev/guide/#scaffolding-your-first-vite-project"}
+  - {title: React - Build a React app from scratch, url: "https://react.dev/learn/build-a-react-app-from-scratch"}
+verified: {method: cli-help, against: "create-vite 9.3.0", date: "2026-10-20"}
+runtime: node
+package_managers: [npm, pnpm, yarn, bun]
+versions:
+  - {id: latest, label: Vite (latest), value: latest, default: true, requires: [{tool: node, min: "20.19", why: "Vite 8 requires Node.js 20.19+ or 22.12+"}]}
+options:
+  - {id: template, label: Template, kind: select, default: react-ts, help: Language and compiler variant., choices: [{value: react-ts, label: React + TypeScript}, {value: react, label: React + JavaScript}, {value: react-compiler-ts, label: React Compiler + TypeScript}, {value: react-compiler, label: React Compiler + JavaScript}], flag: "--template"}
+  - {id: eslint, label: Use ESLint instead of Oxlint, kind: bool, default: false, help: "create-vite lints React templates with Oxlint by default.", flag: "--eslint / --no-eslint"}
+init:
+  install_toggle: true
+  steps:
+    - id: scaffold
+      title: Create the app with create-vite
+      network: true
+      extensible: true
+      needs: [node]
+      run:
+        - "{pm.dlx}"
+        - "create-vite@{version}"
+        - "{name}"
+        - --template
+        - "{opt.template}"
+        - {when: {option: eslint, equals: true}, args: [--eslint], else: [--no-eslint]}
+        - --no-interactive
+        - --no-immediate
+    - id: install
+      title: Install dependencies
+      cwd: project
+      network: true
+      when: {option: install, equals: true}
+      needs: [node]
+      run: ["{pm.install}"]
+verify:
+  files: [package.json, index.html]
+  commands:
+    - {title: Production build, needs_install: true, needs: [node], run: ["{pm.run}", build]}
+tasks:
+  - {id: dev, title: Start the Vite dev server, kind: dev, long_running: true, port: 5173, run: ["{pm.run}", dev], requires_script: dev}
+  - {id: build, title: Production build, kind: build, run: ["{pm.run}", build], requires_script: build}
+  - {id: preview, title: Preview the build, kind: dev, long_running: true, port: 4173, run: ["{pm.run}", preview], requires_script: preview}
+  - {id: lint, title: Lint, kind: lint, run: ["{pm.run}", lint], requires_script: lint}
+  - {id: test, title: Run tests, kind: test, run: ["{pm.run}", test], requires_script: test}
+  - {id: install, title: Install dependencies, kind: install, risk: mutating, run: ["{pm.install}"]}
+detect:
+  rules:
+    - {dependency: react, weight: 3, evidence: react is a dependency}
+    - {dependency: vite, weight: 2, evidence: vite is a dependency}
+    - {file: vite.config.ts, weight: 1, evidence: vite.config.ts}
+    - {file: vite.config.js, weight: 1, evidence: vite.config.js}
+structure: [index.html, src/main.tsx, src/App.tsx, vite.config.ts]
+conventions:
+  - "Components are function components; state lives in hooks."
+  - "Environment variables exposed to the browser must be prefixed VITE_."
+exec:
+  programs: [node, npx, vite]
+  destructive_args: []
