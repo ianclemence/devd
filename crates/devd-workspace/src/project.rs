@@ -990,16 +990,29 @@ mod tests {
         (dir, manager, project)
     }
 
+    /// A command that stays alive for a while, on either platform.
+    fn slow_command(seconds: u32) -> String {
+        if cfg!(windows) {
+            format!(r#"["cmd.exe", "/c", "ping -n {seconds} 127.0.0.1 > NUL"]"#)
+        } else {
+            format!(r#"["sleep", "{seconds}"]"#)
+        }
+    }
+
+    /// A command that prints a line and exits, on either platform.
+    fn echo_command(text: &str) -> String {
+        if cfg!(windows) {
+            format!(r#"["cmd.exe", "/c", "echo {text}"]"#)
+        } else {
+            format!(r#"["echo", "{text}"]"#)
+        }
+    }
+
     fn write_manifest(project: &Path) {
-        let text = r#"
-version: 1
-project:
-  name: test-app
-processes:
-  slow:
-    command: ["cmd.exe", "/c", "ping -n 30 127.0.0.1 > NUL"]
-    restart: never
-"#;
+        let text = format!(
+            "version: 1\nproject:\n  name: test-app\nprocesses:\n  slow:\n    command: {}\n    restart: never\n",
+            slow_command(30)
+        );
         std::fs::write(project.join("devd.yml"), text).unwrap();
     }
 
@@ -1024,7 +1037,7 @@ processes:
         manager.approve(&root, "human:test").unwrap();
         let text = std::fs::read_to_string(project.join("devd.yml"))
             .unwrap()
-            .replace("ping -n 30", "ping -n 31");
+            .replace("30", "31");
         std::fs::write(project.join("devd.yml"), text).unwrap();
         let err = manager.start(&root, "slow").unwrap_err();
         assert!(err.to_string().contains("changed"), "{err}");
@@ -1033,17 +1046,10 @@ processes:
     #[test]
     fn logs_are_captured_and_secret_values_are_redacted() {
         let (_dir, manager, project) = fixture();
-        let text = r#"
-version: 1
-project:
-  name: test-app
-processes:
-  echoer:
-    command: ["cmd.exe", "/c", "echo hello-from-project"]
-    env:
-      API_TOKEN: super-secret-value
-    restart: never
-"#;
+        let text = format!(
+            "version: 1\nproject:\n  name: test-app\nprocesses:\n  echoer:\n    command: {}\n    env:\n      API_TOKEN: super-secret-value\n    restart: never\n",
+            echo_command("hello-from-project")
+        );
         std::fs::write(project.join("devd.yml"), text).unwrap();
         let root = project.to_string_lossy().to_string();
         manager.approve(&root, "human:test").unwrap();
