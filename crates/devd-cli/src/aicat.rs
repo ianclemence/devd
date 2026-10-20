@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use devd_core::{DevdError, Result};
 
 use crate::app::App;
-use crate::{ApprovalsCommand, ChatArgs, InboxCommand, ModelsCommand, ProviderCommand};
+use crate::{ApprovalsCommand, ChatArgs, InboxCommand, ModelsCommand, ProviderCommand, SkillsCommand, TeamCommand};
 
 fn ask(prompt: &str) -> Option<String> {
     eprint!("{prompt}");
@@ -156,6 +156,15 @@ pub fn provider(app: &App, cmd: ProviderCommand) -> Result<()> {
 /// `devd models`.
 pub fn models(app: &App, cmd: ModelsCommand) -> Result<()> {
     match cmd {
+        ModelsCommand::Roles => app.invoke("models.roles", json!({})),
+        ModelsCommand::Assign { role, models, project } => {
+            let mut list = Vec::new();
+            for m in &models {
+                let (p, model) = m.split_once(':').ok_or_else(|| DevdError::invalid(format!("`{m}` should look like provider:model")))?;
+                list.push(json!({ "provider": p, "model": model }));
+            }
+            app.invoke("models.assign", json!({ "role": role, "models": list, "project": project }))
+        }
         ModelsCommand::List { source } => app.invoke("models.catalogue", json!({ "source": source })),
         ModelsCommand::Refresh => app.invoke("models.refresh_official", json!({})),
     }
@@ -193,4 +202,138 @@ fn decide(app: &App, id: &str, approve: bool) -> Result<()> {
         follow(app, &t, after, std::io::stdin().is_terminal() && !app.json)?;
     }
     Ok(())
+}
+
+fn abs_path(p: &str) -> String {
+    if std::path::Path::new(p).is_absolute() {
+        p.to_string()
+    } else {
+        std::env::current_dir().map(|c| c.join(p).display().to_string()).unwrap_or_else(|_| p.to_string())
+    }
+}
+
+/// One line per task, the way the terminal shows a run.
+fn print_run(v: &Value) {
+    let r = &v["run"];
+    println!("{}  [{}]  {}", r["id"].as_str().unwrap_or(""), r["state"].as_str().unwrap_or(""), r["title"].as_str().unwrap_or(""));
+    if let Some(e) = r["error"].as_str() {
+        println!("  ! {e}");
+    }
+    for t in v["tasks"].as_array().cloned().unwrap_or_default() {
+        let ev = t["evidence"].as_array().cloned().unwrap_or_default();
+        let verified = ev.iter().filter(|f| f["kind"] == "verify" && f["ok"] == true).count();
+        println!("  {:<17} {:<12} {:<12} {}{}", t["state"].as_str().unwrap_or(""), t["role"].as_str().unwrap_or(""), t["key"].as_str().unwrap_or(""), t["title"].as_str().unwrap_or(""), if verified > 0 { format!("  ({verified} verification run(s) passed)") } else { String::new() });
+        if let Some(e) = t["error"].as_str().filter(|_| matches!(t["state"].as_str(), Some("unverified" | "blocked" | "failed"))) {
+            println!("      {e}");
+        }
+    }
+    if let Some(s) = r["summary"].as_str() {
+        println!("\n{s}");
+    }
+}
+
+fn follow_run(app: &App, id: &str) -> Result<()> {
+    let mut after = 0i64;
+    let mut last_state = String::new();
+    loop {
+        let v = app.data("team.get", json!({ "run": id, "after": after }))?;
+        for e in v["events"].as_array().cloned().unwrap_or_default() {
+            after = e["id"].as_i64().unwrap_or(after);
+            let d = &e["data"];
+            let line = match e["kind"].as_str().unwrap_or("") {
+                "started" if d.get("task").is_some() => format!("started {} ({})", d["task"].as_str().unwrap_or(""), d["role"].as_str().unwrap_or("")),
+                "started" => "run started".to_string(),
+                "plan" => format!("plan: {} task(s)", d["tasks"].as_array().map(|t| t.len()).unwrap_or(0)),
+                "report" => format!("{} reports {}: {}", d["task"].as_str().unwrap_or(""), d["status"].as_str().unwrap_or(""), d["summary"].as_str().unwrap_or("").lines().next().unwrap_or("")),
+                "accepted" => format!("accepted {} ({} verification run(s) passed)", d["task"].as_str().unwrap_or(""), d["verified"]),
+                "rejected" | "unverified" => format!("NOT accepted {}: {}", d["task"].as_str().unwrap_or(""), d["why"].as_str().unwrap_or("")),
+                "direction" => format!("instruction added: {}", d["text"].as_str().unwrap_or("")),
+                other => format!("{other} {}", d),
+            };
+            println!("  {line}");
+        }
+        let st = v["run"]["state"].as_str().unwrap_or("").to_string();
+        if st != last_state {
+            last_state = st.clone();
+            if st == "awaiting_plan" {
+                print_run(&v);
+                println!("\nThe plan needs your approval: devd team approve {id}");
+                return Ok(());
+            }
+        }
+        if matches!(st.as_str(), "done" | "failed" | "cancelled" | "paused") {
+            println!();
+            print_run(&v);
+            return Ok(());
+        }
+        let pending = v["approvals"].as_array().map(|a| a.len()).unwrap_or(0);
+        if pending > 0 {
+            println!("\n{pending} operation(s) are waiting for your approval: devd approvals list");
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(700));
+    }
+}
+
+/// `devd team`.
+pub fn team(app: &App, cmd: TeamCommand) -> Result<()> {
+    match cmd {
+        TeamCommand::Start { goal, project, new, parallel, yes_plan, detach } => {
+            let run = app.data("team.start", json!({ "goal": goal, "project": project.as_deref().map(abs_path), "new_project": new, "parallel": parallel, "auto_approve": if yes_plan { Some(true) } else { None } }))?;
+            let id = run["id"].as_str().unwrap_or("").to_string();
+            if app.json || detach {
+                println!("{}", serde_json::to_string_pretty(&run).unwrap_or_default());
+                return Ok(());
+            }
+            println!("run {id} started; the planner is working");
+            follow_run(app, &id)
+        }
+        TeamCommand::List => app.invoke("team.list", json!({})),
+        TeamCommand::Show { run, follow } => {
+            if follow && !app.json {
+                return follow_run(app, &run);
+            }
+            if app.json {
+                return app.invoke("team.get", json!({ "run": run }));
+            }
+            let v = app.data("team.get", json!({ "run": run }))?;
+            print_run(&v);
+            Ok(())
+        }
+        TeamCommand::Roles => app.invoke("team.roles", json!({})),
+        TeamCommand::Approve { run } => {
+            app.invoke("team.approve_plan", json!({ "run": run }))?;
+            if !app.json {
+                follow_run(app, &run)?;
+            }
+            Ok(())
+        }
+        TeamCommand::Say { run, text } => app.invoke("team.say", json!({ "run": run, "text": text })),
+        TeamCommand::Pause { run } => app.invoke("team.pause", json!({ "run": run })),
+        TeamCommand::Resume { run } => app.invoke("team.resume", json!({ "run": run })),
+        TeamCommand::Cancel { run } => app.invoke("team.cancel", json!({ "run": run })),
+        TeamCommand::Retry { task, note } => app.invoke("team.retry", json!({ "task": task, "note": note })),
+        TeamCommand::Accept { task } => app.invoke("team.accept", json!({ "task": task })),
+    }
+}
+
+/// `devd skills`.
+pub fn skills(app: &App, cmd: SkillsCommand) -> Result<()> {
+    match cmd {
+        SkillsCommand::List { query, role, kind } => app.invoke("skills.list", json!({ "query": query, "role": role, "kind": kind })),
+        SkillsCommand::Show { name } => {
+            let s = app.data("skills.get", json!({ "name": name }))?;
+            if app.json {
+                println!("{}", serde_json::to_string_pretty(&s).unwrap_or_default());
+            } else {
+                println!("{}  ({}, for {})\n{}\n\n{}", s["name"].as_str().unwrap_or(""), s["kind"].as_str().unwrap_or(""), s["roles"].as_array().map(|r| r.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(", ")).unwrap_or_default(), s["description"].as_str().unwrap_or(""), s["body"].as_str().unwrap_or(""));
+            }
+            Ok(())
+        }
+        SkillsCommand::Add { name, description, kind, roles, file } => {
+            let body = std::fs::read_to_string(&file).map_err(|e| DevdError::invalid(format!("cannot read {file}: {e}")))?;
+            app.invoke("skills.save", json!({ "name": name, "description": description, "kind": kind, "roles": roles, "body": body }))
+        }
+        SkillsCommand::Remove { name } => app.invoke("skills.delete", json!({ "name": name })),
+    }
 }

@@ -173,6 +173,16 @@ pub(crate) enum Command {
     },
     /// Talk to devd's built-in agent, which can use every capability devd has.
     Chat(ChatArgs),
+    /// The agent team: describe a goal, review the plan, follow the work, see the evidence.
+    Team {
+        #[command(subcommand)]
+        cmd: TeamCommand,
+    },
+    /// Skills agents load: playbooks, techniques and principles.
+    Skills {
+        #[command(subcommand)]
+        cmd: SkillsCommand,
+    },
     /// Model providers and API keys for the built-in agent.
     Provider {
         #[command(subcommand)]
@@ -433,7 +443,98 @@ pub(crate) enum ProviderCommand {
 }
 
 #[derive(Subcommand, Debug)]
+pub(crate) enum TeamCommand {
+    /// Start a run. Waits for you to approve the plan unless you pass --yes-plan.
+    Start {
+        /// What to build or change.
+        goal: String,
+        /// Existing project directory.
+        #[arg(long)]
+        project: Option<String>,
+        /// Or the name of a new project.
+        #[arg(long)]
+        new: Option<String>,
+        /// Tasks that may run side by side.
+        #[arg(long, default_value_t = 2)]
+        parallel: i64,
+        /// Do not ask for plan approval.
+        #[arg(long)]
+        yes_plan: bool,
+        /// Return immediately instead of following the run.
+        #[arg(long)]
+        detach: bool,
+    },
+    /// List runs.
+    List,
+    /// Show a run: plan, tasks, evidence and log. Follows it with --follow.
+    Show {
+        run: String,
+        #[arg(long)]
+        follow: bool,
+    },
+    /// The specialists, what each may do and what each must prove.
+    Roles,
+    /// Approve the plan; the work starts.
+    Approve { run: String },
+    /// Give the team a new instruction.
+    Say { run: String, text: String },
+    /// Pause a run.
+    Pause { run: String },
+    /// Resume a paused run.
+    Resume { run: String },
+    /// Stop a run.
+    Cancel { run: String },
+    /// Run a failed, blocked or unverified task again.
+    Retry {
+        task: String,
+        #[arg(long)]
+        note: Option<String>,
+    },
+    /// Accept a task without the required proof (recorded as accepted by hand).
+    Accept { task: String },
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum SkillsCommand {
+    /// List skills.
+    List {
+        query: Option<String>,
+        #[arg(long)]
+        role: Option<String>,
+        #[arg(long)]
+        kind: Option<String>,
+    },
+    /// Print one skill.
+    Show { name: String },
+    /// Add your own skill from a Markdown file (the body).
+    Add {
+        name: String,
+        #[arg(long)]
+        description: String,
+        #[arg(long, default_value = "technique")]
+        kind: String,
+        #[arg(long)]
+        roles: Vec<String>,
+        /// File containing the instructions.
+        file: String,
+    },
+    /// Remove one of your own skills.
+    Remove { name: String },
+}
+
+#[derive(Subcommand, Debug)]
 pub(crate) enum ModelsCommand {
+    /// Which model does which kind of work.
+    Roles,
+    /// Choose the models for a kind of work, first choice first (provider:model ...).
+    Assign {
+        role: String,
+        /// Entries like `anthropic:claude-opus-5-5`; none clears the role.
+        models: Vec<String>,
+        /// Only for this project directory.
+        #[arg(long)]
+        project: Option<String>,
+    },
     /// Show cached models.
     List {
         /// `anthropic-docs` or `provider:<id>`.
@@ -1254,6 +1355,14 @@ fn run(cli: Cli) -> Result<i32> {
         }
         Command::Chat(a) => {
             aicat::chat(&app, a)?;
+            Ok(0)
+        }
+        Command::Team { cmd } => {
+            aicat::team(&app, cmd)?;
+            Ok(0)
+        }
+        Command::Skills { cmd } => {
+            aicat::skills(&app, cmd)?;
             Ok(0)
         }
         Command::Provider { cmd } => {

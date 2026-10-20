@@ -662,3 +662,47 @@ fn model_roles_pick_models_and_fall_back_only_to_what_you_listed() {
     let v2 = wait_for(&e, t2["id"].as_str().unwrap(), &["idle", "error"]);
     assert_eq!(v2["thread"]["state"], "error", "an explicit choice is respected");
 }
+
+#[test]
+fn parallel_implementers_work_in_their_own_copies_and_are_merged() {
+    let e = env();
+    let dir = team_project(&e);
+    let dir_m = dir.clone();
+    let m = mock(move |_, seen| {
+        let dir = dir_m.clone();
+        let role = role_of(seen);
+        let step = step_of(seen);
+        let sys = seen.body["system"].as_str().map(str::to_string).or_else(|| seen.body["system"].as_array().map(|a| a.iter().filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join("\n"))).unwrap_or_default();
+        let workdir = sys.split("Your working directory is ").nth(1).and_then(|r| r.split(". ").next()).unwrap_or("").to_string();
+        let first = seen.body["messages"][0]["content"].to_string();
+        let key = first.split("Your task: ").nth(1).and_then(|r| r.split('(').nth(1)).and_then(|r| r.split(')').next()).unwrap_or("x").to_string();
+        let body = match (role.as_str(), step) {
+            ("Planner", 0) => invoke("p1", "team.plan_submit", json!({ "tasks": [
+                { "key": "alpha", "role": "implementer", "title": "Write alpha", "instructions": "Create alpha.txt and run the test task.", "scope": ["alpha.txt"] },
+                { "key": "beta", "role": "implementer", "title": "Write beta", "instructions": "Create beta.txt and run the test task.", "scope": ["beta.txt"] } ] })),
+            ("Implementer", 0) => invoke("i1", "fs.write", json!({ "path": format!("{workdir}/{key}.txt"), "content": format!("{key}\n") })),
+            ("Implementer", 1) => invoke("i2", "project.run", json!({ "path": workdir, "task": "test" })),
+            ("Implementer", 2) => invoke("i3", "team.report", json!({ "status": "done", "summary": format!("wrote {key}.txt") })),
+            ("QA", 0) | ("Qa", 0) => invoke("q1", "project.run", json!({ "path": dir.display().to_string(), "task": "test" })),
+            ("QA", 1) | ("Qa", 1) => invoke("q2", "team.report", json!({ "status": "done", "summary": "checks pass" })),
+            _ => anthropic_text("ok"),
+        };
+        (200, body)
+    });
+    add_provider(&e, "anthropic", &m.base);
+    let run = call(&e, &e.human, "team.start", json!({ "goal": "Create alpha and beta files, independently", "project": dir.display().to_string(), "parallel": 2, "auto_approve": true }), Approval::None).unwrap();
+    let id = run["id"].as_str().unwrap().to_string();
+    let v = wait_run(&e, &id, &["done", "paused", "failed"]);
+    assert_eq!(v["run"]["state"], "done", "{}", serde_json::to_string_pretty(&v).unwrap());
+    assert!(dir.join("alpha.txt").exists() && dir.join("beta.txt").exists(), "both changes were merged into the project");
+    let tasks = v["tasks"].as_array().unwrap();
+    for k in ["alpha", "beta"] {
+        let t = tasks.iter().find(|t| t["key"] == k).unwrap();
+        assert!(t["branch"].as_str().unwrap().starts_with("devd/"), "{t}");
+        assert!(t["workdir"].as_str().unwrap().contains(".devd/worktrees"), "isolated: {t}");
+    }
+    let log = std::process::Command::new("git").args(["log", "--oneline"]).current_dir(&dir).output().unwrap();
+    assert!(String::from_utf8_lossy(&log.stdout).matches("Merge ").count() >= 2, "{}", String::from_utf8_lossy(&log.stdout));
+    let status = std::process::Command::new("git").args(["status", "--porcelain"]).current_dir(&dir).output().unwrap();
+    assert!(String::from_utf8_lossy(&status.stdout).trim().is_empty(), "the project is clean: {}", String::from_utf8_lossy(&status.stdout));
+}

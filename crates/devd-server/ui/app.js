@@ -644,17 +644,19 @@
   // machine it runs on, and the settings behind it. Related pages share one
   // entry and appear as tabs, so the rail stays short.
   var AREA = {
+    assistant: "assistant", team: "assistant",
     projects: "projects", project: "projects", create: "projects", develop: "projects",
     agents: "agents", shared: "agents",
     overview: "server", services: "server", sites: "server", toolchain: "server", runtimes: "server",
     preview: "server", certificates: "server", hosts: "server"
   };
   var TABS = {
+    assistant: [["assistant", "Chat"], ["team", "Team runs"]],
     projects: [["projects", "Projects"], ["create", "New project"], ["develop", "Stacks and tasks"]],
     agents: [["agents", "Sessions"], ["shared", "Shared notes"]],
     server: [["overview", "Overview"], ["services", "Services"], ["sites", "Sites"], ["toolchain", "Tools"], ["runtimes", "Runtimes"], ["preview", "Preview"], ["certificates", "Certificates"], ["hosts", "Hosts"]]
   };
-  var AREA_HOME = { projects: "projects", agents: "agents", server: "overview" };
+  var AREA_HOME = { assistant: "assistant", projects: "projects", agents: "agents", server: "overview" };
 
   function areaOf(view) { return AREA[view] || view; }
 
@@ -710,6 +712,7 @@
   function crumbs() {
     var labels = {
       home: "Home",
+      team: "Team runs",
       assistant: "Assistant",
       inbox: "Inbox",
       providers: "Models",
@@ -3643,10 +3646,11 @@
       read("chat.list").catch(function () { return []; }),
       read("task.list").catch(function () { return []; }),
       read("provider.list").catch(function () { return []; }),
+      read("team.list").catch(function () { return []; }),
       request("/api/audit?limit=40").then(function (r) { return r.ok ? r.body.items || [] : []; }),
       state.server.loaded ? Promise.resolve() : loadServer()
     ]).then(function (r) {
-      AI.home = { projects: r[1], approvals: r[2], inbox: r[3], threads: r[4], tasks: r[5], providers: r[6], audit: r[7] };
+      AI.home = { projects: r[1], approvals: r[2], inbox: r[3], threads: r[4], tasks: r[5], providers: r[6], teamRuns: r[7], audit: r[8] };
       AI.providers = r[6];
     });
   }
@@ -3684,12 +3688,18 @@
     var ask = ready
       ? '<div class="ask-box"><textarea id="home-ask" class="input" rows="2" placeholder="Ask devd to do something…  e.g. “Create a Laravel app called blog with PostgreSQL” or “Run the tests and fix what fails”">' + esc(AI.askText) + "</textarea>" +
         '<div class="inline"><select class="input" id="home-project">' + projOptions + "</select><span class=\"grow\"></span>" +
-        '<button type="button" class="btn btn-primary" data-action="home-ask">Ask the assistant</button></div></div>'
+        '<button type="button" class="btn" data-action="home-team" title="A planner, specialists working in parallel, and proof before anything counts as done">Build with the team</button><button type="button" class="btn btn-primary" data-action="home-ask">Ask the assistant</button></div></div>'
       : '<div class="ask-box ask-setup"><div><b>Connect an AI provider to talk to devd.</b><div class="row-sub">The built-in assistant can create projects, edit code, run tests and manage your tools, with your approval for anything risky. It needs a model provider and an API key. Nothing else in devd depends on it.</div></div>' +
         '<button type="button" class="btn btn-primary" data-action="nav" data-view="providers">' + (hasProvider ? "Finish setup" : "Set up a provider") + "</button></div>";
 
     // Needs you
     var needs = [];
+    (d.teamRuns || []).filter(function (t) { return t.state === "awaiting_plan"; }).forEach(function (t) {
+      needs.push('<div class="ask ask-approval"><div class="ask-head"><span class="pill pill-warn">plan</span><b>' + esc(t.title) + '</b><span class="dim">team · ' + esc(ago(t.updated_at)) + '</span></div><div class="ask-body">The team has a plan with ' + t.tasks_total + ' task(s). Nothing runs until you approve it.</div><div class="inline"><button type="button" class="btn btn-primary btn-mini" data-action="team-open-from" data-id="' + attr(t.id) + '">Review the plan</button></div></div>');
+    });
+    (d.teamRuns || []).filter(function (t) { return t.state === "paused" && t.error; }).forEach(function (t) {
+      needs.push('<div class="ask ask-warn"><div class="ask-head"><span class="pill pill-warn">paused</span><b>' + esc(t.title) + '</b></div><div class="ask-body">' + esc(t.error) + '</div><div class="inline"><button type="button" class="btn btn-mini" data-action="team-open-from" data-id="' + attr(t.id) + '">Open</button></div></div>');
+    });
     d.approvals.slice(0, 4).forEach(function (r) { needs.push(approvalCard(r, true)); });
     d.inbox.slice(0, 3).forEach(function (m) { needs.push(messageCard(m)); });
     (h.checks || []).filter(function (c) { return c.required && c.state !== "healthy" && c.state !== "starting"; }).forEach(function (c) {
@@ -3733,6 +3743,9 @@
     var svcUp = state.server.services.filter(function (x) { return x.running; });
     if (svcUp.length) live.push('<div class="live"><span class="dot dot-ok"></span><span class="grow">' + svcUp.length + " service" + (svcUp.length === 1 ? "" : "s") + ' running</span><span class="dim nowrap">' + esc(svcUp.map(function (x) { return x.name; }).join(", ")) + '</span><button type="button" class="btn btn-mini" data-action="nav" data-view="services">Open</button></div>');
 
+    (d.teamRuns || []).filter(function (t) { return ["planning", "running", "awaiting_plan", "paused"].indexOf(t.state) >= 0; }).forEach(function (t) {
+      live.push('<div class="live"><span class="dot ' + (t.state === "running" || t.state === "planning" ? "dot-ok" : "dot-warn") + '"></span><span class="grow nowrap">' + esc(t.title) + '</span><span class="dim">team · ' + esc(RUN_WORD[t.state]) + " " + t.tasks_done + "/" + t.tasks_total + '</span><button type="button" class="btn btn-mini" data-action="team-open-from" data-id="' + attr(t.id) + '">Open</button></div>');
+    });
     var feed = d.audit.filter(function (a) { return !a.dry_run && a.tier !== "read"; }).slice(0, 7).map(function (a) {
       var agent = a.actor.indexOf("agent") === 0;
       return '<div class="feed"><span class="feed-who ' + (agent ? "feed-agent" : "") + '">' + esc(a.actor.replace("human:", "").replace("agent:", "")) + '</span><span class="mono grow nowrap">' + esc(a.capability) + "</span>" +
@@ -3760,8 +3773,8 @@
   // ------------------------------------------------------------- providers
 
   function loadProviders() {
-    return Promise.all([read("provider.list"), read("provider.presets"), read("models.catalogue")]).then(function (r) {
-      AI.providers = r[0]; AI.presets = r[1]; AI.catalogue = r[2];
+    return Promise.all([read("provider.list"), read("provider.presets"), read("models.catalogue"), read("models.roles"), read("team.roles")]).then(function (r) {
+      AI.providers = r[0]; AI.presets = r[1]; AI.catalogue = r[2]; AI.roleAssign = r[3]; AI.teamRoles = r[4];
     });
   }
 
@@ -3781,6 +3794,28 @@
     return out;
   }
   function providerKind(id) { var p = (AI.providers || []).filter(function (x) { return x.id === id; })[0]; return p ? p.kind : ""; }
+
+
+  function rolesPanel() {
+    var provs = (AI.providers || []).filter(function (p) { return p.enabled; });
+    if (!provs.length) return "";
+    var info = {};
+    (AI.teamRoles || []).forEach(function (r) { info[r.id] = r; });
+    var rows = ["default"].concat((AI.teamRoles || []).map(function (r) { return r.id; })).map(function (role) {
+      var mine = (AI.roleAssign ? AI.roleAssign.assignments : []).filter(function (a) { return a.role === role && !a.scope; }).sort(function (a, b) { return a.position - b.position; });
+      var cell = function (i) {
+        var a = mine[i] || {};
+        var opts = '<option value="">' + (i ? "no fallback" : "use the default provider") + "</option>" + provs.map(function (p) { return '<option value="' + attr(p.id) + '"' + (a.provider === p.id ? " selected" : "") + ">" + esc(p.label) + "</option>"; }).join("");
+        return '<select class="input" id="rm-' + role + "-p" + i + '" style="max-width:150px">' + opts + '</select><input class="input mono" list="rm-models" id="rm-' + role + "-m" + i + '" value="' + attr(a.model || "") + '" placeholder="model" spellcheck="false" style="max-width:220px">' +
+          (a.model ? '<span class="pill ' + (a.status === "available" ? "pill-ok" : a.status === "missing" ? "pill-bad" : "") + '" title="' + (a.status === "available" ? "This provider's own list includes it" : a.status === "missing" ? "Not in the list this key can see. Fetch the provider's models to refresh it." : "Fetch the provider's models to check this account can use it") + '">' + esc(a.status) + "</span>" : "");
+      };
+      var i = info[role] || { title: "Everything else", summary: "Used when a kind of work has no model of its own, and for the assistant." };
+      return '<tr><td><div class="cell-strong">' + esc(i.title || role) + '</div><div class="cell-dim">' + esc(i.summary) + "</div></td><td><div class=\"inline\">" + cell(0) + "</div></td><td><div class=\"inline\">" + cell(1) + '</div></td><td><button type="button" class="btn btn-mini btn-primary" data-action="role-save" data-role="' + attr(role) + '">Save</button></td></tr>';
+    }).join("");
+    var all = {}; (AI.catalogue || []).forEach(function (m) { all[m.model_id] = 1; });
+    return '<div class="section-title">Which model does which work</div><div class="panel"><div class="panel-body flush"><table class="table"><thead><tr><th>Work</th><th>First choice</th><th>Fallback if it fails</th><th></th></tr></thead><tbody>' + rows + "</tbody></table><datalist id=\"rm-models\">" + Object.keys(all).map(function (m) { return '<option value="' + attr(m) + '"></option>'; }).join("") + "</datalist></div>" +
+      '<div class="panel-body panel-foot row-sub">The fallback is used only when the first choice fails, and only the providers you list here are ever used. A conversation where you pick a model yourself never falls back. Each reply records which model answered and why.</div></div>';
+  }
 
   function renderProviders() {
     if (!AI.providers) return renderLoading();
@@ -3848,7 +3883,7 @@
       "Where the built-in assistant gets its intelligence. Add a provider, give it a key, choose a model. Keys never leave your machine except to that provider.", "",
       (cards || '<div class="panel"><div class="panel-body"><b>No provider yet.</b><div class="row-sub">Pick one below. Anthropic is the one the assistant is tuned for.</div></div></div>') +
       form +
-      '<div class="section-title">Add a provider</div><div class="presets">' + presetCards + "</div>" + offPanel + perProvider);
+      rolesPanel() + '<div class="section-title">Add a provider</div><div class="presets">' + presetCards + "</div>" + offPanel + perProvider);
   }
 
   // --------------------------------------------------------------- assistant
@@ -3976,6 +4011,121 @@
     startThreadTimer();
   }
 
+
+  // -------------------------------------------------------------------- team
+
+  var TEAM = { runs: null, sel: null, data: null, timer: null, form: { goal: "", project: "", name: "", parallel: 2 }, say: "", open: {} };
+  var TASK_WORD = { pending: "waiting", ready: "ready", running: "working", waiting_approval: "needs your approval", done: "done", unverified: "not accepted", failed: "failed", cancelled: "cancelled", skipped: "accepted by hand", blocked: "blocked" };
+  var RUN_WORD = { planning: "planning", awaiting_plan: "plan needs your approval", running: "working", paused: "paused", done: "done", failed: "failed", cancelled: "cancelled" };
+
+  function loadTeam() {
+    return Promise.all([read("team.list"), state.projects.length ? Promise.resolve() : loadProjects(), loadProvidersIfNeeded()]).then(function (r) {
+      TEAM.runs = r[0] || [];
+      if (!TEAM.sel && TEAM.runs.length) TEAM.sel = TEAM.runs[0].id;
+      return TEAM.sel ? read("team.get", { run: TEAM.sel }).then(function (d) { TEAM.data = d; }).catch(function () { TEAM.data = null; }) : null;
+    });
+  }
+
+  function startTeamTimer() {
+    clearInterval(TEAM.timer);
+    TEAM.timer = setInterval(function () {
+      if (state.view !== "team") return clearInterval(TEAM.timer);
+      read("team.list").then(function (runs) {
+        TEAM.runs = runs;
+        return TEAM.sel ? read("team.get", { run: TEAM.sel }) : null;
+      }).then(function (d) { if (d) TEAM.data = d; paintTeam(); }).catch(function () {});
+    }, 1200);
+  }
+
+  function renderTeam() {
+    if (!TEAM.runs) return renderLoading();
+    var ready = (AI.providers || []).some(function (p) { return p.enabled && (p.has_key || !p.needs_key); });
+    var projOpts = '<option value="">Choose a project…</option>' + state.projects.map(function (p) { return '<option value="' + attr(p.path) + '"' + (TEAM.form.project === p.path ? " selected" : "") + ">" + esc(p.name || dirName(p.path)) + "</option>"; }).join("") + '<option value="__new"' + (TEAM.form.project === "__new" ? " selected" : "") + ">A new project…</option>";
+    el("main").innerHTML =
+      '<div class="assistant"><aside class="threads"><div class="threads-head"><b>Runs</b><button type="button" class="btn btn-mini btn-primary" data-action="team-new">New</button></div><div id="team-list"></div></aside>' +
+      '<section class="chat"><div id="team-detail" class="team-detail"></div></section></div>';
+    TEAM.ready = ready; TEAM.projOpts = projOpts;
+    paintTeam();
+    startTeamTimer();
+  }
+
+  function paintTeam() {
+    var list = el("team-list"), box = el("team-detail");
+    if (!list || !box) return;
+    list.innerHTML = (TEAM.runs || []).map(function (r) {
+      return '<button type="button" class="thread' + (TEAM.sel === r.id ? " active" : "") + '" data-action="team-open" data-id="' + attr(r.id) + '"><span class="dot ' + (r.state === "running" || r.state === "planning" ? "dot-ok" : r.state === "awaiting_plan" || r.state === "paused" ? "dot-warn" : r.state === "failed" ? "dot-bad" : "dot-off") + '"></span><span class="grow nowrap">' + esc(r.title) + '</span><span class="dim">' + r.tasks_done + "/" + r.tasks_total + "</span></button>";
+    }).join("") || '<div class="empty-inline">No runs yet.</div>';
+    if (!TEAM.sel || !TEAM.data) { box.innerHTML = teamForm(); return; }
+    var focus = document.activeElement && document.activeElement.id;
+    var val = focus === "team-say" ? document.activeElement.value : null;
+    box.innerHTML = teamDetail(TEAM.data);
+    if (val !== null) { var i = el("team-say"); if (i) { i.value = val; i.focus(); } }
+  }
+
+  function teamForm() {
+    var f = TEAM.form;
+    return '<div class="team-new"><div class="chat-title">Describe what you want built</div>' +
+      '<div class="row-sub">A planner turns this into tasks. You review the plan and approve it before anything runs. Specialists then work in parallel where it is safe, and a task only counts as done when devd can see the proof.</div>' +
+      (TEAM.ready ? "" : '<div class="notice notice-warn" style="margin-top:12px">No usable AI provider yet. <button type="button" class="btn btn-mini btn-primary" data-action="nav" data-view="providers">Set one up</button></div>') +
+      '<div class="field" style="margin-top:14px"><label class="field-label">Goal</label><textarea class="input" id="team-goal" rows="5" placeholder="e.g. Add password reset by email to the app, with tests. Or: Build a small Laravel blog with posts and comments.">' + esc(f.goal) + "</textarea></div>" +
+      '<div class="inline" style="margin-top:10px"><select class="input" id="team-project" style="max-width:280px">' + TEAM.projOpts + "</select>" +
+      (f.project === "__new" ? '<input class="input mono" id="team-name" placeholder="new-project-name" value="' + attr(f.name) + '" style="max-width:220px" spellcheck="false">' : "") +
+      '<label class="field-label">At most</label><select class="input" id="team-parallel" style="max-width:110px">' + [1, 2, 3, 4].map(function (n) { return '<option value="' + n + '"' + (f.parallel === n ? " selected" : "") + ">" + n + " at once</option>"; }).join("") + "</select>" +
+      '<span class="grow"></span><button type="button" class="btn btn-primary" data-action="team-start"' + (TEAM.ready ? "" : " disabled") + ">Start the team</button></div></div>";
+  }
+
+  function evidenceLine(t) {
+    var ev = t.evidence || [];
+    if (!ev.length) return "";
+    var ch = ev.filter(function (f) { return f.kind === "change" && f.ok; }).length;
+    var vp = ev.filter(function (f) { return f.kind === "verify" && f.ok; }).length, vf = ev.filter(function (f) { return f.kind === "verify" && !f.ok; }).length;
+    var rd = ev.filter(function (f) { return f.kind === "read" && f.ok; }).length, cm = ev.filter(function (f) { return f.kind === "command"; }).length;
+    return [ch ? ch + " change" + (ch === 1 ? "" : "s") : "", vp ? vp + " check" + (vp === 1 ? "" : "s") + " passed" : "", vf ? vf + " failed" : "", rd ? rd + " read" : "", cm ? cm + " command" + (cm === 1 ? "" : "s") : ""].filter(Boolean).join(" · ");
+  }
+
+  function teamDetail(d) {
+    var r = d.run, tasks = d.tasks, events = d.events;
+    var planner = tasks.filter(function (t) { return t.role === "planner"; })[0];
+    var work = tasks.filter(function (t) { return t.role !== "planner"; });
+    var actions = "";
+    if (r.state === "awaiting_plan") actions += '<button type="button" class="btn btn-go" data-action="team-approve" data-id="' + attr(r.id) + '">Approve plan and start</button>';
+    if (r.state === "running") actions += '<button type="button" class="btn" data-action="team-pause" data-id="' + attr(r.id) + '">Pause</button>';
+    if (r.state === "paused") actions += '<button type="button" class="btn btn-primary" data-action="team-resume" data-id="' + attr(r.id) + '">Resume</button>';
+    if (["planning", "awaiting_plan", "running", "paused"].indexOf(r.state) >= 0) actions += '<button type="button" class="btn btn-danger" data-action="team-cancel" data-id="' + attr(r.id) + '">Cancel</button>';
+    var head = '<div class="chat-head"><div class="grow"><div class="chat-title">' + esc(r.title) + '</div><div class="dim mono nowrap">' + esc(r.project || "") + ' · started by ' + esc((r.created_by || "").replace("human:", "")) + " " + esc(ago(r.created_at)) + '</div></div><span class="pill ' + (r.state === "failed" ? "pill-bad" : r.state === "done" ? "pill-ok" : r.state === "awaiting_plan" || r.state === "paused" ? "pill-warn" : "pill-accent") + '">' + esc(RUN_WORD[r.state] || r.state) + "</span>" + actions + "</div>";
+    var note = r.error ? '<div class="notice notice-warn" style="margin:12px 16px"><b>Needs you.</b> ' + esc(r.error) + "</div>" : "";
+    if (r.state === "planning") note += '<div class="notice" style="margin:12px 16px">The planner is reading the project and writing the plan' + (planner && planner.state === "waiting_approval" ? ", and is waiting for you to approve something" : "") + ".</div>";
+    var cards = work.map(function (t) {
+      var open = TEAM.open[t.id], dep = t.depends_on.length ? "after " + t.depends_on.join(", ") : "starts first";
+      var btns = "";
+      if (["unverified", "blocked", "failed"].indexOf(t.state) >= 0) btns = '<button type="button" class="btn btn-mini btn-primary" data-action="team-retry" data-id="' + attr(t.id) + '">Retry</button><button type="button" class="btn btn-mini" data-action="team-accept" data-id="' + attr(t.id) + '" title="Accept it without the proof devd asked for. This is recorded.">Accept as is</button>';
+      if (t.thread_id) btns += '<button type="button" class="btn btn-mini btn-ghost" data-action="open-thread" data-id="' + attr(t.thread_id) + '">Conversation</button>';
+      return '<div class="tcard tstate-' + t.state + '"><div class="tcard-head"><span class="step-dot ' + (t.state === "done" || t.state === "skipped" ? "ok" : t.state === "running" ? "run" : t.state === "waiting_approval" ? "wait" : ["failed", "unverified", "blocked"].indexOf(t.state) >= 0 ? "bad" : "") + '"></span><b>' + esc(t.title) + '</b><span class="pill">' + esc(t.role) + '</span><span class="pill ' + (t.state === "done" ? "pill-ok" : ["failed", "unverified", "blocked"].indexOf(t.state) >= 0 ? "pill-bad" : t.state === "running" ? "pill-accent" : "") + '">' + esc(TASK_WORD[t.state] || t.state) + '</span><span class="grow"></span><button type="button" class="btn btn-mini btn-ghost" data-action="team-toggle" data-id="' + attr(t.id) + '">' + (open ? "Hide" : "Details") + "</button></div>" +
+        '<div class="row-sub">' + esc(dep) + (t.attempts > 1 ? " · attempt " + t.attempts : "") + (t.branch ? " · own copy on " + esc(t.branch) : "") + (evidenceLine(t) ? " · " + esc(evidenceLine(t)) : "") + "</div>" +
+        (t.error && ["unverified", "blocked", "failed"].indexOf(t.state) >= 0 ? '<div class="row-sub warn-text">' + esc(t.error) + "</div>" : "") +
+        (open ? '<div class="field-label" style="margin-top:8px">Instructions</div><div class="ask-body">' + md(t.instructions) + (t.result ? '<div class="field-label" style="margin-top:8px">What it reported</div>' + md(t.result) : "") + '<div class="field-label" style="margin-top:8px">Evidence devd recorded</div>' + ((t.evidence || []).length ? '<table class="table"><tbody>' + t.evidence.map(function (f) { return "<tr><td><span class=\"pill " + (f.ok ? "pill-ok" : "pill-bad") + '">' + esc(f.kind) + '</span></td><td class="cell-mono">' + esc(f.capability) + '</td><td class="cell-mono nowrap">' + esc(f.summary || "") + "</td></tr>"; }).join("") + "</tbody></table>" : '<div class="empty-inline">None yet.</div>') + "</div>" : "") +
+        (btns ? '<div class="inline" style="margin-top:8px">' + btns + "</div>" : "") + "</div>";
+    }).join("") || (r.state === "planning" ? "" : '<div class="empty-inline">No tasks yet.</div>');
+    var approvals = (d.approvals || []).map(function (a) { return approvalCard(a, false); }).join("");
+    var log = events.filter(function (e) { return ["started", "plan", "plan_approved", "report", "accepted", "rejected", "unverified", "blocked", "merge_blocked", "failed", "retrying", "retry", "direction", "paused", "resumed", "cancelled", "accepted_by_hand", "needs_person", "done", "note", "recovered", "waiting_approval"].indexOf(e.kind) >= 0; }).slice(-60).reverse().map(function (e) {
+      var x = e.data || {}, text = "";
+      switch (e.kind) {
+        case "started": text = x.task ? "started " + x.task + " (" + x.role + ")" : "run started"; break;
+        case "plan": text = "plan: " + (x.tasks || []).length + " task(s)"; break;
+        case "report": text = x.task + " reported " + x.status + ": " + String(x.summary || "").split("\n")[0]; break;
+        case "accepted": text = "accepted " + x.task + (x.verified ? " (" + x.verified + " passing check" + (x.verified === 1 ? "" : "s") + ")" : ""); break;
+        case "rejected": case "unverified": text = "not accepted " + x.task + ": " + x.why; break;
+        case "direction": text = "you said: " + x.text; break;
+        case "note": text = x.text; break;
+        default: text = e.kind.replace(/_/g, " ") + (x.task ? " " + x.task : "") + (x.why ? ": " + x.why : "");
+      }
+      return '<div class="feed"><span class="dim mono">' + esc(ago(e.at)) + '</span><span class="grow">' + esc(text) + "</span></div>";
+    }).join("");
+    var summary = r.summary ? '<div class="section-title">Result</div><div class="panel"><div class="panel-body ask-body">' + md(r.summary) + "</div></div>" : "";
+    var say = ["done", "failed", "cancelled"].indexOf(r.state) < 0 ? '<div class="composer"><div class="inline"><input class="input grow" id="team-say" placeholder="Tell the team something new (new requirement, a correction)…"><button type="button" class="btn btn-primary" data-action="team-say" data-id="' + attr(r.id) + '">Send</button></div></div>' : "";
+    return head + '<div class="team-scroll">' + note + approvals + (summary) + '<div class="section-title" style="margin:16px 16px 8px">Tasks <span class="count">' + work.length + "</span></div>" + '<div class="tlist">' + cards + "</div>" + '<div class="section-title" style="margin:16px 16px 8px">Log</div><div class="panel" style="margin:0 16px 16px">' + (log || '<div class="empty-inline">Nothing yet.</div>') + "</div></div>" + say;
+  }
+
   // ------------------------------------------------------------------- inbox
 
   function loadInbox() {
@@ -4015,6 +4165,7 @@
     }
     if (state.view === "home") return loadHome().then(render);
     if (state.view === "assistant") return loadAssistant().then(render);
+    if (state.view === "team") return loadTeam().then(render);
     if (state.view === "inbox") return loadInbox().then(render);
     if (state.view === "providers") return loadProviders().then(render);
     if (state.view === "create") return loadCreate().then(render);
@@ -4059,6 +4210,7 @@
       else if (state.view === "hosts") renderHosts();
     } else if (state.view === "home") renderHome();
     else if (state.view === "assistant") renderAssistant();
+    else if (state.view === "team") renderTeam();
     else if (state.view === "inbox") renderInbox();
     else if (state.view === "providers") renderProviders();
     else if (state.view === "create") renderCreate();
@@ -4111,6 +4263,42 @@
       if (opt === "install") return run("toolchain.install", { tool: tool }).then(done);
       if (opt === "remove") return run("toolchain.remove", { tool: tool }).then(done);
       if (opt === "logs") return read("toolchain.logs", { tool: tool }).then(function (d) { openDrawer(tool + " logs", '<pre class="log-block">' + esc((d.lines || []).join("\n") || "(no log lines)") + "</pre>"); }).catch(function (e) { toast("error", e.message); });
+    },
+    "team-new": function () { TEAM.sel = null; TEAM.data = null; paintTeam(); },
+    "team-open": function (n) { TEAM.sel = n.dataset.id; read("team.get", { run: TEAM.sel }).then(function (d) { TEAM.data = d; paintTeam(); }); },
+    "team-toggle": function (n) { TEAM.open[n.dataset.id] = !TEAM.open[n.dataset.id]; paintTeam(); },
+    "team-start": function () {
+      var f = TEAM.form;
+      if (!f.goal.trim()) return toast("warn", "Describe what you want first");
+      if (!f.project) return toast("warn", "Choose a project, or a new one");
+      var args = { goal: f.goal.trim(), parallel: f.parallel };
+      if (f.project === "__new") { if (!f.name.trim()) return toast("warn", "Name the new project"); args.new_project = f.name.trim(); } else args.project = f.project;
+      run("team.start", args).then(function (o) {
+        if (!o) return;
+        TEAM.sel = o.data.id; TEAM.form.goal = ""; TEAM.data = null;
+        return loadTeam().then(paintTeam);
+      });
+    },
+    "team-approve": function (n) { run("team.approve_plan", { run: n.dataset.id }).then(function () { return read("team.get", { run: n.dataset.id }); }).then(function (d) { TEAM.data = d; paintTeam(); loadHealth().then(function () { rail(); }); }); },
+    "team-pause": function (n) { run("team.pause", { run: n.dataset.id }); },
+    "team-resume": function (n) { run("team.resume", { run: n.dataset.id }); },
+    "team-cancel": function (n) { run("team.cancel", { run: n.dataset.id }); },
+    "team-retry": function (n) { var note = window.prompt("What should it do differently? (optional)", ""); if (note === null) return; run("team.retry", { task: n.dataset.id, note: note || undefined }); },
+    "team-accept": function (n) { if (window.confirm("Accept this task without the proof devd asked for? The final report will say it was accepted by hand.")) run("team.accept", { task: n.dataset.id }); },
+    "team-say": function (n) { var i = el("team-say"); if (!i.value.trim()) return; var t = i.value.trim(); i.value = ""; run("team.say", { run: n.dataset.id, text: t }); },
+    "team-open-from": function (n) { TEAM.sel = n.dataset.id; TEAM.data = null; navigate("team"); },
+    "home-team": function () {
+      var text = (el("home-ask").value || "").trim(), p = el("home-project").value;
+      TEAM.form.goal = text; if (p) TEAM.form.project = p;
+      TEAM.sel = null; TEAM.data = null; navigate("team");
+    },
+    "role-save": function (n) {
+      var role = n.dataset.role, models = [];
+      [0, 1].forEach(function (i) {
+        var p = el("rm-" + role + "-p" + i).value, m = el("rm-" + role + "-m" + i).value.trim();
+        if (p && m) models.push({ provider: p, model: m });
+      });
+      run("models.assign", { role: role, models: models }).then(function (o) { if (o) return loadProviders().then(renderProviders); });
     },
     // ---- assistant era
     "health-open": function () { openHealth(); loadHealth().then(function () { healthChip(); if (!el("drawer").hidden) openHealth(); }); },
@@ -4969,6 +5157,16 @@
     if (e.target.id === "home-ask" && e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); ACTIONS["home-ask"](); }
   });
 
+  document.addEventListener("input", function (e) {
+    var t = e.target;
+    if (t.id === "team-goal") TEAM.form.goal = t.value;
+    if (t.id === "team-name") TEAM.form.name = t.value;
+  });
+  document.addEventListener("change", function (e) {
+    var t = e.target;
+    if (t.id === "team-project") { TEAM.form.project = t.value; paintTeam(); }
+    if (t.id === "team-parallel") TEAM.form.parallel = parseInt(t.value, 10);
+  });
   // ----------------------------------------------------------------------- boot
 
   function boot() {

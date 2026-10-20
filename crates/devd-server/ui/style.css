@@ -1309,3 +1309,13 @@ pre.code { margin: 6px 0; padding: var(--s3); background: var(--bg); border: 1px
 .inv { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); }
 .inv:first-child { border-top: 0; padding-top: 0; }
 .inv .health-dot { margin-top: 6px; }
+
+.team-detail { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+.team-scroll { flex: 1; overflow: auto; min-height: 0; }
+.team-new { padding: var(--s5); max-width: 720px; }
+.tlist { padding: 0 var(--s4); display: flex; flex-direction: column; gap: var(--s2); }
+.tcard { padding: var(--s3); background: var(--bg-surface); border: 1px solid var(--line); border-radius: var(--radius-lg); }
+.tcard-head { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+.tstate-running { border-color: var(--accent-line); }
+.tstate-unverified, .tstate-failed, .tstate-blocked { border-color: #5c2b2b; }
+.tstate-done .tcard-head b, .tstate-skipped .tcard-head b { color: var(--fg-mute); }
