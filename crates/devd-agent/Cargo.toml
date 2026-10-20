@@ -1,0 +1,23 @@
+[package]
+name = "devd-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "devd's built-in agent: model providers, the official model catalogue, conversations, the inbox, approvals and file tools."
+
+[dependencies]
+devd-core = { path = "../devd-core" }
+devd-mcp = { path = "../devd-mcp" }
+devd-stacks = { path = "../devd-stacks" }
+devd-git = { path = "../devd-git" }
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+ureq.workspace = true
+regex = "1"
+walkdir.workspace = true
+base64.workspace = true
+webpki-roots = "0.26"
+
+[dev-dependencies]
+tempfile.workspace = true

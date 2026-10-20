@@ -14,6 +14,7 @@ use devd_core::config::Settings;
 use devd_core::paths::Paths;
 use devd_core::{DevdError, Result};
 
+mod aicat;
 mod app;
 mod devcat;
 mod gitcat;
@@ -169,6 +170,28 @@ pub(crate) enum Command {
     Project {
         #[command(subcommand)]
         cmd: ProjectCommand,
+    },
+    /// Talk to devd's built-in agent, which can use every capability devd has.
+    Chat(ChatArgs),
+    /// Model providers and API keys for the built-in agent.
+    Provider {
+        #[command(subcommand)]
+        cmd: ProviderCommand,
+    },
+    /// The model catalogue, from the vendors' own documentation and APIs.
+    Models {
+        #[command(subcommand)]
+        cmd: ModelsCommand,
+    },
+    /// Messages agents left for you.
+    Inbox {
+        #[command(subcommand)]
+        cmd: InboxCommand,
+    },
+    /// Operations agents asked you to approve.
+    Approvals {
+        #[command(subcommand)]
+        cmd: ApprovalsCommand,
     },
     /// Open the terminal dashboard.
     Tui,
@@ -340,6 +363,100 @@ pub(crate) enum ProjectCommand {
         #[arg(long)]
         lines: Option<usize>,
     },
+}
+
+#[derive(clap::Args, Debug)]
+pub(crate) struct ChatArgs {
+    /// What to ask. Omit in a terminal for an interactive conversation.
+    pub message: Option<String>,
+    /// Continue an earlier conversation.
+    #[arg(long)]
+    pub thread: Option<String>,
+    /// Project directory the agent works in.
+    #[arg(long)]
+    pub project: Option<String>,
+    /// Provider id (see `devd provider list`).
+    #[arg(long)]
+    pub provider: Option<String>,
+    /// Model id (see `devd models list`).
+    #[arg(long)]
+    pub model: Option<String>,
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum ProviderCommand {
+    /// List configured providers (keys are never shown).
+    List,
+    /// Show the ready-made provider presets and where to get keys.
+    Presets,
+    /// Add or update a provider. The key comes from DEVD_API_KEY or a prompt.
+    Add {
+        /// Provider id, e.g. `anthropic`.
+        id: String,
+        /// Start from a preset: anthropic, openai, gemini, openrouter, groq, ollama, lm-studio, custom.
+        #[arg(long)]
+        preset: Option<String>,
+        #[arg(long)]
+        base_url: Option<String>,
+        /// Read the key from this environment variable instead of storing it.
+        #[arg(long)]
+        key_env: Option<String>,
+        /// Default model id.
+        #[arg(long)]
+        model: Option<String>,
+        /// Use for new conversations.
+        #[arg(long)]
+        default: bool,
+    },
+    /// Check the URL and key by listing the provider's models.
+    Test { id: String },
+    /// Fetch and cache the models this provider offers.
+    Models { id: String },
+    /// Use this provider for new conversations.
+    Default { id: String },
+    /// Remove a provider and its stored key.
+    Remove { id: String },
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum ModelsCommand {
+    /// Show cached models.
+    List {
+        /// `anthropic-docs` or `provider:<id>`.
+        #[arg(long)]
+        source: Option<String>,
+    },
+    /// Fetch the official Claude model list from Anthropic's documentation.
+    Refresh,
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum InboxCommand {
+    /// Show messages from agents.
+    List {
+        /// Include resolved ones.
+        #[arg(long)]
+        all: bool,
+    },
+    /// Answer a message.
+    Reply {
+        id: String,
+        /// Your answer; empty just resolves it.
+        text: Vec<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum ApprovalsCommand {
+    /// Show requests waiting for you.
+    List {
+        #[arg(long)]
+        all: bool,
+    },
+    /// Approve and run a request.
+    Approve { id: String },
+    /// Decline a request.
+    Decline { id: String },
 }
 
 #[derive(Subcommand, Debug)]
@@ -1121,6 +1238,26 @@ fn run(cli: Cli) -> Result<i32> {
             devcat::new_project(&app, a)?;
             Ok(0)
         }
+        Command::Chat(a) => {
+            aicat::chat(&app, a)?;
+            Ok(0)
+        }
+        Command::Provider { cmd } => {
+            aicat::provider(&app, cmd)?;
+            Ok(0)
+        }
+        Command::Models { cmd } => {
+            aicat::models(&app, cmd)?;
+            Ok(0)
+        }
+        Command::Inbox { cmd } => {
+            aicat::inbox(&app, cmd)?;
+            Ok(0)
+        }
+        Command::Approvals { cmd } => {
+            aicat::approvals(&app, cmd)?;
+            Ok(0)
+        }
         Command::Stacks { cmd } => {
             devcat::stacks(&app, cmd)?;
             Ok(0)
@@ -1216,8 +1353,17 @@ fn run(cli: Cli) -> Result<i32> {
             let git_executable = app.settings.git_executable.clone();
             let extra: Vec<devd_mcp::ExtraChecks> =
                 vec![Arc::new(move || vec![git_check(git_executable.as_deref())])];
+            let queue_store = app.store.clone();
+            let actor_label = format!("agent:{client}");
+            let queue: devd_mcp::ApprovalQueue = Arc::new(move |cap, args, plan| {
+                queue_store
+                    .create_request(&actor_label, cap, args, plan, None, None)
+                    .ok()
+                    .map(|r| r.id)
+            });
             let server = devd_mcp::McpServer::new(app.registry.clone(), app.ctx(), client)
-                .with_extra_checks(extra);
+                .with_extra_checks(extra)
+                .with_approval_queue(queue);
             // Nothing but protocol traffic may reach stdout.
             server.serve_stdio()?;
             Ok(0)
