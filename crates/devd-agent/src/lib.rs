@@ -32,6 +32,7 @@ pub mod docs;
 pub mod fs;
 pub mod health;
 pub mod providers;
+pub mod requirements;
 pub mod search;
 pub mod roles;
 pub mod secrets;

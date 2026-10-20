@@ -813,6 +813,19 @@ kbd {
 .row-sub { color: var(--fg-dim); font-size: var(--text-xs); line-height: 1.5; }
 .row-meta { flex: 0 0 auto; color: var(--fg-dim); font-family: var(--mono); font-size: var(--text-xs); }
 
+/* A requirement: what devd needs, why, and the one action that fixes it. */
+.req-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s3);
+  padding: var(--s3);
+  border-bottom: 1px solid var(--line);
+}
+.req-row:last-child { border-bottom: 0; }
+.req-main { flex: 1; min-width: 0; }
+.req-title { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-weight: 500; }
+.req-action { flex: 0 0 auto; }
+
 /* ----------------------------------------------------------------- tables */
 
 .table-wrap { overflow-x: auto; }

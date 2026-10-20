@@ -626,6 +626,8 @@ pub struct State {
     pub audit: Vec<AuditRow>,
     /// Environment checks.
     pub checks: Vec<CheckRow>,
+    /// What devd needs on this machine, as `setup.requirements` returns it.
+    pub requirements: Vec<Value>,
     /// Stacks that can be created.
     pub stacks: Vec<StackRow>,
     /// Tools and services.
@@ -665,6 +667,7 @@ impl Default for State {
             capability_query: String::new(),
             audit: Vec::new(),
             checks: Vec::new(),
+            requirements: Vec::new(),
             stacks: Vec::new(),
             tools: Vec::new(),
             runs: Vec::new(),

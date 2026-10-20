@@ -174,7 +174,7 @@ fn run_with(boot: Bootstrap) -> tauri::Result<()> {
                 .inner_size(760.0, 420.0)
                 .center()
                 .build()?;
-                let body = serde_json::to_string(&message).unwrap_or_else(|_| "\"backend error\"".into());
+                let body = serde_json::to_string(&explain(&message)).unwrap_or_else(|_| "\"backend error\"".into());
                 let script = format!(
                     "document.body.style.cssText='font:14px ui-monospace,Consolas,monospace;background:#0a0a0b;color:#e8e6e3;padding:32px;white-space:pre-wrap';document.body.textContent={body};"
                 );
@@ -215,6 +215,22 @@ fn send_shutdown(shutdown: &Shutdown) {
             let _ = tx.send(true);
         }
     }
+}
+
+/// Say what a failure means, and what to do about it.
+///
+/// The one that matters is the WebView2 runtime: the window cannot be drawn
+/// without it, and the error the webview returns is not something a person
+/// can act on.
+fn explain(message: &str) -> String {
+    if message.to_lowercase().contains("webview2") {
+        return "The devd window needs the Microsoft Edge WebView2 runtime, and it is not installed on this machine.\n\n\
+                Install it with:\n  MicrosoftEdgeWebview2Setup.exe /silent /install\n\n\
+                or download it from:\n  https://developer.microsoft.com/microsoft-edge/webview2/\n\n\
+                The command line works without it: devd ui"
+            .to_string();
+    }
+    message.to_string()
 }
 
 /// Show a startup failure without starting a backend.

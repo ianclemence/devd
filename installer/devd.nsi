@@ -72,6 +72,30 @@ Function .onInit
     nsExec::ExecToLog 'taskkill /F /IM devd-desktop.exe'
     Sleep 800
   done:
+
+  ; The devd window is drawn by the Microsoft Edge WebView2 runtime. It ships
+  ; with current Edge, but not on every machine, and without it the window
+  ; cannot open at all. Ask before installing it.
+  ClearErrors
+  ReadRegStr $0 HKLM "SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" "pv"
+  IfErrors 0 after_webview2
+  ClearErrors
+  ReadRegStr $0 HKLM "SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" "pv"
+  IfErrors 0 after_webview2
+  ClearErrors
+  ReadRegStr $0 HKCU "SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" "pv"
+  IfErrors 0 after_webview2
+
+  IfSilent silent_webview2
+  MessageBox MB_YESNO|MB_ICONQUESTION "The devd window needs the Microsoft Edge WebView2 runtime, and it is not installed on this machine.$\r$\n$\r$\nInstall it now? It is a small download from Microsoft." IDNO skip_webview2
+  DetailPrint "Installing the WebView2 runtime..."
+  nsExec::ExecToLog 'curl.exe -L -o "$TEMP\MicrosoftEdgeWebview2Setup.exe" "https://go.microsoft.com/fwlink/p/?LinkId=2124703"'
+  nsExec::ExecToLog '"$TEMP\MicrosoftEdgeWebview2Setup.exe" /silent /install'
+  Delete "$TEMP\MicrosoftEdgeWebview2Setup.exe"
+  Goto after_webview2
+  silent_webview2:
+  skip_webview2:
+  after_webview2:
 FunctionEnd
 
 Section "devd (required)" SecMain

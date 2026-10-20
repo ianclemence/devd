@@ -22,7 +22,7 @@ use devd_core::{util, DevdError, Provider, Registry, Result};
 use crate::chat::{Hub, SendRequest};
 use crate::team::{PlanTask, Team};
 use crate::providers;
-use crate::{docs, fs, health, roles, search, secrets, skills};
+use crate::{docs, fs, health, requirements, roles, search, secrets, skills};
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct NoArgs {}
@@ -817,6 +817,16 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             let found = providers::discover_local();
             let running = found.iter().filter(|f| f.running).count();
             Ok(Outcome::with_data(format!("{} local server(s) answering", running), serde_json::to_value(&found)?))
+        })?;
+
+    // ------------------------------------------------------------- setup
+    add::<NoArgs, _, _>(reg, "setup.requirements", "What devd needs on this machine", "Everything devd needs or can use here, with the state of each, why it matters, and the exact operation that fixes it: the capability to call with its arguments, the view to open, or the command to run by hand. Broken things come first, then missing ones. It installs nothing; every fix goes through the ordinary permission model.",
+        Tier::Read, Effect::Read, true, false,
+        |_, _| simple("setup.requirements", "list what devd needs on this machine"),
+        |ctx, _| {
+            let r = requirements::list(ctx)?;
+            let missing = r["missing"].as_i64().unwrap_or(0);
+            Ok(Outcome::with_data(format!("{missing} requirement(s) outstanding"), r))
         })?;
 
     add::<NoArgs, _, _>(reg, "models.refresh_official", "Fetch Anthropic's official model list", "Reads the Claude models overview in Anthropic's documentation and caches each model's API id, description, pricing, context window, maximum output and retirement date. Needs no API key.",

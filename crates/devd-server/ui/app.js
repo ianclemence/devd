@@ -3216,6 +3216,12 @@
         return '<span class="pill">' + esc(g.name) + " " + g.count + "</span>";
       })
       .join("");
+    var reqs = (AI.requirements && AI.requirements.requirements) || [];
+    var reqPanel = reqs.length
+      ? '<div class="panel"><div class="panel-head"><span>Requirements</span><span class="panel-note">' +
+        (AI.requirements.missing || 0) + " missing of " + reqs.length + "</span></div>" +
+        '<div class="panel-body flush">' + reqs.map(requirementRow).join("") + "</div></div>"
+      : "";
 
     el("main").innerHTML =
       '<div class="page">' +
@@ -3226,6 +3232,7 @@
       '<button type="button" class="btn btn-danger" data-action="quit">Quit devd</button>' +
       "</div></div>" +
       '<div class="panel"><div class="panel-head"><span>Status</span><span class="panel-note">' + esc(AI.health ? AI.health.state.replace("_", " ") : "unknown") + '</span></div><div class="panel-body">' + healthBody(false) + "</div></div>" +
+      reqPanel +
       '<div class="panel"><div class="panel-head"><span>Environment</span><span class="panel-note">' + esc((AI.env && AI.env.mode) || "local") + '</span></div><div class="panel-body"><div class="row-sub">' + ((AI.env && AI.env.mode === "production") ? "Production mode is on. Agents need your approval for every change, plan approval cannot be skipped, and devd never deploys or opens ports by itself." : "Local mode. Agents work freely inside authorised project folders; anything destructive or system-wide still asks you. Turn production mode on for a machine that runs something real.") + '</div><div class="inline" style="margin-top:10px"><button type="button" class="btn ' + ((AI.env && AI.env.mode === "production") ? "" : "btn-danger") + '" data-action="env-toggle">' + ((AI.env && AI.env.mode === "production") ? "Switch to local (asks first)" : "Switch to production mode") + "</button></div></div></div>" +
       '<div class="panel"><div class="panel-head"><span>Raw environment checks</span>' +
       '<span class="panel-note">' + (state.doctor && state.doctor.ok ? "no failures" : "see levels") + "</span></div>" +
@@ -3276,7 +3283,7 @@
   }
 
   function loadSystem() {
-    return Promise.all([loadDoctor(), loadSession(), loadHealth()]);
+    return Promise.all([loadDoctor(), loadSession(), loadHealth(), read("setup.requirements").catch(function () { return null; }).then(function (r) { AI.requirements = r; })]);
   }
 
 
@@ -3710,10 +3717,12 @@
       read("provider.list").catch(function () { return []; }),
       read("team.list").catch(function () { return []; }),
       request("/api/audit?limit=40").then(function (r) { return r.ok ? r.body.items || [] : []; }),
+      read("setup.requirements").catch(function () { return null; }),
       state.server.loaded ? Promise.resolve() : loadServer()
     ]).then(function (r) {
-      AI.home = { projects: r[1], approvals: r[2], inbox: r[3], threads: r[4], tasks: r[5], providers: r[6], teamRuns: r[7], audit: r[8] };
+      AI.home = { projects: r[1], approvals: r[2], inbox: r[3], threads: r[4], tasks: r[5], providers: r[6], teamRuns: r[7], audit: r[8], requirements: r[9] };
       AI.providers = r[6];
+      AI.requirements = r[9];
     });
   }
 
@@ -3740,6 +3749,42 @@
         : '<div class="inline"><button type="button" class="btn btn-mini" data-action="inbox-reply" data-id="' + attr(m.id) + '" data-resolve="1">Mark as read</button></div>') + "</div>";
   }
 
+  /* A requirement row: what it is, why devd wants it, and the one action that
+     fixes it. The action is the ordinary capability call, so it asks for
+     approval like everything else that changes the machine. */
+  function requirementRow(r) {
+    var fix = r.fix || {};
+    var action = "";
+    if (fix.capability) {
+      action = '<button type="button" class="btn btn-mini btn-primary" data-action="req-fix" data-id="' + attr(r.id) + '">' + esc(fix.label || "Install") + "</button>";
+    } else if (fix.view) {
+      action = '<button type="button" class="btn btn-mini" data-action="req-fix" data-id="' + attr(r.id) + '">' + esc(fix.label || "Open") + "</button>";
+    } else if (fix.command || fix.url) {
+      action = '<button type="button" class="btn btn-mini" data-action="req-how" data-id="' + attr(r.id) + '">How</button>';
+    }
+    var dot = r.state === "broken" ? "health-problem" : r.state === "missing" ? "health-attention" : "health-ok";
+    return '<div class="req-row"><span class="health-dot ' + dot + '" aria-hidden="true"></span>' +
+      '<div class="req-main"><div class="req-title">' + esc(r.title) +
+      (r.required ? ' <span class="pill pill-warn">required</span>' : ' <span class="pill">optional</span>') +
+      '</div><div class="row-sub">' + esc(r.why) + "</div></div>" +
+      '<div class="req-action">' + action + "</div></div>";
+  }
+
+  function requirementPanel() {
+    var reqs = (AI.requirements && AI.requirements.requirements) || [];
+    var outstanding = reqs.filter(function (r) { return r.state !== "ready"; });
+    if (!outstanding.length) {
+      return '<div class="section-title">Ready</div><div class="calm"><span class="health-dot"></span><div><b>Everything devd needs is here.</b><div class="row-sub">Git, PHP, the services and a model provider are all in place.</div></div></div>';
+    }
+    return '<div class="section-title">Needs installing <span class="count">' + outstanding.length + "</span></div>" +
+      '<div class="panel">' + outstanding.map(requirementRow).join("") + "</div>";
+  }
+
+  function findRequirement(id) {
+    var reqs = (AI.requirements && AI.requirements.requirements) || [];
+    return reqs.filter(function (r) { return r.id === id; })[0] || null;
+  }
+
   function renderHome() {
     var d = AI.home;
     if (!d) return renderLoading();
@@ -3751,8 +3796,7 @@
       ? '<div class="ask-box"><textarea id="home-ask" class="input" rows="2" placeholder="Ask devd to do something…  e.g. “Create a Laravel app called blog with PostgreSQL” or “Run the tests and fix what fails”">' + esc(AI.askText) + "</textarea>" +
         '<div class="inline"><select class="input" id="home-project">' + projOptions + "</select><span class=\"grow\"></span>" +
         '<button type="button" class="btn" data-action="home-team" title="A planner, specialists working in parallel, and proof before anything counts as done">Build with the team</button><button type="button" class="btn btn-primary" data-action="home-ask">Ask the assistant</button></div></div>'
-      : '<div class="ask-box ask-setup"><div><b>Connect an AI provider to talk to devd.</b><div class="row-sub">The built-in assistant can create projects, edit code, run tests and manage your tools, with your approval for anything risky. It needs a model provider and an API key. Nothing else in devd depends on it.</div></div>' +
-        '<button type="button" class="btn btn-primary" data-action="nav" data-view="providers">' + (hasProvider ? "Finish setup" : "Set up a provider") + "</button></div>";
+      : "";
 
     // Needs you
     var needs = [];
@@ -3769,17 +3813,11 @@
       needs.push('<div class="ask ask-' + (bad ? "bad" : "warn") + '"><div class="ask-head"><span class="pill ' + (bad ? "pill-bad" : "pill-warn") + '">' + esc(HEALTH_WORD[c.state]) + "</span><b>" + esc(c.label) + '</b><span class="dim">' + esc(c.detail) + '</span></div><div class="ask-body">' + esc(c.meaning) + "</div>" +
         (f.capability ? '<div class="inline"><button type="button" class="btn btn-primary btn-mini" data-action="health-fix" data-cap="' + attr(f.capability) + '" data-args="' + attr(JSON.stringify(f.args || {})) + '">' + esc(f.label) + "</button></div>" : f.view ? '<div class="inline"><button type="button" class="btn btn-mini" data-action="health-go" data-view="' + attr(f.view) + '">' + esc(f.label) + "</button></div>" : "") + "</div>");
     });
-    var steps = [
-      { done: ready, t: "Connect an AI provider", s: "So the assistant and agent team can work", v: "providers" },
-      { done: d.projects.length > 0, t: "Add your first project", s: "Create one from a stack, or import a repository", v: d.projects.length ? "projects" : "create" },
-      { done: state.server.services.some(function (x) { return x.installed || x.running; }), t: "Set up local services (optional)", s: "Web server, database; existing installs are detected first", v: "services" }
-    ];
-    var started = steps.every(function (x) { return x.done; }) ? "" :
-      '<div class="section-title">Get started</div><div class="panel">' + steps.map(function (x, i) {
-        return '<div class="proj"><span class="step-dot ' + (x.done ? "ok" : "run") + '" style="animation:none"></span><div class="proj-main"><div class="proj-name">' + esc(x.t) + '</div><div class="proj-path">' + esc(x.s) + "</div></div>" +
-          (x.done ? '<span class="dim">done</span>' : '<button type="button" class="btn btn-mini btn-primary" data-action="nav" data-view="' + x.v + '">Open</button>') + "</div>";
-      }).join("") + "</div>";
-    var needsHtml = started + '<div class="section-title">Needs you' + (needs.length ? ' <span class="count">' + needs.length + "</span>" : "") + "</div>" + (needs.length
+    var projectStep = d.projects.length ? "" :
+      '<div class="section-title">Get started</div><div class="panel">' +
+      '<div class="proj"><span class="step-dot run"></span><div class="proj-main"><div class="proj-name">Add your first project</div><div class="proj-path">Create one from a stack, or import a repository</div></div>' +
+      '<button type="button" class="btn btn-mini btn-primary" data-action="nav" data-view="create">Open</button></div></div>';
+    var needsHtml = requirementPanel() + projectStep + '<div class="section-title">Needs you' + (needs.length ? ' <span class="count">' + needs.length + "</span>" : "") + "</div>" + (needs.length
       ? needs.join("")
       : '<div class="calm"><span class="health-dot"></span><div><b>Nothing needs you.</b><div class="row-sub">No approvals waiting, no questions from agents, nothing broken.</div></div></div>');
 
@@ -4479,6 +4517,25 @@
       var pre = n.dataset.id ? el(n.dataset.id) : null;
       if (!pre) return;
       copyText(pre.textContent || "", function () { toast("ok", "Copied to the clipboard"); });
+    },
+    "req-fix": function (n) {
+      var r = findRequirement(n.dataset.id);
+      if (!r) return;
+      var fix = r.fix || {};
+      if (fix.capability) return run(fix.capability, fix.args || {});
+      if (fix.view) return navigate(fix.view);
+      return ACTIONS["req-how"](n);
+    },
+    "req-how": function (n) {
+      var r = findRequirement(n.dataset.id);
+      if (!r) return;
+      var fix = r.fix || {};
+      var body = '<div class="notice">devd cannot install this one for you. Run this in a terminal:</div>' +
+        '<pre class="log-block">' + esc(fix.command || fix.url || "") + "</pre>";
+      if (fix.command && fix.url) {
+        body += '<div class="row-sub">or download it from <a class="link" href="' + attr(fix.url) + '" target="_blank" rel="noopener noreferrer">' + esc(fix.url) + "</a></div>";
+      }
+      openDrawer(r.title, body);
     },
     "role-save": function (n) {
       var role = n.dataset.role, models = [];

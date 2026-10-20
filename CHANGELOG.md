@@ -14,6 +14,17 @@ may change capability identifiers where the design was wrong.
 
 ### Added
 
+- **Requirements, asked for at the right moment.** One capability (`setup.requirements`)
+  lists what devd needs on this machine - Git, the PHP runtime, the services it
+  manages, a model provider and its key, and the WebView2 runtime the native
+  window needs - with the state of each, why it matters, and the exact operation
+  that fixes it. The Windows installer asks before installing the WebView2
+  runtime, because without it the window cannot open; `devd setup` prints the
+  whole list and says what this run will install; the window shows it on the home
+  page and in Diagnostics and installs a missing piece through the ordinary
+  approval flow; the terminal dashboard lists it and installs the first one with
+  `i`. Nothing is installed silently, and an optional thing that is missing never
+  makes devd look broken. See `docs/setup.md`.
 - **Model providers, completed.** Presets for Anthropic, OpenAI, DeepSeek, Moonshot AI
   (Kimi), Zhipu AI (GLM), Google Gemini, xAI, Mistral, Groq, Together, Fireworks,
   OpenRouter, Ollama, LM Studio and any OpenAI-compatible endpoint, in that order of

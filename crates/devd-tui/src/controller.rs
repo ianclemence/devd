@@ -364,6 +364,7 @@ impl Controller {
             Key::Char('d') if self.state.view == View::Projects => self.detect_selected(),
             Key::Char('m') if self.state.view == View::Projects => self.import_selected(),
             Key::Char('i') if self.state.view == View::Toolchain => self.tool_action("toolchain.install"),
+            Key::Char('i') if self.state.view == View::Dashboard => self.install_first_requirement(),
             Key::Char('x') if self.state.view == View::Toolchain => self.tool_action("toolchain.remove"),
             Key::Char('s') if self.state.view == View::Toolchain => self.service_action("start"),
             Key::Char('t') if self.state.view == View::Toolchain => self.service_action("stop"),
@@ -403,6 +404,7 @@ impl Controller {
                 self.load_checks();
                 self.load_projects();
                 self.load_status();
+                self.load_requirements();
             }
             View::Projects => self.load_projects(),
             View::Changes => self.load_status(),
@@ -734,6 +736,49 @@ impl Controller {
                 self.state.audit.clear();
                 self.state.fail(e.to_string());
             }
+        }
+    }
+
+    fn load_requirements(&mut self) {
+        match self.call("setup.requirements", json!({})) {
+            Call::Data(d) => {
+                self.state.requirements = d["requirements"].as_array().cloned().unwrap_or_default();
+                let missing = self.state.requirements.iter().filter(|r| r["state"] != "ready").count();
+                if missing > 0 {
+                    self.state.say(format!("{missing} thing(s) to install"));
+                }
+            }
+            Call::Failed(message) => {
+                self.state.requirements.clear();
+                self.state.fail(message);
+            }
+            _ => {}
+        }
+    }
+
+    /// Install the first thing devd is missing, if it can be installed from
+    /// here. Anything else is named in the dashboard instead.
+    fn install_first_requirement(&mut self) {
+        let Some(requirement) = self
+            .state
+            .requirements
+            .iter()
+            .find(|r| r["state"] != "ready" && r["fix"]["capability"].is_string())
+            .cloned()
+        else {
+            self.state.say("nothing here that devd can install for you");
+            return;
+        };
+        let id = requirement["fix"]["capability"].as_str().unwrap_or_default().to_string();
+        let args = requirement["fix"]["args"].clone();
+        let label = requirement["title"].as_str().unwrap_or(&id).to_string();
+        match self.call(&id, args) {
+            Call::Data(_) | Call::Nothing => {
+                self.state.say(format!("{label}: done"));
+                self.load_requirements();
+            }
+            Call::NeedsApproval => {}
+            Call::Failed(message) => self.state.fail(message),
         }
     }
 

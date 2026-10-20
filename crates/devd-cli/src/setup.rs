@@ -42,6 +42,11 @@ pub fn run(json: bool, plan_only: bool, assume_yes: bool) -> Result<i32> {
 
     let mut steps: Vec<Value> = Vec::new();
 
+    // What devd needs on this machine, and what this run will do about it.
+    // The person sees the whole list before anything changes.
+    say(&app, "==> Requirements");
+    report_requirements(&app);
+
     app = settle_ports(app, &mut steps)?;
 
     say(&app, "==> Runtime");
@@ -146,6 +151,51 @@ pub fn run(json: bool, plan_only: bool, assume_yes: bool) -> Result<i32> {
          from an elevated shell."
     );
     Ok(0)
+}
+
+/// Print what devd needs on this machine and what would fix each thing.
+///
+/// This is the same list the window and the terminal show, so a person is
+/// never told one thing by the installer and another by the app.
+fn report_requirements(app: &App) {
+    let ctx = app.ctx();
+    let request = InvokeRequest {
+        id: "setup.requirements".into(),
+        args: json!({}),
+        dry_run: false,
+    };
+    let Ok(result) = app.registry.dispatch(&ctx, &request, Approval::None) else {
+        return;
+    };
+    let Some(outcome) = result.outcome else { return };
+    let requirements = outcome.data["requirements"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let missing: Vec<&Value> = requirements
+        .iter()
+        .filter(|r| r["state"] != "ready")
+        .collect();
+    if missing.is_empty() {
+        say(app, "    everything devd needs is already here");
+        return;
+    }
+    for r in missing {
+        let title = r["title"].as_str().unwrap_or("requirement");
+        let why = r["why"].as_str().unwrap_or("");
+        say(app, &format!("    {title} — {why}"));
+        let fix = &r["fix"];
+        if let Some(capability) = fix["capability"].as_str() {
+            say(
+                app,
+                &format!("      this run installs it with {capability}"),
+            );
+        } else if let Some(view) = fix["view"].as_str() {
+            say(app, &format!("      open {view} in the app to finish this"));
+        } else if let Some(command) = fix["command"].as_str() {
+            say(app, &format!("      run this yourself: {command}"));
+        }
+    }
 }
 
 /// The steps, for `--plan`.

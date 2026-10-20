@@ -17,6 +17,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
+use serde_json::Value;
 use ratatui::Frame;
 
 use crate::state::{Overlay, PromptKind, State, View};
@@ -544,6 +545,31 @@ fn dashboard(state: &State) -> (String, Vec<Line<'static>>) {
     ]));
     lines.push(Line::from(""));
 
+    // What devd still needs, and the one key that fixes the first of it.
+    let missing: Vec<&Value> = state
+        .requirements
+        .iter()
+        .filter(|r| r["state"] != "ready")
+        .collect();
+    if !missing.is_empty() {
+        lines.push(Line::from(Span::styled("Setup", heading())));
+        for r in &missing {
+            let title = r["title"].as_str().unwrap_or("requirement");
+            let why = r["why"].as_str().unwrap_or("");
+            let broken = r["state"] == "broken";
+            lines.push(Line::from(vec![
+                Span::styled(format!(" {} ", if broken { "!" } else { "-" }), if broken { fail() } else { warn() }),
+                Span::styled(format!("{:<18}", truncate(title, 18)), heading()),
+                Span::styled(truncate(why, 58), quiet()),
+            ]));
+        }
+        lines.push(Line::from(Span::styled(
+            "  press i to install the first one, or 8 for the toolchain",
+            quiet(),
+        )));
+        lines.push(Line::from(""));
+    }
+
     lines.push(Line::from(Span::styled("Environment", heading())));
     if state.checks.is_empty() {
         lines.push(Line::from(Span::styled("  no checks have run", quiet())));
@@ -690,6 +716,7 @@ fn render_footer(frame: &mut Frame, state: &State, area: Rect) {
 
 fn hints_for(view: View) -> &'static str {
     match view {
+        View::Dashboard => "i install what is missing   r refresh   ? help   q quit",
         View::Projects => "t add   Enter open   d detect   m import   r refresh   ? help   q quit",
         View::Changes => {
             "Enter stage/unstage   s stage   u unstage   d discard   a stage all   c commit   r refresh   ? help   q quit"
