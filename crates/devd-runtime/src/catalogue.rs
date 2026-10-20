@@ -112,7 +112,10 @@ pub fn php(thread_safe: bool) -> Result<Vec<Available>> {
         let Some(version) = entry.get("version").and_then(|v| v.as_str()) else {
             continue;
         };
-        let published = entry.get("mtime").and_then(|v| v.as_str()).map(str::to_string);
+        let published = entry
+            .get("mtime")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
         // Build keys look like `nts-vs17-x64` / `ts-vc15-x64`; the toolset
         // number changes between releases, so it is matched, not hard-coded.
         for (key, build) in entry.as_object().into_iter().flatten() {
@@ -397,9 +400,7 @@ pub fn resolve(list: &[Available], spec: &str, channel: Option<&str>) -> Result<
             .iter()
             .find(|a| a.channel.eq_ignore_ascii_case(want))
             .copied()
-            .ok_or_else(|| {
-                DevdError::not_found(format!("no `{want}` build matches `{spec}`"))
-            })?,
+            .ok_or_else(|| DevdError::not_found(format!("no `{want}` build matches `{spec}`")))?,
         None => candidates
             .iter()
             .max_by_key(|a| version_key(&a.version))
@@ -508,7 +509,10 @@ mod tests {
 
     #[test]
     fn build_keys_are_split_or_rejected() {
-        assert_eq!(split_build_key("nts-vs17-x64"), Some(("nts", "vs17", "x64")));
+        assert_eq!(
+            split_build_key("nts-vs17-x64"),
+            Some(("nts", "vs17", "x64"))
+        );
         assert_eq!(split_build_key("ts-vc15-x86"), Some(("ts", "vc15", "x86")));
         assert_eq!(split_build_key("source"), None);
         assert_eq!(split_build_key("nts-vs17"), None);
@@ -541,7 +545,10 @@ mod tests {
         }
         let picked = resolve(&list, "8.3", None).unwrap();
         assert_eq!(picked.kind, "php");
-        assert!(picked.sha256.is_some(), "php builds must publish a digest: {picked:?}");
+        assert!(
+            picked.sha256.is_some(),
+            "php builds must publish a digest: {picked:?}"
+        );
         assert!(picked.url.starts_with("https://windows.php.net/"));
     }
 }

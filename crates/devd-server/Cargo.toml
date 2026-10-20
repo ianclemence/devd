@@ -10,6 +10,7 @@ authors.workspace = true
 
 [dependencies]
 devd-core = { workspace = true }
+devd-workspace = { path = "../devd-workspace" }
 
 axum = { workspace = true }
 serde = { workspace = true }
@@ -20,6 +21,8 @@ hex = { workspace = true }
 rand = { workspace = true }
 portable-pty = { workspace = true }
 base64 = { workspace = true }
+open = { workspace = true }
+url = "2"
 
 [dev-dependencies]
 tower = { workspace = true }

@@ -15,6 +15,9 @@ Unicode true
 !ifndef SOURCE
   !define SOURCE "target\release\devd.exe"
 !endif
+!ifndef DESKTOP
+  !define DESKTOP "target\release\devd-desktop.exe"
+!endif
 !ifndef ROOT
   !define ROOT ".."
 !endif
@@ -63,6 +66,7 @@ Function .onInit
   IfFileExists "$INSTDIR\devd.exe" 0 done
     nsExec::ExecToLog '"$INSTDIR\devd.exe" stack down'
     nsExec::ExecToLog 'taskkill /F /IM devd.exe'
+    nsExec::ExecToLog 'taskkill /F /IM devd-desktop.exe'
     Sleep 800
   done:
 FunctionEnd
@@ -71,6 +75,7 @@ Section "devd (required)" SecMain
   SectionIn RO
   SetOutPath "$INSTDIR"
   File "${SOURCE}"
+  File "${DESKTOP}"
   File "${ROOT}\LICENSE"
   File "${ROOT}\README.md"
 
@@ -92,7 +97,7 @@ Section "devd (required)" SecMain
   FileWrite $9 '    WScript.Quit 1$\r$\n'
   FileWrite $9 '  End If$\r$\n'
   FileWrite $9 'End If$\r$\n'
-  FileWrite $9 'Call sh.Run("""" & app & "\devd.exe"" ui", 0, False)$\r$\n'
+  FileWrite $9 'Call sh.Run("""" & app & "\devd-desktop.exe""", 0, False)$\r$\n'
   FileClose $9
 
   ; PATH helpers, so `devd` works in a new terminal.
@@ -113,7 +118,7 @@ Section "devd (required)" SecMain
   nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\add-to-path.ps1"'
 
   CreateDirectory "$SMPROGRAMS\devd"
-  CreateShortcut "$SMPROGRAMS\devd\devd.lnk" "wscript.exe" '"$INSTDIR\launch.vbs"' "$INSTDIR\devd.exe" 0
+  CreateShortcut "$SMPROGRAMS\devd\devd.lnk" "$INSTDIR\devd-desktop.exe" "" "$INSTDIR\devd-desktop.exe" 0
   CreateShortcut "$SMPROGRAMS\devd\devd terminal.lnk" "$SYSDIR\cmd.exe" '/k ""$INSTDIR\devd.exe" doctor"' "$INSTDIR\devd.exe" 0
   CreateShortcut "$SMPROGRAMS\devd\Uninstall devd.lnk" "$INSTDIR\uninstall.exe"
 
@@ -122,7 +127,7 @@ Section "devd (required)" SecMain
   WriteRegStr HKCU "${UNINSTKEY}" "DisplayVersion" "${VERSION}"
   WriteRegStr HKCU "${UNINSTKEY}" "Publisher" "ianclemence"
   WriteRegStr HKCU "${UNINSTKEY}" "InstallLocation" "$INSTDIR"
-  WriteRegStr HKCU "${UNINSTKEY}" "DisplayIcon" "$INSTDIR\devd.exe"
+  WriteRegStr HKCU "${UNINSTKEY}" "DisplayIcon" "$INSTDIR\devd-desktop.exe"
   WriteRegStr HKCU "${UNINSTKEY}" "UninstallString" '"$INSTDIR\uninstall.exe"'
   WriteRegDWORD HKCU "${UNINSTKEY}" "NoModify" 1
   WriteRegDWORD HKCU "${UNINSTKEY}" "NoRepair" 1
@@ -130,7 +135,7 @@ Section "devd (required)" SecMain
 SectionEnd
 
 Section "Desktop shortcut" SecDesktop
-  CreateShortcut "$DESKTOP\devd.lnk" "wscript.exe" '"$INSTDIR\launch.vbs"' "$INSTDIR\devd.exe" 0
+  CreateShortcut "$DESKTOP\devd.lnk" "$INSTDIR\devd-desktop.exe" "" "$INSTDIR\devd-desktop.exe" 0
 SectionEnd
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
@@ -143,6 +148,7 @@ Section "Uninstall"
   ; %LOCALAPPDATA%\devd is deliberately kept; the README says where it is.
   nsExec::ExecToLog '"$INSTDIR\devd.exe" stack down'
   nsExec::ExecToLog 'taskkill /F /IM devd.exe'
+  nsExec::ExecToLog 'taskkill /F /IM devd-desktop.exe'
   Sleep 500
 
   nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\remove-from-path.ps1"'
@@ -154,6 +160,7 @@ Section "Uninstall"
   Delete "$DESKTOP\devd.lnk"
 
   Delete "$INSTDIR\devd.exe"
+  Delete "$INSTDIR\devd-desktop.exe"
   Delete "$INSTDIR\LICENSE"
   Delete "$INSTDIR\README.md"
   Delete "$INSTDIR\launch.vbs"

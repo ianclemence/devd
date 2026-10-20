@@ -1,0 +1,26 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "devd",
+  "version": "0.8.0",
+  "identifier": "com.ianclemence.devd",
+  "build": {
+    "frontendDist": "../devd-server/ui"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/icon.ico"
+    ],
+    "shortDescription": "Agent-native local development environment",
+    "longDescription": "devd runs managed services, sites, local HTTPS and coding-agent sessions in one native window. It does not proxy the agent: the terminal is the harness's own."
+  }
+}

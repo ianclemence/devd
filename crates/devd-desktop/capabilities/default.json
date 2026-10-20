@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The trusted devd window. Remote origins, including a previewed website, are not listed here and therefore cannot reach Tauri IPC.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

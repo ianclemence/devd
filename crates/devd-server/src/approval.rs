@@ -116,7 +116,13 @@ impl ApprovalStore {
     }
 
     /// Record an invocation and return the token that approves it.
-    pub fn issue(&self, ctx: &Ctx, capability: &str, args: &Value, tier: &'static str) -> Result<Record> {
+    pub fn issue(
+        &self,
+        ctx: &Ctx,
+        capability: &str,
+        args: &Value,
+        tier: &'static str,
+    ) -> Result<Record> {
         let mut pending = self
             .pending
             .lock()
@@ -327,7 +333,9 @@ mod tests {
         for _ in 0..MAX_PENDING {
             store.issue(&ctx(), "git.push", &args(), "remote").unwrap();
         }
-        let err = store.issue(&ctx(), "git.push", &args(), "remote").unwrap_err();
+        let err = store
+            .issue(&ctx(), "git.push", &args(), "remote")
+            .unwrap_err();
         assert_eq!(err.code(), "conflict");
     }
 }

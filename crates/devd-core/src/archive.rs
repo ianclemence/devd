@@ -144,8 +144,7 @@ pub fn extract(archive: &Path, dest: &Path, replace: bool) -> Result<ExtractRepo
 /// directory is the distribution's own root and everything inside it belongs at
 /// the target. Otherwise the whole staging directory is the content.
 fn common_root(staging: &Path) -> Result<PathBuf> {
-    let mut entries = std::fs::read_dir(staging)?
-        .collect::<std::io::Result<Vec<_>>>()?;
+    let mut entries = std::fs::read_dir(staging)?.collect::<std::io::Result<Vec<_>>>()?;
     if entries.len() == 1 {
         let only = entries.remove(0);
         let path = only.path();
@@ -158,8 +157,9 @@ fn common_root(staging: &Path) -> Result<PathBuf> {
 
 fn extract_zip(archive: &Path, dest: &Path) -> Result<ExtractReport> {
     let file = File::open(archive)?;
-    let mut zip = zip::ZipArchive::new(file)
-        .map_err(|e| DevdError::invalid(format!("{} is not a readable zip: {e}", archive.display())))?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|e| {
+        DevdError::invalid(format!("{} is not a readable zip: {e}", archive.display()))
+    })?;
 
     let mut report = ExtractReport {
         files: 0,
@@ -169,9 +169,9 @@ fn extract_zip(archive: &Path, dest: &Path) -> Result<ExtractReport> {
     };
 
     for index in 0..zip.len() {
-        let mut entry = zip
-            .by_index(index)
-            .map_err(|e| DevdError::invalid(format!("{}: entry {index}: {e}", archive.display())))?;
+        let mut entry = zip.by_index(index).map_err(|e| {
+            DevdError::invalid(format!("{}: entry {index}: {e}", archive.display()))
+        })?;
 
         // `enclosed_name` returns `None` for absolute paths and paths that
         // escape the destination through `..`, which is the zip-slip guard.
@@ -223,7 +223,8 @@ fn extract_tar<R: Read>(reader: R, dest: &Path) -> Result<ExtractReport> {
         .entries()
         .map_err(|e| DevdError::invalid(format!("unreadable tarball: {e}")))?
     {
-        let mut entry = entry.map_err(|e| DevdError::invalid(format!("unreadable tarball: {e}")))?;
+        let mut entry =
+            entry.map_err(|e| DevdError::invalid(format!("unreadable tarball: {e}")))?;
         let size = entry.header().size().unwrap_or(0);
         let is_dir = entry.header().entry_type().is_dir();
 
@@ -278,9 +279,18 @@ mod tests {
 
     #[test]
     fn detects_formats_by_name() {
-        assert_eq!(Format::detect(Path::new("a/b/nginx-1.28.0.zip")).unwrap(), Format::Zip);
-        assert_eq!(Format::detect(Path::new("node.tar.gz")).unwrap(), Format::TarGz);
-        assert_eq!(Format::detect(Path::new("node.tgz")).unwrap(), Format::TarGz);
+        assert_eq!(
+            Format::detect(Path::new("a/b/nginx-1.28.0.zip")).unwrap(),
+            Format::Zip
+        );
+        assert_eq!(
+            Format::detect(Path::new("node.tar.gz")).unwrap(),
+            Format::TarGz
+        );
+        assert_eq!(
+            Format::detect(Path::new("node.tgz")).unwrap(),
+            Format::TarGz
+        );
         assert_eq!(Format::detect(Path::new("go.tar")).unwrap(), Format::Tar);
         assert!(Format::detect(Path::new("php.exe")).is_err());
     }
@@ -328,14 +338,20 @@ mod tests {
         let archive = zip_with(&dir, "a.zip", &[("pkg/file.txt", b"one")]);
         let dest = dir.join("install");
         extract(&archive, &dest, false).unwrap();
-        assert_eq!(std::fs::read_to_string(dest.join("file.txt")).unwrap(), "one");
+        assert_eq!(
+            std::fs::read_to_string(dest.join("file.txt")).unwrap(),
+            "one"
+        );
 
         let err = extract(&archive, &dest, false).unwrap_err();
         assert_eq!(err.code(), "conflict");
 
         let archive2 = zip_with(&dir, "b.zip", &[("pkg/file.txt", b"two")]);
         extract(&archive2, &dest, true).unwrap();
-        assert_eq!(std::fs::read_to_string(dest.join("file.txt")).unwrap(), "two");
+        assert_eq!(
+            std::fs::read_to_string(dest.join("file.txt")).unwrap(),
+            "two"
+        );
         // Nothing from the previous contents survived a replace.
         assert!(!dest.join("file.txt").exists() || std::fs::read_dir(&dest).unwrap().count() == 1);
         let _ = std::fs::remove_dir_all(&dir);

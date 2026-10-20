@@ -186,7 +186,8 @@ pub fn render_ini(
             } else {
                 PREFERRED_EXTENSIONS.contains(&name.as_str())
             };
-            let loadable = available.contains(&name) && !builtin.contains(&name) && !seen.contains(&name);
+            let loadable =
+                available.contains(&name) && !builtin.contains(&name) && !seen.contains(&name);
             if wanted && loadable {
                 seen.insert(name.clone());
                 out.push_str(&format!(
@@ -214,7 +215,10 @@ fn shipped_extensions(install: &Path) -> BTreeSet<String> {
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_lowercase();
         // `php_curl.dll` -> `curl`; `php_pdo_mysql.dll` -> `pdo_mysql`.
-        if let Some(stem) = name.strip_prefix("php_").and_then(|n| n.strip_suffix(".dll")) {
+        if let Some(stem) = name
+            .strip_prefix("php_")
+            .and_then(|n| n.strip_suffix(".dll"))
+        {
             set.insert(stem.to_string());
         }
     }
@@ -315,7 +319,13 @@ pub fn verify(install: &Path) -> Result<PhpInfo> {
         )));
     }
 
-    let version_out = util::run(&exe, &["-v".to_string()], Some(install), &[], Some(PROBE_TIMEOUT))?;
+    let version_out = util::run(
+        &exe,
+        &["-v".to_string()],
+        Some(install),
+        &[],
+        Some(PROBE_TIMEOUT),
+    )?;
 
     // With `display_errors = On`, PHP writes startup warnings to standard
     // output, so the version has to be found rather than assumed to be first.
@@ -331,7 +341,13 @@ pub fn verify(install: &Path) -> Result<PhpInfo> {
     warnings.extend(startup_problems(&version_out.stderr));
     warnings.dedup();
 
-    let module_out = util::run(&exe, &["-m".to_string()], Some(install), &[], Some(PROBE_TIMEOUT))?;
+    let module_out = util::run(
+        &exe,
+        &["-m".to_string()],
+        Some(install),
+        &[],
+        Some(PROBE_TIMEOUT),
+    )?;
     for line in startup_problems(&module_out.stdout)
         .into_iter()
         .chain(startup_problems(&module_out.stderr))
@@ -396,7 +412,9 @@ pub fn failed_modules(info: &PhpInfo) -> Vec<String> {
         if !warning.contains("Unable to load dynamic library") {
             continue;
         }
-        let Some(start) = warning.find('\'') else { continue };
+        let Some(start) = warning.find('\'') else {
+            continue;
+        };
         let rest = &warning[start + 1..];
         let Some(end) = rest.find('\'') else { continue };
         let quoted = &rest[..end];
@@ -426,8 +444,7 @@ pub fn disable_extensions(ini: &Path, names: &[String]) -> Result<usize> {
     for line in text.lines() {
         let trimmed = line.trim_start();
         let matches = names.iter().any(|name| {
-            trimmed == format!("extension={name}")
-                || trimmed == format!("zend_extension={name}")
+            trimmed == format!("extension={name}") || trimmed == format!("zend_extension={name}")
         });
         if matches {
             out.push_str(&format!(";{line}  ; disabled by devd: it would not load\n"));
@@ -492,7 +509,15 @@ mod tests {
     #[test]
     fn enables_only_curated_extensions_the_build_ships() {
         let (ini, enabled) = render(
-            &["mysqli", "curl", "gd", "exif", "pdo_firebird", "pdo_mysql", "opcache"],
+            &[
+                "mysqli",
+                "curl",
+                "gd",
+                "exif",
+                "pdo_firebird",
+                "pdo_mysql",
+                "opcache",
+            ],
             &[],
         );
         assert_eq!(
@@ -548,7 +573,10 @@ mod tests {
         configure_ini(&dir, &dir, "8.3.35").unwrap();
         let ini = std::fs::read_to_string(dir.join("php.ini")).unwrap();
         let bound = ini.find("memory_limit = 512M").expect("a bound is set");
-        assert!(bound > ini.find("memory_limit = 128M").unwrap(), "the appended value must win");
+        assert!(
+            bound > ini.find("memory_limit = 128M").unwrap(),
+            "the appended value must win"
+        );
         assert!(ini.contains("cgi.fix_pathinfo = 1"));
         assert!(ini.contains("php-8.3.35.log"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -565,7 +593,10 @@ mod tests {
 
     #[test]
     fn commented_extension_forms_are_understood() {
-        assert_eq!(commented_extension(";extension=curl"), Some((false, "curl".into())));
+        assert_eq!(
+            commented_extension(";extension=curl"),
+            Some((false, "curl".into()))
+        );
         assert_eq!(
             commented_extension(";extension=php_pdo_mysql.dll"),
             Some((false, "pdo_mysql".into()))
@@ -578,7 +609,11 @@ mod tests {
             commented_extension(";   extension=exif      ; Must be after mbstring"),
             Some((false, "exif".into()))
         );
-        assert_eq!(commented_extension("extension=curl"), None, "already active");
+        assert_eq!(
+            commented_extension("extension=curl"),
+            None,
+            "already active"
+        );
         assert_eq!(commented_extension("; extension = gd"), None);
         assert_eq!(commented_extension(";extension="), None);
         assert_eq!(commented_extension(";extension=\"dir/x\""), None);
@@ -603,7 +638,10 @@ mod tests {
                 "some unrelated warning".to_string(),
             ],
         };
-        assert_eq!(failed_modules(&info), vec!["pdo_firebird".to_string(), "gd".to_string()]);
+        assert_eq!(
+            failed_modules(&info),
+            vec!["pdo_firebird".to_string(), "gd".to_string()]
+        );
     }
 
     #[test]
@@ -639,7 +677,11 @@ mod tests {
     fn verify_reports_a_clear_error_when_the_binary_is_absent() {
         let dir = scratch("absent");
         let err = verify(&dir).unwrap_err();
-        assert!(err.to_string().contains("does not contain a PHP interpreter"), "{err}");
+        assert!(
+            err.to_string()
+                .contains("does not contain a PHP interpreter"),
+            "{err}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

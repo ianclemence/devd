@@ -60,10 +60,7 @@ pub fn run(registry: Arc<Registry>, mut ctx: Ctx, extra_checks: Vec<ExtraChecks>
     // a pipe does not degrade gracefully on Windows: there is no console handle
     // to switch, and crossterm's call into it takes the process down. A clear
     // sentence is worth more than a crash with no output.
-    terminal_guard(
-        io::stdin().is_terminal(),
-        io::stdout().is_terminal(),
-    )?;
+    terminal_guard(io::stdin().is_terminal(), io::stdout().is_terminal())?;
 
     // The TUI is a person at a keyboard, and it can answer a prompt. Both the
     // actor kind and the surface matter: `require_interactive` reads the
@@ -99,7 +96,8 @@ fn terminal_guard(stdin_is_tty: bool, stdout_is_tty: bool) -> Result<()> {
 }
 
 /// Restores the terminal on every exit path, including a panic-free early return.
-struct TerminalGuard;impl TerminalGuard {
+struct TerminalGuard;
+impl TerminalGuard {
     fn enter() -> Result<Self> {
         enable_raw_mode()
             .map_err(|e| devd_core::DevdError::internal(format!("cannot enter raw mode: {e}")))?;
@@ -195,7 +193,10 @@ mod tests {
         let error = terminal_guard(false, true).expect_err("a piped stdin must be refused");
         assert_eq!(error.code(), "unsupported");
         assert!(error.to_string().contains("interactive terminal"));
-        assert!(error.to_string().contains("devd ui"), "the error must say what to use instead");
+        assert!(
+            error.to_string().contains("devd ui"),
+            "the error must say what to use instead"
+        );
 
         assert!(terminal_guard(true, false).is_err());
         assert!(terminal_guard(false, false).is_err());

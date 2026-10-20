@@ -103,7 +103,10 @@ fn cap_row(cap: &devd_core::Capability) -> Value {
 }
 
 /// `GET /api/capabilities` - ranked search over the registry.
-pub async fn capabilities(State(state): State<Arc<AppState>>, Query(q): Query<CapQuery>) -> Response {
+pub async fn capabilities(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<CapQuery>,
+) -> Response {
     let limit = q.limit.unwrap_or(100).clamp(1, MAX_PAGE);
     let offset = q.offset.unwrap_or(0);
     let query = q.q.unwrap_or_default();
@@ -122,7 +125,8 @@ pub async fn capabilities(State(state): State<Arc<AppState>>, Query(q): Query<Ca
         .map(|c| cap_row(&c))
         .collect();
 
-    Json(json!({ "total": total, "offset": offset, "limit": limit, "items": items })).into_response()
+    Json(json!({ "total": total, "offset": offset, "limit": limit, "items": items }))
+        .into_response()
 }
 
 /// `GET /api/capabilities/:id` - the full declaration, including its schema.
@@ -404,36 +408,91 @@ mod tests {
 }
 
 // ---------------------------------------------------------------- terminals
+//
+// Polling output and sending keystrokes are deliberately not capability calls:
+// at 80ms a poll would generate an audit row per frame, which is noise rather
+// than accountability. They are still behind the same bearer token, host
+// allow-list and origin check as every other endpoint. Mutating operations that
+// an agent can also perform are declared as capabilities and dispatched through
+// the registry.
 
 /// `GET /api/terminal/harnesses` - the coding-agent CLIs found on this machine.
 pub async fn terminal_harnesses() -> Response {
-    Json(crate::terminal::harnesses()).into_response()
+    Json(devd_workspace::session::harnesses()).into_response()
 }
 
 #[derive(Deserialize)]
 pub struct TerminalStart {
     pub kind: String,
     pub cwd: Option<String>,
+    pub project: Option<String>,
+    pub label: Option<String>,
     pub cols: Option<u16>,
     pub rows: Option<u16>,
+    pub command: Option<Vec<String>>,
 }
 
-/// `POST /api/terminal/start` - run a harness in a real PTY.
+fn start_session(
+    state: &Arc<AppState>,
+    req: TerminalStart,
+) -> Result<devd_workspace::SessionView, String> {
+    let cwd = req
+        .cwd
+        .or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .map(|p| p.display().to_string())
+        })
+        .ok_or_else(|| "a working directory is required".to_string())?;
+    state
+        .workspace
+        .sessions()
+        .start(devd_workspace::StartOptions {
+            harness: req.kind,
+            cwd,
+            project: req.project,
+            label: req.label,
+            cols: req.cols.unwrap_or(100),
+            rows: req.rows.unwrap_or(30),
+            command: req.command,
+            ..Default::default()
+        })
+        .map_err(|e| e.to_string())
+}
+
+/// `POST /api/terminal/start` - the v0.7 compatibility path.
 pub async fn terminal_start(
     State(state): State<Arc<AppState>>,
     Json(req): Json<TerminalStart>,
 ) -> Response {
-    let cols = req.cols.unwrap_or(100);
-    let rows = req.rows.unwrap_or(30);
-    let kind = req.kind;
-    let cwd = req.cwd;
     let task = state.clone();
-    match tokio::task::spawn_blocking(move || {
-        task.terminals.start(&kind, cwd.as_deref(), cols, rows)
-    })
-    .await
-    {
-        Ok(Ok(id)) => Json(json!({ "id": id })).into_response(),
+    match tokio::task::spawn_blocking(move || start_session(&task, req)).await {
+        Ok(Ok(view)) => Json(json!({
+            "id": view.session.id,
+            "session": view,
+        }))
+        .into_response(),
+        Ok(Err(message)) => refuse(StatusCode::BAD_REQUEST, "terminal", &message),
+        Err(e) => refuse(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal",
+            &format!("the terminal task failed: {e}"),
+        ),
+    }
+}
+
+/// `POST /api/sessions` - start a session and return its durable record.
+pub async fn sessions_start(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<TerminalStart>,
+) -> Response {
+    let task = state.clone();
+    let label = req.label.clone();
+    match tokio::task::spawn_blocking(move || start_session(&task, req)).await {
+        Ok(Ok(view)) => {
+            let _ = label;
+            Json(view).into_response()
+        }
         Ok(Err(message)) => refuse(StatusCode::BAD_REQUEST, "terminal", &message),
         Err(e) => refuse(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -444,19 +503,95 @@ pub async fn terminal_start(
 }
 
 #[derive(Deserialize)]
+pub struct SessionQuery {
+    project: Option<String>,
+}
+
+/// `GET /api/sessions` - every session, with live state folded in.
+pub async fn sessions_list(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<SessionQuery>,
+) -> Response {
+    match state.workspace.sessions().list(q.project.as_deref()) {
+        Ok(rows) => Json(json!({ "items": rows })).into_response(),
+        Err(e) => error_response(&e),
+    }
+}
+
+/// `GET /api/sessions/:id`.
+pub async fn session_get(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    match state.workspace.sessions().get(&id) {
+        Ok(view) => Json(view).into_response(),
+        Err(e) => error_response(&e),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct CursorBody {
+    cursor: Option<u64>,
+}
+
+/// `POST /api/sessions/:id/attach` - session plus replay and cursor.
+pub async fn session_attach(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Response {
+    match state.workspace.sessions().attach(&id) {
+        Ok(value) => Json(value).into_response(),
+        Err(e) => error_response(&e),
+    }
+}
+
+/// `POST /api/sessions/:id/output` - bytes since the cursor, base64.
+pub async fn session_output(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    body: String,
+) -> Response {
+    let cursor = parse::<CursorBody>(&body)
+        .and_then(|b| b.cursor)
+        .unwrap_or(0);
+    match state.workspace.sessions().output(&id, cursor) {
+        Ok(value) => Json(value).into_response(),
+        Err(e) => error_response(&e),
+    }
+}
+
+#[derive(Deserialize)]
 pub struct TerminalOutput {
     pub id: String,
     pub cursor: Option<u64>,
 }
 
-/// `POST /api/terminal/output` - bytes since the caller's cursor, base64.
+/// `POST /api/terminal/output` - the v0.7 compatibility path.
 pub async fn terminal_output(
     State(state): State<Arc<AppState>>,
     Json(req): Json<TerminalOutput>,
 ) -> Response {
-    match state.terminals.output(&req.id, req.cursor.unwrap_or(0)) {
+    match state
+        .workspace
+        .sessions()
+        .output(&req.id, req.cursor.unwrap_or(0))
+    {
         Ok(value) => Json(value).into_response(),
-        Err(message) => refuse(StatusCode::NOT_FOUND, "not_found", &message),
+        Err(e) => error_response(&e),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct DataBody {
+    pub data: String,
+}
+
+/// `POST /api/sessions/:id/input`.
+pub async fn session_input(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(body): Json<DataBody>,
+) -> Response {
+    match state.workspace.sessions().write(&id, &body.data) {
+        Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(e) => error_response(&e),
     }
 }
 
@@ -466,14 +601,32 @@ pub struct TerminalInput {
     pub data: String,
 }
 
-/// `POST /api/terminal/input` - keystrokes or pasted text.
+/// `POST /api/terminal/input` - the v0.7 compatibility path.
 pub async fn terminal_input(
     State(state): State<Arc<AppState>>,
     Json(req): Json<TerminalInput>,
 ) -> Response {
-    match state.terminals.write(&req.id, &req.data) {
+    match state.workspace.sessions().write(&req.id, &req.data) {
         Ok(()) => Json(json!({ "ok": true })).into_response(),
-        Err(message) => refuse(StatusCode::NOT_FOUND, "not_found", &message),
+        Err(e) => error_response(&e),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct SizeBody {
+    pub cols: u16,
+    pub rows: u16,
+}
+
+/// `POST /api/sessions/:id/resize`.
+pub async fn session_resize(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(body): Json<SizeBody>,
+) -> Response {
+    match state.workspace.sessions().resize(&id, body.cols, body.rows) {
+        Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(e) => error_response(&e),
     }
 }
 
@@ -484,14 +637,43 @@ pub struct TerminalResize {
     pub rows: u16,
 }
 
-/// `POST /api/terminal/resize` - keep curses programs drawing correctly.
+/// `POST /api/terminal/resize` - the v0.7 compatibility path.
 pub async fn terminal_resize(
     State(state): State<Arc<AppState>>,
     Json(req): Json<TerminalResize>,
 ) -> Response {
-    match state.terminals.resize(&req.id, req.cols, req.rows) {
+    match state
+        .workspace
+        .sessions()
+        .resize(&req.id, req.cols, req.rows)
+    {
         Ok(()) => Json(json!({ "ok": true })).into_response(),
-        Err(message) => refuse(StatusCode::NOT_FOUND, "not_found", &message),
+        Err(e) => error_response(&e),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct RenameBody {
+    pub label: String,
+}
+
+/// `POST /api/sessions/:id/rename`.
+pub async fn session_rename(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(body): Json<RenameBody>,
+) -> Response {
+    match state.workspace.sessions().rename(&id, &body.label) {
+        Ok(view) => Json(view).into_response(),
+        Err(e) => error_response(&e),
+    }
+}
+
+/// `POST /api/sessions/:id/stop`.
+pub async fn session_stop(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    match state.workspace.sessions().stop(&id) {
+        Ok(view) => Json(view).into_response(),
+        Err(e) => error_response(&e),
     }
 }
 
@@ -500,13 +682,287 @@ pub struct TerminalStop {
     pub id: String,
 }
 
-/// `POST /api/terminal/stop` - kill the harness and forget the terminal.
+/// `POST /api/terminal/stop` - the v0.7 compatibility path.
 pub async fn terminal_stop(
     State(state): State<Arc<AppState>>,
     Json(req): Json<TerminalStop>,
 ) -> Response {
-    match state.terminals.stop(&req.id) {
-        Ok(()) => Json(json!({ "ok": true })).into_response(),
-        Err(message) => refuse(StatusCode::NOT_FOUND, "not_found", &message),
+    match state.workspace.sessions().stop(&req.id) {
+        Ok(view) => Json(view).into_response(),
+        Err(e) => error_response(&e),
+    }
+}
+
+/// `DELETE /api/sessions/:id` - forget a finished session.
+pub async fn session_dismiss(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Response {
+    match state.workspace.sessions().dismiss(&id) {
+        Ok(()) => Json(json!({ "dismissed": true })).into_response(),
+        Err(e) => error_response(&e),
+    }
+}
+
+// ------------------------------------------------------------------- tasks
+
+#[derive(Deserialize)]
+pub struct TaskQuery {
+    parent_session_id: Option<String>,
+    project: Option<String>,
+}
+
+/// `GET /api/tasks`.
+pub async fn tasks_list(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<TaskQuery>,
+) -> Response {
+    match state
+        .workspace
+        .orchestrator()
+        .list(q.parent_session_id.as_deref(), q.project.as_deref())
+    {
+        Ok(rows) => Json(json!({ "items": rows })).into_response(),
+        Err(e) => error_response(&e),
+    }
+}
+
+/// `GET /api/tasks/:id`.
+pub async fn task_get(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    match state.workspace.store().get_agent_task(&id) {
+        Ok(Some(task)) => Json(task).into_response(),
+        Ok(None) => error_response(&DevdError::not_found(format!("no task `{id}`"))),
+        Err(e) => error_response(&e),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct WaitBody {
+    timeout_secs: Option<u64>,
+}
+
+/// `POST /api/tasks/:id/wait` - wait asynchronously.
+pub async fn task_wait(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    body: String,
+) -> Response {
+    let timeout = parse::<WaitBody>(&body).and_then(|b| b.timeout_secs);
+    let workspace = state.workspace.clone();
+    match tokio::task::spawn_blocking(move || workspace.orchestrator().wait(&id, timeout)).await {
+        Ok(Ok(outcome)) => Json(json!({
+            "task": outcome.task,
+            "timed_out": outcome.timed_out,
+        }))
+        .into_response(),
+        Ok(Err(e)) => error_response(&e),
+        Err(e) => refuse(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal",
+            &format!("the wait task failed: {e}"),
+        ),
+    }
+}
+
+/// `POST /api/tasks/:id/cancel`.
+pub async fn task_cancel(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    match state.workspace.orchestrator().cancel(&id) {
+        Ok(task) => Json(task).into_response(),
+        Err(e) => error_response(&e),
+    }
+}
+
+/// `GET /api/tasks/:id/result`.
+pub async fn task_result(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    match state.workspace.orchestrator().result(&id) {
+        Ok(value) => Json(value).into_response(),
+        Err(e) => error_response(&e),
+    }
+}
+
+// ----------------------------------------------------------------- projects
+
+#[derive(Deserialize)]
+pub struct ProjectQuery {
+    project: String,
+}
+
+/// `GET /api/project` - the reviewable manifest plan.
+pub async fn project_plan(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<ProjectQuery>,
+) -> Response {
+    match state.workspace.projects().plan(&q.project) {
+        Ok(value) => Json(value).into_response(),
+        Err(e) => error_response(&e),
+    }
+}
+
+/// `GET /api/project/status`.
+pub async fn project_status(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<ProjectQuery>,
+) -> Response {
+    let workspace = state.workspace.clone();
+    let project = q.project;
+    match tokio::task::spawn_blocking(move || workspace.projects().status(&project)).await {
+        Ok(Ok(value)) => Json(value).into_response(),
+        Ok(Err(e)) => error_response(&e),
+        Err(e) => refuse(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal",
+            &format!("the status task failed: {e}"),
+        ),
+    }
+}
+
+fn dispatch_project(state: &Arc<AppState>, id: &str, args: Value) -> Response {
+    let req = InvokeRequest {
+        id: id.to_string(),
+        args,
+        dry_run: false,
+    };
+    match state.registry.dispatch(&state.ctx, &req, Approval::None) {
+        Ok(result) => Json(json!({
+            "capability": result.capability,
+            "outcome": result.outcome,
+        }))
+        .into_response(),
+        Err(e) => error_response(&e),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct ProjectBody {
+    project: String,
+}
+
+/// `POST /api/project/approve`.
+pub async fn project_approve(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<ProjectBody>,
+) -> Response {
+    dispatch_project(
+        &state,
+        "project.approve",
+        json!({ "project": body.project }),
+    )
+}
+
+#[derive(Deserialize)]
+pub struct ProcessBody {
+    project: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    all: bool,
+}
+
+/// `POST /api/project/start`.
+pub async fn project_start(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<ProcessBody>,
+) -> Response {
+    dispatch_project(
+        &state,
+        "project.start",
+        json!({ "project": body.project, "name": body.name, "all": body.all }),
+    )
+}
+
+/// `POST /api/project/stop`.
+pub async fn project_stop(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<ProcessBody>,
+) -> Response {
+    dispatch_project(
+        &state,
+        "project.stop",
+        json!({ "project": body.project, "name": body.name, "all": body.all }),
+    )
+}
+
+/// `POST /api/project/restart`.
+pub async fn project_restart(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<ProcessBody>,
+) -> Response {
+    dispatch_project(
+        &state,
+        "project.restart",
+        json!({ "project": body.project, "name": body.name }),
+    )
+}
+
+#[derive(Deserialize)]
+pub struct LogQuery {
+    project: String,
+    name: String,
+    lines: Option<usize>,
+    query: Option<String>,
+}
+
+/// `GET /api/project/logs`.
+pub async fn project_logs(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<LogQuery>,
+) -> Response {
+    match state.workspace.projects().logs(
+        &q.project,
+        &q.name,
+        q.lines.unwrap_or(200),
+        q.query.as_deref(),
+    ) {
+        Ok(value) => Json(value).into_response(),
+        Err(e) => error_response(&e),
+    }
+}
+
+// ------------------------------------------------------------------ system
+
+#[derive(Deserialize)]
+pub struct OpenUrlBody {
+    pub url: String,
+}
+
+/// `POST /api/open-url` - hand a validated HTTP(S) URL to the operating system.
+///
+/// The native shell cannot rely on `window.open`: a Tauri window does not own
+/// the user's browser. Handing the URL to the server keeps one implementation
+/// for both surfaces, and keeps the shell's navigation rule (only devd itself
+/// stays in the window). Only HTTP(S) is accepted; `file:`, `javascript:` and
+/// custom schemes never reach the OS launcher.
+pub async fn open_url(Json(body): Json<OpenUrlBody>) -> Response {
+    if body.url.len() > 4096 {
+        return refuse(
+            StatusCode::BAD_REQUEST,
+            "invalid_url",
+            "the URL is too long",
+        );
+    }
+    let parsed = match url::Url::parse(&body.url) {
+        Ok(url) => url,
+        Err(e) => {
+            return refuse(
+                StatusCode::BAD_REQUEST,
+                "invalid_url",
+                &format!("not a valid URL: {e}"),
+            )
+        }
+    };
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return refuse(
+            StatusCode::BAD_REQUEST,
+            "invalid_url",
+            "only http and https URLs can be opened",
+        );
+    }
+    match open::that(parsed.as_str()) {
+        Ok(()) => Json(json!({ "opened": true })).into_response(),
+        Err(e) => refuse(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "open_failed",
+            &format!("the operating system could not open the URL: {e}"),
+        ),
     }
 }

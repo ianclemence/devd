@@ -710,7 +710,10 @@ mod tests {
         assert!(status.branch.is_none());
         assert!(!status.clean);
         assert!(status.items().is_empty());
-        assert_eq!(status.summary(), "(detached): 0 staged, 0 unstaged, 0 untracked");
+        assert_eq!(
+            status.summary(),
+            "(detached): 0 staged, 0 unstaged, 0 untracked"
+        );
     }
 
     #[test]
@@ -783,7 +786,10 @@ mod tests {
         }
         assert_eq!(state.cursor, 25);
         assert!(state.scroll <= state.cursor);
-        assert!(state.cursor < state.scroll + 10, "cursor fell outside the window");
+        assert!(
+            state.cursor < state.scroll + 10,
+            "cursor fell outside the window"
+        );
     }
 
     #[test]

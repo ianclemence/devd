@@ -122,7 +122,9 @@ impl Settings {
 
     /// Effective projects directory.
     pub fn effective_www_root(&self, fallback: &Path) -> std::path::PathBuf {
-        self.www_root.clone().unwrap_or_else(|| fallback.to_path_buf())
+        self.www_root
+            .clone()
+            .unwrap_or_else(|| fallback.to_path_buf())
     }
 
     /// Validate the settings, returning a descriptive error when unusable.

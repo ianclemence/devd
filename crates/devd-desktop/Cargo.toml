@@ -1,0 +1,32 @@
+[package]
+name = "devd-desktop"
+description = "The native devd desktop shell: a Tauri window over the existing devd server and UI."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+name = "devd_desktop"
+crate-type = ["rlib"]
+
+[[bin]]
+name = "devd-desktop"
+path = "src/main.rs"
+
+[dependencies]
+devd-core = { workspace = true }
+devd-bootstrap = { path = "../devd-bootstrap" }
+devd-server = { path = "../devd-server" }
+
+tauri = { version = "2", features = [] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true }
+open = { workspace = true }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }

@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
 
-use devd_core::capability::{Approval, Actor, Ctx, InvokeRequest, Surface};
+use devd_core::capability::{Actor, Approval, Ctx, InvokeRequest, Surface};
 use devd_core::{EventBus, Paths, Registry, Settings, Store};
 use devd_git::GitService;
 use devd_tui::{Controller, RegistryBackend, View};
@@ -154,7 +154,10 @@ fn the_dashboard_reads_a_real_repository_through_the_real_registry() {
     assert_eq!(status.untracked.len(), 1, "{status:?}");
 
     let screen = draw(&controller);
-    assert!(screen.contains("main: 1 staged, 1 unstaged, 1 untracked"), "{screen}");
+    assert!(
+        screen.contains("main: 1 staged, 1 unstaged, 1 untracked"),
+        "{screen}"
+    );
     assert!(screen.contains("committed.txt"), "{screen}");
     assert!(screen.contains("untracked.txt"), "{screen}");
     assert!(screen.contains("demo"), "{screen}");
@@ -259,7 +262,10 @@ fn a_destructive_key_from_the_dashboard_asks_before_it_touches_the_working_tree(
     // Nothing has happened to the file yet: the registry produced a plan and the
     // person has been asked.
     let on_disk = std::fs::read_to_string(fixture.repo.join("committed.txt")).unwrap();
-    assert_eq!(on_disk, "third\n", "the working tree changed before approval");
+    assert_eq!(
+        on_disk, "third\n",
+        "the working tree changed before approval"
+    );
     assert!(
         matches!(controller.state.overlay, devd_tui::Overlay::Approval(_)),
         "no confirmation was shown: {:?}",

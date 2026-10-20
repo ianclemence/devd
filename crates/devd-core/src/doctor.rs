@@ -129,7 +129,10 @@ fn state_check(paths: &Paths) -> Check {
             (Ok(_), Err(e)) => Check::fail("state", format!("schema version unreadable: {e}")),
             (Err(e), _) => Check::fail("state", format!("integrity check failed: {e}")),
         },
-        Err(e) => Check::fail("state", format!("cannot open {}: {e}", paths.state_db().display())),
+        Err(e) => Check::fail(
+            "state",
+            format!("cannot open {}: {e}", paths.state_db().display()),
+        ),
     }
 }
 
@@ -181,7 +184,10 @@ fn www_root_check(paths: &Paths, settings: &Settings) -> Check {
             let _ = std::fs::remove_file(&probe);
             Check::ok("www_root", format!("{} is writable", root.display()))
         }
-        Err(e) => Check::fail("www_root", format!("{} is not writable: {e}", root.display())),
+        Err(e) => Check::fail(
+            "www_root",
+            format!("{} is not writable: {e}", root.display()),
+        ),
     }
 }
 
@@ -200,8 +206,18 @@ mod tests {
         let paths = scratch("core");
         let checks = core_checks(&paths, &Settings::default());
         let names: Vec<String> = checks.iter().map(|c| c.name.clone()).collect();
-        for expected in ["home", "layout", "settings", "state", "www_root", "port.http"] {
-            assert!(names.iter().any(|n| n == expected), "missing `{expected}` in {names:?}");
+        for expected in [
+            "home",
+            "layout",
+            "settings",
+            "state",
+            "www_root",
+            "port.http",
+        ] {
+            assert!(
+                names.iter().any(|n| n == expected),
+                "missing `{expected}` in {names:?}"
+            );
         }
         assert!(!checks.iter().any(|c| c.is_fail()), "{checks:#?}");
         let _ = std::fs::remove_dir_all(paths.root());

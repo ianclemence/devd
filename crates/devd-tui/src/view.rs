@@ -180,17 +180,18 @@ fn render_body(frame: &mut Frame, state: &State, area: Rect) {
                 .capabilities
                 .iter()
                 .map(|c| {
-                    let style = if c.requires_approval {
-                        warn()
-                    } else {
-                        quiet()
-                    };
+                    let style = if c.requires_approval { warn() } else { quiet() };
                     Line::from(vec![
                         Span::raw(format!("{:<12}", c.tier)),
                         Span::styled(format!("{:<26}", truncate(&c.id, 26)), data()),
                         Span::raw(truncate(&c.summary, 60)),
                         Span::styled(
-                            if c.requires_approval { "  approval" } else { "" }.to_string(),
+                            if c.requires_approval {
+                                "  approval"
+                            } else {
+                                ""
+                            }
+                            .to_string(),
                             style,
                         ),
                     ])
@@ -265,7 +266,13 @@ fn render_body(frame: &mut Frame, state: &State, area: Rect) {
         .enumerate()
         .skip(first)
         .take(height)
-        .map(|(index, line)| if index == state.cursor { line.style(cursor()) } else { line })
+        .map(|(index, line)| {
+            if index == state.cursor {
+                line.style(cursor())
+            } else {
+                line
+            }
+        })
         .collect();
     frame.render_widget(Paragraph::new(visible).block(block), area);
 }
@@ -311,13 +318,15 @@ fn changes(state: &State) -> (String, Vec<Line<'static>>) {
     );
 
     if items.is_empty() {
-        let mut lines = vec![Line::from(Span::styled(
-            "The working tree is clean",
-            ok(),
-        ))];
+        let mut lines = vec![Line::from(Span::styled("The working tree is clean", ok()))];
         if status.ahead > 0 || status.behind > 0 {
             lines.push(Line::from(Span::styled(
-                format!("{} ahead, {} behind {}", status.ahead, status.behind, status.upstream.clone().unwrap_or_default()),
+                format!(
+                    "{} ahead, {} behind {}",
+                    status.ahead,
+                    status.behind,
+                    status.upstream.clone().unwrap_or_default()
+                ),
                 quiet(),
             )));
         }
@@ -392,7 +401,10 @@ fn dashboard(state: &State) -> (String, Vec<Line<'static>>) {
                 lines.push(Line::from(Span::styled(
                     format!(
                         "  {} - palette: press 3 to see the conflicts",
-                        status.in_progress.clone().unwrap_or_else(|| "unmerged paths".to_string())
+                        status
+                            .in_progress
+                            .clone()
+                            .unwrap_or_else(|| "unmerged paths".to_string())
                     ),
                     fail(),
                 )));
@@ -435,7 +447,10 @@ fn help_lines() -> Vec<Line<'static>> {
         ("1..9", "jump to a view"),
         ("Tab / Shift+Tab", "next / previous view"),
         ("j / k, arrows", "move the cursor"),
-        ("Enter", "open: select a project, toggle a file in the index, show a commit, switch a branch"),
+        (
+            "Enter",
+            "open: select a project, toggle a file in the index, show a commit, switch a branch",
+        ),
         ("s / u", "stage / unstage the selected file"),
         ("d", "discard the selected file (asks first)"),
         ("a", "stage everything"),
@@ -469,10 +484,7 @@ fn render_footer(frame: &mut Frame, state: &State, area: Rect) {
         quiet()
     };
     let message = Line::from(Span::styled(format!(" {}", state.message), style));
-    let hints = Line::from(Span::styled(
-        format!(" {}", hints_for(state.view)),
-        quiet(),
-    ));
+    let hints = Line::from(Span::styled(format!(" {}", hints_for(state.view)), quiet()));
     frame.render_widget(Paragraph::new(vec![message, hints]), area);
 }
 
@@ -510,16 +522,25 @@ fn render_overlay(frame: &mut Frame, state: &State, area: Rect) {
                 .borders(Borders::ALL)
                 .title(format!(" {} ", kind.title()));
             frame.render_widget(
-                Paragraph::new(vec![body, Line::from(""), Line::from(Span::styled(
-                    format!(" {hint}"),
-                    quiet(),
-                ))])
+                Paragraph::new(vec![
+                    body,
+                    Line::from(""),
+                    Line::from(Span::styled(format!(" {hint}"), quiet())),
+                ])
                 .block(block),
                 rect,
             );
         }
-        Overlay::Detail { title, lines, scroll } => {
-            let rect = centered(area, area.width.saturating_sub(6), area.height.saturating_sub(4));
+        Overlay::Detail {
+            title,
+            lines,
+            scroll,
+        } => {
+            let rect = centered(
+                area,
+                area.width.saturating_sub(6),
+                area.height.saturating_sub(4),
+            );
             frame.render_widget(Clear, rect);
             let rendered: Vec<Line> = lines.iter().map(|l| Line::from(l.clone())).collect();
             let block = Block::default()
@@ -546,10 +567,7 @@ fn render_overlay(frame: &mut Frame, state: &State, area: Rect) {
             lines.push(Line::from(vec![
                 Span::styled(" ", quiet()),
                 Span::styled(pending.id.clone(), data()),
-                Span::styled(
-                    " needs your decision before it runs",
-                    quiet(),
-                ),
+                Span::styled(" needs your decision before it runs", quiet()),
             ]));
             lines.push(Line::from(""));
 
@@ -563,10 +581,7 @@ fn render_overlay(frame: &mut Frame, state: &State, area: Rect) {
                         lines.push(Line::from(format!("   - {step}")));
                     }
                     for effect in &plan.effects {
-                        lines.push(Line::from(Span::styled(
-                            format!("   ! {effect}"),
-                            warn(),
-                        )));
+                        lines.push(Line::from(Span::styled(format!("   ! {effect}"), warn())));
                     }
                 }
                 None => lines.push(Line::from(Span::styled(
@@ -588,20 +603,22 @@ fn render_overlay(frame: &mut Frame, state: &State, area: Rect) {
                 Span::raw("decline, and record the refusal"),
             ]));
 
-            let block = Block::default().borders(Borders::ALL).title(
-                if destructive {
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title(if destructive {
                     " Confirm a destructive operation "
                 } else {
                     " Confirm "
-                },
-            );
+                });
             let block = if destructive {
                 block.border_style(fail())
             } else {
                 block
             };
             frame.render_widget(
-                Paragraph::new(lines).wrap(Wrap { trim: false }).block(block),
+                Paragraph::new(lines)
+                    .wrap(Wrap { trim: false })
+                    .block(block),
                 rect,
             );
         }
@@ -662,7 +679,9 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
-    use crate::state::{AuditRow, BranchRow, CapRow, CheckRow, CommitRow, Overlay, Pending, RepoRow, StatusData};
+    use crate::state::{
+        AuditRow, BranchRow, CapRow, CheckRow, CommitRow, Overlay, Pending, RepoRow, StatusData,
+    };
 
     fn draw(state: &State) -> String {
         let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
@@ -733,7 +752,10 @@ mod tests {
         let mut state = state_with_status();
         state.view = View::Changes;
         let screen = draw(&state);
-        assert!(screen.contains("main: 1 staged, 1 unstaged, 1 untracked"), "{screen}");
+        assert!(
+            screen.contains("main: 1 staged, 1 unstaged, 1 untracked"),
+            "{screen}"
+        );
         assert!(screen.contains("src/main.rs"), "{screen}");
         assert!(screen.contains("README.md"), "{screen}");
         assert!(screen.contains("notes.txt"), "{screen}");
@@ -870,8 +892,14 @@ mod tests {
         let screen = draw(&state);
         assert!(screen.contains("destructive operation"), "{screen}");
         assert!(screen.contains("discard 1 path"), "{screen}");
-        assert!(screen.contains("uncommitted changes to notes.txt are lost"), "{screen}");
-        assert!(screen.contains("notes.txt"), "the arguments are not shown: {screen}");
+        assert!(
+            screen.contains("uncommitted changes to notes.txt are lost"),
+            "{screen}"
+        );
+        assert!(
+            screen.contains("notes.txt"),
+            "the arguments are not shown: {screen}"
+        );
         assert!(screen.contains("approve and run"), "{screen}");
         assert!(screen.contains("decline"), "{screen}");
     }
@@ -959,8 +987,14 @@ mod tests {
             .collect();
         state.cursor = 75;
         let screen = draw(&state);
-        assert!(screen.contains("commit number 75"), "the cursor row is off screen:\n{screen}");
-        assert!(!screen.contains("commit number 0"), "the window did not move:\n{screen}");
+        assert!(
+            screen.contains("commit number 75"),
+            "the cursor row is off screen:\n{screen}"
+        );
+        assert!(
+            !screen.contains("commit number 0"),
+            "the window did not move:\n{screen}"
+        );
     }
 
     #[test]

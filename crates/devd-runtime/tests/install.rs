@@ -18,10 +18,7 @@ use devd_core::paths::Paths;
 use devd_core::state::Store;
 
 fn scratch(tag: &str) -> Paths {
-    let dir = std::env::temp_dir().join(format!(
-        "devd-runtime-e2e-{tag}-{}",
-        std::process::id()
-    ));
+    let dir = std::env::temp_dir().join(format!("devd-runtime-e2e-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let paths = Paths::rooted(dir);
     paths.ensure().unwrap();
@@ -98,8 +95,12 @@ fn installing_php_produces_a_working_interpreter() {
     assert_eq!(err.code(), "conflict", "{err}");
 
     // Removal is blocked while a service points at it.
-    let binaries = devd_core::util::directory_size(&paths.runtime_version("php", &installed.runtime.version));
-    assert!(binaries > 1_000_000, "a PHP build is bigger than {binaries} bytes");
+    let binaries =
+        devd_core::util::directory_size(&paths.runtime_version("php", &installed.runtime.version));
+    assert!(
+        binaries > 1_000_000,
+        "a PHP build is bigger than {binaries} bytes"
+    );
 
     let _ = std::fs::remove_dir_all(paths.root());
 }

@@ -59,15 +59,19 @@ pub fn run(app: &App, cmd: RuntimeCommand) -> Result<()> {
         }
         RuntimeCommand::Verify { spec } => {
             let (kind, version) = split_spec(&spec)?;
-            app.invoke("runtime.verify", json!({ "kind": kind, "version": version }))
+            app.invoke(
+                "runtime.verify",
+                json!({ "kind": kind, "version": version }),
+            )
         }
         RuntimeCommand::Remove { spec } => {
             let (kind, version) = split_spec(&spec)?;
-            app.invoke("runtime.remove", json!({ "kind": kind, "version": version }))
+            app.invoke(
+                "runtime.remove",
+                json!({ "kind": kind, "version": version }),
+            )
         }
-        RuntimeCommand::Use { version } => {
-            app.invoke("runtime.use", json!({ "version": version }))
-        }
+        RuntimeCommand::Use { version } => app.invoke("runtime.use", json!({ "version": version })),
     }
 }
 

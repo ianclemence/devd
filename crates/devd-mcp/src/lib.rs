@@ -145,15 +145,9 @@ impl McpServer {
             // Clients probe these even when the server does not advertise them.
             // Answering with an empty list is friendlier than an error.
             "resources/list" => Some(Self::ok(id, json!({ "resources": [] }))),
-            "resources/templates/list" => {
-                Some(Self::ok(id, json!({ "resourceTemplates": [] })))
-            }
+            "resources/templates/list" => Some(Self::ok(id, json!({ "resourceTemplates": [] }))),
             "prompts/list" => Some(Self::ok(id, json!({ "prompts": [] }))),
-            other => Some(Self::error(
-                id,
-                -32601,
-                format!("unknown method `{other}`"),
-            )),
+            other => Some(Self::error(id, -32601, format!("unknown method `{other}`"))),
         }
     }
 
@@ -310,10 +304,7 @@ impl McpServer {
         let Some(id) = args.get("id").and_then(Value::as_str) else {
             return ToolOutcome::Protocol(-32602, "`id` is required".to_string());
         };
-        let cap_args = args
-            .get("args")
-            .cloned()
-            .unwrap_or_else(|| json!({}));
+        let cap_args = args.get("args").cloned().unwrap_or_else(|| json!({}));
         let dry_run = args
             .get("dry_run")
             .and_then(Value::as_bool)
@@ -555,7 +546,9 @@ mod tests {
                     .tier(Tier::Read)
                     .effect(Effect::Read)
                     .handler(
-                        |_ctx, _a: &Value| Ok(devd_core::capability::Plan::new("test.inspect", "inspect")),
+                        |_ctx, _a: &Value| {
+                            Ok(devd_core::capability::Plan::new("test.inspect", "inspect"))
+                        },
                         |_ctx, _a: &Value| Ok(devd_core::capability::Outcome::ok("inspected")),
                     )
                     .build()
@@ -598,7 +591,9 @@ mod tests {
                     .human_only(true)
                     .dry_run(true)
                     .handler(
-                        |_ctx, _a: &Value| Ok(devd_core::capability::Plan::new("test.trust", "install")),
+                        |_ctx, _a: &Value| {
+                            Ok(devd_core::capability::Plan::new("test.trust", "install"))
+                        },
                         move |_ctx, _a: &Value| {
                             human.fetch_add(1, Ordering::SeqCst);
                             Ok(devd_core::capability::Outcome::ok("installed"))
@@ -673,7 +668,12 @@ mod tests {
     #[test]
     fn initialize_reports_the_server_and_its_tools() {
         let (server, _) = fixture();
-        let response = call(&server, 1, "initialize", json!({ "protocolVersion": "2025-06-18" }));
+        let response = call(
+            &server,
+            1,
+            "initialize",
+            json!({ "protocolVersion": "2025-06-18" }),
+        );
         assert_eq!(response["jsonrpc"], "2.0");
         assert_eq!(response["result"]["serverInfo"]["name"], "devd");
         assert_eq!(response["result"]["protocolVersion"], "2025-06-18");
@@ -684,7 +684,12 @@ mod tests {
     #[test]
     fn initialize_echoes_an_unknown_protocol_version() {
         let (server, _) = fixture();
-        let response = call(&server, 1, "initialize", json!({ "protocolVersion": "1999-01-01" }));
+        let response = call(
+            &server,
+            1,
+            "initialize",
+            json!({ "protocolVersion": "1999-01-01" }),
+        );
         assert_eq!(response["result"]["protocolVersion"], "1999-01-01");
     }
 
@@ -795,9 +800,14 @@ mod tests {
     #[test]
     fn groups_are_discoverable_and_counted() {
         let (server, _) = fixture();
-        let body = tool_json(&call(&server, 1, "tools/call", json!({
-            "name": "devd_groups", "arguments": {}
-        })));
+        let body = tool_json(&call(
+            &server,
+            1,
+            "tools/call",
+            json!({
+                "name": "devd_groups", "arguments": {}
+            }),
+        ));
         assert_eq!(body["total_capabilities"], 4);
         let domains = body["domains"].as_array().unwrap();
         assert_eq!(domains.len(), 3);
@@ -810,19 +820,34 @@ mod tests {
     #[test]
     fn capabilities_can_be_searched_and_grouped() {
         let (server, _) = fixture();
-        let all = tool_json(&call(&server, 1, "tools/call", json!({
-            "name": "devd_capabilities", "arguments": {}
-        })));
+        let all = tool_json(&call(
+            &server,
+            1,
+            "tools/call",
+            json!({
+                "name": "devd_capabilities", "arguments": {}
+            }),
+        ));
         assert_eq!(all["total"], 4);
 
-        let grouped = tool_json(&call(&server, 2, "tools/call", json!({
-            "name": "devd_capabilities", "arguments": { "group": "test" }
-        })));
+        let grouped = tool_json(&call(
+            &server,
+            2,
+            "tools/call",
+            json!({
+                "name": "devd_capabilities", "arguments": { "group": "test" }
+            }),
+        ));
         assert_eq!(grouped["total"], 2);
 
-        let searched = tool_json(&call(&server, 3, "tools/call", json!({
-            "name": "devd_capabilities", "arguments": { "query": "trust" }
-        })));
+        let searched = tool_json(&call(
+            &server,
+            3,
+            "tools/call",
+            json!({
+                "name": "devd_capabilities", "arguments": { "query": "trust" }
+            }),
+        ));
         assert_eq!(searched["total"], 1, "{searched}");
         assert_eq!(searched["capabilities"][0]["id"], "test.trust");
         assert_eq!(searched["capabilities"][0]["human_only"], true);
@@ -831,9 +856,14 @@ mod tests {
     #[test]
     fn describe_returns_the_argument_schema() {
         let (server, _) = fixture();
-        let body = tool_json(&call(&server, 1, "tools/call", json!({
-            "name": "devd_describe", "arguments": { "id": "test.reset" }
-        })));
+        let body = tool_json(&call(
+            &server,
+            1,
+            "tools/call",
+            json!({
+                "name": "devd_describe", "arguments": { "id": "test.reset" }
+            }),
+        ));
         assert_eq!(body["id"], "test.reset");
         assert_eq!(body["tier"], "destructive");
         assert_eq!(body["requires_approval"], true);
@@ -843,9 +873,14 @@ mod tests {
     #[test]
     fn describing_an_unknown_capability_fails_helpfully() {
         let (server, _) = fixture();
-        let response = call(&server, 1, "tools/call", json!({
-            "name": "devd_describe", "arguments": { "id": "nope.nope" }
-        }));
+        let response = call(
+            &server,
+            1,
+            "tools/call",
+            json!({
+                "name": "devd_describe", "arguments": { "id": "nope.nope" }
+            }),
+        );
         assert_eq!(response["result"]["isError"], true);
         let body = tool_json(&response);
         assert_eq!(body["error"]["code"], "not_found");
@@ -854,9 +889,14 @@ mod tests {
     #[test]
     fn a_read_capability_runs_for_an_agent() {
         let (server, _) = fixture();
-        let response = call(&server, 1, "tools/call", json!({
-            "name": "devd_invoke", "arguments": { "id": "test.inspect" }
-        }));
+        let response = call(
+            &server,
+            1,
+            "tools/call",
+            json!({
+                "name": "devd_invoke", "arguments": { "id": "test.inspect" }
+            }),
+        );
         assert_eq!(response["result"]["isError"], false, "{response}");
         let body = tool_json(&response);
         assert_eq!(body["ok"], true);
@@ -866,15 +906,23 @@ mod tests {
     #[test]
     fn a_destructive_operation_is_refused_and_the_plan_is_handed_over() {
         let (server, applications) = fixture();
-        let response = call(&server, 1, "tools/call", json!({
-            "name": "devd_invoke", "arguments": { "id": "test.reset" }
-        }));
+        let response = call(
+            &server,
+            1,
+            "tools/call",
+            json!({
+                "name": "devd_invoke", "arguments": { "id": "test.reset" }
+            }),
+        );
         assert_eq!(response["result"]["isError"], true);
         let body = tool_json(&response);
         assert_eq!(body["error"]["code"], "approval_required");
         // The agent gets the plan, so it can tell the human what would happen.
         assert_eq!(body["plan"]["destructive"], true);
-        assert!(body["plan"]["steps"][0].as_str().unwrap().contains("working tree"));
+        assert!(body["plan"]["steps"][0]
+            .as_str()
+            .unwrap()
+            .contains("working tree"));
         assert!(body["next_step"].as_str().unwrap().contains("human"));
         // And nothing ran.
         assert_eq!(applications.load(Ordering::SeqCst), 0);
@@ -883,38 +931,59 @@ mod tests {
     #[test]
     fn a_human_only_operation_is_refused_for_an_agent_even_with_a_plan() {
         let (server, applications) = fixture();
-        let response = call(&server, 1, "tools/call", json!({
-            "name": "devd_invoke", "arguments": { "id": "test.trust" }
-        }));
+        let response = call(
+            &server,
+            1,
+            "tools/call",
+            json!({
+                "name": "devd_invoke", "arguments": { "id": "test.trust" }
+            }),
+        );
         assert_eq!(response["result"]["isError"], true);
         let body = tool_json(&response);
         assert_eq!(body["error"]["code"], "permission_denied");
-        assert!(body["error"]["message"].as_str().unwrap().contains("human-only"));
+        assert!(body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("human-only"));
         assert_eq!(applications.load(Ordering::SeqCst), 0);
     }
 
     #[test]
     fn an_approval_gated_operation_that_cannot_plan_says_so() {
         let (server, applications) = fixture();
-        let response = call(&server, 1, "tools/call", json!({
-            "name": "devd_invoke", "arguments": { "id": "test.publish" }
-        }));
+        let response = call(
+            &server,
+            1,
+            "tools/call",
+            json!({
+                "name": "devd_invoke", "arguments": { "id": "test.publish" }
+            }),
+        );
         assert_eq!(response["result"]["isError"], true);
         let body = tool_json(&response);
         assert_eq!(body["error"]["code"], "approval_required");
         // No plan is invented for a capability that cannot describe itself.
         assert!(body.get("plan").is_none(), "{body}");
-        assert!(body["next_step"].as_str().unwrap().contains("cannot describe itself"));
+        assert!(body["next_step"]
+            .as_str()
+            .unwrap()
+            .contains("cannot describe itself"));
         assert_eq!(applications.load(Ordering::SeqCst), 0);
     }
 
     #[test]
     fn a_dry_run_returns_a_plan_and_changes_nothing() {
         let (server, applications) = fixture();
-        let response = call(&server, 1, "tools/call", json!({
-            "name": "devd_invoke",
-            "arguments": { "id": "test.reset", "dry_run": true }
-        }));
+        let response = call(
+            &server,
+            1,
+            "tools/call",
+            json!({
+                "name": "devd_invoke",
+                "arguments": { "id": "test.reset", "dry_run": true }
+            }),
+        );
         assert_eq!(response["result"]["isError"], false, "{response}");
         let body = tool_json(&response);
         assert_eq!(body["ok"], true);
@@ -926,9 +995,14 @@ mod tests {
     #[test]
     fn invoking_an_unknown_capability_reports_not_found() {
         let (server, _) = fixture();
-        let body = tool_json(&call(&server, 1, "tools/call", json!({
-            "name": "devd_invoke", "arguments": { "id": "does.not.exist" }
-        })));
+        let body = tool_json(&call(
+            &server,
+            1,
+            "tools/call",
+            json!({
+                "name": "devd_invoke", "arguments": { "id": "does.not.exist" }
+            }),
+        ));
         assert_eq!(body["ok"], false);
         assert_eq!(body["error"]["code"], "not_found");
     }
@@ -936,9 +1010,14 @@ mod tests {
     #[test]
     fn an_unknown_tool_is_a_protocol_error_naming_the_alternative() {
         let (server, _) = fixture();
-        let response = call(&server, 1, "tools/call", json!({
-            "name": "run_shell", "arguments": {}
-        }));
+        let response = call(
+            &server,
+            1,
+            "tools/call",
+            json!({
+                "name": "run_shell", "arguments": {}
+            }),
+        );
         assert_eq!(response["error"]["code"], -32602);
         assert!(response["error"]["message"]
             .as_str()
@@ -949,9 +1028,14 @@ mod tests {
     #[test]
     fn a_missing_required_argument_is_a_protocol_error() {
         let (server, _) = fixture();
-        let response = call(&server, 1, "tools/call", json!({
-            "name": "devd_describe", "arguments": {}
-        }));
+        let response = call(
+            &server,
+            1,
+            "tools/call",
+            json!({
+                "name": "devd_describe", "arguments": {}
+            }),
+        );
         assert_eq!(response["error"]["code"], -32602);
     }
 
@@ -961,9 +1045,14 @@ mod tests {
         server = server.with_extra_checks(vec![Arc::new(|| {
             vec![Check::ok("git", "2.46.0 at /usr/bin/git")]
         })]);
-        let body = tool_json(&call(&server, 1, "tools/call", json!({
-            "name": "devd_doctor", "arguments": {}
-        })));
+        let body = tool_json(&call(
+            &server,
+            1,
+            "tools/call",
+            json!({
+                "name": "devd_doctor", "arguments": {}
+            }),
+        ));
         assert_eq!(body["ok"], true);
         let names: Vec<&str> = body["checks"]
             .as_array()
@@ -979,12 +1068,16 @@ mod tests {
     #[test]
     fn a_failing_check_makes_the_doctor_report_not_ok() {
         let (server, _) = fixture();
-        let body = tool_json(&call(&server, 1, "tools/call", json!({
-            "name": "devd_doctor", "arguments": {}
-        })));
+        let body = tool_json(&call(
+            &server,
+            1,
+            "tools/call",
+            json!({
+                "name": "devd_doctor", "arguments": {}
+            }),
+        ));
         // The store is in memory and the layout exists, so this must be ok. If it
         // is not, the fixture is wrong rather than the assertion.
         assert_eq!(body["ok"], true, "{body}");
     }
 }
-

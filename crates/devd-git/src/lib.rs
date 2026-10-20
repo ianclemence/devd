@@ -256,7 +256,13 @@ impl GitService {
             })?,
         };
 
-        let out = util::run(&git, &["--version".to_string()], None, &env(), Some(std::time::Duration::from_secs(15)))?;
+        let out = util::run(
+            &git,
+            &["--version".to_string()],
+            None,
+            &env(),
+            Some(std::time::Duration::from_secs(15)),
+        )?;
         if !out.ok() {
             return Err(DevdError::invalid(format!(
                 "`{}` is not a working git executable",
@@ -285,7 +291,13 @@ impl GitService {
 
     /// Run a Git command in `cwd`, inheriting the hardened environment.
     pub fn exec(&self, cwd: Option<&Path>, args: &[String]) -> Result<CommandOutput> {
-        util::run(&self.git, args, cwd, &env(), Some(std::time::Duration::from_secs(600)))
+        util::run(
+            &self.git,
+            args,
+            cwd,
+            &env(),
+            Some(std::time::Duration::from_secs(600)),
+        )
     }
 
     /// Run and require success, returning stdout.
@@ -304,10 +316,7 @@ impl GitService {
         if !path.exists() {
             return Ok(None);
         }
-        let out = self.exec(
-            Some(path),
-            &["rev-parse".into(), "--show-toplevel".into()],
-        )?;
+        let out = self.exec(Some(path), &["rev-parse".into(), "--show-toplevel".into()])?;
         if !out.ok() {
             return Ok(None);
         }
@@ -371,7 +380,11 @@ impl GitService {
         while let Some(entry) = fields.next() {
             let status_chars = entry.chars().take(2).collect::<String>();
             let needs_original = status_chars.contains('R') || status_chars.contains('C');
-            let original = if needs_original { fields.next().map(|s| s.to_string()) } else { None };
+            let original = if needs_original {
+                fields.next().map(|s| s.to_string())
+            } else {
+                None
+            };
             parse_change(entry, original, &mut status);
         }
 
@@ -404,7 +417,10 @@ impl GitService {
 
     /// The current branch name, or `None` when detached.
     pub fn current_branch(&self, repo: &Path) -> Result<Option<String>> {
-        let out = self.exec_out(repo, &["rev-parse".into(), "--abbrev-ref".into(), "HEAD".into()])?;
+        let out = self.exec_out(
+            repo,
+            &["rev-parse".into(), "--abbrev-ref".into(), "HEAD".into()],
+        )?;
         let name = out.trim().to_string();
         if name == "HEAD" || name.is_empty() {
             Ok(None)
@@ -485,7 +501,11 @@ impl GitService {
                 "--format=%(refname:short)".into(),
             ],
         )?;
-        Ok(out.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
+        Ok(out
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect())
     }
 
     // ---------------------------------------------------------------- staging
@@ -512,14 +532,24 @@ impl GitService {
         for p in paths {
             validate_relpath(p)?;
         }
-        let mut args = vec!["restore".to_string(), "--staged".to_string(), "--".to_string()];
+        let mut args = vec![
+            "restore".to_string(),
+            "--staged".to_string(),
+            "--".to_string(),
+        ];
         args.extend(paths.iter().cloned());
         let out = self.exec(Some(repo), &args)?;
         if out.ok() {
             return Ok(());
         }
         // Repositories with no commits yet cannot use `restore --staged`.
-        let mut fallback = vec!["rm".into(), "--cached".into(), "-r".into(), "--quiet".into(), "--".into()];
+        let mut fallback = vec![
+            "rm".into(),
+            "--cached".into(),
+            "-r".into(),
+            "--quiet".into(),
+            "--".into(),
+        ];
         fallback.extend(paths.iter().cloned());
         let out = self.exec(Some(repo), &fallback)?;
         if out.ok() {
@@ -564,7 +594,11 @@ impl GitService {
         for p in paths {
             validate_relpath(p)?;
         }
-        let mut args = vec!["restore".to_string(), "--worktree".to_string(), "--".to_string()];
+        let mut args = vec![
+            "restore".to_string(),
+            "--worktree".to_string(),
+            "--".to_string(),
+        ];
         args.extend(paths.iter().cloned());
         self.exec_out(repo, &args)?;
         Ok(())
@@ -609,7 +643,11 @@ impl GitService {
         validate_rev(rev)?;
         let out = self.exec_out(
             repo,
-            &["rev-parse".into(), "--verify".into(), format!("{rev}^{{commit}}")],
+            &[
+                "rev-parse".into(),
+                "--verify".into(),
+                format!("{rev}^{{commit}}"),
+            ],
         )?;
         Ok(out.trim().to_string())
     }
@@ -617,7 +655,13 @@ impl GitService {
     // ------------------------------------------------------------------- log
 
     /// Recent commits, newest first.
-    pub fn log(&self, repo: &Path, limit: u32, rev: Option<&str>, path: Option<&str>) -> Result<Vec<CommitInfo>> {
+    pub fn log(
+        &self,
+        repo: &Path,
+        limit: u32,
+        rev: Option<&str>,
+        path: Option<&str>,
+    ) -> Result<Vec<CommitInfo>> {
         let mut args = vec![
             "log".to_string(),
             format!("--max-count={limit}"),
@@ -635,7 +679,9 @@ impl GitService {
         let out = self.exec(Some(repo), &args)?;
         if !out.ok() {
             // An unborn branch has no history; that is not an error.
-            if out.stderr.contains("does not have any commits") || out.stderr.contains("unknown revision") {
+            if out.stderr.contains("does not have any commits")
+                || out.stderr.contains("unknown revision")
+            {
                 return Ok(Vec::new());
             }
             return Err(command_failed(&args, &out));
@@ -702,7 +748,11 @@ impl GitService {
             }
             branches.push(BranchInfo {
                 name: parts[0].to_string(),
-                upstream: if parts[1].is_empty() { None } else { Some(parts[1].to_string()) },
+                upstream: if parts[1].is_empty() {
+                    None
+                } else {
+                    Some(parts[1].to_string())
+                },
                 subject: parts[2].to_string(),
                 current: parts[3].trim() == "*",
             });
@@ -714,7 +764,13 @@ impl GitService {
     ///
     /// `checkout` selects creation *and* switch (`git branch -b` semantics),
     /// versus creating the branch and leaving the current branch alone.
-    pub fn create_branch(&self, repo: &Path, name: &str, start_point: Option<&str>, checkout: bool) -> Result<()> {
+    pub fn create_branch(
+        &self,
+        repo: &Path,
+        name: &str,
+        start_point: Option<&str>,
+        checkout: bool,
+    ) -> Result<()> {
         validate_ref(name)?;
         if let Some(sp) = start_point {
             validate_rev(sp)?;
@@ -740,13 +796,24 @@ impl GitService {
         validate_ref(to)?;
         self.exec_out(
             repo,
-            &["branch".into(), "-m".into(), from.to_string(), to.to_string()],
+            &[
+                "branch".into(),
+                "-m".into(),
+                from.to_string(),
+                to.to_string(),
+            ],
         )?;
         Ok(())
     }
 
     /// Delete a branch. `force` is required for unmerged commits.
-    pub fn delete_branch(&self, repo: &Path, name: &str, force: bool, remote: Option<&str>) -> Result<()> {
+    pub fn delete_branch(
+        &self,
+        repo: &Path,
+        name: &str,
+        force: bool,
+        remote: Option<&str>,
+    ) -> Result<()> {
         validate_ref(name)?;
         let flag = if force { "-D" } else { "-d" };
         let mut args = vec!["branch".to_string(), flag.to_string(), name.to_string()];
@@ -830,7 +897,14 @@ impl GitService {
     // ------------------------------------------------------- merge and rebase
 
     /// Merge a branch into the current one.
-    pub fn merge(&self, repo: &Path, branch: &str, no_ff: bool, squash: bool, message: Option<&str>) -> Result<String> {
+    pub fn merge(
+        &self,
+        repo: &Path,
+        branch: &str,
+        no_ff: bool,
+        squash: bool,
+        message: Option<&str>,
+    ) -> Result<String> {
         validate_ref(branch)?;
         let mut args = vec!["merge".to_string(), "--no-edit".to_string()];
         if no_ff {
@@ -861,7 +935,13 @@ impl GitService {
     /// whole history (which is what a full-history autosquash needs). An
     /// interactive rebase is only ever driven by the built-in no-op sequence
     /// editor, so it cannot hang waiting for a human that is not there.
-    pub fn rebase(&self, repo: &Path, onto: &str, autosquash: bool, interactive: bool) -> Result<String> {
+    pub fn rebase(
+        &self,
+        repo: &Path,
+        onto: &str,
+        autosquash: bool,
+        interactive: bool,
+    ) -> Result<String> {
         let root = onto == "--root";
         if !root {
             validate_ref(onto)?;
@@ -920,12 +1000,7 @@ impl GitService {
                 repo,
                 &["rev-list".into(), "--max-parents=0".into(), "HEAD".into()],
             )?;
-            let root = roots
-                .lines()
-                .last()
-                .unwrap_or("")
-                .trim()
-                .to_string();
+            let root = roots.lines().last().unwrap_or("").trim().to_string();
             if root.is_empty() {
                 return Err(DevdError::internal("could not find the root commit"));
             }
@@ -983,9 +1058,17 @@ impl GitService {
     pub fn conflicts(&self, repo: &Path) -> Result<Vec<String>> {
         let out = self.exec_out(
             repo,
-            &["diff".into(), "--name-only".into(), "--diff-filter=U".into()],
+            &[
+                "diff".into(),
+                "--name-only".into(),
+                "--diff-filter=U".into(),
+            ],
         )?;
-        Ok(out.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
+        Ok(out
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect())
     }
 
     /// Read a conflicted file with conflict markers intact.
@@ -1003,7 +1086,15 @@ impl GitService {
             ConflictSide::Ours => "--ours",
             ConflictSide::Theirs => "--theirs",
         };
-        self.exec_out(repo, &["checkout".into(), flag.into(), "--".into(), path.to_string()])?;
+        self.exec_out(
+            repo,
+            &[
+                "checkout".into(),
+                flag.into(),
+                "--".into(),
+                path.to_string(),
+            ],
+        )?;
         self.stage(repo, &[path.to_string()])
     }
 
@@ -1028,7 +1119,11 @@ impl GitService {
                 None => remotes.push(RemoteInfo {
                     name: name.to_string(),
                     fetch_url: redact_url(url),
-                    push_url: if kind == "(push)" { Some(redact_url(url)) } else { None },
+                    push_url: if kind == "(push)" {
+                        Some(redact_url(url))
+                    } else {
+                        None
+                    },
                 }),
             }
         }
@@ -1041,7 +1136,12 @@ impl GitService {
         validate_remote_url(url)?;
         self.exec_out(
             repo,
-            &["remote".into(), "add".into(), name.to_string(), url.to_string()],
+            &[
+                "remote".into(),
+                "add".into(),
+                name.to_string(),
+                url.to_string(),
+            ],
         )?;
         Ok(())
     }
@@ -1059,7 +1159,12 @@ impl GitService {
         validate_ref(to)?;
         self.exec_out(
             repo,
-            &["remote".into(), "rename".into(), from.to_string(), to.to_string()],
+            &[
+                "remote".into(),
+                "rename".into(),
+                from.to_string(),
+                to.to_string(),
+            ],
         )?;
         Ok(())
     }
@@ -1087,21 +1192,43 @@ impl GitService {
     }
 
     /// Commits that would arrive from the upstream on a pull.
-    pub fn incoming(&self, repo: &Path, remote: &str, branch: &str, limit: u32) -> Result<Vec<CommitInfo>> {
+    pub fn incoming(
+        &self,
+        repo: &Path,
+        remote: &str,
+        branch: &str,
+        limit: u32,
+    ) -> Result<Vec<CommitInfo>> {
         let range = format!("HEAD..{remote}/{branch}");
         self.log(repo, limit, Some(&range), None)
     }
 
     /// Commits a push would publish.
-    pub fn outgoing(&self, repo: &Path, remote: &str, branch: &str, limit: u32) -> Result<Vec<CommitInfo>> {
+    pub fn outgoing(
+        &self,
+        repo: &Path,
+        remote: &str,
+        branch: &str,
+        limit: u32,
+    ) -> Result<Vec<CommitInfo>> {
         let range = format!("{remote}/{branch}..HEAD");
         self.log(repo, limit, Some(&range), None)
     }
 
     /// Preview a synchronisation without changing anything.
-    pub fn sync_preview(&self, repo: &Path, remote: &str, branch: &str, limit: u32) -> Result<SyncPreview> {
-        let incoming = self.incoming(repo, remote, branch, limit).unwrap_or_default();
-        let outgoing = self.outgoing(repo, remote, branch, limit).unwrap_or_default();
+    pub fn sync_preview(
+        &self,
+        repo: &Path,
+        remote: &str,
+        branch: &str,
+        limit: u32,
+    ) -> Result<SyncPreview> {
+        let incoming = self
+            .incoming(repo, remote, branch, limit)
+            .unwrap_or_default();
+        let outgoing = self
+            .outgoing(repo, remote, branch, limit)
+            .unwrap_or_default();
         Ok(SyncPreview {
             diverged: !incoming.is_empty() && !outgoing.is_empty(),
             incoming,
@@ -1110,7 +1237,13 @@ impl GitService {
     }
 
     /// Pull using an explicit strategy.
-    pub fn pull(&self, repo: &Path, remote: Option<&str>, branch: Option<&str>, strategy: PullStrategy) -> Result<String> {
+    pub fn pull(
+        &self,
+        repo: &Path,
+        remote: Option<&str>,
+        branch: Option<&str>,
+        strategy: PullStrategy,
+    ) -> Result<String> {
         let mut args = vec!["pull".to_string()];
         match strategy {
             PullStrategy::Merge => {}
@@ -1137,7 +1270,15 @@ impl GitService {
     }
 
     /// Push the current branch, optionally setting upstream.
-    pub fn push(&self, repo: &Path, remote: &str, branch: Option<&str>, set_upstream: bool, force: ForcePush, tags: bool) -> Result<String> {
+    pub fn push(
+        &self,
+        repo: &Path,
+        remote: &str,
+        branch: Option<&str>,
+        set_upstream: bool,
+        force: ForcePush,
+        tags: bool,
+    ) -> Result<String> {
         validate_ref(remote)?;
         let mut args = vec!["push".to_string()];
         match force {
@@ -1211,7 +1352,14 @@ impl GitService {
     }
 
     /// Create a tag.
-    pub fn create_tag(&self, repo: &Path, name: &str, message: Option<&str>, rev: Option<&str>, force: bool) -> Result<()> {
+    pub fn create_tag(
+        &self,
+        repo: &Path,
+        name: &str,
+        message: Option<&str>,
+        rev: Option<&str>,
+        force: bool,
+    ) -> Result<()> {
         validate_ref(name)?;
         let mut args = vec!["tag".to_string()];
         if let Some(m) = message {
@@ -1255,10 +1403,7 @@ impl GitService {
     /// Reset the branch, with the mode deciding how much is destroyed.
     pub fn reset(&self, repo: &Path, mode: ResetMode, rev: &str) -> Result<String> {
         validate_rev(rev)?;
-        self.exec_out(
-            repo,
-            &["reset".into(), mode.flag().into(), rev.to_string()],
-        )
+        self.exec_out(repo, &["reset".into(), mode.flag().into(), rev.to_string()])
     }
 
     /// Revert a commit by creating its inverse.
@@ -1342,7 +1487,10 @@ impl GitService {
         // `git stash list` uses the log format language, where a separator is
         // `%x1f`. `%1f` is only understood by `for-each-ref` and would be
         // emitted literally here, silently collapsing every entry into one field.
-        let out = self.exec_out(repo, &["stash".into(), "list".into(), "--format=%gd%x1f%gs".into()])?;
+        let out = self.exec_out(
+            repo,
+            &["stash".into(), "list".into(), "--format=%gd%x1f%gs".into()],
+        )?;
         let mut out_entries = Vec::new();
         for line in out.lines() {
             let parts: Vec<&str> = line.split('\u{1f}').collect();
@@ -1358,7 +1506,13 @@ impl GitService {
     }
 
     /// Create a stash entry.
-    pub fn stash_push(&self, repo: &Path, message: Option<&str>, include_untracked: bool, keep_index: bool) -> Result<String> {
+    pub fn stash_push(
+        &self,
+        repo: &Path,
+        message: Option<&str>,
+        include_untracked: bool,
+        keep_index: bool,
+    ) -> Result<String> {
         let mut args = vec!["stash".to_string(), "push".to_string()];
         if include_untracked {
             args.push("--include-untracked".into());
@@ -1374,8 +1528,17 @@ impl GitService {
     }
 
     /// Apply a stash, optionally dropping it.
-    pub fn stash_apply(&self, repo: &Path, reference: Option<&str>, pop: bool, index: bool) -> Result<String> {
-        let mut args = vec!["stash".to_string(), if pop { "pop".into() } else { "apply".into() }];
+    pub fn stash_apply(
+        &self,
+        repo: &Path,
+        reference: Option<&str>,
+        pop: bool,
+        index: bool,
+    ) -> Result<String> {
+        let mut args = vec![
+            "stash".to_string(),
+            if pop { "pop".into() } else { "apply".into() },
+        ];
         if index {
             args.push("--index".into());
         }
@@ -1389,7 +1552,10 @@ impl GitService {
     /// Drop a stash entry.
     pub fn stash_drop(&self, repo: &Path, reference: &str) -> Result<String> {
         validate_stash_ref(reference)?;
-        self.exec_out(repo, &["stash".into(), "drop".into(), reference.to_string()])
+        self.exec_out(
+            repo,
+            &["stash".into(), "drop".into(), reference.to_string()],
+        )
     }
 
     /// Show a stash's patch.
@@ -1397,7 +1563,12 @@ impl GitService {
         validate_stash_ref(reference)?;
         self.exec_out(
             repo,
-            &["stash".into(), "show".into(), "-p".into(), reference.to_string()],
+            &[
+                "stash".into(),
+                "show".into(),
+                "-p".into(),
+                reference.to_string(),
+            ],
         )
     }
 
@@ -1405,7 +1576,10 @@ impl GitService {
 
     /// Linked worktrees.
     pub fn worktrees(&self, repo: &Path) -> Result<Vec<WorktreeInfo>> {
-        let out = self.exec_out(repo, &["worktree".into(), "list".into(), "--porcelain".into()])?;
+        let out = self.exec_out(
+            repo,
+            &["worktree".into(), "list".into(), "--porcelain".into()],
+        )?;
         let mut items: Vec<WorktreeInfo> = Vec::new();
         for line in out.lines() {
             if let Some(p) = line.strip_prefix("worktree ") {
@@ -1443,7 +1617,13 @@ impl GitService {
     }
 
     /// Add a worktree for a branch.
-    pub fn worktree_add(&self, repo: &Path, path: &Path, branch: &str, create_branch: bool) -> Result<()> {
+    pub fn worktree_add(
+        &self,
+        repo: &Path,
+        path: &Path,
+        branch: &str,
+        create_branch: bool,
+    ) -> Result<()> {
         validate_ref(branch)?;
         let mut args = vec!["worktree".to_string(), "add".to_string()];
         if create_branch {
@@ -1483,10 +1663,7 @@ impl GitService {
         std::fs::create_dir_all(path)?;
         self.exec_out(
             path,
-            &[
-                "init".into(),
-                format!("--initial-branch={initial_branch}"),
-            ],
+            &["init".into(), format!("--initial-branch={initial_branch}")],
         )?;
         self.repo_root(path)?
             .ok_or_else(|| DevdError::internal("init did not produce a repository"))
@@ -1526,7 +1703,12 @@ impl GitService {
     }
 
     /// Read a Git configuration value. `scope` selects the file to read.
-    pub fn config_get(&self, repo: Option<&Path>, key: &str, scope: ConfigScope) -> Result<Option<String>> {
+    pub fn config_get(
+        &self,
+        repo: Option<&Path>,
+        key: &str,
+        scope: ConfigScope,
+    ) -> Result<Option<String>> {
         validate_config_key(key)?;
         let mut args = vec!["config".to_string(), scope.flag().to_string()];
         args.push("--get".into());
@@ -1542,7 +1724,13 @@ impl GitService {
     }
 
     /// Write a Git configuration value.
-    pub fn config_set(&self, repo: Option<&Path>, key: &str, value: &str, scope: ConfigScope) -> Result<()> {
+    pub fn config_set(
+        &self,
+        repo: Option<&Path>,
+        key: &str,
+        value: &str,
+        scope: ConfigScope,
+    ) -> Result<()> {
         validate_config_key(key)?;
         if config_key_holds_credentials(key) {
             return Err(DevdError::denied(format!(
@@ -1584,7 +1772,9 @@ impl GitService {
         let mut added = Vec::new();
         for p in patterns {
             if p.contains('\n') || p.trim().is_empty() {
-                return Err(DevdError::invalid("ignore patterns must be non-empty single lines"));
+                return Err(DevdError::invalid(
+                    "ignore patterns must be non-empty single lines",
+                ));
             }
             if !existing.lines().any(|l| l.trim() == p.trim()) {
                 existing.push_str(p);
@@ -1597,7 +1787,12 @@ impl GitService {
     }
 
     /// Delete merged local branches.
-    pub fn prune_merged_branches(&self, repo: &Path, base: &str, dry_run: bool) -> Result<Vec<String>> {
+    pub fn prune_merged_branches(
+        &self,
+        repo: &Path,
+        base: &str,
+        dry_run: bool,
+    ) -> Result<Vec<String>> {
         validate_ref(base)?;
         let out = self.exec_out(
             repo,
@@ -1860,7 +2055,10 @@ fn command_failed(args: &[String], out: &CommandOutput) -> DevdError {
         &out.stderr
     };
     let detail = if detail.trim().is_empty() {
-        format!("`git {program}` exited with code {} and produced no output", out.code)
+        format!(
+            "`git {program}` exited with code {} and produced no output",
+            out.code
+        )
     } else {
         util::truncate(&redact_url(detail), 2000)
     };
@@ -1927,13 +2125,13 @@ pub fn validate_ref(name: &str) -> Result<()> {
     }
     for bad in [' ', '~', '^', ':', '?', '*', '[', '\\', '\u{7f}'] {
         if name.contains(bad) {
-            return Err(DevdError::invalid(format!(
-                "name may not contain {bad:?}"
-            )));
+            return Err(DevdError::invalid(format!("name may not contain {bad:?}")));
         }
     }
     if name.chars().any(|c| (c as u32) < 0x20) {
-        return Err(DevdError::invalid("name may not contain control characters"));
+        return Err(DevdError::invalid(
+            "name may not contain control characters",
+        ));
     }
     Ok(())
 }
@@ -1952,7 +2150,9 @@ pub fn validate_rev(rev: &str) -> Result<()> {
         return Err(DevdError::invalid("revision may not contain '--'"));
     }
     if rev.chars().any(|c| (c as u32) < 0x20) {
-        return Err(DevdError::invalid("revision may not contain control characters"));
+        return Err(DevdError::invalid(
+            "revision may not contain control characters",
+        ));
     }
     Ok(())
 }
@@ -1979,7 +2179,9 @@ pub fn validate_relpath(path: &str) -> Result<()> {
         return Err(DevdError::invalid("path may not contain '..'"));
     }
     if path.chars().any(|c| (c as u32) < 0x20) {
-        return Err(DevdError::invalid("path may not contain control characters"));
+        return Err(DevdError::invalid(
+            "path may not contain control characters",
+        ));
     }
     Ok(())
 }
@@ -1987,7 +2189,9 @@ pub fn validate_relpath(path: &str) -> Result<()> {
 /// Validate a stash reference such as `stash@{2}`.
 pub fn validate_stash_ref(reference: &str) -> Result<()> {
     if !reference.starts_with("stash@{") || !reference.ends_with('}') {
-        return Err(DevdError::invalid("expected a stash reference like stash@{0}"));
+        return Err(DevdError::invalid(
+            "expected a stash reference like stash@{0}",
+        ));
     }
     let inner = &reference[7..reference.len() - 1];
     if !inner.chars().all(|c| c.is_ascii_digit()) {
@@ -2058,7 +2262,9 @@ pub fn validate_remote_url(url: &str) -> Result<()> {
         return Err(DevdError::invalid("remote URL may not start with '-'"));
     }
     if url.chars().any(|c| (c as u32) < 0x20) {
-        return Err(DevdError::invalid("remote URL may not contain control characters"));
+        return Err(DevdError::invalid(
+            "remote URL may not contain control characters",
+        ));
     }
     // A password in a remote URL is a password written to `.git/config` in plain
     // text, echoed into shell history, and printed by `git remote -v`. Credential
@@ -2182,7 +2388,10 @@ mod tests {
             stderr: String::new(),
             duration_ms: 0,
         };
-        let err = command_failed(&["commit".to_string(), "-m".to_string(), "x".to_string()], &out);
+        let err = command_failed(
+            &["commit".to_string(), "-m".to_string(), "x".to_string()],
+            &out,
+        );
         let text = err.to_string();
         assert!(text.contains("nothing to commit"), "{text}");
 
@@ -2201,7 +2410,8 @@ mod tests {
     fn a_failure_still_redacts_credentials_from_either_stream() {
         let out = CommandOutput {
             code: 128,
-            stdout: "fatal: could not read from https://user:ghp_secret@github.com/a/b.git".to_string(),
+            stdout: "fatal: could not read from https://user:ghp_secret@github.com/a/b.git"
+                .to_string(),
             stderr: String::new(),
             duration_ms: 0,
         };

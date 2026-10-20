@@ -75,8 +75,14 @@ pub fn evaluate(check: &Check) -> Health {
         Check::Tcp { host, port } => {
             let start = Instant::now();
             match tcp_connect(host, *port, Duration::from_millis(1500)) {
-                Ok(()) => Health::ok(format!("tcp {host}:{port} answered"), start.elapsed().as_millis()),
-                Err(e) => Health::bad(format!("tcp {host}:{port}: {e}"), start.elapsed().as_millis()),
+                Ok(()) => Health::ok(
+                    format!("tcp {host}:{port} answered"),
+                    start.elapsed().as_millis(),
+                ),
+                Err(e) => Health::bad(
+                    format!("tcp {host}:{port}: {e}"),
+                    start.elapsed().as_millis(),
+                ),
             }
         }
         Check::Http { url, expect } => {
@@ -88,9 +94,15 @@ pub fn evaluate(check: &Check) -> Health {
                         None => (200..400).contains(&status),
                     };
                     if good {
-                        Health::ok(format!("HTTP {status} from {url}"), start.elapsed().as_millis())
+                        Health::ok(
+                            format!("HTTP {status} from {url}"),
+                            start.elapsed().as_millis(),
+                        )
                     } else {
-                        Health::bad(format!("HTTP {status} (unexpected) from {url}"), start.elapsed().as_millis())
+                        Health::bad(
+                            format!("HTTP {status} (unexpected) from {url}"),
+                            start.elapsed().as_millis(),
+                        )
                     }
                 }
                 Err(e) => Health::bad(format!("{url}: {e}"), start.elapsed().as_millis()),
@@ -213,7 +225,8 @@ mod tests {
                 let _ = sock.write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n");
             }
         });
-        let status = http_status(&format!("http://127.0.0.1:{port}/"), Duration::from_secs(3)).unwrap();
+        let status =
+            http_status(&format!("http://127.0.0.1:{port}/"), Duration::from_secs(3)).unwrap();
         assert_eq!(status, 204);
     }
 

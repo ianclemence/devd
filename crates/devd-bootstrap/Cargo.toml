@@ -1,0 +1,20 @@
+[package]
+name = "devd-bootstrap"
+description = "The one composition of devd's capability registry and process runtime, shared by every entry point."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+devd-core = { workspace = true }
+devd-git = { path = "../devd-git" }
+devd-runtime = { path = "../devd-runtime" }
+devd-services = { path = "../devd-services" }
+devd-sites = { path = "../devd-sites" }
+devd-workspace = { path = "../devd-workspace" }
+
+serde = { workspace = true }
+serde_json = { workspace = true }

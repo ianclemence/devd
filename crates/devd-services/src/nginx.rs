@@ -113,13 +113,25 @@ fn render_text(render: Render, sites: &[Site]) -> String {
     out.push_str("# site or a setting changes. `devd web render` rewrites it, `devd web test`\n");
     out.push_str("# checks it with `nginx -t`, and `devd web reload` makes nginx read it.\n\n");
     out.push_str("worker_processes  1;\n");
-    out.push_str(&format!("error_log  \"{}/nginx-error.log\" warn;\n", render.logs));
-    out.push_str(&format!("pid        \"{}logs/nginx.pid\";\n\n", render.prefix));
+    out.push_str(&format!(
+        "error_log  \"{}/nginx-error.log\" warn;\n",
+        render.logs
+    ));
+    out.push_str(&format!(
+        "pid        \"{}logs/nginx.pid\";\n\n",
+        render.prefix
+    ));
     out.push_str("events {\n    worker_connections  1024;\n}\n\n");
     out.push_str("http {\n");
-    out.push_str(&format!("    include       \"{}conf/mime.types\";\n", render.prefix));
+    out.push_str(&format!(
+        "    include       \"{}conf/mime.types\";\n",
+        render.prefix
+    ));
     out.push_str("    default_type  application/octet-stream;\n\n");
-    out.push_str(&format!("    access_log  \"{}/nginx-access.log\";\n\n", render.logs));
+    out.push_str(&format!(
+        "    access_log  \"{}/nginx-access.log\";\n\n",
+        render.logs
+    ));
     out.push_str("    sendfile           on;\n");
     out.push_str("    keepalive_timeout  65;\n");
     out.push_str("    server_tokens      off;\n");
@@ -330,7 +342,10 @@ mod tests {
         let text = render_for(&[site("blog", "internal")], 8080, 8443);
         // The redirect, on the plain port.
         assert!(text.contains("listen       8080;"), "{text}");
-        assert!(text.contains("return 301 https://$host:8443$request_uri;"), "{text}");
+        assert!(
+            text.contains("return 301 https://$host:8443$request_uri;"),
+            "{text}"
+        );
         // The TLS listener, with the certificate devd issued.
         assert!(text.contains("listen       8443 ssl;"), "{text}");
         assert!(
@@ -350,7 +365,10 @@ mod tests {
         );
         assert!(text.contains("include       \"D:/devd-home/services/nginx/conf/fastcgi_params\";"));
         // Document root, with forward slashes.
-        assert!(text.contains("root         \"C:/devd-home/www/blog\";"), "{text}");
+        assert!(
+            text.contains("root         \"C:/devd-home/www/blog\";"),
+            "{text}"
+        );
         // The 404 body deliberately contains a `\n` for nginx to interpret, so
         // the assertion is about paths: no drive letter may be followed by a
         // backslash, which is how a Windows path reaches nginx when the renderer
@@ -386,8 +404,14 @@ mod tests {
 
     #[test]
     fn the_prefix_is_quoted_and_slash_terminated() {
-        assert_eq!(prefix(Path::new("C:\\devd-home\\services\\nginx")), "C:/devd-home/services/nginx/");
-        assert_eq!(prefix(Path::new("/opt/devd/services/nginx")), "/opt/devd/services/nginx/");
+        assert_eq!(
+            prefix(Path::new("C:\\devd-home\\services\\nginx")),
+            "C:/devd-home/services/nginx/"
+        );
+        assert_eq!(
+            prefix(Path::new("/opt/devd/services/nginx")),
+            "/opt/devd/services/nginx/"
+        );
     }
 
     #[test]
@@ -397,6 +421,9 @@ mod tests {
         let mut s = site("laravel", "off");
         s.root = "C:/devd-home/www/laravel/public".to_string();
         let text = render_for(&[s], 80, 443);
-        assert!(text.contains("root         \"C:/devd-home/www/laravel/public\";"), "{text}");
+        assert!(
+            text.contains("root         \"C:/devd-home/www/laravel/public\";"),
+            "{text}"
+        );
     }
 }

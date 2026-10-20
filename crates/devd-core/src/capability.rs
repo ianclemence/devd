@@ -586,9 +586,9 @@ impl CapabilityBuilder {
 
     /// Finish the capability. Fails when no handler was supplied.
     pub fn build(self) -> Result<Capability> {
-        let handler = self
-            .handler
-            .ok_or_else(|| DevdError::internal(format!("capability `{}` has no handler", self.id)))?;
+        let handler = self.handler.ok_or_else(|| {
+            DevdError::internal(format!("capability `{}` has no handler", self.id))
+        })?;
         if self.human_only && self.agent_safe {
             return Err(DevdError::internal(format!(
                 "capability `{}` is human_only and cannot be agent_safe",
@@ -661,7 +661,10 @@ mod tests {
     fn human_only_forces_agent_unsafe() {
         let c = Capability::builder("x.y", "s")
             .human_only(true)
-            .handler(|_, _| Ok(Plan::new("x.y", "p")), |_, _| Ok(Outcome::ok("d")))
+            .handler(
+                |_, _| Ok(Plan::new("x.y", "p")),
+                |_, _| Ok(Outcome::ok("d")),
+            )
             .build()
             .unwrap();
         assert!(!c.agent_safe);

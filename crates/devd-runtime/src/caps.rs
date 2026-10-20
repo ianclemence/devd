@@ -98,7 +98,12 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         true,
         false,
         true,
-        |_, _| Ok(Plan::new("runtime.available", "read the upstream version catalogue")),
+        |_, _| {
+            Ok(Plan::new(
+                "runtime.available",
+                "read the upstream version catalogue",
+            ))
+        },
         |_, args| {
             let thread_safe = args.thread_safe.unwrap_or(false);
             let (list, notes) = runtimes::available(&args.kind, thread_safe)?;
@@ -193,7 +198,12 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         true,
         false,
         true,
-        |_, _| Ok(Plan::new("runtime.verify", "run the runtime and read its version")),
+        |_, _| {
+            Ok(Plan::new(
+                "runtime.verify",
+                "run the runtime and read its version",
+            ))
+        },
         |ctx, args| {
             let report = runtimes::verify(ctx, &args.kind, &args.version)?;
             let version = report
@@ -240,7 +250,9 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             } else {
                 plan = plan.step(format!("delete {}", root.display()));
             }
-            if args.kind == "php" && ctx.settings.primary_php.as_deref() == Some(args.version.as_str()) {
+            if args.kind == "php"
+                && ctx.settings.primary_php.as_deref() == Some(args.version.as_str())
+            {
                 plan = plan.step(
                     "another installed PHP version becomes the default; if none is left, new \
                      sites have no interpreter until one is installed",

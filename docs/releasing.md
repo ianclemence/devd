@@ -27,9 +27,14 @@ add `docs/releases/v<version>.md` before building.
 Output:
 
 ```text
-dist/devd-v0.5.0-x86_64-pc-windows-gnu.exe
+dist/devd-v0.8.0-x86_64-pc-windows-gnu.exe
+dist/devd-desktop-v0.8.0-x86_64-pc-windows-gnu.exe
 dist/SHA256SUMS.txt
 ```
+
+`devd-desktop.exe` is the native Tauri shell and contains its own backend; it
+does not need the CLI binary at run time. Building it needs the WebView2 headers
+used by Tauri, which the Rust crates provide, and a C compiler for SQLite.
 
 The installer is a second artifact:
 
@@ -37,15 +42,16 @@ The installer is a second artifact:
 .\scripts\release-installer.ps1
 ```
 
-It rebuilds the release binary, then compiles `installer/devd.nsi` into
-`dist/devd-setup-<version>.exe` and rewrites the checksum file. NSIS 3 is
-required; pass `-Nsis <path to makensis.exe>` when it is not at the default
-location.
+It rebuilds both release binaries, then compiles `installer/devd.nsi` into
+`dist/devd-setup-<version>.exe` and rewrites the checksum file. The installer
+places `devd.exe`, `devd-desktop.exe`, the launcher, shortcuts and the
+uninstaller under `%LOCALAPPDATA%\Programs\devd`. NSIS 3 is required; pass
+`-Nsis <path to makensis.exe>` when it is not at the default location.
 
 The installer must be exercised, not just built: install it, let the finish page
-run `devd setup`, check the shortcut opens the application, and uninstall it.
-The per-user install and its uninstaller are both reversible without
-administrator rights.
+run `devd setup`, check the Start Menu shortcut opens the native window, exercise
+Agents, Processes, Shared and Preview, then uninstall it. The per-user install and
+its uninstaller are both reversible without administrator rights.
 
 The binary is built for `x86_64-pc-windows-gnu` with `rust-lld`, as configured in
 `.cargo/config.toml`; it links only Windows system libraries, so it needs no

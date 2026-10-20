@@ -76,7 +76,9 @@ pub const DEFINITIONS: &[Definition] = &[
 
 /// Look up a service definition.
 pub fn definition(name: &str) -> Option<&'static Definition> {
-    DEFINITIONS.iter().find(|d| d.name == name || d.kind == name)
+    DEFINITIONS
+        .iter()
+        .find(|d| d.name == name || d.kind == name)
 }
 
 /// The PHP FastCGI listener that nginx hands PHP requests to.
@@ -250,7 +252,11 @@ pub fn status(ctx: &Ctx, name: &str) -> Result<Status> {
     let message = if !installed {
         format!("{} is not installed at {}", service.name, dir.display())
     } else if running && listening {
-        format!("{name} is running (pid {}) on port {}", pid.unwrap_or(0), service.port.unwrap_or(0))
+        format!(
+            "{name} is running (pid {}) on port {}",
+            pid.unwrap_or(0),
+            service.port.unwrap_or(0)
+        )
     } else if running {
         format!(
             "{name} is running (pid {}) but nothing is answering on port {}",
@@ -258,7 +264,9 @@ pub fn status(ctx: &Ctx, name: &str) -> Result<Status> {
             service.port.unwrap_or(0)
         )
     } else if service.desired_state == "running" {
-        format!("{name} should be running but no process was found; run `devd service start {name}`")
+        format!(
+            "{name} should be running but no process was found; run `devd service start {name}`"
+        )
     } else {
         format!("{name} is stopped")
     };
@@ -445,7 +453,10 @@ pub fn install(
             extra.insert("port".to_string(), json!(port));
             extra.insert("data_dir".to_string(), json!(report.data_dir));
             extra.insert("initialized".to_string(), json!(report.initialized));
-            extra.insert("root_password_set".to_string(), json!(report.root_password_set));
+            extra.insert(
+                "root_password_set".to_string(),
+                json!(report.root_password_set),
+            );
             // The provisioning warnings are the ones a user most needs to read -
             // "root has no password" among them - so they are merged into the
             // install's warnings rather than left in a field nobody prints.
@@ -607,7 +618,9 @@ pub fn planned_argv(ctx: &Ctx, name: &str) -> Result<Vec<String>> {
         ))
     })?;
     serde_json::from_str(&service.argv).map_err(|e| {
-        DevdError::internal(format!("the stored command for `{name}` is unreadable: {e}"))
+        DevdError::internal(format!(
+            "the stored command for `{name}` is unreadable: {e}"
+        ))
     })
 }
 
@@ -641,7 +654,8 @@ pub fn ensure_php_service(ctx: &Ctx, php_exe: &Path) -> Result<Service> {
     let _ = php_exe;
     service.kind = "php-cgi".to_string();
     service.runtime_id = runtime_id;
-    service.argv = serde_json::to_string(&service_argv(ctx, PHP_SERVICE, None)?).unwrap_or_default();
+    service.argv =
+        serde_json::to_string(&service_argv(ctx, PHP_SERVICE, None)?).unwrap_or_default();
     service.port = Some(PHP_PORT);
     service.health = Some(json!({ "tcp": PHP_PORT }).to_string());
     ctx.store.upsert_service(&service)?;
@@ -674,6 +688,7 @@ fn spawn_spec(ctx: &Ctx, service: &Service) -> Result<SpawnSpec> {
         args: args.to_vec(),
         cwd,
         envs: Vec::new(),
+        clear_env: false,
         log_path: log_path(ctx, &service.name),
         restarts: 0,
     })
@@ -789,9 +804,10 @@ pub fn start(ctx: &Ctx, name: &str) -> Result<Status> {
 
 /// Stop a service.
 pub fn stop(ctx: &Ctx, name: &str) -> Result<Status> {
-    let mut service = ctx.store.get_service(name)?.ok_or_else(|| {
-        DevdError::not_found(format!("`{name}` is not a devd service"))
-    })?;
+    let mut service = ctx
+        .store
+        .get_service(name)?
+        .ok_or_else(|| DevdError::not_found(format!("`{name}` is not a devd service")))?;
 
     let pid = running_pid(ctx, &service);
     let supervisor = process::shared();
@@ -842,9 +858,9 @@ pub fn restart(ctx: &Ctx, name: &str) -> Result<Status> {
 pub fn logs(ctx: &Ctx, name: &str, lines: usize) -> Result<Vec<String>> {
     // A service that does not exist is a not-found; a service that exists but has
     // never run is an empty log, which is a different thing.
-    ctx.store.get_service(name)?.ok_or_else(|| {
-        DevdError::not_found(format!("`{name}` is not a devd service"))
-    })?;
+    ctx.store
+        .get_service(name)?
+        .ok_or_else(|| DevdError::not_found(format!("`{name}` is not a devd service")))?;
     tail(&log_path(ctx, name), lines)
 }
 
@@ -888,7 +904,11 @@ pub fn stack_up(ctx: &Ctx) -> Result<Vec<Status>> {
     for name in order {
         ordered.extend(services.iter().filter(|s| s.name == name));
     }
-    ordered.extend(services.iter().filter(|s| !order.contains(&s.name.as_str())));
+    ordered.extend(
+        services
+            .iter()
+            .filter(|s| !order.contains(&s.name.as_str())),
+    );
 
     for service in ordered {
         // A service whose files are missing was removed deliberately; skipping it
@@ -920,7 +940,12 @@ pub fn stack_up(ctx: &Ctx) -> Result<Vec<Status>> {
 pub fn stack_down(ctx: &Ctx) -> Result<Vec<Status>> {
     let order = ["nginx", "mariadb", "php-cgi"];
     let mut stopped = Vec::new();
-    let names: Vec<String> = ctx.store.list_services()?.into_iter().map(|s| s.name).collect();
+    let names: Vec<String> = ctx
+        .store
+        .list_services()?
+        .into_iter()
+        .map(|s| s.name)
+        .collect();
     for name in order.iter().map(|s| s.to_string()).chain(
         names
             .iter()
@@ -950,9 +975,10 @@ pub fn stack_down(ctx: &Ctx) -> Result<Vec<Status>> {
 /// the server is not the same decision as discarding every database, and the
 /// result says where the data still is.
 pub fn remove(ctx: &Ctx, name: &str) -> Result<serde_json::Value> {
-    let service = ctx.store.get_service(name)?.ok_or_else(|| {
-        DevdError::not_found(format!("`{name}` is not a devd service"))
-    })?;
+    let service = ctx
+        .store
+        .get_service(name)?
+        .ok_or_else(|| DevdError::not_found(format!("`{name}` is not a devd service")))?;
     if running_pid(ctx, &service).is_some() {
         stop(ctx, name)?;
     }
@@ -1003,7 +1029,10 @@ pub fn doctor_check(paths: &Paths) -> Vec<Check> {
         return vec![Check::fail("services", "the state store could not be read")];
     };
     let Ok(services) = store.list_services() else {
-        return vec![Check::fail("services", "the service table could not be read")];
+        return vec![Check::fail(
+            "services",
+            "the service table could not be read",
+        )];
     };
     if services.is_empty() {
         return vec![Check::info(
@@ -1038,11 +1067,18 @@ pub fn doctor_check(paths: &Paths) -> Vec<Check> {
                 .unwrap_or_else(|| "unknown version".to_string())
         } else {
             std::fs::read_to_string(
-                paths.services().join(&service.name).join(".devd-install.json"),
+                paths
+                    .services()
+                    .join(&service.name)
+                    .join(".devd-install.json"),
             )
             .ok()
             .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-            .and_then(|v| v.get("version").and_then(|x| x.as_str()).map(str::to_string))
+            .and_then(|v| {
+                v.get("version")
+                    .and_then(|x| x.as_str())
+                    .map(str::to_string)
+            })
             .unwrap_or_else(|| "unknown version".to_string())
         };
         let running = store
@@ -1068,7 +1104,11 @@ pub fn doctor_check(paths: &Paths) -> Vec<Check> {
             "services",
             format!(
                 "{} should be running but is not: {}",
-                if stale.len() == 1 { "one service" } else { "these services" },
+                if stale.len() == 1 {
+                    "one service"
+                } else {
+                    "these services"
+                },
                 stale.join(", ")
             ),
         ));
@@ -1086,7 +1126,8 @@ pub fn doctor_check(paths: &Paths) -> Vec<Check> {
 
 /// A pid check that needs only the layout, for the doctor, which has no `Ctx`.
 fn running_pid_for_check(paths: &Paths, service: &Service) -> Option<u32> {
-    let text = std::fs::read_to_string(paths.services().join(&service.name).join("devd.pid")).ok()?;
+    let text =
+        std::fs::read_to_string(paths.services().join(&service.name).join("devd.pid")).ok()?;
     let pid: u32 = text.trim().parse().ok()?;
     if !process::pid_alive(pid) {
         return None;

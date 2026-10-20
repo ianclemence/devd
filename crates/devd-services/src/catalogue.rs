@@ -75,7 +75,12 @@ pub fn nginx() -> Result<Vec<Available>> {
             sha256: None,
             bytes: None,
             published: None,
-            executable: if cfg!(windows) { "nginx.exe" } else { "sbin/nginx" }.to_string(),
+            executable: if cfg!(windows) {
+                "nginx.exe"
+            } else {
+                "sbin/nginx"
+            }
+            .to_string(),
         });
     }
 
@@ -266,7 +271,11 @@ pub fn mariadb_digest(version: &str, filename: &str) -> Result<Option<String>> {
         let (Some(digest), Some(name)) = (parts.next(), parts.next()) else {
             continue;
         };
-        let name = name.trim_start_matches("./").rsplit('/').next().unwrap_or(name);
+        let name = name
+            .trim_start_matches("./")
+            .rsplit('/')
+            .next()
+            .unwrap_or(name);
         if name == filename {
             return Ok(Some(digest.to_lowercase()));
         }
@@ -335,16 +344,16 @@ mod tests {
     #[test]
     fn scan_ignores_a_version_without_the_suffix() {
         let html = "nginx-1.28.3.tar.gz and nginx-1.28.3.zip";
-        assert_eq!(scan_versions(html, "nginx-", ".zip"), vec!["nginx-1.28.3.zip"]);
+        assert_eq!(
+            scan_versions(html, "nginx-", ".zip"),
+            vec!["nginx-1.28.3.zip"]
+        );
     }
 
     #[test]
     fn stable_and_mainline_follow_nginx_numbering() {
         // 1.28 is a stable branch, 1.31 is mainline. This is nginx's own rule.
-        let mut list = vec![
-            make("1.28.3", "stable"),
-            make("1.31.7", "mainline"),
-        ];
+        let mut list = vec![make("1.28.3", "stable"), make("1.31.7", "mainline")];
         sort_newest_first(&mut list);
         assert_eq!(list[0].version, "1.31.7");
         assert_eq!(list[1].channel, "stable");
@@ -383,7 +392,9 @@ mod tests {
         if list.is_empty() {
             return;
         }
-        assert!(list.iter().all(|a| a.url.starts_with("https://nginx.org/download/")));
+        assert!(list
+            .iter()
+            .all(|a| a.url.starts_with("https://nginx.org/download/")));
         assert!(
             list.iter().any(|a| a.channel == "stable"),
             "the stable branch should be represented: {list:?}"

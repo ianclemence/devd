@@ -42,7 +42,10 @@ pub fn serve(app: App, requested: Option<u16>, open: bool) -> Result<Started, De
             if open {
                 window::open_window(&url);
             }
-            return Ok(Started { port: *port, reused: true });
+            return Ok(Started {
+                port: *port,
+                reused: true,
+            });
         }
     }
 
@@ -62,11 +65,13 @@ pub fn serve(app: App, requested: Option<u16>, open: bool) -> Result<Started, De
     let ctx = app.ctx();
     let git_executable = app.settings.git_executable.clone();
     let registry = app.registry.clone();
+    let workspace = app.workspace.clone();
 
     // The Git probe is contributed from here rather than from `devd-server`
     // because the server must not depend on any particular backend. Each entry
     // point appends what only it knows.
-    let extra: Vec<ExtraChecks> = vec![Arc::new(move || vec![git_check(git_executable.as_deref())])];
+    let extra: Vec<ExtraChecks> =
+        vec![Arc::new(move || vec![git_check(git_executable.as_deref())])];
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -79,6 +84,8 @@ pub fn serve(app: App, requested: Option<u16>, open: bool) -> Result<Started, De
         Options {
             port,
             extra_checks: extra,
+            workspace: Some(workspace),
+            shutdown: None,
         },
         move |bound| {
             let url = format!("http://127.0.0.1:{}/", bound.port);
@@ -96,7 +103,10 @@ pub fn serve(app: App, requested: Option<u16>, open: bool) -> Result<Started, De
         },
     ))?;
 
-    Ok(Started { port, reused: false })
+    Ok(Started {
+        port,
+        reused: false,
+    })
 }
 
 /// Ports to try, in order.
@@ -129,7 +139,10 @@ mod tests {
     use devd_core::Paths;
 
     fn app() -> App {
-        let root = std::env::temp_dir().join(format!("devd-web-{}", std::process::id()));
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, Ordering::SeqCst);
+        let root = std::env::temp_dir().join(format!("devd-web-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         App::bootstrap_at(Paths::rooted(root), true, false, false).unwrap()
     }

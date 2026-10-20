@@ -210,9 +210,10 @@ token minted per process, and cannot be reached from another machine.
 
 A native toolkit beside the HTML interface would be a second implementation of
 every list, table, diff and consent screen, and the two would drift the first
-time a capability changed. Wrapping the same assets in a native webview adds a
-window without adding a second UI; that is the planned direction, and the
-interface does not change when it happens.
+time a capability changed. The released desktop shell is Tauri 2 wrapping the
+same assets: it starts the same server in-process, points a webview at the same
+loopback origin, registers no privileged commands, and adds no second UI. See
+[`desktop.md`](desktop.md).
 
 The terminal dashboard is the deliberate second surface: a different medium for
 a different situation (SSH, a console without a browser), not a copy of the
@@ -228,6 +229,43 @@ PTY. devd supplies the directory, the terminal and the process; it does not
 proxy the model, hold the conversation, or stand between the harness and its
 provider. That is why a new model or a harness feature arrives without a devd
 release, and why the agent's own permission prompts remain the authority.
+
+## Sessions and the workspace runtime
+
+Session ownership is a separate layer from session presentation.
+`devd-workspace` owns the PTYs, the child watcher threads, the bounded output
+buffers and the durable metadata; `devd-server` polls that runtime; the window
+is a client. A reload disposes a terminal component, not a process.
+
+The database is the source of truth for metadata, never for liveness. A row says
+which process opened the PTY (`owner_pid` and its start time); reconciliation asks
+whether that process is alive before it reports `running`. A row whose owner is
+gone becomes `stale`, keeps its transcript, and is never attachable. This is the
+one thing persistence cannot do, and the product states it rather than faking it.
+
+Delegated tasks are child processes with a `parent_task_id`,
+`parent_session_id`, depth, timeout, exit code, result and cancellation state.
+Limits (eight unfinished tasks, depth three) are checked before a spawn. Waiting
+is a bounded poll; a timeout does not kill the child. See
+[`sessions.md`](sessions.md).
+
+## Project processes
+
+`devd.yml` is parsed by `devd-workspace::manifest`, which treats it as executable
+configuration: argv arrays only, working directories contained in the project,
+loopback-only health checks, an explicit environment, dependency-cycle detection,
+and unknown-field rejection. A semantic hash is approved by a human
+(`project.approve`, human-only); start and restart refuse without a matching
+hash. Processes run under the core supervisor with log capture, health polling,
+restart policy and whole-tree termination. See [`devd-yml.md`](devd-yml.md).
+
+## Shared project state
+
+Scratchpads and todos are SQLite rows scoped to the canonical project path, with
+authorship, timestamps and optimistic revision checks. They are capabilities,
+not files, so an agent uses the same typed API as the window, and an edit
+conflict is reported instead of merged silently. See
+[`shared-state.md`](shared-state.md).
 
 ## Process execution
 
@@ -324,15 +362,17 @@ test has a comment saying why. Three real bugs were found and fixed this way
 during M0 alone: `git branch -b` does not exist, `switch_safety` compared the
 merge base instead of the two commits, and `%1f` is literal in `git stash list`.
 
-## Not built yet
+## Still to come
 
 The registry, the tier model and the audit trail were built first so that the
-remaining work is additive: a new skill registers capabilities, and a new
-surface renders them. Apache, Redis, Mailpit, a DNS server and SSH/deploy are
-still to come — and when they land, their capabilities will appear in the CLI,
-the dashboard, the application window and the agent surface without a new safety
-decision being made, because all four read the same declarations. The application
-window is a browser engine in application mode rather than a native shell; Tauri
-is the intended eventual wrapper, and the interface does not change when that
-happens because it speaks only to the local API. See
+remaining work is additive: a new skill registers capabilities, and a new surface
+renders them. Apache, Redis, Mailpit, a DNS server and SSH/deploy are still to
+come - and when they land, their capabilities will appear in the CLI, the
+dashboard, the application window and the agent surface without a new safety
+decision being made, because all four read the same declarations.
+
+The desktop application is now a native Tauri 2 window over the same server and
+the same assets, with no privileged IPC and no second interface. `devd ui` still
+serves the browser view for development and for systems where WebView2 is not
+available. See [`desktop.md`](desktop.md) and
 [`../CHANGELOG.md`](../CHANGELOG.md).

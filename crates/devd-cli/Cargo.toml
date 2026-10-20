@@ -14,6 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 devd-core = { workspace = true }
+devd-bootstrap = { path = "../devd-bootstrap" }
 devd-git = { path = "../devd-git" }
 devd-runtime = { path = "../devd-runtime" }
 devd-services = { path = "../devd-services" }
@@ -21,6 +22,7 @@ devd-sites = { path = "../devd-sites" }
 devd-server = { path = "../devd-server" }
 devd-mcp = { path = "../devd-mcp" }
 devd-tui = { path = "../devd-tui" }
+devd-workspace = { path = "../devd-workspace" }
 
 clap = { workspace = true }
 serde = { workspace = true }

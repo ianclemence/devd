@@ -28,7 +28,7 @@
 use std::path::{Path, PathBuf};
 
 use devd_core::capability::Ctx;
-use devd_core::state::{Snapshot, Site};
+use devd_core::state::{Site, Snapshot};
 use devd_core::util;
 use devd_core::{DevdError, Result};
 
@@ -37,7 +37,8 @@ use devd_core::{DevdError, Result};
 pub const ENV_HOSTS_FILE: &str = "DEVD_HOSTS_FILE";
 
 /// First line of the block `devd` owns.
-pub const BEGIN: &str = "# >>> devd managed block - generated from `devd site list`, do not edit >>>";
+pub const BEGIN: &str =
+    "# >>> devd managed block - generated from `devd site list`, do not edit >>>";
 
 /// Last line of the block `devd` owns.
 pub const END: &str = "# <<< devd managed block <<<";
@@ -72,7 +73,11 @@ fn default_path() -> PathBuf {
     #[cfg(windows)]
     {
         let root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
-        Path::new(&root).join("System32").join("drivers").join("etc").join("hosts")
+        Path::new(&root)
+            .join("System32")
+            .join("drivers")
+            .join("etc")
+            .join("hosts")
     }
     #[cfg(unix)]
     {
@@ -312,7 +317,9 @@ fn snapshot_file(ctx: &Ctx, file: &Path, contents: &str, entries: &[Entry]) -> R
         .unwrap_or_else(|| "hosts".to_string());
     let target = dir.join(format!("{stem}-{id}.txt"));
     util::atomic_write(&target, contents)?;
-    let bytes = std::fs::metadata(&target).map(|m| m.len() as i64).unwrap_or(0);
+    let bytes = std::fs::metadata(&target)
+        .map(|m| m.len() as i64)
+        .unwrap_or(0);
     let checksum = util::sha256_file(&target)?;
     ctx.store.create_snapshot(&Snapshot {
         id: id.clone(),
@@ -352,7 +359,10 @@ mod tests {
     fn a_block_is_appended_to_an_existing_file() {
         let existing = "127.0.0.1 localhost\n::1 localhost\n";
         let out = merge(existing, &entries_for(&[site("blog.test")]));
-        assert!(out.starts_with("127.0.0.1 localhost\n::1 localhost\n"), "{out}");
+        assert!(
+            out.starts_with("127.0.0.1 localhost\n::1 localhost\n"),
+            "{out}"
+        );
         assert!(out.contains(BEGIN), "{out}");
         assert!(out.contains("127.0.0.1\tblog.test"), "{out}");
         assert!(out.trim_end().ends_with(END), "{out}");
@@ -370,7 +380,10 @@ mod tests {
     #[test]
     fn an_entry_that_is_no_longer_wanted_disappears() {
         let existing = "127.0.0.1 localhost\n";
-        let with_site = merge(existing, &entries_for(&[site("blog.test"), site("shop.test")]));
+        let with_site = merge(
+            existing,
+            &entries_for(&[site("blog.test"), site("shop.test")]),
+        );
         let without = merge(&with_site, &entries_for(&[site("shop.test")]));
         assert!(!without.contains("blog.test"), "{without}");
         assert!(without.contains("shop.test"), "{without}");
@@ -385,21 +398,30 @@ mod tests {
         let existing = "# a comment\n127.0.0.1 localhost\n10.0.0.5 build.internal\n";
         let out = merge(existing, &entries_for(&[site("blog.test")]));
         let cleared = merge(&out, &[]);
-        assert_eq!(cleared, existing, "removing the block restores the original");
+        assert_eq!(
+            cleared, existing,
+            "removing the block restores the original"
+        );
     }
 
     #[test]
     fn crlf_endings_are_preserved() {
         let existing = "127.0.0.1 localhost\r\n::1 localhost\r\n";
         let out = merge(existing, &entries_for(&[site("blog.test")]));
-        assert!(out.contains("\r\n"), "the file's own line endings must survive");
+        assert!(
+            out.contains("\r\n"),
+            "the file's own line endings must survive"
+        );
         assert!(!out.contains("\n\n"), "no mixed endings: {out:?}");
         assert!(parse_block(&out).iter().any(|e| e.host == "blog.test"));
     }
 
     #[test]
     fn the_block_is_parsed_back_out() {
-        let text = merge("127.0.0.1 localhost\n", &entries_for(&[site("a.test"), site("b.test")]));
+        let text = merge(
+            "127.0.0.1 localhost\n",
+            &entries_for(&[site("a.test"), site("b.test")]),
+        );
         let entries = parse_block(&text);
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].host, "a.test");

@@ -19,7 +19,10 @@ use crate::util;
 /// Migrations are strictly additive: an older `devd` can still open a database
 /// written by a newer one because unknown columns and tables are ignored. That
 /// property is what makes binary rollback safe.
-const MIGRATIONS: &[(i32, &str)] = &[(1, include_str!("../sql/001_init.sql"))];
+const MIGRATIONS: &[(i32, &str)] = &[
+    (1, include_str!("../sql/001_init.sql")),
+    (2, include_str!("../sql/002_work.sql")),
+];
 
 /// One audit row. Every capability attempt, successful or not, writes one.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -283,7 +286,7 @@ impl Store {
         Ok(store)
     }
 
-    fn with<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
+    pub(crate) fn with<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
         let guard = self
             .conn
             .lock()
@@ -294,8 +297,7 @@ impl Store {
     /// Apply any outstanding migrations.
     pub fn migrate(&self) -> Result<()> {
         self.with(|conn| {
-            let current: i32 =
-                conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+            let current: i32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
             for (version, sql) in MIGRATIONS {
                 if *version > current {
                     let tx = conn.unchecked_transaction()?;
@@ -649,7 +651,12 @@ impl Store {
     }
 
     /// Record a service run starting.
-    pub fn start_service_run(&self, service_id: &str, pid: Option<u32>, restart_count: i64) -> Result<String> {
+    pub fn start_service_run(
+        &self,
+        service_id: &str,
+        pid: Option<u32>,
+        restart_count: i64,
+    ) -> Result<String> {
         let id = util::new_id();
         self.with(|conn| {
             conn.execute(
@@ -1055,7 +1062,14 @@ impl Store {
     /// Count rows in a table, for diagnostics.
     pub fn count(&self, table: &str) -> Result<i64> {
         let allowed = [
-            "audit_log", "sites", "runtimes", "services", "tasks", "snapshots", "receipts", "repos",
+            "audit_log",
+            "sites",
+            "runtimes",
+            "services",
+            "tasks",
+            "snapshots",
+            "receipts",
+            "repos",
             "certs",
         ];
         if !allowed.contains(&table) {
@@ -1064,7 +1078,9 @@ impl Store {
             )));
         }
         self.with(|conn| {
-            let n: i64 = conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get(0))?;
+            let n: i64 = conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })?;
             Ok(n)
         })
     }
@@ -1174,8 +1190,18 @@ mod tests {
     #[test]
     fn audit_secrets_are_redacted_by_the_caller_not_the_store() {
         let s = store();
-        s.record_audit("human:cli", "cli", "demo", "read", "read", false, true, "{}", "ok")
-            .unwrap();
+        s.record_audit(
+            "human:cli",
+            "cli",
+            "demo",
+            "read",
+            "read",
+            false,
+            true,
+            "{}",
+            "ok",
+        )
+        .unwrap();
         let rows = s.list_audit(10).unwrap();
         assert_eq!(rows.len(), 1);
         assert!(rows[0].ok);

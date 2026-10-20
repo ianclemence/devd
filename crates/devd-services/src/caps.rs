@@ -115,7 +115,12 @@ fn register_service(reg: &mut Registry) -> Result<()> {
         true,
         false,
         true,
-        |_, _| Ok(Plan::new("service.available", "read the upstream service catalogue")),
+        |_, _| {
+            Ok(Plan::new(
+                "service.available",
+                "read the upstream service catalogue",
+            ))
+        },
         |_, args| {
             let (list, notes) = services::available(&args.name)?;
             let mut outcome = Outcome::with_data(
@@ -334,10 +339,7 @@ fn register_service(reg: &mut Registry) -> Result<()> {
         },
         |ctx, args| {
             let result = services::remove(ctx, &args.name)?;
-            Ok(Outcome::with_data(
-                format!("removed {}", args.name),
-                result,
-            ))
+            Ok(Outcome::with_data(format!("removed {}", args.name), result))
         },
     )?;
     Ok(())
@@ -471,7 +473,10 @@ fn register_web(reg: &mut Registry) -> Result<()> {
         |_, _| Ok(Plan::new("web.test", "run `nginx -t`")),
         |ctx, _| {
             let output = services::nginx::test(ctx)?;
-            Ok(Outcome::with_data("the configuration is valid", json!({ "nginx": output })))
+            Ok(Outcome::with_data(
+                "the configuration is valid",
+                json!({ "nginx": output }),
+            ))
         },
     )?;
 
@@ -488,10 +493,13 @@ fn register_web(reg: &mut Registry) -> Result<()> {
         true,
         false,
         |_, _| {
-            Ok(Plan::new("web.reload", "reload nginx with the generated configuration")
-                .step("run `nginx -t`")
-                .step("signal nginx to reload")
-                .effect("reloads a running process"))
+            Ok(Plan::new(
+                "web.reload",
+                "reload nginx with the generated configuration",
+            )
+            .step("run `nginx -t`")
+            .step("signal nginx to reload")
+            .effect("reloads a running process"))
         },
         |ctx, _| {
             let output = services::nginx::reload(ctx)?;
@@ -567,7 +575,11 @@ fn stack_plan(ctx: &Ctx, up: bool) -> Result<Plan> {
     };
     Ok(Plan::new(
         id,
-        format!("{verb} {} service(s): {}", enabled.len(), enabled.join(", ")),
+        format!(
+            "{verb} {} service(s): {}",
+            enabled.len(),
+            enabled.join(", ")
+        ),
     )
     .step(format!("{verb} {}", enabled.join(", ")))
     .effect("changes which processes are running")
@@ -607,7 +619,10 @@ fn register_tls(reg: &mut Registry) -> Result<()> {
                 if created {
                     format!("created the certificate authority at {}", path.display())
                 } else {
-                    format!("the certificate authority at {} already exists", path.display())
+                    format!(
+                        "the certificate authority at {} already exists",
+                        path.display()
+                    )
                 },
                 json!({
                     "created": created,
@@ -631,7 +646,12 @@ fn register_tls(reg: &mut Registry) -> Result<()> {
         true,
         false,
         true,
-        |_, _| Ok(Plan::new("tls.ca.status", "check the trust stores for the devd authority")),
+        |_, _| {
+            Ok(Plan::new(
+                "tls.ca.status",
+                "check the trust stores for the devd authority",
+            ))
+        },
         |ctx, _| {
             let status = services::tls::trust_status(ctx)?;
             let message = match (status.user, status.machine) {
@@ -668,7 +688,12 @@ fn register_tls(reg: &mut Registry) -> Result<()> {
         true,
         false,
         true,
-        |_, _| Ok(Plan::new("tls.ca.show", "read the certificate authority certificate")),
+        |_, _| {
+            Ok(Plan::new(
+                "tls.ca.show",
+                "read the certificate authority certificate",
+            ))
+        },
         |ctx, _| {
             let pem = services::tls::ca_pem_text(ctx)?;
             Ok(Outcome::with_data(
@@ -756,13 +781,15 @@ fn register_tls(reg: &mut Registry) -> Result<()> {
                 "tls.issue",
                 format!("issue a certificate for {}", args.host),
             )
-            .step(format!("sign a leaf for {} from the local authority", args.host))
             .step(format!(
-                "write <devd>/certs/{}.crt and .key",
+                "sign a leaf for {} from the local authority",
                 args.host
             ))
+            .step(format!("write <devd>/certs/{}.crt and .key", args.host))
             .effect("adds files under <devd>/certs")
-            .data(json!({ "host": args.host, "certs_dir": ctx.paths.certs().display().to_string() })))
+            .data(
+                json!({ "host": args.host, "certs_dir": ctx.paths.certs().display().to_string() }),
+            ))
         },
         |ctx, args| {
             let issued = services::tls::issue(ctx, &args.host)?;

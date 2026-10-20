@@ -80,7 +80,9 @@ fn listeners_windows() -> Result<Vec<Listener>> {
         if !cols[3].eq_ignore_ascii_case("LISTENING") {
             continue;
         }
-        let Some(port) = port_of(cols[1]) else { continue };
+        let Some(port) = port_of(cols[1]) else {
+            continue;
+        };
         let pid = cols[4].parse::<u32>().ok();
         seen.push(Listener {
             port,
@@ -138,11 +140,18 @@ fn listeners_linux() -> Result<Vec<Listener>> {
         if cols.len() < 4 {
             continue;
         }
-        let Some(port) = port_of(cols[3]) else { continue };
+        let Some(port) = port_of(cols[3]) else {
+            continue;
+        };
         let pid = extract_pid(line);
         seen.push(Listener {
             port,
-            protocol: if cols[3].contains("::") { "tcp6" } else { "tcp" }.to_string(),
+            protocol: if cols[3].contains("::") {
+                "tcp6"
+            } else {
+                "tcp"
+            }
+            .to_string(),
             address: cols[3].to_string(),
             pid,
             program: pid.and_then(program_name),
@@ -159,7 +168,9 @@ fn port_of(addr: &str) -> Option<u16> {
 fn extract_pid(line: &str) -> Option<u32> {
     let idx = line.find("pid=")?;
     let rest = &line[idx + 4..];
-    let end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+    let end = rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len());
     rest[..end].parse().ok()
 }
 
@@ -174,13 +185,26 @@ pub fn program_name(pid: u32) -> Option<String> {
             "CSV".to_string(),
             "/NH".to_string(),
         ];
-        let out = util::run(&tasklist, &args, None, &[], Some(std::time::Duration::from_secs(10))).ok()?;
+        let out = util::run(
+            &tasklist,
+            &args,
+            None,
+            &[],
+            Some(std::time::Duration::from_secs(10)),
+        )
+        .ok()?;
         let first = out.stdout.lines().next()?;
         let name = first.split(',').next()?.trim_matches('"').to_string();
-        if name.is_empty() { None } else { Some(name) }
+        if name.is_empty() {
+            None
+        } else {
+            Some(name)
+        }
     } else {
         let path = format!("/proc/{pid}/comm");
-        std::fs::read_to_string(path).ok().map(|s| s.trim().to_string())
+        std::fs::read_to_string(path)
+            .ok()
+            .map(|s| s.trim().to_string())
     }
 }
 

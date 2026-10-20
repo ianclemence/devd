@@ -368,6 +368,62 @@ can be recovered. Nothing else is snapshotted yet: there is no capability that
 restores a snapshot, and changing a site, a certificate or a service
 configuration is not reversible through `devd`.
 
+## Sessions, PTYs and terminals
+
+A session is a real process running as the invoking user. devd does not sandbox
+it, does not proxy its model traffic, and does not mediate the harness's own
+permission prompts. The identity, credentials and approval behaviour of Claude
+Code, OpenCode or a shell are the tool's own; suppressing those prompts would be
+a security regression, not a feature.
+
+The terminal transport sits behind the same bearer token, host allow-list and
+origin check as every endpoint. Output polling is deliberately not audited per
+frame - an 80 ms poll would fill the audit table with noise - while mutations that
+an agent can perform are capabilities and are audited. Only the process that owns
+a PTY may write, resize or stop it; another devd process can read the transcript
+but is told it cannot attach. An agent may stop a session it delegated, but not a
+person's interactive session. `session.input` is human-only because an agent
+typing into a person's terminal is indistinguishable from injected instructions.
+
+The transcript is plaintext on disk under `DEVD_HOME/sessions`. It can contain
+anything the agent printed, including secrets. It is bounded (8 MiB per session)
+and retained after the process ends. A person who would not want that text on
+disk should not run a harness that prints it.
+
+## Executable project configuration
+
+`devd.yml` is executable configuration. A directory containing one is not
+authorised to run anything. `project.plan` validates and displays the commands;
+`project.approve` is human-only and records the **semantic hash**; `project.start`
+and `project.restart` refuse without a matching hash. Editing a command, an
+environment value, a health check, a restart policy or a dependency invalidates
+the approval, and the supervisor refuses to restart a process under unapproved
+commands.
+
+Commands are argv arrays and never pass through a shell string. Working
+directories must resolve inside the project. Health checks may only address
+loopback. The process environment is explicit: the daemon's own environment -
+which may contain provider keys - is not inherited. Secret-looking declared values
+are redacted from log reads, best-effort.
+
+The remaining boundary is real: a human who approves a manifest is trusting the
+programs it names. Approval is a decision, not a sandbox.
+
+## The desktop shell
+
+The Tauri window is not a privileged surface. It starts the same loopback server
+and loads the same HTML. No Tauri commands are registered, no shell/filesystem
+plugin is installed, and the capability file lists only the `main` window with
+`core:default`. The loopback origin is remote from Tauri's perspective and is not
+listed under `remote`, so a page loaded there has no IPC surface even if a command
+is added later.
+
+Top-level navigation outside `http://127.0.0.1:<port>` is refused and handed to
+the operating system browser. The Preview iframe remains sandboxed in the page, so
+a previewed website cannot navigate the shell and cannot reach IPC. The bearer
+token is still injected into the HTML over loopback and never written to disk or
+placed on a command line.
+
 ## What is not protected
 
 The following are outside the model, stated so that no protection is assumed

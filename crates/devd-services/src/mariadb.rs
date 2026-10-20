@@ -292,7 +292,13 @@ fn query(ctx: &Ctx, port: u16, sql: &str) -> Result<Value> {
         None => Vec::new(),
     };
 
-    let out = util::run(&exe, &args, Some(&bin_dir(ctx)), &envs, Some(CLIENT_TIMEOUT))?;
+    let out = util::run(
+        &exe,
+        &args,
+        Some(&bin_dir(ctx)),
+        &envs,
+        Some(CLIENT_TIMEOUT),
+    )?;
     Ok(json!({
         "stdout": out.stdout.trim(),
         "stderr": out.stderr.trim(),
@@ -429,7 +435,10 @@ mod tests {
         assert!(text.contains("datadir=\""), "{text}");
         assert!(text.contains("basedir=\""), "{text}");
         assert!(text.contains("utf8mb4"), "{text}");
-        assert!(!text.contains('\\'), "no backslashes may reach the server: {text}");
+        assert!(
+            !text.contains('\\'),
+            "no backslashes may reach the server: {text}"
+        );
         // The data directory must not be inside the install directory, or
         // removing the server would take the databases with it.
         assert!(!data_dir(&c).starts_with(directory(&c)));
@@ -467,8 +476,14 @@ mod tests {
         assert_eq!(err.code(), "invalid_input", "{err}");
         // It fails before the client is even looked for, which is what makes the
         // validation load-bearing rather than decorative.
-        assert!(!err.to_string().contains("client is not installed"), "{err}");
-        assert_eq!(drop_database(&c, 3306, "MySQL").unwrap_err().code(), "invalid_input");
+        assert!(
+            !err.to_string().contains("client is not installed"),
+            "{err}"
+        );
+        assert_eq!(
+            drop_database(&c, 3306, "MySQL").unwrap_err().code(),
+            "invalid_input"
+        );
         let _ = std::fs::remove_dir_all(c.paths.root());
     }
 

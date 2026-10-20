@@ -137,12 +137,18 @@ impl Fixture {
             actor: devd_core::capability::Actor::human(devd_core::capability::Surface::Cli),
             dry_run: false,
         };
-        AppState::new(self.registry(), ctx, port, Vec::new())
+        AppState::new(self.registry(), ctx, port, Vec::new()).unwrap()
     }
 }
 
 /// Build a request with a well-formed loopback `Host` header.
-fn request(method: &str, path: &str, port: u16, token: Option<&str>, body: Option<Value>) -> Request<Body> {
+fn request(
+    method: &str,
+    path: &str,
+    port: u16,
+    token: Option<&str>,
+    body: Option<Value>,
+) -> Request<Body> {
     let mut builder = Request::builder()
         .method(method)
         .uri(path)
@@ -221,7 +227,9 @@ async fn the_surface_cannot_choose_to_be_an_agent() {
         "POST",
         "/api/invoke",
         Some(&token),
-        Some(json!({ "id": "test.inspect", "args": { "name": "x" }, "actor": { "kind": "agent" } })),
+        Some(
+            json!({ "id": "test.inspect", "args": { "name": "x" }, "actor": { "kind": "agent" } }),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -326,8 +334,14 @@ async fn the_shell_delivers_the_token_and_identifies_the_instance() {
         .await
         .unwrap();
     let html = String::from_utf8_lossy(&bytes);
-    assert!(html.contains(&token), "the page must carry the session token");
-    assert!(!html.contains("__DEVD_TOKEN__"), "the placeholder must be replaced");
+    assert!(
+        html.contains(&token),
+        "the page must carry the session token"
+    );
+    assert!(
+        !html.contains("__DEVD_TOKEN__"),
+        "the placeholder must be replaced"
+    );
 }
 
 // ------------------------------------------------------------- the read path
@@ -518,7 +532,10 @@ async fn an_approval_token_is_single_use() {
     .await;
     assert_eq!(second, StatusCode::FORBIDDEN);
     assert_eq!(body["error"]["code"], "permission_denied");
-    assert!(!fixture.effects.join("once.txt").exists(), "a token replayed");
+    assert!(
+        !fixture.effects.join("once.txt").exists(),
+        "a token replayed"
+    );
 }
 
 #[tokio::test]
@@ -656,7 +673,14 @@ async fn capabilities_can_be_listed_searched_and_described() {
     let (state, _rx) = fixture.state(8787);
     let token = state.token.clone();
 
-    let (status, body) = call(state.clone(), "GET", "/api/capabilities", Some(&token), None).await;
+    let (status, body) = call(
+        state.clone(),
+        "GET",
+        "/api/capabilities",
+        Some(&token),
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["total"].as_u64().unwrap(), 3);
     let first = &body["items"][0];
@@ -712,7 +736,9 @@ async fn a_malformed_body_gets_the_same_error_envelope() {
         .unwrap();
     let response = router(state).oneshot(req).await.unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+    let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+        .await
+        .unwrap();
     let body: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(body["error"]["code"], "invalid_body");
 }
@@ -732,7 +758,10 @@ async fn the_doctor_reports_the_shared_checks() {
         .map(|c| c["name"].as_str().unwrap().to_string())
         .collect();
     for expected in ["home", "layout", "settings", "state", "port.http"] {
-        assert!(names.contains(&expected.to_string()), "missing {expected} in {names:?}");
+        assert!(
+            names.contains(&expected.to_string()),
+            "missing {expected} in {names:?}"
+        );
     }
 }
 
@@ -787,7 +816,10 @@ async fn a_real_socket_serves_the_application_and_stops_when_asked() {
     let version = tokio::task::spawn_blocking(move || devd_server::probe_instance(probe_port))
         .await
         .unwrap();
-    assert!(version.is_some(), "the instance probe did not recognise the server");
+    assert!(
+        version.is_some(),
+        "the instance probe did not recognise the server"
+    );
 
     // A real request over a real socket.
     let body = raw(
@@ -822,5 +854,165 @@ async fn a_real_socket_serves_the_application_and_stops_when_asked() {
         .await
         .expect("the server did not stop when asked")
         .unwrap();
-    assert!(result.is_ok(), "the server exited with an error: {result:?}");
+    assert!(
+        result.is_ok(),
+        "the server exited with an error: {result:?}"
+    );
+}
+
+// ------------------------------------------------------------ work surfaces
+
+#[tokio::test]
+async fn a_session_started_over_http_is_listed_attached_and_stopped() {
+    let fixture = Fixture::new();
+    let (state, _rx) = fixture.state(8799);
+    let token = state.token.clone();
+    let cwd = fixture._temp.path().to_string_lossy().to_string();
+    let command = if cfg!(windows) {
+        json!([
+            "cmd.exe",
+            "/c",
+            "echo persisted-output & ping -n 3 127.0.0.1 > NUL"
+        ])
+    } else {
+        json!(["/bin/sh", "-c", "echo persisted-output; sleep 2"])
+    };
+
+    let (status, started) = call(
+        state.clone(),
+        "POST",
+        "/api/sessions",
+        Some(&token),
+        Some(json!({ "kind": "custom", "cwd": cwd, "command": command, "label": "http test" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{started}");
+    let id = started["id"].as_str().expect("session id").to_string();
+
+    // A reload is a fresh list request: the session is still there.
+    let (status, listed) = call(state.clone(), "GET", "/api/sessions", Some(&token), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(listed["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|s| s["id"] == id));
+
+    // The live state is attachable in this process.
+    let (status, one) = call(
+        state.clone(),
+        "GET",
+        &format!("/api/sessions/{id}"),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(one["attachable"], true);
+
+    // Output is genuinely from the child process.
+    let mut seen = String::new();
+    for _ in 0..40 {
+        let (status, out) = call(
+            state.clone(),
+            "POST",
+            &format!("/api/sessions/{id}/output"),
+            Some(&token),
+            Some(json!({ "cursor": 0 })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        use base64::Engine as _;
+        let raw = base64::engine::general_purpose::STANDARD
+            .decode(out["data"].as_str().unwrap_or(""))
+            .unwrap_or_default();
+        seen = String::from_utf8_lossy(&raw).to_string();
+        if seen.contains("persisted-output") {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(seen.contains("persisted-output"), "output was: {seen}");
+
+    let (status, stopped) = call(
+        state.clone(),
+        "POST",
+        &format!("/api/sessions/{id}/stop"),
+        Some(&token),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{stopped}");
+    assert_eq!(stopped["live_state"], "cancelled");
+    assert_eq!(stopped["attachable"], false);
+
+    // The record and the transcript outlive the process.
+    let (status, after) = call(
+        state.clone(),
+        "GET",
+        &format!("/api/sessions/{id}"),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(after["replayable"], true);
+}
+
+#[tokio::test]
+async fn a_project_manifest_is_reviewable_without_running_anything() {
+    let fixture = Fixture::new();
+    let (state, _rx) = fixture.state(8801);
+    let token = state.token.clone();
+    let project = fixture._temp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(
+        project.join("devd.yml"),
+        r#"version: 1
+project:
+  name: example-app
+processes:
+  web:
+    command: ["node", "-e", "console.log('web')"]
+"#,
+    )
+    .unwrap();
+
+    let encoded = urlencode(&project.to_string_lossy());
+    let (status, plan) = call(
+        state.clone(),
+        "GET",
+        &format!("/api/project?project={encoded}"),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{plan}");
+    assert_eq!(plan["approved"], false);
+    assert_eq!(plan["processes"][0]["name"], "web");
+    assert_eq!(plan["processes"][0]["command"][0], "node");
+
+    let (status, status_body) = call(
+        state.clone(),
+        "GET",
+        &format!("/api/project/status?project={encoded}"),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{status_body}");
+    assert_eq!(status_body["processes"][0]["status"], "stopped");
+}
+
+fn urlencode(value: &str) -> String {
+    let mut out = String::new();
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char)
+            }
+            other => out.push_str(&format!("%{other:02X}")),
+        }
+    }
+    out
 }

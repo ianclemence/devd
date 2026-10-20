@@ -190,11 +190,7 @@ pub fn create(ctx: &Ctx, request: &CreateRequest) -> Result<Created> {
         host: host.clone(),
         root: directory.display().to_string(),
         web_server: ctx.settings.web_server.as_str().to_string(),
-        php: ctx
-            .settings
-            .primary_php
-            .clone()
-            .filter(|v| !v.is_empty()),
+        php: ctx.settings.primary_php.clone().filter(|v| !v.is_empty()),
         tls_mode: tls.as_str().to_string(),
         db_name: None,
         created_at: util::now(),
@@ -233,7 +229,8 @@ pub fn create(ctx: &Ctx, request: &CreateRequest) -> Result<Created> {
     // and its subdomains are exempt: they resolve without a hosts entry, which is
     // why the first-run site uses one.
     let managed = hosts::current_entries()?;
-    if !resolves_without_hosts(&host) && !managed.iter().any(|e| e.host.eq_ignore_ascii_case(&host)) {
+    if !resolves_without_hosts(&host) && !managed.iter().any(|e| e.host.eq_ignore_ascii_case(&host))
+    {
         warnings.push(format!(
             "{host} does not resolve on this machine yet; `devd hosts sync` adds it to {}",
             hosts::path().display()
@@ -332,17 +329,16 @@ fn write_starter_page(directory: &Path, name: &str) -> Result<Option<String>> {
 /// because a hostname was renamed is not a mistake this should be able to make.
 pub fn remove(ctx: &Ctx, name: &str, delete_files: bool) -> Result<serde_json::Value> {
     let site = ctx.store.get_site(name)?.ok_or_else(|| {
-        DevdError::not_found(format!("no site named `{name}`; `devd site list` shows them"))
+        DevdError::not_found(format!(
+            "no site named `{name}`; `devd site list` shows them"
+        ))
     })?;
 
     let mut warnings = Vec::new();
 
     // The certificate belongs to the hostname and stops being meaningful with
     // it, so it goes. It is regenerated on the next create.
-    for path in [
-        certificate_path(ctx, &site.host),
-        key_path(ctx, &site.host),
-    ] {
+    for path in [certificate_path(ctx, &site.host), key_path(ctx, &site.host)] {
         if path.is_file() {
             std::fs::remove_file(&path)?;
         }
@@ -373,10 +369,7 @@ pub fn remove(ctx: &Ctx, name: &str, delete_files: bool) -> Result<serde_json::V
             removed_files = true;
         }
     } else {
-        warnings.push(format!(
-            "the project directory {} was kept",
-            site.root
-        ));
+        warnings.push(format!("the project directory {} was kept", site.root));
     }
 
     if site.db_name.is_some() {
@@ -496,7 +489,10 @@ pub fn doctor_check(paths: &Paths) -> Vec<Check> {
     let mut checks = vec![if missing.is_empty() {
         Check::ok(
             "sites",
-            format!("{} site(s), all of their directories are present", sites.len()),
+            format!(
+                "{} site(s), all of their directories are present",
+                sites.len()
+            ),
         )
     } else {
         Check::fail(
@@ -540,7 +536,8 @@ mod tests {
         let mut settings = devd_core::config::Settings::default();
         settings.http_port = 8080;
         settings.https_port = 8443;
-        Ctx {            store: Arc::new(Store::open_in_memory().unwrap()),
+        Ctx {
+            store: Arc::new(Store::open_in_memory().unwrap()),
             paths: Arc::new(paths),
             settings: Arc::new(settings),
             events: devd_core::events::EventBus::new(),
@@ -598,7 +595,10 @@ mod tests {
         let created = create(&c, &req).unwrap();
         assert_eq!(created.site.tls_mode, "off");
         assert_eq!(created.url, "http://plain.test:8080");
-        assert!(created.certificate.is_none(), "no certificate was requested");
+        assert!(
+            created.certificate.is_none(),
+            "no certificate was requested"
+        );
         let _ = std::fs::remove_dir_all(c.paths.root());
     }
 
@@ -777,7 +777,10 @@ mod tests {
 
         let checks = doctor_check(&paths);
         assert_eq!(checks[0].level, devd_core::Level::Fail);
-        assert!(checks[0].detail.contains("no project directory"), "{checks:?}");
+        assert!(
+            checks[0].detail.contains("no project directory"),
+            "{checks:?}"
+        );
         assert!(
             checks.iter().any(|c| c.name == "sites.hosts"),
             "the hosts gap is reported too: {checks:?}"

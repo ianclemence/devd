@@ -11,14 +11,15 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use devd_core::capability::{Actor, Approval, Ctx, InvokeRequest, InvokeResult, Plan, Surface, Tier};
+use devd_core::capability::{
+    Actor, Approval, Ctx, InvokeRequest, InvokeResult, Plan, Surface, Tier,
+};
 use devd_core::config::Settings;
 use devd_core::events::EventBus;
 use devd_core::paths::Paths;
 use devd_core::state::Store;
 use devd_core::{DevdError, Registry, Result};
-use devd_git::{caps as git_caps, GitService};
-use devd_runtime::caps as runtime_caps;
+use devd_git::GitService;
 
 /// Everything a subcommand needs, assembled once.
 pub struct App {
@@ -38,6 +39,8 @@ pub struct App {
     /// need to move it into a long-lived task while the CLI may still hold the
     /// application.
     pub registry: Arc<Registry>,
+    /// The process-owning workspace the registry's new capabilities refer to.
+    pub workspace: Arc<devd_workspace::Workspace>,
     /// Whether to emit JSON.
     pub json: bool,
     /// Whether to plan only.
@@ -66,29 +69,15 @@ impl App {
         plan_only: bool,
         assume_yes: bool,
     ) -> Result<Self> {
-        paths.ensure()?;
-
-        let settings = Settings::load(&paths.settings_file())?;
-        settings.validate()?;
-
-        let store = Store::open(&paths.state_db())?;
-        store.migrate()?;
-
-        let git = Arc::new(GitService::discover(settings.git_executable.as_deref())?);
-
-        let mut registry = Registry::new();
-        git_caps::register(&mut registry, git.clone())?;
-        runtime_caps::register(&mut registry)?;
-        devd_services::caps::register(&mut registry)?;
-        devd_sites::caps::register(&mut registry)?;
-
+        let boot = devd_bootstrap::Bootstrap::at(paths)?;
         Ok(Self {
-            paths,
-            store: Arc::new(store),
-            settings: Arc::new(settings),
-            events: EventBus::new(),
-            git,
-            registry: Arc::new(registry),
+            paths: boot.paths,
+            store: boot.store,
+            settings: boot.settings,
+            events: boot.events,
+            git: boot.git,
+            registry: boot.registry,
+            workspace: boot.workspace,
             json,
             plan_only,
             assume_yes,
@@ -219,7 +208,13 @@ impl App {
 
     /// Ask a human to approve. Interactive by construction: without a terminal
     /// the operation is refused rather than assumed.
-    fn prompt_approval(&self, id: &str, tier: Tier, summary: &str, _plan_shown: bool) -> Result<Approval> {
+    fn prompt_approval(
+        &self,
+        id: &str,
+        tier: Tier,
+        summary: &str,
+        _plan_shown: bool,
+    ) -> Result<Approval> {
         if self.json || !std::io::stdin().is_terminal() {
             return Err(DevdError::ApprovalRequired {
                 capability: id.to_string(),
@@ -319,9 +314,12 @@ pub fn print_value(value: &Value, indent: usize) {
                 println!("{pad}(none)");
                 return;
             }
-            let scalar = items
-                .iter()
-                .all(|i| matches!(i, Value::String(_) | Value::Number(_) | Value::Bool(_) | Value::Null));
+            let scalar = items.iter().all(|i| {
+                matches!(
+                    i,
+                    Value::String(_) | Value::Number(_) | Value::Bool(_) | Value::Null
+                )
+            });
             if scalar {
                 let rendered: Vec<String> = items
                     .iter()

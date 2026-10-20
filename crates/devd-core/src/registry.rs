@@ -82,7 +82,13 @@ impl Registry {
     ///
     /// Ranking: exact id, then id prefix, then substring in id, then substring
     /// in the summary. Ties are broken alphabetically for determinism.
-    pub fn search(&self, query: &str, group: Option<&str>, limit: usize, offset: usize) -> Vec<Arc<Capability>> {
+    pub fn search(
+        &self,
+        query: &str,
+        group: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> Vec<Arc<Capability>> {
         let q = query.trim().to_lowercase();
         let mut scored: Vec<(u8, Arc<Capability>)> = self
             .caps
@@ -427,9 +433,7 @@ mod tests {
             args: serde_json::json!({}),
             dry_run: false,
         };
-        let err = reg
-            .dispatch(&ctx, &req, Approval::Denied)
-            .unwrap_err();
+        let err = reg.dispatch(&ctx, &req, Approval::Denied).unwrap_err();
         assert!(matches!(err, DevdError::Denied(_)));
         // Even with a higher tier granted later, the denial is absolute.
         assert!(reg.dispatch(&ctx, &req, Approval::Denied).is_err());

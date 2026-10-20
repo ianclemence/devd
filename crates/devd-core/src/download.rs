@@ -63,7 +63,11 @@ impl Artifact {
     /// Attach the published digest.
     pub fn sha256(mut self, digest: impl Into<String>) -> Self {
         let digest = digest.into().to_lowercase();
-        self.sha256 = if digest.is_empty() { None } else { Some(digest) };
+        self.sha256 = if digest.is_empty() {
+            None
+        } else {
+            Some(digest)
+        };
         self
     }
 
@@ -332,7 +336,9 @@ mod tests {
 
     #[test]
     fn filename_comes_from_the_url() {
-        let a = Artifact::new("https://windows.php.net/downloads/releases/php-8.3.35-nts-Win32-vs16-x64.zip");
+        let a = Artifact::new(
+            "https://windows.php.net/downloads/releases/php-8.3.35-nts-Win32-vs16-x64.zip",
+        );
         assert_eq!(a.filename, "php-8.3.35-nts-Win32-vs16-x64.zip");
         assert_eq!(a.sha256, None);
     }

@@ -98,6 +98,10 @@ pub struct SpawnSpec {
     pub cwd: Option<PathBuf>,
     /// Extra environment variables.
     pub envs: Vec<(String, String)>,
+    /// When true, the process starts with an empty environment and sees only
+    /// `envs`. Used by project manifests so the daemon's own credentials are
+    /// not inherited.
+    pub clear_env: bool,
     /// File to append stdout and stderr to.
     pub log_path: PathBuf,
     /// How many times this service has already been restarted.
@@ -189,6 +193,9 @@ impl Supervisor {
             .stderr(Stdio::from(log_err));
         if let Some(dir) = &spec.cwd {
             cmd.current_dir(dir);
+        }
+        if spec.clear_env {
+            cmd.env_clear();
         }
         for (k, v) in &spec.envs {
             cmd.env(k, v);
@@ -368,7 +375,13 @@ pub fn kill_tree(pid: u32) {
                 "/T".to_string(),
                 "/F".to_string(),
             ];
-            let _ = util::run(&taskkill, &args, None, &[], Some(std::time::Duration::from_secs(15)));
+            let _ = util::run(
+                &taskkill,
+                &args,
+                None,
+                &[],
+                Some(std::time::Duration::from_secs(15)),
+            );
         }
     }
     #[cfg(unix)]
@@ -525,6 +538,7 @@ mod tests {
                     args,
                     cwd: None,
                     envs: vec![],
+                    clear_env: false,
                     log_path: dir.join("sleeper.log"),
                     restarts: 0,
                 },
@@ -558,6 +572,7 @@ mod tests {
             args: sleeper_program().1,
             cwd: None,
             envs: vec![],
+            clear_env: false,
             log_path: dir.join("sleeper.log"),
             restarts: 0,
         };

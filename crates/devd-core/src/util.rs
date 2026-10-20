@@ -191,7 +191,9 @@ pub fn validate_name(name: &str) -> Result<()> {
         ));
     }
     if name.starts_with('-') || name.ends_with('-') {
-        return Err(DevdError::invalid("name may not start or end with a hyphen"));
+        return Err(DevdError::invalid(
+            "name may not start or end with a hyphen",
+        ));
     }
     if !name
         .chars()
@@ -227,9 +229,7 @@ pub fn validate_hostname(host: &str) -> Result<()> {
         ));
     }
     if host.ends_with('.') {
-        return Err(DevdError::invalid(
-            "hostname may not end with a dot",
-        ));
+        return Err(DevdError::invalid("hostname may not end with a dot"));
     }
     for label in host.split('.') {
         if label.is_empty() {
@@ -340,6 +340,28 @@ pub fn new_token() -> String {
     hex::encode(bytes)
 }
 
+/// Strip Windows' verbatim prefix from a canonical path.
+///
+/// `std::fs::canonicalize` returns `\\?\C:\...` on Windows. That form is useful
+/// for long-path filesystem calls but hostile to child processes: `cmd.exe`
+/// treats it as a UNC path and silently starts in `C:\Windows`, and it is ugly
+/// to show a person. The prefix is removed for paths handed to processes and
+/// shown in the interface; the lexically equivalent ordinary path resolves to
+/// the same directory.
+pub fn strip_verbatim(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let text = path.to_string_lossy();
+        if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+            return PathBuf::from(format!(r"\\{rest}"));
+        }
+        if let Some(rest) = text.strip_prefix(r"\\?\") {
+            return PathBuf::from(rest);
+        }
+    }
+    path.to_path_buf()
+}
+
 /// Replace the user's home directory in a path with `~` for display.
 pub fn display_path(path: &Path) -> String {
     let s = path.to_string_lossy().to_string();
@@ -391,7 +413,10 @@ mod tests {
         assert!(validate_hostname("my-app.test").is_ok());
         assert!(validate_hostname("localhost").is_ok());
         assert!(validate_hostname("").is_err());
-        assert!(validate_hostname("Blog.test").is_err(), "uppercase is not a DNS name");
+        assert!(
+            validate_hostname("Blog.test").is_err(),
+            "uppercase is not a DNS name"
+        );
         assert!(validate_hostname("blog..test").is_err());
         assert!(validate_hostname("-blog.test").is_err());
         assert!(validate_hostname("blog-.test").is_err());

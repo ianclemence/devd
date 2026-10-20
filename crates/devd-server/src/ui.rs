@@ -49,12 +49,21 @@ const TOKEN_PLACEHOLDER: &str = "__DEVD_TOKEN__";
 ///
 /// `connect-src 'self'` is what keeps the token from being usable by a script
 /// that somehow got injected: it could not send it anywhere else.
-const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-src http: https:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+///
+/// `style-src` permits inline *styles* because xterm.js positions its terminal
+/// with style attributes and the application uses a few for spacing. Inline
+/// style is not script: it cannot execute, and script remains limited to
+/// same-origin files.
+const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; frame-src http: https:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 /// The application shell with the session token injected.
 pub async fn index(State(state): State<Arc<AppState>>) -> Response {
     let html = INDEX.replace(TOKEN_PLACEHOLDER, &state.token);
-    build("text/html; charset=utf-8", Body::from(html), Some(state.port))
+    build(
+        "text/html; charset=utf-8",
+        Body::from(html),
+        Some(state.port),
+    )
 }
 
 /// The view logic.
@@ -116,7 +125,8 @@ fn build(content_type: &str, body: Body, port: Option<u16>) -> Response {
         HeaderValue::from_static("DENY"),
     );
     if let Some(port) = port {
-        if let Ok(value) = HeaderValue::from_str(&format!("{} ({port})", env!("CARGO_PKG_VERSION"))) {
+        if let Ok(value) = HeaderValue::from_str(&format!("{} ({port})", env!("CARGO_PKG_VERSION")))
+        {
             headers.insert(header::HeaderName::from_static(INSTANCE_HEADER), value);
         }
     }
@@ -137,9 +147,18 @@ mod tests {
         // The CSP forbids both, so a regression that added one would produce a
         // blank window rather than a test failure. Assert it here instead.
         let lower = INDEX.to_lowercase();
-        assert!(!lower.contains("<script>"), "inline script would be blocked by CSP");
-        assert!(!lower.contains(" style="), "inline style attribute would be blocked by CSP");
-        assert!(!lower.contains("onclick="), "inline handler would be blocked by CSP");
+        assert!(
+            !lower.contains("<script>"),
+            "inline script would be blocked by CSP"
+        );
+        assert!(
+            !lower.contains(" style="),
+            "inline style attribute would be blocked by CSP"
+        );
+        assert!(
+            !lower.contains("onclick="),
+            "inline handler would be blocked by CSP"
+        );
         assert!(lower.contains("src=\"/app.js\""));
         assert!(lower.contains("href=\"/style.css\""));
     }

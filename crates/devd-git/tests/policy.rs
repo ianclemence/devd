@@ -60,8 +60,13 @@ impl Harness {
         let repo = git.init(repo_dir.path(), "main").expect("init");
         git.config_set(Some(&repo), "user.name", "devd test", ConfigScope::Local)
             .unwrap();
-        git.config_set(Some(&repo), "user.email", "devd@example.test", ConfigScope::Local)
-            .unwrap();
+        git.config_set(
+            Some(&repo),
+            "user.email",
+            "devd@example.test",
+            ConfigScope::Local,
+        )
+        .unwrap();
         git.config_set(Some(&repo), "core.autocrlf", "false", ConfigScope::Local)
             .unwrap();
 
@@ -95,7 +100,12 @@ impl Harness {
         base
     }
 
-    fn dispatch(&self, id: &str, args: Value, approval: Approval) -> devd_core::Result<devd_core::capability::InvokeResult> {
+    fn dispatch(
+        &self,
+        id: &str,
+        args: Value,
+        approval: Approval,
+    ) -> devd_core::Result<devd_core::capability::InvokeResult> {
         self.registry.dispatch(
             &self.ctx,
             &InvokeRequest {
@@ -107,7 +117,11 @@ impl Harness {
         )
     }
 
-    fn plan(&self, id: &str, args: Value) -> devd_core::Result<devd_core::capability::InvokeResult> {
+    fn plan(
+        &self,
+        id: &str,
+        args: Value,
+    ) -> devd_core::Result<devd_core::capability::InvokeResult> {
         self.registry.dispatch(
             &self.ctx,
             &InvokeRequest {
@@ -143,16 +157,33 @@ impl Harness {
 fn every_git_capability_is_well_formed_and_discoverable() {
     let h = Harness::new(Actor::human(devd_core::capability::Surface::Cli));
     let caps = h.registry.list();
-    assert!(caps.len() > 50, "expected a broad Git surface, got {}", caps.len());
+    assert!(
+        caps.len() > 50,
+        "expected a broad Git surface, got {}",
+        caps.len()
+    );
 
     for cap in &caps {
-        assert!(cap.id.starts_with("git."), "{} is not in the git namespace", cap.id);
-        assert!(cap.group.starts_with("git."), "{} has group {}", cap.id, cap.group);
+        assert!(
+            cap.id.starts_with("git."),
+            "{} is not in the git namespace",
+            cap.id
+        );
+        assert!(
+            cap.group.starts_with("git."),
+            "{} has group {}",
+            cap.id,
+            cap.group
+        );
         assert!(!cap.summary.is_empty(), "{} has no summary", cap.id);
         assert!(!cap.description.is_empty(), "{} has no description", cap.id);
         // Every capability must carry a machine-readable argument schema; this
         // is what the GUI, the HTTP API and the MCP tool list are built from.
-        assert!(cap.args_schema.is_object(), "{} has no argument schema", cap.id);
+        assert!(
+            cap.args_schema.is_object(),
+            "{} has no argument schema",
+            cap.id
+        );
         assert!(h.registry.describe_json(&cap.id).is_ok());
     }
 
@@ -201,9 +232,18 @@ fn read_tier_git_operations_need_no_approval() {
     h.write("a.txt", "a\n");
     h.commit_all("base");
 
-    for id in ["git.status", "git.log", "git.branch.list", "git.remote.list", "git.worktree.list"] {
+    for id in [
+        "git.status",
+        "git.log",
+        "git.branch.list",
+        "git.remote.list",
+        "git.worktree.list",
+    ] {
         let cap = h.registry.get(id).expect(id);
-        assert!(!cap.tier.requires_approval(), "{id} should not need approval");
+        assert!(
+            !cap.tier.requires_approval(),
+            "{id} should not need approval"
+        );
     }
     // And they actually run with no approval.
     h.dispatch("git.status", h.args(json!({})), Approval::None)
@@ -343,7 +383,10 @@ fn a_force_push_cannot_be_reached_without_its_own_capability() {
     let forced = h.registry.get("git.push.force").expect("git.push.force");
     assert_eq!(forced.tier, Tier::Remote);
     assert!(forced.tier.requires_approval());
-    assert!(ordinary.tier.requires_approval(), "an ordinary push is still remote");
+    assert!(
+        ordinary.tier.requires_approval(),
+        "an ordinary push is still remote"
+    );
 }
 
 #[test]
@@ -355,7 +398,10 @@ fn the_reset_plan_names_what_a_hard_reset_destroys() {
     h.commit_all("second");
 
     let planned = h
-        .plan("git.reset", h.args(json!({ "mode": "hard", "rev": "HEAD~1" })))
+        .plan(
+            "git.reset",
+            h.args(json!({ "mode": "hard", "rev": "HEAD~1" })),
+        )
         .expect("a plan");
     let plan = planned.plan.as_ref().expect("a plan body");
     assert!(plan.destructive, "a hard reset is destructive");
@@ -471,7 +517,11 @@ fn secrets_never_reach_the_audit_trail() {
         .iter()
         .find(|r| r.capability == "git.status")
         .expect("row");
-    assert!(!row.args.contains("ghp_thisMustNotBeStored"), "{}", row.args);
+    assert!(
+        !row.args.contains("ghp_thisMustNotBeStored"),
+        "{}",
+        row.args
+    );
     assert!(!row.args.contains("hunter2"), "{}", row.args);
     assert!(!row.args.contains("abcdef"), "{}", row.args);
     assert!(row.args.contains("[redacted]"), "{}", row.args);
@@ -509,7 +559,11 @@ fn a_merge_conflict_is_reported_as_a_state_and_can_be_resolved_through_the_regis
         },
         Approval::None,
     );
-    let data = status.expect("conflicts are readable").outcome.unwrap().data;
+    let data = status
+        .expect("conflicts are readable")
+        .outcome
+        .unwrap()
+        .data;
     let conflicts = data
         .get("conflicted")
         .and_then(Value::as_array)
@@ -544,8 +598,12 @@ fn a_merge_conflict_is_reported_as_a_state_and_can_be_resolved_through_the_regis
         Approval::Granted,
     )
     .expect("an approved resolution runs");
-    h.dispatch("git.op.continue", h.args(json!({ "op": "merge" })), Approval::None)
-        .expect("continue");
+    h.dispatch(
+        "git.op.continue",
+        h.args(json!({ "op": "merge" })),
+        Approval::None,
+    )
+    .expect("continue");
     assert!(h.git.status(&h.repo).unwrap().clean);
     assert_eq!(h.read("z.txt"), "main\n");
 }

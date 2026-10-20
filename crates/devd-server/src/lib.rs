@@ -43,12 +43,13 @@
 
 pub mod api;
 pub mod approval;
-pub mod terminal;
 pub mod ui;
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Instant;
+
+use devd_workspace::Workspace;
 
 use axum::body::Body;
 use axum::extract::{Request, State};
@@ -89,6 +90,18 @@ pub struct Options {
     pub port: u16,
     /// Additional checks folded into `GET /api/doctor`.
     pub extra_checks: Vec<ExtraChecks>,
+    /// A runtime whose PTYs and project processes this server should adopt.
+    ///
+    /// The caller that owns the registry also owns the runtime the registry's
+    /// capabilities were built against. Passing it here is what keeps a
+    /// capability call and a UI button talking to the same terminals.
+    pub workspace: Option<Arc<Workspace>>,
+    /// An external shutdown signal.
+    ///
+    /// The desktop shell owns the process that serves the window, so it needs a
+    /// way to ask for a graceful exit (stopping PTYs and project processes)
+    /// without sending a request to itself.
+    pub shutdown: Option<watch::Receiver<bool>>,
 }
 
 impl Default for Options {
@@ -96,6 +109,8 @@ impl Default for Options {
         Self {
             port: DEFAULT_PORT,
             extra_checks: Vec::new(),
+            workspace: None,
+            shutdown: None,
         }
     }
 }
@@ -116,8 +131,8 @@ pub struct AppState {
     pub extra_checks: Vec<ExtraChecks>,
     /// When this process started serving, for the uptime readout.
     pub started: Instant,
-    /// Coding-agent terminals, each with a real PTY.
-    pub terminals: terminal::Terminals,
+    /// The process-owning runtime: agent PTYs and project processes.
+    pub workspace: Arc<Workspace>,
     /// Signals graceful shutdown when the user quits the application.
     shutdown: watch::Sender<bool>,
 }
@@ -133,9 +148,27 @@ impl AppState {
     /// window, and that is the only thing this constructor will build.
     pub fn new(
         registry: Arc<Registry>,
+        ctx: Ctx,
+        port: u16,
+        extra_checks: Vec<ExtraChecks>,
+    ) -> Result<(Arc<Self>, watch::Receiver<bool>)> {
+        let workspace = Workspace::new(ctx.store.clone(), ctx.paths.clone())?;
+        Ok(Self::with_workspace(
+            registry,
+            ctx,
+            port,
+            extra_checks,
+            workspace,
+        ))
+    }
+
+    /// Assemble state around an existing runtime.
+    pub fn with_workspace(
+        registry: Arc<Registry>,
         mut ctx: Ctx,
         port: u16,
         extra_checks: Vec<ExtraChecks>,
+        workspace: Arc<Workspace>,
     ) -> (Arc<Self>, watch::Receiver<bool>) {
         ctx.actor = Actor::human(Surface::Http);
         ctx.dry_run = false;
@@ -149,7 +182,7 @@ impl AppState {
             approvals: ApprovalStore::new(),
             extra_checks,
             started: Instant::now(),
-            terminals: terminal::Terminals::default(),
+            workspace,
             shutdown,
         });
         (state, receiver)
@@ -189,6 +222,33 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/terminal/input", post(api::terminal_input))
         .route("/api/terminal/resize", post(api::terminal_resize))
         .route("/api/terminal/stop", post(api::terminal_stop))
+        .route(
+            "/api/sessions",
+            get(api::sessions_list).post(api::sessions_start),
+        )
+        .route(
+            "/api/sessions/:id",
+            get(api::session_get).delete(api::session_dismiss),
+        )
+        .route("/api/sessions/:id/attach", post(api::session_attach))
+        .route("/api/sessions/:id/output", post(api::session_output))
+        .route("/api/sessions/:id/input", post(api::session_input))
+        .route("/api/sessions/:id/resize", post(api::session_resize))
+        .route("/api/sessions/:id/stop", post(api::session_stop))
+        .route("/api/sessions/:id/rename", post(api::session_rename))
+        .route("/api/tasks", get(api::tasks_list))
+        .route("/api/tasks/:id", get(api::task_get))
+        .route("/api/tasks/:id/wait", post(api::task_wait))
+        .route("/api/tasks/:id/cancel", post(api::task_cancel))
+        .route("/api/tasks/:id/result", get(api::task_result))
+        .route("/api/project", get(api::project_plan))
+        .route("/api/project/status", get(api::project_status))
+        .route("/api/project/approve", post(api::project_approve))
+        .route("/api/project/start", post(api::project_start))
+        .route("/api/project/stop", post(api::project_stop))
+        .route("/api/project/restart", post(api::project_restart))
+        .route("/api/project/logs", get(api::project_logs))
+        .route("/api/open-url", post(api::open_url))
         .with_state(state.clone());
 
     let pages = Router::new()
@@ -232,7 +292,13 @@ where
 {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, options.port)).await?;
     let addr = listener.local_addr()?;
-    let (state, mut shutdown) = AppState::new(registry, ctx, addr.port(), options.extra_checks);
+    let workspace = match options.workspace {
+        Some(workspace) => workspace,
+        None => Workspace::new(ctx.store.clone(), ctx.paths.clone())?,
+    };
+    let external_shutdown = options.shutdown.clone();
+    let (state, mut shutdown) =
+        AppState::with_workspace(registry, ctx, addr.port(), options.extra_checks, workspace);
 
     let bound = Bound {
         addr,
@@ -242,11 +308,18 @@ where
     on_ready(&bound);
 
     let app = router(state);
+    let mut external_shutdown = external_shutdown;
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => {}
                 _ = shutdown.changed() => {}
+                _ = async {
+                    match external_shutdown.as_mut() {
+                        Some(rx) => { let _ = rx.changed().await; }
+                        None => std::future::pending::<()>().await,
+                    }
+                } => {}
             }
         })
         .await
@@ -274,9 +347,7 @@ pub fn probe_instance(port: u16) -> Option<String> {
     let _ = stream.set_write_timeout(Some(Duration::from_millis(600)));
 
     let mut stream = stream;
-    let request = format!(
-        "GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
-    );
+    let request = format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
     stream.write_all(request.as_bytes()).ok()?;
 
     let mut raw = Vec::new();
@@ -400,14 +471,18 @@ pub fn refuse(status: StatusCode, code: &str, message: &str) -> Response {
 pub fn error_response(err: &DevdError) -> Response {
     let status = match err {
         DevdError::NotFound(_) => StatusCode::NOT_FOUND,
-        DevdError::Invalid(_) | DevdError::Unsupported(_) | DevdError::Json(_) | DevdError::TomlDecode(_) | DevdError::TomlEncode(_) => {
-            StatusCode::BAD_REQUEST
-        }
+        DevdError::Invalid(_)
+        | DevdError::Unsupported(_)
+        | DevdError::Json(_)
+        | DevdError::TomlDecode(_)
+        | DevdError::TomlEncode(_) => StatusCode::BAD_REQUEST,
         DevdError::Conflict(_) => StatusCode::CONFLICT,
         DevdError::Denied(_) | DevdError::ApprovalRequired { .. } => StatusCode::FORBIDDEN,
         DevdError::Timeout(_) => StatusCode::GATEWAY_TIMEOUT,
         DevdError::Command { .. } => StatusCode::BAD_GATEWAY,
-        DevdError::Io(_) | DevdError::Db(_) | DevdError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        DevdError::Io(_) | DevdError::Db(_) | DevdError::Internal(_) => {
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
     };
     refuse(status, err.code(), &err.to_string())
 }

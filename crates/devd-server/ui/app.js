@@ -161,16 +161,40 @@
     certFormOpen: false,
     harnesses: [],
     agent: {
-      id: null,
-      kind: null,
-      term: null,
-      fit: null,
-      timer: null,
-      cursor: 0,
-      exited: false,
-      code: null,
       starting: false,
-      cwd: null
+      cwd: null,
+      newOpen: false
+    },
+    sessions: [],
+    activeSession: null,
+    terms: {},
+    agentTimer: null,
+    tasks: [],
+    delegateOpen: false,
+    processes: {
+      project: null,
+      plan: null,
+      status: null,
+      error: null,
+      busy: false,
+      selected: null,
+      log: null,
+      logQuery: "",
+      timer: null,
+      loading: false
+    },
+    shared: {
+      project: null,
+      tab: "todos",
+      notes: [],
+      todos: [],
+      activeNote: null,
+      noteContent: "",
+      noteRevision: 0,
+      todoOpen: false,
+      noteOpen: false,
+      busy: false,
+      loading: false
     },
     preview: { site: null }
   };
@@ -495,7 +519,9 @@
         label: "Workspace",
         items: [
           { view: "projects", label: "Projects", count: state.projects.length || null },
-          { view: "agents", label: "Agents" },
+          { view: "agents", label: "Agents", count: state.sessions.filter(function (s) { return s.live_state === "running"; }).length || null },
+          { view: "processes", label: "Processes" },
+          { view: "shared", label: "Shared" },
           {
             view: "capabilities",
             label: "Capabilities",
@@ -564,6 +590,8 @@
       sites: "Sites",
       preview: "Preview",
       agents: "Agents",
+      processes: "Processes",
+      shared: "Shared",
       services: "Services",
       runtimes: "Runtimes",
       certificates: "Certificates",
@@ -605,6 +633,8 @@
       }
     }
     if (state.session) {
+      var runningSessions = state.sessions.filter(function (s) { return s.live_state === "running"; }).length;
+      if (runningSessions) bits.push(runningSessions + " agent" + (runningSessions === 1 ? "" : "s"));
       bits.push(esc(state.session.registry.capabilities) + " capabilities");
       bits.push("api :" + esc(state.session.port));
     }
@@ -1209,14 +1239,41 @@
     return request(path, { method: "POST", body: JSON.stringify(body || {}) });
   }
 
+  function projectQuery(base) {
+    if (!state.project || !state.project.path) return base;
+    return base + (base.indexOf("?") === -1 ? "?" : "&") + "project=" + encodeURIComponent(state.project.path);
+  }
+
   function loadAgents() {
-    return request("/api/terminal/harnesses")
-      .then(function (res) {
-        state.harnesses = res.ok && Array.isArray(res.body) ? res.body : [];
-      })
-      .catch(function () {
-        state.harnesses = [];
-      });
+    return Promise.all([
+      request("/api/terminal/harnesses").catch(function () { return { ok: false, body: [] }; }),
+      request(projectQuery("/api/sessions")).catch(function () { return { ok: false, body: null }; }),
+      request(projectQuery("/api/tasks")).catch(function () { return { ok: false, body: null }; })
+    ]).then(function (r) {
+      state.harnesses = r[0].ok && Array.isArray(r[0].body) ? r[0].body : [];
+      state.sessions = r[1].ok && r[1].body && Array.isArray(r[1].body.items) ? r[1].body.items : [];
+      state.tasks = r[2].ok && r[2].body && Array.isArray(r[2].body.items) ? r[2].body.items : [];
+
+      var ids = state.sessions.map(function (s) { return s.id; });
+      var saved = null;
+      try { saved = localStorage.getItem("devd.activeSession"); } catch (e) {}
+      if (!state.activeSession || ids.indexOf(state.activeSession) === -1) {
+        var pick = saved && ids.indexOf(saved) !== -1 ? saved : null;
+        if (!pick) {
+          var attachable = state.sessions.filter(function (s) { return s.attachable; })[0];
+          pick = attachable ? attachable.id : (state.sessions[0] ? state.sessions[0].id : null);
+        }
+        state.activeSession = pick;
+      }
+      if (state.activeSession) {
+        try { localStorage.setItem("devd.activeSession", state.activeSession); } catch (e) {}
+      }
+    });
+  }
+
+  function activeSession() {
+    if (!state.activeSession) return null;
+    return state.sessions.filter(function (s) { return s.id === state.activeSession; })[0] || null;
   }
 
   function cwdChoices() {
@@ -1239,201 +1296,864 @@
     return found ? found.label : kind;
   }
 
+  function sessionPill(s) {
+    var live = s.live_state || s.state || "unknown";
+    var cls = live === "running" ? "pill-ok"
+      : live === "failed" ? "pill-bad"
+      : live === "completed" ? "pill-accent"
+      : (live === "stale" || live === "unavailable") ? "pill-warn" : "";
+    return '<span class="pill ' + cls + '">' + esc(live) + "</span>";
+  }
+
+  function shortTime(value) {
+    if (!value) return "";
+    var d = new Date(value);
+    if (isNaN(d.getTime())) return "";
+    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+
+  function sessionRow(s) {
+    var active = s.id === state.activeSession;
+    var detail = s.cwd || "";
+    var sub = [agentLabel(s.harness), shortTime(s.last_activity_at)].filter(Boolean).join(" · ");
+    return (
+      '<button type="button" class="session-row' + (active ? " active" : "") +
+      '" data-action="open-session" data-id="' + attr(s.id) + '" title="' + attr(detail) + '">' +
+      '<span class="session-row-top"><span class="session-dot ' +
+      (s.live_state === "running" ? "on" : s.live_state === "failed" ? "bad" : "") +
+      '"></span><span class="session-name">' + esc(s.label || s.harness) + "</span>" +
+      (s.task_id ? '<span class="pill pill-accent">task</span>' : "") +
+      "</span>" +
+      '<span class="session-row-sub"><span>' + esc(sub) + "</span>" + sessionPill(s) + "</span>" +
+      '<span class="session-row-path">' + esc(detail) + "</span>" +
+      "</button>"
+    );
+  }
+
   function renderAgents() {
     var a = state.agent;
     if (a.starting) {
-      el("main").innerHTML = page(
-        "Agents",
-        "Starting the harness…",
-        "",
-        '<div class="loading">Starting the harness…</div>'
-      );
-      return;
-    }
-
-    if (a.id) {
-      el("main").innerHTML = page(
-        "Agents",
-        "A real terminal running " + agentLabel(a.kind) + " in your project. Its own models, credentials and permission prompts apply.",
-        '<span class="pill ' + (a.exited ? "" : "pill-ok") + '" id="agent-status">' + (a.exited ? "exited" : "running") + "</span>" +
-          '<button type="button" class="btn" data-action="stop-agent">Stop</button>',
-        '<div class="panel"><div class="panel-head"><span>' + esc(agentLabel(a.kind)) + "</span>" +
-          '<span class="panel-note mono">' + esc(a.cwd || "") + "</span></div>" +
-          '<div class="panel-body"><div class="terminal-shell" id="terminal-slot"></div></div></div>'
-      );
-      mountTerminal();
+      el("main").innerHTML = page("Agents", "Starting the harness…", "", '<div class="loading">Starting the harness…</div>');
       return;
     }
 
     var choices = cwdChoices();
-    var options = choices
-      .map(function (c) {
-        return (
-          '<option value="' + attr(c.path) + '"' + (a.cwd === c.path ? " selected" : "") + ">" +
-          esc(c.label) + " — " + esc(c.path) + "</option>"
-        );
-      })
-      .join("");
+    var selectedCwd = a.cwd || (state.project && state.project.path) ||
+      (choices[0] && choices[0].path) || "";
+    var options = choices.map(function (c) {
+      return '<option value="' + attr(c.path) + '"' + (selectedCwd === c.path ? " selected" : "") + ">" +
+        esc(c.label) + " — " + esc(c.path) + "</option>";
+    }).join("");
 
-    var cards = state.harnesses
-      .map(function (h) {
-        return (
-          '<div class="card agent-card">' +
+    var rows = state.sessions.length
+      ? state.sessions.map(sessionRow).join("")
+      : '<div class="empty-inline">No sessions yet. Start a harness to create one.</div>';
+
+    var tabs = state.sessions.slice(0, 10).map(function (s) {
+      return '<button type="button" class="term-tab' + (s.id === state.activeSession ? " active" : "") +
+        '" data-action="open-session" data-id="' + attr(s.id) + '" title="' + attr(s.cwd) + '">' +
+        '<span class="session-dot ' + (s.live_state === "running" ? "on" : s.live_state === "failed" ? "bad" : "") + '"></span>' +
+        esc(s.label || s.harness) +
+        (s.live_state === "running" ? "" : ' <span class="tab-state">' + esc(s.live_state) + "</span>") +
+        "</button>";
+    }).join("");
+
+    var active = activeSession();
+    var terminal;
+    if (active) {
+      var live = active.live_state || active.state;
+      var note = active.attachable
+        ? "Live PTY owned by this devd process. Switching views does not stop it."
+        : (active.unattached_reason || "This session is finished. Its transcript remains readable.");
+      terminal =
+        '<div class="panel terminal-panel">' +
+        '<div class="panel-head terminal-head">' +
+        '<div class="terminal-title"><span class="session-name">' + esc(active.label) + "</span>" +
+        sessionPill(active) + '<span class="panel-note mono">' + esc(active.cwd) + "</span></div>" +
+        '<div class="inline">' +
+        '<button type="button" class="btn btn-mini" data-action="rename-session" data-id="' + attr(active.id) + '">Rename</button>' +
+        (active.attachable
+          ? '<button type="button" class="btn btn-mini" data-action="stop-session" data-id="' + attr(active.id) + '">Stop</button>'
+          : '<button type="button" class="btn btn-mini" data-action="dismiss-session" data-id="' + attr(active.id) + '">Dismiss</button>') +
+        "</div></div>" +
+        '<div class="terminal-note">' + esc(note) + "</div>" +
+        '<div class="terminal-shell" id="terminal-slot" data-session="' + attr(active.id) + '"></div>' +
+        "</div>";
+    } else {
+      var cards = state.harnesses.map(function (h) {
+        return '<button type="button" class="card agent-card" data-action="new-session" data-kind="' + attr(h.kind) + '"' +
+          (h.available ? "" : " disabled") + ">" +
           '<div class="card-title">' + esc(h.label) + "</div>" +
           '<div class="card-meta">' + (h.available ? "installed" : "not installed") + "</div>" +
           '<div class="agent-detail">' + esc(h.detail) + "</div>" +
-          '<div class="card-actions">' +
-          (h.available
-            ? '<button type="button" class="btn btn-primary" data-action="start-agent" data-kind="' + attr(h.kind) + '">Start</button>'
-            : '<button type="button" class="btn" disabled>Not found</button>') +
-          "</div></div>"
-        );
-      })
-      .join("");
+          '<div class="card-actions"><span class="btn btn-primary">Start</span></div></button>';
+      }).join("");
+      terminal =
+        '<div class="panel"><div class="panel-head"><span>Start a session</span></div>' +
+        '<div class="panel-body"><label class="field-label" for="agent-new-cwd">Working directory</label>' +
+        '<select class="select mono" id="agent-new-cwd">' + options + "</select>" +
+        '<div class="row-sub" style="margin-top:8px">Each session is its own real process and PTY. Switching tabs, sections or reloading the window does not stop it.</div>' +
+        '<div class="grid grid-3" style="margin-top:14px">' + cards + "</div></div></div>";
+    }
+
+    var taskRows = state.tasks.length
+      ? state.tasks.map(function (t) {
+          var running = t.state === "running" || t.state === "starting" || t.state === "queued";
+          return '<div class="task-row"><div class="task-main"><div class="task-title">' +
+            esc(t.title) + " " + '<span class="pill ' + (t.state === "succeeded" ? "pill-ok" : t.state === "failed" ? "pill-bad" : "") + '">' + esc(t.state) + "</span>" +
+            '</div><div class="task-sub mono">' + esc(t.harness) + " · depth " + esc(t.depth) + " · " + esc(t.cwd) + "</div>" +
+            (t.error ? '<div class="task-error">' + esc(t.error) + "</div>" : "") + "</div>" +
+            '<div class="inline">' +
+            (running ? '<button type="button" class="btn btn-mini" data-action="task-wait" data-id="' + attr(t.id) + '">Wait</button>' +
+              '<button type="button" class="btn btn-mini" data-action="task-cancel" data-id="' + attr(t.id) + '">Cancel</button>' : "") +
+            '<button type="button" class="btn btn-mini" data-action="task-result" data-id="' + attr(t.id) + '">Result</button>' +
+            "</div></div>";
+        }).join("")
+      : '<div class="empty-inline">No delegated tasks. A coordinating agent can spawn one with agent.spawn, or use Delegate here.</div>';
 
     el("main").innerHTML = page(
       "Agents",
-      "Run the coding agent you already use inside this project. devd does not proxy the model: the terminal is the harness's own.",
-      "",
-      '<div class="panel"><div class="panel-head"><span>Working directory</span></div>' +
-        '<div class="panel-body"><select class="select mono" id="agent-cwd">' + options + "</select>" +
-        '<div class="row-sub" style="margin-top:8px">The harness starts here and can use its own tools on these files.</div></div></div>' +
-        '<div class="grid grid-3">' + cards + "</div>"
+      "Real PTYs owned by the backend. Closing a view or reloading the window does not restart the harness.",
+      '<button type="button" class="btn" data-action="delegate-open">Delegate a task</button>' +
+        '<button type="button" class="btn btn-primary" data-action="new-session" data-kind="shell">New session</button>',
+      '<div class="agents-layout">' +
+        '<aside class="panel session-side">' +
+        '<div class="panel-head"><span>Sessions</span><span class="panel-note">' + state.sessions.length + "</span></div>" +
+        '<div class="session-list">' + rows + "</div>" +
+        '<div class="session-side-foot"><select class="select mono" id="agent-side-cwd">' + options + "</select>" +
+        '<div class="inline" style="margin-top:8px">' +
+        state.harnesses.map(function (h) {
+          return '<button type="button" class="btn btn-mini" data-action="new-session" data-kind="' + attr(h.kind) + '"' +
+            (h.available ? "" : " disabled title=\"not installed\"") + ">" + esc(h.label) + "</button>";
+        }).join("") +
+        "</div></div></aside>" +
+        '<section class="session-main">' +
+        '<div class="term-tabs">' + (tabs || '<span class="faint">No tabs</span>') + "</div>" +
+        terminal +
+        '<div class="panel"><div class="panel-head"><span>Delegated tasks</span><span class="panel-note">' +
+        state.tasks.filter(function (t) { return t.state === "running" || t.state === "starting"; }).length + " running</span></div>" +
+        '<div class="panel-body flush">' + taskRows + "</div></div>" +
+        "</section></div>"
     );
+
+    attachActive();
   }
 
-  function mountTerminal() {
-    var a = state.agent;
+  function ensureTerm(id) {
+    if (state.terms[id]) return state.terms[id];
+    var term = new window.Terminal({
+      fontFamily: 'ui-monospace, "Cascadia Mono", Consolas, monospace',
+      fontSize: 12,
+      lineHeight: 1.35,
+      cursorBlink: true,
+      scrollback: 5000,
+      theme: {
+        background: "#0a0a0b",
+        foreground: "#e7e5e4",
+        cursor: "#e07856",
+        selectionBackground: "#3a2a22",
+        black: "#1c1917",
+        red: "#f0a58c",
+        green: "#9ac9a0",
+        yellow: "#e6c07b",
+        blue: "#8ab4d8",
+        magenta: "#c9a3d8",
+        cyan: "#8fc7c7",
+        white: "#e7e5e4"
+      }
+    });
+    var fit = new window.FitAddon.FitAddon();
+    term.loadAddon(fit);
+    term.onData(function (data) {
+      post("/api/sessions/" + encodeURIComponent(id) + "/input", { data: data }).then(function (res) {
+        if (!res.ok) markSessionGone(id, res.body);
+      });
+    });
+    term.onResize(function (size) {
+      post("/api/sessions/" + encodeURIComponent(id) + "/resize", { cols: size.cols, rows: size.rows });
+    });
+    state.terms[id] = { term: term, fit: fit, cursor: 0, opened: false, attachable: true, finished: false };
+    return state.terms[id];
+  }
+
+  function markSessionGone(id, body) {
+    var t = state.terms[id];
+    if (t) t.attachable = false;
+    var s = state.sessions.filter(function (x) { return x.id === id; })[0];
+    if (s) s.attachable = false;
+    if (body) {
+      var msg = body.error && body.error.message;
+      if (msg) toast("warn", msg);
+    }
+  }
+
+  function attachActive() {
+    var active = activeSession();
     var slot = el("terminal-slot");
-    if (!slot) return;
-
-    // The view was rebuilt; the terminal's DOM is gone but the PTY is not.
-    // Recreate the emulator and replay the session from the start.
-    if (a.term && a.term.element && !document.body.contains(a.term.element)) {
-      try { a.term.dispose(); } catch (e) {}
-      a.term = null;
-      a.fit = null;
-      a.cursor = 0;
+    if (!active || !slot) {
+      stopAgentTimer();
+      return;
     }
+    var t = ensureTerm(active.id);
+    t.attachable = !!active.attachable;
+    if (!t.opened) {
+      t.term.open(slot);
+      t.opened = true;
+    } else if (t.term.element && t.term.element.parentNode !== slot) {
+      slot.appendChild(t.term.element);
+    }
+    try { t.fit.fit(); } catch (e) {}
+    t.term.focus();
+    if (!t.finished) fetchOutput(active.id);
+    if (active.attachable) startAgentTimer(active.id);
+    else stopAgentTimer();
+  }
 
-    if (!a.term) {
-      a.term = new window.Terminal({
-        fontFamily: 'ui-monospace, "Cascadia Mono", Consolas, monospace',
-        fontSize: 12,
-        lineHeight: 1.35,
-        cursorBlink: true,
-        scrollback: 5000,
-        theme: {
-          background: "#0a0a0b",
-          foreground: "#e7e5e4",
-          cursor: "#e07856",
-          selectionBackground: "#3a2a22",
-          black: "#1c1917",
-          red: "#f0a58c",
-          green: "#9ac9a0",
-          yellow: "#e6c07b",
-          blue: "#8ab4d8",
-          magenta: "#c9a3d8",
-          cyan: "#8fc7c7",
-          white: "#e7e5e4"
+  function fetchOutput(id) {
+    var t = state.terms[id];
+    if (!t) return;
+    post("/api/sessions/" + encodeURIComponent(id) + "/output", { cursor: t.cursor }).then(function (res) {
+      if (!res.ok || !res.body) return;
+      var body = res.body;
+      if (body.reset) {
+        try { t.term.reset(); } catch (e) {}
+      }
+      if (body.data) {
+        var raw = atob(body.data);
+        var bytes = new Uint8Array(raw.length);
+        for (var i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+        t.term.write(bytes);
+      }
+      t.cursor = body.cursor || t.cursor;
+      if (body.exited) {
+        t.attachable = false;
+        if (!t.finished) {
+          t.finished = true;
+          stopAgentTimer();
+          var s = state.sessions.filter(function (x) { return x.id === id; })[0];
+          if (s) {
+            s.attachable = false;
+            s.live_state = body.state === "finished"
+              ? (body.code === 0 ? "completed" : "failed")
+              : (body.state || "completed");
+            s.exit_code = body.code;
+          }
+          toast(body.code === 0 ? "ok" : "warn", "Session ended" + (body.code === 0 ? "" : " with code " + body.code));
+          loadAgents().then(renderAgents);
         }
-      });
-      a.fit = new window.FitAddon.FitAddon();
-      a.term.loadAddon(a.fit);
-      a.term.onData(function (data) {
-        if (!a.id) return;
-        post("/api/terminal/input", { id: a.id, data: data });
-      });
-      a.term.onResize(function (size) {
-        if (!a.id) return;
-        post("/api/terminal/resize", { id: a.id, cols: size.cols, rows: size.rows });
-      });
+      }
+    }).catch(function () {});
+  }
+
+  function startAgentTimer(id) {
+    stopAgentTimer();
+    state.agentTimer = setInterval(function () {
+      if (state.view !== "agents" || state.activeSession !== id) {
+        stopAgentTimer();
+        return;
+      }
+      var t = state.terms[id];
+      if (!t || !t.attachable) {
+        stopAgentTimer();
+        return;
+      }
+      fetchOutput(id);
+    }, 110);
+  }
+
+  function stopAgentTimer() {
+    if (state.agentTimer) {
+      clearInterval(state.agentTimer);
+      state.agentTimer = null;
     }
-
-    a.term.open(slot);
-    try { a.fit.fit(); } catch (e) {}
-    a.term.focus();
-    startPolling();
   }
 
-  function startPolling() {
-    var a = state.agent;
-    if (a.timer || !a.id) return;
-    a.timer = setInterval(function () {
-      if (!a.id) return;
-      post("/api/terminal/output", { id: a.id, cursor: a.cursor })
-        .then(function (res) {
-          if (!res.ok || !res.body) return;
-          var body = res.body;
-          if (body.reset && a.term) a.term.reset();
-          if (body.data && a.term) {
-            var raw = atob(body.data);
-            var bytes = new Uint8Array(raw.length);
-            for (var i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-            a.term.write(bytes);
-          }
-          a.cursor = body.cursor;
-          if (body.exited) {
-            a.exited = true;
-            a.code = body.code;
-            if (a.timer) {
-              clearInterval(a.timer);
-              a.timer = null;
-            }
-            var status = el("agent-status");
-            if (status) status.textContent = "exited";
-          }
-        })
-        .catch(function () {});
-    }, 80);
-  }
-
-  function startAgent(kind) {
-    var a = state.agent;
-    var cwd = readInput("agent-cwd");
-    a.cwd = cwd || (cwdChoices()[0] && cwdChoices()[0].path) || null;
-    a.starting = true;
-    a.kind = kind;
+  function openSession(id) {
+    state.activeSession = id;
+    try { localStorage.setItem("devd.activeSession", id); } catch (e) {}
     render();
-    post("/api/terminal/start", { kind: kind, cwd: a.cwd, cols: 100, rows: 30 }).then(function (res) {
-      a.starting = false;
-      if (!res.ok || !res.body || !res.body.id) {
+  }
+
+  function newSession(kind) {
+    var cwd = readInput("agent-new-cwd") || readInput("agent-side-cwd") || state.agent.cwd;
+    if (!cwd) {
+      var choices = cwdChoices();
+      cwd = choices[0] && choices[0].path;
+    }
+    if (!cwd) return toast("warn", "Add a project or choose a working directory first");
+    state.agent.cwd = cwd;
+    state.agent.starting = true;
+    closeDrawer();
+    render();
+    post("/api/sessions", {
+      kind: kind,
+      cwd: cwd,
+      project: state.project ? state.project.path : null,
+      cols: 100,
+      rows: 30
+    }).then(function (res) {
+      state.agent.starting = false;
+      if (!res.ok || !res.body) {
         toast("error", errorOf(res.body, "could not start " + kind));
-        a.kind = null;
         render();
         return;
       }
-      a.id = res.body.id;
-      a.cursor = 0;
-      a.exited = false;
-      a.code = null;
-      render();
+      var id = res.body.id || (res.body.session && res.body.session.id);
+      state.activeSession = id;
+      try { localStorage.setItem("devd.activeSession", id); } catch (e) {}
+      loadAgents().then(function () {
+        state.activeSession = id;
+        render();
+      });
     });
   }
 
-  function stopAgent() {
-    var a = state.agent;
-    if (a.timer) {
-      clearInterval(a.timer);
-      a.timer = null;
+  function openNewSession() {
+    var choices = cwdChoices();
+    var options = choices.map(function (c) {
+      return '<option value="' + attr(c.path) + '">' + esc(c.label) + " — " + esc(c.path) + "</option>";
+    }).join("");
+    var cards = state.harnesses.map(function (h) {
+      return '<button type="button" class="card agent-card" data-action="new-session" data-kind="' + attr(h.kind) + '"' +
+        (h.available ? "" : " disabled") + '><div class="card-title">' + esc(h.label) + "</div>" +
+        '<div class="card-meta">' + (h.available ? "installed" : "not installed") + "</div>" +
+        '<div class="agent-detail">' + esc(h.detail) + "</div></button>";
+    }).join("");
+    openDrawer("New agent session",
+      '<div class="stack"><div class="field"><label class="field-label" for="agent-new-cwd">Working directory</label>' +
+      '<select class="select mono" id="agent-new-cwd">' + options + "</select></div>" +
+      '<div class="grid grid-3">' + (cards || '<div class="faint">No harnesses found.</div>') + "</div>" +
+      '<div class="faint">The harness asks its own permission questions. devd supplies the directory, the PTY and the process.</div></div>');
+  }
+
+  function stopSession(id) {
+    if (!window.confirm("Stop this session and its child processes? Its transcript will be kept.")) return;
+    post("/api/sessions/" + encodeURIComponent(id) + "/stop", {}).then(function (res) {
+      if (!res.ok) return toast("error", errorOf(res.body, "could not stop the session"));
+      var t = state.terms[id];
+      if (t) {
+        try { t.term.dispose(); } catch (e) {}
+        delete state.terms[id];
+      }
+      toast("ok", "Session stopped; its output is still readable");
+      loadAgents().then(renderAgents);
+    });
+  }
+
+  function dismissSession(id) {
+    if (!window.confirm("Dismiss this finished session from the list? The transcript file is retained.")) return;
+    request("/api/sessions/" + encodeURIComponent(id), { method: "DELETE", body: "{}" }).then(function (res) {
+      if (!res.ok) return toast("error", errorOf(res.body, "could not dismiss the session"));
+      var t = state.terms[id];
+      if (t) {
+        try { t.term.dispose(); } catch (e) {}
+        delete state.terms[id];
+      }
+      if (state.activeSession === id) state.activeSession = null;
+      loadAgents().then(renderAgents);
+    });
+  }
+
+  function renameSession(id) {
+    var s = state.sessions.filter(function (x) { return x.id === id; })[0];
+    openDrawer("Rename session",
+      '<div class="stack"><div class="field"><label class="field-label" for="session-label">Label</label>' +
+      '<input class="input" id="session-label" value="' + attr(s ? s.label : "") + '"></div>' +
+      '<button type="button" class="btn btn-primary" data-action="save-session-label" data-id="' + attr(id) + '">Save</button></div>');
+  }
+
+  function saveSessionLabel(id) {
+    var label = readInput("session-label");
+    if (!label) return toast("warn", "A session needs a label");
+    post("/api/sessions/" + encodeURIComponent(id) + "/rename", { label: label }).then(function (res) {
+      if (!res.ok) return toast("error", errorOf(res.body, "could not rename the session"));
+      closeDrawer();
+      loadAgents().then(renderAgents);
+    });
+  }
+
+  function openDelegate() {
+    var choices = cwdChoices();
+    var options = choices.map(function (c) {
+      return '<option value="' + attr(c.path) + '">' + esc(c.path) + "</option>";
+    }).join("");
+    var harnessOptions = state.harnesses.filter(function (h) { return h.kind === "claude" || h.kind === "opencode"; })
+      .map(function (h) {
+        return '<option value="' + attr(h.kind) + '"' + (h.available ? "" : " disabled") + ">" +
+          esc(h.label) + (h.available ? "" : " (not installed)") + "</option>";
+      }).join("");
+    openDrawer("Delegate a task",
+      '<div class="stack">' +
+      '<div class="field"><label class="field-label" for="task-title">Title</label><input class="input" id="task-title" placeholder="Investigate the failing test"></div>' +
+      '<div class="field"><label class="field-label" for="task-harness">Agent</label><select class="select" id="task-harness">' + harnessOptions +
+      '<option value="custom">Custom command (argv JSON)</option></select></div>' +
+      '<div class="field"><label class="field-label" for="task-cwd">Working directory</label><select class="select mono" id="task-cwd">' + options + "</select></div>" +
+      '<div class="field"><label class="field-label" for="task-instructions">Instructions</label><textarea class="input mono" id="task-instructions" rows="6" placeholder="What should the child do?"></textarea></div>' +
+      '<div class="field"><label class="field-label" for="task-command">Custom command (only for custom)</label><input class="input mono" id="task-command" placeholder=\'["node","script.js"]\'></div>' +
+      '<div class="field"><label class="field-label" for="task-timeout">Timeout (seconds)</label><input class="input" id="task-timeout" value="300"></div>' +
+      '<button type="button" class="btn btn-primary" data-action="delegate-go">Spawn a real child process</button>' +
+      '<div class="faint">The child is a separate PTY, limited to three levels of nesting and eight unfinished tasks. A wait timeout does not kill it.</div></div>');
+  }
+
+  function delegateTask() {
+    var title = readInput("task-title");
+    var harness = readInput("task-harness");
+    var cwd = readInput("task-cwd");
+    var instructions = el("task-instructions") ? el("task-instructions").value : "";
+    var commandText = readInput("task-command");
+    var timeout = Number(readInput("task-timeout")) || 300;
+    if (!title) return toast("warn", "A task needs a title");
+    if (!cwd) return toast("warn", "A task needs a working directory");
+    var command = null;
+    if (harness === "custom") {
+      try {
+        command = JSON.parse(commandText);
+      } catch (e) {
+        return toast("error", "The custom command must be a JSON array of arguments");
+      }
+      if (!Array.isArray(command) || !command.length) {
+        return toast("error", "The custom command must be a non-empty JSON array");
+      }
     }
-    if (a.id) post("/api/terminal/stop", { id: a.id });
-    if (a.term) {
-      try { a.term.dispose(); } catch (e) {}
+    var active = activeSession();
+    post("/api/invoke", {
+      id: "agent.spawn",
+      args: {
+        title: title,
+        harness: harness,
+        cwd: cwd,
+        instructions: instructions,
+        project: state.project ? state.project.path : cwd,
+        parent_session_id: active ? active.id : null,
+        timeout_secs: timeout,
+        command: command
+      },
+      dry_run: false
+    }).then(function (res) {
+      if (!res.ok) return toast("error", errorOf(res.body, "could not delegate the task"));
+      var data = res.body.outcome && res.body.outcome.data;
+      var task = data && data.task;
+      closeDrawer();
+      toast("ok", "Delegated " + (task ? task.title : title));
+      loadAgents().then(renderAgents);
+    });
+  }
+
+  function waitTask(id) {
+    toast("ok", "Waiting for the delegated task…");
+    post("/api/tasks/" + encodeURIComponent(id) + "/wait", { timeout_secs: 120 }).then(function (res) {
+      if (!res.ok) return toast("error", errorOf(res.body, "the wait failed"));
+      if (res.body.timed_out) toast("warn", "The task is still running; it was not killed");
+      else toast("ok", "Task " + res.body.task.state);
+      loadAgents().then(renderAgents);
+    });
+  }
+
+  function cancelTask(id) {
+    if (!window.confirm("Cancel this delegated task and stop its child process?")) return;
+    post("/api/tasks/" + encodeURIComponent(id) + "/cancel", {}).then(function (res) {
+      if (!res.ok) return toast("error", errorOf(res.body, "could not cancel the task"));
+      toast("ok", "Task cancelled");
+      loadAgents().then(renderAgents);
+    });
+  }
+
+  function resultTask(id) {
+    request("/api/tasks/" + encodeURIComponent(id) + "/result").then(function (res) {
+      if (!res.ok) return toast("error", errorOf(res.body, "could not read the result"));
+      var task = res.body.task || {};
+      var output = String(res.body.output || "").replace(/\u001b\][^\u0007]*\u0007/g, "").replace(/\u001b\[[0-9;?]*[A-Za-z]/g, "");
+      openDrawer("Task result — " + (task.title || id),
+        '<div class="stack"><div class="inline">' + sessionPill({ live_state: task.state }) +
+        '<span class="pill">exit ' + esc(task.exit_code === null || task.exit_code === undefined ? "?" : task.exit_code) + "</span>" +
+        (task.error ? '<span class="pill pill-bad">' + esc(task.error) + "</span>" : "") + "</div>" +
+        '<pre class="log-pre">' + esc(output || "(no output captured)") + "</pre></div>");
+    });
+  }
+
+  // ----------------------------------------------------------------- processes
+
+  function processProject() {
+    if (state.processes.project) return state.processes.project;
+    if (state.project && state.project.path) return state.project.path;
+    return state.projects[0] ? state.projects[0].path : (state.session ? state.session.paths.www : null);
+  }
+
+  function projectOptions(selected) {
+    return cwdChoices().map(function (c) {
+      return '<option value="' + attr(c.path) + '"' + (c.path === selected ? " selected" : "") + ">" +
+        esc(c.label) + " — " + esc(c.path) + "</option>";
+    }).join("");
+  }
+
+  function loadProcesses() {
+    var project = processProject();
+    state.processes.project = project;
+    if (!project) return Promise.resolve();
+    state.processes.loading = true;
+    return request("/api/project?project=" + encodeURIComponent(project)).then(function (res) {
+      state.processes.loading = false;
+      if (!res.ok) {
+        state.processes.plan = null;
+        state.processes.status = null;
+        state.processes.error = errorOf(res.body, "no devd.yml in this project");
+        return;
+      }
+      state.processes.error = null;
+      state.processes.plan = res.body;
+      return request("/api/project/status?project=" + encodeURIComponent(project)).then(function (status) {
+        state.processes.status = status.ok ? status.body : null;
+        if (!status.ok) state.processes.error = errorOf(status.body, "could not read process status");
+      });
+    }).catch(function (e) {
+      state.processes.loading = false;
+      state.processes.error = e.message;
+    });
+  }
+
+  function renderProcesses() {
+    var p = state.processes;
+    var project = processProject();
+    p.project = project;
+    if (project && !p.plan && !p.error && !p.loading) {
+      p.loading = true;
+      loadProcesses().then(renderProcesses);
     }
-    state.agent = {
-      id: null,
-      kind: null,
-      term: null,
-      fit: null,
-      timer: null,
-      cursor: 0,
-      exited: false,
-      code: null,
-      starting: false,
-      cwd: a.cwd
-    };
-    render();
+    if (p.loading && !p.plan) {
+      el("main").innerHTML = page("Processes", "Supervised project processes from devd.yml.", "", '<div class="loading">Reading the manifest…</div>');
+      return;
+    }
+
+    var select = '<div class="panel"><div class="panel-head"><span>Project manifest</span></div><div class="panel-body">' +
+      '<select class="select mono" id="process-project">' + (projectOptions(project) || '<option value="">No projects</option>') + "</select>" +
+      '<div class="row-sub" style="margin-top:8px">devd reads <span class="mono">devd.yml</span> from the project root. Nothing runs until you review and approve the exact commands.</div></div></div>';
+
+    if (!project || (p.error && !p.plan)) {
+      el("main").innerHTML = page("Processes", "Supervised project processes from devd.yml.", "", select +
+        '<div class="panel"><div class="empty"><div class="empty-title">No manifest to run</div>' +
+        "<div>" + esc(p.error || "Choose a project that contains devd.yml.") + "</div>" +
+        '<pre class="log-pre" style="text-align:left;margin-top:14px">version: 1\nproject:\n  name: example-app\nprocesses:\n  web:\n    command: ["npm", "run", "dev"]\n    working_dir: "."\n    health:\n      url: "http://127.0.0.1:3000/"</pre></div></div>');
+      return;
+    }
+
+    var plan = p.plan || { processes: [] };
+    var status = (p.status && p.status.processes) || [];
+    var byName = {};
+    status.forEach(function (row) { byName[row.name] = row; });
+
+    var approval = plan.approved
+      ? '<span class="pill pill-ok">approved</span><span class="panel-note mono">' + esc(String(plan.hash || "").slice(0, 12)) + "</span>"
+      : '<span class="pill pill-warn">approval required</span>' +
+        '<button type="button" class="btn btn-primary btn-mini" data-action="approve-project">Approve these commands</button>';
+
+    var rows = (plan.processes || []).map(function (spec) {
+      var row = byName[spec.name] || {};
+      var stateName = row.status || "stopped";
+      var health = row.health || (spec.health_declared ? "unknown" : "none");
+      var actions = "";
+      if (stateName === "running" || stateName === "starting") {
+        actions += '<button type="button" class="btn btn-mini" data-action="process-stop" data-name="' + attr(spec.name) + '">Stop</button>' +
+          '<button type="button" class="btn btn-mini" data-action="process-restart" data-name="' + attr(spec.name) + '">Restart</button>';
+      } else {
+        actions += '<button type="button" class="btn btn-mini btn-primary" data-action="process-start" data-name="' + attr(spec.name) + '"' +
+          (plan.approved ? "" : " disabled") + ">Start</button>";
+      }
+      actions += '<button type="button" class="btn btn-mini" data-action="process-logs" data-name="' + attr(spec.name) + '">Logs</button>';
+      return '<tr><td><div class="cell-strong">' + esc(spec.name) + "</div>" +
+        '<div class="cell-mono">' + esc((spec.command || []).join(" ")) + "</div></td>" +
+        '<td><span class="pill ' + (stateName === "running" ? "pill-ok" : stateName === "failed" ? "pill-bad" : "") + '">' + esc(stateName) + "</span>" +
+        '<div class="cell-mono">' + esc(health) + (row.pid ? " · pid " + esc(row.pid) : "") + "</div></td>" +
+        '<td class="cell-mono">' + esc((spec.depends_on || []).join(", ") || "—") + "</td>" +
+        '<td>' + actions + "</td></tr>";
+    }).join("");
+
+    var errorRow = status.filter(function (r) { return r.last_error; }).map(function (r) {
+      return '<div class="task-error"><span class="mono">' + esc(r.name) + "</span> " + esc(r.last_error) + "</div>";
+    }).join("");
+
+    var log = "";
+    if (p.selected) {
+      var lines = (p.log && p.log.lines) || [];
+      var q = (p.logQuery || "").toLowerCase();
+      if (q) lines = lines.filter(function (l) { return l.toLowerCase().indexOf(q) !== -1; });
+      log = '<div class="panel process-log"><div class="panel-head"><span>Logs — ' + esc(p.selected) + "</span>" +
+        '<input class="input mono process-log-filter" id="process-log-query" value="' + attr(p.logQuery || "") + '" placeholder="Filter lines">' +
+        '<button type="button" class="btn btn-mini" data-action="close-process-logs">Close</button></div>' +
+        '<div class="panel-body flush"><pre class="log-pre" id="process-log">' +
+        (lines.length ? esc(lines.join("\n")) : "No output yet.") + "</pre></div></div>";
+    }
+
+    el("main").innerHTML = page(
+      "Processes",
+      "Supervised processes declared in devd.yml, with real pids, logs and health.",
+      '<button type="button" class="btn" data-action="process-start-all"' + (plan.approved ? "" : " disabled") + ">Start all</button>" +
+        '<button type="button" class="btn" data-action="process-stop-all">Stop all</button>' +
+        '<button type="button" class="btn btn-ghost" data-action="process-refresh">Refresh</button>',
+      select +
+        '<div class="panel"><div class="panel-head"><span>' + esc(plan.project || "project") + "</span>" +
+        '<span class="mono panel-note">' + esc(plan.root || "") + "</span>" + approval + "</div>" +
+        '<div class="panel-body flush"><table class="table process-table"><thead><tr>' +
+        "<th>Process</th><th>State</th><th>Depends on</th><th></th></tr></thead><tbody>" +
+        (rows || '<tr><td colspan="4" class="empty-inline">No processes declared.</td></tr>') +
+        "</tbody></table></div></div>" + errorRow + log
+    );
+  }
+
+  function processAction(kind, name, all) {
+    var project = state.processes.project;
+    if (!project) return toast("warn", "Choose a project first");
+    if (!state.processes.plan || !state.processes.plan.approved) {
+      return toast("warn", "Review and approve the manifest commands first");
+    }
+    state.processes.busy = true;
+    var body = { project: project, name: name || "", all: !!all };
+    post("/api/project/" + kind, body).then(function (res) {
+      state.processes.busy = false;
+      if (!res.ok) {
+        toast("error", errorOf(res.body, "the process operation failed"));
+      } else if (res.body.outcome && res.body.outcome.warnings && res.body.outcome.warnings.length) {
+        toast("warn", res.body.outcome.warnings.join("; "));
+      } else {
+        toast("ok", "process " + kind + " applied");
+      }
+      loadProcesses().then(renderProcesses);
+    });
+  }
+
+  function approveProject() {
+    var project = state.processes.project;
+    if (!project) return;
+    post("/api/project/approve", { project: project }).then(function (res) {
+      if (!res.ok) return toast("error", errorOf(res.body, "could not approve the manifest"));
+      toast("ok", "The exact commands in devd.yml are approved");
+      loadProcesses().then(renderProcesses);
+    });
+  }
+
+  function openProcessLogs(name) {
+    state.processes.selected = name;
+    state.processes.logQuery = "";
+    loadProcessLogs().then(renderProcesses);
+    startProcessTimer();
+  }
+
+  function loadProcessLogs() {
+    var p = state.processes;
+    if (!p.selected || !p.project) return Promise.resolve();
+    return request("/api/project/logs?project=" + encodeURIComponent(p.project) +
+      "&name=" + encodeURIComponent(p.selected) + "&lines=400").then(function (res) {
+      if (res.ok) p.log = res.body;
+    });
+  }
+
+  function startProcessTimer() {
+    if (state.processes.timer) return;
+    state.processes.timer = setInterval(function () {
+      if (state.view !== "processes") {
+        clearInterval(state.processes.timer);
+        state.processes.timer = null;
+        return;
+      }
+      if (document.activeElement && document.activeElement.id === "process-log-query") return;
+      loadProcesses().then(function () {
+        if (state.processes.selected) {
+          return loadProcessLogs().then(renderProcesses);
+        }
+        renderProcesses();
+      });
+    }, 2200);
+  }
+
+  // -------------------------------------------------------------------- shared
+
+  function sharedProject() {
+    if (state.shared.project) return state.shared.project;
+    if (state.project && state.project.path) return state.project.path;
+    return state.projects[0] ? state.projects[0].path : (state.session ? state.session.paths.www : null);
+  }
+
+  function loadShared() {
+    var project = sharedProject();
+    state.shared.project = project;
+    if (!project) return Promise.resolve();
+    state.shared.loading = true;
+    return Promise.all([
+      read("scratch.list", { project: project }).catch(function () { return []; }),
+      read("todo.list", { project: project }).catch(function () { return []; })
+    ]).then(function (r) {
+      state.shared.loading = false;
+      state.shared.notes = Array.isArray(r[0]) ? r[0] : [];
+      state.shared.todos = Array.isArray(r[1]) ? r[1] : [];
+      if (state.shared.activeNote) {
+        var found = state.shared.notes.filter(function (n) { return n.name === state.shared.activeNote; })[0];
+        if (!found) {
+          state.shared.activeNote = null;
+          state.shared.noteContent = "";
+        }
+      }
+    });
+  }
+
+  function renderShared() {
+    var s = state.shared;
+    var project = sharedProject();
+    s.project = project;
+    var tabs = '<div class="segmented">' +
+      '<button type="button" class="seg' + (s.tab === "todos" ? " active" : "") + '" data-action="shared-tab" data-tab="todos">Todos <span class="rail-count">' + s.todos.filter(function (t) { return t.status !== "done" && t.status !== "cancelled"; }).length + "</span></button>" +
+      '<button type="button" class="seg' + (s.tab === "notes" ? " active" : "") + '" data-action="shared-tab" data-tab="notes">Scratchpads <span class="rail-count">' + s.notes.length + "</span></button></div>";
+
+    var head = '<div class="panel"><div class="panel-head"><span>Shared project state</span>' +
+      '<select class="select mono" id="shared-project">' + (projectOptions(project) || '<option value="">No projects</option>') + "</select></div>" +
+      '<div class="panel-body row-sub">Notes and todos are project-scoped, durable, and readable by agents through the same capability API. Reloading devd does not lose them.</div></div>';
+
+    var body;
+    if (s.tab === "todos") {
+      var create = s.todoOpen
+        ? '<div class="panel"><div class="panel-body stack">' +
+          '<div class="inline"><input class="input grow" id="todo-title" placeholder="What needs doing?">' +
+          '<select class="select" id="todo-priority"><option value="normal">normal</option><option value="high">high</option><option value="urgent">urgent</option><option value="low">low</option></select></div>' +
+          '<input class="input" id="todo-assignee" placeholder="Assignee (optional, e.g. agent:opencode)">' +
+          '<div class="inline"><button type="button" class="btn btn-primary" data-action="todo-create">Create todo</button>' +
+          '<button type="button" class="btn btn-ghost" data-action="todo-cancel">Cancel</button></div></div></div>'
+        : "";
+      var rows = s.todos.length ? s.todos.map(function (t) {
+        var open = t.status !== "done" && t.status !== "cancelled";
+        return '<div class="todo-row"><div class="todo-main">' +
+          '<div class="todo-title">' + esc(t.title) + ' <span class="pill ' + (t.status === "done" ? "pill-ok" : t.status === "blocked" ? "pill-warn" : "") + '">' + esc(t.status) + "</span>" +
+          ' <span class="pill">' + esc(t.priority) + "</span></div>" +
+          (t.description ? '<div class="todo-desc">' + esc(t.description) + "</div>" : "") +
+          '<div class="todo-meta mono">' + esc(t.assignee || "unassigned") + " · rev " + esc(t.revision) + " · " + esc(t.updated_at || "") + "</div></div>" +
+          '<div class="inline">' +
+          '<select class="select compact" data-action="todo-status" data-id="' + attr(t.id) + '" data-rev="' + attr(t.revision) + '">' +
+          ["open", "in_progress", "blocked", "done", "cancelled"].map(function (st) {
+            return '<option value="' + st + '"' + (t.status === st ? " selected" : "") + ">" + st + "</option>";
+          }).join("") + "</select>" +
+          (open ? '<button type="button" class="btn btn-mini" data-action="todo-done" data-id="' + attr(t.id) + '" data-rev="' + attr(t.revision) + '">Done</button>'
+                : '<button type="button" class="btn btn-mini" data-action="todo-reopen" data-id="' + attr(t.id) + '" data-rev="' + attr(t.revision) + '">Reopen</button>') +
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="todo-delete" data-id="' + attr(t.id) + '">Delete</button>' +
+          "</div></div>";
+      }).join("") : '<div class="empty-inline">No todos yet.</div>';
+      body = '<div class="panel"><div class="panel-head"><span>Todos</span>' +
+        '<button type="button" class="btn btn-mini btn-primary" data-action="todo-open">New todo</button></div>' +
+        '<div class="panel-body flush">' + create + rows + "</div></div>";
+    } else {
+      var noteList = s.notes.length ? s.notes.map(function (n) {
+        return '<button type="button" class="note-row' + (s.activeNote === n.name ? " active" : "") + '" data-action="note-open" data-name="' + attr(n.name) + '">' +
+          '<span class="cell-strong">' + esc(n.name) + "</span>" +
+          '<span class="cell-mono">rev ' + esc(n.revision) + " · " + esc(n.author) + "</span></button>";
+      }).join("") : '<div class="empty-inline">No scratchpads yet.</div>';
+      var editor = s.activeNote
+        ? '<div class="note-editor"><div class="note-editor-head"><span class="cell-strong">' + esc(s.activeNote) + "</span>" +
+          '<span class="cell-mono">revision ' + esc(s.noteRevision) + "</span></div>" +
+          '<textarea class="input mono note-text" id="note-content" rows="16">' + esc(s.noteContent) + "</textarea>" +
+          '<div class="inline"><button type="button" class="btn btn-primary" data-action="note-save">Save</button>' +
+          '<button type="button" class="btn btn-ghost" data-action="note-delete">Delete note</button></div></div>'
+        : '<div class="empty-inline">Select a note, or create one. Agents use scratch.append to add findings without replacing yours.</div>';
+      var create = s.noteOpen
+        ? '<div class="inline" style="padding:10px"><input class="input mono grow" id="note-name" placeholder="note-name">' +
+          '<button type="button" class="btn btn-primary" data-action="note-create">Create</button>' +
+          '<button type="button" class="btn btn-ghost" data-action="note-cancel">Cancel</button></div>'
+        : "";
+      body = '<div class="note-layout"><div class="panel note-list-panel"><div class="panel-head"><span>Scratchpads</span>' +
+        '<button type="button" class="btn btn-mini" data-action="note-open-create">New note</button></div>' +
+        '<div class="panel-body flush">' + create + noteList + "</div></div>" +
+        '<div class="panel"><div class="panel-body">' + editor + "</div></div></div>";
+    }
+
+    el("main").innerHTML = page(
+      "Shared",
+      "Project notes and todos for humans and agents — durable across sessions and reloads.",
+      tabs,
+      head + body
+    );
+  }
+
+  function createTodo() {
+    var title = readInput("todo-title");
+    if (!title) return toast("warn", "A todo needs a title");
+    run("todo.create", {
+      project: sharedProject(),
+      title: title,
+      priority: readInput("todo-priority") || "normal",
+      assignee: readInput("todo-assignee") || null
+    }).then(function (outcome) {
+      if (!outcome) return;
+      state.shared.todoOpen = false;
+      loadShared().then(renderShared);
+    });
+  }
+
+  function setTodoStatus(id, rev, status) {
+    run("todo.update", { id: id, expected_revision: Number(rev), status: status, note: "status changed in the window" })
+      .then(function (outcome) {
+        if (!outcome) return loadShared().then(renderShared);
+        loadShared().then(renderShared);
+      });
+  }
+
+  function completeTodo(id, rev) {
+    run("todo.complete", { id: id, expected_revision: Number(rev) }).then(function (outcome) {
+      if (outcome) loadShared().then(renderShared);
+    });
+  }
+
+  function reopenTodo(id, rev) {
+    run("todo.reopen", { id: id, expected_revision: Number(rev) }).then(function (outcome) {
+      if (outcome) loadShared().then(renderShared);
+    });
+  }
+
+  function deleteTodo(id) {
+    run("todo.delete", { id: id }).then(function (outcome) {
+      if (outcome) loadShared().then(renderShared);
+    });
+  }
+
+  function openNote(name) {
+    read("scratch.get", { project: sharedProject(), name: name }).then(function (note) {
+      if (!note) return;
+      state.shared.activeNote = note.name;
+      state.shared.noteContent = note.content;
+      state.shared.noteRevision = note.revision;
+      renderShared();
+    }).catch(function (e) { toast("error", e.message); });
+  }
+
+  function saveNote() {
+    var content = el("note-content") ? el("note-content").value : "";
+    run("scratch.update", {
+      project: sharedProject(),
+      name: state.shared.activeNote,
+      content: content,
+      expected_revision: state.shared.noteRevision
+    }).then(function (outcome) {
+      if (!outcome) return loadShared().then(renderShared);
+      loadShared().then(function () {
+        return openNote(state.shared.activeNote);
+      });
+    });
+  }
+
+  function createNote() {
+    var name = readInput("note-name");
+    if (!name) return toast("warn", "A note needs a name");
+    run("scratch.create", { project: sharedProject(), name: name, content: "" }).then(function (outcome) {
+      if (!outcome) return;
+      state.shared.noteOpen = false;
+      state.shared.activeNote = name;
+      state.shared.noteContent = "";
+      state.shared.noteRevision = 1;
+      loadShared().then(renderShared);
+    });
+  }
+
+  function deleteNote() {
+    run("scratch.delete", { project: sharedProject(), name: state.shared.activeNote }).then(function (outcome) {
+      if (!outcome) return;
+      state.shared.activeNote = null;
+      state.shared.noteContent = "";
+      loadShared().then(renderShared);
+    });
   }
 
   // ------------------------------------------------------------------- preview
@@ -2369,6 +3089,8 @@
         .then(render);
     }
     if (state.view === "agents") return loadAgents().then(render);
+    if (state.view === "processes") return loadProcesses().then(render);
+    if (state.view === "shared") return loadShared().then(render);
     if (state.view === "capabilities") return loadCapabilities().then(render);
     if (state.view === "activity") return loadActivity().then(render);
     if (state.view === "system") return loadSystem().then(render);
@@ -2376,6 +3098,7 @@
   }
 
   function navigate(view) {
+    if (state.view === "agents" && view !== "agents") stopAgentTimer();
     state.view = view;
     render();
     return refresh();
@@ -2400,6 +3123,8 @@
       else if (state.view === "certificates") renderCertificates();
       else if (state.view === "hosts") renderHosts();
     } else if (state.view === "agents") renderAgents();
+    else if (state.view === "processes") renderProcesses();
+    else if (state.view === "shared") renderShared();
     else if (state.view === "projects") renderProjects();
     else if (state.view === "project") renderProject();
     else if (state.view === "capabilities") renderCapabilities();
@@ -2498,7 +3223,11 @@
 
     "remove-site": function (node) { act("site.remove", { name: node.dataset.name }); },
 
-    "open-url": function (node) { window.open(node.dataset.url, "_blank", "noopener"); },
+    "open-url": function (node) {
+      post("/api/open-url", { url: node.dataset.url }).then(function (res) {
+        if (!res.ok) toast("error", errorOf(res.body, "could not open the URL"));
+      });
+    },
 
     "install-runtime": function (node) {
       toast("info", "installing " + node.dataset.kind + " — the vendor download can take a minute");
@@ -2542,9 +3271,46 @@
       });
     },
 
-    "start-agent": function (node) { startAgent(node.dataset.kind); },
+    "new-session": function (node) {
+      if (node.dataset.kind) newSession(node.dataset.kind);
+      else openNewSession();
+    },
+    "open-session": function (node) { openSession(node.dataset.id); },
+    "stop-session": function (node) { stopSession(node.dataset.id); },
+    "rename-session": function (node) { renameSession(node.dataset.id); },
+    "save-session-label": function (node) { saveSessionLabel(node.dataset.id); },
+    "dismiss-session": function (node) { dismissSession(node.dataset.id); },
+    "delegate-open": function () { openDelegate(); },
+    "delegate-go": function () { delegateTask(); },
+    "task-wait": function (node) { waitTask(node.dataset.id); },
+    "task-cancel": function (node) { cancelTask(node.dataset.id); },
+    "task-result": function (node) { resultTask(node.dataset.id); },
 
-    "stop-agent": function () { stopAgent(); },
+    "process-refresh": function () { loadProcesses().then(renderProcesses); },
+    "process-project": function () { },
+    "approve-project": function () { approveProject(); },
+    "process-start": function (node) { processAction("start", node.dataset.name, false); },
+    "process-stop": function (node) { processAction("stop", node.dataset.name, false); },
+    "process-restart": function (node) { processAction("restart", node.dataset.name, false); },
+    "process-start-all": function () { processAction("start", "", true); },
+    "process-stop-all": function () { processAction("stop", "", true); },
+    "process-logs": function (node) { openProcessLogs(node.dataset.name); },
+    "close-process-logs": function () { state.processes.selected = null; state.processes.log = null; renderProcesses(); },
+
+    "shared-tab": function (node) { state.shared.tab = node.dataset.tab; renderShared(); },
+    "todo-open": function () { state.shared.todoOpen = true; renderShared(); },
+    "todo-cancel": function () { state.shared.todoOpen = false; renderShared(); },
+    "todo-create": function () { createTodo(); },
+    "todo-done": function (node) { completeTodo(node.dataset.id, node.dataset.rev); },
+    "todo-status": function () { },
+    "todo-reopen": function (node) { reopenTodo(node.dataset.id, node.dataset.rev); },
+    "todo-delete": function (node) { deleteTodo(node.dataset.id); },
+    "note-open": function (node) { openNote(node.dataset.name); },
+    "note-open-create": function () { state.shared.noteOpen = true; renderShared(); },
+    "note-cancel": function () { state.shared.noteOpen = false; renderShared(); },
+    "note-create": function () { createNote(); },
+    "note-save": function () { saveNote(); },
+    "note-delete": function () { deleteNote(); },
 
     "reload-preview": function () {
       var frame = el("preview-frame");
@@ -2998,6 +3764,16 @@
 
   document.addEventListener("input", function (event) {
     if (event.target.id === "palette-input") return paletteSearch(event.target.value);
+    if (event.target.id === "process-log-query") {
+      state.processes.logQuery = event.target.value;
+      renderProcesses();
+      var input = el("process-log-query");
+      if (input) {
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+      }
+      return;
+    }
     if (event.target.id === "cap-search") {
       state.caps.q = event.target.value;
       clearTimeout(state.capSearchTimer);
@@ -3020,6 +3796,23 @@
       state.preview.site = event.target.value;
       render();
     }
+    if (event.target.id === "process-project") {
+      state.processes.project = event.target.value;
+      state.processes.plan = null;
+      state.processes.status = null;
+      state.processes.error = null;
+      state.processes.selected = null;
+      loadProcesses().then(renderProcesses);
+    }
+    if (event.target.id === "shared-project") {
+      state.shared.project = event.target.value;
+      state.shared.activeNote = null;
+      state.shared.noteContent = "";
+      loadShared().then(renderShared);
+    }
+    if (event.target.dataset && event.target.dataset.action === "todo-status") {
+      setTodoStatus(event.target.dataset.id, event.target.dataset.rev, event.target.value);
+    }
   });
 
   el("modal-cancel").addEventListener("click", function () { decideModal(false); });
@@ -3040,10 +3833,11 @@
     return loadSession()
       .then(loadServer)
       .then(render)
-      .then(loadAgents)
-      .then(loadDoctor)
-      .then(render)
       .then(loadProjects)
+      .then(render)
+      .then(loadAgents)
+      .then(render)
+      .then(loadDoctor)
       .then(render)
       .then(function () {
         if (!state.session) return;

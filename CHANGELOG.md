@@ -10,6 +10,125 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.8.0] - 2026-10-20 - persistent agents, project processes, shared state and a native shell
+
+The v0.7 roadmap is complete: sessions survive the window, agents can delegate
+real work to other agents, projects declare their processes, people and agents
+share durable notes and todos, and the application is a native desktop app.
+
+### Added
+
+**Persistent agent sessions**
+
+* Every session has a stable id, harness, working directory, owner process,
+  dimensions, lifecycle state, exit code, timestamps and a bounded transcript on
+  disk. Metadata lives in SQLite (schema version 2).
+* The backend owns the PTY. Switching views, opening Preview, switching tabs or
+  reloading the page does not stop or restart the harness. Reopening devd
+  restores the session list and reattaches to a running session.
+* A session list, tabs, rename, stop, dismiss and transcript replay for completed
+  and failed sessions. Output is replayed from a 2 MiB live buffer or the last
+  256 KiB of the transcript, with a byte cursor and a reset signal.
+* Honest reconciliation: a row whose owning process is gone is `stale`; a row
+  owned by another live devd process is `unavailable`; neither is reported as
+  running and attachable.
+
+**Multi-agent orchestration**
+
+* `agent.spawn`, `agent.wait`, `agent.status`, `agent.list`, `agent.result` and
+  `agent.cancel`. A task is a real child PTY running its own harness, not a
+  metadata record.
+* Parent/child task relationships, depth limit 3, 8 unfinished tasks, wait
+  timeout 900 s, task timeout 3600 s, structured results and non-zero exit
+  reporting. A wait timeout does not kill the child.
+* Claude Code tasks use `claude -p`; OpenCode tasks use `opencode run`; custom
+  tasks take an argv array. The child's own permission prompts remain the
+  authority.
+
+**Project processes**
+
+* Versioned `devd.yml` with strict validation: argv commands, project-contained
+  working directories, loopback-only health checks, explicit environment,
+  dependencies, restart policy, startup ordering and unknown-field rejection.
+* `project.plan`, `project.approve` (human-only), `project.status`,
+  `project.start`, `project.stop`, `project.restart` and `project.logs`.
+* A semantic manifest hash must be approved before anything runs; editing the
+  manifest invalidates the approval and blocks automatic restarts.
+* Supervised processes with captured stdout/stderr, pids, exit codes, restart
+  counts, health status, searchable log tails, secret redaction and whole-tree
+  termination.
+
+**Shared state**
+
+* Project-scoped scratchpads with authorship, timestamps, optimistic revisions
+  and `scratch.append` for agent findings.
+* Structured todos with status, priority, assignee, task association,
+  dependencies, transition history, completion, reopening and notes.
+* `scratch.*` and `todo.*` capabilities are available to humans and agents;
+  deletes are destructive and require human approval.
+
+**Native desktop**
+
+* `devd-desktop`, a Tauri 2 window over the existing server and UI. The backend
+  starts in-process on an ephemeral loopback port; the window loads the same HTML
+  and JavaScript.
+* No Tauri commands, no shell/filesystem plugins, no remote IPC access. Top-level
+  navigation is restricted to the devd origin; external links go to the system
+  browser.
+* Graceful shutdown stops PTYs and project processes.
+
+**UI**
+
+* **Agents** with session list, tabs, lifecycle pills, rename/stop/dismiss and a
+  delegated-task panel with Wait, Cancel and Result.
+* **Processes** with manifest review and approval, per-process start/stop/restart,
+  health, pid, restart count, failure detail and filtered logs.
+* **Shared** with todos and scratchpads, revision-aware saving and conflict
+  reporting.
+* Responsive layouts for narrow windows; the terminal remains usable when the
+  session list stacks above it.
+
+### Changed
+
+* The CSP allows inline *style* so xterm.js can position its screen; scripts
+  remain same-origin only, with inline scripts still forbidden.
+* Manifest working directories strip Windows' `\\?\` prefix before they reach a
+  child process, so `cmd.exe` and harnesses start in the project rather than
+  falling back to `C:\Windows`.
+* The registry composition moved into `devd-bootstrap`, shared by the CLI and the
+  desktop shell.
+
+### Security
+
+* Sessions record their owning process; only the owner may write, resize or stop.
+* Terminal input/resize/rename/dismiss are human-only capabilities.
+* Project manifests are executable configuration and require a human approval of
+  their semantic hash.
+* Project environments are explicit; the daemon's own credentials are not
+  inherited.
+* The new capabilities are subject to the existing tier, approval, agent-safety
+  and audit rules.
+
+### Fixed
+
+* A ConPTY session could remain "running" for ever when its child exited but the
+  reader did not reach EOF; a separate child watcher now records the true exit.
+* `cmd.exe` treated canonical `\\?\` paths as UNC and started in the Windows
+  directory.
+
+### Known limitations
+
+* A PTY cannot survive the devd process that owns it. On restart the row becomes
+  `stale` and only its transcript remains.
+* MCP runs in its own process, so an agent-spawned session is owned by that
+  process, not the window. It is genuine, and it is not attachable from the
+  window.
+* Project processes are owned by the process that started them; a second devd
+  reports them as supervised elsewhere rather than adopting them.
+* The Windows installer is not code-signed and the Tauri window requires WebView2.
+
+---
+
 ## [0.7.0] - 2026-10-20 — agents in the window, and a built-in browser
 
 The application window now runs the coding agent you already use and shows the

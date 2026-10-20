@@ -93,7 +93,10 @@ fn stamp(days: i64) -> (time::OffsetDateTime, time::OffsetDateTime) {
     let now = time::OffsetDateTime::now_utc();
     // Backdated an hour so a clock that is slightly behind does not see a
     // not-yet-valid certificate.
-    (now - time::Duration::hours(1), now + time::Duration::days(days))
+    (
+        now - time::Duration::hours(1),
+        now + time::Duration::days(days),
+    )
 }
 
 /// Create the CA if it is missing. Idempotent.
@@ -132,7 +135,10 @@ pub fn ensure_ca(ctx: &Ctx) -> Result<bool> {
         .map_err(|e| DevdError::internal(format!("could not sign the CA certificate: {e}")))?;
 
     util::atomic_write(&ca_cert_path(ctx), &format!("{}\n", cert.pem().trim()))?;
-    write_secret(&ca_key_path(ctx), &format!("{}\n", key.serialize_pem().trim()))?;
+    write_secret(
+        &ca_key_path(ctx),
+        &format!("{}\n", key.serialize_pem().trim()),
+    )?;
     Ok(true)
 }
 
@@ -158,7 +164,9 @@ pub fn issue(ctx: &Ctx, host: &str) -> Result<Issued> {
         .map_err(|e| DevdError::internal(format!("the stored CA certificate is unusable: {e}")))?;
 
     let mut params = CertificateParams::new(vec![host.to_string()]).map_err(|e| {
-        DevdError::invalid(format!("`{host}` cannot be used as a certificate name: {e}"))
+        DevdError::invalid(format!(
+            "`{host}` cannot be used as a certificate name: {e}"
+        ))
     })?;
     params.distinguished_name.push(DnType::CommonName, host);
     params.key_usages = vec![
@@ -510,7 +518,11 @@ pub fn untrust(ctx: &Ctx, machine: bool) -> Result<devd_core::capability::Outcom
         if let Some(trust) = util::which("trust") {
             let out = util::run(
                 &trust,
-                &["anchor".to_string(), "--remove".to_string(), cert.display().to_string()],
+                &[
+                    "anchor".to_string(),
+                    "--remove".to_string(),
+                    cert.display().to_string(),
+                ],
                 None,
                 &[],
                 Some(std::time::Duration::from_secs(60)),
@@ -592,7 +604,10 @@ mod tests {
         // The chain presents the leaf and then the CA.
         assert_eq!(cert.matches("BEGIN CERTIFICATE").count(), 2, "{cert}");
         assert!(cert.starts_with("-----BEGIN CERTIFICATE-----"));
-        assert!(cert.trim_end().ends_with(ca.trim()), "the CA must be last in the chain");
+        assert!(
+            cert.trim_end().ends_with(ca.trim()),
+            "the CA must be last in the chain"
+        );
         assert!(key.contains("BEGIN PRIVATE KEY"), "{key}");
         assert!(key.contains("EC PRIVATE KEY") || key.contains("PRIVATE KEY"));
         assert!(leaf_valid(&c, "blog.test"));
@@ -601,12 +616,18 @@ mod tests {
         // would have written `blog.crt`, and nginx - rendered against
         // `blog.test.crt` - would then have refused to start.
         assert!(
-            issued.cert_path.replace('\\', "/").ends_with("/certs/blog.test.crt"),
+            issued
+                .cert_path
+                .replace('\\', "/")
+                .ends_with("/certs/blog.test.crt"),
             "{}",
             issued.cert_path
         );
         assert!(
-            issued.key_path.replace('\\', "/").ends_with("/certs/blog.test.key"),
+            issued
+                .key_path
+                .replace('\\', "/")
+                .ends_with("/certs/blog.test.key"),
             "{}",
             issued.key_path
         );

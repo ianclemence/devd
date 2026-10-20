@@ -139,9 +139,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             let row = sites::list(ctx)?
                 .into_iter()
                 .find(|r| r.site.name == args.name)
-                .ok_or_else(|| {
-                    DevdError::not_found(format!("no site named `{}`", args.name))
-                })?;
+                .ok_or_else(|| DevdError::not_found(format!("no site named `{}`", args.name)))?;
             let delete = args.delete_files.unwrap_or(false);
             let mut plan = Plan::new(
                 "site.remove",
@@ -215,7 +213,10 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             let plan = sites::hosts::plan(ctx)?;
             Ok(Outcome::with_data(
                 if plan.changes {
-                    format!("{} change(s) pending", plan.adding.len() + plan.removing.len())
+                    format!(
+                        "{} change(s) pending",
+                        plan.adding.len() + plan.removing.len()
+                    )
                 } else {
                     "the hosts file already matches the sites".to_string()
                 },
@@ -257,8 +258,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             if !plan.changes {
                 p = p.step("nothing to change");
             }
-            Ok(p
-                .step("snapshot the current file first")
+            Ok(p.step("snapshot the current file first")
                 .effect("changes how this machine resolves hostnames")
                 .data(json!({
                     "file": plan.file,
@@ -292,10 +292,11 @@ fn create_plan(ctx: &Ctx, args: &CreateArgs) -> Result<Plan> {
         .clone()
         .unwrap_or_else(|| format!("{}.{}", args.name, ctx.settings.tld));
     devd_core::util::validate_hostname(&host)?;
-    let directory = args
-        .root
-        .clone()
-        .unwrap_or_else(|| sites::default_directory(ctx, &args.name).display().to_string());
+    let directory = args.root.clone().unwrap_or_else(|| {
+        sites::default_directory(ctx, &args.name)
+            .display()
+            .to_string()
+    });
     let tls = args.tls.unwrap_or(true);
 
     let mut plan = Plan::new(
@@ -303,7 +304,9 @@ fn create_plan(ctx: &Ctx, args: &CreateArgs) -> Result<Plan> {
         format!("create the site {} served at {host}", args.name),
     )
     .step(format!("create the project directory {directory}"))
-    .step(format!("write a starter index.php in {directory} if it is empty"));
+    .step(format!(
+        "write a starter index.php in {directory} if it is empty"
+    ));
     if tls {
         plan = plan.step(format!(
             "issue a certificate for {host} from the local authority into <devd>/certs"
@@ -313,7 +316,10 @@ fn create_plan(ctx: &Ctx, args: &CreateArgs) -> Result<Plan> {
     }
     plan = plan.step("record the site and re-render the web server configuration");
     if args.db.unwrap_or(false) {
-        plan = plan.step(format!("create the database `{}` if MariaDB is running", args.name));
+        plan = plan.step(format!(
+            "create the database `{}` if MariaDB is running",
+            args.name
+        ));
     }
     plan = plan.step("`devd hosts sync` is a separate, admin-tier step");
 

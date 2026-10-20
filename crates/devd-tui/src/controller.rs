@@ -224,7 +224,11 @@ impl Controller {
                 }
                 return true;
             }
-            Overlay::Detail { title, lines, scroll } => {
+            Overlay::Detail {
+                title,
+                lines,
+                scroll,
+            } => {
                 let scroll = match key {
                     Key::Esc | Key::Enter | Key::Char('q') => {
                         self.state.overlay = Overlay::None;
@@ -238,7 +242,11 @@ impl Controller {
                     Key::End => u16::MAX,
                     _ => scroll,
                 };
-                self.state.overlay = Overlay::Detail { title, lines, scroll };
+                self.state.overlay = Overlay::Detail {
+                    title,
+                    lines,
+                    scroll,
+                };
                 return true;
             }
             Overlay::Approval(_) => {
@@ -360,9 +368,8 @@ impl Controller {
         match self.repo() {
             Some(repo) => Some(repo),
             None => {
-                self.state.fail(
-                    "no repository selected - press 2 to choose one, or t to add a path",
-                );
+                self.state
+                    .fail("no repository selected - press 2 to choose one, or t to add a path");
                 None
             }
         }
@@ -487,10 +494,7 @@ impl Controller {
             self.state.branches.clear();
             return;
         };
-        match self.call(
-            "git.branch.list",
-            json!({ "repo": repo, "all": false }),
-        ) {
+        match self.call("git.branch.list", json!({ "repo": repo, "all": false })) {
             Call::Data(data) => self.state.branches = BranchRow::list_from_json(&data),
             Call::Failed(message) => {
                 self.state.branches.clear();
@@ -529,7 +533,8 @@ impl Controller {
                 let failing = checks.iter().filter(|c| c.level == "fail").count();
                 self.state.checks = checks;
                 if failing > 0 {
-                    self.state.fail(format!("{failing} environment checks failed"));
+                    self.state
+                        .fail(format!("{failing} environment checks failed"));
                 }
             }
             Err(e) => {
@@ -593,10 +598,7 @@ impl Controller {
             return;
         }
         let Some(repo) = self.repo() else { return };
-        match self.call(
-            "git.unstage",
-            json!({ "repo": repo, "paths": [item.path] }),
-        ) {
+        match self.call("git.unstage", json!({ "repo": repo, "paths": [item.path] })) {
             Call::Data(_) | Call::Nothing => self.state.say(format!("unstaged {}", item.path)),
             Call::Failed(message) => self.state.fail(message),
             Call::NeedsApproval => return,
@@ -801,7 +803,8 @@ impl Controller {
                     match serde_json::from_str(trimmed) {
                         Ok(value) => value,
                         Err(e) => {
-                            self.state.fail(format!("arguments are not valid JSON: {e}"));
+                            self.state
+                                .fail(format!("arguments are not valid JSON: {e}"));
                             return;
                         }
                     }
@@ -985,10 +988,7 @@ mod tests {
             self.seen.lock().unwrap().push(record);
 
             if self.human_only.contains(&request.id) {
-                return Err(DevdError::denied(format!(
-                    "`{}` is human-only",
-                    request.id
-                )));
+                return Err(DevdError::denied(format!("`{}` is human-only", request.id)));
             }
             if self.approval_required.contains(&request.id)
                 && approval != Approval::Granted
@@ -1136,7 +1136,8 @@ mod tests {
 
     fn controller() -> (Controller, Calls) {
         let mut fake = Fake::default();
-        fake.answers.insert("git.status".to_string(), status_payload());
+        fake.answers
+            .insert("git.status".to_string(), status_payload());
         fake.answers.insert(
             "git.log".to_string(),
             json!([{ "short": "abc1234", "hash": "abc1234def", "subject": "First", "author": "Ian", "timestamp": 1 }]),
@@ -1156,10 +1157,8 @@ mod tests {
             "git.show".to_string(),
             json!({ "subject": "First", "patch": "diff --git a/x b/x" }),
         );
-        fake.answers.insert(
-            "git.switch.check".to_string(),
-            json!({ "at_risk": [] }),
-        );
+        fake.answers
+            .insert("git.switch.check".to_string(), json!({ "at_risk": [] }));
         fake.approval_required.push("git.discard".to_string());
         fake.human_only.push("git.config.set".to_string());
         let calls = fake.calls();
@@ -1234,7 +1233,10 @@ mod tests {
         // Nothing ran, and the person is looking at a plan.
         assert_eq!(calls.ran("git.discard"), 0);
         let Overlay::Approval(pending) = &controller.state.overlay else {
-            panic!("expected an approval prompt, got {:?}", controller.state.overlay);
+            panic!(
+                "expected an approval prompt, got {:?}",
+                controller.state.overlay
+            );
         };
         assert_eq!(pending.id, "git.discard");
         assert!(pending.plan.is_some(), "the plan was not fetched");
@@ -1395,10 +1397,7 @@ mod tests {
         controller.switch_view(View::Branches);
         controller.state.cursor = 1; // feature
         controller.handle_key(Key::Enter);
-        assert!(calls
-            .seen()
-            .iter()
-            .any(|c| c == "git.switch.check"));
+        assert!(calls.seen().iter().any(|c| c == "git.switch.check"));
         assert_eq!(calls.ran("git.switch"), 1);
         assert!(controller.state.message.contains("switched to feature"));
     }
@@ -1406,7 +1405,8 @@ mod tests {
     #[test]
     fn a_switch_that_would_lose_work_becomes_a_confirm() {
         let mut fake = Fake::default();
-        fake.answers.insert("git.status".to_string(), status_payload());
+        fake.answers
+            .insert("git.status".to_string(), status_payload());
         fake.answers.insert(
             "git.repo.list".to_string(),
             json!([{ "name": "demo", "path": "D:/tmp/demo" }]),
@@ -1424,7 +1424,11 @@ mod tests {
         controller.switch_view(View::Branches);
         controller.handle_key(Key::Enter);
 
-        assert_eq!(calls.ran("git.switch"), 0, "an unsafe switch ran unreviewed");
+        assert_eq!(
+            calls.ran("git.switch"),
+            0,
+            "an unsafe switch ran unreviewed"
+        );
         let Overlay::Approval(pending) = &controller.state.overlay else {
             panic!("expected a confirm, got {:?}", controller.state.overlay);
         };
@@ -1503,7 +1507,10 @@ mod tests {
             "[]",
             "nothing: (none)",
         ] {
-            assert!(joined.contains(expected), "missing `{expected}` in:\n{joined}");
+            assert!(
+                joined.contains(expected),
+                "missing `{expected}` in:\n{joined}"
+            );
         }
     }
 }

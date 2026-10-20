@@ -39,11 +39,13 @@ if (-not $SkipTests) {
 }
 
 Write-Host "==> cargo build --release" -ForegroundColor Cyan
-cargo build --release -p devd-cli
+cargo build --release -p devd-cli -p devd-desktop
 if ($LASTEXITCODE -ne 0) { throw "the release build failed" }
 
 $bin = "target/release/devd.exe"
 if (-not (Test-Path $bin)) { throw "the build did not produce $bin" }
+$desktopBin = "target/release/devd-desktop.exe"
+if (-not (Test-Path $desktopBin)) { throw "the build did not produce $desktopBin" }
 
 # The artifact is only published after it has run. A temporary home keeps this
 # away from whatever is already installed on the machine.
@@ -75,10 +77,17 @@ finally {
 
 New-Item -ItemType Directory -Force dist | Out-Null
 Copy-Item $bin "dist/$name" -Force
+$desktopName = "devd-desktop-v$version-$target.exe"
+Copy-Item $desktopBin "dist/$desktopName" -Force
 
 $sha = (Get-FileHash "dist/$name" -Algorithm SHA256).Hash.ToLower()
-"$sha  $name" | Out-File -Encoding ascii "dist/SHA256SUMS.txt"
+$desktopSha = (Get-FileHash "dist/$desktopName" -Algorithm SHA256).Hash.ToLower()
+@(
+    "$sha  $name"
+    "$desktopSha  $desktopName"
+) | Out-File -Encoding ascii "dist/SHA256SUMS.txt"
 
 Write-Host ""
 Write-Host "wrote dist/$name" -ForegroundColor Green
+Write-Host "wrote dist/$desktopName" -ForegroundColor Green
 Get-Content "dist/SHA256SUMS.txt"

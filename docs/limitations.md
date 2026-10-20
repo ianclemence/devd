@@ -5,7 +5,7 @@ partially, and the platform-specific behaviour worth knowing before relying on
 it. Each entry states the consequence and, where one exists, the change that
 would close it.
 
-This document describes the current release, v0.5.0. See
+This document describes the current release, v0.8.0. See
 [`CHANGELOG.md`](../CHANGELOG.md) for what it contains.
 
 ## Not implemented at all
@@ -204,3 +204,19 @@ and are recorded so they are not rediscovered:
 * **`mysql --batch` prints a header row.** Parsing `SHOW DATABASES` naively made
   `schema_name` appear as a database. The client is now invoked with
   `--skip-column-names`.
+
+## Sessions, agents and the desktop shell (v0.8.0)
+
+| Item | What it is | What it would be |
+| --- | --- | --- |
+| Reattachment across a backend restart | Impossible, and reported as such. A PTY handle belongs to the process that opened it. On startup a row whose owner is gone becomes `stale`; its transcript remains readable. | A detached supervisor process that owns PTYs independently of the UI process, with a reconnect protocol. This is a deliberate non-goal for the current single-process model. |
+| One owner per PTY | A session is owned by one devd process. Another process can list it and read the transcript but cannot attach. MCP launched by an agent is a separate process, so an agent-spawned session belongs to the MCP process, not the window. | A privileged IPC or named-pipe bridge from MCP to the running UI server. The metadata model already records the owner; the transport is missing. |
+| Quitting the desktop app | Stops PTYs and project processes, as a normal exit should. A crash or `TerminateProcess` may leave children; Windows Job Objects would close that gap. | A job object with kill-on-close on Windows, and a reaper on Linux. |
+| Delegation harness modes | Claude uses `claude -p` (print mode) and OpenCode uses `opencode run`. Interactive permission prompts are not answered for the child; if the harness needs a decision it can fail, and that failure is the result. | A PTY-level handoff that lets a person answer the child's prompt without proxying its model. |
+| Delegation across machines | Local only. There is no remote agent pool. | Remote executors with the same typed task contract. |
+| Project process adoption | A project process belongs to the devd process that started it. A second process reports it as supervised elsewhere rather than adopting it. | A small detached supervisor with pid-file ownership discovery. |
+| Windows `.cmd` shims | Started through `cmd.exe /c <shim> <args>`. Arguments remain separate, but a shim can itself interpret them. | Vendor-native `.exe` wrappers where available. |
+| Manifest secrets | Declared values are redacted from log reads on a best-effort key match. A program can print a secret in another form. | Structured secret references (OS credential store) rather than literal values in `devd.yml`. |
+| Tauri packaging | `cargo build` produces the portable executable; the NSIS installer script installs both binaries. The build is not code-signed and requires WebView2 (present with current Edge). | Code signing and an MSI/NSIS bundle produced by `cargo tauri build` in CI. |
+| Tauri and `devd ui` at once | Each starts its own backend. Sessions and processes are not shared; each reports the other's resources as unavailable/unsupervised. | A single-instance handshake that hands the window to an existing backend (the token would then need a secure handoff). |
+| Shared-state access control | Project-scoped by canonical path, not by per-user ACL. A local user who can read `state.db` can read every note. | Per-user encryption or an OS credential-store key. |

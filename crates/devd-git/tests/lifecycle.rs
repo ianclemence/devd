@@ -39,8 +39,13 @@ impl Fixture {
         // on the machine's global Git configuration.
         git.config_set(Some(&repo), "user.name", "devd test", ConfigScope::Local)
             .expect("user.name");
-        git.config_set(Some(&repo), "user.email", "devd@example.test", ConfigScope::Local)
-            .expect("user.email");
+        git.config_set(
+            Some(&repo),
+            "user.email",
+            "devd@example.test",
+            ConfigScope::Local,
+        )
+        .expect("user.email");
         git.config_set(Some(&repo), "commit.gpgsign", "false", ConfigScope::Local)
             .expect("commit.gpgsign");
         // Line-ending translation is pinned off so tests compare the bytes they
@@ -220,7 +225,9 @@ fn amend_replaces_the_previous_commit_instead_of_adding_one() {
 
     fx.write("a.txt", "two\n");
     fx.git.stage(&fx.repo, &[".".to_string()]).unwrap();
-    fx.git.commit(&fx.repo, "first, fixed", true, false).unwrap();
+    fx.git
+        .commit(&fx.repo, "first, fixed", true, false)
+        .unwrap();
 
     let subjects = fx.subjects(5);
     assert_eq!(subjects, vec!["first, fixed".to_string()]);
@@ -255,7 +262,9 @@ fn branch_create_switch_and_merge() {
     fx.write("a.txt", "base\n");
     fx.commit_all("base");
 
-    fx.git.create_branch(&fx.repo, "feature", None, true).unwrap();
+    fx.git
+        .create_branch(&fx.repo, "feature", None, true)
+        .unwrap();
     assert_eq!(
         fx.git.current_branch(&fx.repo).unwrap().as_deref(),
         Some("feature")
@@ -264,14 +273,18 @@ fn branch_create_switch_and_merge() {
     fx.write("feature.txt", "feature\n");
     fx.commit_all("add feature");
 
-    fx.git.switch_branch(&fx.repo, "main", false, false).unwrap();
+    fx.git
+        .switch_branch(&fx.repo, "main", false, false)
+        .unwrap();
     assert_eq!(
         fx.git.current_branch(&fx.repo).unwrap().as_deref(),
         Some("main")
     );
     assert!(!fx.path("feature.txt").exists(), "not merged yet");
 
-    fx.git.merge(&fx.repo, "feature", false, false, None).unwrap();
+    fx.git
+        .merge(&fx.repo, "feature", false, false, None)
+        .unwrap();
     assert!(fx.path("feature.txt").exists(), "merged");
     assert_eq!(
         fx.subjects(10),
@@ -306,7 +319,9 @@ fn switch_safety_reports_the_files_a_switch_would_overwrite() {
     fx.git.create_branch(&fx.repo, "other", None, true).unwrap();
     fx.write("a.txt", "other version\n");
     fx.commit_all("change a on other");
-    fx.git.switch_branch(&fx.repo, "main", false, false).unwrap();
+    fx.git
+        .switch_branch(&fx.repo, "main", false, false)
+        .unwrap();
 
     // Uncommitted work in a file the target branch also changed.
     fx.write("a.txt", "local work\n");
@@ -323,22 +338,37 @@ fn rename_and_delete_branches() {
     let fx = Fixture::new("branch-admin");
     fx.write("a.txt", "a\n");
     fx.commit_all("base");
-    fx.git.create_branch(&fx.repo, "old-name", None, false).unwrap();
-    fx.git.rename_branch(&fx.repo, "old-name", "new-name").unwrap();
+    fx.git
+        .create_branch(&fx.repo, "old-name", None, false)
+        .unwrap();
+    fx.git
+        .rename_branch(&fx.repo, "old-name", "new-name")
+        .unwrap();
     assert!(fx.branch_names().contains(&"new-name".to_string()));
 
     // A branch that is fully merged is safe to delete.
-    fx.git.delete_branch(&fx.repo, "new-name", false, None).unwrap();
+    fx.git
+        .delete_branch(&fx.repo, "new-name", false, None)
+        .unwrap();
     assert!(!fx.branch_names().contains(&"new-name".to_string()));
 
     // Force is required for an unmerged branch, which is exactly the guard the
     // destructive capability surfaces as an approval.
-    fx.git.create_branch(&fx.repo, "unmerged", None, true).unwrap();
+    fx.git
+        .create_branch(&fx.repo, "unmerged", None, true)
+        .unwrap();
     fx.write("u.txt", "u\n");
     fx.commit_all("only on unmerged");
-    fx.git.switch_branch(&fx.repo, "main", false, false).unwrap();
-    assert!(fx.git.delete_branch(&fx.repo, "unmerged", false, None).is_err());
-    fx.git.delete_branch(&fx.repo, "unmerged", true, None).unwrap();
+    fx.git
+        .switch_branch(&fx.repo, "main", false, false)
+        .unwrap();
+    assert!(fx
+        .git
+        .delete_branch(&fx.repo, "unmerged", false, None)
+        .is_err());
+    fx.git
+        .delete_branch(&fx.repo, "unmerged", true, None)
+        .unwrap();
     assert!(!fx.branch_names().contains(&"unmerged".to_string()));
 }
 
@@ -348,23 +378,36 @@ fn prune_merged_branches_deletes_only_what_is_merged() {
     fx.write("a.txt", "a\n");
     fx.commit_all("base");
 
-    fx.git.create_branch(&fx.repo, "merged", None, true).unwrap();
+    fx.git
+        .create_branch(&fx.repo, "merged", None, true)
+        .unwrap();
     fx.write("m.txt", "m\n");
     fx.commit_all("merged work");
-    fx.git.switch_branch(&fx.repo, "main", false, false).unwrap();
-    fx.git.merge(&fx.repo, "merged", false, false, None).unwrap();
+    fx.git
+        .switch_branch(&fx.repo, "main", false, false)
+        .unwrap();
+    fx.git
+        .merge(&fx.repo, "merged", false, false, None)
+        .unwrap();
 
-    fx.git.create_branch(&fx.repo, "unmerged", None, true).unwrap();
+    fx.git
+        .create_branch(&fx.repo, "unmerged", None, true)
+        .unwrap();
     fx.write("u.txt", "u\n");
     fx.commit_all("unmerged work");
-    fx.git.switch_branch(&fx.repo, "main", false, false).unwrap();
+    fx.git
+        .switch_branch(&fx.repo, "main", false, false)
+        .unwrap();
 
     let candidates = fx
         .git
         .prune_merged_branches(&fx.repo, "HEAD", true)
         .unwrap();
     assert!(candidates.contains(&"merged".to_string()), "{candidates:?}");
-    assert!(!candidates.contains(&"unmerged".to_string()), "{candidates:?}");
+    assert!(
+        !candidates.contains(&"unmerged".to_string()),
+        "{candidates:?}"
+    );
 
     let deleted = fx
         .git
@@ -384,15 +427,21 @@ fn rebase_replays_local_commits_onto_another_branch() {
     fx.write("base.txt", "base\n");
     fx.commit_all("base");
 
-    fx.git.create_branch(&fx.repo, "feature", None, true).unwrap();
+    fx.git
+        .create_branch(&fx.repo, "feature", None, true)
+        .unwrap();
     fx.write("feature.txt", "feature\n");
     fx.commit_all("feature work");
 
-    fx.git.switch_branch(&fx.repo, "main", false, false).unwrap();
+    fx.git
+        .switch_branch(&fx.repo, "main", false, false)
+        .unwrap();
     fx.write("main.txt", "main\n");
     fx.commit_all("main work");
 
-    fx.git.switch_branch(&fx.repo, "feature", false, false).unwrap();
+    fx.git
+        .switch_branch(&fx.repo, "feature", false, false)
+        .unwrap();
     fx.git.rebase(&fx.repo, "main", false, false).unwrap();
 
     assert_eq!(
@@ -456,21 +505,30 @@ fn a_merge_conflict_is_detected_resolved_and_committed() {
     fx.write("z.txt", "base\n");
     fx.commit_all("base");
 
-    fx.git.create_branch(&fx.repo, "feature", None, true).unwrap();
+    fx.git
+        .create_branch(&fx.repo, "feature", None, true)
+        .unwrap();
     fx.write("z.txt", "feature\n");
     fx.commit_all("feature change");
 
-    fx.git.switch_branch(&fx.repo, "main", false, false).unwrap();
+    fx.git
+        .switch_branch(&fx.repo, "main", false, false)
+        .unwrap();
     fx.write("z.txt", "main\n");
     fx.commit_all("main change");
 
     // A conflicted merge is a state, not a failure.
-    fx.git.merge(&fx.repo, "feature", false, false, None).unwrap();
+    fx.git
+        .merge(&fx.repo, "feature", false, false, None)
+        .unwrap();
 
     let status = fx.git.status(&fx.repo).unwrap();
     assert_eq!(status.conflicted, vec!["z.txt".to_string()]);
     assert_eq!(status.in_progress.as_deref(), Some("merge"));
-    assert_eq!(fx.git.conflicts(&fx.repo).unwrap(), vec!["z.txt".to_string()]);
+    assert_eq!(
+        fx.git.conflicts(&fx.repo).unwrap(),
+        vec!["z.txt".to_string()]
+    );
 
     // The conflicted file exposes both sides before a choice is made.
     let conflicted = fx.git.conflicted_file(&fx.repo, "z.txt").unwrap();
@@ -496,18 +554,24 @@ fn aborting_a_conflicted_merge_never_removes_unrelated_user_work() {
     fx.write("user.txt", "committed\n");
     fx.commit_all("base");
 
-    fx.git.create_branch(&fx.repo, "feature", None, true).unwrap();
+    fx.git
+        .create_branch(&fx.repo, "feature", None, true)
+        .unwrap();
     fx.write("z.txt", "feature\n");
     fx.commit_all("feature change");
 
-    fx.git.switch_branch(&fx.repo, "main", false, false).unwrap();
+    fx.git
+        .switch_branch(&fx.repo, "main", false, false)
+        .unwrap();
     fx.write("z.txt", "main\n");
     fx.commit_all("main change");
 
     // Work in progress that the merge does not touch.
     fx.write("user.txt", "uncommitted work\n");
 
-    fx.git.merge(&fx.repo, "feature", false, false, None).unwrap();
+    fx.git
+        .merge(&fx.repo, "feature", false, false, None)
+        .unwrap();
     assert_eq!(
         fx.git.status(&fx.repo).unwrap().in_progress.as_deref(),
         Some("merge")
@@ -533,16 +597,22 @@ fn aborting_a_conflicted_rebase_restores_the_original_branch() {
     fx.write("z.txt", "base\n");
     fx.commit_all("base");
 
-    fx.git.create_branch(&fx.repo, "feature", None, true).unwrap();
+    fx.git
+        .create_branch(&fx.repo, "feature", None, true)
+        .unwrap();
     fx.write("z.txt", "feature\n");
     fx.commit_all("feature change");
 
-    fx.git.switch_branch(&fx.repo, "main", false, false).unwrap();
+    fx.git
+        .switch_branch(&fx.repo, "main", false, false)
+        .unwrap();
     fx.write("z.txt", "main\n");
     fx.commit_all("main change");
     let main_tip = fx.git.rev_parse(&fx.repo, "main").unwrap();
 
-    fx.git.switch_branch(&fx.repo, "feature", false, false).unwrap();
+    fx.git
+        .switch_branch(&fx.repo, "feature", false, false)
+        .unwrap();
     fx.git.rebase(&fx.repo, "main", false, false).unwrap();
 
     let status = fx.git.status(&fx.repo).unwrap();
@@ -611,7 +681,9 @@ fn the_reflog_makes_a_hard_reset_recoverable() {
 
     let entries = fx.git.reflog(&fx.repo, 20).unwrap();
     assert!(
-        entries.iter().any(|e| e.contains("second") || e.contains("reset")),
+        entries
+            .iter()
+            .any(|e| e.contains("second") || e.contains("reset")),
         "reflog should record the reset: {entries:?}"
     );
 
@@ -654,7 +726,9 @@ fn the_stash_lifecycle_shelves_and_restores_work() {
     assert_eq!(fx.git.stash_list(&fx.repo).unwrap().len(), 1);
 
     // A second stash of the same work, then `pop`, which restores and drops.
-    fx.git.stash_push(&fx.repo, Some("again"), false, false).unwrap();
+    fx.git
+        .stash_push(&fx.repo, Some("again"), false, false)
+        .unwrap();
     assert_eq!(fx.read("a.txt"), "one\n");
     fx.git.stash_apply(&fx.repo, None, true, false).unwrap();
     assert_eq!(fx.read("a.txt"), "work in progress\n");
@@ -662,7 +736,9 @@ fn the_stash_lifecycle_shelves_and_restores_work() {
 
     // Dropping is explicit and removes exactly the named entry.
     let remaining = fx.git.stash_list(&fx.repo).unwrap();
-    fx.git.stash_drop(&fx.repo, &remaining[0].reference).unwrap();
+    fx.git
+        .stash_drop(&fx.repo, &remaining[0].reference)
+        .unwrap();
     assert!(fx.git.stash_list(&fx.repo).unwrap().is_empty());
     assert_eq!(fx.read("a.txt"), "work in progress\n", "files untouched");
 }
@@ -678,7 +754,9 @@ fn the_worktree_lifecycle_adds_lists_and_removes() {
     // main worktree moves aside first.
     fx.write("b.txt", "b\n");
     fx.commit_all("second");
-    fx.git.create_branch(&fx.repo, "wt-other", None, false).unwrap();
+    fx.git
+        .create_branch(&fx.repo, "wt-other", None, false)
+        .unwrap();
 
     let holder = temp_dir("worktree-holder");
     let wt_path = holder.path().join("linked");
@@ -699,9 +777,14 @@ fn the_worktree_lifecycle_adds_lists_and_removes() {
     // The linked worktree is an independent working tree over the same history.
     std::fs::write(wt_path.join("c.txt"), "c\n").unwrap();
     fx.git.stage(&wt_path, &[".".to_string()]).unwrap();
-    fx.git.commit(&wt_path, "from the worktree", false, false).unwrap();
+    fx.git
+        .commit(&wt_path, "from the worktree", false, false)
+        .unwrap();
     assert!(fx.branch_names().contains(&"wt-other".to_string()));
-    assert!(!fx.path("c.txt").exists(), "the main worktree is unaffected");
+    assert!(
+        !fx.path("c.txt").exists(),
+        "the main worktree is unaffected"
+    );
 
     fx.git.worktree_remove(&fx.repo, &wt_path, false).unwrap();
     assert_eq!(fx.git.worktrees(&fx.repo).unwrap().len(), 1);
@@ -717,14 +800,13 @@ fn removing_a_dirty_worktree_requires_force() {
 
     let holder = temp_dir("worktree-force-holder");
     let wt_path = holder.path().join("linked");
-    fx.git.worktree_add(&fx.repo, &wt_path, "wt", false).unwrap();
+    fx.git
+        .worktree_add(&fx.repo, &wt_path, "wt", false)
+        .unwrap();
     std::fs::write(wt_path.join("dirty.txt"), "uncommitted\n").unwrap();
 
     // Removing a worktree with uncommitted work must not silently succeed.
-    assert!(fx
-        .git
-        .worktree_remove(&fx.repo, &wt_path, false)
-        .is_err());
+    assert!(fx.git.worktree_remove(&fx.repo, &wt_path, false).is_err());
     assert!(wt_path.join("dirty.txt").exists(), "work preserved");
 
     fx.git.worktree_remove(&fx.repo, &wt_path, true).unwrap();
@@ -752,7 +834,9 @@ fn tags_cherry_pick_and_revert() {
     fx.commit_all("second");
     let second = fx.git.rev_parse(&fx.repo, "HEAD").unwrap();
 
-    fx.git.create_branch(&fx.repo, "target", None, true).unwrap();
+    fx.git
+        .create_branch(&fx.repo, "target", None, true)
+        .unwrap();
     fx.git.reset(&fx.repo, ResetMode::Hard, "HEAD~1").unwrap();
     fx.git.cherry_pick(&fx.repo, &second, false).unwrap();
     assert!(fx.path("b.txt").exists());
@@ -782,7 +866,15 @@ fn clone_fetch_pull_and_push_against_a_local_remote() {
 
     let remote_dir = temp_dir("bare-remote");
     let bare = remote_dir.path().join("origin.git");
-    origin.raw(None, &["init", "--bare", "--initial-branch=main", bare.to_str().unwrap()]);
+    origin.raw(
+        None,
+        &[
+            "init",
+            "--bare",
+            "--initial-branch=main",
+            bare.to_str().unwrap(),
+        ],
+    );
     let url = file_url(&bare);
 
     origin.git.remote_add(&origin.repo, "origin", &url).unwrap();
@@ -792,10 +884,19 @@ fn clone_fetch_pull_and_push_against_a_local_remote() {
 
     origin
         .git
-        .push(&origin.repo, "origin", Some("main"), true, ForcePush::None, false)
+        .push(
+            &origin.repo,
+            "origin",
+            Some("main"),
+            true,
+            ForcePush::None,
+            false,
+        )
         .unwrap();
     assert_eq!(
-        origin.raw(Some(&bare), &["rev-parse", "--verify", "main"]).trim(),
+        origin
+            .raw(Some(&bare), &["rev-parse", "--verify", "main"])
+            .trim(),
         first
     );
     let status = origin.git.status(&origin.repo).unwrap();
@@ -827,12 +928,22 @@ fn clone_fetch_pull_and_push_against_a_local_remote() {
     let second = origin.git.rev_parse(&clone_path, "HEAD").unwrap();
     origin
         .git
-        .push(&clone_path, "origin", Some("main"), false, ForcePush::None, false)
+        .push(
+            &clone_path,
+            "origin",
+            Some("main"),
+            false,
+            ForcePush::None,
+            false,
+        )
         .unwrap();
 
     // The origin sees the new commit only after a fetch, and the preview says so
     // before anything is integrated.
-    origin.git.fetch(&origin.repo, Some("origin"), false).unwrap();
+    origin
+        .git
+        .fetch(&origin.repo, Some("origin"), false)
+        .unwrap();
     let preview = origin
         .git
         .sync_preview(&origin.repo, "origin", "main", 10)
@@ -845,7 +956,12 @@ fn clone_fetch_pull_and_push_against_a_local_remote() {
 
     origin
         .git
-        .pull(&origin.repo, Some("origin"), Some("main"), PullStrategy::FastForwardOnly)
+        .pull(
+            &origin.repo,
+            Some("origin"),
+            Some("main"),
+            PullStrategy::FastForwardOnly,
+        )
         .unwrap();
     assert_eq!(origin.git.rev_parse(&origin.repo, "HEAD").unwrap(), second);
     assert_eq!(origin.read("b.txt"), "two\n");
@@ -859,12 +975,27 @@ fn a_diverged_branch_refuses_a_fast_forward_only_pull() {
     origin.commit_all("first: -");
     let remote_dir = temp_dir("diverged-bare");
     let bare = remote_dir.path().join("origin.git");
-    origin.raw(None, &["init", "--bare", "--initial-branch=main", bare.to_str().unwrap()]);
+    origin.raw(
+        None,
+        &[
+            "init",
+            "--bare",
+            "--initial-branch=main",
+            bare.to_str().unwrap(),
+        ],
+    );
     let url = file_url(&bare);
     origin.git.remote_add(&origin.repo, "origin", &url).unwrap();
     origin
         .git
-        .push(&origin.repo, "origin", Some("main"), true, ForcePush::None, false)
+        .push(
+            &origin.repo,
+            "origin",
+            Some("main"),
+            true,
+            ForcePush::None,
+            false,
+        )
         .unwrap();
 
     let clone_dir = temp_dir("diverged-clone");
@@ -877,16 +1008,29 @@ fn a_diverged_branch_refuses_a_fast_forward_only_pull() {
     // Both sides commit, so the histories diverge.
     std::fs::write(clone_path.join("b.txt"), "b\n").unwrap();
     origin.git.stage(&clone_path, &[".".to_string()]).unwrap();
-    origin.git.commit(&clone_path, "from clone", false, false).unwrap();
     origin
         .git
-        .push(&clone_path, "origin", Some("main"), false, ForcePush::None, false)
+        .commit(&clone_path, "from clone", false, false)
+        .unwrap();
+    origin
+        .git
+        .push(
+            &clone_path,
+            "origin",
+            Some("main"),
+            false,
+            ForcePush::None,
+            false,
+        )
         .unwrap();
 
     origin.write("c.txt", "c\n");
     origin.commit_all("from origin");
 
-    origin.git.fetch(&origin.repo, Some("origin"), false).unwrap();
+    origin
+        .git
+        .fetch(&origin.repo, Some("origin"), false)
+        .unwrap();
     let preview = origin
         .git
         .sync_preview(&origin.repo, "origin", "main", 10)
@@ -896,7 +1040,12 @@ fn a_diverged_branch_refuses_a_fast_forward_only_pull() {
     // Fast-forward-only must refuse rather than create a merge commit.
     assert!(origin
         .git
-        .pull(&origin.repo, Some("origin"), Some("main"), PullStrategy::FastForwardOnly)
+        .pull(
+            &origin.repo,
+            Some("origin"),
+            Some("main"),
+            PullStrategy::FastForwardOnly
+        )
         .is_err());
     // The local commit is untouched by the refusal.
     assert!(origin.path("c.txt").exists());
@@ -916,12 +1065,27 @@ fn a_force_push_can_recover_a_rewritten_remote_branch() {
 
     let remote_dir = temp_dir("force-bare");
     let bare = remote_dir.path().join("origin.git");
-    origin.raw(None, &["init", "--bare", "--initial-branch=main", bare.to_str().unwrap()]);
+    origin.raw(
+        None,
+        &[
+            "init",
+            "--bare",
+            "--initial-branch=main",
+            bare.to_str().unwrap(),
+        ],
+    );
     let url = file_url(&bare);
     origin.git.remote_add(&origin.repo, "origin", &url).unwrap();
     origin
         .git
-        .push(&origin.repo, "origin", Some("main"), true, ForcePush::None, false)
+        .push(
+            &origin.repo,
+            "origin",
+            Some("main"),
+            true,
+            ForcePush::None,
+            false,
+        )
         .unwrap();
 
     // Rewrite local history, which makes the remote ref a non-fast-forward.
@@ -929,14 +1093,30 @@ fn a_force_push_can_recover_a_rewritten_remote_branch() {
     // The clone knows the remote's tip, so it can push safely with a lease.
     assert!(origin
         .git
-        .push(&origin.repo, "origin", Some("main"), false, ForcePush::None, false)
+        .push(
+            &origin.repo,
+            "origin",
+            Some("main"),
+            false,
+            ForcePush::None,
+            false
+        )
         .is_err());
     origin
         .git
-        .push(&origin.repo, "origin", Some("main"), false, ForcePush::WithLease, false)
+        .push(
+            &origin.repo,
+            "origin",
+            Some("main"),
+            false,
+            ForcePush::WithLease,
+            false,
+        )
         .unwrap();
     assert_eq!(
-        origin.raw(Some(&bare), &["log", "--format=%s", "-1", "main"]).trim(),
+        origin
+            .raw(Some(&bare), &["log", "--format=%s", "-1", "main"])
+            .trim(),
         "combined"
     );
 }
@@ -950,7 +1130,11 @@ fn a_remote_url_with_credentials_is_refused_and_redacted() {
     // A password in a remote URL would be written to `.git/config` in plain text.
     let err = fx
         .git
-        .remote_add(&fx.repo, "origin", "https://user:ghp_secret@github.com/a/b.git")
+        .remote_add(
+            &fx.repo,
+            "origin",
+            "https://user:ghp_secret@github.com/a/b.git",
+        )
         .expect_err("a credential-bearing URL must be refused");
     let message = err.to_string();
     assert!(!message.contains("ghp_secret"), "{message}");
@@ -965,11 +1149,21 @@ fn a_remote_url_with_credentials_is_refused_and_redacted() {
     // A credential-looking key cannot be written either.
     assert!(fx
         .git
-        .config_set(Some(&fx.repo), "user.password", "hunter2", ConfigScope::Local)
+        .config_set(
+            Some(&fx.repo),
+            "user.password",
+            "hunter2",
+            ConfigScope::Local
+        )
         .is_err());
     assert!(fx
         .git
-        .config_set(Some(&fx.repo), "http.extraHeader", "AUTHORIZATION: basic x", ConfigScope::Local)
+        .config_set(
+            Some(&fx.repo),
+            "http.extraHeader",
+            "AUTHORIZATION: basic x",
+            ConfigScope::Local
+        )
         .is_err());
 }
 
@@ -1016,12 +1210,27 @@ fn outgoing_and_incoming_are_reported_separately() {
     origin.commit_all("first");
     let remote_dir = temp_dir("sync-bare");
     let bare = remote_dir.path().join("origin.git");
-    origin.raw(None, &["init", "--bare", "--initial-branch=main", bare.to_str().unwrap()]);
+    origin.raw(
+        None,
+        &[
+            "init",
+            "--bare",
+            "--initial-branch=main",
+            bare.to_str().unwrap(),
+        ],
+    );
     let url = file_url(&bare);
     origin.git.remote_add(&origin.repo, "origin", &url).unwrap();
     origin
         .git
-        .push(&origin.repo, "origin", Some("main"), true, ForcePush::None, false)
+        .push(
+            &origin.repo,
+            "origin",
+            Some("main"),
+            true,
+            ForcePush::None,
+            false,
+        )
         .unwrap();
 
     let clone_dir = temp_dir("sync-clone");
@@ -1034,7 +1243,10 @@ fn outgoing_and_incoming_are_reported_separately() {
     // The clone is ahead: one local commit that the remote does not have.
     std::fs::write(clone_path.join("b.txt"), "b\n").unwrap();
     origin.git.stage(&clone_path, &[".".to_string()]).unwrap();
-    origin.git.commit(&clone_path, "local only", false, false).unwrap();
+    origin
+        .git
+        .commit(&clone_path, "local only", false, false)
+        .unwrap();
 
     let outgoing = origin
         .git
@@ -1061,8 +1273,13 @@ fn filesystem_paths_with_spaces_are_handled() {
     let repo = git.init(&spaced, "main").unwrap();
     git.config_set(Some(&repo), "user.name", "devd test", ConfigScope::Local)
         .unwrap();
-    git.config_set(Some(&repo), "user.email", "devd@example.test", ConfigScope::Local)
-        .unwrap();
+    git.config_set(
+        Some(&repo),
+        "user.email",
+        "devd@example.test",
+        ConfigScope::Local,
+    )
+    .unwrap();
     std::fs::write(repo.join("a file.txt"), "content\n").unwrap();
 
     git.stage(&repo, &[".".to_string()]).unwrap();
@@ -1070,8 +1287,5 @@ fn filesystem_paths_with_spaces_are_handled() {
     assert!(git.status(&repo).unwrap().clean);
     // The single root commit holds the file; `show` reads it back through the
     // same argv-only path.
-    assert!(git
-        .show(&repo, "HEAD")
-        .unwrap()
-        .contains("a file.txt"));
+    assert!(git.show(&repo, "HEAD").unwrap().contains("a file.txt"));
 }

@@ -2,10 +2,12 @@
 
 A local development environment manager, written in Rust. It installs and runs
 the services a PHP or Node project needs — nginx, MariaDB, PHP, Node.js, Go —
-creates virtual hosts served over HTTPS under a local domain, previews them
-inside the application window, and exposes every operation as a typed,
-permissioned capability reachable from the CLI, a terminal dashboard, the
-application window and an MCP server.
+creates virtual hosts served over HTTPS under a local domain, runs the coding
+agents you already use in persistent PTYs, supervises project processes declared
+in `devd.yml`, keeps shared notes and todos for people and agents, previews the
+site inside a native window, and exposes every operation as a typed, permissioned
+capability reachable from the CLI, a terminal dashboard, the application window
+and an MCP server.
 
 devd replaces Windows-only stacks such as Laragon and XAMPP. It is built on two
 rules:
@@ -22,6 +24,7 @@ rules:
 
 - **Windows 10/11 x64** or **Linux x64**.
 - The Windows installer needs nothing else: no Rust, no administrator rights.
+  The native window uses the WebView2 runtime that ships with current Edge.
 - Building from source needs Rust 1.77 or newer and a C compiler (`cc`) for the
   bundled SQLite.
 - Git must be on `PATH` (or named in `git_executable`) for the Git capabilities.
@@ -39,14 +42,15 @@ Download and run the installer from the
 [latest release](https://github.com/ianclemence/devd/releases/latest):
 
 ```powershell
-curl.exe -LO https://github.com/ianclemence/devd/releases/download/v0.5.1/devd-setup-0.5.1.exe
-.\devd-setup-0.5.1.exe
+curl.exe -LO https://github.com/ianclemence/devd/releases/download/v0.8.0/devd-setup-0.8.0.exe
+.\devd-setup-0.8.0.exe
 ```
 
-It installs for the current user only — no administrator prompt — adds `devd`
-to `PATH`, and creates a Start Menu entry. On the last page, **Set up devd and
-open it** downloads PHP, nginx and MariaDB (about 140 MB), starts them, creates
-a site at `https://localhost:<port>` and opens the application.
+It installs for the current user only - no administrator prompt - adds `devd`
+to `PATH`, creates Start Menu entries and installs the native `devd-desktop`
+window. On the last page, **Set up devd and open it** downloads PHP, nginx and
+MariaDB (about 140 MB), starts them, creates a site and opens the desktop
+application.
 
 Uninstalling keeps your sites and data in `%LOCALAPPDATA%\devd`.
 
@@ -59,17 +63,27 @@ The same binary is attached as a standalone executable if you would rather not
 install anything. Download it, verify it, and put it on `PATH`:
 
 ```powershell
-curl.exe -LO https://github.com/ianclemence/devd/releases/download/v0.5.1/devd-v0.5.1-x86_64-pc-windows-gnu.exe
-curl.exe -LO https://github.com/ianclemence/devd/releases/download/v0.5.1/SHA256SUMS.txt
-certutil -hashfile devd-v0.5.1-x86_64-pc-windows-gnu.exe SHA256
+curl.exe -LO https://github.com/ianclemence/devd/releases/download/v0.8.0/devd-v0.8.0-x86_64-pc-windows-gnu.exe
+curl.exe -LO https://github.com/ianclemence/devd/releases/download/v0.8.0/SHA256SUMS.txt
+certutil -hashfile devd-v0.8.0-x86_64-pc-windows-gnu.exe SHA256
 
-Rename-Item devd-v0.5.1-x86_64-pc-windows-gnu.exe devd.exe
+Rename-Item devd-v0.8.0-x86_64-pc-windows-gnu.exe devd.exe
 devd setup --yes
 devd ui
 ```
 
 It is self-contained: it links only Windows system libraries, so it needs no
 Rust toolchain, MinGW or Visual C++ runtime.
+
+The native window is also published as a portable executable:
+
+```powershell
+curl.exe -LO https://github.com/ianclemence/devd/releases/download/v0.8.0/devd-desktop-v0.8.0-x86_64-pc-windows-gnu.exe
+Rename-Item devd-desktop-v0.8.0-x86_64-pc-windows-gnu.exe devd-desktop.exe
+.\devd-desktop.exe
+```
+
+It starts its own backend and needs WebView2 (present with current Edge).
 
 ### From source
 
@@ -98,10 +112,12 @@ devd setup --yes
 ```
 
 It installs PHP, nginx and MariaDB if they are missing, starts them, and creates
-a site at `https://localhost:<https-port>`. Then open the application:
+a site at `https://localhost:<https-port>`. Then open the desktop application with
+the Start Menu entry, or from source:
 
 ```bash
-devd ui
+devd-desktop          # the native window (target/release/devd-desktop)
+devd ui               # the same interface in an installed browser
 ```
 
 From there, a normal project site is three commands:
@@ -246,27 +262,79 @@ devd doctor
 devd audit -n 20
 ```
 
-The graphical surface is one application window, not a website: `devd ui`
-starts a loopback server and opens the interface in a window. The server binds
-`127.0.0.1` only and requires a per-process bearer token; `devd serve` exposes
-the same API without a window for scripts and tests. There is no second
-graphical toolkit to keep in step, and a later native shell wraps the same
-assets rather than reimplementing them.
+The graphical surface is one application, not a website: the released
+`devd-desktop` window starts the same loopback server in-process and loads the
+same HTML, CSS and JavaScript. `devd ui` opens the same interface through an
+installed browser for development and for systems without WebView2; `devd serve`
+exposes the API without a window for scripts and tests. The server binds
+`127.0.0.1` only and requires a per-process bearer token. There is no second
+graphical toolkit to keep in step. See [`docs/desktop.md`](docs/desktop.md).
 
 ### Agents
 
-The window can run the coding-agent CLI you already use inside the project. It
-is a real terminal, not a chat facade: the harness keeps its own model,
-credentials and permission prompts.
+The window runs the coding-agent CLI you already use inside the project. It is a
+real terminal, not a chat facade: the harness keeps its own model, credentials
+and permission prompts.
 
-* **Agents** lists the harnesses found on this machine — Claude Code, OpenCode
-  and a plain shell — and starts the one you choose in the selected project
+* **Agents** lists the harnesses found on this machine - Claude Code, OpenCode
+  and a plain shell - and starts the one you choose in the selected project
   directory.
-* The terminal is a PTY, so full-screen interfaces, colours and keyboard
-  shortcuts work. Stopping it kills the process.
+* Every session is its own **real PTY**, with a stable id, a durable metadata row
+  and a bounded transcript. Switching to Preview, opening another tab, or
+  reloading the whole page does not stop it; the window reattaches to the same
+  process.
+* Multiple sessions run at once, with tabs and a session list. Completed and
+  failed sessions stay readable after their process ends.
+* **Delegate a task** starts a second agent as a genuine child process and waits
+  with a timeout. The child has its own working directory, instructions, exit
+  code and result. Limits stop runaway spawning (8 unfinished tasks, depth 3).
 * devd does not proxy the model, store prompts or read the conversation. The
   agent's own tools act on the project with the permissions that harness asks
-  for.
+  for; terminal input is human-only, so an agent cannot type into your session.
+* See [`docs/sessions.md`](docs/sessions.md).
+
+### Project processes
+
+A project can declare its dev processes in `devd.yml`. devd validates the file,
+shows the exact commands, and runs nothing until you approve that exact manifest.
+
+```yaml
+version: 1
+project:
+  name: example-app
+processes:
+  web:
+    command: ["npm", "run", "dev"]
+    working_dir: "."
+    health:
+      url: "http://127.0.0.1:3000/"
+  worker:
+    command: ["npm", "run", "worker"]
+    depends_on: ["web"]
+```
+
+* **Processes** shows status, health, pid, restarts and the last failure; start,
+  stop, restart and follow logs without leaving the window.
+* Commands are argv arrays, never shell strings. Working directories must stay
+  inside the project. Health checks are loopback-only. The process environment is
+  explicit and does not inherit the daemon's credentials.
+* Editing the manifest invalidates the approval. A process will not restart under
+  commands nobody reviewed.
+* See [`docs/devd-yml.md`](docs/devd-yml.md).
+
+### Shared project state
+
+**Shared** holds project-scoped scratchpads and structured todos. They are not
+chat history: they survive sessions, reloads and application restarts, and both
+people and agents use the same capability API.
+
+* Scratchpads have authors, timestamps and revision numbers. A stale edit is a
+  conflict, not a silent overwrite.
+* Todos have status, priority, assignee, task association and transition history.
+* An agent can append a finding, create a todo for another agent, spawn it, wait
+  for the result and update the todo. Deleting a note or todo needs human
+  approval.
+* See [`docs/shared-state.md`](docs/shared-state.md).
 
 ### Preview
 
@@ -290,6 +358,8 @@ services/         nginx and MariaDB
 etc/              generated configuration and MariaDB data
 certs/            the authority and per-site certificates
 logs/             service logs
+sessions/         bounded agent-session transcripts, one per session
+projects/         per-project process logs
 snapshots/        copies taken before a file devd did not write is changed
 cache/            verified downloads
 ```

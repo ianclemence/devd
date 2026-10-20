@@ -41,7 +41,9 @@ impl Paths {
             std::env::var_os("XDG_DATA_HOME")
                 .map(PathBuf::from)
                 .map(|p| p.join("devd"))
-                .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share/devd")))
+                .or_else(|| {
+                    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share/devd"))
+                })
                 .unwrap_or_else(|| PathBuf::from(".devd"))
         };
 
@@ -98,6 +100,16 @@ impl Paths {
         self.root.join("logs")
     }
 
+    /// Bounded transcripts for agent sessions, one file per session.
+    pub fn sessions(&self) -> PathBuf {
+        self.root.join("sessions")
+    }
+
+    /// Supervision data for project processes: logs and pid records.
+    pub fn projects(&self) -> PathBuf {
+        self.root.join("projects")
+    }
+
     /// Download staging area; safe to delete at any time.
     pub fn cache(&self) -> PathBuf {
         self.root.join("cache")
@@ -136,6 +148,8 @@ impl Paths {
             self.cache(),
             self.receipts(),
             self.snapshots(),
+            self.sessions(),
+            self.projects(),
         ] {
             std::fs::create_dir_all(&dir)?;
         }
@@ -150,9 +164,18 @@ mod tests {
     #[test]
     fn child_paths_are_under_root() {
         let p = Paths::rooted("C:/tmp/devd-home");
-        assert_eq!(p.state_db(), PathBuf::from("C:/tmp/devd-home").join("state.db"));
+        assert_eq!(
+            p.state_db(),
+            PathBuf::from("C:/tmp/devd-home").join("state.db")
+        );
         assert!(p.runtimes().starts_with(p.root()));
-        assert!(p.runtime_version("php", "8.3.14").ends_with("php/8.3.14".replace('/', std::path::MAIN_SEPARATOR_STR)) || p.runtime_version("php", "8.3.14").to_string_lossy().contains("php"));
+        assert!(
+            p.runtime_version("php", "8.3.14")
+                .ends_with("php/8.3.14".replace('/', std::path::MAIN_SEPARATOR_STR))
+                || p.runtime_version("php", "8.3.14")
+                    .to_string_lossy()
+                    .contains("php")
+        );
     }
 
     #[test]

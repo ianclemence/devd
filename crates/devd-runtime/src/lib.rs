@@ -233,7 +233,13 @@ pub fn install(
                     exe.display()
                 )));
             }
-            let out = util::run(&exe, &[version_flag(kind)], Some(&dest), &[], Some(VERIFY_TIMEOUT))?;
+            let out = util::run(
+                &exe,
+                &[version_flag(kind)],
+                Some(&dest),
+                &[],
+                Some(VERIFY_TIMEOUT),
+            )?;
             if !out.ok() {
                 return Err(DevdError::Command {
                     program: exe.display().to_string(),
@@ -274,10 +280,7 @@ pub fn install(
     );
 
     Ok(Installed {
-        executable: dest
-            .join(executable_relative(kind)?)
-            .display()
-            .to_string(),
+        executable: dest.join(executable_relative(kind)?).display().to_string(),
         runtime,
         verified_version,
         enabled,
@@ -369,7 +372,13 @@ pub fn verify(ctx: &Ctx, kind: &str, version: &str) -> Result<serde_json::Value>
         }));
     }
     let exe = root.join(executable_relative(kind)?);
-    let out = util::run(&exe, &[version_flag(kind)], Some(&root), &[], Some(VERIFY_TIMEOUT))?;
+    let out = util::run(
+        &exe,
+        &[version_flag(kind)],
+        Some(&root),
+        &[],
+        Some(VERIFY_TIMEOUT),
+    )?;
     if !out.ok() {
         return Err(DevdError::Command {
             program: exe.display().to_string(),
@@ -518,7 +527,10 @@ pub fn doctor_check(paths: &Paths) -> Vec<Check> {
         return vec![Check::fail("runtimes", "the state store could not be read")];
     };
     let Ok(rows) = store.list_runtimes() else {
-        return vec![Check::fail("runtimes", "the runtime table could not be read")];
+        return vec![Check::fail(
+            "runtimes",
+            "the runtime table could not be read",
+        )];
     };
     if rows.is_empty() {
         return vec![Check::info(
@@ -544,7 +556,10 @@ pub fn doctor_check(paths: &Paths) -> Vec<Check> {
         .collect::<Vec<_>>()
         .join(", ");
     if missing.is_empty() {
-        checks.push(Check::ok("runtimes", format!("{} installed: {summary}", rows.len())));
+        checks.push(Check::ok(
+            "runtimes",
+            format!("{} installed: {summary}", rows.len()),
+        ));
     } else {
         checks.push(Check::fail(
             "runtimes",
@@ -574,8 +589,14 @@ mod tests {
     fn executable_paths_match_the_unpacked_layouts() {
         let php = executable_relative("php").unwrap();
         let go = executable_relative("go").unwrap();
-        assert!(php.to_string_lossy().ends_with("php.exe") || php.to_string_lossy().ends_with("bin/php"));
-        assert!(go.to_string_lossy().replace('\\', "/").starts_with("bin/go"));
+        assert!(
+            php.to_string_lossy().ends_with("php.exe")
+                || php.to_string_lossy().ends_with("bin/php")
+        );
+        assert!(go
+            .to_string_lossy()
+            .replace('\\', "/")
+            .starts_with("bin/go"));
     }
 
     #[test]
@@ -602,7 +623,10 @@ mod tests {
         let checks = doctor_check(&paths);
         assert_eq!(checks.len(), 1);
         assert_eq!(checks[0].level, devd_core::Level::Info);
-        assert!(checks[0].detail.contains("devd runtime install"), "{checks:?}");
+        assert!(
+            checks[0].detail.contains("devd runtime install"),
+            "{checks:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
