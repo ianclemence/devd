@@ -16,7 +16,7 @@
 //! read on demand with `skills.get` (progressive disclosure keeps the context
 //! small).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
@@ -112,8 +112,12 @@ pub fn save(paths: &Paths, name: &str, description: &str, kind: &str, roles: &[S
     if description.trim().is_empty() || description.contains('\n') {
         return Err(DevdError::invalid("give a one-line description"));
     }
-    if body.trim().len() < 20 || body.len() > 20_000 {
-        return Err(DevdError::invalid("the body must be between 20 and 20,000 characters"));
+    // A skill's body can be long: the published ones run to tens of
+    // thousands of characters. The bound is there to stop a runaway, not to
+    // keep skills short - only the name and the description go into a
+    // prompt, and the body is read on demand.
+    if body.trim().len() < 20 || body.len() > 200_000 {
+        return Err(DevdError::invalid("the body must be between 20 and 200,000 characters"));
     }
     let dir = user_dir(paths);
     std::fs::create_dir_all(&dir)?;
@@ -137,9 +141,205 @@ pub fn delete(paths: &Paths, name: &str) -> Result<()> {
     Ok(())
 }
 
+/// The name devd gives a skill: lowercase letters, digits and hyphens.
+///
+/// A skill written elsewhere may be called "Next.js Development" or
+/// `code_review`. devd's names are one shape, so a name is normalised on the
+/// way in rather than rejected.
+pub fn normalise_name(raw: &str) -> String {
+    let mut out = String::new();
+    let mut dash = false;
+    for ch in raw.trim().chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+            dash = false;
+        } else if !dash && !out.is_empty() {
+            out.push('-');
+            dash = true;
+        }
+    }
+    let trimmed = out.trim_matches('-');
+    let mut name: String = trimmed.chars().take(60).collect();
+    while name.ends_with('-') {
+        name.pop();
+    }
+    name
+}
+
+/// The front matter of a skill file, whatever wrote it.
+///
+/// The Agent Skills format - the one skills.sh publishes and the one every
+/// agent on this machine reads - has a name and a description. devd's own
+/// files add a kind and the roles the skill is meant for.
+///
+/// A description may be folded across lines, which is how the longer skills
+/// write it: `description: >` and the words on the lines below. A folded
+/// description is one sentence with the line breaks turned back into spaces.
+pub fn front_matter(raw: &str) -> Option<(String, String, String, Vec<String>)> {
+    let rest = raw.strip_prefix("---\n").or_else(|| raw.strip_prefix("---\r\n"))?;
+    let end = rest.find("\n---")?;
+    let front = &rest[..end];
+    let body = &rest[end + 4..];
+    let body = body.strip_prefix('\n').unwrap_or(body);
+
+    // Every field, with a folded block gathered into one value.
+    let mut fields: Vec<(String, String)> = Vec::new();
+    let mut lines = front.lines().peekable();
+    while let Some(line) = lines.next() {
+        let Some((key, value)) = line.split_once(':') else { continue };
+        let key = key.trim().to_string();
+        let value = value.trim();
+        if value == ">" || value == "|" || value == ">-" || value == "|-" || value == ">+"
+            || value == "|+"
+        {
+            let mut block: Vec<String> = Vec::new();
+            while let Some(next) = lines.peek() {
+                if next.trim().is_empty() || !next.starts_with(' ') && !next.starts_with('\t') {
+                    break;
+                }
+                block.push(next.trim().to_string());
+                lines.next();
+            }
+            let joined = block.join(" ");
+            let joined = joined.trim().to_string();
+            fields.push((key, joined));
+        } else {
+            let value = value.trim_matches('"').trim_matches('\'').to_string();
+            fields.push((key, value));
+        }
+    }
+    let field = |k: &str| -> Option<String> {
+        fields.iter().find(|(key, _)| key == k).map(|(_, v)| v.clone())
+    };
+    let name = field("name")?;
+    let description = field("description")?;
+    let kind = field("kind").unwrap_or_else(|| "technique".into());
+    let roles = field("roles")
+        .map(|r| r.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+        .unwrap_or_default();
+    Some((name, description, kind, roles))
+}
+
+/// Read a skill written in the Agent Skills format and save it as devd's own.
+///
+/// The body is kept exactly as it was written: a skill is somebody's
+/// instructions, and rewriting them would change what the agent does.
+pub fn import_text(paths: &Paths, raw: &str, fallback_name: &str) -> Result<Skill> {
+    let (raw_name, description, kind, roles) = front_matter(raw)
+        .ok_or_else(|| DevdError::invalid("the file has no front matter with a name and a description"))?;
+    let name = normalise_name(if raw_name.trim().is_empty() { fallback_name } else { &raw_name });
+    if name.is_empty() {
+        return Err(DevdError::invalid("the skill has no usable name"));
+    }
+    if description.trim().is_empty() {
+        return Err(DevdError::invalid("the skill has no description"));
+    }
+    let kind = if matches!(kind.as_str(), "playbook" | "technique" | "principle") {
+        kind
+    } else {
+        "technique".into()
+    };
+    let body = raw
+        .split_once("\n---")
+        .map(|(_, rest)| rest.trim_start_matches('-').trim_start_matches('\n'))
+        .unwrap_or(raw)
+        .trim();
+    if body.len() < 20 {
+        return Err(DevdError::invalid("the skill has no instructions"));
+    }
+    save(paths, &name, description.lines().next().unwrap_or("").trim(), &kind, &roles, body)?;
+    Ok(get(paths, &name)?)
+}
+
+/// The other agents on this machine, and where each keeps its skills.
+pub const AGENT_SKILL_DIRS: &[(&str, &str)] = &[
+    ("Claude Code", ".claude/skills"),
+    ("Cursor", ".cursor/skills"),
+    ("Codex", ".codex/skills"),
+    ("OpenCode", ".config/opencode/skills"),
+    ("OpenCode (legacy)", ".opencode/skills"),
+    ("Windsurf", ".codeium/windsurf/skills"),
+    ("Cline", ".cline/skills"),
+    ("Gemini", ".gemini/skills"),
+    ("Amp", ".amp/skills"),
+    ("Zed", ".config/zed/skills"),
+];
+
+/// The skill folders other agents keep, and how many are in each.
+pub fn agent_sources(home: &Path) -> Vec<(String, PathBuf, usize)> {
+    let mut out = Vec::new();
+    for (name, rel) in AGENT_SKILL_DIRS {
+        let dir = home.join(rel);
+        if !dir.is_dir() {
+            continue;
+        }
+        let count = skill_files(&dir).len();
+        out.push(((*name).to_string(), dir, count));
+    }
+    out
+}
+
+/// Every skill file under a directory: a `SKILL.md` in each folder, and any
+/// Markdown file that carries devd's own front matter.
+fn skill_files(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        for entry in rd.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let is_md = path.extension().map(|e| e == "md").unwrap_or(false);
+            if !is_md {
+                continue;
+            }
+            let named = path.file_name().map(|n| n == "SKILL.md").unwrap_or(false);
+            if named {
+                out.push(path);
+                continue;
+            }
+            if std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|t| front_matter(&t))
+                .is_some()
+            {
+                out.push(path);
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Import every skill another agent keeps into devd's own folder.
+pub fn import_from(paths: &Paths, dir: &Path) -> Result<Vec<String>> {
+    if !dir.is_dir() {
+        return Err(DevdError::not_found(format!("{} is not a directory", dir.display())));
+    }
+    let files = skill_files(dir);
+    if files.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut names = Vec::new();
+    for f in files {
+        let raw = std::fs::read_to_string(&f)?;
+        let fallback = f
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "skill".into());
+        match import_text(paths, &raw, &fallback) {
+            Ok(s) => names.push(s.name),
+            Err(_) => continue,
+        }
+    }
+    Ok(names)
+}
+
 /// The index an agent sees: names and one line each, grouped by kind.
-pub fn index_for(paths: &Paths, role: Option<&str>) -> String {
-    let skills = all(paths);
+pub fn index_for(paths: &Paths, role: Option<&str>) -> String {    let skills = all(paths);
     let mut out = String::new();
     for (kind, title) in [("playbook", "Playbooks"), ("technique", "Techniques"), ("principle", "Principles")] {
         let items: Vec<&Skill> = skills.iter().filter(|s| s.kind == kind && role.map(|r| s.roles.iter().any(|x| x == r) || s.roles.is_empty()).unwrap_or(true)).collect();

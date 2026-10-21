@@ -369,6 +369,73 @@ impl Team {
 
     // --------------------------------------------------------- person's levers
 
+    /// Hand one piece of work to one member of the team.
+    ///
+    /// The planner-driven run is one way to use the team. Often the person
+    /// already knows who should do the work: "@implementer, add the dark mode
+    /// toggle". This gives that person one task, in one role, in that
+    /// member's own copy of the project when the role works in one, and the
+    /// same evidence rules as any other task: the work is not done because
+    /// the member said so, but because the tool results prove it.
+    pub fn assign(
+        self: &Arc<Self>,
+        caller: &Ctx,
+        role: &str,
+        title: &str,
+        instructions: &str,
+        project: Option<&str>,
+    ) -> Result<Value> {
+        let role = role.trim().to_ascii_lowercase();
+        let Some(r) = roles::get(&role) else {
+            let names = roles::ROLES.iter().map(|x| x.id).collect::<Vec<_>>().join(", ");
+            return Err(DevdError::not_found(format!(
+                "there is no team member called `{role}`. The team is: {names}"
+            )));
+        };
+        let instructions = instructions.trim();
+        if instructions.is_empty() {
+            return Err(DevdError::invalid("say what the member has to do"));
+        }
+        if instructions.chars().count() > 20_000 {
+            return Err(DevdError::invalid("the instructions are longer than 20,000 characters; put the detail in a file in the project and point to it"));
+        }
+        let Some(project) = project.map(str::trim).filter(|p| !p.is_empty()) else {
+            return Err(DevdError::invalid("choose the project the member should work in"));
+        };
+        let dir = devd_stacks::authz::authorize_dir(caller, Path::new(project))?;
+        if !dir.is_dir() {
+            return Err(DevdError::not_found(format!("{} is not a directory", dir.display())));
+        }
+        let title = if title.trim().is_empty() {
+            instructions.lines().next().unwrap_or("Assigned work").chars().take(70).collect::<String>()
+        } else {
+            title.trim().chars().take(70).collect()
+        };
+        let run = self.ctx.store.create_run(&title, instructions, Some(&dir.display().to_string()), 1, &caller.actor.label())?;
+        let key = format!("work-{}", &run.id[..6.min(run.id.len())]);
+        self.ctx.store.add_task(&run.id, &key, r.id, &title, instructions, &[], &[])?;
+        self.event(&run.id, None, "started", json!({ "goal": instructions, "project": dir.display().to_string(), "by": caller.actor.label(), "assigned_to": r.id }));
+        // One task, named by the person who asked for it: there is no plan to
+        // approve, because the person wrote the plan. The work still asks for
+        // approval wherever a capability demands one.
+        self.ctx.store.approve_run_plan(&run.id)?;
+        self.event(&run.id, None, "plan_approved", json!({ "by": caller.actor.label(), "note": "one task, assigned directly" }));
+        self.ensure_driver(&run.id);
+        Ok(json!({
+            "run": run.id,
+            "task": key,
+            "member": r.id,
+            "title": r.title,
+            "what_they_must_prove": {
+                "changed_files": r.needs.change,
+                "ran_a_check": r.needs.verify,
+                "read_the_code": r.needs.read,
+                "ran_a_command": r.needs.command,
+            },
+            "next": "the member is working. Read the run with team.get and report what they found.",
+        }))
+    }
+
     /// Approve the plan; the work starts.
     pub fn approve(self: &Arc<Self>, caller: &Ctx, run_id: &str) -> Result<TeamRun> {
         caller.require_human("approving a plan")?;

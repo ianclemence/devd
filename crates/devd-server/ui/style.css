@@ -1438,15 +1438,18 @@ kbd {
 #palette.overlay, #palette .palette { animation: none; }
 
 /* A dialog is occasional, so it may move - but it starts from a shape, never
-   from nothing, and it settles with an ease-out. */
+   from nothing, and it settles with an ease-out.
+   The resting state is the settled one; `@starting-style` is where it comes
+   from. Written the other way round the dialog appears for one frame and
+   then fades away, which is what a flash is. */
 .modal {
   width: min(580px, 96vw);
-  opacity: 0;
-  transform: translateY(-6px) scale(0.98);
+  opacity: 1;
+  transform: none;
   transition: opacity var(--slow) var(--ease-out), transform var(--slow) var(--ease-out);
 }
 @starting-style {
-  .modal { opacity: 1; transform: none; }
+  .modal { opacity: 0; transform: translateY(-6px) scale(0.98); }
 }
 @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
 
@@ -1548,13 +1551,13 @@ kbd {
   background: var(--bg-surface);
   border-left: 1px solid var(--line-strong);
   box-shadow: var(--shadow-float);
-  opacity: 0;
-  transform: translateX(16px);
+  opacity: 1;
+  transform: none;
   transition: opacity var(--slow) var(--ease-drawer), transform var(--slow) var(--ease-drawer);
 }
 .drawer[hidden] { display: none; }
 @starting-style {
-  .drawer { opacity: 1; transform: none; }
+  .drawer { opacity: 0; transform: translateX(16px); }
 }
 .drawer-head {
   display: flex;
@@ -1889,45 +1892,101 @@ pre.code {
 .typing span:nth-child(3) { animation-delay: 0.3s; }
 @keyframes typing { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
 
+/* The actions the agent took.
+ *
+ * They read as a sequence, not as a stack of cards: one line each, joined by
+ * a vertical line, with the time it took at the end. The line is the reason
+ * the eye can follow what happened; the box was the reason it could not.
+ * Hovering brings out the arrow that opens the detail. */
 .step {
+  position: relative;
   max-width: var(--reading);
   margin-left: auto;
   margin-right: auto;
-  background: var(--bg-surface);
-  border: 1px solid var(--line);
-  border-left: 2px solid var(--line-strong);
-  border-radius: var(--radius);
-  overflow: hidden;
+  padding-left: 28px;
 }
-.step.step-bad { border-left-color: var(--danger); }
+.step::before {
+  content: "";
+  position: absolute;
+  left: 16px;
+  top: 14px;
+  bottom: -20px;
+  width: 1px;
+  background: var(--line);
+}
+/* The last action has nothing after it, so nothing to join to. */
+.step:not(:has(+ .step))::before { display: none; }
+.step.step-bad::before { background: var(--danger-line); }
 .step-head {
   display: flex;
   align-items: center;
   gap: var(--s2);
   width: 100%;
-  min-height: 32px;
-  /* The indent lines the step up with the words in the message under it,
-     rather than with the avatar beside it. */
-  padding: 4px 10px 4px 46px;
+  padding: 2px 0;
   background: none;
   border: 0;
-  color: var(--fg-mute);
-  font-size: var(--text-sm);
+  border-radius: var(--radius);
+  color: var(--fg-dim);
+  font-size: var(--text-xs);
   text-align: left;
   cursor: pointer;
 }
-.step-title { color: var(--fg); font-family: var(--mono); font-size: var(--text-sm); }
-.step-toggle { color: var(--fg-dim); font-size: var(--text-xs); }
-.step-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--fg-dim); }
+.step:hover .step-head { color: var(--fg-mute); }
+.step-arrow {
+  position: absolute;
+  left: -1px;
+  top: 3px;
+  display: grid;
+  place-items: center;
+  width: 12px;
+  height: 12px;
+  opacity: 0;
+  transition: opacity var(--fast), transform var(--fast);
+}
+.step-arrow .icon { width: 12px; height: 12px; }
+.step:hover .step-arrow, .step.open .step-arrow { opacity: 1; }
+.step.open .step-arrow { transform: rotate(180deg); }
+.step-dot {
+  position: absolute;
+  left: 13px;
+  top: 5px;
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--fg-dim);
+}
 .step-dot.ok { background: var(--ok); }
 .step-dot.bad { background: var(--danger); }
 .step-dot.wait { background: var(--warn); animation: pulse 1.6s infinite; }
 .step-dot.run { background: var(--accent); animation: pulse 1.4s infinite; }
-@keyframes pulse { 50% { opacity: 0.45; } }
+.step-title {
+  flex: none;
+  color: var(--fg-mute);
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+}
+.step-detail {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg-dim);
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.step-time {
+  flex: none;
+  margin-left: auto;
+  padding-left: var(--s2);
+  color: var(--fg-dim);
+  font-family: var(--mono);
+  font-size: var(--text-2xs);
+}
 .step-body {
-  padding: var(--s2) 10px 10px 46px;
-  border-top: 1px solid var(--line);
-  background: var(--bg-deep);
+  margin-top: var(--s2);
+  padding-left: 0;
 }
 .step-body .field-label { margin-top: var(--s2); }
 .step-body .field-label:first-child { margin-top: 0; }

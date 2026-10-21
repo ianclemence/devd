@@ -149,7 +149,7 @@
     expanded: {},
     diff: null,
     caps: { total: 0, items: [], q: "", group: "" },
-    filters: { services: "", sites: "", toolchain: "", runtimes: "" },
+    filters: { services: "", sites: "", toolchain: "", runtimes: "", skills: "" },
     filterTimer: null,
     selectedCap: null,
     capArgs: {},
@@ -1085,14 +1085,14 @@
   var AREA = {
     assistant: "assistant", team: "assistant",
     projects: "projects", project: "projects", create: "projects", develop: "projects",
-    agents: "agents", shared: "agents",
+    agents: "agents", shared: "agents", skills: "agents",
     overview: "server", services: "server", sites: "server", toolchain: "server", runtimes: "server",
     preview: "server", certificates: "server", hosts: "server"
   };
   var TABS = {
     assistant: [["assistant", "Chat"], ["team", "Team runs"]],
     projects: [["projects", "Projects"], ["create", "New project"], ["develop", "Stacks and tasks"]],
-    agents: [["agents", "Agents"], ["shared", "Shared notes"]],
+    agents: [["agents", "Agents"], ["skills", "Skills"], ["shared", "Shared notes"]],
     server: [["overview", "Overview"], ["services", "Services"], ["sites", "Sites"], ["toolchain", "Tools"], ["runtimes", "Runtimes"], ["preview", "Preview"], ["certificates", "Certificates"], ["hosts", "Hosts"]]
   };
   var AREA_HOME = { assistant: "assistant", projects: "projects", agents: "agents", server: "overview" };
@@ -2685,8 +2685,95 @@
     });
   }
 
-  function renderShared() {
-    var s = state.shared;
+  // ------------------------------------------------------------------ skills
+
+  /* The skills the team can load.
+   *
+   * A skill is a short set of instructions an agent reads when the work
+   * calls for it. They are installed from a GitHub repository - where the
+   * skills published on skills.sh live - or imported from another agent that
+   * already has them. */
+  var SKILLS = { list: null, sources: null, tab: "installed" };
+
+  function loadSkills() {
+    return Promise.all([
+      read("skills.list").catch(function () { return []; }),
+      read("skills.sources").catch(function () { return []; })
+    ]).then(function (r) {
+      SKILLS.list = Array.isArray(r[0]) ? r[0] : [];
+      SKILLS.sources = Array.isArray(r[1]) ? r[1] : [];
+    });
+  }
+
+  function renderSkills() {
+    var list = SKILLS.list || [];
+    var sources = SKILLS.sources || [];
+    var q = state.filters.skills || "";
+
+    var kinds = { playbook: "Playbooks", technique: "Techniques", principle: "Principles" };
+    var groups = {};
+    list
+      .filter(function (s) { return keeps(q, s.name, s.description, s.kind, (s.roles || []).join(" ")); })
+      .forEach(function (s) { (groups[s.kind || "technique"] = groups[s.kind || "technique"] || []).push(s); });
+
+    var body = '<div class="filter-row">' + filterBox("skills", "Search skills") + "</div>";
+
+    if (!list.length) {
+      body += '<div class="panel"><div class="empty"><div class="empty-title">No skills</div>' +
+        "<div>devd ships a small set of its own. Install more from a GitHub repository, or import the ones another agent on this machine already has.</div></div></div>";
+    } else {
+      Object.keys(kinds).forEach(function (k) {
+        var items = groups[k];
+        if (!items || !items.length) return;
+        body += '<div class="panel"><div class="panel-head"><span>' + kinds[k] + "</span>" +
+          '<span class="panel-note">' + items.length + "</span></div><div class=\"rows\">" +
+          items.map(function (s) {
+            return '<div class="svc"><div class="svc-main"><div class="svc-name">' +
+              esc(s.name) + ' <span class="pill">' + esc(s.source) + "</span>" +
+              (s.roles && s.roles.length ? ' <span class="dim mono">' + esc(s.roles.join(", ")) + "</span>" : "") +
+              '</div><div class="svc-sub">' + esc(s.description) + "</div></div>" +
+              '<div class="svc-actions">' +
+              '<button type="button" class="btn btn-mini" data-action="skill-read" data-name="' + attr(s.name) + '">Read</button>' +
+              (s.source === "user" ? '<button type="button" class="btn btn-mini btn-danger" data-action="skill-remove" data-name="' + attr(s.name) + '">Remove</button>' : "") +
+              "</div></div>";
+          }).join("") + "</div></div>";
+      });
+      if (q && !Object.keys(groups).length) {
+        body += '<div class="panel"><div class="panel-body empty-inline">No skill matches "' + esc(q) + '".</div></div>';
+      }
+    }
+
+    body += '<div class="panel"><div class="panel-head"><span>Install</span>' +
+      '<span class="panel-note">from GitHub, where the skills on skills.sh live</span></div>' +
+      '<div class="panel-body stack">' +
+      '<div class="inline"><input class="input mono grow" id="skill-source" placeholder="owner/name, for example anthropics/skills" spellcheck="false">' +
+      '<button type="button" class="btn btn-primary" data-action="skill-install">Install</button></div>' +
+      '<div class="row-sub">A skill is a folder with a SKILL.md in it. devd reads the repository, fetches the skill files as text and saves them in its own folder. Nothing is executed. ' +
+      '<button type="button" class="btn btn-mini btn-ghost" data-action="skill-browse">Browse the catalogue</button></div>' +
+      "</div></div>";
+
+    body += '<div class="panel"><div class="panel-head"><span>Import</span>' +
+      '<span class="panel-note">skills another agent on this machine already has</span></div>' +
+      '<div class="panel-body flush">' +
+      (sources.length
+        ? "<table class=\"table\"><thead><tr><th>Agent</th><th>Skills</th><th>Folder</th><th></th></tr></thead><tbody>" +
+          sources.map(function (s) {
+            return '<tr><td class="cell-strong">' + esc(s.agent) + '</td><td class="cell-mono">' + s.count + "</td>" +
+              '<td class="cell-mono cell-dim" title="' + attr(s.path) + '">' + esc(s.path) + "</td>" +
+              '<td class="cell-actions"><button type="button" class="btn btn-mini" data-action="skill-import" data-agent="' + attr(s.agent) + '">Import</button></td></tr>';
+          }).join("") + "</tbody></table>"
+        : '<div class="panel-body empty-inline">No other agent on this machine keeps a folder of skills.</div>') +
+      "</div></div>";
+
+    el("main").innerHTML = page(
+      "Skills",
+      "Playbooks, techniques and principles the team loads when the work calls for them.",
+      "",
+      body
+    );
+  }
+
+  function renderShared() {    var s = state.shared;
     var project = sharedProject();
     s.project = project;
     var tabs = '<div class="segmented">' +
@@ -4771,13 +4858,53 @@
     }, 800);
   }
 
+  /* What a tool call was, in one line.
+   *
+   * The detail is what a person would say, not the raw arguments: "the file
+   * it edited", "the command it ran". The full arguments are one click away. */
   function summarizeCall(b) {
     var i = b.input || {};
-    if (b.name === "devd_invoke") return { title: i.id || "invoke", detail: i.args ? JSON.stringify(i.args) : "" };
+    if (b.name === "devd_invoke") {
+      var id = i.id || "invoke";
+      var a = i.args || {};
+      return { title: id, detail: callDetail(id, a) };
+    }
     if (b.name === "devd_describe") return { title: "describe " + (i.id || ""), detail: "" };
     if (b.name === "devd_capabilities") return { title: "search capabilities", detail: [i.group, i.query].filter(Boolean).join(" ") };
     if (b.name === "devd_groups") return { title: "list domains", detail: "" };
-    return { title: b.name, detail: JSON.stringify(i) };
+    return { title: b.name, detail: "" };
+  }
+
+  /* The one-line detail of a capability call.
+   *
+   * For a project command the command is the point, not the folder it ran
+   * in: "npm run test" says what happened, "." does not. */
+  function callDetail(id, a) {
+    if (!a || typeof a !== "object") return "";
+    var project = /^project\./.test(String(id || ""));
+    if (project && a.task) return String(a.task);
+    if (project && Array.isArray(a.argv)) return a.argv.join(" ");
+    if (a.path) return String(a.path);
+    if (a.task) return String(a.task);
+    if (Array.isArray(a.argv)) return a.argv.join(" ");
+    if (a.query) return String(a.query);
+    if (a.ref) return String(a.ref);
+    if (a.url) return String(a.url);
+    if (a.name) return String(a.name);
+    var keys = Object.keys(a);
+    if (!keys.length) return "";
+    return keys
+      .slice(0, 2)
+      .map(function (k) { return k + "=" + JSON.stringify(a[k]); })
+      .join(" ");
+  }
+
+  /* How long an action took, in the words people use. */
+  function duration(ms) {
+    if (!ms || ms < 0) return "";
+    if (ms < 1000) return Math.round(ms) + "ms";
+    if (ms < 60000) return (ms / 1000).toFixed(1) + "s";
+    return Math.round(ms / 60000) + "m";
   }
 
   /* The name of a capability, as a person would say it.
@@ -4844,7 +4971,12 @@
 
   function chatHtml() {
     var results = {};
-    AI.events.forEach(function (e) { if (e.kind === "tool_result") results[e.data.tool_use_id] = e.data; });
+    var resultAt = {};
+    AI.events.forEach(function (e) {
+      if (e.kind !== "tool_result") return;
+      results[e.data.tool_use_id] = e.data;
+      resultAt[e.data.tool_use_id] = e.created_at;
+    });
     var pendingByTool = {};
     AI.pending.forEach(function (r) { pendingByTool[r.tool_use_id] = r; });
     var html = "";
@@ -4861,12 +4993,21 @@
             var c = summarizeCall(b), r = results[b.id], open = AI.openSteps[b.id];
             var pend = pendingByTool[b.id];
             var out = r ? clip(String(r.content == null ? "" : r.content), 20000) : "";
-            html += '<div class="step' + (r && r.is_error ? " step-bad" : "") + '">' +
-              '<button type="button" class="step-head" data-action="step-toggle" data-id="' + attr(b.id) + '" aria-expanded="' + (open ? "true" : "false") + '">' +
+            // How long the action took: from the moment the agent asked for it
+            // to the moment the answer came back.
+            var took = "";
+            if (r && resultAt[b.id] && e.created_at) {
+              var ms = Date.parse(resultAt[b.id]) - Date.parse(e.created_at);
+              if (ms > 0 && ms < 3600000) took = duration(ms);
+            }
+            html += '<div class="step' + (r && r.is_error ? " step-bad" : "") + (open ? " open" : "") + '">' +
+              '<button type="button" class="step-head" data-action="step-toggle" data-id="' + attr(b.id) + '" aria-expanded="' + (open ? "true" : "false") + '" title="' + attr(c.title + (c.detail ? " — " + c.detail : "")) + '">' +
+              '<span class="step-arrow" aria-hidden="true"><svg class="icon"><use href="#i-chevron-down"></use></svg></span>' +
               '<span class="step-dot ' + (pend ? "wait" : r ? (r.is_error ? "bad" : "ok") : "run") + '" aria-hidden="true"></span>' +
-              '<span class="step-title">' + esc(c.title) + '</span>' +
-              '<span class="dim nowrap grow">' + esc(c.detail) + "</span>" +
-              '<span class="step-toggle">' + (open ? "Hide" : "Details") + "</span></button>" +
+              '<span class="step-title">' + esc(c.title) + "</span>" +
+              '<span class="step-detail">' + esc(c.detail) + "</span>" +
+              (took ? '<span class="step-time">' + esc(took) + "</span>" : "") +
+              "</button>" +
               (open
                 ? '<div class="step-body"><div class="field-label">Input</div><pre class="log-block">' + esc(JSON.stringify(b.input, null, 2)) + "</pre>" +
                   (r
@@ -5164,6 +5305,7 @@
     if (state.view === "create") return loadCreate().then(render);
     if (state.view === "develop") return loadDevelop().then(render);
     if (state.view === "agents") return loadAgents().then(render);
+    if (state.view === "skills") return loadSkills().then(render);
     if (state.view === "processes") return loadProcesses().then(render);
     if (state.view === "shared") return loadShared().then(render);
     if (state.view === "capabilities") return loadCapabilities().then(render);
@@ -5224,6 +5366,7 @@
     else if (state.view === "create") renderCreate();
     else if (state.view === "develop") renderDevelop();
     else if (state.view === "agents") renderAgents();
+    else if (state.view === "skills") renderSkills();
     else if (state.view === "processes") renderProcesses();
     else if (state.view === "shared") renderShared();
     else if (state.view === "projects") renderProjects();
@@ -5297,9 +5440,9 @@
 
   /* The agents a message can be handed to.
    *
-   * Each one is a real harness devd can start: a child process in its own
-   * terminal, with its own working directory. Naming one in a message is an
-   * instruction to delegate the work to it. */
+   * Two kinds. The first is devd's own team: members with one job, one set of
+   * permissions and one thing they must prove. The second is someone else's
+   * coding agent, started as a child process in its own terminal. */
   var AGENT_HARNESSES = [
     { id: "claude", name: "Claude Code", note: "a coding agent that reads and changes the project" },
     { id: "opencode", name: "OpenCode", note: "a coding agent for the project" }
@@ -5333,7 +5476,10 @@
     var sessions = read("session.list")
       .then(function (d) { return Array.isArray(d) ? d : []; })
       .catch(function () { return []; });
-    return Promise.all([caps, skills, projects, sessions]).then(function (r) {
+    var roster = read("team.roles")
+      .then(function (d) { return Array.isArray(d) ? d : []; })
+      .catch(function () { return []; });
+    return Promise.all([caps, skills, projects, sessions, roster]).then(function (r) {
       var items = [];
       r[0].forEach(function (c) {
         items.push({ kind: "capability", token: "@" + c.id, title: c.id, detail: c.summary || c.group, group: "Capabilities" });
@@ -5350,9 +5496,13 @@
       // The agents a message can be handed to. A delegated agent starts with
       // no memory of the conversation, so naming one is an instruction to
       // give it the whole task.
+      (r[4] || []).forEach(function (m) {
+        if (q && m.id.indexOf(q.toLowerCase()) < 0 && m.title.toLowerCase().indexOf(q.toLowerCase()) < 0 && String(m.summary || "").toLowerCase().indexOf(q.toLowerCase()) < 0) return;
+        items.push({ kind: "member", token: "@" + m.id + ":", title: m.title, detail: m.summary, group: "devd's team", member: m.id });
+      });
       AGENT_HARNESSES.forEach(function (h) {
         if (q && h.id.indexOf(q.toLowerCase()) < 0 && h.name.toLowerCase().indexOf(q.toLowerCase()) < 0) return;
-        items.push({ kind: "agent", token: "@agent:" + h.id, title: h.name, detail: h.note, group: "Agents", harness: h.id });
+        items.push({ kind: "agent", token: "@agent:" + h.id, title: h.name, detail: h.note, group: "Other agents", harness: h.id });
       });
       r[3].forEach(function (s) {
         var label = s.label || s.harness || s.id;
@@ -5894,6 +6044,33 @@
       renderActivity();
     },
 
+    "skill-read": function (n) {
+      read("skills.get", { name: n.dataset.name }).then(function (d) {
+        openDrawer(n.dataset.name, '<div class="kv"><dt>Kind</dt><dd>' + esc(d.kind) + "</dd></div>" +
+          '<div class="row-sub">' + esc(d.description) + "</div>" +
+          '<pre class="log-block">' + esc(d.body || "") + "</pre>");
+      }).catch(function (e) { toast("error", e.message); });
+    },
+    "skill-remove": function (n) {
+      act("skills.delete", { name: n.dataset.name }).then(function () { return loadSkills(); }).then(render);
+    },
+    "skill-install": function () {
+      var src = el("skill-source");
+      var value = src ? src.value.trim() : "";
+      if (!value) return toast("warn", "Give the repository as owner/name");
+      act("skills.install", { source: value }).then(function () {
+        toast("ok", "installed");
+        return loadSkills();
+      }).then(render);
+    },
+    "skill-import": function (n) {
+      act("skills.import", { from: n.dataset.agent }).then(function () {
+        return loadSkills();
+      }).then(render);
+    },
+    "skill-browse": function () {
+      window.open("https://skills.sh", "_blank", "noopener");
+    },
     "close-drawer": function () { closeDrawer(); },
     "filter-clear": function (n) {
       var key = n.dataset.key;

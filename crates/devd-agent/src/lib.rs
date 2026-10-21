@@ -39,6 +39,7 @@ pub mod roles;
 pub mod secrets;
 pub mod skills;
 pub mod skills_data;
+pub mod skills_install;
 pub mod team;
 
 pub use chat::Hub;
