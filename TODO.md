@@ -78,6 +78,15 @@ Ordered by what makes devd *wrong* today, not by what is easiest.
 | G2 | One catalogue for the services, rather than an HTML page and a REST API | A catalogue is data; the installer should not know where it came from | `devd-services/src/catalogue.rs` |
 | G3 | nginx from nginx.org's own listing, not from a page of markup | A change in someone's HTML is not a contract | `devd-services/src/catalogue.rs` |
 
+### I. Moving from Laragon
+
+| # | What | Why | Where |
+|---|------|-----|-------|
+| I1 | An Apache driver | Laragon serves with Apache; `web_server = "apache"` is refused until one exists, and `.htaccess` rules do not apply under nginx | `devd-services` |
+| I2 | Park a folder: every directory in `www` is a site | Laragon's auto virtual hosts | `devd-sites` |
+| I3 | Database dump and restore, and MySQL as a managed service | An existing MySQL 8 cannot be used by `db.*`, and databases move by hand | `devd-services` |
+| I4 | Wildcard `*.test` resolution | Hosts file only today; a loopback resolver needs admin on Windows | new |
+
 ### H. Housekeeping
 
 | # | What | Why |

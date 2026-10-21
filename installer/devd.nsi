@@ -38,8 +38,9 @@ InstallDir "$LOCALAPPDATA\Programs\devd"
 InstallDirRegKey HKCU "Software\devd" "InstallDir"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
-ShowInstDetails show
-ShowUninstDetails show
+; The progress bar is the page; the file-by-file log is one click away.
+ShowInstDetails nevershow
+ShowUninstDetails nevershow
 
 VIProductVersion "${VERSION}.0"
 VIAddVersionKey "ProductName" "devd"
@@ -48,20 +49,52 @@ VIAddVersionKey "FileVersion" "${VERSION}"
 VIAddVersionKey "ProductVersion" "${VERSION}"
 VIAddVersionKey "LegalCopyright" "MIT"
 
+; The standard Windows installer look, with devd's own icon.
+!define MUI_ICON "${ROOT}\crates\devd-desktop\icons\icon.ico"
+!define MUI_UNICON "${ROOT}\crates\devd-desktop\icons\icon.ico"
 !define MUI_ABORTWARNING
-!define MUI_WELCOMEPAGE_TITLE "devd ${VERSION}"
-!define MUI_WELCOMEPAGE_TEXT "devd is a local development environment: PHP, Node.js, Go, nginx, MariaDB and HTTPS sites, with one permissioned interface for people and agents.$\r$\n$\r$\nThis installs for the current user only. No administrator password is required.$\r$\n$\r$\nPHP, nginx and MariaDB are downloaded from their vendors on first start, never bundled."
+BrandingText "devd ${VERSION}"
+
+; Four pages: welcome, where, installing, done. Nothing else to answer.
+!define MUI_WELCOMEPAGE_TITLE "Welcome to devd"
+!define MUI_WELCOMEPAGE_TEXT "Your sites, services, runtimes and agents in one place.$\r$\n$\r$\nThis takes a minute. It installs for you alone, so no administrator password is needed, and it adds devd to your PATH and the Start menu.$\r$\n$\r$\nPHP, nginx and MariaDB are not bundled: devd downloads them from their publishers the first time it starts, and checks each one before it runs it."
 !insertmacro MUI_PAGE_WELCOME
+
+!define MUI_DIRECTORYPAGE_TEXT_TOP "Choose the folder to install devd in. Click Browse to pick another one, then click Install.$\r$\n$\r$\nYour projects, databases and certificates are kept in $LOCALAPPDATA\devd whichever folder you choose, so they survive an upgrade or a reinstall."
+!define MUI_PAGE_CUSTOMFUNCTION_LEAVE DirLeave
 !insertmacro MUI_PAGE_DIRECTORY
-!insertmacro MUI_PAGE_COMPONENTS
+
 !insertmacro MUI_PAGE_INSTFILES
 
+!define MUI_FINISHPAGE_TITLE "devd is ready"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\launch.vbs"
-!define MUI_FINISHPAGE_RUN_TEXT "Set up devd and open it"
-!define MUI_FINISHPAGE_TEXT "devd is installed.$\r$\n$\r$\nThe first start runs the setup, which reports what it is doing as it goes:$\r$\n$\r$\n  1. Requirements - what is missing, and what this run will do about it$\r$\n  2. Runtime - PHP is downloaded and verified by running it$\r$\n  3. Services - nginx and MariaDB are downloaded from their vendors$\r$\n  4. Starting the stack - each service is started and checked$\r$\n  5. First site - a site is created and a certificate is issued$\r$\n  6. Certificate authority - trusted for this user$\r$\n$\r$\nThe downloads are about 140 MB and can take a few minutes. Progress appears in a console window; the application opens when the setup finishes."
+!define MUI_FINISHPAGE_RUN_TEXT "Set up devd and open it now"
+!define MUI_FINISHPAGE_TEXT "devd is installed.$\r$\n$\r$\nThe first start sets everything up and shows what it is doing: it checks what your machine needs, downloads PHP, nginx and MariaDB (about 140 MB), starts them and creates your first site. It takes a few minutes, and devd opens when it is done.$\r$\n$\r$\nYou can run devd from the Start menu or the desktop at any time."
 !insertmacro MUI_PAGE_FINISH
 
+!insertmacro MUI_UNPAGE_CONFIRM
+!insertmacro MUI_UNPAGE_INSTFILES
+
 !insertmacro MUI_LANGUAGE "English"
+
+; devd installs for the current user and asks for no administrator password,
+; so a folder that needs one cannot be written to. Say so on the page where the
+; folder is chosen, not as a failure halfway through copying files.
+Function DirLeave
+  StrLen $1 "$PROGRAMFILES"
+  StrCpy $2 "$INSTDIR" $1
+  StrCmp $2 "$PROGRAMFILES" protected 0
+  StrLen $1 "$PROGRAMFILES64"
+  StrCpy $2 "$INSTDIR" $1
+  StrCmp $2 "$PROGRAMFILES64" protected 0
+  StrLen $1 "$WINDIR"
+  StrCpy $2 "$INSTDIR" $1
+  StrCmp $2 "$WINDIR" protected done
+  protected:
+    MessageBox MB_OK|MB_ICONEXCLAMATION "devd installs for your user without an administrator password, so it cannot write to $INSTDIR.$\r$\n$\r$\nChoose a folder you own, such as D:\devd or the default."
+    Abort
+  done:
+FunctionEnd
 
 Function .onInit
   ; Refuse to install over a running copy: its files are locked and its
@@ -171,14 +204,11 @@ Section "devd (required)" SecMain
   WriteRegDWORD HKCU "${UNINSTKEY}" "EstimatedSize" 12000
 SectionEnd
 
+; A desktop shortcut is part of the install rather than a question: there is no
+; components page to ask it on.
 Section "Desktop shortcut" SecDesktop
   CreateShortcut "$DESKTOP\devd.lnk" "$INSTDIR\devd-desktop.exe" "" "$INSTDIR\devd-desktop.exe" 0
 SectionEnd
-
-!insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
-  !insertmacro MUI_DESCRIPTION_TEXT ${SecMain} "devd, its uninstaller and the Start Menu entries."
-  !insertmacro MUI_DESCRIPTION_TEXT ${SecDesktop} "A shortcut on the desktop."
-!insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 Section "Uninstall"
   ; Stop the application and the services it started.
