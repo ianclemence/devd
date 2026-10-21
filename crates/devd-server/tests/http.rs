@@ -51,6 +51,10 @@ impl Fixture {
 
     /// A registry with one capability per interesting tier.
     fn registry(&self) -> Arc<Registry> {
+        Arc::new(self.build_registry())
+    }
+
+    fn build_registry(&self) -> Registry {
         let effects = self.effects.clone();
         let mut registry = Registry::new();
 
@@ -123,7 +127,7 @@ impl Fixture {
             )
             .unwrap();
 
-        Arc::new(registry)
+        registry
     }
 
     fn state(&self, port: u16) -> (Arc<AppState>, tokio::sync::watch::Receiver<bool>) {
@@ -138,6 +142,32 @@ impl Fixture {
             dry_run: false,
         };
         AppState::new(self.registry(), ctx, port, Vec::new()).unwrap()
+    }
+
+    /// State whose registry also carries the workspace capabilities.
+    ///
+    /// The session and task routes dispatch them, so a test that drives those
+    /// routes needs them bound to the workspace the state serves. Tests that
+    /// count the registry's capabilities use `state` instead.
+    fn state_with_workspace(
+        &self,
+        port: u16,
+    ) -> (Arc<AppState>, tokio::sync::watch::Receiver<bool>) {
+        let paths = Paths::rooted(self.root.clone());
+        paths.ensure().unwrap();
+        let ctx = Ctx {
+            store: Arc::new(Store::open_in_memory().unwrap()),
+            paths: Arc::new(paths),
+            settings: Arc::new(Settings::default()),
+            events: EventBus::new(),
+            actor: devd_core::capability::Actor::human(devd_core::capability::Surface::Cli),
+            dry_run: false,
+        };
+        let workspace =
+            devd_workspace::Workspace::new(ctx.store.clone(), ctx.paths.clone()).unwrap();
+        let mut registry = self.build_registry();
+        devd_workspace::caps::register(&mut registry, workspace.clone()).unwrap();
+        AppState::with_workspace(Arc::new(registry), ctx, port, Vec::new(), workspace, None)
     }
 }
 
@@ -865,7 +895,7 @@ async fn a_real_socket_serves_the_application_and_stops_when_asked() {
 #[tokio::test]
 async fn a_session_started_over_http_is_listed_attached_and_stopped() {
     let fixture = Fixture::new();
-    let (state, _rx) = fixture.state(8799);
+    let (state, _rx) = fixture.state_with_workspace(8799);
     let token = state.token.clone();
     let cwd = fixture._temp.path().to_string_lossy().to_string();
     let command = if cfg!(windows) {
@@ -957,6 +987,93 @@ async fn a_session_started_over_http_is_listed_attached_and_stopped() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(after["replayable"], true);
+
+    // Dismissing is destructive. The dedicated route must not be a way around
+    // the approval the capability requires.
+    let (status, refused) = call(
+        state.clone(),
+        "DELETE",
+        &format!("/api/sessions/{id}"),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    let (status, still) = call(
+        state.clone(),
+        "GET",
+        &format!("/api/sessions/{id}"),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "the refused dismissal removed the session: {still}");
+
+    // Every launch and stop reaches the audit trail, like any other operation.
+    let (_, audit) = call(state.clone(), "GET", "/api/audit?limit=50", Some(&token), None).await;
+    let rows = audit["items"].as_array().expect("audit rows");
+    for capability in ["session.start", "session.stop", "session.dismiss"] {
+        assert!(
+            rows.iter().any(|r| r["capability"] == capability),
+            "no audit row for {capability}: {audit}"
+        );
+    }
+
+    // The same operation goes through when the person approves it.
+    let (status, asked) = call(
+        state.clone(),
+        "POST",
+        "/api/invoke",
+        Some(&token),
+        Some(json!({ "id": "session.dismiss", "args": { "id": id } })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{asked}");
+    assert_eq!(asked["approval_required"], true);
+    let (status, done) = call(
+        state.clone(),
+        "POST",
+        "/api/approve",
+        Some(&token),
+        Some(json!({ "token": asked["token"] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    let (status, _) = call(
+        state,
+        "GET",
+        &format!("/api/sessions/{id}"),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// The window's dedicated routes may not reach a subsystem directly.
+///
+/// Polling, keystrokes and resizing are the documented exceptions (they would
+/// write an audit row per frame). Everything else that changes state must go
+/// through `Registry::dispatch`, or its tier is not enforced and it is not
+/// audited.
+#[test]
+fn a_dedicated_route_cannot_reach_a_mutating_subsystem_directly() {
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/api.rs"))
+        .expect("api.rs");
+    let forbidden = [
+        ".sessions().start(",
+        ".sessions().stop(",
+        ".sessions().rename(",
+        ".sessions().dismiss(",
+        ".orchestrator().cancel(",
+        ".orchestrator().spawn(",
+    ];
+    for needle in forbidden {
+        assert!(
+            !source.contains(needle),
+            "api.rs calls `{needle}` directly; dispatch the capability instead"
+        );
+    }
 }
 
 #[tokio::test]

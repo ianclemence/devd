@@ -423,12 +423,12 @@ mod tests {
 
 // ---------------------------------------------------------------- terminals
 //
-// Polling output and sending keystrokes are deliberately not capability calls:
-// at 80ms a poll would generate an audit row per frame, which is noise rather
-// than accountability. They are still behind the same bearer token, host
-// allow-list and origin check as every other endpoint. Mutating operations that
-// an agent can also perform are declared as capabilities and dispatched through
-// the registry.
+// Polling output, sending keystrokes and resizing are deliberately not
+// capability calls: at 80ms a poll would generate an audit row per frame, which
+// is noise rather than accountability. They are still behind the same bearer
+// token, host allow-list and origin check as every other endpoint. Every other
+// mutating operation - stop, rename, dismiss, cancel - is dispatched through
+// the registry, so its tier is enforced and the attempt is audited.
 
 /// `GET /api/terminal/harnesses` - the coding-agent CLIs found on this machine.
 pub async fn terminal_harnesses() -> Response {
@@ -446,10 +446,9 @@ pub struct TerminalStart {
     pub command: Option<Vec<String>>,
 }
 
-fn start_session(
-    state: &Arc<AppState>,
-    req: TerminalStart,
-) -> Result<devd_workspace::SessionView, String> {
+/// Start a session through `session.start`, so the start is audited and the
+/// tier is enforced like any other launch. Returns the session view as JSON.
+fn start_session(state: &Arc<AppState>, req: TerminalStart) -> Result<Value, String> {
     let cwd = req
         .cwd
         .or_else(|| {
@@ -458,20 +457,26 @@ fn start_session(
                 .map(|p| p.display().to_string())
         })
         .ok_or_else(|| "a working directory is required".to_string())?;
+    let request = InvokeRequest {
+        id: "session.start".to_string(),
+        args: json!({
+            "harness": req.kind,
+            "cwd": cwd,
+            "project": req.project,
+            "label": req.label,
+            "cols": req.cols,
+            "rows": req.rows,
+            "command": req.command,
+        }),
+        dry_run: false,
+    };
     state
-        .workspace
-        .sessions()
-        .start(devd_workspace::StartOptions {
-            harness: req.kind,
-            cwd,
-            project: req.project,
-            label: req.label,
-            cols: req.cols.unwrap_or(100),
-            rows: req.rows.unwrap_or(30),
-            command: req.command,
-            ..Default::default()
-        })
-        .map_err(|e| e.to_string())
+        .registry
+        .dispatch(&state.ctx, &request, Approval::None)
+        .map_err(|e| e.to_string())?
+        .outcome
+        .map(|outcome| outcome.data)
+        .ok_or_else(|| "session.start returned no session".to_string())
 }
 
 /// `POST /api/terminal/start` - the v0.7 compatibility path.
@@ -482,7 +487,7 @@ pub async fn terminal_start(
     let task = state.clone();
     match tokio::task::spawn_blocking(move || start_session(&task, req)).await {
         Ok(Ok(view)) => Json(json!({
-            "id": view.session.id,
+            "id": view["id"],
             "session": view,
         }))
         .into_response(),
@@ -671,24 +676,49 @@ pub struct RenameBody {
     pub label: String,
 }
 
+/// Dispatch a capability for one of the dedicated routes and answer with the
+/// data the old handler returned, so a client written against the route keeps
+/// working while the call is checked and audited like every other.
+///
+/// The operation runs with `Approval::None`: a capability that needs approval
+/// refuses here with `approval_required`, and the client must use
+/// `/api/invoke`, which negotiates the approval and then applies it.
+async fn dispatch_route(state: Arc<AppState>, id: &'static str, args: Value) -> Response {
+    let req = InvokeRequest {
+        id: id.to_string(),
+        args,
+        dry_run: false,
+    };
+    let st = state.clone();
+    match tokio::task::spawn_blocking(move || st.registry.dispatch(&st.ctx, &req, Approval::None))
+        .await
+    {
+        Ok(Ok(result)) => match result.outcome {
+            Some(outcome) if !outcome.data.is_null() => Json(outcome.data).into_response(),
+            _ => Json(json!({ "ok": true })).into_response(),
+        },
+        Ok(Err(e)) => error_response(&e),
+        Err(e) => error_response(&DevdError::internal(format!("the operation panicked: {e}"))),
+    }
+}
+
 /// `POST /api/sessions/:id/rename`.
 pub async fn session_rename(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Json(body): Json<RenameBody>,
 ) -> Response {
-    match state.workspace.sessions().rename(&id, &body.label) {
-        Ok(view) => Json(view).into_response(),
-        Err(e) => error_response(&e),
-    }
+    dispatch_route(
+        state,
+        "session.rename",
+        json!({ "id": id, "label": body.label }),
+    )
+    .await
 }
 
 /// `POST /api/sessions/:id/stop`.
 pub async fn session_stop(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
-    match state.workspace.sessions().stop(&id) {
-        Ok(view) => Json(view).into_response(),
-        Err(e) => error_response(&e),
-    }
+    dispatch_route(state, "session.stop", json!({ "id": id })).await
 }
 
 #[derive(Deserialize)]
@@ -701,21 +731,19 @@ pub async fn terminal_stop(
     State(state): State<Arc<AppState>>,
     Json(req): Json<TerminalStop>,
 ) -> Response {
-    match state.workspace.sessions().stop(&req.id) {
-        Ok(view) => Json(view).into_response(),
-        Err(e) => error_response(&e),
-    }
+    dispatch_route(state, "session.stop", json!({ "id": req.id })).await
 }
 
 /// `DELETE /api/sessions/:id` - forget a finished session.
+///
+/// `session.dismiss` is destructive, so this route refuses with
+/// `approval_required`; the window dismisses through `/api/invoke`, which shows
+/// the plan and asks.
 pub async fn session_dismiss(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Response {
-    match state.workspace.sessions().dismiss(&id) {
-        Ok(()) => Json(json!({ "dismissed": true })).into_response(),
-        Err(e) => error_response(&e),
-    }
+    dispatch_route(state, "session.dismiss", json!({ "id": id })).await
 }
 
 // ------------------------------------------------------------------- tasks
@@ -780,10 +808,7 @@ pub async fn task_wait(
 
 /// `POST /api/tasks/:id/cancel`.
 pub async fn task_cancel(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
-    match state.workspace.orchestrator().cancel(&id) {
-        Ok(task) => Json(task).into_response(),
-        Err(e) => error_response(&e),
-    }
+    dispatch_route(state, "agent.cancel", json!({ "task_id": id })).await
 }
 
 /// `GET /api/tasks/:id/result`.

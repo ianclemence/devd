@@ -2345,9 +2345,8 @@
   }
 
   function dismissSession(id) {
-    if (!window.confirm("Dismiss this finished session from the list? The transcript file is retained.")) return;
-    request("/api/sessions/" + encodeURIComponent(id), { method: "DELETE", body: "{}" }).then(function (res) {
-      if (!res.ok) return toast("error", errorOf(res.body, "could not dismiss the session"));
+    run("session.dismiss", { id: id }).then(function (done) {
+      if (!done) return;
       var t = state.terms[id];
       if (t) {
         try { t.term.dispose(); } catch (e) {}
