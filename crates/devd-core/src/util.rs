@@ -59,8 +59,20 @@ pub fn run(
     envs: &[(String, String)],
     timeout: Option<Duration>,
 ) -> Result<CommandOutput> {
-    let mut cmd = Command::new(program);
-    cmd.args(args);
+    // A Windows batch file is a script, not a program: the operating system
+    // will not start it, so it has to go through the command interpreter.
+    // npm, Composer, Yarn and the Expo CLI all ship this way.
+    let mut cmd = if needs_shell(program) {
+        let mut c = Command::new(shell_path());
+        c.arg("/C");
+        c.arg(program);
+        c.args(args);
+        c
+    } else {
+        let mut c = Command::new(program);
+        c.args(args);
+        c
+    };
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
     }
@@ -152,7 +164,14 @@ pub fn directory_size(path: &Path) -> u64 {
         .sum()
 }
 
-/// Locate an executable on `PATH` (appending `.exe` on Windows).
+/// Locate an executable on `PATH`.
+///
+/// On Windows the extensions in `PATHEXT` are tried first. npm, Composer,
+/// Yarn and the Expo CLI all drop an extensionless POSIX shell script beside
+/// the Windows shim that actually runs, and Windows cannot execute a shell
+/// script: taking the extensionless file would find a program that cannot be
+/// started. The bare name is still the last resort, because a directory may
+/// hold a program with no extension that is a real executable.
 pub fn which(program: &str) -> Option<PathBuf> {
     let path_var = std::env::var_os("PATH")?;
     let exts: Vec<String> = if cfg!(windows) {
@@ -166,10 +185,6 @@ pub fn which(program: &str) -> Option<PathBuf> {
     };
 
     for dir in std::env::split_paths(&path_var) {
-        let direct = dir.join(program);
-        if direct.is_file() {
-            return Some(direct);
-        }
         if cfg!(windows) && !program.contains('.') {
             for ext in &exts {
                 let candidate = dir.join(format!("{program}{ext}"));
@@ -178,8 +193,61 @@ pub fn which(program: &str) -> Option<PathBuf> {
                 }
             }
         }
+        let direct = dir.join(program);
+        if direct.is_file() {
+            return Some(direct);
+        }
     }
     None
+}
+
+/// Whether a file has to be started through the Windows command interpreter.
+///
+/// A `.cmd` or `.bat` file is a script, not a program: the operating system
+/// will not run it directly, so it has to go through `cmd.exe`. A file with no
+/// extension on Windows is usually a POSIX shell script left behind by an
+/// installer, and it cannot be started at all.
+pub fn needs_shell(path: &Path) -> bool {
+    if !cfg!(windows) {
+        return false;
+    }
+    match path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase) {
+        Some(ext) => ext == "cmd" || ext == "bat",
+        None => true,
+    }
+}
+
+/// The command interpreter to run a Windows script with.
+pub fn shell_path() -> PathBuf {
+    std::env::var_os("COMSPEC")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("cmd.exe"))
+}
+
+/// The version a program printed.
+///
+/// The first capture group of `pattern` is the version. Without a pattern,
+/// the first dotted number in the output is taken, which is right for the
+/// many tools that print nothing but their version.
+pub fn extract_version(text: &str, pattern: Option<&str>) -> Option<String> {
+    let cleaned: String = text
+        .lines()
+        .filter(|l| !l.starts_with("Picked up"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let re = regex::Regex::new(pattern.unwrap_or(r"(\d+\.\d+(?:\.\d+)*)")).ok()?;
+    re.captures(&cleaned)
+        .and_then(|c| c.iter().skip(1).flatten().next().map(|m| m.as_str().to_string()))
+        .or_else(|| {
+            if pattern.is_some() {
+                None
+            } else {
+                regex::Regex::new(r"(\d+\.\d+(?:\.\d+)*)")
+                    .ok()?
+                    .captures(&cleaned)
+                    .map(|c| c[1].to_string())
+            }
+        })
 }
 
 /// Validate a filesystem/DNS-safe label: lowercase letters, digits and inner

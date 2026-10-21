@@ -1,20 +1,44 @@
 # devd
 
-A local development environment manager, written in Rust. It installs and runs
-the services a PHP or Node project needs — nginx, MariaDB, PHP, Node.js, Go —
-creates virtual hosts served over HTTPS under a local domain, runs the coding
-agents you already use in persistent PTYs, supervises project processes declared
-in `devd.yml`, keeps shared notes and todos for people and agents, previews the
-site inside a native window, and exposes every operation as a typed, permissioned
-capability reachable from the CLI, a terminal dashboard, the application window
-and an MCP server.
+> **Your development environment, on your machine, with your rules.**
+> *One program for the services, the sites, the runtimes and the agents — and
+> nothing it does happens without your say-so.*
 
-devd replaces Windows-only stacks such as Laragon and XAMPP. It is built on two
-rules:
+---
+
+## What devd does for you
+
+devd is the development environment you would otherwise assemble by hand, in one
+place that knows what is installed, what is running, and what each project needs.
+
+- **It finds your project.** You browse to the folder; devd reads what is
+  inside it — the stack, the package manager, the runtimes it asks for, the
+  services it talks to — and sets it up from there.
+- **It runs the services.** PHP, Node.js, Go, nginx and MariaDB are installed
+  from their publishers, started, health-checked and kept running. A site is a
+  directory, a hostname and a certificate, and it answers over HTTPS.
+- **It runs your agents.** Claude Code, OpenCode or a shell, in a real terminal
+  that survives you changing screens. Give an agent a goal and a team splits it:
+  a planner proposes the work, you approve it, specialists do it in isolated
+  copies, and a task is only done when devd can see the files that changed and
+  the check that passed.
+- **It keeps the record.** Every operation is written down: what was asked,
+  what ran, what it changed, and who approved it.
+
+You say what you want. devd does the rest, and it asks before it does anything
+consequential.
+
+---
+
+## Two rules
+
+Everything in devd follows from these, and they are why it can be trusted with
+your machine.
 
 - **One implementation.** Every action is declared once, in a capability
-  registry. The interfaces are projections of that registry; none of them holds
-  business logic of its own.
+  registry. The command line, the terminal dashboard, the application window and
+  the MCP server are projections of that registry; none of them holds business
+  logic of its own, so they cannot disagree about what is possible.
 - **Approval is enforced, not suggested.** Destructive, privileged and remote
   operations return a plan and require an explicit human decision before they
   run. An agent cannot approve its own action, and a declined operation never
@@ -23,7 +47,7 @@ rules:
 ## Projects for any stack
 
 devd creates, imports and runs projects across languages, driven by structured stack definitions with official documentation links:
-`devd new` (guided), `devd project detect|import|tasks|run|exec`, `devd tools list|install|start`, and the same operations in the window (Create, Develop, Toolchain), the terminal dashboard and MCP. See [`docs/stacks-engine.md`](docs/stacks-engine.md) and the generated [compatibility matrix](docs/stacks.md).
+`devd new` (guided), `devd project detect|import|tasks|run|exec|browse`, `devd tools list|install|start`, and the same operations in the window (Create, Develop, Tools), the terminal dashboard and MCP. See [`docs/stacks-engine.md`](docs/stacks-engine.md) and the generated [compatibility matrix](docs/stacks.md).
 
 ## An agent team that works and proves it
 
@@ -56,7 +80,7 @@ Download and run the installer from the
 [latest release](https://github.com/ianclemence/devd/releases/latest):
 
 ```powershell
-curl.exe -LO https://github.com/ianclemence/devd/releases/download/v0.8.0/devd-setup-0.8.0.exe
+curl.exe -LO https://github.com/ianclemence/devd/releases/download/v0.9.0/devd-setup-0.8.0.exe
 .\devd-setup-0.8.0.exe
 ```
 
@@ -77,11 +101,11 @@ The same binary is attached as a standalone executable if you would rather not
 install anything. Download it, verify it, and put it on `PATH`:
 
 ```powershell
-curl.exe -LO https://github.com/ianclemence/devd/releases/download/v0.8.0/devd-v0.8.0-x86_64-pc-windows-gnu.exe
-curl.exe -LO https://github.com/ianclemence/devd/releases/download/v0.8.0/SHA256SUMS.txt
-certutil -hashfile devd-v0.8.0-x86_64-pc-windows-gnu.exe SHA256
+curl.exe -LO https://github.com/ianclemence/devd/releases/download/v0.9.0/devd-v0.9.0-x86_64-pc-windows-gnu.exe
+curl.exe -LO https://github.com/ianclemence/devd/releases/download/v0.9.0/SHA256SUMS.txt
+certutil -hashfile devd-v0.9.0-x86_64-pc-windows-gnu.exe SHA256
 
-Rename-Item devd-v0.8.0-x86_64-pc-windows-gnu.exe devd.exe
+Rename-Item devd-v0.9.0-x86_64-pc-windows-gnu.exe devd.exe
 devd setup --yes
 devd ui
 ```
@@ -92,8 +116,8 @@ Rust toolchain, MinGW or Visual C++ runtime.
 The native window is also published as a portable zip:
 
 ```powershell
-curl.exe -LO https://github.com/ianclemence/devd/releases/download/v0.8.0/devd-desktop-v0.8.0-x86_64-pc-windows-gnu.zip
-Expand-Archive devd-desktop-v0.8.0-x86_64-pc-windows-gnu.zip -DestinationPath devd-desktop
+curl.exe -LO https://github.com/ianclemence/devd/releases/download/v0.9.0/devd-desktop-v0.9.0-x86_64-pc-windows-gnu.zip
+Expand-Archive devd-desktop-v0.9.0-x86_64-pc-windows-gnu.zip -DestinationPath devd-desktop
 .\devd-desktop\devd-desktop.exe
 ```
 
@@ -116,6 +140,20 @@ only after it has been executed on its target platform, and the release is built
 on Windows. To produce one, run `scripts/release-linux.sh` on Linux, or
 `scripts/release-linux.ps1` from Windows through WSL or Docker. Both are
 described in [`docs/releasing.md`](docs/releasing.md).
+
+### Linux
+
+```bash
+git clone https://github.com/ianclemence/devd.git
+cd devd
+cargo build --release -p devd-cli
+./scripts/install-linux.sh --binary target/release/devd
+```
+
+The installer is per-user and needs no administrator rights: it puts the
+binary in `~/.local/bin`, adds a desktop entry, and runs the first-time setup.
+`./scripts/install-linux.sh --uninstall` removes the program and keeps your
+data; `--uninstall --purge` removes both.
 
 ## Quick start
 

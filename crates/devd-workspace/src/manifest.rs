@@ -174,8 +174,22 @@ pub fn load(root: &Path) -> Result<Manifest> {
         return Err(DevdError::invalid("the project path is not a directory"));
     }
     let path = root.join(MANIFEST_FILE);
-    let metadata = std::fs::metadata(&path).map_err(|e| {
-        DevdError::not_found(format!("no {MANIFEST_FILE} in {}: {e}", root.display()))
+    // The message is a sentence, not an operating-system complaint: "the
+    // system cannot find the file specified" tells a person nothing they can
+    // act on.
+    let metadata = std::fs::metadata(&path).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => DevdError::not_found(format!(
+            "there is no {MANIFEST_FILE} in {}",
+            root.display()
+        )),
+        std::io::ErrorKind::PermissionDenied => DevdError::denied(format!(
+            "{MANIFEST_FILE} in {} cannot be read",
+            root.display()
+        )),
+        _ => DevdError::not_found(format!(
+            "{MANIFEST_FILE} in {} cannot be read: {e}",
+            root.display()
+        )),
     })?;
     if metadata.len() > MAX_MANIFEST_BYTES {
         return Err(DevdError::invalid(format!(

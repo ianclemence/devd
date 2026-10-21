@@ -78,17 +78,45 @@ pub fn list(ctx: &Ctx) -> Result<Value> {
     }
 
     // ---- The PHP runtime devd serves sites with.
-    let runtimes = ctx.store.list_runtimes().unwrap_or_default();
-    let has_php = runtimes.iter().any(|r| r.kind == "php");
-    if !has_php {
+    //
+    // devd serves sites through a FastCGI listener it runs, and that
+    // listener comes from a runtime devd downloaded and verified. A PHP that
+    // is already on the machine is real and it is usable, but devd cannot
+    // manage it - so it is named, not hidden: the person must be able to see
+    // that a PHP exists and still be told why devd wants its own.
+    let runtimes = devd_runtime::list(ctx).unwrap_or_default();
+    let managed_php = runtimes
+        .iter()
+        .find(|r| r.runtime.kind == "php" && r.managed)
+        .map(|r| r.runtime.version.clone());
+    let found_php = runtimes
+        .iter()
+        .find(|r| r.runtime.kind == "php" && !r.managed)
+        .map(|r| (r.runtime.version.clone(), r.executable.clone()));
+    if managed_php.is_none() {
+        let (why, detail) = match &found_php {
+            Some((version, path)) => (
+                format!(
+                    "PHP {version} is installed on this machine, but not by devd. Sites are served through a FastCGI listener devd runs, and that listener is built from a runtime devd downloaded and verified."
+                ),
+                Some(format!("found at {path}")),
+            ),
+            None => (
+                "Sites are served by PHP. devd downloads a verified build from windows.php.net.".to_string(),
+                None,
+            ),
+        };
         reqs.push(Requirement {
             id: "runtime:php".into(),
-            title: "PHP".into(),
+            title: match &found_php {
+                Some(_) => "PHP runtime devd manages".into(),
+                None => "PHP".into(),
+            },
             kind: "runtime",
-            why: "Sites are served by PHP. devd downloads a verified build from windows.php.net.".into(),
+            why,
             state: "missing",
             required: true,
-            detail: None,
+            detail,
             fix: Some(json!({
                 "label": "Install PHP",
                 "capability": "runtime.install",

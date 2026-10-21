@@ -857,6 +857,46 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             Ok(Outcome::with_data(format!("{} device(s)", devices.len()), json!(devices)))
         })?;
 
+    add::<NoArgs, _, _>(reg, "toolchain.eas_projects", "Expo projects linked to this machine",
+        "The Expo projects this machine is signed in to, with the slug and the account that owns them. Needs the EAS CLI and an Expo account; if EAS is not signed in it says so rather than guessing.",
+        Tier::Read, Effect::Read, true, false, true,
+        |_, _| read_plan("toolchain.eas_projects", "list Expo projects"),
+        |ctx, _| {
+            let r = stacks(ctx);
+            let eas = r.tool("eas-cli").map(|t| t.probe(&toolchain::managed_dirs(ctx)));
+            if !eas.as_ref().map(|e| e.installed).unwrap_or(false) {
+                return Err(DevdError::conflict("the EAS CLI is not installed; install it with toolchain.install { tool: \"eas-cli\" }"));
+            }
+            let res = exec::run_streaming(
+                &exec::RunSpec { argv: vec!["eas".into(), "project:list".into(), "--json".into(), "--non-interactive".into()], cwd: std::env::temp_dir(), env: vec![], extra_path: toolchain::managed_dirs(ctx), timeout: Some(std::time::Duration::from_secs(60)) },
+                &AtomicBool::new(false), None, &mut |_| {})?;
+            let text = res.tail.join("\n");
+            // EAS answers with JSON when it can and with a sentence when it
+            // cannot. Both are reported; neither is invented.
+            let parsed: serde_json::Value = serde_json::from_str(&text).unwrap_or(serde_json::Value::Null);
+            let projects: Vec<Value> = match &parsed {
+                serde_json::Value::Array(items) => items
+                    .iter()
+                    .map(|p| json!({
+                        "slug": p.get("slug").and_then(|v| v.as_str()).unwrap_or_default(),
+                        "name": p.get("name").and_then(|v| v.as_str()).unwrap_or_default(),
+                        "owner": p.get("ownerAccount").and_then(|v| v.as_str()).unwrap_or_default(),
+                    }))
+                    .collect(),
+                _ => Vec::new(),
+            };
+            if projects.is_empty() {
+                return Ok(Outcome::with_data(
+                    String::from("no Expo projects"),
+                    json!({ "projects": [], "message": devd_core::util::truncate(text.trim(), 400), "signed_in": false }),
+                ));
+            }
+            Ok(Outcome::with_data(
+                format!("{} Expo project(s)", projects.len()),
+                json!({ "projects": projects, "signed_in": true }),
+            ))
+        })?;
+
     Ok(())
 }
 

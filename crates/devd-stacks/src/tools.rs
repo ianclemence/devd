@@ -83,6 +83,20 @@ pub struct ToolDef {
     /// Regex whose first group is the version.
     #[serde(default)]
     pub version_regex: Option<String>,
+    /// Text the output must contain for this program to be this tool.
+    ///
+    /// Several tools share an executable name. MariaDB's client prints
+    /// "MariaDB"; MySQL's does not; Windows' `convert.exe` is a disk
+    /// converter and says nothing about images. Without this, the wrong
+    /// program answers and devd reports a tool that is not there.
+    #[serde(default)]
+    pub version_require: Option<String>,
+    /// Text the output must not contain.
+    ///
+    /// MySQL's client is also MariaDB's client, and says "MariaDB" when it is
+    /// MariaDB. MySQL must not match that.
+    #[serde(default)]
+    pub version_reject: Option<String>,
     /// Oldest version devd considers supported.
     #[serde(default)]
     pub supported_min: Option<String>,
@@ -232,12 +246,12 @@ pub struct ToolStatus {
 }
 
 /// Search directories first, then `PATH`.
+///
+/// The Windows extensions come before the bare name, for the same reason as
+/// in `util::which`: an installer that leaves a shell script beside its
+/// Windows shim would otherwise be found and could not be started.
 pub fn which_in(program: &str, dirs: &[PathBuf]) -> Option<(PathBuf, bool)> {
     for d in dirs {
-        let p = d.join(program);
-        if p.is_file() {
-            return Some((p, true));
-        }
         if cfg!(windows) {
             for ext in ["exe", "cmd", "bat"] {
                 let p = d.join(format!("{program}.{ext}"));
@@ -246,25 +260,17 @@ pub fn which_in(program: &str, dirs: &[PathBuf]) -> Option<(PathBuf, bool)> {
                 }
             }
         }
+        let p = d.join(program);
+        if p.is_file() {
+            return Some((p, true));
+        }
     }
     util::which(program).map(|p| (p, false))
 }
 
 /// Extract a version from command output.
 pub fn extract_version(text: &str, regex: Option<&str>) -> Option<String> {
-    let cleaned: String = text
-        .lines()
-        .filter(|l| !l.starts_with("Picked up"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    if let Some(r) = regex {
-        let re = Regex::new(r).ok()?;
-        return re
-            .captures(&cleaned)
-            .and_then(|c| c.iter().skip(1).flatten().next().map(|m| m.as_str().to_string()));
-    }
-    let re = Regex::new(r"(\d+\.\d+(?:\.\d+)*)").ok()?;
-    re.captures(&cleaned).map(|c| c[1].to_string())
+    util::extract_version(text, regex)
 }
 
 impl ToolDef {
@@ -285,6 +291,7 @@ impl ToolDef {
             st.problem = Some("installed per project, not on the machine".into());
             return st;
         }
+        let mut rejected: Vec<String> = Vec::new();
         for exe in &self.exes {
             let Some((path, managed)) = which_in(exe, extra_dirs) else {
                 continue;
@@ -294,34 +301,60 @@ impl ToolDef {
             } else {
                 self.version_args.clone()
             };
-            st.path = Some(path.display().to_string());
-            st.source = Some(if managed { "devd-runtime" } else { "path" }.to_string());
             match util::run(&path, &args, None, &[], Some(Duration::from_secs(15))) {
                 Ok(out) => {
                     let text = format!("{}\n{}", out.stdout, out.stderr);
-                    st.version = extract_version(&text, self.version_regex.as_deref());
+                    // The program that answered has to be this tool and not
+                    // another one that happens to share its name.
+                    if let Some(need) = &self.version_require {
+                        if !text.contains(need) {
+                            rejected.push(format!("`{exe}` is a different program"));
+                            continue;
+                        }
+                    }
+                    if let Some(no) = &self.version_reject {
+                        if text.contains(no) {
+                            rejected.push(format!("`{exe}` is {no}"));
+                            continue;
+                        }
+                    }
+                    let version = extract_version(&text, self.version_regex.as_deref());
                     // Some tools print their version to a non-zero exit; a
                     // version we could parse is proof enough that it runs.
-                    st.installed = out.ok() || st.version.is_some();
-                    if !st.installed {
-                        st.problem = Some(format!(
-                            "`{exe}` was found but failed to run: {}",
-                            util::truncate(out.stderr.trim(), 200)
-                        ));
+                    let installed = out.ok() || version.is_some();
+                    if installed {
+                        st.path = Some(path.display().to_string());
+                        st.source = Some(if managed { "devd-runtime" } else { "path" }.to_string());
+                        st.version = version;
+                        st.installed = true;
+                        if let (Some(v), Some(min)) = (&st.version, &self.supported_min) {
+                            st.outdated = cmp_version(v, min) == std::cmp::Ordering::Less;
+                        }
+                        st.problem = None;
+                        return st;
                     }
+                    // This candidate is the wrong program, or a broken one.
+                    // Try the next name before saying anything about it.
+                    st.problem = Some(format!(
+                        "`{exe}` was found but failed to run: {}",
+                        util::truncate(out.stderr.trim(), 200)
+                    ));
                 }
-                Err(e) => st.problem = Some(format!("`{exe}` was found but did not run: {e}")),
-            }
-            if st.installed {
-                if let (Some(v), Some(min)) = (&st.version, &self.supported_min) {
-                    st.outdated = cmp_version(v, min) == std::cmp::Ordering::Less;
+                Err(e) => {
+                    st.problem = Some(format!("`{exe}` was found but did not run: {e}"));
                 }
-                st.problem = None;
-                return st;
             }
         }
         if st.problem.is_none() {
-            st.problem = Some(format!("`{}` was not found on PATH", self.exes.join("` or `")));
+            st.problem = Some(if rejected.is_empty() {
+                format!("`{}` was not found on PATH", self.exes.join("` or `"))
+            } else {
+                format!(
+                    "`{}` was not found on PATH; {}",
+                    self.exes.join("` or `"),
+                    rejected.join("; ")
+                )
+            });
         }
         st
     }

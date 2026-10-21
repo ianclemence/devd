@@ -263,6 +263,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/project/logs", get(api::project_logs))
         .route("/api/open-url", post(api::open_url))
         .route("/api/pick-folder", post(api::pick_folder))
+        .route("/api/upload", post(api::upload))
         .with_state(state.clone());
 
     let pages = Router::new()

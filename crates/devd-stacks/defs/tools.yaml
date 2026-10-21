@@ -132,7 +132,7 @@ tools:
   - id: php
     name: PHP
     category: runtime
-    purpose: PHP runtime for Laravel, Symfony, CodeIgniter, CakePHP and Slim.
+    purpose: PHP runtime for Laravel, Slim and other PHP frameworks.
     exes: [php]
     version_regex: 'PHP (\d+\.\d+\.\d+)'
     supported_min: "8.1"
@@ -153,7 +153,7 @@ tools:
   - id: composer
     name: Composer
     category: package-manager
-    purpose: PHP dependency manager; creates Laravel, Symfony and CakePHP projects.
+    purpose: PHP dependency manager; creates Laravel and Slim projects.
     exes: [composer]
     version_regex: 'Composer version (\d+\.\d+\.\d+)'
     supported_min: "2.2"
@@ -419,7 +419,10 @@ tools:
     category: database
     purpose: MySQL-compatible relational database.
     exes: [mariadb, mysql]
-    version_regex: 'Distrib (\d+\.\d+\.\d+)|Ver (\d+\.\d+(?:\.\d+)?)'
+    version_regex: 'Distrib (\d+\.\d+\.\d+)'
+    # MariaDB's client is also called `mysql`, so the name alone is not proof:
+    # only a program that says "MariaDB" is MariaDB.
+    version_require: MariaDB
     docs: [{title: MariaDB documentation, url: "https://mariadb.com/kb/en/documentation/"}]
     install:
       - {manager: apt, packages: [mariadb-server]}
@@ -447,6 +450,9 @@ tools:
     purpose: Relational database.
     exes: [mysql]
     version_regex: 'Distrib (\d+\.\d+\.\d+)|Ver (\d+\.\d+(?:\.\d+)?)'
+    # MySQL's client is also MariaDB's client. A program that says "MariaDB"
+    # is MariaDB, and must not be counted as MySQL.
+    version_reject: MariaDB
     docs: [{title: MySQL reference manual, url: "https://dev.mysql.com/doc/refman/en/"}]
     install:
       - {manager: apt, packages: [mysql-server]}
@@ -717,6 +723,9 @@ tools:
     purpose: Image processing used by PHP's imagick extension and many CMS plugins.
     exes: [magick, convert]
     version_regex: 'ImageMagick (\d+\.\d+\.\d+)'
+    # Windows ships a `convert.exe` that converts FAT volumes to NTFS. Only a
+    # program that says "ImageMagick" is ImageMagick.
+    version_require: ImageMagick
     docs: [{title: ImageMagick, url: "https://imagemagick.org/script/command-line-processing.php"}]
     install:
       - {manager: apt, packages: [imagemagick]}

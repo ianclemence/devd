@@ -39,7 +39,12 @@
   }
 
   function errorOf(body, fallback) {
-    if (body && body.error && body.error.message) return body.error.message;
+    if (body && body.error && body.error.message) {
+      // The message carries the error's code as a prefix ("not found: ...").
+      // The code is for machines; the sentence is for people.
+      var message = String(body.error.message).replace(/^[a-z][a-z ]*:\s*/, "");
+      return message || fallback || "the request failed";
+    }
     return fallback || "the request failed";
   }
 
@@ -144,6 +149,8 @@
     expanded: {},
     diff: null,
     caps: { total: 0, items: [], q: "", group: "" },
+    filters: { services: "", sites: "", toolchain: "", runtimes: "" },
+    filterTimer: null,
     selectedCap: null,
     capArgs: {},
     audit: [],
@@ -277,9 +284,25 @@
     xdebug: "xdebug", mailpit: "mailpit", meilisearch: "meilisearch", minio: "minio",
     elasticsearch: "elasticsearch", prometheus: "prometheus", grafana: "grafana",
     docker: "docker", git: "git", sentry: "sentry", opencode: "opencode",
-    cakephp: "cakephp", phpmyadmin: "phpmyadmin", phpstorm: "phpstorm",
+    phpmyadmin: "phpmyadmin", phpstorm: "phpstorm",
     cursor: "cursor", insomnia: "insomnia", postman: "postman", figma: "figma",
-    discord: "discord", notion: "notion", obsidian: "obsidian", raycast: "raycast"
+    discord: "discord", notion: "notion", obsidian: "obsidian", raycast: "raycast",
+    // The toolchain: languages, package managers, version control, mobile.
+    npm: "npm", pnpm: "pnpm", yarn: "yarn", bun: "bun", python: "python",
+    uv: "uv", poetry: "poetry", ruby: "ruby", bundler: "bundler", rails: "rails",
+    go: "go", java: "java", maven: "maven", gradle: "gradle", dotnet: "dotnet",
+    rust: "rust", gh: "gh", adb: "android", "android-sdk": "android", expo: "expo",
+    "eas-cli": "eascli", "build-tools": "build-tools",
+    // The stacks a project can be created from.
+    astro: "astro", django: "django", express: "express", fastapi: "fastapi",
+    flask: "flask", nextjs: "nextjs", "react-native": "react-native",
+    "react-vite": "react-vite", "spring-boot": "spring-boot", sveltekit: "sveltekit",
+    slim: "slim", vue: "vue", tailwind: "tailwind", typescript: "typescript",
+    javascript: "javascript",
+    // Editors and CI.
+    vscode: "vscode", sublime: "sublime", xcode: "xcode", jetbrains: "jetbrains",
+    intellijidea: "intellijidea", androidstudio: "androidstudio", gitlab: "gitlab",
+    jenkins: "jenkins", terraform: "terraform", ansible: "ansible"
   };
 
   /*
@@ -316,7 +339,7 @@
   function brandImg(name, className) {
     var file = brandFor(name);
     if (!file) return "";
-    var ext = file.indexOf("together") === 0 || file === "typesense" || file === "valkey" || file === "xdebug" ? "png" : "svg";
+    var ext = file.indexOf("together") === 0 || file === "typesense" || file === "valkey" || file === "xdebug" || file === "vscode" ? "png" : "svg";
     var wide = WIDE_BRANDS[file] ? " brand-dot-wide" : "";
     return '<img class="' + (className || "brand-dot") + wide + '" src="/brands/' + file + "." + ext + '" alt="" loading="lazy" width="18" height="18">';
   }
@@ -1153,7 +1176,7 @@
       projects: "Projects",
       create: "Create a project",
       develop: "Develop",
-      toolchain: "Toolchain",
+      toolchain: "Tools",
       capabilities: "API and tools",
       activity: "Activity",
       system: "Diagnostics"
@@ -1198,7 +1221,7 @@
 
   // -------------------------------------------------------------------- server
 
-  var SERVER_VIEWS = ["overview", "sites", "preview", "services", "runtimes", "certificates", "hosts"];
+  var SERVER_VIEWS = ["overview", "sites", "preview", "services", "toolchain", "runtimes", "certificates", "hosts"];
 
   var KNOWN_SERVICES = [
     { name: "nginx", label: "nginx", note: "web server" },
@@ -1225,6 +1248,29 @@
 
   function dot(on, warn) {
     return '<span class="dot ' + (on ? "dot-ok" : warn ? "dot-warn" : "dot-off") + '" aria-hidden="true"></span>';
+  }
+
+  /* A box that narrows a list.
+   *
+   * Every list on the server screens can be searched. The filter narrows what
+   * is on screen and nothing else, so a service that is not on screen is not
+   * stopped, and the count beside a heading always says what is really there.
+   */
+  function filterBox(key, placeholder) {
+    var v = state.filters[key] || "";
+    return '<div class="filter">' +
+      '<svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg>' +
+      '<input class="filter-input" data-filter="' + key + '" value="' + attr(v) + '" placeholder="' + attr(placeholder) + '" aria-label="' + attr(placeholder) + '" spellcheck="false">' +
+      (v ? '<button type="button" class="filter-clear" data-action="filter-clear" data-key="' + key + '" aria-label="Clear the filter" title="Clear the filter">&times;</button>' : "") +
+      "</div>";
+  }
+
+  /* Whether a row survives the filter. */
+  function keeps(query, ...fields) {
+    var q = String(query || "").trim().toLowerCase();
+    if (!q) return true;
+    var hay = fields.filter(Boolean).join(" ").toLowerCase();
+    return q.split(/\s+/).every(function (word) { return hay.indexOf(word) !== -1; });
   }
 
   function statCard(label, value, sub) {
@@ -1256,8 +1302,14 @@
 
   function phpPrimary() {
     var php = state.server.runtimes.filter(function (r) { return r.runtime.kind === "php"; });
+    // What devd installed and marked as the default comes first. Then any
+    // runtime devd installed. Then one that was already on the machine: it
+    // is real and usable, and saying "not installed" because devd did not
+    // put it there would be a lie.
     var primary = php.filter(function (r) { return r.primary; })[0];
     if (primary) return primary.runtime.version;
+    var managed = php.filter(function (r) { return r.managed !== false; })[0];
+    if (managed) return managed.runtime.version;
     return php.length ? php[0].runtime.version : null;
   }
 
@@ -1332,7 +1384,7 @@
       statCard("Services", up + " / " + total, total ? "running" : "none installed") +
       statCard("Sites", String(s.sites.length), s.sites.length ? "served" : "none yet") +
       statCard("PHP", php || "none", php ? "primary runtime" : "not installed") +
-      statCard("Certificates", String(s.certs.length), "issued by devd") +
+      statCard("Certificates", String(s.certs.length), s.certs.length ? "issued by devd" : "none yet") +
       "</div>";
 
     var sitesPanel =
@@ -1368,7 +1420,7 @@
             .map(function (svc) {
               return (
                 '<div class="svc">' + dot(svc.running) +
-                '<div class="svc-main"><div class="svc-name">' + esc(svc.name) + "</div>" +
+                '<div class="svc-main"><div class="svc-name">' + brandImg(svc.kind || svc.name, "brand-dot") + esc(svc.name) + "</div>" +
                 '<div class="svc-sub mono">' + esc(servicePorts(svc)) + "</div></div>" +
                 '<div class="svc-actions">' +
                 (svc.running
@@ -1485,7 +1537,12 @@
 
   function renderSites() {
     var s = state.server;
-    var rows = s.sites.map(function (row) {
+    var q = state.filters.sites || "";
+    var all = s.sites;
+    var matching = all.filter(function (row) {
+      return keeps(q, row.site && row.site.name, row.url, row.document_root, row.php_effective);
+    });
+    var rows = matching.map(function (row) {
       var site = row.site;
       // The version a site actually runs on: its own, or the default. A
       // version that is not installed is shown as the default, because that is
@@ -1526,13 +1583,17 @@
     });
 
     var body = state.siteFormOpen ? siteForm() : "";
-    if (s.sites.length) {
+    body += '<div class="filter-row">' + filterBox("sites", "Search sites") + "</div>";
+    if (all.length) {
       body +=
         '<div class="panel"><div class="panel-head"><span>Sites</span>' +
-        '<span class="panel-note">' + s.sites.length + "</span></div>" +
-        '<div class="panel-body flush"><table class="table"><thead><tr>' +
-        "<th>Site</th><th>URL</th><th>PHP</th><th>TLS</th><th>Directory</th><th></th>" +
-        "</tr></thead><tbody>" + rows.join("") + "</tbody></table></div></div>";
+        '<span class="panel-note">' + (q ? matching.length + " of " : "") + all.length + "</span></div>" +
+        (matching.length
+          ? '<div class="panel-body flush"><table class="table"><thead><tr>' +
+            "<th>Site</th><th>URL</th><th>PHP</th><th>TLS</th><th>Directory</th><th></th>" +
+            "</tr></thead><tbody>" + rows.join("") + "</tbody></table></div>"
+          : '<div class="panel-body empty-inline">No site matches "' + esc(q) + '".</div>') +
+        "</div>";
     } else if (!state.siteFormOpen) {
       body +=
         '<div class="panel"><div class="empty">' +
@@ -1560,7 +1621,11 @@
   function inventoryPanel() {
     var inv = state.server.inventory || [];
     if (!inv.length) return "";
-    var rows = inv.map(function (v) {
+    var q = state.filters.services || "";
+    var shown = inv.filter(function (v) {
+      return keeps(q, v.tool, v.name, v.headline, v.path, v.status);
+    });
+    var rows = shown.map(function (v) {
       var dec = v.decision ? '<span class="pill pill-accent">' + esc(v.decision.mode) + (v.decision.port ? " :" + v.decision.port : "") + "</span>" : "";
       var tone = v.status === "ready" ? "ok" : v.status === "missing" ? "" : v.status === "installed_stopped" ? "warn" : "bad";
       var rec = v.recommendation || {};
@@ -1576,55 +1641,66 @@
         '<div class="row-sub">' + esc(rec.why || "") + "</div></div><div class=\"inline\">" + btns +
         (v.decision ? '<button type="button" class="btn btn-mini btn-ghost" data-action="svc-option" data-tool="' + attr(v.tool) + '" data-opt="clear">Reset</button>' : "") + "</div></div>";
     }).join("");
-    return '<div class="panel"><div class="panel-head"><span>Found on this machine</span><span class="panel-note">detected, not assumed: a service is Ready only after it answers</span></div><div class="panel-body">' + rows +
+    var note = "detected, not assumed: a service is Ready only after it answers";
+    if (q) note = shown.length + " of " + inv.length + " · " + note;
+    var body = shown.length ? rows : '<div class="empty-inline">No service matches "' + esc(q) + '".</div>';
+    return '<div class="panel"><div class="panel-head"><span>Found on this machine</span><span class="panel-note">' + esc(note) + "</span></div><div class=\"panel-body\">" + body +
       '<div class="row-sub" style="margin-top:8px">devd never replaces an installed service. Using, watching or hiding one only records your choice. Starting, installing or removing asks for approval and keeps your data.</div></div></div>';
   }
 
   function renderServices() {
     var rows = state.server.services;
+    var q = state.filters.services || "";
     var byName = {};
     rows.forEach(function (r) { byName[r.name] = r; });
     var up = rows.filter(function (r) { return r.running; }).length;
+    var shown = rows.filter(function (svc) {
+      return keeps(q, svc.name, svc.kind, svc.version, servicePorts(svc));
+    });
 
-    var body = inventoryPanel();
+    var body = '<div class="filter-row">' + filterBox("services", "Search services") + "</div>" + inventoryPanel();
     if (rows.length) {
       body +=
         '<div class="panel"><div class="panel-head"><span>Installed</span>' +
-        '<span class="panel-note">' + up + " of " + rows.length + " running</span></div>" +
-        '<div class="panel-body flush"><table class="table"><thead><tr>' +
-        "<th>Service</th><th>Version</th><th>Ports</th><th>Status</th><th>PID</th><th></th>" +
-        "</tr></thead><tbody>" +
-        rows
-          .map(function (svc) {
-            return (
-              "<tr>" +
-              '<td><div class="cell-strong">' + dot(svc.running) + " " + brandImg(svc.kind || svc.name, "brand-dot") + esc(svc.name) + "</div>" +
-              '<div class="cell-dim">' + esc(svc.kind) + "</div></td>" +
-              '<td class="cell-mono">' + esc(svc.version || "—") + "</td>" +
-              '<td class="cell-mono">' + esc(servicePorts(svc)) + "</td>" +
-              "<td>" +
-              (svc.running
-                ? '<span class="pill pill-ok">running</span>'
-                : '<span class="pill">' + (svc.installed ? "stopped" : "files missing") + "</span>") +
-              "</td>" +
-              '<td class="cell-mono">' + (svc.pid || "—") + "</td>" +
-              '<td class="cell-actions">' +
-              (svc.running
-                ? '<button type="button" class="btn btn-mini" data-action="stop-service" data-name="' + attr(svc.name) + '">Stop</button>' +
-                  '<button type="button" class="btn btn-mini" data-action="restart-service" data-name="' + attr(svc.name) + '">Restart</button>'
-                : svc.installed
-                  ? '<button type="button" class="btn btn-mini btn-primary" data-action="start-service" data-name="' + attr(svc.name) + '">Start</button>'
-                  : '<button type="button" class="btn btn-mini btn-primary" data-action="install-service" data-name="' + attr(svc.name) + '">Install</button>') +
-              '<button type="button" class="btn btn-mini" data-action="service-logs" data-name="' + attr(svc.name) + '">Logs</button>' +
-              '<button type="button" class="btn btn-mini btn-ghost" data-action="remove-service" data-name="' + attr(svc.name) + '">Remove</button>' +
-              "</td></tr>"
-            );
-          })
-          .join("") +
-        "</tbody></table></div></div>";
+        '<span class="panel-note">' + (q ? shown.length + " of " : "") + up + " of " + rows.length + " running</span></div>" +
+        (shown.length
+          ? '<div class="panel-body flush"><table class="table"><thead><tr>' +
+            "<th>Service</th><th>Version</th><th>Ports</th><th>Status</th><th>PID</th><th></th>" +
+            "</tr></thead><tbody>" +
+            shown
+              .map(function (svc) {
+                return (
+                  "<tr>" +
+                  '<td><div class="cell-strong">' + dot(svc.running) + " " + brandImg(svc.kind || svc.name, "brand-dot") + esc(svc.name) + "</div>" +
+                  '<div class="cell-dim">' + esc(svc.kind) + "</div></td>" +
+                  '<td class="cell-mono">' + esc(svc.version || "-") + "</td>" +
+                  '<td class="cell-mono">' + esc(servicePorts(svc)) + "</td>" +
+                  "<td>" +
+                  (svc.running
+                    ? '<span class="pill pill-ok">running</span>'
+                    : '<span class="pill">' + (svc.installed ? "stopped" : "files missing") + "</span>") +
+                  "</td>" +
+                  '<td class="cell-mono">' + (svc.pid || "-") + "</td>" +
+                  '<td class="cell-actions">' +
+                  (svc.running
+                    ? '<button type="button" class="btn btn-mini" data-action="stop-service" data-name="' + attr(svc.name) + '">Stop</button>' +
+                      '<button type="button" class="btn btn-mini" data-action="restart-service" data-name="' + attr(svc.name) + '">Restart</button>'
+                    : svc.installed
+                      ? '<button type="button" class="btn btn-mini btn-primary" data-action="start-service" data-name="' + attr(svc.name) + '">Start</button>'
+                      : '<button type="button" class="btn btn-mini btn-primary" data-action="install-service" data-name="' + attr(svc.name) + '">Install</button>') +
+                  '<button type="button" class="btn btn-mini" data-action="service-logs" data-name="' + attr(svc.name) + '">Logs</button>' +
+                  '<button type="button" class="btn btn-mini btn-ghost" data-action="remove-service" data-name="' + attr(svc.name) + '">Remove</button>' +
+                  "</td></tr>"
+                );
+              })
+              .join("") +
+            "</tbody></table></div>"
+          : '<div class="panel-body empty-inline">No service matches "' + esc(q) + '".</div>') +
+        "</div>";
     }
 
-    var missing = KNOWN_SERVICES.filter(function (k) { return !byName[k.name]; });
+    var missing = KNOWN_SERVICES.filter(function (k) { return !byName[k.name]; })
+      .filter(function (k) { return keeps(q, k.name, k.label, k.note); });
     if (missing.length) {
       body +=
         '<div class="panel"><div class="panel-head"><span>Available</span>' +
@@ -1666,8 +1742,11 @@
   // ------------------------------------------------------------------ runtimes
 
   function renderRuntimes() {
+    var q = state.filters.runtimes || "";
     var cards = RUNTIME_KINDS.map(function (kind) {
-      var installed = state.server.runtimes.filter(function (r) { return r.runtime.kind === kind.kind; });
+      var installed = state.server.runtimes.filter(function (r) {
+        return r.runtime.kind === kind.kind && keeps(q, r.runtime.version, r.runtime.path, kind.label, kind.kind);
+      });
       var list = installed.length
         ? '<div class="rows">' +
           installed
@@ -1704,7 +1783,7 @@
       "Runtimes",
       "Interpreters installed on this machine, downloaded from their vendors and verified against a published digest.",
       "",
-      cards.join("")
+      '<div class="filter-row">' + filterBox("runtimes", "Search runtimes") + "</div>" + cards.join("")
     );
   }
 
@@ -2440,7 +2519,11 @@
       el("main").innerHTML = page("Processes", "Supervised project processes from devd.yml.", "", select +
         '<div class="panel"><div class="empty"><div class="empty-title">No manifest to run</div>' +
         "<div>" + esc(p.error || "Choose a project that contains devd.yml.") + "</div>" +
-        '<pre class="log-pre" style="text-align:left;margin-top:14px">version: 1\nproject:\n  name: example-app\nprocesses:\n  web:\n    command: ["npm", "run", "dev"]\n    working_dir: "."\n    health:\n      url: "http://127.0.0.1:3000/"</pre></div></div>');
+        '<div class="empty-actions"></div></div>' +
+        '<div class="example"><div class="section-title">An example devd.yml</div>' +
+        '<pre class="log-pre">version: 1\nproject:\n  name: example-app\nprocesses:\n  web:\n    command: ["npm", "run", "dev"]\n    working_dir: "."\n    health:\n      url: "http://127.0.0.1:3000/"</pre>' +
+        '<div class="row-sub">Put this in the root of the project. devd reads the manifest, shows you the exact commands, and asks before it runs anything.</div></div>' +
+        "</div>");
       return;
     }
 
@@ -2921,11 +3004,9 @@
       body =
         '<div class="panel"><div class="empty">' +
         '<div class="empty-title">No projects yet</div>' +
-        "<div>devd works with the projects that are already on your disk. Choose one to get started, or clone a repository.</div>" +
-        '<div class="inline" style="margin-top:var(--s4)">' +
-        '<button type="button" class="btn btn-primary" data-action="add-project">Choose a project folder</button>' +
-        '<button type="button" class="btn" data-action="clone-form">Clone a repository</button>' +
-        "</div></div></div>";
+        '<div class="empty-hint">devd works with the projects that are already on your disk. Add a folder that holds one, or start a new one from a stack.</div>' +
+        '<div class="empty-actions"><button type="button" class="btn btn-primary btn-mini" data-action="nav" data-view="create">Create a project</button></div>' +
+        "</div></div>";
     } else {
       var controls =
         '<div class="list-bar">' +
@@ -3930,7 +4011,7 @@
         return '<div class="panel"><div class="panel-head"><span>' + esc(c) + "</span></div>" +
           '<div class="panel-body flush"><table class="table"><tbody>' +
           cats[c].map(function (s) {
-            return '<tr><td class="cell-strong">' + esc(s.name) + '</td><td class="dim">' + esc(s.language) + "</td>" +
+            return '<tr><td class="cell-strong">' + brandImg(s.id, "brand-dot") + esc(s.name) + '</td><td class="dim">' + esc(s.language) + "</td>" +
               "<td>" + esc(s.summary) + '</td><td class="nowrap">' + docLinks(s.docs.slice(0, 1)) + "</td>" +
               '<td><button type="button" class="btn btn-primary btn-mini" data-action="create-pick" data-id="' + attr(s.id) + '">Create</button></td></tr>';
           }).join("") + "</tbody></table></div></div>";
@@ -4109,28 +4190,54 @@
 
   // -------------------------------------------------------------- toolchain
 
-  var TC = { data: null, devices: null };
+  var TC = { data: null, devices: null, loading: false };
 
   function loadToolchain() {
-    return read("toolchain.list").then(function (d) { TC.data = d; });
+    TC.loading = true;
+    return read("toolchain.list")
+      .then(function (d) { TC.data = d; })
+      .catch(function (e) { toast("error", e.message); })
+      .then(function () { TC.loading = false; });
   }
 
   function renderToolchain() {
-    if (!TC.data) return renderLoading();
+    var title = "Tools";
+    var sub = "Languages, package managers, databases and mobile tooling on this machine. Installs show their commands and source first and need your approval.";
+    var actions = '<button type="button" class="btn" data-action="refresh">Re-check</button>';
+    if (!TC.data) {
+      // Probing every tool means running it, and that takes a while. The page
+      // keeps its heading and its tabs; only the body says what is happening,
+      // so the screen does not look like a different place.
+      el("main").innerHTML = page(title, sub, actions,
+        '<div class="panel"><div class="empty">' +
+        '<div class="empty-title">Checking this machine</div>' +
+        "<div>devd runs every tool it knows to see which are installed and what version they are. That takes a moment.</div>" +
+        "</div></div>");
+      return;
+    }
     var host = TC.data.host, tools = TC.data.tools;
+    var q = state.filters.toolchain || "";
     var cats = {};
-    tools.forEach(function (t) { (cats[t.tool.category] = cats[t.tool.category] || []).push(t); });
+    tools
+      .filter(function (t) { return keeps(q, t.tool.id, t.tool.name, t.tool.purpose, t.tool.category); })
+      .forEach(function (t) { (cats[t.tool.category] = cats[t.tool.category] || []).push(t); });
     var notes = [];
     if (!host.root && !host.sudo && host.os === "linux") notes.push("devd has neither root nor passwordless sudo, so package installs show the exact command to run yourself.");
     if (!host.managers.length) notes.push("No supported package manager was found; installs will show manual steps.");
-    var html = '<div class="panel"><div class="panel-body"><div class="kv"><dt>Machine</dt><dd>' + esc(host.os) + " " + esc(host.arch) + " · package managers: " + esc(host.managers.join(", ") || "none") + " · " + (host.root ? "running as root" : host.sudo ? "passwordless sudo available" : "unprivileged") + "</dd></div>" +
+    var html = '<div class="filter-row">' + filterBox("toolchain", "Search tools") + "</div>";
+    html += '<div class="panel"><div class="panel-body"><div class="kv"><dt>Machine</dt><dd>' + esc(host.os) + " " + esc(host.arch) + " · package managers: " + esc(host.managers.join(", ") || "none") + " · " + (host.root ? "running as root" : host.sudo ? "passwordless sudo available" : "unprivileged") + "</dd></div>" +
       notes.map(function (n) { return '<div class="notice notice-warn">' + esc(n) + "</div>"; }).join("") + "</div></div>";
+    if (!Object.keys(cats).length) {
+      html += '<div class="panel"><div class="panel-body empty-inline">No tool matches "' + esc(q) + '".</div></div>';
+    }
     Object.keys(cats).forEach(function (c) {
       html += '<div class="panel"><div class="panel-head"><span>' + esc(c) + "</span></div>" + cats[c].map(function (t) {
         var st = t.status, sv = t.service, id = t.tool.id;
         var state = st.installed ? (st.outdated ? pill("warn", "outdated") : pill("ok", "installed")) : (t.tool.per_project ? pill("", "per project") : pill("bad", "missing"));
         var acts = "";
-        if (!t.tool.per_project) acts += '<button type="button" class="btn btn-mini" data-action="tool-plan" data-id="' + attr(id) + '" data-act="' + (st.installed ? "remove" : "install") + '">Plan</button>';
+        // One button per action. It opens the approval, and the approval
+        // shows the exact commands, the source and anything that would block
+        // it - so a second "Plan" button beside it would say the same thing.
         if (!st.installed && !t.tool.per_project) acts += '<button type="button" class="btn btn-mini btn-primary" data-action="tool-install" data-id="' + attr(id) + '">Install</button>';
         if (st.installed && !t.tool.per_project) acts += '<button type="button" class="btn btn-mini btn-danger" data-action="tool-remove" data-id="' + attr(id) + '">Remove</button>';
         var svc = "";
@@ -4140,22 +4247,12 @@
           acts += '<button type="button" class="btn btn-mini" data-action="svc-logs" data-id="' + attr(id) + '">Logs</button>';
         }
         if (id === "adb" && st.installed) acts += '<button type="button" class="btn btn-mini" data-action="devices">Devices</button>';
+        if (id === "eas-cli" && st.installed) acts += '<button type="button" class="btn btn-mini" data-action="eas-projects">Projects</button>';
         return '<div class="svc"><div class="svc-main"><div class="svc-name">' + brandImg(t.tool.id, "brand-dot") + esc(t.tool.name) + " " + state + ' <span class="dim mono">' + esc(st.version || "") + '</span></div><div class="svc-sub">' + esc(t.tool.purpose) + "</div>" + svc +
           (!st.installed && st.problem && !t.tool.per_project ? '<div class="row-sub">' + esc(st.problem) + "</div>" : "") + '</div><div class="svc-actions">' + acts + "</div></div>";
       }).join("") + "</div>";
     });
-    el("main").innerHTML = page("Toolchain", "Languages, package managers, databases and mobile tooling on this machine. Installs show their commands and source first and need your approval.", '<button type="button" class="btn" data-action="refresh">Re-check</button>', html);
-  }
-
-  function showPlanDrawer(p, title) {
-    var h = '<div class="kv"><dt>Manager</dt><dd>' + esc(p.manager || "none") + (p.privileged ? " (needs administrator rights)" : "") + "</dd></div>";
-    h += '<div class="field-label">Commands</div><pre class="log-block">' + esc((p.display || []).join("\n") || "(none)") + "</pre>";
-    (p.blockers || []).forEach(function (b) { h += '<div class="notice notice-warn">' + esc(b) + "</div>"; });
-    if (p.manual) h += '<div class="notice">' + esc(p.manual) + "</div>";
-    h += '<div class="kv"><dt>Source</dt><dd>' + esc(p.trust) + "</dd></div>";
-    if (p.upgrade) h += '<div class="kv"><dt>Upgrades</dt><dd>' + esc(p.upgrade) + "</dd></div>";
-    if (p.data_note) h += '<div class="notice">' + esc(p.data_note) + "</div>";
-    openDrawer(title, h);
+    el("main").innerHTML = page(title, sub, actions, html);
   }
 
 
@@ -4333,7 +4430,8 @@
     return '<div class="req-row"><span class="health-dot ' + dot + '" aria-hidden="true"></span>' +
       '<div class="req-main"><div class="req-title">' + esc(r.title) +
       (r.required ? ' <span class="pill pill-warn">required</span>' : ' <span class="pill">optional</span>') +
-      '</div><div class="row-sub">' + esc(r.why) + "</div></div>" +
+      '</div><div class="row-sub">' + esc(r.why) + "</div>" +
+      (r.detail ? '<div class="row-sub mono">' + esc(r.detail) + "</div>" : "") + "</div>" +
       '<div class="req-action">' + action + "</div></div>";
   }
 
@@ -4384,17 +4482,19 @@
       '<div class="section-title">Get started</div><div class="panel">' +
       '<div class="proj"><span class="step-dot run"></span><div class="proj-main"><div class="proj-name">Add your first project</div><div class="proj-path">Create one from a stack, or import a repository</div></div>' +
       '<button type="button" class="btn btn-mini btn-primary" data-action="nav" data-view="create">Open</button></div></div>';
-    var needsHtml = requirementPanel() + projectStep + '<div class="section-title">Needs you' + (needs.length ? ' <span class="count">' + needs.length + "</span>" : "") + "</div>" + (needs.length
+    // The left column leads with what needs a person, because that is the one
+    // thing on this screen that cannot wait.
+    var needsHtml = '<div class="section-title">Needs you' + (needs.length ? ' <span class="count">' + needs.length + "</span>" : "") + "</div>" + (needs.length
       ? needs.join("")
-      : '<div class="calm"><span class="health-dot"></span><div><b>Nothing needs you.</b><div class="row-sub">No approvals waiting, no questions from agents, nothing broken.</div></div></div>');
-
+      : '<div class="calm"><span class="health-dot"></span><div><b>Nothing needs you.</b><div class="row-sub">No approvals waiting, no questions from agents, nothing broken.</div></div></div>') +
+      requirementPanel() + projectStep;
     // Projects
     var projects = d.projects.slice(0, 6).map(function (p) {
       return '<div class="proj"><div class="proj-main"><div class="proj-name">' + esc(p.name) + (p.stack ? ' <span class="pill pill-accent">' + esc(p.stack) + "</span>" : "") +
         '</div><div class="proj-path mono nowrap" title="' + attr(p.path) + '">' + esc(p.path) + '</div></div><div class="proj-actions">' +
         '<button type="button" class="btn btn-mini" data-action="home-open" data-path="' + attr(p.path) + '">Develop</button>' +
         (ready ? '<button type="button" class="btn btn-mini" data-action="home-chat" data-path="' + attr(p.path) + '">Ask</button>' : "") + "</div></div>";
-    }).join("") || '<div class="empty"><div class="empty-title">No projects yet</div><div class="empty-hint">Create one from a stack, or point devd at a repository that already exists on disk.</div><div class="empty-actions"><button type="button" class="btn btn-primary btn-mini" data-action="nav" data-view="create">Create a project</button><button type="button" class="btn btn-mini" data-action="nav" data-view="projects">Import</button></div></div>';
+    }).join("") || '<div class="empty"><div class="empty-title">No projects yet</div><div class="empty-hint">Create one from a stack, or point devd at a repository that already exists on disk.</div></div>';
 
     // Working now
     var live = [];
@@ -4602,12 +4702,10 @@
 
     el("main").innerHTML = page("Models and providers",
       "One place to add, test and choose the models the assistant and the agent team use. Test checks the key and lists models; Verify runs one real request and proves whether the model can call tools.",
-      '<button type="button" class="btn" data-action="prov-discover">Find local servers</button>' +
-        '<button type="button" class="btn" data-action="models-refresh">Refresh Claude list</button>',
+      '<button type="button" class="btn" data-action="prov-discover">Find local servers</button>',
       (cards ? '<div class="provider-list">' + cards + "</div>" : empty) +
       (AI.provForm ? providerForm(AI.provForm) : "") +
       localPanel() +
-      '<div class="notice">Test and Verify talk only to the provider you configured. Local servers (Ollama, LM Studio) are contacted on this machine only. Nothing is sent to a provider until you run a request.</div>' +
       rolesPanel() +
       '<div class="section-title" id="add-provider">Add a provider</div>' +
       '<div class="preset-grid">' + presetCards + "</div>" +
@@ -4682,6 +4780,68 @@
     return { title: b.name, detail: JSON.stringify(i) };
   }
 
+  /* The name of a capability, as a person would say it.
+   *
+   * The capability ids are exact and machine-shaped ("fs.edit",
+   * "project.exec"). A person reading a conversation wants to know what the
+   * agent did, not what it called. */
+  var CAPABILITY_NAME = {
+    "fs.read": "Read",
+    "fs.write": "Write",
+    "fs.edit": "Edit",
+    "fs.list": "List",
+    "fs.search": "Search",
+    "fs.delete": "Delete",
+    "fs.move": "Move",
+    "fs.browse": "Browse",
+    "project.exec": "Shell",
+    "project.run": "Run",
+    "project.tasks": "Tasks",
+    "project.detect": "Detect",
+    "git.status": "Status",
+    "git.log": "Log",
+    "git.diff": "Diff",
+    "git.commit": "Commit",
+  };
+
+  function capabilityName(id) {
+    if (!id) return "Tool";
+    if (CAPABILITY_NAME[id]) return CAPABILITY_NAME[id];
+    var tail = String(id).split(".").pop() || String(id);
+    return tail.charAt(0).toUpperCase() + tail.slice(1);
+  }
+
+  /* What a tool call was, in words.
+   *
+   * The agent calls one generic tool, "devd_invoke", and passes it the
+   * capability to run. The capability is the interesting part, so that is
+   * what the name is built from. */
+  function toolLabel(block) {
+    var i = block.input || {};
+    if (block.name === "devd_invoke") return capabilityName(i.id);
+    if (block.name === "devd_describe") return "Describe";
+    if (block.name === "devd_capabilities") return "Search";
+    if (block.name === "devd_groups") return "Domains";
+    return capabilityName(block.name);
+  }
+
+  /* "Used 4 Edit, Shell, Read" - what the agent did before it spoke.
+   *
+   * The number counts the calls; the names are the distinct ones, so three
+   * edits read as "Used 3 Edit" and a mix reads as "Used 4 Edit, Shell". */
+  function usedLine(blocks) {
+    var calls = 0;
+    var names = [];
+    (blocks || []).forEach(function (b) {
+      if (b.type !== "tool_use") return;
+      calls += 1;
+      var name = toolLabel(b);
+      if (names.indexOf(name) === -1) names.push(name);
+    });
+    if (!calls) return "";
+    return '<div class="msg-used">Used ' + calls + " " + names.join(", ") + "</div>";
+  }
+
   function chatHtml() {
     var results = {};
     AI.events.forEach(function (e) { if (e.kind === "tool_result") results[e.data.tool_use_id] = e.data; });
@@ -4693,6 +4853,7 @@
       if (e.kind === "user") {
         html += '<div class="msg msg-user"><div><div class="bubble">' + md(e.data.text) + '</div><div class="msg-meta">You' + (when ? " · " + when : "") + "</div></div></div>";
       } else if (e.kind === "assistant") {
+        html += usedLine(e.data.content);
         (e.data.content || []).forEach(function (b) {
           if (b.type === "text" && b.text.trim()) {
             html += '<div class="msg msg-agent"><div class="avatar" aria-hidden="true">d</div><div><div class="bubble">' + md(b.text) + '</div><div class="msg-meta">devd' + (when ? " · " + when : "") + "</div></div></div>";
@@ -4725,7 +4886,8 @@
     if (AI.thread && (AI.thread.state === "running" || AI.running)) {
       html += '<div class="msg msg-agent"><div class="avatar" aria-hidden="true">d</div><div class="bubble typing" role="status" aria-label="devd is working"><span></span><span></span><span></span></div></div>';
     }
-    return html || '<div class="chat-empty"><div class="empty-icon"><svg class="icon" aria-hidden="true"><use href="#i-spark"></use></svg></div><div class="chat-empty-title">What should we build?</div><div class="empty-hint">Describe a task. The assistant discovers what devd can do, works in small steps, checks its work by running your tests, and asks you before anything risky.</div></div>';
+    return html || '<div class="chat-wordmark"><div class="wordmark">devd</div>' +
+      '<div class="wordmark-hint">Describe a task. devd discovers what it can do, works in small steps, checks its work by running your tests, and asks you before anything risky.</div></div>';
   }
 
   function paintChat() {
@@ -4740,19 +4902,26 @@
     var head = el("chat-head");
     if (head && t) head.innerHTML = chatHeadHtml();
     var send = el("chat-send");
-    if (send) { var busy = t && (t.state === "running" || AI.running); send.textContent = busy ? "Stop" : "Send"; send.setAttribute("data-action", busy ? "chat-stop" : "chat-send"); send.className = "btn " + (busy ? "btn-danger" : "btn-primary"); }
+    if (send) {
+      var busy = t && (t.state === "running" || AI.running);
+      // The button is an arrow while it sends and a square while it stops, so
+      // the control never changes its size under the pointer.
+      send.innerHTML = busy
+        ? '<svg class="icon" aria-hidden="true"><use href="#i-stop"></use></svg>'
+        : '<svg class="icon" aria-hidden="true"><use href="#i-arrow-up"></use></svg>';
+      send.setAttribute("data-action", busy ? "chat-stop" : "chat-send");
+      send.setAttribute("aria-label", busy ? "Stop" : "Send");
+      send.setAttribute("title", busy ? "Stop" : "Send");
+      send.className = "composer-send" + (busy ? " is-busy" : "");
+    }
+    syncComposerAction();
   }
 
   function chatHeadHtml() {
     var t = AI.thread;
-    var provs = (AI.providers || []).filter(function (p) { return p.enabled; });
-    var cur = t.provider_id || (provs.filter(function (p) { return p.is_default; })[0] || provs[0] || {}).id;
-    var opts = provs.map(function (p) { return '<option value="' + attr(p.id) + '"' + (p.id === cur ? " selected" : "") + ">" + esc(p.label) + "</option>"; }).join("");
-    var models = modelOptions(cur).map(function (m) { return '<option value="' + attr(m.model_id) + '"></option>'; }).join("");
-    var p = (AI.providers || []).filter(function (x) { return x.id === cur; })[0];
+    // The provider and the model live in the composer, where they are used.
+    // The head says what the conversation is and where it stands.
     return '<div class="grow"><div class="chat-title">' + esc(t.title) + '</div><div class="dim mono nowrap">' + esc(t.project || "no project") + " · " + t.input_tokens + " in / " + t.output_tokens + " out tokens</div></div>" +
-      '<select class="input" data-chat="provider">' + opts + "</select>" +
-      '<input class="input mono" list="chat-models" data-chat="model" value="' + attr(t.model || (p && p.default_model) || "") + '" placeholder="model" spellcheck="false" style="width:200px"><datalist id="chat-models">' + models + "</datalist>" +
       '<span class="pill ' + (t.state === "error" ? "pill-bad" : t.state === "idle" ? "" : "pill-accent") + '">' + esc(t.state.replace("_", " ")) + "</span>";
   }
 
@@ -4769,16 +4938,63 @@
     var ready = (AI.providers || []).some(function (p) { return p.enabled && (p.has_key || !p.needs_key); });
     var projOpts = '<option value="">No project</option>' + state.projects.map(function (p) { return '<option value="' + attr(p.path) + '"' + (AI.project === p.path ? " selected" : "") + ">" + esc(p.name || dirName(p.path)) + "</option>"; }).join("") +
       (DEV.projects || []).map(function (p) { return '<option value="' + attr(p.path) + '"' + (AI.project === p.path ? " selected" : "") + ">" + esc(p.name) + "</option>"; }).join("");
+
+    // The model picker lives in the composer, where it is used, rather than in
+    // a header above the conversation.
+    var provs = (AI.providers || []).filter(function (p) { return p.enabled; });
+    var cur = (AI.thread && AI.thread.provider_id) ||
+      (provs.filter(function (p) { return p.is_default; })[0] || provs[0] || {}).id;
+    var modelOpts = modelOptions(cur).map(function (m) { return '<option value="' + attr(m.model_id) + '"></option>'; }).join("");
+    var current = provs.filter(function (p) { return p.id === cur; })[0];
+    var currentModel = (AI.thread && AI.thread.model) || (current && current.default_model) || "";
+    var projectName = AI.project || (state.project && state.project.path) || "";
+
+    var composer =
+      '<div class="composer">' +
+      '<div class="mention-menu" id="chat-mentions" hidden role="listbox" aria-label="Reference"></div>' +
+      '<div class="composer-attachments" id="chat-attachments" hidden></div>' +
+      '<textarea class="composer-input" id="chat-input" rows="2" placeholder="Ask anything... / @ for a capability, skill or project" aria-label="Message" aria-autocomplete="list" aria-controls="chat-mentions">' + esc(AI.composer) + "</textarea>" +
+      '<div class="composer-bar">' +
+      '<div class="composer-left">' +
+      '<button type="button" class="composer-tool" data-action="chat-attach" title="Attach a file" aria-label="Attach a file"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg></button>' +
+      '<select class="composer-picker" data-chat="provider" aria-label="Provider">' +
+      (provs.length ? provs.map(function (p) { return '<option value="' + attr(p.id) + '"' + (p.id === cur ? " selected" : "") + ">" + esc(p.label) + "</option>"; }).join("") : '<option value="">no provider</option>') +
+      "</select>" +
+      '<input class="composer-picker mono" list="chat-models" data-chat="model" value="' + attr(currentModel) + '" placeholder="model" spellcheck="false" aria-label="Model"><datalist id="chat-models">' + modelOpts + "</datalist>" +
+      "</div>" +
+      '<div class="composer-right">' +
+      // One slot for the two things you can do next. The microphone holds it
+      // until there is something to send; the arrow takes it over from then.
+      '<span class="composer-slot">' +
+      '<button type="button" class="composer-tool" id="chat-mic" data-action="chat-dictate" title="Dictate with Whisper" aria-label="Dictate with Whisper"><svg class="icon" aria-hidden="true"><use href="#i-mic"></use></svg></button>' +
+      '<button type="button" class="composer-send" id="chat-send" data-action="chat-send" title="Send" aria-label="Send"><svg class="icon" aria-hidden="true"><use href="#i-arrow-up"></use></svg></button>' +
+      "</span>" +
+      "</div></div></div>" +
+      '<div class="composer-status">' +
+      '<span class="status-chip">devd</span>' +
+      '<span class="status-sep" aria-hidden="true">/</span>' +
+      '<span class="status-chip">Local</span>' +
+      '<span class="status-sep" aria-hidden="true">/</span>' +
+      (AI.thread
+        ? '<span class="status-chip">' + esc(dirName(AI.thread.project || "no project")) + "</span>"
+        : '<select class="status-chip status-select" id="chat-project" aria-label="Project">' + projOpts + "</select>") +
+      "</div>";
+
     el("main").innerHTML =
       '<div class="assistant"><aside class="threads"><div class="threads-head"><b>Conversations</b><button type="button" class="btn btn-mini btn-primary" data-action="chat-new">New</button></div><div id="thread-list"></div></aside>' +
       '<section class="chat">' +
-      (AI.thread ? '<div class="chat-head" id="chat-head"></div>' : '<div class="chat-head"><div class="grow"><div class="chat-title">Assistant</div><div class="dim">Claude Code-style, built into your server</div></div></div>') +
+      (AI.thread ? '<div class="chat-head" id="chat-head"></div>' : '<div class="chat-head"><div class="grow"><div class="chat-title">Assistant</div><div class="dim">Built into your server</div></div></div>') +
       (!ready ? '<div class="notice notice-warn chat-notice">No usable AI provider yet. <button type="button" class="btn btn-mini btn-primary" data-action="nav" data-view="providers">Set one up</button></div>' : "") +
+      // The conversation and the box share one column, and the box sits at the
+      // bottom of it: the conversation scrolls above, the box never moves.
+      '<div class="chat-body">' +
       '<div class="chat-stream" id="chat-stream" role="log" aria-live="off" aria-label="Conversation"></div>' +
-      '<div class="composer"><div class="inline">' + (AI.thread ? "" : '<select class="input" id="chat-project" aria-label="Project">' + projOpts + "</select>") +
-      '<span class="grow hint">Enter to send · Shift+Enter for a new line' + (AI.thread && AI.thread.project ? " · working in " + esc(dirName(AI.thread.project)) : "") + "</span></div>" +
-      '<div class="inline"><textarea class="input grow" id="chat-input" rows="2" placeholder="Ask for something…" aria-label="Message">' + esc(AI.composer) + '</textarea><button type="button" class="btn btn-primary" id="chat-send" data-action="chat-send">Send</button></div></div></section></div>';
+      composer +
+      "</div>" +
+      '<input type="file" id="chat-file" multiple hidden>' +
+      "</section></div>";
     paintThreads(); paintChat();
+    paintAttachments();
     var box = el("chat-stream"); if (box) box.scrollTop = box.scrollHeight;
     startThreadTimer();
   }
@@ -4927,7 +5143,12 @@
 
   function refresh() {
     state.tabs = state.tabs || {};
-    if (SERVER_VIEWS.indexOf(state.view) !== -1) return loadServer().then(render);
+    if (SERVER_VIEWS.indexOf(state.view) !== -1) {
+      // The toolchain probes the machine instead of reading the server
+      // inventory, but it is a tab of the same screen and behaves like one.
+      if (state.view === "toolchain") return loadToolchain().then(render);
+      return loadServer().then(render);
+    }
     if (state.view === "projects") return loadProjects().then(render);
     if (state.view === "project") {
       state.tabs = {};
@@ -4942,7 +5163,6 @@
     if (state.view === "providers") return loadProviders().then(render);
     if (state.view === "create") return loadCreate().then(render);
     if (state.view === "develop") return loadDevelop().then(render);
-    if (state.view === "toolchain") return loadToolchain().then(render);
     if (state.view === "agents") return loadAgents().then(render);
     if (state.view === "processes") return loadProcesses().then(render);
     if (state.view === "shared") return loadShared().then(render);
@@ -4987,7 +5207,7 @@
     statusbar();
     healthChip();
     if (SERVER_VIEWS.indexOf(state.view) !== -1) {
-      if (!state.server.loaded) return renderLoading();
+      if (!state.server.loaded && state.view !== "toolchain") return renderLoading();
       if (state.view === "overview") renderOverview();
       else if (state.view === "sites") renderSites();
       else if (state.view === "preview") renderPreview();
@@ -4995,6 +5215,7 @@
       else if (state.view === "runtimes") renderRuntimes();
       else if (state.view === "certificates") renderCertificates();
       else if (state.view === "hosts") renderHosts();
+      else if (state.view === "toolchain") renderToolchain();
     } else if (state.view === "home") renderHome();
     else if (state.view === "assistant") renderAssistant();
     else if (state.view === "team") renderTeam();
@@ -5002,7 +5223,6 @@
     else if (state.view === "providers") renderProviders();
     else if (state.view === "create") renderCreate();
     else if (state.view === "develop") renderDevelop();
-    else if (state.view === "toolchain") renderToolchain();
     else if (state.view === "agents") renderAgents();
     else if (state.view === "processes") renderProcesses();
     else if (state.view === "shared") renderShared();
@@ -5030,7 +5250,372 @@
     return node ? node.checked : false;
   }
 
+  // ---------------------------------------------------------- the composer
+  //
+  // The box takes a message, files and speech. Files are uploaded and their
+  // paths are remembered; speech is recorded in the browser as 16 kHz mono
+  // WAV - the shape Whisper wants - and transcribed on this machine.
+
+  var ATTACHMENTS = [];
+  var RECORDER = null;
+
+  function paintAttachments() {
+    var box = el("chat-attachments");
+    if (!box) return;
+    box.hidden = !ATTACHMENTS.length;
+    box.innerHTML = ATTACHMENTS.map(function (a, i) {
+      return '<span class="composer-attachment"><b title="' + attr(a.path) + '">' + esc(a.name) + "</b>" +
+        '<button type="button" data-action="chat-remove-file" data-index="' + i + '" aria-label="Remove ' + attr(a.name) + '">×</button></span>';
+    }).join("");
+    syncComposerAction();
+  }
+
+  function uploadFile(file) {
+    return fetch("/api/upload", {
+      method: "POST",
+      headers: { "X-File-Name": file.name || "file" },
+      body: file
+    }).then(function (res) {
+      if (!res.ok) {
+        return res.json().then(function (body) {
+          throw new Error((body && body.error && body.error.message) || "the file could not be uploaded");
+        });
+      }
+      return res.json();
+    });
+  }
+
+  // ----------------------------------------------------------------- mentions
+
+  /* What a message can point at.
+   *
+   * Typing "@" opens a list of the things an agent can be given: a capability
+   * it can run, a skill it can load, a project it can work in. The mention is
+   * written into the message as text, so the agent reads exactly what the
+   * person wrote - the list is a way of naming things, not a side channel. */
+  var MENTIONS = { open: false, items: [], index: 0, start: 0, query: "", seq: 0, timer: null };
+
+  /* The agents a message can be handed to.
+   *
+   * Each one is a real harness devd can start: a child process in its own
+   * terminal, with its own working directory. Naming one in a message is an
+   * instruction to delegate the work to it. */
+  var AGENT_HARNESSES = [
+    { id: "claude", name: "Claude Code", note: "a coding agent that reads and changes the project" },
+    { id: "opencode", name: "OpenCode", note: "a coding agent for the project" }
+  ];
+
+  /* Where the "@" that opens the list is, and what has been typed after it. */
+  function mentionTrigger(text, caret) {
+    if (caret == null) caret = text.length;
+    var upto = text.slice(0, caret);
+    var at = upto.lastIndexOf("@");
+    if (at < 0) return null;
+    // An "@" inside a word is part of that word - an address, a version - and
+    // should not open a list.
+    if (at > 0 && !/[\s(]/.test(upto.charAt(at - 1))) return null;
+    var query = upto.slice(at + 1);
+    if (/[\s]/.test(query)) return null;
+    return { start: at, query: query };
+  }
+
+  function mentionItems(query) {
+    var q = query.trim();
+    var caps = request("/api/capabilities?limit=8&q=" + encodeURIComponent(q))
+      .then(function (res) { return res.ok ? (res.body.items || []) : []; })
+      .catch(function () { return []; });
+    var skills = read("skills.list", { query: q })
+      .then(function (d) { return Array.isArray(d) ? d : []; })
+      .catch(function () { return []; });
+    var projects = read("project.list")
+      .then(function (d) { return Array.isArray(d) ? d : []; })
+      .catch(function () { return []; });
+    var sessions = read("session.list")
+      .then(function (d) { return Array.isArray(d) ? d : []; })
+      .catch(function () { return []; });
+    return Promise.all([caps, skills, projects, sessions]).then(function (r) {
+      var items = [];
+      r[0].forEach(function (c) {
+        items.push({ kind: "capability", token: "@" + c.id, title: c.id, detail: c.summary || c.group, group: "Capabilities" });
+      });
+      r[1].forEach(function (s) {
+        if (q && s.name.indexOf(q.toLowerCase()) < 0 && String(s.description || "").toLowerCase().indexOf(q.toLowerCase()) < 0) return;
+        items.push({ kind: "skill", token: "@skill:" + s.name, title: s.name, detail: s.description, group: "Skills" });
+      });
+      r[2].forEach(function (p) {
+        var name = p.name || dirName(p.path || "");
+        if (q && name.toLowerCase().indexOf(q.toLowerCase()) < 0 && String(p.path || "").toLowerCase().indexOf(q.toLowerCase()) < 0) return;
+        items.push({ kind: "project", token: "@project:" + name, title: name, detail: p.path, path: p.path, group: "Projects" });
+      });
+      // The agents a message can be handed to. A delegated agent starts with
+      // no memory of the conversation, so naming one is an instruction to
+      // give it the whole task.
+      AGENT_HARNESSES.forEach(function (h) {
+        if (q && h.id.indexOf(q.toLowerCase()) < 0 && h.name.toLowerCase().indexOf(q.toLowerCase()) < 0) return;
+        items.push({ kind: "agent", token: "@agent:" + h.id, title: h.name, detail: h.note, group: "Agents", harness: h.id });
+      });
+      r[3].forEach(function (s) {
+        var label = s.label || s.harness || s.id;
+        if (q && String(label).toLowerCase().indexOf(q.toLowerCase()) < 0) return;
+        items.push({ kind: "session", token: "@session:" + s.id, title: label, detail: (s.harness || "") + (s.state ? " · " + s.state : ""), group: "Running agents", session: s.id });
+      });
+      return items;
+    });
+  }
+
+  function openMentions(start, query) {
+    MENTIONS.start = start;
+    MENTIONS.query = query;
+    MENTIONS.open = true;
+    MENTIONS.index = 0;
+    var seq = ++MENTIONS.seq;
+    clearTimeout(MENTIONS.timer);
+    // The list is a suggestion, so it appears at once and refines itself a
+    // moment later rather than leaving the person waiting.
+    paintMentions();
+    MENTIONS.timer = setTimeout(function () {
+      if (seq !== MENTIONS.seq) return;
+      mentionItems(query).then(function (items) {
+        if (seq !== MENTIONS.seq) return;
+        MENTIONS.items = items;
+        MENTIONS.index = 0;
+        paintMentions();
+      });
+    }, 120);
+  }
+
+  function closeMentions() {
+    MENTIONS.open = false;
+    MENTIONS.items = [];
+    MENTIONS.seq += 1;
+    clearTimeout(MENTIONS.timer);
+    var box = el("chat-mentions");
+    if (box) { box.hidden = true; box.innerHTML = ""; }
+  }
+
+  function paintMentions() {
+    var box = el("chat-mentions");
+    if (!box) return;
+    if (!MENTIONS.open) { box.hidden = true; box.innerHTML = ""; return; }
+    if (!MENTIONS.items.length) {
+      box.hidden = false;
+      box.innerHTML = '<div class="mention-empty">Nothing to reference yet.</div>';
+      return;
+    }
+    var groups = [];
+    var byGroup = {};
+    MENTIONS.items.forEach(function (it, i) {
+      if (!byGroup[it.group]) { byGroup[it.group] = []; groups.push(it.group); }
+      byGroup[it.group].push({ it: it, i: i });
+    });
+    box.innerHTML = groups.map(function (g) {
+      return '<div class="mention-group"><div class="mention-label">' + esc(g) + "</div>" +
+        byGroup[g].map(function (row) {
+          var it = row.it;
+          return '<button type="button" class="mention-item' + (row.i === MENTIONS.index ? " active" : "") +
+            '" data-action="mention-pick" data-index="' + row.i + '" role="option" aria-selected="' + (row.i === MENTIONS.index ? "true" : "false") + '">' +
+            '<span class="mention-title">' + esc(it.title) + "</span>" +
+            (it.detail ? '<span class="mention-detail">' + esc(it.detail) + "</span>" : "") +
+            "</button>";
+        }).join("") + "</div>";
+    }).join("");
+    box.hidden = false;
+    var active = box.querySelector(".mention-item.active");
+    if (active) active.scrollIntoView({ block: "nearest" });
+  }
+
+  function moveMention(step) {
+    if (!MENTIONS.items.length) return;
+    var n = MENTIONS.items.length;
+    MENTIONS.index = (MENTIONS.index + step + n) % n;
+    paintMentions();
+  }
+
+  function pickMention() {
+    var it = MENTIONS.items[MENTIONS.index];
+    if (!it) return;
+    applyMention(it);
+  }
+
+  /* Put the mention into the message and, for a project, say where the work
+   * happens. */
+  function applyMention(item) {
+    var inp = el("chat-input");
+    if (!inp) return;
+    var text = inp.value;
+    var caret = inp.selectionStart == null ? text.length : inp.selectionStart;
+    var before = text.slice(0, MENTIONS.start);
+    var after = text.slice(caret);
+    var token = item.token + " ";
+    inp.value = before + token + after;
+    AI.composer = inp.value;
+    var pos = before.length + token.length;
+    inp.focus();
+    try { inp.setSelectionRange(pos, pos); } catch (e) { /* not a text control */ }
+    closeMentions();
+    syncComposerAction();
+    if (item.kind === "project" && item.path && !AI.thread) {
+      AI.project = item.path;
+      var sel = el("chat-project");
+      if (sel) {
+        var known = Array.prototype.some.call(sel.options, function (o) { return o.value === item.path; });
+        if (!known) {
+          var opt = document.createElement("option");
+          opt.value = item.path;
+          opt.textContent = item.title;
+          sel.appendChild(opt);
+        }
+        sel.value = item.path;
+      }
+    }
+  }
+
+  /* The microphone and the send arrow share one slot. The microphone holds it
+   * until there is something to send; typing takes the slot back. */
+  function syncComposerAction() {
+    var inp = el("chat-input"), send = el("chat-send"), mic = el("chat-mic");
+    if (!inp || !send || !mic) return;
+    var busy = !!(AI.thread && (AI.thread.state === "running" || AI.running));
+    var hasText = !!(inp.value || "").trim() || ATTACHMENTS.length;
+    send.hidden = !busy && !hasText;
+    mic.hidden = busy || hasText;
+  }
+
+  /* Record 16 kHz mono PCM and encode it as a WAV file.
+   *
+   * Whisper wants 16 kHz mono. Encoding it here means the server never has to
+   * decode a compressed format, and the recording is exactly the shape the
+   * model was trained on. */
+  function recordWav(seconds) {
+    return navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+      var context = new (window.AudioContext || window.webkitAudioContext)();
+      var source = context.createMediaStreamSource(stream);
+      var processor = context.createScriptProcessor(4096, 1, 1);
+      var chunks = [];
+      processor.onaudioprocess = function (event) {
+        chunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
+      };
+      source.connect(processor);
+      processor.connect(context.destination);
+      return new Promise(function (resolve) {
+        RECORDER = {
+          stop: function () {
+            try { source.disconnect(); processor.disconnect(); } catch (e) { /* already gone */ }
+            stream.getTracks().forEach(function (t) { t.stop(); });
+            var rate = context.sampleRate;
+            context.close();
+            resolve({ rate: rate, chunks: chunks });
+          }
+        };
+        setTimeout(function () {
+          if (RECORDER) { var r = RECORDER; RECORDER = null; r.stop(); }
+        }, seconds * 1000);
+      });
+    });
+  }
+
+  function encodeWav(chunks, rate) {
+    var total = chunks.reduce(function (n, c) { return n + c.length; }, 0);
+    var target = 16000;
+    var ratio = rate / target;
+    var outLength = Math.floor(total / ratio);
+    var out = new Float32Array(outLength);
+    for (var i = 0; i < total; i++) {
+      var to = Math.floor(i / ratio);
+      if (to < outLength) out[to] = chunks[0][i];
+    }
+    var buffer = new ArrayBuffer(44 + outLength * 2);
+    var view = new DataView(buffer);
+    var write = function (at, text) {
+      for (var i = 0; i < text.length; i++) view.setUint8(at + i, text.charCodeAt(i));
+    };
+    write(0, "RIFF");
+    view.setUint32(4, 36 + outLength * 2, true);
+    write(8, "WAVE");
+    write(12, "fmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, target, true);
+    view.setUint32(28, target * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    write(36, "data");
+    view.setUint32(40, outLength * 2, true);
+    for (var s = 0; s < outLength; s++) {
+      var v = Math.max(-1, Math.min(1, out[s]));
+      view.setInt16(44 + s * 2, v < 0 ? v * 0x8000 : v * 0x7fff, true);
+    }
+    return new Blob([buffer], { type: "audio/wav" });
+  }
+
+  function insertAtCursor(text) {
+    var input = el("chat-input");
+    if (!input) return;
+    var start = input.selectionStart || input.value.length;
+    var end = input.selectionEnd || start;
+    input.value = input.value.slice(0, start) + text + input.value.slice(end);
+    var at = start + text.length;
+    input.focus();
+    try { input.setSelectionRange(at, at); } catch (e) { /* not a text field */ }
+  }
+
   var ACTIONS = {
+    "chat-attach": function () {
+      var input = el("chat-file");
+      if (input) input.click();
+    },
+
+    "chat-remove-file": function (node) {
+      ATTACHMENTS.splice(Number(node.dataset.index), 1);
+      paintAttachments();
+    },
+
+    "chat-dictate": function (node) {
+      if (RECORDER) {
+        var recorder = RECORDER;
+        RECORDER = null;
+        node.classList.remove("is-recording");
+        recorder.stop().then(function (audio) {
+          if (!audio.chunks.length) {
+            toast("warn", "Nothing was recorded");
+            return;
+          }
+          var blob = encodeWav(audio.chunks, audio.rate);
+          uploadFile(new File([blob], "dictation.wav", { type: "audio/wav" }))
+            .then(function (stored) {
+              return read("dictation.transcribe", { path: stored.path });
+            })
+            .then(function (data) {
+              var text = (data && data.text) || "";
+              if (!text) {
+                toast("warn", "Whisper heard nothing");
+                return;
+              }
+              insertAtCursor(text);
+            })
+            .catch(function (e) {
+              toast("error", e.message);
+            });
+        });
+        return;
+      }
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        toast("error", "This browser cannot record audio");
+        return;
+      }
+      toast("info", "Recording. Press the microphone again to stop.");
+      node.classList.add("is-recording");
+      recordWav(120)
+        .then(function (recorder) {
+          RECORDER = recorder;
+        })
+        .catch(function (e) {
+          node.classList.remove("is-recording");
+          toast("error", "The microphone could not be opened: " + e.message);
+        });
+    },
+
     nav: function (node) {
       var v = node.dataset.view, area = AREA[v];
       if (node.classList.contains("rail-item") && area && AREA[state.view] !== area && state.areaTab && state.areaTab[area]) v = state.areaTab[area];
@@ -5139,12 +5724,23 @@
     "chat-new": function () { AI.thread = null; AI.events = []; AI.pending = []; AI.lastId = 0; renderAssistant(); },
     "chat-send": function () {
       var inp = el("chat-input"); var text = (inp.value || "").trim();
-      if (!text) return;
+      if (!text && !ATTACHMENTS.length) return;
+      // The files travel with the message, so the agent can read them.
+      if (ATTACHMENTS.length) {
+        text += (text ? "\n\n" : "") + "Attached files:\n" +
+          ATTACHMENTS.map(function (a) { return "- " + a.path; }).join("\n");
+      }
       inp.value = ""; AI.composer = "";
+      ATTACHMENTS = [];
+      paintAttachments();
       if (AI.thread && AI.thread.id) return sendChat({ message: text, thread: AI.thread.id });
       var sel = el("chat-project"); startChat(text, sel ? sel.value : "");
     },
     "chat-stop": function () { if (AI.thread) run("chat.stop", { thread: AI.thread.id }).then(function () { pollThread(false).then(paintChat); }); },
+    "mention-pick": function (n) {
+      var it = MENTIONS.items[Number(n.dataset.index)];
+      if (it) applyMention(it);
+    },
     "step-toggle": function (n) { AI.openSteps[n.dataset.id] = !AI.openSteps[n.dataset.id]; paintChat(); },
     "req-decide": function (n) {
       var approve = n.dataset.approve === "1";
@@ -5237,10 +5833,10 @@
     "open-develop": function (n) { DEV.path = n.dataset.path; DEV.ctx = null; DEV.detect = null; navigate("develop"); },
     "tool-install": function (n) { act("toolchain.install", { tool: n.dataset.id }).then(function () { if (state.view === "create") scheduleValidate(); }); },
     "tool-remove": function (n) { act("toolchain.remove", { tool: n.dataset.id }); },
-    "tool-plan": function (n) { read("toolchain.plan", { tool: n.dataset.id, action: n.dataset.act }).then(function (p) { showPlanDrawer(p, n.dataset.act + " " + n.dataset.id); }).catch(function (e) { toast("error", e.message); }); },
     "svc": function (n) { act("toolchain.service", { tool: n.dataset.id, action: n.dataset.act }); },
     "svc-logs": function (n) { read("toolchain.logs", { tool: n.dataset.id }).then(function (d) { openDrawer(n.dataset.id + " logs", '<pre class="log-block">' + esc((d.lines || []).join("\n") || "empty") + "</pre>"); }).catch(function (e) { toast("error", e.message); }); },
     "devices": function () { read("toolchain.devices").then(function (d) { openDrawer("Android devices", d.length ? d.map(function (x) { return '<div class="kv"><dt class="mono">' + esc(x.serial) + "</dt><dd>" + esc(x.state) + " " + esc(x.note) + "</dd></div>"; }).join("") : '<div class="empty">No devices. Connect one with USB debugging enabled, or start an emulator.</div>'); }).catch(function (e) { toast("error", e.message); }); },
+    "eas-projects": function () { read("toolchain.eas_projects").then(function (d) { var list = d.projects || []; openDrawer("Expo projects", list.length ? list.map(function (x) { return '<div class="kv"><dt class="mono">' + esc(x.slug) + "</dt><dd>" + esc(x.name || "") + (x.owner ? " · " + esc(x.owner) : "") + "</dd></div>"; }).join("") : '<div class="empty">' + esc(d.message || "No Expo projects. Sign in with `eas login` first.") + "</div>"); }).catch(function (e) { toast("error", e.message); }); },
     "dev-open": function (n) { openProject(n.dataset.path); },
     "dev-pick": function () {
       openPicker({
@@ -5299,6 +5895,14 @@
     },
 
     "close-drawer": function () { closeDrawer(); },
+    "filter-clear": function (n) {
+      var key = n.dataset.key;
+      if (!key) return;
+      state.filters[key] = "";
+      render();
+      var again = document.querySelector('[data-filter="' + key + '"]');
+      if (again) again.focus();
+    },
 
     // ------------------------------------------------------------- projects
 
@@ -6250,7 +6854,25 @@
   document.addEventListener("input", function (e) {
     var t = e.target;
     if (t.id === "home-ask") AI.askText = t.value;
-    else if (t.id === "chat-input") AI.composer = t.value;
+    else if (t.id === "chat-input") {
+      AI.composer = t.value;
+      syncComposerAction();
+      // "@" opens the list of things a message can refer to.
+      var trig = mentionTrigger(t.value, t.selectionStart);
+      if (!trig) closeMentions();
+      else if (!MENTIONS.open || MENTIONS.start !== trig.start || MENTIONS.query !== trig.query) openMentions(trig.start, trig.query);
+    } else if (t.dataset && t.dataset.filter) {
+      // The list is re-rendered from the same data, so there is nothing to
+      // fetch; a short pause keeps the screen from redrawing on every letter.
+      state.filters[t.dataset.filter] = t.value;
+      clearTimeout(state.filterTimer);
+      state.filterTimer = setTimeout(function () {
+        render();
+        // The box is rebuilt by the render, so the caret has to be put back.
+        var again = document.querySelector('[data-filter="' + t.dataset.filter + '"]');
+        if (again) { again.focus(); again.setSelectionRange(again.value.length, again.value.length); }
+      }, 120);
+    }
   });
   document.addEventListener("change", function (e) {
     var t = e.target;
@@ -6264,9 +6886,18 @@
     if (t.dataset && t.dataset.provModel !== undefined && t.dataset.provModel !== "") setProviderModel(t.dataset.provModel, t.value.trim());
   });
   document.addEventListener("keydown", function (e) {
-    if (e.target.id === "chat-input" && e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      var b = el("chat-send"); if (b) b.click();
+    if (e.target.id === "chat-input") {
+      // While the list is open the keyboard belongs to the list.
+      if (MENTIONS.open) {
+        if (e.key === "ArrowDown") { e.preventDefault(); moveMention(1); return; }
+        if (e.key === "ArrowUp") { e.preventDefault(); moveMention(-1); return; }
+        if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); pickMention(); return; }
+        if (e.key === "Escape") { e.preventDefault(); closeMentions(); return; }
+      }
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        var b = el("chat-send"); if (b) b.click();
+      }
     }
     if (e.target.id === "home-ask" && e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); ACTIONS["home-ask"](); }
   });
@@ -6278,6 +6909,19 @@
   });
   document.addEventListener("change", function (e) {
     var t = e.target;
+    if (t.id === "chat-file") {
+      var files = Array.prototype.slice.call(t.files || []);
+      if (!files.length) return;
+      Promise.all(files.map(uploadFile)).then(function (stored) {
+        ATTACHMENTS = ATTACHMENTS.concat(stored);
+        paintAttachments();
+      }).catch(function (err) {
+        toast("error", err.message);
+      }).then(function () {
+        t.value = "";
+      });
+      return;
+    }
     if (t.id === "team-project") { TEAM.form.project = t.value; paintTeam(); }
     if (t.id === "team-parallel") TEAM.form.parallel = parseInt(t.value, 10);
   });

@@ -981,6 +981,119 @@ pub async fn open_url(Json(body): Json<OpenUrlBody>) -> Response {
     }
 }
 
+// ------------------------------------------------------------------ uploads
+
+/// The largest upload devd accepts.
+///
+/// A recording or a screenshot is a megabyte or two. A file that is much
+/// larger is not something a person meant to attach to a message, and refusing
+/// it is better than filling the disk.
+const MAX_UPLOAD_BYTES: usize = 32 * 1024 * 1024;
+
+/// `POST /api/upload` - store a file the page wants to send.
+///
+/// The browser cannot hand a file to a capability through JSON, so the file
+/// arrives here first and is stored under the devd home. What comes back is a
+/// path, and that path is what the capabilities take.
+///
+/// The file name is reduced to its last component and its characters are
+/// limited, so a name cannot be used to write outside the upload directory.
+pub async fn upload(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if body.is_empty() {
+        return refuse(
+            StatusCode::BAD_REQUEST,
+            "empty_upload",
+            "the file was empty",
+        );
+    }
+    if body.len() > MAX_UPLOAD_BYTES {
+        return refuse(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "upload_too_large",
+            &format!(
+                "the file is larger than {} MiB",
+                MAX_UPLOAD_BYTES / (1024 * 1024)
+            ),
+        );
+    }
+
+    let name = headers
+        .get("x-file-name")
+        .and_then(|v| v.to_str().ok())
+        .map(safe_file_name)
+        .unwrap_or_else(|| "upload".to_string());
+    let extension = std::path::Path::new(&name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    let stored = format!("{}.{}", upload_id(), extension);
+
+    let dir = state.ctx.paths.root().join("uploads");
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        return refuse(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "upload_failed",
+            &format!("the upload directory could not be created: {e}"),
+        );
+    }
+    let path = dir.join(&stored);
+    if let Err(e) = std::fs::write(&path, &body) {
+        return refuse(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "upload_failed",
+            &format!("the file could not be stored: {e}"),
+        );
+    }
+
+    Json(json!({
+        "path": path.display().to_string(),
+        "name": name,
+        "bytes": body.len(),
+    }))
+    .into_response()
+}
+
+/// A file name that cannot reach outside the upload directory.
+fn safe_file_name(name: &str) -> String {
+    let last = name
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("upload")
+        .trim()
+        .to_string();
+    let cleaned: String = last
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let cleaned = cleaned.trim_matches('.').to_string();
+    if cleaned.is_empty() {
+        "upload".to_string()
+    } else {
+        cleaned.chars().take(120).collect()
+    }
+}
+
+/// A name that will not collide with another upload.
+fn upload_id() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{:x}{:x}", nanos, std::process::id())
+}
+
 // ------------------------------------------------------------------- picker
 
 #[derive(Deserialize)]

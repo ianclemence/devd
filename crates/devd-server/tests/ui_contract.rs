@@ -177,6 +177,44 @@ fn every_action_handler_does_something() {
 }
 
 #[test]
+fn every_custom_property_the_stylesheet_uses_is_defined() {
+    // A `var(--name)` with no definition is not an error in CSS: the property
+    // silently falls back to its initial value. That is how a brand mark ends
+    // up filling a whole card, and nothing complains.
+    let mut defined: Vec<String> = Vec::new();
+    for line in CSS.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("--") {
+            if let Some((name, _)) = rest.split_once(':') {
+                defined.push(name.trim().to_string());
+            }
+        }
+    }
+    let mut used: Vec<String> = Vec::new();
+    for chunk in CSS.split("var(--") {
+        if chunk == CSS.split("var(--").next().unwrap_or("") {
+            continue;
+        }
+        let name: String = chunk
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
+            .collect();
+        if !name.is_empty() {
+            used.push(name);
+        }
+    }
+    used.sort();
+    used.dedup();
+    let mut missing: Vec<&String> = Vec::new();
+    for name in &used {
+        if !defined.contains(name) {
+            missing.push(name);
+        }
+    }
+    assert!(missing.is_empty(), "these custom properties are used but never defined: {missing:?}");
+}
+
+#[test]
 fn the_stylesheet_is_balanced() {
     // A rule with a stray brace swallows everything after it, and a browser
     // says nothing: the stylesheet simply stops applying. This check is the

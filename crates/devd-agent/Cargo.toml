@@ -11,6 +11,7 @@ devd-mcp = { path = "../devd-mcp" }
 devd-stacks = { path = "../devd-stacks" }
 devd-git = { path = "../devd-git" }
 devd-services = { path = "../devd-services" }
+devd-runtime = { path = "../devd-runtime" }
 serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true

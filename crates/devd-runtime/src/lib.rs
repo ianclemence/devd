@@ -88,6 +88,13 @@ pub struct InstalledRow {
     pub executable: String,
     /// Whether this is the runtime new sites use by default.
     pub primary: bool,
+    /// Whether devd installed this runtime itself.
+    ///
+    /// A runtime found on the machine - one you installed with another tool -
+    /// is real and usable, but devd does not own it: it cannot remove it,
+    /// and it must never point devd's own services at a directory devd does
+    /// not manage.
+    pub managed: bool,
 }
 
 /// What an install produced.
@@ -343,7 +350,17 @@ pub fn list(ctx: &Ctx) -> Result<Vec<InstalledRow>> {
             runtime,
             executable: exe.display().to_string(),
             primary,
+            managed: true,
         });
+    }
+    // A runtime that is installed on this machine but that devd did not
+    // install is still a runtime. Saying "not installed" because the row is
+    // missing from devd's own registry is a lie the person can see through.
+    for found in discover(ctx) {
+        if out.iter().any(|r| r.runtime.kind == found.runtime.kind && r.runtime.version == found.runtime.version) {
+            continue;
+        }
+        out.push(found);
     }
     out.sort_by(|a, b| {
         a.runtime
@@ -352,6 +369,50 @@ pub fn list(ctx: &Ctx) -> Result<Vec<InstalledRow>> {
             .then_with(|| b.runtime.version.cmp(&a.runtime.version))
     });
     Ok(out)
+}
+
+/// The runtimes this machine already has, found by asking the machine.
+///
+/// Only the interpreter is asked for, and only once. Probing every tool in
+/// the catalogue takes minutes and has no place on a screen that answers in
+/// a moment.
+fn discover(ctx: &Ctx) -> Vec<InstalledRow> {
+    let mut out = Vec::new();
+    let Some(exe) = devd_core::util::which("php") else {
+        return out;
+    };
+    let Ok(result) = devd_core::util::run(
+        &exe,
+        &["--version".to_string()],
+        None,
+        &[],
+        Some(std::time::Duration::from_secs(10)),
+    ) else {
+        return out;
+    };
+    let text = format!("{}\n{}", result.stdout, result.stderr);
+    let Some(version) = util::extract_version(&text, Some(r"PHP (\d+\.\d+\.\d+)")) else {
+        return out;
+    };
+    out.push(InstalledRow {
+        runtime: Runtime {
+            id: format!("php-{version}-system"),
+            kind: "php".into(),
+            version: version.clone(),
+            path: exe.display().to_string(),
+            digest: None,
+            pinned: false,
+            installed_at: String::new(),
+        },
+        present: true,
+        executable: exe.display().to_string(),
+        // The primary is whatever devd installed and marked as such. A
+        // runtime found on the machine is a fallback, never the primary.
+        primary: false,
+        managed: false,
+    });
+    let _ = ctx;
+    out
 }
 
 /// Run an installed runtime and report what it says.

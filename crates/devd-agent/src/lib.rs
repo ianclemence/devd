@@ -28,6 +28,7 @@
 
 pub mod caps;
 pub mod chat;
+pub mod dictation;
 pub mod docs;
 pub mod fs;
 pub mod health;

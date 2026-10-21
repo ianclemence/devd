@@ -22,7 +22,7 @@ use devd_core::{browse, util, DevdError, Provider, Registry, Result};
 use crate::chat::{Hub, SendRequest};
 use crate::team::{PlanTask, Team};
 use crate::providers;
-use crate::{docs, fs, health, requirements, roles, search, secrets, skills};
+use crate::{dictation, docs, fs, health, requirements, roles, search, secrets, skills};
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct NoArgs {}
@@ -477,8 +477,24 @@ fn find_provider(ctx: &Ctx, id: &str) -> Result<Provider> {
 
 /// What a health check means and what to do about it.
 /// Register everything.
-pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()> {
-    add::<SearchArgs, _, _>(reg, "search.query", "Search projects, files, text, conversations, models, tasks and activity", "Searches what devd can see: project names, file paths (walked live, not indexed), literal text inside a project, conversations, the model catalogue, background tasks and the audit trail. Each response lists which sources were searched, how, and whether the search was cut short, so an empty result is never mistaken for a complete search.",
+/// The model to install for speech-to-text.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct DictateInstall {
+    /// Which model: `tiny.en`, `base.en` or `small.en`.
+    model: String,
+}
+
+/// A recording to transcribe.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct DictateArgs {
+    /// The WAV file to transcribe.
+    path: String,
+    /// The language, when it is known. Whisper detects it otherwise.
+    #[serde(default)]
+    language: Option<String>,
+}
+
+pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()> {    add::<SearchArgs, _, _>(reg, "search.query", "Search projects, files, text, conversations, models, tasks and activity", "Searches what devd can see: project names, file paths (walked live, not indexed), literal text inside a project, conversations, the model catalogue, background tasks and the audit trail. Each response lists which sources were searched, how, and whether the search was cut short, so an empty result is never mistaken for a complete search.",
         Tier::Read, Effect::Read, true, false,
         |_, a| simple("search.query", format!("search for `{}`", a.query)),
         |ctx, a| {
@@ -486,9 +502,48 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             Ok(Outcome::with_data(format!("{} result(s)", v["results"].as_array().map(|r| r.len()).unwrap_or(0)), v))
         })?;
 
-    // ---------------------------------------------------------- environment
-    add::<NoArgs, _, _>(reg, "environment.get", "Local or production", "Which environment devd is treating this machine as, and what that changes. In production mode an agent changes nothing without a person's approval, the team cannot skip plan approval, and the status bar says so everywhere.",
+    // ------------------------------------------------------------ dictation
+    add::<NoArgs, _, _>(reg, "dictation.status", "What speech-to-text is installed", "Whether the local Whisper binary and a model are installed, where they are, and which models can be installed. The microphone button in the window uses this to tell the truth about what will happen when it is pressed.",
         Tier::Read, Effect::Read, true, false,
+        |_, _| simple("dictation.status", "read the state of the speech-to-text tools"),
+        |ctx, _| {
+            let state = dictation::status(ctx);
+            Ok(Outcome::with_data(
+                if state.binary && !state.models.is_empty() {
+                    "speech to text is ready".to_string()
+                } else {
+                    "speech to text is not installed yet".to_string()
+                },
+                serde_json::to_value(&state)?,
+            ))
+        })?;
+    add::<DictateInstall, _, _>(reg, "dictation.install", "Install speech-to-text", "Downloads the Whisper binary and a model from their publishers, checks both against the digest each publisher states, and installs them for this machine. Nothing is sent anywhere: the model runs locally.",
+        Tier::Write, Effect::Process, true, false,
+        |_, a| Ok(Plan::new("dictation.install", format!("install the {} Whisper model", a.model))
+            .step("download whisper-cli and check it against the published digest")
+            .step(format!("download the {} model and check it against the published digest", a.model))
+            .effect("writes files under the devd home")),
+        |ctx, a| {
+            let state = dictation::install(ctx, &a.model)?;
+            Ok(Outcome::with_data(
+                "speech to text is ready".to_string(),
+                serde_json::to_value(&state)?,
+            ))
+        })?;
+    add::<DictateArgs, _, _>(reg, "dictation.transcribe", "Transcribe a recording", "Transcribes a 16 kHz mono WAV file with the local Whisper model and returns the text. The audio stays on this machine.",
+        Tier::Read, Effect::Read, true, false,
+        |_, a| simple("dictation.transcribe", format!("transcribe {}", a.path)),
+        |ctx, a| {
+            let path = std::path::PathBuf::from(&a.path);
+            let text = dictation::transcribe(ctx, &path, a.language.as_deref())?;
+            Ok(Outcome::with_data(
+                if text.is_empty() { "nothing was said".to_string() } else { text.clone() },
+                json!({ "text": text }),
+            ))
+        })?;
+
+    // ---------------------------------------------------------- environment
+    add::<NoArgs, _, _>(reg, "environment.get", "Local or production", "Which environment devd is treating this machine as, and what that changes. In production mode an agent changes nothing without a person's approval, the team cannot skip plan approval, and the status bar says so everywhere.",        Tier::Read, Effect::Read, true, false,
         |_, _| simple("environment.get", "read the environment mode"),
         |ctx, _| {
             let mode = ctx.store.environment_mode();

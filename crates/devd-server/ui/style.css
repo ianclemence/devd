@@ -106,6 +106,55 @@
 
   --shadow-float: 0 18px 48px rgba(0, 0, 0, 0.55);
   --focus-ring: 0 0 0 3px rgba(124, 245, 192, 0.16);
+
+  /* A hairline: the one-pixel border that separates one region from another. */
+  --hairline: 1px;
+  --hairline-strong: 1.5px;
+  --radius-pill: 999px;
+
+  /* Icons, controls and rows. */
+  --icon-xs: 14px;
+  --icon-sm: 16px;
+  --icon: 18px;
+  --icon-lg: 20px;
+  --icon-xl: 26px;
+  --h-control-sm: 24px;
+  --h-control: 28px;
+  --h-control-lg: 32px;
+  --h-tile: 40px;
+  --h-row: 44px;
+  --h-panel: 56px;
+  --scrollbar: 10px;
+
+  /* Layout measurements, named for what they are. */
+  --w-search-min: 180px;
+  --w-search-cap: 240px;
+  --w-search-max: 320px;
+  --w-input-chat: 180px;
+  --w-filter: 240px;
+  --w-filter-sm: 220px;
+  --w-side-min: 240px;
+  --w-side-max: 300px;
+  --w-note-max: 280px;
+  --w-chat: 460px;
+  --w-team: 720px;
+  --w-home: 1200px;
+  --w-dialog: 640px;
+  --w-dialog-narrow: 580px;
+  --w-drawer: 760px;
+  --w-picker: 720px;
+  --grid-min-sm: 180px;
+  --grid-min: 200px;
+  --grid-min-md: 220px;
+  --grid-min-lg: 280px;
+  --h-list: 200px;
+  --h-composer-max: 220px;
+  --h-step-log: 260px;
+  --h-note: 260px;
+  --h-terminal-min: 300px;
+  --h-diff: 560px;
+  --h-log: 380px;
+  --h-patch: 420px;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -240,6 +289,10 @@ code, kbd, pre, samp { font-family: var(--mono); }
   background: var(--bg);
   scroll-behavior: smooth;
 }
+/* The scroll container's own rows keep their size; only the page below them
+   scrolls. A flex column squeezes what it can, and a breadcrumb row that
+   loses half its height is a breadcrumb row nobody can read. */
+.content > .crumbs, .content > .subnav { flex: none; }
 
 /* The content column is the scroll container, so a workspace that wants the
    whole viewport (the assistant, the team run) can ask for 100% height and get
@@ -319,11 +372,15 @@ code, kbd, pre, samp { font-family: var(--mono); }
   display: flex;
   align-items: center;
   gap: var(--s2);
-  width: 100%;
-  height: 30px;
+  /* The width comes from the flex layout, not from `100%`: a percentage would
+     be the rail's whole width and the margins would push it out of the rail. */
+  width: auto;
+  min-width: 0;
+  height: var(--h-control-lg);
+  margin: 0 var(--s3) var(--s2);
   padding: 0 var(--s2) 0 9px;
   background: var(--bg-surface);
-  border: 1px solid var(--line);
+  border: var(--hairline) solid var(--line);
   border-radius: var(--radius);
   color: var(--fg-dim);
   font-size: var(--text-sm);
@@ -488,19 +545,317 @@ code, kbd, pre, samp { font-family: var(--mono); }
  * Marks are never recoloured. A brand's colour is part of the brand, and a
  * half-tinted logo is a different logo.
  */
+/* Marks are never recoloured, and a dark mark on a dark surface is invisible.
+   The mark therefore sits on a light tile, the way a favicon does in a tab
+   strip: the brand keeps its own colours and stays readable.
+
+   There are three sizes and no others: a mark beside a name in a list, a mark
+   beside a heading, and a wordmark that needs its own proportions. */
 .brand-dot {
-  width: 16px;
-  height: 16px;
-  margin-right: 6px;
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  margin-right: var(--s2);
+  padding: 1px;
   vertical-align: -3px;
   object-fit: contain;
   border-radius: 3px;
+  background: #fff;
   flex: 0 0 auto;
+  align-self: flex-start;
 }
-.brand-dot-lead { width: 18px; height: 18px; margin-right: 7px; vertical-align: -4px; }
+.brand-dot-lead { width: var(--icon-lg); height: var(--icon-lg); padding: 2px; vertical-align: -4px; }
 
 /* A wordmark keeps its own proportions and is given room to be read. */
-.brand-dot-wide { width: 26px; height: auto; max-height: 16px; }
+.brand-dot-wide { width: var(--icon-xl); height: auto; max-height: var(--icon-sm); align-self: center; }
+
+/* An example is not output. It is labelled, set apart from a log, and says
+   what it is for. */
+.example {
+  margin-top: var(--s3);
+  padding: var(--s3) var(--s4) var(--s4);
+  background: var(--bg-rail);
+  border: var(--hairline) solid var(--line);
+  border-radius: var(--radius-lg);
+}
+.example .section-title { margin-top: 0; }
+.example .log-pre { text-align: left; margin-bottom: var(--s2); }
+
+/* The conversation and the box share one column, so the mark above them and
+   the box below it are on the same centre line. */
+/* The conversation and the box share one column. The column fills the screen
+   below the heading, the conversation scrolls, and the box sits at the bottom
+   of it - where a box you write into belongs. */
+.chat-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  max-width: 860px;
+  margin: 0 auto;
+}
+
+/* The conversation box.
+ *
+ * It is one box: the message goes in it, the controls sit in its bottom row,
+ * and the attachments sit above it. A separate row of controls above a
+ * separate box would be two things to look at instead of one.
+ */
+.composer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  flex: none;
+  margin: 0 var(--s5) var(--s2);
+  padding: var(--s3);
+  background: var(--bg-surface);
+  border: var(--hairline) solid var(--line-strong);
+  border-radius: var(--radius-lg);
+  transition: border-color var(--fast);
+  position: relative;
+}
+.composer:focus-within { border-color: var(--accent-line); }
+.composer-input {
+  width: 100%;
+  min-height: 44px;
+  max-height: 220px;
+  padding: 0;
+  background: none;
+  border: 0;
+  outline: none;
+  color: var(--fg);
+  font-family: var(--sans);
+  font-size: var(--text-md);
+  line-height: 1.55;
+  resize: none;
+}
+.composer-bar { display: flex; align-items: center; gap: var(--s2); }
+.composer-left { display: flex; align-items: center; gap: var(--s1); min-width: 0; flex: 1; }
+.composer-right { display: flex; align-items: center; gap: var(--s1); flex: 0 0 auto; }
+
+/* One slot for the two things that can come next. The microphone holds it
+   until there is something to send; the arrow takes it over from then, in the
+   same place, so the control never moves under the pointer. */
+.composer-slot {
+  position: relative;
+  display: block;
+  width: var(--h-control-lg);
+  height: var(--h-control-lg);
+}
+.composer-slot > * { position: absolute; inset: 0; }
+.composer-tool {
+  display: grid;
+  place-items: center;
+  width: var(--h-control);
+  height: var(--h-control);
+  background: none;
+  border: 0;
+  border-radius: var(--radius);
+  color: var(--fg-dim);
+  cursor: pointer;
+}
+.composer-tool .icon { width: var(--icon); height: var(--icon); }
+.composer-tool:hover { background: var(--bg-hover); color: var(--fg); }
+.composer-tool.is-recording { background: var(--danger-quiet); color: var(--danger); }
+/* The microphone sits in the send slot, so it takes the slot's shape. */
+.composer-slot .composer-tool { width: var(--h-control-lg); height: var(--h-control-lg); }
+
+/* The provider and model pickers, in the bar where they are used. */
+.composer-picker {
+  height: var(--h-control);
+  max-width: 220px;
+  padding: 0 var(--s2);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: var(--fg-mute);
+  font-family: var(--sans);
+  font-size: var(--text-sm);
+}
+.composer-picker:hover { background: var(--bg-hover); color: var(--fg); }
+.composer-picker:focus-visible { border-color: var(--accent-line); color: var(--fg); }
+
+/* The send control is an arrow, and a square while it stops. */
+.composer-send {
+  display: grid;
+  place-items: center;
+  width: var(--h-control-lg);
+  height: var(--h-control-lg);
+  background: var(--bg-raised);
+  border: var(--hairline) solid var(--line-strong);
+  border-radius: var(--radius);
+  color: var(--fg-mute);
+  cursor: pointer;
+  transition: background var(--fast), color var(--fast), border-color var(--fast);
+}
+.composer-send .icon { width: var(--icon); height: var(--icon); }
+.composer-send:hover { background: var(--bg-hover); color: var(--fg); border-color: var(--line-strong); }
+.composer-send.is-busy { color: var(--danger); border-color: var(--danger-line); background: var(--danger-quiet); }
+
+/* What devd is, where it is working, and which branch: the state of the
+   session, in one line under the box. */
+.composer-status {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex: none;
+  padding: 0 var(--s5) var(--s4);
+  color: var(--fg-dim);
+  font-size: var(--text-xs);
+}
+.status-chip { color: var(--fg-mute); }
+.status-sep { color: var(--fg-dim); }
+.status-select {
+  height: auto;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--fg-mute);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.status-select:hover { color: var(--fg); }
+
+/* The mark, shown when there is no conversation yet. */
+.chat-wordmark {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s3);
+  height: 100%;
+  padding: var(--s6) var(--s4);
+  text-align: center;
+}
+.wordmark {
+  font-size: clamp(32px, 6vw, 56px);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--fg-dim);
+  line-height: 1;
+}
+.wordmark-hint { max-width: 44ch; color: var(--fg-dim); font-size: var(--text-sm); line-height: 1.6; }
+
+/* What the agent did before it spoke. */
+.msg-used {
+  margin: var(--s3) 0 var(--s1);
+  color: var(--fg-dim);
+  font-size: var(--text-xs);
+}
+
+/* The files that will go with the message. */
+.composer-attachments { display: flex; flex-wrap: wrap; gap: var(--s1); }
+.composer-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s1);
+  max-width: 260px;
+  padding: 2px var(--s1) 2px var(--s2);
+  background: var(--bg-raised);
+  border: var(--hairline) solid var(--line-strong);
+  border-radius: var(--radius-pill);
+  color: var(--fg-mute);
+  font-size: var(--text-xs);
+}
+.composer-attachment b { color: var(--fg); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-attachment button {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-pill);
+  color: var(--fg-dim);
+  cursor: pointer;
+  line-height: 1;
+}
+.composer-attachment button:hover { background: var(--bg-hover); color: var(--fg); }
+
+/* The list of things a message can refer to. It opens over the composer,
+   because it belongs to the sentence being written. */
+.mention-menu {
+  position: absolute;
+  bottom: calc(100% + var(--s2));
+  left: 0;
+  right: 0;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: var(--s1);
+  background: var(--bg-raised);
+  border: var(--hairline) solid var(--line-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-float);
+}
+.mention-group + .mention-group { margin-top: var(--s1); }
+.mention-label {
+  padding: var(--s1) var(--s2);
+  color: var(--fg-dim);
+  font-size: var(--text-2xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.mention-item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  width: 100%;
+  padding: var(--s1) var(--s2);
+  background: none;
+  border: 0;
+  border-radius: var(--radius);
+  color: var(--fg);
+  font-family: var(--sans);
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.mention-item:hover, .mention-item.active { background: var(--bg-hover); }
+.mention-title { flex: 0 0 auto; font-weight: 500; }
+.mention-detail {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg-dim);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mention-empty { padding: var(--s2); color: var(--fg-dim); font-size: var(--text-sm); }
+
+/* A box that narrows a list. */
+.filter-row { margin-bottom: var(--s3); }
+.filter { display: flex; align-items: center; gap: var(--s2); }
+.filter > .icon { width: var(--icon); height: var(--icon); flex: none; color: var(--fg-dim); }
+.filter-input {
+  flex: 1;
+  min-width: 0;
+  height: var(--h-control);
+  padding: 0 var(--s3);
+  background: var(--bg-raised);
+  border: var(--hairline) solid var(--line);
+  border-radius: var(--radius);
+  color: var(--fg);
+  font-family: var(--sans);
+  font-size: var(--text-sm);
+}
+.filter-input::placeholder { color: var(--fg-dim); }
+.filter-input:focus-visible { border-color: var(--accent-line); outline: none; }
+.filter-clear {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-pill);
+  color: var(--fg-dim);
+  font-size: var(--text-md);
+  line-height: 1;
+  cursor: pointer;
+}
+.filter-clear:hover { background: var(--bg-hover); color: var(--fg); }
 
 /* --------------------------------------------------------------- controls */
 
@@ -952,7 +1307,10 @@ kbd {
 .cell-actions { display: flex; gap: var(--s2); justify-content: flex-end; white-space: nowrap; }
 .table td.cell-actions { text-align: right; }
 
-.kv { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 3px var(--s3); font-size: var(--text-sm); }
+/* A definition list. The label column is as wide as the widest label in that
+   list, not a fixed guess: a fixed column leaves a gap the size of a word
+   between "Machine" and what the machine is. */
+.kv { display: grid; grid-template-columns: minmax(72px, max-content) minmax(0, 1fr); gap: 3px var(--s3); font-size: var(--text-sm); }
 .kv dt { color: var(--fg-mute); }
 .kv dd { margin: 0; font-family: var(--mono); font-size: var(--text-sm); overflow-wrap: anywhere; }
 
@@ -1323,13 +1681,15 @@ button.svc { width: 100%; background: none; border: 0; border-bottom: 1px solid 
 .home-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: var(--s5); align-items: start; }
 .home-col { min-width: 0; }
 
+/* An empty state inside a panel needs less room than one that fills the
+   screen: the panel is already the frame. */
+.panel > .empty { padding: var(--s5) var(--s4); }
+
 .calm {
   display: flex;
   align-items: flex-start;
   gap: var(--s3);
-  padding: var(--s4);
-  border: 1px dashed var(--line-strong);
-  border-radius: var(--radius-lg);
+  padding: var(--s3) var(--s4);
   color: var(--fg-mute);
   font-size: var(--text-sm);
 }
@@ -1447,10 +1807,26 @@ button.svc { width: 100%; background: none; border: 0; border-bottom: 1px solid 
   overflow-y: auto;
   overscroll-behavior: contain;
 }
-.chat-stream > * { width: 100%; max-width: var(--reading); margin-inline: auto; }
+/* The conversation scrolls. Its children must not shrink to fit the box:
+   a flex column squeezes anything that can be squeezed, and a row with
+   `overflow: hidden` can be squeezed all the way to nothing. */
+.chat-stream > * { flex: 0 0 auto; width: 100%; max-width: var(--reading); margin-inline: auto; }
 
-.chat-empty { margin: auto; max-width: 460px; text-align: center; }
-.chat-empty-title { margin-bottom: var(--s2); font-size: var(--text-xl); font-weight: 650; letter-spacing: -0.015em; }
+/* The empty conversation. It uses the same arrangement as every other empty
+   state - a centred icon, a title, a sentence - so the screen reads as a
+   designed place rather than as a panel that happens to be empty. */
+.chat-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s2);
+  margin: auto;
+  max-width: var(--w-chat);
+  color: var(--fg-mute);
+  text-align: center;
+}
+.chat-empty .empty-icon { margin-bottom: 0; }
+.chat-empty-title { margin-bottom: 0; font-size: var(--text-xl); font-weight: 650; letter-spacing: -0.015em; }
 
 .msg { display: flex; gap: 10px; max-width: var(--reading); }
 .msg-agent { align-items: flex-start; }
@@ -1465,7 +1841,13 @@ button.svc { width: 100%; background: none; border: 0; border-bottom: 1px solid 
   overflow-wrap: anywhere;
 }
 .msg-agent .bubble { background: var(--bg-surface); border: 1px solid var(--line); }
-.msg-user .bubble { max-width: min(78%, 620px); background: var(--accent-quiet); border: 1px solid var(--accent-line); }
+/* The width cap belongs on the message, not on the bubble.
+ *
+ * A percentage on the bubble would be a percentage of a box whose width is
+ * decided by the bubble, and the browser resolves that by shrinking the text
+ * until it fits - a short message ends up one letter wide. */
+.msg-user > div { max-width: min(78%, 620px); }
+.msg-user .bubble { max-width: none; background: var(--accent-quiet); border: 1px solid var(--accent-line); }
 .bubble p { margin: 0 0 6px; }
 .bubble p:last-child { margin: 0; }
 .bubble ul { margin: 4px 0; padding-left: 18px; list-style: disc; }
@@ -1508,7 +1890,7 @@ pre.code {
 @keyframes typing { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
 
 .step {
-  max-width: calc(var(--reading) - 36px);
+  max-width: var(--reading);
   margin-left: auto;
   margin-right: auto;
   background: var(--bg-surface);
@@ -1524,7 +1906,9 @@ pre.code {
   gap: var(--s2);
   width: 100%;
   min-height: 32px;
-  padding: 4px 10px;
+  /* The indent lines the step up with the words in the message under it,
+     rather than with the avatar beside it. */
+  padding: 4px 10px 4px 46px;
   background: none;
   border: 0;
   color: var(--fg-mute);
@@ -1541,7 +1925,7 @@ pre.code {
 .step-dot.run { background: var(--accent); animation: pulse 1.4s infinite; }
 @keyframes pulse { 50% { opacity: 0.45; } }
 .step-body {
-  padding: var(--s2) 10px 10px;
+  padding: var(--s2) 10px 10px 46px;
   border-top: 1px solid var(--line);
   background: var(--bg-deep);
 }
@@ -1549,19 +1933,6 @@ pre.code {
 .step-body .field-label:first-child { margin-top: 0; }
 .step-body .log-block { max-height: 260px; background: transparent; padding: var(--s1) 0 0; }
 .step-copy { margin-left: auto; }
-
-.composer {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s2);
-  padding: var(--s3) var(--s4) var(--s4);
-  background: var(--bg-surface);
-  border-top: 1px solid var(--line);
-}
-.composer textarea { min-height: 64px; max-height: 220px; resize: vertical; font-size: var(--text-md); }
-.composer .inline:last-child { align-items: flex-end; gap: var(--s2); }
-.composer .btn { height: 32px; padding: 0 14px; }
-.composer .hint { color: var(--fg-dim); font-size: var(--text-2xs); }
 
 /* ---------------------------------------------------------------- agents */
 
