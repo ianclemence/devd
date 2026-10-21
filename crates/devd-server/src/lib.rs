@@ -440,7 +440,11 @@ async fn guard(State(state): State<Arc<AppState>>, req: Request<Body>, next: Nex
         }
     }
 
-    if req.uri().path().starts_with("/api") {
+    // `/api` and everything under `/api/` is the API. A screen whose address merely
+    // begins with the letters (`/api-tools`) is a page, and refusing it for want of
+    // a token made a reload or a shared link show a JSON error.
+    let path = req.uri().path();
+    if path == "/api" || path.starts_with("/api/") {
         let presented = req
             .headers()
             .get(header::AUTHORIZATION)

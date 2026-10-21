@@ -103,23 +103,36 @@ pub fn render(frame: &mut Frame, state: &State) {
     render_overlay(frame, state, area);
 }
 
+/// The labels of the tab strip for a terminal `width` columns wide.
+///
+/// Every tab is shown with its name when they all fit. When they do not, names
+/// are dropped from the last tab backwards, leaving its key, until the strip
+/// fits: it never runs off the edge and hides the views it is there to offer.
+fn tab_labels(current: View, width: usize) -> Vec<(String, bool)> {
+    let named = |v: &View| format!(" {} {} ", v.shortcut(), v.title());
+    let bare = |v: &View| format!(" {} ", v.shortcut());
+    let mut labels: Vec<(String, bool)> = View::ALL.iter().map(|v| (named(v), *v == current)).collect();
+    // Shed names from the end, one tab at a time, until the strip fits. The
+    // current tab keeps its name whatever happens.
+    let mut index = View::ALL.len();
+    while labels.iter().map(|(l, _)| l.chars().count()).sum::<usize>() > width && index > 0 {
+        index -= 1;
+        if View::ALL[index] != current {
+            labels[index].0 = bare(&View::ALL[index]);
+        }
+    }
+    labels
+}
+
 fn render_header(frame: &mut Frame, state: &State, area: Rect) {
     let [top, tabs_area] =
         Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(area);
     let width = area.width as usize;
 
-    let mut tabs: Vec<Span> = Vec::new();
-    for view in View::ALL {
-        let style = if view == state.view {
-            tab_active()
-        } else {
-            quiet()
-        };
-        tabs.push(Span::styled(
-            format!(" {} {} ", view.shortcut(), view.title()),
-            style,
-        ));
-    }
+    let tabs: Vec<Span> = tab_labels(state.view, width)
+        .into_iter()
+        .map(|(label, active)| Span::styled(label, if active { tab_active() } else { quiet() }))
+        .collect();
 
     // Identity on the left, the state of the selected repository on the right.
     // The right side is what a reader checks first, so it is allowed to win the
@@ -270,7 +283,7 @@ fn render_body(frame: &mut Frame, state: &State, area: Rect) {
                         _ => String::new(),
                     };
                     Line::from(vec![
-                        Span::raw(format!("{:<24}", truncate(&t.name, 24))),
+                        Span::raw(format!("{:<25}", truncate(&t.name, 24))),
                         Span::styled(format!("{mark:<10}"), style),
                         Span::styled(format!("{:<12}", truncate(t.version.as_deref().unwrap_or("-"), 12)), data()),
                         Span::styled(format!("{:<16}", truncate(&service, 16)), if service.starts_with("running") { ok() } else { quiet() }),
@@ -461,7 +474,7 @@ fn empty_hint(state: &State) -> &'static str {
 
 fn empty_line(state: &State) -> Line<'static> {
     let text = match state.view {
-        View::Projects => "No repositories yet - press t to add a path,".to_string(),
+        View::Projects => "No repositories yet.".to_string(),
         View::Changes if state.repo.is_none() => {
             "No repository selected - press 2 to choose one, or t to add a path".to_string()
         }
@@ -926,6 +939,36 @@ mod tests {
     use super::*;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+
+    fn strip_width(labels: &[(String, bool)]) -> usize {
+        labels.iter().map(|(l, _)| l.chars().count()).sum()
+    }
+
+    #[test]
+    fn the_tab_strip_always_fits_and_always_names_the_current_view() {
+        for width in [60usize, 80, 100, 120, 140] {
+            for view in View::ALL {
+                let labels = tab_labels(view, width);
+                assert_eq!(labels.len(), View::ALL.len(), "a tab went missing at {width}");
+                assert!(
+                    strip_width(&labels) <= width,
+                    "the strip is {} wide at {width}",
+                    strip_width(&labels)
+                );
+                let active: Vec<_> = labels.iter().filter(|(_, a)| *a).collect();
+                assert_eq!(active.len(), 1);
+                assert!(active[0].0.contains(view.title()), "{view:?} at {width}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_wide_terminal_names_every_tab() {
+        let labels = tab_labels(View::Dashboard, 400);
+        for (label, view) in labels.iter().zip(View::ALL) {
+            assert!(label.0.contains(view.title()), "{}", label.0);
+        }
+    }
 
     use crate::state::{
         AuditRow, BranchRow, CapRow, CheckRow, CommitRow, Overlay, Pending, RepoRow, StatusData,

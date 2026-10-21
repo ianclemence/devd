@@ -219,6 +219,34 @@ async fn call(
 // ------------------------------------------------------------------- the guard
 
 #[tokio::test]
+async fn a_screen_whose_address_starts_with_api_is_a_page_not_the_api() {
+    let fixture = Fixture::new();
+    let (state, _rx) = fixture.state(8787);
+    let port = state.port;
+
+    // The capability browser lives at `/api-tools`. Reloading it must show the
+    // page, not a JSON error about a missing token.
+    let response = router(state.clone())
+        .oneshot(request("GET", "/api-tools", port, None, None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), 4 * 1024 * 1024)
+        .await
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&bytes).contains("<html"),
+        "/api-tools did not serve the application"
+    );
+
+    // Narrowing what counts as the API must not open any of it.
+    for path in ["/api", "/api/", "/api/session", "/api/capabilities"] {
+        let (status, _) = call(state.clone(), "GET", path, None, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{path} must need a token");
+    }
+}
+
+#[tokio::test]
 async fn the_api_is_unreachable_without_a_token() {
     let fixture = Fixture::new();
     let (state, _rx) = fixture.state(8787);

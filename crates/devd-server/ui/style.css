@@ -1956,6 +1956,9 @@ pre.code {
   border-radius: 50%;
   background: var(--fg-dim);
 }
+/* A project row has no timeline to hang the dot from, so it sits in the flow;
+   absolutely positioned it landed on whatever heading was above the row. */
+.proj > .step-dot { position: static; flex: none; margin-right: 4px; }
 .step-dot.ok { background: var(--ok); }
 .step-dot.bad { background: var(--danger); }
 .step-dot.wait { background: var(--warn); animation: pulse 1.6s infinite; }
