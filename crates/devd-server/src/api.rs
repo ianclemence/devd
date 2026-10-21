@@ -474,12 +474,8 @@ pub async fn sessions_start(
     Json(req): Json<TerminalStart>,
 ) -> Response {
     let task = state.clone();
-    let label = req.label.clone();
     match tokio::task::spawn_blocking(move || start_session(&task, req)).await {
-        Ok(Ok(view)) => {
-            let _ = label;
-            Json(view).into_response()
-        }
+        Ok(Ok(view)) => Json(view).into_response(),
         Ok(Err(message)) => refuse(StatusCode::BAD_REQUEST, "terminal", &message),
         Err(e) => refuse(
             StatusCode::INTERNAL_SERVER_ERROR,
