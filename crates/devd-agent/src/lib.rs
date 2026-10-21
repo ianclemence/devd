@@ -43,6 +43,3 @@ pub mod skills_install;
 pub mod team;
 
 pub use chat::Hub;
-
-#[allow(unused_imports)]
-use devd_git as _;
