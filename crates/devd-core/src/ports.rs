@@ -204,6 +204,9 @@ fn port_of(addr: &str) -> Option<u16> {
     addr[idx + 1..].trim().parse().ok()
 }
 
+/// The process id in an `ss` line, which names it as `pid=1234`. Only the Unix
+/// listener scan reads `ss`; Windows resolves names through `tasklist`.
+#[cfg(not(windows))]
 fn extract_pid(line: &str) -> Option<u32> {
     let idx = line.find("pid=")?;
     let rest = &line[idx + 4..];
@@ -264,6 +267,7 @@ mod tests {
         assert_eq!(port_of("garbage"), None);
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn extracted_pid_from_ss_line() {
         let line = r#"LISTEN 0 511 0.0.0.0:80 0.0.0.0:* users:(("nginx",pid=1234,fd=6))"#;
