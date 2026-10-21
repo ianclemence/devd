@@ -997,12 +997,6 @@ pub fn prune_php_services(ctx: &Ctx) -> Result<Vec<String>> {
     Ok(removed)
 }
 
-/// A forward-slash path, used by tests that assert on stored argument arrays.
-#[allow(dead_code)]
-fn slashy(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
-}
-
 /// Build the spawn specification for a service.
 fn spawn_spec(ctx: &Ctx, service: &Service) -> Result<SpawnSpec> {
     let argv: Vec<String> = serde_json::from_str(&service.argv)
@@ -1496,6 +1490,11 @@ fn running_pid_for_check(paths: &Paths, service: &Service) -> Option<u32> {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    /// A forward-slash path, for asserting on stored argument arrays.
+    fn slashy(path: &Path) -> String {
+        path.to_string_lossy().replace('\\', "/")
+    }
 
     fn ctx(tag: &str) -> Ctx {
         let dir = std::env::temp_dir().join(format!("devd-svc-{tag}-{}", std::process::id()));
