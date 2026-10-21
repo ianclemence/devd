@@ -26,6 +26,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (4, include_str!("../sql/004_agent.sql")),
     (5, include_str!("../sql/005_team.sql")),
     (6, include_str!("../sql/006_site_upstream.sql")),
+    (7, include_str!("../sql/007_drop_receipts.sql")),
 ];
 
 /// One audit row. Every capability attempt, successful or not, writes one.
@@ -203,23 +204,6 @@ pub struct Snapshot {
     pub created_at: String,
     /// Free-text description.
     pub description: String,
-}
-
-/// A receipt describing how to reverse a previously applied capability.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Receipt {
-    /// Row identifier.
-    pub id: String,
-    /// Capability that was applied.
-    pub capability: String,
-    /// Capability that reverses it.
-    pub undo_capability: Option<String>,
-    /// Arguments for the reversing capability.
-    pub undo_args: Option<String>,
-    /// Creation timestamp.
-    pub created_at: String,
-    /// Whether the receipt has already been used.
-    pub applied: bool,
 }
 
 /// A Git repository `devd` knows about.
@@ -872,58 +856,6 @@ impl Store {
         })
     }
 
-    // ------------------------------------------------------------- receipts
-
-    /// Record a reversal recipe.
-    pub fn create_receipt(
-        &self,
-        id: &str,
-        capability: &str,
-        undo_capability: Option<&str>,
-        undo_args: Option<&str>,
-    ) -> Result<()> {
-        self.with(|conn| {
-            conn.execute(
-                "INSERT INTO receipts (id, capability, undo_capability, undo_args, created_at, applied)
-                 VALUES (?1, ?2, ?3, ?4, ?5, 0)",
-                params![id, capability, undo_capability, undo_args, util::now()],
-            )?;
-            Ok(())
-        })
-    }
-
-    /// Fetch a receipt.
-    pub fn get_receipt(&self, id: &str) -> Result<Option<Receipt>> {
-        self.with(|conn| {
-            let r = conn
-                .query_row(
-                    "SELECT id, capability, undo_capability, undo_args, created_at, applied
-                     FROM receipts WHERE id = ?1",
-                    params![id],
-                    |row| {
-                        Ok(Receipt {
-                            id: row.get(0)?,
-                            capability: row.get(1)?,
-                            undo_capability: row.get(2)?,
-                            undo_args: row.get(3)?,
-                            created_at: row.get(4)?,
-                            applied: row.get::<_, i32>(5)? != 0,
-                        })
-                    },
-                )
-                .optional()?;
-            Ok(r)
-        })
-    }
-
-    /// Mark a receipt as used.
-    pub fn mark_receipt_applied(&self, id: &str) -> Result<()> {
-        self.with(|conn| {
-            conn.execute("UPDATE receipts SET applied = 1 WHERE id = ?1", params![id])?;
-            Ok(())
-        })
-    }
-
     // ---------------------------------------------------------------- repos
 
     /// Insert or update a known repository.
@@ -1079,7 +1011,6 @@ impl Store {
             "services",
             "tasks",
             "snapshots",
-            "receipts",
             "repos",
             "certs",
         ];
@@ -1161,6 +1092,42 @@ mod tests {
         let s = Store::open_in_memory().unwrap();
         s.migrate().unwrap();
         s
+    }
+
+    #[test]
+    fn the_unused_receipts_table_is_gone_and_a_database_that_had_it_migrates() {
+        let s = store();
+        let tables: Vec<String> = s
+            .with(|conn| {
+                let mut stmt =
+                    conn.prepare("SELECT name FROM sqlite_master WHERE type = 'table'")?;
+                let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+                Ok(rows.filter_map(|r| r.ok()).collect())
+            })
+            .unwrap();
+        assert!(!tables.iter().any(|t| t == "receipts"), "{tables:?}");
+        assert!(tables.iter().any(|t| t == "sites"), "{tables:?}");
+
+        // An installation made before the table was dropped has it, and its
+        // data, and must still open: migrate a version-6 database.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("old.db");
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            for (_, sql) in &MIGRATIONS[..6] {
+                conn.execute_batch(sql).unwrap();
+            }
+            conn.execute_batch(
+                "PRAGMA user_version = 6;
+                 INSERT INTO receipts (id, capability, created_at)
+                 VALUES ('r1', 'site.create', '2026-10-21T00:00:00Z');",
+            )
+            .unwrap();
+        }
+        let upgraded = Store::open(&path).unwrap();
+        upgraded.migrate().unwrap();
+        assert_eq!(upgraded.schema_version().unwrap(), MIGRATIONS.len() as i32);
+        assert!(upgraded.count("sites").is_ok());
     }
 
     #[test]

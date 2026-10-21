@@ -260,9 +260,6 @@ impl App {
             for warning in &outcome.warnings {
                 println!("warning: {warning}");
             }
-            if let Some(receipt) = &outcome.receipt {
-                println!("receipt: {receipt}");
-            }
             if !outcome.data.is_null() {
                 print_value(&outcome.data, 1);
             }

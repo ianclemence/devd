@@ -115,11 +115,6 @@ impl Paths {
         self.root.join("cache")
     }
 
-    /// Installation receipts used by uninstall and rollback.
-    pub fn receipts(&self) -> PathBuf {
-        self.root.join("receipts")
-    }
-
     /// Snapshots taken before sensitive operations.
     pub fn snapshots(&self) -> PathBuf {
         self.root.join("snapshots")
@@ -146,7 +141,6 @@ impl Paths {
             self.www(),
             self.logs(),
             self.cache(),
-            self.receipts(),
             self.snapshots(),
             self.sessions(),
             self.projects(),

@@ -365,8 +365,6 @@ pub struct Outcome {
     pub message: String,
     /// Structured result.
     pub data: Value,
-    /// Identifier of a receipt that can be passed to `devd undo`.
-    pub receipt: Option<String>,
     /// Warnings that do not invalidate the result.
     pub warnings: Vec<String>,
 }
@@ -378,7 +376,6 @@ impl Outcome {
             ok: true,
             message: message.into(),
             data: Value::Null,
-            receipt: None,
             warnings: Vec::new(),
         }
     }
@@ -389,15 +386,8 @@ impl Outcome {
             ok: true,
             message: message.into(),
             data,
-            receipt: None,
             warnings: Vec::new(),
         }
-    }
-
-    /// Record a receipt for later undo.
-    pub fn receipt(mut self, id: impl Into<String>) -> Self {
-        self.receipt = Some(id.into());
-        self
     }
 
     /// Attach a warning.
