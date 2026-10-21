@@ -387,17 +387,6 @@ fn parse<T: for<'de> Deserialize<'de>>(raw: &str) -> Option<T> {
     serde_json::from_str(text).ok()
 }
 
-/// Re-exported so tests can assert on the status a `devd` error maps to.
-pub fn status_for(err: &DevdError) -> StatusCode {
-    match err {
-        DevdError::NotFound(_) => StatusCode::NOT_FOUND,
-        DevdError::Invalid(_) | DevdError::Unsupported(_) => StatusCode::BAD_REQUEST,
-        DevdError::Conflict(_) => StatusCode::CONFLICT,
-        DevdError::Denied(_) | DevdError::ApprovalRequired { .. } => StatusCode::FORBIDDEN,
-        _ => StatusCode::INTERNAL_SERVER_ERROR,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
