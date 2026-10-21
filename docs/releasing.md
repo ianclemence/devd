@@ -27,9 +27,9 @@ add `docs/releases/v<version>.md` before building.
 Output:
 
 ```text
-dist/devd-v0.8.0-x86_64-pc-windows-gnu.exe
-dist/devd-desktop-v0.8.0-x86_64-pc-windows-gnu.exe
-dist/devd-desktop-v0.8.0-x86_64-pc-windows-gnu.zip
+dist/devd-v<version>-x86_64-pc-windows-gnu.exe
+dist/devd-desktop-v<version>-x86_64-pc-windows-gnu.exe
+dist/devd-desktop-v<version>-x86_64-pc-windows-gnu.zip
 dist/SHA256SUMS.txt
 ```
 

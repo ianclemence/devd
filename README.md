@@ -80,8 +80,8 @@ Download and run the installer from the
 [latest release](https://github.com/ianclemence/devd/releases/latest):
 
 ```powershell
-curl.exe -LO https://github.com/ianclemence/devd/releases/download/v0.9.0/devd-setup-0.8.0.exe
-.\devd-setup-0.8.0.exe
+curl.exe -LO https://github.com/ianclemence/devd/releases/download/v0.9.0/devd-setup-0.9.0.exe
+.\devd-setup-0.9.0.exe
 ```
 
 It installs for the current user only - no administrator prompt - adds `devd`
