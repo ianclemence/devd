@@ -55,13 +55,14 @@ Ordered by what makes devd *wrong* today, not by what is easiest.
 
 | # | What | Why | Where |
 |---|------|-----|-------|
-| E1 | A route for every page, tab and section | A link to a screen should work, and the back button should mean something | `devd-server/src/api.rs`, `ui/app.js` |
-| E2 | Every button does what it says; the ones that are not needed are gone | A button that does nothing is a lie | all screens |
+| E1 | A route for every page, tab and section | **done**: every screen has an address; the back button works | `devd-server/src/lib.rs`, `ui/app.js` |
+| E2 | Every button does what it says; the ones that are not needed are gone | **done for the toolchain**: the "Plan" button said what the approval already says | `ui/app.js` |
 | E3 | EAS for mobile development, like ADB for Android | **done**: `toolchain.eas_projects` and a Projects button | `crates/devd-stacks/src/caps.rs` |
 | E4 | The composer at the bottom, the microphone in the send slot, `@` for context | **done** | `ui/app.js` |
 | E5 | The "Plan" button beside Install was saying what the approval already says | **done**: removed; one button per action | `ui/app.js` |
 | E6 | The dialogs flashed and vanished | **done**: the modal and the drawer had their starting and resting states the wrong way round | `ui/style.css` |
 | E7 | The actions in a conversation were boxes with raw JSON in them | **done**: a sequence, joined by a line, with the time it took | `ui/app.js`, `ui/style.css` |
+| E8 | Every button on every screen does what it says | A button that does nothing is a lie | an audit of each screen |
 
 ### F. The command line
 
@@ -73,7 +74,9 @@ Ordered by what makes devd *wrong* today, not by what is easiest.
 
 | # | What | Why | Where |
 |---|------|-----|-------|
-| G1 | How Herd fetches PHP versions and installs its services, and what devd should do differently | The vendoring, digesting and switching model is worth copying | `docs/research/` |
+| ~~G1~~ | ~~How Herd fetches PHP versions and installs its services~~ **done** | The evidence and the three things to take from it are written down; nginx is now verified | `docs/research/05-herd-catalogue-and-install.md` |
+| G2 | One catalogue for the services, rather than an HTML page and a REST API | A catalogue is data; the installer should not know where it came from | `devd-services/src/catalogue.rs` |
+| G3 | nginx from nginx.org's own listing, not from a page of markup | A change in someone's HTML is not a contract | `devd-services/src/catalogue.rs` |
 
 ### H. Housekeeping
 
@@ -107,3 +110,6 @@ Ordered by what makes devd *wrong* today, not by what is easiest.
 - **MySQL is MySQL and MariaDB is MariaDB; ImageMagick is ImageMagick.**
 - **PHP, Node.js and Go are reported the same way everywhere: what the
   machine has, and whether devd installed it.**
+- **Every screen has an address**, and the back button means something.
+- **nginx is verified before it is installed**, with the digests devd
+  recorded the first time it fetched each archive.
