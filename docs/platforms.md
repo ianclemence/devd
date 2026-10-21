@@ -77,8 +77,7 @@ reconfigured.
 
 Treat Linux and macOS support as written, compiled and unit-tested, not as proven.
 The first run on a real machine is expected to find things; `cargo test
---workspace` there is the first thing to do, and `docs/research/herd-parity/`
-lists what else was left unverified.
+--workspace` there is the first thing to do.
 
 ## Not done yet
 

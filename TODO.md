@@ -74,7 +74,7 @@ Ordered by what makes devd *wrong* today, not by what is easiest.
 
 | # | What | Why | Where |
 |---|------|-----|-------|
-| ~~G1~~ | ~~How Herd fetches PHP versions and installs its services~~ **done** | The evidence and the three things to take from it are written down; nginx is now verified | `docs/research/05-herd-catalogue-and-install.md` |
+| ~~G1~~ | ~~How Herd fetches PHP versions and installs its services~~ **done** | The evidence and the three things to take from it are written down; nginx is now verified | recorded in the git history |
 | G2 | One catalogue for the services, rather than an HTML page and a REST API | A catalogue is data; the installer should not know where it came from | `devd-services/src/catalogue.rs` |
 | G3 | nginx from nginx.org's own listing, not from a page of markup | A change in someone's HTML is not a contract | `devd-services/src/catalogue.rs` |
 
