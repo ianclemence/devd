@@ -173,8 +173,9 @@ impl Supervisor {
 
     /// Start a process, replacing any previous process with the same name.
     ///
-    /// Returns `(pid, run_id)`.
-    pub fn start(&self, spec: SpawnSpec, run_id: String) -> Result<(u32, String)> {
+    /// Returns the process id. The caller names the run, so there is no run
+    /// identifier to hand back.
+    pub fn start(&self, spec: SpawnSpec, run_id: String) -> Result<u32> {
         self.stop(&spec.name)?;
 
         if let Some(parent) = spec.log_path.parent() {
@@ -253,7 +254,7 @@ impl Supervisor {
             .map_err(|_| DevdError::internal("supervisor lock poisoned"))?;
         guard.insert(name, managed);
 
-        Ok((pid, spec_run_id(&guard, &spec.name)))
+        Ok(pid)
     }
 
     /// Stop a process and its children. Succeeds when nothing was running.
@@ -359,10 +360,6 @@ impl Supervisor {
         }
         Ok(lines)
     }
-}
-
-fn spec_run_id(_guard: &HashMap<String, ManagedProcess>, _name: &str) -> String {
-    String::new()
 }
 
 /// Terminate a process and all of its descendants.
@@ -537,7 +534,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let sup = Supervisor::new();
         let (program, args) = sleeper_program();
-        let (pid, _run) = sup
+        let pid = sup
             .start(
                 SpawnSpec {
                     name: "sleeper".into(),
@@ -585,8 +582,8 @@ mod tests {
             restarts: 0,
         };
         let _ = (program, args);
-        let (pid1, _) = sup.start(spec(), "r1".into()).unwrap();
-        let (pid2, _) = sup.start(spec(), "r2".into()).unwrap();
+        let pid1 = sup.start(spec(), "r1".into()).unwrap();
+        let pid2 = sup.start(spec(), "r2".into()).unwrap();
         assert_ne!(pid1, pid2);
         assert_eq!(sup.list().len(), 1);
         sup.stop_all().unwrap();

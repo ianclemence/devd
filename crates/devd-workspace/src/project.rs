@@ -444,7 +444,7 @@ impl ProjectManager {
             restarts,
         };
         match self.supervisor.start(spawn, util::new_id()) {
-            Ok((pid, _)) => {
+            Ok(pid) => {
                 self.store.update_project_process(
                     &manifest.root,
                     &spec.name,

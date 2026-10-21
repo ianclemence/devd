@@ -1079,7 +1079,7 @@ pub fn start(ctx: &Ctx, name: &str) -> Result<Status> {
     let log = log_path(ctx, &service.name);
 
     let supervisor: std::sync::Arc<Supervisor> = process::shared();
-    let (pid, _) = supervisor.start(spec, util::new_id())?;
+    let pid = supervisor.start(spec, util::new_id())?;
     util::atomic_write(&pid_file(ctx, &service.name), &pid.to_string())?;
     let run_id = ctx.store.start_service_run(&service.id, Some(pid), 0)?;
 

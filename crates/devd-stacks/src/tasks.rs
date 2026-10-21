@@ -404,7 +404,7 @@ pub fn run(ctx: &Ctx, reg: &StackRegistry, dir: &Path, task: &TaskInfo, args: &[
             restarts: 0,
         };
         let sup = process::shared();
-        let (pid, _) = sup.start(spec, run_id.clone())?;
+        let pid = sup.start(spec, run_id.clone())?;
         // A server that dies immediately is a failure, not a success.
         std::thread::sleep(Duration::from_millis(900));
         let info = sup.list().into_iter().find(|p| p.name == name);
