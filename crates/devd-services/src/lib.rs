@@ -531,6 +531,15 @@ pub fn install(
             artifact.sha256 = Some(digest);
         }
     }
+    // A service devd cannot verify is a service it does not install. The
+    // archive is the program that will run with the machine's privileges;
+    // "it looked like the right file" is not evidence.
+    if artifact.sha256.is_none() {
+        return Err(DevdError::unsupported(format!(
+            "{} {} is published without a checksum devd can check, so devd will not install it",
+            def.name, chosen.version
+        )));
+    }
 
     if let Some(report) = progress {
         report(&devd_core::download::Progress {

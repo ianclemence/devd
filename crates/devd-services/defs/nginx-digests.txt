@@ -1,0 +1,11 @@
+# The SHA-256 of the nginx archives devd installs.
+#
+# nginx.org publishes a PGP signature and no checksum, so devd records the
+# digest of each archive when it is first fetched and checks every later
+# download against it. A file that does not match is deleted and nothing is
+# installed.
+#
+# version                  sha256
+1.28.3                   aad7bf75d669ece7671688bfdf35f1093d6a30d2e62469405f4d55d8d82d5fd3
+1.30.6                   c6ee35edb0a861063323f709192ae50d1eefaf2ea7d00678bd2b22d8542dc61e
+1.31.7                   7c717ccf861f8925be64431d06d57634512a5014bcc8d149f279928f5e8151bf

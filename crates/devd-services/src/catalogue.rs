@@ -47,6 +47,31 @@ const MARIADB_FLOOR: (u32, u32) = (10, 4);
 ///
 /// nginx's own release scheme is used to label the channels: an even minor
 /// version is a stable branch, an odd one is mainline.
+/// The digests of the nginx archives devd installs.
+///
+/// nginx.org publishes a PGP signature for each archive and no checksum, so
+/// devd records the digest of an archive when it is first fetched and checks
+/// every later download against it. The table is shipped with devd; an archive
+/// that does not match is deleted and nothing is installed.
+const NGINX_DIGESTS: &str = include_str!("../defs/nginx-digests.txt");
+
+/// The recorded digest of one nginx archive.
+pub fn nginx_digest(version: &str) -> Option<String> {
+    for line in NGINX_DIGESTS.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        let v = parts.next()?;
+        let digest = parts.next()?;
+        if v == version {
+            return Some(digest.to_string());
+        }
+    }
+    None
+}
+
 pub fn nginx() -> Result<Vec<Available>> {
     let html = download::fetch_text(NGINX_DOWNLOAD, TIMEOUT)?;
     let mut list = Vec::new();
@@ -71,8 +96,9 @@ pub fn nginx() -> Result<Vec<Available>> {
             series: devd_runtime::catalogue::series_of(&version),
             channel: if minor % 2 == 0 { "stable" } else { "mainline" }.to_string(),
             url: format!("{NGINX_BASE}{name}"),
-            // nginx publishes a PGP signature, not a checksum file.
-            sha256: None,
+            // nginx publishes a PGP signature, not a checksum file. devd
+            // checks the archive against the digest it recorded.
+            sha256: nginx_digest(&version),
             bytes: None,
             published: None,
             executable: if cfg!(windows) {
