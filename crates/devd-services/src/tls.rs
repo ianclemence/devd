@@ -348,7 +348,46 @@ pub fn trust(ctx: &Ctx, machine: bool) -> Result<devd_core::capability::Outcome>
         ));
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "macos")]
+    {
+        let security = util::which("security").ok_or_else(|| {
+            DevdError::not_found("`security` was not found; it ships with macOS")
+        })?;
+        let args = macos::trust_args(&cert, machine);
+        let out = util::run(
+            &security,
+            &args,
+            None,
+            &[],
+            Some(std::time::Duration::from_secs(120)),
+        )?;
+        if !out.ok() {
+            let hint = if machine {
+                " Adding to the System keychain needs an administrator; macOS asks for a password."
+            } else {
+                ""
+            };
+            return Err(DevdError::Command {
+                program: "security add-trusted-cert".to_string(),
+                code: out.code,
+                stderr: format!("{}{hint}", util::truncate(out.stderr.trim(), 800)),
+            });
+        }
+        return Ok(devd_core::capability::Outcome::with_data(
+            if machine {
+                "the devd certificate authority is trusted machine-wide".to_string()
+            } else {
+                "the devd certificate authority is trusted for this user".to_string()
+            },
+            serde_json::json!({
+                "certificate": cert.display().to_string(),
+                "scope": if machine { "machine" } else { "user" },
+                "keychain": macos::keychain(machine),
+            }),
+        ));
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
     {
         let _ = machine;
         // The portable answer on Linux is p11-kit's `trust`, which is what most
@@ -438,7 +477,32 @@ pub fn trust_status(ctx: &Ctx) -> Result<TrustStatus> {
         })
     }
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        let Some(security) = util::which("security") else {
+            return Ok(TrustStatus {
+                user: false,
+                machine: false,
+            });
+        };
+        let present = |machine: bool| -> bool {
+            util::run(
+                &security,
+                &macos::status_args(machine),
+                None,
+                &[],
+                Some(Duration::from_secs(20)),
+            )
+            .map(|out| out.ok())
+            .unwrap_or(false)
+        };
+        Ok(TrustStatus {
+            user: present(false),
+            machine: present(true),
+        })
+    }
+
+    #[cfg(all(not(windows), not(target_os = "macos")))]
     {
         let Some(trust) = util::which("trust") else {
             return Ok(TrustStatus {
@@ -512,7 +576,51 @@ pub fn untrust(ctx: &Ctx, machine: bool) -> Result<devd_core::capability::Outcom
         ));
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "macos")]
+    {
+        let security = util::which("security").ok_or_else(|| {
+            DevdError::not_found("`security` was not found; it ships with macOS")
+        })?;
+        // Two steps: withdraw the trust setting, then delete the certificate.
+        // Deleting alone leaves a trust setting that points at nothing.
+        let untrust = util::run(
+            &security,
+            &macos::untrust_args(&cert, machine),
+            None,
+            &[],
+            Some(std::time::Duration::from_secs(120)),
+        )?;
+        if !untrust.ok() {
+            return Err(DevdError::Command {
+                program: "security remove-trusted-cert".to_string(),
+                code: untrust.code,
+                stderr: util::truncate(untrust.stderr.trim(), 800),
+            });
+        }
+        let delete = util::run(
+            &security,
+            &macos::delete_args(machine),
+            None,
+            &[],
+            Some(std::time::Duration::from_secs(120)),
+        )?;
+        if !delete.ok() {
+            return Err(DevdError::Command {
+                program: "security delete-certificate".to_string(),
+                code: delete.code,
+                stderr: util::truncate(delete.stderr.trim(), 800),
+            });
+        }
+        return Ok(devd_core::capability::Outcome::with_data(
+            "the devd certificate authority is no longer trusted".to_string(),
+            serde_json::json!({
+                "scope": if machine { "machine" } else { "user" },
+                "keychain": macos::keychain(machine),
+            }),
+        ));
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
     {
         let _ = machine;
         if let Some(trust) = util::which("trust") {
@@ -551,10 +659,112 @@ pub fn untrust(ctx: &Ctx, machine: bool) -> Result<devd_core::capability::Outcom
     }
 }
 
+/// The `security` command lines macOS trust management needs.
+///
+/// Built here, as plain functions of their inputs, so that they are checked on
+/// every platform; only running them is macOS-specific.
+pub mod macos {
+    use super::CA_COMMON_NAME;
+    use std::path::Path;
+
+    /// The keychain a scope refers to.
+    pub fn keychain(machine: bool) -> String {
+        if machine {
+            "/Library/Keychains/System.keychain".to_string()
+        } else {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "~".to_string());
+            format!("{home}/Library/Keychains/login.keychain-db")
+        }
+    }
+
+    /// `security add-trusted-cert -r trustRoot [-d] -k <keychain> <cert>`.
+    ///
+    /// `-d` adds the trust setting for every user rather than the current one.
+    pub fn trust_args(cert: &Path, machine: bool) -> Vec<String> {
+        let mut args = vec!["add-trusted-cert".to_string()];
+        if machine {
+            args.push("-d".to_string());
+        }
+        args.extend([
+            "-r".to_string(),
+            "trustRoot".to_string(),
+            "-k".to_string(),
+            keychain(machine),
+            cert.display().to_string(),
+        ]);
+        args
+    }
+
+    /// `security remove-trusted-cert [-d] <cert>`.
+    pub fn untrust_args(cert: &Path, machine: bool) -> Vec<String> {
+        let mut args = vec!["remove-trusted-cert".to_string()];
+        if machine {
+            args.push("-d".to_string());
+        }
+        args.push(cert.display().to_string());
+        args
+    }
+
+    /// `security delete-certificate -c <name> <keychain>`.
+    pub fn delete_args(machine: bool) -> Vec<String> {
+        vec![
+            "delete-certificate".to_string(),
+            "-c".to_string(),
+            CA_COMMON_NAME.to_string(),
+            keychain(machine),
+        ]
+    }
+
+    /// `security find-certificate -c <name> <keychain>`, which exits 0 when the
+    /// certificate is in the keychain.
+    pub fn status_args(machine: bool) -> Vec<String> {
+        vec![
+            "find-certificate".to_string(),
+            "-c".to_string(),
+            CA_COMMON_NAME.to_string(),
+            keychain(machine),
+        ]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn macos_trusts_a_root_in_the_users_keychain_without_touching_the_system_one() {
+        let args = macos::trust_args(std::path::Path::new("/tmp/devd-ca.pem"), false);
+        assert_eq!(args[0], "add-trusted-cert");
+        assert!(!args.contains(&"-d".to_string()));
+        assert!(args.windows(2).any(|w| w == ["-r", "trustRoot"]));
+        let keychain = &args[args.len() - 2];
+        assert!(keychain.ends_with("/Library/Keychains/login.keychain-db"), "{keychain}");
+        assert_eq!(args.last().unwrap(), "/tmp/devd-ca.pem");
+    }
+
+    #[test]
+    fn macos_machine_scope_uses_the_system_keychain_and_the_admin_flag() {
+        let args = macos::trust_args(std::path::Path::new("/tmp/devd-ca.pem"), true);
+        assert!(args.contains(&"-d".to_string()));
+        assert!(args.contains(&"/Library/Keychains/System.keychain".to_string()));
+        let untrust = macos::untrust_args(std::path::Path::new("/tmp/devd-ca.pem"), true);
+        assert_eq!(untrust, ["remove-trusted-cert", "-d", "/tmp/devd-ca.pem"]);
+    }
+
+    #[test]
+    fn macos_finds_and_deletes_the_authority_by_its_common_name() {
+        for machine in [false, true] {
+            let find = macos::status_args(machine);
+            let delete = macos::delete_args(machine);
+            assert_eq!(find[0], "find-certificate");
+            assert_eq!(delete[0], "delete-certificate");
+            for args in [&find, &delete] {
+                assert!(args.windows(2).any(|w| w == ["-c", CA_COMMON_NAME]));
+                assert_eq!(args.last().unwrap(), &macos::keychain(machine));
+            }
+        }
+    }
 
     fn ctx(tag: &str) -> Ctx {
         let dir = std::env::temp_dir().join(format!("devd-tls-{tag}-{}", std::process::id()));

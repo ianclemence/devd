@@ -58,24 +58,25 @@ pub fn run(json: bool, plan_only: bool, assume_yes: bool) -> Result<i32> {
                 &app,
                 "    installing PHP (the vendor download is about 35 MB)",
             );
-            steps.push(invoke(
-                &app,
-                "runtime.install",
-                json!({ "kind": "php", "version": "latest" }),
-            )?);
         } else {
-            // devd publishes Windows PHP builds. On this platform the system's
-            // own PHP is used, and saying so is better than failing.
-            say(
-                &app,
-                "    PHP is not installed. devd uses the system PHP on this platform; \
-                 install it with your package manager (for example \
-                 `sudo apt install php-cli php-cgi php-fpm`).",
-            );
-            problems.push(
-                "PHP is not installed. devd uses the system PHP; install php-cli and php-cgi."
-                    .to_string(),
-            );
+            // php.net publishes Windows builds only. Elsewhere devd adopts the
+            // PHP the system's package manager installed, after asking the
+            // package manager whether the file is still what it installed.
+            say(&app, "    adopting the PHP your system has installed");
+        }
+        match invoke(
+            &app,
+            "runtime.install",
+            json!({ "kind": "php", "version": "latest" }),
+        ) {
+            Ok(step) => steps.push(step),
+            // Off Windows a missing program is something to fix and carry on
+            // from, not a reason to stop: the error already says how.
+            Err(e) if !cfg!(windows) => {
+                say(&app, &format!("    {e}"));
+                problems.push(e.to_string());
+            }
+            Err(e) => return Err(e),
         }
     } else {
         say(&app, "    PHP is already installed");
@@ -99,31 +100,27 @@ pub fn run(json: bool, plan_only: bool, assume_yes: bool) -> Result<i32> {
             say(&app, &format!("    {name} is already installed"));
             continue;
         }
-        if !cfg!(windows) {
-            // The vendor binaries devd installs are Windows builds. On this
-            // platform the services come from the system package manager, and
-            // devd drives the ones it finds rather than replacing them.
+        if cfg!(windows) {
+            say(&app, &format!("    installing {name}"));
+        } else {
             say(
                 &app,
-                &format!(
-                    "    {name} comes from the system package manager on this platform; \
-                     devd will use the one it finds (install it with your package manager \
-                     if it is missing)"
-                ),
+                &format!("    adopting the {name} your system has installed"),
             );
-            problems.push(format!(
-                "{name} is not installed by devd on this platform; install it with your \
-                 package manager if it is missing."
-            ));
-            continue;
         }
-        say(&app, &format!("    installing {name}"));
         let args = if name == "mariadb" {
             json!({ "name": name, "version": null, "port": db_port })
         } else {
             json!({ "name": name, "version": null })
         };
-        steps.push(invoke(&app, "service.install", args)?);
+        match invoke(&app, "service.install", args) {
+            Ok(step) => steps.push(step),
+            Err(e) if !cfg!(windows) => {
+                say(&app, &format!("    {e}"));
+                problems.push(e.to_string());
+            }
+            Err(e) => return Err(e),
+        }
     }
 
     say(&app, "==> Starting the stack");

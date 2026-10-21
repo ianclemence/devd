@@ -91,10 +91,11 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
+        let (http_port, https_port) = crate::platform::Os::current().default_ports();
         Self {
             tld: "test".to_string(),
-            http_port: 80,
-            https_port: 443,
+            http_port,
+            https_port,
             www_root: None,
             web_server: WebServer::default(),
             primary_php: None,
@@ -159,7 +160,10 @@ mod tests {
     fn defaults_are_sane() {
         let s = Settings::default();
         assert_eq!(s.tld, "test");
-        assert_eq!(s.http_port, 80);
+        assert_eq!(
+            (s.http_port, s.https_port),
+            crate::platform::Os::current().default_ports()
+        );
         assert!(s.git_protect_uncommitted);
         s.validate().unwrap();
     }

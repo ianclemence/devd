@@ -55,6 +55,15 @@ pub fn bin_dir(ctx: &Ctx) -> PathBuf {
     directory(ctx).join("bin")
 }
 
+/// The directory the server finds its message files and plugins in.
+///
+/// For a download that is the install directory. For a program the system's
+/// package manager installed, devd's install directory holds only links, and
+/// the real base directory is wherever the package put it (`/usr`).
+pub fn base_dir(ctx: &Ctx) -> PathBuf {
+    crate::system::system_basedir(&directory(ctx)).unwrap_or_else(|| directory(ctx))
+}
+
 /// The server executable.
 pub fn server_exe(ctx: &Ctx) -> PathBuf {
     bin_dir(ctx).join(exe("mysqld.exe", "mariadbd"))
@@ -123,6 +132,12 @@ pub fn is_initialized(ctx: &Ctx) -> bool {
 /// unset, because an empty password is the same as no password and pretending
 /// otherwise would imply a protection that is not there.
 pub fn root_password() -> Option<String> {
+    // `mariadb-install-db` has no option to set a password, so off Windows the
+    // setting cannot be honoured. Returning it anyway would make the client
+    // present a password the server never learned.
+    if !cfg!(windows) {
+        return None;
+    }
     match std::env::var(ENV_ROOT_PASSWORD) {
         Ok(value) if !value.is_empty() => Some(value),
         _ => None,
@@ -134,7 +149,7 @@ pub fn root_password() -> Option<String> {
 /// Every path in it is absolute: the server is not started from its own
 /// directory by every surface, so nothing may depend on the working directory.
 pub fn write_config(ctx: &Ctx, port: u16) -> Result<PathBuf> {
-    let basedir = slashy(&directory(ctx));
+    let basedir = slashy(&base_dir(ctx));
     let datadir = slashy(&data_dir(ctx));
     let log = slashy(&error_log(ctx));
     let pid = slashy(&ctx.paths.etc().join("mariadb").join("mariadb.pid"));
@@ -198,7 +213,12 @@ pub fn provision(ctx: &Ctx, port: u16) -> Result<Provision> {
             let _ = std::fs::remove_dir_all(&test_schema);
         }
     }
-    if password.is_none() {
+    if !cfg!(windows) && std::env::var(ENV_ROOT_PASSWORD).is_ok_and(|v| !v.is_empty()) {
+        warnings.push(format!(
+            "{ENV_ROOT_PASSWORD} is set but cannot be applied on this platform yet: root has no \
+             password, and the server binds to 127.0.0.1 only"
+        ));
+    } else if password.is_none() {
         warnings.push(format!(
             "root has no password and the server binds to 127.0.0.1 only. Set {ENV_ROOT_PASSWORD} \
              before installing to give root a password; see docs/security.md"
@@ -227,17 +247,28 @@ fn bootstrap(ctx: &Ctx, port: u16, password: Option<&str>) -> Result<()> {
     }
 
     let mut args = vec![
-        // `mysql_install_db.exe` takes no `--basedir`: it works that out from
-        // where it is running, and rejects the flag as an unknown variable.
         format!("--datadir={}", data_dir(ctx).display()),
         format!("--port={port}"),
-        "--default-user".to_string(),
     ];
-    // The password is passed on the bootstrap command line only, where the
-    // operating system shows it to the same user who typed it. It is hashed into
-    // the database by the bootstrap and is never written to a file devd owns.
-    if let Some(password) = password {
-        args.push(format!("--password={password}"));
+    if cfg!(windows) {
+        // `mysql_install_db.exe` takes no `--basedir`: it works that out from
+        // where it is running, and rejects the flag as an unknown variable.
+        args.push("--default-user".to_string());
+        // The password is passed on the bootstrap command line only, where the
+        // operating system shows it to the same user who typed it. It is hashed
+        // into the database by the bootstrap and is never written to a file devd
+        // owns.
+        if let Some(password) = password {
+            args.push(format!("--password={password}"));
+        }
+    } else {
+        // `mariadb-install-db` is a script that works out its base directory from
+        // the path it was started by - here a link inside devd's layout - so it
+        // is told where the package really is. Without `normal`, root can only
+        // log in through the local socket as the operating-system root user,
+        // which is not how devd or a framework connects.
+        args.push(format!("--basedir={}", base_dir(ctx).display()));
+        args.push("--auth-root-authentication-method=normal".to_string());
     }
 
     let out = util::run(&exe, &args, Some(&directory(ctx)), &[], Some(INIT_TIMEOUT))?;

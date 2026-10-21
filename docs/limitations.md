@@ -32,22 +32,24 @@ MariaDB, create a site, and reach it over HTTPS with a chain that verifies again
 `devd`'s own CA. Anything not in that sentence is either Git (M0), the
 application (M1), MCP (M2) or the dashboard (M3).
 
-## Windows is the only platform with a service provider
+## Linux and macOS: written and compiled, not yet run
 
-The service catalogues are the vendors' own Windows builds: nginx ships a Windows
-zip and no Linux binary, and MariaDB publishes `winx64` archives. On Linux,
-`devd service available nginx` therefore returns an empty list and installing a
-service reports that no builds are published upstream for this platform.
+nginx, MariaDB and PHP are adopted from the system's package manager on Linux and
+from Homebrew on macOS, after the package manager has confirmed the file is still
+what it installed. See [`platforms.md`](platforms.md) for how that works and what
+differs from Windows.
 
-Runtimes are less affected — Node and Go publish Linux tarballs — but PHP's
-installer reads `windows.php.net`, so PHP on Linux is not installable either. The
-core, Git, the CLI, the application, MCP and the dashboard run on both platforms;
-the service layer is Windows-only today.
+This code type-checks for Linux and macOS (`scripts/cross-check.ps1`) and its
+parsing, verification decisions and generated files are unit-tested, but it has
+**never been executed on a Linux or macOS machine**: the first real install,
+`mariadb-install-db` run, nginx start as an ordinary user and `security` call are
+untested. Specifically not done:
 
-Closing it means a Linux provider that uses the distribution's packages (or builds
-from source), with the same verification contract: a package is installed only
-after its origin and version are known, and `devd` still never writes a shell
-string.
+* `DEVD_MYSQL_ROOT_PASSWORD` is not applied off Windows.
+* One PHP version per machine unless several are installed side by side.
+* No resolver for `*.test` (hosts file only), no macOS installer, and the Linux
+  install script has not been executed on Linux.
+
 
 ## Runtimes and services
 
@@ -70,7 +72,7 @@ string.
 | Item | What it is | What it would be |
 | --- | --- | --- |
 | Certificate authority | An internal CA created on first use: ECDSA P-256, leaf valid 397 days, CA 3650 days, leaf backdated an hour. Every leaf is issued by `devd`'s own CA; there is no ACME and no public certificate. | ACME for a real domain, and a per-site choice between the internal CA and a public one. |
-| Trust | `devd tls trust` runs `certutil -addstore` (Windows) or `trust anchor` (Linux). Without p11-kit on Linux it prints the manual `update-ca-certificates` recipe instead. | p11-kit integration, and macOS `security add-trusted-cert` if macOS is ever supported. |
+| Trust | `devd tls trust` runs `certutil -addstore` (Windows), `trust anchor` (Linux) or `security add-trusted-cert` (macOS, not yet run on a Mac). Without p11-kit on Linux it prints the manual `update-ca-certificates` recipe instead. | Firefox's own store (NSS) is not touched on any platform. |
 | Revocation | No OCSP, no CRL, no certificate transparency. A leaf is trusted because the CA is trusted. | Revocation is not meaningful for a local CA of this size; a short leaf lifetime is the current mitigation. |
 | Hosts file | Writing it needs elevation on Windows. The operation is a separate, explicitly approved capability (`hosts.sync`, `Tier::Admin`), snapshots the file first and preserves every line outside its own block. `DEVD_HOSTS_FILE` points it at another file, which is what makes it testable without elevation. | A DNS server on loopback, which removes the elevation requirement and gives wildcard names. |
 | Site removal | `site.remove` deletes the site row, its vhost and its certificate, and keeps the project directory unless `--delete-files` is passed. It refuses to delete a directory outside the `www` root. | A trash/undo window before the directory is removed. |

@@ -22,6 +22,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use devd_core::download;
+use devd_core::platform::Os;
 use devd_core::{DevdError, Result};
 
 /// Where PHP publishes Windows builds and their digests.
@@ -256,12 +257,26 @@ pub fn node_artifact(version: &str) -> Result<String> {
             )))
         }
     };
-    let (os, extension) = if cfg!(windows) {
-        ("win", "zip")
-    } else {
-        ("linux", "tar.gz")
-    };
+    let (os, extension) = node_platform(Os::current());
     Ok(format!("node-{version}-{os}-{arch}.{extension}"))
+}
+
+/// The operating-system word and archive type Node uses in its file names.
+pub fn node_platform(os: Os) -> (&'static str, &'static str) {
+    match os {
+        Os::Windows => ("win", "zip"),
+        Os::Linux => ("linux", "tar.gz"),
+        Os::MacOs => ("darwin", "tar.gz"),
+    }
+}
+
+/// The operating-system word Go uses in its release list.
+pub fn go_os(os: Os) -> &'static str {
+    match os {
+        Os::Windows => "windows",
+        Os::Linux => "linux",
+        Os::MacOs => "darwin",
+    }
 }
 
 /// Go toolchains for this platform.
@@ -287,7 +302,7 @@ pub fn go() -> Result<Vec<Available>> {
     }
 
     let rows: Vec<Row> = download::fetch_json(GO_RELEASES, CATALOGUE_TIMEOUT)?;
-    let want_os = if cfg!(windows) { "windows" } else { "linux" };
+    let want_os = go_os(Os::current());
     let want_arch = match std::env::consts::ARCH {
         "x86_64" => "amd64",
         "aarch64" => "arm64",
@@ -412,6 +427,18 @@ pub fn resolve(list: &[Available], spec: &str, channel: Option<&str>) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn node_and_go_name_each_platform_the_way_their_publishers_do() {
+        // macOS used to be treated as Linux, which downloads a program that
+        // cannot run there.
+        assert_eq!(node_platform(Os::Windows), ("win", "zip"));
+        assert_eq!(node_platform(Os::Linux), ("linux", "tar.gz"));
+        assert_eq!(node_platform(Os::MacOs), ("darwin", "tar.gz"));
+        assert_eq!(go_os(Os::Windows), "windows");
+        assert_eq!(go_os(Os::Linux), "linux");
+        assert_eq!(go_os(Os::MacOs), "darwin");
+    }
 
     fn sample() -> Vec<Available> {
         ["8.4.2", "8.3.35", "8.3.14", "8.2.29"]

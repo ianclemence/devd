@@ -25,6 +25,7 @@
 pub mod caps;
 pub mod catalogue;
 pub mod php;
+pub mod system;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -161,6 +162,12 @@ pub fn install(
             "`{kind}` is not a runtime devd can install (try one of: {})",
             KINDS.join(", ")
         )));
+    }
+
+    // php.net publishes binaries for Windows only; elsewhere the PHP the
+    // system's package manager installed is adopted.
+    if kind == "php" && devd_core::platform::Os::current().uses_system_packages() {
+        return system::install_php(ctx, spec, force, &devd_core::platform::SystemHost);
     }
 
     let (list, notes) = available(kind, thread_safe)?;

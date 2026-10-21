@@ -32,7 +32,9 @@ token. (2) Audit rows exist for each route. (3) A test enumerates every mutating
 `/api/upload`). (4) UI contract tests pass; terminal typing latency unchanged in a
 manual check.
 
-## M1 — Platform provider layer + Linux [Z01, R01, S01, S02, V01, M04] · P0
+## M1 — Platform provider layer + Linux [Z01, R01, S01, S02, V01, M04] · P0 · **code done, never run on Linux**
+
+Implemented as *adoption* rather than download (see `../../platforms.md`): `devd-core::platform` (OS, package ownership and integrity via dpkg/rpm/pacman/Homebrew, linking), `devd-services::system` (nginx, MariaDB), `devd-runtime::system` (PHP), `setup` wired to it. Windows suite: 491 pass. Linux and macOS compile (`scripts/cross-check.ps1`). **Not executed on Linux** - no environment was available (WSL has no distribution, no Docker). Package-manager installs through `toolchain.install` were not changed.
 
 **Design.** A `PlatformProvider` boundary in `devd-core` (catalogue, install, verify,
 trust, privileged hosts write, autostart, data/config dirs) with `windows`, `linux`
@@ -56,7 +58,9 @@ nginx+MariaDB+PHP, `devd site create blog` serves HTTPS locally (curl with CA),
 **Blocker:** needs a Linux environment to execute (U-11) — WSL/Docker via
 `scripts/release-linux.ps1`.
 
-## M2 — macOS [Z02, S02, M04, D08] · P0 (code), verification gated
+## M2 — macOS [Z02, S02, M04, D08] · P0 (code), verification gated · **partly done**
+
+Done: Homebrew adoption (same code as Linux), `security add-trusted-cert`/`remove-trusted-cert`/`find-certificate` for the CA, default ports, and a bug found on the way - the Node and Go catalogues treated macOS as Linux and would have downloaded Linux builds. Not done: launchd autostart, a macOS installer, the resolver for `*.test`, and any run on a Mac.
 
 Homebrew provider (`brew install`, `brew services` replaced by devd's own supervision),
 `security add-trusted-cert` for the CA, launchd agent for autostart, `.pkg`/zip release,

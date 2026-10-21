@@ -60,17 +60,20 @@ and read how it all fits together in [docs/agents.md](docs/agents.md).
 
 ## Requirements
 
-- **Windows 10/11 x64** or **Linux x64**.
+- **Windows 10/11 x64** (supported and tested), **Linux x64** or **macOS**
+  (written and compiled, not yet run on a real machine).
 - The Windows installer needs nothing else: no Rust, no administrator rights.
   The native window uses the WebView2 runtime that ships with current Edge.
 - Building from source needs Rust 1.77 or newer and a C compiler (`cc`) for the
   bundled SQLite.
 - Git must be on `PATH` (or named in `git_executable`) for the Git capabilities.
 
-Service management is available on Windows. On Linux the core, Git, the CLI,
-the dashboard, the application window, MCP, and the Node.js and Go runtimes work;
-nginx and MariaDB installation is not available yet because devd manages the
-vendors' Windows archives. See [`docs/limitations.md`](docs/limitations.md).
+On Windows devd downloads PHP, nginx and MariaDB from their publishers and checks
+each against the publisher's digest. On Linux and macOS it adopts the ones your
+package manager (or Homebrew) installed, after asking the package manager whether
+each file is still what it installed, and refuses one that is not. See
+[`docs/platforms.md`](docs/platforms.md) for how that works and what has and has
+not been verified, and [`docs/limitations.md`](docs/limitations.md).
 
 ## Install
 

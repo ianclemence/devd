@@ -20,6 +20,7 @@ pub mod caps;
 pub mod catalogue;
 pub mod mariadb;
 pub mod nginx;
+pub mod system;
 pub mod tls;
 
 use std::path::{Path, PathBuf};
@@ -32,6 +33,7 @@ use devd_core::capability::Ctx;
 use devd_core::doctor::Check;
 use devd_core::download::{Artifact, ProgressFn};
 use devd_core::paths::Paths;
+use devd_core::platform::{self, Host, Os, SystemHost};
 use devd_core::process::{self, SpawnSpec, Supervisor};
 use devd_core::state::{Service, Store};
 use devd_core::util;
@@ -46,8 +48,10 @@ pub struct Definition {
     pub kind: &'static str,
     /// One-line description for discovery.
     pub summary: &'static str,
-    /// Executable, relative to the install directory.
-    pub executable: &'static str,
+    /// Executable on Windows, relative to the install directory.
+    pub windows_exe: &'static str,
+    /// Executable on Linux and macOS, relative to the install directory.
+    pub unix_exe: &'static str,
     /// The port it listens on by default.
     pub default_port: u16,
     /// How long to wait for the port to open before calling the start a failure.
@@ -60,7 +64,8 @@ pub const DEFINITIONS: &[Definition] = &[
         name: "nginx",
         kind: "nginx",
         summary: "nginx, the web server that fronts every site",
-        executable: "nginx.exe",
+        windows_exe: "nginx.exe",
+        unix_exe: "sbin/nginx",
         default_port: 0,
         startup: Duration::from_secs(10),
     },
@@ -68,11 +73,23 @@ pub const DEFINITIONS: &[Definition] = &[
         name: "mariadb",
         kind: "mariadb",
         summary: "MariaDB, the database for new projects",
-        executable: "bin/mysqld.exe",
+        windows_exe: "bin/mysqld.exe",
+        unix_exe: "bin/mariadbd",
         default_port: 3306,
         startup: Duration::from_secs(60),
     },
 ];
+
+impl Definition {
+    /// The executable on this platform, relative to the install directory.
+    pub fn executable(&self) -> &'static str {
+        if cfg!(windows) {
+            self.windows_exe
+        } else {
+            self.unix_exe
+        }
+    }
+}
 
 /// Look up a service definition.
 pub fn definition(name: &str) -> Option<&'static Definition> {
@@ -425,8 +442,9 @@ pub fn available(kind: &str) -> Result<(Vec<Available>, Vec<String>)> {
     let mut notes = Vec::new();
     if !cfg!(windows) {
         notes.push(
-            "devd installs web server and database binaries on Windows; on this platform it \
-             manages the ones your system package manager provides"
+            "devd downloads web server and database binaries on Windows only; on this \
+             platform `service install` adopts the ones your system package manager has \
+             installed, after checking them against the package"
                 .to_string(),
         );
     }
@@ -475,6 +493,12 @@ pub fn install(
         ))
     })?;
 
+    // Off Windows the program comes from the system's package manager, not from
+    // a download devd verifies itself.
+    if Os::current().uses_system_packages() {
+        return install_system(ctx, def, port, &SystemHost);
+    }
+
     let (list, notes) = available(def.kind)?;
     if list.is_empty() {
         return Err(DevdError::unsupported(if notes.is_empty() {
@@ -499,7 +523,7 @@ pub fn install(
     let chosen = resolve(&list, spec, None)?;
     let dest = install_dir(ctx, def.name);
     let already = installed_version(ctx, def.name);
-    if dest.join(def.executable).is_file() && !force {
+    if dest.join(def.executable()).is_file() && !force {
         match already.as_deref() {
             Some(v) if v == chosen.version => {
                 return Err(DevdError::conflict(format!(
@@ -560,6 +584,49 @@ pub fn install(
 
     archive::extract(&fetched.path, &dest, true)?;
 
+    let record = json!({
+        "url": chosen.url,
+        "sha256": fetched.sha256,
+        "bytes": fetched.bytes,
+    });
+    let (service, extra) = finish_install(
+        ctx,
+        def,
+        port,
+        &chosen.version,
+        record,
+        &dest,
+        &mut warnings,
+    )?;
+
+    Ok(InstalledService {
+        service,
+        version: chosen.version,
+        path: dest.display().to_string(),
+        digest: artifact.sha256.clone().or(Some(fetched.sha256.clone())),
+        bytes: fetched.bytes,
+        from_cache: fetched.from_cache,
+        warnings,
+        details: serde_json::Value::Object(extra),
+    })
+}
+
+/// Everything an install does once the program is in place: provision what the
+/// program needs (a database's data directory, the web server's configuration),
+/// write the install manifest and record the service.
+///
+/// Shared by both ways a program arrives - downloaded from its publisher on
+/// Windows, adopted from the system's package manager elsewhere - so the two
+/// cannot drift apart in what "installed" means.
+fn finish_install(
+    ctx: &Ctx,
+    def: &Definition,
+    port: Option<u16>,
+    version: &str,
+    record: serde_json::Value,
+    dest: &Path,
+    warnings: &mut Vec<String>,
+) -> Result<(Service, serde_json::Map<String, serde_json::Value>)> {
     let mut extra = serde_json::Map::new();
     match def.name {
         "mariadb" => {
@@ -586,17 +653,17 @@ pub fn install(
         _ => {}
     }
 
+    let mut manifest_doc = serde_json::Map::new();
+    manifest_doc.insert("name".to_string(), json!(def.name));
+    manifest_doc.insert("version".to_string(), json!(version));
+    manifest_doc.insert("installed_at".to_string(), json!(util::now()));
+    if let serde_json::Value::Object(fields) = record {
+        manifest_doc.extend(fields);
+    }
     util::atomic_write(
         &manifest(ctx, def.name),
-        &serde_json::to_string_pretty(&json!({
-            "name": def.name,
-            "version": chosen.version,
-            "url": chosen.url,
-            "sha256": fetched.sha256,
-            "bytes": fetched.bytes,
-            "installed_at": util::now(),
-        }))
-        .unwrap_or_default(),
+        &serde_json::to_string_pretty(&serde_json::Value::Object(manifest_doc))
+            .unwrap_or_default(),
     )?;
 
     let service = ctx.store.get_service(def.name)?.unwrap_or(Service {
@@ -633,17 +700,66 @@ pub fn install(
 
     ctx.events.emit_with(
         format!("service.{}.installed", def.name),
-        format!("installed {} {}", def.name, chosen.version),
-        json!({ "name": def.name, "version": chosen.version, "path": dest.display().to_string() }),
+        format!("installed {} {}", def.name, version),
+        json!({ "name": def.name, "version": version, "path": dest.display().to_string() }),
     );
+
+    Ok((service, extra))
+}
+
+/// Adopt the program the system's package manager installed.
+///
+/// On Linux and macOS nginx and MariaDB are built and signed by the
+/// distribution, not published by the project as an archive devd could check.
+/// devd therefore does not fetch a second copy. It finds the installed program,
+/// asks the package manager which package owns it and whether the file still
+/// matches that package, refuses a file that does not, and links the program
+/// into the layout the rest of devd uses. Configuration and data stay devd's
+/// own: nothing under `/etc` is read or written.
+pub fn install_system(
+    ctx: &Ctx,
+    def: &Definition,
+    port: Option<u16>,
+    host: &dyn Host,
+) -> Result<InstalledService> {
+    if let Ok(Some(existing)) = ctx.store.get_service(def.name) {
+        if running_pid(ctx, &existing).is_some() {
+            return Err(DevdError::conflict(format!(
+                "{} is running; stop it first with `devd service stop {}`",
+                def.name, def.name
+            )));
+        }
+    }
+
+    let adoption = system::adopt(host, def.kind)?;
+    let version = system::version_of(def.kind, &adoption.banner).ok_or_else(|| {
+        DevdError::invalid(format!(
+            "could not read a {} version from `{}`",
+            def.name,
+            adoption.banner.trim()
+        ))
+    })?;
+
+    let dest = install_dir(ctx, def.name);
+    platform::link_into(&dest, &adoption.found)?;
+    system::prepare(def.kind, &dest, &adoption)?;
+
+    let mut warnings = adoption.warnings.clone();
+    let record = json!({
+        "source": "system",
+        "prefix": adoption.prefix.display().to_string(),
+        "programs": adoption.found,
+        "origin": adoption.origin,
+    });
+    let (service, extra) = finish_install(ctx, def, port, &version, record, &dest, &mut warnings)?;
 
     Ok(InstalledService {
         service,
-        version: chosen.version,
+        version,
         path: dest.display().to_string(),
-        digest: artifact.sha256.clone().or(Some(fetched.sha256.clone())),
-        bytes: fetched.bytes,
-        from_cache: fetched.from_cache,
+        digest: None,
+        bytes: 0,
+        from_cache: false,
         warnings,
         details: serde_json::Value::Object(extra),
     })
@@ -654,7 +770,7 @@ pub fn service_argv(ctx: &Ctx, name: &str, _port: Option<u16>) -> Result<Vec<Str
     let dir = install_dir(ctx, name);
     match name {
         "nginx" => {
-            let exe = dir.join("nginx.exe");
+            let exe = dir.join(nginx::exe_name());
             // These arguments are passed to the process as an array, not through a
             // shell, so native separators need no escaping here. Only the
             // *configuration file contents* require forward slashes, because nginx
@@ -705,13 +821,20 @@ fn php_cgi_argv(_ctx: &Ctx, php_exe: &Path, port: u16) -> Vec<String> {
         .map(Path::to_path_buf)
         .unwrap_or_else(|| php_exe.to_path_buf());
     let cgi = dir.join(if cfg!(windows) { "php-cgi.exe" } else { "php-cgi" });
-    vec![
+    let ini = dir.join("php.ini");
+    let mut argv = vec![
         native(&cgi),
         "-b".to_string(),
         format!("127.0.0.1:{port}"),
-        "-c".to_string(),
-        native(&dir.join("php.ini")),
-    ]
+    ];
+    // A downloaded PHP carries the php.ini devd generated beside it. A system
+    // PHP keeps its configuration under /etc, so there is no file here to point
+    // at, and a `-c` that names nothing is worse than none.
+    if cfg!(windows) || ini.is_file() {
+        argv.push("-c".to_string());
+        argv.push(native(&ini));
+    }
+    argv
 }
 
 /// The PHP interpreter of the newest patch release of a series.
@@ -772,7 +895,12 @@ pub fn ensure_php_service(ctx: &Ctx, php_exe: &Path) -> Result<Service> {
         .store
         .list_runtimes()?
         .into_iter()
-        .find(|r| r.kind == "php" && Path::new(&r.path).join("php.exe").is_file())
+        .find(|r| {
+            r.kind == "php"
+                && devd_runtime::executable_relative("php")
+                    .map(|rel| Path::new(&r.path).join(rel).is_file())
+                    .unwrap_or(false)
+        })
         .map(|r| r.id);
 
     let existing = ctx.store.get_service(PHP_SERVICE)?;
@@ -1384,12 +1512,104 @@ mod tests {
         }
     }
 
+    /// A machine whose programs are the files given, with a fixed version banner.
+    #[cfg(unix)]
+    struct FakeHost {
+        programs: Vec<(&'static str, std::path::PathBuf)>,
+        banner: &'static str,
+    }
+
+    #[cfg(unix)]
+    impl devd_core::platform::Commands for FakeHost {
+        fn run(&self, _program: &str, _args: &[&str]) -> Option<(i32, String)> {
+            None
+        }
+    }
+
+    #[cfg(unix)]
+    impl Host for FakeHost {
+        fn find(&self, names: &[&str]) -> Option<std::path::PathBuf> {
+            names.iter().find_map(|n| {
+                self.programs
+                    .iter()
+                    .find(|(name, _)| name == n)
+                    .map(|(_, p)| p.clone())
+            })
+        }
+        fn banner(&self, _exe: &Path, _args: &[&str]) -> Result<String> {
+            Ok(self.banner.to_string())
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn installing_nginx_on_unix_links_the_system_program_and_records_where_it_came_from() {
+        let c = ctx("adopt-nginx");
+        let bin = c.paths.root().join("system/sbin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let real = bin.join("nginx");
+        std::fs::write(&real, b"#!/bin/sh\n").unwrap();
+        let host = FakeHost {
+            programs: vec![("nginx", real.clone())],
+            banner: "nginx version: nginx/1.24.0 (Ubuntu)\n",
+        };
+
+        let def = definition("nginx").unwrap();
+        let done = install_system(&c, def, None, &host).expect("install");
+
+        assert_eq!(done.version, "1.24.0");
+        assert!(done.digest.is_none(), "a system install has no download digest");
+        // The layout the rest of devd expects: the program is where it is
+        // looked for, as a link, and the files nginx needs beside it exist.
+        let dir = install_dir(&c, "nginx");
+        let linked = dir.join("sbin/nginx");
+        assert!(std::fs::symlink_metadata(&linked).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_link(&linked).unwrap(), real);
+        assert!(dir.join("conf/fastcgi_params").is_file());
+        assert!(dir.join("conf/mime.types").is_file());
+        assert!(dir.join("temp/client_body").is_dir());
+        // The manifest says the program was adopted, and from where.
+        let manifest: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(manifest(&c, "nginx")).unwrap())
+                .unwrap();
+        assert_eq!(manifest["source"], "system");
+        assert_eq!(manifest["version"], "1.24.0");
+        // The service is recorded and its command line starts the linked program.
+        let service = c.store.get_service("nginx").unwrap().expect("service row");
+        let argv: Vec<String> = serde_json::from_str(&service.argv).unwrap();
+        assert!(argv[0].ends_with("sbin/nginx"), "{argv:?}");
+        // The configuration keeps nginx's temporary files out of /var/lib.
+        let conf = std::fs::read_to_string(nginx::config_path(&c)).unwrap();
+        assert!(conf.contains("client_body_temp_path"), "{conf}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_system_mariadb_that_is_really_mysql_is_refused() {
+        let c = ctx("adopt-mysql");
+        let bin = c.paths.root().join("system/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        for name in ["mysqld", "mysql", "mysql_install_db"] {
+            std::fs::write(bin.join(name), b"x").unwrap();
+        }
+        let host = FakeHost {
+            programs: ["mysqld", "mysql", "mysql_install_db"]
+                .iter()
+                .map(|n| (*n, bin.join(n)))
+                .collect(),
+            banner: "mysqld  Ver 8.0.36 for Linux on x86_64 (MySQL Community Server - GPL)\n",
+        };
+        let err = install_system(&c, definition("mariadb").unwrap(), None, &host).unwrap_err();
+        assert!(err.to_string().contains("not MariaDB"), "{err}");
+        assert!(c.store.get_service("mariadb").unwrap().is_none());
+    }
+
     #[test]
     fn definitions_are_consistent() {
         for def in DEFINITIONS {
             assert_eq!(definition(def.name).map(|d| d.name), Some(def.name));
             assert_eq!(definition(def.kind).map(|d| d.name), Some(def.name));
-            assert!(def.executable.contains('/') || !def.executable.is_empty());
+            assert!(!def.windows_exe.is_empty() && !def.unix_exe.is_empty());
         }
         assert!(definition("apache").is_none());
     }

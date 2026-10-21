@@ -165,6 +165,25 @@ fn render_text(render: Render, sites: &[Site]) -> String {
         "    access_log  \"{}/nginx-access.log\";\n\n",
         render.logs
     ));
+    if !cfg!(windows) {
+        // A package builds nginx with temporary directories under /var/lib,
+        // which an ordinary user cannot create, and nginx refuses to start when
+        // it cannot. Keep them under devd's own prefix.
+        for directive in [
+            "client_body_temp_path",
+            "proxy_temp_path",
+            "fastcgi_temp_path",
+            "uwsgi_temp_path",
+            "scgi_temp_path",
+        ] {
+            let leaf = directive.trim_end_matches("_temp_path");
+            out.push_str(&format!(
+                "    {directive} \"{}temp/{leaf}\";\n",
+                render.prefix
+            ));
+        }
+        out.push('\n');
+    }
     out.push_str("    sendfile           on;\n");
     out.push_str("    keepalive_timeout  65;\n");
     out.push_str("    server_tokens      off;\n");
@@ -299,7 +318,7 @@ fn site_servers(render: &Render, site: &Site) -> String {
     out
 }
 
-fn exe_name() -> &'static str {
+pub(crate) fn exe_name() -> &'static str {
     if cfg!(windows) {
         "nginx.exe"
     } else {
