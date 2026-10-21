@@ -90,6 +90,112 @@ pub const PHP_SERVICE: &str = "php-cgi";
 /// The port the PHP listener uses.
 pub const PHP_PORT: u16 = 9000;
 
+/// The name of the listener for one PHP series.
+///
+/// A site can be pinned to a PHP version, and each version needs its own
+/// listener: two listeners cannot share a port. The listener is named after
+/// the *series* - 8.5, not 8.5.11 - because a patch release is not a
+/// different thing to a site, and two patch releases of one series would
+/// fight over the same port.
+pub fn php_service_name(series: &str) -> String {
+    format!("{PHP_SERVICE}-{series}")
+}
+
+/// The series of a PHP version: `8.5.11` is the series `8.5`.
+///
+/// A site records the version it was created against, which may be a full
+/// version, a series, or nothing at all. The series is what a listener is
+/// per, so that is what everything else is resolved through.
+pub fn php_series(version: &str) -> String {
+    let trimmed = version.trim();
+    let mut parts = trimmed.split('.');
+    let major = parts.next().unwrap_or("");
+    let minor = parts.next().unwrap_or("");
+    if major.is_empty() || minor.is_empty() {
+        return trimmed.to_string();
+    }
+    format!("{major}.{minor}")
+}
+
+/// The port the listener for a PHP series uses.
+///
+/// `9000 + major * 10 + minor`, so 8.3 is 9083 and 8.5 is 9085. The scheme
+/// is the one Laravel Herd uses, so the numbers are recognisable.
+pub fn php_port_for_series(series: &str) -> u16 {
+    let mut parts = series.split('.');
+    let major: u16 = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+    let minor: u16 = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+    let offset = major.saturating_mul(10).saturating_add(minor);
+    // The offset is bounded so that a nonsense version cannot produce a port
+    // outside the range the supervisor and the firewall rules expect.
+    PHP_PORT.saturating_add(offset.min(99))
+}
+
+/// The PHP listeners, as series and port.
+///
+/// One listener per installed series. A site pinned to a version is sent to
+/// the listener for that version's series; a site that is not pinned is sent
+/// to the primary.
+pub fn php_listeners(ctx: &Ctx) -> Result<Vec<(String, u16)>> {
+    Ok(installed_php_series(ctx)?
+        .into_iter()
+        .map(|series| {
+            let port = php_port_for_series(&series);
+            (series, port)
+        })
+        .collect())
+}
+
+/// The port the listener for a series uses, when that series is installed.
+pub fn php_port_for(ctx: &Ctx, series: &str) -> Option<u16> {
+    php_listeners(ctx)
+        .ok()?
+        .into_iter()
+        .find(|(s, _)| s == series)
+        .map(|(_, port)| port)
+}
+
+/// The series the primary PHP version belongs to.
+pub fn primary_php_series(ctx: &Ctx) -> Option<String> {
+    let primary = ctx.settings.primary_php.clone()?;
+    if primary.trim().is_empty() {
+        return None;
+    }
+    Some(php_series(&primary))
+}
+
+/// The PHP series that are installed, newest first.
+///
+/// A series appears once even when several patch releases of it are
+/// installed: the newest is the one a site would use.
+pub fn installed_php_series(ctx: &Ctx) -> Result<Vec<String>> {
+    let mut series: Vec<(String, String)> = Vec::new();
+    for runtime in ctx.store.list_runtimes()? {
+        if runtime.kind != "php" {
+            continue;
+        }
+        let key = php_series(&runtime.version);
+        // The version strings sort lexicographically, which is right for
+        // "8.5.11" and "8.5.9" only by luck, so the comparison is by parts.
+        match series.iter_mut().find(|(s, _)| s == &key) {
+            Some((_, current)) if version_parts(&runtime.version) <= version_parts(current) => {}
+            Some((_, current)) => *current = runtime.version.clone(),
+            None => series.push((key, runtime.version.clone())),
+        }
+    }
+    series.sort_by(|a, b| version_parts(&b.1).cmp(&version_parts(&a.1)));
+    Ok(series.into_iter().map(|(s, _)| s).collect())
+}
+
+/// A version as a list of numbers, so that versions compare by value.
+fn version_parts(version: &str) -> Vec<u32> {
+    version
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|p| !p.is_empty())
+        .map(|p| p.parse().unwrap_or(0))
+        .collect()
+}
+
 /// Where a service is installed.
 pub fn install_dir(ctx: &Ctx, name: &str) -> PathBuf {
     ctx.paths.services().join(name)
@@ -568,33 +674,56 @@ pub fn service_argv(ctx: &Ctx, name: &str, _port: Option<u16>) -> Result<Vec<Str
         }
         PHP_SERVICE => {
             let php = php_executable(ctx)?;
-            let dir = php
-                .parent()
-                .map(Path::to_path_buf)
-                .ok_or_else(|| DevdError::internal("the PHP executable has no directory"))?;
-            let cgi = dir.join(if cfg!(windows) {
-                "php-cgi.exe"
-            } else {
-                "php-cgi"
-            });
-            if !cgi.is_file() {
-                return Err(DevdError::not_found(format!(
-                    "{} does not contain php-cgi, which nginx needs",
-                    dir.display()
-                )));
-            }
-            Ok(vec![
-                native(&cgi),
-                "-b".to_string(),
-                format!("127.0.0.1:{PHP_PORT}"),
-                "-c".to_string(),
-                native(&dir.join("php.ini")),
-            ])
+            Ok(php_cgi_argv(ctx, &php, PHP_PORT))
+        }
+        // A listener for one PHP series: `php-cgi-8.3`.
+        other if other.starts_with(&format!("{PHP_SERVICE}-")) => {
+            let series = other.trim_start_matches(&format!("{PHP_SERVICE}-"));
+            let php = php_executable_for_series(ctx, series)?;
+            let port = php_port_for_series(series);
+            Ok(php_cgi_argv(ctx, &php, port))
         }
         other => Err(DevdError::unsupported(format!(
             "there is no driver for the service `{other}`"
         ))),
     }
+}
+
+/// The argument array for a PHP FastCGI listener.
+fn php_cgi_argv(_ctx: &Ctx, php_exe: &Path, port: u16) -> Vec<String> {
+    let dir = php_exe
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| php_exe.to_path_buf());
+    let cgi = dir.join(if cfg!(windows) { "php-cgi.exe" } else { "php-cgi" });
+    vec![
+        native(&cgi),
+        "-b".to_string(),
+        format!("127.0.0.1:{port}"),
+        "-c".to_string(),
+        native(&dir.join("php.ini")),
+    ]
+}
+
+/// The PHP interpreter of the newest patch release of a series.
+fn php_executable_for_series(ctx: &Ctx, series: &str) -> Result<PathBuf> {
+    let wanted = php_series(series);
+    let mut best: Option<String> = None;
+    for runtime in ctx.store.list_runtimes()? {
+        if runtime.kind != "php" || php_series(&runtime.version) != wanted {
+            continue;
+        }
+        match &best {
+            Some(current) if version_parts(&runtime.version) <= version_parts(current) => {}
+            _ => best = Some(runtime.version.clone()),
+        }
+    }
+    let version = best.ok_or_else(|| {
+        DevdError::not_found(format!(
+            "no PHP {wanted} is installed; `devd runtime install php@{wanted}` adds one"
+        ))
+    })?;
+    devd_runtime::executable(ctx, "php", Some(&version))
 }
 
 /// A path in the form the operating system prefers, for a command-line argument.
@@ -660,6 +789,75 @@ pub fn ensure_php_service(ctx: &Ctx, php_exe: &Path) -> Result<Service> {
     service.health = Some(json!({ "tcp": PHP_PORT }).to_string());
     ctx.store.upsert_service(&service)?;
     Ok(service)
+}
+
+/// Create or refresh one listener per installed PHP series.
+///
+/// A site can be pinned to a PHP version, and each version needs its own
+/// listener, so a machine with three PHP versions has three listeners. The
+/// legacy single `php-cgi` row is replaced by these: it pointed at whichever
+/// interpreter happened to be primary, which is exactly the limitation this
+/// removes.
+pub fn ensure_php_services(ctx: &Ctx) -> Result<Vec<Service>> {
+    let mut out = Vec::new();
+    for (series, port) in php_listeners(ctx)? {
+        let name = php_service_name(&series);
+        let argv = service_argv(ctx, &name, Some(port))?;
+        let runtime_id = ctx
+            .store
+            .list_runtimes()?
+            .into_iter()
+            .find(|r| r.kind == "php" && php_series(&r.version) == series)
+            .map(|r| r.id);
+        let existing = ctx.store.get_service(&name)?;
+        let mut service = existing.unwrap_or(Service {
+            id: util::new_id(),
+            name: name.clone(),
+            kind: "php-cgi".to_string(),
+            runtime_id: None,
+            argv: String::new(),
+            port: Some(port),
+            health: None,
+            desired_state: "stopped".to_string(),
+            restart_policy: "on-failure".to_string(),
+            enabled: true,
+            created_at: util::now(),
+        });
+        service.kind = "php-cgi".to_string();
+        service.runtime_id = runtime_id;
+        service.argv = serde_json::to_string(&argv).unwrap_or_default();
+        service.port = Some(port);
+        service.health = Some(json!({ "tcp": port }).to_string());
+        ctx.store.upsert_service(&service)?;
+        out.push(service);
+    }
+    Ok(out)
+}
+
+/// Remove the listener rows for PHP series that are no longer installed.
+///
+/// A runtime that is uninstalled must not leave a listener behind that points
+/// at an interpreter that is gone.
+pub fn prune_php_services(ctx: &Ctx) -> Result<Vec<String>> {
+    let wanted: Vec<String> = installed_php_series(ctx)?
+        .into_iter()
+        .map(|s| php_service_name(&s))
+        .collect();
+    let mut removed = Vec::new();
+    for service in ctx.store.list_services()? {
+        if !service.name.starts_with(&format!("{PHP_SERVICE}-")) {
+            continue;
+        }
+        if wanted.contains(&service.name) {
+            continue;
+        }
+        if running_pid(ctx, &service).is_some() {
+            let _ = stop(ctx, &service.name);
+        }
+        ctx.store.delete_service(&service.name)?;
+        removed.push(service.name);
+    }
+    Ok(removed)
 }
 
 /// A forward-slash path, used by tests that assert on stored argument arrays.
@@ -879,16 +1077,24 @@ fn tail(path: &Path, lines: usize) -> Result<Vec<String>> {
 /// "php-cgi did not start, so nginx was not attempted" tells the user less than
 /// both results at once.
 pub fn stack_up(ctx: &Ctx) -> Result<Vec<Status>> {
-    // The PHP listener has no archive of its own: it comes from the installed
-    // PHP runtime. A stack that refused to start because nobody had created that
-    // row would be a worse answer than one that creates it, so the row is made
-    // here when a runtime is present and simply skipped when none is.
-    if ctx.store.get_service(PHP_SERVICE)?.is_none() {
+    // The PHP listeners have no archive of their own: they come from the
+    // installed PHP runtimes. A stack that refused to start because nobody had
+    // created those rows would be a worse answer than one that creates them, so
+    // the rows are made here when a runtime is present and simply skipped when
+    // none is.
+    //
+    // One listener per installed PHP version, so that a site pinned to a
+    // version is served by that version.
+    if !installed_php_series(ctx)?.is_empty() {
+        prune_php_services(ctx)?;
+        ensure_php_services(ctx)?;
+    } else if ctx.store.get_service(PHP_SERVICE)?.is_none() {
         if let Ok(php) = php_executable(ctx) {
             ensure_php_service(ctx, &php)?;
         }
     }
 
+    // The listeners come first: nginx needs a FastCGI upstream to answer with.
     let order = ["php-cgi", "mariadb", "nginx"];
     let services: Vec<Service> = ctx
         .store
@@ -901,14 +1107,21 @@ pub fn stack_up(ctx: &Ctx) -> Result<Vec<Status>> {
     let mut failures = Vec::new();
 
     let mut ordered: Vec<&Service> = Vec::new();
-    for name in order {
-        ordered.extend(services.iter().filter(|s| s.name == name));
-    }
+    // Every PHP listener, whichever version it is for, before anything else.
     ordered.extend(
         services
             .iter()
-            .filter(|s| !order.contains(&s.name.as_str())),
+            .filter(|s| s.name == "php-cgi" || s.name.starts_with("php-cgi-")),
     );
+    for name in ["mariadb", "nginx"] {
+        ordered.extend(services.iter().filter(|s| s.name == name));
+    }
+    ordered.extend(services.iter().filter(|s| {
+        s.name != "php-cgi"
+            && !s.name.starts_with("php-cgi-")
+            && s.name != "mariadb"
+            && s.name != "nginx"
+    }));
 
     for service in ordered {
         // A service whose files are missing was removed deliberately; skipping it

@@ -346,6 +346,13 @@
     return parts[parts.length - 1] || p;
   }
 
+  /* The series of a PHP version: "8.5.11" is the series "8.5". */
+  function devSeries(version) {
+    var parts = String(version || "").split(".");
+    if (parts.length < 2 || !parts[0] || !parts[1]) return String(version || "");
+    return parts[0] + "." + parts[1];
+  }
+
   /*
    * A one-letter badge for a file's state.
    *
@@ -1480,12 +1487,30 @@
     var s = state.server;
     var rows = s.sites.map(function (row) {
       var site = row.site;
+      // The version a site actually runs on: its own, or the default. A
+      // version that is not installed is shown as the default, because that is
+      // what it is served by.
+      var installed = row.php_installed || [];
+      var effective = row.php_effective || "";
+      var pinned = site.php ? devdSeries(site.php) : "";
+      var phpCell;
+      if (!installed.length) {
+        phpCell = '<span class="dim">' + esc(effective || "no PHP installed") + "</span>";
+      } else {
+        var options = ['<option value=""' + (pinned ? "" : " selected") + ">Default (" + esc(phpPrimary() || "none") + ")</option>"];
+        installed.forEach(function (v) {
+          options.push('<option value="' + attr(v) + '"' + (pinned === v ? " selected" : "") + ">" + esc(v) + "</option>");
+        });
+        phpCell =
+          '<select class="select compact" data-action="site-php" data-name="' + attr(site.name) + '"' +
+          ' aria-label="PHP version for ' + attr(site.name) + '">' + options.join("") + "</select>";
+      }
       return (
         "<tr>" +
         '<td><div class="cell-strong">' + esc(site.name) + "</div>" +
         (row.present ? "" : '<div class="cell-warn">directory missing</div>') + "</td>" +
         '<td class="cell-mono"><a href="' + attr(row.url) + '" target="_blank" rel="noreferrer">' + esc(row.url) + "</a></td>" +
-        "<td>" + esc(site.php || phpPrimary() || "—") + "</td>" +
+        "<td>" + phpCell + "</td>" +
         "<td>" +
         (site.tls_mode === "off"
           ? '<span class="pill">http</span>'
@@ -5394,6 +5419,14 @@
       if (state.siteFormOpen && el("site-name")) el("site-name").focus();
     },
 
+    "site-php": function (node) {
+      var version = node.value || null;
+      run("site.set_php", { name: node.dataset.name, version: version }).then(function (o) {
+        if (o) return loadServer().then(render);
+        return null;
+      });
+    },
+
     "create-site": function () {
       var name = readInput("site-name");
       if (!name) return toast("error", "a site needs a name");
@@ -6099,6 +6132,10 @@
   });
 
   document.addEventListener("change", function (event) {
+    if (event.target.dataset && event.target.dataset.action === "site-php") {
+      ACTIONS["site-php"](event.target);
+      return;
+    }
     if (event.target.id === "preview-site") {
       state.preview.site = event.target.value;
       render();

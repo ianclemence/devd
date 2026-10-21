@@ -109,6 +109,10 @@ pub fn site(app: &App, cmd: SiteCommand) -> Result<()> {
             "site.remove",
             json!({ "name": name, "delete_files": delete_files }),
         ),
+        SiteCommand::Php { name, version } => app.invoke(
+            "site.set_php",
+            json!({ "name": name, "version": version }),
+        ),
     }
 }
 

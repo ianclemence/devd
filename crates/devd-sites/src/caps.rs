@@ -42,6 +42,8 @@ args! {
     CreateArgs { name: String, host: Option<String>, root: Option<String>, tls: Option<bool>, db: Option<bool> }
     /// A site to remove.
     RemoveArgs { name: String, delete_files: Option<bool> }
+    /// A site to pin to a PHP version.
+    SetPhpArgs { name: String, version: Option<String> }
 }
 
 /// Register every site capability.
@@ -119,6 +121,79 @@ pub fn register(reg: &mut Registry) -> Result<()> {
                 outcome = outcome.warn(warning);
             }
             Ok(outcome)
+        },
+    )?;
+
+    add::<SetPhpArgs, _, _>(
+        reg,
+        "site.set_php",
+        "Pin a site to a PHP version",
+        "Pins a site to one of the installed PHP versions, so that it is served by that \
+         version however the default changes, or unpins it so that it follows the default \
+         again. A version that is not installed is refused, and the versions that are \
+         installed are named. The web server configuration is re-rendered, and the \
+         listener for the version is started if it is not running.",
+        "site",
+        Tier::Write,
+        Effect::Config,
+        true,
+        false,
+        true,
+        |ctx, args| {
+            let row = sites::list(ctx)?
+                .into_iter()
+                .find(|r| r.site.name == args.name)
+                .ok_or_else(|| DevdError::not_found(format!("no site named `{}`", args.name)))?;
+            let installed = devd_services::installed_php_series(ctx)?;
+            let mut plan = Plan::new(
+                "site.set_php",
+                match args.version.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+                    Some(v) => format!("serve {} with PHP {v}", args.name),
+                    None => format!("serve {} with the default PHP version", args.name),
+                },
+            )
+            .step("re-render the web server configuration");
+            if let Some(version) = args.version.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+                let series = devd_services::php_series(version);
+                if !installed.iter().any(|s| s == &series) {
+                    plan = plan.effect(format!(
+                        "PROBLEM PHP {series} is not installed; the installed versions are {}",
+                        installed.join(", ")
+                    ));
+                } else {
+                    plan = plan.step(format!("make sure the PHP {series} listener is running"));
+                }
+            }
+            Ok(plan.data(json!({
+                "site": row.site,
+                "version": args.version,
+                "installed": installed,
+            })))
+        },
+        |ctx, args| {
+            let installed = devd_services::installed_php_series(ctx)?;
+            let version = args
+                .version
+                .as_deref()
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(devd_services::php_series);
+            if let Some(series) = &version {
+                if !installed.iter().any(|s| s == series) {
+                    return Err(DevdError::invalid(format!(
+                        "PHP {series} is not installed; the installed versions are {}",
+                        installed.join(", ")
+                    )));
+                }
+            }
+            let result = sites::set_php(ctx, &args.name, version.as_deref())?;
+            Ok(Outcome::with_data(
+                match &version {
+                    Some(v) => format!("{} now runs on PHP {v}", args.name),
+                    None => format!("{} now follows the default PHP version", args.name),
+                },
+                result,
+            ))
         },
     )?;
 

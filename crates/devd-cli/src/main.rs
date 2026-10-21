@@ -969,6 +969,13 @@ pub(crate) enum SiteCommand {
         #[arg(long)]
         delete_files: bool,
     },
+    /// Pin a site to a PHP version, or let it follow the default again.
+    Php {
+        /// Project name.
+        name: String,
+        /// The PHP version to pin it to. Omit to let it follow the default.
+        version: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]

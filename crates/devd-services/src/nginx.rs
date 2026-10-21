@@ -40,8 +40,13 @@ struct Render {
     http: u16,
     /// Port the TLS listener uses.
     https: u16,
-    /// Port the PHP FastCGI listener is on.
-    php: u16,
+    /// The PHP FastCGI listeners, as series and port.
+    ///
+    /// One per installed PHP version, so a site pinned to a version is served
+    /// by that version and a site that is not pinned is served by the primary.
+    php: Vec<(String, u16)>,
+    /// The series the primary PHP version belongs to.
+    primary: Option<String>,
 }
 
 /// Where nginx is installed under the layout.
@@ -54,16 +59,43 @@ pub fn config_path(ctx: &Ctx) -> PathBuf {
     ctx.paths.etc().join("nginx").join("nginx.conf")
 }
 
+/// The PHP FastCGI listeners, as series and port.
+///
+/// The installed runtimes say which versions exist; the service rows say which
+/// port each listener actually uses. Both are consulted, because a row left
+/// behind by an uninstalled runtime must not keep a site on a dead upstream,
+/// and a row's port is the one the supervisor started.
+pub fn php_listeners(ctx: &Ctx) -> Vec<(String, u16)> {
+    let mut out: Vec<(String, u16)> = Vec::new();
+    for series in crate::installed_php_series(ctx).unwrap_or_default() {
+        let name = crate::php_service_name(&series);
+        let port = ctx
+            .store
+            .get_service(&name)
+            .ok()
+            .flatten()
+            .and_then(|s| s.port)
+            .unwrap_or_else(|| crate::php_port_for_series(&series));
+        out.push((series, port));
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
 /// The port the PHP FastCGI listener is on, from the `php-cgi` service row.
 ///
-/// Read from the store rather than assumed, because the row is what the
-/// supervisor actually started.
+/// The port of the primary listener, for callers that do not care which
+/// version they are talking to.
 pub fn php_port(ctx: &Ctx) -> u16 {
     ctx.store
         .get_service("php-cgi")
         .ok()
         .flatten()
         .and_then(|s| s.port)
+        .or_else(|| {
+            let primary = crate::primary_php_series(ctx)?;
+            crate::php_port_for(ctx, &primary)
+        })
         .unwrap_or(9000)
 }
 
@@ -83,7 +115,8 @@ fn render_context(ctx: &Ctx) -> Render {
         certs: slashy(&ctx.paths.certs()),
         http: ctx.settings.http_port,
         https: ctx.settings.https_port,
-        php: php_port(ctx),
+        php: php_listeners(ctx),
+        primary: crate::primary_php_series(ctx),
     }
 }
 
@@ -138,16 +171,57 @@ fn render_text(render: Render, sites: &[Site]) -> String {
     out.push_str("    client_max_body_size 64m;\n");
     out.push_str("    fastcgi_read_timeout 120s;\n\n");
     out.push_str(&format!(
-        "    # One PHP FastCGI listener per installed version; every site shares it.\n    \
-         upstream devd_php {{\n        server 127.0.0.1:{};\n    }}\n\n",
-        render.php
+        "    # One PHP FastCGI listener per installed version. A site that is \
+         pinned to a version is sent to that one; the rest go to the primary.\n"
     ));
+    for (series, port) in &render.php {
+        out.push_str(&format!(
+            "    upstream devd_php_{} {{\n        server 127.0.0.1:{port};\n    }}\n\n",
+            upstream_name(series)
+        ));
+    }
     out.push_str(&default_server(&render));
     for site in sites {
         out.push_str(&site_servers(&render, site));
     }
     out.push_str("}\n");
     out
+}
+
+/// The name of the upstream block for a PHP series.
+///
+/// A series is a version like `8.5`, which is not a valid identifier, so the
+/// dot becomes an underscore.
+fn upstream_name(series: &str) -> String {
+    if series.is_empty() {
+        return "default".to_string();
+    }
+    series.replace('.', "_")
+}
+
+/// The upstream a site is sent to.
+///
+/// A site that pins a version is sent to that version's listener. A site
+/// that pins nothing is sent to the primary. A site that pins a version that
+/// is not installed falls back to the primary rather than to a listener that
+/// does not exist, because a missing upstream is a 502 for every request.
+fn site_upstream(render: &Render, site: &Site) -> String {
+    let pinned = site.php.as_deref().map(crate::php_series).filter(|s| !s.is_empty());
+    if let Some(series) = pinned {
+        if render.php.iter().any(|(s, _)| s == &series) {
+            return format!("devd_php_{}", upstream_name(&series));
+        }
+    }
+    match &render.primary {
+        Some(primary) if render.php.iter().any(|(s, _)| s == primary) => {
+            format!("devd_php_{}", upstream_name(primary))
+        }
+        // No primary is known, so the first listener takes every site.
+        _ => match render.php.first() {
+            Some((first, _)) => format!("devd_php_{}", upstream_name(first)),
+            None => "devd_php_default".to_string(),
+        },
+    }
 }
 
 /// A request that matches no site gets a page that says so, rather than nginx's
@@ -207,7 +281,10 @@ fn site_servers(render: &Render, site: &Site) -> String {
     out.push_str("        location / {\n            try_files $uri $uri/ /index.php?$query_string;\n        }\n\n");
     out.push_str("        location ~ \\.php$ {\n");
     out.push_str("            try_files $uri =404;\n");
-    out.push_str("            fastcgi_pass  devd_php;\n");
+    out.push_str(&format!(
+        "            fastcgi_pass  {};\n",
+        site_upstream(render, site)
+    ));
     out.push_str("            fastcgi_index index.php;\n");
     out.push_str(&format!(
         "            include       \"{}conf/fastcgi_params\";\n",
@@ -317,6 +394,13 @@ mod tests {
         }
     }
 
+    /// A site pinned to a PHP series.
+    fn site_on(name: &str, tls: &str, series: Option<&str>) -> Site {
+        let mut s = site(name, tls);
+        s.php = series.map(|v| v.to_string());
+        s
+    }
+
     fn render_for(sites: &[Site], http: u16, https: u16) -> String {
         let settings = Settings {
             http_port: http,
@@ -331,7 +415,8 @@ mod tests {
                 certs: "D:/devd-home/certs".to_string(),
                 http,
                 https,
-                php: 9000,
+                php: vec![("8.3".to_string(), 9000), ("8.5".to_string(), 9085)],
+                primary: Some("8.3".to_string()),
             },
             sites,
         )
@@ -357,7 +442,7 @@ mod tests {
             "{text}"
         );
         // FastCGI over the upstream, not a hard-coded socket.
-        assert!(text.contains("fastcgi_pass  devd_php;"), "{text}");
+        assert!(text.contains("fastcgi_pass  devd_php_8_3;"), "{text}");
         assert!(text.contains("server 127.0.0.1:9000;"), "{text}");
         assert!(
             text.contains("fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;"),
@@ -393,6 +478,43 @@ mod tests {
         let text = render_for(&[site("a", "off"), site("b", "off")], 80, 443);
         assert!(text.contains("nginx-a.test.access.log"), "{text}");
         assert!(text.contains("nginx-b.test.access.log"), "{text}");
+    }
+
+    #[test]
+    fn a_pinned_site_reaches_its_own_php_version() {
+        let text = render_for(
+            &[
+                site_on("pinned", "off", Some("8.5")),
+                site_on("free", "off", None),
+            ],
+            80,
+            443,
+        );
+        // The pinned site is sent to the 8.5 listener.
+        assert!(text.contains("fastcgi_pass  devd_php_8_5;"), "{text}");
+        // The unpinned site follows the primary.
+        assert!(text.contains("fastcgi_pass  devd_php_8_3;"), "{text}");
+        // One upstream per installed version.
+        assert!(text.contains("upstream devd_php_8_5 {"), "{text}");
+        assert!(text.contains("upstream devd_php_8_3 {"), "{text}");
+        assert!(text.contains("server 127.0.0.1:9085;"), "{text}");
+    }
+
+    #[test]
+    fn a_patch_release_is_the_same_series_as_its_minor() {
+        // A site that records 8.5.11 is served by the 8.5 listener, because a
+        // patch release is not a different thing to a site.
+        let text = render_for(&[site_on("patch", "off", Some("8.5.11"))], 80, 443);
+        assert!(text.contains("fastcgi_pass  devd_php_8_5;"), "{text}");
+    }
+
+    #[test]
+    fn a_site_pinned_to_a_version_that_is_not_installed_falls_back() {
+        // A missing upstream is a 502 for every request, so the site is
+        // served by the primary instead.
+        let text = render_for(&[site_on("gone", "off", Some("7.4"))], 80, 443);
+        assert!(text.contains("fastcgi_pass  devd_php_8_3;"), "{text}");
+        assert!(!text.contains("devd_php_7_4"), "{text}");
     }
 
     #[test]

@@ -425,6 +425,10 @@ pub struct SiteRow {
     pub certificate: bool,
     /// Whether the web server is running at all.
     pub server_running: bool,
+    /// The PHP versions that are installed, so a surface can offer them.
+    pub php_installed: Vec<String>,
+    /// The PHP version the site is served by: its own, or the default.
+    pub php_effective: Option<String>,
 }
 
 /// Every site, with a live check of what is actually on disk.
@@ -433,21 +437,108 @@ pub fn list(ctx: &Ctx) -> Result<Vec<SiteRow>> {
     let server_running = devd_services::status(ctx, "nginx")
         .map(|s| s.running)
         .unwrap_or(false);
+    let php_installed = devd_services::installed_php_series(ctx).unwrap_or_default();
+    let primary = devd_services::primary_php_series(ctx);
 
     Ok(ctx
         .store
         .list_sites()?
         .into_iter()
-        .map(|site| SiteRow {
-            present: Path::new(&site.root).is_dir(),
-            url: url_for(ctx, &site),
-            document_root: site.document_root(),
-            in_hosts: managed.iter().any(|e| e.host == site.host),
-            certificate: devd_services::tls::leaf_valid(ctx, &site.host),
-            server_running,
-            site,
+        .map(|site| {
+            // The version a site runs on: its own, or the default. A site
+            // pinned to a version that is not installed falls back to the
+            // default, because that is what it is actually served by.
+            let pinned = site
+                .php
+                .as_deref()
+                .map(devd_services::php_series)
+                .filter(|s| !s.is_empty());
+            let php_effective = match &pinned {
+                Some(series) if php_installed.iter().any(|s| s == series) => Some(series.clone()),
+                // The pinned version is gone, so the default takes over - unless
+                // there is no default either, in which case the pin is what the
+                // site says it wants.
+                Some(series) => primary.clone().or_else(|| Some(series.clone())),
+                None => primary.clone(),
+            };
+            SiteRow {
+                present: Path::new(&site.root).is_dir(),
+                url: url_for(ctx, &site),
+                document_root: site.document_root(),
+                in_hosts: managed.iter().any(|e| e.host == site.host),
+                certificate: devd_services::tls::leaf_valid(ctx, &site.host),
+                server_running,
+                php_installed: php_installed.clone(),
+                php_effective,
+                site,
+            }
         })
         .collect())
+}
+
+/// Pin a site to a PHP version, or unpin it.
+///
+/// A site that is pinned is served by that version's listener however the
+/// default changes. A site that is not pinned follows the default. The web
+/// server configuration is re-rendered, because that is what decides which
+/// listener a request reaches.
+pub fn set_php(ctx: &Ctx, name: &str, version: Option<&str>) -> Result<serde_json::Value> {
+    let mut site = ctx
+        .store
+        .list_sites()?
+        .into_iter()
+        .find(|s| s.name == name)
+        .ok_or_else(|| DevdError::not_found(format!("no site named `{name}`")))?;
+
+    // A version that is not installed cannot be served, so it is refused
+    // rather than recorded and discovered to be wrong later.
+    if let Some(version) = version {
+        let series = devd_services::php_series(version);
+        let installed = devd_services::installed_php_series(ctx)?;
+        if !installed.iter().any(|s| s == &series) {
+            return Err(DevdError::invalid(format!(
+                "PHP {series} is not installed; the installed versions are {}",
+                installed.join(", ")
+            )));
+        }
+        site.php = Some(series);
+    } else {
+        site.php = None;
+    }
+    ctx.store.upsert_site(&site)?;
+
+    // The listener for the pinned version has to be running, or every request
+    // to the site is a 502. The row for it is made here, because the version
+    // may have been installed since the last time the stack was started.
+    let mut started = Vec::new();
+    if let Some(series) = &site.php {
+        let _ = devd_services::ensure_php_services(ctx);
+        let listener = devd_services::php_service_name(series);
+        let running = ctx
+            .store
+            .get_service(&listener)?
+            .map(|s| devd_services::running_pid(ctx, &s).is_some())
+            .unwrap_or(false);
+        if !running {
+            if let Ok(status) = devd_services::start(ctx, &listener) {
+                started.push(status.name);
+            }
+        }
+    }
+
+    // The configuration is what decides which upstream a request reaches, so
+    // it is re-rendered whenever the pin changes.
+    let mut warnings = Vec::new();
+    if let Err(e) = devd_services::nginx::render(ctx) {
+        warnings.push(format!("the web server configuration could not be re-rendered: {e}"));
+    }
+
+    Ok(json!({
+        "site": site,
+        "php": site.php,
+        "started": started,
+        "warnings": warnings,
+    }))
 }
 
 /// The site component of the environment check.
@@ -587,9 +678,56 @@ mod tests {
         let _ = std::fs::remove_dir_all(c.paths.root());
     }
 
+    /// A PHP runtime row, so that a version counts as installed.
+    fn install_php(c: &Ctx, version: &str) {
+        c.store
+            .upsert_runtime(&devd_core::state::Runtime {
+                id: format!("php-{version}"),
+                kind: "php".to_string(),
+                version: version.to_string(),
+                path: c.paths.runtime_version("php", version).display().to_string(),
+                digest: None,
+                pinned: false,
+                installed_at: devd_core::util::now(),
+            })
+            .unwrap();
+    }
+
     #[test]
-    fn a_site_without_tls_is_served_over_http_only() {
-        let c = ctx("plain");
+    fn a_site_can_be_pinned_to_a_php_version_and_unpinned_again() {
+        let c = ctx("pin");
+        install_php(&c, "8.5.11");
+        let created = create(&c, &request("pinned")).unwrap();
+
+        let pinned = set_php(&c, "pinned", Some("8.5")).unwrap();
+        assert_eq!(pinned["php"], json!("8.5"));
+        assert_eq!(c.store.get_site("pinned").unwrap().unwrap().php.as_deref(), Some("8.5"));
+
+        // The listing says which version the site runs on.
+        let rows = list(&c).unwrap();
+        let row = rows.iter().find(|r| r.site.name == "pinned").unwrap();
+        assert_eq!(row.php_effective.as_deref(), Some("8.5"));
+        assert!(row.php_installed.contains(&"8.5".to_string()));
+
+        // Unpinning puts it back on the default.
+        set_php(&c, "pinned", None).unwrap();
+        assert!(c.store.get_site("pinned").unwrap().unwrap().php.is_none());
+        let _ = std::fs::remove_dir_all(c.paths.root());
+        let _ = created;
+    }
+
+    #[test]
+    fn pinning_a_site_to_a_version_that_is_not_installed_is_refused() {
+        let c = ctx("pin-missing");
+        create(&c, &request("missing")).unwrap();
+        let err = set_php(&c, "missing", Some("7.4")).unwrap_err();
+        assert_eq!(err.code(), "invalid_input");
+        assert!(err.to_string().contains("not installed"), "{err}");
+        let _ = std::fs::remove_dir_all(c.paths.root());
+    }
+
+    #[test]
+    fn a_site_without_tls_is_served_over_http_only() {        let c = ctx("plain");
         let mut req = request("plain");
         req.tls = false;
         let created = create(&c, &req).unwrap();
