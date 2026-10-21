@@ -373,44 +373,51 @@ pub fn list(ctx: &Ctx) -> Result<Vec<InstalledRow>> {
 
 /// The runtimes this machine already has, found by asking the machine.
 ///
-/// Only the interpreter is asked for, and only once. Probing every tool in
-/// the catalogue takes minutes and has no place on a screen that answers in
-/// a moment.
+/// Only the interpreters are asked for, and only once each. Probing every
+/// tool in the catalogue takes minutes and has no place on a screen that
+/// answers in a moment.
 fn discover(ctx: &Ctx) -> Vec<InstalledRow> {
     let mut out = Vec::new();
-    let Some(exe) = devd_core::util::which("php") else {
-        return out;
-    };
-    let Ok(result) = devd_core::util::run(
-        &exe,
-        &["--version".to_string()],
-        None,
-        &[],
-        Some(std::time::Duration::from_secs(10)),
-    ) else {
-        return out;
-    };
-    let text = format!("{}\n{}", result.stdout, result.stderr);
-    let Some(version) = util::extract_version(&text, Some(r"PHP (\d+\.\d+\.\d+)")) else {
-        return out;
-    };
-    out.push(InstalledRow {
-        runtime: Runtime {
-            id: format!("php-{version}-system"),
-            kind: "php".into(),
-            version: version.clone(),
-            path: exe.display().to_string(),
-            digest: None,
-            pinned: false,
-            installed_at: String::new(),
-        },
-        present: true,
-        executable: exe.display().to_string(),
-        // The primary is whatever devd installed and marked as such. A
-        // runtime found on the machine is a fallback, never the primary.
-        primary: false,
-        managed: false,
-    });
+    // Each interpreter is asked in its own language: Go says `go version` and
+    // has no `--version` at all.
+    for (kind, exe, args, pattern) in [
+        ("php", "php", &["--version"][..], r"PHP (\d+\.\d+\.\d+)"),
+        ("node", "node", &["--version"][..], r"v(\d+\.\d+\.\d+)"),
+        ("go", "go", &["version"][..], r"go(\d+\.\d+(?:\.\d+)?)"),
+    ] {
+        let Some(exe) = devd_core::util::which(exe) else { continue };
+        let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+        let Ok(result) = devd_core::util::run(
+            &exe,
+            &args,
+            None,
+            &[],
+            Some(std::time::Duration::from_secs(10)),
+        ) else {
+            continue;
+        };
+        let text = format!("{}\n{}", result.stdout, result.stderr);
+        let Some(version) = util::extract_version(&text, Some(pattern)) else {
+            continue;
+        };
+        out.push(InstalledRow {
+            runtime: Runtime {
+                id: format!("{kind}-{version}-system"),
+                kind: kind.into(),
+                version: version.clone(),
+                path: exe.display().to_string(),
+                digest: None,
+                pinned: false,
+                installed_at: String::new(),
+            },
+            present: true,
+            executable: exe.display().to_string(),
+            // The primary is whatever devd installed and marked as such. A
+            // runtime found on the machine is a fallback, never the primary.
+            primary: false,
+            managed: false,
+        });
+    }
     let _ = ctx;
     out
 }

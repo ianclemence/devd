@@ -13,20 +13,23 @@ Ordered by what makes devd *wrong* today, not by what is easiest.
 | # | What | Why it matters | Where |
 |---|------|----------------|-------|
 | ~~A1~~ | ~~npm, Composer, Yarn and EAS reported "missing"~~ **fixed** | `util::which` now tries the `PATHEXT` candidates first, and `util::run` starts a batch file through the command interpreter | `devd-core/src/util.rs` |
-| ~~A2~~ | ~~Home card says "PHP — not installed"~~ **fixed** | `runtime.list` now reports a PHP found on the machine, marked as not managed by devd | `devd-runtime/src/lib.rs` |
+| ~~A2~~ | ~~Home card says "PHP — not installed"~~ **fixed** | `runtime.list` now reports the interpreters the machine already has, marked as not managed by devd | `devd-runtime/src/lib.rs` |
 | ~~A3~~ | ~~MariaDB reported installed when only MySQL is~~ **fixed** | A tool may now say what its output must contain and must not contain | `tools.yaml`, `tools.rs` |
 | ~~A4~~ | ~~ImageMagick probes the Windows disk converter~~ **fixed** | Same mechanism: only a program that says "ImageMagick" counts | `tools.yaml` |
 | ~~A5~~ | ~~A failed probe leaves the path pointing at the last candidate~~ **fixed** | The path is only recorded when the program actually ran | `tools.rs` `probe` |
+| ~~A6~~ | ~~The Runtimes tab said Node.js was not installed~~ **fixed** | Node and Go are found the same way PHP is; Go is asked with `go version`, which is the only thing it answers | `devd-runtime/src/lib.rs` |
+| A7 | A runtime the host's package manager still lists but whose files are gone | Bun on this machine: the registry entry is left, the files are not | the toolchain's "missing" note |
 
 ### B. devd's own team of agents
 
 | # | What | Why | Where |
 |---|------|-----|-------|
-| B1 | devd needs its own agents — a startup team, not a launcher for other people's | The person should name a member of the team and the work should go to that member, with its own brief, its own skills and its own copy of the work | new: `devd-agent` roster + `agent.spawn` |
-| B2 | Each agent has a role, a brief and a loadout of skills | Anthropic's pattern: a description says when to use it, a prompt says how it behaves, tools say what it may touch | `devd-agent/src/roles.rs` |
-| B3 | The team works on different projects at the same time, each in its own copy | "A team of engineers working on different projects being given to them" | `devd-workspace/src/orchestrate.rs` |
-| B4 | Agents report progress and ask questions through the inbox | The person should not have to watch | `devd-agent/src/team.rs`, `inbox.*` |
-| B5 | The assistant's own prompt must follow Anthropic's engineering guidance | Orchestrator-worker, explicit delegation, context isolation, bounded depth | `devd-agent/src/chat.rs` `PROMPT` |
+| B1 | devd needs its own agents — a startup team, not a launcher for other people's | **done**: eight specialists, named in the message, given the work | `devd-agent/src/roles.rs`, `team.assign` |
+| B2 | Each agent has a role, a brief and a loadout of skills | **done**: the roster already had one job, one permission set and one proof each; the assistant's prompt now describes them | `devd-agent/src/chat.rs` |
+| B3 | The team works on different projects at the same time, each in its own copy | The implementer role works in its own copy; the rest do not need one | `devd-workspace/src/orchestrate.rs` |
+| B4 | Agents report progress and ask questions through the inbox | **done**: the team already reports through the inbox and the run | `devd-agent/src/team.rs` |
+| B5 | The assistant's own prompt must follow Anthropic's engineering guidance | **done**: explicit delegation, context isolation, bounded depth, evidence over assertion | `devd-agent/src/chat.rs` `PROMPT` |
+| B6 | Show the roster on a screen, not only in the mention list | A team nobody can see is not a team | the Team runs screen |
 
 ### C. Memory
 
@@ -42,11 +45,11 @@ Ordered by what makes devd *wrong* today, not by what is easiest.
 
 | # | What | Why | Where |
 |---|------|-----|-------|
-| D1 | A **Skills** tab in the Agents screen | Skills are part of the team's loadout and need a home | `ui/app.js`, `devd-agent/src/skills.rs` |
-| D2 | Install a skill from a GitHub repository | Skills are shared as repositories | new capability |
-| D3 | Install a skill from skills.sh | The catalogue people already use | new capability |
-| D4 | Import a skill from another agent — OpenCode, Cursor, Codex | Their skills are already written | new capability |
-| D5 | Everything that is installed must load correctly | An installed skill that does not load is worse than one that is not there | new + tests |
+| D1 | A **Skills** tab in the Agents screen | **done** | `ui/app.js` |
+| D2 | Install a skill from a GitHub repository | **done**: the repository archive, read as text | `skills.install` |
+| D3 | Install a skill from skills.sh | **done, differently**: skills.sh's API needs a Vercel token and allows sixty requests an hour from an address; the files come from GitHub, where they live. The screen links to the catalogue | `skills.install`, the screen's "Browse the catalogue" |
+| D4 | Import a skill from another agent — Claude Code, Cursor, Codex, OpenCode, Windsurf, Cline, Gemini, Amp, Zed | **done** | `skills.import`, `skills.sources` |
+| D5 | Everything that is installed must load correctly | **done**: the front matter is parsed the way it is written, including a description folded across lines | `skills.rs` |
 
 ### E. The interface
 
@@ -54,9 +57,11 @@ Ordered by what makes devd *wrong* today, not by what is easiest.
 |---|------|-----|-------|
 | E1 | A route for every page, tab and section | A link to a screen should work, and the back button should mean something | `devd-server/src/api.rs`, `ui/app.js` |
 | E2 | Every button does what it says; the ones that are not needed are gone | A button that does nothing is a lie | all screens |
-| E3 | EAS for mobile development, like ADB for Android | Mobile is half the stacks and one of the two screens had a devices button | `toolchain.eas_projects`, done |
-| E4 | The composer at the bottom, the microphone in the send slot, `@` for context | asked for | done |
-| E5 | The "Plan" button beside Install was saying what the approval already says | Removed: one button per action | `ui/app.js`, done |
+| E3 | EAS for mobile development, like ADB for Android | **done**: `toolchain.eas_projects` and a Projects button | `crates/devd-stacks/src/caps.rs` |
+| E4 | The composer at the bottom, the microphone in the send slot, `@` for context | **done** | `ui/app.js` |
+| E5 | The "Plan" button beside Install was saying what the approval already says | **done**: removed; one button per action | `ui/app.js` |
+| E6 | The dialogs flashed and vanished | **done**: the modal and the drawer had their starting and resting states the wrong way round | `ui/style.css` |
+| E7 | The actions in a conversation were boxes with raw JSON in them | **done**: a sequence, joined by a line, with the time it took | `ui/app.js`, `ui/style.css` |
 
 ### F. The command line
 
@@ -81,17 +86,24 @@ Ordered by what makes devd *wrong* today, not by what is easiest.
 - The assistant follows OpenCode's shape: the mark before a conversation, the
   box with its controls in one row, the state of the session underneath.
 - A conversation says what it used — "Used 3 Edit, Shell" — before the words.
+- The actions in a conversation are a sequence, joined by a line, with the time
+  each one took; the details open on a click and say what a person would say.
 - The microphone holds the send slot until there is something to send.
-- `@` in the composer lists capabilities, skills, projects and agents.
+- `@` in the composer lists capabilities, skills, projects, devd's own team and
+  other people's agents.
+- devd's team can be named, and the work is handed to that member.
+- A Skills tab, with skills installed from GitHub and imported from the
+  agents already on this machine.
+- The dialogs stay open. The modal and the drawer had their starting and
+  resting states the wrong way round, so every one of them flashed and went.
 - Symfony, CodeIgniter 4 and CakePHP are gone from the stacks, and from the
   text that describes them.
 - The Tools tab, its page and its breadcrumb are all called Tools, and it
   behaves like the other Server tabs: it keeps its heading while it probes.
-- Services, Sites, Tools and Runtimes can be searched.
+- Services, Sites, Tools, Runtimes and Skills can be searched.
 - The README talks about devd and not about other products.
-- The tool steps in a conversation were being squashed to two pixels by a
-  flex column; the user's own message was being squeezed to one word.
 - Brand marks for the toolchain and the stacks, from the owners' own artwork.
 - **npm, Composer, Yarn and the Expo CLI are found and run again.**
 - **MySQL is MySQL and MariaDB is MariaDB; ImageMagick is ImageMagick.**
-- **The Home screen names the PHP it found and says why devd wants its own.**
+- **PHP, Node.js and Go are reported the same way everywhere: what the
+  machine has, and whether devd installed it.**

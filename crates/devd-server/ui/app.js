@@ -1300,17 +1300,22 @@
     return svc.port ? "port " + svc.port : "";
   }
 
-  function phpPrimary() {
+  function phpRuntime() {
     var php = state.server.runtimes.filter(function (r) { return r.runtime.kind === "php"; });
     // What devd installed and marked as the default comes first. Then any
     // runtime devd installed. Then one that was already on the machine: it
     // is real and usable, and saying "not installed" because devd did not
     // put it there would be a lie.
     var primary = php.filter(function (r) { return r.primary; })[0];
-    if (primary) return primary.runtime.version;
+    if (primary) return primary;
     var managed = php.filter(function (r) { return r.managed !== false; })[0];
-    if (managed) return managed.runtime.version;
-    return php.length ? php[0].runtime.version : null;
+    if (managed) return managed;
+    return php[0] || null;
+  }
+
+  function phpPrimary() {
+    var r = phpRuntime();
+    return r ? r.runtime.version : null;
   }
 
   /* Whether the operating system trusts devd's authority, as reported by the
@@ -1359,7 +1364,11 @@
     var healthy = total > 0 && up === total;
     var hosts = s.hosts || {};
     var pending = (hosts.adding || []).length + (hosts.removing || []).length;
-    var php = phpPrimary();
+    var phpRow = phpRuntime();
+    var php = phpRow ? phpRow.runtime.version : null;
+    // A PHP devd did not install is still a PHP, but it is not one devd can
+    // remove or point its own listener at.
+    var phpOwn = !phpRow || phpRow.managed !== false;
 
     var banner =
       '<div class="banner ' + (healthy ? "banner-ok" : "banner-warn") + '">' +
@@ -1383,7 +1392,7 @@
       '<div class="stat-grid">' +
       statCard("Services", up + " / " + total, total ? "running" : "none installed") +
       statCard("Sites", String(s.sites.length), s.sites.length ? "served" : "none yet") +
-      statCard("PHP", php || "none", php ? "primary runtime" : "not installed") +
+      statCard("PHP", php || "none", php ? (phpOwn ? "primary runtime" : "found on this machine") : "not installed") +
       statCard("Certificates", String(s.certs.length), s.certs.length ? "issued by devd" : "none yet") +
       "</div>";
 
@@ -1552,7 +1561,7 @@
       var pinned = site.php ? devdSeries(site.php) : "";
       var phpCell;
       if (!installed.length) {
-        phpCell = '<span class="dim">' + esc(effective || "no PHP installed") + "</span>";
+        phpCell = '<span class="dim">' + esc(effective || "no PHP runtime devd manages") + "</span>";
       } else {
         var options = ['<option value=""' + (pinned ? "" : " selected") + ">Default (" + esc(phpPrimary() || "none") + ")</option>"];
         installed.forEach(function (v) {
@@ -1747,21 +1756,29 @@
       var installed = state.server.runtimes.filter(function (r) {
         return r.runtime.kind === kind.kind && keeps(q, r.runtime.version, r.runtime.path, kind.label, kind.kind);
       });
+      var managed = installed.filter(function (r) { return r.managed !== false; });
       var list = installed.length
         ? '<div class="rows">' +
           installed
             .map(function (r) {
               var rt = r.runtime;
+              // A runtime devd did not install is real and usable, but devd
+              // cannot remove it and must not point its own services at it.
+              var own = r.managed !== false;
               return (
                 '<div class="svc">' +
                 '<div class="svc-main"><div class="svc-name">' + esc(rt.version) +
-                (r.primary ? ' <span class="pill pill-accent">primary</span>' : "") + "</div>" +
+                (r.primary ? ' <span class="pill pill-accent">primary</span>' : "") +
+                (own ? "" : ' <span class="pill">found on this machine</span>') +
+                "</div>" +
                 '<div class="svc-sub mono nowrap" title="' + attr(rt.path) + '">' + esc(rt.path) + "</div></div>" +
                 '<div class="svc-actions">' +
-                (kind.kind === "php" && !r.primary
+                (kind.kind === "php" && !r.primary && own
                   ? '<button type="button" class="btn btn-mini" data-action="use-runtime" data-version="' + attr(rt.version) + '">Use for new sites</button>'
                   : "") +
-                '<button type="button" class="btn btn-mini btn-danger" data-action="remove-runtime" data-kind="' + attr(kind.kind) + '" data-version="' + attr(rt.version) + '">Remove</button>' +
+                (own
+                  ? '<button type="button" class="btn btn-mini btn-danger" data-action="remove-runtime" data-kind="' + attr(kind.kind) + '" data-version="' + attr(rt.version) + '">Remove</button>'
+                  : "") +
                 "</div></div>"
               );
             })
@@ -1770,7 +1787,7 @@
 
       return (
         '<div class="panel"><div class="panel-head"><span>' + brandImg(kind.kind, "brand-dot") + esc(kind.label) + "</span>" +
-        '<span class="panel-note">' + installed.length + " installed</span></div>" +
+        '<span class="panel-note">' + managed.length + " installed" + (managed.length !== installed.length ? " · " + (installed.length - managed.length) + " found on this machine" : "") + "</span></div>" +
         list +
         '<div class="panel-body panel-foot"><div class="inline">' +
         '<span class="dim grow">' + esc(kind.note) + "</span>" +
