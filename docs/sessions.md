@@ -90,8 +90,7 @@ The limits are enforced before a process is created, not after.
 | `POST` | `/api/sessions/:id/rename` | `{label}` |
 | `DELETE` | `/api/sessions/:id` | Dismiss a finished session |
 
-The v0.7 `/api/terminal/*` routes remain as compatibility aliases over the same
-session manager.
+`GET /api/sessions/harnesses` lists the coding-agent CLIs found on the machine.
 
 The same operations are capabilities (`session.start`, `session.list`,
 `session.get`, `session.attach`, `session.output`, `session.input`,

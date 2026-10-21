@@ -921,6 +921,38 @@ async fn a_real_socket_serves_the_application_and_stops_when_asked() {
 // ------------------------------------------------------------ work surfaces
 
 #[tokio::test]
+async fn the_harness_list_is_not_mistaken_for_a_session_id() {
+    // `/api/sessions/harnesses` sits beside `/api/sessions/:id`. It must answer
+    // with the list of harnesses, not look for a session called "harnesses".
+    let fixture = Fixture::new();
+    let (state, _rx) = fixture.state(8788);
+    let token = state.token.clone();
+
+    let (status, body) = call(state.clone(), "GET", "/api/sessions/harnesses", Some(&token), None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let list = body.as_array().expect("a list of harnesses");
+    assert!(
+        list.iter().any(|h| h["kind"] == "shell"),
+        "the plain shell is always offered: {body}"
+    );
+
+    // The removed v0.7 aliases no longer do anything. An unknown GET falls back
+    // to the application page, so what matters is that it is not the list.
+    let (_, legacy) =
+        call(state.clone(), "GET", "/api/terminal/harnesses", Some(&token), None).await;
+    assert!(legacy.as_array().is_none(), "the old harness route still answers");
+    let (status, _) = call(
+        state,
+        "POST",
+        "/api/terminal/start",
+        Some(&token),
+        Some(json!({ "kind": "shell" })),
+    )
+    .await;
+    assert_ne!(status, StatusCode::OK, "the old start route still starts a session");
+}
+
+#[tokio::test]
 async fn a_session_started_over_http_is_listed_attached_and_stopped() {
     let fixture = Fixture::new();
     let (state, _rx) = fixture.state_with_workspace(8799);

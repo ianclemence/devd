@@ -419,8 +419,8 @@ mod tests {
 // mutating operation - stop, rename, dismiss, cancel - is dispatched through
 // the registry, so its tier is enforced and the attempt is audited.
 
-/// `GET /api/terminal/harnesses` - the coding-agent CLIs found on this machine.
-pub async fn terminal_harnesses() -> Response {
+/// `GET /api/sessions/harnesses` - the coding-agent CLIs found on this machine.
+pub async fn session_harnesses() -> Response {
     Json(devd_workspace::session::harnesses()).into_response()
 }
 
@@ -466,27 +466,6 @@ fn start_session(state: &Arc<AppState>, req: TerminalStart) -> Result<Value, Str
         .outcome
         .map(|outcome| outcome.data)
         .ok_or_else(|| "session.start returned no session".to_string())
-}
-
-/// `POST /api/terminal/start` - the v0.7 compatibility path.
-pub async fn terminal_start(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<TerminalStart>,
-) -> Response {
-    let task = state.clone();
-    match tokio::task::spawn_blocking(move || start_session(&task, req)).await {
-        Ok(Ok(view)) => Json(json!({
-            "id": view["id"],
-            "session": view,
-        }))
-        .into_response(),
-        Ok(Err(message)) => refuse(StatusCode::BAD_REQUEST, "terminal", &message),
-        Err(e) => refuse(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal",
-            &format!("the terminal task failed: {e}"),
-        ),
-    }
 }
 
 /// `POST /api/sessions` - start a session and return its durable record.
@@ -566,27 +545,6 @@ pub async fn session_output(
 }
 
 #[derive(Deserialize)]
-pub struct TerminalOutput {
-    pub id: String,
-    pub cursor: Option<u64>,
-}
-
-/// `POST /api/terminal/output` - the v0.7 compatibility path.
-pub async fn terminal_output(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<TerminalOutput>,
-) -> Response {
-    match state
-        .workspace
-        .sessions()
-        .output(&req.id, req.cursor.unwrap_or(0))
-    {
-        Ok(value) => Json(value).into_response(),
-        Err(e) => error_response(&e),
-    }
-}
-
-#[derive(Deserialize)]
 pub struct DataBody {
     pub data: String,
 }
@@ -598,23 +556,6 @@ pub async fn session_input(
     Json(body): Json<DataBody>,
 ) -> Response {
     match state.workspace.sessions().write(&id, &body.data) {
-        Ok(()) => Json(json!({ "ok": true })).into_response(),
-        Err(e) => error_response(&e),
-    }
-}
-
-#[derive(Deserialize)]
-pub struct TerminalInput {
-    pub id: String,
-    pub data: String,
-}
-
-/// `POST /api/terminal/input` - the v0.7 compatibility path.
-pub async fn terminal_input(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<TerminalInput>,
-) -> Response {
-    match state.workspace.sessions().write(&req.id, &req.data) {
         Ok(()) => Json(json!({ "ok": true })).into_response(),
         Err(e) => error_response(&e),
     }
@@ -633,28 +574,6 @@ pub async fn session_resize(
     Json(body): Json<SizeBody>,
 ) -> Response {
     match state.workspace.sessions().resize(&id, body.cols, body.rows) {
-        Ok(()) => Json(json!({ "ok": true })).into_response(),
-        Err(e) => error_response(&e),
-    }
-}
-
-#[derive(Deserialize)]
-pub struct TerminalResize {
-    pub id: String,
-    pub cols: u16,
-    pub rows: u16,
-}
-
-/// `POST /api/terminal/resize` - the v0.7 compatibility path.
-pub async fn terminal_resize(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<TerminalResize>,
-) -> Response {
-    match state
-        .workspace
-        .sessions()
-        .resize(&req.id, req.cols, req.rows)
-    {
         Ok(()) => Json(json!({ "ok": true })).into_response(),
         Err(e) => error_response(&e),
     }
@@ -708,19 +627,6 @@ pub async fn session_rename(
 /// `POST /api/sessions/:id/stop`.
 pub async fn session_stop(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
     dispatch_route(state, "session.stop", json!({ "id": id })).await
-}
-
-#[derive(Deserialize)]
-pub struct TerminalStop {
-    pub id: String,
-}
-
-/// `POST /api/terminal/stop` - the v0.7 compatibility path.
-pub async fn terminal_stop(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<TerminalStop>,
-) -> Response {
-    dispatch_route(state, "session.stop", json!({ "id": req.id })).await
 }
 
 /// `DELETE /api/sessions/:id` - forget a finished session.

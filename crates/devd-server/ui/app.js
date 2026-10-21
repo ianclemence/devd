@@ -1954,7 +1954,7 @@
 
   function loadAgents() {
     return Promise.all([
-      request("/api/terminal/harnesses").catch(function () { return { ok: false, body: [] }; }),
+      request("/api/sessions/harnesses").catch(function () { return { ok: false, body: [] }; }),
       request(projectQuery("/api/sessions")).catch(function () { return { ok: false, body: null }; }),
       request(projectQuery("/api/tasks")).catch(function () { return { ok: false, body: null }; })
     ]).then(function (r) {

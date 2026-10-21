@@ -229,12 +229,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/audit", get(api::audit))
         .route("/api/doctor", get(api::doctor))
         .route("/api/shutdown", post(api::shutdown))
-        .route("/api/terminal/harnesses", get(api::terminal_harnesses))
-        .route("/api/terminal/start", post(api::terminal_start))
-        .route("/api/terminal/output", post(api::terminal_output))
-        .route("/api/terminal/input", post(api::terminal_input))
-        .route("/api/terminal/resize", post(api::terminal_resize))
-        .route("/api/terminal/stop", post(api::terminal_stop))
+        .route("/api/sessions/harnesses", get(api::session_harnesses))
         .route(
             "/api/sessions",
             get(api::sessions_list).post(api::sessions_start),
