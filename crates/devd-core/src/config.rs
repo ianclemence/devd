@@ -148,6 +148,14 @@ impl Settings {
                 "http_port and https_port must differ",
             ));
         }
+        // Accepting a setting nothing acts on is worse than refusing it: sites
+        // would be recorded for a web server that renders no configuration.
+        if self.web_server == WebServer::Apache {
+            return Err(crate::error::DevdError::invalid(
+                "web_server = \"apache\" is not implemented: devd serves sites with nginx. \
+                 Remove the setting, or set it to \"nginx\"",
+            ));
+        }
         Ok(())
     }
 }
@@ -165,6 +173,16 @@ mod tests {
             crate::platform::Os::current().default_ports()
         );
         assert!(s.git_protect_uncommitted);
+        s.validate().unwrap();
+    }
+
+    #[test]
+    fn a_web_server_devd_cannot_drive_is_refused_not_silently_ignored() {
+        let mut s = Settings::default();
+        s.web_server = WebServer::Apache;
+        let err = s.validate().unwrap_err().to_string();
+        assert!(err.contains("apache") && err.contains("not implemented"), "{err}");
+        s.web_server = WebServer::Nginx;
         s.validate().unwrap();
     }
 

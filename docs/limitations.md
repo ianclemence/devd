@@ -51,6 +51,19 @@ untested. Specifically not done:
   install script has not been executed on Linux.
 
 
+## Moving from Laragon
+
+Laragon serves sites with Apache (mod_php), nginx, MySQL and Redis. What devd does today:
+
+| Laragon | devd |
+| --- | --- |
+| Apache | **Not implemented.** `web_server = "apache"` is refused with an error rather than ignored. Sites are served by nginx; Laravel, WordPress and any app whose routing is a front controller work through `try_files`, but rules that live in an `.htaccess` (`php_value`, authentication, custom rewrites) do not. |
+| Auto virtual hosts for every folder in `www` | **Not implemented.** Each project is added with `devd site create <name> --root <folder>`. |
+| MySQL 8 | devd manages **MariaDB**, not MySQL. An existing MySQL is detected and can be chosen with "Use it", but `db.*` and `site create --db` act only on devd's own MariaDB. There is no dump and restore yet, so databases move by hand. |
+| Redis | Detected, not managed. |
+| Ports 80 and 443 | Held by Laragon while it runs; stop it, or let `devd setup` move devd to other ports. |
+| Wildcard `*.test` | Not implemented; names are published one at a time in the hosts file, as Laragon does. |
+
 ## Runtimes and services
 
 | Item | What it is | What it would be |
