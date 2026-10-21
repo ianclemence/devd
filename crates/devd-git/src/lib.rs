@@ -1607,11 +1607,6 @@ impl GitService {
         let mut items: Vec<WorktreeInfo> = Vec::new();
         for line in out.lines() {
             if let Some(p) = line.strip_prefix("worktree ") {
-                if let Some(last) = items.last() {
-                    if last.path.is_empty() {
-                        // unreachable, kept for clarity
-                    }
-                }
                 items.push(WorktreeInfo {
                     path: p.to_string(),
                     head: String::new(),
