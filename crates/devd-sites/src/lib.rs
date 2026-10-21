@@ -125,6 +125,121 @@ pub fn key_path(ctx: &Ctx, host: &str) -> PathBuf {
     devd_services::tls::key_path_for_host(ctx, host)
 }
 
+
+/// Turn what a person typed into the address nginx will proxy to.
+///
+/// `3000`, `localhost:5173`, `http://127.0.0.1:8000` and `https://localhost:8443`
+/// are all accepted. The result is always `scheme://host:port` with nothing
+/// else on it.
+///
+/// Only a program on this machine can be a site's upstream. A proxy site hands
+/// every request that reaches the hostname to the address, so an address that
+/// pointed elsewhere would make devd a relay for whatever answered there; a
+/// program on another machine is a deliberate decision for a configuration
+/// file, not a field. The text ends up inside an nginx configuration, so
+/// anything that is not part of a plain address is refused rather than quoted.
+pub fn normalize_upstream(raw: &str) -> Result<String> {
+    let text = raw.trim();
+    if text.is_empty() {
+        return Err(DevdError::invalid(
+            "an upstream is the address of a program that is running, such as 3000 or \
+             http://127.0.0.1:5173",
+        ));
+    }
+    if text
+        .chars()
+        .any(|c| c.is_whitespace() || c.is_control() || "\"'`;{}$\\@?#|<>*".contains(c))
+    {
+        return Err(DevdError::invalid(format!(
+            "`{text}` is not a plain address; use a port, or scheme://host:port"
+        )));
+    }
+
+    // A bare port means "on this machine".
+    if text.chars().all(|c| c.is_ascii_digit()) {
+        let port = parse_port(text)?;
+        return Ok(format!("http://127.0.0.1:{port}"));
+    }
+
+    let (scheme, rest) = match text.split_once("://") {
+        Some((scheme, rest)) => (scheme.to_ascii_lowercase(), rest),
+        None => ("http".to_string(), text),
+    };
+    if scheme != "http" && scheme != "https" {
+        return Err(DevdError::invalid(format!(
+            "an upstream is spoken to over http or https, not {scheme}"
+        )));
+    }
+    let rest = rest.trim_end_matches('/');
+    if rest.contains('/') {
+        return Err(DevdError::invalid(
+            "an upstream is an address without a path: every request is forwarded, so put \
+             the path in the browser",
+        ));
+    }
+
+    let (host, port) = if let Some(inner) = rest.strip_prefix('[') {
+        let (host, after) = inner
+            .split_once(']')
+            .ok_or_else(|| DevdError::invalid("an IPv6 address needs a closing `]`"))?;
+        let port = match after.strip_prefix(':') {
+            Some(p) => parse_port(p)?,
+            None if after.is_empty() => default_port(&scheme),
+            None => return Err(DevdError::invalid(format!("`{rest}` is not an address"))),
+        };
+        (format!("[{host}]"), port)
+    } else {
+        match rest.rsplit_once(':') {
+            Some((host, port)) => (host.to_string(), parse_port(port)?),
+            None => (rest.to_string(), default_port(&scheme)),
+        }
+    };
+
+    let loopback = matches!(host.as_str(), "127.0.0.1" | "localhost" | "[::1]")
+        || host.ends_with(".localhost")
+        || host.starts_with("127.") && host.split('.').count() == 4
+            && host.split('.').all(|p| p.parse::<u8>().is_ok());
+    if !loopback {
+        return Err(DevdError::invalid(format!(
+            "{host} is not on this machine. A proxy site forwards to a program on \
+             127.0.0.1 or localhost"
+        )));
+    }
+    Ok(format!("{scheme}://{host}:{port}"))
+}
+
+fn default_port(scheme: &str) -> u16 {
+    if scheme == "https" {
+        443
+    } else {
+        80
+    }
+}
+
+fn parse_port(text: &str) -> Result<u16> {
+    match text.parse::<u16>() {
+        Ok(port) if port > 0 => Ok(port),
+        _ => Err(DevdError::invalid(format!(
+            "`{text}` is not a port between 1 and 65535"
+        ))),
+    }
+}
+
+/// The port of a normalised upstream.
+fn upstream_port(upstream: &str) -> Option<u16> {
+    upstream.rsplit(':').next()?.parse().ok()
+}
+
+/// Whether something is accepting connections at a site's upstream.
+///
+/// `None` for a site that is not a proxy. A dev server that is not running is
+/// the ordinary state of a proxy site, so this is information to show, not an
+/// error.
+pub fn upstream_listening(site: &Site) -> Option<bool> {
+    let port = upstream_port(site.upstream.as_deref()?)?;
+    Some(devd_services::local_tcp_open(port))
+}
+
 /// Arguments accepted by [`create`].
 #[derive(Debug, Clone)]
 pub struct CreateRequest {
@@ -138,6 +253,9 @@ pub struct CreateRequest {
     pub tls: bool,
     /// Whether to create a database named after the site.
     pub db: bool,
+    /// A running program to forward every request to, instead of serving a
+    /// directory: `3000`, `localhost:5173`, `http://127.0.0.1:8000`.
+    pub upstream: Option<String>,
 }
 
 /// Create a site: directory, certificate, record, configuration.
@@ -148,6 +266,11 @@ pub fn create(ctx: &Ctx, request: &CreateRequest) -> Result<Created> {
         .clone()
         .unwrap_or_else(|| format!("{}.{}", request.name, ctx.settings.tld));
     util::validate_hostname(&host)?;
+    let upstream = request
+        .upstream
+        .as_deref()
+        .map(normalize_upstream)
+        .transpose()?;
 
     for existing in ctx.store.list_sites()? {
         if existing.name == request.name {
@@ -169,8 +292,14 @@ pub fn create(ctx: &Ctx, request: &CreateRequest) -> Result<Created> {
         .clone()
         .map(PathBuf::from)
         .unwrap_or_else(|| default_directory(ctx, &request.name));
-    std::fs::create_dir_all(&directory)?;
-    let starter = write_starter_page(&directory, &request.name)?;
+    // A proxy site serves a program, not a directory, so it creates neither the
+    // directory nor a starter page.
+    let starter = if upstream.is_none() {
+        std::fs::create_dir_all(&directory)?;
+        write_starter_page(&directory, &request.name)?
+    } else {
+        None
+    };
 
     let mut warnings = Vec::new();
     if let Some(page) = &starter {
@@ -190,11 +319,22 @@ pub fn create(ctx: &Ctx, request: &CreateRequest) -> Result<Created> {
         host: host.clone(),
         root: directory.display().to_string(),
         web_server: ctx.settings.web_server.as_str().to_string(),
-        php: ctx.settings.primary_php.clone().filter(|v| !v.is_empty()),
+        php: if upstream.is_some() {
+            None
+        } else {
+            ctx.settings.primary_php.clone().filter(|v| !v.is_empty())
+        },
         tls_mode: tls.as_str().to_string(),
         db_name: None,
+        upstream: upstream.clone(),
         created_at: util::now(),
     };
+    if upstream.is_some() && upstream_listening(&site) == Some(false) {
+        warnings.push(format!(
+            "nothing is listening at {} yet; start the program and {host} will reach it",
+            upstream.as_deref().unwrap_or_default()
+        ));
+    }
     ctx.store.upsert_site(&site)?;
 
     // A database is created only when a server is actually there to create it
@@ -277,8 +417,15 @@ fn reconcile(ctx: &Ctx, warnings: &mut Vec<String>) -> Result<bool> {
         Err(e) => return Err(e),
     }
 
-    let status = devd_services::status(ctx, "nginx")?;
-    if !status.running {
+    // The site is already recorded and its configuration written. A web server
+    // devd has not installed as a service is not running, which is not a reason
+    // to fail the operation that has just succeeded.
+    let running = match devd_services::status(ctx, "nginx") {
+        Ok(status) => status.running,
+        Err(e) if e.code() == "not_found" => false,
+        Err(e) => return Err(e),
+    };
+    if !running {
         return Ok(false);
     }
     devd_services::nginx::reload(ctx)?;
@@ -321,6 +468,65 @@ fn write_starter_page(directory: &Path, name: &str) -> Result<Option<String>> {
     );
     util::atomic_write(&php, &page)?;
     Ok(Some(php.display().to_string()))
+}
+
+/// Point a site at a running program, or turn it back into a directory site.
+///
+/// `Some(address)` makes every request to the hostname go to that program and
+/// drops the PHP pin, since nothing runs PHP for it. `None` serves the site's
+/// project directory again, which needs that directory to exist: the site is
+/// not left pointing at nothing.
+pub fn set_upstream(ctx: &Ctx, name: &str, upstream: Option<&str>) -> Result<serde_json::Value> {
+    let mut site = ctx
+        .store
+        .list_sites()?
+        .into_iter()
+        .find(|s| s.name == name)
+        .ok_or_else(|| DevdError::not_found(format!("no site named `{name}`")))?;
+
+    match upstream.map(str::trim).filter(|u| !u.is_empty()) {
+        Some(address) => {
+            site.upstream = Some(normalize_upstream(address)?);
+            site.php = None;
+        }
+        None => {
+            if site.upstream.is_none() {
+                return Err(DevdError::invalid(format!(
+                    "`{name}` already serves its project directory"
+                )));
+            }
+            if !Path::new(&site.root).is_dir() {
+                return Err(DevdError::invalid(format!(
+                    "`{name}` has no project directory at {} to serve; create it, or give \
+                     the site another upstream",
+                    site.root
+                )));
+            }
+            site.upstream = None;
+        }
+    }
+    ctx.store.upsert_site(&site)?;
+
+    let mut warnings = Vec::new();
+    if upstream_listening(&site) == Some(false) {
+        warnings.push(format!(
+            "nothing is listening at {} yet; start the program and {} will reach it",
+            site.upstream.as_deref().unwrap_or_default(),
+            site.host
+        ));
+    }
+    let reloaded = reconcile(ctx, &mut warnings)?;
+    ctx.events.emit_with(
+        "site.upstream_changed",
+        format!("{} now serves {}", site.name, site.upstream.as_deref().unwrap_or("its directory")),
+        json!({ "site": site.name, "upstream": site.upstream }),
+    );
+    Ok(json!({
+        "site": site,
+        "url": url_for(ctx, &site),
+        "reloaded": reloaded,
+        "warnings": warnings,
+    }))
 }
 
 /// Remove a site.
@@ -429,6 +635,9 @@ pub struct SiteRow {
     pub php_installed: Vec<String>,
     /// The PHP version the site is served by: its own, or the default.
     pub php_effective: Option<String>,
+    /// For a proxy site, whether anything is accepting connections at its
+    /// upstream right now. `None` for a site that serves a directory.
+    pub upstream_listening: Option<bool>,
 }
 
 /// Every site, with a live check of what is actually on disk.
@@ -462,7 +671,8 @@ pub fn list(ctx: &Ctx) -> Result<Vec<SiteRow>> {
                 None => primary.clone(),
             };
             SiteRow {
-                present: Path::new(&site.root).is_dir(),
+                // A proxy site has no project directory to be missing.
+                present: site.upstream.is_some() || Path::new(&site.root).is_dir(),
                 url: url_for(ctx, &site),
                 document_root: site.document_root(),
                 in_hosts: managed.iter().any(|e| e.host == site.host),
@@ -470,6 +680,7 @@ pub fn list(ctx: &Ctx) -> Result<Vec<SiteRow>> {
                 server_running,
                 php_installed: php_installed.clone(),
                 php_effective,
+                upstream_listening: upstream_listening(&site),
                 site,
             }
         })
@@ -562,7 +773,8 @@ pub fn doctor_check(paths: &Paths) -> Vec<Check> {
 
     let missing: Vec<&str> = sites
         .iter()
-        .filter(|s| !Path::new(&s.root).is_dir())
+        // A proxy site serves a program, so it has no directory to be missing.
+        .filter(|s| s.upstream.is_none() && !Path::new(&s.root).is_dir())
         .map(|s| s.name.as_str())
         .collect();
     let unmanaged: Vec<&str> = sites
@@ -644,7 +856,110 @@ mod tests {
             root: None,
             tls: true,
             db: false,
+            upstream: None,
         }
+    }
+
+    #[test]
+    fn an_upstream_is_a_plain_address_on_this_machine() {
+        for (typed, expected) in [
+            ("3000", "http://127.0.0.1:3000"),
+            (" 5173 ", "http://127.0.0.1:5173"),
+            ("localhost:5173", "http://localhost:5173"),
+            ("http://127.0.0.1:8000", "http://127.0.0.1:8000"),
+            ("http://127.0.0.1:8000/", "http://127.0.0.1:8000"),
+            ("HTTPS://localhost:8443", "https://localhost:8443"),
+            ("[::1]:3000", "http://[::1]:3000"),
+            ("localhost", "http://localhost:80"),
+            ("http://app.localhost:4000", "http://app.localhost:4000"),
+            ("127.0.0.2:9000", "http://127.0.0.2:9000"),
+        ] {
+            assert_eq!(normalize_upstream(typed).unwrap(), expected, "{typed}");
+        }
+    }
+
+    #[test]
+    fn an_upstream_that_is_not_plain_or_not_local_is_refused() {
+        for bad in [
+            "",
+            "0",
+            "70000",
+            "ftp://127.0.0.1:21",
+            "example.com:3000",
+            "http://192.168.1.5:3000",
+            "http://127.0.0.1:3000/api",
+            "http://user@127.0.0.1:3000",
+            "127.0.0.1:3000; return 200",
+            "127.0.0.1:3000 foo",
+            "http://127.0.0.1:3000/$x",
+            "http://127.0.0.1:{x}",
+            "http://[::1:3000",
+            "127.0.0.1:abc",
+            "127.0.0.1.evil.com:80",
+            "999.1.1.1:80",
+        ] {
+            assert!(normalize_upstream(bad).is_err(), "`{bad}` was accepted");
+        }
+    }
+
+    #[test]
+    fn a_proxy_site_has_no_directory_no_php_and_a_proxy_block() {
+        let c = ctx("proxy");
+        let mut req = request("api");
+        req.upstream = Some("5173".to_string());
+        let created = create(&c, &req).unwrap();
+        assert_eq!(created.site.upstream.as_deref(), Some("http://127.0.0.1:5173"));
+        assert_eq!(created.site.php, None);
+        assert!(
+            !Path::new(&created.directory).exists(),
+            "a proxy site must not create a project directory"
+        );
+        assert!(created.certificate.is_some(), "a proxy site still gets HTTPS");
+        let row = list(&c).unwrap().into_iter().find(|r| r.site.name == "api").unwrap();
+        assert!(row.present, "a proxy site has no directory to be missing");
+        // Nothing listens on that port in a test, and the row says so.
+        assert!(row.upstream_listening.is_some());
+    }
+
+    #[test]
+    fn creating_a_site_succeeds_when_nginx_is_present_but_not_yet_a_service() {
+        // The program and its files are there, but `service install` has not
+        // recorded a service. Creating the site must not fail after the site is
+        // already stored.
+        let c = ctx("noservice");
+        let exe = devd_services::nginx::directory(&c).join(if cfg!(windows) {
+            "nginx.exe"
+        } else {
+            "sbin/nginx"
+        });
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, b"binary").unwrap();
+
+        let mut req = request("api");
+        req.upstream = Some("3999".to_string());
+        let created = create(&c, &req).expect("the site must be created");
+        assert!(!created.reloaded, "nothing is running to reload");
+        assert!(c.store.get_site("api").unwrap().is_some());
+        assert!(
+            devd_services::nginx::config_path(&c).is_file(),
+            "the configuration is still written"
+        );
+    }
+
+    #[test]
+    fn an_upstream_can_be_changed_and_a_directory_site_can_become_a_proxy() {
+        let c = ctx("setproxy");
+        create(&c, &request("blog")).unwrap();
+        let result = set_upstream(&c, "blog", Some("3000")).unwrap();
+        assert_eq!(result["site"]["upstream"], "http://127.0.0.1:3000");
+        assert!(c.store.get_site("blog").unwrap().unwrap().php.is_none());
+        // Back to a directory: the directory is still there.
+        set_upstream(&c, "blog", None).unwrap();
+        assert!(c.store.get_site("blog").unwrap().unwrap().upstream.is_none());
+        // Clearing a site that was never a proxy is a mistake worth naming.
+        assert!(set_upstream(&c, "blog", None).is_err());
+        assert!(set_upstream(&c, "blog", Some("example.com:80")).is_err());
+        assert!(set_upstream(&c, "nope", Some("3000")).is_err());
     }
 
     #[test]
@@ -908,6 +1223,7 @@ mod tests {
                 php: None,
                 tls_mode: "internal".into(),
                 db_name: None,
+                upstream: None,
                 created_at: util::now(),
             })
             .unwrap();

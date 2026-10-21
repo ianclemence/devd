@@ -199,6 +199,12 @@ fn render_text(render: Render, sites: &[Site]) -> String {
             upstream_name(series)
         ));
     }
+    if sites.iter().any(|s| s.upstream.is_some()) {
+        // Only a request that asks to upgrade keeps the connection open for it.
+        out.push_str(
+            "    map $http_upgrade $devd_connection_upgrade {\n        default upgrade;\n        ''      close;\n    }\n\n",
+        );
+    }
     out.push_str(&default_server(&render));
     for site in sites {
         out.push_str(&site_servers(&render, site));
@@ -254,6 +260,30 @@ fn default_server(render: &Render) -> String {
     )
 }
 
+/// The `location` that hands every request to a program that is already
+/// running.
+///
+/// The host the browser asked for is passed through unchanged, because dev
+/// servers build absolute URLs and check origins from it. The upgrade headers
+/// are what let a hot-reload WebSocket (Vite, webpack, Next) through, and the
+/// read timeout is long for the same reason: an idle socket is not an error.
+fn proxy_location(upstream: &str) -> String {
+    format!(
+        "        location / {{\n\
+         \x20           proxy_pass          {upstream};\n\
+         \x20           proxy_http_version  1.1;\n\
+         \x20           proxy_set_header    Host               $host;\n\
+         \x20           proxy_set_header    X-Real-IP          $remote_addr;\n\
+         \x20           proxy_set_header    X-Forwarded-For    $proxy_add_x_forwarded_for;\n\
+         \x20           proxy_set_header    X-Forwarded-Proto  $scheme;\n\
+         \x20           proxy_set_header    X-Forwarded-Host   $host;\n\
+         \x20           proxy_set_header    Upgrade            $http_upgrade;\n\
+         \x20           proxy_set_header    Connection         $devd_connection_upgrade;\n\
+         \x20           proxy_read_timeout  3600s;\n\
+         \x20       }}\n"
+    )
+}
+
 /// The server blocks for one site.
 fn site_servers(render: &Render, site: &Site) -> String {
     let root = slashy(Path::new(&site.document_root()));
@@ -287,8 +317,10 @@ fn site_servers(render: &Render, site: &Site) -> String {
         out.push_str("        ssl_session_cache    shared:devd:2m;\n");
         out.push_str("        ssl_session_timeout  10m;\n");
     }
-    out.push_str(&format!("        root         \"{root}\";\n"));
-    out.push_str("        index        index.php index.html index.htm;\n");
+    if site.upstream.is_none() {
+        out.push_str(&format!("        root         \"{root}\";\n"));
+        out.push_str("        index        index.php index.html index.htm;\n");
+    }
     out.push_str(&format!(
         "        access_log   \"{}/nginx-{host}.access.log\";\n",
         render.logs
@@ -297,6 +329,11 @@ fn site_servers(render: &Render, site: &Site) -> String {
         "        error_log    \"{}/nginx-{host}.error.log\";\n\n",
         render.logs
     ));
+    if let Some(upstream) = &site.upstream {
+        out.push_str(&proxy_location(upstream));
+        out.push_str("    }\n\n");
+        return out;
+    }
     out.push_str("        location / {\n            try_files $uri $uri/ /index.php?$query_string;\n        }\n\n");
     out.push_str("        location ~ \\.php$ {\n");
     out.push_str("            try_files $uri =404;\n");
@@ -409,6 +446,7 @@ mod tests {
             php: Some("8.3.35".to_string()),
             tls_mode: tls.to_string(),
             db_name: None,
+            upstream: None,
             created_at: devd_core::util::now(),
         }
     }
@@ -439,6 +477,45 @@ mod tests {
             },
             sites,
         )
+    }
+
+    fn proxy(name: &str, tls: &str, upstream: &str) -> Site {
+        let mut s = site(name, tls);
+        s.php = None;
+        s.upstream = Some(upstream.to_string());
+        s
+    }
+
+    #[test]
+    fn a_proxy_site_forwards_everything_and_serves_no_files() {
+        let text = render_for(&[proxy("app", "internal", "http://127.0.0.1:5173")], 8080, 8443);
+        assert!(text.contains("proxy_pass          http://127.0.0.1:5173;"), "{text}");
+        // The browser's host reaches the program, and a hot-reload socket can upgrade.
+        assert!(text.contains("proxy_set_header    Host               $host;"), "{text}");
+        assert!(text.contains("proxy_set_header    Upgrade            $http_upgrade;"), "{text}");
+        assert!(text.contains("map $http_upgrade $devd_connection_upgrade"), "{text}");
+        // Still HTTPS, with the certificate devd issued.
+        assert!(text.contains("listen       8443 ssl;"), "{text}");
+        assert!(text.contains("ssl_certificate      \"D:/devd-home/certs/app.test.crt\";"), "{text}");
+        // None of the directory-site machinery is emitted for it.
+        let block = &text[text.find("server_name  app.test;").unwrap()..];
+        assert!(!block.contains("fastcgi_pass"), "{text}");
+        assert!(!block.contains("try_files"), "{text}");
+        assert!(!block.contains("root         \"C:/devd-home/www/app\""), "{text}");
+    }
+
+    #[test]
+    fn the_upgrade_map_is_only_written_when_a_proxy_site_needs_it() {
+        let plain = render_for(&[site("blog", "off")], 8080, 8443);
+        assert!(!plain.contains("devd_connection_upgrade"), "{plain}");
+        let mixed = render_for(
+            &[site("blog", "off"), proxy("app", "off", "http://localhost:3000")],
+            8080,
+            8443,
+        );
+        assert_eq!(mixed.matches("map $http_upgrade").count(), 1, "{mixed}");
+        // The directory site beside it is unchanged.
+        assert!(mixed.contains("fastcgi_pass  devd_php_8_3;"), "{mixed}");
     }
 
     #[test]

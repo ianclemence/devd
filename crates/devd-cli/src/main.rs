@@ -960,6 +960,18 @@ pub(crate) enum SiteCommand {
         /// Create a database named after the site, when MariaDB is running.
         #[arg(long)]
         db: bool,
+        /// Serve a program that is already running instead of a directory: a
+        /// port such as `3000`, or an address such as `localhost:5173`.
+        #[arg(long)]
+        upstream: Option<String>,
+    },
+    /// Point a site at a running program, or back at its directory.
+    Upstream {
+        /// Project name.
+        name: String,
+        /// A port or an address on this machine. Omit to serve the project
+        /// directory again.
+        upstream: Option<String>,
     },
     /// Remove a site. This can delete the project directory.
     Remove {

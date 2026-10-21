@@ -25,6 +25,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (3, include_str!("../sql/003_stacks.sql")),
     (4, include_str!("../sql/004_agent.sql")),
     (5, include_str!("../sql/005_team.sql")),
+    (6, include_str!("../sql/006_site_upstream.sql")),
 ];
 
 /// One audit row. Every capability attempt, successful or not, writes one.
@@ -73,6 +74,11 @@ pub struct Site {
     pub tls_mode: String,
     /// Database created alongside the site, when set.
     pub db_name: Option<String>,
+    /// Address of a running program that serves this site, when it is one
+    /// (`http://127.0.0.1:3000`). The site has no PHP and no document root
+    /// served from disk.
+    #[serde(default)]
+    pub upstream: Option<String>,
     /// Creation timestamp.
     pub created_at: String,
 }
@@ -432,15 +438,16 @@ impl Store {
     pub fn upsert_site(&self, site: &Site) -> Result<()> {
         self.with(|conn| {
             conn.execute(
-                "INSERT INTO sites (id, name, host, root, web_server, php, tls_mode, db_name, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                "INSERT INTO sites (id, name, host, root, web_server, php, tls_mode, db_name, upstream, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
                  ON CONFLICT(name) DO UPDATE SET
                    host = excluded.host,
                    root = excluded.root,
                    web_server = excluded.web_server,
                    php = excluded.php,
                    tls_mode = excluded.tls_mode,
-                   db_name = excluded.db_name",
+                   db_name = excluded.db_name,
+                   upstream = excluded.upstream",
                 params![
                     site.id,
                     site.name,
@@ -450,6 +457,7 @@ impl Store {
                     site.php,
                     site.tls_mode,
                     site.db_name,
+                    site.upstream,
                     site.created_at
                 ],
             )?;
@@ -462,7 +470,7 @@ impl Store {
         self.with(|conn| {
             let s = conn
                 .query_row(
-                    "SELECT id, name, host, root, web_server, php, tls_mode, db_name, created_at
+                    "SELECT id, name, host, root, web_server, php, tls_mode, db_name, upstream, created_at
                      FROM sites WHERE name = ?1",
                     params![name],
                     map_site,
@@ -476,7 +484,7 @@ impl Store {
     pub fn list_sites(&self) -> Result<Vec<Site>> {
         self.with(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, host, root, web_server, php, tls_mode, db_name, created_at
+                "SELECT id, name, host, root, web_server, php, tls_mode, db_name, upstream, created_at
                  FROM sites ORDER BY name",
             )?;
             let rows = stmt.query_map([], map_site)?;
@@ -1099,7 +1107,8 @@ fn map_site(row: &rusqlite::Row<'_>) -> rusqlite::Result<Site> {
         php: row.get(5)?,
         tls_mode: row.get(6)?,
         db_name: row.get(7)?,
-        created_at: row.get(8)?,
+        upstream: row.get(8)?,
+        created_at: row.get(9)?,
     })
 }
 
@@ -1181,6 +1190,7 @@ mod tests {
             php: Some("8.3.14".into()),
             tls_mode: "internal".into(),
             db_name: Some("blog".into()),
+            upstream: None,
             created_at: util::now(),
         };
         s.upsert_site(&site).unwrap();
@@ -1256,6 +1266,7 @@ mod tests {
             php: None,
             tls_mode: "off".into(),
             db_name: None,
+            upstream: None,
             created_at: util::now(),
         };
         assert!(site.document_root().ends_with("public"));

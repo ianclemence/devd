@@ -1383,10 +1383,12 @@
         ? " · HTTP " + state.session.settings.http_port + " · HTTPS " + state.session.settings.https_port
         : "") +
       "</div></div>" +
-      '<div class="banner-actions">' +
-      '<button type="button" class="btn btn-primary" data-action="stack-up">Start all</button>' +
-      '<button type="button" class="btn" data-action="stack-down"' + (up ? "" : " disabled") + ">Stop all</button>" +
-      "</div></div>";
+      (total
+        ? '<div class="banner-actions">' +
+          '<button type="button" class="btn btn-primary" data-action="stack-up">Start all</button>' +
+          '<button type="button" class="btn" data-action="stack-down"' + (up ? "" : " disabled") + ">Stop all</button></div>"
+        : '<div class="banner-actions"><button type="button" class="btn btn-primary" data-action="nav" data-view="services">Install services</button></div>') +
+      "</div>";
 
     var stats =
       '<div class="stat-grid">' +
@@ -1533,6 +1535,8 @@
       '<input class="input mono" id="site-name" placeholder="blog" autocomplete="off" spellcheck="false"></label>' +
       '<label class="field"><span class="field-label">Hostname, optional</span>' +
       '<input class="input mono" id="site-host" placeholder="blog.test" autocomplete="off" spellcheck="false"></label>' +
+      '<label class="field"><span class="field-label">Serve a running program, optional</span>' +
+      '<input class="input mono" id="site-upstream" placeholder="3000 or localhost:5173" autocomplete="off" spellcheck="false"></label>' +
       "</div>" +
       '<div class="inline" style="margin-top:12px">' +
       '<label class="check"><input type="checkbox" id="site-tls" checked> HTTPS with a local certificate</label>' +
@@ -1549,7 +1553,7 @@
     var q = state.filters.sites || "";
     var all = s.sites;
     var matching = all.filter(function (row) {
-      return keeps(q, row.site && row.site.name, row.url, row.document_root, row.php_effective);
+      return keeps(q, row.site && row.site.name, row.url, row.document_root, row.php_effective, row.site && row.site.upstream);
     });
     var rows = matching.map(function (row) {
       var site = row.site;
@@ -1560,7 +1564,10 @@
       var effective = row.php_effective || "";
       var pinned = site.php ? devdSeries(site.php) : "";
       var phpCell;
-      if (!installed.length) {
+      var proxied = !!site.upstream;
+      if (proxied) {
+        phpCell = '<span class="dim">proxy</span>';
+      } else if (!installed.length) {
         phpCell = '<span class="dim">' + esc(effective || "no PHP runtime devd manages") + "</span>";
       } else {
         var options = ['<option value=""' + (pinned ? "" : " selected") + ">Default (" + esc(phpPrimary() || "none") + ")</option>"];
@@ -1583,7 +1590,11 @@
           : '<span class="pill ' + (row.certificate ? "pill-ok" : "pill-warn") + '">' +
             (row.certificate ? "https" : "no certificate") + "</span>") +
         "</td>" +
-        '<td class="cell-mono nowrap" title="' + attr(row.document_root) + '">' + esc(row.document_root) + "</td>" +
+        (proxied
+          ? '<td class="cell-mono nowrap" title="Every request is forwarded to this address">' +
+            '<span class="health-dot hstate-' + (row.upstream_listening ? "healthy" : "degraded") + '"></span> ' +
+            esc(site.upstream) + (row.upstream_listening ? "" : ' <span class="cell-warn">not running</span>') + "</td>"
+          : '<td class="cell-mono nowrap" title="' + attr(row.document_root) + '">' + esc(row.document_root) + "</td>") +
         '<td class="cell-actions">' +
         '<button type="button" class="btn btn-mini" data-action="open-url" data-url="' + attr(row.url) + '">Open</button>' +
         '<button type="button" class="btn btn-mini btn-ghost" data-action="remove-site" data-name="' + attr(site.name) + '">Remove</button>' +
@@ -1599,7 +1610,7 @@
         '<span class="panel-note">' + (q ? matching.length + " of " : "") + all.length + "</span></div>" +
         (matching.length
           ? '<div class="panel-body flush"><table class="table"><thead><tr>' +
-            "<th>Site</th><th>URL</th><th>PHP</th><th>TLS</th><th>Directory</th><th></th>" +
+            "<th>Site</th><th>URL</th><th>PHP</th><th>TLS</th><th>Serves</th><th></th>" +
             "</tr></thead><tbody>" + rows.join("") + "</tbody></table></div>"
           : '<div class="panel-body empty-inline">No site matches "' + esc(q) + '".</div>') +
         "</div>";
@@ -6314,7 +6325,7 @@
       var name = readInput("site-name");
       if (!name) return toast("error", "a site needs a name");
       var host = readInput("site-host");
-      var args = { name: name, host: host || null, tls: checked("site-tls"), db: checked("site-db") };
+      var args = { name: name, host: host || null, tls: checked("site-tls"), db: checked("site-db"), upstream: readInput("site-upstream") || null };
       act("site.create", args).then(function (outcome) {
         if (outcome) {
           state.siteFormOpen = false;

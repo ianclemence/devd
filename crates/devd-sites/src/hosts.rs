@@ -351,6 +351,7 @@ mod tests {
             php: None,
             tls_mode: "internal".to_string(),
             db_name: None,
+            upstream: None,
             created_at: util::now(),
         }
     }

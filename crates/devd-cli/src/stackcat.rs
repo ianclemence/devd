@@ -95,6 +95,7 @@ pub fn site(app: &App, cmd: SiteCommand) -> Result<()> {
             root,
             no_tls,
             db,
+            upstream,
         } => app.invoke(
             "site.create",
             json!({
@@ -103,7 +104,12 @@ pub fn site(app: &App, cmd: SiteCommand) -> Result<()> {
                 "root": root,
                 "tls": !no_tls,
                 "db": db,
+                "upstream": upstream,
             }),
+        ),
+        SiteCommand::Upstream { name, upstream } => app.invoke(
+            "site.set_upstream",
+            json!({ "name": name, "upstream": upstream }),
         ),
         SiteCommand::Remove { name, delete_files } => app.invoke(
             "site.remove",

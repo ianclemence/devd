@@ -39,9 +39,11 @@ args! {
     /// No arguments.
     NoArgs {}
     /// A site to create.
-    CreateArgs { name: String, host: Option<String>, root: Option<String>, tls: Option<bool>, db: Option<bool> }
+    CreateArgs { name: String, host: Option<String>, root: Option<String>, tls: Option<bool>, db: Option<bool>, upstream: Option<String> }
     /// A site to remove.
     RemoveArgs { name: String, delete_files: Option<bool> }
+    /// A site to point at a running program, or back at its directory.
+    SetUpstreamArgs { name: String, upstream: Option<String> }
     /// A site to pin to a PHP version.
     SetPhpArgs { name: String, version: Option<String> }
 }
@@ -92,8 +94,11 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         "Create a site",
         "Creates the project directory with a starter page, issues a certificate for the \
          hostname from the local authority, records the site and re-renders the web server \
-         configuration. It does not edit the hosts file: that is `hosts.sync`, an admin-tier \
-         operation, so creating a site does not need an elevated approval.",
+         configuration. With `upstream` (a port, or an address on this machine) the site serves \
+         a program that is already running - a Node, Python or Rails dev server - instead of a \
+         directory, and no directory or starter page is created. It does not edit the hosts \
+         file: that is `hosts.sync`, an admin-tier operation, so creating a site does not need \
+         an elevated approval.",
         "site",
         Tier::Write,
         Effect::Write,
@@ -108,6 +113,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
                 root: args.root.clone(),
                 tls: args.tls.unwrap_or(true),
                 db: args.db.unwrap_or(false),
+                upstream: args.upstream.clone(),
             };
             let created = sites::create(ctx, &request)?;
             let mut outcome = Outcome::with_data(
@@ -119,6 +125,59 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             );
             for warning in created.warnings {
                 outcome = outcome.warn(warning);
+            }
+            Ok(outcome)
+        },
+    )?;
+
+    add::<SetUpstreamArgs, _, _>(
+        reg,
+        "site.set_upstream",
+        "Point a site at a running program",
+        "Makes every request to the site's hostname go to a program that is already running \
+         on this machine - `3000`, `localhost:5173`, `http://127.0.0.1:8000` - and re-renders \
+         the web server configuration. Without `upstream` the site serves its project \
+         directory again. Only addresses on this machine are accepted.",
+        "site",
+        Tier::Write,
+        Effect::Config,
+        true,
+        false,
+        true,
+        |ctx, args| {
+            let site = ctx
+                .store
+                .get_site(&args.name)?
+                .ok_or_else(|| DevdError::not_found(format!("no site named `{}`", args.name)))?;
+            let target = match args.upstream.as_deref().map(str::trim).filter(|u| !u.is_empty()) {
+                Some(address) => Some(sites::normalize_upstream(address)?),
+                None => None,
+            };
+            let plan = Plan::new(
+                "site.set_upstream",
+                match &target {
+                    Some(t) => format!("serve {} from {t}", site.host),
+                    None => format!("serve {} from its project directory again", site.host),
+                },
+            )
+            .step("record the change and re-render the web server configuration");
+            Ok(match &target {
+                Some(_) => plan.step("stop pinning a PHP version: nothing runs PHP for a proxy"),
+                None => plan.step(format!("serve {}", site.root)),
+            }
+            .data(json!({ "site": site.name, "upstream": target })))
+        },
+        |ctx, args| {
+            let result = sites::set_upstream(ctx, &args.name, args.upstream.as_deref())?;
+            let mut outcome = Outcome::with_data(
+                match result["site"]["upstream"].as_str() {
+                    Some(u) => format!("{} now serves {u}", args.name),
+                    None => format!("{} now serves its project directory", args.name),
+                },
+                result.clone(),
+            );
+            for warning in result["warnings"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+                outcome = outcome.warn(warning.to_string());
             }
             Ok(outcome)
         },
@@ -373,15 +432,28 @@ fn create_plan(ctx: &Ctx, args: &CreateArgs) -> Result<Plan> {
             .to_string()
     });
     let tls = args.tls.unwrap_or(true);
+    let upstream = match args.upstream.as_deref().map(str::trim).filter(|u| !u.is_empty()) {
+        Some(address) => Some(sites::normalize_upstream(address)?),
+        None => None,
+    };
 
     let mut plan = Plan::new(
         "site.create",
-        format!("create the site {} served at {host}", args.name),
-    )
-    .step(format!("create the project directory {directory}"))
-    .step(format!(
-        "write a starter index.php in {directory} if it is empty"
-    ));
+        match &upstream {
+            Some(u) => format!("create the site {} served at {host}, forwarding to {u}", args.name),
+            None => format!("create the site {} served at {host}", args.name),
+        },
+    );
+    plan = match &upstream {
+        Some(u) => plan.step(format!(
+            "forward every request for {host} to {u}; no directory or starter page is created"
+        )),
+        None => plan
+            .step(format!("create the project directory {directory}"))
+            .step(format!(
+                "write a starter index.php in {directory} if it is empty"
+            )),
+    };
     if tls {
         plan = plan.step(format!(
             "issue a certificate for {host} from the local authority into <devd>/certs"
@@ -406,6 +478,7 @@ fn create_plan(ctx: &Ctx, args: &CreateArgs) -> Result<Plan> {
             "directory": directory,
             "tls": tls,
             "db": args.db.unwrap_or(false),
+            "upstream": upstream,
         })))
 }
 
