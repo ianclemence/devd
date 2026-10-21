@@ -136,6 +136,8 @@
     doctor: null,
     health: null,
     projects: [],
+    projectQuery: "",
+    projectSort: "name",
     project: null,
     tab: "changes",
     tabs: {},
@@ -225,6 +227,100 @@
     return document.getElementById(id);
   }
 
+  /* The last entry of a working-directory list: an offer to go and find one.
+     A person with a project somewhere unusual should never be stuck typing a
+     path. */
+  var BROWSE_OPTION = '<option value="__browse__">Choose a folder…</option>';
+
+  /*
+   * Paging.
+   *
+   * A list that grows without bound is a list nobody can read. The page size
+   * is chosen so that a page fits on a screen, the control says exactly what
+   * is showing and what is not, and the count is real.
+   */
+  var PAGE_SIZE = 50;
+
+  function pager(total, page, action) {
+    var pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    if (pages <= 1) return "";
+    var from = page * PAGE_SIZE + 1;
+    var to = Math.min(total, (page + 1) * PAGE_SIZE);
+    return (
+      '<div class="pager">' +
+      '<span class="pager-count">Showing ' + from + "–" + to + " of " + total + "</span>" +
+      '<div class="pager-buttons">' +
+      '<button type="button" class="btn btn-mini" data-action="' + action + '" data-page="' + (page - 1) + '"' + (page === 0 ? " disabled" : "") + ">Previous</button>" +
+      '<span class="pager-page">Page ' + (page + 1) + " of " + pages + "</span>" +
+      '<button type="button" class="btn btn-mini" data-action="' + action + '" data-page="' + (page + 1) + '"' + (page >= pages - 1 ? " disabled" : "") + ">Next</button>" +
+      "</div></div>"
+    );
+  }
+
+  /*
+   * Brand marks.
+   *
+   * Each one is the owner's own artwork, served from the binary. The map is
+   * the list of things devd actually supports: a mark is never shown for
+   * something devd cannot do, and a supported thing never goes unmarked.
+   */
+  var BRANDS = {
+    // Model providers.
+    anthropic: "anthropic", openai: "openai", deepseek: "deepseek",
+    moonshot: "moonshot", zhipu: "zhipu", gemini: "gemini", openrouter: "openrouter",
+    ollama: "ollama", "lm-studio": "lmstudio", mistral: "mistral", groq: "groq",
+    together: "together", fireworks: "fireworks", xai: "xai", claude: "claude",
+    // Services.
+    mysql: "mysql", mariadb: "mariadb", postgresql: "postgresql", mongodb: "mongodb",
+    redis: "redis", valkey: "valkey", typesense: "typesense", sqlite: "sqlite",
+    nginx: "nginx", php: "php", node: "node", composer: "composer", laravel: "laravel",
+    xdebug: "xdebug", mailpit: "mailpit", meilisearch: "meilisearch", minio: "minio",
+    elasticsearch: "elasticsearch", prometheus: "prometheus", grafana: "grafana",
+    docker: "docker", git: "git", sentry: "sentry", opencode: "opencode",
+    cakephp: "cakephp", phpmyadmin: "phpmyadmin", phpstorm: "phpstorm",
+    cursor: "cursor", insomnia: "insomnia", postman: "postman", figma: "figma",
+    discord: "discord", notion: "notion", obsidian: "obsidian", raycast: "raycast"
+  };
+
+  /*
+   * The mark for a thing, or nothing.
+   *
+   * An exact name is the normal case. A name with a version or an instance
+   * number after it - "postgresql-16", "anthropic-2" - is the same thing. A
+   * name that merely *starts* with a brand is a different thing: "phpstan" is
+   * not PHP, and marking it as PHP would be a lie.
+   */
+  function brandFor(name) {
+    if (!name) return null;
+    var key = String(name).toLowerCase();
+    if (BRANDS[key]) return BRANDS[key];
+    var best = null;
+    Object.keys(BRANDS).forEach(function (k) {
+      if (key.indexOf(k) !== 0) return;
+      var rest = key.slice(k.length);
+      if (!/^[-_. ]?\d/.test(rest)) return;
+      if (!best || k.length > best.length) best = k;
+    });
+    return best ? BRANDS[best] : null;
+  }
+
+  /*
+   * Some owners publish a wordmark rather than a square mark. Squeezing a
+   * wordmark into a square makes it unreadable, so those are given a wider
+   * slot of their own - still their own artwork, never stretched.
+   */
+  var WIDE_BRANDS = { zhipu: true };
+
+  /* The mark as a small image. The name is the accessible label, and the
+     image is decorative: the text beside it already says what it is. */
+  function brandImg(name, className) {
+    var file = brandFor(name);
+    if (!file) return "";
+    var ext = file.indexOf("together") === 0 || file === "typesense" || file === "valkey" || file === "xdebug" ? "png" : "svg";
+    var wide = WIDE_BRANDS[file] ? " brand-dot-wide" : "";
+    return '<img class="' + (className || "brand-dot") + wide + '" src="/brands/' + file + "." + ext + '" alt="" loading="lazy" width="18" height="18">';
+  }
+
   function relativeTime(seconds) {
     if (!seconds) return "";
     var diff = Math.floor(Date.now() / 1000) - Number(seconds);
@@ -250,15 +346,24 @@
     return parts[parts.length - 1] || p;
   }
 
+  /*
+   * A one-letter badge for a file's state.
+   *
+   * The letters come from Git's porcelain status, and the order matters: a
+   * file that is both modified and deleted is a deletion, because that is
+   * what will happen to it. Untracked and conflicted are different states and
+   * must not share a badge, or a conflict reads as a harmless new file.
+   */
   function statusTag(code) {
     var c = String(code || "").toUpperCase();
     var cls = "tag";
     var letter = c || "?";
-    if (c.indexOf("A") >= 0 || c === "?") { cls += " tag-add"; letter = c === "?" ? "U" : "A"; }
-    else if (c.indexOf("D") >= 0) { cls += " tag-del"; letter = "D"; }
-    else if (c.indexOf("R") >= 0) { cls += " tag-mod"; letter = "R"; }
-    else if (c.indexOf("C") >= 0) { cls += " tag-mod"; letter = "C"; }
+    if (c.indexOf("D") >= 0) { cls += " tag-del"; letter = "D"; }
+    else if (c.indexOf("C") >= 0) { cls += " tag-add"; letter = "C"; }
     else if (c.indexOf("U") >= 0) { cls += " tag-conf"; letter = "U"; }
+    else if (c.indexOf("A") >= 0) { cls += " tag-add"; letter = "A"; }
+    else if (c.indexOf("R") >= 0) { cls += " tag-mod"; letter = "R"; }
+    else if (c === "?") { cls += " tag-unt"; letter = "U"; }
     else { cls += " tag-mod"; letter = c.charAt(0) || "M"; }
     return '<span class="' + cls + '" title="' + attr(c) + '">' + esc(letter) + "</span>";
   }
@@ -373,6 +478,268 @@
 
   function closeDrawer() {
     el("drawer").hidden = true;
+  }
+
+  // ------------------------------------------------------------------- picker
+  //
+  // Choosing a folder is a thing a person does with a file browser, not with a
+  // text box. This dialog shows the device the way the operating system does:
+  // the places work is kept, the path you are in, and the folders that are
+  // there. The desktop shell can also put its own native dialog in front of
+  // this one, and when the page is running in a plain browser that button is
+  // simply not offered, because there is no native dialog to offer.
+  //
+  // The path that comes back is only ever a string here. Everything that acts
+  // on it - detecting the project, registering it - goes through a capability
+  // that inspects it first.
+
+  var picker = {
+    open: false,
+    title: "Choose a folder",
+    note: "Move through your device and pick the folder that holds the project.",
+    confirm: "Use this folder",
+    /** What the caller wants to do with the folder. */
+    intent: "directory",
+    /** Where the browser should open. */
+    path: null,
+    /** The listing currently shown. */
+    listing: null,
+    /** The folder the person has highlighted, and that the confirm button takes. */
+    selected: null,
+    /** What the detection found in the highlighted folder. */
+    inspect: null,
+    /** Whether the native dialog is available in this surface. */
+    native: false,
+    /** Resolves the promise handed back to the caller. */
+    resolve: null,
+    /** The element the picker was opened from, so focus can go back to it. */
+    opener: null
+  };
+
+  /* Open the picker and resolve with the chosen folder, or null. */
+  function openPicker(options) {
+    options = options || {};
+    picker.title = options.title || "Choose a folder";
+    picker.note = options.note || "Move through your device and pick the folder that holds the project.";
+    picker.confirm = options.confirm || "Use this folder";
+    picker.intent = options.intent || "directory";
+    picker.listing = null;
+    picker.inspect = null;
+    picker.selected = options.start || null;
+    picker.opener = document.activeElement;
+    picker.native = false;
+
+    el("picker-title").textContent = picker.title;
+    el("picker-note").textContent = picker.note;
+    el("picker-choose").textContent = picker.confirm;
+    el("picker-path-input").value = picker.selected || "";
+    el("picker").hidden = false;
+    picker.open = true;
+    // The desktop shell can put the operating system's own dialog in front of
+    // this one; a plain browser cannot, and the button is not offered there.
+    picker.native = !!(state.session && state.session.native_picker);
+
+    var start = picker.selected;
+    if (!start) {
+      read("fs.browse", {}).then(function (places) {
+        picker.places = places || [];
+        paintPicker();
+      }).catch(function (e) {
+        toast("error", e.message);
+      });
+    }
+    return new Promise(function (resolve) {
+      picker.resolve = resolve;
+    }).then(function (path) {
+      picker.open = false;
+      el("picker").hidden = true;
+      if (picker.opener && picker.opener.focus) {
+        try { picker.opener.focus(); } catch (e) { /* the opener is gone */ }
+      }
+      picker.resolve = null;
+      return path;
+    });
+  }
+
+  function closePicker(path) {
+    if (!picker.resolve) return;
+    var done = picker.resolve;
+    picker.resolve = null;
+    done(path || null);
+  }
+
+  /* Load a directory and show it. */
+  function pickerGo(path) {
+    var current = picker.listing ? picker.listing.path : null;
+    return read("fs.browse", { path: path }).then(function (listing) {
+      picker.listing = listing;
+      picker.selected = listing.path;
+      picker.inspect = null;
+      el("picker-path-input").value = listing.path;
+      if (current !== listing.path) {
+        // The person moved: what used to be highlighted is no longer relevant.
+        picker.inspect = null;
+      }
+      return pickerInspect(listing.path);
+    }).then(function () {
+      paintPicker();
+    }).catch(function (e) {
+      toast("error", e.message);
+      paintPicker();
+    });
+  }
+
+  /* Ask what is in the highlighted folder. */
+  function pickerInspect(path) {
+    if (picker.intent !== "project") {
+      picker.inspect = null;
+      return Promise.resolve(null);
+    }
+    return read("project.detect", { path: path }).then(function (ctx) {
+      picker.inspect = ctx;
+      return ctx;
+    }).catch(function (e) {
+      picker.inspect = { error: e.message };
+      return null;
+    });
+  }
+
+  function paintPicker() {
+    if (!picker.open) return;
+    var listing = picker.listing;
+    var native = el("picker-native");
+    native.hidden = !picker.native;
+
+    // Places to start from.
+    var places = el("picker-places");
+    var chips = [];
+    (picker.places || []).forEach(function (p) {
+      chips.push(
+        '<button type="button" class="picker-place" data-action="picker-goto" data-path="' + attr(p.path) + '"' +
+        (listing && listing.path === p.path ? ' aria-current="true"' : "") + ">" + esc(p.label) + "</button>"
+      );
+    });
+    if (listing) {
+      (listing.roots || []).forEach(function (r) {
+        chips.push('<span class="picker-place-sep" aria-hidden="true">·</span>');
+        chips.push(
+          '<button type="button" class="picker-place" data-action="picker-goto" data-path="' + attr(r.path) + '">' +
+          esc(r.label) + "</button>"
+        );
+      });
+    }
+    places.innerHTML = chips.join("");
+
+    // The path, as a trail of places you can step back through.
+    var crumbs = el("picker-crumbs");
+    if (listing) {
+      var parts = (listing.crumbs || []).map(function (c, i) {
+        var current = i === listing.crumbs.length - 1;
+        return (i ? '<span class="picker-crumb-sep" aria-hidden="true">/</span>' : "") +
+          '<button type="button" class="picker-crumb" data-action="picker-goto" data-path="' + attr(c.path) + '"' +
+          (current ? ' aria-current="true"' : "") + ">" + esc(c.label) + "</button>";
+      });
+      crumbs.innerHTML = parts.join("");
+    } else {
+      crumbs.innerHTML = "";
+    }
+    el("picker-up").disabled = !listing || !listing.parent;
+
+    // The folders.
+    var list = el("picker-list");
+    if (!listing) {
+      list.innerHTML = '<div class="picker-inspect-empty" style="padding:var(--s3)">Choose one of the places above to begin.</div>';
+    } else {
+      var folders = (listing.entries || []).filter(function (e) { return e.kind === "directory"; });
+      var files = (listing.entries || []).filter(function (e) { return e.kind !== "directory"; });
+      var rows = "";
+      folders.concat(files).forEach(function (e) {
+        var isFolder = e.kind === "directory";
+        var selected = picker.selected === e.path;
+        rows +=
+          '<button type="button" class="picker-item' + (isFolder ? "" : " is-file") + '" role="option"' +
+          ' aria-selected="' + (selected ? "true" : "false") + '"' +
+          ' data-action="' + (isFolder ? "picker-goto" : "picker-pick-file") + '"' +
+          ' data-path="' + attr(e.path) + '"' +
+          ' title="' + attr(e.path) + '">' +
+          '<svg class="icon" aria-hidden="true"><use href="#' + (isFolder ? "i-folder" : "i-code") + '"></use></svg>' +
+          '<span class="picker-item-name">' + esc(e.name) + "</span>" +
+          (e.symlink ? '<span class="picker-item-kind">link</span>' : "") +
+          '<span class="picker-item-kind">' + (isFolder ? "folder" : "file") + "</span>" +
+          "</button>";
+      });
+      if (!rows) {
+        rows = '<div class="picker-inspect-empty" style="padding:var(--s3)">This folder is empty.</div>';
+      }
+      if (listing.warning) {
+        rows += '<div class="picker-inspect-warn" style="padding:var(--s2) var(--s3)">' + esc(listing.warning) + "</div>";
+      }
+      if (listing.truncated) {
+        rows += '<div class="picker-inspect-empty" style="padding:var(--s2) var(--s3)">Only the first entries are shown. Type a path to go straight to a folder.</div>';
+      }
+      list.innerHTML = rows;
+    }
+
+    paintPickerInspect();
+  }
+
+  function paintPickerInspect() {
+    var box = el("picker-inspect");
+    var ctx = picker.inspect;
+    if (!ctx) {
+      box.innerHTML = '<div class="picker-inspect-empty">Nothing is selected yet.</div>';
+      return;
+    }
+    if (ctx.error) {
+      box.innerHTML = '<div class="picker-inspect-warn">' + esc(ctx.error) + "</div>";
+      return;
+    }
+    var lines = [];
+    lines.push(
+      '<div class="picker-inspect-title">' + esc(ctx.name || "This folder") + "</div>"
+    );
+    var stack = ctx.primary || (ctx.stacks && ctx.stacks[0] ? ctx.stacks[0].name : null);
+    // "Uncertain" only means something when there is a stack to be unsure
+    // about. A folder that simply is not a project is not uncertain.
+    var unsure = !!(ctx.ambiguous && stack);
+    lines.push(
+      '<div class="picker-inspect-line"><span class="k">Detected</span><span class="v">' +
+      (stack ? esc(stack) : '<span class="picker-inspect-empty">no known stack</span>') +
+      (unsure ? ' <span class="pill pill-warn">uncertain</span>' : "") +
+      "</span></div>"
+    );
+    if (ctx.package_manager) {
+      lines.push(
+        '<div class="picker-inspect-line"><span class="k">Packages</span><span class="v">' + esc(ctx.package_manager) + "</span></div>"
+      );
+    }
+    if (ctx.runtimes && ctx.runtimes.length) {
+      lines.push(
+        '<div class="picker-inspect-line"><span class="k">Needs</span><span class="v">' +
+        esc(ctx.runtimes.map(function (r) { return r.tool + " " + r.constraint; }).join(", ")) +
+        "</span></div>"
+      );
+    }
+    if (ctx.git && ctx.git.repository) {
+      lines.push(
+        '<div class="picker-inspect-line"><span class="k">Git</span><span class="v">' +
+        esc(ctx.git.branch ? "repository, on " + ctx.git.branch : "repository") + "</span></div>"
+      );
+    }
+    if (ctx.missing && ctx.missing.length) {
+      lines.push(
+        '<div class="picker-inspect-line"><span class="k">Missing</span><span class="v picker-inspect-warn">' +
+        esc(ctx.missing.map(function (m) { return m.tool; }).join(", ")) +
+        "</span></div>"
+      );
+    }
+    if (ctx.warnings && ctx.warnings.length) {
+      lines.push(
+        '<div class="picker-inspect-line"><span class="k">Notes</span><span class="v">' +
+        esc(ctx.warnings.join(" ")) + "</span></div>"
+      );
+    }
+    box.innerHTML = lines.join("");
   }
 
   // -------------------------------------------------------------------- modal
@@ -505,7 +872,7 @@
     ["home", "Home", "what needs you, what is running"], ["inbox", "Inbox", "approvals and questions from agents"],
     ["assistant", "Assistant", "talk to the built-in agent"], ["projects", "Projects", "repositories and stacks"],
     ["create", "New project", "start from a stack"], ["develop", "Stacks and tasks", "detect and run project tasks"],
-    ["agents", "Sessions", "Claude Code and shell sessions"], ["shared", "Shared notes", "notes agents share"],
+    ["agents", "Agents", "Claude Code and shell sessions"], ["shared", "Shared notes", "notes agents share"],
     ["processes", "Processes", "supervised project processes and logs"], ["overview", "Server", "local web server overview"],
     ["services", "Services", "nginx, PHP, MariaDB and others"], ["sites", "Sites", "projects served on local hostnames"],
     ["toolchain", "Tools", "languages, package managers, databases"], ["runtimes", "Runtimes", "PHP, Node and Go versions"],
@@ -516,7 +883,7 @@
 
   function palActions(q) {
     var acts = [
-      { key: "a:new", title: "Create a project", detail: "from 24 stacks", run: function () { navigate("create"); } },
+      { key: "a:new", title: "Create a project", detail: stackCount() ? "from " + stackCount() + " stacks" : "from a stack", run: function () { navigate("create"); } },
       { key: "a:import", title: "Import an existing project", detail: "detect its stack and tasks", run: function () { navigate("develop"); } },
       { key: "a:provider", title: "Add an AI provider", detail: "key and default model", run: function () { navigate("providers"); } },
       { key: "a:models", title: "Refresh the official model list", detail: "reads Anthropic's documentation", run: function () { run("models.refresh_official", {}); } },
@@ -695,7 +1062,7 @@
   var TABS = {
     assistant: [["assistant", "Chat"], ["team", "Team runs"]],
     projects: [["projects", "Projects"], ["create", "New project"], ["develop", "Stacks and tasks"]],
-    agents: [["agents", "Sessions"], ["shared", "Shared notes"]],
+    agents: [["agents", "Agents"], ["shared", "Shared notes"]],
     server: [["overview", "Overview"], ["services", "Services"], ["sites", "Sites"], ["toolchain", "Tools"], ["runtimes", "Runtimes"], ["preview", "Preview"], ["certificates", "Certificates"], ["hosts", "Hosts"]]
   };
   var AREA_HOME = { assistant: "assistant", projects: "projects", agents: "agents", server: "overview" };
@@ -733,7 +1100,7 @@
       { label: "Work", items: [
         { view: "assistant", label: "Assistant", count: working },
         { view: "projects", label: "Projects", count: state.projects.length || null },
-        { view: "agents", label: "Sessions", count: live },
+        { view: "agents", label: "Agents", count: live },
         { view: "processes", label: "Processes" }
       ] },
       { label: "Run", items: [
@@ -769,7 +1136,7 @@
       overview: "Server",
       sites: "Sites",
       preview: "Preview",
-      agents: "Sessions",
+      agents: "Agents",
       processes: "Processes",
       shared: "Shared",
       services: "Services",
@@ -1179,7 +1546,7 @@
       }).join("");
       var need = v.required ? '<span class="pill pill-warn" title="' + attr(v.required_by.map(function (r) { return r.project; }).join(", ")) + '">needed by ' + v.required_by.length + "</span>" : "";
       return '<div class="inv"><span class="health-dot hstate-' + (v.status === "ready" ? "healthy" : v.status === "installed_stopped" ? "degraded" : v.status === "missing" ? "setup_incomplete" : "critical") + '"></span><div class="grow">' +
-        '<div class="hrow-title">' + esc(v.name) + ' <span class="pill ' + (tone ? "pill-" + tone : "") + '">' + esc(INV_LABEL[v.status]) + "</span> " + dec + " " + need + "</div>" +
+        '<div class="hrow-title">' + brandImg(v.tool, "brand-dot") + esc(v.name) + ' <span class="pill ' + (tone ? "pill-" + tone : "") + '">' + esc(INV_LABEL[v.status]) + "</span> " + dec + " " + need + "</div>" +
         '<div class="row-sub">' + esc(v.headline) + (v.path ? " · " + esc(v.path) : "") + (v.port_owner && v.port_owner.program ? " · port held by " + esc(v.port_owner.program) + (v.port_owner.pid ? " (pid " + v.port_owner.pid + ")" : "") : "") + "</div>" +
         '<div class="row-sub">' + esc(rec.why || "") + "</div></div><div class=\"inline\">" + btns +
         (v.decision ? '<button type="button" class="btn btn-mini btn-ghost" data-action="svc-option" data-tool="' + attr(v.tool) + '" data-opt="clear">Reset</button>' : "") + "</div></div>";
@@ -1206,7 +1573,7 @@
           .map(function (svc) {
             return (
               "<tr>" +
-              '<td><div class="cell-strong">' + dot(svc.running) + " " + esc(svc.name) + "</div>" +
+              '<td><div class="cell-strong">' + dot(svc.running) + " " + brandImg(svc.kind || svc.name, "brand-dot") + esc(svc.name) + "</div>" +
               '<div class="cell-dim">' + esc(svc.kind) + "</div></td>" +
               '<td class="cell-mono">' + esc(svc.version || "—") + "</td>" +
               '<td class="cell-mono">' + esc(servicePorts(svc)) + "</td>" +
@@ -1298,7 +1665,7 @@
         : '<div class="panel-body empty-inline">Not installed.</div>';
 
       return (
-        '<div class="panel"><div class="panel-head"><span>' + esc(kind.label) + "</span>" +
+        '<div class="panel"><div class="panel-head"><span>' + brandImg(kind.kind, "brand-dot") + esc(kind.label) + "</span>" +
         '<span class="panel-note">' + installed.length + " installed</span></div>" +
         list +
         '<div class="panel-body panel-foot"><div class="inline">' +
@@ -1491,6 +1858,9 @@
     state.server.sites.forEach(function (row) {
       out.push({ path: row.document_root, label: row.site.name + " (site)" });
     });
+    state.sessions.forEach(function (s) {
+      if (s.cwd) out.push({ path: s.cwd, label: "session" });
+    });
     if (state.session) out.push({ path: state.session.paths.www, label: "www" });
     var seen = {};
     return out.filter(function (c) {
@@ -1552,7 +1922,7 @@
     var options = choices.map(function (c) {
       return '<option value="' + attr(c.path) + '"' + (selectedCwd === c.path ? " selected" : "") + ">" +
         esc(c.label) + " — " + esc(c.path) + "</option>";
-    }).join("");
+    }).join("") + BROWSE_OPTION;
 
     var rows = state.sessions.length
       ? state.sessions.map(sessionRow).join("")
@@ -1633,7 +2003,7 @@
         '<div class="panel-head"><span>Sessions</span><span class="panel-note">' + state.sessions.length + "</span></div>" +
         '<div class="session-list">' + rows + "</div>" +
         '<div class="session-side-foot">' +
-        (choices.length ? '<select class="select mono" id="agent-side-cwd" aria-label="Working directory">' + options + "</select>" : '<div class="row-sub">No working directory yet.</div>') +
+        (choices.length ? '<select class="select mono" id="agent-side-cwd" aria-label="Working directory">' + options + BROWSE_OPTION + "</select>" : '<div class="row-sub">No working directory yet.</div>') +
         '<div class="inline" style="margin-top:8px">' +
         state.harnesses.map(function (h) {
           return '<button type="button" class="btn btn-mini" data-action="new-session" data-kind="' + attr(h.kind) + '"' +
@@ -1834,7 +2204,7 @@
     }).join("");
     openDrawer("New agent session",
       '<div class="stack"><div class="field"><label class="field-label" for="agent-new-cwd">Working directory</label>' +
-      '<select class="select mono" id="agent-new-cwd">' + options + "</select></div>" +
+      '<select class="select mono" id="agent-new-cwd">' + options + BROWSE_OPTION + "</select></div>" +
       '<div class="grid grid-3">' + (cards || '<div class="faint">No harnesses found.</div>') + "</div>" +
       '<div class="faint">The harness asks its own permission questions. devd supplies the directory, the PTY and the process.</div></div>');
   }
@@ -2419,80 +2789,212 @@
     );
   }
 
+  /*
+   * Register a folder as a project.
+   *
+   * The folder is not moved, not copied and not changed: devd records where it
+   * is and what is in it. A folder that is also a Git repository is indexed as
+   * one, so that the Git screens and the project screens talk about the same
+   * thing.
+   */
+  function addProjectAt(path) {
+    return run("project.import", { path: path })
+      .then(function (outcome) {
+        if (!outcome) return null;
+        var data = outcome.data || {};
+        var isRepo = !!(data.git && data.git.repository);
+        if (!isRepo) return outcome;
+        return run("git.repo.track", { repo: path }).then(function () { return outcome; });
+      })
+      .then(function (outcome) {
+        if (!outcome) return null;
+        return loadProjects().then(function () {
+          navigate("projects");
+          return outcome;
+        });
+      });
+  }
+
   // ------------------------------------------------------------------ projects
+  //
+  // A project is a folder on the person's disk. devd does not create them and
+  // does not own them: it knows where they are, what is in them, and what
+  // state they are in. Adding one is therefore a matter of *choosing a
+  // folder*, which is what the picker is for.
+
+  var PROJECT_SORTS = [
+    { id: "name", label: "Name" },
+    { id: "recent", label: "Recently touched" },
+    { id: "status", label: "Needs attention" }
+  ];
+
+  function projectSortLabel() {
+    for (var i = 0; i < PROJECT_SORTS.length; i++) {
+      if (PROJECT_SORTS[i].id === state.projectSort) return PROJECT_SORTS[i].label;
+    }
+    return "Name";
+  }
+
+  /* Pinned projects, kept per browser because pinning is a personal view
+     preference rather than a fact about the project. */
+  function pinnedProjects() {
+    try {
+      var raw = window.localStorage.getItem("devd.pinned");
+      var list = raw ? JSON.parse(raw) : [];
+      return Array.isArray(list) ? list : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function togglePin(path) {
+    var list = pinnedProjects();
+    var at = list.indexOf(path);
+    if (at === -1) list.push(path);
+    else list.splice(at, 1);
+    try {
+      window.localStorage.setItem("devd.pinned", JSON.stringify(list));
+    } catch (e) {
+      // A browser that refuses storage still works; the pin just does not stick.
+    }
+    renderProjects();
+  }
+
+  function projectChanges(st) {
+    if (!st) return 0;
+    return (st.staged || []).length + (st.unstaged || []).length + (st.untracked || []).length;
+  }
 
   function renderProjects() {
-    var addForm =
-      '<div class="panel"><div class="panel-body inline">' +
-      '<input class="input mono grow" id="add-path" placeholder="C:\\code\\my-project">' +
-      '<button type="button" class="btn btn-primary" data-action="track-path">Track it</button>' +
-      '<button type="button" class="btn" data-action="init-path">Initialise a repository here</button>' +
-      '<button type="button" class="btn btn-ghost" data-action="add-cancel">Cancel</button>' +
-      "</div></div>";
+    var query = state.projectQuery.trim().toLowerCase();
+    var pinned = pinnedProjects();
+    var all = state.projects.slice();
+
+    var visible = all.filter(function (p) {
+      if (!query) return true;
+      return (p.name || "").toLowerCase().indexOf(query) !== -1 ||
+        (p.path || "").toLowerCase().indexOf(query) !== -1;
+    });
+
+    visible.sort(function (a, b) {
+      var ap = pinned.indexOf(a.path) !== -1 ? 0 : 1;
+      var bp = pinned.indexOf(b.path) !== -1 ? 0 : 1;
+      if (ap !== bp) return ap - bp;
+      if (state.projectSort === "recent") {
+        return String(b.updated_at || "").localeCompare(String(a.updated_at || ""));
+      }
+      if (state.projectSort === "status") {
+        var ac = projectChanges(a.status);
+        var bc = projectChanges(b.status);
+        if (ac !== bc) return bc - ac;
+      }
+      return String(a.name || a.path).localeCompare(String(b.name || b.path));
+    });
 
     var body;
-    if (!state.projects.length) {
+    if (!all.length) {
       body =
         '<div class="panel"><div class="empty">' +
         '<div class="empty-title">No projects yet</div>' +
-        "<div>Point devd at a repository that already exists on disk.</div>" +
-        '<div class="inline" style="margin-top:8px">' +
-        '<input class="input mono" id="add-path" placeholder="C:\\code\\my-project" style="width:340px">' +
-        '<button type="button" class="btn btn-primary" data-action="track-path">Add project</button>' +
-        '<button type="button" class="btn" data-action="init-path">Create repository here</button>' +
+        "<div>devd works with the projects that are already on your disk. Choose one to get started, or clone a repository.</div>" +
+        '<div class="inline" style="margin-top:var(--s4)">' +
+        '<button type="button" class="btn btn-primary" data-action="add-project">Choose a project folder</button>' +
+        '<button type="button" class="btn" data-action="clone-form">Clone a repository</button>' +
         "</div></div></div>";
     } else {
-      body =
-        (state.addOpen ? addForm : "") +
-        '<div class="grid">' +
-        state.projects
-          .map(function (p) {
-            var st = p.status;
-            var stats = [];
-            if (st) {
-              stats.push('<span class="pill' + (st.clean ? " pill-ok" : "") + '">' +
-                (st.clean ? "clean" : (st.staged.length + st.unstaged.length + st.untracked.length) + " changes") +
-                "</span>");
-              stats.push('<span class="pill">' + esc(st.branch || "(detached)") + "</span>");
-              if (st.ahead) stats.push('<span class="pill pill-accent">' + st.ahead + " ahead</span>");
-              if (st.behind) stats.push('<span class="pill pill-warn">' + st.behind + " behind</span>");
-              if (st.in_progress) stats.push('<span class="pill pill-warn">' + esc(st.in_progress) + "</span>");
-            } else {
-              stats.push('<span class="pill pill-bad">unavailable</span>');
-            }
-            return (
-              '<button type="button" class="card card-link" data-action="open-project" data-path="' + attr(p.path) + '">' +
-              '<div class="card-title">' + esc(p.name) + "</div>" +
-              '<div class="card-meta nowrap" title="' + attr(p.path) + '">' + esc(p.path) + "</div>" +
-              '<div class="card-stats">' + stats.join("") + "</div>" +
-              (p.error ? '<div class="row-sub" style="margin-top:6px">' + esc(p.error) + "</div>" : "") +
-              "</button>"
-            );
-          })
-          .join("") +
+      var controls =
+        '<div class="list-bar">' +
+        '<label class="list-search">' +
+        '<svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg>' +
+        '<input type="search" id="project-search" class="input" placeholder="Search projects" value="' + attr(state.projectQuery) + '" aria-label="Search projects">' +
+        "</label>" +
+        '<div class="seg" role="group" aria-label="Sort projects">' +
+        PROJECT_SORTS.map(function (s) {
+          return '<button type="button" class="seg' + (state.projectSort === s.id ? " active" : "") +
+            '" data-action="project-sort" data-sort="' + attr(s.id) + '" aria-pressed="' + (state.projectSort === s.id ? "true" : "false") + '">' +
+            esc(s.label) + "</button>";
+        }).join("") +
+        "</div>" +
+        '<span class="list-count">' + visible.length + " of " + all.length + "</span>" +
         "</div>";
+
+      if (!visible.length) {
+        body = controls + '<div class="panel"><div class="empty">' +
+          '<div class="empty-title">No project matches “' + esc(state.projectQuery) + "”</div>" +
+          "<div>Clear the search to see the rest.</div></div></div>";
+      } else {
+        body = controls + '<div class="grid">' + visible.map(function (p) {
+          var st = p.status;
+          var stats = [];
+          if (p.stack) stats.push('<span class="pill">' + esc(p.stack) + "</span>");
+          if (st) {
+            var changes = projectChanges(st);
+            stats.push('<span class="pill' + (changes ? " pill-warn" : " pill-ok") + '">' +
+              (changes ? changes + " change" + (changes === 1 ? "" : "s") : "clean") + "</span>");
+            stats.push('<span class="pill">' + esc(st.branch || "detached") + "</span>");
+            if (st.ahead) stats.push('<span class="pill pill-accent">' + st.ahead + " ahead</span>");
+            if (st.behind) stats.push('<span class="pill pill-warn">' + st.behind + " behind</span>");
+          } else if (p.is_repository) {
+            stats.push('<span class="pill">repository</span>');
+          }
+          if (p.exists === false) stats.push('<span class="pill pill-bad">folder is gone</span>');
+          if (!p.registered) stats.push('<span class="pill">not imported</span>');
+          var isPinned = pinned.indexOf(p.path) !== -1;
+          return (
+            '<div class="card card-project">' +
+            '<button type="button" class="card-open" data-action="open-project" data-path="' + attr(p.path) + '">' +
+            '<div class="card-title">' + esc(p.name) + "</div>" +
+            '<div class="card-meta nowrap" title="' + attr(p.path) + '">' + esc(p.path) + "</div>" +
+            '<div class="card-stats">' + stats.join("") + "</div>" +
+            (p.error ? '<div class="row-sub" style="margin-top:var(--s2)">' + esc(p.error) + "</div>" : "") +
+            "</button>" +
+            '<button type="button" class="card-pin" data-action="pin-project" data-path="' + attr(p.path) + '"' +
+            ' aria-pressed="' + (isPinned ? "true" : "false") + '"' +
+            ' title="' + (isPinned ? "Unpin this project" : "Pin this project to the top") + '">' +
+            (isPinned ? "★" : "☆") + "</button>" +
+            "</div>"
+          );
+        }).join("") + "</div>";
+      }
     }
 
     el("main").innerHTML =
       '<div class="page">' +
       '<div class="page-head">' +
       "<div><h1 class=\"page-title\">Projects</h1>" +
-      '<div class="page-sub">Every repository devd knows about, with its live state.</div></div>' +
+      '<div class="page-sub">The folders on your machine that devd knows about, with their live state.</div></div>' +
       '<div class="page-actions">' +
       '<button type="button" class="btn" data-action="clone-form">Clone a repository</button>' +
-      (state.projects.length ? '<button type="button" class="btn" data-action="add-form">Add existing</button>' : "") +
+      '<button type="button" class="btn btn-primary" data-action="add-project">Add existing project</button>' +
       "</div></div>" +
       body +
       "</div>";
   }
 
   function loadProjects() {
-    return read("git.repo.list")
-      .then(function (repos) {
-        var list = Array.isArray(repos) ? repos : [];
-        state.projects = list.map(function (p) { return { path: p.path, name: p.name, repo: p, status: null, error: null }; });
+    return read("project.list")
+      .then(function (rows) {
+        var list = Array.isArray(rows) ? rows : [];
+        state.projects = list.map(function (p) {
+          return {
+            path: p.path,
+            name: p.name || dirName(p.path),
+            stack: p.stack,
+            package_manager: p.package_manager,
+            source: p.source,
+            registered: p.registered,
+            is_repository: p.is_repository,
+            exists: p.exists,
+            updated_at: p.updated_at,
+            status: null,
+            error: null
+          };
+        });
+        // The state of a repository is worth knowing, but a folder that is not
+        // a repository is not an error - it simply has no Git state.
         return Promise.all(
           state.projects.map(function (p) {
+            if (!p.is_repository) return Promise.resolve();
             return read("git.status", { repo: p.path })
               .then(function (st) { p.status = st; })
               .catch(function (e) { p.error = e.message; });
@@ -2574,7 +3076,9 @@
 
   function fileRow(kind, change) {
     var path = typeof change === "string" ? change : change.path;
-    var code = typeof change === "string" ? "?" : change.status;
+    // Git reports untracked and conflicted files as bare paths. The group the
+    // file is in says which it is.
+    var code = typeof change === "string" ? (kind === "conflicted" ? "U" : "?") : change.status;
     var actions = [];
     if (kind === "staged") {
       actions.push(mini("Diff", "diff-file", { path: path, staged: "1" }));
@@ -2930,13 +3434,17 @@
       (entries.length
         ? entries
             .map(function (e) {
-              var hash = e.hash || e.new_hash || "";
-              var subject = e.subject || e.message || "";
+              var hash = e.hash || "";
+              var subject = e.subject || "";
               return (
                 '<div class="row">' +
                 '<span class="tag">' + esc(String(hash).slice(0, 7)) + "</span>" +
-                '<span class="row-main nowrap">' + esc(subject) + "</span>" +
-                '<span class="row-meta">' + esc(relativeTime(e.timestamp || 0)) + "</span>" +
+                '<span class="row-main">' +
+                (e.action ? '<span class="pill">' + esc(e.action) + "</span> " : "") +
+                esc(subject) +
+                "</span>" +
+                '<span class="row-meta mono nowrap" title="' + attr(e.timestamp || "") + '">' +
+                esc(String(e.timestamp || "").slice(0, 16)) + "</span>" +
                 '<span class="row-actions">' +
                 mini("Reset to this", "reset-to", { rev: hash }) +
                 "</span></div>"
@@ -3031,7 +3539,8 @@
       "</div>" +
       '<div class="page-actions">' +
       '<button type="button" class="btn" data-action="project-refresh">Refresh</button>' +
-      '<button type="button" class="btn btn-ghost" data-action="untrack">Forget in devd</button>' +
+      '<button type="button" class="btn btn-ghost" data-action="untrack">Remove from devd</button>' +
+      '<button type="button" class="btn btn-ghost btn-danger" data-action="delete-folder">Delete from disk</button>' +
       "</div></div>" +
       '<div class="tabs">' + tabs + "</div>" +
       body +
@@ -3074,7 +3583,10 @@
 
   function renderCapabilities() {
     var detail = state.selectedCapDetail;
-    var rows = state.caps.items
+    var page = state.caps.page || 0;
+    var start = page * PAGE_SIZE;
+    var visible = state.caps.items.slice(start, start + PAGE_SIZE);
+    var rows = visible
       .map(function (c) {
         return (
           '<div class="row' + (state.selectedCap === c.id ? " selected" : "") + '">' +
@@ -3136,13 +3648,15 @@
       attr(state.caps.q) + '" aria-label="Filter capabilities"></div>' +
       '<div class="panel-body flush"><div class="rows">' +
       (rows || '<div class="empty-inline">No capability matches that filter.</div>') +
-      "</div></div></div>" +
+      "</div></div>" +
+      pager(state.caps.items.length, page, "cap-page") +
+      "</div>" +
       "<div>" + inspector + "</div>" +
       "</div></div>";
   }
 
   function loadCapabilities() {
-    var url = "/api/capabilities?limit=200&q=" + encodeURIComponent(state.caps.q) +
+    var url = "/api/capabilities?limit=500&q=" + encodeURIComponent(state.caps.q) +
       (state.caps.group ? "&group=" + encodeURIComponent(state.caps.group) : "");
     return request(url).then(function (res) {
       if (!res.ok) {
@@ -3151,13 +3665,18 @@
       }
       state.caps.total = res.body.total;
       state.caps.items = res.body.items || [];
+      var pages = Math.max(1, Math.ceil(state.caps.items.length / PAGE_SIZE));
+      if ((state.caps.page || 0) >= pages) state.caps.page = 0;
     });
   }
 
   // -------------------------------------------------------------------- activity
 
   function renderActivity() {
+    var page = state.auditPage || 0;
+    var start = page * PAGE_SIZE;
     var rows = state.audit
+      .slice(start, start + PAGE_SIZE)
       .map(function (a) {
         var result = a.dry_run
           ? '<span class="pill pill-quiet">plan</span>'
@@ -3190,15 +3709,28 @@
       (rows
         ? '<table class="table"><thead><tr><th>When</th><th>Actor</th><th>Capability</th>' +
           "<th>Tier</th><th>Result</th><th>Arguments</th><th>Message</th></tr></thead>" +
-          "<tbody>" + rows + "</tbody></table>"
+          "<tbody>" + rows + "</tbody></table>" +
+          pager(state.audit.length, page, "audit-page")
+        : state.auditError
+        ? '<div class="empty"><div class="empty-title">The activity log could not be read</div>' +
+          "<div>" + esc(state.auditError) + "</div></div>"
         : '<div class="empty"><div class="empty-title">Nothing has happened yet</div>' +
           "<div>Audit rows appear here as soon as a capability is called from any surface.</div></div>") +
       "</div></div></div>";
   }
 
   function loadActivity() {
-    return request("/api/audit?limit=200").then(function (res) {
-      state.audit = res.ok ? res.body.items || [] : [];
+    return request("/api/audit?limit=500").then(function (res) {
+      if (res.ok) {
+        state.audit = res.body.items || [];
+        state.auditError = null;
+        var pages = Math.max(1, Math.ceil(state.audit.length / PAGE_SIZE));
+        if ((state.auditPage || 0) >= pages) state.auditPage = 0;
+        return;
+      }
+      // A failure is not an empty history. Saying so keeps the two apart.
+      state.audit = [];
+      state.auditError = errorOf(res.body, "the activity log could not be read");
     });
   }
 
@@ -3235,7 +3767,7 @@
     el("main").innerHTML =
       '<div class="page">' +
       '<div class="page-head"><div><h1 class="page-title">Diagnostics</h1>' +
-      '<div class="page-sub">What devd checked, what it means for you, and how to fix it. The raw environment checks (`devd doctor`) are below.</div></div>' +
+      '<div class="page-sub">What devd checked, what it means for you, and how to fix it. The raw environment checks are below.</div></div>' +
       '<div class="page-actions">' +
       '<button type="button" class="btn" data-action="refresh">Re-check</button>' +
       '<button type="button" class="btn btn-danger" data-action="quit">Quit devd</button>' +
@@ -3264,14 +3796,6 @@
       '<div class="panel"><div class="panel-head"><span>Registry</span>' +
       '<span class="panel-note">' + ((s.registry && s.registry.capabilities) || 0) + " capabilities</span></div>" +
       '<div class="panel-body inline">' + groups + "</div></div>" +
-      '<div class="panel"><div class="panel-head"><span>Not yet implemented</span></div>' +
-      '<div class="panel-body stack">' +
-      "<div>Services, sites, runtimes, DNS and certificates have no capabilities registered yet, so there is " +
-      "nothing honest to show for them. They are the next milestones, and they will appear here as soon as " +
-      "they exist rather than as disabled switches now.</div>" +
-      '<div class="dim">What works today: projects, the complete Git lifecycle, the capability registry, ' +
-      "the audit trail and this interface.</div>" +
-      "</div></div>" +
       "</div>";
   }
 
@@ -3311,6 +3835,14 @@
       CREATE.stacks = [];
       toast("error", e.message);
     });
+  }
+
+  /* How many stacks devd can create a project from. The number comes from the
+     server, because a number written in the interface is a number that will
+     be wrong one day. */
+  function stackCount() {
+    if (CREATE.stacks && CREATE.stacks.length) return CREATE.stacks.length;
+    return null;
   }
 
   function pickStack(id) {
@@ -3507,7 +4039,8 @@
         '<div class="svc-main"><div class="svc-name">' + esc(p.name) + '</div><div class="svc-sub mono nowrap">' + esc(p.stack || "unknown stack") + " · " + esc(p.path) + "</div></div></button>";
     }).join("") || '<div class="panel-body empty-inline">No projects yet. Create one or import a checkout.</div>';
     var imp = '<div class="panel"><div class="panel-head"><span>Import an existing project</span></div><div class="panel-body">' +
-      '<div class="inline"><input class="input mono grow" id="dev-import" placeholder="/path/to/checkout" value="' + attr(DEV.importPath) + '" spellcheck="false">' +
+      '<div class="inline"><input class="input mono grow" id="dev-import" placeholder="Where the project is" value="' + attr(DEV.importPath) + '" spellcheck="false">' +
+      '<button type="button" class="btn" data-action="dev-pick">Choose folder…</button>' +
       '<button type="button" class="btn" data-action="dev-detect">Detect</button><button type="button" class="btn btn-primary" data-action="dev-import">Import</button></div>' +
       '<div class="row-sub">Nothing is changed in the project. Clone a repository first with <span class="mono">git clone</span> or the Projects view.</div></div></div>';
     el("main").innerHTML = page("Develop", "Detect any project's stack, run its tasks, and make it available to agents.", "",
@@ -3582,7 +4115,7 @@
           acts += '<button type="button" class="btn btn-mini" data-action="svc-logs" data-id="' + attr(id) + '">Logs</button>';
         }
         if (id === "adb" && st.installed) acts += '<button type="button" class="btn btn-mini" data-action="devices">Devices</button>';
-        return '<div class="svc"><div class="svc-main"><div class="svc-name">' + esc(t.tool.name) + " " + state + ' <span class="dim mono">' + esc(st.version || "") + '</span></div><div class="svc-sub">' + esc(t.tool.purpose) + "</div>" + svc +
+        return '<div class="svc"><div class="svc-main"><div class="svc-name">' + brandImg(t.tool.id, "brand-dot") + esc(t.tool.name) + " " + state + ' <span class="dim mono">' + esc(st.version || "") + '</span></div><div class="svc-sub">' + esc(t.tool.purpose) + "</div>" + svc +
           (!st.installed && st.problem && !t.tool.per_project ? '<div class="row-sub">' + esc(st.problem) + "</div>" : "") + '</div><div class="svc-actions">' + acts + "</div></div>";
       }).join("") + "</div>";
     });
@@ -3862,7 +4395,7 @@
     }).join("") || '<div class="empty-inline">Nothing yet.</div>';
 
     var quick = [
-      { v: "create", t: "Create a project", s: "From 24 stacks" },
+      { v: "create", t: "Create a project", s: stackCount() ? "From " + stackCount() + " stacks" : "From a stack" },
       { v: "develop", t: "Import a project", s: "Detect and work on it" },
       { v: "toolchain", t: "Install tools", s: "Languages and databases" },
       { v: "agents", t: "Open an agent session", s: "Claude Code, shell" }
@@ -3951,7 +4484,7 @@
     var result = AI.provBusy[p.id + ":msg"];
     return '<article class="provider' + (p.is_default ? " is-default" : "") + '">' +
       "<div>" +
-        '<div class="provider-name">' + esc(p.label) +
+        '<div class="provider-name">' + brandImg(p.preset || p.id, "brand-dot brand-dot-lead") + esc(p.label) +
           (p.is_default ? ' <span class="pill pill-accent">default</span>' : "") +
           (p.enabled ? "" : ' <span class="pill">disabled</span>') +
           ' <span class="pill">' + esc(p.kind) + "</span></div>" +
@@ -4033,7 +4566,7 @@
     var presetCards = (AI.presets || []).map(function (pr) {
       var cat = pr.category === "local" ? "local" : pr.category === "aggregator" ? "aggregator" : "cloud";
       return '<button type="button" class="preset" data-action="prov-new" data-preset="' + attr(pr.id) + '">' +
-        '<span class="preset-head"><b>' + esc(pr.label) + '</b><span class="preset-cat">' + esc(cat) + "</span></span>" +
+        '<span class="preset-head">' + brandImg(pr.id, "brand-dot") + "<b>" + esc(pr.label) + '</b><span class="preset-cat">' + esc(cat) + "</span></span>" +
         "<span>" + esc(pr.requires_key ? "Needs an API key" : "No key") + " · " + esc(pr.tools === "documented" ? "tool calling" : "tools depend on the model") + "</span>" +
         "<small>" + esc(pr.models_from || "") + "</small></button>";
     }).join("");
@@ -4615,14 +5148,18 @@
     },
     "prov-edit": function (n) {
       var p = (AI.providers || []).filter(function (x) { return x.id === n.dataset.id; })[0]; if (!p) return;
-      AI.provForm = { preset: p.preset || p.id, kind: p.kind, label: p.label, id: p.id, base_url: p.base_url, key_env: p.key_env || "", default_model: p.default_model || "", make_default: false, editing: true };
+      // The preset is only set when the provider really is one of the known
+      // presets. A custom provider has no preset, and saying so is what lets
+      // it be edited.
+      AI.provForm = { preset: p.preset || null, kind: p.kind, label: p.label, id: p.id, base_url: p.base_url, key_env: p.key_env || "", default_model: p.default_model || "", make_default: false, editing: true };
       renderProviders();
     },
     "prov-cancel": function () { AI.provForm = null; renderProviders(); },
     "prov-save": function () {
       var f = AI.provForm; if (!f) return;
       var q = function (k) { var e = document.querySelector('[data-pf="' + k + '"]'); return e ? (e.type === "checkbox" ? e.checked : e.value.trim()) : ""; };
-      var args = { id: f.editing ? f.id : q("id"), preset: f.preset, kind: q("kind") || f.kind, label: f.label, base_url: q("base_url"), default_model: q("default_model"), make_default: q("make_default") };
+      var args = { id: f.editing ? f.id : q("id"), kind: q("kind") || f.kind, label: f.label, base_url: q("base_url"), default_model: q("default_model"), make_default: q("make_default") };
+      if (f.preset) args.preset = f.preset;
       if (q("key_env")) args.key_env = q("key_env");
       var key = document.querySelector('[data-pf="api_key"]'); if (key && key.value) args.api_key = key.value;
       run("provider.save", args).then(function (o) {
@@ -4680,6 +5217,21 @@
     "svc-logs": function (n) { read("toolchain.logs", { tool: n.dataset.id }).then(function (d) { openDrawer(n.dataset.id + " logs", '<pre class="log-block">' + esc((d.lines || []).join("\n") || "empty") + "</pre>"); }).catch(function (e) { toast("error", e.message); }); },
     "devices": function () { read("toolchain.devices").then(function (d) { openDrawer("Android devices", d.length ? d.map(function (x) { return '<div class="kv"><dt class="mono">' + esc(x.serial) + "</dt><dd>" + esc(x.state) + " " + esc(x.note) + "</dd></div>"; }).join("") : '<div class="empty">No devices. Connect one with USB debugging enabled, or start an emulator.</div>'); }).catch(function (e) { toast("error", e.message); }); },
     "dev-open": function (n) { openProject(n.dataset.path); },
+    "dev-pick": function () {
+      openPicker({
+        title: "Choose a project folder",
+        note: "Pick the folder that holds the project. devd will look at what is inside it.",
+        confirm: "Use this folder",
+        intent: "project",
+        start: DEV.importPath
+      }).then(function (path) {
+        if (!path) return;
+        DEV.importPath = path;
+        var input = el("dev-import");
+        if (input) input.value = path;
+        return ACTIONS["dev-detect"]();
+      });
+    },
     "dev-detect": function () {
       var p = readInput("dev-import"); DEV.importPath = p; if (!p) return;
       DEV.busy = true; renderDevelop();
@@ -4711,7 +5263,92 @@
       dismissToast(node.closest(".toast"));
     },
 
+    "cap-page": function (node) {
+      state.caps.page = Math.max(0, Number(node.dataset.page) || 0);
+      renderCapabilities();
+    },
+
+    "audit-page": function (node) {
+      state.auditPage = Math.max(0, Number(node.dataset.page) || 0);
+      renderActivity();
+    },
+
     "close-drawer": function () { closeDrawer(); },
+
+    // ------------------------------------------------------------- projects
+
+    "add-project": function () {
+      openPicker({
+        title: "Add a project",
+        note: "Choose the folder that holds the project. devd looks at what is inside it before anything is registered.",
+        confirm: "Add this project",
+        intent: "project"
+      }).then(function (path) {
+        if (!path) return;
+        return addProjectAt(path);
+      });
+    },
+
+    "pin-project": function (node) {
+      togglePin(node.dataset.path);
+    },
+
+    "project-sort": function (node) {
+      state.projectSort = node.dataset.sort;
+      renderProjects();
+    },
+
+    // ------------------------------------------------------------- picker
+
+    "picker-goto": function (node) {
+      pickerGo(node.dataset.path);
+    },
+
+    "picker-pick-file": function (node) {
+      // A file cannot be a project, but it may sit next to one; going to its
+      // folder is the useful thing to do.
+      var path = node.dataset.path || "";
+      var cut = path.replace(/[\\/][^\\/]+$/, "");
+      if (cut) pickerGo(cut);
+    },
+
+    "picker-up": function () {
+      if (picker.listing && picker.listing.parent) pickerGo(picker.listing.parent);
+    },
+
+    "picker-native": function () {
+      request("/api/pick-folder", {
+        method: "POST",
+        body: JSON.stringify({
+          title: picker.title,
+          start: picker.listing ? picker.listing.path : picker.selected
+        })
+      }).then(function (res) {
+        if (res.status === 501) {
+          toast("info", "This window has no native folder dialog", "Use the browser below to move through your device.");
+          return;
+        }
+        if (!res.ok) {
+          toast("error", errorOf(res.body, "the folder dialog could not be shown"));
+          return;
+        }
+        if (!res.body || !res.body.path) return;
+        return pickerGo(res.body.path);
+      });
+    },
+
+    "picker-choose": function () {
+      var path = picker.selected;
+      if (!path) {
+        toast("warn", "Choose a folder first");
+        return;
+      }
+      closePicker(path);
+    },
+
+    "picker-cancel": function () { closePicker(null); },
+
+    "picker-close": function () { closePicker(null); },
 
     "add-form": function () {
       state.addOpen = true;
@@ -4891,11 +5528,26 @@
           '<div class="field"><label class="field-label" for="clone-url">Repository URL</label>' +
           '<input class="input mono" id="clone-url" placeholder="https://host/owner/repo.git"></div>' +
           '<div class="field"><label class="field-label" for="clone-dest">Destination</label>' +
-          '<input class="input mono" id="clone-dest" placeholder="C:\\\\code\\\\repo"></div>' +
+          '<div class="inline"><input class="input mono grow" id="clone-dest" placeholder="Where the clone should go">' +
+          '<button type="button" class="btn" data-action="clone-pick">Choose folder…</button></div></div>' +
           '<div class="inline"><button type="button" class="btn btn-primary" data-action="clone-go">Clone</button>' +
           '<span class="faint">Credentials come from your Git credential manager; devd never stores them.</span></div>' +
           "</div>"
       );
+    },
+
+    "clone-pick": function () {
+      openPicker({
+        title: "Choose where to clone into",
+        note: "Pick the folder the repository should be cloned into. The repository name is added to it.",
+        confirm: "Use this folder",
+        intent: "directory",
+        start: readInput("clone-dest")
+      }).then(function (path) {
+        if (!path) return;
+        var input = el("clone-dest");
+        if (input) input.value = path;
+      });
     },
 
     "clone-go": function () {
@@ -4914,8 +5566,47 @@
     },
 
     untrack: function () {
-      act("git.repo.untrack", { repo: project() }).then(function (o) {
+      var path = project();
+      if (!path) return;
+      // Removing a project from devd never touches the folder. The words on
+      // the button say so, because the difference matters.
+      act("project.forget", { path: path }).then(function (o) {
         if (o) navigate("projects");
+      });
+    },
+
+    "delete-folder": function () {
+      var path = project();
+      if (!path) return;
+      var name = dirName(path);
+      openDrawer(
+        "Delete " + name + " from disk",
+        '<div class="notice notice-bad"><strong>This deletes the folder and everything in it.</strong> ' +
+        "The project is removed from devd as well. This cannot be undone.</div>" +
+        '<div class="field"><label class="field-label" for="delete-confirm">Type <span class="mono">' +
+        esc(name) + "</span> to confirm</label>" +
+        '<input class="input mono" id="delete-confirm" autocomplete="off" spellcheck="false"></div>' +
+        '<div class="inline"><button type="button" class="btn btn-danger" id="delete-folder-go" data-action="delete-folder-go" disabled>Delete the folder</button>' +
+        '<button type="button" class="btn" data-action="close-drawer">Cancel</button></div>'
+      );
+    },
+
+    "delete-folder-go": function () {
+      var path = project();
+      var typed = readInput("delete-confirm");
+      if (!path) return;
+      if (typed !== dirName(path)) {
+        toast("error", "The name does not match, so nothing was deleted");
+        return;
+      }
+      closeDrawer();
+      act("fs.delete", { path: path, recursive: true }).then(function (o) {
+        if (o) {
+          return act("project.forget", { path: path });
+        }
+        return null;
+      }).then(function () {
+        navigate("projects");
       });
     },
 
@@ -5221,6 +5912,16 @@
       if (!args) return;
       plan(state.selectedCap, args)
         .then(function (p) {
+          // Some capabilities cannot produce a plan. That is a fact about the
+          // capability, not an error, and it is worth saying plainly.
+          if (!p) {
+            openDrawer(
+              state.selectedCap + " plan",
+              '<div class="notice notice-warn">This capability cannot produce a plan. ' +
+              "Running it will act straight away.</div>"
+            );
+            return;
+          }
           openDrawer(
             state.selectedCap + " plan",
             '<div class="notice">' + esc(p.summary) + "</div>" +
@@ -5289,6 +5990,7 @@
     }
     if (event.key === "Escape") {
       if (state.palette.open) return closePalette();
+      if (picker.open) return closePicker(null);
       if (!el("modal").hidden) return decideModal(false);
       if (!el("drawer").hidden) return closeDrawer();
       return;
@@ -5309,10 +6011,24 @@
       event.preventDefault();
       return decideModal(true);
     }
+    if (picker.open && event.key === "Enter" && event.target.id === "picker-path-input") {
+      event.preventDefault();
+      var typed = event.target.value.trim();
+      if (typed) pickerGo(typed);
+      return;
+    }
+    if (picker.open && event.key === "Enter" && !event.target.matches("input, textarea")) {
+      event.preventDefault();
+      var chosen = picker.selected;
+      if (chosen) closePicker(chosen);
+      return;
+    }
     // Keep Tab inside a dialog: focus that escapes behind a modal is the most
     // common keyboard trap in a single-page app.
     if (event.key === "Tab") {
-      var dialog = !el("modal").hidden ? el("modal") : state.palette.open ? document.querySelector("#palette .palette") : null;
+      var dialog = !el("modal").hidden ? el("modal")
+        : picker.open ? document.querySelector("#picker .picker")
+        : state.palette.open ? document.querySelector("#palette .palette") : null;
       if (!dialog) return;
       var focusables = Array.prototype.filter.call(
         dialog.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'),
@@ -5327,6 +6043,13 @@
 
   document.addEventListener("input", function (event) {
     if (event.target.id === "palette-input") return paletteSearch(event.target.value);
+    if (event.target.id === "picker-path-input") {
+      // Typing a path is the advanced way in; it still has to work, but it is
+      // never the only way.
+      picker.selected = event.target.value.trim() || null;
+      paintPickerInspect();
+      return;
+    }
     if (event.target.id === "process-log-query") {
       state.processes.logQuery = event.target.value;
       renderProcesses();
@@ -5335,6 +6058,27 @@
         input.focus();
         input.setSelectionRange(input.value.length, input.value.length);
       }
+      return;
+    }
+    if (event.target.id === "delete-confirm") {
+      var button = el("delete-folder-go");
+      if (button) {
+        var path = project();
+        button.disabled = !path || event.target.value.trim() !== dirName(path);
+      }
+      return;
+    }
+    if (event.target.id === "project-search") {
+      state.projectQuery = event.target.value;
+      clearTimeout(state.projectSearchTimer);
+      state.projectSearchTimer = setTimeout(function () {
+        renderProjects();
+        var input = el("project-search");
+        if (input) {
+          input.focus();
+          input.setSelectionRange(input.value.length, input.value.length);
+        }
+      }, 140);
       return;
     }
     if (event.target.id === "cap-search") {
@@ -5358,6 +6102,52 @@
     if (event.target.id === "preview-site") {
       state.preview.site = event.target.value;
       render();
+    }
+    if (event.target.value === "__browse__") {
+      // The person asked to go and find a folder. Put the list back the way it
+      // was, and open the picker.
+      var back = event.target.value;
+      event.target.value = "";
+      if (event.target.id === "agent-new-cwd") {
+        openPicker({
+          title: "Choose a working directory",
+          note: "The agent will start in this folder.",
+          confirm: "Use this folder",
+          intent: "directory"
+        }).then(function (path) {
+          if (!path) return;
+          var select = el("agent-new-cwd");
+          if (select) {
+            var opt = document.createElement("option");
+            opt.value = path;
+            opt.textContent = path;
+            select.appendChild(opt);
+            select.value = path;
+          }
+        });
+        return;
+      }
+      if (event.target.id === "agent-side-cwd") {
+        openPicker({
+          title: "Choose a working directory",
+          note: "New sessions will start in this folder.",
+          confirm: "Use this folder",
+          intent: "directory"
+        }).then(function (path) {
+          if (!path) return;
+          state.agent.cwd = path;
+          var select = el("agent-side-cwd");
+          if (select) {
+            var opt = document.createElement("option");
+            opt.value = path;
+            opt.textContent = path;
+            select.appendChild(opt);
+            select.value = path;
+          }
+        });
+        return;
+      }
+      event.target.value = back;
     }
     if (event.target.id === "process-project") {
       state.processes.project = event.target.value;
@@ -5464,6 +6254,8 @@
       .then(loadServer)
       .then(render)
       .then(loadProjects)
+      .then(render)
+      .then(loadCreate)
       .then(render)
       .then(loadAgents)
       .then(render)

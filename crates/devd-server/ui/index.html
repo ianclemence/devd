@@ -107,6 +107,41 @@
   <div class="drawer-body" id="drawer-body"></div>
 </div>
 
+<div class="overlay picker-overlay" id="picker" hidden>
+  <div class="picker" role="dialog" aria-modal="true" aria-labelledby="picker-title" aria-describedby="picker-note">
+    <div class="picker-head">
+      <div class="picker-headings">
+        <h2 id="picker-title">Choose a folder</h2>
+        <p class="picker-note" id="picker-note">Move through your device and pick the folder that holds the project.</p>
+      </div>
+      <button type="button" class="btn btn-ghost" data-action="picker-close" aria-label="Close the folder picker">Close</button>
+    </div>
+
+    <div class="picker-bar">
+      <button type="button" class="btn btn-ghost picker-up" id="picker-up" data-action="picker-up" aria-label="Go to the parent folder" disabled>Up</button>
+      <nav class="picker-crumbs" id="picker-crumbs" aria-label="Path"></nav>
+      <button type="button" class="btn" data-action="picker-native" id="picker-native" hidden>Browse this device…</button>
+    </div>
+
+    <div class="picker-places" id="picker-places" aria-label="Places"></div>
+
+    <div class="picker-list" id="picker-list" role="listbox" aria-label="Folders" tabindex="-1"></div>
+
+    <div class="picker-inspect" id="picker-inspect" aria-live="polite"></div>
+
+    <div class="picker-foot">
+      <label class="picker-path">
+        <span class="sr-only">Folder path</span>
+        <input type="text" id="picker-path-input" class="input mono" spellcheck="false" autocomplete="off" placeholder="Paste a path">
+      </label>
+      <div class="picker-buttons">
+        <button type="button" class="btn" data-action="picker-cancel">Cancel</button>
+        <button type="button" class="btn btn-go" id="picker-choose" data-action="picker-choose">Use this folder</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
 <div class="sr-only" id="announcer" aria-live="polite" aria-atomic="true"></div>
 

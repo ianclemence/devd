@@ -442,6 +442,10 @@ protections, see [`docs/security.md`](docs/security.md).
 | [`docs/git-cli.md`](docs/git-cli.md) | Every Git command and the capability it calls. |
 | [`docs/limitations.md`](docs/limitations.md) | What is not implemented, and what is weaker than intended. |
 | [`docs/releasing.md`](docs/releasing.md) | How a release is built, verified and published. |
+| [`docs/research/00-comment-debt.md`](docs/research/00-comment-debt.md) | The comment audit: what to delete, what to refactor, and what to enforce. |
+| [`docs/research/01-herd-investigation.md`](docs/research/01-herd-investigation.md) | What Laravel Herd 2.0.2 actually does, and the evidence for it. |
+| [`docs/research/02-feature-matrix.md`](docs/research/02-feature-matrix.md) | Every Herd capability mapped to its devd equivalent, with its state. |
+| [`docs/research/03-screen-inventory.md`](docs/research/03-screen-inventory.md) | Every screen, what it shows, and what was corrected. |
 | [`CHANGELOG.md`](CHANGELOG.md) | Release history. |
 
 ## License

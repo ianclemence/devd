@@ -109,6 +109,118 @@ fn every_icon_comes_from_the_same_logo() {
 }
 
 #[test]
+fn every_element_the_script_looks_up_exists_in_the_markup() {
+    // `el("id")` returns null for an id that is not in the page, and the line
+    // that used it then throws - which takes the whole screen down rather than
+    // the one control that is missing. Every id the script reaches for has to
+    // be in the markup.
+    let mut wanted: Vec<String> = Vec::new();
+    let bytes = APP.as_bytes();
+    let needle = b"el(\"";
+    let mut at = 0usize;
+    while let Some(found) = APP[at..].find("el(\"") {
+        let start = at + found;
+        at = start + needle.len();
+        // `sel("x")` ends in `el("` too, so the call has to stand on its own.
+        let before = if start == 0 { b' ' } else { bytes[start - 1] };
+        if before.is_ascii_alphanumeric() || before == b'_' {
+            continue;
+        }
+        let name = APP[at..].split('"').next().unwrap_or("");
+        // `el("prefix-" + id)` is a template, not one element, so a name that
+        // ends in a dash is not a real id.
+        if !name.is_empty()
+            && !name.ends_with('-')
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        {
+            wanted.push(name.to_string());
+        }
+    }
+    wanted.sort();
+    wanted.dedup();
+    for id in &wanted {
+        // Some elements are built by the script itself - a drawer, a row - so
+        // their ids appear in the markup of the script rather than the page.
+        let in_page = HTML.contains(&format!("id=\"{id}\""));
+        let in_script = APP.contains(&format!("id=\"{id}\""));
+        assert!(
+            in_page || in_script,
+            "the script looks up `el(\"{id}\")` but nothing ever creates an element with that id"
+        );
+    }
+}
+
+#[test]
+fn every_action_handler_does_something() {
+    // A handler that is empty is worse than no handler: the control looks
+    // real, the click does nothing, and the default action is swallowed.
+    let mut offenders: Vec<String> = Vec::new();
+    for line in APP.split("\n    ").filter(|l| l.trim_start().starts_with('"')) {
+        let name = line.trim_start_matches('"').split('"').next().unwrap_or("").to_string();
+        if name.is_empty() {
+            continue;
+        }
+        if let Some(at) = APP.find(&format!("\"{name}\": function (")) {
+            let body = &APP[at..];
+            let end = body.find("\n    },").unwrap_or(body.len());
+            let body = &body[..end];
+            let code = body
+                .split_once("function (")
+                .map(|(_, rest)| rest.split_once(')').map(|(_, after)| after).unwrap_or(""))
+                .unwrap_or("");
+            if code.trim().trim_end_matches('{').trim().is_empty() {
+                offenders.push(name);
+            }
+        }
+    }
+    assert!(offenders.is_empty(), "empty action handlers: {offenders:?}");
+}
+
+#[test]
+fn the_stylesheet_is_balanced() {
+    // A rule with a stray brace swallows everything after it, and a browser
+    // says nothing: the stylesheet simply stops applying. This check is the
+    // only thing standing between a typo and half the interface losing its
+    // layout, including every responsive breakpoint.
+    let mut depth: i32 = 0;
+    for (number, line) in CSS.lines().enumerate() {
+        for ch in line.chars() {
+            match ch {
+                '{' => depth += 1,
+                '}' => depth -= 1,
+                _ => {}
+            }
+            assert!(depth >= 0, "the stylesheet closes a rule it never opened at line {}", number + 1);
+        }
+    }
+    assert_eq!(depth, 0, "the stylesheet ends with an unclosed rule");
+}
+
+#[test]
+fn the_folder_picker_is_the_normal_way_to_choose_a_project() {
+    // A person must never have to type a path to add a project. The Projects
+    // screen offers the picker, and the only place a path is typed is the
+    // picker's own advanced field.
+    let projects = &APP[APP.find("function renderProjects()").unwrap()..];
+    let projects = &projects[..projects.find("function loadProjects()").unwrap()];
+    assert!(
+        projects.contains("data-action=\"add-project\""),
+        "the Projects screen has no Add existing project action"
+    );
+    assert!(
+        !projects.contains("id=\"add-path\""),
+        "the Projects screen still asks for a typed path"
+    );
+    assert!(
+        HTML.contains("id=\"picker\""),
+        "the folder picker is missing from the page"
+    );
+    for id in ["picker-title", "picker-note", "picker-up", "picker-crumbs", "picker-places", "picker-list", "picker-inspect", "picker-path-input", "picker-choose", "picker-native"] {
+        assert!(HTML.contains(&format!("id=\"{id}\"")), "the picker is missing `#{id}`");
+    }
+}
+
+#[test]
 fn the_logo_has_no_transparent_padding_and_is_square() {
     let marker = "data:image/png;base64,";
     let start = HTML.find(marker).expect("inline logo") + marker.len();

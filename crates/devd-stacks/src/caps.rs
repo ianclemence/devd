@@ -476,23 +476,73 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         })?;
 
     add::<NoArgs, _, _>(reg, "project.list", "List known projects",
-        "Projects devd created or imported, with their stack and package manager.",
+        "Every project devd knows about: the ones it created or imported, and the repositories that were indexed. One list, so the application, the terminal and an agent all see the same projects. Each row says where the project is, what stack was detected, how it was added, and whether the folder is still there.",
         Tier::Read, Effect::Read, true, false, true,
         |_, _| read_plan("project.list", "list projects"),
         |ctx, _| {
             let rows = ctx.store.list_stack_projects()?;
-            let v: Vec<Value> = rows.iter().map(|p| json!({"path": p.path, "name": p.name, "stack": p.stack_id, "package_manager": p.package_manager, "source": p.source, "exists": Path::new(&p.path).is_dir(), "updated_at": p.updated_at})).collect();
+            let mut v: Vec<Value> = Vec::new();
+            let mut seen: Vec<String> = Vec::new();
+            for p in &rows {
+                let path = authz::normalise(Path::new(&p.path)).display().to_string();
+                seen.push(path.clone());
+                v.push(json!({
+                    "path": path,
+                    "name": p.name,
+                    "stack": p.stack_id,
+                    "package_manager": p.package_manager,
+                    "source": p.source,
+                    "registered": true,
+                    "is_repository": Path::new(&p.path).join(".git").exists(),
+                    "exists": Path::new(&p.path).is_dir(),
+                    "updated_at": p.updated_at,
+                }));
+            }
+            // A repository that was indexed but never imported is still a
+            // project the person works on, so it belongs in the same list.
+            for r in ctx.store.list_repos()? {
+                let path = authz::normalise(Path::new(&r.path)).display().to_string();
+                if seen.iter().any(|s| s == &path) {
+                    continue;
+                }
+                v.push(json!({
+                    "path": path,
+                    "name": r.name,
+                    "stack": Value::Null,
+                    "package_manager": Value::Null,
+                    "source": "repository",
+                    "registered": false,
+                    "is_repository": true,
+                    "exists": Path::new(&r.path).is_dir(),
+                    "updated_at": r.last_seen_at,
+                }));
+            }
+            v.sort_by(|a, b| {
+                let an = a.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                let bn = b.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                an.to_lowercase().cmp(&bn.to_lowercase())
+            });
             Ok(Outcome::with_data(format!("{} project(s)", v.len()), json!(v)))
         })?;
 
-    add::<ForgetArgs, _, _>(reg, "project.forget", "Unregister a project",
-        "Removes a project from devd's list. Files on disk are never touched.",
+    add::<ForgetArgs, _, _>(reg, "project.forget", "Remove a project from devd",
+        "Removes a project from devd's list, whether it was imported or indexed as a repository. The folder and everything in it are never touched: this only means devd forgets about it.",
         Tier::Write, Effect::Write, false, false, true,
-        |_, a| Ok(Plan::new("project.forget", format!("unregister {} (files are kept)", a.path))),
+        |_, a| Ok(Plan::new("project.forget", format!("forget {} (the folder is kept)", a.path))),
         |ctx, a| {
             let p = authz::normalise(Path::new(&a.path)).display().to_string();
-            let gone = ctx.store.delete_stack_project(&p)?;
-            Ok(Outcome::ok(if gone { format!("forgot {p}") } else { format!("{p} was not registered") }))
+            let mut removed = false;
+            if ctx.store.delete_stack_project(&p)? {
+                removed = true;
+            }
+            if ctx.store.delete_repo(&p)? {
+                removed = true;
+            }
+            Ok(Outcome::ok(if removed {
+                format!("forgot {p}; the folder is untouched")
+            } else {
+                format!("{p} was not registered")
+            }))
         })?;
 
     // -------------------------------------------------------------- tasks

@@ -348,6 +348,14 @@ pub(crate) enum ProjectCommand {
     },
     /// List projects devd knows.
     List,
+    /// Look around a folder: the directories inside it, and which look like projects.
+    Browse {
+        #[arg(default_value = ".")]
+        path: String,
+        /// Include dot folders and hidden files.
+        #[arg(long)]
+        hidden: bool,
+    },
     /// Unregister a project (files are kept).
     Forget { path: String },
     /// List a project's tasks.

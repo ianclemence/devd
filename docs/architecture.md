@@ -230,6 +230,32 @@ proxy the model, hold the conversation, or stand between the harness and its
 provider. That is why a new model or a harness feature arrives without a devd
 release, and why the agent's own permission prompts remain the authority.
 
+## Choosing a folder
+
+A person finds a project by looking at their device, not by typing a path. That
+needs two things, and they are deliberately different.
+
+**The listing** is a capability: `fs.browse` lists the directories inside a
+location, the parent, the path from the root, the filesystem roots and the
+places work is kept. It lives in `devd-core` because it is a fact about the
+filesystem, and it is platform-correct: Windows drives, UNC paths, the verbatim
+`\\?\` prefix, long paths, non-ASCII names, and a directory that cannot be read
+— which is reported rather than hidden.
+
+**The dialog** is not a capability. A browser page cannot open the operating
+system's own folder picker, and a native dialog is a user-interface act rather
+than a domain operation, so an agent should not be able to trigger one. The
+desktop shell supplies it to the server as a narrow interface that can only open
+a dialog and return a path; the web application, which has no shell around it,
+draws its own browser over the same `fs.browse` listing. Both paths end in the
+same place: a string that is inspected by the capability that acts on it.
+
+**The brand marks** follow the same rule as the rest of the interface. They are
+the owners' own artwork, compiled into the binary and served from
+`/brands/{file}`, so the interface never depends on a third party being
+reachable and never shows a mark that has been tampered with. A mark is only
+shown for something devd actually supports, and it is never recoloured.
+
 ## Sessions and the workspace runtime
 
 Session ownership is a separate layer from session presentation.

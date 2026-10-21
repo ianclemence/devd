@@ -424,6 +424,27 @@ a previewed website cannot navigate the shell and cannot reach IPC. The bearer
 token is still injected into the HTML over loopback and never written to disk or
 placed on a command line.
 
+## The folder picker
+
+Choosing a folder is the one thing a browser page cannot do for itself, so the
+shell supplies it. The shape of that exception is deliberate:
+
+* **It is not a capability.** An agent has no business opening a dialog on a
+  person's screen, and a capability is something an agent may call.
+* **It can only open a dialog.** The picker returns the path the person chose
+  and nothing else. It cannot read a file, run a program, list a directory or
+  reach the registry. There is no argument that changes that.
+* **The path it returns is untrusted input.** It is a string, and everything
+  that acts on it goes through a capability that inspects it first: the project
+  is detected, the directory is checked, the authorisation rules apply.
+* **It is behind the same guard as everything else.** The bearer token, the host
+  allow-list and the origin check apply, so a hostile page cannot make the
+  window open a dialog.
+* **A server with no shell around it has none.** `devd ui` in a browser answers
+  `501`, and the web application uses its own folder browser instead, which
+  lists directories through the `fs.browse` capability and is subject to the
+  same authorisation as any other read.
+
 ## What is not protected
 
 The following are outside the model, stated so that no protection is assumed

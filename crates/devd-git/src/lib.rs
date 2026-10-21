@@ -38,6 +38,26 @@ pub struct FileChange {
     pub original_path: Option<String>,
 }
 
+/// One entry in the reflog.
+///
+/// The reflog is how a bad reset or rebase is undone, so an entry has to say
+/// what it was, when it happened and what it did. A line of text is not
+/// enough: every surface that shows the reflog would have to parse it again,
+/// and would parse it differently.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReflogEntry {
+    /// The commit the entry points at.
+    pub hash: String,
+    /// The reference the entry belongs to, e.g. `HEAD`.
+    pub reference: String,
+    /// When the entry was made, as Git reported it.
+    pub timestamp: String,
+    /// What Git did, e.g. `commit`, `reset`, `rebase`.
+    pub action: String,
+    /// The message that went with it.
+    pub subject: String,
+}
+
 /// Working tree summary.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepoStatus {
@@ -1443,8 +1463,12 @@ impl GitService {
     }
 
     /// The reflog, which is what makes recovery from a bad reset possible.
-    pub fn reflog(&self, repo: &Path, limit: u32) -> Result<Vec<String>> {
-        let out = self.exec_out(
+    /// The reflog, most recent first.
+    ///
+    /// Git prints one line per entry:
+    /// `<hash> <ref>@{<when>}: <action>: <subject>`. The parts are separated
+    /// here so that a caller never has to take the line apart itself.
+    pub fn reflog(&self, repo: &Path, limit: u32) -> Result<Vec<ReflogEntry>> {        let out = self.exec_out(
             repo,
             &[
                 "reflog".into(),
@@ -1452,7 +1476,7 @@ impl GitService {
                 "--date=iso".into(),
             ],
         )?;
-        Ok(out.lines().map(|l| l.to_string()).collect())
+        Ok(out.lines().map(parse_reflog_line).collect())
     }
 
     /// Start a bisect run.
@@ -2134,6 +2158,54 @@ pub fn validate_ref(name: &str) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+/// Split one line of `git reflog` into its parts.
+///
+/// The format is `<hash> <ref>@{<when>}: <action>: <subject>`. The subject
+/// may itself contain colons, so only the first two are separators.
+fn parse_reflog_line(line: &str) -> ReflogEntry {
+    let mut reference = String::new();
+    let mut timestamp = String::new();
+
+    // The hash is the first token.
+    let mut rest = line.trim_start();
+    let hash = match rest.find(' ') {
+        Some(at) => {
+            let first = rest[..at].to_string();
+            rest = rest[at + 1..].trim_start();
+            first
+        }
+        None => {
+            let whole = rest.to_string();
+            rest = "";
+            whole
+        }
+    };
+
+    // The reference and the time are together: `HEAD@{2026-01-01 10:00:00}`.
+    if let Some(at) = rest.find("@{") {
+        reference = rest[..at].to_string();
+        let after = &rest[at + 2..];
+        if let Some(close) = after.find("}") {
+            timestamp = after[..close].to_string();
+            rest = after[close + 1..].trim_start().trim_start_matches(':').trim_start();
+        }
+    }
+
+    // The action comes first, then the subject.
+    let (action, subject) = match rest.find(": ") {
+        Some(at) => (rest[..at].to_string(), rest[at + 2..].to_string()),
+        None => (rest.to_string(), String::new()),
+    };
+
+    ReflogEntry {
+        hash,
+        reference,
+        timestamp,
+        action,
+        subject,
+    }
 }
 
 /// Validate a revision expression used as an argument.

@@ -52,8 +52,18 @@ if ($LASTEXITCODE -ne 0) { throw "makensis failed" }
 if (-not (Test-Path $out)) { throw "the installer was not produced at $out" }
 
 $sha = (Get-FileHash $out -Algorithm SHA256).Hash.ToLower()
-"$sha  devd-setup-$version.exe" | Out-File -Encoding ascii "dist\SHA256SUMS.txt"
+$name = "devd-setup-$version.exe"
+
+# The checksum file lists every artifact. The installer is added to it rather
+# than replacing it, so a release always has one complete list.
+$sums = Join-Path $repo "dist\SHA256SUMS.txt"
+$lines = @()
+if (Test-Path $sums) {
+    $lines = Get-Content $sums | Where-Object { $_ -and $_ -notmatch [regex]::Escape($name) }
+}
+$lines += "$sha  $name"
+$lines | Out-File -Encoding ascii $sums
 
 Write-Host ""
-Write-Host "wrote dist\devd-setup-$version.exe" -ForegroundColor Green
-Get-Content "dist\SHA256SUMS.txt"
+Write-Host "wrote dist\$name" -ForegroundColor Green
+Get-Content $sums

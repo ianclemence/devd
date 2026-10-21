@@ -86,6 +86,10 @@ pub fn serve(app: App, requested: Option<u16>, open: bool) -> Result<Started, De
             extra_checks: extra,
             workspace: Some(workspace),
             shutdown: None,
+            // A browser cannot open the operating system's own folder dialog,
+            // so the web application falls back to the folder browser it draws
+            // itself.
+            picker: None,
         },
         move |bound| {
             let url = format!("http://127.0.0.1:{}/", bound.port);

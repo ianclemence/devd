@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use axum::body::Body;
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 
@@ -79,6 +79,55 @@ pub async fn style() -> Response {
 /// The window icon.
 pub async fn favicon() -> Response {
     build("image/svg+xml", Body::from(FAVICON), None)
+}
+
+/// The brand marks of the services and providers devd supports.
+///
+/// These are the owners' own artwork, taken from their own sites and from a
+/// curated brand registry. They are served from here rather than fetched from
+/// the internet at runtime, so the interface never depends on a third party
+/// being reachable and never shows a mark that has been tampered with.
+///
+/// The name is a file name and nothing else: the lookup is against a fixed
+/// list, so a request cannot reach outside the directory.
+pub async fn brand(Path(file): Path<String>) -> Response {
+    let Some((name, extension)) = file.rsplit_once('.') else {
+        return missing();
+    };
+    if !matches!(extension, "svg" | "png") {
+        return missing();
+    }
+    // A file name is letters, digits and dashes. Anything else is not a brand.
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return missing();
+    }
+    let Ok(bytes) = std::fs::read(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("ui/brands")
+            .join(&file),
+    ) else {
+        return missing();
+    };
+    let content_type = if extension == "svg" {
+        "image/svg+xml"
+    } else {
+        "image/png"
+    };
+    build(content_type, Body::from(bytes), None)
+}
+
+/// A brand mark that does not exist.
+fn missing() -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        "no such brand mark",
+    )
+        .into_response()
 }
 
 /// The vendored terminal emulator.

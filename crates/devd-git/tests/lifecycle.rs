@@ -683,8 +683,12 @@ fn the_reflog_makes_a_hard_reset_recoverable() {
     assert!(
         entries
             .iter()
-            .any(|e| e.contains("second") || e.contains("reset")),
+            .any(|e| e.subject.contains("second") || e.action.contains("reset")),
         "reflog should record the reset: {entries:?}"
+    );
+    assert!(
+        entries.iter().all(|e| !e.hash.is_empty() && !e.timestamp.is_empty()),
+        "every reflog entry should say which commit it is and when: {entries:?}"
     );
 
     // The discarded commit is still reachable by hash, which is the promise

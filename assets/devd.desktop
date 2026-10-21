@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=devd
+GenericName=Development environment
+Comment=Projects, runtimes, sites and agents on this machine
+Exec=@EXEC@ ui
+Icon=devd
+Terminal=false
+Categories=Development;Utility;
+StartupNotify=true

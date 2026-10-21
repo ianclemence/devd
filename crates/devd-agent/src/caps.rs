@@ -17,7 +17,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use devd_core::capability::{Capability, Ctx, Effect, Outcome, Plan, Tier};
-use devd_core::{util, DevdError, Provider, Registry, Result};
+use devd_core::{browse, util, DevdError, Provider, Registry, Result};
 
 use crate::chat::{Hub, SendRequest};
 use crate::team::{PlanTask, Team};
@@ -364,6 +364,17 @@ struct FsList {
     limit: Option<usize>,
 }
 
+/// A directory to list, for the folder picker.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct FsBrowse {
+    /// Absolute directory. An empty value lists the places worth starting from.
+    #[serde(default)]
+    path: Option<String>,
+    /// Include dot files and Windows hidden files.
+    #[serde(default)]
+    hidden: Option<bool>,
+}
+
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct FsRead {
     /// Absolute file path.
@@ -444,6 +455,7 @@ fn provider_view(ctx: &Ctx, p: &Provider) -> Value {
         "id": p.id, "kind": p.kind, "label": p.label, "base_url": p.base_url,
         "key_env": p.key_env, "default_model": p.default_model,
         "is_default": p.is_default, "enabled": p.enabled,
+        "preset": pre.as_ref().map(|x| x.id.clone()),
         "key_source": secrets::key_source(&ctx.paths, p),
         "key_hint": key.as_deref().map(secrets::mask),
         "has_key": key.is_some(),
@@ -970,6 +982,31 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
         })?;
 
     // ------------------------------------------------------------- files
+    add::<FsBrowse, _, _>(reg, "fs.browse", "Browse folders", "Lists the folders inside a directory so a person can choose one without typing a path. Returns the folders and files in that directory, the parent directory, the path from the root, the filesystem roots (one per drive on Windows), the places a person keeps their work, and a warning when part of the listing could not be read. With no path it returns only the starting places. Reads nothing else and changes nothing.",
+        Tier::Read, Effect::Read, true, false,
+        |_, a| simple("fs.browse", match a.path.as_deref().filter(|p| !p.trim().is_empty()) {
+            Some(p) => format!("browse {p}"),
+            None => "list the places a person can start from".to_string(),
+        }),
+        |_, a| {
+            let path = a.path.as_deref().map(str::trim).filter(|p| !p.is_empty());
+            match path {
+                Some(p) => {
+                    let listing = browse::browse(std::path::Path::new(p), a.hidden.unwrap_or(false))?;
+                    Ok(Outcome::with_data(
+                        format!("{} folder(s) in {}", listing.entries.len(), listing.path),
+                        serde_json::to_value(&listing)?,
+                    ))
+                }
+                None => {
+                    let places = browse::places();
+                    Ok(Outcome::with_data(
+                        format!("{} place(s) to start from", places.len()),
+                        serde_json::to_value(&places)?,
+                    ))
+                }
+            }
+        })?;
     add::<FsList, _, _>(reg, "fs.list", "List files", "Lists a directory (up to four levels), skipping build output and dependency folders, and flagging secrets files without reading them.",
         Tier::Read, Effect::Read, true, false,
         |_, a| simple("fs.list", format!("list {}", a.path)),

@@ -41,6 +41,7 @@ pub fn run(json: bool, plan_only: bool, assume_yes: bool) -> Result<i32> {
     }
 
     let mut steps: Vec<Value> = Vec::new();
+    let mut problems: Vec<String> = Vec::new();
 
     // What devd needs on this machine, and what this run will do about it.
     // The person sees the whole list before anything changes.
@@ -52,15 +53,30 @@ pub fn run(json: bool, plan_only: bool, assume_yes: bool) -> Result<i32> {
     say(&app, "==> Runtime");
     let ctx = app.ctx();
     if devd_runtime::executable(&ctx, "php", None).is_err() {
-        say(
-            &app,
-            "    installing PHP (the vendor download is about 35 MB)",
-        );
-        steps.push(invoke(
-            &app,
-            "runtime.install",
-            json!({ "kind": "php", "version": "latest" }),
-        )?);
+        if cfg!(windows) {
+            say(
+                &app,
+                "    installing PHP (the vendor download is about 35 MB)",
+            );
+            steps.push(invoke(
+                &app,
+                "runtime.install",
+                json!({ "kind": "php", "version": "latest" }),
+            )?);
+        } else {
+            // devd publishes Windows PHP builds. On this platform the system's
+            // own PHP is used, and saying so is better than failing.
+            say(
+                &app,
+                "    PHP is not installed. devd uses the system PHP on this platform; \
+                 install it with your package manager (for example \
+                 `sudo apt install php-cli php-cgi php-fpm`).",
+            );
+            problems.push(
+                "PHP is not installed. devd uses the system PHP; install php-cli and php-cgi."
+                    .to_string(),
+            );
+        }
     } else {
         say(&app, "    PHP is already installed");
     }
@@ -83,6 +99,24 @@ pub fn run(json: bool, plan_only: bool, assume_yes: bool) -> Result<i32> {
             say(&app, &format!("    {name} is already installed"));
             continue;
         }
+        if !cfg!(windows) {
+            // The vendor binaries devd installs are Windows builds. On this
+            // platform the services come from the system package manager, and
+            // devd drives the ones it finds rather than replacing them.
+            say(
+                &app,
+                &format!(
+                    "    {name} comes from the system package manager on this platform; \
+                     devd will use the one it finds (install it with your package manager \
+                     if it is missing)"
+                ),
+            );
+            problems.push(format!(
+                "{name} is not installed by devd on this platform; install it with your \
+                 package manager if it is missing."
+            ));
+            continue;
+        }
         say(&app, &format!("    installing {name}"));
         let args = if name == "mariadb" {
             json!({ "name": name, "version": null, "port": db_port })
@@ -93,7 +127,16 @@ pub fn run(json: bool, plan_only: bool, assume_yes: bool) -> Result<i32> {
     }
 
     say(&app, "==> Starting the stack");
-    steps.push(invoke(&app, "stack.up", json!({}))?);
+    // Starting the stack is best-effort: a machine whose nginx comes from the
+    // package manager may have no devd-managed service to start, and that is
+    // not a failure of the setup.
+    match invoke(&app, "stack.up", json!({})) {
+        Ok(step) => steps.push(step),
+        Err(e) => {
+            say(&app, &format!("    could not start every managed service: {e}"));
+            problems.push(format!("a managed service did not start: {e}"));
+        }
+    }
 
     let ctx = app.ctx();
     if ctx.store.list_sites()?.is_empty() {
@@ -109,7 +152,10 @@ pub fn run(json: bool, plan_only: bool, assume_yes: bool) -> Result<i32> {
         say(&app, "==> Certificate authority");
         match invoke(&app, "tls.trust", json!({ "machine": false })) {
             Ok(step) => steps.push(step),
-            Err(e) => say(&app, &format!("    could not trust the CA: {e}")),
+            Err(e) => {
+                say(&app, &format!("    could not trust the CA: {e}"));
+                problems.push(format!("the certificate authority is not trusted: {e}"));
+            }
         }
     }
 
@@ -125,18 +171,23 @@ pub fn run(json: bool, plan_only: bool, assume_yes: bool) -> Result<i32> {
         println!(
             "{}",
             serde_json::to_string_pretty(&json!({
-                "ok": true,
+                "ok": problems.is_empty(),
                 "steps": steps,
                 "site": FIRST_SITE,
                 "url": url,
                 "certificate_trusted": app.assume_yes,
+                "problems": problems,
             }))?
         );
-        return Ok(0);
+        return Ok(if problems.is_empty() { 0 } else { 1 });
     }
 
     println!();
-    println!("==> Ready");
+    if problems.is_empty() {
+        println!("==> Ready");
+    } else {
+        println!("==> Ready, with two things left to do");
+    }
     if let Some(url) = &url {
         println!("    site   {url}");
     }
@@ -150,7 +201,10 @@ pub fn run(json: bool, plan_only: bool, assume_yes: bool) -> Result<i32> {
         "    Further sites use <name>.<tld>; publish them with `devd hosts sync` \
          from an elevated shell."
     );
-    Ok(0)
+    for problem in &problems {
+        println!("    ! {problem}");
+    }
+    Ok(if problems.is_empty() { 0 } else { 1 })
 }
 
 /// Print what devd needs on this machine and what would fix each thing.
@@ -200,14 +254,25 @@ fn report_requirements(app: &App) {
 
 /// The steps, for `--plan`.
 fn plan_lines() -> Vec<&'static str> {
-    vec![
-        "choose free ports when 80/443 are taken by another program",
-        "install PHP (latest stable) when no PHP runtime is installed",
-        "install nginx and MariaDB when they are not installed",
-        "start php-cgi, MariaDB and nginx",
-        "create the site `welcome` at https://localhost:<https-port>",
-        "trust the local certificate authority for this user (with --yes)",
-    ]
+    if cfg!(windows) {
+        vec![
+            "choose free ports when 80/443 are taken by another program",
+            "install PHP (latest stable) when no PHP runtime is installed",
+            "install nginx and MariaDB when they are not installed",
+            "start php-cgi, MariaDB and nginx",
+            "create the site `welcome` at https://localhost:<https-port>",
+            "trust the local certificate authority for this user (with --yes)",
+        ]
+    } else {
+        vec![
+            "choose free ports when 80/443 are taken by another program",
+            "use the system PHP (devd publishes Windows PHP builds only)",
+            "use the system nginx and MariaDB (devd installs Windows builds only)",
+            "start the services devd manages",
+            "create the site `welcome` at https://localhost:<https-port>",
+            "trust the local certificate authority for this user (with --yes)",
+        ]
+    }
 }
 
 /// Choose ports when the configured ones are held by another program.

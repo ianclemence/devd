@@ -316,12 +316,71 @@ fn abs(p: &str) -> String {
     }
 }
 
+/// Look around a folder from the terminal.
+///
+/// The window has a folder picker; a terminal has none, so the same listing
+/// is printed instead. The directories are marked with the markers that say
+/// "there is a project here", and the parent is given so the person can keep
+/// going up. Everything comes from `fs.browse`, so the terminal and the
+/// window see the same disk.
+fn browse(app: &App, path: &str, hidden: bool) -> Result<()> {
+    let listing = app.data("fs.browse", json!({ "path": path, "hidden": hidden }))?;
+    let here = listing["path"].as_str().unwrap_or(path);
+    println!("{here}");
+    if let Some(parent) = listing["parent"].as_str() {
+        println!("  .. {parent}");
+    }
+    let entries = listing["entries"].as_array().cloned().unwrap_or_default();
+    if entries.is_empty() {
+        println!("  (nothing here)");
+        return Ok(());
+    }
+    for entry in entries {
+        if entry["kind"].as_str() != Some("directory") {
+            continue;
+        }
+        let name = entry["name"].as_str().unwrap_or("");
+        let child = entry["path"].as_str().unwrap_or("");
+        // A directory that holds a project manifest is worth pointing at.
+        let marker = if std::path::Path::new(child)
+            .join("devd.yml")
+            .exists()
+            || std::path::Path::new(child)
+                .join("package.json")
+                .exists()
+            || std::path::Path::new(child)
+                .join("composer.json")
+                .exists()
+            || std::path::Path::new(child)
+                .join(".git")
+                .exists()
+        {
+            "  project"
+        } else {
+            ""
+        };
+        let link = if entry["symlink"].as_bool().unwrap_or(false) {
+            "  (link)"
+        } else {
+            ""
+        };
+        println!("  {name}{marker}{link}");
+    }
+    if listing["truncated"].as_bool().unwrap_or(false) {
+        println!("  ... only the first entries are shown");
+    }
+    if let Some(warning) = listing["warning"].as_str() {
+        eprintln!("  warning: {warning}");
+    }
+    Ok(())
+}
+
 /// `devd project`.
-pub fn project(app: &App, cmd: ProjectCommand) -> Result<()> {
-    match cmd {
+pub fn project(app: &App, cmd: ProjectCommand) -> Result<()> {    match cmd {
         ProjectCommand::Detect { path, stack } => app.invoke("project.detect", json!({ "path": abs(&path), "stack": stack })),
         ProjectCommand::Import { path, stack, name } => app.invoke("project.import", json!({ "path": abs(&path), "stack": stack, "name": name })),
         ProjectCommand::List => app.invoke("project.list", json!({})),
+        ProjectCommand::Browse { path, hidden } => browse(app, &abs(&path), hidden),
         ProjectCommand::Forget { path } => app.invoke("project.forget", json!({ "path": abs(&path) })),
         ProjectCommand::Tasks { path } => app.invoke("project.tasks", json!({ "path": abs(&path) })),
         ProjectCommand::Run { path, task, background, foreground, args } => {

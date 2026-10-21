@@ -28,5 +28,9 @@ chrono = { workspace = true }
 tokio = { workspace = true }
 open = { workspace = true }
 
+# The native folder picker. On Windows it drives the common item dialog; on
+# Linux it asks the desktop portal, so the shell needs no GTK at build time.
+rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

@@ -8,6 +8,7 @@
 
 Unicode true
 !include "MUI2.nsh"
+!include "LogicLib.nsh"
 
 !ifndef VERSION
   !define VERSION "0.0.0"
@@ -57,7 +58,7 @@ VIAddVersionKey "LegalCopyright" "MIT"
 
 !define MUI_FINISHPAGE_RUN "$INSTDIR\launch.vbs"
 !define MUI_FINISHPAGE_RUN_TEXT "Set up devd and open it"
-!define MUI_FINISHPAGE_TEXT "devd is installed.$\r$\n$\r$\nThe first start downloads PHP, nginx and MariaDB (about 140 MB), starts them, creates a site and opens the application. This can take a few minutes and shows progress in a console window."
+!define MUI_FINISHPAGE_TEXT "devd is installed.$\r$\n$\r$\nThe first start runs the setup, which reports what it is doing as it goes:$\r$\n$\r$\n  1. Requirements - what is missing, and what this run will do about it$\r$\n  2. Runtime - PHP is downloaded and verified by running it$\r$\n  3. Services - nginx and MariaDB are downloaded from their vendors$\r$\n  4. Starting the stack - each service is started and checked$\r$\n  5. First site - a site is created and a certificate is issued$\r$\n  6. Certificate authority - trusted for this user$\r$\n$\r$\nThe downloads are about 140 MB and can take a few minutes. Progress appears in a console window; the application opens when the setup finishes."
 !insertmacro MUI_PAGE_FINISH
 
 !insertmacro MUI_LANGUAGE "English"
@@ -153,6 +154,9 @@ Section "devd (required)" SecMain
   CreateShortcut "$SMPROGRAMS\devd\Uninstall devd.lnk" "$INSTDIR\uninstall.exe" "" "$INSTDIR\uninstall.exe" 0
 
   WriteRegStr HKCU "Software\devd" "InstallDir" "$INSTDIR"
+  ; Whether the WebView2 runtime was found. The application can still be used
+  ; from the terminal without it, and the uninstaller says so.
+  WriteRegStr HKCU "Software\devd" "WebView2" "$0"
   WriteRegStr HKCU "${UNINSTKEY}" "DisplayName" "devd"
   WriteRegStr HKCU "${UNINSTKEY}" "DisplayVersion" "${VERSION}"
   WriteRegStr HKCU "${UNINSTKEY}" "Publisher" "ianclemence"
@@ -160,7 +164,10 @@ Section "devd (required)" SecMain
   WriteRegStr HKCU "${UNINSTKEY}" "DisplayIcon" "$INSTDIR\devd-desktop.exe"
   WriteRegStr HKCU "${UNINSTKEY}" "UninstallString" '"$INSTDIR\uninstall.exe"'
   WriteRegDWORD HKCU "${UNINSTKEY}" "NoModify" 1
-  WriteRegDWORD HKCU "${UNINSTKEY}" "NoRepair" 1
+  ; Repair is left available: re-running the installer over a broken install is
+  ; the cheapest way to fix one, and the installer stops the running copy
+  ; before it writes.
+  WriteRegDWORD HKCU "${UNINSTKEY}" "NoRepair" 0
   WriteRegDWORD HKCU "${UNINSTKEY}" "EstimatedSize" 12000
 SectionEnd
 
@@ -174,8 +181,7 @@ SectionEnd
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 Section "Uninstall"
-  ; Stop the application and the services it started. User data in
-  ; %LOCALAPPDATA%\devd is deliberately kept; the README says where it is.
+  ; Stop the application and the services it started.
   nsExec::ExecToLog '"$INSTDIR\devd.exe" stack down'
   nsExec::ExecToLog 'taskkill /F /IM devd.exe'
   nsExec::ExecToLog 'taskkill /F /IM devd-desktop.exe'
@@ -202,4 +208,22 @@ Section "Uninstall"
 
   DeleteRegKey HKCU "${UNINSTKEY}"
   DeleteRegKey HKCU "Software\devd"
+
+  ; The data is the person's: their projects, their databases, their
+  ; certificates and their settings. Removing devd must not remove those
+  ; unless they say so.
+  ;
+  ; A silent uninstall asks nobody, so it keeps the data. That is the only
+  ; safe default for an unattended removal, and it is the same answer the
+  ; question gives when it is dismissed without one.
+  DetailPrint "Your data is in $LOCALAPPDATA\devd"
+  ${IfNot} ${Silent}
+    MessageBox MB_YESNO|MB_ICONQUESTION "devd has kept your data in$\r$\n$LOCALAPPDATA\devd$\r$\n$\r$\nIt holds your projects, your databases, your certificates and your settings.$\r$\n$\r$\nKeep it?$\r$\n$\r$\nYes, keep my data (the default).$\r$\nNo, remove it as well." IDNO remove_data
+  ${EndIf}
+  DetailPrint "Keeping your data in $LOCALAPPDATA\devd"
+  Goto after_data
+  remove_data:
+  DetailPrint "Removing devd's data from $LOCALAPPDATA\devd ..."
+  RMDir /r "$LOCALAPPDATA\devd"
+  after_data:
 SectionEnd

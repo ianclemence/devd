@@ -5,24 +5,27 @@ partially, and the platform-specific behaviour worth knowing before relying on
 it. Each entry states the consequence and, where one exists, the change that
 would close it.
 
-This document describes the current release, v0.8.0. See
-[`CHANGELOG.md`](../CHANGELOG.md) for what it contains.
+This document describes the current release, v0.8.0, plus the work in
+`Unreleased`. See [`CHANGELOG.md`](../CHANGELOG.md) for what it contains.
 
 ## Not implemented at all
 
 | Area | State |
 | --- | --- |
-| Apache, Redis, Mailpit | Not started. nginx and MariaDB are the services that exist. |
+| Apache, Redis, Mailpit, PostgreSQL, MySQL and MongoDB as **devd-managed** services | Not started. `devd` installs and supervises **nginx** and **MariaDB** itself. The others are found on the machine, and can be installed and controlled through the system package manager (`toolchain.*`). Redis has no official Windows build at all, so a devd-managed Redis on Windows would mean an unofficial build; that is not done. |
 | DNS server | Not started. `*.test` names resolve through a managed block in the hosts file, one entry per site; there is no wildcard and no query server. |
 | SSH control of a remote host, deploy | Not started. |
+| Public tunnels and webhook testing | Not started. `devd` has no tunnel and does not pretend to. |
+| Local mail capture, dump interception, Xdebug sessions, profiling | Not started. The PHP extensions can be installed through the toolchain, but devd does not run a mail server, intercept dumps or capture a debug session. |
 | Snapshots and receipts | A hosts write snapshots the file first. Nothing else does, and no snapshot can be restored. |
 | Licensing / redistribution checks | Not started. |
 | Self-update and upgrade check | Not started. Nothing in `devd` contacts GitHub. The release list the mechanism will read is public and reachable (`GET /repos/ianclemence/devd/releases?per_page=3`), and the releases carry the source archives GitHub generates, but no code reads them yet. |
-| An in-app conversational agent | Not started. The MCP server is the agent surface today. |
-| Prebuilt Linux binary | Not attached to this release: an artifact is published only after it has been executed on its target platform, and the release is built on Windows. `scripts/release-linux.sh` produces one on any Linux machine, or through WSL or Docker on Windows. |
-| Runtime, service and site panels in the app and the dashboard | Not built. The capabilities exist and the CLI covers them; the application's capability inspector can invoke them, but there are no dedicated screens. |
+| Prebuilt Linux binary | Not attached to this release: an artifact is published only after it has been executed on its target platform, and the release is built on Windows. `scripts/release-linux.sh` produces one on any Linux machine, or through WSL or Docker on Windows, and `scripts/install-linux.sh` installs it. |
+| Runtime, service and site screens in the **terminal dashboard** | Not built. The web application has Overview, Sites, Services, Tools, Runtimes, Preview, Certificates and Hosts; the terminal dashboard has neither. |
 | Per-site PHP version routing | A site records the PHP version it was created against, and nginx has **one** FastCGI upstream — the `php-cgi` listener built from the primary runtime. Creating a second site against another version changes the record, not the listener. |
 | HTTP/2 | The TLS listener is HTTP/1.1. `http2` is not enabled in the generated vhosts. |
+| Focus management in the detail drawer | The drawer is a `role="dialog"`, but focus is not moved into it and it is not part of the focus trap. The palette and the approval dialog are. |
+| Announcing a failure | A failed operation is shown in a toast that is announced politely, not assertively. |
 
 **Consequence.** On Windows, a user can install PHP/Node/Go, install nginx and
 MariaDB, create a site, and reach it over HTTPS with a chain that verifies against

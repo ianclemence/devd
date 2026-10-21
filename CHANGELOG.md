@@ -10,9 +10,103 @@ may change capability identifiers where the design was wrong.
 
 ---
 
-## Unreleased
+## [0.9.0] - 2026-10-21 - a folder picker, official brand marks, and a stylesheet that works
+
+devd now lets you find a project by looking at your device instead of typing
+its path, shows the owners' own marks beside the services and providers it
+supports, and — after a one-character fault in the stylesheet — actually
+adapts to the window you are in.
+
+### Added
+
+- **Choosing a project folder by looking at your device.** The window and the
+  web application now have a folder picker, so no project ever has to be added
+  by typing a path.
+  - The desktop window opens the **operating system's own folder dialog**
+    (`POST /api/pick-folder`, implemented with `rfd` in the shell). The picker
+    returns a path and nothing else: it cannot read a file or run a program.
+  - The web application draws its own folder browser, listing the places work
+    is kept, the filesystem roots, the path as a trail you can step back
+    through, and the folders that are there, with symbolic links marked.
+  - The highlighted folder is inspected before you commit to it: the detected
+    stack, the package manager, the runtimes it asks for, whether it is a Git
+    repository, and anything that is missing.
+  - The same picker is used wherever a folder is needed: the Projects screen,
+    the Develop tab, the agent's working directory, and the destination for a
+    clone.
+  - In a terminal, `devd project browse [path]` prints the same listing and
+    marks the directories that hold a project.
+- **Official brand marks.** 51 marks - the model providers, the databases,
+  caches, search engines, runtimes, tools and editors - are served from the
+  binary and shown beside the thing they name. Each one is the owner's own
+  artwork, taken from their own site or from a curated brand registry, and
+  never recoloured or distorted.
+- **A documented plan for the comment-debt remediation** in
+  `docs/research/00-comment-debt.md`, with the evidence for each finding and a
+  separation between the changes that are safe now and the ones that need
+  architectural work.
+- **Research notes** in `docs/research/`: the investigation of Laravel Herd
+  2.0.2 with the evidence for each observation, a feature acceptance matrix
+  that maps every Herd capability to its DEVD equivalent, and a full screen
+  inventory.
+- **A Linux installer**, `scripts/install-linux.sh`: a per-user install with no
+  administrator rights, a desktop entry, and an uninstall that keeps your data
+  unless you ask it to remove it.
+
+### Fixed
+
+- **The responsive half of the stylesheet was dead.** A malformed rule left a
+  brace open, so the browser silently ignored everything after it - including
+  every breakpoint below 960 pixels. The application was unusable on a narrow
+  window and nobody had noticed, because the fault was in the file and not in
+  the browser. A contract test now checks that the stylesheet is balanced.
+- **The folder list could take the whole screen down.** A missing element id
+  made the picker throw instead of rendering. A contract test now checks every
+  id the script looks up, and another checks that no action handler is empty.
+- **`hidden` did not hide anything** that had a `display` rule of its own.
+- **`git.reflog` returned text where the interface expected structure**, so the
+  Recover tab showed blank rows and offered to reset to an empty revision. It
+  now returns the hash, the reference, the time, the action and the subject.
+- **A provider whose id was not a preset id could not be edited**: the
+  interface sent the provider's own id as a preset and the server refused it.
+- **The Recover tab and the Changes tab gave a conflicted file different
+  colours.** Untracked and conflicted are now different badges.
+- **"Dry run" on a capability that cannot plan threw an error.** It now says
+  so.
+- **A failed request for the activity log looked like an empty history.**
+- **The number of stacks was written into the interface.** It now comes from
+  the server.
+- **The Diagnostics screen claimed that services, sites, runtimes, DNS and
+  certificates had no capabilities** - on the same screen that renders all
+  five.
+- **The runtime installer dropped its "upstream publishes no digest" warning**
+  because a later binding shadowed it.
+- **`devd setup` aborted on Linux**, where devd publishes no PHP or service
+  binaries. It now uses the system's own PHP and services, says so, and reports
+  what is left to do instead of failing.
+- **Two collection screens were unbounded**: the activity log and the
+  capability registry. Both are paged, with a real count of what is showing.
 
 ### Changed
+
+- **One list of projects.** `project.list` returns the union of imported
+  projects and indexed repositories, so the window, the terminal and an agent
+  all see the same projects. The window's Projects screen used to read a
+  different list from the Develop tab.
+- **"Remove from devd" and "Delete from disk" are now different things.** The
+  first forgets a project and keeps the folder; the second deletes the folder
+  and asks you to type its name first.
+- **One name per destination.** The rail, the tab strip, the command palette
+  and the breadcrumb all call a screen the same thing; the page heading may be
+  longer.
+- **The installer can be repaired.** The Windows install is no longer marked
+  "no repair", and the uninstaller offers to remove your data as an explicit,
+  separate choice that is off by default.
+- **The uninstaller says what it keeps.** Your projects, databases,
+  certificates and settings stay in `%LOCALAPPDATA%\devd` unless you ask for
+  them to go.
+
+### Changed (earlier in this release)
 
 - **One logo, everywhere, generated from one file.** The artwork now lives in
   `assets/devd-logo.png` and nothing else is a source of truth. `scripts/make-icons.py`

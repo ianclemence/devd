@@ -8,6 +8,7 @@
 //! [`Registry::dispatch`].
 
 pub mod archive;
+pub mod browse;
 pub mod capability;
 pub mod config;
 pub mod doctor;
@@ -26,6 +27,7 @@ pub mod store_work;
 pub mod util;
 
 pub use archive::{extract, Format};
+pub use browse::{browse, Crumb, Entry, Kind, Listing, Place};
 pub use capability::{
     Actor, Approval, Capability, Ctx, Effect, Handler, InvokeRequest, InvokeResult, Outcome, Plan,
     Surface, Tier,

@@ -46,6 +46,7 @@ pub async fn session(State(state): State<Arc<AppState>>) -> Response {
         "port": state.port,
         "uptime_ms": state.started.elapsed().as_millis() as u64,
         "pending_approvals": state.approvals.len(),
+        "native_picker": state.picker.is_some(),
         "paths": {
             "root": state.ctx.paths.root().display().to_string(),
             "state_db": state.ctx.paths.state_db().display().to_string(),
@@ -977,5 +978,81 @@ pub async fn open_url(Json(body): Json<OpenUrlBody>) -> Response {
             "open_failed",
             &format!("the operating system could not open the URL: {e}"),
         ),
+    }
+}
+
+// ------------------------------------------------------------------- picker
+
+#[derive(Deserialize)]
+pub struct PickFolderBody {
+    /// Heading for the dialog.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Directory the dialog should open in.
+    #[serde(default)]
+    pub start: Option<String>,
+}
+
+/// `POST /api/pick-folder` - ask the person for a folder with the operating
+/// system's own dialog.
+///
+/// The desktop shell owns a native picker; a `devd ui` in a browser has none,
+/// because a web page cannot open one. Rather than pretend, the endpoint says
+/// so with `501`, and the web application falls back to the folder browser it
+/// draws itself from `fs.browse`.
+///
+/// The path that comes back is treated as untrusted: it is a string, and
+/// everything that acts on it goes through a capability that inspects it
+/// first.
+pub async fn pick_folder(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<PickFolderBody>,
+) -> Response {
+    let picker = match &state.picker {
+        Some(p) => p.clone(),
+        None => {
+            return refuse(
+                StatusCode::NOT_IMPLEMENTED,
+                "no_native_picker",
+                "this surface has no native folder picker; use the built-in folder browser",
+            )
+        }
+    };
+    let title = body
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .unwrap_or("Choose a folder")
+        .to_string();
+    if title.chars().count() > 200 {
+        return refuse(
+            StatusCode::BAD_REQUEST,
+            "invalid_title",
+            "the dialog title is too long",
+        );
+    }
+    let start = body
+        .start
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(std::path::PathBuf::from);
+
+    // The dialog blocks until the person answers, so it must not occupy a
+    // worker thread that other requests need.
+    let chosen = match tokio::task::spawn_blocking(move || picker.pick(&title, start)).await {
+        Ok(chosen) => chosen,
+        Err(e) => {
+            return refuse(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "picker_failed",
+                &format!("the folder picker could not be shown: {e}"),
+            )
+        }
+    };
+    match chosen {
+        Some(path) => Json(json!({ "path": path.to_string_lossy() })).into_response(),
+        None => Json(json!({ "path": Value::Null })).into_response(),
     }
 }

@@ -43,6 +43,7 @@
 
 pub mod api;
 pub mod approval;
+pub mod picker;
 pub mod ui;
 
 use std::net::{Ipv4Addr, SocketAddr};
@@ -102,6 +103,12 @@ pub struct Options {
     /// way to ask for a graceful exit (stopping PTYs and project processes)
     /// without sending a request to itself.
     pub shutdown: Option<watch::Receiver<bool>>,
+    /// A native folder picker, when the shell can show one.
+    ///
+    /// The desktop window supplies it so that choosing a project folder is a
+    /// real operating-system dialog. A `devd ui` in a browser has no such
+    /// dialog; there the web application uses its own folder browser instead.
+    pub picker: Option<picker::Picker>,
 }
 
 impl Default for Options {
@@ -111,6 +118,7 @@ impl Default for Options {
             extra_checks: Vec::new(),
             workspace: None,
             shutdown: None,
+            picker: None,
         }
     }
 }
@@ -133,6 +141,8 @@ pub struct AppState {
     pub started: Instant,
     /// The process-owning runtime: agent PTYs and project processes.
     pub workspace: Arc<Workspace>,
+    /// A native folder picker, when the shell can show one.
+    pub picker: Option<picker::Picker>,
     /// Signals graceful shutdown when the user quits the application.
     shutdown: watch::Sender<bool>,
 }
@@ -159,6 +169,7 @@ impl AppState {
             port,
             extra_checks,
             workspace,
+            None,
         ))
     }
 
@@ -169,6 +180,7 @@ impl AppState {
         port: u16,
         extra_checks: Vec<ExtraChecks>,
         workspace: Arc<Workspace>,
+        picker: Option<picker::Picker>,
     ) -> (Arc<Self>, watch::Receiver<bool>) {
         ctx.actor = Actor::human(Surface::Http);
         ctx.dry_run = false;
@@ -183,6 +195,7 @@ impl AppState {
             extra_checks,
             started: Instant::now(),
             workspace,
+            picker,
             shutdown,
         });
         (state, receiver)
@@ -249,6 +262,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/project/restart", post(api::project_restart))
         .route("/api/project/logs", get(api::project_logs))
         .route("/api/open-url", post(api::open_url))
+        .route("/api/pick-folder", post(api::pick_folder))
         .with_state(state.clone());
 
     let pages = Router::new()
@@ -256,6 +270,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/app.js", get(ui::script))
         .route("/style.css", get(ui::style))
         .route("/favicon.svg", get(ui::favicon))
+        .route("/brands/:file", get(ui::brand))
         .route("/vendor/xterm.js", get(ui::xterm_js))
         .route("/vendor/xterm.css", get(ui::xterm_css))
         .route("/vendor/addon-fit.js", get(ui::xterm_fit))
@@ -297,8 +312,14 @@ where
         None => Workspace::new(ctx.store.clone(), ctx.paths.clone())?,
     };
     let external_shutdown = options.shutdown.clone();
-    let (state, mut shutdown) =
-        AppState::with_workspace(registry, ctx, addr.port(), options.extra_checks, workspace);
+    let (state, mut shutdown) = AppState::with_workspace(
+        registry,
+        ctx,
+        addr.port(),
+        options.extra_checks,
+        workspace,
+        options.picker.clone(),
+    );
 
     let bound = Bound {
         addr,

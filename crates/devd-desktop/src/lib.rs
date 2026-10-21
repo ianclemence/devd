@@ -19,6 +19,14 @@
 //! * No `tauri-plugin-shell`, filesystem or process API is registered. A remote
 //!   origin therefore has no IPC surface to reach even if its page is hostile.
 //! * PTYs and project processes are owned by this process and stopped on exit.
+//!
+//! # The one thing the shell adds
+//!
+//! A browser page cannot open the operating system's folder dialog. The shell
+//! can, so it supplies the server with a [`FolderPicker`]. The dialog returns
+//! a path and nothing else: it cannot read a file, run a program or reach the
+//! registry. Everything that happens with the path afterwards goes through the
+//! ordinary capability API, where the permission checks live.
 
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
@@ -28,6 +36,7 @@ use devd_core::capability::{Actor, Ctx, Surface};
 use devd_server::{Bound, Options};
 use tauri::{RunEvent, WebviewUrl, WebviewWindowBuilder};
 
+pub mod picker;
 type Shutdown = Arc<Mutex<Option<tokio::sync::watch::Sender<bool>>>>;
 
 /// Launch the desktop application.
@@ -115,6 +124,7 @@ fn run_with(boot: Bootstrap) -> tauri::Result<()> {
                 extra_checks: Vec::new(),
                 workspace: Some(backend_workspace),
                 shutdown: Some(shutdown_rx),
+                picker: Some(Arc::new(picker::NativePicker)),
             },
             move |bound| {
                 let _ = tx.send(Ok(bound.clone()));

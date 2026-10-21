@@ -84,6 +84,7 @@ them against a real socket.
 | --- | --- |
 | `GET /` | The application shell, with the session token injected |
 | `GET /app.js`, `GET /style.css`, `GET /favicon.svg` | The UI, compiled into the binary |
+| `GET /brands/{file}` | An owner's own brand mark, served from the binary |
 | `GET /api/session` | Version, actor, paths, settings, registry summary |
 | `GET /api/capabilities` | Ranked search: `?q=&group=&limit=&offset=` |
 | `GET /api/capabilities/{id}` | The full declaration, including its argument schema |
@@ -94,9 +95,25 @@ them against a real socket.
 | `GET /api/audit` | Recent capability attempts, arguments redacted |
 | `GET /api/doctor` | The environment check, identical to `devd doctor` |
 | `POST /api/shutdown` | Stop the server |
+| `POST /api/pick-folder` | Ask the operating system for a folder |
 
-There is no endpoint that does anything on its own. Every one of them either
-reads the registry or calls it, which is why the API cannot drift from the CLI.
+Everything except two of these either reads the registry or calls it, which is
+why the API cannot drift from the CLI.
+
+The two exceptions are deliberate and narrow:
+
+* **`POST /api/pick-folder`** opens the operating system's own folder dialog.
+  It is a user-interface act, not a domain operation, so it is not a
+  capability: an agent has no business opening a dialog on a person's screen.
+  The dialog returns a path and nothing else — it cannot read a file, run a
+  program or reach the registry — and the path it returns is untrusted input
+  that is inspected by the capability that acts on it. A server with no shell
+  around it (a browser, `devd ui`) answers `501`, and the web application uses
+  its own folder browser instead, driven by the `fs.browse` capability.
+* **The session, terminal and project routes** move bytes between a running
+  process and the page: polling a terminal, attaching to a session, reading a
+  project's log. Polling a terminal at 80 ms through the registry would write an
+  audit row per frame, which is noise rather than accountability.
 
 ## Approvals in a browser
 
