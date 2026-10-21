@@ -179,8 +179,6 @@ pub fn front_matter(raw: &str) -> Option<(String, String, String, Vec<String>)> 
     let rest = raw.strip_prefix("---\n").or_else(|| raw.strip_prefix("---\r\n"))?;
     let end = rest.find("\n---")?;
     let front = &rest[..end];
-    let body = &rest[end + 4..];
-    let body = body.strip_prefix('\n').unwrap_or(body);
 
     // Every field, with a folded block gathered into one value.
     let mut fields: Vec<(String, String)> = Vec::new();

@@ -159,7 +159,7 @@ struct SkillImport {
 }
 
 /// The folder another agent keeps its skills in, or a path the person gave.
-fn resolve_source_dir(paths: &devd_core::paths::Paths, from: &str) -> Result<std::path::PathBuf> {
+fn resolve_source_dir(from: &str) -> Result<std::path::PathBuf> {
     let from = from.trim();
     if from.is_empty() {
         return Err(DevdError::invalid("name the agent to import from, or give the folder to read"));
@@ -800,7 +800,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
         Tier::Write, Effect::Write, false, true,
         |_, a| simple("skills.import", format!("import skills from {}", a.from)),
         |ctx, a| {
-            let dir = resolve_source_dir(&ctx.paths, &a.from)?;
+            let dir = resolve_source_dir(&a.from)?;
             let names = skills::import_from(&ctx.paths, &dir)?;
             Ok(Outcome::with_data(format!("imported {} skill(s)", names.len()), json!({ "imported": names, "from": dir.display().to_string() })))
         })?;
@@ -808,7 +808,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
         "The other agents on this machine that keep a folder of skills, how many are in each, and where the folder is. Read this before skills.import.",
         Tier::Read, Effect::Read, true, false,
         |_, _| simple("skills.sources", "look for other agents' skills"),
-        |ctx, _| {
+        |_, _| {
             let rows: Vec<Value> = skills::agent_sources(&home_dir())
                 .into_iter()
                 .map(|(name, dir, count)| json!({ "agent": name, "path": dir.display().to_string(), "count": count }))

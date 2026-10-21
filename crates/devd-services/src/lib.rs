@@ -1226,7 +1226,6 @@ pub fn stack_up(ctx: &Ctx) -> Result<Vec<Status>> {
     }
 
     // The listeners come first: nginx needs a FastCGI upstream to answer with.
-    let order = ["php-cgi", "mariadb", "nginx"];
     let services: Vec<Service> = ctx
         .store
         .list_services()?

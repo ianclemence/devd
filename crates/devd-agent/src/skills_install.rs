@@ -10,9 +10,8 @@
 //! installed.
 
 use std::collections::BTreeMap;
-use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use devd_core::paths::Paths;
 use devd_core::{DevdError, Result};
