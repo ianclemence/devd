@@ -275,6 +275,11 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/vendor/xterm.js", get(ui::xterm_js))
         .route("/vendor/xterm.css", get(ui::xterm_css))
         .route("/vendor/addon-fit.js", get(ui::xterm_fit))
+        // Every screen has an address of its own, so a link to it can be
+        // copied and the back button means something. The shell answers for
+        // any path it does not have a file for, and the interface reads the
+        // path to decide what to show.
+        .fallback(get(ui::index))
         .with_state(state.clone());
 
     api.merge(pages)

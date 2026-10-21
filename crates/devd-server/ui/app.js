@@ -3236,6 +3236,7 @@
     state.tabs = {};
     state.diff = null;
     state.project = { path: path, name: dirName(path), status: null, open: null, error: null };
+    writeRoute("project", false);
     render();
     return loadProject().then(render);
   }
@@ -5331,10 +5332,94 @@
     return Promise.resolve();
   }
 
-  function navigate(view) {
+  // ------------------------------------------------------------------ routes
+
+  /* Every screen has an address.
+   *
+   * A link to a screen can be copied and sent to somebody, and the back
+   * button means something. The path is the truth about where the person is;
+   * the view is what the path resolves to. */
+  var ROUTES = {
+    home: "/",
+    inbox: "/inbox",
+    assistant: "/assistant",
+    team: "/team",
+    projects: "/projects",
+    create: "/create",
+    develop: "/develop",
+    agents: "/agents",
+    skills: "/skills",
+    shared: "/shared",
+    processes: "/processes",
+    overview: "/server",
+    services: "/server/services",
+    sites: "/server/sites",
+    toolchain: "/server/tools",
+    runtimes: "/server/runtimes",
+    preview: "/server/preview",
+    certificates: "/server/certificates",
+    hosts: "/server/hosts",
+    providers: "/models",
+    activity: "/activity",
+    system: "/diagnostics",
+    capabilities: "/api-tools"
+  };
+
+  /* The address of the screen that is showing. */
+  function routeFor(view) {
+    if (view === "project") {
+      var path = state.project && state.project.path;
+      return path ? "/projects/" + encodeURIComponent(path) : "/projects";
+    }
+    if (view === "assistant") {
+      return AI.thread && AI.thread.id ? "/assistant/" + encodeURIComponent(AI.thread.id) : "/assistant";
+    }
+    return ROUTES[view] || "/";
+  }
+
+  /* The screen an address means. */
+  function viewFor(path) {
+    var p = String(path || "/").split("?")[0].replace(/\/+$/, "") || "/";
+    if (p === "/" ) return "home";
+    if (p.indexOf("/projects/") === 0) return "project";
+    if (p.indexOf("/assistant/") === 0) return "assistant";
+    for (var k in ROUTES) {
+      if (ROUTES[k] === p) return k;
+    }
+    return "home";
+  }
+
+  /* Put the address in the bar without adding a history entry. */
+  function writeRoute(view, replace) {
+    var path = routeFor(view);
+    if (location.pathname + location.search === path) return;
+    var url = path + location.search;
+    if (replace) history.replaceState({ view: view }, "", url);
+    else history.pushState({ view: view }, "", url);
+  }
+
+  /* Follow the address: the back button, a pasted link, a bookmark. */
+  function readRoute() {
+    var view = viewFor(location.pathname);
+    var parts = location.pathname.split("/").filter(Boolean);
+    if (view === "project") {
+      var raw = parts.slice(1).join("/");
+      if (raw) {
+        try { state.project = { path: decodeURIComponent(raw), name: dirName(decodeURIComponent(raw)) }; } catch (e) { /* not a path */ }
+      }
+    }
+    if (view === "assistant" && parts[1]) {
+      state.pendingThread = decodeURIComponent(parts[1]);
+    }
+    if (state.view === view && !state.pendingThread) return;
+    navigate(view, true);
+  }
+
+  function navigate(view, fromRoute) {
     if (state.view === "agents" && view !== "agents") stopAgentTimer();
     if (AREA[view]) { state.areaTab = state.areaTab || {}; state.areaTab[AREA[view]] = view; }
     state.view = view;
+    if (!fromRoute) writeRoute(view, false);
     render();
     return refresh();
   }
@@ -5886,9 +5971,10 @@
     "open-thread": function (n) {
       AI.thread = { id: n.dataset.id, title: "", state: "idle", input_tokens: 0, output_tokens: 0 }; AI.lastId = 0; AI.events = []; AI.pending = [];
       if (state.view !== "assistant") { state.view = "assistant"; render(); }
+      writeRoute("assistant", false);
       pollThread(true).then(function () { renderAssistant(); });
     },
-    "chat-new": function () { AI.thread = null; AI.events = []; AI.pending = []; AI.lastId = 0; renderAssistant(); },
+    "chat-new": function () { AI.thread = null; AI.events = []; AI.pending = []; AI.lastId = 0; writeRoute("assistant", false); renderAssistant(); },
     "chat-send": function () {
       var inp = el("chat-input"); var text = (inp.value || "").trim();
       if (!text && !ATTACHMENTS.length) return;
@@ -7123,6 +7209,9 @@
 
   function boot() {
     render();
+    // The address is read first: a link to a screen, a bookmark or the back
+    // button all say where the person wants to be.
+    readRoute();
     // Session first, then the server data, then the environment check. The
     // dashboard must not wait for a slow doctor run to show what is running.
     return loadSession()
@@ -7145,8 +7234,19 @@
         if (!state.session) return;
         var pending = state.session.pending_approvals;
         if (pending) toast("warn", pending + " operations are awaiting a decision");
+      })
+      .then(function () {
+        // A conversation named in the address is opened once the list is in.
+        var id = state.pendingThread;
+        if (!id) return;
+        state.pendingThread = null;
+        var t = (AI.threads || []).filter(function (x) { return x.id === id; })[0];
+        if (t) ACTIONS["open-thread"]({ dataset: { id: id } });
+        else navigate("assistant", true);
       });
   }
+
+  window.addEventListener("popstate", function () { readRoute(); });
 
 
   document.addEventListener("input", onCreateInput);
