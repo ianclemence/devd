@@ -22,7 +22,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use devd_core::capability::{Capability, Ctx, Effect, Outcome, Plan, Tier};
+use devd_core::capability::{Ctx, Effect, Outcome, Plan, Tier};
 use devd_core::download::Progress;
 use devd_core::{DevdError, Registry, Result};
 
@@ -72,18 +72,15 @@ pub fn register(reg: &mut Registry) -> Result<()> {
 // ------------------------------------------------------------------ services
 
 fn register_service(reg: &mut Registry) -> Result<()> {
-    add::<NoArgs, _, _>(
-        reg,
-        "service.list",
-        "List services",
-        "Every service devd manages, with a live check that its files exist, its recorded \
-         process is still the process it claims to be, and its port is answering.",
-        "service",
-        Tier::Read,
-        Effect::Read,
-        true,
-        false,
-        true,
+    reg.define::<NoArgs>("service.list", "List services")
+    .description("Every service devd manages, with a live check that its files exist, its recorded \
+         process is still the process it claims to be, and its port is answering.")
+    .group("service")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .handlers(
         |_, _| Ok(Plan::new("service.list", "list the installed services")),
         |ctx, _| {
             let rows = services::list(ctx)?;
@@ -103,18 +100,15 @@ fn register_service(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
-    add::<NameArgs, _, _>(
-        reg,
-        "service.available",
-        "List service versions published upstream",
-        "Reads the vendor's own listing (nginx.org, archive.mariadb.org) and returns the \
-         versions that can be installed.",
-        "service",
-        Tier::Read,
-        Effect::Read,
-        true,
-        false,
-        true,
+    reg.define::<NameArgs>("service.available", "List service versions published upstream")
+    .description("Reads the vendor's own listing (nginx.org, archive.mariadb.org) and returns the \
+         versions that can be installed.")
+    .group("service")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .handlers(
         |_, _| {
             Ok(Plan::new(
                 "service.available",
@@ -134,20 +128,17 @@ fn register_service(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
-    add::<InstallArgs, _, _>(
-        reg,
-        "service.install",
-        "Install a service",
-        "Resolves the request against the vendor's listing, downloads the official build, \
+    reg.define::<InstallArgs>("service.install", "Install a service")
+    .description("Resolves the request against the vendor's listing, downloads the official build, \
          verifies its digest where the vendor publishes one, unpacks it and records how to \
          start it. The plan names the URL, the digest and the destination before anything is \
-         downloaded. A vendor that publishes no checksum file is reported as such.",
-        "service",
-        Tier::Write,
-        Effect::Write,
-        true,
-        true,
-        false,
+         downloaded. A vendor that publishes no checksum file is reported as such.")
+    .group("service")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers(
         |_, args| install_plan(args),
         |ctx, args| {
             let version = args.version.clone().unwrap_or_else(|| "latest".to_string());
@@ -191,19 +182,16 @@ fn register_service(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
-    add::<NameArgs, _, _>(
-        reg,
-        "service.start",
-        "Start a service",
-        "Starts the service detached and records its process id, so it survives the command \
+    reg.define::<NameArgs>("service.start", "Start a service")
+    .description("Starts the service detached and records its process id, so it survives the command \
          that started it. The start is verified: the port has to open, or the service is \
-         stopped again and the failure is reported with the tail of its own log.",
-        "service",
-        Tier::Exec,
-        Effect::Process,
-        true,
-        true,
-        false,
+         stopped again and the failure is reported with the tail of its own log.")
+    .group("service")
+    .tier(Tier::Exec)
+    .effect(Effect::Process)
+    .agent_safe()
+    .dry_run()
+    .handlers(
         |ctx, args| start_plan(ctx, args),
         |ctx, args| {
             let status = services::start(ctx, &args.name)?;
@@ -214,19 +202,17 @@ fn register_service(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
-    add::<NameArgs, _, _>(
-        reg,
-        "service.stop",
-        "Stop a service",
-        "Stops the service and everything it spawned. The recorded process id is only used \
+    reg.define::<NameArgs>("service.stop", "Stop a service")
+    .description("Stops the service and everything it spawned. The recorded process id is only used \
          after its image name has been confirmed, so a recycled process id cannot lead to an \
-         unrelated program being killed.",
-        "service",
-        Tier::Exec,
-        Effect::Process,
-        true,
-        true,
-        true,
+         unrelated program being killed.")
+    .group("service")
+    .tier(Tier::Exec)
+    .effect(Effect::Process)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |ctx, args| stop_plan(ctx, args),
         |ctx, args| {
             let status = services::stop(ctx, &args.name)?;
@@ -237,17 +223,14 @@ fn register_service(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
-    add::<NameArgs, _, _>(
-        reg,
-        "service.restart",
-        "Restart a service",
-        "Stops the service and starts it again.",
-        "service",
-        Tier::Exec,
-        Effect::Process,
-        true,
-        true,
-        false,
+    reg.define::<NameArgs>("service.restart", "Restart a service")
+    .description("Stops the service and starts it again.")
+    .group("service")
+    .tier(Tier::Exec)
+    .effect(Effect::Process)
+    .agent_safe()
+    .dry_run()
+    .handlers(
         |ctx, args| stop_plan(ctx, args),
         |ctx, args| {
             let status = services::restart(ctx, &args.name)?;
@@ -258,18 +241,15 @@ fn register_service(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
-    add::<NameArgs, _, _>(
-        reg,
-        "service.status",
-        "Show one service",
-        "The current state of a service: whether it is installed, running, which process id \
-         it has, and whether its port is answering.",
-        "service",
-        Tier::Read,
-        Effect::Read,
-        true,
-        false,
-        true,
+    reg.define::<NameArgs>("service.status", "Show one service")
+    .description("The current state of a service: whether it is installed, running, which process id \
+         it has, and whether its port is answering.")
+    .group("service")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .handlers(
         |_, _| Ok(Plan::new("service.status", "read the service state")),
         |ctx, args| {
             let status = services::status(ctx, &args.name)?;
@@ -280,18 +260,15 @@ fn register_service(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
-    add::<LogsArgs, _, _>(
-        reg,
-        "service.logs",
-        "Read a service log",
-        "The last lines of a service's own log file - nginx's error output, the PHP \
-         FastCGI listener's startup messages, MariaDB's error log.",
-        "service",
-        Tier::Read,
-        Effect::Read,
-        true,
-        false,
-        true,
+    reg.define::<LogsArgs>("service.logs", "Read a service log")
+    .description("The last lines of a service's own log file - nginx's error output, the PHP \
+         FastCGI listener's startup messages, MariaDB's error log.")
+    .group("service")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .handlers(
         |_, _| Ok(Plan::new("service.logs", "read the service log")),
         |ctx, args| {
             let lines = args.lines.unwrap_or(50).min(2000) as usize;
@@ -303,19 +280,15 @@ fn register_service(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
-    add::<NameArgs, _, _>(
-        reg,
-        "service.remove",
-        "Remove a service",
-        "Stops the service, deletes the installed files and forgets the record. For MariaDB \
+    reg.define::<NameArgs>("service.remove", "Remove a service")
+    .description("Stops the service, deletes the installed files and forgets the record. For MariaDB \
          the data directory is deliberately kept: uninstalling the server is not the same \
-         decision as discarding every database.",
-        "service",
-        Tier::Destructive,
-        Effect::Write,
-        false,
-        true,
-        false,
+         decision as discarding every database.")
+    .group("service")
+    .tier(Tier::Destructive)
+    .effect(Effect::Write)
+    .dry_run()
+    .handlers(
         |ctx, args| {
             let status = services::status(ctx, &args.name)?;
             Ok(Plan::new(
@@ -428,19 +401,17 @@ fn stop_plan(ctx: &Ctx, args: &NameArgs) -> Result<Plan> {
 // --------------------------------------------------------------- web server
 
 fn register_web(reg: &mut Registry) -> Result<()> {
-    add::<NoArgs, _, _>(
-        reg,
-        "web.render",
-        "Render the web server configuration",
-        "Rebuilds nginx.conf from the state store: one server block per site, with the TLS \
+    reg.define::<NoArgs>("web.render", "Render the web server configuration")
+    .description("Rebuilds nginx.conf from the state store: one server block per site, with the TLS \
          listener, the redirect, the document root and the FastCGI upstream. The file is \
-         generated, never edited, so it cannot drift from what devd believes.",
-        "web",
-        Tier::Write,
-        Effect::Config,
-        true,
-        true,
-        true,
+         generated, never edited, so it cannot drift from what devd believes.")
+    .group("web")
+    .tier(Tier::Write)
+    .effect(Effect::Config)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, _| {
             Ok(Plan::new(
                 "web.render",
@@ -459,17 +430,14 @@ fn register_web(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
-    add::<NoArgs, _, _>(
-        reg,
-        "web.test",
-        "Check the web server configuration",
-        "Runs `nginx -t` against the generated configuration and reports nginx's own message.",
-        "web",
-        Tier::Read,
-        Effect::Read,
-        true,
-        false,
-        true,
+    reg.define::<NoArgs>("web.test", "Check the web server configuration")
+    .description("Runs `nginx -t` against the generated configuration and reports nginx's own message.")
+    .group("web")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .handlers(
         |_, _| Ok(Plan::new("web.test", "run `nginx -t`")),
         |ctx, _| {
             let output = services::nginx::test(ctx)?;
@@ -480,18 +448,15 @@ fn register_web(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
-    add::<NoArgs, _, _>(
-        reg,
-        "web.reload",
-        "Reload the web server",
-        "Checks the generated configuration and then asks nginx to read it, without dropping \
-         connections. A configuration that does not pass the check is never loaded.",
-        "web",
-        Tier::Exec,
-        Effect::Process,
-        true,
-        true,
-        false,
+    reg.define::<NoArgs>("web.reload", "Reload the web server")
+    .description("Checks the generated configuration and then asks nginx to read it, without dropping \
+         connections. A configuration that does not pass the check is never loaded.")
+    .group("web")
+    .tier(Tier::Exec)
+    .effect(Effect::Process)
+    .agent_safe()
+    .dry_run()
+    .handlers(
         |_, _| {
             Ok(Plan::new(
                 "web.reload",
@@ -515,19 +480,16 @@ fn register_web(reg: &mut Registry) -> Result<()> {
 // -------------------------------------------------------------------- stack
 
 fn register_stack(reg: &mut Registry) -> Result<()> {
-    add::<NoArgs, _, _>(
-        reg,
-        "stack.up",
-        "Start the development stack",
-        "Starts every enabled service in dependency order - the PHP FastCGI listener, then \
+    reg.define::<NoArgs>("stack.up", "Start the development stack")
+    .description("Starts every enabled service in dependency order - the PHP FastCGI listener, then \
          MariaDB, then nginx. Every service is attempted, so one failure does not hide the \
-         state of the others, and the result reports exactly what started.",
-        "stack",
-        Tier::Exec,
-        Effect::Process,
-        true,
-        true,
-        false,
+         state of the others, and the result reports exactly what started.")
+    .group("stack")
+    .tier(Tier::Exec)
+    .effect(Effect::Process)
+    .agent_safe()
+    .dry_run()
+    .handlers(
         |ctx, _| stack_plan(ctx, true),
         |ctx, _| {
             let started = services::stack_up(ctx)?;
@@ -538,17 +500,14 @@ fn register_stack(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
-    add::<NoArgs, _, _>(
-        reg,
-        "stack.down",
-        "Stop the development stack",
-        "Stops every running service, in reverse dependency order.",
-        "stack",
-        Tier::Exec,
-        Effect::Process,
-        true,
-        true,
-        false,
+    reg.define::<NoArgs>("stack.down", "Stop the development stack")
+    .description("Stops every running service, in reverse dependency order.")
+    .group("stack")
+    .tier(Tier::Exec)
+    .effect(Effect::Process)
+    .agent_safe()
+    .dry_run()
+    .handlers(
         |ctx, _| stack_plan(ctx, false),
         |ctx, _| {
             let stopped = services::stack_down(ctx)?;
@@ -589,20 +548,17 @@ fn stack_plan(ctx: &Ctx, up: bool) -> Result<Plan> {
 // ---------------------------------------------------------------------- TLS
 
 fn register_tls(reg: &mut Registry) -> Result<()> {
-    add::<NoArgs, _, _>(
-        reg,
-        "tls.ca.ensure",
-        "Create the local certificate authority",
-        "Creates the per-installation certificate authority that signs every site \
+    reg.define::<NoArgs>("tls.ca.ensure", "Create the local certificate authority")
+    .description("Creates the per-installation certificate authority that signs every site \
          certificate. Idempotent: an existing authority, and its key, are left exactly as \
          they are, because replacing the key would invalidate every certificate already \
-         issued from it.",
-        "tls",
-        Tier::Write,
-        Effect::Write,
-        true,
-        false,
-        true,
+         issued from it.")
+    .group("tls")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .agent_safe()
+    .idempotent()
+    .handlers(
         |_, _| {
             Ok(Plan::new(
                 "tls.ca.ensure",
@@ -633,19 +589,16 @@ fn register_tls(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
-    add::<NoArgs, _, _>(
-        reg,
-        "tls.ca.status",
-        "Report whether the authority is trusted",
-        "Checks the operating system's certificate stores for the authority devd created. \
+    reg.define::<NoArgs>("tls.ca.status", "Report whether the authority is trusted")
+    .description("Checks the operating system's certificate stores for the authority devd created. \
          A user-scope trust needs no administrator; a machine-scope one does. Nothing is \
-         changed by checking.",
-        "tls",
-        Tier::Read,
-        Effect::Read,
-        true,
-        false,
-        true,
+         changed by checking.")
+    .group("tls")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .handlers(
         |_, _| {
             Ok(Plan::new(
                 "tls.ca.status",
@@ -674,20 +627,17 @@ fn register_tls(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
-    add::<NoArgs, _, _>(
-        reg,
-        "tls.ca.show",
-        "Show the local certificate authority",
-        "The public certificate of the authority that signs site certificates. This is the \
+    reg.define::<NoArgs>("tls.ca.show", "Show the local certificate authority")
+    .description("The public certificate of the authority that signs site certificates. This is the \
          file to import into a browser, a device or a corporate proxy to make development \
          certificates trusted without disabling verification anywhere. The private key is \
-         never returned.",
-        "tls",
-        Tier::Read,
-        Effect::Read,
-        true,
-        false,
-        true,
+         never returned.")
+    .group("tls")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .handlers(
         |_, _| {
             Ok(Plan::new(
                 "tls.ca.show",
@@ -709,20 +659,17 @@ fn register_tls(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
-    add::<TrustArgs, _, _>(
-        reg,
-        "tls.trust",
-        "Trust the local certificate authority",
-        "Adds the authority to the operating system's trust store, so that every site devd \
+    reg.define::<TrustArgs>("tls.trust", "Trust the local certificate authority")
+    .description("Adds the authority to the operating system's trust store, so that every site devd \
          serves is accepted by a browser and by any tool that uses the system store, with \
          certificate verification left on. This changes what every program on the machine \
-         trusts, which is why it needs a person to approve it.",
-        "tls",
-        Tier::Admin,
-        Effect::System,
-        false,
-        true,
-        true,
+         trusts, which is why it needs a person to approve it.")
+    .group("tls")
+    .tier(Tier::Admin)
+    .effect(Effect::System)
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, args| {
             let store = if args.machine.unwrap_or(false) {
                 "the machine-wide root store (an elevated shell is required)"
@@ -740,17 +687,15 @@ fn register_tls(reg: &mut Registry) -> Result<()> {
         |ctx, args| services::tls::trust(ctx, args.machine.unwrap_or(false)),
     )?;
 
-    add::<TrustArgs, _, _>(
-        reg,
-        "tls.untrust",
-        "Stop trusting the local certificate authority",
-        "Removes the authority from the operating system's trust store.",
-        "tls",
-        Tier::Admin,
-        Effect::System,
-        true,
-        true,
-        true,
+    reg.define::<TrustArgs>("tls.untrust", "Stop trusting the local certificate authority")
+    .description("Removes the authority from the operating system's trust store.")
+    .group("tls")
+    .tier(Tier::Admin)
+    .effect(Effect::System)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, args| {
             Ok(Plan::new(
                 "tls.untrust",
@@ -763,19 +708,16 @@ fn register_tls(reg: &mut Registry) -> Result<()> {
         |ctx, args| services::tls::untrust(ctx, args.machine.unwrap_or(false)),
     )?;
 
-    add::<HostArgs, _, _>(
-        reg,
-        "tls.issue",
-        "Issue a site certificate",
-        "Issues a leaf certificate for a hostname, signed by the local authority, with the \
+    reg.define::<HostArgs>("tls.issue", "Issue a site certificate")
+    .description("Issues a leaf certificate for a hostname, signed by the local authority, with the \
          hostname in subjectAltName and the full chain written where the web server reads \
-         it. Re-issuing replaces the certificate it replaces.",
-        "tls",
-        Tier::Write,
-        Effect::Write,
-        true,
-        false,
-        true,
+         it. Re-issuing replaces the certificate it replaces.")
+    .group("tls")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .agent_safe()
+    .idempotent()
+    .handlers(
         |ctx, args| {
             Ok(Plan::new(
                 "tls.issue",
@@ -800,18 +742,15 @@ fn register_tls(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
-    add::<NoArgs, _, _>(
-        reg,
-        "tls.list",
-        "List issued certificates",
-        "Every certificate under the layout's certs directory, with the host it is for and \
-         whether the key beside it is present.",
-        "tls",
-        Tier::Read,
-        Effect::Read,
-        true,
-        false,
-        true,
+    reg.define::<NoArgs>("tls.list", "List issued certificates")
+    .description("Every certificate under the layout's certs directory, with the host it is for and \
+         whether the key beside it is present.")
+    .group("tls")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .handlers(
         |_, _| Ok(Plan::new("tls.list", "list the issued certificates")),
         |ctx, _| {
             let rows = services::tls::list(ctx)?;
@@ -827,17 +766,14 @@ fn register_tls(reg: &mut Registry) -> Result<()> {
 // ----------------------------------------------------------------- database
 
 fn register_db(reg: &mut Registry) -> Result<()> {
-    add::<NoArgs, _, _>(
-        reg,
-        "db.list",
-        "List databases",
-        "The databases on the local MariaDB server, excluding the system schemas.",
-        "db",
-        Tier::Read,
-        Effect::Read,
-        true,
-        false,
-        true,
+    reg.define::<NoArgs>("db.list", "List databases")
+    .description("The databases on the local MariaDB server, excluding the system schemas.")
+    .group("db")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .handlers(
         |ctx, _| {
             let port = db_port(ctx)?;
             Ok(Plan::new(
@@ -855,18 +791,16 @@ fn register_db(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
-    add::<DbCreateArgs, _, _>(
-        reg,
-        "db.create",
-        "Create a database",
-        "Creates a database with the utf8mb4 character set, if it does not already exist. \
-         The name is validated as a plain identifier, so it cannot carry a second statement.",
-        "db",
-        Tier::Write,
-        Effect::Data,
-        true,
-        true,
-        true,
+    reg.define::<DbCreateArgs>("db.create", "Create a database")
+    .description("Creates a database with the utf8mb4 character set, if it does not already exist. \
+         The name is validated as a plain identifier, so it cannot carry a second statement.")
+    .group("db")
+    .tier(Tier::Write)
+    .effect(Effect::Data)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |ctx, args| {
             devd_core::util::validate_name(&args.name)?;
             let port = db_port(ctx)?;
@@ -888,18 +822,14 @@ fn register_db(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
-    add::<DbDropArgs, _, _>(
-        reg,
-        "db.drop",
-        "Drop a database",
-        "Drops a database and everything in it. This cannot be undone and always requires \
-         approval.",
-        "db",
-        Tier::Destructive,
-        Effect::Data,
-        false,
-        true,
-        false,
+    reg.define::<DbDropArgs>("db.drop", "Drop a database")
+    .description("Drops a database and everything in it. This cannot be undone and always requires \
+         approval.")
+    .group("db")
+    .tier(Tier::Destructive)
+    .effect(Effect::Data)
+    .dry_run()
+    .handlers(
         |ctx, args| {
             let port = db_port(ctx)?;
             Ok(Plan::new(
@@ -934,48 +864,3 @@ fn db_port(ctx: &Ctx) -> Result<u16> {
 
 // -------------------------------------------------------------------- shared
 
-#[allow(clippy::too_many_arguments)]
-fn add<A, P, Q>(
-    reg: &mut Registry,
-    id: &str,
-    summary: &str,
-    description: &str,
-    group: &str,
-    tier: Tier,
-    effect: Effect,
-    agent_safe: bool,
-    dry_run: bool,
-    idempotent: bool,
-    plan: P,
-    apply: Q,
-) -> Result<()>
-where
-    A: for<'de> Deserialize<'de> + JsonSchema + Send + Sync + 'static,
-    P: Fn(&Ctx, &A) -> Result<Plan> + Send + Sync + 'static,
-    Q: Fn(&Ctx, &A) -> Result<Outcome> + Send + Sync + 'static,
-{
-    let cap = Capability::builder(id, summary)
-        .description(description)
-        .group(group)
-        .tier(tier)
-        .effect(effect)
-        .agent_safe(agent_safe)
-        .dry_run(dry_run)
-        .idempotent(idempotent)
-        .args_schema(
-            serde_json::to_value(schemars::schema_for!(A))
-                .map_err(|e| DevdError::internal(format!("cannot build schema for {id}: {e}")))?,
-        )
-        .handler(
-            move |ctx: &Ctx, args: &Value| {
-                let typed: A = ctx.parse(args)?;
-                plan(ctx, &typed)
-            },
-            move |ctx: &Ctx, args: &Value| {
-                let typed: A = ctx.parse(args)?;
-                apply(ctx, &typed)
-            },
-        )
-        .build()?;
-    reg.register(cap)
-}

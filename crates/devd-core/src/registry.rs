@@ -146,7 +146,6 @@ impl Registry {
             "human_only": cap.human_only,
             "supports_dry_run": cap.supports_dry_run,
             "idempotent": cap.idempotent,
-            "undo": cap.undo,
             "requires_approval": cap.tier.requires_approval(),
             "args_schema": cap.args_schema,
         }))

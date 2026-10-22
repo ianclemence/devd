@@ -3927,7 +3927,6 @@
       if (!detail.agent_safe) flags.push('<span class="pill pill-warn">agents refused</span>');
       if (detail.supports_dry_run) flags.push('<span class="pill">plannable</span>');
       if (detail.idempotent) flags.push('<span class="pill">idempotent</span>');
-      if (detail.undo) flags.push('<span class="pill">undo: ' + esc(detail.undo) + "</span>");
 
       inspector =
         '<div class="panel"><div class="panel-head"><span class="mono">' + esc(detail.id) + "</span>" +

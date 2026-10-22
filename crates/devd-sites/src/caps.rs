@@ -18,7 +18,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use devd_core::capability::{Capability, Ctx, Effect, Outcome, Plan, Tier};
+use devd_core::capability::{Ctx, Effect, Outcome, Plan, Tier};
 use devd_core::{DevdError, Registry, Result};
 
 use crate as sites;
@@ -50,19 +50,16 @@ args! {
 
 /// Register every site capability.
 pub fn register(reg: &mut Registry) -> Result<()> {
-    add::<NoArgs, _, _>(
-        reg,
-        "site.list",
-        "List sites",
-        "Every site with a live check of what is really on disk: whether its project directory \
+    reg.define::<NoArgs>("site.list", "List sites")
+    .description("Every site with a live check of what is really on disk: whether its project directory \
          exists, whether its hostname is in the hosts file, whether a certificate has been \
-         issued and whether the web server is running.",
-        "site",
-        Tier::Read,
-        Effect::Read,
-        true,
-        false,
-        true,
+         issued and whether the web server is running.")
+    .group("site")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .handlers(
         |_, _| Ok(Plan::new("site.list", "list the sites")),
         |ctx, _| {
             let rows = sites::list(ctx)?;
@@ -88,23 +85,20 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
-    add::<CreateArgs, _, _>(
-        reg,
-        "site.create",
-        "Create a site",
-        "Creates the project directory with a starter page, issues a certificate for the \
+    reg.define::<CreateArgs>("site.create", "Create a site")
+    .description("Creates the project directory with a starter page, issues a certificate for the \
          hostname from the local authority, records the site and re-renders the web server \
          configuration. With `upstream` (a port, or an address on this machine) the site serves \
          a program that is already running - a Node, Python or Rails dev server - instead of a \
          directory, and no directory or starter page is created. It does not edit the hosts \
          file: that is `hosts.sync`, an admin-tier operation, so creating a site does not need \
-         an elevated approval.",
-        "site",
-        Tier::Write,
-        Effect::Write,
-        true,
-        true,
-        false,
+         an elevated approval.")
+    .group("site")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers(
         |ctx, args| create_plan(ctx, args),
         |ctx, args| {
             let request = sites::CreateRequest {
@@ -130,20 +124,17 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
-    add::<SetUpstreamArgs, _, _>(
-        reg,
-        "site.set_upstream",
-        "Point a site at a running program",
-        "Makes every request to the site's hostname go to a program that is already running \
+    reg.define::<SetUpstreamArgs>("site.set_upstream", "Point a site at a running program")
+    .description("Makes every request to the site's hostname go to a program that is already running \
          on this machine - `3000`, `localhost:5173`, `http://127.0.0.1:8000` - and re-renders \
          the web server configuration. Without `upstream` the site serves its project \
-         directory again. Only addresses on this machine are accepted.",
-        "site",
-        Tier::Write,
-        Effect::Config,
-        true,
-        false,
-        true,
+         directory again. Only addresses on this machine are accepted.")
+    .group("site")
+    .tier(Tier::Write)
+    .effect(Effect::Config)
+    .agent_safe()
+    .idempotent()
+    .handlers(
         |ctx, args| {
             let site = ctx
                 .store
@@ -183,21 +174,18 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
-    add::<SetPhpArgs, _, _>(
-        reg,
-        "site.set_php",
-        "Pin a site to a PHP version",
-        "Pins a site to one of the installed PHP versions, so that it is served by that \
+    reg.define::<SetPhpArgs>("site.set_php", "Pin a site to a PHP version")
+    .description("Pins a site to one of the installed PHP versions, so that it is served by that \
          version however the default changes, or unpins it so that it follows the default \
          again. A version that is not installed is refused, and the versions that are \
          installed are named. The web server configuration is re-rendered, and the \
-         listener for the version is started if it is not running.",
-        "site",
-        Tier::Write,
-        Effect::Config,
-        true,
-        false,
-        true,
+         listener for the version is started if it is not running.")
+    .group("site")
+    .tier(Tier::Write)
+    .effect(Effect::Config)
+    .agent_safe()
+    .idempotent()
+    .handlers(
         |ctx, args| {
             let row = sites::list(ctx)?
                 .into_iter()
@@ -256,19 +244,15 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
-    add::<RemoveArgs, _, _>(
-        reg,
-        "site.remove",
-        "Remove a site",
-        "Removes the certificate, the record and the web server configuration. The project \
+    reg.define::<RemoveArgs>("site.remove", "Remove a site")
+    .description("Removes the certificate, the record and the web server configuration. The project \
          directory is kept unless `delete_files` is set, and a directory outside the layout's \
-         www root is never deleted.",
-        "site",
-        Tier::Destructive,
-        Effect::Write,
-        false,
-        true,
-        false,
+         www root is never deleted.")
+    .group("site")
+    .tier(Tier::Destructive)
+    .effect(Effect::Write)
+    .dry_run()
+    .handlers(
         |ctx, args| {
             let row = sites::list(ctx)?
                 .into_iter()
@@ -324,18 +308,15 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
-    add::<NoArgs, _, _>(
-        reg,
-        "hosts.show",
-        "Show the managed hosts block",
-        "The hostnames devd manages in the hosts file, what is in the file now, and what a sync \
-         would change. Reads the file; writes nothing.",
-        "hosts",
-        Tier::Read,
-        Effect::Read,
-        true,
-        false,
-        true,
+    reg.define::<NoArgs>("hosts.show", "Show the managed hosts block")
+    .description("The hostnames devd manages in the hosts file, what is in the file now, and what a sync \
+         would change. Reads the file; writes nothing.")
+    .group("hosts")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .handlers(
         |ctx, _| {
             let plan = sites::hosts::plan(ctx)?;
             Ok(Plan::new(
@@ -359,20 +340,17 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
-    add::<NoArgs, _, _>(
-        reg,
-        "hosts.sync",
-        "Sync the hosts file",
-        "Writes the managed block in the system hosts file so that every site hostname \
+    reg.define::<NoArgs>("hosts.sync", "Sync the hosts file")
+    .description("Writes the managed block in the system hosts file so that every site hostname \
          resolves, snapshotting the file first. Everything outside the block is preserved \
          exactly, including the file's own line endings. On Windows the real hosts file needs \
-         an elevated shell, and the refusal is reported as the operating system gives it.",
-        "hosts",
-        Tier::Admin,
-        Effect::System,
-        false,
-        true,
-        true,
+         an elevated shell, and the refusal is reported as the operating system gives it.")
+    .group("hosts")
+    .tier(Tier::Admin)
+    .effect(Effect::System)
+    .dry_run()
+    .idempotent()
+    .handlers(
         |ctx, _| {
             let plan = sites::hosts::plan(ctx)?;
             let mut p = Plan::new(
@@ -482,48 +460,3 @@ fn create_plan(ctx: &Ctx, args: &CreateArgs) -> Result<Plan> {
         })))
 }
 
-#[allow(clippy::too_many_arguments)]
-fn add<A, P, Q>(
-    reg: &mut Registry,
-    id: &str,
-    summary: &str,
-    description: &str,
-    group: &str,
-    tier: Tier,
-    effect: Effect,
-    agent_safe: bool,
-    dry_run: bool,
-    idempotent: bool,
-    plan: P,
-    apply: Q,
-) -> Result<()>
-where
-    A: for<'de> Deserialize<'de> + JsonSchema + Send + Sync + 'static,
-    P: Fn(&Ctx, &A) -> Result<Plan> + Send + Sync + 'static,
-    Q: Fn(&Ctx, &A) -> Result<Outcome> + Send + Sync + 'static,
-{
-    let cap = Capability::builder(id, summary)
-        .description(description)
-        .group(group)
-        .tier(tier)
-        .effect(effect)
-        .agent_safe(agent_safe)
-        .dry_run(dry_run)
-        .idempotent(idempotent)
-        .args_schema(
-            serde_json::to_value(schemars::schema_for!(A))
-                .map_err(|e| DevdError::internal(format!("cannot build schema for {id}: {e}")))?,
-        )
-        .handler(
-            move |ctx: &Ctx, args: &Value| {
-                let typed: A = ctx.parse(args)?;
-                plan(ctx, &typed)
-            },
-            move |ctx: &Ctx, args: &Value| {
-                let typed: A = ctx.parse(args)?;
-                apply(ctx, &typed)
-            },
-        )
-        .build()?;
-    reg.register(cap)
-}

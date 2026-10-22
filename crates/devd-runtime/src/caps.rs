@@ -21,9 +21,9 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use devd_core::capability::{Capability, Ctx, Effect, Outcome, Plan, Tier};
+use devd_core::capability::{Ctx, Effect, Outcome, Plan, Tier};
 use devd_core::download::Progress;
-use devd_core::{DevdError, Registry, Result};
+use devd_core::{Registry, Result};
 
 use crate as runtimes;
 
@@ -54,18 +54,15 @@ args! {
 
 /// Register every runtime capability.
 pub fn register(reg: &mut Registry) -> Result<()> {
-    add::<NoArgs, _, _>(
-        reg,
-        "runtime.list",
-        "List installed runtimes",
-        "Every runtime devd has installed, with a live check that the install directory \
-         and executable are still there.",
-        "runtime",
-        Tier::Read,
-        Effect::Read,
-        true,
-        false,
-        true,
+    reg.define::<NoArgs>("runtime.list", "List installed runtimes")
+    .description("Every runtime devd has installed, with a live check that the install directory \
+         and executable are still there.")
+    .group("runtime")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .handlers(
         |_, _| Ok(Plan::new("runtime.list", "list the installed runtimes")),
         |ctx, _| {
             let rows = runtimes::list(ctx)?;
@@ -85,19 +82,16 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
-    add::<AvailableArgs, _, _>(
-        reg,
-        "runtime.available",
-        "List runtime versions published upstream",
-        "Reads the vendor's own version catalogue (windows.php.net for PHP, nodejs.org \
+    reg.define::<AvailableArgs>("runtime.available", "List runtime versions published upstream")
+    .description("Reads the vendor's own version catalogue (windows.php.net for PHP, nodejs.org \
          for Node, go.dev for Go) and returns the builds that can be installed, with the \
-         digest each one will be verified against.",
-        "runtime",
-        Tier::Read,
-        Effect::Read,
-        true,
-        false,
-        true,
+         digest each one will be verified against.")
+    .group("runtime")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .handlers(
         |_, _| {
             Ok(Plan::new(
                 "runtime.available",
@@ -118,20 +112,17 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
-    add::<InstallArgs, _, _>(
-        reg,
-        "runtime.install",
-        "Install a runtime",
-        "Resolves the request against the vendor's catalogue, downloads the official \
+    reg.define::<InstallArgs>("runtime.install", "Install a runtime")
+    .description("Resolves the request against the vendor's catalogue, downloads the official \
          build over HTTPS, verifies the vendor's published SHA-256, unpacks it under \
          runtimes/<kind>/<version>/, runs the post-install steps the build needs (PHP \
-         gets a generated php.ini) and proves it starts before recording it.",
-        "runtime",
-        Tier::Write,
-        Effect::Write,
-        true,
-        true,
-        false,
+         gets a generated php.ini) and proves it starts before recording it.")
+    .group("runtime")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers(
         |ctx, args| install_plan(ctx, args),
         |ctx, args| {
             let thread_safe = args.thread_safe.unwrap_or(false);
@@ -185,19 +176,16 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
-    add::<VersionArgs, _, _>(
-        reg,
-        "runtime.verify",
-        "Run an installed runtime and report its version",
-        "Starts the installed interpreter with its version flag and reports what it says, \
+    reg.define::<VersionArgs>("runtime.verify", "Run an installed runtime and report its version")
+    .description("Starts the installed interpreter with its version flag and reports what it says, \
          so a runtime that is present but cannot start is visible rather than assumed \
-         healthy. For PHP it also reports the loaded modules.",
-        "runtime",
-        Tier::Read,
-        Effect::Read,
-        true,
-        false,
-        true,
+         healthy. For PHP it also reports the loaded modules.")
+    .group("runtime")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .handlers(
         |_, _| {
             Ok(Plan::new(
                 "runtime.verify",
@@ -218,18 +206,14 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
-    add::<VersionArgs, _, _>(
-        reg,
-        "runtime.remove",
-        "Remove an installed runtime",
-        "Deletes the runtime's directory and its record. Refused while a service is \
-         configured to use it, so a running web server cannot lose its interpreter.",
-        "runtime",
-        Tier::Destructive,
-        Effect::Write,
-        false,
-        true,
-        false,
+    reg.define::<VersionArgs>("runtime.remove", "Remove an installed runtime")
+    .description("Deletes the runtime's directory and its record. Refused while a service is \
+         configured to use it, so a running web server cannot lose its interpreter.")
+    .group("runtime")
+    .tier(Tier::Destructive)
+    .effect(Effect::Write)
+    .dry_run()
+    .handlers(
         |ctx, args| {
             let root = ctx.paths.runtime_version(&args.kind, &args.version);
             let mut plan = Plan::new(
@@ -269,17 +253,14 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
-    add::<UseArgs, _, _>(
-        reg,
-        "runtime.use",
-        "Choose the PHP version new sites use",
-        "Sets the default PHP version for sites that do not pin one of their own.",
-        "runtime",
-        Tier::Write,
-        Effect::Config,
-        true,
-        false,
-        true,
+    reg.define::<UseArgs>("runtime.use", "Choose the PHP version new sites use")
+    .description("Sets the default PHP version for sites that do not pin one of their own.")
+    .group("runtime")
+    .tier(Tier::Write)
+    .effect(Effect::Config)
+    .agent_safe()
+    .idempotent()
+    .handlers(
         |ctx, args| {
             Ok(Plan::new(
                 "runtime.use",
@@ -355,52 +336,6 @@ fn install_plan(ctx: &Ctx, args: &InstallArgs) -> Result<Plan> {
         "bytes": chosen.bytes,
         "destination": dest.display().to_string(),
     })))
-}
-
-#[allow(clippy::too_many_arguments)]
-fn add<A, P, Q>(
-    reg: &mut Registry,
-    id: &str,
-    summary: &str,
-    description: &str,
-    group: &str,
-    tier: Tier,
-    effect: Effect,
-    agent_safe: bool,
-    dry_run: bool,
-    idempotent: bool,
-    plan: P,
-    apply: Q,
-) -> Result<()>
-where
-    A: for<'de> Deserialize<'de> + JsonSchema + Send + Sync + 'static,
-    P: Fn(&Ctx, &A) -> Result<Plan> + Send + Sync + 'static,
-    Q: Fn(&Ctx, &A) -> Result<Outcome> + Send + Sync + 'static,
-{
-    let cap = Capability::builder(id, summary)
-        .description(description)
-        .group(group)
-        .tier(tier)
-        .effect(effect)
-        .agent_safe(agent_safe)
-        .dry_run(dry_run)
-        .idempotent(idempotent)
-        .args_schema(
-            serde_json::to_value(schemars::schema_for!(A))
-                .map_err(|e| DevdError::internal(format!("cannot build schema for {id}: {e}")))?,
-        )
-        .handler(
-            move |ctx: &Ctx, args: &Value| {
-                let typed: A = ctx.parse(args)?;
-                plan(ctx, &typed)
-            },
-            move |ctx: &Ctx, args: &Value| {
-                let typed: A = ctx.parse(args)?;
-                apply(ctx, &typed)
-            },
-        )
-        .build()?;
-    reg.register(cap)
 }
 
 #[cfg(test)]

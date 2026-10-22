@@ -19,7 +19,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use devd_core::capability::{Capability, Ctx, Effect, Outcome, Plan, Tier};
+use devd_core::capability::{Ctx, Effect, Outcome, Plan, Tier};
 use devd_core::{DevdError, Registry, Result};
 
 use crate::authz;
@@ -188,51 +188,6 @@ struct LogArgs {
     lines: Option<usize>,
 }
 
-#[allow(clippy::too_many_arguments)]
-fn add<A, P, Q>(
-    reg: &mut Registry,
-    id: &str,
-    summary: &str,
-    description: &str,
-    tier: Tier,
-    effect: Effect,
-    agent_safe: bool,
-    human_only: bool,
-    idempotent: bool,
-    plan: P,
-    apply: Q,
-) -> Result<()>
-where
-    A: for<'de> Deserialize<'de> + JsonSchema + Send + Sync + 'static,
-    P: Fn(&Ctx, &A) -> Result<Plan> + Send + Sync + 'static,
-    Q: Fn(&Ctx, &A) -> Result<Outcome> + Send + Sync + 'static,
-{
-    let cap = Capability::builder(id, summary)
-        .description(description)
-        .tier(tier)
-        .effect(effect)
-        .agent_safe(agent_safe)
-        .human_only(human_only)
-        .dry_run(true)
-        .idempotent(idempotent)
-        .args_schema(
-            serde_json::to_value(schemars::schema_for!(A))
-                .map_err(|e| DevdError::internal(format!("cannot build schema for {id}: {e}")))?,
-        )
-        .handler(
-            move |ctx: &Ctx, args: &Value| {
-                let typed: A = ctx.parse(args)?;
-                plan(ctx, &typed)
-            },
-            move |ctx: &Ctx, args: &Value| {
-                let typed: A = ctx.parse(args)?;
-                apply(ctx, &typed)
-            },
-        )
-        .build()?;
-    reg.register(cap)
-}
-
 fn read_plan(id: &str, summary: impl Into<String>) -> Result<Plan> {
     Ok(Plan::new(id, summary))
 }
@@ -334,9 +289,14 @@ fn install_hint(dir: &Path) -> Option<&'static str> {
 /// Register every stack-engine capability.
 pub fn register(reg: &mut Registry) -> Result<()> {
     // -------------------------------------------------------------- registry
-    add::<ListArgs, _, _>(reg, "stacks.list", "List supported stacks",
-        "Every stack devd can create, detect and run, with its versions, package managers and official documentation. Start here to discover what is supported.",
-        Tier::Read, Effect::Read, true, false, true,
+    reg.define::<ListArgs>("stacks.list", "List supported stacks")
+    .description("Every stack devd can create, detect and run, with its versions, package managers and official documentation. Start here to discover what is supported.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, _| read_plan("stacks.list", "list stacks"),
         |ctx, a| {
             let r = stacks(ctx);
@@ -346,17 +306,29 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             let mut o = Outcome::with_data(format!("{} stack(s)", list.len()), json!(list));
             for rej in &r.rejected { o = o.warn(format!("extension rejected: {rej}")); }
             Ok(o)
-        })?;
+        },
+    )?;
 
-    add::<DescribeArgs, _, _>(reg, "stacks.describe", "Describe one stack",
-        "The complete definition: versions and their tool requirements, every option with its type, choices, default and the CLI flag it maps to, tasks, services, environment variables, conventions and official documentation. Includes a JSON Schema for the options object.",
-        Tier::Read, Effect::Read, true, false, true,
+    reg.define::<DescribeArgs>("stacks.describe", "Describe one stack")
+    .description("The complete definition: versions and their tool requirements, every option with its type, choices, default and the CLI flag it maps to, tasks, services, environment variables, conventions and official documentation. Includes a JSON Schema for the options object.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, a| read_plan("stacks.describe", format!("describe {}", a.stack)),
-        |ctx, a| Ok(Outcome::with_data(format!("{} definition", a.stack), describe(&stacks(ctx), &a.stack)?)))?;
+        |ctx, a| Ok(Outcome::with_data(format!("{} definition", a.stack), describe(&stacks(ctx), &a.stack)?)),
+    )?;
 
-    add::<NoArgs, _, _>(reg, "stacks.schema", "Machine-readable schemas",
-        "JSON Schemas for stack definitions, initialisation requests, plans (with validation issues), reports, project context, tasks and tool plans, so clients can discover the API instead of hardcoding it.",
-        Tier::Read, Effect::Read, true, false, true,
+    reg.define::<NoArgs>("stacks.schema", "Machine-readable schemas")
+    .description("JSON Schemas for stack definitions, initialisation requests, plans (with validation issues), reports, project context, tasks and tool plans, so clients can discover the API instead of hardcoding it.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, _| read_plan("stacks.schema", "return the schemas"),
         |_, _| {
             let s = |v: schemars::schema::RootSchema| serde_json::to_value(v).unwrap_or(Value::Null);
@@ -374,32 +346,49 @@ pub fn register(reg: &mut Registry) -> Result<()> {
                 "tool_plan": s(schemars::schema_for!(crate::tools::ToolPlan)),
                 "service_state": s(schemars::schema_for!(crate::tools::ServiceState)),
             })))
-        })?;
+        },
+    )?;
 
-    add::<InitRequest, _, _>(reg, "stacks.validate", "Validate an initialisation request",
-        "Resolves a project.init request without running it: validation issues (field, code, message), the exact commands that would run, prerequisite checks against the installed tools and the services the project will need. Never changes anything.",
-        Tier::Read, Effect::Read, true, false, true,
+    reg.define::<InitRequest>("stacks.validate", "Validate an initialisation request")
+    .description("Resolves a project.init request without running it: validation issues (field, code, message), the exact commands that would run, prerequisite checks against the installed tools and the services the project will need. Never changes anything.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, a| read_plan("stacks.validate", format!("validate {} {}", a.stack, a.name)),
         |ctx, a| {
             let r = stacks(ctx);
             let p = init::plan(ctx, &r, a)?;
             let msg = if !p.valid { format!("{} problem(s) with the request", p.issues.len()) } else if !p.ready { "valid, but prerequisites are missing".into() } else { "valid and ready".to_string() };
             Ok(Outcome::with_data(msg, serde_json::to_value(&p)?))
-        })?;
+        },
+    )?;
 
-    add::<NoArgs, _, _>(reg, "stacks.matrix", "Compatibility matrix",
-        "Which framework versions need which tool versions, and which package managers each tool can be installed with. Generated from the registry, so it cannot drift from what devd enforces.",
-        Tier::Read, Effect::Read, true, false, true,
+    reg.define::<NoArgs>("stacks.matrix", "Compatibility matrix")
+    .description("Which framework versions need which tool versions, and which package managers each tool can be installed with. Generated from the registry, so it cannot drift from what devd enforces.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, _| read_plan("stacks.matrix", "return the compatibility matrix"),
         |ctx, _| {
             let r = stacks(ctx);
             Ok(Outcome::with_data("compatibility matrix", crate::matrix::json(&r)))
-        })?;
+        },
+    )?;
 
     // -------------------------------------------------------------- init
-    add::<InitRequest, _, _>(reg, "project.init", "Create a project from a stack",
-        "Creates a new project with the stack's official scaffolder. The request is validated, prerequisites are checked, and the exact commands are shown in the plan before anything runs. Afterwards devd verifies the expected files, git state and a build/check command, registers the project and reports honestly: ok, partial (created but a check failed), failed or cancelled. Progress arrives as stack.progress events; stacks.cancel stops it.",
-        Tier::Exec, Effect::Process, true, false, false,
+    reg.define::<InitRequest>("project.init", "Create a project from a stack")
+    .description("Creates a new project with the stack's official scaffolder. The request is validated, prerequisites are checked, and the exact commands are shown in the plan before anything runs. Afterwards devd verifies the expected files, git state and a build/check command, registers the project and reports honestly: ok, partial (created but a check failed), failed or cancelled. Progress arrives as stack.progress events; stacks.cancel stops it.")
+    .tier(Tier::Exec)
+    .effect(Effect::Process)
+    .agent_safe()
+    .dry_run()
+    .handlers(
         |ctx, a| {
             let r = stacks(ctx);
             let p = init::plan(ctx, &r, a)?;
@@ -429,12 +418,18 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             o.ok = ok;
             for w in &report.warnings { o = o.warn(w.clone()); }
             Ok(o)
-        })?;
+        },
+    )?;
 
     // -------------------------------------------------------------- detect / import
-    add::<PathArgs, _, _>(reg, "project.detect", "Understand an existing project",
-        "Inspects a directory and returns what it is: matching stacks with evidence and confidence, package manager, runtime versions the project asks for and whether the installed ones satisfy them, entry points, scripts, tests/lint/typecheck tooling, services it needs, environment-variable names (never values), documentation files, git state, official docs and conventions, and any missing tools with the capability that fixes each. Works on projects devd did not create. When detection is uncertain it says so (ambiguous: true).",
-        Tier::Read, Effect::Read, true, false, true,
+    reg.define::<PathArgs>("project.detect", "Understand an existing project")
+    .description("Inspects a directory and returns what it is: matching stacks with evidence and confidence, package manager, runtime versions the project asks for and whether the installed ones satisfy them, entry points, scripts, tests/lint/typecheck tooling, services it needs, environment-variable names (never values), documentation files, git state, official docs and conventions, and any missing tools with the capability that fixes each. Works on projects devd did not create. When detection is uncertain it says so (ambiguous: true).")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, a| read_plan("project.detect", format!("inspect {}", a.path)),
         |ctx, a| {
             let r = stacks(ctx);
@@ -446,11 +441,17 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             if let Some(a) = &c.ambiguity { o = o.warn(a.clone()); }
             for w in &c.warnings { o = o.warn(w.clone()); }
             Ok(o)
-        })?;
+        },
+    )?;
 
-    add::<ImportArgs, _, _>(reg, "project.import", "Import an existing project",
-        "Registers a directory (a Git checkout or any project) with devd without changing its files: detects the stack, package manager, tasks and services, stores the result and makes the project available to agents. Agents can only import under the projects root.",
-        Tier::Write, Effect::Write, true, false, true,
+    reg.define::<ImportArgs>("project.import", "Import an existing project")
+    .description("Registers a directory (a Git checkout or any project) with devd without changing its files: detects the stack, package manager, tasks and services, stores the result and makes the project available to agents. Agents can only import under the projects root.")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |ctx, a| {
             let d = dir_arg(ctx, &a.path)?;
             Ok(Plan::new("project.import", format!("register {} (no files are changed)", d.display())))
@@ -473,11 +474,17 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             if c.ambiguous { o = o.warn(c.ambiguity.clone().unwrap_or_default()); }
             for m in &c.missing { o = o.warn(format!("{}: {} - {}", m.tool, m.why, m.fix)); }
             Ok(o)
-        })?;
+        },
+    )?;
 
-    add::<NoArgs, _, _>(reg, "project.list", "List known projects",
-        "Every project devd knows about: the ones it created or imported, and the repositories that were indexed. One list, so the application, the terminal and an agent all see the same projects. Each row says where the project is, what stack was detected, how it was added, and whether the folder is still there.",
-        Tier::Read, Effect::Read, true, false, true,
+    reg.define::<NoArgs>("project.list", "List known projects")
+    .description("Every project devd knows about: the ones it created or imported, and the repositories that were indexed. One list, so the application, the terminal and an agent all see the same projects. Each row says where the project is, what stack was detected, how it was added, and whether the folder is still there.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, _| read_plan("project.list", "list projects"),
         |ctx, _| {
             let rows = ctx.store.list_stack_projects()?;
@@ -523,11 +530,16 @@ pub fn register(reg: &mut Registry) -> Result<()> {
                 an.to_lowercase().cmp(&bn.to_lowercase())
             });
             Ok(Outcome::with_data(format!("{} project(s)", v.len()), json!(v)))
-        })?;
+        },
+    )?;
 
-    add::<ForgetArgs, _, _>(reg, "project.forget", "Remove a project from devd",
-        "Removes a project from devd's list, whether it was imported or indexed as a repository. The folder and everything in it are never touched: this only means devd forgets about it.",
-        Tier::Write, Effect::Write, false, false, true,
+    reg.define::<ForgetArgs>("project.forget", "Remove a project from devd")
+    .description("Removes a project from devd's list, whether it was imported or indexed as a repository. The folder and everything in it are never touched: this only means devd forgets about it.")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, a| Ok(Plan::new("project.forget", format!("forget {} (the folder is kept)", a.path))),
         |ctx, a| {
             let p = authz::normalise(Path::new(&a.path)).display().to_string();
@@ -543,22 +555,33 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             } else {
                 format!("{p} was not registered")
             }))
-        })?;
+        },
+    )?;
 
     // -------------------------------------------------------------- tasks
-    add::<PathArgs, _, _>(reg, "project.tasks", "List a project's tasks",
-        "The workflow commands available in this project - dev, build, test, lint, format, typecheck, install, migrate - from the stack definition and from the project's own package.json/composer.json scripts and Makefile, each with its exact command, risk class (safe, mutating, destructive) and whether it can run now.",
-        Tier::Read, Effect::Read, true, false, true,
+    reg.define::<PathArgs>("project.tasks", "List a project's tasks")
+    .description("The workflow commands available in this project - dev, build, test, lint, format, typecheck, install, migrate - from the stack definition and from the project's own package.json/composer.json scripts and Makefile, each with its exact command, risk class (safe, mutating, destructive) and whether it can run now.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, a| read_plan("project.tasks", format!("list tasks in {}", a.path)),
         |ctx, a| {
             let r = stacks(ctx);
             let (_, c) = detect_ctx(ctx, &r, &a.path, a.stack.as_deref())?;
             Ok(Outcome::with_data(format!("{} task(s)", c.tasks.len()), serde_json::to_value(&c.tasks)?))
-        })?;
+        },
+    )?;
 
-    add::<RunTask, _, _>(reg, "project.run", "Run a project task",
-        "Runs a task from project.tasks in the project directory with the right executable and package manager. Output is streamed (stack.output events), secrets are removed, and the result carries exit code, duration, output tail and whether the task is safe to retry. Long-running tasks (dev servers) start in the background with a log. Destructive tasks are refused here - use project.run_destructive, which needs a human's approval.",
-        Tier::Exec, Effect::Process, true, false, false,
+    reg.define::<RunTask>("project.run", "Run a project task")
+    .description("Runs a task from project.tasks in the project directory with the right executable and package manager. Output is streamed (stack.output events), secrets are removed, and the result carries exit code, duration, output tail and whether the task is safe to retry. Long-running tasks (dev servers) start in the background with a log. Destructive tasks are refused here - use project.run_destructive, which needs a human's approval.")
+    .tier(Tier::Exec)
+    .effect(Effect::Process)
+    .agent_safe()
+    .dry_run()
+    .handlers(
         |ctx, a| {
             let r = stacks(ctx);
             let (_, c) = detect_ctx(ctx, &r, &a.path, None)?;
@@ -570,22 +593,32 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             if !t.available { p = p.effect(format!("CANNOT RUN: {}", t.unavailable_reason.clone().unwrap_or_default())); }
             Ok(p.data(serde_json::to_value(t)?))
         },
-        |ctx, a| run_task(ctx, a, false))?;
+        |ctx, a| run_task(ctx, a, false),
+    )?;
 
-    add::<RunTask, _, _>(reg, "project.run_destructive", "Run a destructive project task",
-        "Runs a task classified as destructive (drops or resets data, deploys, force-pushes, migrate:fresh, db:reset...). Always needs a human's approval and is never available to agents.",
-        Tier::Destructive, Effect::Data, false, true, false,
+    reg.define::<RunTask>("project.run_destructive", "Run a destructive project task")
+    .description("Runs a task classified as destructive (drops or resets data, deploys, force-pushes, migrate:fresh, db:reset...). Always needs a human's approval and is never available to agents.")
+    .tier(Tier::Destructive)
+    .effect(Effect::Data)
+    .human_only()
+    .dry_run()
+    .handlers(
         |ctx, a| {
             let r = stacks(ctx);
             let (_, c) = detect_ctx(ctx, &r, &a.path, None)?;
             let t = pick_task(&c, &a.task)?;
             Ok(Plan::new("project.run_destructive", format!("run `{}`", t.command)).step(format!("in {}", a.path)).effect("can destroy data; it cannot be undone by devd").destructive(true).data(serde_json::to_value(t)?))
         },
-        |ctx, a| run_task(ctx, a, true))?;
+        |ctx, a| run_task(ctx, a, true),
+    )?;
 
-    add::<ExecArgs, _, _>(reg, "project.exec", "Run a framework command",
-        "Runs a program from the stack's allow-list (for Laravel: php, composer, vendor/bin/pint...; for Django: python, django-admin...) in the project, with argv - never a shell. Use it for framework commands that are not tasks, such as `php artisan make:model Post` or `python manage.py startapp blog`. Commands containing destructive arguments (migrate:fresh, db:drop, --force...) are refused here.",
-        Tier::Exec, Effect::Process, true, false, false,
+    reg.define::<ExecArgs>("project.exec", "Run a framework command")
+    .description("Runs a program from the stack's allow-list (for Laravel: php, composer, vendor/bin/pint...; for Django: python, django-admin...) in the project, with argv - never a shell. Use it for framework commands that are not tasks, such as `php artisan make:model Post` or `python manage.py startapp blog`. Commands containing destructive arguments (migrate:fresh, db:drop, --force...) are refused here.")
+    .tier(Tier::Exec)
+    .effect(Effect::Process)
+    .agent_safe()
+    .dry_run()
+    .handlers(
         |ctx, a| {
             let r = stacks(ctx);
             let (_, c) = detect_ctx(ctx, &r, &a.path, None)?;
@@ -594,35 +627,58 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             if let Some(m) = tasks::is_destructive(stack, &a.argv) { p = p.effect(format!("DESTRUCTIVE ({m}): refused here; use project.exec_destructive")); }
             Ok(p)
         },
-        |ctx, a| exec_cmd(ctx, a, false))?;
+        |ctx, a| exec_cmd(ctx, a, false),
+    )?;
 
-    add::<ExecArgs, _, _>(reg, "project.exec_destructive", "Run a destructive framework command",
-        "Like project.exec for commands that can destroy data. Always needs a human's approval; never available to agents.",
-        Tier::Destructive, Effect::Data, false, true, false,
+    reg.define::<ExecArgs>("project.exec_destructive", "Run a destructive framework command")
+    .description("Like project.exec for commands that can destroy data. Always needs a human's approval; never available to agents.")
+    .tier(Tier::Destructive)
+    .effect(Effect::Data)
+    .human_only()
+    .dry_run()
+    .handlers(
         |_, a| Ok(Plan::new("project.exec_destructive", format!("run `{}`", crate::template::display(&exec::redact_argv(&a.argv)))).step(format!("in {}", a.path)).effect("can destroy data").destructive(true)),
-        |ctx, a| exec_cmd(ctx, a, true))?;
+        |ctx, a| exec_cmd(ctx, a, true),
+    )?;
 
-    add::<NoArgs, _, _>(reg, "task.list", "List background tasks",
-        "Dev servers and other long-running tasks devd started, with pid, state and log path.",
-        Tier::Read, Effect::Read, true, false, true,
+    reg.define::<NoArgs>("task.list", "List background tasks")
+    .description("Dev servers and other long-running tasks devd started, with pid, state and log path.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, _| read_plan("task.list", "list background tasks"),
         |_, _| {
             let v = tasks::background();
             Ok(Outcome::with_data(format!("{} background task(s)", v.len()), json!(v)))
-        })?;
+        },
+    )?;
 
-    add::<ProcArgs, _, _>(reg, "task.stop", "Stop a background task",
-        "Stops a background task and everything it started.",
-        Tier::Exec, Effect::Process, true, false, true,
+    reg.define::<ProcArgs>("task.stop", "Stop a background task")
+    .description("Stops a background task and everything it started.")
+    .tier(Tier::Exec)
+    .effect(Effect::Process)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, a| Ok(Plan::new("task.stop", format!("stop {}", a.name))),
         |_, a| {
             let r = tasks::stop(&a.name)?;
             Ok(Outcome::ok(match r { Some(_) => format!("stopped {}", a.name), None => format!("{} was not running", a.name) }))
-        })?;
+        },
+    )?;
 
-    add::<ProcArgs, _, _>(reg, "task.logs", "Read a background task's log",
-        "The last lines of a background task's output, with secrets removed.",
-        Tier::Read, Effect::Read, true, false, true,
+    reg.define::<ProcArgs>("task.logs", "Read a background task's log")
+    .description("The last lines of a background task's output, with secrets removed.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, a| read_plan("task.logs", format!("read the log of {}", a.name)),
         |_, a| {
             let procs = devd_core::process::shared().list();
@@ -630,29 +686,47 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             let lines = devd_core::process::shared().tail_log(Path::new(&p.log_path), a.lines.unwrap_or(200).min(2000))?;
             let lines: Vec<String> = lines.iter().map(|l| exec::redact_line(l)).collect();
             Ok(Outcome::with_data(format!("{} line(s)", lines.len()), json!({"running": p.running, "exit_code": p.exit_code, "lines": lines})))
-        })?;
+        },
+    )?;
 
-    add::<RunIdArgs, _, _>(reg, "stacks.cancel", "Cancel a running operation",
-        "Stops a project.init, project.run or toolchain operation that is in progress, killing the whole process tree.",
-        Tier::Exec, Effect::Process, true, false, true,
+    reg.define::<RunIdArgs>("stacks.cancel", "Cancel a running operation")
+    .description("Stops a project.init, project.run or toolchain operation that is in progress, killing the whole process tree.")
+    .tier(Tier::Exec)
+    .effect(Effect::Process)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, a| Ok(Plan::new("stacks.cancel", format!("cancel run {}", a.run_id))),
         |_, a| {
             let did = runs::cancel(&a.run_id);
             Ok(Outcome::ok(if did { "cancellation requested".to_string() } else { "that run is not in progress".to_string() }))
-        })?;
+        },
+    )?;
 
-    add::<RunsArgs, _, _>(reg, "stacks.runs", "Execution history",
-        "Recent initialisations, tasks and toolchain changes with their redacted commands, outcome and duration.",
-        Tier::Read, Effect::Read, true, false, true,
+    reg.define::<RunsArgs>("stacks.runs", "Execution history")
+    .description("Recent initialisations, tasks and toolchain changes with their redacted commands, outcome and duration.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, _| read_plan("stacks.runs", "list history"),
         |ctx, a| {
             let rows = ctx.store.list_stack_runs(a.subject.as_deref(), a.limit.unwrap_or(30).clamp(1, 200))?;
             Ok(Outcome::with_data(format!("{} run(s)", rows.len()), serde_json::to_value(rows)?))
-        })?;
+        },
+    )?;
 
-    add::<LogArgs, _, _>(reg, "stacks.log", "Read a run's output",
-        "The last lines of the output log of a run, with secrets removed. Works while the run is in progress.",
-        Tier::Read, Effect::Read, true, false, true,
+    reg.define::<LogArgs>("stacks.log", "Read a run's output")
+    .description("The last lines of the output log of a run, with secrets removed. Works while the run is in progress.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, a| read_plan("stacks.log", format!("read the log of {}", a.run_id)),
         |ctx, a| {
             if !a.run_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
@@ -668,12 +742,18 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             let n = a.lines.unwrap_or(200).min(5000);
             if lines.len() > n { lines.drain(0..lines.len() - n); }
             Ok(Outcome::with_data(format!("{} line(s)", lines.len()), json!({"running": runs::active().contains(&a.run_id), "lines": lines})))
-        })?;
+        },
+    )?;
 
     // -------------------------------------------------------------- toolchain
-    add::<ToolListArgs, _, _>(reg, "toolchain.list", "List tools and services",
-        "Every tool in the catalogue (Git, Node.js and its package managers, PHP, Composer, Python, Ruby, Go, Java, .NET, Rust, MySQL, MariaDB, PostgreSQL, Redis, SQLite, Docker, GitHub CLI, adb, the Android SDK, Expo/EAS and utilities) with a live probe: installed, version, path, whether it is below the supported minimum, and for services whether the port answers and the health check passes. Also returns the host: OS, package managers found, whether devd has root or passwordless sudo.",
-        Tier::Read, Effect::Read, true, false, true,
+    reg.define::<ToolListArgs>("toolchain.list", "List tools and services")
+    .description("Every tool in the catalogue (Git, Node.js and its package managers, PHP, Composer, Python, Ruby, Go, Java, .NET, Rust, MySQL, MariaDB, PostgreSQL, Redis, SQLite, Docker, GitHub CLI, adb, the Android SDK, Expo/EAS and utilities) with a live probe: installed, version, path, whether it is below the supported minimum, and for services whether the port answers and the health check passes. Also returns the host: OS, package managers found, whether devd has root or passwordless sudo.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, _| read_plan("toolchain.list", "probe the toolchain"),
         |ctx, a| {
             let r = stacks(ctx);
@@ -681,11 +761,17 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             let views: Vec<_> = views.into_iter().filter(|v| a.category.as_ref().map(|c| &v.tool.category == c).unwrap_or(true)).collect();
             let installed = views.iter().filter(|v| v.status.installed).count();
             Ok(Outcome::with_data(format!("{installed} of {} installed", views.len()), json!({"host": host, "tools": views})))
-        })?;
+        },
+    )?;
 
-    add::<CheckArgs, _, _>(reg, "toolchain.check", "Check a stack's prerequisites",
-        "Whether the installed tools satisfy a stack and framework version: each requirement is ok, missing, too_old or too_new, with the fix.",
-        Tier::Read, Effect::Read, true, false, true,
+    reg.define::<CheckArgs>("toolchain.check", "Check a stack's prerequisites")
+    .description("Whether the installed tools satisfy a stack and framework version: each requirement is ok, missing, too_old or too_new, with the fix.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, a| read_plan("toolchain.check", format!("check prerequisites of {}", a.stack)),
         |ctx, a| {
             let r = stacks(ctx);
@@ -693,17 +779,24 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             let p = init::plan(ctx, &r, &req)?;
             let bad = p.prerequisites.iter().filter(|q| q.status != "ok").count();
             Ok(Outcome::with_data(if bad == 0 { "all prerequisites satisfied".to_string() } else { format!("{bad} prerequisite(s) not satisfied") }, serde_json::to_value(&p.prerequisites)?))
-        })?;
+        },
+    )?;
 
-    add::<ToolPlanArgs, _, _>(reg, "toolchain.plan", "Plan a tool install or removal",
-        "Exactly what installing or removing a tool would do on this machine: the package manager chosen, the commands, whether administrator rights are needed, the trust model of the source, upgrade notes, and blockers that stop it being automated here.",
-        Tier::Read, Effect::Read, true, false, true,
+    reg.define::<ToolPlanArgs>("toolchain.plan", "Plan a tool install or removal")
+    .description("Exactly what installing or removing a tool would do on this machine: the package manager chosen, the commands, whether administrator rights are needed, the trust model of the source, upgrade notes, and blockers that stop it being automated here.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, a| read_plan("toolchain.plan", format!("plan {}", a.tool)),
         |ctx, a| {
             let r = stacks(ctx);
             let p = toolchain::plan(ctx, &r, &a.tool, a.action.as_deref().unwrap_or("install"))?;
             Ok(Outcome::with_data(if p.blockers.is_empty() { "can be automated".to_string() } else { p.blockers[0].clone() }, serde_json::to_value(&p)?))
-        })?;
+        },
+    )?;
 
     for (id, action, summary) in [("toolchain.install", "install", "Install a tool"), ("toolchain.remove", "remove", "Remove a tool")] {
         let desc = if action == "install" {
@@ -711,9 +804,14 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         } else {
             "Removes a tool through the package manager that installs it. Data directories (databases!) are never deleted. Needs approval."
         };
-        add::<ToolArgs, _, _>(reg, id, summary, desc,
-            Tier::Admin, Effect::System, true, false, false,
-            move |ctx, a| {
+        reg.define::<ToolArgs>(id, summary)
+    .description(desc)
+    .tier(Tier::Admin)
+    .effect(Effect::System)
+    .agent_safe()
+    .dry_run()
+    .handlers(
+        move |ctx, a| {
                 let r = stacks(ctx);
                 let p = toolchain::plan(ctx, &r, &a.tool, action)?;
                 let mut plan = Plan::new(if action == "install" { "toolchain.install" } else { "toolchain.remove" }, format!("{action} {}", a.tool));
@@ -724,7 +822,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
                 plan = plan.effect(format!("source: {}", p.trust)).approval(true);
                 Ok(plan.data(serde_json::to_value(&p)?))
             },
-            move |ctx, a| {
+        move |ctx, a| {
                 let r = stacks(ctx);
                 let p = toolchain::plan(ctx, &r, &a.tool, action)?;
                 if action == "install" {
@@ -744,12 +842,18 @@ pub fn register(reg: &mut Registry) -> Result<()> {
                 o.ok = change.verified;
                 for n in &change.notes { o = o.warn(n.clone()); }
                 Ok(o)
-            })?;
+            },
+    )?;
     }
 
-    add::<NoArgs, _, _>(reg, "services.inventory", "Services found on this machine",
-        "Every database and service devd knows (MySQL, MariaDB, PostgreSQL, Redis, Docker): whether it is installed, whether it is actually answering (a detected service is never called healthy), who holds its port, which of your projects need it, what you decided about it, the one recommended next step and every option with its risk. Changes nothing.",
-        Tier::Read, Effect::Read, true, false, true,
+    reg.define::<NoArgs>("services.inventory", "Services found on this machine")
+    .description("Every database and service devd knows (MySQL, MariaDB, PostgreSQL, Redis, Docker): whether it is installed, whether it is actually answering (a detected service is never called healthy), who holds its port, which of your projects need it, what you decided about it, the one recommended next step and every option with its risk. Changes nothing.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, _| read_plan("services.inventory", "inspect the services on this machine"),
         |ctx, _| {
             let r = stacks(ctx);
@@ -757,11 +861,16 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             let n = v["services"].as_array().map(|a| a.len()).unwrap_or(0);
             let ready = v["services"].as_array().map(|a| a.iter().filter(|s| s["status"] == "ready").count()).unwrap_or(0);
             Ok(Outcome::with_data(format!("{ready} of {n} services ready"), v))
-        })?;
+        },
+    )?;
 
-    add::<DecideService, _, _>(reg, "services.decide", "Decide how devd treats a service",
-        "Records whether devd should adopt an existing service (use and control it as it is), only observe it, treat an instance you run yourself as the project's service, or ignore it. Records a decision only: nothing is installed, stopped, replaced or reconfigured, and data is never touched. Use clear=true to forget the decision.",
-        Tier::Write, Effect::Write, false, false, true,
+    reg.define::<DecideService>("services.decide", "Decide how devd treats a service")
+    .description("Records whether devd should adopt an existing service (use and control it as it is), only observe it, treat an instance you run yourself as the project's service, or ignore it. Records a decision only: nothing is installed, stopped, replaced or reconfigured, and data is never touched. Use clear=true to forget the decision.")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, a| {
             if !a.clear.unwrap_or(false) && !reconcile::MODES.contains(&a.mode.as_deref().unwrap_or("")) { return Err(DevdError::invalid("mode must be adopt, observe, external or ignore")); }
             Ok(Plan::new("services.decide", format!("{} {}", if a.clear.unwrap_or(false) { "forget the decision about".to_string() } else { format!("record `{}` for", a.mode.clone().unwrap_or_default()) }, a.tool)).effect("no installation, process or data is changed"))
@@ -779,11 +888,17 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             if mode == "external" && a.port.is_none() { return Err(DevdError::invalid("external needs the port your instance listens on")); }
             ctx.store.set_service_decision(&a.tool, &mode, a.port.map(|p| p as i64), a.note.as_deref(), &ctx.actor.label())?;
             Ok(Outcome::ok(format!("{}: {mode}", t.name)))
-        })?;
+        },
+    )?;
 
-    add::<ToolArgs, _, _>(reg, "toolchain.status", "Service status",
-        "State of a service tool: installed, listening, healthy, which unit controls it, port conflicts, data and log locations and its security defaults.",
-        Tier::Read, Effect::Read, true, false, true,
+    reg.define::<ToolArgs>("toolchain.status", "Service status")
+    .description("State of a service tool: installed, listening, healthy, which unit controls it, port conflicts, data and log locations and its security defaults.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, a| read_plan("toolchain.status", format!("check {}", a.tool)),
         |ctx, a| {
             let r = stacks(ctx);
@@ -792,11 +907,16 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             let st = t.probe(&toolchain::managed_dirs(ctx));
             let s = t.service_state(&host, &st).ok_or_else(|| DevdError::unsupported(format!("{} is not a service", t.name)))?;
             Ok(Outcome::with_data(s.detail.clone(), serde_json::to_value(&s)?))
-        })?;
+        },
+    )?;
 
-    add::<ServiceArgs, _, _>(reg, "toolchain.service", "Start, stop or restart a service",
-        "Controls a database or other service through systemd/service (privileged) or, where the host has no service manager, the tool's own daemon mode. Waits until the port answers and the health check passes, or until it has really stopped - a zero exit code from the service manager is not accepted as proof. Refuses to start when another program holds the port.",
-        Tier::Admin, Effect::Process, true, false, false,
+    reg.define::<ServiceArgs>("toolchain.service", "Start, stop or restart a service")
+    .description("Controls a database or other service through systemd/service (privileged) or, where the host has no service manager, the tool's own daemon mode. Waits until the port answers and the health check passes, or until it has really stopped - a zero exit code from the service manager is not accepted as proof. Refuses to start when another program holds the port.")
+    .tier(Tier::Admin)
+    .effect(Effect::Process)
+    .agent_safe()
+    .dry_run()
+    .handlers(
         |ctx, a| {
             if !["start", "stop", "restart"].contains(&a.action.as_str()) { return Err(DevdError::invalid("action must be start, stop or restart")); }
             let r = stacks(ctx);
@@ -820,21 +940,33 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             }
             let s = toolchain::control(ctx, &r, &a.tool, &a.action)?;
             Ok(Outcome::with_data(s.detail.clone(), serde_json::to_value(&s)?))
-        })?;
+        },
+    )?;
 
-    add::<ToolArgs, _, _>(reg, "toolchain.logs", "Service logs",
-        "Recent log lines for a service, where the host's journal can provide them.",
-        Tier::Read, Effect::Read, true, false, true,
+    reg.define::<ToolArgs>("toolchain.logs", "Service logs")
+    .description("Recent log lines for a service, where the host's journal can provide them.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, a| read_plan("toolchain.logs", format!("read logs of {}", a.tool)),
         |ctx, a| {
             let r = stacks(ctx);
             let lines: Vec<String> = toolchain::service_logs(ctx, &r, &a.tool)?;
             Ok(Outcome::with_data(format!("{} line(s)", lines.len()), json!({"lines": lines})))
-        })?;
+        },
+    )?;
 
-    add::<NoArgs, _, _>(reg, "toolchain.devices", "Connected Android devices",
-        "Devices and emulators visible to adb, with their state. Starts the adb server if needed.",
-        Tier::Read, Effect::Read, true, false, true,
+    reg.define::<NoArgs>("toolchain.devices", "Connected Android devices")
+    .description("Devices and emulators visible to adb, with their state. Starts the adb server if needed.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, _| read_plan("toolchain.devices", "list adb devices"),
         |ctx, _| {
             let r = stacks(ctx);
@@ -855,11 +987,17 @@ pub fn register(reg: &mut Registry) -> Result<()> {
                     json!({"serial": serial, "state": state, "details": extra, "usable": state == "device", "note": match state { "unauthorized" => "accept the debugging prompt on the device", "offline" => "reconnect the device", _ => "" }})
                 }).collect();
             Ok(Outcome::with_data(format!("{} device(s)", devices.len()), json!(devices)))
-        })?;
+        },
+    )?;
 
-    add::<NoArgs, _, _>(reg, "toolchain.eas_projects", "Expo projects linked to this machine",
-        "The Expo projects this machine is signed in to, with the slug and the account that owns them. Needs the EAS CLI and an Expo account; if EAS is not signed in it says so rather than guessing.",
-        Tier::Read, Effect::Read, true, false, true,
+    reg.define::<NoArgs>("toolchain.eas_projects", "Expo projects linked to this machine")
+    .description("The Expo projects this machine is signed in to, with the slug and the account that owns them. Needs the EAS CLI and an Expo account; if EAS is not signed in it says so rather than guessing.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, _| read_plan("toolchain.eas_projects", "list Expo projects"),
         |ctx, _| {
             let r = stacks(ctx);
@@ -895,7 +1033,8 @@ pub fn register(reg: &mut Registry) -> Result<()> {
                 format!("{} Expo project(s)", projects.len()),
                 json!({ "projects": projects, "signed_in": true }),
             ))
-        })?;
+        },
+    )?;
 
     Ok(())
 }

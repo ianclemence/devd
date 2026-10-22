@@ -12,7 +12,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use devd_core::capability::{Capability, Ctx, Effect, Outcome, Plan, Tier};
+use devd_core::capability::{Ctx, Effect, Outcome, Plan, Tier};
 use devd_core::error::{DevdError, Result};
 use devd_core::store_work::{Scratchpad, Todo};
 use devd_core::{util, Registry};
@@ -156,19 +156,16 @@ pub fn register(reg: &mut Registry, workspace: Arc<Workspace>) -> Result<()> {
 
 fn register_sessions(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
     let w = ws.clone();
-    add::<SessionStartArgs, _, _>(
-        reg,
-        "session.start",
-        "Start a coding-agent session",
-        "Starts the named harness in a real PTY. The backend owns the process, so \
+    reg.define::<SessionStartArgs>("session.start", "Start a coding-agent session")
+    .description("Starts the named harness in a real PTY. The backend owns the process, so \
          a frontend reload or a view change does not stop it. Returns a stable \
-         session id that can be attached to later.",
-        "session",
-        Tier::Exec,
-        Effect::Process,
-        true,
-        true,
-        false,
+         session id that can be attached to later.")
+    .group("session")
+    .tier(Tier::Exec)
+    .effect(Effect::Process)
+    .agent_safe()
+    .dry_run()
+    .handlers(
         |_, a| {
             Ok(
                 Plan::new("session.start", format!("start {} in {}", a.harness, a.cwd))
@@ -197,20 +194,18 @@ fn register_sessions(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
     )?;
 
     let w = ws.clone();
-    add::<SessionListArgs, _, _>(
-        reg,
-        "session.list",
-        "List agent sessions",
-        "Every recorded session, newest first, with live state folded in. A \
+    reg.define::<SessionListArgs>("session.list", "List agent sessions")
+    .description("Every recorded session, newest first, with live state folded in. A \
          running session owned by another devd process is reported as \
          unavailable rather than runnable, and a row left by a dead process is \
-         reported as stale.",
-        "session",
-        Tier::Read,
-        Effect::Read,
-        true,
-        true,
-        true,
+         reported as stale.")
+    .group("session")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, _| Ok(Plan::new("session.list", "list agent sessions")),
         move |_ctx, a| {
             let rows = w.sessions().list(a.project.as_deref())?;
@@ -222,18 +217,16 @@ fn register_sessions(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
     )?;
 
     let w = ws.clone();
-    add::<SessionArgs, _, _>(
-        reg,
-        "session.get",
-        "Inspect an agent session",
-        "Returns one session's metadata, its live state and whether it can be \
-         attached to in this process.",
-        "session",
-        Tier::Read,
-        Effect::Read,
-        true,
-        true,
-        true,
+    reg.define::<SessionArgs>("session.get", "Inspect an agent session")
+    .description("Returns one session's metadata, its live state and whether it can be \
+         attached to in this process.")
+    .group("session")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, a| {
             Ok(Plan::new(
                 "session.get",
@@ -250,19 +243,17 @@ fn register_sessions(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
     )?;
 
     let w = ws.clone();
-    add::<SessionArgs, _, _>(
-        reg,
-        "session.attach",
-        "Attach to an agent session",
-        "Returns the session plus recent output from the beginning and a cursor, \
+    reg.define::<SessionArgs>("session.attach", "Attach to an agent session")
+    .description("Returns the session plus recent output from the beginning and a cursor, \
          so a client that reloaded can restore the terminal. A finished session \
-         replays its transcript; a stale or foreign one explains why it cannot.",
-        "session",
-        Tier::Read,
-        Effect::Read,
-        true,
-        true,
-        true,
+         replays its transcript; a stale or foreign one explains why it cannot.")
+    .group("session")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, a| {
             Ok(Plan::new(
                 "session.attach",
@@ -276,19 +267,17 @@ fn register_sessions(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
     )?;
 
     let w = ws.clone();
-    add::<SessionOutputArgs, _, _>(
-        reg,
-        "session.output",
-        "Read session output",
-        "Returns base64 bytes since the caller's cursor. Output is bounded in \
+    reg.define::<SessionOutputArgs>("session.output", "Read session output")
+    .description("Returns base64 bytes since the caller's cursor. Output is bounded in \
          memory and on disk; a reset flag tells the client to rebuild its screen \
-         from the replay.",
-        "session",
-        Tier::Read,
-        Effect::Read,
-        true,
-        true,
-        true,
+         from the replay.")
+    .group("session")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, a| {
             Ok(Plan::new(
                 "session.output",
@@ -302,20 +291,15 @@ fn register_sessions(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
     )?;
 
     let w = ws.clone();
-    add::<SessionInputArgs, _, _>(
-        reg,
-        "session.input",
-        "Write to an agent terminal",
-        "Sends keystrokes or pasted text to a live PTY. Reserved for humans: an \
+    reg.define::<SessionInputArgs>("session.input", "Write to an agent terminal")
+    .description("Sends keystrokes or pasted text to a live PTY. Reserved for humans: an \
          agent typing into a user's terminal is indistinguishable from prompt \
          injection, and delegated work already receives its instructions at \
-         spawn time.",
-        "session",
-        Tier::Exec,
-        Effect::Process,
-        false,
-        false,
-        false,
+         spawn time.")
+    .group("session")
+    .tier(Tier::Exec)
+    .effect(Effect::Process)
+    .handlers(
         |_, a| Ok(Plan::new("session.input", format!("write to {}", a.id))),
         move |ctx, a| {
             ctx.require_human("writing to a terminal")?;
@@ -325,17 +309,12 @@ fn register_sessions(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
     )?;
 
     let w = ws.clone();
-    add::<SessionResizeArgs, _, _>(
-        reg,
-        "session.resize",
-        "Resize an agent terminal",
-        "Tells the PTY its new size so full-screen terminal programs redraw.",
-        "session",
-        Tier::Write,
-        Effect::Process,
-        false,
-        false,
-        false,
+    reg.define::<SessionResizeArgs>("session.resize", "Resize an agent terminal")
+    .description("Tells the PTY its new size so full-screen terminal programs redraw.")
+    .group("session")
+    .tier(Tier::Write)
+    .effect(Effect::Process)
+    .handlers(
         |_, a| {
             Ok(Plan::new(
                 "session.resize",
@@ -350,18 +329,13 @@ fn register_sessions(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
     )?;
 
     let w = ws.clone();
-    add::<SessionRenameArgs, _, _>(
-        reg,
-        "session.rename",
-        "Rename an agent session",
-        "Changes the display label only. The id, process and history are \
-         unchanged.",
-        "session",
-        Tier::Write,
-        Effect::Write,
-        false,
-        false,
-        false,
+    reg.define::<SessionRenameArgs>("session.rename", "Rename an agent session")
+    .description("Changes the display label only. The id, process and history are \
+         unchanged.")
+    .group("session")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .handlers(
         |_, a| {
             Ok(Plan::new(
                 "session.rename",
@@ -379,19 +353,15 @@ fn register_sessions(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
     )?;
 
     let w = ws.clone();
-    add::<SessionArgs, _, _>(
-        reg,
-        "session.stop",
-        "Stop an agent session",
-        "Kills the PTY and its child process tree, retains the transcript and \
+    reg.define::<SessionArgs>("session.stop", "Stop an agent session")
+    .description("Kills the PTY and its child process tree, retains the transcript and \
          records the session as cancelled. An agent may stop a delegated \
-         session, but not a person's interactive one.",
-        "session",
-        Tier::Exec,
-        Effect::Process,
-        true,
-        false,
-        false,
+         session, but not a person's interactive one.")
+    .group("session")
+    .tier(Tier::Exec)
+    .effect(Effect::Process)
+    .agent_safe()
+    .handlers(
         |_, a| {
             Ok(Plan::new("session.stop", format!("stop session {}", a.id))
                 .effect("the terminal process and its children are terminated"))
@@ -407,19 +377,16 @@ fn register_sessions(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
     )?;
 
     let w = ws.clone();
-    add::<SessionArgs, _, _>(
-        reg,
-        "session.dismiss",
-        "Dismiss a finished session",
-        "Deletes the metadata row for a session that is no longer attachable. \
+    reg.define::<SessionArgs>("session.dismiss", "Dismiss a finished session")
+    .description("Deletes the metadata row for a session that is no longer attachable. \
          The transcript file is retained. A running session cannot be \
-         dismissed.",
-        "session",
-        Tier::Destructive,
-        Effect::Data,
-        false,
-        true,
-        true,
+         dismissed.")
+    .group("session")
+    .tier(Tier::Destructive)
+    .effect(Effect::Data)
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, a| {
             Ok(
                 Plan::new("session.dismiss", format!("forget session {}", a.id))
@@ -441,20 +408,17 @@ fn register_sessions(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
 
 fn register_orchestration(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
     let w = ws.clone();
-    add::<SpawnArgs, _, _>(
-        reg,
-        "agent.spawn",
-        "Delegate a task to another agent",
-        "Starts a real child process in its own PTY, with its own working \
+    reg.define::<SpawnArgs>("agent.spawn", "Delegate a task to another agent")
+    .description("Starts a real child process in its own PTY, with its own working \
          directory and harness invocation. Returns a stable task id and session \
          id. Nesting is limited to three levels and eight unfinished delegated \
-         tasks per installation.",
-        "agent",
-        Tier::Exec,
-        Effect::Process,
-        true,
-        true,
-        false,
+         tasks per installation.")
+    .group("agent")
+    .tier(Tier::Exec)
+    .effect(Effect::Process)
+    .agent_safe()
+    .dry_run()
+    .handlers(
         |_, a| {
             Ok(Plan::new(
                 "agent.spawn",
@@ -484,19 +448,17 @@ fn register_orchestration(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> 
     )?;
 
     let w = ws.clone();
-    add::<WaitArgs, _, _>(
-        reg,
-        "agent.wait",
-        "Wait for a delegated task",
-        "Waits up to a bounded timeout for a task to reach a terminal state. A \
+    reg.define::<WaitArgs>("agent.wait", "Wait for a delegated task")
+    .description("Waits up to a bounded timeout for a task to reach a terminal state. A \
          timeout does not kill the child: use agent.cancel to cancel it \
-         explicitly. Returns the final task and its state.",
-        "agent",
-        Tier::Read,
-        Effect::Read,
-        true,
-        true,
-        true,
+         explicitly. Returns the final task and its state.")
+    .group("agent")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, a| {
             Ok(Plan::new(
                 "agent.wait",
@@ -521,17 +483,15 @@ fn register_orchestration(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> 
     )?;
 
     let w = ws.clone();
-    add::<TaskArgs, _, _>(
-        reg,
-        "agent.status",
-        "Inspect a delegated task",
-        "Returns a task's state, exit code, error and parent/child relationship.",
-        "agent",
-        Tier::Read,
-        Effect::Read,
-        true,
-        true,
-        true,
+    reg.define::<TaskArgs>("agent.status", "Inspect a delegated task")
+    .description("Returns a task's state, exit code, error and parent/child relationship.")
+    .group("agent")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, a| {
             Ok(Plan::new(
                 "agent.status",
@@ -551,17 +511,15 @@ fn register_orchestration(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> 
     )?;
 
     let w = ws.clone();
-    add::<TaskListArgs, _, _>(
-        reg,
-        "agent.list",
-        "List delegated tasks",
-        "Lists tasks, optionally for one parent session or project.",
-        "agent",
-        Tier::Read,
-        Effect::Read,
-        true,
-        true,
-        true,
+    reg.define::<TaskListArgs>("agent.list", "List delegated tasks")
+    .description("Lists tasks, optionally for one parent session or project.")
+    .group("agent")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, _| Ok(Plan::new("agent.list", "list delegated tasks")),
         move |_ctx, a| {
             let rows = w
@@ -575,18 +533,16 @@ fn register_orchestration(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> 
     )?;
 
     let w = ws.clone();
-    add::<TaskArgs, _, _>(
-        reg,
-        "agent.result",
-        "Read a delegated task's result",
-        "Returns the task and the tail of its terminal output. The result is \
-         recorded when the child exits, so it survives a frontend reload.",
-        "agent",
-        Tier::Read,
-        Effect::Read,
-        true,
-        true,
-        true,
+    reg.define::<TaskArgs>("agent.result", "Read a delegated task's result")
+    .description("Returns the task and the tail of its terminal output. The result is \
+         recorded when the child exits, so it survives a frontend reload.")
+    .group("agent")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, a| {
             Ok(Plan::new(
                 "agent.result",
@@ -603,18 +559,15 @@ fn register_orchestration(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> 
     )?;
 
     let w = ws;
-    add::<TaskArgs, _, _>(
-        reg,
-        "agent.cancel",
-        "Cancel a delegated task",
-        "Stops the child session and records the task as cancelled. Idempotent \
-         for a task that has already finished.",
-        "agent",
-        Tier::Exec,
-        Effect::Process,
-        true,
-        false,
-        true,
+    reg.define::<TaskArgs>("agent.cancel", "Cancel a delegated task")
+    .description("Stops the child session and records the task as cancelled. Idempotent \
+         for a task that has already finished.")
+    .group("agent")
+    .tier(Tier::Exec)
+    .effect(Effect::Process)
+    .agent_safe()
+    .idempotent()
+    .handlers(
         |_, a| {
             Ok(
                 Plan::new("agent.cancel", format!("cancel task {}", a.task_id))
@@ -637,18 +590,16 @@ fn register_orchestration(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> 
 
 fn register_projects(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
     let w = ws.clone();
-    add::<ProjectArgs, _, _>(
-        reg,
-        "project.plan",
-        "Review a devd.yml manifest",
-        "Parses and validates the project manifest and returns the commands a \
-         person is being asked to approve, with a semantic hash. Nothing runs.",
-        "project",
-        Tier::Read,
-        Effect::Read,
-        true,
-        true,
-        true,
+    reg.define::<ProjectArgs>("project.plan", "Review a devd.yml manifest")
+    .description("Parses and validates the project manifest and returns the commands a \
+         person is being asked to approve, with a semantic hash. Nothing runs.")
+    .group("project")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, a| Ok(Plan::new("project.plan", format!("review {}", a.project))),
         move |_ctx, a| {
             let value = w.projects().plan(&a.project)?;
@@ -664,19 +615,15 @@ fn register_projects(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
     )?;
 
     let w = ws.clone();
-    add::<ProjectArgs, _, _>(
-        reg,
-        "project.approve",
-        "Approve a project's commands",
-        "Records a human's approval of the current manifest hash. Starting any \
+    reg.define::<ProjectArgs>("project.approve", "Approve a project's commands")
+    .description("Records a human's approval of the current manifest hash. Starting any \
          process requires this approval, and editing devd.yml invalidates it. \
-         Agents cannot approve executable configuration.",
-        "project",
-        Tier::Write,
-        Effect::Config,
-        false,
-        true,
-        false,
+         Agents cannot approve executable configuration.")
+    .group("project")
+    .tier(Tier::Write)
+    .effect(Effect::Config)
+    .dry_run()
+    .handlers(
         |_, a| {
             Ok(Plan::new(
                 "project.approve",
@@ -699,18 +646,16 @@ fn register_projects(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
     )?;
 
     let w = ws.clone();
-    add::<ProjectArgs, _, _>(
-        reg,
-        "project.status",
-        "Inspect project processes",
-        "Returns the manifest's declared processes with live state, health, pid, \
-         restart count and the last failure.",
-        "project",
-        Tier::Read,
-        Effect::Read,
-        true,
-        true,
-        true,
+    reg.define::<ProjectArgs>("project.status", "Inspect project processes")
+    .description("Returns the manifest's declared processes with live state, health, pid, \
+         restart count and the last failure.")
+    .group("project")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, a| {
             Ok(Plan::new(
                 "project.status",
@@ -727,18 +672,15 @@ fn register_projects(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
     )?;
 
     let w = ws.clone();
-    add::<ProcessArgs, _, _>(
-        reg,
-        "project.start",
-        "Start project processes",
-        "Starts the named process, or every declared process in dependency order \
-         when `all` is true. Requires a current approval for the manifest.",
-        "project",
-        Tier::Exec,
-        Effect::Process,
-        true,
-        true,
-        false,
+    reg.define::<ProcessArgs>("project.start", "Start project processes")
+    .description("Starts the named process, or every declared process in dependency order \
+         when `all` is true. Requires a current approval for the manifest.")
+    .group("project")
+    .tier(Tier::Exec)
+    .effect(Effect::Process)
+    .agent_safe()
+    .dry_run()
+    .handlers(
         |_, a| {
             let what = if a.all.unwrap_or(false) {
                 "all processes".to_string()
@@ -762,18 +704,14 @@ fn register_projects(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
     )?;
 
     let w = ws.clone();
-    add::<ProcessArgs, _, _>(
-        reg,
-        "project.stop",
-        "Stop project processes",
-        "Stops the named process tree, or every process in the project when \
-         `all` is true.",
-        "project",
-        Tier::Exec,
-        Effect::Process,
-        true,
-        false,
-        false,
+    reg.define::<ProcessArgs>("project.stop", "Stop project processes")
+    .description("Stops the named process tree, or every process in the project when \
+         `all` is true.")
+    .group("project")
+    .tier(Tier::Exec)
+    .effect(Effect::Process)
+    .agent_safe()
+    .handlers(
         |_, a| {
             Ok(
                 Plan::new("project.stop", format!("stop processes in {}", a.project))
@@ -791,17 +729,14 @@ fn register_projects(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
     )?;
 
     let w = ws.clone();
-    add::<ProcessArgs, _, _>(
-        reg,
-        "project.restart",
-        "Restart a project process",
-        "Stops and starts one declared process, resetting its health state.",
-        "project",
-        Tier::Exec,
-        Effect::Process,
-        true,
-        false,
-        true,
+    reg.define::<ProcessArgs>("project.restart", "Restart a project process")
+    .description("Stops and starts one declared process, resetting its health state.")
+    .group("project")
+    .tier(Tier::Exec)
+    .effect(Effect::Process)
+    .agent_safe()
+    .idempotent()
+    .handlers(
         |_, a| {
             Ok(Plan::new(
                 "project.restart",
@@ -816,18 +751,16 @@ fn register_projects(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
     )?;
 
     let w = ws;
-    add::<LogsArgs, _, _>(
-        reg,
-        "project.logs",
-        "Read project process logs",
-        "Returns the tail of a process's combined stdout and stderr, optionally \
-         filtered. Values declared as secret environment variables are redacted.",
-        "project",
-        Tier::Read,
-        Effect::Read,
-        true,
-        true,
-        true,
+    reg.define::<LogsArgs>("project.logs", "Read project process logs")
+    .description("Returns the tail of a process's combined stdout and stderr, optionally \
+         filtered. Values declared as secret environment variables are redacted.")
+    .group("project")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, a| Ok(Plan::new("project.logs", format!("read {} logs", a.name))),
         move |_ctx, a| {
             let value = w.projects().logs(
@@ -847,18 +780,16 @@ fn register_projects(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
 
 fn register_scratchpads(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
     let w = ws.clone();
-    add::<ScratchListArgs, _, _>(
-        reg,
-        "scratch.list",
-        "List shared scratchpads",
-        "Lists project-scoped notes. Scratchpads are shared project state, not \
-         chat history: they survive sessions, reloads and restarts.",
-        "scratch",
-        Tier::Read,
-        Effect::Read,
-        true,
-        true,
-        true,
+    reg.define::<ScratchListArgs>("scratch.list", "List shared scratchpads")
+    .description("Lists project-scoped notes. Scratchpads are shared project state, not \
+         chat history: they survive sessions, reloads and restarts.")
+    .group("scratch")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, a| {
             Ok(Plan::new(
                 "scratch.list",
@@ -877,18 +808,16 @@ fn register_scratchpads(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
     )?;
 
     let w = ws.clone();
-    add::<ScratchArgs, _, _>(
-        reg,
-        "scratch.get",
-        "Read a shared scratchpad",
-        "Returns the note content and its revision. Pass the revision to \
-         scratch.update so a concurrent edit cannot be silently overwritten.",
-        "scratch",
-        Tier::Read,
-        Effect::Read,
-        true,
-        true,
-        true,
+    reg.define::<ScratchArgs>("scratch.get", "Read a shared scratchpad")
+    .description("Returns the note content and its revision. Pass the revision to \
+         scratch.update so a concurrent edit cannot be silently overwritten.")
+    .group("scratch")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, a| Ok(Plan::new("scratch.get", format!("read note `{}`", a.name))),
         move |_ctx, a| {
             let project = scope(&a.project)?;
@@ -904,18 +833,15 @@ fn register_scratchpads(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
     )?;
 
     let w = ws.clone();
-    add::<ScratchCreateArgs, _, _>(
-        reg,
-        "scratch.create",
-        "Create a shared scratchpad",
-        "Creates a named, project-scoped note. Content is Markdown. Names are \
-         unique within a project.",
-        "scratch",
-        Tier::Write,
-        Effect::Write,
-        true,
-        true,
-        false,
+    reg.define::<ScratchCreateArgs>("scratch.create", "Create a shared scratchpad")
+    .description("Creates a named, project-scoped note. Content is Markdown. Names are \
+         unique within a project.")
+    .group("scratch")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers(
         |_, a| {
             Ok(
                 Plan::new("scratch.create", format!("create note `{}`", a.name))
@@ -952,18 +878,15 @@ fn register_scratchpads(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
     )?;
 
     let w = ws.clone();
-    add::<ScratchUpdateArgs, _, _>(
-        reg,
-        "scratch.update",
-        "Update a shared scratchpad",
-        "Replaces the content if `expected_revision` is current. A mismatch is a \
-         conflict: read the note, merge, and try again.",
-        "scratch",
-        Tier::Write,
-        Effect::Write,
-        true,
-        true,
-        false,
+    reg.define::<ScratchUpdateArgs>("scratch.update", "Update a shared scratchpad")
+    .description("Replaces the content if `expected_revision` is current. A mismatch is a \
+         conflict: read the note, merge, and try again.")
+    .group("scratch")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers(
         |_, a| {
             Ok(
                 Plan::new("scratch.update", format!("update note `{}`", a.name))
@@ -991,18 +914,15 @@ fn register_scratchpads(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
     )?;
 
     let w = ws.clone();
-    add::<ScratchAppendArgs, _, _>(
-        reg,
-        "scratch.append",
-        "Append to a shared scratchpad",
-        "Adds a section to an existing note, creating it if needed. Useful for \
-         an agent recording findings without replacing a human's notes.",
-        "scratch",
-        Tier::Write,
-        Effect::Write,
-        true,
-        true,
-        false,
+    reg.define::<ScratchAppendArgs>("scratch.append", "Append to a shared scratchpad")
+    .description("Adds a section to an existing note, creating it if needed. Useful for \
+         an agent recording findings without replacing a human's notes.")
+    .group("scratch")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers(
         |_, a| {
             Ok(Plan::new(
                 "scratch.append",
@@ -1047,18 +967,15 @@ fn register_scratchpads(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
     )?;
 
     let w = ws;
-    add::<ScratchArgs, _, _>(
-        reg,
-        "scratch.delete",
-        "Delete a shared scratchpad",
-        "Deletes a project note. Destructive: it requires human approval and is \
-         never performed unattended by an agent.",
-        "scratch",
-        Tier::Destructive,
-        Effect::Data,
-        false,
-        true,
-        true,
+    reg.define::<ScratchArgs>("scratch.delete", "Delete a shared scratchpad")
+    .description("Deletes a project note. Destructive: it requires human approval and is \
+         never performed unattended by an agent.")
+    .group("scratch")
+    .tier(Tier::Destructive)
+    .effect(Effect::Data)
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, a| {
             Ok(
                 Plan::new("scratch.delete", format!("delete note `{}`", a.name))
@@ -1083,18 +1000,16 @@ fn register_scratchpads(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
 
 fn register_todos(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
     let w = ws.clone();
-    add::<TodoListArgs, _, _>(
-        reg,
-        "todo.list",
-        "List shared todos",
-        "Lists structured, project-scoped todos ordered by priority and age, \
-         optionally filtered by task or status.",
-        "todo",
-        Tier::Read,
-        Effect::Read,
-        true,
-        true,
-        true,
+    reg.define::<TodoListArgs>("todo.list", "List shared todos")
+    .description("Lists structured, project-scoped todos ordered by priority and age, \
+         optionally filtered by task or status.")
+    .group("todo")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, a| {
             Ok(Plan::new(
                 "todo.list",
@@ -1114,17 +1029,15 @@ fn register_todos(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
     )?;
 
     let w = ws.clone();
-    add::<TodoArgs, _, _>(
-        reg,
-        "todo.get",
-        "Read a todo",
-        "Returns one todo and its revision.",
-        "todo",
-        Tier::Read,
-        Effect::Read,
-        true,
-        true,
-        true,
+    reg.define::<TodoArgs>("todo.get", "Read a todo")
+    .description("Returns one todo and its revision.")
+    .group("todo")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, a| Ok(Plan::new("todo.get", format!("read todo {}", a.id))),
         move |_ctx, a| {
             let todo = w
@@ -1139,18 +1052,15 @@ fn register_todos(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
     )?;
 
     let w = ws.clone();
-    add::<TodoCreateArgs, _, _>(
-        reg,
-        "todo.create",
-        "Create a todo",
-        "Creates a structured todo with a stable id, priority, optional assignee \
-         and task scope. Todos are project state, not conversation history.",
-        "todo",
-        Tier::Write,
-        Effect::Write,
-        true,
-        true,
-        false,
+    reg.define::<TodoCreateArgs>("todo.create", "Create a todo")
+    .description("Creates a structured todo with a stable id, priority, optional assignee \
+         and task scope. Todos are project state, not conversation history.")
+    .group("todo")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers(
         |_, a| {
             Ok(
                 Plan::new("todo.create", format!("create todo `{}`", a.title))
@@ -1197,18 +1107,15 @@ fn register_todos(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
     )?;
 
     let w = ws.clone();
-    add::<TodoUpdateArgs, _, _>(
-        reg,
-        "todo.update",
-        "Update a todo",
-        "Updates the fields supplied, guarded by `expected_revision`. Status \
-         changes are recorded in the todo's history.",
-        "todo",
-        Tier::Write,
-        Effect::Write,
-        true,
-        true,
-        false,
+    reg.define::<TodoUpdateArgs>("todo.update", "Update a todo")
+    .description("Updates the fields supplied, guarded by `expected_revision`. Status \
+         changes are recorded in the todo's history.")
+    .group("todo")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers(
         |_, a| {
             Ok(Plan::new("todo.update", format!("update todo {}", a.id))
                 .step(format!("require revision {}", a.expected_revision)))
@@ -1239,17 +1146,15 @@ fn register_todos(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
     )?;
 
     let w = ws.clone();
-    add::<TodoCompleteArgs, _, _>(
-        reg,
-        "todo.complete",
-        "Complete a todo",
-        "Moves a todo to `done`, recording the transition and optional note.",
-        "todo",
-        Tier::Write,
-        Effect::Write,
-        true,
-        true,
-        true,
+    reg.define::<TodoCompleteArgs>("todo.complete", "Complete a todo")
+    .description("Moves a todo to `done`, recording the transition and optional note.")
+    .group("todo")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, a| {
             Ok(Plan::new(
                 "todo.complete",
@@ -1276,17 +1181,15 @@ fn register_todos(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
     )?;
 
     let w = ws.clone();
-    add::<TodoReopenArgs, _, _>(
-        reg,
-        "todo.reopen",
-        "Reopen a todo",
-        "Moves a completed or cancelled todo back to `open`.",
-        "todo",
-        Tier::Write,
-        Effect::Write,
-        true,
-        true,
-        true,
+    reg.define::<TodoReopenArgs>("todo.reopen", "Reopen a todo")
+    .description("Moves a completed or cancelled todo back to `open`.")
+    .group("todo")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, a| Ok(Plan::new("todo.reopen", format!("reopen todo {}", a.id))),
         move |ctx, a| {
             let todo = w.store().update_todo(
@@ -1308,17 +1211,14 @@ fn register_todos(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
     )?;
 
     let w = ws.clone();
-    add::<TodoNoteArgs, _, _>(
-        reg,
-        "todo.note",
-        "Record a note on a todo",
-        "Adds a history entry without changing the todo's status.",
-        "todo",
-        Tier::Write,
-        Effect::Write,
-        true,
-        true,
-        false,
+    reg.define::<TodoNoteArgs>("todo.note", "Record a note on a todo")
+    .description("Adds a history entry without changing the todo's status.")
+    .group("todo")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers(
         |_, a| Ok(Plan::new("todo.note", format!("note on todo {}", a.id))),
         move |ctx, a| {
             w.store().note_todo(&a.id, &ctx.actor.label(), &a.note)?;
@@ -1327,17 +1227,15 @@ fn register_todos(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
     )?;
 
     let w = ws.clone();
-    add::<TodoHistoryArgs, _, _>(
-        reg,
-        "todo.history",
-        "Read todo history",
-        "Returns the recorded status transitions and notes, newest first.",
-        "todo",
-        Tier::Read,
-        Effect::Read,
-        true,
-        true,
-        true,
+    reg.define::<TodoHistoryArgs>("todo.history", "Read todo history")
+    .description("Returns the recorded status transitions and notes, newest first.")
+    .group("todo")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, a| {
             Ok(Plan::new(
                 "todo.history",
@@ -1354,18 +1252,15 @@ fn register_todos(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
     )?;
 
     let w = ws;
-    add::<TodoArgs, _, _>(
-        reg,
-        "todo.delete",
-        "Delete a todo",
-        "Deletes a todo and its history. Destructive: requires human approval \
-         and is never performed unattended by an agent.",
-        "todo",
-        Tier::Destructive,
-        Effect::Data,
-        false,
-        true,
-        true,
+    reg.define::<TodoArgs>("todo.delete", "Delete a todo")
+    .description("Deletes a todo and its history. Destructive: requires human approval \
+         and is never performed unattended by an agent.")
+    .group("todo")
+    .tier(Tier::Destructive)
+    .effect(Effect::Data)
+    .dry_run()
+    .idempotent()
+    .handlers(
         |_, a| {
             Ok(Plan::new("todo.delete", format!("delete todo {}", a.id))
                 .destructive(true)
@@ -1468,52 +1363,6 @@ fn validate_priority(priority: &str) -> Result<()> {
             "unknown priority `{other}`; expected low, normal, high or urgent"
         ))),
     }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn add<A, P, Q>(
-    reg: &mut Registry,
-    id: &str,
-    summary: &str,
-    description: &str,
-    group: &str,
-    tier: Tier,
-    effect: Effect,
-    agent_safe: bool,
-    dry_run: bool,
-    idempotent: bool,
-    plan: P,
-    apply: Q,
-) -> Result<()>
-where
-    A: for<'de> Deserialize<'de> + JsonSchema + Send + Sync + 'static,
-    P: Fn(&Ctx, &A) -> Result<Plan> + Send + Sync + 'static,
-    Q: Fn(&Ctx, &A) -> Result<Outcome> + Send + Sync + 'static,
-{
-    let cap = Capability::builder(id, summary)
-        .description(description)
-        .group(group)
-        .tier(tier)
-        .effect(effect)
-        .agent_safe(agent_safe)
-        .dry_run(dry_run)
-        .idempotent(idempotent)
-        .args_schema(
-            serde_json::to_value(schemars::schema_for!(A))
-                .map_err(|e| DevdError::internal(format!("cannot build schema for {id}: {e}")))?,
-        )
-        .handler(
-            move |ctx: &Ctx, args: &Value| {
-                let typed: A = ctx.parse(args)?;
-                plan(ctx, &typed)
-            },
-            move |ctx: &Ctx, args: &Value| {
-                let typed: A = ctx.parse(args)?;
-                apply(ctx, &typed)
-            },
-        )
-        .build()?;
-    reg.register(cap)
 }
 
 // Keep the manifest module reachable for capability tests that need the schema.

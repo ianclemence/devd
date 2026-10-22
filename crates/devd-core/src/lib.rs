@@ -11,6 +11,7 @@ pub mod archive;
 pub mod browse;
 pub mod capability;
 pub mod config;
+pub mod define;
 pub mod doctor;
 pub mod download;
 pub mod events;

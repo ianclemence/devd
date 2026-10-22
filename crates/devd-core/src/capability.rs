@@ -1,7 +1,7 @@
 //! Capabilities: the single declaration of everything `devd` can do.
 //!
 //! A [`Capability`] carries its own identity, argument schema, permission tier,
-//! side-effect class, dry-run support, undo metadata and handler. The CLI, TUI,
+//! side-effect class, dry-run support and handler. The CLI, TUI,
 //! GUI, HTTP API and MCP server all read from this structure, which is why they
 //! cannot disagree about what is possible or who may do it.
 
@@ -448,8 +448,6 @@ pub struct Capability {
     pub human_only: bool,
     /// Whether repeating the call is harmless.
     pub idempotent: bool,
-    /// Capability that reverses this one, when a reversal exists.
-    pub undo: Option<String>,
     /// Implementation.
     pub handler: Arc<dyn Handler>,
 }
@@ -479,7 +477,6 @@ impl Capability {
             agent_safe: true,
             human_only: false,
             idempotent: false,
-            undo: None,
             handler: None,
         }
     }
@@ -498,7 +495,6 @@ pub struct CapabilityBuilder {
     agent_safe: bool,
     human_only: bool,
     idempotent: bool,
-    undo: Option<String>,
     handler: Option<Arc<dyn Handler>>,
 }
 
@@ -551,11 +547,6 @@ impl CapabilityBuilder {
         self.idempotent = yes;
         self
     }
-    /// Name the capability that reverses this one.
-    pub fn undo(mut self, id: impl Into<String>) -> Self {
-        self.undo = Some(id.into());
-        self
-    }
     /// Supply the handler as two closures.
     pub fn handler(
         mut self,
@@ -597,7 +588,6 @@ impl CapabilityBuilder {
             agent_safe: self.agent_safe,
             human_only: self.human_only,
             idempotent: self.idempotent,
-            undo: self.undo,
             handler,
         })
     }

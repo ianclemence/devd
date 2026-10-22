@@ -24,7 +24,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
 
-use devd_core::capability::{Capability, Ctx, Effect, Outcome, Plan, Tier};
+use devd_core::capability::{Ctx, Effect, Outcome, Plan, Tier};
 use devd_core::state::Repo;
 use devd_core::util;
 use devd_core::{DevdError, Registry, Result};
@@ -190,77 +190,6 @@ pub fn register(reg: &mut Registry, git: Arc<GitService>) -> Result<()> {
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-fn add<A, P, Q>(
-    reg: &mut Registry,
-    id: &str,
-    summary: &str,
-    description: &str,
-    group: &str,
-    tier: Tier,
-    effect: Effect,
-    agent_safe: bool,
-    dry_run: bool,
-    idempotent: bool,
-    plan: P,
-    apply: Q,
-) -> Result<()>
-where
-    A: for<'de> Deserialize<'de> + JsonSchema + Send + Sync + 'static,
-    P: Fn(&Ctx, &A) -> Result<Plan> + Send + Sync + 'static,
-    Q: Fn(&Ctx, &A) -> Result<Outcome> + Send + Sync + 'static,
-{
-    let cap = Capability::builder(id, summary)
-        .description(description)
-        .group(group)
-        .tier(tier)
-        .effect(effect)
-        .agent_safe(agent_safe)
-        .dry_run(dry_run)
-        .idempotent(idempotent)
-        .args_schema(
-            serde_json::to_value(schemars::schema_for!(A))
-                .map_err(|e| DevdError::internal(format!("cannot build schema for {id}: {e}")))?,
-        )
-        .handler(
-            move |ctx: &Ctx, args: &Value| {
-                let typed: A = ctx.parse(args)?;
-                plan(ctx, &typed)
-            },
-            move |ctx: &Ctx, args: &Value| {
-                let typed: A = ctx.parse(args)?;
-                apply(ctx, &typed)
-            },
-        )
-        .build()?;
-    reg.register(cap)
-}
-
-macro_rules! git_cap {
-    (
-        $reg:expr, $git:expr, $id:literal, $group:literal, $summary:literal, $doc:literal,
-        $tier:expr, $effect:expr, $agent:expr, $dry:expr, $idem:expr,
-        $args:ty, $plan:expr, $apply:expr
-    ) => {{
-        let plan_service = ::std::sync::Arc::clone($git);
-        let apply_service = ::std::sync::Arc::clone($git);
-        add::<$args, _, _>(
-            $reg,
-            $id,
-            $summary,
-            $doc,
-            $group,
-            $tier,
-            $effect,
-            $agent,
-            $dry,
-            $idem,
-            move |ctx: &Ctx, a: &$args| $plan(ctx, a, plan_service.as_ref()),
-            move |ctx: &Ctx, a: &$args| $apply(ctx, a, apply_service.as_ref()),
-        )?;
-    }};
-}
-
 /// Resolve any path inside a work tree to the repository root.
 fn repo_of(git: &GitService, path: &str) -> Result<PathBuf> {
     let candidate = PathBuf::from(path);
@@ -318,10 +247,15 @@ fn read_plan(id: &str, what: impl Into<String>) -> Plan {
 // ------------------------------------------------------------------ read tier
 
 fn register_read(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
-    git_cap!(reg, git, "git.status", "git.repo",
-        "Show working tree status",
-        "Reports the current branch, upstream tracking, ahead/behind counts, staged and unstaged changes, untracked files, conflicts and any interrupted Git operation.",
-        Tier::Read, Effect::Read, true, false, true, RepoArgs,
+    reg.define::<RepoArgs>("git.status", "Show working tree status")
+    .description("Reports the current branch, upstream tracking, ahead/behind counts, staged and unstaged changes, untracked files, conflicts and any interrupted Git operation.")
+    .group("git.repo")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .handlers_with(
+        git,
         |_ctx, a: &RepoArgs, _git| Ok(read_plan("git.status", format!("read status of {}", a.repo))),
         |ctx: &Ctx, a: &RepoArgs, git: &GitService| {
             let repo = repo_of(git, &a.repo)?;
@@ -340,12 +274,18 @@ fn register_read(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                 ),
                 json_status(&status),
             ))
-        });
+        },
+    )?;
 
-    git_cap!(reg, git, "git.repo.open", "git.repo",
-        "Open a repository and describe it",
-        "Resolves the repository root and returns branch, upstream, remotes and in-progress state. Read-only: nothing is recorded, so use `git.repo.track` to index it.",
-        Tier::Read, Effect::Read, true, false, true, RepoArgs,
+    reg.define::<RepoArgs>("git.repo.open", "Open a repository and describe it")
+    .description("Resolves the repository root and returns branch, upstream, remotes and in-progress state. Read-only: nothing is recorded, so use `git.repo.track` to index it.")
+    .group("git.repo")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .handlers_with(
+        git,
         |_ctx, a: &RepoArgs, _git| Ok(read_plan("git.repo.open", format!("open {}", a.repo))),
         |ctx: &Ctx, a: &RepoArgs, git: &GitService| {
             let repo = repo_of(git, &a.repo)?;
@@ -368,21 +308,18 @@ fn register_read(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                     "tracked": tracked,
                 }),
             ))
-        });
+        },
+    )?;
 
-    git_cap!(
-        reg,
+    reg.define::<NoArgs>("git.repo.list", "List repositories devd has seen")
+    .description("Returns every repository recorded in devd's index, most recently used first.")
+    .group("git.repo")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .handlers_with(
         git,
-        "git.repo.list",
-        "git.repo",
-        "List repositories devd has seen",
-        "Returns every repository recorded in devd's index, most recently used first.",
-        Tier::Read,
-        Effect::Read,
-        true,
-        false,
-        true,
-        NoArgs,
         |_ctx, _a: &NoArgs, _git| Ok(read_plan("git.repo.list", "list indexed repositories")),
         |ctx: &Ctx, _a: &NoArgs, _git| {
             let repos = ctx.store.list_repos()?;
@@ -390,13 +327,18 @@ fn register_read(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                 format!("{} repositories", repos.len()),
                 serde_json::to_value(&repos).unwrap_or(Value::Null),
             ))
-        }
-    );
+        },
+    )?;
 
-    git_cap!(reg, git, "git.diff", "git.changes",
-        "Show a diff",
-        "Produces a patch for the working tree, the index, a single path, or between arbitrary revisions.",
-        Tier::Read, Effect::Read, true, false, true, DiffArgs,
+    reg.define::<DiffArgs>("git.diff", "Show a diff")
+    .description("Produces a patch for the working tree, the index, a single path, or between arbitrary revisions.")
+    .group("git.changes")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .handlers_with(
+        git,
         |_ctx, a: &DiffArgs, _git| {
             let target = if a.staged.unwrap_or(false) { "staged changes" } else { "unstaged changes" };
             Ok(read_plan("git.diff", format!("diff {target} in {}", a.repo)))
@@ -417,21 +359,18 @@ fn register_read(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                 format!("{} bytes of diff", text.len()),
                 serde_json::json!({ "patch": text }),
             ))
-        });
+        },
+    )?;
 
-    git_cap!(
-        reg,
+    reg.define::<RevArgs>("git.show", "Show a commit with its patch")
+    .description("Returns commit metadata and the full patch for one revision.")
+    .group("git.history")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .handlers_with(
         git,
-        "git.show",
-        "git.history",
-        "Show a commit with its patch",
-        "Returns commit metadata and the full patch for one revision.",
-        Tier::Read,
-        Effect::Read,
-        true,
-        false,
-        true,
-        RevArgs,
         |_ctx, a: &RevArgs, _git| Ok(read_plan("git.show", format!("show {}", a.rev))),
         |_ctx, a: &RevArgs, git: &GitService| {
             let repo = repo_of(git, &a.repo)?;
@@ -440,22 +379,18 @@ fn register_read(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                 format!("{} bytes", text.len()),
                 serde_json::json!({ "patch": text }),
             ))
-        }
-    );
+        },
+    )?;
 
-    git_cap!(
-        reg,
+    reg.define::<BlameArgs>("git.blame", "Blame a file")
+    .description("Shows which commit and author last touched each line of a file.")
+    .group("git.history")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .handlers_with(
         git,
-        "git.blame",
-        "git.history",
-        "Blame a file",
-        "Shows which commit and author last touched each line of a file.",
-        Tier::Read,
-        Effect::Read,
-        true,
-        false,
-        true,
-        BlameArgs,
         |_ctx, a: &BlameArgs, _git| Ok(read_plan("git.blame", format!("blame {}", a.path))),
         |_ctx, a: &BlameArgs, git: &GitService| {
             let repo = repo_of(git, &a.repo)?;
@@ -464,22 +399,18 @@ fn register_read(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                 format!("blame for {}", a.path),
                 serde_json::json!({ "blame": text }),
             ))
-        }
-    );
+        },
+    )?;
 
-    git_cap!(
-        reg,
+    reg.define::<SearchArgs>("git.search", "Search commit history")
+    .description("Searches commit messages, optionally restricted to an author or a path.")
+    .group("git.history")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .handlers_with(
         git,
-        "git.search",
-        "git.history",
-        "Search commit history",
-        "Searches commit messages, optionally restricted to an author or a path.",
-        Tier::Read,
-        Effect::Read,
-        true,
-        false,
-        true,
-        SearchArgs,
         |_ctx, a: &SearchArgs, _git| Ok(read_plan(
             "git.search",
             format!("search for {:?}", a.query)
@@ -497,22 +428,18 @@ fn register_read(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                 format!("{} matching commits", hits.len()),
                 serde_json::to_value(&hits).unwrap_or(Value::Null),
             ))
-        }
-    );
+        },
+    )?;
 
-    git_cap!(
-        reg,
+    reg.define::<LogArgs>("git.log", "Read commit history")
+    .description("Returns recent commits, optionally for one revision range or path.")
+    .group("git.history")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .handlers_with(
         git,
-        "git.log",
-        "git.history",
-        "Read commit history",
-        "Returns recent commits, optionally for one revision range or path.",
-        Tier::Read,
-        Effect::Read,
-        true,
-        false,
-        true,
-        LogArgs,
         |_ctx, a: &LogArgs, _git| Ok(read_plan("git.log", format!("read history of {}", a.repo))),
         |_ctx, a: &LogArgs, git: &GitService| {
             let repo = repo_of(git, &a.repo)?;
@@ -526,13 +453,18 @@ fn register_read(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                 format!("{} commits", commits.len()),
                 serde_json::to_value(&commits).unwrap_or(Value::Null),
             ))
-        }
-    );
+        },
+    )?;
 
-    git_cap!(reg, git, "git.branch.list", "git.branches",
-        "List branches",
-        "Lists local branches, optionally including remote-tracking branches, with upstream and tip subject.",
-        Tier::Read, Effect::Read, true, false, true, BranchListArgs,
+    reg.define::<BranchListArgs>("git.branch.list", "List branches")
+    .description("Lists local branches, optionally including remote-tracking branches, with upstream and tip subject.")
+    .group("git.branches")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .handlers_with(
+        git,
         |_ctx, a: &BranchListArgs, _git| Ok(read_plan("git.branch.list", format!("list branches in {}", a.repo))),
         |_ctx, a: &BranchListArgs, git: &GitService| {
             let repo = repo_of(git, &a.repo)?;
@@ -542,21 +474,18 @@ fn register_read(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                 format!("{} branches (on {})", branches.len(), current.as_deref().unwrap_or("detached HEAD")),
                 serde_json::to_value(&branches).unwrap_or(Value::Null),
             ))
-        });
+        },
+    )?;
 
-    git_cap!(
-        reg,
+    reg.define::<RepoArgs>("git.remote.list", "List remotes")
+    .description("Lists configured remotes. Credentials embedded in URLs are redacted.")
+    .group("git.remotes")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .handlers_with(
         git,
-        "git.remote.list",
-        "git.remotes",
-        "List remotes",
-        "Lists configured remotes. Credentials embedded in URLs are redacted.",
-        Tier::Read,
-        Effect::Read,
-        true,
-        false,
-        true,
-        RepoArgs,
         |_ctx, a: &RepoArgs, _git| Ok(read_plan(
             "git.remote.list",
             format!("list remotes of {}", a.repo)
@@ -568,22 +497,18 @@ fn register_read(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                 format!("{} remotes", remotes.len()),
                 serde_json::to_value(&remotes).unwrap_or(Value::Null),
             ))
-        }
-    );
+        },
+    )?;
 
-    git_cap!(
-        reg,
+    reg.define::<RepoArgs>("git.tag.list", "List tags")
+    .description("Lists tags, newest first, noting which are annotated.")
+    .group("git.tags")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .handlers_with(
         git,
-        "git.tag.list",
-        "git.tags",
-        "List tags",
-        "Lists tags, newest first, noting which are annotated.",
-        Tier::Read,
-        Effect::Read,
-        true,
-        false,
-        true,
-        RepoArgs,
         |_ctx, a: &RepoArgs, _git| Ok(read_plan(
             "git.tag.list",
             format!("list tags of {}", a.repo)
@@ -595,22 +520,18 @@ fn register_read(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                 format!("{} tags", tags.len()),
                 serde_json::to_value(&tags).unwrap_or(Value::Null),
             ))
-        }
-    );
+        },
+    )?;
 
-    git_cap!(
-        reg,
+    reg.define::<RepoArgs>("git.stash.list", "List stashes")
+    .description("Lists stash entries with their subjects.")
+    .group("git.stashes")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .handlers_with(
         git,
-        "git.stash.list",
-        "git.stashes",
-        "List stashes",
-        "Lists stash entries with their subjects.",
-        Tier::Read,
-        Effect::Read,
-        true,
-        false,
-        true,
-        RepoArgs,
         |_ctx, a: &RepoArgs, _git| Ok(read_plan(
             "git.stash.list",
             format!("list stashes of {}", a.repo)
@@ -622,22 +543,18 @@ fn register_read(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                 format!("{} stash entries", stashes.len()),
                 serde_json::to_value(&stashes).unwrap_or(Value::Null),
             ))
-        }
-    );
+        },
+    )?;
 
-    git_cap!(
-        reg,
+    reg.define::<StashRefArgs>("git.stash.show", "Show a stash as a patch")
+    .description("Returns the diff stored in a stash entry without applying it.")
+    .group("git.stashes")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .handlers_with(
         git,
-        "git.stash.show",
-        "git.stashes",
-        "Show a stash as a patch",
-        "Returns the diff stored in a stash entry without applying it.",
-        Tier::Read,
-        Effect::Read,
-        true,
-        false,
-        true,
-        StashRefArgs,
         |_ctx, _a: &StashRefArgs, _git| Ok(read_plan("git.stash.show", "show stash")),
         |_ctx, a: &StashRefArgs, git: &GitService| {
             let repo = repo_of(git, &a.repo)?;
@@ -650,22 +567,18 @@ fn register_read(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                 format!("{} bytes", text.len()),
                 serde_json::json!({ "patch": text }),
             ))
-        }
-    );
+        },
+    )?;
 
-    git_cap!(
-        reg,
+    reg.define::<RepoArgs>("git.worktree.list", "List worktrees")
+    .description("Lists linked worktrees with their head, branch and lock state.")
+    .group("git.worktrees")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .handlers_with(
         git,
-        "git.worktree.list",
-        "git.worktrees",
-        "List worktrees",
-        "Lists linked worktrees with their head, branch and lock state.",
-        Tier::Read,
-        Effect::Read,
-        true,
-        false,
-        true,
-        RepoArgs,
         |_ctx, a: &RepoArgs, _git| Ok(read_plan(
             "git.worktree.list",
             format!("list worktrees of {}", a.repo)
@@ -677,22 +590,18 @@ fn register_read(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                 format!("{} worktrees", worktrees.len()),
                 serde_json::to_value(&worktrees).unwrap_or(Value::Null),
             ))
-        }
-    );
+        },
+    )?;
 
-    git_cap!(
-        reg,
+    reg.define::<ReflogArgs>("git.reflog", "Read the reflog")
+    .description("Returns recent reflog entries, which is how a bad reset or rebase is recovered.")
+    .group("git.recovery")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .handlers_with(
         git,
-        "git.reflog",
-        "git.recovery",
-        "Read the reflog",
-        "Returns recent reflog entries, which is how a bad reset or rebase is recovered.",
-        Tier::Read,
-        Effect::Read,
-        true,
-        false,
-        true,
-        ReflogArgs,
         |_ctx, a: &ReflogArgs, _git| Ok(read_plan(
             "git.reflog",
             format!("read reflog of {}", a.repo)
@@ -704,13 +613,18 @@ fn register_read(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                 format!("{} reflog entries", entries.len()),
                 serde_json::json!({ "entries": entries }),
             ))
-        }
-    );
+        },
+    )?;
 
-    git_cap!(reg, git, "git.sync.preview", "git.remotes",
-        "Preview incoming and outgoing commits",
-        "Shows what a fetch would bring in and what a push would publish, without contacting the remote for a write.",
-        Tier::Read, Effect::Read, true, false, true, SyncArgs,
+    reg.define::<SyncArgs>("git.sync.preview", "Preview incoming and outgoing commits")
+    .description("Shows what a fetch would bring in and what a push would publish, without contacting the remote for a write.")
+    .group("git.remotes")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .handlers_with(
+        git,
         |_ctx, a: &SyncArgs, _git| Ok(read_plan("git.sync.preview", format!("preview sync of {}", a.repo))),
         |_ctx, a: &SyncArgs, git: &GitService| {
             let repo = repo_of(git, &a.repo)?;
@@ -731,12 +645,18 @@ fn register_read(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                 ),
                 serde_json::to_value(&preview).unwrap_or(Value::Null),
             ))
-        });
+        },
+    )?;
 
-    git_cap!(reg, git, "git.switch.check", "git.branches",
-        "Check whether a branch switch would lose work",
-        "Identifies files modified locally that the target branch also changes, which is what makes a switch destructive.",
-        Tier::Read, Effect::Read, true, false, true, SwitchCheckArgs,
+    reg.define::<SwitchCheckArgs>("git.switch.check", "Check whether a branch switch would lose work")
+    .description("Identifies files modified locally that the target branch also changes, which is what makes a switch destructive.")
+    .group("git.branches")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .handlers_with(
+        git,
         |_ctx, a: &SwitchCheckArgs, _git| Ok(read_plan("git.switch.check", format!("check switching to {}", a.target))),
         |_ctx, a: &SwitchCheckArgs, git: &GitService| {
             let repo = repo_of(git, &a.repo)?;
@@ -749,12 +669,18 @@ fn register_read(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                 },
                 serde_json::json!({ "at_risk": risky, "safe": risky.is_empty() }),
             ))
-        });
+        },
+    )?;
 
-    git_cap!(reg, git, "git.config.get", "git.config",
-        "Read Git configuration",
-        "Reads a configuration value and reports which file it came from, so the user can tell whether it is local, global or system.",
-        Tier::Read, Effect::Read, true, false, true, ConfigGetArgs,
+    reg.define::<ConfigGetArgs>("git.config.get", "Read Git configuration")
+    .description("Reads a configuration value and reports which file it came from, so the user can tell whether it is local, global or system.")
+    .group("git.config")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .handlers_with(
+        git,
         |_ctx, a: &ConfigGetArgs, _git| Ok(read_plan("git.config.get", format!("read {}", a.key))),
         |_ctx, a: &ConfigGetArgs, git: &GitService| {
             let scope = a.scope.unwrap_or(match a.repo {
@@ -773,21 +699,18 @@ fn register_read(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                 },
                 serde_json::json!({ "key": a.key, "value": value, "scope": scope_flag(scope) }),
             ))
-        });
+        },
+    )?;
 
-    git_cap!(
-        reg,
+    reg.define::<RepoArgs>("git.conflicts.list", "List conflicted files")
+    .description("Returns the paths Git could not merge automatically.")
+    .group("git.merge")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .handlers_with(
         git,
-        "git.conflicts.list",
-        "git.merge",
-        "List conflicted files",
-        "Returns the paths Git could not merge automatically.",
-        Tier::Read,
-        Effect::Read,
-        true,
-        false,
-        true,
-        RepoArgs,
         |_ctx, a: &RepoArgs, _git| Ok(read_plan(
             "git.conflicts.list",
             format!("list conflicts in {}", a.repo)
@@ -799,13 +722,18 @@ fn register_read(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                 format!("{} conflicted files", files.len()),
                 serde_json::json!({ "conflicted": files }),
             ))
-        }
-    );
+        },
+    )?;
 
-    git_cap!(reg, git, "git.conflicts.show", "git.merge",
-        "Show a conflicted file",
-        "Returns a conflicted file with its conflict markers intact, so a human or agent can decide how to resolve it.",
-        Tier::Read, Effect::Read, true, false, true, BlameArgs,
+    reg.define::<BlameArgs>("git.conflicts.show", "Show a conflicted file")
+    .description("Returns a conflicted file with its conflict markers intact, so a human or agent can decide how to resolve it.")
+    .group("git.merge")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .handlers_with(
+        git,
         |_ctx, a: &BlameArgs, _git| Ok(read_plan("git.conflicts.show", format!("show conflict in {}", a.path))),
         |_ctx, a: &BlameArgs, git: &GitService| {
             let repo = repo_of(git, &a.repo)?;
@@ -814,7 +742,8 @@ fn register_read(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                 format!("{} bytes", text.len()),
                 serde_json::json!({ "path": a.path, "content": text }),
             ))
-        });
+        },
+    )?;
 
     Ok(())
 }
@@ -830,19 +759,15 @@ fn scope_flag(scope: ConfigScope) -> &'static str {
 // ----------------------------------------------------------------- write tier
 
 fn register_write(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
-    git_cap!(
-        reg,
+    reg.define::<RepoPathsArgs>("git.stage", "Stage paths")
+    .description("Adds paths to the index. This is what a commit will record.")
+    .group("git.changes")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers_with(
         git,
-        "git.stage",
-        "git.changes",
-        "Stage paths",
-        "Adds paths to the index. This is what a commit will record.",
-        Tier::Write,
-        Effect::Write,
-        true,
-        true,
-        false,
-        RepoPathsArgs,
         |_ctx, a: &RepoPathsArgs, _git| {
             Ok(
                 Plan::new("git.stage", format!("stage {} path(s)", a.paths.len()))
@@ -856,22 +781,18 @@ fn register_write(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                 format!("staged {} path(s)", a.paths.len()),
                 serde_json::json!({ "paths": a.paths }),
             ))
-        }
-    );
+        },
+    )?;
 
-    git_cap!(
-        reg,
+    reg.define::<RepoPathsArgs>("git.unstage", "Unstage paths")
+    .description("Removes paths from the index while leaving the working tree untouched.")
+    .group("git.changes")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers_with(
         git,
-        "git.unstage",
-        "git.changes",
-        "Unstage paths",
-        "Removes paths from the index while leaving the working tree untouched.",
-        Tier::Write,
-        Effect::Write,
-        true,
-        true,
-        false,
-        RepoPathsArgs,
         |_ctx, a: &RepoPathsArgs, _git| {
             Ok(
                 Plan::new("git.unstage", format!("unstage {} path(s)", a.paths.len()))
@@ -885,13 +806,18 @@ fn register_write(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                 format!("unstaged {} path(s)", a.paths.len()),
                 serde_json::json!({ "paths": a.paths }),
             ))
-        }
-    );
+        },
+    )?;
 
-    git_cap!(reg, git, "git.stage.patch", "git.changes",
-        "Stage a patch (hunk or line level)",
-        "Applies a unified diff to the index, which is how an individual hunk or line is staged without staging the rest of the file.",
-        Tier::Write, Effect::Write, true, true, false, StagePatchArgs,
+    reg.define::<StagePatchArgs>("git.stage.patch", "Stage a patch (hunk or line level)")
+    .description("Applies a unified diff to the index, which is how an individual hunk or line is staged without staging the rest of the file.")
+    .group("git.changes")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers_with(
+        git,
         |_ctx, a: &StagePatchArgs, _git| {
             Ok(Plan::new("git.stage.patch", format!("apply a {} byte patch to the index", a.patch.len()))
                 .step("git apply --cached <patch>"))
@@ -900,12 +826,18 @@ fn register_write(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
             let repo = repo_of(git, &a.repo)?;
             git.stage_patch(&repo, &a.patch, a.reverse.unwrap_or(false))?;
             Ok(Outcome::ok("applied patch to the index"))
-        });
+        },
+    )?;
 
-    git_cap!(reg, git, "git.commit", "git.commits",
-        "Create or amend a commit",
-        "Records the staged changes. Refuses an empty message, and never opens an interactive editor or a signing prompt.",
-        Tier::Write, Effect::Write, true, true, false, CommitArgs,
+    reg.define::<CommitArgs>("git.commit", "Create or amend a commit")
+    .description("Records the staged changes. Refuses an empty message, and never opens an interactive editor or a signing prompt.")
+    .group("git.commits")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers_with(
+        git,
         |ctx: &Ctx, a: &CommitArgs, git: &GitService| {
             let repo = repo_of(git, &a.repo)?;
             let status = git.status(&repo)?;
@@ -934,21 +866,19 @@ fn register_write(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                 format!("committed {}", &hash[..7.min(hash.len())]),
                 serde_json::json!({ "commit": hash, "previous": before }),
             ))
-        });
+        },
+    )?;
 
-    git_cap!(
-        reg,
+    reg.define::<BranchCreateArgs>("git.branch.create", "Create a branch")
+    .description("Creates a branch, optionally at a given start point and optionally switching to it.")
+    .group("git.branches")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers_with(
         git,
-        "git.branch.create",
-        "git.branches",
-        "Create a branch",
-        "Creates a branch, optionally at a given start point and optionally switching to it.",
-        Tier::Write,
-        Effect::Write,
-        true,
-        true,
-        true,
-        BranchCreateArgs,
         |_ctx, a: &BranchCreateArgs, _git| {
             Ok(
                 Plan::new("git.branch.create", format!("create branch {}", a.name))
@@ -987,22 +917,19 @@ fn register_write(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                 format!("created branch {}", a.name),
                 serde_json::json!({ "branch": a.name }),
             ))
-        }
-    );
+        },
+    )?;
 
-    git_cap!(
-        reg,
+    reg.define::<BranchRenameArgs>("git.branch.rename", "Rename a branch")
+    .description("Renames a local branch.")
+    .group("git.branches")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers_with(
         git,
-        "git.branch.rename",
-        "git.branches",
-        "Rename a branch",
-        "Renames a local branch.",
-        Tier::Write,
-        Effect::Write,
-        true,
-        true,
-        true,
-        BranchRenameArgs,
         |_ctx, a: &BranchRenameArgs, _git| {
             Ok(Plan::new(
                 "git.branch.rename",
@@ -1013,22 +940,19 @@ fn register_write(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
             let repo = repo_of(git, &a.repo)?;
             git.rename_branch(&repo, &a.from, &a.to)?;
             Ok(Outcome::ok(format!("renamed {} to {}", a.from, a.to)))
-        }
-    );
+        },
+    )?;
 
-    git_cap!(
-        reg,
+    reg.define::<BranchUpstreamArgs>("git.branch.upstream", "Set a branch upstream")
+    .description("Configures the remote-tracking branch a local branch follows.")
+    .group("git.remotes")
+    .tier(Tier::Write)
+    .effect(Effect::Config)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers_with(
         git,
-        "git.branch.upstream",
-        "git.remotes",
-        "Set a branch upstream",
-        "Configures the remote-tracking branch a local branch follows.",
-        Tier::Write,
-        Effect::Config,
-        true,
-        true,
-        true,
-        BranchUpstreamArgs,
         |_ctx, a: &BranchUpstreamArgs, _git| {
             Ok(Plan::new(
                 "git.branch.upstream",
@@ -1042,13 +966,18 @@ fn register_write(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                 "{} now tracks {}",
                 a.branch, a.upstream
             )))
-        }
-    );
+        },
+    )?;
 
-    git_cap!(reg, git, "git.tag.create", "git.tags",
-        "Create a tag",
-        "Creates an annotated or lightweight tag. Overwriting an existing tag requires the force flag.",
-        Tier::Write, Effect::Write, true, true, false, TagCreateArgs,
+    reg.define::<TagCreateArgs>("git.tag.create", "Create a tag")
+    .description("Creates an annotated or lightweight tag. Overwriting an existing tag requires the force flag.")
+    .group("git.tags")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers_with(
+        git,
         |_ctx, a: &TagCreateArgs, _git| {
             let mut plan = Plan::new(
                 "git.tag.create",
@@ -1066,12 +995,19 @@ fn register_write(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
             let repo = repo_of(git, &a.repo)?;
             git.create_tag(&repo, &a.name, a.message.as_deref(), a.rev.as_deref(), a.force.unwrap_or(false))?;
             Ok(Outcome::ok(format!("created tag {}", a.name)))
-        });
+        },
+    )?;
 
-    git_cap!(reg, git, "git.remote.add", "git.remotes",
-        "Add a remote",
-        "Adds a remote. Plain http:// URLs are refused because they would carry credentials and code in the clear.",
-        Tier::Write, Effect::Config, true, true, true, RemoteAddArgs,
+    reg.define::<RemoteAddArgs>("git.remote.add", "Add a remote")
+    .description("Adds a remote. Plain http:// URLs are refused because they would carry credentials and code in the clear.")
+    .group("git.remotes")
+    .tier(Tier::Write)
+    .effect(Effect::Config)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers_with(
+        git,
         |_ctx, a: &RemoteAddArgs, _git| {
             Ok(Plan::new("git.remote.add", format!("add remote {} -> {}", a.name, crate::redact_url(&a.url))))
         },
@@ -1079,21 +1015,19 @@ fn register_write(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
             let repo = repo_of(git, &a.repo)?;
             git.remote_add(&repo, &a.name, &a.url)?;
             Ok(Outcome::ok(format!("added remote {}", a.name)))
-        });
+        },
+    )?;
 
-    git_cap!(
-        reg,
+    reg.define::<RemoteRenameArgs>("git.remote.rename", "Rename a remote")
+    .description("Renames a configured remote.")
+    .group("git.remotes")
+    .tier(Tier::Write)
+    .effect(Effect::Config)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers_with(
         git,
-        "git.remote.rename",
-        "git.remotes",
-        "Rename a remote",
-        "Renames a configured remote.",
-        Tier::Write,
-        Effect::Config,
-        true,
-        true,
-        true,
-        RemoteRenameArgs,
         |_ctx, a: &RemoteRenameArgs, _git| {
             Ok(Plan::new(
                 "git.remote.rename",
@@ -1107,22 +1041,18 @@ fn register_write(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                 "renamed remote {} to {}",
                 a.from, a.to
             )))
-        }
-    );
+        },
+    )?;
 
-    git_cap!(
-        reg,
+    reg.define::<StashPushArgs>("git.stash.push", "Create a stash")
+    .description("Shelves working tree changes so the tree can be clean.")
+    .group("git.stashes")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers_with(
         git,
-        "git.stash.push",
-        "git.stashes",
-        "Create a stash",
-        "Shelves working tree changes so the tree can be clean.",
-        Tier::Write,
-        Effect::Write,
-        true,
-        true,
-        false,
-        StashPushArgs,
         |_ctx, a: &StashPushArgs, _git| {
             Ok(Plan::new("git.stash.push", "shelve local changes").step(
                 if a.include_untracked.unwrap_or(false) {
@@ -1144,22 +1074,18 @@ fn register_write(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                 out.trim().to_string(),
                 serde_json::json!({ "output": out }),
             ))
-        }
-    );
+        },
+    )?;
 
-    git_cap!(
-        reg,
+    reg.define::<StashRefArgs>("git.stash.apply", "Apply a stash")
+    .description("Restores a stash's changes. Set pop to also drop the entry once applied.")
+    .group("git.stashes")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers_with(
         git,
-        "git.stash.apply",
-        "git.stashes",
-        "Apply a stash",
-        "Restores a stash's changes. Set pop to also drop the entry once applied.",
-        Tier::Write,
-        Effect::Write,
-        true,
-        true,
-        false,
-        StashRefArgs,
         |_ctx, a: &StashRefArgs, _git| {
             let reference = a
                 .reference
@@ -1189,13 +1115,19 @@ fn register_write(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                 out.trim().to_string(),
                 serde_json::json!({ "output": out }),
             ))
-        }
-    );
+        },
+    )?;
 
-    git_cap!(reg, git, "git.worktree.add", "git.worktrees",
-        "Add a worktree",
-        "Creates a second working tree for a branch. This is the isolation mechanism the agent prefers for substantial tasks, because it cannot disturb the user's current checkout.",
-        Tier::Write, Effect::Write, true, true, true, WorktreeAddArgs,
+    reg.define::<WorktreeAddArgs>("git.worktree.add", "Add a worktree")
+    .description("Creates a second working tree for a branch. This is the isolation mechanism the agent prefers for substantial tasks, because it cannot disturb the user's current checkout.")
+    .group("git.worktrees")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers_with(
+        git,
         |_ctx, a: &WorktreeAddArgs, _git| {
             Ok(Plan::new("git.worktree.add", format!("add a worktree at {} for {}", a.path, a.branch))
                 .step(if a.create_branch.unwrap_or(false) {
@@ -1213,21 +1145,19 @@ fn register_write(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                 format!("added worktree at {}", path.display()),
                 serde_json::json!({ "path": a.path, "branch": a.branch }),
             ))
-        });
+        },
+    )?;
 
-    git_cap!(
-        reg,
+    reg.define::<IgnoreArgs>("git.ignore.add", "Add patterns to .gitignore")
+    .description("Appends patterns to `.gitignore`, skipping ones already present.")
+    .group("git.repo")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers_with(
         git,
-        "git.ignore.add",
-        "git.repo",
-        "Add patterns to .gitignore",
-        "Appends patterns to `.gitignore`, skipping ones already present.",
-        Tier::Write,
-        Effect::Write,
-        true,
-        true,
-        true,
-        IgnoreArgs,
         |_ctx, a: &IgnoreArgs, _git| {
             Ok(Plan::new(
                 "git.ignore.add",
@@ -1242,13 +1172,17 @@ fn register_write(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                 format!("updated .gitignore with {} pattern(s)", a.patterns.len()),
                 serde_json::json!({ "patterns": a.patterns }),
             ))
-        }
-    );
+        },
+    )?;
 
-    git_cap!(reg, git, "git.config.set", "git.config",
-        "Write Git configuration",
-        "Writes a configuration value at local, global or system scope. The scope is always explicit, so nothing is changed implicitly.",
-        Tier::Write, Effect::Config, false, true, false, ConfigSetArgs,
+    reg.define::<ConfigSetArgs>("git.config.set", "Write Git configuration")
+    .description("Writes a configuration value at local, global or system scope. The scope is always explicit, so nothing is changed implicitly.")
+    .group("git.config")
+    .tier(Tier::Write)
+    .effect(Effect::Config)
+    .dry_run()
+    .handlers_with(
+        git,
         |_ctx, a: &ConfigSetArgs, _git| {
             let scope = a.scope.unwrap_or(match a.repo {
                 Some(_) => ConfigScope::Local,
@@ -1268,12 +1202,19 @@ fn register_write(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
             };
             git.config_set(repo.as_deref(), &a.key, &a.value, scope)?;
             Ok(Outcome::ok(format!("set {} at {} scope", a.key, scope_flag(scope))))
-        });
+        },
+    )?;
 
-    git_cap!(reg, git, "git.repo.init", "git.repo",
-        "Initialise a repository",
-        "Creates a new repository with an explicit initial branch name, so the result does not depend on the machine's default.",
-        Tier::Write, Effect::Write, true, true, true, InitArgs,
+    reg.define::<InitArgs>("git.repo.init", "Initialise a repository")
+    .description("Creates a new repository with an explicit initial branch name, so the result does not depend on the machine's default.")
+    .group("git.repo")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers_with(
+        git,
         |ctx: &Ctx, a: &InitArgs, _git| {
             let branch = a.initial_branch.clone().unwrap_or_else(|| ctx.settings.git_default_branch.clone());
             let mut plan = Plan::new("git.repo.init", format!("initialise a repository at {}", a.path))
@@ -1291,18 +1232,26 @@ fn register_write(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                 format!("initialised {} on {branch}", root.display()),
                 serde_json::json!({ "root": root.to_string_lossy(), "branch": branch }),
             ))
-        });
+        },
+    )?;
 
-    git_cap!(reg, git, "git.repo.track", "git.repo",
-        "Track a repository in devd",
-        "Adds a repository to devd's index so it appears in the GUI and CLI listings without being discovered by scanning.",
-        Tier::Write, Effect::Write, true, true, true, RepoArgs,
+    reg.define::<RepoArgs>("git.repo.track", "Track a repository in devd")
+    .description("Adds a repository to devd's index so it appears in the GUI and CLI listings without being discovered by scanning.")
+    .group("git.repo")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers_with(
+        git,
         |_ctx, a: &RepoArgs, _git| Ok(Plan::new("git.repo.track", format!("index {}", a.repo))),
         |ctx: &Ctx, a: &RepoArgs, git: &GitService| {
             let repo = repo_of(git, &a.repo)?;
             track_repo(ctx, git, &repo);
             Ok(Outcome::ok(format!("tracking {}", repo.display())))
-        });
+        },
+    )?;
 
     Ok(())
 }
@@ -1310,10 +1259,15 @@ fn register_write(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
 // ------------------------------------------------------------------ exec tier
 
 fn register_exec(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
-    git_cap!(reg, git, "git.switch", "git.branches",
-        "Switch branch",
-        "Switches the working tree to another branch, optionally creating it. Refuses by default when it would overwrite uncommitted work.",
-        Tier::Exec, Effect::Write, true, true, false, SwitchArgs,
+    reg.define::<SwitchArgs>("git.switch", "Switch branch")
+    .description("Switches the working tree to another branch, optionally creating it. Refuses by default when it would overwrite uncommitted work.")
+    .group("git.branches")
+    .tier(Tier::Exec)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers_with(
+        git,
         |_: &Ctx, a: &SwitchArgs, git: &GitService| {
             let repo = repo_of(git, &a.repo)?;
             let status = git.status(&repo)?;
@@ -1356,12 +1310,19 @@ fn register_exec(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
             }
             git.switch_branch(&repo, &a.name, a.create.unwrap_or(false), force)?;
             Ok(Outcome::ok(format!("switched to {}", a.name)))
-        });
+        },
+    )?;
 
-    git_cap!(reg, git, "git.fetch", "git.remotes",
-        "Fetch from a remote",
-        "Updates remote-tracking branches, optionally pruning ones deleted on the remote. Does not touch local branches.",
-        Tier::Exec, Effect::Remote, true, true, true, FetchArgs,
+    reg.define::<FetchArgs>("git.fetch", "Fetch from a remote")
+    .description("Updates remote-tracking branches, optionally pruning ones deleted on the remote. Does not touch local branches.")
+    .group("git.remotes")
+    .tier(Tier::Exec)
+    .effect(Effect::Remote)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers_with(
+        git,
         |_ctx, a: &FetchArgs, _git| {
             Ok(Plan::new(
                 "git.fetch",
@@ -1377,12 +1338,18 @@ fn register_exec(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                 "fetch complete".to_string(),
                 serde_json::json!({ "output": out }),
             ))
-        });
+        },
+    )?;
 
-    git_cap!(reg, git, "git.pull", "git.remotes",
-        "Pull from a remote",
-        "Fetches and integrates. The integration strategy is explicit: merge, rebase, or fast-forward-only.",
-        Tier::Exec, Effect::Write, true, true, false, PullArgs,
+    reg.define::<PullArgs>("git.pull", "Pull from a remote")
+    .description("Fetches and integrates. The integration strategy is explicit: merge, rebase, or fast-forward-only.")
+    .group("git.remotes")
+    .tier(Tier::Exec)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers_with(
+        git,
         |_ctx, a: &PullArgs, git: &GitService| {
             let repo = repo_of(git, &a.repo)?;
             let strategy = a.strategy.unwrap_or(PullStrategy::FastForwardOnly);
@@ -1421,12 +1388,18 @@ fn register_exec(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                 ));
             }
             Ok(outcome)
-        });
+        },
+    )?;
 
-    git_cap!(reg, git, "git.push", "git.remotes",
-        "Push a branch",
-        "Publishes commits. Force is deliberately not available here; it has its own capability and its own approval gate.",
-        Tier::Remote, Effect::Remote, true, true, false, PushArgs,
+    reg.define::<PushArgs>("git.push", "Push a branch")
+    .description("Publishes commits. Force is deliberately not available here; it has its own capability and its own approval gate.")
+    .group("git.remotes")
+    .tier(Tier::Remote)
+    .effect(Effect::Remote)
+    .agent_safe()
+    .dry_run()
+    .handlers_with(
+        git,
         |_ctx, a: &PushArgs, git: &GitService| {
             let repo = repo_of(git, &a.repo)?;
             let remote = a.remote.clone().unwrap_or_else(|| "origin".to_string());
@@ -1457,12 +1430,18 @@ fn register_exec(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                 a.tags.unwrap_or(false),
             )?;
             Ok(Outcome::with_data("push complete", serde_json::json!({ "output": out })))
-        });
+        },
+    )?;
 
-    git_cap!(reg, git, "git.merge", "git.merge",
-        "Merge a branch",
-        "Merges a branch into the current one. A conflict is reported as a state to resolve, not as a crash.",
-        Tier::Exec, Effect::Write, true, true, false, MergeArgs,
+    reg.define::<MergeArgs>("git.merge", "Merge a branch")
+    .description("Merges a branch into the current one. A conflict is reported as a state to resolve, not as a crash.")
+    .group("git.merge")
+    .tier(Tier::Exec)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers_with(
+        git,
         |_ctx, a: &MergeArgs, git: &GitService| {
             let repo = repo_of(git, &a.repo)?;
             let current = git.current_branch(&repo)?.unwrap_or_else(|| "(detached)".to_string());
@@ -1480,12 +1459,18 @@ fn register_exec(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                 a.message.as_deref(),
             )?;
             Ok(finish_operation(&repo, git, "merge", out))
-        });
+        },
+    )?;
 
-    git_cap!(reg, git, "git.rebase", "git.merge",
-        "Rebase the current branch",
-        "Replays local commits onto another base. Rewrites local commit identity, so conflicts are reported with everything needed to continue or abort.",
-        Tier::Exec, Effect::Write, true, true, false, RebaseArgs,
+    reg.define::<RebaseArgs>("git.rebase", "Rebase the current branch")
+    .description("Replays local commits onto another base. Rewrites local commit identity, so conflicts are reported with everything needed to continue or abort.")
+    .group("git.merge")
+    .tier(Tier::Exec)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers_with(
+        git,
         |_ctx, a: &RebaseArgs, git: &GitService| {
             let repo = repo_of(git, &a.repo)?;
             let current = git.current_branch(&repo)?.unwrap_or_else(|| "(detached)".to_string());
@@ -1498,21 +1483,18 @@ fn register_exec(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
             let repo = repo_of(git, &a.repo)?;
             let out = git.rebase(&repo, &a.onto, a.autosquash.unwrap_or(false), a.interactive.unwrap_or(false))?;
             Ok(finish_operation(&repo, git, "rebase", out))
-        });
+        },
+    )?;
 
-    git_cap!(
-        reg,
+    reg.define::<RevArgs>("git.cherry.pick", "Cherry-pick a commit")
+    .description("Applies the change introduced by a commit onto the current branch.")
+    .group("git.history")
+    .tier(Tier::Exec)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers_with(
         git,
-        "git.cherry.pick",
-        "git.history",
-        "Cherry-pick a commit",
-        "Applies the change introduced by a commit onto the current branch.",
-        Tier::Exec,
-        Effect::Write,
-        true,
-        true,
-        false,
-        RevArgs,
         |_ctx, a: &RevArgs, _git| {
             Ok(
                 Plan::new("git.cherry.pick", format!("cherry-pick {}", a.rev))
@@ -1523,13 +1505,18 @@ fn register_exec(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
             let repo = repo_of(git, &a.repo)?;
             let out = git.cherry_pick(&repo, &a.rev, false)?;
             Ok(finish_operation(&repo, git, "cherry-pick", out))
-        }
-    );
+        },
+    )?;
 
-    git_cap!(reg, git, "git.revert", "git.history",
-        "Revert a commit",
-        "Creates a new commit that undoes the change, which is the safe way to undo work that is already shared.",
-        Tier::Exec, Effect::Write, true, true, false, RevertArgs,
+    reg.define::<RevertArgs>("git.revert", "Revert a commit")
+    .description("Creates a new commit that undoes the change, which is the safe way to undo work that is already shared.")
+    .group("git.history")
+    .tier(Tier::Exec)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers_with(
+        git,
         |_ctx, a: &RevertArgs, _git| {
             Ok(Plan::new("git.revert", format!("revert {}", a.rev))
                 .step("history is extended, never rewritten, so this is safe on shared branches"))
@@ -1538,12 +1525,18 @@ fn register_exec(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
             let repo = repo_of(git, &a.repo)?;
             let out = git.revert(&repo, &a.rev, a.no_commit.unwrap_or(false))?;
             Ok(finish_operation(&repo, git, "revert", out))
-        });
+        },
+    )?;
 
-    git_cap!(reg, git, "git.op.continue", "git.merge",
-        "Continue an interrupted operation",
-        "Continues a merge, rebase, cherry-pick or revert that stopped for conflicts, after the conflicts have been resolved and staged.",
-        Tier::Exec, Effect::Write, true, true, false, OpArgs,
+    reg.define::<OpArgs>("git.op.continue", "Continue an interrupted operation")
+    .description("Continues a merge, rebase, cherry-pick or revert that stopped for conflicts, after the conflicts have been resolved and staged.")
+    .group("git.merge")
+    .tier(Tier::Exec)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers_with(
+        git,
         |_ctx, a: &OpArgs, git: &GitService| {
             let repo = repo_of(git, &a.repo)?;
             let remaining = git.conflicts(&repo)?;
@@ -1559,12 +1552,18 @@ fn register_exec(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
             let repo = repo_of(git, &a.repo)?;
             let out = git.continue_op(&repo, &a.op)?;
             Ok(finish_operation(&repo, git, &a.op, out))
-        });
+        },
+    )?;
 
-    git_cap!(reg, git, "git.op.abort", "git.merge",
-        "Abort an interrupted operation",
-        "Returns the repository to the state it was in before the merge, rebase, cherry-pick or revert started.",
-        Tier::Exec, Effect::Write, true, true, false, OpArgs,
+    reg.define::<OpArgs>("git.op.abort", "Abort an interrupted operation")
+    .description("Returns the repository to the state it was in before the merge, rebase, cherry-pick or revert started.")
+    .group("git.merge")
+    .tier(Tier::Exec)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers_with(
+        git,
         |_ctx, a: &OpArgs, git: &GitService| {
             let repo = repo_of(git, &a.repo)?;
             let status = git.status(&repo)?;
@@ -1585,12 +1584,18 @@ fn register_exec(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                 format!("aborted {}", a.op),
                 serde_json::json!({ "output": out, "status": status }),
             ))
-        });
+        },
+    )?;
 
-    git_cap!(reg, git, "git.clone", "git.repo",
-        "Clone a repository",
-        "Clones a remote repository, optionally shallow or with submodules. Hooks and project setup code are never executed as part of a clone.",
-        Tier::Exec, Effect::Remote, true, true, false, CloneArgs,
+    reg.define::<CloneArgs>("git.clone", "Clone a repository")
+    .description("Clones a remote repository, optionally shallow or with submodules. Hooks and project setup code are never executed as part of a clone.")
+    .group("git.repo")
+    .tier(Tier::Exec)
+    .effect(Effect::Remote)
+    .agent_safe()
+    .dry_run()
+    .handlers_with(
+        git,
         |_ctx, a: &CloneArgs, _git| {
             let mut plan = Plan::new("git.clone", format!("clone {} into {}", crate::redact_url(&a.url), a.destination))
                 .step("no hooks, setup scripts or project code are executed");
@@ -1627,7 +1632,8 @@ fn register_exec(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                     "clean": status.clean,
                 }),
             ))
-        });
+        },
+    )?;
 
     Ok(())
 }
@@ -1682,10 +1688,15 @@ fn finish_operation(repo: &Path, git: &GitService, op: &str, output: String) -> 
 // ----------------------------------------------------------- destructive tier
 
 fn register_destructive(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
-    git_cap!(reg, git, "git.discard", "git.changes",
-        "Discard working tree changes",
-        "Throws away uncommitted modifications to tracked files. Uncommitted work is lost and is not recoverable from the repository.",
-        Tier::Destructive, Effect::Write, true, true, false, RepoPathsArgs,
+    reg.define::<RepoPathsArgs>("git.discard", "Discard working tree changes")
+    .description("Throws away uncommitted modifications to tracked files. Uncommitted work is lost and is not recoverable from the repository.")
+    .group("git.changes")
+    .tier(Tier::Destructive)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers_with(
+        git,
         |_ctx, a: &RepoPathsArgs, git: &GitService| {
             let repo = repo_of(git, &a.repo)?;
             let status = git.status(&repo)?;
@@ -1715,12 +1726,18 @@ fn register_destructive(reg: &mut Registry, git: &Arc<GitService>) -> Result<()>
                 format!("discarded changes in {} path(s)", a.paths.len()),
                 serde_json::json!({ "paths": a.paths }),
             ))
-        });
+        },
+    )?;
 
-    git_cap!(reg, git, "git.reset", "git.recovery",
-        "Reset the branch",
-        "Moves the branch to another revision. Soft keeps everything, mixed unstages, hard discards the working tree. The plan states exactly what each mode destroys.",
-        Tier::Destructive, Effect::Write, true, true, false, ModeArgs,
+    reg.define::<ModeArgs>("git.reset", "Reset the branch")
+    .description("Moves the branch to another revision. Soft keeps everything, mixed unstages, hard discards the working tree. The plan states exactly what each mode destroys.")
+    .group("git.recovery")
+    .tier(Tier::Destructive)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers_with(
+        git,
         |_ctx, a: &ModeArgs, git: &GitService| {
             let repo = repo_of(git, &a.repo)?;
             let head = git.rev_parse(&repo, "HEAD").ok();
@@ -1768,12 +1785,18 @@ fn register_destructive(reg: &mut Registry, git: &Arc<GitService>) -> Result<()>
                     "recover_with": "git.reset to the previous commit, or git.reflog to find it",
                 }),
             ))
-        });
+        },
+    )?;
 
-    git_cap!(reg, git, "git.branch.delete", "git.branches",
-        "Delete a branch",
-        "Deletes a local or remote branch. A branch with unmerged commits needs the force flag, and the plan says how many commits would be lost.",
-        Tier::Destructive, Effect::Write, true, true, false, BranchDeleteArgs,
+    reg.define::<BranchDeleteArgs>("git.branch.delete", "Delete a branch")
+    .description("Deletes a local or remote branch. A branch with unmerged commits needs the force flag, and the plan says how many commits would be lost.")
+    .group("git.branches")
+    .tier(Tier::Destructive)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers_with(
+        git,
         |_ctx, a: &BranchDeleteArgs, git: &GitService| {
             let repo = repo_of(git, &a.repo)?;
             let mut plan = Plan::new("git.branch.delete", format!("delete branch {}", a.name));
@@ -1799,12 +1822,18 @@ fn register_destructive(reg: &mut Registry, git: &Arc<GitService>) -> Result<()>
             let repo = repo_of(git, &a.repo)?;
             git.delete_branch(&repo, &a.name, a.force.unwrap_or(false), a.remote.as_deref())?;
             Ok(Outcome::ok(format!("deleted branch {}", a.name)))
-        });
+        },
+    )?;
 
-    git_cap!(reg, git, "git.tag.delete", "git.tags",
-        "Delete a tag",
-        "Deletes a tag locally and optionally from a remote. Deleting a published tag breaks anyone who has pinned it.",
-        Tier::Destructive, Effect::Write, true, true, false, TagDeleteArgs,
+    reg.define::<TagDeleteArgs>("git.tag.delete", "Delete a tag")
+    .description("Deletes a tag locally and optionally from a remote. Deleting a published tag breaks anyone who has pinned it.")
+    .group("git.tags")
+    .tier(Tier::Destructive)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers_with(
+        git,
         |_ctx, a: &TagDeleteArgs, _git| {
             let mut plan = Plan::new("git.tag.delete", format!("delete tag {}", a.name));
             if let Some(remote) = &a.remote {
@@ -1816,21 +1845,18 @@ fn register_destructive(reg: &mut Registry, git: &Arc<GitService>) -> Result<()>
             let repo = repo_of(git, &a.repo)?;
             git.delete_tag(&repo, &a.name, a.remote.as_deref())?;
             Ok(Outcome::ok(format!("deleted tag {}", a.name)))
-        });
+        },
+    )?;
 
-    git_cap!(
-        reg,
+    reg.define::<WorktreeRemoveArgs>("git.worktree.remove", "Remove a worktree")
+    .description("Removes a linked worktree. Its uncommitted changes are lost unless they were committed.")
+    .group("git.worktrees")
+    .tier(Tier::Destructive)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers_with(
         git,
-        "git.worktree.remove",
-        "git.worktrees",
-        "Remove a worktree",
-        "Removes a linked worktree. Its uncommitted changes are lost unless they were committed.",
-        Tier::Destructive,
-        Effect::Write,
-        true,
-        true,
-        false,
-        WorktreeRemoveArgs,
         |_ctx, a: &WorktreeRemoveArgs, _git| {
             Ok(Plan::new(
                 "git.worktree.remove",
@@ -1849,22 +1875,19 @@ fn register_destructive(reg: &mut Registry, git: &Arc<GitService>) -> Result<()>
             let repo = repo_of(git, &a.repo)?;
             git.worktree_remove(&repo, Path::new(&a.path), a.force.unwrap_or(false))?;
             Ok(Outcome::ok(format!("removed worktree {}", a.path)))
-        }
-    );
+        },
+    )?;
 
-    git_cap!(
-        reg,
+    reg.define::<RepoArgs>("git.worktree.prune", "Prune worktree metadata")
+    .description("Removes bookkeeping for worktrees whose directories no longer exist.")
+    .group("git.worktrees")
+    .tier(Tier::Write)
+    .effect(Effect::Config)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers_with(
         git,
-        "git.worktree.prune",
-        "git.worktrees",
-        "Prune worktree metadata",
-        "Removes bookkeeping for worktrees whose directories no longer exist.",
-        Tier::Write,
-        Effect::Config,
-        true,
-        true,
-        true,
-        RepoArgs,
         |_ctx, a: &RepoArgs, _git| Ok(Plan::new(
             "git.worktree.prune",
             format!("prune stale worktrees of {}", a.repo)
@@ -1873,22 +1896,18 @@ fn register_destructive(reg: &mut Registry, git: &Arc<GitService>) -> Result<()>
             let repo = repo_of(git, &a.repo)?;
             git.worktree_prune(&repo)?;
             Ok(Outcome::ok("pruned stale worktree metadata"))
-        }
-    );
+        },
+    )?;
 
-    git_cap!(
-        reg,
+    reg.define::<StashDropArgs>("git.stash.drop", "Drop a stash")
+    .description("Deletes a stash entry. The changes it held become unreachable through the stash list.")
+    .group("git.stashes")
+    .tier(Tier::Destructive)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers_with(
         git,
-        "git.stash.drop",
-        "git.stashes",
-        "Drop a stash",
-        "Deletes a stash entry. The changes it held become unreachable through the stash list.",
-        Tier::Destructive,
-        Effect::Write,
-        true,
-        true,
-        false,
-        StashDropArgs,
         |_ctx, a: &StashDropArgs, _git| {
             Ok(Plan::new("git.stash.drop", format!("drop {}", a.reference))
                 .step("the entry disappears from the stash list")
@@ -1903,13 +1922,18 @@ fn register_destructive(reg: &mut Registry, git: &Arc<GitService>) -> Result<()>
                 out.trim().to_string(),
                 serde_json::json!({ "output": out }),
             ))
-        }
-    );
+        },
+    )?;
 
-    git_cap!(reg, git, "git.remote.remove", "git.remotes",
-        "Remove a remote",
-        "Removes a remote and its remote-tracking branches. Nothing on the remote itself is touched.",
-        Tier::Destructive, Effect::Config, true, true, false, RemoteNameArgs,
+    reg.define::<RemoteNameArgs>("git.remote.remove", "Remove a remote")
+    .description("Removes a remote and its remote-tracking branches. Nothing on the remote itself is touched.")
+    .group("git.remotes")
+    .tier(Tier::Destructive)
+    .effect(Effect::Config)
+    .agent_safe()
+    .dry_run()
+    .handlers_with(
+        git,
         |_ctx, a: &RemoteNameArgs, _git| {
             Ok(Plan::new("git.remote.remove", format!("remove remote {}", a.name))
                 .step("remote-tracking branches for it are removed locally")
@@ -1920,12 +1944,18 @@ fn register_destructive(reg: &mut Registry, git: &Arc<GitService>) -> Result<()>
             let repo = repo_of(git, &a.repo)?;
             git.remote_remove(&repo, &a.name)?;
             Ok(Outcome::ok(format!("removed remote {}", a.name)))
-        });
+        },
+    )?;
 
-    git_cap!(reg, git, "git.repo.prune", "git.repo",
-        "Delete merged branches",
-        "Finds local branches already merged into a base branch and deletes them. Deleting the wrong branch is recoverable only through the reflog.",
-        Tier::Destructive, Effect::Write, true, true, false, PruneArgs,
+    reg.define::<PruneArgs>("git.repo.prune", "Delete merged branches")
+    .description("Finds local branches already merged into a base branch and deletes them. Deleting the wrong branch is recoverable only through the reflog.")
+    .group("git.repo")
+    .tier(Tier::Destructive)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers_with(
+        git,
         |_ctx, a: &PruneArgs, git: &GitService| {
             let repo = repo_of(git, &a.repo)?;
             let base = a.base.clone().unwrap_or_else(|| "HEAD".to_string());
@@ -1953,12 +1983,18 @@ fn register_destructive(reg: &mut Registry, git: &Arc<GitService>) -> Result<()>
                 format!("deleted {} merged branch(es)", deleted.len()),
                 serde_json::json!({ "deleted": deleted }),
             ))
-        });
+        },
+    )?;
 
-    git_cap!(reg, git, "git.squash", "git.history",
-        "Squash recent commits",
-        "Combines the last N commits into one with a new message. The original commits remain in the reflog.",
-        Tier::Destructive, Effect::Write, true, true, false, SquashArgs,
+    reg.define::<SquashArgs>("git.squash", "Squash recent commits")
+    .description("Combines the last N commits into one with a new message. The original commits remain in the reflog.")
+    .group("git.history")
+    .tier(Tier::Destructive)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers_with(
+        git,
         |_ctx, a: &SquashArgs, git: &GitService| {
             let repo = repo_of(git, &a.repo)?;
             let mut plan = Plan::new("git.squash", format!("squash the last {} commits", a.count))
@@ -1978,21 +2014,18 @@ fn register_destructive(reg: &mut Registry, git: &Arc<GitService>) -> Result<()>
                 format!("squashed {} commits into {}", a.count, &hash[..7.min(hash.len())]),
                 serde_json::json!({ "commit": hash }),
             ))
-        });
+        },
+    )?;
 
-    git_cap!(
-        reg,
+    reg.define::<BisectStartArgs>("git.bisect.start", "Start a bisect")
+    .description("Begins a binary search for the commit that introduced a defect.")
+    .group("git.recovery")
+    .tier(Tier::Exec)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers_with(
         git,
-        "git.bisect.start",
-        "git.recovery",
-        "Start a bisect",
-        "Begins a binary search for the commit that introduced a defect.",
-        Tier::Exec,
-        Effect::Write,
-        true,
-        true,
-        false,
-        BisectStartArgs,
         |_ctx, a: &BisectStartArgs, _git| {
             Ok(Plan::new(
                 "git.bisect.start",
@@ -2008,22 +2041,18 @@ fn register_destructive(reg: &mut Registry, git: &Arc<GitService>) -> Result<()>
                 "bisect started",
                 serde_json::json!({ "output": out }),
             ))
-        }
-    );
+        },
+    )?;
 
-    git_cap!(
-        reg,
+    reg.define::<BisectMarkArgs>("git.bisect.mark", "Mark the current bisect step")
+    .description("Records whether the commit currently checked out is good, bad, or untestable.")
+    .group("git.recovery")
+    .tier(Tier::Exec)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers_with(
         git,
-        "git.bisect.mark",
-        "git.recovery",
-        "Mark the current bisect step",
-        "Records whether the commit currently checked out is good, bad, or untestable.",
-        Tier::Exec,
-        Effect::Write,
-        true,
-        true,
-        false,
-        BisectMarkArgs,
         |_ctx, a: &BisectMarkArgs, _git| {
             Ok(Plan::new(
                 "git.bisect.mark",
@@ -2041,22 +2070,18 @@ fn register_destructive(reg: &mut Registry, git: &Arc<GitService>) -> Result<()>
                 },
                 serde_json::json!({ "output": out }),
             ))
-        }
-    );
+        },
+    )?;
 
-    git_cap!(
-        reg,
+    reg.define::<RepoArgs>("git.bisect.reset", "End a bisect")
+    .description("Stops the bisect and returns to the branch that was checked out before it started.")
+    .group("git.recovery")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers_with(
         git,
-        "git.bisect.reset",
-        "git.recovery",
-        "End a bisect",
-        "Stops the bisect and returns to the branch that was checked out before it started.",
-        Tier::Write,
-        Effect::Write,
-        true,
-        true,
-        false,
-        RepoArgs,
         |_ctx, a: &RepoArgs, _git| Ok(Plan::new(
             "git.bisect.reset",
             format!("end the bisect in {}", a.repo)
@@ -2068,13 +2093,18 @@ fn register_destructive(reg: &mut Registry, git: &Arc<GitService>) -> Result<()>
                 "bisect ended",
                 serde_json::json!({ "output": out }),
             ))
-        }
-    );
+        },
+    )?;
 
-    git_cap!(reg, git, "git.conflicts.resolve", "git.merge",
-        "Resolve a conflict by choosing a side",
-        "Replaces the conflicted file with one side and stages it. The other side's content for that file is discarded.",
-        Tier::Destructive, Effect::Write, true, true, false, ResolveArgs,
+    reg.define::<ResolveArgs>("git.conflicts.resolve", "Resolve a conflict by choosing a side")
+    .description("Replaces the conflicted file with one side and stages it. The other side's content for that file is discarded.")
+    .group("git.merge")
+    .tier(Tier::Destructive)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers_with(
+        git,
         |_ctx, a: &ResolveArgs, git: &GitService| {
             let repo = repo_of(git, &a.repo)?;
             let conflicted = git.conflicts(&repo)?;
@@ -2093,14 +2123,20 @@ fn register_destructive(reg: &mut Registry, git: &Arc<GitService>) -> Result<()>
             let repo = repo_of(git, &a.repo)?;
             git.resolve_conflict(&repo, &a.path, a.side)?;
             Ok(Outcome::ok(format!("resolved {} by taking {:?}", a.path, a.side)))
-        });
+        },
+    )?;
 
     // Force push lives in its own capability so that no code path can reach a
     // forced update without passing the approval gate its tier enforces.
-    git_cap!(reg, git, "git.push.force", "git.remotes",
-        "Force push a branch",
-        "Overwrites the remote branch. Prefers --force-with-lease, which refuses if someone else pushed commits you have not seen; --force is available and is genuinely dangerous.",
-        Tier::Remote, Effect::Remote, true, true, false, PushArgs,
+    reg.define::<PushArgs>("git.push.force", "Force push a branch")
+    .description("Overwrites the remote branch. Prefers --force-with-lease, which refuses if someone else pushed commits you have not seen; --force is available and is genuinely dangerous.")
+    .group("git.remotes")
+    .tier(Tier::Remote)
+    .effect(Effect::Remote)
+    .agent_safe()
+    .dry_run()
+    .handlers_with(
+        git,
         |_ctx, a: &PushArgs, git: &GitService| {
             let repo = repo_of(git, &a.repo)?;
             let remote = a.remote.clone().unwrap_or_else(|| "origin".to_string());
@@ -2139,22 +2175,20 @@ fn register_destructive(reg: &mut Registry, git: &Arc<GitService>) -> Result<()>
                 format!("force pushed {branch} to {remote}"),
                 serde_json::json!({ "output": out }),
             ))
-        });
+        },
+    )?;
 
     // A repository that has not been opened yet can be forgotten from the index.
-    git_cap!(
-        reg,
+    reg.define::<RepoArgs>("git.repo.untrack", "Forget a repository in devd")
+    .description("Removes a repository from devd's index. Nothing on disk is touched.")
+    .group("git.repo")
+    .tier(Tier::Write)
+    .effect(Effect::Config)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers_with(
         git,
-        "git.repo.untrack",
-        "git.repo",
-        "Forget a repository in devd",
-        "Removes a repository from devd's index. Nothing on disk is touched.",
-        Tier::Write,
-        Effect::Config,
-        true,
-        true,
-        true,
-        RepoArgs,
         |_ctx, a: &RepoArgs, _git| Ok(Plan::new("git.repo.untrack", format!("forget {}", a.repo))),
         |ctx: &Ctx, a: &RepoArgs, _git| {
             let removed = ctx.store.delete_repo(&a.repo)?;
@@ -2163,8 +2197,8 @@ fn register_destructive(reg: &mut Registry, git: &Arc<GitService>) -> Result<()>
             } else {
                 format!("{} was not in the index", a.repo)
             }))
-        }
-    );
+        },
+    )?;
 
     Ok(())
 }

@@ -99,7 +99,6 @@ fn cap_row(cap: &devd_core::Capability) -> Value {
         "requires_approval": cap.tier.requires_approval(),
         "supports_dry_run": cap.supports_dry_run,
         "idempotent": cap.idempotent,
-        "undo": cap.undo,
     })
 }
 
