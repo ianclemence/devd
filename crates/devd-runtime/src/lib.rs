@@ -45,7 +45,7 @@ use devd_core::{archive, DevdError, Result};
 pub use catalogue::Available;
 
 /// Runtime kinds `devd` can install.
-pub const KINDS: &[&str] = &["php", "node", "go"];
+pub const KINDS: &[&str] = &["php", "node", "go", "python", "ruby"];
 
 /// Whether a kind is one of them.
 pub fn known_kind(kind: &str) -> bool {
@@ -64,6 +64,10 @@ pub fn executable_relative(kind: &str) -> Result<PathBuf> {
         ("node", false) => "bin/node",
         ("go", true) => "bin/go.exe",
         ("go", false) => "bin/go",
+        ("python", true) => "python.exe",
+        ("python", false) => "bin/python3",
+        ("ruby", true) => "bin/ruby.exe",
+        ("ruby", false) => "bin/ruby",
         other => {
             return Err(DevdError::unsupported(format!(
                 "`{}` is not a runtime devd can install (try one of: {})",
@@ -138,6 +142,15 @@ pub fn available(kind: &str, thread_safe: bool) -> Result<(Vec<Available>, Vec<S
         }
         "node" => catalogue::node()?,
         "go" => catalogue::go()?,
+        "python" => catalogue::python()?,
+        "ruby" => {
+            if !cfg!(windows) {
+                notes.push("Ruby publishes binaries for Windows only (RubyInstaller); on this platform use your system's Ruby".to_string());
+                Vec::new()
+            } else {
+                catalogue::ruby()?
+            }
+        }
         other => {
             return Err(DevdError::unsupported(format!(
                 "`{other}` is not a runtime devd can install (try one of: {})",
@@ -322,12 +335,11 @@ fn first_version(output: &str) -> Option<String> {
         .split_whitespace()
         .map(|token| {
             let token = token.trim_start_matches('v');
-            token.strip_prefix("go").unwrap_or(token)
+            let token = token.strip_prefix("go").unwrap_or(token);
+            // `3.3.5p100` (Ruby) is 3.3.5; `3.12.15+` is 3.12.15.
+            token.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect::<String>().trim_end_matches('.').to_string()
         })
-        .find(|token| {
-            token.chars().next().is_some_and(|c| c.is_ascii_digit()) && token.contains('.')
-        })
-        .map(str::to_string)
+        .find(|token| token.chars().next().is_some_and(|c| c.is_ascii_digit()) && token.contains('.'))
 }
 
 /// Settings as they are on disk.
@@ -654,9 +666,9 @@ mod tests {
 
     #[test]
     fn unknown_kinds_are_rejected_with_the_list() {
-        let err = executable_relative("ruby").unwrap_err();
+        let err = executable_relative("perl").unwrap_err();
         assert_eq!(err.code(), "unsupported");
-        assert!(err.to_string().contains("php, node, go"), "{err}");
+        assert!(err.to_string().contains("php, node, go, python, ruby"), "{err}");
     }
 
     #[test]
@@ -685,6 +697,8 @@ mod tests {
             first_version("go version go1.24.1 windows/amd64").as_deref(),
             Some("1.24.1")
         );
+        assert_eq!(first_version("Python 3.12.15\n").as_deref(), Some("3.12.15"));
+        assert_eq!(first_version("ruby 3.3.5p100 (2024-09-03 revision abc) [x64-mingw-ucrt]").as_deref(), Some("3.3.5"));
         assert_eq!(first_version("no version here"), None);
     }
 

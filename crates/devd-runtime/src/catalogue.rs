@@ -37,6 +37,15 @@ const NODE_BASE: &str = "https://nodejs.org/dist/";
 const GO_RELEASES: &str = "https://go.dev/dl/?mode=json";
 
 /// How long to wait for a catalogue document.
+/// python-build-standalone: complete CPython builds (pip, venv, the standard library) for
+/// every platform. Each release publishes a `SHA256SUMS` file for all of its archives, and
+/// `releases/latest/download` always names the newest.
+const PYTHON_SUMS: &str = "https://github.com/astral-sh/python-build-standalone/releases/latest/download/SHA256SUMS";
+const PYTHON_BASE: &str = "https://github.com/astral-sh/python-build-standalone/releases/download/";
+
+/// RubyInstaller's releases, with the SHA-256 GitHub records for each asset.
+const RUBY_RELEASES: &str = "https://api.github.com/repos/oneclick/rubyinstaller2/releases?per_page=30";
+
 const CATALOGUE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// One installable build published by an upstream.
@@ -202,6 +211,101 @@ fn parse_size(text: &str) -> Option<u64> {
 }
 
 /// Node builds for this platform.
+/// The python-build-standalone target for this machine.
+fn python_triple() -> Option<&'static str> {
+    Some(if cfg!(all(windows, target_arch = "x86_64")) {
+        "x86_64-pc-windows-msvc"
+    } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        "x86_64-unknown-linux-gnu"
+    } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+        "aarch64-unknown-linux-gnu"
+    } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        "aarch64-apple-darwin"
+    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+        "x86_64-apple-darwin"
+    } else {
+        return None;
+    })
+}
+
+/// Every Python the newest python-build-standalone release has for this machine.
+pub fn python() -> Result<Vec<Available>> {
+    let triple = python_triple().ok_or_else(|| DevdError::unsupported("python-build-standalone has no build for this platform"))?;
+    let sums = download::fetch_text(PYTHON_SUMS, CATALOGUE_TIMEOUT)?;
+    let mut list = python_from(&sums, triple);
+    sort_newest_first(&mut list);
+    Ok(list)
+}
+
+/// Read `SHA256SUMS` (`<sha256>  cpython-3.12.15+20261021-<triple>-install_only.tar.gz`).
+pub(crate) fn python_from(sums: &str, triple: &str) -> Vec<Available> {
+    let suffix = format!("-{triple}-install_only.tar.gz");
+    let mut out = Vec::new();
+    for line in sums.lines() {
+        let mut parts = line.split_whitespace();
+        let (Some(digest), Some(name)) = (parts.next(), parts.next()) else { continue };
+        let Some(rest) = name.strip_prefix("cpython-") else { continue };
+        let Some(stem) = rest.strip_suffix(&suffix) else { continue };
+        let Some((version, tag)) = stem.split_once('+') else { continue };
+        if digest.len() != 64 || version.split('.').count() != 3 || version.split('.').any(|p| p.parse::<u32>().is_err()) {
+            continue;
+        }
+        out.push(Available {
+            kind: "python".to_string(),
+            version: version.to_string(),
+            series: series_of(version),
+            channel: "stable".to_string(),
+            url: format!("{PYTHON_BASE}{tag}/cpython-{version}%2B{tag}{suffix}"),
+            sha256: Some(digest.to_ascii_lowercase()),
+            bytes: None,
+            published: None,
+            executable: if cfg!(windows) { "python.exe" } else { "bin/python3" }.to_string(),
+        });
+    }
+    out
+}
+
+/// Ruby for Windows: RubyInstaller's `.7z` archives.
+pub fn ruby() -> Result<Vec<Available>> {
+    let body = download::fetch_text(RUBY_RELEASES, CATALOGUE_TIMEOUT)?;
+    let mut list = ruby_from(&body)?;
+    sort_newest_first(&mut list);
+    Ok(list)
+}
+
+pub(crate) fn ruby_from(json_text: &str) -> Result<Vec<Available>> {
+    let releases: serde_json::Value = serde_json::from_str(json_text).map_err(|e| DevdError::internal(format!("the RubyInstaller release list is not JSON: {e}")))?;
+    let mut out: Vec<Available> = Vec::new();
+    for release in releases.as_array().into_iter().flatten() {
+        if release["prerelease"].as_bool().unwrap_or(false) || release["draft"].as_bool().unwrap_or(false) {
+            continue;
+        }
+        for file in release["assets"].as_array().into_iter().flatten() {
+            let Some(name) = file["name"].as_str() else { continue };
+            // rubyinstaller-3.3.5-1-x64.7z (the DevKit installers are .exe and are not wanted)
+            let Some(rest) = name.strip_prefix("rubyinstaller-").and_then(|r| r.strip_suffix("-x64.7z")) else { continue };
+            let version: String = rest.split('-').next().unwrap_or("").to_string();
+            let digest = file["digest"].as_str().and_then(|d| d.strip_prefix("sha256:")).map(|d| d.to_ascii_lowercase());
+            let (Some(url), Some(sha256)) = (file["browser_download_url"].as_str(), digest) else { continue };
+            if version.split('.').count() != 3 || out.iter().any(|a| a.version == version) {
+                continue;
+            }
+            out.push(Available {
+                kind: "ruby".to_string(),
+                series: series_of(&version),
+                version,
+                channel: "stable".to_string(),
+                url: url.to_string(),
+                sha256: Some(sha256),
+                bytes: file["size"].as_u64(),
+                published: release["published_at"].as_str().map(str::to_string),
+                executable: "bin/ruby.exe".to_string(),
+            });
+        }
+    }
+    Ok(out)
+}
+
 pub fn node() -> Result<Vec<Available>> {
     #[derive(serde::Deserialize)]
     struct Row {
@@ -426,6 +530,38 @@ pub fn resolve(list: &[Available], spec: &str, channel: Option<&str>) -> Result<
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn python_comes_from_the_checksum_file_for_this_platform_only() {
+        let sums = "136bbb2e50fe037fd5e32126e70e95b35d1fa5dac5bd04a55b8088415ee99540  cpython-3.11.17+20261021-x86_64-pc-windows-msvc-install_only.tar.gz
+be7f14464d1d66f84429ad27e01f6d1482963afff64a2fb5256b2a51c7b5d398  cpython-3.12.15+20261021-x86_64-pc-windows-msvc-install_only.tar.gz
+490fd9caa3ed15db752379d6fdd0d9a8e8e44e392c3c9c0f274eface439c03ae  cpython-3.12.15+20261021-i686-pc-windows-msvc-install_only.tar.gz
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  cpython-3.12.15+20261021-x86_64-pc-windows-msvc-install_only_stripped.tar.gz
+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  cpython-3.13.0rc1+20261021-x86_64-pc-windows-msvc-install_only.tar.gz
+short  cpython-3.10.1+20261021-x86_64-pc-windows-msvc-install_only.tar.gz
+";
+        let found = super::python_from(sums, "x86_64-pc-windows-msvc");
+        let versions: Vec<&str> = found.iter().map(|a| a.version.as_str()).collect();
+        assert_eq!(versions, vec!["3.11.17", "3.12.15"], "other targets, stripped variants, pre-releases and bad digests are left out");
+        assert_eq!(found[1].url, "https://github.com/astral-sh/python-build-standalone/releases/download/20261021/cpython-3.12.15%2B20261021-x86_64-pc-windows-msvc-install_only.tar.gz");
+        assert_eq!(found[1].sha256.as_deref(), Some("be7f14464d1d66f84429ad27e01f6d1482963afff64a2fb5256b2a51c7b5d398"));
+    }
+
+    #[test]
+    fn ruby_comes_from_the_7z_assets_that_carry_a_digest() {
+        let json = r#"[
+          {"prerelease":false,"published_at":"2026-09-01T00:00:00Z","assets":[
+            {"name":"rubyinstaller-3.3.5-2-x64.7z","size":100,"browser_download_url":"https://github.com/oneclick/rubyinstaller2/releases/download/RubyInstaller-3.3.5-2/rubyinstaller-3.3.5-2-x64.7z","digest":"sha256:AAAA000000000000000000000000000000000000000000000000000000000000"},
+            {"name":"rubyinstaller-devkit-3.3.5-2-x64.exe","size":1,"browser_download_url":"https://x/y","digest":"sha256:bb"},
+            {"name":"rubyinstaller-3.2.6-1-x64.7z","size":1,"browser_download_url":"https://x/z","digest":null}]},
+          {"prerelease":false,"assets":[
+            {"name":"rubyinstaller-3.3.5-1-x64.7z","size":1,"browser_download_url":"https://x/old","digest":"sha256:cccc"}]}]"#;
+        let found = super::ruby_from(json).unwrap();
+        assert_eq!(found.len(), 1, "no digest, no install; the older build of the same Ruby is not offered twice");
+        assert_eq!(found[0].version, "3.3.5");
+        assert!(found[0].url.ends_with("rubyinstaller-3.3.5-2-x64.7z"));
+        assert_eq!(found[0].sha256.as_deref(), Some("aaaa000000000000000000000000000000000000000000000000000000000000"));
+    }
+
     use super::*;
 
     #[test]

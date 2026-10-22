@@ -35,6 +35,8 @@ pub enum Format {
     TarGz,
     /// An uncompressed tarball.
     Tar,
+    /// A `.7z` archive.
+    SevenZ,
 }
 
 impl Format {
@@ -50,9 +52,11 @@ impl Format {
             Ok(Self::TarGz)
         } else if name.ends_with(".tar") {
             Ok(Self::Tar)
+        } else if name.ends_with(".7z") {
+            Ok(Self::SevenZ)
         } else {
             Err(DevdError::unsupported(format!(
-                "`{}` is not an archive devd can unpack (expected .zip, .tar.gz or .tar)",
+                "`{}` is not an archive devd can unpack (expected .zip, .tar.gz, .tar or .7z)",
                 path.display()
             )))
         }
@@ -122,6 +126,7 @@ pub fn extract(archive: &Path, dest: &Path, replace: bool) -> Result<ExtractRepo
                 let file = BufReader::new(File::open(archive)?);
                 extract_tar(file, &staging)?
             }
+            Format::SevenZ => extract_7z(archive, &staging)?,
         };
 
         let source = common_root(&staging)?;
@@ -153,6 +158,27 @@ fn common_root(staging: &Path) -> Result<PathBuf> {
         }
     }
     Ok(staging.to_path_buf())
+}
+
+fn extract_7z(archive: &Path, dest: &Path) -> Result<ExtractReport> {
+    let mut report = ExtractReport { files: 0, directories: 0, bytes: 0, stripped_root: None };
+    let root = dest.to_path_buf();
+    sevenz_rust::decompress_file_with_extract_fn(archive, dest, |entry, reader, target| {
+        // The same guard as for zip: an entry may not climb out of the destination.
+        let escapes = target.components().any(|c| matches!(c, std::path::Component::ParentDir)) || !target.starts_with(&root);
+        if escapes {
+            return Err(sevenz_rust::Error::other(format!("an entry escapes the install directory: {}", entry.name())));
+        }
+        if entry.is_directory() {
+            report.directories += 1;
+        } else {
+            report.files += 1;
+            report.bytes += entry.size();
+        }
+        sevenz_rust::default_entry_extract_fn(entry, reader, target)
+    })
+    .map_err(|e| DevdError::invalid(format!("{} is not a readable 7z: {e}", archive.display())))?;
+    Ok(report)
 }
 
 fn extract_zip(archive: &Path, dest: &Path) -> Result<ExtractReport> {
@@ -293,6 +319,26 @@ mod tests {
         );
         assert_eq!(Format::detect(Path::new("go.tar")).unwrap(), Format::Tar);
         assert!(Format::detect(Path::new("php.exe")).is_err());
+    }
+
+    #[test]
+    fn a_7z_unpacks_and_loses_its_single_top_level_directory() {
+        let dir = scratch("sevenz");
+        let pack = dir.join("pack");
+        let src = pack.join("rubyinstaller-3.3.5-1-x64");
+        std::fs::create_dir_all(src.join("bin")).unwrap();
+        std::fs::write(src.join("bin").join("ruby.exe"), b"binary").unwrap();
+        std::fs::write(src.join("LICENSE.txt"), b"licence").unwrap();
+        let archive = dir.join("ruby.7z");
+        // compress_to_path packs the contents of a folder, so the distribution's own folder goes inside `pack`.
+        sevenz_rust::compress_to_path(&pack, &archive).unwrap();
+        let dest = dir.join("install");
+        let report = extract(&archive, &dest, false).unwrap();
+        assert_eq!(report.stripped_root.as_deref(), Some("rubyinstaller-3.3.5-1-x64"));
+        assert_eq!(std::fs::read(dest.join("bin").join("ruby.exe")).unwrap(), b"binary");
+        assert!(dest.join("LICENSE.txt").is_file());
+        assert!(Format::detect(Path::new("x.7z")).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
