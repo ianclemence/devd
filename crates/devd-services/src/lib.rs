@@ -520,7 +520,21 @@ pub fn install(
         }
     }
 
-    let chosen = resolve(&list, spec, None)?;
+    // "latest" means the newest build devd can verify, not the newest published:
+    // nginx.org publishes no checksum, so only versions whose digest devd has
+    // recorded can be installed, and failing setup because a release came out
+    // yesterday helps nobody. An explicit version that cannot be verified is
+    // still refused below, with its own message.
+    let installable = verifiable(def.name, &list);
+    let chosen = resolve(&installable, spec, None).or_else(|_| resolve(&list, spec, None))?;
+    let newer_unverified = list
+        .first()
+        .filter(|newest| {
+            newest.version != chosen.version
+                && installable.first().map(|a| a.version.as_str()) == Some(chosen.version.as_str())
+                && !installable.iter().any(|a| a.version == newest.version)
+        })
+        .map(|newest| newest.version.clone());
     let dest = install_dir(ctx, def.name);
     let already = installed_version(ctx, def.name);
     if dest.join(def.executable()).is_file() && !force {
@@ -574,6 +588,12 @@ pub fn install(
     let fetched = devd_core::download::fetch(&artifact, &ctx.paths.cache(), progress)?;
 
     let mut warnings = Vec::new();
+    if let Some(newest) = newer_unverified {
+        warnings.push(format!(
+            "{} {newest} is newer, but devd has no recorded checksum for it, so {} was installed",
+            def.name, chosen.version
+        ));
+    }
     if artifact.sha256.is_none() {
         warnings.push(format!(
             "{} publishes no checksum file, so this download could only be checked for length \
@@ -763,6 +783,19 @@ pub fn install_system(
         warnings,
         details: serde_json::Value::Object(extra),
     })
+}
+
+/// The builds devd can verify before it installs them.
+///
+/// nginx publishes a signature and no checksum, so only the versions whose digest
+/// devd has recorded qualify. The others (MariaDB, whose digest comes from its
+/// release API when a build is chosen) are all candidates.
+fn verifiable(name: &str, list: &[Available]) -> Vec<Available> {
+    if name == "nginx" {
+        list.iter().filter(|a| a.sha256.is_some()).cloned().collect()
+    } else {
+        list.to_vec()
+    }
 }
 
 /// The argument array for a service's process. Never a shell string.
@@ -1599,6 +1632,41 @@ mod tests {
         let err = install_system(&c, definition("mariadb").unwrap(), None, &host).unwrap_err();
         assert!(err.to_string().contains("not MariaDB"), "{err}");
         assert!(c.store.get_service("mariadb").unwrap().is_none());
+    }
+
+    fn build(version: &str, sha: Option<&str>) -> Available {
+        Available {
+            kind: "nginx".to_string(),
+            version: version.to_string(),
+            series: devd_runtime::catalogue::series_of(version),
+            channel: "mainline".to_string(),
+            url: format!("https://example.invalid/nginx-{version}.zip"),
+            sha256: sha.map(str::to_string),
+            bytes: None,
+            published: None,
+            executable: "nginx.exe".to_string(),
+        }
+    }
+
+    #[test]
+    fn latest_nginx_means_the_newest_build_with_a_recorded_checksum() {
+        // 1.31.8 is out, but no digest for it is recorded.
+        let list = vec![
+            build("1.31.8", None),
+            build("1.31.7", Some("aa")),
+            build("1.30.6", Some("bb")),
+        ];
+        let installable = verifiable("nginx", &list);
+        assert_eq!(installable.len(), 2);
+        let chosen = resolve(&installable, "latest", None).unwrap();
+        assert_eq!(chosen.version, "1.31.7");
+        // Another service's builds are all candidates: MariaDB's digest is read
+        // from its release API once a build is chosen.
+        assert_eq!(verifiable("mariadb", &list).len(), 3);
+        // Asking for the unverifiable version by name still finds it, so the
+        // install can refuse it with a message that names it.
+        let exact = resolve(&installable, "1.31.8", None).or_else(|_| resolve(&list, "1.31.8", None));
+        assert_eq!(exact.unwrap().version, "1.31.8");
     }
 
     #[test]
