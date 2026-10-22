@@ -350,7 +350,7 @@ pub fn process_name(dir: &Path, task: &str) -> String {
 
 /// Run a task (foreground or background). The caller has already authorised
 /// the directory and the task's risk class.
-pub fn run(ctx: &Ctx, reg: &StackRegistry, dir: &Path, task: &TaskInfo, args: &[String], req: &RunTask) -> Result<Value> {
+pub fn run(ctx: &Ctx, dir: &Path, task: &TaskInfo, args: &[String], req: &RunTask) -> Result<Value> {
     validate_args(args)?;
     if !task.available {
         return Err(DevdError::conflict(format!(
@@ -459,7 +459,6 @@ pub fn run(ctx: &Ctx, reg: &StackRegistry, dir: &Path, task: &TaskInfo, args: &[
         log_path: log.display().to_string(),
         safe_to_retry: task.risk == Risk::Safe,
     };
-    let _ = reg;
     Ok(serde_json::to_value(res)?)
 }
 

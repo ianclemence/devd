@@ -1012,7 +1012,7 @@ mod tests {
     fn a_site_can_be_pinned_to_a_php_version_and_unpinned_again() {
         let c = ctx("pin");
         install_php(&c, "8.5.11");
-        let created = create(&c, &request("pinned")).unwrap();
+        create(&c, &request("pinned")).unwrap();
 
         let pinned = set_php(&c, "pinned", Some("8.5")).unwrap();
         assert_eq!(pinned["php"], json!("8.5"));
@@ -1028,7 +1028,6 @@ mod tests {
         set_php(&c, "pinned", None).unwrap();
         assert!(c.store.get_site("pinned").unwrap().unwrap().php.is_none());
         let _ = std::fs::remove_dir_all(c.paths.root());
-        let _ = created;
     }
 
     #[test]

@@ -693,8 +693,8 @@ fn finish_install(
     // Installing nginx is the moment a PHP listener becomes meaningful, so it is
     // created (stopped) if a PHP runtime exists.
     if def.name == "nginx" {
-        if let Ok(php) = devd_runtime::executable(ctx, "php", None) {
-            ensure_php_service(ctx, &php)?;
+        if devd_runtime::executable(ctx, "php", None).is_ok() {
+            ensure_php_service(ctx)?;
         }
     }
 
@@ -890,7 +890,7 @@ fn php_executable(ctx: &Ctx) -> Result<PathBuf> {
 }
 
 /// Create or refresh the `php-cgi` service row from an installed PHP runtime.
-pub fn ensure_php_service(ctx: &Ctx, php_exe: &Path) -> Result<Service> {
+pub fn ensure_php_service(ctx: &Ctx) -> Result<Service> {
     let runtime_id = ctx
         .store
         .list_runtimes()?
@@ -917,7 +917,6 @@ pub fn ensure_php_service(ctx: &Ctx, php_exe: &Path) -> Result<Service> {
         enabled: true,
         created_at: util::now(),
     });
-    let _ = php_exe;
     service.kind = "php-cgi".to_string();
     service.runtime_id = runtime_id;
     service.argv =
@@ -1029,8 +1028,8 @@ pub fn start(ctx: &Ctx, name: &str) -> Result<Status> {
     // Asking for it to start before anything has created the row is a reasonable
     // thing to do, so the row is created here rather than reported as missing.
     if name == PHP_SERVICE && ctx.store.get_service(PHP_SERVICE)?.is_none() {
-        let php = php_executable(ctx)?;
-        ensure_php_service(ctx, &php)?;
+        php_executable(ctx)?;
+        ensure_php_service(ctx)?;
     }
 
     let service = ctx.store.get_service(name)?.ok_or_else(|| {
@@ -1220,8 +1219,8 @@ pub fn stack_up(ctx: &Ctx) -> Result<Vec<Status>> {
         prune_php_services(ctx)?;
         ensure_php_services(ctx)?;
     } else if ctx.store.get_service(PHP_SERVICE)?.is_none() {
-        if let Ok(php) = php_executable(ctx) {
-            ensure_php_service(ctx, &php)?;
+        if php_executable(ctx).is_ok() {
+            ensure_php_service(ctx)?;
         }
     }
 

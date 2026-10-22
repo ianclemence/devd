@@ -910,7 +910,7 @@ fn run_task(ctx: &Ctx, a: &RunTask, destructive: bool) -> Result<Outcome> {
     if t.risk != Risk::Destructive && destructive {
         return Err(DevdError::invalid("that task is not destructive; use project.run"));
     }
-    let v = tasks::run(ctx, &r, &dir, t, &a.args, a)?;
+    let v = tasks::run(ctx, &dir, t, &a.args, a)?;
     let mut o;
     if v.get("mode").and_then(|m| m.as_str()) == Some("background") {
         o = Outcome::with_data(format!("started `{}` in the background", t.command), v);

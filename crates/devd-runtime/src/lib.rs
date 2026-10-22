@@ -363,7 +363,7 @@ pub fn list(ctx: &Ctx) -> Result<Vec<InstalledRow>> {
     // A runtime that is installed on this machine but that devd did not
     // install is still a runtime. Saying "not installed" because the row is
     // missing from devd's own registry is a lie the person can see through.
-    for found in discover(ctx) {
+    for found in discover() {
         if out.iter().any(|r| r.runtime.kind == found.runtime.kind && r.runtime.version == found.runtime.version) {
             continue;
         }
@@ -383,7 +383,7 @@ pub fn list(ctx: &Ctx) -> Result<Vec<InstalledRow>> {
 /// Only the interpreters are asked for, and only once each. Probing every
 /// tool in the catalogue takes minutes and has no place on a screen that
 /// answers in a moment.
-fn discover(ctx: &Ctx) -> Vec<InstalledRow> {
+fn discover() -> Vec<InstalledRow> {
     let mut out = Vec::new();
     // Each interpreter is asked in its own language: Go says `go version` and
     // has no `--version` at all.
@@ -425,7 +425,6 @@ fn discover(ctx: &Ctx) -> Vec<InstalledRow> {
             managed: false,
         });
     }
-    let _ = ctx;
     out
 }
 

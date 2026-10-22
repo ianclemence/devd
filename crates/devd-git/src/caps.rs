@@ -1314,7 +1314,7 @@ fn register_exec(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
         "Switch branch",
         "Switches the working tree to another branch, optionally creating it. Refuses by default when it would overwrite uncommitted work.",
         Tier::Exec, Effect::Write, true, true, false, SwitchArgs,
-        |ctx: &Ctx, a: &SwitchArgs, git: &GitService| {
+        |_: &Ctx, a: &SwitchArgs, git: &GitService| {
             let repo = repo_of(git, &a.repo)?;
             let status = git.status(&repo)?;
             let mut plan = Plan::new(
@@ -1338,7 +1338,6 @@ fn register_exec(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                     .destructive(true)
                     .approval(true);
             }
-            let _ = ctx;
             Ok(plan)
         },
         |ctx: &Ctx, a: &SwitchArgs, git: &GitService| {

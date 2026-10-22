@@ -492,19 +492,20 @@ fn is_hidden(path: &Path, name: &str) -> bool {
     if name.starts_with('.') {
         return true;
     }
-    #[cfg(windows)]
-    {
-        // The hidden attribute is not the same as the name, and Windows
-        // Explorer honours it.
-        use std::os::windows::fs::MetadataExt;
-        if let Ok(m) = fs::metadata(path) {
-            return m.file_attributes() & 0x2 != 0;
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = path;
-    }
+    has_hidden_attribute(path)
+}
+
+/// The hidden attribute is not the same as the name, and Windows Explorer
+/// honours it.
+#[cfg(windows)]
+fn has_hidden_attribute(path: &Path) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    fs::metadata(path).is_ok_and(|m| m.file_attributes() & 0x2 != 0)
+}
+
+/// Elsewhere a file is hidden by its name alone.
+#[cfg(not(windows))]
+fn has_hidden_attribute(_path: &Path) -> bool {
     false
 }
 

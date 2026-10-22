@@ -508,8 +508,7 @@ impl Hub {
                     }
                 }
             }
-            let Some((response, model, provider_id, why)) = chosen else { return self.fail(tid, &last_err) };
-            let _ = provider_id;
+            let Some((response, model, _, why)) = chosen else { return self.fail(tid, &last_err) };
             self.ctx.store.add_thread_usage(tid, response.input_tokens, response.output_tokens)?;
             self.log(tid, "assistant", json!({ "content": response.content, "stop_reason": response.stop_reason, "model": model, "routing": why, "usage": { "input": response.input_tokens, "output": response.output_tokens } }))?;
 

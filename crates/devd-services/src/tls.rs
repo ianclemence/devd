@@ -389,7 +389,6 @@ pub fn trust(ctx: &Ctx, machine: bool) -> Result<devd_core::capability::Outcome>
 
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        let _ = machine;
         // The portable answer on Linux is p11-kit's `trust`, which is what most
         // distributions route their CA store through.
         if let Some(trust) = util::which("trust") {
@@ -407,9 +406,15 @@ pub fn trust(ctx: &Ctx, machine: bool) -> Result<devd_core::capability::Outcome>
                     stderr: util::truncate(out.stderr.trim(), 800),
                 });
             }
+            // p11-kit has one store, the system one. Say what was asked and what was
+            // done rather than quietly answering a different question.
             return Ok(devd_core::capability::Outcome::with_data(
-                "the devd certificate authority is trusted".to_string(),
-                serde_json::json!({ "certificate": cert.display().to_string() }),
+                "the devd certificate authority is trusted in the system store".to_string(),
+                serde_json::json!({
+                    "certificate": cert.display().to_string(),
+                    "scope": "system",
+                    "requested_scope": if machine { "machine" } else { "user" },
+                }),
             ));
         }
         Err(DevdError::unsupported(format!(
@@ -418,13 +423,6 @@ pub fn trust(ctx: &Ctx, machine: bool) -> Result<devd_core::capability::Outcome>
              run update-ca-certificates.",
             cert.display()
         )))
-    }
-    #[cfg(not(any(windows, unix)))]
-    {
-        let _ = machine;
-        Err(DevdError::unsupported(
-            "trusting a certificate authority is not implemented on this platform",
-        ))
     }
 }
 
@@ -622,7 +620,6 @@ pub fn untrust(ctx: &Ctx, machine: bool) -> Result<devd_core::capability::Outcom
 
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        let _ = machine;
         if let Some(trust) = util::which("trust") {
             let out = util::run(
                 &trust,
@@ -642,19 +639,16 @@ pub fn untrust(ctx: &Ctx, machine: bool) -> Result<devd_core::capability::Outcom
                     stderr: util::truncate(out.stderr.trim(), 800),
                 });
             }
-            return Ok(devd_core::capability::Outcome::ok(
-                "the devd certificate authority is no longer trusted",
+            return Ok(devd_core::capability::Outcome::with_data(
+                "the devd certificate authority is no longer trusted in the system store".to_string(),
+                serde_json::json!({
+                    "scope": "system",
+                    "requested_scope": if machine { "machine" } else { "user" },
+                }),
             ));
         }
         Err(DevdError::unsupported(
             "removing a trust anchor needs p11-kit's `trust` command, which is not installed",
-        ))
-    }
-    #[cfg(not(any(windows, unix)))]
-    {
-        let _ = machine;
-        Err(DevdError::unsupported(
-            "untrusting a certificate authority is not implemented on this platform",
         ))
     }
 }

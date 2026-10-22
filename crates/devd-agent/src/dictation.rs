@@ -237,17 +237,19 @@ pub fn install(ctx: &Ctx, model_id: &str) -> Result<Status> {
     Ok(status(ctx))
 }
 
-/// Make a file runnable, where the platform has such a thing.
+/// Make a file runnable.
+#[cfg(unix)]
 fn make_executable(path: &Path) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(path)?.permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(path, perms)?;
-    }
-    #[cfg(not(unix))]
-    let _ = path;
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = std::fs::metadata(path)?.permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(path, perms)?;
+    Ok(())
+}
+
+/// Windows has no executable bit: a file runs by its extension.
+#[cfg(not(unix))]
+fn make_executable(_path: &Path) -> Result<()> {
     Ok(())
 }
 

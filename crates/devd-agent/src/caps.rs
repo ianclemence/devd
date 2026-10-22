@@ -633,8 +633,6 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
     // ------------------------------------------------------------- the team
     {
         let t = team.clone();
-        let h = hub.clone();
-        let _ = h;
         add::<TeamStart, _, _>(reg, "team.start", "Start the agent team on a goal", "Hands a goal to a coordinated team: a planner turns it into tasks with owners, dependencies and acceptance criteria; a person approves the plan; specialists (architect, researcher, implementers, QA, reviewer, infra, docs) do the work in parallel where it is safe, each confined to its own folder, and devd accepts a task only when the tool results prove it. Use `project` for an existing repository or `new_project` for a new one. Only a person can waive plan approval.",
             Tier::Exec, Effect::Process, true, false,
             |_, a| simple("team.start", format!("start a team run: {}", util::truncate(&a.goal, 80))),

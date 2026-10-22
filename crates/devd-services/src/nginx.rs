@@ -434,7 +434,6 @@ pub fn version(install: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use devd_core::config::Settings;
 
     fn site(name: &str, tls: &str) -> Site {
         Site {
@@ -459,12 +458,6 @@ mod tests {
     }
 
     fn render_for(sites: &[Site], http: u16, https: u16) -> String {
-        let settings = Settings {
-            http_port: http,
-            https_port: https,
-            ..Settings::default()
-        };
-        let _ = settings;
         render_text(
             Render {
                 prefix: "D:/devd-home/services/nginx/".to_string(),
