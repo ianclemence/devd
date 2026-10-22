@@ -427,7 +427,7 @@ code, kbd, pre, samp { font-family: var(--mono); }
   transition: background var(--fast), color var(--fast);
 }
 .rail-item .icon { width: 17px; height: 17px; color: var(--fg-dim); transition: color var(--fast); }
-.rail-item.active { background: var(--accent-quiet); color: var(--fg); box-shadow: inset 2px 0 0 var(--accent); }
+.rail-item.active { background: var(--accent-quiet); color: var(--fg); }
 .rail-item.active .icon { color: var(--accent); }
 .rail-item:focus-visible { outline-offset: -2px; }
 
@@ -1007,6 +1007,8 @@ kbd {
   overflow: hidden;
 }
 .panel + .panel { margin-top: var(--s3); }
+/* The notes layout is a grid, not a panel, so it needs the same gap. */
+.panel + .note-layout { margin-top: var(--s3); }
 
 .panel-head {
   display: flex;
