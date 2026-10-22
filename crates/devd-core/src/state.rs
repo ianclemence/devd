@@ -27,6 +27,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (5, include_str!("../sql/005_team.sql")),
     (6, include_str!("../sql/006_site_upstream.sql")),
     (7, include_str!("../sql/007_drop_receipts.sql")),
+    (8, include_str!("../sql/008_goal_loop.sql")),
 ];
 
 /// One audit row. Every capability attempt, successful or not, writes one.

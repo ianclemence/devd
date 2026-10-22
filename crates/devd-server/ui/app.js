@@ -5267,7 +5267,7 @@
 
   // -------------------------------------------------------------------- team
 
-  var TEAM = { runs: null, sel: null, data: null, timer: null, form: { goal: "", project: "", name: "", parallel: 2 }, say: "", open: {} };
+  var TEAM = { runs: null, sel: null, data: null, timer: null, form: { goal: "", done: "", project: "", name: "", parallel: 2 }, say: "", open: {} };
   var TASK_WORD = { pending: "waiting", ready: "ready", running: "working", waiting_approval: "needs your approval", done: "done", unverified: "not accepted", failed: "failed", cancelled: "cancelled", skipped: "accepted by hand", blocked: "blocked" };
   var RUN_WORD = { planning: "planning", awaiting_plan: "plan needs your approval", running: "working", paused: "paused", done: "done", failed: "failed", cancelled: "cancelled" };
 
@@ -5321,6 +5321,7 @@
       '<div class="row-sub">A planner turns this into tasks. You review the plan and approve it before anything runs. Specialists then work in parallel where it is safe, and a task only counts as done when devd can see the proof.</div>' +
       (TEAM.ready ? "" : '<div class="notice notice-warn" style="margin-top:12px">No usable AI provider yet. <button type="button" class="btn btn-mini btn-primary" data-action="nav" data-view="providers">Set one up</button></div>') +
       '<div class="field" style="margin-top:14px"><label class="field-label">Goal</label><textarea class="input" id="team-goal" rows="5" placeholder="e.g. Add password reset by email to the app, with tests. Or: Build a small Laravel blog with posts and comments.">' + esc(f.goal) + "</textarea></div>" +
+      '<div class="field" style="margin-top:10px"><label class="field-label">Definition of done <span class="dim">(optional, one per line)</span></label><textarea class="input" id="team-done" rows="3" placeholder="e.g. The tests pass&#10;The README documents every command">' + esc(f.done) + "</textarea><div class=\"row-sub\">When the work is finished devd checks each line against what the team recorded and starts another pass for any that are not met. Needs the Jev key (judge.configure); without it the lines are listed for you to confirm.</div></div>" +
       '<div class="inline" style="margin-top:10px"><select class="input" id="team-project" style="max-width:280px">' + TEAM.projOpts + "</select>" +
       (f.project === "__new" ? '<input class="input mono" id="team-name" placeholder="new-project-name" value="' + attr(f.name) + '" style="max-width:220px" spellcheck="false">' : "") +
       '<label class="field-label">At most</label><select class="input" id="team-parallel" style="max-width:110px">' + [1, 2, 3, 4].map(function (n) { return '<option value="' + n + '"' + (f.parallel === n ? " selected" : "") + ">" + n + " at once</option>"; }).join("") + "</select>" +
@@ -6006,10 +6007,12 @@
       if (!f.goal.trim()) return toast("warn", "Describe what you want first");
       if (!f.project) return toast("warn", "Choose a project, or a new one");
       var args = { goal: f.goal.trim(), parallel: f.parallel };
+      var done = f.done.split("\n").map(function (l) { return l.trim(); }).filter(Boolean);
+      if (done.length) args.done_when = done;
       if (f.project === "__new") { if (!f.name.trim()) return toast("warn", "Name the new project"); args.new_project = f.name.trim(); } else args.project = f.project;
       run("team.start", args).then(function (o) {
         if (!o) return;
-        TEAM.sel = o.data.id; TEAM.form.goal = ""; TEAM.data = null;
+        TEAM.sel = o.data.id; TEAM.form.goal = ""; TEAM.form.done = ""; TEAM.data = null;
         return loadTeam().then(paintTeam);
       });
     },
@@ -7298,6 +7301,7 @@
   document.addEventListener("input", function (e) {
     var t = e.target;
     if (t.id === "team-goal") TEAM.form.goal = t.value;
+    if (t.id === "team-done") TEAM.form.done = t.value;
     if (t.id === "team-name") TEAM.form.name = t.value;
   });
   document.addEventListener("change", function (e) {

@@ -31,10 +31,11 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use devd_core::capability::Ctx;
+use devd_core::capability::{Approval, Ctx, InvokeRequest};
 use devd_core::{util, ChatEvent, DevdError, Registry, Result, TeamRun, TeamTask};
 
 use crate::chat::Hub;
+use crate::judge;
 use crate::roles::{self, Role};
 
 /// Most tasks a plan may contain.
@@ -42,6 +43,27 @@ pub const MAX_TASKS: usize = 14;
 
 /// Most times a task is started before a person has to look at it.
 pub const MAX_ATTEMPTS: i64 = 3;
+
+/// How likely a criterion must be judged to hold to count as met.
+const MET: f64 = 0.6;
+
+/// Everything needed to start a run.
+pub struct StartRequest {
+    /// What to build or change.
+    pub goal: String,
+    /// An existing project directory.
+    pub project: Option<String>,
+    /// Or the name of a new project.
+    pub new_project: Option<String>,
+    /// Tasks that may run side by side.
+    pub parallel: i64,
+    /// Skip plan approval (a person's choice, checked by the caller).
+    pub auto_approve: bool,
+    /// Criteria the finished work must meet.
+    pub done_when: Vec<String>,
+    /// Extra passes allowed to meet them.
+    pub max_rounds: i64,
+}
 
 /// Commands that count as verification when run through `project.run`.
 const VERIFY_TASKS: &[&str] = &["test", "tests", "lint", "typecheck", "check", "build", "verify", "ci", "compile", "analyze", "analyse", "format-check", "fmt-check"];
@@ -166,6 +188,11 @@ pub fn system_prompt(store: &devd_core::state::Store, t: &TeamTask) -> String {
 /// The first message of a task's conversation.
 fn task_brief(store: &devd_core::state::Store, run: &TeamRun, t: &TeamTask, tasks: &[TeamTask]) -> String {
     let mut s = format!("# The goal\n{}\n\n# Your task: {} ({})\n{}\n", run.goal, t.title, t.key, t.instructions);
+    if let Ok(g) = store.goal_loop(&run.id) {
+        if !g.done_when.is_empty() {
+            s.push_str(&format!("\n# Definition of done\nThe run is finished only when all of these hold; plan and work toward them:\n{}\n", g.done_when.iter().map(|c| format!("- {c}")).collect::<Vec<_>>().join("\n")));
+        }
+    }
     if !t.scope.is_empty() {
         s.push_str(&format!("\nYou may change: {}\n", t.scope.join(", ")));
     }
@@ -218,9 +245,15 @@ impl Team {
         Arc::new(Self { hub, ctx, registry: OnceLock::new(), drivers: Mutex::new(HashSet::new()), stop: Mutex::new(HashMap::new()) })
     }
 
-    /// Give the team the registry and resume runs that were in progress.
+    /// Give the team the registry.
     pub fn attach(self: &Arc<Self>, registry: Arc<Registry>) {
         let _ = self.registry.set(registry);
+        roles::use_custom_dir(&self.ctx.paths.root().join("roles"));
+    }
+
+    /// Resume runs that were in progress when devd last stopped. Only the process
+    /// that owns the agents (see [`crate::host`]) may call this.
+    pub fn recover(self: &Arc<Self>) {
         for run in self.ctx.store.list_runs(100).unwrap_or_default() {
             if matches!(run.state.as_str(), "planning" | "running") {
                 // Whatever was running when devd stopped is not running now.
@@ -260,7 +293,9 @@ impl Team {
 
     /// Start a run. The planner starts at once; nothing else runs until a
     /// person has approved the plan (unless they said not to ask).
-    pub fn start(self: &Arc<Self>, caller: &Ctx, goal: &str, project: Option<&str>, new_project: Option<&str>, parallel: i64, auto_approve: bool) -> Result<TeamRun> {
+    pub fn start(self: &Arc<Self>, caller: &Ctx, req: &StartRequest) -> Result<TeamRun> {
+        let StartRequest { goal, project, new_project, parallel, auto_approve, done_when, max_rounds } = req;
+        let (parallel, auto_approve) = (*parallel, *auto_approve);
         let goal = goal.trim();
         if goal.is_empty() {
             return Err(DevdError::invalid("describe what you want built or changed"));
@@ -290,8 +325,17 @@ impl Team {
             }
             _ => return Err(DevdError::invalid("choose an existing project, or give a name for a new one")),
         };
+        let criteria: Vec<String> = done_when.iter().map(|c| c.trim().to_string()).filter(|c| !c.is_empty()).collect();
+        if criteria.len() > 12 || criteria.iter().any(|c| c.chars().count() > 300) {
+            return Err(DevdError::invalid("a definition of done takes at most 12 criteria of 300 characters each"));
+        }
+        let imported = self.import_for_agents(caller, &dir);
         let title: String = goal.lines().next().unwrap_or("Team run").chars().take(70).collect();
         let run = self.ctx.store.create_run(&title, goal, Some(&dir.display().to_string()), parallel, &caller.actor.label())?;
+        self.ctx.store.set_goal_loop(&run.id, &criteria, *max_rounds)?;
+        if let Some(note) = imported {
+            self.event(&run.id, None, "note", json!({ "text": note }));
+        }
         if auto_approve {
             self.event(&run.id, None, "note", json!({ "text": "Plan approval was waived by the person who started the run." }));
             self.ctx.store.add_team_event(&run.id, None, "auto_approve", &json!({}))?;
@@ -299,6 +343,21 @@ impl Team {
         self.event(&run.id, None, "started", json!({ "goal": goal, "project": dir.display().to_string(), "new_project": new_project.is_some(), "by": caller.actor.label() }));
         self.ensure_driver(&run.id);
         Ok(run)
+    }
+
+    /// Agents may only work in projects a person imported. A person who points a
+    /// run at a folder has said it is a project, so register it for them; say so,
+    /// because it changes what the agents on this run may touch.
+    fn import_for_agents(&self, caller: &Ctx, dir: &Path) -> Option<String> {
+        if caller.actor.is_agent() || devd_stacks::authz::roots(&self.ctx).iter().any(|r| dir.starts_with(r)) {
+            return None;
+        }
+        let registry = self.registry.get()?;
+        let request = InvokeRequest { id: "project.import".into(), args: json!({ "path": dir.display().to_string() }), dry_run: false };
+        match registry.dispatch(caller, &request, Approval::None) {
+            Ok(_) => Some(format!("{} was imported as a project so the team can work in it.", dir.display())),
+            Err(e) => Some(format!("{} could not be imported, so agents may be refused access to it: {e}", dir.display())),
+        }
     }
 
     fn ensure_driver(self: &Arc<Self>, run_id: &str) {
@@ -497,7 +556,8 @@ impl Team {
         if run.state != "paused" {
             return Err(DevdError::conflict(format!("only a paused run can be resumed (it is {})", run.state)));
         }
-        self.ctx.store.set_run_state(run_id, "running", None, None)?;
+        // Before the plan was approved there is nothing to schedule; the planner still has to finish.
+        self.ctx.store.set_run_state(run_id, if run.plan_approved { "running" } else { "planning" }, None, None)?;
         self.event(run_id, None, "resumed", json!({ "by": caller.actor.label() }));
         self.ensure_driver(run_id);
         self.run(run_id)
@@ -520,7 +580,7 @@ impl Team {
         self.ctx.store.update_team_task(&t.id, "pending", None, feedback.as_deref(), None, None, None, None)?;
         self.event(&run.id, Some(&t.id), "retry", json!({ "task": t.key, "by": caller.actor.label(), "note": note }));
         if matches!(run.state.as_str(), "paused" | "failed") {
-            self.ctx.store.set_run_state(&run.id, "running", None, None)?;
+            self.ctx.store.set_run_state(&run.id, if run.plan_approved { "running" } else { "planning" }, None, None)?;
         }
         self.ensure_driver(&run.id);
         Ok(self.ctx.store.get_team_task(task_id)?.expect("exists"))
@@ -674,8 +734,7 @@ impl Team {
                 self.event(&run.id, None, "note", json!({ "text": "devd added a final verification task: completion needs an independent check, not only the implementers' reports." }));
                 return Ok(true);
             }
-            self.finish(run, &tasks)?;
-            return Ok(false);
+            return self.finish(run, &tasks);
         }
         // Stuck: something needs a person.
         let blocked: Vec<String> = real.iter().filter(|t| matches!(t.state.as_str(), "unverified" | "blocked" | "failed")).map(|t| format!("{} ({}): {}", t.key, t.state, t.error.clone().unwrap_or_default())).collect();
@@ -740,7 +799,10 @@ impl Team {
         let message = task_brief(&self.ctx.store, run, t, tasks);
         let thread = match existing_thread {
             Some(id) => {
-                self.hub.follow_up(&id, &format!("The task starts again.\n\n{}", message))?;
+                // After a restart the assistant may already have resumed this conversation; telling it again would clash.
+                if !self.hub.is_running(&id) {
+                    self.hub.follow_up(&id, &format!("The task starts again.\n\n{}", message))?;
+                }
                 self.ctx.store.get_thread(&id)?.expect("exists")
             }
             None => self.hub.open_thread(&workdir.display().to_string(), &format!("{} · {}", role.title, t.title), &message)?,
@@ -891,16 +953,73 @@ impl Team {
         Ok(())
     }
 
-    fn finish(&self, run: &TeamRun, tasks: &[TeamTask]) -> Result<()> {
+    /// Every task is done. If the run has a definition of done, check it before
+    /// calling the run finished; when criteria are unmet and passes remain, add the
+    /// work to meet them. Returns whether the run goes on.
+    fn finish(&self, run: &TeamRun, tasks: &[TeamTask]) -> Result<bool> {
+        let goal = self.ctx.store.goal_loop(&run.id)?;
+        let mut unchecked: Vec<String> = Vec::new();
+        if !goal.done_when.is_empty() {
+            match self.check_criteria(run, tasks, &goal.done_when) {
+                Ok(scores) => {
+                    let unmet: Vec<(&String, f64)> = goal.done_when.iter().zip(scores.iter().copied()).filter(|(_, p)| *p < MET).collect();
+                    self.event(&run.id, None, "criteria", json!({ "round": goal.rounds, "checked_by": "Jev", "results": goal.done_when.iter().zip(scores.iter()).map(|(c, p)| json!({ "criterion": c, "probability": p, "met": *p >= MET })).collect::<Vec<_>>() }));
+                    if !unmet.is_empty() && goal.rounds < goal.max_rounds {
+                        return self.another_pass(run, tasks, &unmet, goal.rounds + 1);
+                    }
+                    unchecked = unmet.iter().map(|(c, p)| format!("not met after {} pass(es) ({:.0}% likely): {c}", goal.rounds, p * 100.0)).collect();
+                }
+                Err(why) => {
+                    self.event(&run.id, None, "note", json!({ "text": format!("The definition of done was not machine-checked: {why}") }));
+                    unchecked = goal.done_when.iter().map(|c| format!("for you to confirm: {c}")).collect();
+                }
+            }
+        }
+        self.conclude(run, tasks, &unchecked)?;
+        Ok(false)
+    }
+
+    /// How likely each criterion is to hold, given what the run recorded. Only
+    /// devd's own evidence summary is sent, never source files.
+    fn check_criteria(&self, run: &TeamRun, tasks: &[TeamTask], criteria: &[String]) -> std::result::Result<Vec<f64>, String> {
+        let judge = judge::Judge::configured(&self.ctx.paths).ok_or("no judge is configured (judge.configure stores a Jev key)")?;
+        let mut state = format!("Goal: {}\n\nWhat the team did, as devd recorded it:\n", run.goal);
+        for t in tasks.iter().filter(|t| t.role != "planner") {
+            let facts: Vec<String> = t.evidence.as_array().into_iter().flatten().filter_map(|f| f["summary"].as_str().map(|s| format!("{} {}", if f["ok"] == true { "passed:" } else { "failed:" }, s))).take(12).collect();
+            state.push_str(&format!("- {} ({}): {}. {}\n  evidence: {}\n", t.title, t.role, t.state, util::truncate(t.result.as_deref().unwrap_or(""), 600), facts.join("; ")));
+        }
+        let statements: Vec<String> = criteria.iter().map(|c| format!("The work satisfies this requirement: {c}")).collect();
+        judge.truths(&state, &statements).map_err(|e| e.to_string())
+    }
+
+    /// Add the work that meets what is still missing, and verify it after.
+    fn another_pass(&self, run: &TeamRun, tasks: &[TeamTask], unmet: &[(&String, f64)], round: i64) -> Result<bool> {
+        let before: Vec<String> = tasks.iter().filter(|t| t.role != "planner").map(|t| t.key.clone()).collect();
+        let mut keys = Vec::new();
+        for (i, (criterion, _)) in unmet.iter().enumerate() {
+            let key = format!("pass{round}-{}", i + 1);
+            let instructions = format!("The run is not finished: this requirement of the definition of done is not yet met, judged from the recorded evidence.\n\nRequirement: {criterion}\n\nLook at the project as it is now, make the change that meets it, and prove it with the project's own checks. Do not redo work that is already accepted.");
+            self.ctx.store.add_task(&run.id, &key, "implementer", &format!("Meet: {}", util::truncate(criterion, 60)), &instructions, &before, &[])?;
+            keys.push(key);
+        }
+        let verify = format!("pass{round}-verify");
+        self.ctx.store.add_task(&run.id, &verify, "qa", "Verify the additional work", "Independently verify the project again: run its own test, lint and build tasks and report exactly what passed and what failed. Do not change application code.", &keys, &[])?;
+        self.ctx.store.bump_round(&run.id)?;
+        self.event(&run.id, None, "note", json!({ "text": format!("{} requirement(s) of the definition of done are not met; devd started pass {round} of {} to meet them.", unmet.len(), self.ctx.store.goal_loop(&run.id).map(|g| g.max_rounds).unwrap_or(round)) }));
+        Ok(true)
+    }
+
+    fn conclude(&self, run: &TeamRun, tasks: &[TeamTask], criteria_notes: &[String]) -> Result<()> {
         let real: Vec<&TeamTask> = tasks.iter().filter(|t| t.role != "planner").collect();
         let verified = real.iter().filter(|t| t.evidence.as_array().map(|e| e.iter().any(|f| f["kind"] == "verify" && f["ok"] == true)).unwrap_or(false)).count();
         let by_hand: Vec<&str> = real.iter().filter(|t| t.state == "skipped").map(|t| t.key.as_str()).collect();
         let lines: Vec<String> = real.iter().map(|t| format!("- {} ({}): {}{}", t.title, t.role, t.state, t.result.as_ref().map(|r| format!(" — {}", util::truncate(r, 200))).unwrap_or_default())).collect();
+        let open = if criteria_notes.is_empty() { String::new() } else { format!("\nDefinition of done, still open:\n{}", criteria_notes.iter().map(|n| format!("- {n}")).collect::<Vec<_>>().join("\n")) };
         let summary = format!(
-            "{} task(s) finished, {} with a passing verification run recorded by devd.{}\n{}",
+            "{} task(s) finished, {} with a passing verification run recorded by devd.{}\n{}{}",
             real.len(), verified,
             if by_hand.is_empty() { String::new() } else { format!(" Accepted by hand without proof: {}.", by_hand.join(", ")) },
-            lines.join("\n")
+            lines.join("\n"), open
         );
         self.ctx.store.set_run_state(&run.id, "done", Some(&summary), None)?;
         self.event(&run.id, None, "done", json!({ "tasks": real.len(), "verified": verified, "accepted_by_hand": by_hand }));

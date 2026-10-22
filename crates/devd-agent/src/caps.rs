@@ -20,9 +20,9 @@ use devd_core::capability::{Ctx, Effect, Outcome, Plan, Tier};
 use devd_core::{browse, util, DevdError, Provider, Registry, Result};
 
 use crate::chat::{Hub, SendRequest};
-use crate::team::{PlanTask, Team};
+use crate::team::{PlanTask, StartRequest, Team};
 use crate::providers;
-use crate::{dictation, docs, fs, health, requirements, roles, search, secrets, skills};
+use crate::{dictation, docs, fs, health, judge, requirements, roles, search, secrets, skills};
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct NoArgs {}
@@ -112,6 +112,26 @@ struct TeamStart {
     /// Skip plan approval. Only a person can ask for this.
     #[serde(default)]
     auto_approve: Option<bool>,
+    /// The definition of done: statements the finished work must satisfy. When Jev
+    /// is configured devd checks each against the recorded evidence and starts
+    /// another pass for any that are not met; otherwise they are listed for you to
+    /// confirm.
+    #[serde(default)]
+    done_when: Option<Vec<String>>,
+    /// Extra passes devd may take to meet the definition of done (0-5, default 2).
+    #[serde(default)]
+    max_rounds: Option<i64>,
+}
+
+/// Store or remove the Jev key.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct JudgeConfigure {
+    /// The TypeSafe API key.
+    #[serde(default)]
+    api_key: Option<String>,
+    /// Remove the stored key instead.
+    #[serde(default)]
+    remove: Option<bool>,
 }
 
 /// Install a skill from a GitHub repository.
@@ -665,7 +685,15 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                 if a.auto_approve.unwrap_or(false) && ctx.store.environment_mode() == "production" {
                     return Err(DevdError::denied("plan approval cannot be waived in production mode"));
                 }
-                let run = t.start(ctx, &a.goal, a.project.as_deref(), a.new_project.as_deref(), a.parallel.unwrap_or(2), a.auto_approve.unwrap_or(false))?;
+                let run = t.start(ctx, &StartRequest {
+                    goal: a.goal.clone(),
+                    project: a.project.clone(),
+                    new_project: a.new_project.clone(),
+                    parallel: a.parallel.unwrap_or(2),
+                    auto_approve: a.auto_approve.unwrap_or(false),
+                    done_when: a.done_when.clone().unwrap_or_default(),
+                    max_rounds: a.max_rounds.unwrap_or(2),
+                })?;
                 Ok(Outcome::with_data("the planner is working; you will be asked to approve the plan", serde_json::to_value(&run)?))
             },
     )?;
@@ -738,12 +766,16 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             let assigned = ctx.store.list_role_models()?;
             let rows: Vec<Value> = roles::all().iter().map(|r| {
                 let m: Vec<Value> = assigned.iter().filter(|a| a.scope.is_empty() && (a.role == r.id)).map(|a| json!({ "provider": a.provider_id, "model": a.model })).collect();
-                json!({ "id": r.id, "title": r.title, "team": r.team, "team_title": roles::TEAMS.iter().find(|t| t.0 == r.team).map(|t| t.1).unwrap_or(r.team), "summary": r.summary, "skills": r.skills, "writes_files": r.writes, "max_tier": match r.max_rank { 0 => "read", 1 => "write", 2 => "exec", _ => "admin (approval)" },
+                json!({ "id": r.id, "title": r.title, "team": r.team, "team_title": roles::TEAMS.iter().find(|t| t.0 == r.team).map(|t| t.1).unwrap_or(r.team), "summary": r.summary, "built_in": roles::is_built_in(r.id), "skills": r.skills, "writes_files": r.writes, "max_tier": match r.max_rank { 0 => "read", 1 => "write", 2 => "exec", _ => "admin (approval)" },
                     "works_in_own_copy": r.isolated,
                     "must_prove": { "change": r.needs.change, "verify": r.needs.verify, "read": r.needs.read, "command": r.needs.command },
                     "models": m })
             }).collect();
-            Ok(Outcome::with_data(format!("{} role(s)", rows.len()), json!(rows)))
+            let mut outcome = Outcome::with_data(format!("{} role(s)", rows.len()), json!(rows));
+            for problem in roles::custom_errors() {
+                outcome = outcome.warn(format!("not loaded: {problem}"));
+            }
+            Ok(outcome)
         },
     )?;
     {
@@ -1095,6 +1127,41 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                 secrets::save_key(&ctx.paths, &p.id, k)?;
             }
             Ok(Outcome::with_data(format!("saved provider {}", p.label), provider_view(ctx, &p)))
+        },
+    )?;
+
+    reg.define::<NoArgs>("judge.status", "Whether Jev is set up to judge a run's definition of done")
+    .description("Jev is TypeSafe's System One model: it answers typed questions with a probability instead of prose. devd uses it only where its own code needs a verdict, such as checking a run's definition of done against the recorded evidence. Reports whether a key is stored, never the key.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .dry_run()
+    .handlers(
+        |_, _| simple("judge.status", "read whether Jev is set up"),
+        |ctx, _| {
+            let source = judge::source(&ctx.paths);
+            let message = if source == "none" { "Jev is not set up; a definition of done is listed for you to confirm instead of checked" } else { "Jev is set up" };
+            Ok(Outcome::with_data(message, json!({ "configured": source != "none", "key_source": source, "sends": "devd's evidence summary for a run with a definition of done: task titles, states, reports and check results. Never source files." })))
+        },
+    )?;
+
+    reg.define::<JudgeConfigure>("judge.configure", "Store or remove the Jev key")
+    .description("Stores the TypeSafe API key privately (an owner-only file, never in the database, logs or API responses), or removes it. TYPESAFE_API_KEY in the environment overrides the file. Human only.")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .human_only()
+    .dry_run()
+    .handlers(
+        |_, a| simple("judge.configure", if a.remove.unwrap_or(false) { "remove the stored Jev key" } else { "store the Jev key" }),
+        |ctx, a| {
+            if a.remove.unwrap_or(false) {
+                judge::delete_key(&ctx.paths);
+                return Ok(Outcome::ok("the stored Jev key is removed"));
+            }
+            let key = a.api_key.as_deref().ok_or_else(|| DevdError::invalid("give the API key, or set remove to true"))?;
+            judge::save_key(&ctx.paths, key)?;
+            Ok(Outcome::ok("the Jev key is stored"))
         },
     )?;
 

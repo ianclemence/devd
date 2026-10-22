@@ -32,6 +32,8 @@ pub mod dictation;
 pub mod docs;
 pub mod fs;
 pub mod health;
+pub mod host;
+pub mod judge;
 pub mod providers;
 pub mod requirements;
 pub mod search;

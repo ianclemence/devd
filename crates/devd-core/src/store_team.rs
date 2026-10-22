@@ -84,6 +84,17 @@ pub struct TeamRun {
     pub updated_at: String,
 }
 
+/// What a run must achieve, in the person's words, and how many extra passes devd may take to get there.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GoalLoop {
+    /// Criteria the finished work must meet.
+    pub done_when: Vec<String>,
+    /// Extra passes made so far.
+    pub rounds: i64,
+    /// Most extra passes allowed.
+    pub max_rounds: i64,
+}
+
 /// One unit of work for one specialist.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TeamTask {
@@ -285,6 +296,34 @@ impl Store {
             Ok(())
         })?;
         Ok(run)
+    }
+
+    /// Record the definition of done a run must meet and how many extra passes it may take.
+    pub fn set_goal_loop(&self, run_id: &str, done_when: &[String], max_rounds: i64) -> Result<()> {
+        self.with(|c| {
+            c.execute(
+                "UPDATE team_runs SET done_when=?2, max_rounds=?3 WHERE id=?1",
+                params![run_id, serde_json::to_string(done_when)?, max_rounds.clamp(0, 5)],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// A run's definition of done and how far through its extra passes it is.
+    pub fn goal_loop(&self, run_id: &str) -> Result<GoalLoop> {
+        self.with(|c| {
+            Ok(c.query_row("SELECT done_when,rounds,max_rounds FROM team_runs WHERE id=?1", params![run_id], |r| {
+                Ok(GoalLoop { done_when: serde_json::from_str(&r.get::<_, String>(0)?).unwrap_or_default(), rounds: r.get(1)?, max_rounds: r.get(2)? })
+            })?)
+        })
+    }
+
+    /// Count one more pass.
+    pub fn bump_round(&self, run_id: &str) -> Result<()> {
+        self.with(|c| {
+            c.execute("UPDATE team_runs SET rounds=rounds+1, updated_at=?2 WHERE id=?1", params![run_id, util::now()])?;
+            Ok(())
+        })
     }
 
     /// One run.

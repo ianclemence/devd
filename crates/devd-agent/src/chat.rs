@@ -223,14 +223,14 @@ impl Hub {
     /// capabilities that hold the hub).
     pub fn attach(&self, registry: Arc<Registry>) {
         let _ = self.registry.set(registry);
-        self.reconcile();
     }
 
     fn registry(&self) -> Result<&Arc<Registry>> {
         self.registry.get().ok_or_else(|| DevdError::internal("the agent is not attached to the capability registry"))
     }
 
-    /// Conversations that were running when devd last stopped are not.
+    /// Conversations that were running when devd last stopped are not. Only the
+    /// process that owns the agents (see [`crate::host`]) may call this.
     pub fn reconcile(&self) {
         if let Ok(threads) = self.ctx.store.list_threads(200) {
             for t in threads.into_iter().filter(|t| t.state == "running") {

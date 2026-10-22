@@ -54,6 +54,7 @@ pub fn run() {
             return;
         }
     };
+    boot.agents.resume(&boot.paths);
     if let Err(e) = run_with(boot) {
         startup_log(&format!("window/backend failed: {e}"));
         show_error(format!("devd could not open its window.\n\n{e}"));

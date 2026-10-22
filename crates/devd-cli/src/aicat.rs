@@ -278,8 +278,8 @@ fn follow_run(app: &App, id: &str) -> Result<()> {
 /// `devd team`.
 pub fn team(app: &App, cmd: TeamCommand) -> Result<()> {
     match cmd {
-        TeamCommand::Start { goal, project, new, parallel, yes_plan, detach } => {
-            let run = app.data("team.start", json!({ "goal": goal, "project": project.as_deref().map(abs_path), "new_project": new, "parallel": parallel, "auto_approve": if yes_plan { Some(true) } else { None } }))?;
+        TeamCommand::Start { goal, project, new, parallel, yes_plan, done_when, rounds, detach } => {
+            let run = app.data("team.start", json!({ "goal": goal, "project": project.as_deref().map(abs_path), "new_project": new, "parallel": parallel, "auto_approve": if yes_plan { Some(true) } else { None }, "done_when": if done_when.is_empty() { None } else { Some(done_when) }, "max_rounds": rounds }))?;
             let id = run["id"].as_str().unwrap_or("").to_string();
             if app.json || detach {
                 println!("{}", serde_json::to_string_pretty(&run).unwrap_or_default());

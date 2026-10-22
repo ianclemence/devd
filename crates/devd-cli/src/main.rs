@@ -468,6 +468,13 @@ pub(crate) enum TeamCommand {
         /// Do not ask for plan approval.
         #[arg(long)]
         yes_plan: bool,
+        /// A requirement the finished work must meet; repeat for more. devd checks each
+        /// one (with Jev, when configured) and starts another pass for any that are not met.
+        #[arg(long = "done-when")]
+        done_when: Vec<String>,
+        /// Extra passes allowed to meet the definition of done.
+        #[arg(long, default_value_t = 2)]
+        rounds: i64,
         /// Return immediately instead of following the run.
         #[arg(long)]
         detach: bool,
@@ -1381,10 +1388,12 @@ fn run(cli: Cli) -> Result<i32> {
             Ok(0)
         }
         Command::Chat(a) => {
+            app.resume_agents();
             aicat::chat(&app, a)?;
             Ok(0)
         }
         Command::Team { cmd } => {
+            app.resume_agents();
             aicat::team(&app, cmd)?;
             Ok(0)
         }
@@ -1482,6 +1491,7 @@ fn run(cli: Cli) -> Result<i32> {
         }
         Command::Doctor => unreachable!("handled before bootstrap"),
         Command::Tui => {
+            app.resume_agents();
             let git_executable = app.settings.git_executable.clone();
             let extra: Vec<devd_tui::ExtraChecks> =
                 vec![Arc::new(move || vec![git_check(git_executable.as_deref())])];
@@ -1520,10 +1530,12 @@ fn run(cli: Cli) -> Result<i32> {
         }
         Command::Setup => setup::run(cli.json, cli.plan, cli.yes),
         Command::Ui { port, no_open } => {
+            app.resume_agents();
             web::serve(app, port, !no_open)?;
             Ok(0)
         }
         Command::Serve { port } => {
+            app.resume_agents();
             let started = web::serve(app, port, false)?;
             if started.reused {
                 println!("attached to the instance already on port {}", started.port);

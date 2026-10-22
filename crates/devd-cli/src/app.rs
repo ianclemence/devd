@@ -41,6 +41,8 @@ pub struct App {
     pub registry: Arc<Registry>,
     /// The process-owning workspace the registry's new capabilities refer to.
     pub workspace: Arc<devd_workspace::Workspace>,
+    /// The built-in agent and team; a long-lived command calls [`App::resume_agents`].
+    pub agents: devd_bootstrap::Agents,
     /// Whether to emit JSON.
     pub json: bool,
     /// Whether to plan only.
@@ -78,6 +80,7 @@ impl App {
             git: boot.git,
             registry: boot.registry,
             workspace: boot.workspace,
+            agents: boot.agents,
             json,
             plan_only,
             assume_yes,
@@ -86,6 +89,13 @@ impl App {
             // why an agent cannot inherit a human's authority by using the CLI.
             actor: Actor::human(Surface::Cli),
         })
+    }
+
+    /// Recover conversations and runs a previous process left half done. Called
+    /// only by commands that stay running and drive agents; a one-shot command
+    /// must not take work from the application running beside it.
+    pub fn resume_agents(&self) {
+        self.agents.resume(&self.paths);
     }
 
     /// Build an execution context for the configured actor.

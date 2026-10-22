@@ -126,6 +126,48 @@ goal -> planner -> [you approve the plan] -> scheduler -> specialists -> final v
 the window has Assistant > Team runs; the terminal dashboard has a Team view and an
 Inbox view; all read `team.get`.
 
+### A definition of done
+
+`team.start` takes `done_when`, a list of statements the finished work must
+satisfy (`devd team start ... --done-when "the tests pass" --done-when "the README
+documents every command"`; the window has a field for it). The planner sees them
+in its brief. When every task is done, devd asks Jev (below) how likely each
+statement is to hold given what the run recorded: task titles, states, reports
+and check results, never source files. A statement under 60% likely is not met;
+devd adds an implementer task for each one and a QA task to verify them, up to
+`max_rounds` extra passes (default 2, at most 5), then checks again. What is
+still open after the last pass is listed in the run's summary. Without a Jev key
+nothing is machine-checked and the run says so: the statements are listed for you
+to confirm.
+
+### Jev
+
+[Jev](https://docs.typesafe.ai) is TypeSafe's System One model: it takes a state
+and typed questions and returns a calibrated probability, not prose to parse.
+That is the right tool where devd's own code, not an agent, needs a verdict.
+`judge.configure` stores the key (an owner-only file; `TYPESAFE_API_KEY` overrides
+it; a person only) and `judge.status` reports whether one is set. It is optional.
+
+### Your own roles
+
+Put a Markdown file in `<devd home>/roles/`, in the same format as the built-in
+roles, and it joins the team. A role of your own may use up to the exec tier, may
+not name extra capabilities, cannot take a built-in's name, and may only carry
+skills that exist. A file that does not load is reported by `team.roles` with the
+reason; the rest of the team is unaffected.
+
+### Who runs the agents
+
+Conversations and runs are driven by threads in one process and recorded in the
+shared database. The application, `devd serve`, the terminal dashboard and the
+commands that follow a run (`devd chat`, `devd team`) are hosts. The first one to
+start claims the agents (`agent-host.pid` in the devd home) and recovers whatever a
+previous process left half done; a one-line command run beside it, such as
+`devd provider list`, never touches the application's work. A run started by a
+command that exits immediately (`devd call team.start`) has no host driving it
+until the next host starts, which resumes it. Use `devd team start` to follow a
+run in the terminal.
+
 ## Skills
 
 Skills are short Markdown instructions agents load with `skills.get` when the work

@@ -732,3 +732,53 @@ fn production_mode_makes_every_agent_change_wait_for_a_person() {
     let health = call(&e, &e.human, "health.status", json!({}), Approval::None).unwrap();
     assert!(health["checks"].as_array().unwrap().iter().any(|c| c["name"] == "environment"));
 }
+
+#[test]
+fn a_definition_of_done_sends_the_team_back_until_it_is_met() {
+    let e = env();
+    let dir = team_project(&e);
+    let file = dir.join("hello.txt").display().to_string();
+    let dir_m = dir.clone();
+    let m = mock(move |_, seen| {
+        let dir = dir_m.clone();
+        let role = role_of(seen);
+        let step = step_of(seen);
+        let body = match (role.as_str(), step) {
+            ("Planner", 0) => invoke("p1", "team.plan_submit", json!({ "tasks": [
+                { "key": "write", "role": "implementer", "title": "Write hello.txt", "instructions": "Create hello.txt, run the test task and report.", "scope": ["hello.txt"] } ] })),
+            ("Planner", _) => anthropic_text("Plan submitted."),
+            ("Implementer", 0) => invoke("i1", "fs.write", json!({ "path": file, "content": "hello\n" })),
+            ("Implementer", 1) => invoke("i2", "project.run", json!({ "path": dir.display().to_string(), "task": "test" })),
+            ("Implementer", 2) => invoke("i3", "team.report", json!({ "status": "done", "summary": "wrote hello.txt; the test task passed" })),
+            ("Qa", 0) | ("QA", 0) => invoke("q1", "project.run", json!({ "path": dir.display().to_string(), "task": "test" })),
+            ("Qa", 1) | ("QA", 1) => invoke("q2", "team.report", json!({ "status": "done", "summary": "tests pass" })),
+            _ => anthropic_text("Done."),
+        };
+        (200, body)
+    });
+    add_provider(&e, "anthropic", &m.base);
+    // Jev says the criterion is unmet the first time and met the second.
+    let jev = mock(|n, _| (200, json!({ "answers": { "q0": { "type": "noul", "noul": if n == 0 { 0.1 } else { 0.95 } } } }).to_string()));
+    std::env::set_var("DEVD_JUDGE_URL", format!("{}/v1/systemone", jev.base));
+    call(&e, &e.human, "judge.configure", json!({ "api_key": "apikey_0123456789abcdef" }), Approval::None).unwrap();
+    assert_eq!(call(&e, &e.agent, "judge.configure", json!({ "api_key": "apikey_0123456789abcdef" }), Approval::None).unwrap_err().code(), "permission_denied");
+
+    let run = call(&e, &e.human, "team.start", json!({ "goal": "Add a hello file", "project": dir.display().to_string(), "parallel": 1, "auto_approve": true, "done_when": ["hello.txt exists"], "max_rounds": 2 }), Approval::None).unwrap();
+    let id = run["id"].as_str().unwrap().to_string();
+    let v = wait_run(&e, &id, &["done", "paused", "failed"]);
+    assert_eq!(v["run"]["state"], "done", "{}", serde_json::to_string_pretty(&v).unwrap());
+    let tasks = v["tasks"].as_array().unwrap();
+    assert!(tasks.iter().any(|t| t["key"] == "pass1-1" && t["state"] == "done"), "an extra pass was made: {tasks:?}");
+    assert!(tasks.iter().any(|t| t["key"] == "pass1-verify" && t["state"] == "done"));
+    let checks: Vec<&Value> = v["events"].as_array().unwrap().iter().filter(|e| e["kind"] == "criteria").collect();
+    assert_eq!(checks.len(), 2, "checked before and after the extra pass");
+    assert_eq!(checks[0]["data"]["results"][0]["met"], false);
+    assert_eq!(checks[1]["data"]["results"][0]["met"], true);
+    // What went to Jev was the documented bearer call carrying devd's own evidence summary.
+    let seen = jev.seen.lock().unwrap();
+    assert_eq!(seen.len(), 2);
+    assert_eq!(seen[0].headers.iter().find(|h| h.0 == "authorization").map(|h| h.1.as_str()), Some("Bearer apikey_0123456789abcdef"));
+    assert_eq!(seen[0].body["questions"]["q0"]["type"], "noul");
+    assert!(seen[0].body["state"].as_str().unwrap().contains("Write hello.txt"));
+    std::env::remove_var("DEVD_JUDGE_URL");
+}

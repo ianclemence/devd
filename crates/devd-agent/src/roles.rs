@@ -32,6 +32,7 @@
 //! there are a fixed handful, they live as long as the process, and nothing
 //! reloads them.
 
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use devd_core::capability::{Capability, Tier};
@@ -192,15 +193,71 @@ fn parse(file: &str, raw: &str) -> Result<Role, String> {
     })
 }
 
-/// Every role, in roster order.
+static CUSTOM_DIR: OnceLock<PathBuf> = OnceLock::new();
+static CUSTOM_ERRORS: OnceLock<Vec<String>> = OnceLock::new();
+
+/// Name the folder a person keeps their own roles in. Call it once, before the
+/// first role is looked up; later calls are ignored because the roster is read once.
+pub fn use_custom_dir(dir: &Path) {
+    let _ = CUSTOM_DIR.set(dir.to_path_buf());
+}
+
+/// Why a role file in the custom folder was not loaded, one line each.
+pub fn custom_errors() -> &'static [String] {
+    all();
+    CUSTOM_ERRORS.get().map(Vec::as_slice).unwrap_or(&[])
+}
+
+/// The roles in a folder: every `*.md` that parses, and a message for each that
+/// does not. A person's role can add to the team but never replace a built-in one.
+fn load_custom(dir: &Path, taken: &[Role]) -> (Vec<Role>, Vec<String>) {
+    let mut roles: Vec<Role> = Vec::new();
+    let mut errors = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else { return (roles, errors) };
+    let mut files: Vec<PathBuf> = entries.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.extension().map(|x| x == "md").unwrap_or(false)).collect();
+    files.sort();
+    for path in files {
+        let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        let raw = match std::fs::read_to_string(&path) {
+            Ok(r) => r.replace("\r\n", "\n"),
+            Err(e) => {
+                errors.push(format!("roles/{stem}.md: cannot be read: {e}"));
+                continue;
+            }
+        };
+        match parse(&stem, &raw) {
+            Err(e) => errors.push(e),
+            Ok(r) if taken.iter().chain(roles.iter()).any(|t| t.id == r.id) => errors.push(format!("roles/{stem}.md: a role named {} already exists", r.id)),
+            Ok(r) if r.max_rank > 2 || !r.extra.is_empty() => errors.push(format!("roles/{stem}.md: your own roles may use up to the exec tier and no extra capabilities")),
+            Ok(r) => match r.skills.iter().find(|name| crate::skills::builtin_description(name).is_none()) {
+                Some(name) => errors.push(format!("roles/{stem}.md: the skill {name} does not exist")),
+                None => roles.push(r),
+            },
+        }
+    }
+    (roles, errors)
+}
+
+/// Every role, in roster order: the built-in team, then the person's own.
 pub fn all() -> &'static [Role] {
     static ROLES: OnceLock<Vec<Role>> = OnceLock::new();
     ROLES.get_or_init(|| {
-        FILES
+        let mut roles: Vec<Role> = FILES
             .iter()
             .map(|(id, raw)| parse(id, raw).unwrap_or_else(|e| panic!("a built-in role is malformed: {e}")))
-            .collect()
+            .collect();
+        if let Some(dir) = CUSTOM_DIR.get() {
+            let (custom, errors) = load_custom(dir, &roles);
+            roles.extend(custom);
+            let _ = CUSTOM_ERRORS.set(errors);
+        }
+        roles
     })
+}
+
+/// Whether a role ships with devd, as opposed to being one a person wrote.
+pub fn is_built_in(id: &str) -> bool {
+    FILES.iter().any(|(f, _)| *f == id)
 }
 
 /// Look up a role.
@@ -243,6 +300,25 @@ pub fn allows(role: &Role, cap: &Capability) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::skills_data::BUILTIN;
+
+    #[test]
+    fn a_persons_own_roles_are_loaded_and_bad_ones_are_explained() {
+        let d = tempfile::tempdir().unwrap();
+        let good = "---\nid: copywriter\ntitle: Copywriter\nteam: knowledge\nsummary: Writes the words in the product\ntier: read\nwrites: true\nisolated: false\nproves: change\nskills: plain-speech\n---\nYou write short, plain copy.\n";
+        std::fs::write(d.path().join("copywriter.md"), good).unwrap();
+        std::fs::write(d.path().join("planner.md"), good.replace("copywriter", "planner")).unwrap();
+        std::fs::write(d.path().join("ghost.md"), good.replace("copywriter", "ghost").replace("plain-speech", "no-such-skill")).unwrap();
+        std::fs::write(d.path().join("broken.md"), "no front matter").unwrap();
+        let (roles, errors) = load_custom(d.path(), all());
+        assert_eq!(roles.iter().map(|r| r.id).collect::<Vec<_>>(), vec!["copywriter"]);
+        assert_eq!(errors.len(), 3, "{errors:?}");
+        let admin = good.replace("copywriter", "gatekeeper").replace("tier: read", "tier: admin");
+        std::fs::write(d.path().join("gatekeeper.md"), admin).unwrap();
+        let (_, errors) = load_custom(d.path(), all());
+        assert!(errors.iter().any(|e| e.contains("up to the exec tier")), "{errors:?}");
+        assert!(errors.iter().any(|e| e.contains("already exists")));
+        assert!(errors.iter().any(|e| e.contains("no-such-skill")));
+    }
 
     #[test]
     fn every_built_in_role_parses_and_matches_its_file() {

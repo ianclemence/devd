@@ -34,6 +34,27 @@ pub struct Bootstrap {
     pub registry: Arc<Registry>,
     /// The process-owning runtime the new capabilities refer to.
     pub workspace: Arc<Workspace>,
+    /// The built-in agent and the team, which a long-lived process starts with [`Bootstrap::resume_agents`].
+    pub agents: Agents,
+}
+
+/// The built-in agent and the team that drives it.
+#[derive(Clone)]
+pub struct Agents {
+    hub: Arc<devd_agent::Hub>,
+    team: Arc<devd_agent::team::Team>,
+}
+
+impl Agents {
+    /// Recover the conversations and runs a previous process left half done, if
+    /// this process is the one that owns the agents. A one-shot command beside a
+    /// running application is not, and leaves the application's work alone.
+    pub fn resume(&self, paths: &Paths) {
+        if devd_agent::host::claim(paths) {
+            self.hub.reconcile();
+            self.team.recover();
+        }
+    }
 }
 
 impl Bootstrap {
@@ -96,6 +117,7 @@ impl Bootstrap {
             git,
             registry,
             workspace,
+            agents: Agents { hub, team },
         })
     }
 }

@@ -31,7 +31,10 @@ Ordered by what makes devd *wrong* today, not by what is easiest.
 | B5 | The assistant's own prompt must follow Anthropic's engineering guidance | **done**: explicit delegation, context isolation, bounded depth, evidence over assertion | `devd-agent/src/chat.rs` `PROMPT` |
 | B6 | Show the roster on a screen, not only in the mention list | **done**: Agents is the team - each member, its permissions, the proof it owes and its skills, with a "Give work" button; terminal sessions moved to a Terminals tab | `ui/app.js` `renderRoster` |
 | B7 | A startup-shaped team: product, design, frontend, backend, mobile, data, security | **done**: fifteen members, each a Markdown file under `crates/devd-agent/roles/` with a skill loadout | `devd-agent/roles/` |
-| B8 | Roles you define yourself, in `<devd home>/roles/` | The built-in team cannot cover every company; additions must never weaken a built-in's permissions | `devd-agent/src/roles.rs` |
+| B8 | Roles you define yourself, in `<devd home>/roles/` | **done**: same file format as the built-ins; a custom role may use up to the exec tier and no extra capabilities, cannot reuse a built-in id, and a file that does not load is named in `team.roles` | `devd-agent/src/roles.rs` |
+| B9 | A definition of done on a run, checked by devd, with extra passes until it is met | **done**: `done_when` on `team.start`; Jev judges each statement against the recorded evidence | `devd-agent/src/team.rs`, `judge.rs` |
+| B10 | Triggers and schedules: start a run from an event or a clock | Not started: needs a host that stays running and a place to keep the definitions | |
+| B11 | Run templates: spec to pull request as a named, versioned pipeline with approval checkpoints | Not started | |
 
 ### C. Memory
 
