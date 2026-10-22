@@ -244,7 +244,28 @@ pub fn cli_exe() -> Result<std::path::PathBuf> {
     Err(DevdError::not_found("the devd command-line program was not found beside this one"))
 }
 
+/// Remove ANSI colour and cursor sequences. Composer, for one, colours "Composer version 2.9.4"
+/// word by word even when its output is captured.
+pub fn strip_ansi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' && chars.peek() == Some(&'[') {
+            chars.next();
+            for n in chars.by_ref() {
+                if n.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 pub fn extract_version(text: &str, pattern: Option<&str>) -> Option<String> {
+    let text = strip_ansi(text);
     let cleaned: String = text
         .lines()
         .filter(|l| !l.starts_with("Picked up"))
@@ -463,6 +484,12 @@ pub fn display_path(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn colour_codes_do_not_hide_a_version() {
+        let composer = "\u{1b}[32mComposer\u{1b}[39m version \u{1b}[33m2.9.4\u{1b}[39m 2026-01-22";
+        assert_eq!(super::extract_version(composer, Some(r"Composer version (\d+\.\d+\.\d+)")).as_deref(), Some("2.9.4"));
+    }
+
     use super::*;
 
     #[test]

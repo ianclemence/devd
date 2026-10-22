@@ -137,6 +137,28 @@ fn child_path(extra: &[PathBuf]) -> Option<std::ffi::OsString> {
     std::env::join_paths(dirs).ok()
 }
 
+/// Add arguments to a command. When the program is a `.cmd`/`.bat` script run through
+/// `cmd.exe`, an argument holding one of cmd's metacharacters is quoted: `composer ... ^4.0`
+/// would otherwise reach Composer as `4.0`, an exact version, because `^` is cmd's escape.
+fn push_args(cmd: &mut Command, through_cmd: bool, args: &[String]) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        for a in args {
+            if through_cmd && a.chars().any(|c| "^&|<>()".contains(c)) && !a.contains(['"', '%', '!']) {
+                cmd.raw_arg(format!("\"{a}\""));
+            } else {
+                cmd.arg(a);
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = through_cmd;
+        cmd.args(args);
+    }
+}
+
 /// Run to completion, streaming each (redacted) line to `on_line`.
 pub fn run_streaming(
     spec: &RunSpec,
@@ -149,7 +171,8 @@ pub fn run_streaming(
     };
     let (exe, lead) = resolve_program(program, &spec.cwd, &spec.extra_path)?;
     let mut cmd = Command::new(&exe);
-    cmd.args(&lead).args(&spec.argv[1..]);
+    cmd.args(&lead);
+    push_args(&mut cmd, !lead.is_empty(), &spec.argv[1..]);
     cmd.current_dir(&spec.cwd);
     for k in STRIPPED_ENV {
         cmd.env_remove(k);
