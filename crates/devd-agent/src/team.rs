@@ -245,6 +245,11 @@ impl Team {
         Arc::new(Self { hub, ctx, registry: OnceLock::new(), drivers: Mutex::new(HashSet::new()), stop: Mutex::new(HashMap::new()) })
     }
 
+    /// The context the team runs in: the system's, with no person behind it.
+    pub(crate) fn context(&self) -> &Ctx {
+        &self.ctx
+    }
+
     /// Give the team the registry.
     pub fn attach(self: &Arc<Self>, registry: Arc<Registry>) {
         let _ = self.registry.set(registry);
@@ -254,6 +259,7 @@ impl Team {
     /// Resume runs that were in progress when devd last stopped. Only the process
     /// that owns the agents (see [`crate::host`]) may call this.
     pub fn recover(self: &Arc<Self>) {
+        crate::schedule::spawn_loop(self.clone());
         for run in self.ctx.store.list_runs(100).unwrap_or_default() {
             if matches!(run.state.as_str(), "planning" | "running") {
                 // Whatever was running when devd stopped is not running now.

@@ -78,6 +78,7 @@ struct Env {
     root: std::path::PathBuf,
     reg: Arc<Registry>,
     hub: Arc<devd_agent::Hub>,
+    team: Arc<devd_agent::team::Team>,
     human: Ctx,
     agent: Ctx,
 }
@@ -113,6 +114,7 @@ fn env() -> Env {
         root,
         reg,
         hub,
+        team,
     }
 }
 
@@ -781,4 +783,86 @@ fn a_definition_of_done_sends_the_team_back_until_it_is_met() {
     assert_eq!(seen[0].body["questions"]["q0"]["type"], "noul");
     assert!(seen[0].body["state"].as_str().unwrap().contains("Write hello.txt"));
     std::env::remove_var("DEVD_JUDGE_URL");
+}
+
+#[test]
+fn a_schedule_starts_a_run_from_its_template_and_never_piles_them_up() {
+    let e = env();
+    let dir = team_project(&e);
+    let m = mock(|_, _| (200, anthropic_text("Nothing to plan.")));
+    add_provider(&e, "anthropic", &m.base);
+    let project = dir.display().to_string();
+
+    // Only a person makes standing instructions.
+    let args = json!({ "name": "nightly", "spec": "every 30m", "project": project, "template": "fix-bug", "params": { "report": "checkout returns a 500" } });
+    assert_eq!(call(&e, &e.agent, "schedule.create", args.clone(), Approval::None).unwrap_err().code(), "permission_denied");
+    // A schedule that could never start is refused now, not at nine o'clock.
+    let missing = json!({ "name": "bad", "spec": "every 30m", "project": project, "template": "fix-bug", "params": {} });
+    assert!(call(&e, &e.human, "schedule.create", missing, Approval::None).unwrap_err().to_string().contains("needs report"));
+    let unreadable = json!({ "name": "bad", "spec": "whenever", "project": project, "template": "fix-bug", "params": { "report": "x" } });
+    assert!(call(&e, &e.human, "schedule.create", unreadable, Approval::None).unwrap_err().to_string().contains("weekdays 09:30"));
+
+    let made = call(&e, &e.human, "schedule.create", args, Approval::None).unwrap();
+    assert_eq!(made["enabled"], true);
+    assert!(made["next_run_at"].is_string());
+    let listed = call(&e, &e.human, "schedule.list", json!({}), Approval::None).unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+
+    // Make it due, and let the clock tick.
+    let store = e.human.store.clone();
+    let team = e.team.clone();
+    store.record_schedule_attempt("nightly", None, None, Some(&(chrono::Utc::now() - chrono::Duration::minutes(1)).to_rfc3339())).unwrap();
+    assert_eq!(devd_agent::schedule::tick(&team).unwrap(), 1);
+    let s = store.get_schedule("nightly").unwrap().unwrap();
+    let run_id = s.last_run_id.clone().expect("a run started");
+    let run = store.get_run(&run_id).unwrap().unwrap();
+    assert!(run.goal.contains("checkout returns a 500"), "{}", run.goal);
+    assert_eq!(run.created_by, "system:daemon", "{}", run.created_by);
+    let goal = store.goal_loop(&run_id).unwrap();
+    assert!(goal.done_when.iter().any(|c| c.contains("root cause")), "the template's definition of done came with it: {goal:?}");
+    assert!(s.next_run_at.unwrap() > chrono::Utc::now().to_rfc3339(), "the next run is in the future");
+
+    // Due again while that run is still going: skipped, and it says why.
+    store.record_schedule_attempt("nightly", None, None, Some(&(chrono::Utc::now() - chrono::Duration::minutes(1)).to_rfc3339())).unwrap();
+    store.set_run_state(&run_id, "running", None, None).unwrap();
+    assert_eq!(devd_agent::schedule::tick(&team).unwrap(), 0);
+    assert!(store.get_schedule("nightly").unwrap().unwrap().last_error.unwrap().contains("still going"));
+
+    // Missed by more than two hours while devd was off: skipped, not fired late.
+    store.set_run_state(&run_id, "done", None, None).unwrap();
+    store.record_schedule_attempt("nightly", None, None, Some(&(chrono::Utc::now() - chrono::Duration::hours(3)).to_rfc3339())).unwrap();
+    assert_eq!(devd_agent::schedule::tick(&team).unwrap(), 0);
+    assert!(store.get_schedule("nightly").unwrap().unwrap().last_error.unwrap().contains("not running"));
+
+    // Off means off.
+    call(&e, &e.human, "schedule.enable", json!({ "name": "nightly", "enabled": false }), Approval::None).unwrap();
+    store.record_schedule_attempt("nightly", None, None, Some(&(chrono::Utc::now() - chrono::Duration::minutes(1)).to_rfc3339())).unwrap();
+    assert_eq!(devd_agent::schedule::tick(&team).unwrap(), 0);
+    call(&e, &e.human, "schedule.delete", json!({ "name": "nightly" }), Approval::None).unwrap();
+    assert!(store.get_schedule("nightly").unwrap().is_none());
+}
+
+#[test]
+fn a_template_fills_its_blanks_and_starts_the_team_with_its_definition_of_done() {
+    let e = env();
+    let dir = team_project(&e);
+    let m = mock(|_, _| (200, anthropic_text("Nothing to plan.")));
+    add_provider(&e, "anthropic", &m.base);
+
+    let list = call(&e, &e.agent, "template.list", json!({}), Approval::None).unwrap();
+    assert!(list.as_array().unwrap().iter().any(|t| t["id"] == "security-review"));
+    let t = call(&e, &e.agent, "template.get", json!({ "id": "spec-to-pr" }), Approval::None).unwrap();
+    assert!(t["body"].as_str().unwrap().contains("{{spec}}"));
+
+    let err = call(&e, &e.human, "template.run", json!({ "id": "spec-to-pr", "project": dir.display().to_string(), "params": {} }), Approval::None).unwrap_err();
+    assert!(err.to_string().contains("needs spec"), "{err}");
+    let run = call(&e, &e.human, "template.run", json!({ "id": "spec-to-pr", "project": dir.display().to_string(), "params": { "spec": "add a health endpoint" }, "done_when": ["it answers in under 50 ms"] }), Approval::None).unwrap();
+    let id = run["id"].as_str().unwrap();
+    let stored = e.human.store.get_run(id).unwrap().unwrap();
+    assert!(stored.goal.contains("add a health endpoint") && !stored.goal.contains("{{spec}}"));
+    let goal = e.human.store.goal_loop(id).unwrap();
+    assert!(goal.done_when.iter().any(|c| c.contains("under 50 ms")) && goal.done_when.len() >= 4, "{goal:?}");
+    // An agent cannot waive plan approval through a template either.
+    let err = call(&e, &e.agent, "template.run", json!({ "id": "security-review", "project": dir.display().to_string(), "auto_approve": true }), Approval::None).unwrap_err();
+    assert_eq!(err.code(), "permission_denied");
 }

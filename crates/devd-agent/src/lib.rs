@@ -38,10 +38,12 @@ pub mod providers;
 pub mod requirements;
 pub mod search;
 pub mod roles;
+pub mod schedule;
 pub mod secrets;
 pub mod skills;
 pub mod skills_data;
 pub mod skills_install;
 pub mod team;
+pub mod templates;
 
 pub use chat::Hub;

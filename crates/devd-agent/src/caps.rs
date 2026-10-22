@@ -22,7 +22,7 @@ use devd_core::{browse, util, DevdError, Provider, Registry, Result};
 use crate::chat::{Hub, SendRequest};
 use crate::team::{PlanTask, StartRequest, Team};
 use crate::providers;
-use crate::{dictation, docs, fs, health, judge, requirements, roles, search, secrets, skills};
+use crate::{dictation, docs, fs, health, judge, requirements, roles, schedule, search, secrets, skills, templates};
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct NoArgs {}
@@ -132,6 +132,77 @@ struct JudgeConfigure {
     /// Remove the stored key instead.
     #[serde(default)]
     remove: Option<bool>,
+}
+
+/// A run template, by id.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct TemplateRef {
+    /// The template id (template.list shows them).
+    id: String,
+}
+
+/// Start the team from a template.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct TemplateRun {
+    /// The template id.
+    id: String,
+    /// Existing project directory (absolute).
+    #[serde(default)]
+    project: Option<String>,
+    /// Or a name for a brand-new project.
+    #[serde(default)]
+    new_project: Option<String>,
+    /// Values for the template's parameters, by name.
+    #[serde(default)]
+    params: Option<serde_json::Map<String, Value>>,
+    /// More criteria for the definition of done, besides the template's own.
+    #[serde(default)]
+    done_when: Option<Vec<String>>,
+    /// Skip plan approval. Only a person can ask for this.
+    #[serde(default)]
+    auto_approve: Option<bool>,
+}
+
+/// A schedule to create.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct ScheduleCreate {
+    /// A short unique name.
+    name: String,
+    /// When: `every 30m`, `every 6h`, `daily 09:30`, `weekdays 09:30`, `mon,wed 18:00` (local time).
+    spec: String,
+    /// The project directory the runs work in (absolute).
+    project: String,
+    /// A run template to start...
+    #[serde(default)]
+    template: Option<String>,
+    /// ...with these values for its parameters.
+    #[serde(default)]
+    params: Option<serde_json::Map<String, Value>>,
+    /// Or a goal written out, instead of a template.
+    #[serde(default)]
+    goal: Option<String>,
+    /// More criteria for the definition of done.
+    #[serde(default)]
+    done_when: Option<Vec<String>>,
+    /// Waive plan approval for the runs it starts. Refused in production mode.
+    #[serde(default)]
+    auto_approve: Option<bool>,
+}
+
+/// A schedule, by name.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct ScheduleRef {
+    /// The schedule's name.
+    name: String,
+}
+
+/// Turn a schedule on or off.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct ScheduleEnable {
+    /// The schedule's name.
+    name: String,
+    /// On or off.
+    enabled: bool,
 }
 
 /// Install a skill from a GitHub repository.
@@ -1623,6 +1694,8 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
     )?;
 
     // ------------------------------------------------------------ health
+    register_automation(reg, team.clone())?;
+
     reg.define::<NoArgs>("health.status", "Operational health")
     .description("Whether devd can be relied on right now. A state (healthy, degraded, starting, setup_incomplete, unknown or critical), a headline, every component with its own state, whether devd needs it, what it means and the fix to offer, plus setup steps and what is waiting for a person. Detection is never reported as health: a service counts as healthy only after it answers.")
     .tier(Tier::Read)
@@ -1637,6 +1710,212 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             Ok(Outcome::with_data(v["headline"].as_str().unwrap_or("health").to_string(), v))
         },
     )?;
+
+    Ok(())
+}
+
+/// Templates and schedules: the team started again and again, by name and on a clock.
+fn register_automation(reg: &mut Registry, team: Arc<Team>) -> Result<()> {
+    reg.define::<NoArgs>("template.list", "List the run templates")
+    .description("Goals written once with blanks, each with the definition of done every run carries. devd ships five (a spec to a reviewed change, a bug fix, a feature, a security review, a release); your own in <devd home>/templates/ join them. A file that does not load is reported as a warning.")
+    .group("template")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .dry_run()
+    .handlers(
+        |_, _| simple("template.list", "list run templates"),
+        |ctx, _| {
+            let (list, errors) = templates::all(&ctx.paths.root().join("templates"));
+            let rows: Vec<Value> = list.iter().map(|t| json!({ "id": t.id, "title": t.title, "summary": t.summary, "params": t.params, "done_when": t.done_when, "built_in": t.built_in })).collect();
+            let mut outcome = Outcome::with_data(format!("{} template(s)", rows.len()), json!(rows));
+            for e in errors {
+                outcome = outcome.warn(format!("not loaded: {e}"));
+            }
+            Ok(outcome)
+        },
+    )?;
+
+    reg.define::<TemplateRef>("template.get", "Read one run template")
+    .description("The template's parameters, its definition of done, and its goal with the blanks showing.")
+    .group("template")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .dry_run()
+    .handlers(
+        |_, a| simple("template.get", format!("read the template {}", a.id)),
+        |ctx, a| {
+            let t = templates::get(&ctx.paths.root().join("templates"), &a.id)?;
+            Ok(Outcome::with_data(t.title.clone(), serde_json::to_value(&t)?))
+        },
+    )?;
+
+    {
+        let t = team.clone();
+        reg.define::<TemplateRun>("template.run", "Start the team from a template")
+        .description("Fills a template's blanks, adds its definition of done and starts the team exactly as team.start does: a planner makes the plan, a person approves it, specialists do the work, and devd checks the criteria. Use project for an existing repository or new_project for a new one.")
+        .group("template")
+        .tier(Tier::Exec)
+        .effect(Effect::Process)
+        .agent_safe()
+        .dry_run()
+        .handlers(
+            |_, a| simple("template.run", format!("start the team from the template {}", a.id)),
+            move |ctx, a| {
+                if a.auto_approve.unwrap_or(false) && ctx.actor.is_agent() {
+                    return Err(DevdError::denied("only a person can waive plan approval"));
+                }
+                if a.auto_approve.unwrap_or(false) && ctx.store.environment_mode() == "production" {
+                    return Err(DevdError::denied("plan approval cannot be waived in production mode"));
+                }
+                let template = templates::get(&ctx.paths.root().join("templates"), &a.id)?;
+                let goal = template.goal(&a.params.clone().unwrap_or_default())?;
+                let mut done_when = template.done_when.clone();
+                done_when.extend(a.done_when.clone().unwrap_or_default());
+                let run = t.start(ctx, &StartRequest {
+                    goal,
+                    project: a.project.clone(),
+                    new_project: a.new_project.clone(),
+                    parallel: template.parallel,
+                    auto_approve: a.auto_approve.unwrap_or(false),
+                    done_when,
+                    max_rounds: 2,
+                })?;
+                Ok(Outcome::with_data("the planner is working; you will be asked to approve the plan", serde_json::to_value(&run)?))
+            },
+        )?;
+    }
+
+    reg.define::<NoArgs>("schedule.list", "List the schedules")
+    .description("Each schedule with when it is next due, the run it last started and why its last attempt did not start one, if it did not.")
+    .group("schedule")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .dry_run()
+    .handlers(
+        |_, _| simple("schedule.list", "list schedules"),
+        |ctx, _| {
+            let rows = ctx.store.list_schedules()?;
+            Ok(Outcome::with_data(format!("{} schedule(s)", rows.len()), serde_json::to_value(&rows)?))
+        },
+    )?;
+
+    reg.define::<ScheduleCreate>("schedule.create", "Run the team on a clock")
+    .description("A standing instruction: at the times given, start a team run on a project from a template (or a goal). It never starts a run while the last one it started is still going, skips an occurrence that was missed by more than two hours, and waits for a person to approve each plan unless auto_approve was set here. It only runs while devd is running (the application, devd serve or the terminal dashboard). Human only.")
+    .group("schedule")
+    .tier(Tier::Write)
+    .effect(Effect::Config)
+    .human_only()
+    .dry_run()
+    .handlers(
+        |_, a| simple("schedule.create", format!("run {} on a schedule: {}", a.template.clone().unwrap_or_else(|| "a goal".into()), a.spec)),
+        |ctx, a| {
+            util::validate_name(&a.name)?;
+            let next = schedule::next_due(&a.spec, chrono::Local::now())?;
+            let dir = std::path::Path::new(&a.project);
+            if !dir.is_absolute() || !dir.is_dir() {
+                return Err(DevdError::invalid("the project must be an existing folder, given as an absolute path"));
+            }
+            let params = a.params.clone().unwrap_or_default();
+            match (&a.template, &a.goal) {
+                (Some(id), None) => {
+                    // Fail now, with the reason, rather than at nine o'clock.
+                    templates::get(&ctx.paths.root().join("templates"), id)?.goal(&params)?;
+                }
+                (None, Some(goal)) if !goal.trim().is_empty() => {}
+                _ => return Err(DevdError::invalid("give a template (with its params) or a goal, not both and not neither")),
+            }
+            let done_when = a.done_when.clone().unwrap_or_default();
+            if done_when.len() > 12 || done_when.iter().any(|c| c.chars().count() > 300) {
+                return Err(DevdError::invalid("a definition of done takes at most 12 criteria of 300 characters each"));
+            }
+            let created = devd_core::Schedule {
+                id: util::new_id(),
+                name: a.name.clone(),
+                spec: a.spec.trim().to_string(),
+                template: a.template.clone(),
+                goal: a.goal.clone(),
+                project: a.project.clone(),
+                params: Value::Object(params),
+                done_when,
+                auto_approve: a.auto_approve.unwrap_or(false),
+                enabled: true,
+                next_run_at: next.clone(),
+                last_run_at: None,
+                last_run_id: None,
+                last_error: None,
+                created_by: ctx.actor.label(),
+                created_at: util::now(),
+            };
+            ctx.store.create_schedule(&created)?;
+            let mut outcome = Outcome::with_data(format!("scheduled {}; next run {}", created.name, next.as_deref().unwrap_or("never")), serde_json::to_value(&created)?);
+            if created.auto_approve {
+                outcome = outcome.warn("plan approval is waived for this schedule's runs (except in production mode)");
+            }
+            Ok(outcome)
+        },
+    )?;
+
+    reg.define::<ScheduleEnable>("schedule.enable", "Turn a schedule on or off")
+    .description("Turning it on works out the next time it is due from now. Runs it already started are not touched. Human only.")
+    .group("schedule")
+    .tier(Tier::Write)
+    .effect(Effect::Config)
+    .human_only()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, a| simple("schedule.enable", format!("turn {} {}", a.name, if a.enabled { "on" } else { "off" })),
+        |ctx, a| {
+            let s = ctx.store.get_schedule(&a.name)?.ok_or_else(|| DevdError::not_found(format!("no schedule named {}", a.name)))?;
+            let next = if a.enabled { schedule::next_due(&s.spec, chrono::Local::now())? } else { None };
+            ctx.store.set_schedule_enabled(&a.name, a.enabled, next.as_deref())?;
+            Ok(Outcome::ok(if a.enabled { "the schedule is on" } else { "the schedule is off" }))
+        },
+    )?;
+
+    reg.define::<ScheduleRef>("schedule.delete", "Delete a schedule")
+    .description("Removes the schedule. Runs it already started are not touched. Human only.")
+    .group("schedule")
+    .tier(Tier::Write)
+    .effect(Effect::Config)
+    .human_only()
+    .dry_run()
+    .handlers(
+        |_, a| simple("schedule.delete", format!("delete the schedule {}", a.name)),
+        |ctx, a| {
+            let removed = ctx.store.delete_schedule(&a.name)?;
+            if !removed {
+                return Err(DevdError::not_found(format!("no schedule named {}", a.name)));
+            }
+            Ok(Outcome::ok("the schedule is deleted"))
+        },
+    )?;
+
+    {
+        let t = team.clone();
+        reg.define::<ScheduleRef>("schedule.run_now", "Start a schedule's run now")
+        .description("Starts the run the schedule describes immediately, without changing when it is next due. A person still approves the plan unless the schedule waives it.")
+        .group("schedule")
+        .tier(Tier::Exec)
+        .effect(Effect::Process)
+        .dry_run()
+        .handlers(
+            |_, a| simple("schedule.run_now", format!("start the run of {} now", a.name)),
+            move |ctx, a| {
+                let s = ctx.store.get_schedule(&a.name)?.ok_or_else(|| DevdError::not_found(format!("no schedule named {}", a.name)))?;
+                let run = schedule::start_run(&t, &s)?;
+                ctx.store.add_team_event(&run.id, None, "note", &json!({ "text": format!("Started now from the schedule `{}` by {}.", s.name, ctx.actor.label()) }))?;
+                ctx.store.record_schedule_attempt(&s.name, Some(&run.id), None, s.next_run_at.as_deref())?;
+                Ok(Outcome::with_data("the run has started", serde_json::to_value(&run)?))
+            },
+        )?;
+    }
 
     Ok(())
 }

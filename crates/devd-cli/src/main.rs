@@ -178,6 +178,16 @@ pub(crate) enum Command {
         #[command(subcommand)]
         cmd: TeamCommand,
     },
+    /// Run templates: a goal written once, with blanks, that the team can be started on again.
+    Template {
+        #[command(subcommand)]
+        cmd: TemplateCommand,
+    },
+    /// Schedules: team runs devd starts on a clock, while devd is running.
+    Schedule {
+        #[command(subcommand)]
+        cmd: ScheduleCommand,
+    },
     /// Skills agents load: playbooks, techniques and principles.
     Skills {
         #[command(subcommand)]
@@ -1045,6 +1055,91 @@ pub(crate) enum HostsCommand {
 }
 
 #[derive(Subcommand, Debug)]
+pub(crate) enum TemplateCommand {
+    /// List the templates, with their parameters.
+    List,
+    /// Show one template: parameters, definition of done and goal.
+    Show {
+        /// Template id.
+        id: String,
+    },
+    /// Start the team from a template and follow the run.
+    Run {
+        /// Template id.
+        id: String,
+        /// Existing project directory.
+        #[arg(long)]
+        project: Option<String>,
+        /// Or the name of a new project.
+        #[arg(long)]
+        new: Option<String>,
+        /// A value for a template parameter, as name=value; repeat for more.
+        #[arg(long = "param", value_name = "NAME=VALUE")]
+        params: Vec<String>,
+        /// More criteria for the definition of done.
+        #[arg(long = "done-when")]
+        done_when: Vec<String>,
+        /// Do not ask for plan approval.
+        #[arg(long)]
+        yes_plan: bool,
+        /// Return immediately instead of following the run.
+        #[arg(long)]
+        detach: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum ScheduleCommand {
+    /// List the schedules and when each is next due.
+    List,
+    /// Run the team on a clock: `every 30m`, `daily 09:30`, `weekdays 09:30`, `mon,wed 18:00`.
+    Create {
+        /// A short unique name.
+        name: String,
+        /// When (local time).
+        spec: String,
+        /// The project directory the runs work in.
+        #[arg(long)]
+        project: String,
+        /// The template to start.
+        #[arg(long)]
+        template: Option<String>,
+        /// A value for a template parameter, as name=value; repeat for more.
+        #[arg(long = "param", value_name = "NAME=VALUE")]
+        params: Vec<String>,
+        /// Or a goal written out.
+        #[arg(long)]
+        goal: Option<String>,
+        /// More criteria for the definition of done.
+        #[arg(long = "done-when")]
+        done_when: Vec<String>,
+        /// Waive plan approval for the runs it starts (never in production mode).
+        #[arg(long)]
+        yes_plan: bool,
+    },
+    /// Turn a schedule on.
+    Enable {
+        /// Schedule name.
+        name: String,
+    },
+    /// Turn a schedule off.
+    Disable {
+        /// Schedule name.
+        name: String,
+    },
+    /// Start a schedule's run now.
+    Run {
+        /// Schedule name.
+        name: String,
+    },
+    /// Delete a schedule.
+    Delete {
+        /// Schedule name.
+        name: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 pub(crate) enum AutostartCommand {
     /// Whether the stack starts when you sign in.
     Status,
@@ -1483,6 +1578,15 @@ fn run(cli: Cli) -> Result<i32> {
         Command::Team { cmd } => {
             app.resume_agents();
             aicat::team(&app, cmd)?;
+            Ok(0)
+        }
+        Command::Template { cmd } => {
+            app.resume_agents();
+            aicat::template(&app, cmd)?;
+            Ok(0)
+        }
+        Command::Schedule { cmd } => {
+            aicat::schedule(&app, cmd)?;
             Ok(0)
         }
         Command::Skills { cmd } => {

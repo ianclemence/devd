@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use devd_core::{DevdError, Result};
 
 use crate::app::App;
-use crate::{ApprovalsCommand, ChatArgs, InboxCommand, ModelsCommand, ProviderCommand, SkillsCommand, TeamCommand};
+use crate::{ApprovalsCommand, ChatArgs, InboxCommand, ModelsCommand, ProviderCommand, ScheduleCommand, SkillsCommand, TeamCommand, TemplateCommand};
 
 fn ask(prompt: &str) -> Option<String> {
     eprint!("{prompt}");
@@ -314,6 +314,68 @@ pub fn team(app: &App, cmd: TeamCommand) -> Result<()> {
         TeamCommand::Cancel { run } => app.invoke("team.cancel", json!({ "run": run })),
         TeamCommand::Retry { task, note } => app.invoke("team.retry", json!({ "task": task, "note": note })),
         TeamCommand::Accept { task } => app.invoke("team.accept", json!({ "task": task })),
+    }
+}
+
+/// `name=value` pairs as a JSON object.
+fn pairs(items: &[String]) -> Result<serde_json::Map<String, serde_json::Value>> {
+    let mut out = serde_json::Map::new();
+    for item in items {
+        let (k, v) = item.split_once('=').ok_or_else(|| devd_core::DevdError::invalid(format!("`{item}` should be name=value")))?;
+        out.insert(k.trim().to_string(), json!(v));
+    }
+    Ok(out)
+}
+
+/// `devd template`.
+pub fn template(app: &App, cmd: TemplateCommand) -> Result<()> {
+    match cmd {
+        TemplateCommand::List => app.invoke("template.list", json!({})),
+        TemplateCommand::Show { id } => app.invoke("template.get", json!({ "id": id })),
+        TemplateCommand::Run { id, project, new, params, done_when, yes_plan, detach } => {
+            let run = app.data(
+                "template.run",
+                json!({
+                    "id": id,
+                    "project": project.as_deref().map(abs_path),
+                    "new_project": new,
+                    "params": pairs(&params)?,
+                    "done_when": if done_when.is_empty() { None } else { Some(done_when) },
+                    "auto_approve": if yes_plan { Some(true) } else { None },
+                }),
+            )?;
+            let id = run["id"].as_str().unwrap_or("").to_string();
+            if app.json || detach {
+                println!("{}", serde_json::to_string_pretty(&run).unwrap_or_default());
+                return Ok(());
+            }
+            println!("run {id} started; the planner is working");
+            follow_run(app, &id)
+        }
+    }
+}
+
+/// `devd schedule`.
+pub fn schedule(app: &App, cmd: ScheduleCommand) -> Result<()> {
+    match cmd {
+        ScheduleCommand::List => app.invoke("schedule.list", json!({})),
+        ScheduleCommand::Create { name, spec, project, template, params, goal, done_when, yes_plan } => app.invoke(
+            "schedule.create",
+            json!({
+                "name": name,
+                "spec": spec,
+                "project": abs_path(&project),
+                "template": template,
+                "params": pairs(&params)?,
+                "goal": goal,
+                "done_when": if done_when.is_empty() { None } else { Some(done_when) },
+                "auto_approve": if yes_plan { Some(true) } else { None },
+            }),
+        ),
+        ScheduleCommand::Enable { name } => app.invoke("schedule.enable", json!({ "name": name, "enabled": true })),
+        ScheduleCommand::Disable { name } => app.invoke("schedule.enable", json!({ "name": name, "enabled": false })),
+        ScheduleCommand::Run { name } => app.invoke("schedule.run_now", json!({ "name": name })),
+        ScheduleCommand::Delete { name } => app.invoke("schedule.delete", json!({ "name": name })),
     }
 }
 

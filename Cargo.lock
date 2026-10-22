@@ -928,6 +928,7 @@ name = "devd-agent"
 version = "0.9.0"
 dependencies = [
  "base64 0.22.1",
+ "chrono",
  "devd-core",
  "devd-git",
  "devd-mcp",
