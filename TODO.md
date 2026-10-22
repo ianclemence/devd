@@ -33,8 +33,8 @@ Ordered by what makes devd *wrong* today, not by what is easiest.
 | B7 | A startup-shaped team: product, design, frontend, backend, mobile, data, security | **done**: fifteen members, each a Markdown file under `crates/devd-agent/roles/` with a skill loadout | `devd-agent/roles/` |
 | B8 | Roles you define yourself, in `<devd home>/roles/` | **done**: same file format as the built-ins; a custom role may use up to the exec tier and no extra capabilities, cannot reuse a built-in id, and a file that does not load is named in `team.roles` | `devd-agent/src/roles.rs` |
 | B9 | A definition of done on a run, checked by devd, with extra passes until it is met | **done**: `done_when` on `team.start`; Jev judges each statement against the recorded evidence | `devd-agent/src/team.rs`, `judge.rs` |
-| B10 | Triggers and schedules: start a run from an event or a clock | Not started: needs a host that stays running and a place to keep the definitions | |
-| B11 | Run templates: spec to pull request as a named, versioned pipeline with approval checkpoints | Not started | |
+| B10 | Triggers and schedules: start a run from a clock | **done**: schedules (`every 6h`, `weekdays 09:30`) start a run from a template or a goal while a host process runs; event triggers other than `schedule.run_now` and `template.run` from a script are not built | `devd-agent/src/schedule.rs` |
+| B11 | Run templates: spec to pull request as a named pipeline | **done**: five built-ins and your own, each with a definition of done; approval checkpoints are the plan approval and the criteria check | `devd-agent/src/templates.rs` |
 
 ### C. Memory
 
