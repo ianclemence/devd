@@ -30,6 +30,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (8, include_str!("../sql/008_goal_loop.sql")),
     (9, include_str!("../sql/009_drop_sessions.sql")),
     (10, include_str!("../sql/010_schedules.sql")),
+    (11, include_str!("../sql/011_runtime_pins.sql")),
 ];
 
 /// One audit row. Every capability attempt, successful or not, writes one.

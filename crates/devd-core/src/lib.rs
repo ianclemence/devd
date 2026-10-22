@@ -24,6 +24,7 @@ pub mod registry;
 pub mod schedule;
 pub mod state;
 pub mod store_ai;
+pub mod store_pins;
 pub mod store_schedule;
 pub mod store_team;
 pub mod store_stacks;

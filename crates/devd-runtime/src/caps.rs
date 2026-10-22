@@ -50,6 +50,10 @@ args! {
     VersionArgs { kind: String, version: String }
     /// A PHP version to make the default for new sites.
     UseArgs { version: String }
+    /// A project's runtime pin; no version clears it.
+    PinArgs { project: String, kind: String, version: Option<String> }
+    /// Which project's pins to list; none lists every project's.
+    PinsArgs { project: Option<String> }
 }
 
 /// Register every runtime capability.
@@ -282,6 +286,70 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
+    reg.define::<PinArgs>("runtime.pin", "Pin a project to a runtime version, or clear the pin")
+    .description("The project's commands, tasks and processes run with this installed version of PHP,          Node, Go, Python or Ruby instead of the machine default. The version may be a series          such as 3.12. Omit the version to clear the pin.")
+    .group("runtime")
+    .tier(Tier::Write)
+    .effect(Effect::Config)
+    .agent_safe()
+    .idempotent()
+    .handlers(
+        |ctx, args| {
+            check_pin(ctx, &args)?;
+            Ok(Plan::new("runtime.pin", match &args.version {
+                Some(v) => format!("run {} with {} {v}", args.project, args.kind),
+                None => format!("clear the {} pin of {}", args.kind, args.project),
+            })
+            .step("record the choice in the state store"))
+        },
+        |ctx, args| {
+            check_pin(ctx, &args)?;
+            match &args.version {
+                Some(v) => {
+                    ctx.store.set_runtime_pin(&args.project, &args.kind, v)?;
+                    Ok(Outcome::with_data(format!("{} runs with {} {v}", args.project, args.kind), json!({ "project": args.project, "kind": args.kind, "version": v })))
+                }
+                None => {
+                    let had = ctx.store.clear_runtime_pin(&args.project, &args.kind)?;
+                    Ok(Outcome::with_data(if had { "pin cleared" } else { "there was no pin" }.to_string(), json!({ "project": args.project, "kind": args.kind, "cleared": had })))
+                }
+            }
+        },
+    )?;
+
+    reg.define::<PinsArgs>("runtime.pins", "List the runtime versions projects are pinned to")
+    .group("runtime")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .handlers(|_, _| Ok(Plan::new("runtime.pins", "list the pins")), |ctx, args| {
+        let rows = match &args.project {
+            Some(p) => ctx.store.runtime_pins_of(p)?.into_iter().map(|(k, v)| (p.clone(), k, v)).collect(),
+            None => ctx.store.runtime_pins()?,
+        };
+        let pins: Vec<Value> = rows.into_iter().map(|(project, kind, version)| json!({ "project": project, "kind": kind, "version": version })).collect();
+        Ok(Outcome::with_data(format!("{} pin(s)", pins.len()), json!({ "pins": pins })))
+    })?;
+
+    Ok(())
+}
+
+/// A pin must name a project folder, a known kind, and a version that is installed
+/// (or a series of one).
+fn check_pin(ctx: &Ctx, args: &PinArgs) -> Result<()> {
+    if !std::path::Path::new(&args.project).is_dir() {
+        return Err(devd_core::DevdError::not_found(format!("{} is not a folder", args.project)));
+    }
+    if !runtimes::KINDS.contains(&args.kind.as_str()) {
+        return Err(devd_core::DevdError::unsupported(format!("unknown runtime kind {}; use one of {}", args.kind, runtimes::KINDS.join(", "))));
+    }
+    if let Some(v) = &args.version {
+        let ok = ctx.store.runtimes_of_kind(&args.kind)?.iter().any(|r| r.version == *v || r.version.strip_prefix(v.as_str()).is_some_and(|rest| rest.starts_with('.')));
+        if !ok {
+            return Err(devd_core::DevdError::not_found(format!("{} {v} is not installed; run `devd runtime install {}@{v}`", args.kind, args.kind)));
+        }
+    }
     Ok(())
 }
 
@@ -365,6 +433,8 @@ mod tests {
                 "runtime.available",
                 "runtime.install",
                 "runtime.list",
+                "runtime.pin",
+                "runtime.pins",
                 "runtime.remove",
                 "runtime.use",
                 "runtime.verify",

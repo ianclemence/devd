@@ -33,6 +33,24 @@ pub fn managed_dirs(ctx: &Ctx) -> Vec<PathBuf> {
     out
 }
 
+/// The same, for one project: a runtime the project pinned wins over the machine default.
+pub fn managed_dirs_for(ctx: &Ctx, project: &std::path::Path) -> Vec<PathBuf> {
+    let key = project.display().to_string();
+    let mut out = Vec::new();
+    for kind in devd_runtime::KINDS {
+        if let Ok(exe) = devd_runtime::executable_for(ctx, Some(&key), kind) {
+            if let Some(dir) = exe.parent() {
+                for d in [Some(dir.to_path_buf()), Some(dir.join("Scripts")).filter(|p| *kind == "python" && p.is_dir())].into_iter().flatten() {
+                    if !out.contains(&d) {
+                        out.push(d);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Probe the named tools (unknown ids are skipped).
 pub fn probe(reg: &StackRegistry, ids: &[String], dirs: &[PathBuf]) -> BTreeMap<String, ToolStatus> {
     let mut out = BTreeMap::new();

@@ -368,7 +368,7 @@ pub fn run(ctx: &Ctx, dir: &Path, task: &TaskInfo, args: &[String], req: &RunTas
         }
         argv.extend(args.iter().cloned());
     }
-    let dirs = toolchain::managed_dirs(ctx);
+    let dirs = toolchain::managed_dirs_for(ctx, dir);
     let run_id = req.run_id.clone().unwrap_or_else(util::new_id);
     let log = ctx.paths.logs().join("stacks").join(format!("task-{run_id}.log"));
     let display = exec::redact_argv(&argv).join(" ");
@@ -509,7 +509,7 @@ pub fn exec_allowed(ctx: &Ctx, reg: &StackRegistry, stack: Option<&StackDef>, pm
     if matches!(base.as_str(), "sh" | "bash" | "zsh" | "cmd" | "powershell" | "pwsh" | "sudo" | "su") {
         return Err(DevdError::denied("shells and privilege tools are never allowed"));
     }
-    let dirs = toolchain::managed_dirs(ctx);
+    let dirs = toolchain::managed_dirs_for(ctx, dir);
     let cancel = AtomicBool::new(false);
     exec::run_streaming(
         &RunSpec { argv: argv.to_vec(), cwd: dir.to_path_buf(), env: vec![], extra_path: dirs, timeout: Some(Duration::from_secs(timeout.clamp(1, 3600))) },

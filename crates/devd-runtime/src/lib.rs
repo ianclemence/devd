@@ -607,6 +607,30 @@ pub fn executable(ctx: &Ctx, kind: &str, version: Option<&str>) -> Result<PathBu
     Ok(exe)
 }
 
+/// The installed runtime a pin names: the exact version, or the newest of a series.
+fn pick_pinned<'a>(installed: &'a [Runtime], pin: &str) -> Option<&'a Runtime> {
+    installed
+        .iter()
+        .filter(|r| r.version == pin || r.version.strip_prefix(pin).is_some_and(|rest| rest.starts_with('.')))
+        .max_by_key(|r| catalogue::version_key(&r.version))
+}
+
+/// Resolve the executable of a runtime for one project: its pin when it has one
+/// (an installed version, or a series such as `3.12` meaning the newest 3.12.x),
+/// otherwise what [`executable`] picks.
+pub fn executable_for(ctx: &Ctx, project: Option<&str>, kind: &str) -> Result<PathBuf> {
+    if let Some(project) = project {
+        let pin = ctx.store.runtime_pins_of(project)?.into_iter().find(|(k, _)| k == kind).map(|(_, v)| v);
+        if let Some(pin) = pin {
+            let installed = ctx.store.runtimes_of_kind(kind)?;
+            let chosen = pick_pinned(&installed, &pin)
+                .ok_or_else(|| DevdError::not_found(format!("this project is pinned to {kind} {pin}, which is not installed; run `devd runtime install {kind}@{pin}`")))?;
+            return executable(ctx, kind, Some(&chosen.version));
+        }
+    }
+    executable(ctx, kind, None)
+}
+
 /// The runtime component of the environment check.
 pub fn doctor_check(paths: &Paths) -> Vec<Check> {
     let Ok(store) = Store::open(&paths.state_db()) else {
@@ -716,6 +740,16 @@ mod tests {
             "{checks:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_pin_names_a_version_or_the_newest_of_a_series() {
+        let rt = |v: &str| Runtime { id: runtime_id("python", v), kind: "python".into(), version: v.into(), path: String::new(), digest: None, pinned: false, installed_at: String::new() };
+        let installed = vec![rt("3.12.4"), rt("3.12.15"), rt("3.13.1"), rt("3.1.9")];
+        assert_eq!(pick_pinned(&installed, "3.12").unwrap().version, "3.12.15");
+        assert_eq!(pick_pinned(&installed, "3.12.4").unwrap().version, "3.12.4");
+        assert_eq!(pick_pinned(&installed, "3.1").unwrap().version, "3.1.9", "3.1 must not match 3.12");
+        assert!(pick_pinned(&installed, "3.11").is_none());
     }
 
     #[test]

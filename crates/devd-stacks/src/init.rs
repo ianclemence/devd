@@ -809,7 +809,7 @@ fn run_steps(
 ) -> Result<InitReport> {
     let project_dir = PathBuf::from(&plan.project_dir);
     let parent = PathBuf::from(&plan.parent_dir);
-    let dirs = toolchain::managed_dirs(ctx);
+    let dirs = toolchain::managed_dirs_for(ctx, &project_dir);
     let emit = |msg: String, data: Value| ctx.events.emit_with("stack.progress", msg, data);
     std::fs::create_dir_all(&parent)?;
     let existed_before = project_dir.exists();

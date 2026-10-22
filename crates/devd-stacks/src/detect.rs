@@ -557,7 +557,7 @@ pub fn detect(ctx: &Ctx, reg: &StackRegistry, dir: &Path, stack_override: Option
 
     // Tools.
     let scripts: ProjectScripts = tasks::read_scripts(dir);
-    let dirs = toolchain::managed_dirs(ctx);
+    let dirs = toolchain::managed_dirs_for(ctx, dir);
     let mut tool_ids: Vec<String> = Vec::new();
     if let Some(s) = stack {
         if let Some(r) = &s.runtime {

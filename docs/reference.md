@@ -14,6 +14,8 @@ devd runtime install ruby@3.3      # Windows only (RubyInstaller); other platfor
 devd runtime list
 devd runtime verify php
 devd runtime use php@8.4          # the version new sites use
+devd runtime pin python@3.12     # this project (current folder) runs with Python 3.12.x; --clear removes it
+devd runtime pins
 devd runtime remove php@8.2       # destructive: asks for approval
 ```
 

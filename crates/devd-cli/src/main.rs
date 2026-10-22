@@ -904,6 +904,19 @@ pub(crate) enum RuntimeCommand {
         /// An installed version, e.g. `8.3.35`.
         version: String,
     },
+    /// Run a project with its own runtime version (`python@3.12`), or clear the pin with `--clear`.
+    Pin {
+        /// Kind and version or series, e.g. `python@3.12`.
+        spec: String,
+        /// The project folder (default: the current folder).
+        #[arg(long)]
+        project: Option<std::path::PathBuf>,
+        /// Remove the pin instead of setting it.
+        #[arg(long)]
+        clear: bool,
+    },
+    /// List the runtime versions projects are pinned to.
+    Pins,
 }
 
 #[derive(Subcommand, Debug)]

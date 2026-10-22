@@ -72,6 +72,15 @@ pub fn run(app: &App, cmd: RuntimeCommand) -> Result<()> {
             )
         }
         RuntimeCommand::Use { version } => app.invoke("runtime.use", json!({ "version": version })),
+        RuntimeCommand::Pin { spec, project, clear } => {
+            let (kind, version) = split_spec(&spec)?;
+            let project = match project {
+                Some(p) => p,
+                None => std::env::current_dir()?,
+            };
+            app.invoke("runtime.pin", json!({ "project": project.display().to_string(), "kind": kind, "version": if clear { None } else { Some(version) } }))
+        }
+        RuntimeCommand::Pins => app.invoke("runtime.pins", json!({})),
     }
 }
 
