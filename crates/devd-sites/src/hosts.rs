@@ -307,6 +307,93 @@ pub fn sync(ctx: &Ctx) -> Result<serde_json::Value> {
     }))
 }
 
+/// The `devd` command-line program: this one, or the one beside the window.
+fn cli_exe() -> Result<PathBuf> {
+    let me = std::env::current_exe()?;
+    if me.file_stem().map(|s| s.eq_ignore_ascii_case("devd")).unwrap_or(false) {
+        return Ok(me);
+    }
+    let sibling = me.with_file_name(if cfg!(windows) { "devd.exe" } else { "devd" });
+    if sibling.is_file() {
+        return Ok(sibling);
+    }
+    Err(DevdError::not_found("the devd command-line program was not found beside this one"))
+}
+
+/// Standard base64, which `powershell -EncodedCommand` takes UTF-16 text in.
+fn base64(bytes: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for chunk in bytes.chunks(3) {
+        let n = (chunk[0] as u32) << 16 | (*chunk.get(1).unwrap_or(&0) as u32) << 8 | *chunk.get(2).unwrap_or(&0) as u32;
+        out.push(T[(n >> 18) as usize & 63] as char);
+        out.push(T[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 { T[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 2 { T[n as usize & 63] as char } else { '=' });
+    }
+    out
+}
+
+/// The PowerShell that runs `devd hosts sync` in an elevated process, asking Windows
+/// for permission the way any installer does. The person sees the consent prompt
+/// and answers it; devd never sees a password.
+fn elevation_script(exe: &Path, home: Option<&str>) -> String {
+    let q = |s: &str| s.replace('\'', "''");
+    let set = home.map(|h| format!("set \"DEVD_HOME={h}\" && ")).unwrap_or_default();
+    let line = format!("{set}\"{}\" hosts sync --yes", exe.display());
+    format!(
+        "$ErrorActionPreference = 'Stop'\n\
+         try {{ $p = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c', '{}') -Verb RunAs -Wait -PassThru -WindowStyle Hidden; exit $p.ExitCode }}\n\
+         catch {{ [Console]::Error.WriteLine($_.Exception.Message); exit 1223 }}\n",
+        q(&line)
+    )
+}
+
+/// Write the hosts file from an elevated process (Windows only).
+///
+/// Used when the ordinary write was refused. The elevated child is `devd hosts
+/// sync`, the same operation, so what it writes is what was planned and approved.
+pub fn sync_elevated(ctx: &Ctx) -> Result<serde_json::Value> {
+    if !cfg!(windows) {
+        return Err(DevdError::unsupported(
+            "devd asks for elevation on Windows only; on this system run `sudo devd hosts sync`",
+        ));
+    }
+    let exe = cli_exe()?;
+    let home = std::env::var("DEVD_HOME").ok().filter(|h| !h.is_empty());
+    let script = elevation_script(&exe, home.as_deref());
+    let utf16: Vec<u8> = script.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+    let out = util::run(
+        Path::new("powershell.exe"),
+        &["-NoProfile".to_string(), "-NonInteractive".to_string(), "-EncodedCommand".to_string(), base64(&utf16)],
+        None,
+        &[],
+        Some(std::time::Duration::from_secs(180)),
+    )?;
+    if out.code == 1223 {
+        return Err(DevdError::denied(
+            "Windows did not give permission to change the hosts file (the prompt was declined or closed)",
+        ));
+    }
+    if out.code != 0 {
+        return Err(DevdError::Command {
+            program: "elevated hosts sync".to_string(),
+            code: out.code,
+            stderr: util::truncate(format!("{}{}", out.stdout, out.stderr).trim(), 1500),
+        });
+    }
+    let entries = entries_for(&ctx.store.list_sites()?);
+    let current = current_entries().unwrap_or_default();
+    let missing: Vec<&Entry> = entries.iter().filter(|e| !current.iter().any(|c| c.host.eq_ignore_ascii_case(&e.host))).collect();
+    if !missing.is_empty() {
+        return Err(DevdError::internal(format!(
+            "the elevated process finished but {} name(s) are still missing from the hosts file",
+            missing.len()
+        )));
+    }
+    Ok(serde_json::json!({ "file": path().display().to_string(), "entries": entries, "changed": true, "elevated": true }))
+}
+
 fn snapshot_file(ctx: &Ctx, file: &Path, contents: &str, entries: &[Entry]) -> Result<String> {
     let dir = ctx.paths.snapshots();
     std::fs::create_dir_all(&dir)?;
@@ -340,6 +427,25 @@ fn snapshot_file(ctx: &Ctx, file: &Path, contents: &str, entries: &[Entry]) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn base64_matches_the_standard_vectors() {
+        assert_eq!(base64(b""), "");
+        assert_eq!(base64(b"M"), "TQ==");
+        assert_eq!(base64(b"Ma"), "TWE=");
+        assert_eq!(base64(b"Man"), "TWFu");
+        assert_eq!(base64(b"hello world"), "aGVsbG8gd29ybGQ=");
+    }
+
+    #[test]
+    fn the_elevation_script_asks_windows_and_runs_the_same_sync() {
+        let script = elevation_script(Path::new(r"C:\Program Files\devd\devd.exe"), Some(r"D:\it's home"));
+        assert!(script.contains("-Verb RunAs") && script.contains("-Wait"));
+        assert!(script.contains("hosts sync --yes"));
+        // A quote in a path cannot end the PowerShell string it sits in.
+        assert!(script.contains("it''s home"), "{script}");
+        assert!(script.contains("exit 1223"), "a declined prompt is reported as such");
+    }
 
     fn site(host: &str) -> Site {
         Site {

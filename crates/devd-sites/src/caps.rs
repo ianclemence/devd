@@ -46,6 +46,8 @@ args! {
     SetUpstreamArgs { name: String, upstream: Option<String> }
     /// A folder of projects.
     FolderArgs { path: String }
+    /// Whether to ask Windows for permission when the hosts file cannot be written.
+    HostsSyncArgs { elevate: Option<bool> }
     /// A site to pin to a PHP version.
     SetPhpArgs { name: String, version: Option<String> }
 }
@@ -434,11 +436,13 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
-    reg.define::<NoArgs>("hosts.sync", "Sync the hosts file")
+    reg.define::<HostsSyncArgs>("hosts.sync", "Sync the hosts file")
     .description("Writes the managed block in the system hosts file so that every site hostname \
          resolves, snapshotting the file first. Everything outside the block is preserved \
          exactly, including the file's own line endings. On Windows the real hosts file needs \
-         an elevated shell, and the refusal is reported as the operating system gives it.")
+         administrator rights: with elevate, devd asks Windows for them (the consent prompt you \
+         know from installers) and runs the same sync in an elevated process; without it the \
+         refusal is reported as the operating system gives it.")
     .group("hosts")
     .tier(Tier::Admin)
     .effect(Effect::System)
@@ -472,8 +476,11 @@ pub fn register(reg: &mut Registry) -> Result<()> {
                     "removing": plan.removing,
                 })))
         },
-        |ctx, _| {
-            let result = sites::hosts::sync(ctx)?;
+        |ctx, a| {
+            let result = match sites::hosts::sync(ctx) {
+                Err(DevdError::Denied(_)) if a.elevate.unwrap_or(false) && cfg!(windows) => sites::hosts::sync_elevated(ctx)?,
+                other => other?,
+            };
             let changed = result
                 .get("changed")
                 .and_then(Value::as_bool)

@@ -1030,9 +1030,13 @@ pub(crate) enum SiteCommand {
 pub(crate) enum HostsCommand {
     /// Show what devd has in the hosts file, and what a sync would change.
     Show,
-    /// Write the managed block in the hosts file. Needs an elevated shell on
-    /// Windows.
-    Sync,
+    /// Write the managed block in the hosts file. Needs administrator rights;
+    /// on Windows, `--elevate` asks for them with the usual consent prompt.
+    Sync {
+        /// Ask Windows for permission instead of failing when the file is read-only to you.
+        #[arg(long)]
+        elevate: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]

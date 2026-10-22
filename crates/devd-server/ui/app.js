@@ -5913,7 +5913,7 @@
     },
 
     "sync-hosts": function () {
-      act("hosts.sync", {}).then(function (outcome) {
+      act("hosts.sync", { elevate: true }).then(function (outcome) {
         if (outcome) render();
       });
     },

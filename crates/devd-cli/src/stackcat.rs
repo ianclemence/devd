@@ -136,6 +136,6 @@ pub fn site(app: &App, cmd: SiteCommand) -> Result<()> {
 pub fn hosts(app: &App, cmd: HostsCommand) -> Result<()> {
     match cmd {
         HostsCommand::Show => app.invoke("hosts.show", json!({})),
-        HostsCommand::Sync => app.invoke("hosts.sync", json!({})),
+        HostsCommand::Sync { elevate } => app.invoke("hosts.sync", json!({ "elevate": elevate })),
     }
 }
