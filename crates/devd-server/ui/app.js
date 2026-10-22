@@ -902,7 +902,7 @@
     ["home", "Home", "what needs you, what is running"], ["inbox", "Inbox", "approvals and questions from agents"],
     ["assistant", "Assistant", "talk to the built-in agent"], ["projects", "Projects", "repositories and stacks"],
     ["create", "New project", "start from a stack"], ["develop", "Stacks and tasks", "detect and run project tasks"],
-    ["agents", "Agents", "Claude Code and shell sessions"], ["shared", "Shared notes", "notes agents share"],
+    ["agents", "Agents", "your team and what each member does"], ["terminals", "Terminals", "Claude Code and shell sessions"], ["shared", "Shared notes", "notes agents share"],
     ["processes", "Processes", "supervised project processes and logs"], ["overview", "Server", "local web server overview"],
     ["services", "Services", "nginx, PHP, MariaDB and others"], ["sites", "Sites", "projects served on local hostnames"],
     ["toolchain", "Tools", "languages, package managers, databases"], ["runtimes", "Runtimes", "PHP, Node and Go versions"],
@@ -955,7 +955,7 @@
     });
     state.sessions.forEach(function (x) {
       var sc = hit((x.label || "") + " " + x.harness, x.label || x.harness);
-      if (sc >= 0 && toks.length) out.push({ key: "sess:" + x.id, group: "Sessions", title: x.label || x.harness, detail: x.live_state, score: sc + 10, run: function () { navigate("agents"); } });
+      if (sc >= 0 && toks.length) out.push({ key: "sess:" + x.id, group: "Sessions", title: x.label || x.harness, detail: x.live_state, score: sc + 10, run: function () { navigate("terminals"); } });
     });
     return out;
   }
@@ -1085,14 +1085,14 @@
   var AREA = {
     assistant: "assistant", team: "assistant",
     projects: "projects", project: "projects", create: "projects", develop: "projects",
-    agents: "agents", shared: "agents", skills: "agents",
+    agents: "agents", terminals: "agents", shared: "agents", skills: "agents",
     overview: "server", services: "server", sites: "server", toolchain: "server", runtimes: "server",
     preview: "server", certificates: "server", hosts: "server"
   };
   var TABS = {
     assistant: [["assistant", "Chat"], ["team", "Team runs"]],
     projects: [["projects", "Projects"], ["create", "New project"], ["develop", "Stacks and tasks"]],
-    agents: [["agents", "Agents"], ["skills", "Skills"], ["shared", "Shared notes"]],
+    agents: [["agents", "Team"], ["terminals", "Terminals"], ["skills", "Skills"], ["shared", "Shared notes"]],
     server: [["overview", "Overview"], ["services", "Services"], ["sites", "Sites"], ["toolchain", "Tools"], ["runtimes", "Runtimes"], ["preview", "Preview"], ["certificates", "Certificates"], ["hosts", "Hosts"]]
   };
   var AREA_HOME = { assistant: "assistant", projects: "projects", agents: "agents", server: "overview" };
@@ -1952,6 +1952,103 @@
     return base + (base.indexOf("?") === -1 ? "?" : "&") + "project=" + encodeURIComponent(state.project.path);
   }
 
+  // ------------------------------------------------------------------- the team
+
+  /* devd's own team: who is on it, what each member may do, what each must
+   * prove, and which skills each carries. Read from team.roles, so this screen
+   * cannot disagree with the capability the agents themselves use. */
+  function loadRoster() {
+    return read("team.roles").then(function (rows) {
+      state.roster = rows || [];
+    }).catch(function () {
+      state.roster = state.roster || [];
+    });
+  }
+
+  var TIER_WORD = {
+    read: "reads only",
+    write: "writes files",
+    exec: "runs the project's checks",
+    "admin (approval)": "installs with your approval"
+  };
+
+  var PROOF_WORD = { change: "files changed", verify: "a check passed", read: "the code was read", command: "a command ran" };
+
+  function memberCard(r) {
+    var chips = [];
+    chips.push('<span class="pill">' + esc(TIER_WORD[r.max_tier] || r.max_tier) + "</span>");
+    if (r.works_in_own_copy) chips.push('<span class="pill pill-accent" title="Its changes are made in a separate copy of the project and merged only once its work is proven">own copy of the project</span>');
+    var proves = Object.keys(r.must_prove || {}).filter(function (k) { return r.must_prove[k]; }).map(function (k) { return PROOF_WORD[k]; });
+    var skills = (r.skills || []).map(function (s) { return '<span class="chip" title="A skill this member carries">' + esc(s) + "</span>"; }).join("");
+    var model = (r.models && r.models.length) ? r.models[0].model : "the default model";
+    return (
+      '<div class="panel member">' +
+      '<div class="member-head"><b>' + esc(r.title) + '</b><span class="dim mono">@' + esc(r.id) + "</span></div>" +
+      '<div class="member-summary">' + esc(r.summary) + "</div>" +
+      '<div class="member-chips">' + chips.join("") + "</div>" +
+      (proves.length ? '<div class="row-sub">Counts as done only when: ' + esc(proves.join(" and ")) + "</div>" : "") +
+      (skills ? '<div class="member-skills">' + skills + "</div>" : "") +
+      '<div class="member-foot"><span class="dim">' + esc(model) + '</span><span class="grow"></span>' +
+      '<button type="button" class="btn btn-mini btn-primary" data-action="member-assign" data-id="' + attr(r.id) + '">Give work</button></div>' +
+      "</div>"
+    );
+  }
+
+  function renderRoster() {
+    var rows = state.roster || [];
+    var groups = [];
+    rows.forEach(function (r) {
+      var g = groups.filter(function (x) { return x.key === r.team; })[0];
+      if (!g) { g = { key: r.team, title: r.team_title || r.team, members: [] }; groups.push(g); }
+      g.members.push(r);
+    });
+    var body = groups.length
+      ? groups.map(function (g) {
+          return '<div class="section-title">' + esc(g.title) + ' <span class="count">' + g.members.length + "</span></div>" +
+            '<div class="roster">' + g.members.map(memberCard).join("") + "</div>";
+        }).join("")
+      : '<div class="panel"><div class="empty"><div class="empty-title">The team is not available</div><div>team.roles did not answer.</div></div></div>';
+    el("main").innerHTML = page(
+      "Agents",
+      "devd's own team. Each member has one job, its own permissions, skills that say how to work, and a check it must pass before its work counts.",
+      '<button type="button" class="btn" data-action="nav" data-view="team">Team runs</button>' +
+        '<button type="button" class="btn btn-primary" data-action="nav" data-view="assistant">Describe a goal</button>',
+      body
+    );
+  }
+
+  function openAssign(id) {
+    var r = (state.roster || []).filter(function (x) { return x.id === id; })[0];
+    if (!r) return;
+    var choices = cwdChoices();
+    var options = choices.map(function (c) { return '<option value="' + attr(c.path) + '">' + esc(c.label) + " - " + esc(c.path) + "</option>"; }).join("");
+    openDrawer("Give work to " + r.title,
+      '<div class="stack"><div class="row-sub">' + esc(r.summary) + "</div>" +
+      '<div class="field"><label class="field-label" for="member-title">What to call it</label>' +
+      '<input class="input" id="member-title" placeholder="Short title, optional"></div>' +
+      '<div class="field"><label class="field-label" for="member-task">What they should do, and how you will know it worked</label>' +
+      '<textarea class="input" id="member-task" rows="6" placeholder="Be concrete: the outcome, and the command or check that proves it."></textarea></div>' +
+      '<div class="field"><label class="field-label" for="member-project">Project</label>' +
+      '<select class="select mono" id="member-project">' + (options || '<option value="">No projects yet</option>') + "</select></div>" +
+      '<div class="faint">They work in the project directory only. Anything above their permissions asks you first, and the task is accepted only when its tool results prove it.</div>' +
+      '<button type="button" class="btn btn-primary" data-action="member-assign-submit" data-id="' + attr(r.id) + '">Start ' + esc(r.title) + "</button></div>");
+  }
+
+  function submitAssign(id) {
+    var task = readInput("member-task");
+    if (!task) return toast("warn", "Say what they should do");
+    run("team.assign", {
+      member: id,
+      title: readInput("member-title") || null,
+      instructions: task,
+      project: readInput("member-project") || null
+    }).then(function (outcome) {
+      if (!outcome) return;
+      closeDrawer();
+      toast("ok", "The work has started. Follow it under Team runs.");
+    });
+  }
+
   function loadAgents() {
     return Promise.all([
       request("/api/sessions/harnesses").catch(function () { return { ok: false, body: [] }; }),
@@ -2263,7 +2360,7 @@
   function startAgentTimer(id) {
     stopAgentTimer();
     state.agentTimer = setInterval(function () {
-      if (state.view !== "agents" || state.activeSession !== id) {
+      if (state.view !== "terminals" || state.activeSession !== id) {
         stopAgentTimer();
         return;
       }
@@ -4617,7 +4714,7 @@
       live.push('<div class="live"><span class="dot dot-ok"></span><span class="grow nowrap">' + esc(t.title) + '</span><span class="dim">' + (t.state === "running" ? "assistant working" : "waiting for you") + '</span><button type="button" class="btn btn-mini" data-action="open-thread" data-id="' + attr(t.id) + '">Open</button></div>');
     });
     state.sessions.filter(function (x) { return x.live_state === "running"; }).forEach(function (x) {
-      live.push('<div class="live"><span class="dot dot-ok"></span><span class="grow nowrap">' + esc(x.label || x.harness) + '</span><span class="dim">' + esc(x.harness) + ' session</span><button type="button" class="btn btn-mini" data-action="nav" data-view="agents">Open</button></div>');
+      live.push('<div class="live"><span class="dot dot-ok"></span><span class="grow nowrap">' + esc(x.label || x.harness) + '</span><span class="dim">' + esc(x.harness) + ' session</span><button type="button" class="btn btn-mini" data-action="nav" data-view="terminals">Open</button></div>');
     });
     d.tasks.filter(function (t) { return t.running; }).forEach(function (t) {
       live.push('<div class="live"><span class="dot dot-ok"></span><span class="grow nowrap mono">' + esc(t.name) + '</span><span class="dim">background task</span><button type="button" class="btn btn-mini" data-action="nav" data-view="develop">Open</button></div>');
@@ -4638,7 +4735,7 @@
       { v: "create", t: "Create a project", s: stackCount() ? "From " + stackCount() + " stacks" : "From a stack" },
       { v: "develop", t: "Import a project", s: "Detect and work on it" },
       { v: "toolchain", t: "Install tools", s: "Languages and databases" },
-      { v: "agents", t: "Open an agent session", s: "Claude Code, shell" }
+      { v: "terminals", t: "Open an agent session", s: "Claude Code, shell" }
     ].map(function (q) { return '<button type="button" class="quick" data-action="nav" data-view="' + q.v + '"><b>' + esc(q.t) + "</b><span>" + esc(q.s) + "</span></button>"; }).join("");
 
     el("main").innerHTML =
@@ -5332,7 +5429,8 @@
     if (state.view === "providers") return loadProviders().then(render);
     if (state.view === "create") return loadCreate().then(render);
     if (state.view === "develop") return loadDevelop().then(render);
-    if (state.view === "agents") return loadAgents().then(render);
+    if (state.view === "agents") return loadRoster().then(render);
+    if (state.view === "terminals") return loadAgents().then(render);
     if (state.view === "skills") return loadSkills().then(render);
     if (state.view === "processes") return loadProcesses().then(render);
     if (state.view === "shared") return loadShared().then(render);
@@ -5358,6 +5456,7 @@
     create: "/create",
     develop: "/develop",
     agents: "/agents",
+    terminals: "/agents/terminals",
     skills: "/skills",
     shared: "/shared",
     processes: "/processes",
@@ -5426,7 +5525,7 @@
   }
 
   function navigate(view, fromRoute) {
-    if (state.view === "agents" && view !== "agents") stopAgentTimer();
+    if (state.view === "terminals" && view !== "terminals") stopAgentTimer();
     if (AREA[view]) { state.areaTab = state.areaTab || {}; state.areaTab[AREA[view]] = view; }
     state.view = view;
     if (!fromRoute) writeRoute(view, false);
@@ -5477,7 +5576,8 @@
     else if (state.view === "providers") renderProviders();
     else if (state.view === "create") renderCreate();
     else if (state.view === "develop") renderDevelop();
-    else if (state.view === "agents") renderAgents();
+    else if (state.view === "agents") renderRoster();
+    else if (state.view === "terminals") renderAgents();
     else if (state.view === "skills") renderSkills();
     else if (state.view === "processes") renderProcesses();
     else if (state.view === "shared") renderShared();
@@ -6306,6 +6406,10 @@
           openDrawer("service.logs " + name, '<div class="notice notice-bad">' + esc(e.message) + "</div>");
         });
     },
+
+    "member-assign": function (node) { openAssign(node.dataset.id); },
+
+    "member-assign-submit": function (node) { submitAssign(node.dataset.id); },
 
     "new-site": function () {
       state.siteFormOpen = !state.siteFormOpen;

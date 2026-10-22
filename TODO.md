@@ -29,7 +29,9 @@ Ordered by what makes devd *wrong* today, not by what is easiest.
 | B3 | The team works on different projects at the same time, each in its own copy | The implementer role works in its own copy; the rest do not need one | `devd-workspace/src/orchestrate.rs` |
 | B4 | Agents report progress and ask questions through the inbox | **done**: the team already reports through the inbox and the run | `devd-agent/src/team.rs` |
 | B5 | The assistant's own prompt must follow Anthropic's engineering guidance | **done**: explicit delegation, context isolation, bounded depth, evidence over assertion | `devd-agent/src/chat.rs` `PROMPT` |
-| B6 | Show the roster on a screen, not only in the mention list | A team nobody can see is not a team | the Team runs screen |
+| B6 | Show the roster on a screen, not only in the mention list | **done**: Agents is the team - each member, its permissions, the proof it owes and its skills, with a "Give work" button; terminal sessions moved to a Terminals tab | `ui/app.js` `renderRoster` |
+| B7 | A startup-shaped team: product, design, frontend, backend, mobile, data, security | **done**: fifteen members, each a Markdown file under `crates/devd-agent/roles/` with a skill loadout | `devd-agent/roles/` |
+| B8 | Roles you define yourself, in `<devd home>/roles/` | The built-in team cannot cover every company; additions must never weaken a built-in's permissions | `devd-agent/src/roles.rs` |
 
 ### C. Memory
 

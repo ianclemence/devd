@@ -2825,3 +2825,33 @@ textarea,
   .picker-buttons { justify-content: flex-end; }
 }
 
+
+/* ---------------------------------------------------------------- the team */
+
+.roster {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--s3);
+  margin-bottom: var(--s4);
+}
+.roster .panel + .panel { margin-top: 0; }
+.member {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding: var(--s3);
+  min-width: 0;
+}
+.member-head { display: flex; align-items: baseline; gap: var(--s2); }
+.member-head b { font-size: var(--text-sm); }
+.member-summary { color: var(--fg-mute); font-size: var(--text-sm); line-height: 1.5; }
+.member-chips, .member-skills { display: flex; flex-wrap: wrap; gap: 6px; }
+.member-foot { display: flex; align-items: center; gap: var(--s2); margin-top: auto; padding-top: var(--s2); border-top: 1px solid var(--line); font-size: var(--text-xs); }
+.chip {
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--fg-dim);
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+}

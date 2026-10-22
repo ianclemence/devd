@@ -689,7 +689,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             let assigned = ctx.store.list_role_models()?;
             let rows: Vec<Value> = roles::all().iter().map(|r| {
                 let m: Vec<Value> = assigned.iter().filter(|a| a.scope.is_empty() && (a.role == r.id)).map(|a| json!({ "provider": a.provider_id, "model": a.model })).collect();
-                json!({ "id": r.id, "title": r.title, "team": r.team, "summary": r.summary, "skills": r.skills, "writes_files": r.writes, "max_tier": match r.max_rank { 0 => "read", 1 => "write", 2 => "exec", _ => "admin (approval)" },
+                json!({ "id": r.id, "title": r.title, "team": r.team, "team_title": roles::TEAMS.iter().find(|t| t.0 == r.team).map(|t| t.1).unwrap_or(r.team), "summary": r.summary, "skills": r.skills, "writes_files": r.writes, "max_tier": match r.max_rank { 0 => "read", 1 => "write", 2 => "exec", _ => "admin (approval)" },
                     "works_in_own_copy": r.isolated,
                     "must_prove": { "change": r.needs.change, "verify": r.needs.verify, "read": r.needs.read, "command": r.needs.command },
                     "models": m })
