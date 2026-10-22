@@ -886,7 +886,7 @@
     ["home", "Home", "what needs you, what is running"], ["inbox", "Inbox", "approvals and questions from agents"],
     ["assistant", "Assistant", "talk to the built-in agent"], ["projects", "Projects", "repositories and stacks"],
     ["create", "New project", "start from a stack"], ["develop", "Stacks and tasks", "detect and run project tasks"],
-    ["agents", "Agents", "your team and what each member does"], ["shared", "Shared notes", "notes agents share"],
+    ["agents", "Agents", "your team and what each member does"], ["schedules", "Schedules", "team runs on a clock"], ["shared", "Shared notes", "notes agents share"],
     ["processes", "Processes", "supervised project processes and logs"], ["overview", "Server", "local web server overview"],
     ["services", "Services", "nginx, PHP, MariaDB and others"], ["sites", "Sites", "projects served on local hostnames"],
     ["toolchain", "Tools", "languages, package managers, databases"], ["runtimes", "Runtimes", "PHP, Node and Go versions"],
@@ -1065,14 +1065,14 @@
   var AREA = {
     assistant: "assistant", team: "assistant",
     projects: "projects", project: "projects", create: "projects", develop: "projects",
-    agents: "agents", shared: "agents", skills: "agents",
+    agents: "agents", schedules: "agents", shared: "agents", skills: "agents",
     overview: "server", services: "server", sites: "server", toolchain: "server", runtimes: "server",
     preview: "server", certificates: "server", hosts: "server"
   };
   var TABS = {
     assistant: [["assistant", "Chat"], ["team", "Team runs"]],
     projects: [["projects", "Projects"], ["create", "New project"], ["develop", "Stacks and tasks"]],
-    agents: [["agents", "Team"], ["skills", "Skills"], ["shared", "Shared notes"]],
+    agents: [["agents", "Team"], ["schedules", "Schedules"], ["skills", "Skills"], ["shared", "Shared notes"]],
     server: [["overview", "Overview"], ["services", "Services"], ["sites", "Sites"], ["toolchain", "Tools"], ["runtimes", "Runtimes"], ["preview", "Preview"], ["certificates", "Certificates"], ["hosts", "Hosts"]]
   };
   var AREA_HOME = { assistant: "assistant", projects: "projects", agents: "agents", server: "overview" };
@@ -1109,7 +1109,7 @@
       { label: "Work", items: [
         { view: "assistant", label: "Assistant", count: working },
         { view: "projects", label: "Projects", count: state.projects.length || null },
-        { view: "agents", label: "Agents", count: live },
+        { view: "agents", label: "Agents" },
         { view: "processes", label: "Processes" }
       ] },
       { label: "Run", items: [
@@ -2267,6 +2267,61 @@
    * skills published on skills.sh live - or imported from another agent that
    * already has them. */
   var SKILLS = { list: null, sources: null, tab: "installed" };
+
+  var SCHED = { list: null, templates: [], form: { name: "", spec: "weekdays 09:30", project: "", template: "", params: "", goal: "", done: "", waive: false } };
+
+  function loadSchedules() {
+    return Promise.all([
+      read("schedule.list").catch(function () { return []; }),
+      read("template.list").catch(function () { return []; }),
+      state.projects.length ? Promise.resolve() : loadProjects()
+    ]).then(function (r) {
+      SCHED.list = Array.isArray(r[0]) ? r[0] : [];
+      SCHED.templates = Array.isArray(r[1]) ? r[1] : [];
+    });
+  }
+
+  function whenText(iso) {
+    if (!iso) return "never";
+    var d = new Date(iso);
+    return isNaN(d.getTime()) ? iso : d.toLocaleString();
+  }
+
+  function renderSchedules() {
+    if (!SCHED.list) return renderLoading();
+    var f = SCHED.form;
+    var rows = SCHED.list.map(function (sc) {
+      var what = sc.template ? "template " + sc.template : "a goal";
+      return "<tr>" +
+        '<td><b>' + esc(sc.name) + "</b><div class=\"dim\">" + esc(sc.spec) + (sc.auto_approve ? " · plan approval waived" : "") + "</div></td>" +
+        "<td>" + esc(what) + '<div class="dim mono">' + esc(sc.project) + "</div></td>" +
+        "<td>" + (sc.enabled ? esc(whenText(sc.next_run_at)) : '<span class="dim">off</span>') + "</td>" +
+        "<td>" + (sc.last_run_at ? esc(whenText(sc.last_run_at)) : '<span class="dim">not yet</span>') +
+          (sc.last_error ? '<div class="dim">' + esc(sc.last_error) + "</div>" : "") +
+          (sc.last_run_id ? '<div><button type="button" class="btn btn-mini btn-ghost" data-action="team-open-from" data-id="' + attr(sc.last_run_id) + '">Open the run</button></div>' : "") + "</td>" +
+        '<td class="actions"><button type="button" class="btn btn-mini" data-action="schedule-run" data-name="' + attr(sc.name) + '">Run now</button> ' +
+        '<button type="button" class="btn btn-mini" data-action="schedule-toggle" data-name="' + attr(sc.name) + '" data-on="' + (sc.enabled ? "1" : "0") + '">' + (sc.enabled ? "Turn off" : "Turn on") + "</button> " +
+        '<button type="button" class="btn btn-mini btn-ghost" data-action="schedule-delete" data-name="' + attr(sc.name) + '">Delete</button></td></tr>';
+    }).join("");
+    var tpl = SCHED.templates.map(function (t) { return '<option value="' + attr(t.id) + '"' + (f.template === t.id ? " selected" : "") + ">" + esc(t.title) + "</option>"; }).join("");
+    var chosen = SCHED.templates.filter(function (t) { return t.id === f.template; })[0];
+    var hint = chosen ? (chosen.params || []).map(function (p) { return p.name + "=" + (p.help || "") + (p.optional ? " (optional)" : ""); }).join("\n") : "";
+    var projects = '<option value="">Choose a project…</option>' + state.projects.map(function (p) { return '<option value="' + attr(p.path) + '"' + (f.project === p.path ? " selected" : "") + ">" + esc(p.name || dirName(p.path)) + "</option>"; }).join("");
+    el("main").innerHTML = page("Schedules", "Team runs devd starts on a clock", "",
+      '<div class="panel"><div class="panel-head"><span>Schedules</span><span class="panel-note">they run only while devd is open or serving</span></div>' +
+      (SCHED.list.length ? '<div class="table-wrap"><table class="table"><thead><tr><th>Name</th><th>What</th><th>Next</th><th>Last</th><th></th></tr></thead><tbody>' + rows + "</tbody></table></div>"
+        : '<div class="panel-body empty-inline">No schedules yet. A schedule starts the team on a project at times you choose; it never piles runs up and a person still approves each plan unless you waive it.</div>') + "</div>" +
+      '<div class="panel"><div class="panel-head"><span>New schedule</span></div><div class="panel-body stack">' +
+      '<div class="inline"><input class="input" id="sched-name" placeholder="name, e.g. weekly-security" value="' + attr(f.name) + '" style="max-width:240px" spellcheck="false">' +
+      '<input class="input" id="sched-spec" placeholder="weekdays 09:30" value="' + attr(f.spec) + '" style="max-width:200px" spellcheck="false" title="every 30m, every 6h, daily 09:30, weekdays 09:30, mon,wed 18:00 (local time)">' +
+      '<select class="input" id="sched-project" style="max-width:280px">' + projects + "</select></div>" +
+      '<div class="inline"><select class="input" id="sched-template" style="max-width:320px"><option value="">A goal I write</option>' + tpl + "</select></div>" +
+      (chosen ? '<div class="field"><label class="field-label">Values <span class="dim">(name=value, one per line)</span></label><textarea class="input mono" id="sched-params" rows="3" placeholder="' + attr(hint) + '">' + esc(f.params) + "</textarea></div>"
+        : '<div class="field"><label class="field-label">Goal</label><textarea class="input" id="sched-goal" rows="3" placeholder="What the team should do each time">' + esc(f.goal) + "</textarea></div>") +
+      '<div class="field"><label class="field-label">More to prove <span class="dim">(optional, one per line)</span></label><textarea class="input" id="sched-done" rows="2">' + esc(f.done) + "</textarea></div>" +
+      '<label class="check"><input type="checkbox" id="sched-waive"' + (f.waive ? " checked" : "") + '> Start each run without asking me to approve the plan <span class="dim">(not in production mode)</span></label>' +
+      '<div><button type="button" class="btn btn-primary" data-action="schedule-create">Create the schedule</button></div></div></div>');
+  }
 
   function loadSkills() {
     return Promise.all([
@@ -4718,8 +4773,9 @@
   var RUN_WORD = { planning: "planning", awaiting_plan: "plan needs your approval", running: "working", paused: "paused", done: "done", failed: "failed", cancelled: "cancelled" };
 
   function loadTeam() {
-    return Promise.all([read("team.list"), state.projects.length ? Promise.resolve() : loadProjects(), loadProvidersIfNeeded()]).then(function (r) {
+    return Promise.all([read("team.list"), state.projects.length ? Promise.resolve() : loadProjects(), loadProvidersIfNeeded(), read("template.list").catch(function () { return []; })]).then(function (r) {
       TEAM.runs = r[0] || [];
+      TEAM.templates = Array.isArray(r[3]) ? r[3] : [];
       if (!TEAM.sel && TEAM.runs.length) TEAM.sel = TEAM.runs[0].id;
       return TEAM.sel ? read("team.get", { run: TEAM.sel }).then(function (d) { TEAM.data = d; }).catch(function () { TEAM.data = null; }) : null;
     });
@@ -4766,6 +4822,7 @@
     return '<div class="team-new"><div class="chat-title">Describe what you want built</div>' +
       '<div class="row-sub">A planner turns this into tasks. You review the plan and approve it before anything runs. Specialists then work in parallel where it is safe, and a task only counts as done when devd can see the proof.</div>' +
       (TEAM.ready ? "" : '<div class="notice notice-warn" style="margin-top:12px">No usable AI provider yet. <button type="button" class="btn btn-mini btn-primary" data-action="nav" data-view="providers">Set one up</button></div>') +
+      (TEAM.templates && TEAM.templates.length ? '<div class="field" style="margin-top:14px"><label class="field-label">Start from a template <span class="dim">(optional)</span></label><select class="input" id="team-template"><option value="">Write the goal myself</option>' + TEAM.templates.map(function (t) { return '<option value="' + attr(t.id) + '"' + (TEAM.form.template === t.id ? " selected" : "") + ">" + esc(t.title) + " — " + esc(t.summary) + "</option>"; }).join("") + "</select></div>" : "") +
       '<div class="field" style="margin-top:14px"><label class="field-label">Goal</label><textarea class="input" id="team-goal" rows="5" placeholder="e.g. Add password reset by email to the app, with tests. Or: Build a small Laravel blog with posts and comments.">' + esc(f.goal) + "</textarea></div>" +
       '<div class="field" style="margin-top:10px"><label class="field-label">Definition of done <span class="dim">(optional, one per line)</span></label><textarea class="input" id="team-done" rows="3" placeholder="e.g. The tests pass&#10;The README documents every command">' + esc(f.done) + "</textarea><div class=\"row-sub\">When the work is finished devd checks each line against what the team recorded and starts another pass for any that are not met. Needs the Jev key (judge.configure); without it the lines are listed for you to confirm.</div></div>" +
       '<div class="inline" style="margin-top:10px"><select class="input" id="team-project" style="max-width:280px">' + TEAM.projOpts + "</select>" +
@@ -4878,6 +4935,7 @@
     if (state.view === "agents") return loadRoster().then(render);
     if (state.view === "skills") return loadSkills().then(render);
     if (state.view === "processes") return loadProcesses().then(render);
+    if (state.view === "schedules") return loadSchedules().then(render);
     if (state.view === "shared") return loadShared().then(render);
     if (state.view === "capabilities") return loadCapabilities().then(render);
     if (state.view === "activity") return loadActivity().then(render);
@@ -4902,6 +4960,7 @@
     develop: "/develop",
     agents: "/agents",
     skills: "/skills",
+    schedules: "/schedules",
     shared: "/shared",
     processes: "/processes",
     overview: "/server",
@@ -5022,6 +5081,7 @@
     else if (state.view === "agents") renderRoster();
     else if (state.view === "skills") renderSkills();
     else if (state.view === "processes") renderProcesses();
+    else if (state.view === "schedules") renderSchedules();
     else if (state.view === "shared") renderShared();
     else if (state.view === "projects") renderProjects();
     else if (state.view === "project") renderProject();
@@ -5814,6 +5874,32 @@
         act("service.adopt", { name: name, path: f.path });
       });
     },
+
+    "schedule-create": function () {
+      var f = SCHED.form;
+      var params = {};
+      (f.params || "").split("\n").forEach(function (line) {
+        var i = line.indexOf("=");
+        if (i > 0) params[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+      });
+      var args = { name: f.name.trim(), spec: f.spec.trim(), project: f.project };
+      if (f.template) { args.template = f.template; args.params = params; } else args.goal = f.goal.trim();
+      var done = (f.done || "").split("\n").map(function (l) { return l.trim(); }).filter(Boolean);
+      if (done.length) args.done_when = done;
+      if (f.waive) args.auto_approve = true;
+      if (!args.name || !args.project) return toast("warn", "Give it a name and choose a project");
+      run("schedule.create", args).then(function (o) {
+        if (!o) return;
+        SCHED.form.name = ""; SCHED.form.params = ""; SCHED.form.goal = ""; SCHED.form.done = "";
+        return loadSchedules().then(renderSchedules);
+      });
+    },
+
+    "schedule-run": function (node) { run("schedule.run_now", { name: node.dataset.name }).then(function (o) { if (o) loadSchedules().then(renderSchedules); }); },
+
+    "schedule-toggle": function (node) { run("schedule.enable", { name: node.dataset.name, enabled: node.dataset.on !== "1" }).then(function () { return loadSchedules().then(renderSchedules); }); },
+
+    "schedule-delete": function (node) { if (window.confirm("Delete the schedule " + node.dataset.name + "? Runs it already started are not touched.")) run("schedule.delete", { name: node.dataset.name }).then(function () { return loadSchedules().then(renderSchedules); }); },
 
     "start-service": function (node) { act("service.start", { name: node.dataset.name }); },
 
@@ -6681,6 +6767,11 @@
   document.addEventListener("input", function (e) {
     var t = e.target;
     if (t.id === "team-goal") TEAM.form.goal = t.value;
+    if (t.id === "sched-name") SCHED.form.name = t.value;
+    if (t.id === "sched-spec") SCHED.form.spec = t.value;
+    if (t.id === "sched-params") SCHED.form.params = t.value;
+    if (t.id === "sched-goal") SCHED.form.goal = t.value;
+    if (t.id === "sched-done") SCHED.form.done = t.value;
     if (t.id === "team-done") TEAM.form.done = t.value;
     if (t.id === "team-name") TEAM.form.name = t.value;
   });
@@ -6699,6 +6790,20 @@
       });
       return;
     }
+    if (t.id === "team-template") {
+      TEAM.form.template = t.value;
+      if (!t.value) return;
+      read("template.get", { id: t.value }).then(function (tpl) {
+        TEAM.form.goal = tpl.body;
+        TEAM.form.done = (tpl.done_when || []).join("\n");
+        paintTeam();
+        toast("info", "Replace the {{blanks}} in the goal with your own words before you start.");
+      });
+      return;
+    }
+    if (t.id === "sched-project") SCHED.form.project = t.value;
+    if (t.id === "sched-template") { SCHED.form.template = t.value; renderSchedules(); return; }
+    if (t.id === "sched-waive") SCHED.form.waive = t.checked;
     if (t.id === "team-project") { TEAM.form.project = t.value; paintTeam(); }
     if (t.id === "team-parallel") TEAM.form.parallel = parseInt(t.value, 10);
   });

@@ -21,6 +21,11 @@ devd runtime remove php@8.2       # destructive: asks for approval
 devd service available nginx
 devd service install nginx
 devd service install mariadb --port 3306
+devd service install apache       # Apache Lounge, checked against its published SHA-256 (Windows)
+devd service find apache          # Apache or Redis folders already on this machine (Laragon, XAMPP...)
+devd service adopt apache 'D:\laragon\bin\apache\httpd-2.4.54-win64-VS16'   # use one as it is
+devd service adopt redis 'D:\laragon\bin\redis\redis-x64-5.0.14.1' --port 6379
+devd service install mailpit      # mail catcher; checked against the digest GitHub records
 devd service start nginx
 devd service status nginx
 devd service logs nginx
@@ -39,18 +44,30 @@ devd site create blog             # --host and --root override the defaults
 devd site create api --upstream 3000   # serve a running dev server at api.test
 devd site upstream api 5173       # point it at another port; omit to serve a directory again
 devd site list
+devd site park D:\www            # a site for every project directory in it
+devd site sync                    # pick up folders added since
+devd site parked
+devd site unpark D:\www           # its sites stay
 devd site remove blog             # destructive; keeps files unless --delete-files
 
 devd hosts show                   # what a sync would change
 devd hosts sync                   # admin: writes the managed block
+devd hosts sync --elevate         # Windows: ask for permission with the usual prompt
 
-devd web render                   # rebuild nginx.conf from the site table
-devd web test                     # nginx -t
-devd web reload
+devd web use apache               # or nginx; applies when devd next starts
+devd web render                   # rebuild nginx.conf or httpd.conf from the site table
+devd web test                     # nginx -t or httpd -t
+devd web reload                   # nginx reloads; Apache restarts
+
+devd db dump blog                 # a SQL file under <devd home>/backups
+devd db copy blog --from-port 3306   # from Laragon's MySQL into devd's MariaDB
+devd db restore blog ./blog.sql
+
+devd autostart enable             # run devd stack up when you sign in
 ```
 
-`nginx.conf` is generated. The site table is the source of truth, so edits to
-the generated file are overwritten rather than merged.
+`nginx.conf` and `httpd.conf` are generated. The site table is the source of truth,
+so edits to the generated file are overwritten rather than merged.
 
 ## Stack
 

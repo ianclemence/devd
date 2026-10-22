@@ -10,6 +10,36 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **Apache** as a web server (`web.use`, `service.install apache`, `service.adopt`). Laragon's Apache is used as it
+  is; Apache Lounge's build is installed against the SHA-256 it publishes. `.htaccess` works; PHP goes to the
+  same FastCGI listeners nginx uses.
+- **Park a folder** (`site.park`, `site.sync`): every project directory becomes `<folder>.test`.
+- **Database moves** (`db.dump`, `db.restore`, `db.copy`) from Laragon's MySQL into devd's MariaDB.
+- **Redis** (adopted) and **Mailpit** (downloaded, digest-checked) as managed services; PHP mail goes to Mailpit.
+- **Hosts file with a consent prompt** on Windows (`hosts.sync --elevate`) and **start with sign-in**
+  (`autostart.*`).
+- **A definition of done** on team runs, judged by Jev (`judge.*`), with extra passes until it is met.
+- **Run templates** and **schedules** (`template.*`, `schedule.*`): start the team by name and on a clock.
+- **Your own roles** in `<devd home>/roles/`.
+- `Registry::define`: capabilities are declared with named properties instead of a twelve-argument helper.
+
+### Changed
+
+- Only the process that owns the agents recovers interrupted conversations and runs; a one-line command beside the
+  application no longer restarts its live work.
+- A person who starts a run on a folder imports it as a project so the team may work there.
+
+### Removed
+
+- The **Terminals** tab and everything behind it: terminal sessions, delegation to Claude Code and OpenCode
+  (`session.*`, `agent.*`), the PTY manager, xterm and `@agent` mentions. devd has its own agents.
+
+---
+
 ## [0.9.0] - 2026-10-21 - a folder picker, official brand marks, and a stylesheet that works
 
 devd now lets you find a project by looking at your device instead of typing

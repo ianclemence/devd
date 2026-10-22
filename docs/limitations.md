@@ -12,11 +12,10 @@ This document describes the current release, v0.9.0, plus the work in
 
 | Area | State |
 | --- | --- |
-| Apache, Redis, Mailpit, PostgreSQL, MySQL and MongoDB as **devd-managed** services | Not started. `devd` installs and supervises **nginx** and **MariaDB** itself. The others are found on the machine, and can be installed and controlled through the system package manager (`toolchain.*`). Redis has no official Windows build at all, so a devd-managed Redis on Windows would mean an unofficial build; that is not done. |
-| DNS server | Not started. `*.test` names resolve through a managed block in the hosts file, one entry per site; there is no wildcard and no query server. |
+| PostgreSQL, MySQL and MongoDB as **devd-managed** services | Not started. devd installs and supervises nginx or Apache, MariaDB, Redis (adopted) and Mailpit itself. The others are found on the machine, and can be installed and controlled through the system package manager or the toolchain. |
+| DNS server | Not started, for the reason in *Moving from Laragon*. `*.test` names resolve through a managed block in the hosts file, one entry per site; there is no wildcard and no query server. |
 | SSH control of a remote host, deploy | Not started. |
 | Public tunnels and webhook testing | Not started. `devd` has no tunnel and does not pretend to. |
-| Local mail capture, dump interception, Xdebug sessions, profiling | Not started. The PHP extensions can be installed through the toolchain, but devd does not run a mail server, intercept dumps or capture a debug session. |
 | Snapshots and receipts | A hosts write snapshots the file first. Nothing else does, and no snapshot can be restored. |
 | Licensing / redistribution checks | Not started. |
 | Self-update and upgrade check | Not started. Nothing in `devd` contacts GitHub. The release list the mechanism will read is public and reachable (`GET /repos/ianclemence/devd/releases?per_page=3`), and the releases carry the source archives GitHub generates, but no code reads them yet. |
@@ -53,16 +52,20 @@ untested. Specifically not done:
 
 ## Moving from Laragon
 
-Laragon serves sites with Apache (mod_php), nginx, MySQL and Redis. What devd does today:
+Laragon serves sites with Apache (mod_php), nginx, MySQL and Redis, adds a name to the hosts file for each folder in `www`, and starts with Windows. What devd does:
 
 | Laragon | devd |
 | --- | --- |
-| Apache | **Not implemented.** `web_server = "apache"` is refused with an error rather than ignored. Sites are served by nginx; Laravel, WordPress and any app whose routing is a front controller work through `try_files`, but rules that live in an `.htaccess` (`php_value`, authentication, custom rewrites) do not. |
-| Auto virtual hosts for every folder in `www` | **Not implemented.** Each project is added with `devd site create <name> --root <folder>`. |
-| MySQL 8 | devd manages **MariaDB**, not MySQL. An existing MySQL is detected and can be chosen with "Use it", but `db.*` and `site create --db` act only on devd's own MariaDB. There is no dump and restore yet, so databases move by hand. |
-| Redis | Detected, not managed. |
+| Apache | **Supported.** `devd service adopt apache <folder>` uses Laragon's Apache as it is (nothing in its folder is changed); `devd service install apache` downloads Apache Lounge's build and checks it against the SHA-256 Apache Lounge publishes. `devd web use apache` serves sites with it. Sites render to an `httpd.conf` with `AllowOverride All`, so `.htaccess` rewrites work. PHP runs through the same FastCGI listeners nginx uses, not `mod_php`, so an `.htaccess` that sets `php_value` or `php_flag` fails (Apache has no such directive without mod_php): move those to `.user.ini`. A request of the form `/index.php/extra` runs the script but sets no `PATH_INFO`. Apache is restarted rather than reloaded when sites change. Linux and macOS use nginx. |
+| Auto virtual hosts for every folder in `www` | **Supported.** `devd site park <folder>` (the projects root is always parked) makes `<folder>.test` of each project directory, serving `public/` when it has one and writing nothing into the project. `devd site sync` picks up folders added later; a site whose folder is gone is reported, not removed. |
+| Adding names to the hosts file | **Supported with a prompt.** `devd hosts sync --elevate` (the window's button) asks Windows for permission the way an installer does and runs the same sync elevated. devd never sees a password. |
+| MySQL 8 | devd manages **MariaDB**, not MySQL. `devd db copy <database> --from-port 3306` moves a database from Laragon's running MySQL into devd's MariaDB (dump, create, restore; the source is only read), and `db dump` / `db restore` do the two halves. Sources must be on this machine. Dumping from MySQL 8 with MariaDB's client works for ordinary schemas; a database that uses MySQL-only features (the JSON schema validation functions, `caching_sha2_password` accounts the client lacks) may not restore. |
+| Redis | **Supported by adoption.** `devd service adopt redis <folder>` runs Laragon's Redis under devd, on its own port, bound to 127.0.0.1. devd does not download Redis for Windows: the builds are third-party and publish no checksum. On Linux and macOS the system's Redis is adopted after the package check. The window's *Found on this machine* list can also start a detected Redis through the toolchain; use one or the other. |
+| Mail catching | **Supported.** `devd service install mailpit` downloads Mailpit from its GitHub release and checks the SHA-256 GitHub records for it, and points PHP's `mail()` at it on Windows (SMTP 127.0.0.1:1025, inbox at http://127.0.0.1:8025). On Linux and macOS PHP uses `sendmail_path`, which devd does not change. |
+| Start with Windows | **Supported.** `devd autostart enable` adds a sign-in entry that runs `devd stack up` (a Run value in your registry hive, an autostart entry on Linux, a LaunchAgent on macOS). No administrator rights. |
 | Ports 80 and 443 | Held by Laragon while it runs; stop it, or let `devd setup` move devd to other ports. |
-| Wildcard `*.test` | Not implemented; names are published one at a time in the hosts file, as Laragon does. |
+| Wildcard `*.test` | Not implemented, and not a Laragon feature either: it adds one hosts entry per site, as devd does. A DNS server cannot be bound to port 53 on a machine where Internet Connection Sharing holds it (this one), and Windows cannot point a resolver rule at another port. |
+| PostgreSQL, Memcached, Node/Python/Ruby version switching, public share links | Not managed. PostgreSQL is found and can be controlled through the toolchain; nothing else here is built. |
 
 ## Runtimes and services
 

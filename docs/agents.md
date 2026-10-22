@@ -147,6 +147,42 @@ That is the right tool where devd's own code, not an agent, needs a verdict.
 `judge.configure` stores the key (an owner-only file; `TYPESAFE_API_KEY` overrides
 it; a person only) and `judge.status` reports whether one is set. It is optional.
 
+### Templates
+
+A run template is a goal written once, with blanks, and the definition of done every
+run of it carries. devd ships five - `spec-to-pr`, `fix-bug`, `add-feature`,
+`security-review`, `release-prep` - and your own in `<devd home>/templates/` join
+them (same Markdown format; they cannot replace a built-in).
+
+```bash
+devd template list
+devd template run fix-bug --project . --param report="checkout returns a 500"
+```
+
+The window's *Team runs* form has a template menu that fills the goal and the
+definition of done for you to edit.
+
+### Schedules
+
+A schedule starts a team run on a clock, from a template or a goal:
+
+```bash
+devd schedule create weekly-security "mon 09:00" --project . --template security-review
+devd schedule create nightly-tests "every 6h" --project . --goal "Run the checks and report what is failing" --done-when "The report names every failing test"
+devd schedule list
+devd schedule run weekly-security   # now, without changing the next time
+```
+
+Times are `every 30m` / `every 6h` / `every 1d` (at least five minutes), `daily 09:30`,
+`weekdays 09:30`, `weekends 10:00` or a list such as `mon,wed,fri 18:00`, in the
+machine's local time. Schedules run only while a process that owns the agents is
+running (the application, `devd serve`, the terminal dashboard). A schedule never
+starts a run while the last one it started is still going, skips an occurrence
+that was missed by more than two hours and says so, and waits for a person to
+approve each plan unless `--yes-plan` was given when it was made (never in
+production mode). Only a person creates, changes or deletes schedules; an agent
+can list them and start one now.
+
 ### Your own roles
 
 Put a Markdown file in `<devd home>/roles/`, in the same format as the built-in
