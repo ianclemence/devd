@@ -1262,17 +1262,9 @@
     { kind: "ruby", label: "Ruby", note: "RubyInstaller builds (Windows)" }
   ];
 
-  var VIEW_ICON = {
-    home: "i-home", inbox: "i-inbox", assistant: "i-spark", projects: "i-folder", project: "i-folder", create: "i-plus", develop: "i-code",
-    agents: "i-team", team: "i-team", schedules: "i-clock", skills: "i-spark", shared: "i-layers", studio: "i-layers", processes: "i-pulse",
-    overview: "i-server", services: "i-server", sites: "i-server", toolchain: "i-code", runtimes: "i-code", preview: "i-search",
-    certificates: "i-check-circle", hosts: "i-server", providers: "i-sliders", activity: "i-clock", system: "i-check-circle", capabilities: "i-code"
-  };
-
-  /* The heading of a page: its icon, then its name. */
-  function pageTitle(text, view) {
-    var icon = VIEW_ICON[view || state.view] || "i-layers";
-    return '<h1 class="page-title"><svg class="icon title-icon" aria-hidden="true"><use href="#' + icon + '"></use></svg><span>' + esc(text) + "</span></h1>";
+  /* The heading of a page: its name. */
+  function pageTitle(text) {
+    return '<h1 class="page-title">' + esc(text) + "</h1>";
   }
 
   function page(title, sub, actions, body) {
