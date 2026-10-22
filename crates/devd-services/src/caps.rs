@@ -61,6 +61,12 @@ args! {
     DbCreateArgs { name: String }
     /// A database to drop.
     DbDropArgs { name: String }
+    /// A database to write to a file.
+    DbDumpArgs { database: String, path: Option<String>, from_port: Option<u16>, from_user: Option<String>, from_password: Option<String> }
+    /// A file to read into a database.
+    DbRestoreArgs { database: String, path: String, replace: Option<bool> }
+    /// A database to copy from another server on this machine.
+    DbCopyArgs { database: String, from_port: u16, from_user: Option<String>, from_password: Option<String>, as_name: Option<String>, replace: Option<bool> }
 }
 
 /// Register every service capability.
@@ -912,6 +918,94 @@ fn register_db(reg: &mut Registry) -> Result<()> {
             Ok(Outcome::with_data(
                 format!("database `{}` exists", args.name),
                 result,
+            ))
+        },
+    )?;
+
+    reg.define::<DbDumpArgs>("db.dump", "Write a database to a SQL file")
+    .description("Dumps one database (tables, data, routines, triggers, events) to a .sql file. By default it is \
+         devd's MariaDB, written under <devd home>/backups; from_port names another server on this machine \
+         instead, such as Laragon's MySQL. Only a person can choose where the file goes. Servers on other \
+         machines are refused.")
+    .group("db")
+    .tier(Tier::Write)
+    .effect(Effect::Data)
+    .agent_safe()
+    .dry_run()
+    .handlers(
+        |_, a| Ok(Plan::new("db.dump", format!("write the database `{}` to a SQL file", a.database)).effect("writes a file")),
+        |ctx, a| {
+            if a.path.is_some() && ctx.actor.is_agent() {
+                return Err(DevdError::denied("an agent cannot choose where a dump is written; it goes under the devd backups folder"));
+            }
+            let from = match a.from_port {
+                Some(port) => services::dump::Endpoint::local(None, port, a.from_user.as_deref(), a.from_password.clone())?,
+                None => services::dump::Endpoint::devd(db_port(ctx)?),
+            };
+            let file = match &a.path {
+                Some(p) => std::path::PathBuf::from(p),
+                None => services::dump::default_file(ctx, &a.database),
+            };
+            let report = services::dump::dump(ctx, &from, &a.database, &file)?;
+            Ok(Outcome::with_data(format!("wrote {} to {}", a.database, file.display()), report))
+        },
+    )?;
+
+    reg.define::<DbRestoreArgs>("db.restore", "Read a SQL file into a database")
+    .description("Runs a SQL file against a database on devd's MariaDB, creating the database when it is not \
+         there. A database that already has tables is refused unless replace is true, because a dump can \
+         drop and recreate them. The file is run as it is: restore only files you trust. Always needs approval.")
+    .group("db")
+    .tier(Tier::Destructive)
+    .effect(Effect::Data)
+    .dry_run()
+    .handlers(
+        |_, a| Ok(Plan::new("db.restore", format!("run {} against the database `{}`", a.path, a.database)).effect("changes stored data")),
+        |ctx, a| {
+            let port = db_port(ctx)?;
+            if !a.replace.unwrap_or(false) && services::mariadb::table_count(ctx, port, &a.database)? > 0 {
+                return Err(DevdError::conflict(format!(
+                    "the database `{}` already has tables; pass replace to run the file over them",
+                    a.database
+                )));
+            }
+            let report = services::dump::restore(ctx, &services::dump::Endpoint::devd(port), &a.database, std::path::Path::new(&a.path))?;
+            Ok(Outcome::with_data(format!("restored {}", a.database), report))
+        },
+    )?;
+
+    reg.define::<DbCopyArgs>("db.copy", "Copy a database from another server on this machine into devd")
+    .description("Moves a database off Laragon's MySQL (or any server on 127.0.0.1) into devd's MariaDB: dumps it \
+         to <devd home>/backups, then restores it under the same name or as_name. The source is only read. A \
+         target that already has tables is refused unless replace is true. Always needs approval.")
+    .group("db")
+    .tier(Tier::Destructive)
+    .effect(Effect::Data)
+    .dry_run()
+    .handlers(
+        |_, a| {
+            Ok(Plan::new("db.copy", format!("copy `{}` from the server on port {} into devd's MariaDB", a.database, a.from_port))
+                .step("dump the source to the backups folder (read only)")
+                .step("create the target database if it is missing")
+                .step("run the dump against it")
+                .effect("writes a file and changes stored data"))
+        },
+        |ctx, a| {
+            let port = db_port(ctx)?;
+            let target = a.as_name.clone().unwrap_or_else(|| a.database.clone());
+            services::dump::valid_source_name(&target)?;
+            if !a.replace.unwrap_or(false) && services::mariadb::table_count(ctx, port, &target)? > 0 {
+                return Err(DevdError::conflict(format!(
+                    "the database `{target}` already has tables; pass replace to copy over them"
+                )));
+            }
+            let from = services::dump::Endpoint::local(None, a.from_port, a.from_user.as_deref(), a.from_password.clone())?;
+            let file = services::dump::default_file(ctx, &a.database);
+            let dumped = services::dump::dump(ctx, &from, &a.database, &file)?;
+            let restored = services::dump::restore(ctx, &services::dump::Endpoint::devd(port), &target, &file)?;
+            Ok(Outcome::with_data(
+                format!("copied {} into devd as {}", a.database, target),
+                json!({ "dump": dumped, "restore": restored, "tables": services::mariadb::table_count(ctx, port, &target)? }),
             ))
         },
     )?;

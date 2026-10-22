@@ -19,6 +19,7 @@
 pub mod apache;
 pub mod caps;
 pub mod catalogue;
+pub mod dump;
 pub mod mariadb;
 pub mod nginx;
 pub mod system;

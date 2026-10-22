@@ -362,6 +362,42 @@ pub fn create_database(ctx: &Ctx, port: u16, name: &str) -> Result<Value> {
     Ok(json!({ "database": name, "created": true }))
 }
 
+/// Create a database whose name was chosen by someone else (a database moved from
+/// another server keeps its name, capitals included). The name is validated as
+/// an identifier first, so it cannot carry a second statement.
+pub fn create_database_unchecked(ctx: &Ctx, port: u16, name: &str) -> Result<Value> {
+    crate::dump::valid_source_name(name)?;
+    let sql = format!("CREATE DATABASE IF NOT EXISTS `{name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+    let result = query(ctx, port, &sql)?;
+    let code = result.get("code").and_then(Value::as_i64).unwrap_or(-1);
+    if code != 0 {
+        return Err(DevdError::Command {
+            program: "mysql".to_string(),
+            code: code as i32,
+            stderr: result.get("stderr").and_then(Value::as_str).unwrap_or_default().to_string(),
+        });
+    }
+    Ok(json!({ "database": name, "created": true }))
+}
+
+/// How many tables a database has. Zero for one that does not exist.
+pub fn table_count(ctx: &Ctx, port: u16, name: &str) -> Result<u64> {
+    crate::dump::valid_source_name(name)?;
+    // Windows folds database names to lower case, so a name with capitals is found under that.
+    let sql = format!(
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='{name}' \n         OR (@@lower_case_table_names > 0 AND table_schema=LOWER('{name}'))"
+    );
+    let result = query(ctx, port, &sql)?;
+    if result.get("code").and_then(Value::as_i64).unwrap_or(-1) != 0 {
+        return Err(DevdError::Command {
+            program: "mysql".to_string(),
+            code: -1,
+            stderr: result.get("stderr").and_then(Value::as_str).unwrap_or_default().to_string(),
+        });
+    }
+    Ok(result.get("stdout").and_then(Value::as_str).unwrap_or("0").trim().parse().unwrap_or(0))
+}
+
 /// Remove a database.
 pub fn drop_database(ctx: &Ctx, port: u16, name: &str) -> Result<Value> {
     util::validate_name(name)?;

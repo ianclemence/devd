@@ -1100,6 +1100,41 @@ pub(crate) enum DbCommand {
         /// Database name.
         name: String,
     },
+    /// Write a database to a SQL file (devd's MariaDB, or another server on this machine with --from-port).
+    Dump {
+        /// Database name.
+        database: String,
+        /// Where to write it. Defaults to a timestamped file under the devd backups folder.
+        #[arg(long)]
+        path: Option<String>,
+        /// Dump from another server on this machine, such as Laragon's MySQL on 3306.
+        #[arg(long)]
+        from_port: Option<u16>,
+    },
+    /// Run a SQL file against a database on devd's MariaDB.
+    Restore {
+        /// Database name; created when missing.
+        database: String,
+        /// The SQL file.
+        path: String,
+        /// Run it even though the database already has tables.
+        #[arg(long)]
+        replace: bool,
+    },
+    /// Copy a database from another server on this machine (Laragon's MySQL) into devd's MariaDB.
+    Copy {
+        /// Database name on the source.
+        database: String,
+        /// The source server's port, usually 3306.
+        #[arg(long)]
+        from_port: u16,
+        /// Name for the copy; the same name by default.
+        #[arg(long)]
+        as_name: Option<String>,
+        /// Copy over a database that already has tables.
+        #[arg(long)]
+        replace: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]

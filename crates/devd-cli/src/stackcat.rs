@@ -85,6 +85,9 @@ pub fn db(app: &App, cmd: DbCommand) -> Result<()> {
         DbCommand::List => app.invoke("db.list", json!({})),
         DbCommand::Create { name } => app.invoke("db.create", json!({ "name": name })),
         DbCommand::Drop { name } => app.invoke("db.drop", json!({ "name": name })),
+        DbCommand::Dump { database, path, from_port } => app.invoke("db.dump", json!({ "database": database, "path": path, "from_port": from_port })),
+        DbCommand::Restore { database, path, replace } => app.invoke("db.restore", json!({ "database": database, "path": path, "replace": replace })),
+        DbCommand::Copy { database, from_port, as_name, replace } => app.invoke("db.copy", json!({ "database": database, "from_port": from_port, "as_name": as_name, "replace": replace })),
     }
 }
 
