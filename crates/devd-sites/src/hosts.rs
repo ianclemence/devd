@@ -307,19 +307,6 @@ pub fn sync(ctx: &Ctx) -> Result<serde_json::Value> {
     }))
 }
 
-/// The `devd` command-line program: this one, or the one beside the window.
-fn cli_exe() -> Result<PathBuf> {
-    let me = std::env::current_exe()?;
-    if me.file_stem().map(|s| s.eq_ignore_ascii_case("devd")).unwrap_or(false) {
-        return Ok(me);
-    }
-    let sibling = me.with_file_name(if cfg!(windows) { "devd.exe" } else { "devd" });
-    if sibling.is_file() {
-        return Ok(sibling);
-    }
-    Err(DevdError::not_found("the devd command-line program was not found beside this one"))
-}
-
 /// Standard base64, which `powershell -EncodedCommand` takes UTF-16 text in.
 fn base64(bytes: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -359,7 +346,7 @@ pub fn sync_elevated(ctx: &Ctx) -> Result<serde_json::Value> {
             "devd asks for elevation on Windows only; on this system run `sudo devd hosts sync`",
         ));
     }
-    let exe = cli_exe()?;
+    let exe = util::cli_exe()?;
     let home = std::env::var("DEVD_HOME").ok().filter(|h| !h.is_empty());
     let script = elevation_script(&exe, home.as_deref());
     let utf16: Vec<u8> = script.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();

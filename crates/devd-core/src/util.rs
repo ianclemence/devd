@@ -229,6 +229,21 @@ pub fn shell_path() -> PathBuf {
 /// The first capture group of `pattern` is the version. Without a pattern,
 /// the first dotted number in the output is taken, which is right for the
 /// many tools that print nothing but their version.
+/// The `devd` command-line program: this one, or the one beside the window.
+/// Anything that has to run `devd` again (an elevated sync, the sign-in entry)
+/// needs the command-line program, not the desktop executable.
+pub fn cli_exe() -> Result<std::path::PathBuf> {
+    let me = std::env::current_exe()?;
+    if me.file_stem().map(|s| s.eq_ignore_ascii_case("devd")).unwrap_or(false) {
+        return Ok(me);
+    }
+    let sibling = me.with_file_name(if cfg!(windows) { "devd.exe" } else { "devd" });
+    if sibling.is_file() {
+        return Ok(sibling);
+    }
+    Err(DevdError::not_found("the devd command-line program was not found beside this one"))
+}
+
 pub fn extract_version(text: &str, pattern: Option<&str>) -> Option<String> {
     let cleaned: String = text
         .lines()

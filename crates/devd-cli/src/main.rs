@@ -214,6 +214,11 @@ pub(crate) enum Command {
         #[arg(long)]
         list: bool,
     },
+    /// Start the stack when you sign in: `status`, `enable` or `disable`.
+    Autostart {
+        #[command(subcommand)]
+        cmd: AutostartCommand,
+    },
     /// Check the environment for problems.
     Doctor,
 }
@@ -1040,6 +1045,16 @@ pub(crate) enum HostsCommand {
 }
 
 #[derive(Subcommand, Debug)]
+pub(crate) enum AutostartCommand {
+    /// Whether the stack starts when you sign in.
+    Status,
+    /// Run `devd stack up` when you sign in. No administrator rights.
+    Enable,
+    /// Stop doing that. Running services keep running.
+    Disable,
+}
+
+#[derive(Subcommand, Debug)]
 pub(crate) enum WebCommand {
     /// Rebuild the web server configuration from the state store.
     Render,
@@ -1560,6 +1575,15 @@ fn run(cli: Cli) -> Result<i32> {
                     );
                 }
             }
+            Ok(0)
+        }
+        Command::Autostart { cmd } => {
+            let id = match cmd {
+                AutostartCommand::Status => "autostart.status",
+                AutostartCommand::Enable => "autostart.enable",
+                AutostartCommand::Disable => "autostart.disable",
+            };
+            app.invoke(id, serde_json::json!({}))?;
             Ok(0)
         }
         Command::Doctor => unreachable!("handled before bootstrap"),

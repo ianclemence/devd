@@ -192,6 +192,59 @@ fn register_service(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
+    reg.define::<NoArgs>("autostart.status", "Whether the stack starts when you sign in")
+    .description("Reports the sign-in entry that runs `devd stack up`, if there is one.")
+    .group("autostart")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .dry_run()
+    .handlers(
+        |_, _| Ok(Plan::new("autostart.status", "read the sign-in entry")),
+        |_, _| {
+            let entry = services::autostart::status()?;
+            Ok(Outcome::with_data(
+                if entry.is_some() { "the stack starts when you sign in" } else { "the stack does not start when you sign in" },
+                json!({ "enabled": entry.is_some(), "command": entry }),
+            ))
+        },
+    )?;
+
+    reg.define::<NoArgs>("autostart.enable", "Start the stack when you sign in")
+    .description("Adds a sign-in entry (a Run value in your registry hive on Windows, an autostart entry on Linux, \
+         a LaunchAgent on macOS) that runs `devd stack up`: the enabled services start, detached, and devd exits. \
+         No administrator rights. Human only, because it changes what runs at every sign-in.")
+    .group("autostart")
+    .tier(Tier::Admin)
+    .effect(Effect::System)
+    .human_only()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, _| Ok(Plan::new("autostart.enable", "run `devd stack up` when you sign in").effect("adds a sign-in entry for this user")),
+        |_, _| {
+            let command = services::autostart::enable(&devd_core::util::cli_exe()?)?;
+            Ok(Outcome::with_data("the stack will start when you sign in", json!({ "command": command })))
+        },
+    )?;
+
+    reg.define::<NoArgs>("autostart.disable", "Stop starting the stack when you sign in")
+    .description("Removes the sign-in entry. Services that are already running keep running.")
+    .group("autostart")
+    .tier(Tier::Admin)
+    .effect(Effect::System)
+    .human_only()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, _| Ok(Plan::new("autostart.disable", "remove the sign-in entry").effect("removes a sign-in entry for this user")),
+        |_, _| {
+            let was = services::autostart::disable()?;
+            Ok(Outcome::ok(if was { "the sign-in entry is removed" } else { "there was no sign-in entry" }))
+        },
+    )?;
+
     reg.define::<NameArgs>("service.find_local", "Find a service's program already on this machine")
     .description("Looks for an Apache or Redis folder from Laragon, XAMPP, WampServer or a plain install on \
          every drive and reports each with its version. Nothing is changed; `service.adopt` uses one.")

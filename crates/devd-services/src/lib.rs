@@ -17,6 +17,7 @@
 //! development environment can report.
 
 pub mod apache;
+pub mod autostart;
 pub mod caps;
 pub mod catalogue;
 pub mod dump;
