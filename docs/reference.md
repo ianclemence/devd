@@ -134,26 +134,9 @@ graphical toolkit to keep in step. See [`docs/desktop.md`](docs/desktop.md).
 
 ## Agents
 
-The window runs the coding-agent CLI you already use inside the project. It is a
-real terminal, not a chat facade: the harness keeps its own model, credentials
-and permission prompts.
-
-* **Agents** lists the harnesses found on this machine - Claude Code, OpenCode
-  and a plain shell - and starts the one you choose in the selected project
-  directory.
-* Every session is its own **real PTY**, with a stable id, a durable metadata row
-  and a bounded transcript. Switching to Preview, opening another tab, or
-  reloading the whole page does not stop it; the window reattaches to the same
-  process.
-* Multiple sessions run at once, with tabs and a session list. Completed and
-  failed sessions stay readable after their process ends.
-* **Delegate a task** starts a second agent as a genuine child process and waits
-  with a timeout. The child has its own working directory, instructions, exit
-  code and result. Limits stop runaway spawning (8 unfinished tasks, depth 3).
-* devd does not proxy the model, store prompts or read the conversation. The
-  agent's own tools act on the project with the permissions that harness asks
-  for; terminal input is human-only, so an agent cannot type into your session.
-* See [`docs/sessions.md`](docs/sessions.md).
+devd has its own agents: an assistant for one-off questions and a team for whole
+goals, both running through the providers you configure. See
+[`docs/agents.md`](docs/agents.md).
 
 ## Project processes
 
@@ -220,7 +203,6 @@ services/         nginx and MariaDB
 etc/              generated configuration and MariaDB data
 certs/            the authority and per-site certificates
 logs/             service logs
-sessions/         bounded agent-session transcripts, one per session
 projects/         per-project process logs
 snapshots/        copies taken before a file devd did not write is changed
 cache/            verified downloads

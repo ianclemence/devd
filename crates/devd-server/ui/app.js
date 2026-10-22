@@ -168,18 +168,7 @@
     },
     siteFormOpen: false,
     certFormOpen: false,
-    harnesses: [],
-    agent: {
-      starting: false,
-      cwd: null,
-      newOpen: false
-    },
-    sessions: [],
-    activeSession: null,
-    terms: {},
-    agentTimer: null,
-    tasks: [],
-    delegateOpen: false,
+
     processes: {
       project: null,
       plan: null,
@@ -233,11 +222,6 @@
   function el(id) {
     return document.getElementById(id);
   }
-
-  /* The last entry of a working-directory list: an offer to go and find one.
-     A person with a project somewhere unusual should never be stuck typing a
-     path. */
-  var BROWSE_OPTION = '<option value="__browse__">Choose a folder…</option>';
 
   /*
    * Paging.
@@ -902,7 +886,7 @@
     ["home", "Home", "what needs you, what is running"], ["inbox", "Inbox", "approvals and questions from agents"],
     ["assistant", "Assistant", "talk to the built-in agent"], ["projects", "Projects", "repositories and stacks"],
     ["create", "New project", "start from a stack"], ["develop", "Stacks and tasks", "detect and run project tasks"],
-    ["agents", "Agents", "your team and what each member does"], ["terminals", "Terminals", "Claude Code and shell sessions"], ["shared", "Shared notes", "notes agents share"],
+    ["agents", "Agents", "your team and what each member does"], ["shared", "Shared notes", "notes agents share"],
     ["processes", "Processes", "supervised project processes and logs"], ["overview", "Server", "local web server overview"],
     ["services", "Services", "nginx, PHP, MariaDB and others"], ["sites", "Sites", "projects served on local hostnames"],
     ["toolchain", "Tools", "languages, package managers, databases"], ["runtimes", "Runtimes", "PHP, Node and Go versions"],
@@ -952,10 +936,6 @@
       var nm = st.name || st.host || "";
       var sc = hit(nm + " " + (st.host || ""), nm);
       if (sc >= 0 && toks.length) out.push({ key: "site:" + nm, group: "Sites", title: nm, detail: st.host || "", score: sc + 10, run: function () { navigate("sites"); } });
-    });
-    state.sessions.forEach(function (x) {
-      var sc = hit((x.label || "") + " " + x.harness, x.label || x.harness);
-      if (sc >= 0 && toks.length) out.push({ key: "sess:" + x.id, group: "Sessions", title: x.label || x.harness, detail: x.live_state, score: sc + 10, run: function () { navigate("terminals"); } });
     });
     return out;
   }
@@ -1085,14 +1065,14 @@
   var AREA = {
     assistant: "assistant", team: "assistant",
     projects: "projects", project: "projects", create: "projects", develop: "projects",
-    agents: "agents", terminals: "agents", shared: "agents", skills: "agents",
+    agents: "agents", shared: "agents", skills: "agents",
     overview: "server", services: "server", sites: "server", toolchain: "server", runtimes: "server",
     preview: "server", certificates: "server", hosts: "server"
   };
   var TABS = {
     assistant: [["assistant", "Chat"], ["team", "Team runs"]],
     projects: [["projects", "Projects"], ["create", "New project"], ["develop", "Stacks and tasks"]],
-    agents: [["agents", "Team"], ["terminals", "Terminals"], ["skills", "Skills"], ["shared", "Shared notes"]],
+    agents: [["agents", "Team"], ["skills", "Skills"], ["shared", "Shared notes"]],
     server: [["overview", "Overview"], ["services", "Services"], ["sites", "Sites"], ["toolchain", "Tools"], ["runtimes", "Runtimes"], ["preview", "Preview"], ["certificates", "Certificates"], ["hosts", "Hosts"]]
   };
   var AREA_HOME = { assistant: "assistant", projects: "projects", agents: "agents", server: "overview" };
@@ -1121,7 +1101,6 @@
     var running = server.services.filter(function (s) { return s.running; }).length;
     var attention = (AI.counts.approvals + AI.counts.questions) || null;
     var working = AI.threads ? (AI.threads.filter(function (t) { return t.state === "running"; }).length || null) : null;
-    var live = state.sessions.filter(function (s) { return s.live_state === "running"; }).length || null;
     var groups = [
       { label: null, items: [
         { view: "home", label: "Home" },
@@ -1208,9 +1187,8 @@
       var up = state.server.services.filter(function (s) { return s.running; }).length;
       if (total) left.push(up + "/" + total + " services up");
     }
-    var live = state.sessions.filter(function (s) { return s.live_state === "running"; }).length;
     var chats = AI.threads ? AI.threads.filter(function (t) { return t.state === "running"; }).length : 0;
-    if (live + chats) left.push((live + chats) + " agent" + (live + chats === 1 ? "" : "s") + " working");
+    if (chats) left.push(chats + " agent" + (chats === 1 ? "" : "s") + " working");
     var wait = AI.counts.approvals + AI.counts.questions;
     if (wait) left.push('<button type="button" class="sb-link sb-warn" data-action="nav" data-view="inbox">' + wait + " waiting for you</button>");
     var prod = AI.env && AI.env.mode === "production";
@@ -2046,539 +2024,6 @@
       if (!outcome) return;
       closeDrawer();
       toast("ok", "The work has started. Follow it under Team runs.");
-    });
-  }
-
-  function loadAgents() {
-    return Promise.all([
-      request("/api/sessions/harnesses").catch(function () { return { ok: false, body: [] }; }),
-      request(projectQuery("/api/sessions")).catch(function () { return { ok: false, body: null }; }),
-      request(projectQuery("/api/tasks")).catch(function () { return { ok: false, body: null }; })
-    ]).then(function (r) {
-      state.harnesses = r[0].ok && Array.isArray(r[0].body) ? r[0].body : [];
-      state.sessions = r[1].ok && r[1].body && Array.isArray(r[1].body.items) ? r[1].body.items : [];
-      state.tasks = r[2].ok && r[2].body && Array.isArray(r[2].body.items) ? r[2].body.items : [];
-
-      var ids = state.sessions.map(function (s) { return s.id; });
-      var saved = null;
-      try { saved = localStorage.getItem("devd.activeSession"); } catch (e) {}
-      if (!state.activeSession || ids.indexOf(state.activeSession) === -1) {
-        var pick = saved && ids.indexOf(saved) !== -1 ? saved : null;
-        if (!pick) {
-          var attachable = state.sessions.filter(function (s) { return s.attachable; })[0];
-          pick = attachable ? attachable.id : (state.sessions[0] ? state.sessions[0].id : null);
-        }
-        state.activeSession = pick;
-      }
-      if (state.activeSession) {
-        try { localStorage.setItem("devd.activeSession", state.activeSession); } catch (e) {}
-      }
-    });
-  }
-
-  function activeSession() {
-    if (!state.activeSession) return null;
-    return state.sessions.filter(function (s) { return s.id === state.activeSession; })[0] || null;
-  }
-
-  function cwdChoices() {
-    var out = [];
-    state.projects.forEach(function (p) { out.push({ path: p.path, label: p.name }); });
-    state.server.sites.forEach(function (row) {
-      out.push({ path: row.document_root, label: row.site.name + " (site)" });
-    });
-    state.sessions.forEach(function (s) {
-      if (s.cwd) out.push({ path: s.cwd, label: "session" });
-    });
-    if (state.session) out.push({ path: state.session.paths.www, label: "www" });
-    var seen = {};
-    return out.filter(function (c) {
-      if (!c.path || seen[c.path]) return false;
-      seen[c.path] = true;
-      return true;
-    });
-  }
-
-  function agentLabel(kind) {
-    var found = state.harnesses.filter(function (h) { return h.kind === kind; })[0];
-    return found ? found.label : kind;
-  }
-
-  function sessionPill(s) {
-    var live = s.live_state || s.state || "unknown";
-    var cls = live === "running" ? "pill-ok"
-      : live === "failed" ? "pill-bad"
-      : live === "completed" ? "pill-accent"
-      : (live === "stale" || live === "unavailable") ? "pill-warn" : "";
-    return '<span class="pill ' + cls + '">' + esc(live) + "</span>";
-  }
-
-  function shortTime(value) {
-    if (!value) return "";
-    var d = new Date(value);
-    if (isNaN(d.getTime())) return "";
-    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  }
-
-  function sessionRow(s) {
-    var active = s.id === state.activeSession;
-    var detail = s.cwd || "";
-    var sub = [agentLabel(s.harness), shortTime(s.last_activity_at)].filter(Boolean).join(" · ");
-    return (
-      '<button type="button" class="session-row' + (active ? " active" : "") +
-      '" data-action="open-session" data-id="' + attr(s.id) + '" title="' + attr(detail) + '">' +
-      '<span class="session-row-top"><span class="session-dot ' +
-      (s.live_state === "running" ? "on" : s.live_state === "failed" ? "bad" : "") +
-      '"></span><span class="session-name">' + esc(s.label || s.harness) + "</span>" +
-      (s.task_id ? '<span class="pill pill-accent">task</span>' : "") +
-      "</span>" +
-      '<span class="session-row-sub"><span>' + esc(sub) + "</span>" + sessionPill(s) + "</span>" +
-      '<span class="session-row-path">' + esc(detail) + "</span>" +
-      "</button>"
-    );
-  }
-
-  function renderAgents() {
-    var a = state.agent;
-    if (a.starting) {
-      el("main").innerHTML = page("Agents", "Starting the harness…", "", '<div class="loading">Starting the harness…</div>');
-      return;
-    }
-
-    var choices = cwdChoices();
-    var selectedCwd = a.cwd || (state.project && state.project.path) ||
-      (choices[0] && choices[0].path) || "";
-    var options = choices.map(function (c) {
-      return '<option value="' + attr(c.path) + '"' + (selectedCwd === c.path ? " selected" : "") + ">" +
-        esc(c.label) + " — " + esc(c.path) + "</option>";
-    }).join("") + BROWSE_OPTION;
-
-    var rows = state.sessions.length
-      ? state.sessions.map(sessionRow).join("")
-      : '<div class="empty-inline">No sessions yet. Start a harness to create one.</div>';
-
-    var tabs = state.sessions.slice(0, 10).map(function (s) {
-      return '<button type="button" class="term-tab' + (s.id === state.activeSession ? " active" : "") +
-        '" data-action="open-session" data-id="' + attr(s.id) + '" title="' + attr(s.cwd) + '">' +
-        '<span class="session-dot ' + (s.live_state === "running" ? "on" : s.live_state === "failed" ? "bad" : "") + '"></span>' +
-        esc(s.label || s.harness) +
-        (s.live_state === "running" ? "" : ' <span class="tab-state">' + esc(s.live_state) + "</span>") +
-        "</button>";
-    }).join("");
-
-    var active = activeSession();
-    var terminal;
-    if (active) {
-      var live = active.live_state || active.state;
-      var note = active.attachable
-        ? "Live PTY owned by this devd process. Switching views does not stop it."
-        : (active.unattached_reason || "This session is finished. Its transcript remains readable.");
-      terminal =
-        '<div class="panel terminal-panel">' +
-        '<div class="panel-head terminal-head">' +
-        '<div class="terminal-title"><span class="session-name">' + esc(active.label) + "</span>" +
-        sessionPill(active) + '<span class="panel-note mono">' + esc(active.cwd) + "</span></div>" +
-        '<div class="inline">' +
-        '<button type="button" class="btn btn-mini" data-action="rename-session" data-id="' + attr(active.id) + '">Rename</button>' +
-        (active.attachable
-          ? '<button type="button" class="btn btn-mini" data-action="stop-session" data-id="' + attr(active.id) + '">Stop</button>'
-          : '<button type="button" class="btn btn-mini" data-action="dismiss-session" data-id="' + attr(active.id) + '">Dismiss</button>') +
-        "</div></div>" +
-        '<div class="terminal-note">' + esc(note) + "</div>" +
-        '<div class="terminal-shell" id="terminal-slot" data-session="' + attr(active.id) + '"></div>' +
-        "</div>";
-    } else {
-      var cards = state.harnesses.map(function (h) {
-        return '<button type="button" class="card agent-card" data-action="new-session" data-kind="' + attr(h.kind) + '"' +
-          (h.available ? "" : " disabled") + ">" +
-          '<div class="card-title">' + esc(h.label) + "</div>" +
-          '<div class="card-meta">' + (h.available ? "installed" : "not installed") + "</div>" +
-          '<div class="agent-detail">' + esc(h.detail) + "</div>" +
-          '<div class="card-actions"><span class="btn btn-primary">Start</span></div></button>';
-      }).join("");
-      terminal =
-        '<div class="panel"><div class="panel-head"><span>Start a session</span><span class="panel-note">a real PTY, owned by this process</span></div>' +
-        '<div class="panel-body">' +
-        (choices.length
-          ? '<div class="field"><label class="field-label" for="agent-new-cwd">Working directory</label><select class="select mono" id="agent-new-cwd">' + options + "</select></div>"
-          : '<div class="notice">There is no working directory to start in yet. Create a project or a site first; each session runs in one.</div>') +
-        '<div class="row-sub">Switching tabs, sections or reloading the window does not stop a session.</div>' +
-        (cards ? '<div class="grid grid-3" style="margin-top:14px">' + cards + "</div>" : '<div class="empty-inline">No harnesses were found on this machine.</div>') +
-        "</div></div>";
-    }
-
-    var taskRows = state.tasks.length
-      ? state.tasks.map(function (t) {
-          var running = t.state === "running" || t.state === "starting" || t.state === "queued";
-          return '<div class="task-row"><div class="task-main"><div class="task-title">' +
-            esc(t.title) + " " + '<span class="pill ' + (t.state === "succeeded" ? "pill-ok" : t.state === "failed" ? "pill-bad" : "") + '">' + esc(t.state) + "</span>" +
-            '</div><div class="task-sub mono">' + esc(t.harness) + " · depth " + esc(t.depth) + " · " + esc(t.cwd) + "</div>" +
-            (t.error ? '<div class="task-error">' + esc(t.error) + "</div>" : "") + "</div>" +
-            '<div class="inline">' +
-            (running ? '<button type="button" class="btn btn-mini" data-action="task-wait" data-id="' + attr(t.id) + '">Wait</button>' +
-              '<button type="button" class="btn btn-mini" data-action="task-cancel" data-id="' + attr(t.id) + '">Cancel</button>' : "") +
-            '<button type="button" class="btn btn-mini" data-action="task-result" data-id="' + attr(t.id) + '">Result</button>' +
-            "</div></div>";
-        }).join("")
-      : '<div class="empty-inline">No delegated tasks. A coordinating agent can spawn one with agent.spawn, or use Delegate here.</div>';
-
-    el("main").innerHTML = page(
-      "Agents",
-      "Real PTYs owned by the backend. Closing a view or reloading the window does not restart the harness.",
-      '<button type="button" class="btn" data-action="delegate-open">Delegate a task</button>' +
-        '<button type="button" class="btn btn-primary" data-action="new-session" data-kind="shell">New session</button>',
-      '<div class="agents-layout">' +
-        '<aside class="panel session-side">' +
-        '<div class="panel-head"><span>Sessions</span><span class="panel-note">' + state.sessions.length + "</span></div>" +
-        '<div class="session-list">' + rows + "</div>" +
-        '<div class="session-side-foot">' +
-        (choices.length ? '<select class="select mono" id="agent-side-cwd" aria-label="Working directory">' + options + BROWSE_OPTION + "</select>" : '<div class="row-sub">No working directory yet.</div>') +
-        '<div class="inline" style="margin-top:8px">' +
-        state.harnesses.map(function (h) {
-          return '<button type="button" class="btn btn-mini" data-action="new-session" data-kind="' + attr(h.kind) + '"' +
-            (h.available ? "" : " disabled title=\"not installed\"") + ">" + esc(h.label) + "</button>";
-        }).join("") +
-        "</div></div></aside>" +
-        '<section class="session-main">' +
-        (tabs ? '<div class="term-tabs">' + tabs + "</div>" : "") +
-        terminal +
-        '<div class="panel"><div class="panel-head"><span>Delegated tasks</span><span class="panel-note">' +
-        state.tasks.filter(function (t) { return t.state === "running" || t.state === "starting"; }).length + " running</span></div>" +
-        '<div class="panel-body flush">' + taskRows + "</div></div>" +
-        "</section></div>"
-    );
-
-    attachActive();
-  }
-
-  function ensureTerm(id) {
-    if (state.terms[id]) return state.terms[id];
-    var term = new window.Terminal({
-      fontFamily: 'ui-monospace, "Cascadia Mono", Consolas, monospace',
-      fontSize: 12,
-      lineHeight: 1.35,
-      cursorBlink: true,
-      scrollback: 5000,
-      theme: {
-        background: "#000000",
-        foreground: "#f2f2f2",
-        cursor: "#7cf5c0",
-        selectionBackground: "#1f4a38",
-        black: "#171717",
-        red: "#ff6b6b",
-        green: "#4ade80",
-        yellow: "#facc15",
-        blue: "#9ad0ff",
-        magenta: "#c8b6ff",
-        cyan: "#7cf5c0",
-        white: "#f2f2f2"
-      }
-    });
-    var fit = new window.FitAddon.FitAddon();
-    term.loadAddon(fit);
-    term.onData(function (data) {
-      post("/api/sessions/" + encodeURIComponent(id) + "/input", { data: data }).then(function (res) {
-        if (!res.ok) markSessionGone(id, res.body);
-      });
-    });
-    term.onResize(function (size) {
-      post("/api/sessions/" + encodeURIComponent(id) + "/resize", { cols: size.cols, rows: size.rows });
-    });
-    state.terms[id] = { term: term, fit: fit, cursor: 0, opened: false, attachable: true, finished: false };
-    return state.terms[id];
-  }
-
-  function markSessionGone(id, body) {
-    var t = state.terms[id];
-    if (t) t.attachable = false;
-    var s = state.sessions.filter(function (x) { return x.id === id; })[0];
-    if (s) s.attachable = false;
-    if (body) {
-      var msg = body.error && body.error.message;
-      if (msg) toast("warn", msg);
-    }
-  }
-
-  function attachActive() {
-    var active = activeSession();
-    var slot = el("terminal-slot");
-    if (!active || !slot) {
-      stopAgentTimer();
-      return;
-    }
-    var t = ensureTerm(active.id);
-    t.attachable = !!active.attachable;
-    if (!t.opened) {
-      t.term.open(slot);
-      t.opened = true;
-    } else if (t.term.element && t.term.element.parentNode !== slot) {
-      slot.appendChild(t.term.element);
-    }
-    try { t.fit.fit(); } catch (e) {}
-    t.term.focus();
-    if (!t.finished) fetchOutput(active.id);
-    if (active.attachable) startAgentTimer(active.id);
-    else stopAgentTimer();
-  }
-
-  function fetchOutput(id) {
-    var t = state.terms[id];
-    if (!t) return;
-    post("/api/sessions/" + encodeURIComponent(id) + "/output", { cursor: t.cursor }).then(function (res) {
-      if (!res.ok || !res.body) return;
-      var body = res.body;
-      if (body.reset) {
-        try { t.term.reset(); } catch (e) {}
-      }
-      if (body.data) {
-        var raw = atob(body.data);
-        var bytes = new Uint8Array(raw.length);
-        for (var i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-        t.term.write(bytes);
-      }
-      t.cursor = body.cursor || t.cursor;
-      if (body.exited) {
-        t.attachable = false;
-        if (!t.finished) {
-          t.finished = true;
-          stopAgentTimer();
-          var s = state.sessions.filter(function (x) { return x.id === id; })[0];
-          if (s) {
-            s.attachable = false;
-            s.live_state = body.state === "finished"
-              ? (body.code === 0 ? "completed" : "failed")
-              : (body.state || "completed");
-            s.exit_code = body.code;
-          }
-          toast(body.code === 0 ? "ok" : "warn", "Session ended" + (body.code === 0 ? "" : " with code " + body.code));
-          loadAgents().then(renderAgents);
-        }
-      }
-    }).catch(function () {});
-  }
-
-  function startAgentTimer(id) {
-    stopAgentTimer();
-    state.agentTimer = setInterval(function () {
-      if (state.view !== "terminals" || state.activeSession !== id) {
-        stopAgentTimer();
-        return;
-      }
-      var t = state.terms[id];
-      if (!t || !t.attachable) {
-        stopAgentTimer();
-        return;
-      }
-      fetchOutput(id);
-    }, 110);
-  }
-
-  function stopAgentTimer() {
-    if (state.agentTimer) {
-      clearInterval(state.agentTimer);
-      state.agentTimer = null;
-    }
-  }
-
-  function openSession(id) {
-    state.activeSession = id;
-    try { localStorage.setItem("devd.activeSession", id); } catch (e) {}
-    render();
-  }
-
-  function newSession(kind) {
-    var cwd = readInput("agent-new-cwd") || readInput("agent-side-cwd") || state.agent.cwd;
-    if (!cwd) {
-      var choices = cwdChoices();
-      cwd = choices[0] && choices[0].path;
-    }
-    if (!cwd) return toast("warn", "Add a project or choose a working directory first");
-    state.agent.cwd = cwd;
-    state.agent.starting = true;
-    closeDrawer();
-    render();
-    post("/api/sessions", {
-      kind: kind,
-      cwd: cwd,
-      project: state.project ? state.project.path : null,
-      cols: 100,
-      rows: 30
-    }).then(function (res) {
-      state.agent.starting = false;
-      if (!res.ok || !res.body) {
-        toast("error", errorOf(res.body, "could not start " + kind));
-        render();
-        return;
-      }
-      var id = res.body.id || (res.body.session && res.body.session.id);
-      state.activeSession = id;
-      try { localStorage.setItem("devd.activeSession", id); } catch (e) {}
-      loadAgents().then(function () {
-        state.activeSession = id;
-        render();
-      });
-    });
-  }
-
-  function openNewSession() {
-    var choices = cwdChoices();
-    var options = choices.map(function (c) {
-      return '<option value="' + attr(c.path) + '">' + esc(c.label) + " — " + esc(c.path) + "</option>";
-    }).join("");
-    var cards = state.harnesses.map(function (h) {
-      return '<button type="button" class="card agent-card" data-action="new-session" data-kind="' + attr(h.kind) + '"' +
-        (h.available ? "" : " disabled") + '><div class="card-title">' + esc(h.label) + "</div>" +
-        '<div class="card-meta">' + (h.available ? "installed" : "not installed") + "</div>" +
-        '<div class="agent-detail">' + esc(h.detail) + "</div></button>";
-    }).join("");
-    openDrawer("New agent session",
-      '<div class="stack"><div class="field"><label class="field-label" for="agent-new-cwd">Working directory</label>' +
-      '<select class="select mono" id="agent-new-cwd">' + options + BROWSE_OPTION + "</select></div>" +
-      '<div class="grid grid-3">' + (cards || '<div class="faint">No harnesses found.</div>') + "</div>" +
-      '<div class="faint">The harness asks its own permission questions. devd supplies the directory, the PTY and the process.</div></div>');
-  }
-
-  function stopSession(id) {
-    if (!window.confirm("Stop this session and its child processes? Its transcript will be kept.")) return;
-    post("/api/sessions/" + encodeURIComponent(id) + "/stop", {}).then(function (res) {
-      if (!res.ok) return toast("error", errorOf(res.body, "could not stop the session"));
-      var t = state.terms[id];
-      if (t) {
-        try { t.term.dispose(); } catch (e) {}
-        delete state.terms[id];
-      }
-      toast("ok", "Session stopped; its output is still readable");
-      loadAgents().then(renderAgents);
-    });
-  }
-
-  function dismissSession(id) {
-    run("session.dismiss", { id: id }).then(function (done) {
-      if (!done) return;
-      var t = state.terms[id];
-      if (t) {
-        try { t.term.dispose(); } catch (e) {}
-        delete state.terms[id];
-      }
-      if (state.activeSession === id) state.activeSession = null;
-      loadAgents().then(renderAgents);
-    });
-  }
-
-  function renameSession(id) {
-    var s = state.sessions.filter(function (x) { return x.id === id; })[0];
-    openDrawer("Rename session",
-      '<div class="stack"><div class="field"><label class="field-label" for="session-label">Label</label>' +
-      '<input class="input" id="session-label" value="' + attr(s ? s.label : "") + '"></div>' +
-      '<button type="button" class="btn btn-primary" data-action="save-session-label" data-id="' + attr(id) + '">Save</button></div>');
-  }
-
-  function saveSessionLabel(id) {
-    var label = readInput("session-label");
-    if (!label) return toast("warn", "A session needs a label");
-    post("/api/sessions/" + encodeURIComponent(id) + "/rename", { label: label }).then(function (res) {
-      if (!res.ok) return toast("error", errorOf(res.body, "could not rename the session"));
-      closeDrawer();
-      loadAgents().then(renderAgents);
-    });
-  }
-
-  function openDelegate() {
-    var choices = cwdChoices();
-    var options = choices.map(function (c) {
-      return '<option value="' + attr(c.path) + '">' + esc(c.path) + "</option>";
-    }).join("");
-    var harnessOptions = state.harnesses.filter(function (h) { return h.kind === "claude" || h.kind === "opencode"; })
-      .map(function (h) {
-        return '<option value="' + attr(h.kind) + '"' + (h.available ? "" : " disabled") + ">" +
-          esc(h.label) + (h.available ? "" : " (not installed)") + "</option>";
-      }).join("");
-    openDrawer("Delegate a task",
-      '<div class="stack">' +
-      '<div class="field"><label class="field-label" for="task-title">Title</label><input class="input" id="task-title" placeholder="Investigate the failing test"></div>' +
-      '<div class="field"><label class="field-label" for="task-harness">Agent</label><select class="select" id="task-harness">' + harnessOptions +
-      '<option value="custom">Custom command (argv JSON)</option></select></div>' +
-      '<div class="field"><label class="field-label" for="task-cwd">Working directory</label><select class="select mono" id="task-cwd">' + options + "</select></div>" +
-      '<div class="field"><label class="field-label" for="task-instructions">Instructions</label><textarea class="input mono" id="task-instructions" rows="6" placeholder="What should the child do?"></textarea></div>' +
-      '<div class="field"><label class="field-label" for="task-command">Custom command (only for custom)</label><input class="input mono" id="task-command" placeholder=\'["node","script.js"]\'></div>' +
-      '<div class="field"><label class="field-label" for="task-timeout">Timeout (seconds)</label><input class="input" id="task-timeout" value="300"></div>' +
-      '<button type="button" class="btn btn-primary" data-action="delegate-go">Spawn a real child process</button>' +
-      '<div class="faint">The child is a separate PTY, limited to three levels of nesting and eight unfinished tasks. A wait timeout does not kill it.</div></div>');
-  }
-
-  function delegateTask() {
-    var title = readInput("task-title");
-    var harness = readInput("task-harness");
-    var cwd = readInput("task-cwd");
-    var instructions = el("task-instructions") ? el("task-instructions").value : "";
-    var commandText = readInput("task-command");
-    var timeout = Number(readInput("task-timeout")) || 300;
-    if (!title) return toast("warn", "A task needs a title");
-    if (!cwd) return toast("warn", "A task needs a working directory");
-    var command = null;
-    if (harness === "custom") {
-      try {
-        command = JSON.parse(commandText);
-      } catch (e) {
-        return toast("error", "The custom command must be a JSON array of arguments");
-      }
-      if (!Array.isArray(command) || !command.length) {
-        return toast("error", "The custom command must be a non-empty JSON array");
-      }
-    }
-    var active = activeSession();
-    post("/api/invoke", {
-      id: "agent.spawn",
-      args: {
-        title: title,
-        harness: harness,
-        cwd: cwd,
-        instructions: instructions,
-        project: state.project ? state.project.path : cwd,
-        parent_session_id: active ? active.id : null,
-        timeout_secs: timeout,
-        command: command
-      },
-      dry_run: false
-    }).then(function (res) {
-      if (!res.ok) return toast("error", errorOf(res.body, "could not delegate the task"));
-      var data = res.body.outcome && res.body.outcome.data;
-      var task = data && data.task;
-      closeDrawer();
-      toast("ok", "Delegated " + (task ? task.title : title));
-      loadAgents().then(renderAgents);
-    });
-  }
-
-  function waitTask(id) {
-    toast("ok", "Waiting for the delegated task…");
-    post("/api/tasks/" + encodeURIComponent(id) + "/wait", { timeout_secs: 120 }).then(function (res) {
-      if (!res.ok) return toast("error", errorOf(res.body, "the wait failed"));
-      if (res.body.timed_out) toast("warn", "The task is still running; it was not killed");
-      else toast("ok", "Task " + res.body.task.state);
-      loadAgents().then(renderAgents);
-    });
-  }
-
-  function cancelTask(id) {
-    if (!window.confirm("Cancel this delegated task and stop its child process?")) return;
-    post("/api/tasks/" + encodeURIComponent(id) + "/cancel", {}).then(function (res) {
-      if (!res.ok) return toast("error", errorOf(res.body, "could not cancel the task"));
-      toast("ok", "Task cancelled");
-      loadAgents().then(renderAgents);
-    });
-  }
-
-  function resultTask(id) {
-    request("/api/tasks/" + encodeURIComponent(id) + "/result").then(function (res) {
-      if (!res.ok) return toast("error", errorOf(res.body, "could not read the result"));
-      var task = res.body.task || {};
-      var output = String(res.body.output || "").replace(/\u001b\][^\u0007]*\u0007/g, "").replace(/\u001b\[[0-9;?]*[A-Za-z]/g, "");
-      openDrawer("Task result — " + (task.title || id),
-        '<div class="stack"><div class="inline">' + sessionPill({ live_state: task.state }) +
-        '<span class="pill">exit ' + esc(task.exit_code === null || task.exit_code === undefined ? "?" : task.exit_code) + "</span>" +
-        (task.error ? '<span class="pill pill-bad">' + esc(task.error) + "</span>" : "") + "</div>" +
-        '<pre class="log-pre">' + esc(output || "(no output captured)") + "</pre></div>");
     });
   }
 
@@ -4712,9 +4157,6 @@
     d.threads.filter(function (t) { return t.state === "running" || t.state === "waiting_approval"; }).forEach(function (t) {
       live.push('<div class="live"><span class="dot dot-ok"></span><span class="grow nowrap">' + esc(t.title) + '</span><span class="dim">' + (t.state === "running" ? "assistant working" : "waiting for you") + '</span><button type="button" class="btn btn-mini" data-action="open-thread" data-id="' + attr(t.id) + '">Open</button></div>');
     });
-    state.sessions.filter(function (x) { return x.live_state === "running"; }).forEach(function (x) {
-      live.push('<div class="live"><span class="dot dot-ok"></span><span class="grow nowrap">' + esc(x.label || x.harness) + '</span><span class="dim">' + esc(x.harness) + ' session</span><button type="button" class="btn btn-mini" data-action="nav" data-view="terminals">Open</button></div>');
-    });
     d.tasks.filter(function (t) { return t.running; }).forEach(function (t) {
       live.push('<div class="live"><span class="dot dot-ok"></span><span class="grow nowrap mono">' + esc(t.name) + '</span><span class="dim">background task</span><button type="button" class="btn btn-mini" data-action="nav" data-view="develop">Open</button></div>');
     });
@@ -4734,7 +4176,7 @@
       { v: "create", t: "Create a project", s: stackCount() ? "From " + stackCount() + " stacks" : "From a stack" },
       { v: "develop", t: "Import a project", s: "Detect and work on it" },
       { v: "toolchain", t: "Install tools", s: "Languages and databases" },
-      { v: "terminals", t: "Open an agent session", s: "Claude Code, shell" }
+      { v: "agents", t: "Give work to the team", s: "Plan, build, review" }
     ].map(function (q) { return '<button type="button" class="quick" data-action="nav" data-view="' + q.v + '"><b>' + esc(q.t) + "</b><span>" + esc(q.s) + "</span></button>"; }).join("");
 
     el("main").innerHTML =
@@ -5430,7 +4872,6 @@
     if (state.view === "create") return loadCreate().then(render);
     if (state.view === "develop") return loadDevelop().then(render);
     if (state.view === "agents") return loadRoster().then(render);
-    if (state.view === "terminals") return loadAgents().then(render);
     if (state.view === "skills") return loadSkills().then(render);
     if (state.view === "processes") return loadProcesses().then(render);
     if (state.view === "shared") return loadShared().then(render);
@@ -5456,7 +4897,6 @@
     create: "/create",
     develop: "/develop",
     agents: "/agents",
-    terminals: "/agents/terminals",
     skills: "/skills",
     shared: "/shared",
     processes: "/processes",
@@ -5525,7 +4965,6 @@
   }
 
   function navigate(view, fromRoute) {
-    if (state.view === "terminals" && view !== "terminals") stopAgentTimer();
     if (AREA[view]) { state.areaTab = state.areaTab || {}; state.areaTab[AREA[view]] = view; }
     state.view = view;
     if (!fromRoute) writeRoute(view, false);
@@ -5577,7 +5016,6 @@
     else if (state.view === "create") renderCreate();
     else if (state.view === "develop") renderDevelop();
     else if (state.view === "agents") renderRoster();
-    else if (state.view === "terminals") renderAgents();
     else if (state.view === "skills") renderSkills();
     else if (state.view === "processes") renderProcesses();
     else if (state.view === "shared") renderShared();
@@ -5650,16 +5088,6 @@
    * person wrote - the list is a way of naming things, not a side channel. */
   var MENTIONS = { open: false, items: [], index: 0, start: 0, query: "", seq: 0, timer: null };
 
-  /* The agents a message can be handed to.
-   *
-   * Two kinds. The first is devd's own team: members with one job, one set of
-   * permissions and one thing they must prove. The second is someone else's
-   * coding agent, started as a child process in its own terminal. */
-  var AGENT_HARNESSES = [
-    { id: "claude", name: "Claude Code", note: "a coding agent that reads and changes the project" },
-    { id: "opencode", name: "OpenCode", note: "a coding agent for the project" }
-  ];
-
   /* Where the "@" that opens the list is, and what has been typed after it. */
   function mentionTrigger(text, caret) {
     if (caret == null) caret = text.length;
@@ -5685,13 +5113,10 @@
     var projects = read("project.list")
       .then(function (d) { return Array.isArray(d) ? d : []; })
       .catch(function () { return []; });
-    var sessions = read("session.list")
-      .then(function (d) { return Array.isArray(d) ? d : []; })
-      .catch(function () { return []; });
     var roster = read("team.roles")
       .then(function (d) { return Array.isArray(d) ? d : []; })
       .catch(function () { return []; });
-    return Promise.all([caps, skills, projects, sessions, roster]).then(function (r) {
+    return Promise.all([caps, skills, projects, roster]).then(function (r) {
       var items = [];
       r[0].forEach(function (c) {
         items.push({ kind: "capability", token: "@" + c.id, title: c.id, detail: c.summary || c.group, group: "Capabilities" });
@@ -5705,21 +5130,10 @@
         if (q && name.toLowerCase().indexOf(q.toLowerCase()) < 0 && String(p.path || "").toLowerCase().indexOf(q.toLowerCase()) < 0) return;
         items.push({ kind: "project", token: "@project:" + name, title: name, detail: p.path, path: p.path, group: "Projects" });
       });
-      // The agents a message can be handed to. A delegated agent starts with
-      // no memory of the conversation, so naming one is an instruction to
-      // give it the whole task.
-      (r[4] || []).forEach(function (m) {
+      // The members of devd's team a message can be handed to.
+      (r[3] || []).forEach(function (m) {
         if (q && m.id.indexOf(q.toLowerCase()) < 0 && m.title.toLowerCase().indexOf(q.toLowerCase()) < 0 && String(m.summary || "").toLowerCase().indexOf(q.toLowerCase()) < 0) return;
         items.push({ kind: "member", token: "@" + m.id + ":", title: m.title, detail: m.summary, group: "devd's team", member: m.id });
-      });
-      AGENT_HARNESSES.forEach(function (h) {
-        if (q && h.id.indexOf(q.toLowerCase()) < 0 && h.name.toLowerCase().indexOf(q.toLowerCase()) < 0) return;
-        items.push({ kind: "agent", token: "@agent:" + h.id, title: h.name, detail: h.note, group: "Other agents", harness: h.id });
-      });
-      r[3].forEach(function (s) {
-        var label = s.label || s.harness || s.id;
-        if (q && String(label).toLowerCase().indexOf(q.toLowerCase()) < 0) return;
-        items.push({ kind: "session", token: "@session:" + s.id, title: label, detail: (s.harness || "") + (s.state ? " · " + s.state : ""), group: "Running agents", session: s.id });
       });
       return items;
     });
@@ -6499,8 +5913,6 @@
     "rename-session": function (node) { renameSession(node.dataset.id); },
     "save-session-label": function (node) { saveSessionLabel(node.dataset.id); },
     "dismiss-session": function (node) { dismissSession(node.dataset.id); },
-    "delegate-open": function () { openDelegate(); },
-    "delegate-go": function () { delegateTask(); },
     "task-wait": function (node) { waitTask(node.dataset.id); },
     "task-cancel": function (node) { cancelTask(node.dataset.id); },
     "task-result": function (node) { resultTask(node.dataset.id); },
@@ -7140,52 +6552,6 @@
       state.preview.site = event.target.value;
       render();
     }
-    if (event.target.value === "__browse__") {
-      // The person asked to go and find a folder. Put the list back the way it
-      // was, and open the picker.
-      var back = event.target.value;
-      event.target.value = "";
-      if (event.target.id === "agent-new-cwd") {
-        openPicker({
-          title: "Choose a working directory",
-          note: "The agent will start in this folder.",
-          confirm: "Use this folder",
-          intent: "directory"
-        }).then(function (path) {
-          if (!path) return;
-          var select = el("agent-new-cwd");
-          if (select) {
-            var opt = document.createElement("option");
-            opt.value = path;
-            opt.textContent = path;
-            select.appendChild(opt);
-            select.value = path;
-          }
-        });
-        return;
-      }
-      if (event.target.id === "agent-side-cwd") {
-        openPicker({
-          title: "Choose a working directory",
-          note: "New sessions will start in this folder.",
-          confirm: "Use this folder",
-          intent: "directory"
-        }).then(function (path) {
-          if (!path) return;
-          state.agent.cwd = path;
-          var select = el("agent-side-cwd");
-          if (select) {
-            var opt = document.createElement("option");
-            opt.value = path;
-            opt.textContent = path;
-            select.appendChild(opt);
-            select.value = path;
-          }
-        });
-        return;
-      }
-      event.target.value = back;
-    }
     if (event.target.id === "process-project") {
       state.processes.project = event.target.value;
       state.processes.plan = null;
@@ -7337,8 +6703,6 @@
       .then(loadProjects)
       .then(render)
       .then(loadCreate)
-      .then(render)
-      .then(loadAgents)
       .then(render)
       // The home page needs the assistant and health, not a full doctor run.
       // Diagnostics can take seconds on a cold machine; it must not hold the

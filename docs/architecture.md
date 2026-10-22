@@ -223,13 +223,6 @@ same screens.
 site in an iframe, so the page you are building is one click from the page you
 are editing. The iframe is sandboxed and cannot navigate the window.
 
-**Agents are wrapped, not reimplemented.** Agent terminals run the harness
-installed on the machine — Claude Code, OpenCode, or a shell — behind a real
-PTY. devd supplies the directory, the terminal and the process; it does not
-proxy the model, hold the conversation, or stand between the harness and its
-provider. That is why a new model or a harness feature arrives without a devd
-release, and why the agent's own permission prompts remain the authority.
-
 ## Choosing a folder
 
 A person finds a project by looking at their device, not by typing a path. That
@@ -255,25 +248,6 @@ the owners' own artwork, compiled into the binary and served from
 `/brands/{file}`, so the interface never depends on a third party being
 reachable and never shows a mark that has been tampered with. A mark is only
 shown for something devd actually supports, and it is never recoloured.
-
-## Sessions and the workspace runtime
-
-Session ownership is a separate layer from session presentation.
-`devd-workspace` owns the PTYs, the child watcher threads, the bounded output
-buffers and the durable metadata; `devd-server` polls that runtime; the window
-is a client. A reload disposes a terminal component, not a process.
-
-The database is the source of truth for metadata, never for liveness. A row says
-which process opened the PTY (`owner_pid` and its start time); reconciliation asks
-whether that process is alive before it reports `running`. A row whose owner is
-gone becomes `stale`, keeps its transcript, and is never attachable. This is the
-one thing persistence cannot do, and the product states it rather than faking it.
-
-Delegated tasks are child processes with a `parent_task_id`,
-`parent_session_id`, depth, timeout, exit code, result and cancellation state.
-Limits (eight unfinished tasks, depth three) are checked before a spawn. Waiting
-is a bounded poll; a timeout does not kill the child. See
-[`sessions.md`](sessions.md).
 
 ## Project processes
 

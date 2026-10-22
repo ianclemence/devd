@@ -229,26 +229,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/audit", get(api::audit))
         .route("/api/doctor", get(api::doctor))
         .route("/api/shutdown", post(api::shutdown))
-        .route("/api/sessions/harnesses", get(api::session_harnesses))
-        .route(
-            "/api/sessions",
-            get(api::sessions_list).post(api::sessions_start),
-        )
-        .route(
-            "/api/sessions/:id",
-            get(api::session_get).delete(api::session_dismiss),
-        )
-        .route("/api/sessions/:id/attach", post(api::session_attach))
-        .route("/api/sessions/:id/output", post(api::session_output))
-        .route("/api/sessions/:id/input", post(api::session_input))
-        .route("/api/sessions/:id/resize", post(api::session_resize))
-        .route("/api/sessions/:id/stop", post(api::session_stop))
-        .route("/api/sessions/:id/rename", post(api::session_rename))
-        .route("/api/tasks", get(api::tasks_list))
-        .route("/api/tasks/:id", get(api::task_get))
-        .route("/api/tasks/:id/wait", post(api::task_wait))
-        .route("/api/tasks/:id/cancel", post(api::task_cancel))
-        .route("/api/tasks/:id/result", get(api::task_result))
         .route("/api/project", get(api::project_plan))
         .route("/api/project/status", get(api::project_status))
         .route("/api/project/approve", post(api::project_approve))
@@ -267,9 +247,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/style.css", get(ui::style))
         .route("/favicon.svg", get(ui::favicon))
         .route("/brands/:file", get(ui::brand))
-        .route("/vendor/xterm.js", get(ui::xterm_js))
-        .route("/vendor/xterm.css", get(ui::xterm_css))
-        .route("/vendor/addon-fit.js", get(ui::xterm_fit))
         // Every screen has an address of its own, so a link to it can be
         // copied and the back button means something. The shell answers for
         // any path it does not have a file for, and the interface reads the

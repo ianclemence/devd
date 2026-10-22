@@ -123,14 +123,10 @@ Laragon serves sites with Apache (mod_php), nginx, MySQL and Redis. What devd do
 | Secret scanning | A warning when staged content looks like a credential is specified | Not implemented. Previewing a staged diff before a commit shows the content but does not flag it. |
 | Instance discovery | `devd ui` finds a running instance by probing the remembered port and the next few for the `X-Devd-App` header | A lock file or a named pipe, which would be exact rather than a scan. |
 
-## Agent terminals and preview
+## Preview
 
 | Item | What it is | What it would be |
 | --- | --- | --- |
-| Agent harnesses | The terminal runs `claude`, `opencode` or a shell as installed on the machine. There is no bundled agent, no model proxy and no API key stored by devd. | Additional harnesses by command template, and per-project harness presets. |
-| Sessions | One agent terminal at a time in the window. Its id lives in the page, so reloading the window loses the handle while the PTY keeps running until it exits or the server stops. | A session list with reattach, and adoption after a reload. |
-| Output | Polled over the loopback API every 80ms, with 2 MB of scrollback in memory. It is not archived. | A WebSocket transport, and saved transcripts. |
-| Permissions | The harness's own prompts are the authority. devd does not mediate file edits or commands the agent runs. | Nothing — proxying those would make the agent's guarantees devd's problem. |
 | Preview | The site is embedded in an iframe with `sandbox` set. A site that sends `X-Frame-Options` or a `frame-ancestors` policy will refuse to render; devd's generated vhosts do not. | A per-site "block embedding" switch, and a device-size preview. |
 | Preview certificates | An HTTPS site renders without a warning only after the local authority is trusted. The page says when it is not. | A one-click trust from the preview, which exists but is the same admin action. |
 
@@ -223,15 +219,11 @@ and are recorded so they are not rediscovered:
   `schema_name` appear as a database. The client is now invoked with
   `--skip-column-names`.
 
-## Sessions, agents and the desktop shell (v0.8.0)
+## Project processes and the desktop shell
 
 | Item | What it is | What it would be |
 | --- | --- | --- |
-| Reattachment across a backend restart | Impossible, and reported as such. A PTY handle belongs to the process that opened it. On startup a row whose owner is gone becomes `stale`; its transcript remains readable. | A detached supervisor process that owns PTYs independently of the UI process, with a reconnect protocol. This is a deliberate non-goal for the current single-process model. |
-| One owner per PTY | A session is owned by one devd process. Another process can list it and read the transcript but cannot attach. MCP launched by an agent is a separate process, so an agent-spawned session belongs to the MCP process, not the window. | A privileged IPC or named-pipe bridge from MCP to the running UI server. The metadata model already records the owner; the transport is missing. |
-| Quitting the desktop app | Stops PTYs and project processes, as a normal exit should. A crash or `TerminateProcess` may leave children; Windows Job Objects would close that gap. | A job object with kill-on-close on Windows, and a reaper on Linux. |
-| Delegation harness modes | Claude uses `claude -p` (print mode) and OpenCode uses `opencode run`. Interactive permission prompts are not answered for the child; if the harness needs a decision it can fail, and that failure is the result. | A PTY-level handoff that lets a person answer the child's prompt without proxying its model. |
-| Delegation across machines | Local only. There is no remote agent pool. | Remote executors with the same typed task contract. |
+| Quitting the desktop app | Stops project processes, as a normal exit should. A crash or `TerminateProcess` may leave children; Windows Job Objects would close that gap. | A job object with kill-on-close on Windows, and a reaper on Linux. |
 | Project process adoption | A project process belongs to the devd process that started it. A second process reports it as supervised elsewhere rather than adopting it. | A small detached supervisor with pid-file ownership discovery. |
 | Windows `.cmd` shims | Started through `cmd.exe /c <shim> <args>`. Arguments remain separate, but a shim can itself interpret them. | Vendor-native `.exe` wrappers where available. |
 | Manifest secrets | Declared values are redacted from log reads on a best-effort key match. A program can print a secret in another form. | Structured secret references (OS credential store) rather than literal values in `devd.yml`. |
@@ -249,8 +241,7 @@ Stated plainly, so nothing is assumed:
 * **Merges are plain `git merge --no-ff`.** A conflict blocks the task for a person;
   devd does not resolve conflicts or rebase.
 * **Evidence is read from `project.run` and file capabilities.** Work an agent does
-  by other means (for example a long shell session in Claude Code) is not counted;
-  those sessions are not governed by the team scheduler.
+  by other means is not counted.
 * **Team tasks use the providers you configured.** Gemini and local runtimes go
   through their OpenAI-compatible endpoints; there is no native Gemini adapter, and
   model capabilities beyond what a provider lists (tool support, modalities) are not

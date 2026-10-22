@@ -20,10 +20,9 @@ The structure follows Anthropic's published guidance on building agents
 | Human approval for consequential actions | One approval queue. Agents queue; only a person decides. |
 | Keep the context lean | Tool results are shortened and old ones cleared; skills are loaded on demand. |
 
-Claude Code itself is integrated as a *session* (`devd-workspace`): devd starts it
-in the project directory with devd's MCP server attached, so it can use every
-capability with the same permission model. devd does not proxy or re-implement
-its tool loop; its own agent runs through the providers you configure.
+devd does not launch other coding agents. Its own agents, the assistant and the
+team, run through the providers you configure, and an outside agent that speaks
+MCP can still drive devd through the same capabilities and permission model.
 
 ## Providers and models
 

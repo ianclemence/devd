@@ -14,7 +14,7 @@ devd is the local development server you would otherwise assemble by hand: a web
 - **It serves your dev servers too.** Point a hostname at a program that is already running — `devd site create api --upstream 3000` — and a Node, Python or Rails dev server gets the same `.test` name and HTTPS.
 - **It runs the services.** PHP, nginx and MariaDB are installed, started, health-checked and kept running. A service is "Ready" only after it has answered, not because its port is open.
 - **It sees what you already have.** MySQL, Redis, PostgreSQL and Docker are detected, never assumed healthy and never replaced. You decide whether devd uses them, watches them or leaves them alone.
-- **It runs your agents.** Claude Code, OpenCode or a shell, in a real terminal that survives you changing screens. Give an agent team a goal and a planner proposes the work, you approve it, and specialists do it in isolated copies of the project.
+- **It has its own agents.** An assistant, and a team of fifteen specialists (planner, product, designer, architect, engineers, QA, security, infrastructure, docs). Give the team a goal and a definition of done: a planner proposes the work, you approve it, and specialists do it in isolated copies of the project until the evidence shows it is done.
 - **It keeps the record.** What was asked, what ran, what it changed and who approved it.
 
 You say what you want. devd does the rest, and it asks before it does anything consequential.

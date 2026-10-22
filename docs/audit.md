@@ -10,7 +10,7 @@ following each part into its code, and what was decided.
 | Home | Static cards, status text that duplicated Overview. | Rebuilt around work: what needs you, what is running, projects, getting started. |
 | Assistant, Inbox, Providers & models | New; Inbox was only reachable from the assistant. | Inbox is top-level (it is where agents reach you). Assistant gained Team runs as a tab. Providers became **Models** under Manage. |
 | Projects, Create, Develop | Three pages for one thing: Projects listed git repos, Develop held stack projects, Create scaffolded. | One **Projects** entry with tabs: Projects, New project, Stacks and tasks. |
-| Agent sessions, Shared notes | Notes exist only for agents sharing a project. | **Sessions** with Shared notes as a tab. |
+| Agent sessions, Shared notes | Notes exist only for agents sharing a project. | Shared notes became a tab of **Agents**; terminal sessions were later removed. |
 | Processes | Distinct (supervised project processes and logs). | Kept. |
 | Overview, Sites, Preview, Services, Runtimes, Toolchain, Certificates, Hosts | Eight rail items for one subject; Overview duplicated Home. | One **Server** entry; tabs for Overview, Services, Sites, Tools, Runtimes, Preview, Certificates, Hosts. |
 | Capabilities, Activity, System | "Capabilities" is an API reference, not a daily destination; System was an unlabelled dump. | Moved to Manage as **API and tools**, **Activity**, **Diagnostics** (health model first, raw checks below). |

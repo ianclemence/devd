@@ -100,11 +100,6 @@ impl Paths {
         self.root.join("logs")
     }
 
-    /// Bounded transcripts for agent sessions, one file per session.
-    pub fn sessions(&self) -> PathBuf {
-        self.root.join("sessions")
-    }
-
     /// Supervision data for project processes: logs and pid records.
     pub fn projects(&self) -> PathBuf {
         self.root.join("projects")
@@ -142,7 +137,6 @@ impl Paths {
             self.logs(),
             self.cache(),
             self.snapshots(),
-            self.sessions(),
             self.projects(),
         ] {
             std::fs::create_dir_all(&dir)?;

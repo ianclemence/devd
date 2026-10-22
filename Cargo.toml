@@ -42,7 +42,6 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 tar = "0.4"
 flate2 = "1"
 rcgen = "0.13"
-portable-pty = "0.8"
 base64 = "0.22"
 time = "0.3"
 

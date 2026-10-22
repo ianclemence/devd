@@ -44,7 +44,7 @@ timestamp. There is no hidden authorship.
 | --- | --- |
 | `id` | Stable UUID |
 | `project` | Canonical project path |
-| `task_id` | Optional delegated task association |
+| `task_id` | Optional association with a team task |
 | `title`, `description` | What needs doing |
 | `status` | `open`, `in_progress`, `blocked`, `done`, `cancelled` |
 | `priority` | `low`, `normal`, `high`, `urgent` |
@@ -78,9 +78,9 @@ A coordinating agent can:
 1. `scratch.append` its findings to a project note.
 2. `todo.create` an actionable item assigned to another agent, with the project
    and optional task scope.
-3. `agent.spawn` the second agent with instructions that name the note and todo.
-4. `agent.wait` without blocking the interface.
-5. `agent.result` for the output, and update the todo when the work is done.
+3. `team.assign` the work to another member of the team with instructions that name the note and todo.
+4. Follow the run with `team.get` without blocking the interface.
+5. Update the todo when the work is accepted.
 
 The second agent reads the same records. Nothing is passed through an
 unrestricted shared text file, and the note is not automatically visible outside

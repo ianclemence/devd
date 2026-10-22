@@ -32,10 +32,6 @@ const SCRIPT: &str = include_str!("../ui/app.js");
 const STYLE: &str = include_str!("../ui/style.css");
 /// Window icon.
 const FAVICON: &str = include_str!("../ui/favicon.svg");
-/// Vendored xterm.js, for the agent terminal.
-const XTERM_JS: &str = include_str!("../ui/vendor/xterm.js");
-const XTERM_CSS: &str = include_str!("../ui/vendor/xterm.css");
-const FIT_JS: &str = include_str!("../ui/vendor/addon-fit.js");
 
 /// Placeholder substituted with the bearer token at serve time.
 ///
@@ -50,8 +46,7 @@ const TOKEN_PLACEHOLDER: &str = "__DEVD_TOKEN__";
 /// `connect-src 'self'` is what keeps the token from being usable by a script
 /// that somehow got injected: it could not send it anywhere else.
 ///
-/// `style-src` permits inline *styles* because xterm.js positions its terminal
-/// with style attributes and the application uses a few for spacing. Inline
+/// `style-src` permits inline *styles* because the application uses a few for spacing. Inline
 /// style is not script: it cannot execute, and script remains limited to
 /// same-origin files.
 const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; frame-src http: https:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
@@ -128,19 +123,6 @@ fn missing() -> Response {
         "no such brand mark",
     )
         .into_response()
-}
-
-/// The vendored terminal emulator.
-pub async fn xterm_js() -> Response {
-    build("text/javascript; charset=utf-8", Body::from(XTERM_JS), None)
-}
-
-pub async fn xterm_css() -> Response {
-    build("text/css; charset=utf-8", Body::from(XTERM_CSS), None)
-}
-
-pub async fn xterm_fit() -> Response {
-    build("text/javascript; charset=utf-8", Body::from(FIT_JS), None)
 }
 
 fn build(content_type: &str, body: Body, port: Option<u16>) -> Response {

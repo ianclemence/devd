@@ -368,27 +368,6 @@ can be recovered. Nothing else is snapshotted yet: there is no capability that
 restores a snapshot, and changing a site, a certificate or a service
 configuration is not reversible through `devd`.
 
-## Sessions, PTYs and terminals
-
-A session is a real process running as the invoking user. devd does not sandbox
-it, does not proxy its model traffic, and does not mediate the harness's own
-permission prompts. The identity, credentials and approval behaviour of Claude
-Code, OpenCode or a shell are the tool's own; suppressing those prompts would be
-a security regression, not a feature.
-
-The terminal transport sits behind the same bearer token, host allow-list and
-origin check as every endpoint. Output polling is deliberately not audited per
-frame - an 80 ms poll would fill the audit table with noise - while mutations that
-an agent can perform are capabilities and are audited. Only the process that owns
-a PTY may write, resize or stop it; another devd process can read the transcript
-but is told it cannot attach. An agent may stop a session it delegated, but not a
-person's interactive session. `session.input` is human-only because an agent
-typing into a person's terminal is indistinguishable from injected instructions.
-
-The transcript is plaintext on disk under `DEVD_HOME/sessions`. It can contain
-anything the agent printed, including secrets. It is bounded (8 MiB per session)
-and retained after the process ends. A person who would not want that text on
-disk should not run a harness that prints it.
 
 ## Executable project configuration
 

@@ -7,7 +7,7 @@ interface and it has no privileged bridge.
 ```text
 devd-desktop.exe
   ├─ capability registry (devd-bootstrap)
-  ├─ workspace: PTYs, delegated tasks, project processes
+  ├─ workspace: project processes
   ├─ loopback HTTP server (devd-server, ephemeral port)
   └─ Tauri webview ──HTTP──> http://127.0.0.1:<port>/
 ```
@@ -31,8 +31,7 @@ window shows the real error rather than a blank page.
 ## Shutdown
 
 Closing the last window sends the shutdown signal. The HTTP server stops
-accepting, `Workspace` is dropped, PTYs are stopped and their child trees killed,
-and project processes are terminated. The application then exits. The same path
+accepting, `Workspace` is dropped and project processes are terminated. The application then exits. The same path
 runs on `RunEvent::Exit`; shutdown is idempotent.
 
 ## Permissions and isolation
