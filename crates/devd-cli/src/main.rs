@@ -966,6 +966,20 @@ pub(crate) enum ServiceCommand {
 pub(crate) enum SiteCommand {
     /// List the sites.
     List,
+    /// List the folders whose projects become sites.
+    Parked,
+    /// Park a folder: a site for each project in it, named after the folder.
+    Park {
+        /// The folder, as an absolute path.
+        path: String,
+    },
+    /// Stop parking a folder. Its sites stay.
+    Unpark {
+        /// The folder, as an absolute path.
+        path: String,
+    },
+    /// Make a site of every project directory in the parked folders that has none.
+    Sync,
     /// Create a site: directory, certificate, record and web server block.
     Create {
         /// Project name, used for the directory and, by default, the hostname.

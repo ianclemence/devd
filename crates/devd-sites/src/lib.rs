@@ -21,6 +21,7 @@
 
 pub mod caps;
 pub mod hosts;
+pub mod park;
 
 use std::path::{Path, PathBuf};
 
@@ -260,6 +261,13 @@ pub struct CreateRequest {
 
 /// Create a site: directory, certificate, record, configuration.
 pub fn create(ctx: &Ctx, request: &CreateRequest) -> Result<Created> {
+    create_with(ctx, request, true, true)
+}
+
+/// [`create`], with control over the two things a caller creating many sites
+/// does not want repeated: writing a starter page into a directory that has
+/// nothing to serve, and re-rendering and reloading the web server.
+pub(crate) fn create_with(ctx: &Ctx, request: &CreateRequest, starter_page: bool, reload: bool) -> Result<Created> {
     util::validate_name(&request.name)?;
     let host = request
         .host
@@ -296,7 +304,11 @@ pub fn create(ctx: &Ctx, request: &CreateRequest) -> Result<Created> {
     // directory nor a starter page.
     let starter = if upstream.is_none() {
         std::fs::create_dir_all(&directory)?;
-        write_starter_page(&directory, &request.name)?
+        if starter_page {
+            write_starter_page(&directory, &request.name)?
+        } else {
+            None
+        }
     } else {
         None
     };
@@ -362,7 +374,7 @@ pub fn create(ctx: &Ctx, request: &CreateRequest) -> Result<Created> {
         }
     }
 
-    let reloaded = reconcile(ctx, &mut warnings)?;
+    let reloaded = if reload { reconcile(ctx, &mut warnings)? } else { false };
 
     // The hosts file is deliberately not written here; say so rather than leaving
     // the user with a name that does not resolve and no explanation. `localhost`
@@ -400,7 +412,7 @@ pub fn create(ctx: &Ctx, request: &CreateRequest) -> Result<Created> {
 /// Returns whether a reload happened. A reload is a convenience: everything has
 /// already been written, and the state store is the truth, so a web server that
 /// is not running does not make the operation a failure.
-fn reconcile(ctx: &Ctx, warnings: &mut Vec<String>) -> Result<bool> {
+pub(crate) fn reconcile(ctx: &Ctx, warnings: &mut Vec<String>) -> Result<bool> {
     let server = devd_services::web::service_name(ctx);
     match devd_services::web::render(ctx) {
         Ok(_) => {}
@@ -855,6 +867,37 @@ mod tests {
             db: false,
             upstream: None,
         }
+    }
+
+    #[test]
+    fn parking_a_folder_makes_a_site_of_each_project_once_and_writes_nothing_into_them() {
+        let c = ctx("park");
+        let folder = c.paths.root().join("parked");
+        std::fs::create_dir_all(folder.join("My Blog").join("public")).unwrap();
+        std::fs::create_dir_all(folder.join("shop")).unwrap();
+        std::fs::create_dir_all(folder.join(".git")).unwrap();
+        std::fs::create_dir_all(folder.join("node_modules")).unwrap();
+        std::fs::write(folder.join("notes.txt"), "not a project").unwrap();
+
+        let report = park::sync(&c, std::slice::from_ref(&folder)).unwrap();
+        let mut made: Vec<String> = report.created.iter().map(|(n, h)| format!("{n} {h}")).collect();
+        made.sort();
+        assert_eq!(made, vec!["my-blog my-blog.test", "shop shop.test"], "{report:?}");
+        assert!(report.skipped.is_empty(), "{report:?}");
+        // No starter page was written into a person's project.
+        assert!(!folder.join("shop").join("index.php").exists());
+        assert!(!folder.join("My Blog").join("public").join("index.php").exists());
+        let site = c.store.list_sites().unwrap().into_iter().find(|s| s.name == "my-blog").unwrap();
+        assert!(site.document_root().ends_with("public"));
+
+        let again = park::sync(&c, std::slice::from_ref(&folder)).unwrap();
+        assert!(again.created.is_empty());
+        assert_eq!(again.existing.len(), 2);
+
+        std::fs::remove_dir_all(folder.join("shop")).unwrap();
+        let gone = park::sync(&c, std::slice::from_ref(&folder)).unwrap();
+        assert_eq!(gone.gone, vec!["shop"], "a site whose folder vanished is reported, not removed");
+        assert_eq!(c.store.list_sites().unwrap().len(), 2);
     }
 
     #[test]

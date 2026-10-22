@@ -84,6 +84,9 @@ pub struct Settings {
     /// human in the loop. Destructive and admin capabilities are never
     /// auto-approved regardless of this setting.
     pub agent_auto_approve_write: bool,
+    /// Folders besides the projects root whose project directories become sites
+    /// (`site.park`).
+    pub parked: Vec<std::path::PathBuf>,
     /// Extra directories, besides the projects root, in which agents may create
     /// and run projects. Humans are not limited to these.
     pub project_roots: Vec<std::path::PathBuf>,
@@ -106,6 +109,7 @@ impl Default for Settings {
             agent_model: None,
             agent_auto_approve_write: false,
             project_roots: Vec::new(),
+            parked: Vec::new(),
         }
     }
 }

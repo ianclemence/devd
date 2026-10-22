@@ -44,12 +44,106 @@ args! {
     RemoveArgs { name: String, delete_files: Option<bool> }
     /// A site to point at a running program, or back at its directory.
     SetUpstreamArgs { name: String, upstream: Option<String> }
+    /// A folder of projects.
+    FolderArgs { path: String }
     /// A site to pin to a PHP version.
     SetPhpArgs { name: String, version: Option<String> }
 }
 
 /// Register every site capability.
 pub fn register(reg: &mut Registry) -> Result<()> {
+    reg.define::<NoArgs>("site.parked", "List the folders whose projects become sites")
+    .description("The projects root and every folder added with site.park. Each project directory in them is a site after site.sync, named after the folder, the way Laragon's auto virtual hosts work.")
+    .group("site")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .dry_run()
+    .handlers(
+        |_, _| Ok(Plan::new("site.parked", "list parked folders")),
+        |ctx, _| {
+            let rows: Vec<Value> = sites::park::folders(ctx)
+                .into_iter()
+                .map(|f| {
+                    let projects = std::fs::read_dir(&f)
+                        .map(|d| d.flatten().filter(|e| e.path().is_dir() && !e.file_name().to_string_lossy().starts_with('.')).count())
+                        .unwrap_or(0);
+                    json!({ "folder": f.display().to_string(), "projects": projects, "exists": f.is_dir() })
+                })
+                .collect();
+            Ok(Outcome::with_data(format!("{} parked folder(s)", rows.len()), json!(rows)))
+        },
+    )?;
+
+    reg.define::<FolderArgs>("site.park", "Park a folder: its projects become sites")
+    .description("Adds a folder to the parked list in the settings file and makes a site of each project directory in it (site.sync). A site is <folder name>.<tld>, served from the folder, from its public/ directory when it has one. Nothing is written into the projects. Human only, because it makes everything in the folder reachable by name.")
+    .group("site")
+    .tier(Tier::Write)
+    .effect(Effect::Config)
+    .human_only()
+    .dry_run()
+    .handlers(
+        |_, a| Ok(Plan::new("site.park", format!("park {} and make a site of each project in it", a.path)).effect("rewrites settings.toml and the web server configuration")),
+        |ctx, a| {
+            let folder = sites::park::park(ctx, std::path::Path::new(&a.path))?;
+            let report = sites::park::sync(ctx, std::slice::from_ref(&folder))?;
+            let mut outcome = Outcome::with_data(
+                format!("parked {}; {} site(s) created", folder.display(), report.created.len()),
+                serde_json::to_value(&report).unwrap_or(Value::Null),
+            );
+            for w in &report.warnings {
+                outcome = outcome.warn(w.clone());
+            }
+            Ok(outcome)
+        },
+    )?;
+
+    reg.define::<FolderArgs>("site.unpark", "Stop parking a folder")
+    .description("Removes a folder from the parked list. The sites it produced stay until site.remove deletes them.")
+    .group("site")
+    .tier(Tier::Write)
+    .effect(Effect::Config)
+    .human_only()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, a| Ok(Plan::new("site.unpark", format!("stop parking {}", a.path)).effect("rewrites settings.toml")),
+        |ctx, a| {
+            let removed = sites::park::unpark(ctx, std::path::Path::new(&a.path))?;
+            Ok(Outcome::ok(if removed { "the folder is no longer parked; its sites stay" } else { "that folder was not parked" }))
+        },
+    )?;
+
+    reg.define::<NoArgs>("site.sync", "Make a site of every project in the parked folders")
+    .description("For each project directory in the projects root and the parked folders that has no site, creates one (<folder>.<tld>, with a certificate) and re-renders the web server once. Sites whose folder has gone are reported, not removed. The names still need the hosts file: hosts.sync.")
+    .group("site")
+    .tier(Tier::Write)
+    .effect(Effect::Config)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, _| Ok(Plan::new("site.sync", "create a site for each project directory that has none").effect("adds sites and rewrites the web server configuration")),
+        |ctx, _| {
+            let report = sites::park::sync(ctx, &sites::park::folders(ctx))?;
+            let mut outcome = Outcome::with_data(
+                format!("{} created, {} already had a site, {} skipped", report.created.len(), report.existing.len(), report.skipped.len()),
+                serde_json::to_value(&report).unwrap_or(Value::Null),
+            );
+            for w in &report.warnings {
+                outcome = outcome.warn(w.clone());
+            }
+            for s in &report.skipped {
+                outcome = outcome.warn(format!("skipped {}: {}", s.folder, s.reason));
+            }
+            for g in &report.gone {
+                outcome = outcome.warn(format!("{g} has no folder any more; site.remove removes the site"));
+            }
+            Ok(outcome)
+        },
+    )?;
+
     reg.define::<NoArgs>("site.list", "List sites")
     .description("Every site with a live check of what is really on disk: whether its project directory \
          exists, whether its hostname is in the hosts file, whether a certificate has been \
