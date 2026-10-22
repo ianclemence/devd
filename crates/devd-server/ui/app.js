@@ -1203,7 +1203,10 @@
 
   var KNOWN_SERVICES = [
     { name: "nginx", label: "nginx", note: "web server" },
+    { name: "apache", label: "Apache", note: "web server that reads .htaccess; Laragon's works as it is", find: true, download: true },
     { name: "mariadb", label: "MariaDB", note: "database" },
+    { name: "redis", label: "Redis", note: "cache, queues and sessions; uses the one you already have", find: true, download: false },
+    { name: "mailpit", label: "Mailpit", note: "catches the mail your applications send" },
     { name: "php-cgi", label: "php-cgi", note: "PHP FastCGI listener, built from the installed runtime" }
   ];
 
@@ -1713,7 +1716,8 @@
               '<div class="card-actions">' +
               (k.name === "php-cgi"
                 ? '<button type="button" class="btn btn-mini" data-action="nav" data-view="runtimes">Install a PHP runtime</button>'
-                : '<button type="button" class="btn btn-mini btn-primary" data-action="install-service" data-name="' + attr(k.name) + '">Install</button>') +
+                : (k.download === false ? "" : '<button type="button" class="btn btn-mini btn-primary" data-action="install-service" data-name="' + attr(k.name) + '">Install</button>') +
+                  (k.find ? '<button type="button" class="btn btn-mini" data-action="adopt-service" data-name="' + attr(k.name) + '">Use the one on this computer</button>' : "")) +
               "</div></div>"
             );
           })
@@ -1725,7 +1729,7 @@
       body =
         '<div class="panel"><div class="empty">' +
         '<div class="empty-title">No services</div>' +
-        "<div>Install nginx, MariaDB and a PHP runtime to serve sites.</div></div></div>";
+        "<div>Install a web server (nginx or Apache), MariaDB and a PHP runtime to serve sites.</div></div></div>";
     }
 
     el("main").innerHTML = page(
@@ -5799,6 +5803,16 @@
     "install-service": function (node) {
       toast("info", "installing " + node.dataset.name + " — the vendor download can take a minute");
       act("service.install", { name: node.dataset.name, version: null });
+    },
+
+    "adopt-service": function (node) {
+      var name = node.dataset.name;
+      read("service.find_local", { name: name }).then(function (found) {
+        if (!found || !found.length) return toast("warn", "No " + name + " folder was found on this computer.");
+        var f = found[0];
+        if (!window.confirm("Use " + name + " " + f.version + " at " + f.path + "? devd does not change that folder; it writes its own configuration.")) return;
+        act("service.adopt", { name: name, path: f.path });
+      });
     },
 
     "start-service": function (node) { act("service.start", { name: node.dataset.name }); },

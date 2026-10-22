@@ -193,8 +193,8 @@ fn register_service(reg: &mut Registry) -> Result<()> {
     )?;
 
     reg.define::<NameArgs>("service.find_local", "Find a service's program already on this machine")
-    .description("Looks for an Apache folder from Laragon, XAMPP, WampServer or a plain install on every \
-         drive and reports each with its version. Nothing is changed; `service.adopt` uses one.")
+    .description("Looks for an Apache or Redis folder from Laragon, XAMPP, WampServer or a plain install on \
+         every drive and reports each with its version. Nothing is changed; `service.adopt` uses one.")
     .group("service")
     .tier(Tier::Read)
     .effect(Effect::Read)
@@ -204,19 +204,21 @@ fn register_service(reg: &mut Registry) -> Result<()> {
     .handlers(
         |_, a| Ok(Plan::new("service.find_local", format!("look for {} folders on this machine", a.name))),
         |_, a| {
-            if a.name != "apache" {
-                return Err(DevdError::unsupported("only Apache can be found on disk"));
-            }
-            let found: Vec<Value> = services::find_local_apache()
+            let folders = match a.name.as_str() {
+                "apache" => services::find_local_apache(),
+                "redis" => services::find_local_redis(),
+                _ => return Err(DevdError::unsupported("only Apache and Redis can be found on disk")),
+            };
+            let found: Vec<Value> = folders
                 .into_iter()
                 .map(|(path, version)| json!({ "path": path.display().to_string(), "version": version }))
                 .collect();
-            Ok(Outcome::with_data(format!("{} Apache folder(s) found", found.len()), json!(found)))
+            Ok(Outcome::with_data(format!("{} {} folder(s) found", found.len(), a.name), json!(found)))
         },
     )?;
 
     reg.define::<AdoptArgs>("service.adopt", "Use a program that is already on disk")
-    .description("Records an existing Apache folder (Laragon's, XAMPP's, a plain install) as devd's Apache. \
+    .description("Records an existing Apache or Redis folder (Laragon's, XAMPP's, a plain install) as devd's. \
          The folder is not copied or modified: devd writes its own httpd.conf and starts the program with \
          it. Human only, because the program in that folder is what devd will then run.")
     .group("service")
@@ -384,7 +386,7 @@ fn register_service(reg: &mut Registry) -> Result<()> {
 fn install_plan(args: &InstallArgs) -> Result<Plan> {
     let def = services::definition(&args.name).ok_or_else(|| {
         DevdError::unsupported(format!(
-            "`{}` is not a service devd can install; installable services are nginx, apache and mariadb",
+            "`{}` is not a service devd can install; installable services are nginx, apache, mariadb, redis and mailpit",
             args.name
         ))
     })?;

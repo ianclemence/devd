@@ -35,6 +35,12 @@ const MARIADB: &[Want] = &[
     },
 ];
 
+/// Redis is the server; the client is not needed.
+const REDIS: &[Want] = &[Want {
+    link: "bin/redis-server",
+    names: &["redis-server"],
+}];
+
 /// The standard `fastcgi_params`, used when the system's copy cannot be found.
 const FASTCGI_PARAMS: &str = "\
 fastcgi_param  QUERY_STRING       $query_string;
@@ -116,6 +122,7 @@ fn hint(tool: &str) -> String {
 pub fn adopt(host: &dyn Host, kind: &str) -> Result<Adoption> {
     match kind {
         "nginx" => platform::adopt(host, "nginx", &hint("nginx"), NGINX, &["-v"]),
+        "redis" => platform::adopt(host, "Redis", &hint("redis-server"), REDIS, &["--version"]),
         "mariadb" => {
             let adoption =
                 platform::adopt(host, "MariaDB", &hint("mariadb"), MARIADB, &["--version"])?;
@@ -143,6 +150,7 @@ pub fn version_of(kind: &str, banner: &str) -> Option<String> {
         "nginx" => r"nginx/(\d+\.\d+\.\d+)",
         // `mariadbd  Ver 11.4.2-MariaDB ...` and `mariadbd from 11.4.2-MariaDB ...`
         "mariadb" => r"(?:Ver|from) (\d+\.\d+\.\d+)",
+        "redis" => r"v=(\d+(?:\.\d+){1,3})",
         _ => return None,
     };
     util::extract_version(banner, Some(pattern))

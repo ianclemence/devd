@@ -20,6 +20,7 @@ pub mod apache;
 pub mod caps;
 pub mod catalogue;
 pub mod dump;
+pub mod extras;
 pub mod mariadb;
 pub mod nginx;
 pub mod system;
@@ -80,6 +81,24 @@ pub const DEFINITIONS: &[Definition] = &[
         unix_exe: "bin/httpd",
         default_port: 0,
         startup: Duration::from_secs(20),
+    },
+    Definition {
+        name: "redis",
+        kind: "redis",
+        summary: "Redis, for cache, queues and sessions",
+        windows_exe: "redis-server.exe",
+        unix_exe: "bin/redis-server",
+        default_port: 6379,
+        startup: Duration::from_secs(10),
+    },
+    Definition {
+        name: "mailpit",
+        kind: "mailpit",
+        summary: "Mailpit, which catches the mail your applications send",
+        windows_exe: "mailpit.exe",
+        unix_exe: "mailpit",
+        default_port: extras::MAILPIT_UI_PORT,
+        startup: Duration::from_secs(10),
     },
     Definition {
         name: "mariadb",
@@ -233,6 +252,13 @@ pub fn install_dir(ctx: &Ctx, name: &str) -> PathBuf {
 /// The pid file for a service.
 fn pid_file(ctx: &Ctx, name: &str) -> PathBuf {
     install_dir(ctx, name).join("devd.pid")
+}
+
+/// The folder a service runs from when it was adopted rather than installed.
+pub(crate) fn manifest_root(ctx: &Ctx, name: &str) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(manifest(ctx, name)).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    value.get("root").and_then(|v| v.as_str()).map(PathBuf::from)
 }
 
 /// The install manifest written by `service.install`.
@@ -512,9 +538,14 @@ pub fn install(
         ));
     }
 
+    if def.name == "redis" && cfg!(windows) {
+        return Err(extras::redis_download_refusal());
+    }
+
     // Off Windows the program comes from the system's package manager, not from
-    // a download devd verifies itself.
-    if Os::current().uses_system_packages() {
+    // a download devd verifies itself. Mailpit is the exception: it is published
+    // for every platform with a digest, so it is downloaded and checked everywhere.
+    if def.name != "mailpit" && Os::current().uses_system_packages() {
         return install_system(ctx, def, port, &SystemHost);
     }
 
@@ -693,6 +724,26 @@ fn finish_install(
             // check the moment nginx is installed.
             nginx::render(ctx)?;
         }
+        "redis" => {
+            let port = port.unwrap_or(def.default_port);
+            extras::redis_write_config(ctx, port)?;
+            extra.insert("port".to_string(), json!(port));
+            extra.insert("config".to_string(), json!(extras::redis_config_path(ctx).display().to_string()));
+            warnings.push("Redis listens on 127.0.0.1 only and keeps a snapshot under the devd data folder".to_string());
+        }
+        "mailpit" => {
+            std::fs::create_dir_all(ctx.paths.etc().join("mailpit"))?;
+            let port = port.unwrap_or(def.default_port);
+            extra.insert("inbox".to_string(), json!(format!("http://127.0.0.1:{port}")));
+            extra.insert("smtp".to_string(), json!(format!("127.0.0.1:{}", extras::SMTP_PORT)));
+            let pointed = extras::point_php_at_mailpit(ctx)?;
+            if !pointed.is_empty() {
+                warnings.push(format!(
+                    "PHP {} now sends mail to Mailpit; restart the php-cgi service to apply it",
+                    pointed.join(", ")
+                ));
+            }
+        }
         "apache" => {
             // The manifest that names the Apache root is written below, so the
             // render has to look where it will be, not where it is.
@@ -822,6 +873,33 @@ pub fn install_system(
     })
 }
 
+/// Redis folders already on this machine, as (path, version): Laragon's, and a plain install.
+pub fn find_local_redis() -> Vec<(PathBuf, String)> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if cfg!(windows) {
+        for drive in 'A'..='Z' {
+            let root = PathBuf::from(format!("{drive}:\\"));
+            if !root.is_dir() {
+                continue;
+            }
+            for parent in ["laragon\\bin\\redis", "wamp64\\bin\\redis", "Redis", "Program Files\\Redis"] {
+                candidates.push(root.join(parent));
+            }
+        }
+    }
+    let mut out: Vec<(PathBuf, String)> = Vec::new();
+    for candidate in candidates {
+        let Some(root) = extras::redis_root_of(&candidate) else { continue };
+        if out.iter().any(|(p, _)| p == &root) {
+            continue;
+        }
+        if let Some(version) = extras::redis_version(&root) {
+            out.push((root, version));
+        }
+    }
+    out
+}
+
 /// Apache folders already on this machine, as (path, version).
 ///
 /// Looks where the Windows distributions put it - Laragon, XAMPP, WampServer, a
@@ -878,32 +956,34 @@ fn apache_root_of(folder: &Path) -> Option<PathBuf> {
 /// decision, because the program in that folder is what devd will then run.
 pub fn adopt(ctx: &Ctx, name: &str, path: &Path, port: Option<u16>) -> Result<InstalledService> {
     let def = definition(name)
-        .filter(|d| d.name == "apache")
-        .ok_or_else(|| DevdError::unsupported("only Apache can be adopted from a folder"))?;
+        .filter(|d| matches!(d.name, "apache" | "redis"))
+        .ok_or_else(|| DevdError::unsupported("only Apache and Redis can be adopted from a folder"))?;
     if !path.is_absolute() {
-        return Err(DevdError::invalid("give the absolute path of the Apache folder"));
+        return Err(DevdError::invalid(format!("give the absolute path of the {} folder", def.name)));
     }
-    let root = apache_root_of(path).ok_or_else(|| {
+    let root = if def.name == "redis" { extras::redis_root_of(path) } else { apache_root_of(path) }.ok_or_else(|| {
         DevdError::not_found(format!(
-            "{} is not an Apache folder: it needs {} and a modules folder",
+            "{} is not a {} folder: it needs {}",
             path.display(),
-            apache::exe_name()
+            def.name,
+            if def.name == "redis" { extras::redis_exe_name() } else { apache::exe_name() }
         ))
     })?;
     if let Ok(Some(existing)) = ctx.store.get_service(def.name) {
         if running_pid(ctx, &existing).is_some() {
             return Err(DevdError::conflict(
-                "apache is running; stop it first with `devd service stop apache`",
+                format!("{} is running; stop it first with `devd service stop {}`", def.name, def.name),
             ));
         }
     }
-    let version = apache::version(&root).ok_or_else(|| {
-        DevdError::invalid(format!("could not read an Apache version from {}", root.display()))
+    let version = if def.name == "redis" { extras::redis_version(&root) } else { apache::version(&root) }.ok_or_else(|| {
+        DevdError::invalid(format!("could not read a {} version from {}", def.name, root.display()))
     })?;
+    let config = if def.name == "redis" { extras::redis_config_path(ctx) } else { apache::config_path(ctx) };
     let mut warnings = vec![format!(
         "{} is used as it is. devd does not change it; its own configuration is {}",
         root.display(),
-        apache::config_path(ctx).display()
+        config.display()
     )];
     let record = json!({ "source": "adopted", "root": root.display().to_string() });
     let dest = install_dir(ctx, def.name);
@@ -952,6 +1032,17 @@ pub fn service_argv(ctx: &Ctx, name: &str, _port: Option<u16>) -> Result<Vec<Str
                 "-c".to_string(),
                 native(&nginx::config_path(ctx)),
             ])
+        }
+        "redis" => {
+            let exe = extras::redis_directory(ctx).join(extras::redis_exe_name());
+            Ok(vec![native(&exe), native(&extras::redis_config_path(ctx))])
+        }
+        "mailpit" => {
+            let exe = dir.join(extras::mailpit_exe_name());
+            let port = ctx.store.get_service("mailpit")?.and_then(|s| s.port).unwrap_or(extras::MAILPIT_UI_PORT);
+            let mut argv = vec![native(&exe)];
+            argv.extend(extras::mailpit_args(ctx, port));
+            Ok(argv)
         }
         "apache" => {
             let root = apache::directory(ctx);
@@ -1234,6 +1325,10 @@ pub fn start(ctx: &Ctx, name: &str) -> Result<Status> {
         if let Err(e) = nginx::test(ctx) {
             return Err(e);
         }
+    }
+
+    if service.name == "redis" {
+        extras::redis_write_config(ctx, service.port.unwrap_or(6379))?;
     }
 
     if service.name == "apache" {

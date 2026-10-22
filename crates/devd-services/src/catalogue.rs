@@ -8,6 +8,7 @@
 //! | nginx | `nginx.org/en/download.html` | not published as a file |
 //! | MariaDB | `downloads.mariadb.org/rest-api` | per-file `sha256sum` in the API |
 //! | Apache httpd | `apachelounge.com/download` (Windows) | `<zip>.txt` beside each archive |
+//! | Mailpit | GitHub releases of `axllent/mailpit` | the `digest` GitHub records for each asset |
 //!
 //! nginx is the one honest gap. nginx.org publishes a PGP signature
 //! (`nginx-1.28.3.zip.asc`) and no checksum file, so `devd` cannot check the
@@ -29,6 +30,9 @@ const NGINX_BASE: &str = "https://nginx.org/download/";
 /// Apache Lounge, the Windows builds the Apache project itself points to.
 const APACHE_PAGE: &str = "https://www.apachelounge.com/download/";
 const APACHE_HOST: &str = "https://www.apachelounge.com";
+
+/// Mailpit's releases, with the SHA-256 GitHub records for each file.
+const MAILPIT_API: &str = "https://api.github.com/repos/axllent/mailpit/releases?per_page=10";
 
 /// Where MariaDB keeps every release's files.
 const MARIADB_BASE: &str = "https://archive.mariadb.org/";
@@ -138,6 +142,67 @@ fn apache_sha256(text: &str) -> Option<String> {
         let digest = value.trim().to_ascii_lowercase();
         (digest.len() == 64 && digest.chars().all(|c| c.is_ascii_hexdigit())).then_some(digest)
     })
+}
+
+/// The Mailpit asset name for this platform, e.g. `mailpit-windows-amd64.zip`.
+fn mailpit_asset() -> Option<String> {
+    let os = if cfg!(windows) {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "darwin"
+    } else if cfg!(target_os = "linux") {
+        "linux"
+    } else {
+        return None;
+    };
+    let arch = if cfg!(target_arch = "x86_64") {
+        "amd64"
+    } else if cfg!(target_arch = "aarch64") {
+        "arm64"
+    } else {
+        return None;
+    };
+    Some(format!("mailpit-{os}-{arch}.{}", if cfg!(windows) { "zip" } else { "tar.gz" }))
+}
+
+/// Every recent Mailpit release that has a build for this platform and a digest.
+pub fn mailpit() -> Result<Vec<Available>> {
+    let asset = mailpit_asset().ok_or_else(|| DevdError::unsupported("Mailpit publishes no build for this platform"))?;
+    let body = download::fetch_text(MAILPIT_API, TIMEOUT)?;
+    mailpit_from(&body, &asset)
+}
+
+fn mailpit_from(json_text: &str, asset: &str) -> Result<Vec<Available>> {
+    let releases: serde_json::Value = serde_json::from_str(json_text)
+        .map_err(|e| DevdError::internal(format!("the Mailpit release list is not JSON: {e}")))?;
+    let mut list = Vec::new();
+    for release in releases.as_array().into_iter().flatten() {
+        if release["prerelease"].as_bool().unwrap_or(false) || release["draft"].as_bool().unwrap_or(false) {
+            continue;
+        }
+        let Some(tag) = release["tag_name"].as_str() else { continue };
+        let version = tag.trim_start_matches('v').to_string();
+        for file in release["assets"].as_array().into_iter().flatten() {
+            if file["name"].as_str() != Some(asset) {
+                continue;
+            }
+            let digest = file["digest"].as_str().and_then(|d| d.strip_prefix("sha256:")).map(|d| d.to_ascii_lowercase());
+            let (Some(url), Some(sha256)) = (file["browser_download_url"].as_str(), digest) else { continue };
+            list.push(Available {
+                kind: "mailpit".to_string(),
+                series: devd_runtime::catalogue::series_of(&version),
+                version: version.clone(),
+                channel: "stable".to_string(),
+                url: url.to_string(),
+                sha256: Some(sha256),
+                bytes: file["size"].as_u64(),
+                published: release["published_at"].as_str().map(str::to_string),
+                executable: if cfg!(windows) { "mailpit.exe" } else { "mailpit" }.to_string(),
+            });
+        }
+    }
+    sort_newest_first(&mut list);
+    Ok(list)
 }
 
 pub fn nginx() -> Result<Vec<Available>> {
@@ -409,8 +474,11 @@ pub fn for_kind(kind: &str) -> Result<Vec<Available>> {
             }
             apache()
         }
+        "mailpit" => mailpit(),
+        // Redis has no build devd can verify; it is adopted, not downloaded.
+        "redis" => Ok(Vec::new()),
         other => Err(DevdError::unsupported(format!(
-            "`{other}` has no upstream catalogue in devd; installable services are nginx, apache and mariadb"
+            "`{other}` has no upstream catalogue in devd; installable services are nginx, apache, mariadb, redis and mailpit"
         ))),
     }
 }
@@ -477,7 +545,21 @@ mod tests {
     fn unknown_kinds_are_refused() {
         let err = for_kind("lighttpd").unwrap_err();
         assert_eq!(err.code(), "unsupported");
-        assert!(err.to_string().contains("nginx, apache and mariadb"), "{err}");
+        assert!(err.to_string().contains("nginx, apache, mariadb, redis and mailpit"), "{err}");
+    }
+
+    #[test]
+    fn mailpit_is_chosen_by_platform_and_only_with_a_recorded_digest() {
+        let json = r#"[
+          {"tag_name":"v1.31.6","prerelease":false,"published_at":"2026-10-01T00:00:00Z","assets":[
+            {"name":"mailpit-windows-amd64.zip","size":10640632,"browser_download_url":"https://github.com/axllent/mailpit/releases/download/v1.31.6/mailpit-windows-amd64.zip","digest":"sha256:5D5AD094BFB3BAC9004F9D1105D2335FEA9F8952C09951DF73AE0A280E34D3B1"},
+            {"name":"mailpit-linux-amd64.tar.gz","size":1,"browser_download_url":"https://x/y","digest":null}]},
+          {"tag_name":"v1.32.0-rc1","prerelease":true,"assets":[]}]"#;
+        let win = mailpit_from(json, "mailpit-windows-amd64.zip").unwrap();
+        assert_eq!(win.len(), 1);
+        assert_eq!(win[0].version, "1.31.6");
+        assert_eq!(win[0].sha256.as_deref(), Some("5d5ad094bfb3bac9004f9d1105d2335fea9f8952c09951df73ae0a280e34d3b1"));
+        assert!(mailpit_from(json, "mailpit-linux-amd64.tar.gz").unwrap().is_empty(), "no digest, no install");
     }
 
     #[test]

@@ -74,9 +74,7 @@ pub fn directory(ctx: &Ctx) -> PathBuf {
 
 /// The root recorded when an existing Apache was adopted.
 fn adopted_root(ctx: &Ctx) -> Option<PathBuf> {
-    let text = std::fs::read_to_string(crate::manifest(ctx, "apache")).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
-    value.get("root").and_then(|v| v.as_str()).map(PathBuf::from)
+    crate::manifest_root(ctx, "apache")
 }
 
 /// The generated configuration file.
