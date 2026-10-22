@@ -21,6 +21,7 @@ pub mod autostart;
 pub mod caps;
 pub mod catalogue;
 pub mod dump;
+pub mod engines;
 pub mod extras;
 pub mod mariadb;
 pub mod nginx;
@@ -90,6 +91,33 @@ pub const DEFINITIONS: &[Definition] = &[
         windows_exe: "redis-server.exe",
         unix_exe: "bin/redis-server",
         default_port: 6379,
+        startup: Duration::from_secs(10),
+    },
+    Definition {
+        name: "postgres",
+        kind: "postgres",
+        summary: "PostgreSQL, for projects that need it",
+        windows_exe: "bin/postgres.exe",
+        unix_exe: "bin/postgres",
+        default_port: 5432,
+        startup: Duration::from_secs(40),
+    },
+    Definition {
+        name: "mongodb",
+        kind: "mongodb",
+        summary: "MongoDB, a document database",
+        windows_exe: "bin/mongod.exe",
+        unix_exe: "bin/mongod",
+        default_port: 27017,
+        startup: Duration::from_secs(40),
+    },
+    Definition {
+        name: "memcached",
+        kind: "memcached",
+        summary: "Memcached, an in-memory cache",
+        windows_exe: "memcached.exe",
+        unix_exe: "memcached",
+        default_port: 11211,
         startup: Duration::from_secs(10),
     },
     Definition {
@@ -542,6 +570,9 @@ pub fn install(
     if def.name == "redis" && cfg!(windows) {
         return Err(extras::redis_download_refusal());
     }
+    if let Some(engine) = engines::get(def.name) {
+        return Err(engines::download_refusal(engine));
+    }
 
     // Off Windows the program comes from the system's package manager, not from
     // a download devd verifies itself. Mailpit is the exception: it is published
@@ -731,6 +762,14 @@ fn finish_install(
             extra.insert("port".to_string(), json!(port));
             extra.insert("config".to_string(), json!(extras::redis_config_path(ctx).display().to_string()));
             warnings.push("Redis listens on 127.0.0.1 only and keeps a snapshot under the devd data folder".to_string());
+        }
+        other if engines::get(other).is_some() => {
+            let engine = engines::get(other).expect("checked");
+            let root = record.get("root").and_then(|v| v.as_str()).map(PathBuf::from).ok_or_else(|| DevdError::internal("an engine was recorded without its folder"))?;
+            warnings.extend(engines::prepare(ctx, engine, &root)?);
+            extra.insert("port".to_string(), json!(port.unwrap_or(def.default_port)));
+            extra.insert("data_dir".to_string(), json!(engines::data_dir(ctx, other).display().to_string()));
+            warnings.push(format!("{other} listens on 127.0.0.1 only; its data lives in {}", engines::data_dir(ctx, other).display()));
         }
         "mailpit" => {
             std::fs::create_dir_all(ctx.paths.etc().join("mailpit"))?;
@@ -955,17 +994,27 @@ fn apache_root_of(folder: &Path) -> Option<PathBuf> {
 /// decision, because the program in that folder is what devd will then run.
 pub fn adopt(ctx: &Ctx, name: &str, path: &Path, port: Option<u16>) -> Result<InstalledService> {
     let def = definition(name)
-        .filter(|d| matches!(d.name, "apache" | "redis"))
-        .ok_or_else(|| DevdError::unsupported("only Apache and Redis can be adopted from a folder"))?;
+        .filter(|d| matches!(d.name, "apache" | "redis") || engines::get(d.name).is_some())
+        .ok_or_else(|| DevdError::unsupported("only Apache, Redis, PostgreSQL, MongoDB and Memcached can be adopted from a folder"))?;
+    let engine = engines::get(def.name);
     if !path.is_absolute() {
         return Err(DevdError::invalid(format!("give the absolute path of the {} folder", def.name)));
     }
-    let root = if def.name == "redis" { extras::redis_root_of(path) } else { apache_root_of(path) }.ok_or_else(|| {
+    let found_root = match (engine, def.name) {
+        (Some(e), _) => engines::root_of(e, path),
+        (None, "redis") => extras::redis_root_of(path),
+        _ => apache_root_of(path),
+    };
+    let root = found_root.ok_or_else(|| {
         DevdError::not_found(format!(
             "{} is not a {} folder: it needs {}",
             path.display(),
             def.name,
-            if def.name == "redis" { extras::redis_exe_name() } else { apache::exe_name() }
+            match engine {
+                Some(e) => format!("{} (and {})", e.program, e.needs.join(", ")),
+                None if def.name == "redis" => extras::redis_exe_name().to_string(),
+                None => apache::exe_name().to_string(),
+            }
         ))
     })?;
     if let Ok(Some(existing)) = ctx.store.get_service(def.name) {
@@ -975,12 +1024,21 @@ pub fn adopt(ctx: &Ctx, name: &str, path: &Path, port: Option<u16>) -> Result<In
             ));
         }
     }
-    let version = if def.name == "redis" { extras::redis_version(&root) } else { apache::version(&root) }.ok_or_else(|| {
+    let read_version = match (engine, def.name) {
+        (Some(e), _) => engines::version(e, &root),
+        (None, "redis") => extras::redis_version(&root),
+        _ => apache::version(&root),
+    };
+    let version = read_version.ok_or_else(|| {
         DevdError::invalid(format!("could not read a {} version from {}", def.name, root.display()))
     })?;
-    let config = if def.name == "redis" { extras::redis_config_path(ctx) } else { apache::config_path(ctx) };
+    let config = match (engine, def.name) {
+        (Some(_), _) => engines::data_dir(ctx, def.name),
+        (None, "redis") => extras::redis_config_path(ctx),
+        _ => apache::config_path(ctx),
+    };
     let mut warnings = vec![format!(
-        "{} is used as it is. devd does not change it; its own configuration is {}",
+        "{} is used as it is. devd does not change it; devd's own files for it are in {}",
         root.display(),
         config.display()
     )];
@@ -1014,7 +1072,7 @@ fn verifiable(name: &str, list: &[Available]) -> Vec<Available> {
 }
 
 /// The argument array for a service's process. Never a shell string.
-pub fn service_argv(ctx: &Ctx, name: &str, _port: Option<u16>) -> Result<Vec<String>> {
+pub fn service_argv(ctx: &Ctx, name: &str, port: Option<u16>) -> Result<Vec<String>> {
     let dir = install_dir(ctx, name);
     match name {
         "nginx" => {
@@ -1031,6 +1089,16 @@ pub fn service_argv(ctx: &Ctx, name: &str, _port: Option<u16>) -> Result<Vec<Str
                 "-c".to_string(),
                 native(&nginx::config_path(ctx)),
             ])
+        }
+        other if engines::get(other).is_some() => {
+            let engine = engines::get(other).expect("checked");
+            let root = manifest_root(ctx, other).ok_or_else(|| DevdError::not_found(format!("{other} has no recorded folder; adopt it again")))?;
+            // The port being installed with, else the one already recorded, else the engine's own.
+            let port = match port {
+                Some(p) => p,
+                None => ctx.store.get_service(other)?.and_then(|s| s.port).unwrap_or(engine.default_port),
+            };
+            engines::argv(ctx, engine, &root, port)
         }
         "redis" => {
             let exe = extras::redis_directory(ctx).join(extras::redis_exe_name());
@@ -1330,6 +1398,11 @@ pub fn start(ctx: &Ctx, name: &str) -> Result<Status> {
         extras::redis_write_config(ctx, service.port.unwrap_or(6379))?;
     }
 
+    if let Some(engine) = engines::get(&service.name) {
+        let root = manifest_root(ctx, &service.name).ok_or_else(|| DevdError::not_found(format!("{} has no recorded folder; adopt it again", service.name)))?;
+        engines::prepare(ctx, engine, &root)?;
+    }
+
     if service.name == "apache" {
         if !apache::config_path(ctx).is_file() {
             apache::render(ctx)?;
@@ -1420,6 +1493,13 @@ pub fn stop(ctx: &Ctx, name: &str) -> Result<Status> {
     let pid = running_pid(ctx, &service);
     let supervisor = process::shared();
     let mut exit_code = 0;
+
+    // A database is asked to finish what it is doing before its process is ended.
+    if pid.is_some() {
+        if let Some(root) = manifest_root(ctx, name).filter(|_| engines::get(name).is_some()) {
+            engines::graceful_stop(ctx, name, &root);
+        }
+    }
 
     if supervisor.list().iter().any(|p| p.name == service.name) {
         // The supervisor owns the handle in this process, so it can wait for a
@@ -1627,6 +1707,8 @@ pub fn remove(ctx: &Ctx, name: &str) -> Result<serde_json::Value> {
         "bytes_removed": bytes,
         "data_kept": if name == "mariadb" {
             Some(mariadb::data_dir(ctx).display().to_string())
+        } else if engines::get(name).is_some() {
+            Some(engines::data_dir(ctx, name).display().to_string())
         } else {
             None
         },

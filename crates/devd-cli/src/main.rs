@@ -122,8 +122,11 @@ pub(crate) enum Command {
         #[command(subcommand)]
         cmd: TlsCommand,
     },
-    /// Databases on the local MariaDB server.
+    /// Databases on devd's MariaDB, or PostgreSQL with `--engine postgres`.
     Db {
+        /// `mariadb` (the default) or `postgres`.
+        #[arg(long, global = true)]
+        engine: Option<String>,
         #[command(subcommand)]
         cmd: DbCommand,
     },
@@ -912,14 +915,14 @@ pub(crate) enum ServiceCommand {
         /// Service name: `nginx`, `apache` or `mariadb`.
         name: String,
     },
-    /// Look for a service's program already on this machine (Apache from XAMPP, WampServer or a portable stack).
+    /// Look for a service's program already on this machine: Apache, Redis, PostgreSQL, MongoDB or Memcached.
     Find {
-        /// Service name: `apache`.
+        /// Service name: `apache`, `redis`, `postgres`, `mongodb` or `memcached`.
         name: String,
     },
     /// Use a program that is already on disk, without copying or changing it.
     Adopt {
-        /// Service name: `apache`.
+        /// Service name: `apache`, `redis`, `postgres`, `mongodb` or `memcached`.
         name: String,
         /// The program's folder, for example `C:\\Apache24`.
         path: String,
@@ -1658,8 +1661,8 @@ fn run(cli: Cli) -> Result<i32> {
             stackcat::tls(&app, cmd)?;
             Ok(0)
         }
-        Command::Db { cmd } => {
-            stackcat::db(&app, cmd)?;
+        Command::Db { engine, cmd } => {
+            stackcat::db(&app, engine, cmd)?;
             Ok(0)
         }
         Command::Audit { limit } => {

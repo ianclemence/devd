@@ -80,14 +80,14 @@ pub fn tls(app: &App, cmd: TlsCommand) -> Result<()> {
 }
 
 /// Run a `devd db` subcommand.
-pub fn db(app: &App, cmd: DbCommand) -> Result<()> {
+pub fn db(app: &App, engine: Option<String>, cmd: DbCommand) -> Result<()> {
     match cmd {
-        DbCommand::List => app.invoke("db.list", json!({})),
-        DbCommand::Create { name } => app.invoke("db.create", json!({ "name": name })),
-        DbCommand::Drop { name } => app.invoke("db.drop", json!({ "name": name })),
-        DbCommand::Dump { database, path, from_port } => app.invoke("db.dump", json!({ "database": database, "path": path, "from_port": from_port })),
-        DbCommand::Restore { database, path, replace } => app.invoke("db.restore", json!({ "database": database, "path": path, "replace": replace })),
-        DbCommand::Copy { database, from_port, as_name, replace } => app.invoke("db.copy", json!({ "database": database, "from_port": from_port, "as_name": as_name, "replace": replace })),
+        DbCommand::List => app.invoke("db.list", json!({ "engine": engine })),
+        DbCommand::Create { name } => app.invoke("db.create", json!({ "name": name, "engine": engine })),
+        DbCommand::Drop { name } => app.invoke("db.drop", json!({ "name": name, "engine": engine })),
+        DbCommand::Dump { database, path, from_port } => app.invoke("db.dump", json!({ "database": database, "path": path, "from_port": from_port, "engine": engine })),
+        DbCommand::Restore { database, path, replace } => app.invoke("db.restore", json!({ "database": database, "path": path, "replace": replace, "engine": engine })),
+        DbCommand::Copy { database, from_port, as_name, replace } => app.invoke("db.copy", json!({ "database": database, "from_port": from_port, "as_name": as_name, "replace": replace, "engine": engine })),
     }
 }
 

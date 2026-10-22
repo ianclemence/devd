@@ -26,6 +26,8 @@ devd service find apache          # Apache or Redis folders already on this mach
 devd service adopt apache 'C:\Apache24'   # use one as it is
 devd service adopt redis 'C:\Redis' --port 6379
 devd service install mailpit      # mail catcher; checked against the digest GitHub records
+devd service adopt postgres 'C:\pgsql'    # also mongodb and memcached: run one you already have
+devd db list --engine postgres
 devd service start nginx
 devd service status nginx
 devd service logs nginx

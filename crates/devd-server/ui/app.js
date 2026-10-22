@@ -1207,6 +1207,9 @@
     { name: "apache", label: "Apache", note: "reads .htaccess; use the one you already have", find: true, download: true },
     { name: "mariadb", label: "MariaDB", note: "database" },
     { name: "redis", label: "Redis", note: "cache, queues and sessions; uses the one you already have", find: true, download: false },
+    { name: "postgres", label: "PostgreSQL", note: "uses the one you already have", find: true, download: false },
+    { name: "mongodb", label: "MongoDB", note: "uses the one you already have", find: true, download: false },
+    { name: "memcached", label: "Memcached", note: "uses the one you already have", find: true, download: false },
     { name: "mailpit", label: "Mailpit", note: "catches the mail your applications send" },
     { name: "php-cgi", label: "php-cgi", note: "PHP FastCGI listener, built from the installed runtime" }
   ];
@@ -1596,8 +1599,8 @@
   // Services already on the machine: detected, never assumed healthy, never replaced.
   var INV_LABEL = { ready: "Ready", installed_stopped: "Installed, not running", port_conflict: "Port taken by something else", not_operational: "Not operational", limited: "Detected, limited control", missing: "Not installed" };
 
-  function managedRedis() {
-    return (state.server.services || []).some(function (x) { return x.name === "redis"; });
+  function managedService(name) {
+    return (state.server.services || []).some(function (x) { return x.name === name; });
   }
 
   function inventoryPanel() {
@@ -1616,8 +1619,9 @@
         var cls = "btn btn-mini" + (recd ? " btn-primary" : o.risk === "destructive" ? " btn-danger" : "");
         return '<button type="button" class="' + cls + '" data-action="svc-option" data-tool="' + attr(v.tool) + '" data-opt="' + attr(o.action) + '" title="' + attr((o.why_not || "") + (o.risk === "approval" ? " Asks you first." : "")) + '">' + esc(o.action === "adopt" ? "Use it" : o.action === "observe" ? "Only watch" : o.action === "external" ? "Use my own instance" : o.action === "start" ? "Start" : o.action === "install" ? "Install" : o.action === "logs" ? "Logs" : o.action === "remove" ? "Remove…" : o.label) + "</button>";
       }).join("");
-      if (v.tool === "redis" && v.path && !managedRedis()) {
-        btns = '<button type="button" class="btn btn-mini btn-primary" data-action="adopt-found" data-name="redis" data-path="' + attr(v.path.replace(/[\\/][^\\/]*$/, "")) + '">Run it with devd</button>';
+      var own = { redis: "redis", postgresql: "postgres", mongodb: "mongodb", memcached: "memcached" }[v.tool];
+      if (own && v.path && !managedService(own)) {
+        btns = '<button type="button" class="btn btn-mini btn-primary" data-action="adopt-found" data-name="' + attr(own) + '" data-path="' + attr(v.path.replace(/[\\/][^\\/]*$/, "")) + '">Run it with devd</button>';
       }
       var need = v.required ? '<span class="pill pill-warn" title="' + attr(v.required_by.map(function (r) { return r.project; }).join(", ")) + '">needed by ' + v.required_by.length + "</span>" : "";
       return '<div class="inv"><span class="health-dot hstate-' + (v.status === "ready" ? "healthy" : v.status === "installed_stopped" ? "degraded" : v.status === "missing" ? "setup_incomplete" : "critical") + '"></span><div class="grow">' +
@@ -1685,7 +1689,10 @@
     }
 
     var missing = KNOWN_SERVICES.filter(function (k) { return !byName[k.name]; })
-      .filter(function (k) { return k.name !== "redis" || !(state.server.inventory || []).some(function (v) { return v.tool === "redis" && v.path; }); })
+      .filter(function (k) {
+        var tool = k.name === "postgres" ? "postgresql" : k.name;
+        return !k.find || k.name === "apache" || !(state.server.inventory || []).some(function (v) { return v.tool === tool && v.path; });
+      })
       .filter(function (k) { return keeps(q, k.name, k.label, k.note); });
     if (missing.length) {
       body +=
@@ -6119,7 +6126,7 @@
     },
 
     "adopt-found": function (node) {
-      if (window.confirm("Run the Redis in " + node.dataset.path + " under devd? The folder is not changed; devd writes its own configuration.")) {
+      if (window.confirm("Run the " + node.dataset.name + " in " + node.dataset.path + " under devd? The folder is not changed; devd keeps its own data and configuration.")) {
         act("service.adopt", { name: node.dataset.name, path: node.dataset.path });
       }
     },

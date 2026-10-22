@@ -57,16 +57,18 @@ args! {
     HostArgs { host: String }
     /// Whether to trust the CA for every user or just this one.
     TrustArgs { machine: Option<bool> }
+    /// The databases of one server.
+    DbListArgs { engine: Option<String> }
     /// A database to create.
-    DbCreateArgs { name: String }
+    DbCreateArgs { name: String, engine: Option<String> }
     /// A database to drop.
-    DbDropArgs { name: String }
+    DbDropArgs { name: String, engine: Option<String> }
     /// A database to write to a file.
-    DbDumpArgs { database: String, path: Option<String>, from_port: Option<u16>, from_user: Option<String>, from_password: Option<String> }
+    DbDumpArgs { database: String, path: Option<String>, from_port: Option<u16>, from_user: Option<String>, from_password: Option<String>, engine: Option<String> }
     /// A file to read into a database.
-    DbRestoreArgs { database: String, path: String, replace: Option<bool> }
+    DbRestoreArgs { database: String, path: String, replace: Option<bool>, engine: Option<String> }
     /// A database to copy from another server on this machine.
-    DbCopyArgs { database: String, from_port: u16, from_user: Option<String>, from_password: Option<String>, as_name: Option<String>, replace: Option<bool> }
+    DbCopyArgs { database: String, from_port: u16, from_user: Option<String>, from_password: Option<String>, as_name: Option<String>, replace: Option<bool>, engine: Option<String> }
 }
 
 /// Register every service capability.
@@ -246,7 +248,7 @@ fn register_service(reg: &mut Registry) -> Result<()> {
     )?;
 
     reg.define::<NameArgs>("service.find_local", "Find a service's program already on this machine")
-    .description("Looks for an Apache or Redis folder from a portable stack, XAMPP, WampServer or a plain install on \
+    .description("Looks for an Apache, Redis, PostgreSQL, MongoDB or Memcached folder from a portable stack, XAMPP, WampServer or a plain install on \
          every drive and reports each with its version. Nothing is changed; `service.adopt` uses one.")
     .group("service")
     .tier(Tier::Read)
@@ -260,7 +262,10 @@ fn register_service(reg: &mut Registry) -> Result<()> {
             let folders = match a.name.as_str() {
                 "apache" => services::find_local_apache(),
                 "redis" => services::find_local_redis(),
-                _ => return Err(DevdError::unsupported("only Apache and Redis can be found on disk")),
+                other => match services::engines::get(other) {
+                    Some(engine) => services::engines::find_local(engine),
+                    None => return Err(DevdError::unsupported("only Apache, Redis, PostgreSQL, MongoDB and Memcached can be found on disk")),
+                },
             };
             let found: Vec<Value> = folders
                 .into_iter()
@@ -271,7 +276,7 @@ fn register_service(reg: &mut Registry) -> Result<()> {
     )?;
 
     reg.define::<AdoptArgs>("service.adopt", "Use a program that is already on disk")
-    .description("Records an existing Apache or Redis folder (a portable stack's, XAMPP's, a plain install) as devd's. \
+    .description("Records an existing Apache, Redis, PostgreSQL, MongoDB or Memcached folder (a portable stack's, XAMPP's, a plain install) as devd's. \
          The folder is not copied or modified: devd writes its own httpd.conf and starts the program with \
          it. Human only, because the program in that folder is what devd will then run.")
     .group("service")
@@ -920,35 +925,54 @@ fn register_tls(reg: &mut Registry) -> Result<()> {
 
 // ----------------------------------------------------------------- database
 
+/// The database server a `db.*` call is about.
+enum Db {
+    /// devd's MariaDB.
+    Maria { port: u16 },
+    /// devd's PostgreSQL, run from this folder.
+    Postgres { root: std::path::PathBuf, port: u16 },
+}
+
+/// Pick the server: MariaDB unless the call says `engine: postgres`.
+fn db_target(ctx: &Ctx, engine: &Option<String>) -> Result<Db> {
+    match engine.as_deref() {
+        None | Some("mariadb") | Some("mysql") => Ok(Db::Maria { port: db_port(ctx)? }),
+        Some("postgres") | Some("postgresql") => {
+            let service = ctx.store.get_service("postgres")?.ok_or_else(|| DevdError::not_found("PostgreSQL is not set up; `devd service adopt postgres <folder>` uses one you already have"))?;
+            let root = services::manifest_root(ctx, "postgres").ok_or_else(|| DevdError::not_found("PostgreSQL has no recorded folder; adopt it again"))?;
+            Ok(Db::Postgres { root, port: service.port.unwrap_or(5432) })
+        }
+        Some(other) => Err(DevdError::invalid(format!("engine must be mariadb or postgres, not {other}"))),
+    }
+}
+
 fn register_db(reg: &mut Registry) -> Result<()> {
-    reg.define::<NoArgs>("db.list", "List databases")
-    .description("The databases on the local MariaDB server, excluding the system schemas.")
+    reg.define::<DbListArgs>("db.list", "List databases")
+    .description("The databases on devd's MariaDB (or, with engine postgres, PostgreSQL), excluding the system databases.")
     .group("db")
     .tier(Tier::Read)
     .effect(Effect::Read)
     .agent_safe()
     .idempotent()
     .handlers(
-        |ctx, _| {
-            let port = db_port(ctx)?;
-            Ok(Plan::new(
-                "db.list",
-                format!("list the databases on the MariaDB server on port {port}"),
-            ))
+        |ctx, a| {
+            db_target(ctx, &a.engine)?;
+            Ok(Plan::new("db.list", "list the databases"))
         },
-        |ctx, _| {
-            let port = db_port(ctx)?;
-            let names = services::mariadb::databases(ctx, port)?;
-            Ok(Outcome::with_data(
-                format!("{} database(s)", names.len()),
-                json!({ "databases": names, "port": port }),
-            ))
+        |ctx, a| match db_target(ctx, &a.engine)? {
+            Db::Maria { port } => {
+                let names = services::mariadb::databases(ctx, port)?;
+                Ok(Outcome::with_data(format!("{} database(s)", names.len()), json!({ "databases": names, "port": port })))
+            }
+            Db::Postgres { root, port } => {
+                let names = services::engines::pg_databases(ctx, &root, port)?;
+                Ok(Outcome::with_data(format!("{} database(s)", names.len()), json!({ "databases": names, "port": port })))
+            }
         },
     )?;
 
     reg.define::<DbCreateArgs>("db.create", "Create a database")
-    .description("Creates a database with the utf8mb4 character set, if it does not already exist. \
-         The name is validated as a plain identifier, so it cannot carry a second statement.")
+    .description("Creates a database (utf8mb4 on MariaDB, UTF-8 on PostgreSQL) if it does not already exist. The name is validated as a plain identifier, so it cannot carry a second statement.")
     .group("db")
     .tier(Tier::Write)
     .effect(Effect::Data)
@@ -956,32 +980,27 @@ fn register_db(reg: &mut Registry) -> Result<()> {
     .dry_run()
     .idempotent()
     .handlers(
-        |ctx, args| {
-            devd_core::util::validate_name(&args.name)?;
-            let port = db_port(ctx)?;
-            Ok(Plan::new(
-                "db.create",
-                format!("create the database `{}` on port {port}", args.name),
-            )
-            .step(format!("CREATE DATABASE IF NOT EXISTS `{}`", args.name))
-            .step("character set utf8mb4, collation utf8mb4_unicode_ci")
-            .effect("creates stored data"))
+        |ctx, a| {
+            match db_target(ctx, &a.engine)? {
+                Db::Maria { .. } => devd_core::util::validate_name(&a.name)?,
+                Db::Postgres { .. } => services::engines::valid_pg_name(&a.name)?,
+            }
+            Ok(Plan::new("db.create", format!("create the database `{}`", a.name)).effect("creates stored data"))
         },
-        |ctx, args| {
-            let port = db_port(ctx)?;
-            let result = services::mariadb::create_database(ctx, port, &args.name)?;
-            Ok(Outcome::with_data(
-                format!("database `{}` exists", args.name),
-                result,
-            ))
+        |ctx, a| match db_target(ctx, &a.engine)? {
+            Db::Maria { port } => {
+                let result = services::mariadb::create_database(ctx, port, &a.name)?;
+                Ok(Outcome::with_data(format!("database `{}` exists", a.name), result))
+            }
+            Db::Postgres { root, port } => {
+                services::engines::pg_create(ctx, &root, port, &a.name)?;
+                Ok(Outcome::with_data(format!("database `{}` exists", a.name), json!({ "database": a.name, "port": port })))
+            }
         },
     )?;
 
     reg.define::<DbDumpArgs>("db.dump", "Write a database to a SQL file")
-    .description("Dumps one database (tables, data, routines, triggers, events) to a .sql file. By default it is \
-         devd's MariaDB, written under <devd home>/backups; from_port names another server on this machine \
-         instead, such as a MySQL you already run. Only a person can choose where the file goes. Servers on other \
-         machines are refused.")
+    .description("Dumps one database to a .sql file. By default it is devd's MariaDB (or PostgreSQL with engine postgres), written under <devd home>/backups; from_port names another server of the same kind on this machine instead, such as a MySQL you already run. Only a person can choose where the file goes. Servers on other machines are refused.")
     .group("db")
     .tier(Tier::Write)
     .effect(Effect::Data)
@@ -993,105 +1012,130 @@ fn register_db(reg: &mut Registry) -> Result<()> {
             if a.path.is_some() && ctx.actor.is_agent() {
                 return Err(DevdError::denied("an agent cannot choose where a dump is written; it goes under the devd backups folder"));
             }
-            let from = match a.from_port {
-                Some(port) => services::dump::Endpoint::local(None, port, a.from_user.as_deref(), a.from_password.clone())?,
-                None => services::dump::Endpoint::devd(db_port(ctx)?),
-            };
             let file = match &a.path {
                 Some(p) => std::path::PathBuf::from(p),
                 None => services::dump::default_file(ctx, &a.database),
             };
-            let report = services::dump::dump(ctx, &from, &a.database, &file)?;
-            Ok(Outcome::with_data(format!("wrote {} to {}", a.database, file.display()), report))
+            match db_target(ctx, &a.engine)? {
+                Db::Maria { port } => {
+                    let from = match a.from_port {
+                        Some(p) => services::dump::Endpoint::local(None, p, a.from_user.as_deref(), a.from_password.clone())?,
+                        None => services::dump::Endpoint::devd(port),
+                    };
+                    let report = services::dump::dump(ctx, &from, &a.database, &file)?;
+                    Ok(Outcome::with_data(format!("wrote {} to {}", a.database, file.display()), report))
+                }
+                Db::Postgres { root, port } => {
+                    let (port, user) = match a.from_port {
+                        Some(p) => (services::dump::Endpoint::local(None, p, a.from_user.as_deref(), None)?.port, a.from_user.clone().unwrap_or_else(|| "postgres".into())),
+                        None => (port, "postgres".to_string()),
+                    };
+                    services::engines::pg_dump(&root, port, &user, a.from_password.as_deref(), &a.database, &file)?;
+                    Ok(Outcome::with_data(format!("wrote {} to {}", a.database, file.display()), json!({ "database": a.database, "file": file.display().to_string() })))
+                }
+            }
         },
     )?;
 
     reg.define::<DbRestoreArgs>("db.restore", "Read a SQL file into a database")
-    .description("Runs a SQL file against a database on devd's MariaDB, creating the database when it is not \
-         there. A database that already has tables is refused unless replace is true, because a dump can \
-         drop and recreate them. The file is run as it is: restore only files you trust. Always needs approval.")
+    .description("Runs a SQL file against a database on devd's MariaDB (or PostgreSQL with engine postgres), creating the database when it is not there. A database that already has tables is refused unless replace is true, because a dump can drop and recreate them. The file is run as it is: restore only files you trust. Always needs approval.")
     .group("db")
     .tier(Tier::Destructive)
     .effect(Effect::Data)
     .dry_run()
     .handlers(
         |_, a| Ok(Plan::new("db.restore", format!("run {} against the database `{}`", a.path, a.database)).effect("changes stored data")),
-        |ctx, a| {
-            let port = db_port(ctx)?;
-            if !a.replace.unwrap_or(false) && services::mariadb::table_count(ctx, port, &a.database)? > 0 {
-                return Err(DevdError::conflict(format!(
-                    "the database `{}` already has tables; pass replace to run the file over them",
-                    a.database
-                )));
+        |ctx, a| match db_target(ctx, &a.engine)? {
+            Db::Maria { port } => {
+                if !a.replace.unwrap_or(false) && services::mariadb::table_count(ctx, port, &a.database)? > 0 {
+                    return Err(DevdError::conflict(format!("the database `{}` already has tables; pass replace to run the file over them", a.database)));
+                }
+                let report = services::dump::restore(ctx, &services::dump::Endpoint::devd(port), &a.database, std::path::Path::new(&a.path))?;
+                Ok(Outcome::with_data(format!("restored {}", a.database), report))
             }
-            let report = services::dump::restore(ctx, &services::dump::Endpoint::devd(port), &a.database, std::path::Path::new(&a.path))?;
-            Ok(Outcome::with_data(format!("restored {}", a.database), report))
+            Db::Postgres { root, port } => {
+                if !a.replace.unwrap_or(false) && services::engines::pg_table_count(&root, port, &a.database)? > 0 {
+                    return Err(DevdError::conflict(format!("the database `{}` already has tables; pass replace to run the file over them", a.database)));
+                }
+                services::engines::pg_restore(ctx, &root, port, &a.database, std::path::Path::new(&a.path))?;
+                Ok(Outcome::with_data(format!("restored {}", a.database), json!({ "database": a.database, "file": a.path })))
+            }
         },
     )?;
 
     reg.define::<DbCopyArgs>("db.copy", "Copy a database from another server on this machine into devd")
-    .description("Moves a database off a MySQL (or any server on 127.0.0.1) into devd's MariaDB: dumps it \
-         to <devd home>/backups, then restores it under the same name or as_name. The source is only read. A \
-         target that already has tables is refused unless replace is true. Always needs approval.")
+    .description("Moves a database off another server on 127.0.0.1 (a MySQL for MariaDB, a PostgreSQL for engine postgres) into devd's: dumps it to <devd home>/backups, then restores it under the same name or as_name. MySQL 8 collation and charset names are rewritten for MariaDB and counted in the result. The source is only read. A target that already has tables is refused unless replace is true. Always needs approval.")
     .group("db")
     .tier(Tier::Destructive)
     .effect(Effect::Data)
     .dry_run()
     .handlers(
         |_, a| {
-            Ok(Plan::new("db.copy", format!("copy `{}` from the server on port {} into devd's MariaDB", a.database, a.from_port))
+            Ok(Plan::new("db.copy", format!("copy `{}` from the server on port {} into devd", a.database, a.from_port))
                 .step("dump the source to the backups folder (read only)")
                 .step("create the target database if it is missing")
                 .step("run the dump against it")
                 .effect("writes a file and changes stored data"))
         },
         |ctx, a| {
-            let port = db_port(ctx)?;
             let target = a.as_name.clone().unwrap_or_else(|| a.database.clone());
-            services::dump::valid_source_name(&target)?;
-            if !a.replace.unwrap_or(false) && services::mariadb::table_count(ctx, port, &target)? > 0 {
-                return Err(DevdError::conflict(format!(
-                    "the database `{target}` already has tables; pass replace to copy over them"
-                )));
-            }
-            let from = services::dump::Endpoint::local(None, a.from_port, a.from_user.as_deref(), a.from_password.clone())?;
             let file = services::dump::default_file(ctx, &a.database);
-            let dumped = services::dump::dump(ctx, &from, &a.database, &file)?;
-            let restored = services::dump::restore(ctx, &services::dump::Endpoint::devd(port), &target, &file)?;
-            Ok(Outcome::with_data(
-                format!("copied {} into devd as {}", a.database, target),
-                json!({ "dump": dumped, "restore": restored, "tables": services::mariadb::table_count(ctx, port, &target)? }),
-            ))
+            match db_target(ctx, &a.engine)? {
+                Db::Maria { port } => {
+                    services::dump::valid_source_name(&target)?;
+                    if !a.replace.unwrap_or(false) && services::mariadb::table_count(ctx, port, &target)? > 0 {
+                        return Err(DevdError::conflict(format!("the database `{target}` already has tables; pass replace to copy over them")));
+                    }
+                    let from = services::dump::Endpoint::local(None, a.from_port, a.from_user.as_deref(), a.from_password.clone())?;
+                    let dumped = services::dump::dump(ctx, &from, &a.database, &file)?;
+                    let restored = services::dump::restore(ctx, &services::dump::Endpoint::devd(port), &target, &file)?;
+                    Ok(Outcome::with_data(
+                        format!("copied {} into devd as {}", a.database, target),
+                        json!({ "dump": dumped, "restore": restored, "tables": services::mariadb::table_count(ctx, port, &target)? }),
+                    ))
+                }
+                Db::Postgres { root, port } => {
+                    services::engines::valid_pg_name(&target)?;
+                    if !a.replace.unwrap_or(false) && services::engines::pg_table_count(&root, port, &target)? > 0 {
+                        return Err(DevdError::conflict(format!("the database `{target}` already has tables; pass replace to copy over them")));
+                    }
+                    services::dump::Endpoint::local(None, a.from_port, a.from_user.as_deref(), None)?;
+                    let user = a.from_user.clone().unwrap_or_else(|| "postgres".into());
+                    services::engines::pg_dump(&root, a.from_port, &user, a.from_password.as_deref(), &a.database, &file)?;
+                    services::engines::pg_restore(ctx, &root, port, &target, &file)?;
+                    Ok(Outcome::with_data(
+                        format!("copied {} into devd as {}", a.database, target),
+                        json!({ "file": file.display().to_string(), "tables": services::engines::pg_table_count(&root, port, &target)? }),
+                    ))
+                }
+            }
         },
     )?;
 
     reg.define::<DbDropArgs>("db.drop", "Drop a database")
-    .description("Drops a database and everything in it. This cannot be undone and always requires \
-         approval.")
+    .description("Drops a database and everything in it. This cannot be undone and always requires approval.")
     .group("db")
     .tier(Tier::Destructive)
     .effect(Effect::Data)
     .dry_run()
     .handlers(
-        |ctx, args| {
-            let port = db_port(ctx)?;
-            Ok(Plan::new(
-                "db.drop",
-                format!("drop the database `{}` on port {port}", args.name),
-            )
-            .step(format!("DROP DATABASE IF EXISTS `{}`", args.name))
-            .step("every table and every row in it is deleted")
-            .effect("deletes stored data")
-            .destructive(true)
-            .data(json!({ "database": args.name, "port": port })))
+        |ctx, a| {
+            db_target(ctx, &a.engine)?;
+            Ok(Plan::new("db.drop", format!("drop the database `{}`", a.name))
+                .step("every table and every row in it is deleted")
+                .effect("deletes stored data")
+                .destructive(true)
+                .data(json!({ "database": a.name })))
         },
-        |ctx, args| {
-            let port = db_port(ctx)?;
-            let result = services::mariadb::drop_database(ctx, port, &args.name)?;
-            Ok(Outcome::with_data(
-                format!("dropped the database `{}`", args.name),
-                result,
-            ))
+        |ctx, a| match db_target(ctx, &a.engine)? {
+            Db::Maria { port } => {
+                let result = services::mariadb::drop_database(ctx, port, &a.name)?;
+                Ok(Outcome::with_data(format!("dropped the database `{}`", a.name), result))
+            }
+            Db::Postgres { root, port } => {
+                services::engines::pg_drop(ctx, &root, port, &a.name)?;
+                Ok(Outcome::with_data(format!("dropped the database `{}`", a.name), json!({ "database": a.name })))
+            }
         },
     )?;
     Ok(())
