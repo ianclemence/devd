@@ -1217,7 +1217,9 @@
   var RUNTIME_KINDS = [
     { kind: "php", label: "PHP", note: "8.x, downloaded from windows.php.net" },
     { kind: "node", label: "Node.js", note: "LTS and current releases" },
-    { kind: "go", label: "Go", note: "the official toolchain" }
+    { kind: "go", label: "Go", note: "the official toolchain" },
+    { kind: "python", label: "Python", note: "standalone CPython builds, with pip and venv" },
+    { kind: "ruby", label: "Ruby", note: "RubyInstaller builds (Windows)" }
   ];
 
   function page(title, sub, actions, body) {
@@ -1228,6 +1230,61 @@
       '<div class="page-actions">' + (actions || "") + "</div>" +
       "</div>" + body + "</div>"
     );
+  }
+
+  // ---------------------------------------------------------- calm components
+  //
+  // The vocabulary every screen is written in: a row, a status dot, a section
+  // head, an empty state and a sheet that slides in for the detail. Titles and
+  // subtitles are HTML the caller has already escaped.
+
+  function uiDot(kind) {
+    return '<span class="ui-dot ui-dot-' + (kind || "off") + '" aria-hidden="true"></span>';
+  }
+
+  /* o: { dot, title, sub, wrap, meta, actions, hover, accent, open (attrs), mono } */
+  function uiRow(o) {
+    var attrs = o.open ? ' data-open="1" ' + o.open : "";
+    return '<div class="ui-row' + (o.accent ? " ui-row-accent" : "") + (o.mono ? " mono-title" : "") + '"' + attrs + ">" +
+      (o.dot ? uiDot(o.dot) : "") +
+      '<div class="ui-row-main"><div class="ui-row-title">' + o.title + "</div>" +
+      (o.sub ? '<div class="ui-row-sub' + (o.wrap ? " wrap" : "") + '">' + o.sub + "</div>" : "") + "</div>" +
+      (o.meta ? '<div class="ui-row-meta">' + o.meta + "</div>" : "") +
+      (o.actions ? '<div class="ui-row-actions' + (o.hover ? " hover" : "") + '">' + o.actions + "</div>" : "") +
+      "</div>";
+  }
+
+  function uiList(rows) {
+    return rows.length ? '<div class="ui-list">' + rows.join("") + "</div>" : "";
+  }
+
+  function uiHead(title, count, actions) {
+    return '<div class="ui-head"><h2>' + esc(title) + "</h2>" +
+      (count !== null && count !== undefined && count !== "" ? '<span class="count">' + esc(String(count)) + "</span>" : "") +
+      '<span class="grow"></span>' + (actions || "") + "</div>";
+  }
+
+  function uiEmpty(title, hint, action) {
+    return '<div class="ui-empty"><b>' + esc(title) + "</b>" + (hint ? "<span>" + esc(hint) + "</span>" : "") + (action || "") + "</div>";
+  }
+
+  /* One readable line from a long report: no markdown, no truncation markers,
+   * the first sentence, never more than `max` characters. */
+  function uiSummary(text, max) {
+    var t = String(text || "").replace(/\[truncated[^\]]*\]/g, "").replace(/[`*_#>]/g, "").replace(/\s+/g, " ").trim();
+    var m = t.match(/^(.{20,}?[.!?])(\s|$)/);
+    var s = m ? m[1] : t;
+    max = max || 150;
+    return s.length > max ? s.slice(0, max - 1).trimEnd() + "…" : s;
+  }
+
+  /* The full text of a stored report, without the markers the store left. */
+  function uiBody(text) {
+    return md(String(text || "").replace(/\s*\[truncated[^\]]*\]/g, ""));
+  }
+
+  function uiSheet(title, html) {
+    openDrawer(title, '<div class="ui-sheet">' + html + "</div>");
   }
 
   function dot(on, warn) {
@@ -1297,6 +1354,11 @@
     return php[0] || null;
   }
 
+  /* The release series of a version: 8.3.14 is series 8.3. */
+  function devdSeries(v) {
+    return String(v || "").split(".").slice(0, 2).join(".");
+  }
+
   function phpPrimary() {
     var r = phpRuntime();
     return r ? r.runtime.version : null;
@@ -1350,142 +1412,183 @@
   // ------------------------------------------------------------------ overview
 
   function renderOverview() {
+    if (state.view !== "overview") return;
     var s = state.server;
     var total = s.services.length;
     var up = s.services.filter(function (x) { return x.running; }).length;
     var healthy = total > 0 && up === total;
     var hosts = s.hosts || {};
     var pending = (hosts.adding || []).length + (hosts.removing || []).length;
-    var phpRow = phpRuntime();
-    var php = phpRow ? phpRow.runtime.version : null;
-    // A PHP devd did not install is still a PHP, but it is not one devd can
-    // remove or point its own listener at.
-    var phpOwn = !phpRow || phpRow.managed !== false;
+    var ports = state.session && state.session.settings ? "HTTP " + state.session.settings.http_port + " · HTTPS " + state.session.settings.https_port : "";
 
-    var banner =
-      '<div class="banner ' + (healthy ? "banner-ok" : "banner-warn") + '">' +
-      dot(healthy, total > 0 && !healthy) +
-      '<div class="banner-main">' +
-      '<div class="banner-title">' +
-      (healthy ? "Server running" : total ? "Server needs attention" : "Nothing installed yet") +
-      "</div>" +
-      '<div class="banner-sub">' +
-      (total ? up + " of " + total + " services running" : "Install PHP, nginx and MariaDB to serve sites") +
-      (state.session && state.session.settings
-        ? " · HTTP " + state.session.settings.http_port + " · HTTPS " + state.session.settings.https_port
-        : "") +
-      "</div></div>" +
-      (total
-        ? '<div class="banner-actions">' +
-          '<button type="button" class="btn btn-primary" data-action="stack-up">Start all</button>' +
-          '<button type="button" class="btn" data-action="stack-down"' + (up ? "" : " disabled") + ">Stop all</button></div>"
-        : '<div class="banner-actions"><button type="button" class="btn btn-primary" data-action="nav" data-view="services">Install services</button></div>') +
-      "</div>";
-
-    var stats =
-      '<div class="stat-grid">' +
-      statCard("Services", up + " / " + total, total ? "running" : "none installed") +
-      statCard("Sites", String(s.sites.length), s.sites.length ? "served" : "none yet") +
-      statCard("PHP", php || "none", php ? (phpOwn ? "primary runtime" : "found on this machine") : "not installed") +
-      statCard("Certificates", String(s.certs.length), s.certs.length ? "issued by devd" : "none yet") +
-      "</div>";
-
-    var sitesPanel =
-      '<div class="panel"><div class="panel-head"><span>Sites</span>' +
-      '<span class="panel-note">' + s.sites.length + "</span></div>" +
-      (s.sites.length
-        ? '<div class="rows">' +
-          s.sites
-            .map(function (row) {
-              var meta =
-                '<span class="pill">' + (row.site.tls_mode === "off" ? "http" : "https") + "</span>" +
-                (row.site.php ? ' <span class="pill">PHP ' + esc(row.site.php) + "</span>" : "");
-              return (
-                '<div class="svc">' + dot(row.server_running) +
-                '<div class="svc-main"><div class="svc-name">' + esc(row.site.name) + " " + meta + "</div>" +
-                '<div class="svc-sub mono">' + esc(row.url) + "</div></div>" +
-                '<div class="svc-actions">' +
-                '<button type="button" class="btn btn-mini" data-action="open-url" data-url="' + attr(row.url) + '">Open</button>' +
-        (row.shared
-          ? '<button type="button" class="btn btn-mini" data-action="unshare-site" data-name="' + attr(site.name) + '">Stop sharing</button>'
-          : '<button type="button" class="btn btn-mini btn-ghost" data-action="share-site" data-name="' + attr(site.name) + '" title="Open a public link for two hours">Share</button>') +
-                "</div></div>"
-              );
-            })
-            .join("") + "</div>"
-        : '<div class="panel-body empty-inline">No sites yet. ' +
-          '<button type="button" class="btn btn-mini" data-action="nav" data-view="sites">Create one</button></div>') +
-      "</div>";
-
-    var servicesPanel =
-      '<div class="panel"><div class="panel-head"><span>Services</span>' +
-      '<span class="panel-note">' + up + " / " + total + "</span></div>" +
-      (total
-        ? '<div class="rows">' +
-          s.services
-            .map(function (svc) {
-              return (
-                '<div class="svc">' + dot(svc.running) +
-                '<div class="svc-main"><div class="svc-name">' + brandImg(svc.kind || svc.name, "brand-dot") + esc(svc.name) + "</div>" +
-                '<div class="svc-sub mono">' + esc(servicePorts(svc)) + "</div></div>" +
-                '<div class="svc-actions">' +
-                (svc.running
-                  ? '<button type="button" class="btn btn-mini" data-action="restart-service" data-name="' + attr(svc.name) + '">Restart</button>' +
-                    '<button type="button" class="btn btn-mini" data-action="stop-service" data-name="' + attr(svc.name) + '">Stop</button>'
-                  : '<button type="button" class="btn btn-mini btn-primary" data-action="start-service" data-name="' + attr(svc.name) + '">Start</button>') +
-                "</div></div>"
-              );
-            })
-            .join("") + "</div>"
-        : '<div class="panel-body empty-inline">Nothing installed. ' +
-          '<button type="button" class="btn btn-mini" data-action="nav" data-view="services">Install services</button></div>') +
-      "</div>";
+    var head =
+      '<div class="ui-status-line">' + uiDot(healthy ? "ok" : total ? "warn" : "off") +
+      "<span>" + (total ? (healthy ? "All " + total + " services are running" : up + " of " + total + " services running") : "Nothing is installed yet") + (ports ? " · " + esc(ports) : "") + "</span></div>";
+    var actions = total
+      ? '<button type="button" class="btn" data-action="stack-down"' + (up ? "" : " disabled") + '>Stop all</button><button type="button" class="btn btn-primary" data-action="stack-up">Start all</button>'
+      : '<button type="button" class="btn btn-primary" data-action="nav" data-view="services">Install services</button>';
 
     var notices = [];
-    if (!total) {
-      notices.push(
-        notice(
-          "No services are installed. devd installs PHP, nginx and MariaDB from their vendors.",
-          "Open services",
-          "nav",
-          "services"
-        )
-      );
-    }
     if (pending) {
-      notices.push(
-        notice(
-          (pending === 1
-            ? "1 hostname is not published, so a site on .test does not resolve."
-            : pending + " hostnames are not published, so sites on .test do not resolve."),
-          "Review hosts",
-          "nav",
-          "hosts"
-        )
-      );
+      notices.push(uiRow({ accent: true, dot: "warn", title: pending + (pending === 1 ? " hostname is" : " hostnames are") + " not published",
+        sub: "Sites on ." + esc((state.session && state.session.settings && state.session.settings.tld) || "test") + " will not resolve until the hosts file is updated.",
+        actions: '<button type="button" class="btn btn-primary btn-mini" data-action="nav" data-view="hosts">Review</button>' }));
     }
     if (s.certs.length && !caTrusted()) {
-      notices.push(
-        notice(
-          "Sites use certificates from devd's local authority. Trust it once so browsers stop warning.",
-          "Trust the CA",
-          "ca-trust"
-        )
-      );
+      notices.push(uiRow({ accent: true, dot: "warn", title: "Trust devd's certificate authority", sub: "Browsers will stop warning about your local https sites.",
+        actions: '<button type="button" class="btn btn-primary btn-mini" data-action="ca-trust">Trust it</button>' }));
     }
 
-    el("main").innerHTML = page(
-      "Overview",
-      "",
-      '<button type="button" class="btn" data-action="nav" data-view="sites">Sites</button>' +
-        '<button type="button" class="btn btn-primary" data-action="new-site">New site</button>',
-      banner + stats +
-        (notices.length ? '<div class="notice-stack">' + notices.join("") + "</div>" : "") +
-        '<div class="overview-grid">' +
-        '<div class="overview-stack">' + sitesPanel + "</div>" +
-        servicesPanel +
-        "</div>"
-    );
+    var sites = s.sites.map(function (row) {
+      return uiRow({
+        dot: row.server_running ? "ok" : "off",
+        title: esc(row.site.name),
+        sub: esc(row.url) + (row.shared ? ' · <a href="' + attr(row.shared) + '" target="_blank" rel="noreferrer">public link</a>' : ""),
+        open: 'data-action="open-url" data-url="' + attr(row.url) + '"',
+        actions: '<button type="button" class="btn btn-mini" data-action="open-url" data-url="' + attr(row.url) + '">Open</button>' +
+          (row.shared
+            ? '<button type="button" class="btn btn-mini" data-action="unshare-site" data-name="' + attr(row.site.name) + '">Stop sharing</button>'
+            : '<button type="button" class="btn btn-mini btn-ghost" data-action="share-site" data-name="' + attr(row.site.name) + '">Share</button>'),
+        hover: true
+      });
+    });
+    var services = s.services.map(function (svc) {
+      return uiRow({
+        dot: svc.running ? "ok" : "off",
+        title: brandImg(svc.kind || svc.name, "brand-dot") + esc(svc.name),
+        sub: esc(servicePorts(svc) || (svc.running ? "running" : "stopped")),
+        actions: svc.running
+          ? '<button type="button" class="btn btn-mini" data-action="stop-service" data-name="' + attr(svc.name) + '">Stop</button>'
+          : '<button type="button" class="btn btn-mini btn-primary" data-action="start-service" data-name="' + attr(svc.name) + '">Start</button>'
+      });
+    });
+
+    el("main").innerHTML = page("Server", "", actions,
+      head + (notices.length ? uiList(notices) : "") +
+      uiHead("Sites", s.sites.length || null, '<button type="button" class="btn btn-mini btn-ghost" data-action="new-site">New site</button>') +
+      (sites.length ? uiList(sites) : uiEmpty("No sites yet", "A site is a folder, a hostname and a certificate.", '<button type="button" class="btn btn-primary" data-action="new-site">Create a site</button>')) +
+      uiHead("Services", total ? up + " of " + total : null) +
+      (services.length ? uiList(services) : uiEmpty("No services installed", "devd installs PHP, a web server and MariaDB from their makers.", '<button type="button" class="btn btn-primary" data-action="nav" data-view="services">Install services</button>')) +
+      '<div class="ui-more">Also: <button type="button" data-action="nav" data-view="toolchain">Tools</button> · <button type="button" data-action="nav" data-view="runtimes">Runtimes</button> · <button type="button" data-action="nav" data-view="certificates">Certificates</button> · <button type="button" data-action="nav" data-view="hosts">Hosts</button> · <button type="button" data-action="nav" data-view="preview">Preview</button></div>');
+  }
+
+  // --------------------------------------------------------------------- sites
+
+  function renderSites() {
+    if (state.view !== "sites") return;
+    var all = state.server.sites;
+    var q = state.filters.sites || "";
+    var matching = all.filter(function (row) {
+      return keeps(q, row.site && row.site.name, row.url, row.document_root, row.php_effective, row.site && row.site.upstream);
+    });
+    var rows = matching.map(function (row) {
+      var site = row.site;
+      var installed = row.php_installed || [];
+      var pinned = site.php ? devdSeries(site.php) : "";
+      var proxied = !!site.upstream;
+      var meta = proxied ? "proxy" : esc(row.php_effective ? "PHP " + row.php_effective : "static");
+      var sub = esc(row.url) + (proxied ? " → " + esc(site.upstream) + (row.upstream_listening ? "" : " (not running)") : " · " + esc(row.document_root)) +
+        (row.shared ? ' · <a href="' + attr(row.shared) + '" target="_blank" rel="noreferrer">public link</a>' : "") +
+        (row.present ? "" : " · directory missing");
+      var phpSelect = !proxied && installed.length
+        ? '<select class="select compact" data-action="site-php" data-name="' + attr(site.name) + '" aria-label="PHP version for ' + attr(site.name) + '"><option value=""' + (pinned ? "" : " selected") + ">Default PHP</option>" +
+          installed.map(function (v) { return '<option value="' + attr(v) + '"' + (pinned === v ? " selected" : "") + ">" + esc(v) + "</option>"; }).join("") + "</select>"
+        : "";
+      return uiRow({
+        dot: row.server_running ? (row.certificate || site.tls_mode === "off" ? "ok" : "warn") : "off",
+        title: esc(site.name) + (site.tls_mode === "off" ? "" : ' <span class="pill ' + (row.certificate ? "pill-ok" : "pill-warn") + '">' + (row.certificate ? "https" : "no certificate") + "</span>"),
+        sub: sub, meta: meta,
+        open: 'data-action="open-url" data-url="' + attr(row.url) + '"',
+        actions: phpSelect +
+          '<button type="button" class="btn btn-mini" data-action="open-url" data-url="' + attr(row.url) + '">Open</button>' +
+          (row.shared
+            ? '<button type="button" class="btn btn-mini" data-action="unshare-site" data-name="' + attr(site.name) + '">Stop sharing</button>'
+            : '<button type="button" class="btn btn-mini btn-ghost" data-action="share-site" data-name="' + attr(site.name) + '">Share</button>') +
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="remove-site" data-name="' + attr(site.name) + '">Remove</button>',
+        hover: true
+      });
+    });
+    var body = state.siteFormOpen ? siteForm() : "";
+    if (all.length > 6) body += '<div class="filter-row">' + filterBox("sites", "Search sites") + "</div>";
+    if (all.length) {
+      body += matching.length ? uiList(rows) : uiEmpty('No site matches "' + q + '"');
+    } else if (!state.siteFormOpen) {
+      body += uiEmpty("No sites yet", "A site is a project folder, a hostname, a certificate and a URL.", '<button type="button" class="btn btn-primary" data-action="new-site">Create a site</button>');
+    }
+    el("main").innerHTML = page("Sites", "", '<button type="button" class="btn btn-primary" data-action="new-site">New site</button>', body);
+  }
+
+  function inventoryRows() {
+    var inv = state.server.inventory || [];
+    return inv.map(function (v) {
+      var rec = v.recommendation || {};
+      var opts = v.options.filter(function (o) { return o.available && o.action !== "ignore"; });
+      function label(o) { return o.action === "adopt" ? "Use it" : o.action === "watch" ? "Only watch" : o.action === "install" ? "Install" : o.action === "remove" ? "Remove" : o.action; }
+      var btns = opts.map(function (o) {
+        var recd = o.action === rec.action;
+        var cls = "btn btn-mini" + (recd ? " btn-primary" : o.risk === "destructive" ? " btn-danger" : " btn-ghost");
+        return '<button type="button" class="' + cls + '" data-action="svc-option" data-tool="' + attr(v.tool) + '" data-opt="' + attr(o.action) + '" title="' + attr((o.why_not || "") + (o.risk === "approval" ? " Asks you first." : "")) + '">' + esc(label(o)) + "</button>";
+      }).join("");
+      var own = { redis: "redis", postgresql: "postgres", mongodb: "mongodb", memcached: "memcached" }[v.tool];
+      if (own && v.path && !managedService(own)) {
+        btns = '<button type="button" class="btn btn-mini btn-primary" data-action="adopt-found" data-name="' + attr(own) + '" data-path="' + attr(v.path.replace(/[\\/][^\\/]*$/, "")) + '">Run it with devd</button>';
+      }
+      if (v.decision) btns += '<button type="button" class="btn btn-mini btn-ghost" data-action="svc-option" data-tool="' + attr(v.tool) + '" data-opt="clear">Reset</button>';
+      return uiRow({
+        dot: v.status === "ready" ? "ok" : v.status === "installed_stopped" ? "warn" : v.status === "missing" ? "off" : "bad",
+        title: brandImg(v.tool, "brand-dot") + esc(v.name) + (v.decision ? ' <span class="pill pill-accent">' + esc(v.decision.mode) + "</span>" : "") +
+          (v.required ? ' <span class="pill pill-warn">needed by ' + v.required_by.length + "</span>" : ""),
+        sub: esc(INV_LABEL[v.status] + (v.path ? " · " + v.path : "") + (v.port_owner && v.port_owner.program ? " · port held by " + v.port_owner.program : "")),
+        actions: btns
+      });
+    });
+  }
+
+  function renderServices() {
+    if (state.view !== "services") return;
+    var rows = state.server.services;
+    var byName = {};
+    rows.forEach(function (r) { byName[r.name] = r; });
+    var up = rows.filter(function (r) { return r.running; }).length;
+    var installed = rows.map(function (svc) {
+      return uiRow({
+        dot: svc.running ? "ok" : "off",
+        title: brandImg(svc.kind || svc.name, "brand-dot") + esc(svc.name) + (svc.version ? ' <span class="ui-quiet" style="display:inline;padding:0">' + esc(svc.version) + "</span>" : ""),
+        sub: esc([servicePorts(svc), svc.running && svc.pid ? "pid " + svc.pid : svc.installed ? "stopped" : "files missing"].filter(Boolean).join(" · ")),
+        actions: (svc.running
+          ? '<button type="button" class="btn btn-mini" data-action="stop-service" data-name="' + attr(svc.name) + '">Stop</button>'
+          : svc.installed
+            ? '<button type="button" class="btn btn-mini btn-primary" data-action="start-service" data-name="' + attr(svc.name) + '">Start</button>'
+            : '<button type="button" class="btn btn-mini btn-primary" data-action="install-service" data-name="' + attr(svc.name) + '">Install</button>') +
+          (svc.running ? '<button type="button" class="btn btn-mini btn-ghost" data-action="restart-service" data-name="' + attr(svc.name) + '">Restart</button>' : "") +
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="service-logs" data-name="' + attr(svc.name) + '">Logs</button>' +
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="remove-service" data-name="' + attr(svc.name) + '">Remove</button>',
+        hover: !svc.running && svc.installed ? true : true
+      });
+    });
+    var found = inventoryRows();
+    var missing = KNOWN_SERVICES.filter(function (k) { return !byName[k.name]; })
+      .filter(function (k) {
+        var tool = k.name === "postgres" ? "postgresql" : k.name;
+        return !k.find || k.name === "apache" || !(state.server.inventory || []).some(function (v) { return v.tool === tool && v.path; });
+      })
+      .map(function (k) {
+        return uiRow({
+          dot: "off", title: esc(k.label), sub: esc(k.note),
+          actions: k.name === "php-cgi"
+            ? '<button type="button" class="btn btn-mini" data-action="nav" data-view="runtimes">Install a PHP runtime</button>'
+            : (k.download === false ? "" : '<button type="button" class="btn btn-mini btn-primary" data-action="install-service" data-name="' + attr(k.name) + '">Install</button>') +
+              (k.find ? '<button type="button" class="btn btn-mini" data-action="adopt-service" data-name="' + attr(k.name) + '">Use existing</button>' : "")
+        });
+      });
+    var body = "";
+    body += uiHead("Installed", rows.length ? up + " of " + rows.length + " running" : null) +
+      (installed.length ? uiList(installed) : uiEmpty("Nothing installed yet", "Install a web server, MariaDB and a PHP runtime to serve sites."));
+    if (found.length) body += uiHead("Already on this computer", found.length) + uiList(found) +
+      '<div class="ui-more">devd never replaces what you have. Using or watching a service only records your choice.</div>';
+    if (missing.length) body += uiHead("Available", missing.length) + uiList(missing);
+    el("main").innerHTML = page("Services", "",
+      '<button type="button" class="btn" data-action="stack-down">Stop all</button><button type="button" class="btn btn-primary" data-action="stack-up">Start all</button>', body);
   }
 
   // --------------------------------------------------------------------- sites
@@ -1512,91 +1615,6 @@
     );
   }
 
-  function renderSites() {
-    var s = state.server;
-    var q = state.filters.sites || "";
-    var all = s.sites;
-    var matching = all.filter(function (row) {
-      return keeps(q, row.site && row.site.name, row.url, row.document_root, row.php_effective, row.site && row.site.upstream);
-    });
-    var rows = matching.map(function (row) {
-      var site = row.site;
-      // The version a site actually runs on: its own, or the default. A
-      // version that is not installed is shown as the default, because that is
-      // what it is served by.
-      var installed = row.php_installed || [];
-      var effective = row.php_effective || "";
-      var pinned = site.php ? devdSeries(site.php) : "";
-      var phpCell;
-      var proxied = !!site.upstream;
-      if (proxied) {
-        phpCell = '<span class="dim">proxy</span>';
-      } else if (!installed.length) {
-        phpCell = '<span class="dim">' + esc(effective || "no PHP runtime devd manages") + "</span>";
-      } else {
-        var options = ['<option value=""' + (pinned ? "" : " selected") + ">Default (" + esc(phpPrimary() || "none") + ")</option>"];
-        installed.forEach(function (v) {
-          options.push('<option value="' + attr(v) + '"' + (pinned === v ? " selected" : "") + ">" + esc(v) + "</option>");
-        });
-        phpCell =
-          '<select class="select compact" data-action="site-php" data-name="' + attr(site.name) + '"' +
-          ' aria-label="PHP version for ' + attr(site.name) + '">' + options.join("") + "</select>";
-      }
-      return (
-        "<tr>" +
-        '<td><div class="cell-strong">' + esc(site.name) + "</div>" +
-        (row.present ? "" : '<div class="cell-warn">directory missing</div>') + "</td>" +
-        '<td class="cell-mono"><a href="' + attr(row.url) + '" target="_blank" rel="noreferrer">' + esc(row.url) + "</a>" +
-        (row.shared ? '<div><span class="pill pill-warn">public</span> <a href="' + attr(row.shared) + '" target="_blank" rel="noreferrer">' + esc(row.shared) + "</a></div>" : "") + "</td>" +
-        "<td>" + phpCell + "</td>" +
-        "<td>" +
-        (site.tls_mode === "off"
-          ? '<span class="pill">http</span>'
-          : '<span class="pill ' + (row.certificate ? "pill-ok" : "pill-warn") + '">' +
-            (row.certificate ? "https" : "no certificate") + "</span>") +
-        "</td>" +
-        (proxied
-          ? '<td class="cell-mono nowrap" title="Every request is forwarded to this address">' +
-            '<span class="health-dot hstate-' + (row.upstream_listening ? "healthy" : "degraded") + '"></span> ' +
-            esc(site.upstream) + (row.upstream_listening ? "" : ' <span class="cell-warn">not running</span>') + "</td>"
-          : '<td class="cell-mono nowrap" title="' + attr(row.document_root) + '">' + esc(row.document_root) + "</td>") +
-        '<td class="cell-actions">' +
-        '<button type="button" class="btn btn-mini" data-action="open-url" data-url="' + attr(row.url) + '">Open</button>' +
-        '<button type="button" class="btn btn-mini btn-ghost" data-action="remove-site" data-name="' + attr(site.name) + '">Remove</button>' +
-        "</td></tr>"
-      );
-    });
-
-    var body = state.siteFormOpen ? siteForm() : "";
-    body += '<div class="filter-row">' + filterBox("sites", "Search sites") + "</div>";
-    if (all.length) {
-      body +=
-        '<div class="panel"><div class="panel-head"><span>Sites</span>' +
-        '<span class="panel-note">' + (q ? matching.length + " of " : "") + all.length + "</span></div>" +
-        (matching.length
-          ? '<div class="panel-body flush"><table class="table"><thead><tr>' +
-            "<th>Site</th><th>URL</th><th>PHP</th><th>TLS</th><th>Serves</th><th></th>" +
-            "</tr></thead><tbody>" + rows.join("") + "</tbody></table></div>"
-          : '<div class="panel-body empty-inline">No site matches "' + esc(q) + '".</div>') +
-        "</div>";
-    } else if (!state.siteFormOpen) {
-      body +=
-        '<div class="panel"><div class="empty">' +
-        '<div class="empty-title">No sites yet</div>' +
-        "<div>A site is a project directory, a hostname, a certificate and a URL.</div>" +
-        '<div class="inline" style="margin-top:12px">' +
-        '<button type="button" class="btn btn-primary" data-action="new-site">Create a site</button>' +
-        "</div></div></div>";
-    }
-
-    el("main").innerHTML = page(
-      "Sites",
-      "Projects served over local hostnames.",
-      '<button type="button" class="btn btn-primary" data-action="new-site">New site</button>',
-      body
-    );
-  }
-
   // ------------------------------------------------------------------ services
 
 
@@ -1607,195 +1625,37 @@
     return (state.server.services || []).some(function (x) { return x.name === name; });
   }
 
-  function inventoryPanel() {
-    var inv = state.server.inventory || [];
-    if (!inv.length) return "";
-    var q = state.filters.services || "";
-    var shown = inv.filter(function (v) {
-      return keeps(q, v.tool, v.name, v.headline, v.path, v.status);
-    });
-    var rows = shown.map(function (v) {
-      var dec = v.decision ? '<span class="pill pill-accent">' + esc(v.decision.mode) + (v.decision.port ? " :" + v.decision.port : "") + "</span>" : "";
-      var tone = v.status === "ready" ? "ok" : v.status === "missing" ? "" : v.status === "installed_stopped" ? "warn" : "bad";
-      var rec = v.recommendation || {};
-      var btns = v.options.filter(function (o) { return o.available && o.action !== "ignore"; }).map(function (o) {
-        var recd = o.action === rec.action;
-        var cls = "btn btn-mini" + (recd ? " btn-primary" : o.risk === "destructive" ? " btn-danger" : "");
-        return '<button type="button" class="' + cls + '" data-action="svc-option" data-tool="' + attr(v.tool) + '" data-opt="' + attr(o.action) + '" title="' + attr((o.why_not || "") + (o.risk === "approval" ? " Asks you first." : "")) + '">' + esc(o.action === "adopt" ? "Use it" : o.action === "observe" ? "Only watch" : o.action === "external" ? "Use my own instance" : o.action === "start" ? "Start" : o.action === "install" ? "Install" : o.action === "logs" ? "Logs" : o.action === "remove" ? "Remove…" : o.label) + "</button>";
-      }).join("");
-      var own = { redis: "redis", postgresql: "postgres", mongodb: "mongodb", memcached: "memcached" }[v.tool];
-      if (own && v.path && !managedService(own)) {
-        btns = '<button type="button" class="btn btn-mini btn-primary" data-action="adopt-found" data-name="' + attr(own) + '" data-path="' + attr(v.path.replace(/[\\/][^\\/]*$/, "")) + '">Run it with devd</button>';
-      }
-      var need = v.required ? '<span class="pill pill-warn" title="' + attr(v.required_by.map(function (r) { return r.project; }).join(", ")) + '">needed by ' + v.required_by.length + "</span>" : "";
-      return '<div class="inv"><span class="health-dot hstate-' + (v.status === "ready" ? "healthy" : v.status === "installed_stopped" ? "degraded" : v.status === "missing" ? "setup_incomplete" : "critical") + '"></span><div class="grow">' +
-        '<div class="hrow-title">' + brandImg(v.tool, "brand-dot") + esc(v.name) + ' <span class="pill ' + (tone ? "pill-" + tone : "") + '">' + esc(INV_LABEL[v.status]) + "</span> " + dec + " " + need + "</div>" +
-        '<div class="row-sub">' + esc(v.headline) + (v.path ? " · " + esc(v.path) : "") + (v.port_owner && v.port_owner.program ? " · port held by " + esc(v.port_owner.program) + (v.port_owner.pid ? " (pid " + v.port_owner.pid + ")" : "") : "") + "</div>" +
-        '<div class="row-sub">' + esc(rec.why || "") + "</div></div><div class=\"inline\">" + btns +
-        (v.decision ? '<button type="button" class="btn btn-mini btn-ghost" data-action="svc-option" data-tool="' + attr(v.tool) + '" data-opt="clear">Reset</button>' : "") + "</div></div>";
-    }).join("");
-    var note = "detected, not assumed: a service is Ready only after it answers";
-    if (q) note = shown.length + " of " + inv.length + " · " + note;
-    var body = shown.length ? rows : '<div class="empty-inline">No service matches "' + esc(q) + '".</div>';
-    return '<div class="panel"><div class="panel-head"><span>Found on this machine</span><span class="panel-note">' + esc(note) + "</span></div><div class=\"panel-body\">" + body +
-      '<div class="row-sub" style="margin-top:8px">devd never replaces an installed service. Using, watching or hiding one only records your choice. Starting, installing or removing asks for approval and keeps your data.</div></div></div>';
-  }
-
-  function renderServices() {
-    var rows = state.server.services;
-    var q = state.filters.services || "";
-    var byName = {};
-    rows.forEach(function (r) { byName[r.name] = r; });
-    var up = rows.filter(function (r) { return r.running; }).length;
-    var shown = rows.filter(function (svc) {
-      return keeps(q, svc.name, svc.kind, svc.version, servicePorts(svc));
-    });
-
-    var body = '<div class="filter-row">' + filterBox("services", "Search services") + "</div>" + inventoryPanel();
-    if (rows.length) {
-      body +=
-        '<div class="panel"><div class="panel-head"><span>Installed</span>' +
-        '<span class="panel-note">' + (q ? shown.length + " of " : "") + up + " of " + rows.length + " running</span></div>" +
-        (shown.length
-          ? '<div class="panel-body flush"><table class="table"><thead><tr>' +
-            "<th>Service</th><th>Version</th><th>Ports</th><th>Status</th><th>PID</th><th></th>" +
-            "</tr></thead><tbody>" +
-            shown
-              .map(function (svc) {
-                return (
-                  "<tr>" +
-                  '<td><div class="cell-strong">' + dot(svc.running) + " " + brandImg(svc.kind || svc.name, "brand-dot") + esc(svc.name) + "</div>" +
-                  '<div class="cell-dim">' + esc(svc.kind) + "</div></td>" +
-                  '<td class="cell-mono">' + esc(svc.version || "-") + "</td>" +
-                  '<td class="cell-mono">' + esc(servicePorts(svc)) + "</td>" +
-                  "<td>" +
-                  (svc.running
-                    ? '<span class="pill pill-ok">running</span>'
-                    : '<span class="pill">' + (svc.installed ? "stopped" : "files missing") + "</span>") +
-                  "</td>" +
-                  '<td class="cell-mono">' + (svc.pid || "-") + "</td>" +
-                  '<td class="cell-actions">' +
-                  (svc.running
-                    ? '<button type="button" class="btn btn-mini" data-action="stop-service" data-name="' + attr(svc.name) + '">Stop</button>' +
-                      '<button type="button" class="btn btn-mini" data-action="restart-service" data-name="' + attr(svc.name) + '">Restart</button>'
-                    : svc.installed
-                      ? '<button type="button" class="btn btn-mini btn-primary" data-action="start-service" data-name="' + attr(svc.name) + '">Start</button>'
-                      : '<button type="button" class="btn btn-mini btn-primary" data-action="install-service" data-name="' + attr(svc.name) + '">Install</button>') +
-                  '<button type="button" class="btn btn-mini" data-action="service-logs" data-name="' + attr(svc.name) + '">Logs</button>' +
-                  '<button type="button" class="btn btn-mini btn-ghost" data-action="remove-service" data-name="' + attr(svc.name) + '">Remove</button>' +
-                  "</td></tr>"
-                );
-              })
-              .join("") +
-            "</tbody></table></div>"
-          : '<div class="panel-body empty-inline">No service matches "' + esc(q) + '".</div>') +
-        "</div>";
-    }
-
-    var missing = KNOWN_SERVICES.filter(function (k) { return !byName[k.name]; })
-      .filter(function (k) {
-        var tool = k.name === "postgres" ? "postgresql" : k.name;
-        return !k.find || k.name === "apache" || !(state.server.inventory || []).some(function (v) { return v.tool === tool && v.path; });
-      })
-      .filter(function (k) { return keeps(q, k.name, k.label, k.note); });
-    if (missing.length) {
-      body +=
-        '<div class="panel"><div class="panel-head"><span>Available</span>' +
-        '<span class="panel-note">downloaded from the vendor when installed</span></div>' +
-        '<div class="panel-body"><div class="grid grid-3">' +
-        missing
-          .map(function (k) {
-            return (
-              '<div class="card">' +
-              '<div class="card-title">' + esc(k.label) + "</div>" +
-              '<div class="card-meta">' + esc(k.note) + "</div>" +
-              '<div class="card-actions">' +
-              (k.name === "php-cgi"
-                ? '<button type="button" class="btn btn-mini" data-action="nav" data-view="runtimes">Install a PHP runtime</button>'
-                : (k.download === false ? "" : '<button type="button" class="btn btn-mini btn-primary" data-action="install-service" data-name="' + attr(k.name) + '">Install</button>') +
-                  (k.find ? '<button type="button" class="btn btn-mini" data-action="adopt-service" data-name="' + attr(k.name) + '">Use existing</button>' : "")) +
-              "</div></div>"
-            );
-          })
-          .join("") +
-        "</div></div></div>";
-    }
-
-    if (!body) {
-      body =
-        '<div class="panel"><div class="empty">' +
-        '<div class="empty-title">No services</div>' +
-        "<div>Install a web server (nginx or Apache), MariaDB and a PHP runtime to serve sites.</div></div></div>";
-    }
-
-    el("main").innerHTML = page(
-      "Services",
-      "The processes that serve your sites, with their ports, logs and state.",
-      '<button type="button" class="btn" data-action="stack-down">Stop all</button>' +
-        '<button type="button" class="btn btn-primary" data-action="stack-up">Start all</button>',
-      body
-    );
-  }
-
   // ------------------------------------------------------------------ runtimes
 
   function renderRuntimes() {
+    if (state.view !== "runtimes") return;
     var q = state.filters.runtimes || "";
-    var cards = RUNTIME_KINDS.map(function (kind) {
+    var body = RUNTIME_KINDS.map(function (kind) {
       var installed = state.server.runtimes.filter(function (r) {
         return r.runtime.kind === kind.kind && keeps(q, r.runtime.version, r.runtime.path, kind.label, kind.kind);
       });
-      var managed = installed.filter(function (r) { return r.managed !== false; });
-      var list = installed.length
-        ? '<div class="rows">' +
-          installed
-            .map(function (r) {
-              var rt = r.runtime;
-              // A runtime devd did not install is real and usable, but devd
-              // cannot remove it and must not point its own services at it.
-              var own = r.managed !== false;
-              return (
-                '<div class="svc">' +
-                '<div class="svc-main"><div class="svc-name">' + esc(rt.version) +
-                (r.primary ? ' <span class="pill pill-accent">primary</span>' : "") +
-                (own ? "" : ' <span class="pill">found on this machine</span>') +
-                "</div>" +
-                '<div class="svc-sub mono nowrap" title="' + attr(rt.path) + '">' + esc(rt.path) + "</div></div>" +
-                '<div class="svc-actions">' +
-                (kind.kind === "php" && !r.primary && own
-                  ? '<button type="button" class="btn btn-mini" data-action="use-runtime" data-version="' + attr(rt.version) + '">Use for new sites</button>'
-                  : "") +
-                (own
-                  ? '<button type="button" class="btn btn-mini btn-danger" data-action="remove-runtime" data-kind="' + attr(kind.kind) + '" data-version="' + attr(rt.version) + '">Remove</button>'
-                  : "") +
-                "</div></div>"
-              );
-            })
-            .join("") + "</div>"
-        : '<div class="panel-body empty-inline">Not installed.</div>';
-
-      return (
-        '<div class="panel"><div class="panel-head"><span>' + brandImg(kind.kind, "brand-dot") + esc(kind.label) + "</span>" +
-        '<span class="panel-note">' + managed.length + " installed" + (managed.length !== installed.length ? " · " + (installed.length - managed.length) + " found on this machine" : "") + "</span></div>" +
-        list +
-        '<div class="panel-body panel-foot"><div class="inline">' +
-        '<span class="dim grow">' + esc(kind.note) + "</span>" +
-        '<button type="button" class="btn btn-primary" data-action="install-runtime" data-kind="' + attr(kind.kind) + '">Install latest</button>' +
-        "</div></div></div>"
-      );
+      var rows = installed.map(function (r) {
+        var rt = r.runtime;
+        var own = r.managed !== false;
+        return uiRow({
+          dot: "ok",
+          title: esc(rt.version) + (r.primary ? ' <span class="pill pill-accent">default</span>' : "") + (own ? "" : ' <span class="pill">found on this computer</span>'),
+          sub: '<span title="' + attr(rt.path) + '">' + esc(rt.path) + "</span>",
+          actions: (kind.kind === "php" && !r.primary && own ? '<button type="button" class="btn btn-mini" data-action="use-runtime" data-version="' + attr(rt.version) + '">Use for new sites</button>' : "") +
+            (own ? '<button type="button" class="btn btn-mini btn-ghost" data-action="remove-runtime" data-kind="' + attr(kind.kind) + '" data-version="' + attr(rt.version) + '">Remove</button>' : ""),
+          hover: true
+        });
+      });
+      return uiHead(kind.label, installed.length || null, '<button type="button" class="btn btn-mini" data-action="install-runtime" data-kind="' + attr(kind.kind) + '">' + (installed.length ? "Install another" : "Install latest") + "</button>") +
+        (rows.length ? uiList(rows) : '<div class="ui-quiet">' + esc(kind.note) + " \u2014 not installed.</div>");
     });
-
-    el("main").innerHTML = page(
-      "Runtimes",
-      "Interpreters installed on this machine, downloaded from their vendors and verified against a published digest.",
-      "",
-      '<div class="filter-row">' + filterBox("runtimes", "Search runtimes") + "</div>" + cards.join("")
-    );
+    el("main").innerHTML = page("Runtimes", "", "", body.join("") + '<div class="ui-more">Each runtime is downloaded from its maker and checked against the digest they publish. A project can use its own version with <span class="mono">devd runtime pin</span>.</div>');
   }
 
   // -------------------------------------------------------------- certificates
 
   function renderCertificates() {
+    if (state.view !== "certificates") return;
     var s = state.server;
     var ca = s.ca;
     var form = state.certFormOpen
@@ -1855,6 +1715,7 @@
   // --------------------------------------------------------------------- hosts
 
   function renderHosts() {
+    if (state.view !== "hosts") return;
     var data = state.server.hosts || { adding: [], removing: [], entries: [], file: "", changes: false };
     var adding = data.adding || [];
     var removing = data.removing || [];
@@ -1953,21 +1814,20 @@
   var PROOF_WORD = { change: "files changed", verify: "a check passed", read: "the code was read", command: "a command ran" };
 
   function memberCard(r) {
-    var chips = '<span class="pill">' + esc(TIER_WORD[r.max_tier] || r.max_tier) + "</span>";
-    if (r.works_in_own_copy) chips += '<span class="pill pill-accent" title="Works in a separate copy of the project; merged only once its work is proven">own copy</span>';
     var proves = Object.keys(r.must_prove || {}).filter(function (k) { return r.must_prove[k]; }).map(function (k) { return PROOF_WORD[k]; });
     var detail = (proves.length ? "Counts as done only when: " + proves.join(" and ") + ". " : "") + ((r.skills || []).length ? "Skills: " + r.skills.join(", ") + "." : "");
-    return (
-      '<div class="panel member" title="' + attr(detail) + '">' +
-      '<div class="member-head"><b>' + esc(r.title) + '</b><span class="dim mono">@' + esc(r.id) + "</span></div>" +
-      '<div class="member-summary">' + esc(r.summary) + "</div>" +
-      '<div class="member-foot"><span class="member-chips">' + chips + '</span><span class="grow"></span>' +
-      '<button type="button" class="btn btn-mini btn-primary" data-action="member-assign" data-id="' + attr(r.id) + '">Give work</button></div>' +
-      "</div>"
-    );
+    return uiRow({
+      title: esc(r.title) + ' <span class="ui-quiet" style="display:inline;padding:0">@' + esc(r.id) + '</span>',
+      sub: esc(r.summary), wrap: true,
+      meta: esc(TIER_WORD[r.max_tier] || r.max_tier) + (r.works_in_own_copy ? " \u00b7 own copy" : ""),
+      open: 'data-action="member-assign" data-id="' + attr(r.id) + '" title="' + attr(detail) + '"',
+      actions: '<button type="button" class="btn btn-mini btn-primary" data-action="member-assign" data-id="' + attr(r.id) + '">Give work</button>',
+      hover: true
+    });
   }
 
   function renderRoster() {
+    if (state.view !== "agents") return;
     var rows = state.roster || [];
     var groups = [];
     rows.forEach(function (r) {
@@ -1976,17 +1836,10 @@
       g.members.push(r);
     });
     var body = groups.length
-      ? groups.map(function (g) {
-          return '<div class="section-title">' + esc(g.title) + ' <span class="count">' + g.members.length + "</span></div>" +
-            '<div class="roster">' + g.members.map(memberCard).join("") + "</div>";
-        }).join("")
-      : '<div class="panel"><div class="empty"><div class="empty-title">The team is not available</div><div>team.roles did not answer.</div></div></div>';
-    el("main").innerHTML = page(
-      "Agents",
-      "",
-      '<button type="button" class="btn btn-primary" data-action="nav" data-view="team">Give the team a goal</button>',
-      body
-    );
+      ? groups.map(function (g) { return uiHead(g.title, g.members.length) + uiList(g.members.map(memberCard)); }).join("")
+      : uiEmpty("The team is not available", "team.roles did not answer.");
+    el("main").innerHTML = page("Team", "",
+      '<button type="button" class="btn btn-primary" data-action="nav" data-view="team">Give the team a goal</button>', body);
   }
 
   function openAssign(id) {
@@ -2079,6 +1932,7 @@
   }
 
   function renderProcesses() {
+    if (state.view !== "processes") return;
     var p = state.processes;
     var project = processProject();
     p.project = project;
@@ -2291,6 +2145,7 @@
   }
 
   function renderSchedules() {
+    if (state.view !== "schedules") return;
     if (!SCHED.list) return renderLoading();
     var f = SCHED.form;
     var rows = SCHED.list.map(function (sc) {
@@ -2337,6 +2192,7 @@
   }
 
   function renderSkills() {
+    if (state.view !== "skills") return;
     var list = SKILLS.list || [];
     var sources = SKILLS.sources || [];
     var q = state.filters.skills || "";
@@ -2404,7 +2260,8 @@
     );
   }
 
-  function renderShared() {    var s = state.shared;
+  function renderShared() {
+    if (state.view !== "shared") return;    var s = state.shared;
     var project = sharedProject();
     s.project = project;
     var tabs = '<div class="segmented">' +
@@ -2568,6 +2425,7 @@
   // ------------------------------------------------------------------- preview
 
   function renderPreview() {
+    if (state.view !== "preview") return;
     var sites = state.server.sites;
     if (!sites.length) {
       el("main").innerHTML = page(
@@ -2692,26 +2550,21 @@
   }
 
   function renderProjects() {
+    if (state.view !== "projects") return;
     var query = state.projectQuery.trim().toLowerCase();
     var pinned = pinnedProjects();
     var all = state.projects.slice();
-
     var visible = all.filter(function (p) {
       if (!query) return true;
-      return (p.name || "").toLowerCase().indexOf(query) !== -1 ||
-        (p.path || "").toLowerCase().indexOf(query) !== -1;
+      return (p.name || "").toLowerCase().indexOf(query) !== -1 || (p.path || "").toLowerCase().indexOf(query) !== -1;
     });
-
     visible.sort(function (a, b) {
       var ap = pinned.indexOf(a.path) !== -1 ? 0 : 1;
       var bp = pinned.indexOf(b.path) !== -1 ? 0 : 1;
       if (ap !== bp) return ap - bp;
-      if (state.projectSort === "recent") {
-        return String(b.updated_at || "").localeCompare(String(a.updated_at || ""));
-      }
+      if (state.projectSort === "recent") return String(b.updated_at || "").localeCompare(String(a.updated_at || ""));
       if (state.projectSort === "status") {
-        var ac = projectChanges(a.status);
-        var bc = projectChanges(b.status);
+        var ac = projectChanges(a.status), bc = projectChanges(b.status);
         if (ac !== bc) return bc - ac;
       }
       return String(a.name || a.path).localeCompare(String(b.name || b.path));
@@ -2719,80 +2572,42 @@
 
     var body;
     if (!all.length) {
-      body =
-        '<div class="panel"><div class="empty">' +
-        '<div class="empty-title">No projects yet</div>' +
-        '<div class="empty-hint">devd works with the projects that are already on your disk. Add a folder that holds one, or start a new one from a stack.</div>' +
-        '<div class="empty-actions"><button type="button" class="btn btn-primary btn-mini" data-action="nav" data-view="create">Create a project</button></div>' +
-        "</div></div>";
+      body = uiEmpty("No projects yet", "devd works with projects on your disk. Add a folder that has one, or start a new one from a stack.",
+        '<div class="inline"><button type="button" class="btn btn-primary" data-action="nav" data-view="create">Create a project</button><button type="button" class="btn" data-action="add-project">Add a folder</button></div>');
     } else {
-      var controls =
-        '<div class="list-bar">' +
-        '<label class="list-search">' +
-        '<svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg>' +
-        '<input type="search" id="project-search" class="input" placeholder="Search projects" value="' + attr(state.projectQuery) + '" aria-label="Search projects">' +
-        "</label>" +
-        '<div class="seg" role="group" aria-label="Sort projects">' +
-        PROJECT_SORTS.map(function (s) {
-          return '<button type="button" class="seg' + (state.projectSort === s.id ? " active" : "") +
-            '" data-action="project-sort" data-sort="' + attr(s.id) + '" aria-pressed="' + (state.projectSort === s.id ? "true" : "false") + '">' +
-            esc(s.label) + "</button>";
-        }).join("") +
-        "</div>" +
-        '<span class="list-count">' + visible.length + " of " + all.length + "</span>" +
-        "</div>";
-
-      if (!visible.length) {
-        body = controls + '<div class="panel"><div class="empty">' +
-          '<div class="empty-title">No project matches “' + esc(state.projectQuery) + "”</div>" +
-          "<div>Clear the search to see the rest.</div></div></div>";
-      } else {
-        body = controls + '<div class="grid">' + visible.map(function (p) {
-          var st = p.status;
-          var stats = [];
-          if (p.stack) stats.push('<span class="pill">' + esc(p.stack) + "</span>");
-          if (st) {
-            var changes = projectChanges(st);
-            stats.push('<span class="pill' + (changes ? " pill-warn" : " pill-ok") + '">' +
-              (changes ? changes + " change" + (changes === 1 ? "" : "s") : "clean") + "</span>");
-            stats.push('<span class="pill">' + esc(st.branch || "detached") + "</span>");
-            if (st.ahead) stats.push('<span class="pill pill-accent">' + st.ahead + " ahead</span>");
-            if (st.behind) stats.push('<span class="pill pill-warn">' + st.behind + " behind</span>");
-          } else if (p.is_repository) {
-            stats.push('<span class="pill">repository</span>');
-          }
-          if (p.exists === false) stats.push('<span class="pill pill-bad">folder is gone</span>');
-          if (!p.registered) stats.push('<span class="pill">not imported</span>');
-          var isPinned = pinned.indexOf(p.path) !== -1;
-          return (
-            '<div class="card card-project">' +
-            '<button type="button" class="card-open" data-action="open-project" data-path="' + attr(p.path) + '">' +
-            '<div class="card-title">' + esc(p.name) + "</div>" +
-            '<div class="card-meta nowrap" title="' + attr(p.path) + '">' + esc(p.path) + "</div>" +
-            '<div class="card-stats">' + stats.join("") + "</div>" +
-            (p.error ? '<div class="row-sub" style="margin-top:var(--s2)">' + esc(p.error) + "</div>" : "") +
-            "</button>" +
-            '<button type="button" class="card-pin" data-action="pin-project" data-path="' + attr(p.path) + '"' +
-            ' aria-pressed="' + (isPinned ? "true" : "false") + '"' +
-            ' title="' + (isPinned ? "Unpin this project" : "Pin this project to the top") + '">' +
-            (isPinned ? "★" : "☆") + "</button>" +
-            "</div>"
-          );
-        }).join("") + "</div>";
-      }
+      var sorts = PROJECT_SORTS.map(function (s) {
+        return '<button type="button" class="ui-sort' + (state.projectSort === s.id ? " active" : "") + '" data-action="project-sort" data-sort="' + attr(s.id) + '">' + esc(s.label) + "</button>";
+      }).join("");
+      var controls = '<div class="ui-controls"><input type="search" id="project-search" class="ui-search" placeholder="Search projects" value="' + attr(state.projectQuery) + '" aria-label="Search projects"><span class="grow"></span>' + sorts + "</div>";
+      var rows = visible.map(function (p) {
+        var st = p.status;
+        var bits = [];
+        if (p.stack) bits.push(p.stack);
+        var dotKind = "off";
+        if (st) {
+          var changes = projectChanges(st);
+          bits.push(st.branch || "detached");
+          bits.push(changes ? changes + " change" + (changes === 1 ? "" : "s") : "clean");
+          if (st.ahead) bits.push(st.ahead + " ahead");
+          if (st.behind) bits.push(st.behind + " behind");
+          dotKind = changes ? "warn" : "ok";
+        } else if (p.is_repository) bits.push("repository");
+        if (p.exists === false) { bits.push("folder is gone"); dotKind = "bad"; }
+        if (!p.registered) bits.push("not imported");
+        var isPinned = pinned.indexOf(p.path) !== -1;
+        return uiRow({
+          dot: dotKind, title: (isPinned ? "★ " : "") + esc(p.name),
+          sub: esc(bits.join(" · ")) + '<span class="ui-path" title="' + attr(p.path) + '"> · ' + esc(p.path) + "</span>",
+          open: 'data-action="open-project" data-path="' + attr(p.path) + '"',
+          actions: '<button type="button" class="btn btn-mini btn-primary" data-action="open-project" data-path="' + attr(p.path) + '">Open</button>' +
+            '<button type="button" class="btn btn-mini btn-ghost" data-action="pin-project" data-path="' + attr(p.path) + '" title="' + (isPinned ? "Unpin" : "Pin to the top") + '">' + (isPinned ? "Unpin" : "Pin") + "</button>",
+          hover: true
+        });
+      });
+      body = (all.length > 4 ? controls : "") + (visible.length ? uiList(rows) : uiEmpty('No project matches "' + state.projectQuery + '"', "Clear the search to see the rest."));
     }
-
-    el("main").innerHTML =
-      '<div class="page">' +
-      '<div class="page-head">' +
-      "<div><h1 class=\"page-title\">Projects</h1>" +
-      '<div class="page-sub">The folders on your machine that devd knows about, with their live state.</div></div>' +
-      '<div class="page-actions">' +
-      '<button type="button" class="btn" data-action="clone-form">Clone a repository</button>' +
-      '<button type="button" class="btn btn-primary" data-action="add-project">Add existing project</button>' +
-      "</div></div>" +
-      body +
-      "</div>";
+    el("main").innerHTML = page("Projects", "",
+      '<button type="button" class="btn" data-action="clone-form">Clone</button><button type="button" class="btn btn-primary" data-action="add-project">Add a folder</button>', body);
   }
 
   function loadProjects() {
@@ -3338,6 +3153,7 @@
   }
 
   function renderProject() {
+    if (state.view !== "project") return;
     var st = state.project.status;
     var tab = state.tab;
     var badge = "";
@@ -3429,6 +3245,7 @@
   }
 
   function renderCapabilities() {
+    if (state.view !== "capabilities") return;
     var detail = state.selectedCapDetail;
     var page = state.caps.page || 0;
     var start = page * PAGE_SIZE;
@@ -3518,51 +3335,51 @@
 
   // -------------------------------------------------------------------- activity
 
-  function renderActivity() {
-    var page = state.auditPage || 0;
-    var start = page * PAGE_SIZE;
-    var rows = state.audit
-      .slice(start, start + PAGE_SIZE)
-      .map(function (a) {
-        var result = a.dry_run
-          ? '<span class="pill pill-quiet">plan</span>'
-          : a.ok
-          ? '<span class="pill pill-ok">applied</span>'
-          : '<span class="pill pill-bad">refused</span>';
-        return (
-          "<tr>" +
-          '<td class="cell-mono" title="' + attr(a.at) + '">' + esc(stamp(a.at)) + "</td>" +
-          "<td>" + esc(a.actor) + "</td>" +
-          '<td class="cell-mono">' + esc(a.capability) + "</td>" +
-          '<td class="cell-mono">' + esc(a.tier) + "</td>" +
-          "<td>" + result + "</td>" +
-          '<td class="cell-mono">' + esc(a.args || "") + "</td>" +
-          "<td>" + esc(a.message) + "</td>" +
-          "</tr>"
-        );
-      })
-      .join("");
+  var AUDIT_FILTERS = [["changes", "Changes"], ["mine", "Mine"], ["agents", "Agents"], ["refused", "Refused"], ["all", "Everything"]];
 
-    el("main").innerHTML =
-      '<div class="page">' +
-      '<div class="page-head"><div><h1 class="page-title">Activity</h1>' +
-      '<div class="page-sub">Every capability attempt, successful or not, with arguments redacted. ' +
-      "A <em>plan</em> row is a preview that changed nothing; a <em>refused</em> row is an operation " +
-      "a human declined or that was blocked. Refusals are recorded, so a declined operation is never " +
-      "indistinguishable from one that never happened.</div></div>" +
-      '<div class="page-actions"><button type="button" class="btn" data-action="refresh">Refresh</button></div></div>' +
-      '<div class="panel"><div class="panel-body flush">' +
-      (rows
-        ? '<table class="table"><thead><tr><th>When</th><th>Actor</th><th>Capability</th>' +
-          "<th>Tier</th><th>Result</th><th>Arguments</th><th>Message</th></tr></thead>" +
-          "<tbody>" + rows + "</tbody></table>" +
-          pager(state.audit.length, page, "audit-page")
-        : state.auditError
-        ? '<div class="empty"><div class="empty-title">The activity log could not be read</div>' +
-          "<div>" + esc(state.auditError) + "</div></div>"
-        : '<div class="empty"><div class="empty-title">Nothing has happened yet</div>' +
-          "<div>Audit rows appear here as soon as a capability is called from any surface.</div></div>") +
-      "</div></div></div>";
+  function auditVisible() {
+    var f = state.auditFilter || "changes";
+    return state.audit.filter(function (a) {
+      if (f === "all") return true;
+      if (f === "mine") return a.actor.indexOf("agent") !== 0 && a.tier !== "read";
+      if (f === "agents") return a.actor.indexOf("agent") === 0;
+      if (f === "refused") return !a.ok && !a.dry_run;
+      return !a.dry_run && a.tier !== "read";
+    });
+  }
+
+  function renderActivity() {
+    if (state.view !== "activity") return;
+    var pageNo = state.auditPage || 0;
+    var visible = auditVisible();
+    var start = pageNo * PAGE_SIZE;
+    var rows = visible.slice(start, start + PAGE_SIZE).map(function (a) {
+      var who = a.actor.replace("human:", "").replace("agent:", "agent ");
+      var verb = a.dry_run ? " previewed " : a.ok ? " ran " : " was refused ";
+      return uiRow({
+        dot: a.dry_run ? "off" : a.ok ? "ok" : "bad",
+        title: esc(who) + verb + '<span class="mono">' + esc(a.capability) + "</span>",
+        sub: a.message && a.message !== "ok" ? esc(uiSummary(a.message, 160)) : "",
+        meta: '<span title="' + attr(a.at) + '">' + esc(stamp(a.at)) + "</span>",
+        open: 'data-action="open-audit" data-at="' + attr(a.at) + '" data-cap="' + attr(a.capability) + '"'
+      });
+    });
+    var tabs = '<div class="ui-controls">' + AUDIT_FILTERS.map(function (f) {
+      return '<button type="button" class="ui-sort' + ((state.auditFilter || "changes") === f[0] ? " active" : "") + '" data-action="audit-filter" data-filter="' + f[0] + '">' + f[1] + "</button>";
+    }).join("") + '<span class="grow"></span><button type="button" class="btn btn-mini btn-ghost" data-action="refresh">Refresh</button></div>';
+    var body = tabs + (rows.length ? uiList(rows) + pager(visible.length, pageNo, "audit-page")
+      : state.auditError ? uiEmpty("The activity log could not be read", state.auditError)
+      : uiEmpty("Nothing here yet", "Rows appear as soon as a capability is called from any surface."));
+    el("main").innerHTML = '<div class="page"><div class="page-head"><div><h1 class="page-title">Activity</h1></div></div>' + body + "</div>";
+  }
+
+  function openAuditSheet(at, cap) {
+    var a = state.audit.filter(function (x) { return x.at === at && x.capability === cap; })[0];
+    if (!a) return;
+    uiSheet(a.capability,
+      '<div class="ui-quiet">' + esc(a.actor) + " \u00b7 " + esc(stamp(a.at)) + " \u00b7 " + esc(a.tier) + " \u00b7 " + (a.dry_run ? "preview" : a.ok ? "applied" : "refused") + "</div>" +
+      (a.message ? "<h3>Result</h3><div>" + esc(a.message) + "</div>" : "") +
+      '<h3>Arguments</h3><pre class="log-block">' + esc(a.args || "{}") + "</pre>");
   }
 
   function loadActivity() {
@@ -3583,6 +3400,7 @@
   // ---------------------------------------------------------------------- system
 
   function renderSystem() {
+    if (state.view !== "system") return;
     var checks = (state.doctor && state.doctor.checks) || [];
     var checkRows = checks
       .map(function (c) {
@@ -3612,22 +3430,21 @@
 
     el("main").innerHTML =
       '<div class="page">' +
-      '<div class="page-head"><div><h1 class="page-title">Diagnostics</h1>' +
-      '<div class="page-sub">What devd checked, what it means for you, and how to fix it. The raw environment checks are below.</div></div>' +
+      '<div class="page-head"><div><h1 class="page-title">Diagnostics</h1></div>' +
       '<div class="page-actions">' +
       '<button type="button" class="btn" data-action="refresh">Re-check</button>' +
       '<button type="button" class="btn btn-danger" data-action="quit">Quit devd</button>' +
       "</div></div>" +
-      '<div class="panel"><div class="panel-head"><span>Status</span><span class="panel-note">' + esc(AI.health ? AI.health.state.replace("_", " ") : "unknown") + '</span></div><div class="panel-body">' + healthBody(false) + "</div></div>" +
-      reqPanel +
-      '<div class="panel"><div class="panel-head"><span>Environment</span><span class="panel-note">' + esc((AI.env && AI.env.mode) || "local") + '</span></div><div class="panel-body"><div class="row-sub">' + ((AI.env && AI.env.mode === "production") ? "Production mode is on. Agents need your approval for every change, plan approval cannot be skipped, and devd never deploys or opens ports by itself." : "Local mode. Agents work freely inside authorised project folders; anything destructive or system-wide still asks you. Turn production mode on for a machine that runs something real.") + '</div><div class="inline" style="margin-top:10px"><button type="button" class="btn ' + ((AI.env && AI.env.mode === "production") ? "" : "btn-danger") + '" data-action="env-toggle">' + ((AI.env && AI.env.mode === "production") ? "Switch to local (asks first)" : "Switch to production mode") + "</button></div></div></div>" +
-      '<div class="panel"><div class="panel-head"><span>Raw environment checks</span>' +
+      '<div class="ui-diag">' + healthBody(false) + "</div>" +
+      (reqs.length && AI.requirements.missing ? '<details class="ui-fold" open><summary>Set up (' + AI.requirements.missing + " missing)</summary>" + reqPanel + "</details>" : "") +
+      '<details class="ui-fold"><summary>Environment: ' + esc((AI.env && AI.env.mode) || "local") + '</summary><div class="panel"><div class="panel-head"><span>Environment</span><span class="panel-note">' + esc((AI.env && AI.env.mode) || "local") + '</span></div><div class="panel-body"><div class="row-sub">' + ((AI.env && AI.env.mode === "production") ? "Production mode is on. Agents need your approval for every change, plan approval cannot be skipped, and devd never deploys or opens ports by itself." : "Local mode. Agents work freely inside authorised project folders; anything destructive or system-wide still asks you. Turn production mode on for a machine that runs something real.") + '</div><div class="inline" style="margin-top:10px"><button type="button" class="btn ' + ((AI.env && AI.env.mode === "production") ? "" : "btn-danger") + '" data-action="env-toggle">' + ((AI.env && AI.env.mode === "production") ? "Switch to local (asks first)" : "Switch to production mode") + "</button></div></div></div></details>" +
+      '<details class="ui-fold"><summary>Raw environment checks</summary><div class="panel"><div class="panel-head"><span>Raw environment checks</span>' +
       '<span class="panel-note">' + (state.doctor && state.doctor.ok ? "no failures" : "see levels") + "</span></div>" +
       '<div class="panel-body flush">' +
       '<table class="table"><thead><tr><th>Check</th><th>Level</th><th>Detail</th></tr></thead>' +
       "<tbody>" + checkRows + "</tbody></table>" +
-      "</div></div>" +
-      '<div class="panel"><div class="panel-head"><span>Layout</span></div>' +
+      "</div></div></details>" +
+      '<details class="ui-fold"><summary>Layout, settings and registry</summary><div class="panel"><div class="panel-head"><span>Layout</span></div>' +
       '<div class="panel-body"><dl class="kv">' +
       Object.keys(s.paths || {})
         .map(function (k) { return "<dt>" + esc(k) + "</dt><dd>" + esc(s.paths[k]) + "</dd>"; })
@@ -3641,7 +3458,7 @@
       "</dl></div></div>" +
       '<div class="panel"><div class="panel-head"><span>Registry</span>' +
       '<span class="panel-note">' + ((s.registry && s.registry.capabilities) || 0) + " capabilities</span></div>" +
-      '<div class="panel-body inline">' + groups + "</div></div>" +
+      '<div class="panel-body inline">' + groups + "</div></div></details>" +
       "</div>";
   }
 
@@ -3740,6 +3557,7 @@
   }
 
   function renderCreate() {
+    if (state.view !== "create") return;
     if (!CREATE.stacks) return renderLoading();
     if (!CREATE.id) {
       var cats = {};
@@ -3748,16 +3566,12 @@
       });
       var order = ["web", "backend", "frontend", "mobile", "language"];
       var html = order.filter(function (c) { return cats[c]; }).map(function (c) {
-        return '<div class="panel"><div class="panel-head"><span>' + esc(c) + "</span></div>" +
-          '<div class="panel-body flush"><table class="table"><tbody>' +
+        return uiHead(c.charAt(0).toUpperCase() + c.slice(1), cats[c].length) + '<div class="ui-tiles">' +
           cats[c].map(function (s) {
-            return '<tr><td class="cell-strong">' + brandImg(s.id, "brand-dot") + esc(s.name) + '</td><td class="dim">' + esc(s.language) + "</td>" +
-              "<td>" + esc(s.summary) + '</td><td class="nowrap">' + docLinks(s.docs.slice(0, 1)) + "</td>" +
-              '<td><button type="button" class="btn btn-primary btn-mini" data-action="create-pick" data-id="' + attr(s.id) + '">Create</button></td></tr>';
-          }).join("") + "</tbody></table></div></div>";
+            return '<button type="button" class="ui-tile" data-action="create-pick" data-id="' + attr(s.id) + '"><b>' + brandImg(s.id, "brand-dot") + esc(s.name) + '</b><span>' + esc(s.summary) + '</span></button>';
+          }).join("") + "</div>";
       }).join("");
-      el("main").innerHTML = page("Create a project",
-        "Pick a stack. devd runs the framework's official scaffolder with the options you choose - the same engine the terminal, the dashboard and agents use.",
+      el("main").innerHTML = page("New project", "",
         '<button type="button" class="btn" data-action="nav" data-view="develop">Import an existing project</button>', html);
       return;
     }
@@ -3879,6 +3693,7 @@
   }
 
   function renderDevelop() {
+    if (state.view !== "develop") return;
     if (!DEV.projects) return renderLoading();
     var list = DEV.projects.map(function (p) {
       return '<button type="button" class="svc ' + (DEV.path === p.path ? "active" : "") + '" data-action="dev-open" data-path="' + attr(p.path) + '" style="width:100%;text-align:left">' +
@@ -3941,58 +3756,47 @@
   }
 
   function renderToolchain() {
-    var title = "Tools";
-    var sub = "Languages, package managers, databases and mobile tooling on this machine. Installs show their commands and source first and need your approval.";
+    if (state.view !== "toolchain") return;
     var actions = '<button type="button" class="btn" data-action="refresh">Re-check</button>';
     if (!TC.data) {
-      // Probing every tool means running it, and that takes a while. The page
-      // keeps its heading and its tabs; only the body says what is happening,
-      // so the screen does not look like a different place.
-      el("main").innerHTML = page(title, sub, actions,
-        '<div class="panel"><div class="empty">' +
-        '<div class="empty-title">Checking this machine</div>' +
-        "<div>devd runs every tool it knows to see which are installed and what version they are. That takes a moment.</div>" +
-        "</div></div>");
+      el("main").innerHTML = page("Tools", "", actions, uiEmpty("Checking this computer", "devd runs each tool it knows to see what is installed. That takes a moment."));
       return;
     }
     var host = TC.data.host, tools = TC.data.tools;
     var q = state.filters.toolchain || "";
     var cats = {};
-    tools
-      .filter(function (t) { return keeps(q, t.tool.id, t.tool.name, t.tool.purpose, t.tool.category); })
+    tools.filter(function (t) { return keeps(q, t.tool.id, t.tool.name, t.tool.purpose, t.tool.category); })
       .forEach(function (t) { (cats[t.tool.category] = cats[t.tool.category] || []).push(t); });
     var notes = [];
     if (!host.root && !host.sudo && host.os === "linux") notes.push("devd has neither root nor passwordless sudo, so package installs show the exact command to run yourself.");
     if (!host.managers.length) notes.push("No supported package manager was found; installs will show manual steps.");
-    var html = '<div class="filter-row">' + filterBox("toolchain", "Search tools") + "</div>";
-    html += '<div class="panel"><div class="panel-body"><div class="kv"><dt>Machine</dt><dd>' + esc(host.os) + " " + esc(host.arch) + " · package managers: " + esc(host.managers.join(", ") || "none") + " · " + (host.root ? "running as root" : host.sudo ? "passwordless sudo available" : "unprivileged") + "</dd></div>" +
-      notes.map(function (n) { return '<div class="notice notice-warn">' + esc(n) + "</div>"; }).join("") + "</div></div>";
-    if (!Object.keys(cats).length) {
-      html += '<div class="panel"><div class="panel-body empty-inline">No tool matches "' + esc(q) + '".</div></div>';
-    }
+    var html = '<div class="ui-quiet">' + esc(host.os + " " + host.arch) + " \u00b7 package managers: " + esc(host.managers.join(", ") || "none") + "</div>" +
+      notes.map(function (n) { return uiRow({ accent: true, dot: "warn", title: esc(n) }); }).join("") +
+      '<div class="filter-row">' + filterBox("toolchain", "Search tools") + "</div>";
+    if (!Object.keys(cats).length) html += uiEmpty('No tool matches "' + q + '"');
     Object.keys(cats).forEach(function (c) {
-      html += '<div class="panel"><div class="panel-head"><span>' + esc(c) + "</span></div>" + cats[c].map(function (t) {
+      var list = cats[c].slice().sort(function (a, b) { return (a.status.installed ? 1 : 0) - (b.status.installed ? 1 : 0); });
+      html += uiHead(c.charAt(0).toUpperCase() + c.slice(1), list.length) + uiList(list.map(function (t) {
         var st = t.status, sv = t.service, id = t.tool.id;
-        var state = st.installed ? (st.outdated ? pill("warn", "outdated") : pill("ok", "installed")) : (t.tool.per_project ? pill("", "per project") : pill("bad", "missing"));
         var acts = "";
-        // One button per action. It opens the approval, and the approval
-        // shows the exact commands, the source and anything that would block
-        // it - so a second "Plan" button beside it would say the same thing.
         if (!st.installed && !t.tool.per_project) acts += '<button type="button" class="btn btn-mini btn-primary" data-action="tool-install" data-id="' + attr(id) + '">Install</button>';
-        if (st.installed && !t.tool.per_project) acts += '<button type="button" class="btn btn-mini btn-danger" data-action="tool-remove" data-id="' + attr(id) + '">Remove</button>';
-        var svc = "";
         if (sv && st.installed) {
-          svc = '<div class="row-sub">' + dot(sv.healthy, sv.listening) + " " + esc(sv.detail) + (sv.port_conflict ? " - port held by " + esc(sv.port_conflict) : "") + "</div>";
-          acts += sv.healthy ? '<button type="button" class="btn btn-mini" data-action="svc" data-act="stop" data-id="' + attr(id) + '">Stop</button><button type="button" class="btn btn-mini" data-action="svc" data-act="restart" data-id="' + attr(id) + '">Restart</button>' : '<button type="button" class="btn btn-mini btn-go" data-action="svc" data-act="start" data-id="' + attr(id) + '">Start</button>';
-          acts += '<button type="button" class="btn btn-mini" data-action="svc-logs" data-id="' + attr(id) + '">Logs</button>';
+          acts += sv.healthy ? '<button type="button" class="btn btn-mini" data-action="svc" data-act="stop" data-id="' + attr(id) + '">Stop</button><button type="button" class="btn btn-mini btn-ghost" data-action="svc" data-act="restart" data-id="' + attr(id) + '">Restart</button>' : '<button type="button" class="btn btn-mini btn-primary" data-action="svc" data-act="start" data-id="' + attr(id) + '">Start</button>';
+          acts += '<button type="button" class="btn btn-mini btn-ghost" data-action="svc-logs" data-id="' + attr(id) + '">Logs</button>';
         }
-        if (id === "adb" && st.installed) acts += '<button type="button" class="btn btn-mini" data-action="devices">Devices</button>';
-        if (id === "eas-cli" && st.installed) acts += '<button type="button" class="btn btn-mini" data-action="eas-projects">Projects</button>';
-        return '<div class="svc"><div class="svc-main"><div class="svc-name">' + brandImg(t.tool.id, "brand-dot") + esc(t.tool.name) + " " + state + ' <span class="dim mono">' + esc(st.version || "") + '</span></div><div class="svc-sub">' + esc(t.tool.purpose) + "</div>" + svc +
-          (!st.installed && st.problem && !t.tool.per_project ? '<div class="row-sub">' + esc(st.problem) + "</div>" : "") + '</div><div class="svc-actions">' + acts + "</div></div>";
-      }).join("") + "</div>";
+        if (id === "adb" && st.installed) acts += '<button type="button" class="btn btn-mini btn-ghost" data-action="devices">Devices</button>';
+        if (id === "eas-cli" && st.installed) acts += '<button type="button" class="btn btn-mini btn-ghost" data-action="eas-projects">Projects</button>';
+        if (st.installed && !t.tool.per_project) acts += '<button type="button" class="btn btn-mini btn-ghost" data-action="tool-remove" data-id="' + attr(id) + '">Remove</button>';
+        var sub = st.installed ? (sv ? sv.detail + (sv.port_conflict ? " - port held by " + sv.port_conflict : "") : t.tool.purpose) : (st.problem && !t.tool.per_project ? st.problem : t.tool.purpose);
+        return uiRow({
+          dot: st.installed ? (st.outdated ? "warn" : "ok") : (t.tool.per_project ? "off" : "bad"),
+          title: brandImg(id, "brand-dot") + esc(t.tool.name) + (st.version ? ' <span class="ui-quiet" style="display:inline;padding:0">' + esc(st.version) + "</span>" : "") + (t.tool.per_project ? ' <span class="pill">per project</span>' : "") + (st.outdated ? ' <span class="pill pill-warn">outdated</span>' : ""),
+          sub: esc(uiSummary(sub, 140)),
+          actions: acts, hover: st.installed
+        });
+      }));
     });
-    el("main").innerHTML = page(title, sub, actions, html);
+    el("main").innerHTML = page("Tools", "", actions, html);
   }
 
 
@@ -4111,30 +3915,42 @@
   // -------------------------------------------------------------------- home
 
   function loadHome() {
-    return Promise.all([
-      loadHealth(),
+    // The quick reads go out first and the page draws when they arrive. The health check and
+    // the machine inventory probe the whole computer and take seconds; they are asked for
+    // afterwards and fill in when ready.
+    var fast = Promise.all([
       read("project.list").catch(function () { return []; }),
       read("approval.list", { pending_only: true }).catch(function () { return []; }),
       read("inbox.list", { open_only: true }).catch(function () { return []; }),
       read("chat.list").catch(function () { return []; }),
       read("provider.list").catch(function () { return []; }),
       read("team.list").catch(function () { return []; }),
-      request("/api/audit?limit=40").then(function (r) { return r.ok ? r.body.items || [] : []; }),
-      read("setup.requirements").catch(function () { return null; }),
-      state.server.loaded ? Promise.resolve() : loadServer()
-    ]).then(function (r) {
+      request("/api/audit?limit=40").then(function (r) { return r.ok ? r.body.items || [] : []; })
+    ]);
+    var slowDone = fast.then(function () {
+      return Promise.all([
+        loadHealth(),
+        read("setup.requirements").catch(function () { return null; }),
+        state.server.loaded ? Promise.resolve() : loadServer()
+      ]);
+    }).then(function (r) {
+      AI.requirements = r[1];
+      if (AI.home) AI.home.requirements = r[1];
+      if (state.view === "home") render();
+    });
+    void slowDone;
+    return fast.then(function (r) {
       AI.home = {
-        projects: r[1] || [],
-        approvals: r[2] || [],
-        inbox: r[3] || [],
-        threads: r[4] || [],
-        providers: r[5] || [],
-        teamRuns: r[6] || [],
-        audit: r[7] || [],
-        requirements: r[8]
+        projects: r[0] || [],
+        approvals: r[1] || [],
+        inbox: r[2] || [],
+        threads: r[3] || [],
+        providers: r[4] || [],
+        teamRuns: r[5] || [],
+        audit: r[6] || [],
+        requirements: AI.requirements || null
       };
-      AI.providers = r[5] || [];
-      AI.requirements = r[8];
+      AI.providers = r[4] || [];
     });
   }
 
@@ -4198,85 +4014,122 @@
     return reqs.filter(function (r) { return r.id === id; })[0] || null;
   }
 
+  function approvalRow(r) {
+    var title = (r.plan && r.plan.summary) || ("Run " + r.capability);
+    return uiRow({
+      accent: true, dot: "warn",
+      title: esc(title),
+      sub: esc(r.actor.replace("agent:", "") + " asks to use " + r.capability),
+      meta: esc(ago(r.created_at)),
+      open: 'data-action="open-approval" data-id="' + attr(r.id) + '"',
+      actions: '<button type="button" class="btn btn-go btn-mini" data-action="req-decide" data-id="' + attr(r.id) + '" data-approve="1">Approve</button>' +
+        '<button type="button" class="btn btn-mini btn-ghost" data-action="req-decide" data-id="' + attr(r.id) + '" data-approve="0">Decline</button>'
+    });
+  }
+
+  function questionRow(m) {
+    var who = m.from_actor.replace("agent:", "").replace("devd-", "");
+    return uiRow({
+      accent: true, dot: "warn",
+      title: esc(m.subject), sub: esc(uiSummary(m.body, 170)), wrap: true,
+      meta: esc(who + " · " + ago(m.created_at)),
+      open: 'data-action="open-message" data-id="' + attr(m.id) + '"',
+      actions: '<button type="button" class="btn btn-primary btn-mini" data-action="open-message" data-id="' + attr(m.id) + '">Answer</button>'
+    });
+  }
+
   function renderHome() {
+    if (state.view !== "home") return;
     var d = AI.home;
     if (!d) return renderLoading("Reading projects, approvals and the services on this machine.");
     var h = AI.health || { level: "checking", checks: [], headline: "" };
-    var hasProvider = d.providers.some(function (p) { return p.enabled; });
     var ready = d.providers.some(function (p) { return p.enabled && p.has_key; }) || d.providers.some(function (p) { return p.enabled && !p.needs_key; });
     var projOptions = '<option value="">No project</option>' + d.projects.map(function (p) { return '<option value="' + attr(p.path) + '"' + (AI.askProject === p.path ? " selected" : "") + ">" + esc(p.name) + "</option>"; }).join("");
-    var ask = ready
-      ? '<div class="ask-box"><textarea id="home-ask" class="input" rows="2" placeholder="Ask devd to do something…  e.g. “Create a Laravel app called blog with PostgreSQL” or “Run the tests and fix what fails”">' + esc(AI.askText) + "</textarea>" +
-        '<div class="inline"><select class="input" id="home-project">' + projOptions + "</select><span class=\"grow\"></span>" +
-        '<button type="button" class="btn" data-action="home-team" title="A planner, specialists working in parallel, and proof before anything counts as done">Build with the team</button><button type="button" class="btn btn-primary" data-action="home-ask">Ask the assistant</button></div></div>'
-      : "";
 
-    // Needs you
+    var ask = ready
+      ? '<div class="ui-ask"><textarea id="home-ask" rows="1" placeholder="Ask devd to do something…" style="flex:1;background:none;border:0;outline:0;resize:none;color:var(--fg);font:inherit;font-size:var(--text-lg);padding:12px 0">' + esc(AI.askText) + "</textarea>" +
+        '<select class="input" id="home-project" style="max-width:150px">' + projOptions + "</select>" +
+        '<button type="button" class="btn btn-ghost" data-action="home-team" title="A planner, specialists working in parallel, and proof before anything counts as done">Team</button>' +
+        '<button type="button" class="btn btn-primary" data-action="home-ask">Ask</button></div>'
+      : '<div class="ui-ask"><span class="grow" style="flex:1;color:var(--fg-mute);padding:12px 0">Connect a model to ask devd for things.</span><button type="button" class="btn btn-primary" data-action="nav" data-view="providers">Connect a model</button></div>';
+
     var needs = [];
     (d.teamRuns || []).filter(function (t) { return t.state === "awaiting_plan"; }).forEach(function (t) {
-      needs.push('<div class="ask ask-approval"><div class="ask-head"><span class="pill pill-warn">plan</span><b>' + esc(t.title) + '</b><span class="dim">team · ' + esc(ago(t.updated_at)) + '</span></div><div class="ask-body">The team has a plan with ' + t.tasks_total + ' task(s). Nothing runs until you approve it.</div><div class="inline"><button type="button" class="btn btn-primary btn-mini" data-action="team-open-from" data-id="' + attr(t.id) + '">Review the plan</button></div></div>');
+      needs.push(uiRow({ accent: true, dot: "warn", title: esc(t.title), sub: "The team has a plan with " + t.tasks_total + " task(s). Nothing runs until you approve it.", meta: esc(ago(t.updated_at)),
+        actions: '<button type="button" class="btn btn-primary btn-mini" data-action="team-open-from" data-id="' + attr(t.id) + '">Review plan</button>' }));
     });
     (d.teamRuns || []).filter(function (t) { return t.state === "paused" && t.error; }).forEach(function (t) {
-      needs.push('<div class="ask ask-warn"><div class="ask-head"><span class="pill pill-warn">paused</span><b>' + esc(t.title) + '</b></div><div class="ask-body">' + esc(t.error) + '</div><div class="inline"><button type="button" class="btn btn-mini" data-action="team-open-from" data-id="' + attr(t.id) + '">Open</button></div></div>');
+      needs.push(uiRow({ accent: true, dot: "warn", title: esc(t.title), sub: esc(uiSummary(t.error, 150)), wrap: true, meta: "paused",
+        actions: '<button type="button" class="btn btn-mini" data-action="team-open-from" data-id="' + attr(t.id) + '">Open</button>' }));
     });
-    d.approvals.slice(0, 4).forEach(function (r) { needs.push(approvalCard(r, true)); });
-    d.inbox.slice(0, 3).forEach(function (m) { needs.push(messageCard(m)); });
+    d.approvals.forEach(function (r) { needs.push(approvalRow(r)); });
+    d.inbox.filter(function (m) { return m.needs_reply; }).forEach(function (m) { needs.push(questionRow(m)); });
     (h.checks || []).filter(function (c) { return c.required && c.state !== "healthy" && c.state !== "starting"; }).forEach(function (c) {
       var f = c.fix || {}, bad = c.state === "critical" || c.state === "unavailable" || c.state === "degraded";
-      needs.push('<div class="ask ask-' + (bad ? "bad" : "warn") + '"><div class="ask-head"><span class="pill ' + (bad ? "pill-bad" : "pill-warn") + '">' + esc(HEALTH_WORD[c.state]) + "</span><b>" + esc(c.label) + '</b><span class="dim">' + esc(c.detail) + '</span></div><div class="ask-body">' + esc(c.meaning) + "</div>" +
-        (f.capability ? '<div class="inline"><button type="button" class="btn btn-primary btn-mini" data-action="health-fix" data-cap="' + attr(f.capability) + '" data-args="' + attr(JSON.stringify(f.args || {})) + '">' + esc(f.label) + "</button></div>" : f.view ? '<div class="inline"><button type="button" class="btn btn-mini" data-action="health-go" data-view="' + attr(f.view) + '">' + esc(f.label) + "</button></div>" : "") + "</div>");
+      var act = f.capability
+        ? '<button type="button" class="btn btn-primary btn-mini" data-action="health-fix" data-cap="' + attr(f.capability) + '" data-args="' + attr(JSON.stringify(f.args || {})) + '">' + esc(f.label) + "</button>"
+        : f.view ? '<button type="button" class="btn btn-mini" data-action="health-go" data-view="' + attr(f.view) + '">' + esc(f.label) + "</button>" : "";
+      needs.push(uiRow({ accent: true, dot: bad ? "bad" : "warn", title: esc(c.label), sub: esc(c.meaning || c.detail), wrap: true, actions: act }));
     });
-    var projectStep = d.projects.length ? "" :
-      '<div class="section-title">Get started</div><div class="panel">' +
-      '<div class="proj"><span class="step-dot run"></span><div class="proj-main"><div class="proj-name">Add your first project</div><div class="proj-path">Create one from a stack, or import a repository</div></div>' +
-      '<button type="button" class="btn btn-mini btn-primary" data-action="nav" data-view="create">Open</button></div></div>';
-    // The left column leads with what needs a person, because that is the one
-    // thing on this screen that cannot wait.
-    var needsHtml = '<div class="section-title">Needs you' + (needs.length ? ' <span class="count">' + needs.length + "</span>" : "") + "</div>" + (needs.length
-      ? needs.join("")
-      : '<div class="calm"><span class="health-dot"></span><div><b>Nothing needs you.</b><div class="row-sub">No approvals waiting, no questions from agents, nothing broken.</div></div></div>') +
-      requirementPanel() + projectStep;
-    // Projects
-    var projects = d.projects.slice(0, 6).map(function (p) {
-      return '<div class="proj"><div class="proj-main"><div class="proj-name">' + esc(p.name) + (p.stack ? ' <span class="pill pill-accent">' + esc(p.stack) + "</span>" : "") +
-        '</div><div class="proj-path mono nowrap" title="' + attr(p.path) + '">' + esc(p.path) + '</div></div><div class="proj-actions">' +
-        '<button type="button" class="btn btn-mini" data-action="home-open" data-path="' + attr(p.path) + '">Develop</button>' +
-        (ready ? '<button type="button" class="btn btn-mini" data-action="home-chat" data-path="' + attr(p.path) + '">Ask</button>' : "") + "</div></div>";
-    }).join("") || '<div class="empty"><div class="empty-title">No projects yet</div><div class="empty-hint">Create one from a stack, or point devd at a repository that already exists on disk.</div></div>';
+    var updates = d.inbox.filter(function (m) { return !m.needs_reply; }).length;
+    var needsHtml = "";
+    if (needs.length) {
+      needsHtml += uiHead("Needs you", needs.length) + uiList(needs.slice(0, 4));
+      var hidden = needs.length - 4 + updates;
+      if (hidden > 0) needsHtml += '<div class="ui-more"><button type="button" data-action="nav" data-view="inbox">' + hidden + " more in the inbox</button></div>";
+    } else if (updates) {
+      needsHtml += '<div class="ui-more"><button type="button" data-action="nav" data-view="inbox">' + updates + " update" + (updates === 1 ? "" : "s") + " in the inbox</button></div>";
+    }
 
-    // Working now
+    var reqs = ((AI.requirements && AI.requirements.requirements) || []).filter(function (r) { return r.state !== "ready"; });
+    var setup = reqs.length
+      ? uiList([uiRow({ dot: "warn", title: "Finish setting up devd", sub: reqs.length + " thing" + (reqs.length === 1 ? "" : "s") + " to install: " + esc(reqs.slice(0, 3).map(function (r) { return r.title; }).join(", ")) + (reqs.length > 3 ? "…" : ""),
+          actions: '<button type="button" class="btn btn-mini" data-action="open-setup">Review</button>' })])
+      : "";
+
+    var projects = d.projects.length
+      ? uiList(d.projects.slice(0, 6).map(function (p) {
+        return uiRow({
+          title: esc(p.name), sub: esc((p.stack ? p.stack + " · " : "") + p.path),
+          open: 'data-action="home-open" data-path="' + attr(p.path) + '"',
+          actions: '<button type="button" class="btn btn-mini" data-action="home-open" data-path="' + attr(p.path) + '">Open</button>' + (ready ? '<button type="button" class="btn btn-mini btn-ghost" data-action="home-chat" data-path="' + attr(p.path) + '">Ask</button>' : ""),
+          hover: true
+        });
+      }))
+      : uiEmpty("No projects yet", "Create one from a stack, or point devd at a folder that already exists.",
+        '<div class="inline"><button type="button" class="btn btn-primary" data-action="nav" data-view="create">Create a project</button><button type="button" class="btn" data-action="nav" data-view="develop">Import a folder</button></div>');
+
     var live = [];
     d.threads.filter(function (t) { return t.state === "running" || t.state === "waiting_approval"; }).forEach(function (t) {
-      live.push('<div class="live"><span class="dot dot-ok"></span><span class="grow nowrap">' + esc(t.title) + '</span><span class="dim">' + (t.state === "running" ? "assistant working" : "waiting for you") + '</span><button type="button" class="btn btn-mini" data-action="open-thread" data-id="' + attr(t.id) + '">Open</button></div>');
+      live.push(uiRow({ dot: t.state === "running" ? "live" : "warn", title: esc(t.title), meta: t.state === "running" ? "assistant working" : "waiting for you",
+        actions: '<button type="button" class="btn btn-mini" data-action="open-thread" data-id="' + attr(t.id) + '">Open</button>' }));
+    });
+    (d.teamRuns || []).filter(function (t) { return ["planning", "running"].indexOf(t.state) >= 0; }).forEach(function (t) {
+      live.push(uiRow({ dot: "live", title: esc(t.title), meta: "team · " + esc(t.state),
+        actions: '<button type="button" class="btn btn-mini" data-action="team-open-from" data-id="' + attr(t.id) + '">Open</button>' }));
     });
     var svcUp = state.server.services.filter(function (x) { return x.running; });
-    if (svcUp.length) live.push('<div class="live"><span class="dot dot-ok"></span><span class="grow">' + svcUp.length + " service" + (svcUp.length === 1 ? "" : "s") + ' running</span><span class="dim nowrap">' + esc(svcUp.map(function (x) { return x.name; }).join(", ")) + '</span><button type="button" class="btn btn-mini" data-action="nav" data-view="services">Open</button></div>');
+    if (svcUp.length) live.push(uiRow({ dot: "ok", title: svcUp.length + " service" + (svcUp.length === 1 ? "" : "s") + " running", sub: esc(svcUp.map(function (x) { return x.name; }).join(", ")),
+      actions: '<button type="button" class="btn btn-mini" data-action="nav" data-view="services">Open</button>' }));
 
-    (d.teamRuns || []).filter(function (t) { return ["planning", "running", "awaiting_plan", "paused"].indexOf(t.state) >= 0; }).forEach(function (t) {
-      live.push('<div class="live"><span class="dot ' + (t.state === "running" || t.state === "planning" ? "dot-ok" : "dot-warn") + '"></span><span class="grow nowrap">' + esc(t.title) + '</span><span class="dim">team · ' + esc(RUN_WORD[t.state]) + " " + t.tasks_done + "/" + t.tasks_total + '</span><button type="button" class="btn btn-mini" data-action="team-open-from" data-id="' + attr(t.id) + '">Open</button></div>');
+    var feed = d.audit.filter(function (a) { return !a.dry_run && a.tier !== "read"; }).slice(0, 5).map(function (a) {
+      var who = a.actor.replace("human:", "").replace("agent:", "");
+      return uiRow({ dot: a.ok ? "off" : "bad", title: esc(who + (a.ok ? " ran " : " was refused ") + a.capability), meta: esc(ago(a.at)) });
     });
-    var feed = d.audit.filter(function (a) { return !a.dry_run && a.tier !== "read"; }).slice(0, 7).map(function (a) {
-      var agent = a.actor.indexOf("agent") === 0;
-      return '<div class="feed"><span class="feed-who ' + (agent ? "feed-agent" : "") + '">' + esc(a.actor.replace("human:", "").replace("agent:", "")) + '</span><span class="mono grow nowrap">' + esc(a.capability) + "</span>" +
-        (a.ok ? "" : '<span class="pill pill-bad">refused</span>') + '<span class="dim">' + esc(ago(a.at)) + "</span></div>";
-    }).join("") || '<div class="empty-inline">Nothing yet.</div>';
-
-    var quick = [
-      { v: "create", t: "Create a project", s: stackCount() ? "From " + stackCount() + " stacks" : "From a stack" },
-      { v: "develop", t: "Import a project", s: "Detect and work on it" },
-      { v: "toolchain", t: "Install tools", s: "Languages and databases" },
-      { v: "agents", t: "Give work to the team", s: "Plan, build, review" }
-    ].map(function (q) { return '<button type="button" class="quick" data-action="nav" data-view="' + q.v + '"><b>' + esc(q.t) + "</b><span>" + esc(q.s) + "</span></button>"; }).join("");
 
     el("main").innerHTML =
       '<div class="page home">' +
-      '<div class="home-head"><div><h1 class="page-title">' + greeting() + '</h1><div class="page-sub">' + new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" }) + " · " + d.projects.length + " project" + (d.projects.length === 1 ? "" : "s") + "</div></div></div>" +
-      ask +
-      '<div class="quick-row">' + quick + "</div>" +
-      '<div class="home-grid"><div class="home-col">' + needsHtml + "</div>" +
-      '<div class="home-col"><div class="section-title">Projects</div><div class="panel">' + projects + '</div>' +
-      '<div class="section-title">Working now</div><div class="panel">' + (live.join("") || '<div class="empty-inline">Nothing is running.</div>') + "</div>" +
-      '<div class="section-title">Recent activity</div><div class="panel">' + feed + "</div></div></div></div>";
+      '<div class="ui-greet"><h1 class="page-title">' + greeting() + '</h1><div class="sub">' + new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" }) + "</div></div>" +
+      ask + needsHtml + setup +
+      uiHead("Projects", d.projects.length || null, d.projects.length ? '<button type="button" class="btn btn-mini btn-ghost" data-action="nav" data-view="create">New</button>' : "") + projects +
+      (live.length ? uiHead("Working now", live.length) + uiList(live) : "") +
+      (feed.length ? uiHead("Recently", null) + uiList(feed) : "") +
+      "</div>";
+  }
+
+  function openSetupSheet() {
+    var reqs = ((AI.requirements && AI.requirements.requirements) || []).filter(function (r) { return r.state !== "ready"; });
+    uiSheet("Finish setting up devd", reqs.length ? '<div class="panel">' + reqs.map(requirementRow).join("") + "</div>" : uiEmpty("Everything devd needs is here"));
   }
 
   // ------------------------------------------------------------- providers
@@ -4428,6 +4281,7 @@
   }
 
   function renderProviders() {
+    if (state.view !== "providers") return;
     if (!AI.providers) return renderLoading();
     var cards = AI.providers.map(providerCard).join("");
     var presetCards = (AI.presets || []).map(function (pr) {
@@ -4442,16 +4296,15 @@
       '<div class="empty-hint">Connect Anthropic, OpenAI, DeepSeek, Kimi, GLM, Gemini, OpenRouter, a local Ollama instance, or any OpenAI-compatible endpoint. Keys are stored privately and never returned by the API.</div>' +
       '<div class="empty-actions"><a class="btn btn-primary" href="#add-provider">Choose a provider</a></div></div></div>';
 
-    el("main").innerHTML = page("Models and providers",
-      "One place to add, test and choose the models the assistant and the agent team use. Test checks the key and lists models; Verify runs one real request and proves whether the model can call tools.",
+    var roles = AI.providers.length ? rolesPanel() : "";
+    el("main").innerHTML = page("Models", "",
       '<button type="button" class="btn" data-action="prov-discover">Find local servers</button>',
-      (cards ? '<div class="provider-list">' + cards + "</div>" : empty) +
+      (cards ? uiHead("Connected", AI.providers.length) + '<div class="provider-list">' + cards + "</div>" : empty) +
       (AI.provForm ? providerForm(AI.provForm) : "") +
       localPanel() +
-      rolesPanel() +
-      '<div class="section-title" id="add-provider">Add a provider</div>' +
-      '<div class="preset-grid">' + presetCards + "</div>" +
-      '<div class="section-title">Model catalogue</div>' + modelPanels());
+      (roles ? '<details class="ui-fold"><summary>Which model does which work</summary>' + roles + "</details>" : "") +
+      uiHead("Add a provider", null) + '<div class="preset-grid" id="add-provider">' + presetCards + "</div>" +
+      '<details class="ui-fold"><summary>Model catalogue</summary>' + modelPanels() + "</details>");
   }
 
   // --------------------------------------------------------------- assistant
@@ -4740,6 +4593,7 @@
   }
 
   function renderAssistant() {
+    if (state.view !== "assistant") return;
     if (!AI.threads) return renderLoading();
     var ready = (AI.providers || []).some(function (p) { return p.enabled && (p.has_key || !p.needs_key); });
     var projOpts = '<option value="">No project</option>' + state.projects.map(function (p) { return '<option value="' + attr(p.path) + '"' + (AI.project === p.path ? " selected" : "") + ">" + esc(p.name || dirName(p.path)) + "</option>"; }).join("") +
@@ -4833,6 +4687,7 @@
   }
 
   function renderTeam() {
+    if (state.view !== "team") return;
     if (!TEAM.runs) return renderLoading();
     var ready = (AI.providers || []).some(function (p) { return p.enabled && (p.has_key || !p.needs_key); });
     var projOpts = '<option value="">Choose a project…</option>' + state.projects.map(function (p) { return '<option value="' + attr(p.path) + '"' + (TEAM.form.project === p.path ? " selected" : "") + ">" + esc(p.name || dirName(p.path)) + "</option>"; }).join("") + '<option value="__new"' + (TEAM.form.project === "__new" ? " selected" : "") + ">A new project…</option>";
@@ -4918,7 +4773,7 @@
       }
       return '<div class="feed"><span class="dim mono">' + esc(ago(e.at)) + '</span><span class="grow">' + esc(text) + "</span></div>";
     }).join("");
-    var summary = r.summary ? '<div class="section-title">Result</div><div class="panel"><div class="panel-body ask-body">' + md(r.summary) + "</div></div>" : "";
+    var summary = r.summary ? '<div class="team-result"><div class="ui-row-title">Result</div><div class="ui-row-sub wrap">' + esc(uiSummary(r.summary, 260)) + '</div><button type="button" class="btn btn-mini" data-action="team-report" data-id="' + attr(r.id) + '">Read the full report</button></div>' : "";
     var say = ["done", "failed", "cancelled"].indexOf(r.state) < 0 ? '<div class="composer"><div class="inline"><input class="input grow" id="team-say" placeholder="Tell the team something new (new requirement, a correction)…"><button type="button" class="btn btn-primary" data-action="team-say" data-id="' + attr(r.id) + '">Send</button></div></div>' : "";
     return head + '<div class="team-scroll">' + note + approvals + (summary) + '<div class="section-title" style="margin:16px 16px 8px">Tasks <span class="count">' + work.length + "</span></div>" + '<div class="tlist">' + cards + "</div>" + '<div class="section-title" style="margin:16px 16px 8px">Log</div><div class="panel" style="margin:0 16px 16px">' + (log || '<div class="empty-inline">Nothing yet.</div>') + "</div></div>" + say;
   }
@@ -4934,18 +4789,78 @@
   }
 
   function renderInbox() {
+    if (state.view !== "inbox") return;
     if (!AI.requests) return renderLoading();
-    var a = AI.requests.map(function (r) { return approvalCard(r, false); }).join("");
-    var m = AI.inbox.map(messageCard).join("");
-    var hist = AI.history.requests.map(function (r) {
-      return '<div class="feed"><span class="pill ' + (r.state === "approved" ? "pill-ok" : r.state === "failed" ? "pill-bad" : "") + '">' + esc(r.state) + '</span><span class="mono grow nowrap">' + esc(r.capability) + '</span><span class="dim">' + esc(r.actor.replace("agent:", "")) + " · " + esc(ago(r.decided_at || r.created_at)) + "</span></div>";
-    }).join("") + AI.history.messages.map(function (x) {
-      return '<div class="feed"><span class="pill">answered</span><span class="grow nowrap">' + esc(x.subject) + '</span><span class="dim">' + esc(x.reply ? "“" + x.reply + "”" : "read") + "</span></div>";
-    }).join("");
-    el("main").innerHTML = page("Inbox", "", "",
-      '<div class="section-title">Waiting for your approval <span class="count">' + AI.requests.length + "</span></div>" + (a || '<div class="calm"><span class="health-dot"></span><div>Nothing to approve.</div></div>') +
-      '<div class="section-title">Messages from agents <span class="count">' + AI.inbox.length + "</span></div>" + (m || '<div class="calm"><span class="health-dot"></span><div>No messages.</div></div>') +
-      '<div class="section-title">Recently decided</div><div class="panel">' + (hist || '<div class="empty-inline">Nothing yet.</div>') + "</div>");
+    var needs = [];
+    AI.requests.forEach(function (r) {
+      var title = (r.plan && r.plan.summary) || ("Run " + r.capability);
+      needs.push(uiRow({
+        accent: true, dot: "warn",
+        title: esc(title),
+        sub: esc(r.actor.replace("agent:", "") + " asks to use " + r.capability),
+        meta: esc(ago(r.created_at)),
+        open: 'data-action="open-approval" data-id="' + attr(r.id) + '"',
+        actions: '<button type="button" class="btn btn-go btn-mini" data-action="req-decide" data-id="' + attr(r.id) + '" data-approve="1">Approve</button>' +
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="req-decide" data-id="' + attr(r.id) + '" data-approve="0">Decline</button>'
+      }));
+    });
+    var updates = [];
+    AI.inbox.forEach(function (m) {
+      var who = m.from_actor.replace("agent:", "").replace("devd-", "");
+      if (m.needs_reply) {
+        needs.push(uiRow({
+          accent: true, dot: "warn",
+          title: esc(m.subject), sub: esc(uiSummary(m.body, 170)), wrap: true,
+          meta: esc(who + " · " + ago(m.created_at)),
+          open: 'data-action="open-message" data-id="' + attr(m.id) + '"',
+          actions: '<button type="button" class="btn btn-primary btn-mini" data-action="open-message" data-id="' + attr(m.id) + '">Answer</button>'
+        }));
+      } else {
+        updates.push(uiRow({
+          dot: "ok", title: esc(m.subject), sub: esc(uiSummary(m.body)),
+          meta: esc(who + " · " + ago(m.created_at)),
+          open: 'data-action="open-message" data-id="' + attr(m.id) + '"',
+          actions: '<button type="button" class="btn btn-mini btn-ghost" data-action="inbox-reply" data-id="' + attr(m.id) + '" data-resolve="1">Dismiss</button>',
+          hover: true
+        }));
+      }
+    });
+    var earlier = AI.history.requests.map(function (r) {
+      return uiRow({ dot: r.state === "approved" ? "ok" : r.state === "failed" ? "bad" : "off", title: esc(r.capability), sub: esc(r.state), meta: esc(ago(r.decided_at || r.created_at)), mono: true });
+    }).concat(AI.history.messages.map(function (x) {
+      return uiRow({ dot: "off", title: esc(x.subject), sub: esc(x.reply ? "You answered: " + x.reply : "Read") });
+    }));
+    var body = "";
+    if (needs.length) body += uiHead("Needs you", needs.length) + uiList(needs);
+    if (updates.length) body += uiHead("Updates", updates.length) + uiList(updates);
+    if (!needs.length && !updates.length) body += uiEmpty("You're caught up", "Questions and approvals from agents show up here.");
+    if (earlier.length) body += uiHead("Earlier", null) + uiList(earlier.slice(0, 8));
+    el("main").innerHTML = page("Inbox", "", "", body);
+  }
+
+  function openMessageSheet(id) {
+    var m = AI.inbox.filter(function (x) { return x.id === id; })[0];
+    if (!m) return;
+    var who = m.from_actor.replace("agent:", "");
+    uiSheet(m.subject,
+      '<div class="ui-quiet">' + esc(who) + " · " + esc(ago(m.created_at)) + "</div>" +
+      "<div>" + uiBody(m.body) + "</div>" +
+      (m.needs_reply
+        ? '<div class="inline"><input class="input grow" id="reply-' + attr(m.id) + '" placeholder="Your answer"><button type="button" class="btn btn-primary" data-action="inbox-reply" data-id="' + attr(m.id) + '">Send</button></div>'
+        : '<div class="ui-actions"><button type="button" class="btn" data-action="inbox-reply" data-id="' + attr(m.id) + '" data-resolve="1">Mark as read</button></div>'));
+  }
+
+  function openApprovalSheet(id) {
+    var r = AI.requests.filter(function (x) { return x.id === id; })[0];
+    if (!r) return;
+    var steps = (r.plan && r.plan.steps || []).map(function (x) { return "<li>" + esc(x) + "</li>"; }).join("");
+    var effects = (r.plan && r.plan.effects || []).map(function (x) { return '<li class="warn-text">' + esc(x) + "</li>"; }).join("");
+    uiSheet((r.plan && r.plan.summary) || r.capability,
+      '<div class="ui-quiet">' + esc(r.actor.replace("agent:", "")) + " · " + esc(ago(r.created_at)) + " · <span class=\"mono\">" + esc(r.capability) + "</span></div>" +
+      (steps || effects ? "<h3>What will happen</h3><ul class=\"ask-steps\">" + steps + effects + "</ul>" : "") +
+      '<h3>Arguments</h3><pre class="log-block">' + esc(JSON.stringify(r.args, null, 2)) + "</pre>" +
+      '<div class="ui-actions"><button type="button" class="btn btn-go" data-action="req-decide" data-id="' + attr(r.id) + '" data-approve="1">Approve and run</button>' +
+      '<button type="button" class="btn btn-danger" data-action="req-decide" data-id="' + attr(r.id) + '" data-approve="0">Decline</button></div>');
   }
 
   // ------------------------------------------------------------------- refresh
@@ -5193,6 +5108,7 @@
   }
 
   function renderStudio() {
+    if (state.view !== "studio") return;
     el("main").innerHTML = page("Studio", "", "", studioTabs() + (STUDIO.tab === "memory" ? renderMemoryTab() : renderReviewTab()));
   }
 
@@ -5850,6 +5766,7 @@
     },
     "step-toggle": function (n) { AI.openSteps[n.dataset.id] = !AI.openSteps[n.dataset.id]; paintChat(); },
     "req-decide": function (n) {
+      closeDrawer();
       var approve = n.dataset.approve === "1";
       n.disabled = true;
       run("approval.decide", { id: n.dataset.id, approve: approve }).then(function () {
@@ -5861,6 +5778,7 @@
       });
     },
     "inbox-reply": function (n) {
+      closeDrawer();
       var inp = el("reply-" + n.dataset.id);
       var args = { id: n.dataset.id };
       if (inp) { if (!inp.value.trim()) return toast("warn", "Write an answer first"); args.reply = inp.value.trim(); }
@@ -6030,6 +5948,12 @@
       window.open("https://skills.sh", "_blank", "noopener");
     },
     "close-drawer": function () { closeDrawer(); },
+    "open-audit": function (n) { openAuditSheet(n.dataset.at, n.dataset.cap); },
+    "audit-filter": function (n) { state.auditFilter = n.dataset.filter; state.auditPage = 0; render(); },
+    "team-report": function (n) { var d = TEAM.data; if (d && d.run && d.run.id === n.dataset.id) uiSheet(d.run.title, uiBody(d.run.summary)); },
+    "open-setup": function () { openSetupSheet(); },
+    "open-message": function (n) { openMessageSheet(n.dataset.id); },
+    "open-approval": function (n) { openApprovalSheet(n.dataset.id); },
     "filter-clear": function (n) {
       var key = n.dataset.key;
       if (!key) return;
