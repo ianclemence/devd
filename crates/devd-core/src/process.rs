@@ -25,6 +25,11 @@ use serde::Serialize;
 use crate::error::{DevdError, Result};
 use crate::util;
 
+// devd targets Windows, Linux and macOS. Saying so here is better than a pid
+// lookup that quietly answers "nothing" on a platform nobody has tried.
+#[cfg(not(any(windows, unix)))]
+compile_error!("devd supports Windows, Linux and macOS");
+
 /// Windows process queries.
 ///
 /// `tasklist` is the portable answer, but it starts a process per call - about
@@ -401,10 +406,6 @@ pub fn kill_tree(pid: u32) {
             libc_kill(-pid_i, 9);
         }
     }
-    #[cfg(not(any(windows, unix)))]
-    {
-        let _ = pid;
-    }
 }
 
 #[cfg(unix)]
@@ -461,10 +462,9 @@ pub fn process_image(pid: u32) -> Option<String> {
             }
         }
     }
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_os = "macos")))]
     {
-        let path = format!("/proc/{pid}/comm");
-        let text = std::fs::read_to_string(path).ok()?;
+        let text = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
         let name = text.trim().to_string();
         if name.is_empty() {
             None
@@ -472,10 +472,25 @@ pub fn process_image(pid: u32) -> Option<String> {
             Some(name)
         }
     }
-    #[cfg(not(any(windows, unix)))]
+    // macOS has no /proc; `ps` names the process.
+    #[cfg(target_os = "macos")]
     {
-        let _ = pid;
-        None
+        let ps = util::which("ps")?;
+        let out = util::run(
+            &ps,
+            &["-p".to_string(), pid.to_string(), "-o".to_string(), "comm=".to_string()],
+            None,
+            &[],
+            Some(std::time::Duration::from_secs(5)),
+        )
+        .ok()?;
+        let path = out.stdout.trim();
+        let name = path.rsplit('/').next().unwrap_or(path);
+        if name.is_empty() {
+            None
+        } else {
+            Some(name.to_string())
+        }
     }
 }
 
@@ -500,13 +515,11 @@ pub fn pid_alive(pid: u32) -> bool {
             ok != 0 && code == win::STILL_ACTIVE
         }
     }
+    // Signal 0 sends nothing and reports whether the process exists. It works
+    // on every Unix, which /proc does not (macOS has none).
     #[cfg(unix)]
     {
-        std::path::Path::new(&format!("/proc/{pid}")).exists()
-    }
-    #[cfg(not(any(windows, unix)))]
-    {
-        false
+        unsafe { libc_kill(pid as i32, 0) == 0 }
     }
 }
 
