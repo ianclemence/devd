@@ -20,3 +20,6 @@ devd-workspace = { path = "../devd-workspace" }
 
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+[lints]
+workspace = true

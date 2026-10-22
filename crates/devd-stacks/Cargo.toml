@@ -16,3 +16,6 @@ devd-runtime = { path = "../devd-runtime" }
 
 [dev-dependencies]
 tempfile.workspace = true
+
+[lints]
+workspace = true

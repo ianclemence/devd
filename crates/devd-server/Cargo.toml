@@ -27,3 +27,6 @@ url = "2"
 [dev-dependencies]
 tower = { workspace = true }
 tempfile = { workspace = true }
+
+[lints]
+workspace = true

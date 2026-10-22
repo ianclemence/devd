@@ -23,3 +23,6 @@ webpki-roots = "0.26"
 
 [dev-dependencies]
 tempfile.workspace = true
+
+[lints]
+workspace = true

@@ -34,3 +34,6 @@ rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "t
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+
+[lints]
+workspace = true

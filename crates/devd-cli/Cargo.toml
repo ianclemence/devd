@@ -35,3 +35,6 @@ open = { workspace = true }
 # Embeds the devd icon in the executable on Windows, so it does not show the
 # default application icon in Explorer or on the taskbar.
 embed-resource = "3"
+
+[lints]
+workspace = true

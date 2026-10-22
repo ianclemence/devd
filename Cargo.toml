@@ -48,6 +48,12 @@ time = "0.3"
 
 devd-core = { path = "crates/devd-core" }
 
+[workspace.lints.rust]
+# A warning is a decision nobody made. These fail the build instead of printing:
+# dead code, unused imports and variables, and unused results. Suppressing one
+# with #[allow] has to be done where a reviewer will see it.
+unused = { level = "deny", priority = -1 }
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

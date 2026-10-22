@@ -1,0 +1,45 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Builds and tests on every platform devd targets. A warning fails the build (the
+# workspace lints in Cargo.toml deny unused code), so nothing here needs a flag.
+# RUSTFLAGS is deliberately not set: it would replace the linker settings in
+# .cargo/config.toml.
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Windows is the GNU toolchain: that is the target the project links
+          # with rust-lld, and the one its installer is built from.
+          - os: windows-latest
+            toolchain: stable-x86_64-pc-windows-gnu
+          - os: ubuntu-latest
+            toolchain: stable
+          - os: macos-latest
+            toolchain: stable
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install "${{ matrix.toolchain }}" --profile minimal
+          rustup default "${{ matrix.toolchain }}"
+          rustc -vV
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --workspace --exclude devd-desktop --all-targets
+      - name: Test
+        run: cargo test --workspace --exclude devd-desktop
+      # The desktop shell links each platform's web view, so it is built only
+      # where the project ships it.
+      - name: Build the desktop shell
+        if: runner.os == 'Windows'
+        run: cargo build -p devd-desktop
