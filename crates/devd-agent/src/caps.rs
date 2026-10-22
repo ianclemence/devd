@@ -189,7 +189,7 @@ fn home_dir() -> std::path::PathBuf {
 /// Hand one piece of work to one member of the team.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct TeamAssign {
-    /// Which member: planner, architect, researcher, implementer, qa, reviewer, infra, docs.
+    /// Which member, by role id: see team.roles (planner, product, designer, architect, implementer, frontend, backend, mobile, data, qa, reviewer, security, infra, researcher, docs).
     member: String,
     /// What they have to do.
     instructions: String,
@@ -648,7 +648,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             })?;
         let t = team.clone();
         add::<TeamAssign, _, _>(reg, "team.assign", "Hand one piece of work to one member of the team",
-            "Gives one task to one named member of devd's own team - the planner, the architect, the researcher, an implementer, QA, the reviewer, infrastructure or docs - and starts them on it now. Use this when the person has already said who should do the work. The member works in their own copy of the project when their role works in one, and the task is only accepted when the tool results prove it: a member saying it is done is not proof.",
+            "Gives one task to one named member of devd's own team - the product manager, the designer, a frontend, backend, mobile or data engineer, QA, the security engineer, the architect, and so on (team.roles lists them) - and starts them on it now. Use this when the person has already said who should do the work. The member works in their own copy of the project when their role works in one, and the task is only accepted when the tool results prove it: a member saying it is done is not proof.",
             Tier::Exec, Effect::Process, true, false,
             |_, a| simple("team.assign", format!("give {} the work: {}", a.member, util::truncate(&a.instructions, 60))),
             move |ctx, a| {
@@ -687,9 +687,9 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
         Tier::Read, Effect::Read, true, false,
         |_, _| simple("team.roles", "list roles"),        |ctx, _| {
             let assigned = ctx.store.list_role_models()?;
-            let rows: Vec<Value> = roles::ROLES.iter().map(|r| {
+            let rows: Vec<Value> = roles::all().iter().map(|r| {
                 let m: Vec<Value> = assigned.iter().filter(|a| a.scope.is_empty() && (a.role == r.id)).map(|a| json!({ "provider": a.provider_id, "model": a.model })).collect();
-                json!({ "id": r.id, "title": r.title, "summary": r.summary, "writes_files": r.writes, "max_tier": match r.max_rank { 0 => "read", 1 => "write", 2 => "exec", _ => "admin (approval)" },
+                json!({ "id": r.id, "title": r.title, "team": r.team, "summary": r.summary, "skills": r.skills, "writes_files": r.writes, "max_tier": match r.max_rank { 0 => "read", 1 => "write", 2 => "exec", _ => "admin (approval)" },
                     "works_in_own_copy": r.isolated,
                     "must_prove": { "change": r.needs.change, "verify": r.needs.verify, "read": r.needs.read, "command": r.needs.command },
                     "models": m })
@@ -835,7 +835,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                 json!({ "role": a.role, "scope": a.scope, "position": a.position, "provider": a.provider_id, "model": a.model, "status": status })
             }).collect();
             let mut names = vec!["default"];
-            names.extend(roles::ROLES.iter().map(|r| r.id));
+            names.extend(roles::all().iter().map(|r| r.id));
             Ok(Outcome::with_data(format!("{} assignment(s)", rows.len()), json!({ "roles": names, "assignments": rows })))
         })?;
     add::<AssignModels, _, _>(reg, "models.assign", "Choose models for a kind of work", "Sets the first choice and fallbacks for a role, everywhere or for one project. Fallbacks are used only when the first choice fails, and never include a provider you did not list. Empty list clears it. Human only.",

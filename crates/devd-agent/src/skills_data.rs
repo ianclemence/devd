@@ -57,4 +57,13 @@ pub const BUILTIN: &[(&str, &str)] = &[
     ("unslop", include_str!("../skills/unslop.md")),
     ("why", include_str!("../skills/why.md")),
     ("work", include_str!("../skills/work.md")),
+    ("product-requirements", include_str!("../skills/product-requirements.md")),
+    ("user-stories", include_str!("../skills/user-stories.md")),
+    ("ui-design-review", include_str!("../skills/ui-design-review.md")),
+    ("accessibility-check", include_str!("../skills/accessibility-check.md")),
+    ("api-design", include_str!("../skills/api-design.md")),
+    ("database-migrations", include_str!("../skills/database-migrations.md")),
+    ("threat-model", include_str!("../skills/threat-model.md")),
+    ("secure-coding-review", include_str!("../skills/secure-coding-review.md")),
+    ("mobile-release-checklist", include_str!("../skills/mobile-release-checklist.md")),
 ];

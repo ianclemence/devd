@@ -83,11 +83,31 @@ goal -> planner -> [you approve the plan] -> scheduler -> specialists -> final v
   (excluded locally from git). Without git, or without a commit, writers run one
   at a time. Accepted branches are committed and merged with `--no-ff`; a dirty
   project or a conflict blocks the task and changes nothing.
-* **Specialists** are conversations with a role prompt, a tier ceiling
-  (`devd-agent::roles`), a working directory they cannot leave (paths outside it
-  are refused), and a model chosen by role. Planner, architect and researcher
-  change nothing; the reviewer reads and runs checks but writes nothing; only the
-  implementer, QA and docs roles write files.
+* **Specialists** are the members of devd's own team, a small startup in a
+  folder. Each is a conversation with a role prompt, a tier ceiling, a working
+  directory they cannot leave (paths outside it are refused), a model chosen by
+  role, and a loadout of skills. The roster (`team.roles`):
+
+  | Part of the company | Members |
+  |---|---|
+  | Leadership | planner, product manager |
+  | Design | designer |
+  | Engineering | architect, implementer, frontend, backend, mobile, data |
+  | Quality and security | QA, reviewer, security engineer |
+  | Operations | infrastructure |
+  | Knowledge | researcher, docs |
+
+  Planner, product, architect and researcher plan or write documents and change
+  no code; the reviewer and the security engineer read and run checks but write
+  nothing; the engineers and the designer change code in their own copy of the
+  project and must prove it with a check that passed.
+
+  Each role is one Markdown file in `crates/devd-agent/roles/`: the front matter
+  states the tier, whether it writes, what it must prove and which skills it
+  carries, and the body is its instructions. A test checks that every role
+  parses, that every skill it names exists, and that the permissions are
+  coherent (a role that must prove a change may change files, one that must run
+  a check may run commands, nobody may use destructive or remote operations).
 * **Evidence.** After a specialist reports, devd reads the tool results in its
   conversation. An implementer must have changed files *and* had a verification
   (a `project.run` of test, build, lint, check...) exit 0; a reviewer must have
@@ -109,7 +129,7 @@ Inbox view; all read `team.get`.
 ## Skills
 
 Skills are short Markdown instructions agents load with `skills.get` when the work
-calls for them. 55 ship with devd:
+calls for them. 64 ship with devd:
 
 * **Playbooks** - `work` (choose one), `investigate`, `fix-bug`, `build-feature`,
   `refactor`, `prototype`, `improve-performance`, `ship`, `handoff`.

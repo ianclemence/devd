@@ -25,6 +25,15 @@ use devd_core::{DevdError, Result};
 
 use crate::skills_data::BUILTIN;
 
+/// The one-line description of a built-in skill.
+pub fn builtin_description(name: &str) -> Option<String> {
+    BUILTIN
+        .iter()
+        .filter_map(|(_, raw)| parse(raw, "builtin"))
+        .find(|s| s.name == name)
+        .map(|s| s.description)
+}
+
 /// One skill.
 #[derive(Debug, Clone, Serialize)]
 pub struct Skill {
