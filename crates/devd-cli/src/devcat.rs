@@ -378,6 +378,7 @@ fn browse(app: &App, path: &str, hidden: bool) -> Result<()> {
 /// `devd project`.
 pub fn project(app: &App, cmd: ProjectCommand) -> Result<()> {    match cmd {
         ProjectCommand::Detect { path, stack } => app.invoke("project.detect", json!({ "path": abs(&path), "stack": stack })),
+        ProjectCommand::Terminal { path } => app.invoke("project.terminal", json!({ "path": abs(&path) })),
         ProjectCommand::Import { path, stack, name } => app.invoke("project.import", json!({ "path": abs(&path), "stack": stack, "name": name })),
         ProjectCommand::List => app.invoke("project.list", json!({})),
         ProjectCommand::Browse { path, hidden } => browse(app, &abs(&path), hidden),

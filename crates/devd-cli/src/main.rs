@@ -355,6 +355,11 @@ pub(crate) enum ProjectCommand {
         #[arg(long)]
         stack: Option<String>,
     },
+    /// Open a terminal in a project, with its pinned runtimes and devd first on PATH.
+    Terminal {
+        #[arg(default_value = ".")]
+        path: String,
+    },
     /// Register an existing project without changing it.
     Import {
         #[arg(default_value = ".")]

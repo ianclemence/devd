@@ -3907,7 +3907,7 @@
     if (DEV.error) return '<div class="panel"><div class="panel-body notice notice-bad">' + esc(DEV.error) + "</div></div>";
     var c = DEV.detect || DEV.ctx;
     if (!c) return '<div class="panel"><div class="panel-body empty-inline">Select a project.</div></div>';
-    var h = '<div class="panel"><div class="panel-head"><span>' + esc(c.name) + '</span><span class="panel-note mono">' + esc(c.path) + "</span></div><div class=\"panel-body\">";
+    var h = '<div class="panel"><div class="panel-head"><span>' + esc(c.name) + '</span><span class="panel-note mono">' + esc(c.path) + '</span></div><div class="panel-body"><div class="toolbar"><button type="button" class="btn btn-mini" data-action="open-terminal" data-path="' + attr(c.path) + '" title="Your terminal, in this folder, with its pinned runtimes first on PATH">Open a terminal here</button></div>';
     if (c.ambiguous) h += '<div class="notice notice-warn">' + esc(c.ambiguity) + "</div>";
     h += '<div class="kv"><dt>Stack</dt><dd>' + (c.stacks.length ? c.stacks.map(function (s, i) { return (i === 0 ? "<b>" : "") + esc(s.name) + " " + pill(s.confidence === "high" ? "ok" : "warn", s.confidence) + (i === 0 ? "</b>" : ""); }).join(" · ") : "unknown") + "</dd></div>";
     if (c.stacks.length) h += '<div class="row-sub">' + esc(c.stacks[0].evidence.join("; ")) + "</div>";
@@ -5937,6 +5937,7 @@
       }).then(function () { toast(CREATE.report.status === "ok" ? "ok" : "error", "project.init: " + CREATE.report.status); paintReview(); paintProgress(); });
     },
     "create-cancel": function () { act("stacks.cancel", { run_id: CREATE.runId }); },
+    "open-terminal": function (n) { run("project.terminal", { path: n.dataset.path }); },
     "open-develop": function (n) { DEV.path = n.dataset.path; DEV.ctx = null; DEV.detect = null; navigate("develop"); },
     "tool-install": function (n) { act("toolchain.install", { tool: n.dataset.id }).then(function () { if (state.view === "create") scheduleValidate(); }); },
     "tool-remove": function (n) { act("toolchain.remove", { tool: n.dataset.id }); },

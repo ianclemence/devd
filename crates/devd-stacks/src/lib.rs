@@ -14,6 +14,7 @@ pub mod model;
 pub mod reconcile;
 pub mod registry;
 pub mod tasks;
+pub mod terminal;
 pub mod template;
 pub mod toolchain;
 pub mod tools;

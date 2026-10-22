@@ -36,6 +36,7 @@ devd new laravel blog --stack-version 12 -o database=pgsql --pm composer --plan
 devd stacks list | show <id> | schema | matrix --markdown
 devd tools list | check <stack> | plan <tool> | install <tool> | start <service>
 devd project detect . | import . | tasks . | run . test | exec . -- php artisan route:list
+devd project terminal .             # your terminal in the folder, pinned runtimes and devd first on PATH
 ```
 
 In the window: **Create**, **Develop** and **Toolchain**. In the terminal dashboard: keys `0` (Create) and `-` (Toolchain). Over HTTP and MCP: the capabilities above, discoverable with `stacks.schema`.

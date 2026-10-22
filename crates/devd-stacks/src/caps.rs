@@ -630,6 +630,19 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         |ctx, a| exec_cmd(ctx, a, false),
     )?;
 
+    reg.define::<PathArgs>("project.terminal", "Open a terminal in a project")
+    .description("Opens the operating system's own terminal window in the project folder, with the runtimes the project is pinned to (and the devd command) first on PATH. Human only: it hands a person an interactive shell.")
+    .tier(Tier::Exec)
+    .effect(Effect::Process)
+    .human_only()
+    .handlers(
+        |_, a| Ok(Plan::new("project.terminal", format!("open a terminal in {}", a.path)).step("pinned runtimes and devd first on PATH")),
+        |ctx, a| {
+            let msg = crate::terminal::open(ctx, std::path::Path::new(&a.path))?;
+            Ok(Outcome::with_data(msg, json!({ "path": a.path })))
+        },
+    )?;
+
     reg.define::<ExecArgs>("project.exec_destructive", "Run a destructive framework command")
     .description("Like project.exec for commands that can destroy data. Always needs a human's approval; never available to agents.")
     .tier(Tier::Destructive)
