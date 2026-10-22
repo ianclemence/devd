@@ -45,5 +45,6 @@ pub mod skills_data;
 pub mod skills_install;
 pub mod team;
 pub mod templates;
+pub mod workflows;
 
 pub use chat::Hub;

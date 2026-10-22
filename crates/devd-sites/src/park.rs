@@ -1,6 +1,6 @@
 //! Parked folders: every project directory in them is a site.
 //!
-//! Laragon calls this auto virtual hosts: put a folder in `www`, and
+//! Auto virtual hosts: put a folder in `www`, and
 //! `https://<folder>.test` works. devd does the same on request. A folder is
 //! parked (the projects root always is, and `site.park` adds more), and
 //! `site.sync` makes a site of every project directory in it that does not have

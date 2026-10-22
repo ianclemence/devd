@@ -1696,6 +1696,9 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
     // ------------------------------------------------------------ health
     register_automation(reg, team.clone())?;
 
+    // ------------------------------------------------ reviews, memory, canvases
+    crate::workflows::register(reg)?;
+
     reg.define::<NoArgs>("health.status", "Operational health")
     .description("Whether devd can be relied on right now. A state (healthy, degraded, starting, setup_incomplete, unknown or critical), a headline, every component with its own state, whether devd needs it, what it means and the fix to offer, plus setup steps and what is waiting for a person. Detection is never reported as health: a service counts as healthy only after it answers.")
     .tier(Tier::Read)

@@ -912,7 +912,7 @@ pub(crate) enum ServiceCommand {
         /// Service name: `nginx`, `apache` or `mariadb`.
         name: String,
     },
-    /// Look for a service's program already on this machine (Apache from Laragon, XAMPP, WampServer).
+    /// Look for a service's program already on this machine (Apache from XAMPP, WampServer or a portable stack).
     Find {
         /// Service name: `apache`.
         name: String,
@@ -921,7 +921,7 @@ pub(crate) enum ServiceCommand {
     Adopt {
         /// Service name: `apache`.
         name: String,
-        /// The program's folder, for example `D:laragoninapachehttpd-2.4.54-win64-VS16`.
+        /// The program's folder, for example `C:\\Apache24`.
         path: String,
         /// Port it should listen on; the configured HTTP port by default.
         #[arg(long)]
@@ -1221,7 +1221,7 @@ pub(crate) enum DbCommand {
         /// Where to write it. Defaults to a timestamped file under the devd backups folder.
         #[arg(long)]
         path: Option<String>,
-        /// Dump from another server on this machine, such as Laragon's MySQL on 3306.
+        /// Dump from another server on this machine, such as a MySQL on 3306.
         #[arg(long)]
         from_port: Option<u16>,
     },
@@ -1235,7 +1235,7 @@ pub(crate) enum DbCommand {
         #[arg(long)]
         replace: bool,
     },
-    /// Copy a database from another server on this machine (Laragon's MySQL) into devd's MariaDB.
+    /// Copy a database from another server on this machine (a MySQL) into devd's MariaDB.
     Copy {
         /// Database name on the source.
         database: String,

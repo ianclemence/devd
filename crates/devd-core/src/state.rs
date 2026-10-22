@@ -1,6 +1,6 @@
 //! The authoritative state store.
 //!
-//! Laragon's source of truth is a pile of regenerated config files. `devd`
+//! A pile of regenerated config files is a poor source of truth. `devd`
 //! inverts that: **SQLite is the truth and configuration files are rendered
 //! output**. That inversion is what makes version switching, rollback, audit and
 //! agent-driven change deterministic instead of best-effort.

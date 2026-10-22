@@ -1063,16 +1063,15 @@
   // machine it runs on, and the settings behind it. Related pages share one
   // entry and appear as tabs, so the rail stays short.
   var AREA = {
-    assistant: "assistant", team: "assistant",
+    assistant: "assistant", team: "agents",
     projects: "projects", project: "projects", create: "projects", develop: "projects",
     agents: "agents", schedules: "agents", shared: "agents", skills: "agents",
     overview: "server", services: "server", sites: "server", toolchain: "server", runtimes: "server",
     preview: "server", certificates: "server", hosts: "server"
   };
   var TABS = {
-    assistant: [["assistant", "Chat"], ["team", "Team runs"]],
     projects: [["projects", "Projects"], ["create", "New project"], ["develop", "Stacks and tasks"]],
-    agents: [["agents", "Team"], ["schedules", "Schedules"], ["skills", "Skills"], ["shared", "Shared notes"]],
+    agents: [["agents", "Team"], ["team", "Runs"], ["schedules", "Schedules"], ["skills", "Skills"], ["shared", "Notes"]],
     server: [["overview", "Overview"], ["services", "Services"], ["sites", "Sites"], ["toolchain", "Tools"], ["runtimes", "Runtimes"], ["preview", "Preview"], ["certificates", "Certificates"], ["hosts", "Hosts"]]
   };
   var AREA_HOME = { assistant: "assistant", projects: "projects", agents: "agents", server: "overview" };
@@ -1092,7 +1091,7 @@
 
   var RAIL_ICON = {
     home: "i-home", inbox: "i-inbox", assistant: "i-spark", projects: "i-folder",
-    agents: "i-terminal", processes: "i-pulse", overview: "i-server", providers: "i-sliders",
+    agents: "i-team", studio: "i-layers", processes: "i-pulse", overview: "i-server", providers: "i-sliders",
     activity: "i-clock", system: "i-check-circle", capabilities: "i-code"
   };
 
@@ -1108,8 +1107,9 @@
       ] },
       { label: "Work", items: [
         { view: "assistant", label: "Assistant", count: working },
-        { view: "projects", label: "Projects", count: state.projects.length || null },
         { view: "agents", label: "Agents" },
+        { view: "projects", label: "Projects", count: state.projects.length || null },
+        { view: "studio", label: "Studio" },
         { view: "processes", label: "Processes" }
       ] },
       { label: "Run", items: [
@@ -1146,6 +1146,7 @@
       sites: "Sites",
       preview: "Preview",
       agents: "Agents",
+      studio: "Studio",
       processes: "Processes",
       shared: "Shared",
       services: "Services",
@@ -1203,7 +1204,7 @@
 
   var KNOWN_SERVICES = [
     { name: "nginx", label: "nginx", note: "web server" },
-    { name: "apache", label: "Apache", note: "web server that reads .htaccess; Laragon's works as it is", find: true, download: true },
+    { name: "apache", label: "Apache", note: "reads .htaccess; use the one you already have", find: true, download: true },
     { name: "mariadb", label: "MariaDB", note: "database" },
     { name: "redis", label: "Redis", note: "cache, queues and sessions; uses the one you already have", find: true, download: false },
     { name: "mailpit", label: "Mailpit", note: "catches the mail your applications send" },
@@ -1220,8 +1221,7 @@
     return (
       '<div class="page">' +
       '<div class="page-head"><div>' +
-      '<h1 class="page-title">' + esc(title) + "</h1>" +
-      '<div class="page-sub">' + esc(sub) + "</div></div>" +
+      '<h1 class="page-title">' + esc(title) + "</h1></div>" +
       '<div class="page-actions">' + (actions || "") + "</div>" +
       "</div>" + body + "</div>"
     );
@@ -1314,6 +1314,10 @@
   }
 
   function loadServer() {
+    // The inventory probes every installed service and port, which takes
+    // seconds. The screen does not wait for it: services, sites and runtimes
+    // are enough to draw the page, and the inventory panel appears when its
+    // answer arrives.
     return Promise.all([
       read("service.list").catch(function () { return []; }),
       read("site.list").catch(function () { return []; }),
@@ -1321,10 +1325,8 @@
       read("tls.list").catch(function () { return []; }),
       read("tls.ca.show").catch(function () { return null; }),
       read("hosts.show").catch(function () { return null; }),
-      read("tls.ca.status").catch(function () { return null; }),
-      read("services.inventory").catch(function () { return null; })
+      read("tls.ca.status").catch(function () { return null; })
     ]).then(function (r) {
-      state.server.inventory = r[7] && r[7].services ? r[7].services : [];
       state.server.services = Array.isArray(r[0]) ? r[0] : [];
       state.server.sites = Array.isArray(r[1]) ? r[1] : [];
       state.server.runtimes = Array.isArray(r[2]) ? r[2] : [];
@@ -1333,6 +1335,12 @@
       state.server.hosts = r[5];
       state.server.trust = r[6];
       state.server.loaded = true;
+      read("services.inventory")
+        .then(function (inv) {
+          state.server.inventory = inv && inv.services ? inv.services : [];
+          if (SERVER_VIEWS.indexOf(state.view) !== -1 || state.view === "home") render();
+        })
+        .catch(function () { /* the panel simply stays out of the page */ });
     });
   }
 
@@ -1460,46 +1468,15 @@
       );
     }
 
-    var hostsData = s.hosts || {};
-    var published = (hostsData.entries || []).length;
-    var pendingNames = (hostsData.adding || []).length + (hostsData.removing || []).length;
-    var hostsPanel =
-      '<div class="panel"><div class="panel-head"><span>Hosts</span>' +
-      '<span class="panel-note">' + published + " published</span></div>" +
-      '<div class="panel-body"><div class="inline"><span class="grow dim">' +
-      (pendingNames
-        ? (pendingNames === 1
-            ? "1 change is waiting to be written to the hosts file."
-            : pendingNames + " changes are waiting to be written to the hosts file.")
-        : "Everything resolves: no site needs a hosts entry.") +
-      "</span>" +
-      (pendingNames
-        ? '<button type="button" class="btn btn-mini" data-action="nav" data-view="hosts">Review</button>'
-        : "") +
-      "</div></div></div>";
-
-    var certsPanel =
-      '<div class="panel"><div class="panel-head"><span>Certificates</span>' +
-      '<span class="panel-note">' + s.certs.length + " issued</span></div>" +
-      '<div class="panel-body"><div class="inline"><span class="grow dim">' +
-      (caTrusted()
-        ? "The local authority is trusted by this user."
-        : "Trust the local authority once so browsers stop warning.") +
-      "</span>" +
-      (!caTrusted() && s.certs.length
-        ? '<button type="button" class="btn btn-mini" data-action="ca-trust" data-machine="false">Trust</button>'
-        : '<button type="button" class="btn btn-mini" data-action="nav" data-view="certificates">Manage</button>') +
-      "</div></div></div>";
-
     el("main").innerHTML = page(
       "Overview",
-      "Local services, sites and the state of this machine.",
+      "",
       '<button type="button" class="btn" data-action="nav" data-view="sites">Sites</button>' +
         '<button type="button" class="btn btn-primary" data-action="new-site">New site</button>',
       banner + stats +
         (notices.length ? '<div class="notice-stack">' + notices.join("") + "</div>" : "") +
         '<div class="overview-grid">' +
-        '<div class="overview-stack">' + sitesPanel + hostsPanel + certsPanel + "</div>" +
+        '<div class="overview-stack">' + sitesPanel + "</div>" +
         servicesPanel +
         "</div>"
     );
@@ -1619,6 +1596,10 @@
   // Services already on the machine: detected, never assumed healthy, never replaced.
   var INV_LABEL = { ready: "Ready", installed_stopped: "Installed, not running", port_conflict: "Port taken by something else", not_operational: "Not operational", limited: "Detected, limited control", missing: "Not installed" };
 
+  function managedRedis() {
+    return (state.server.services || []).some(function (x) { return x.name === "redis"; });
+  }
+
   function inventoryPanel() {
     var inv = state.server.inventory || [];
     if (!inv.length) return "";
@@ -1635,6 +1616,9 @@
         var cls = "btn btn-mini" + (recd ? " btn-primary" : o.risk === "destructive" ? " btn-danger" : "");
         return '<button type="button" class="' + cls + '" data-action="svc-option" data-tool="' + attr(v.tool) + '" data-opt="' + attr(o.action) + '" title="' + attr((o.why_not || "") + (o.risk === "approval" ? " Asks you first." : "")) + '">' + esc(o.action === "adopt" ? "Use it" : o.action === "observe" ? "Only watch" : o.action === "external" ? "Use my own instance" : o.action === "start" ? "Start" : o.action === "install" ? "Install" : o.action === "logs" ? "Logs" : o.action === "remove" ? "Remove…" : o.label) + "</button>";
       }).join("");
+      if (v.tool === "redis" && v.path && !managedRedis()) {
+        btns = '<button type="button" class="btn btn-mini btn-primary" data-action="adopt-found" data-name="redis" data-path="' + attr(v.path.replace(/[\\/][^\\/]*$/, "")) + '">Run it with devd</button>';
+      }
       var need = v.required ? '<span class="pill pill-warn" title="' + attr(v.required_by.map(function (r) { return r.project; }).join(", ")) + '">needed by ' + v.required_by.length + "</span>" : "";
       return '<div class="inv"><span class="health-dot hstate-' + (v.status === "ready" ? "healthy" : v.status === "installed_stopped" ? "degraded" : v.status === "missing" ? "setup_incomplete" : "critical") + '"></span><div class="grow">' +
         '<div class="hrow-title">' + brandImg(v.tool, "brand-dot") + esc(v.name) + ' <span class="pill ' + (tone ? "pill-" + tone : "") + '">' + esc(INV_LABEL[v.status]) + "</span> " + dec + " " + need + "</div>" +
@@ -1701,6 +1685,7 @@
     }
 
     var missing = KNOWN_SERVICES.filter(function (k) { return !byName[k.name]; })
+      .filter(function (k) { return k.name !== "redis" || !(state.server.inventory || []).some(function (v) { return v.tool === "redis" && v.path; }); })
       .filter(function (k) { return keeps(q, k.name, k.label, k.note); });
     if (missing.length) {
       body +=
@@ -1717,7 +1702,7 @@
               (k.name === "php-cgi"
                 ? '<button type="button" class="btn btn-mini" data-action="nav" data-view="runtimes">Install a PHP runtime</button>'
                 : (k.download === false ? "" : '<button type="button" class="btn btn-mini btn-primary" data-action="install-service" data-name="' + attr(k.name) + '">Install</button>') +
-                  (k.find ? '<button type="button" class="btn btn-mini" data-action="adopt-service" data-name="' + attr(k.name) + '">Use the one on this computer</button>' : "")) +
+                  (k.find ? '<button type="button" class="btn btn-mini" data-action="adopt-service" data-name="' + attr(k.name) + '">Use existing</button>' : "")) +
               "</div></div>"
             );
           })
@@ -1957,20 +1942,15 @@
   var PROOF_WORD = { change: "files changed", verify: "a check passed", read: "the code was read", command: "a command ran" };
 
   function memberCard(r) {
-    var chips = [];
-    chips.push('<span class="pill">' + esc(TIER_WORD[r.max_tier] || r.max_tier) + "</span>");
-    if (r.works_in_own_copy) chips.push('<span class="pill pill-accent" title="Its changes are made in a separate copy of the project and merged only once its work is proven">own copy of the project</span>');
+    var chips = '<span class="pill">' + esc(TIER_WORD[r.max_tier] || r.max_tier) + "</span>";
+    if (r.works_in_own_copy) chips += '<span class="pill pill-accent" title="Works in a separate copy of the project; merged only once its work is proven">own copy</span>';
     var proves = Object.keys(r.must_prove || {}).filter(function (k) { return r.must_prove[k]; }).map(function (k) { return PROOF_WORD[k]; });
-    var skills = (r.skills || []).map(function (s) { return '<span class="chip" title="A skill this member carries">' + esc(s) + "</span>"; }).join("");
-    var model = (r.models && r.models.length) ? r.models[0].model : "the default model";
+    var detail = (proves.length ? "Counts as done only when: " + proves.join(" and ") + ". " : "") + ((r.skills || []).length ? "Skills: " + r.skills.join(", ") + "." : "");
     return (
-      '<div class="panel member">' +
+      '<div class="panel member" title="' + attr(detail) + '">' +
       '<div class="member-head"><b>' + esc(r.title) + '</b><span class="dim mono">@' + esc(r.id) + "</span></div>" +
       '<div class="member-summary">' + esc(r.summary) + "</div>" +
-      '<div class="member-chips">' + chips.join("") + "</div>" +
-      (proves.length ? '<div class="row-sub">Counts as done only when: ' + esc(proves.join(" and ")) + "</div>" : "") +
-      (skills ? '<div class="member-skills">' + skills + "</div>" : "") +
-      '<div class="member-foot"><span class="dim">' + esc(model) + '</span><span class="grow"></span>' +
+      '<div class="member-foot"><span class="member-chips">' + chips + '</span><span class="grow"></span>' +
       '<button type="button" class="btn btn-mini btn-primary" data-action="member-assign" data-id="' + attr(r.id) + '">Give work</button></div>' +
       "</div>"
     );
@@ -1992,9 +1972,8 @@
       : '<div class="panel"><div class="empty"><div class="empty-title">The team is not available</div><div>team.roles did not answer.</div></div></div>';
     el("main").innerHTML = page(
       "Agents",
-      "devd's own team. Each member has one job, its own permissions, skills that say how to work, and a check it must pass before its work counts.",
-      '<button type="button" class="btn" data-action="nav" data-view="team">Team runs</button>' +
-        '<button type="button" class="btn btn-primary" data-action="nav" data-view="assistant">Describe a goal</button>',
+      "",
+      '<button type="button" class="btn btn-primary" data-action="nav" data-view="team">Give the team a goal</button>',
       body
     );
   }
@@ -2032,6 +2011,23 @@
   }
 
   // ----------------------------------------------------------------- processes
+
+  /* The project folders a person can choose from. The projects devd knows
+     come first; the projects folder itself is offered last so a new folder
+     can be picked without registering it first. */
+  function cwdChoices() {
+    var out = [];
+    (state.projects || []).forEach(function (p) {
+      if (!p || !p.path) return;
+      if (out.some(function (x) { return x.path === p.path; })) return;
+      out.push({ label: p.name || dirName(p.path), path: p.path });
+    });
+    var www = state.session && state.session.paths ? state.session.paths.www : null;
+    if (www && !out.some(function (x) { return x.path === www; })) {
+      out.push({ label: "devd projects folder", path: www });
+    }
+    return out;
+  }
 
   function processProject() {
     if (state.processes.project) return state.processes.project;
@@ -2080,23 +2076,18 @@
       loadProcesses().then(renderProcesses);
     }
     if (p.loading && !p.plan) {
-      el("main").innerHTML = page("Processes", "Supervised project processes from devd.yml.", "", '<div class="loading">Loading…</div>');
+      el("main").innerHTML = page("Processes", "", "", '<div class="loading">Loading…</div>');
       return;
     }
 
     var select = '<div class="panel"><div class="panel-head"><span>Project manifest</span></div><div class="panel-body">' +
       '<select class="select mono" id="process-project">' + (projectOptions(project) || '<option value="">No projects</option>') + "</select>" +
-      '<div class="row-sub" style="margin-top:8px">devd reads <span class="mono">devd.yml</span> from the project root. Nothing runs until you review and approve the exact commands.</div></div></div>';
+      '</div></div>';
 
     if (!project || (p.error && !p.plan)) {
-      el("main").innerHTML = page("Processes", "Supervised project processes from devd.yml.", "", select +
-        '<div class="panel"><div class="empty"><div class="empty-title">No manifest to run</div>' +
-        "<div>" + esc(p.error || "Choose a project that contains devd.yml.") + "</div>" +
-        '<div class="empty-actions"></div></div>' +
-        '<div class="example"><div class="section-title">An example devd.yml</div>' +
-        '<pre class="log-pre">version: 1\nproject:\n  name: example-app\nprocesses:\n  web:\n    command: ["npm", "run", "dev"]\n    working_dir: "."\n    health:\n      url: "http://127.0.0.1:3000/"</pre>' +
-        '<div class="row-sub">Put this in the root of the project. devd reads the manifest, shows you the exact commands, and asks before it runs anything.</div></div>' +
-        "</div>");
+      el("main").innerHTML = page("Processes", "", "", select +
+        '<div class="panel"><div class="empty"><div class="empty-title">No devd.yml here</div>' +
+        "<div>" + esc(p.error || "Choose a project that contains one.") + "</div></div></div>");
       return;
     }
 
@@ -2267,6 +2258,7 @@
    * skills published on skills.sh live - or imported from another agent that
    * already has them. */
   var SKILLS = { list: null, sources: null, tab: "installed" };
+  var STUDIO = { tab: "review", project: "", reviews: null, selected: null, memory: null, memoryOpen: null, compat: null };
 
   var SCHED = { list: null, templates: [], form: { name: "", spec: "weekdays 09:30", project: "", template: "", params: "", goal: "", done: "", waive: false } };
 
@@ -2942,42 +2934,64 @@
     var st = state.project.status;
     if (!st) return '<div class="empty">Status is unavailable for this repository.</div>';
 
+    var conflicts = (st.conflicted || []).length;
+    var staged = (st.staged || []).length;
+    var changed = (st.unstaged || []).length;
+    var untracked = (st.untracked || []).length;
+    var total = conflicts + staged + changed + untracked;
+
     var groups =
       fileGroup("Conflicted", "conflicted", st.conflicted) +
       fileGroup("Staged", "staged", st.staged) +
       fileGroup("Changed", "unstaged", st.unstaged) +
       fileGroup("Untracked", "untracked", st.untracked);
 
-    if (!groups) groups = '<div class="empty"><div class="empty-title">Working tree clean</div></div>';
+    if (!groups) groups = '<div class="empty"><div class="empty-title">Working tree clean</div>' +
+      '<div class="empty-hint">Nothing to commit. New changes appear here as you work.</div></div>';
+
+    // Say what is in the tree before listing it. The counts are the actual
+    // groups below, not a second opinion about them.
+    var summary = total
+      ? '<div class="change-summary">' +
+        (conflicts ? '<span class="pill pill-bad">' + conflicts + " conflicted</span>" : "") +
+        (staged ? '<span class="pill pill-accent">' + staged + " staged</span>" : "") +
+        (changed ? '<span class="pill pill-warn">' + changed + " changed</span>" : "") +
+        (untracked ? '<span class="pill">' + untracked + " untracked</span>" : "") +
+        "</div>"
+      : "";
 
     var left =
       '<div class="panel"><div class="panel-head"><span>Working tree</span>' +
-      '<span class="panel-note">' + esc(st.branch || "(detached)") + "</span>" +
+      '<span class="panel-note">' + esc(st.branch || "(detached)") +
+      (total ? " · " + total + " file" + (total === 1 ? "" : "s") : "") + "</span>" +
       '<span class="inline right">' +
       mini("Stage all", "stage-all") +
       mini("Unstage all", "unstage-all") +
       mini("Stash changes", "stash-push") +
       "</span></div>" +
-      '<div class="panel-body flush"><div class="rows">' + groups + "</div></div></div>";
+      '<div class="panel-body flush">' + summary + '<div class="rows">' + groups + "</div></div></div>";
 
     var diffPanel =
       '<div class="panel"><div class="panel-head"><span>Diff</span>' +
-      (state.diff ? '<span class="panel-note">' + esc(state.diff.title) + "</span>" : "") +
+      (state.diff ? '<span class="panel-note mono nowrap" title="' + attr(state.diff.title) + '">' + esc(state.diff.title) + "</span>" : "") +
       "</div>" +
       (state.diff
         ? '<div class="panel-body flush">' + renderPatch(state.diff.patch, 3000) + "</div>"
-        : '<div class="empty">Select a file to see its diff</div>') +
+        : '<div class="empty"><div class="empty-title">No file selected</div><div class="empty-hint">Choose a file from the working tree to read its diff.</div></div>') +
       "</div>";
 
+    var canCommit = staged > 0;
     var commit =
       '<div class="panel"><div class="panel-head"><span>Commit</span>' +
-      '<span class="panel-note">' + st.staged.length + " staged</span></div>" +
+      '<span class="panel-note">' + staged + " staged</span></div>" +
       '<div class="panel-body"><div class="commit-box">' +
-      '<textarea class="textarea" id="commit-message" placeholder="Commit message"></textarea>' +
+      '<textarea class="textarea" id="commit-message" placeholder="' + (canCommit ? "Describe the change" : "Stage a file first") + '"' + (canCommit ? "" : " disabled") + "></textarea>" +
       '<div class="commit-row">' +
-      '<label class="check"><input type="checkbox" id="commit-amend"> Amend the last commit</label>' +
-      '<button type="button" class="btn btn-primary right" data-action="commit">Commit</button>' +
-      "</div></div></div></div>";
+      '<label class="check"><input type="checkbox" id="commit-amend"' + (canCommit ? "" : " disabled") + "> Amend the last commit</label>" +
+      '<button type="button" class="btn btn-primary" data-action="commit"' + (canCommit ? "" : " disabled") + ">Commit" + (staged ? " " + staged + " file" + (staged === 1 ? "" : "s") : "") + "</button>" +
+      "</div>" +
+      (canCommit ? "" : '<div class="row-sub">Only staged changes are committed. Stage a file to enable this.</div>') +
+      "</div></div></div>";
 
     return '<div class="columns">' + left + "<div>" + diffPanel + commit + "</div></div>";
   }
@@ -4092,16 +4106,24 @@
       read("approval.list", { pending_only: true }).catch(function () { return []; }),
       read("inbox.list", { open_only: true }).catch(function () { return []; }),
       read("chat.list").catch(function () { return []; }),
-      read("task.list").catch(function () { return []; }),
       read("provider.list").catch(function () { return []; }),
       read("team.list").catch(function () { return []; }),
       request("/api/audit?limit=40").then(function (r) { return r.ok ? r.body.items || [] : []; }),
       read("setup.requirements").catch(function () { return null; }),
       state.server.loaded ? Promise.resolve() : loadServer()
     ]).then(function (r) {
-      AI.home = { projects: r[1], approvals: r[2], inbox: r[3], threads: r[4], tasks: r[5], providers: r[6], teamRuns: r[7], audit: r[8], requirements: r[9] };
-      AI.providers = r[6];
-      AI.requirements = r[9];
+      AI.home = {
+        projects: r[1] || [],
+        approvals: r[2] || [],
+        inbox: r[3] || [],
+        threads: r[4] || [],
+        providers: r[5] || [],
+        teamRuns: r[6] || [],
+        audit: r[7] || [],
+        requirements: r[8]
+      };
+      AI.providers = r[5] || [];
+      AI.requirements = r[8];
     });
   }
 
@@ -4167,7 +4189,7 @@
 
   function renderHome() {
     var d = AI.home;
-    if (!d) return renderLoading();
+    if (!d) return renderLoading("Reading projects, approvals and the services on this machine.");
     var h = AI.health || { level: "checking", checks: [], headline: "" };
     var hasProvider = d.providers.some(function (p) { return p.enabled; });
     var ready = d.providers.some(function (p) { return p.enabled && p.has_key; }) || d.providers.some(function (p) { return p.enabled && !p.needs_key; });
@@ -4215,9 +4237,6 @@
     var live = [];
     d.threads.filter(function (t) { return t.state === "running" || t.state === "waiting_approval"; }).forEach(function (t) {
       live.push('<div class="live"><span class="dot dot-ok"></span><span class="grow nowrap">' + esc(t.title) + '</span><span class="dim">' + (t.state === "running" ? "assistant working" : "waiting for you") + '</span><button type="button" class="btn btn-mini" data-action="open-thread" data-id="' + attr(t.id) + '">Open</button></div>');
-    });
-    d.tasks.filter(function (t) { return t.running; }).forEach(function (t) {
-      live.push('<div class="live"><span class="dot dot-ok"></span><span class="grow nowrap mono">' + esc(t.name) + '</span><span class="dim">background task</span><button type="button" class="btn btn-mini" data-action="nav" data-view="develop">Open</button></div>');
     });
     var svcUp = state.server.services.filter(function (x) { return x.running; });
     if (svcUp.length) live.push('<div class="live"><span class="dot dot-ok"></span><span class="grow">' + svcUp.length + " service" + (svcUp.length === 1 ? "" : "s") + ' running</span><span class="dim nowrap">' + esc(svcUp.map(function (x) { return x.name; }).join(", ")) + '</span><button type="button" class="btn btn-mini" data-action="nav" data-view="services">Open</button></div>');
@@ -4652,8 +4671,18 @@
     if (AI.thread && (AI.thread.state === "running" || AI.running)) {
       html += '<div class="msg msg-agent"><div class="avatar" aria-hidden="true">d</div><div class="bubble typing" role="status" aria-label="devd is working"><span></span><span></span><span></span></div></div>';
     }
-    return html || '<div class="chat-wordmark"><div class="wordmark">devd</div>' +
-      '<div class="wordmark-hint">Describe a task. devd discovers what it can do, works in small steps, checks its work by running your tests, and asks you before anything risky.</div></div>';
+    return html || '<div class="chat-empty">' +
+      '<div class="empty-icon" aria-hidden="true"><svg class="icon"><use href="#i-spark"></use></svg></div>' +
+      '<div class="chat-empty-title">What should devd do?</div>' +
+      '<div class="empty-hint">Describe a task. devd discovers what it can do, works in small steps, runs your checks, and asks before anything risky.</div>' +
+      '<div class="chat-suggests">' +
+      (AI.project || (state.project && state.project.path)
+        ? '<button type="button" class="chat-suggest" data-action="chat-suggest" data-prompt="Review the uncommitted changes in this project and tell me what needs attention.">Review my changes</button>' +
+          '<button type="button" class="chat-suggest" data-action="chat-suggest" data-prompt="Run the project\'s tests and checks, then fix what actually fails.">Run the tests and fix what fails</button>' +
+          '<button type="button" class="chat-suggest" data-action="chat-suggest" data-prompt="Explain how this project is structured: the entry points, the main modules and how they connect.">Explain this project</button>'
+        : '<button type="button" class="chat-suggest" data-action="chat-suggest" data-prompt="What needs my attention right now?">What needs attention?</button>' +
+          '<button type="button" class="chat-suggest" data-action="chat-suggest" data-prompt="Help me create a new project. Ask me what I am building first.">Start a new project</button>') +
+      "</div></div>";
   }
 
   function paintChat() {
@@ -4902,7 +4931,7 @@
     }).join("") + AI.history.messages.map(function (x) {
       return '<div class="feed"><span class="pill">answered</span><span class="grow nowrap">' + esc(x.subject) + '</span><span class="dim">' + esc(x.reply ? "“" + x.reply + "”" : "read") + "</span></div>";
     }).join("");
-    el("main").innerHTML = page("Inbox", "How agents reach you. They queue operations that need your approval and leave questions here; you decide, and they carry on.", "",
+    el("main").innerHTML = page("Inbox", "", "",
       '<div class="section-title">Waiting for your approval <span class="count">' + AI.requests.length + "</span></div>" + (a || '<div class="calm"><span class="health-dot"></span><div>Nothing to approve.</div></div>') +
       '<div class="section-title">Messages from agents <span class="count">' + AI.inbox.length + "</span></div>" + (m || '<div class="calm"><span class="health-dot"></span><div>No messages.</div></div>') +
       '<div class="section-title">Recently decided</div><div class="panel">' + (hist || '<div class="empty-inline">Nothing yet.</div>') + "</div>");
@@ -4937,6 +4966,7 @@
     if (state.view === "processes") return loadProcesses().then(render);
     if (state.view === "schedules") return loadSchedules().then(render);
     if (state.view === "shared") return loadShared().then(render);
+    if (state.view === "studio") return loadStudio().then(render);
     if (state.view === "capabilities") return loadCapabilities().then(render);
     if (state.view === "activity") return loadActivity().then(render);
     if (state.view === "system") return loadSystem().then(render);
@@ -4962,6 +4992,7 @@
     skills: "/skills",
     schedules: "/schedules",
     shared: "/shared",
+    studio: "/studio",
     processes: "/processes",
     overview: "/server",
     services: "/server/services",
@@ -5035,9 +5066,137 @@
     return refresh();
   }
 
-  function renderLoading() {
+  // ------------------------------------------------------------------ studio
+
+  function studioProject() {
+    if (STUDIO.project) return STUDIO.project;
+    if (state.project && state.project.path) return state.project.path;
+    return state.projects[0] ? state.projects[0].path : "";
+  }
+
+  function loadStudio() {
+    var ready = state.projects.length ? Promise.resolve() : read("project.list").then(function (d) {
+      state.projects = Array.isArray(d) ? d : [];
+    }).catch(function () { /* the empty state explains itself */ });
+    return ready.then(function () {
+      if (STUDIO.project === "") STUDIO.project = studioProject();
+      return Promise.all([
+        read("review.list", { limit: 30 }).catch(function () { return []; }),
+        read("memory.list", { limit: 30 }).catch(function () { return []; })
+      ]).then(function (r) {
+        STUDIO.reviews = Array.isArray(r[0]) ? r[0] : [];
+        STUDIO.memory = Array.isArray(r[1]) ? r[1] : [];
+      });
+    });
+  }
+
+  function studioTabs() {
+    return '<div class="tabs">' + [["review", "Reviews"], ["memory", "Agent memory"]].map(function (t) {
+      return '<button type="button" class="tab' + (STUDIO.tab === t[0] ? " active" : "") + '" data-action="studio-tab" data-tab="' + t[0] + '">' + esc(t[1]) + "</button>";
+    }).join("") + "</div>";
+  }
+
+  function studioProjectBar(extra) {
+    var list = (state.projects || []).filter(function (p) { return p && p.path; });
+    if (!list.length) {
+      return '<div class="panel"><div class="panel-body empty-inline">No project yet. <button type="button" class="btn btn-mini btn-primary" data-action="nav" data-view="projects">Add one</button></div></div>';
+    }
+    var chosen = studioProject();
+    var options = list.map(function (p) {
+      return '<option value="' + attr(p.path) + '"' + (p.path === chosen ? " selected" : "") + ">" + esc(p.name || dirName(p.path)) + "</option>";
+    }).join("");
+    return '<div class="toolbar"><select class="select" id="studio-project" title="' + attr(chosen) + '">' + options + "</select>" +
+      '<span class="grow"></span>' + (extra || "") + "</div>";
+  }
+
+  function severityPill(sev) {
+    var s = String(sev || "").toLowerCase();
+    return '<span class="pill ' + (s === "high" ? "pill-bad" : s === "medium" ? "pill-warn" : "") + '">' + esc(s || "note") + "</span>";
+  }
+
+  function renderReviewTab() {
+    var project = studioProject();
+    var list = (STUDIO.reviews || []).filter(function (r) { return !project || r.project === project; });
+    var selected = STUDIO.selected;
+    var rows = list.map(function (r) {
+      var count = (r.findings || []).length;
+      return '<button type="button" class="note-row' + (selected && selected.id === r.id ? " active" : "") + '" data-action="studio-open-review" data-id="' + attr(r.id) + '">' +
+        '<span class="cell-strong">' + esc(r.summary || "(no summary)") + "</span>" +
+        '<span class="cell-mono">' + (count ? count + " finding" + (count === 1 ? "" : "s") : "no findings") + " · " + esc(ago(r.created_at)) + "</span></button>";
+    }).join("");
+    var detail = "";
+    if (selected) {
+      var findings = (selected.findings || []).map(function (f) {
+        return '<div class="finding"><div class="finding-head">' + severityPill(f.severity) + "<b>" + esc(f.title || "Finding") + "</b>" +
+          (f.file ? '<span class="cell-mono dim">' + esc(f.file) + (f.line ? ":" + esc(f.line) : "") + "</span>" : "") + "</div>" +
+          (f.detail ? '<div class="ask-body">' + md(f.detail) + "</div>" : "") +
+          (f.suggestion ? '<div class="row-sub">Suggestion: ' + esc(f.suggestion) + "</div>" : "") + "</div>";
+      }).join("");
+      detail = '<div class="panel"><div class="panel-head"><span>' + esc(selected.model || "Review") + '</span><span class="panel-note">' + esc(ago(selected.created_at)) + "</span>" +
+        '<button type="button" class="btn btn-mini btn-ghost" data-action="studio-delete-review" data-id="' + attr(selected.id) + '">Delete</button></div>' +
+        '<div class="panel-body stack">' + (selected.summary ? md(selected.summary) : "") +
+        (findings || '<div class="empty-inline">No findings.</div>') +
+        (selected.diff ? '<details><summary class="row-sub">The diff it read' + (selected.diff_truncated ? " (shortened)" : "") + '</summary><pre class="log-block">' + esc(selected.diff) + "</pre></details>" : "") +
+        "</div></div>";
+    }
+    return studioProjectBar('<button type="button" class="btn btn-primary" data-action="studio-review"' + (project ? "" : " disabled") + ">Review changes</button>") +
+      '<div class="note-layout"><div class="panel note-list-panel"><div class="panel-head"><span>Reviews</span><span class="panel-note">' + list.length + "</span></div>" +
+      '<div class="panel-body flush">' + (rows || '<div class="empty-inline">No reviews yet.</div>') + "</div></div>" +
+      (detail || '<div class="panel"><div class="panel-body empty-inline">Choose a review.</div></div>') + "</div>";
+  }
+
+  function renderMemoryTab() {
+    var proposals = STUDIO.memory || [];
+    var rows = proposals.map(function (p) {
+      return '<button type="button" class="note-row' + (STUDIO.memoryOpen && STUDIO.memoryOpen.id === p.id ? " active" : "") + '" data-action="studio-open-memory" data-id="' + attr(p.id) + '">' +
+        '<span class="cell-strong">' + esc(p.lesson) + '</span><span class="cell-mono">' + esc(ago(p.created_at)) + "</span></button>";
+    }).join("");
+    var open = STUDIO.memoryOpen;
+    var detail = open
+      ? '<div class="panel"><div class="panel-head"><span>' + esc(open.target || "AGENTS.md") + "</span>" +
+        '<button type="button" class="btn btn-mini btn-primary" data-action="studio-apply-memory" data-id="' + attr(open.id) + '">Apply</button></div>' +
+        '<div class="panel-body stack">' + (open.evidence ? '<div class="row-sub">Evidence: ' + esc(open.evidence) + "</div>" : "") +
+        '<pre class="log-block">' + esc(open.diff || "") + "</pre></div></div>"
+      : '<div class="panel"><div class="panel-body empty-inline">Choose a proposal to see its diff.</div></div>';
+    var c = STUDIO.compat;
+    var audit = "";
+    if (c) {
+      var files = (c.files || []).map(function (f) {
+        return "<tr><td class=\"cell-strong\">" + esc(f.path) + "</td><td>" + esc(f.owner) + "</td></tr>";
+      }).join("");
+      var issues = (c.issues || []).map(function (i) {
+        return '<div class="finding"><div class="finding-head">' + severityPill(i.severity) + "<b>" + esc(i.path || "Project") + '</b></div><div class="ask-body">' + esc(i.message) + "</div></div>";
+      }).join("");
+      audit = '<div class="panel"><div class="panel-head"><span>Instruction files</span><span class="panel-note">' + (c.files || []).length + "</span>" +
+        (c.proposal ? '<button type="button" class="btn btn-mini btn-primary" data-action="studio-compat-write">Create AGENTS.md</button>' : "") + "</div>" +
+        '<div class="panel-body stack">' + (files ? '<table class="table"><thead><tr><th>File</th><th>Read by</th></tr></thead><tbody>' + files + "</tbody></table>" : '<div class="empty-inline">No instruction file found.</div>') +
+        issues + "</div></div>";
+    }
+    return studioProjectBar('<button type="button" class="btn" data-action="studio-compat"' + (studioProject() ? "" : " disabled") + ">Audit instruction files</button>") +
+      '<div class="panel"><div class="panel-head"><span>Remember a lesson</span></div><div class="panel-body stack">' +
+      '<textarea class="input" id="studio-memory-lesson" rows="2" placeholder="One durable fact: a build command, a convention, a trap."></textarea>' +
+      '<div class="inline"><input class="input grow" id="studio-memory-evidence" placeholder="What proved it?">' +
+      '<button type="button" class="btn btn-primary" data-action="studio-propose-memory"' + (studioProject() ? "" : " disabled") + ">Propose</button></div></div></div>" +
+      '<div class="note-layout"><div class="panel note-list-panel"><div class="panel-head"><span>Proposals</span><span class="panel-note">' + proposals.length + "</span></div>" +
+      '<div class="panel-body flush">' + (rows || '<div class="empty-inline">None pending.</div>') + "</div></div>" + detail + "</div>" + audit;
+  }
+
+  function renderStudio() {
+    el("main").innerHTML = page("Studio", "", "", studioTabs() + (STUDIO.tab === "memory" ? renderMemoryTab() : renderReviewTab()));
+  }
+
+  function renderLoading(note) {
     el("main").innerHTML =
-      '<div class="page"><div class="loading">Loading…</div></div>';
+      '<div class="page"><div class="loading" role="status" aria-live="polite">Loading…</div>' +
+      (note ? '<div class="row-sub">' + esc(note) + "</div>" : "") + "</div>";
+  }
+
+  /* Reading the server means probing this machine - installed services,
+     runtimes, sites and the inventory - which takes seconds on a cold start.
+     The note says what is being waited for, so the screen is not a spinner
+     with no explanation. */
+  function renderLoadingServer() {
+    renderLoading("Checking the services, runtimes and sites on this machine.");
   }
 
   /* Tables are the one element that cannot shrink below its content. Wrapping
@@ -5062,7 +5221,7 @@
     statusbar();
     healthChip();
     if (SERVER_VIEWS.indexOf(state.view) !== -1) {
-      if (!state.server.loaded && state.view !== "toolchain") return renderLoading();
+      if (!state.server.loaded && state.view !== "toolchain") return renderLoadingServer();
       if (state.view === "overview") renderOverview();
       else if (state.view === "sites") renderSites();
       else if (state.view === "preview") renderPreview();
@@ -5083,6 +5242,7 @@
     else if (state.view === "processes") renderProcesses();
     else if (state.view === "schedules") renderSchedules();
     else if (state.view === "shared") renderShared();
+    else if (state.view === "studio") renderStudio();
     else if (state.view === "projects") renderProjects();
     else if (state.view === "project") renderProject();
     else if (state.view === "capabilities") renderCapabilities();
@@ -5404,6 +5564,99 @@
     "chat-attach": function () {
       var input = el("chat-file");
       if (input) input.click();
+    },
+
+    /* A starting point is put in the box, not sent: the person can edit it,
+       and nothing runs until they press send. */
+    "chat-suggest": function (node) {
+      var prompt = node.dataset.prompt || "";
+      AI.composer = prompt;
+      var input = el("chat-input");
+      if (input) {
+        input.value = prompt;
+        input.focus();
+        input.setSelectionRange(prompt.length, prompt.length);
+      }
+      syncComposerAction();
+    },
+
+    // --------------------------------------------------------------- studio
+    "studio-tab": function (node) {
+      STUDIO.tab = node.dataset.tab;
+      renderStudio();
+    },
+
+    "studio-review": function () {
+      var project = studioProject();
+      if (!project) return toast("warn", "Choose a project first");
+      toast("info", "Reviewing the changes. The diff goes to the model chosen for reviewers.");
+      run("review.run", { project: project }).then(function (o) {
+        if (!o) return;
+        STUDIO.selected = o.data || null;
+        return loadStudio().then(renderStudio);
+      });
+    },
+
+    "studio-open-review": function (node) {
+      read("review.get", { id: node.dataset.id }).then(function (r) {
+        STUDIO.selected = r;
+        renderStudio();
+      }).catch(function (e) { toast("error", e.message); });
+    },
+
+    "studio-delete-review": function (node) {
+      run("review.delete", { id: node.dataset.id }).then(function (o) {
+        if (!o) return;
+        STUDIO.selected = null;
+        return loadStudio().then(renderStudio);
+      });
+    },
+
+    "studio-propose-memory": function () {
+      var project = studioProject();
+      if (!project) return toast("warn", "Choose a project first");
+      var lesson = (el("studio-memory-lesson") || {}).value || "";
+      if (!lesson.trim()) return toast("warn", "Say what should be remembered");
+      run("memory.propose", { project: project, lesson: lesson.trim(), evidence: readInput("studio-memory-evidence") || null }).then(function (o) {
+        if (!o) return;
+        STUDIO.memoryOpen = o.data;
+        return loadStudio().then(renderStudio);
+      });
+    },
+
+    "studio-open-memory": function (node) {
+      var found = (STUDIO.memory || []).filter(function (p) { return p.id === node.dataset.id; })[0];
+      STUDIO.memoryOpen = found || null;
+      renderStudio();
+    },
+
+    "studio-apply-memory": function (node) {
+      run("memory.apply", { id: node.dataset.id }).then(function (o) {
+        if (!o) return;
+        STUDIO.memoryOpen = null;
+        return loadStudio().then(renderStudio);
+      });
+    },
+
+    "studio-compat": function () {
+      var project = studioProject();
+      if (!project) return toast("warn", "Choose a project first");
+      read("compat.audit", { project: project }).then(function (c) {
+        STUDIO.compat = c;
+        renderStudio();
+      }).catch(function (e) { toast("error", e.message); });
+    },
+
+    "studio-compat-write": function () {
+      var project = studioProject();
+      if (!project) return;
+      run("compat.write", { project: project }).then(function (o) {
+        if (!o) return;
+        return read("compat.audit", { project: project }).then(function (c) {
+          STUDIO.compat = c;
+          renderStudio();
+        });
+      });
     },
 
     "chat-remove-file": function (node) {
@@ -5865,6 +6118,12 @@
       act("service.install", { name: node.dataset.name, version: null });
     },
 
+    "adopt-found": function (node) {
+      if (window.confirm("Run the Redis in " + node.dataset.path + " under devd? The folder is not changed; devd writes its own configuration.")) {
+        act("service.adopt", { name: node.dataset.name, path: node.dataset.path });
+      }
+    },
+
     "adopt-service": function (node) {
       var name = node.dataset.name;
       read("service.find_local", { name: name }).then(function (found) {
@@ -6004,21 +6263,7 @@
       });
     },
 
-    "new-session": function (node) {
-      if (node.dataset.kind) newSession(node.dataset.kind);
-      else openNewSession();
-    },
-    "open-session": function (node) { openSession(node.dataset.id); },
-    "stop-session": function (node) { stopSession(node.dataset.id); },
-    "rename-session": function (node) { renameSession(node.dataset.id); },
-    "save-session-label": function (node) { saveSessionLabel(node.dataset.id); },
-    "dismiss-session": function (node) { dismissSession(node.dataset.id); },
-    "task-wait": function (node) { waitTask(node.dataset.id); },
-    "task-cancel": function (node) { cancelTask(node.dataset.id); },
-    "task-result": function (node) { resultTask(node.dataset.id); },
-
     "process-refresh": function () { loadProcesses().then(renderProcesses); },
-    "process-project": function () { },
     "approve-project": function () { approveProject(); },
     "process-start": function (node) { processAction("start", node.dataset.name, false); },
     "process-stop": function (node) { processAction("stop", node.dataset.name, false); },
@@ -6668,6 +6913,12 @@
     }
     if (event.target.dataset && event.target.dataset.action === "todo-status") {
       setTodoStatus(event.target.dataset.id, event.target.dataset.rev, event.target.value);
+    }
+    if (event.target.id === "studio-project") {
+      STUDIO.project = event.target.value;
+      STUDIO.selected = null;
+      STUDIO.compat = null;
+      loadStudio().then(renderStudio);
     }
   });
 

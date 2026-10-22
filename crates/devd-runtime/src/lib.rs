@@ -1,7 +1,7 @@
 //! Managed runtimes: PHP, Node and Go.
 //!
-//! The promise this crate implements is the one Laragon makes with a folder full
-//! of pre-bundled binaries, but without bundling them: **one command installs a
+//! The promise this crate implements is the one a folder full of pre-bundled
+//! binaries makes, but without bundling them: **one command installs a
 //! runtime, and it works**.
 //!
 //! ```text
@@ -276,8 +276,8 @@ pub fn install(
     };
     ctx.store.upsert_runtime(&runtime)?;
 
-    // A first runtime becomes the default for new sites. This is the behaviour a
-    // Laragon user expects: install PHP and sites use it, without a second step.
+    // A first runtime becomes the default for new sites. This is the behaviour
+    // people expect: install PHP and sites use it, without a second step.
     if kind == "php" && persisted_settings(ctx).primary_php.is_none() {
         set_primary_php(ctx, &chosen.version)?;
     }

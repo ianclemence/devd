@@ -246,7 +246,7 @@ fn register_service(reg: &mut Registry) -> Result<()> {
     )?;
 
     reg.define::<NameArgs>("service.find_local", "Find a service's program already on this machine")
-    .description("Looks for an Apache or Redis folder from Laragon, XAMPP, WampServer or a plain install on \
+    .description("Looks for an Apache or Redis folder from a portable stack, XAMPP, WampServer or a plain install on \
          every drive and reports each with its version. Nothing is changed; `service.adopt` uses one.")
     .group("service")
     .tier(Tier::Read)
@@ -271,7 +271,7 @@ fn register_service(reg: &mut Registry) -> Result<()> {
     )?;
 
     reg.define::<AdoptArgs>("service.adopt", "Use a program that is already on disk")
-    .description("Records an existing Apache or Redis folder (Laragon's, XAMPP's, a plain install) as devd's. \
+    .description("Records an existing Apache or Redis folder (a portable stack's, XAMPP's, a plain install) as devd's. \
          The folder is not copied or modified: devd writes its own httpd.conf and starts the program with \
          it. Human only, because the program in that folder is what devd will then run.")
     .group("service")
@@ -568,7 +568,7 @@ fn register_web(reg: &mut Registry) -> Result<()> {
     )?;
 
     reg.define::<UseWebArgs>("web.use", "Choose the web server: nginx or apache")
-    .description("Sets which web server fronts the sites. Apache reads .htaccess files, so a site written          for Laragon or shared hosting works unchanged; nginx is lighter. The choice is a setting, so it          applies the next time devd starts: stop the running server, restart devd, then bring the stack up.          The server has to be installed first. Human only.")
+    .description("Sets which web server fronts the sites. Apache reads .htaccess files, so a site written          for shared hosting or XAMPP works unchanged; nginx is lighter. The choice is a setting, so it          applies the next time devd starts: stop the running server, restart devd, then bring the stack up.          The server has to be installed first. Human only.")
     .group("web")
     .tier(Tier::Write)
     .effect(Effect::Config)
@@ -980,7 +980,7 @@ fn register_db(reg: &mut Registry) -> Result<()> {
     reg.define::<DbDumpArgs>("db.dump", "Write a database to a SQL file")
     .description("Dumps one database (tables, data, routines, triggers, events) to a .sql file. By default it is \
          devd's MariaDB, written under <devd home>/backups; from_port names another server on this machine \
-         instead, such as Laragon's MySQL. Only a person can choose where the file goes. Servers on other \
+         instead, such as a MySQL you already run. Only a person can choose where the file goes. Servers on other \
          machines are refused.")
     .group("db")
     .tier(Tier::Write)
@@ -1030,7 +1030,7 @@ fn register_db(reg: &mut Registry) -> Result<()> {
     )?;
 
     reg.define::<DbCopyArgs>("db.copy", "Copy a database from another server on this machine into devd")
-    .description("Moves a database off Laragon's MySQL (or any server on 127.0.0.1) into devd's MariaDB: dumps it \
+    .description("Moves a database off a MySQL (or any server on 127.0.0.1) into devd's MariaDB: dumps it \
          to <devd home>/backups, then restores it under the same name or as_name. The source is only read. A \
          target that already has tables is refused unless replace is true. Always needs approval.")
     .group("db")

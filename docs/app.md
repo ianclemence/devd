@@ -184,7 +184,8 @@ risk of what you are about to run.
 | Capabilities | the registry |
 | Activity | the audit table |
 | System | the shared doctor checks, paths, settings |
-| Services, sites, runtimes | reachable through the capability inspector; there are no dedicated panels yet |
+| Studio | `review.*`, `memory.*`, `compat.*` |
+| Services, sites, runtimes, certificates, hosts | the Server screen, each tab reading its own capability group |
 
 Every panel reads a real capability. There are no placeholder controls, because a
 switch that does nothing is worse than an honest empty state.

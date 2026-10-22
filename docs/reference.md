@@ -22,9 +22,9 @@ devd service available nginx
 devd service install nginx
 devd service install mariadb --port 3306
 devd service install apache       # Apache Lounge, checked against its published SHA-256 (Windows)
-devd service find apache          # Apache or Redis folders already on this machine (Laragon, XAMPP...)
-devd service adopt apache 'D:\laragon\bin\apache\httpd-2.4.54-win64-VS16'   # use one as it is
-devd service adopt redis 'D:\laragon\bin\redis\redis-x64-5.0.14.1' --port 6379
+devd service find apache          # Apache or Redis folders already on this machine (XAMPP, WampServer...)
+devd service adopt apache 'C:\Apache24'   # use one as it is
+devd service adopt redis 'C:\Redis' --port 6379
 devd service install mailpit      # mail catcher; checked against the digest GitHub records
 devd service start nginx
 devd service status nginx
@@ -60,7 +60,7 @@ devd web test                     # nginx -t or httpd -t
 devd web reload                   # nginx reloads; Apache restarts
 
 devd db dump blog                 # a SQL file under <devd home>/backups
-devd db copy blog --from-port 3306   # from Laragon's MySQL into devd's MariaDB
+devd db copy blog --from-port 3306   # from a MySQL on this machine into devd's MariaDB
 devd db restore blog ./blog.sql
 
 devd autostart enable             # run devd stack up when you sign in
@@ -154,6 +154,10 @@ graphical toolkit to keep in step. See [`docs/desktop.md`](docs/desktop.md).
 devd has its own agents: an assistant for one-off questions and a team for whole
 goals, both running through the providers you configure. See
 [`docs/agents.md`](docs/agents.md).
+
+Reviews, agent memory and instruction-file audits (`review.*`, `memory.*`, `compat.*`) are
+capabilities too, reachable from `devd call`, the HTTP API, MCP and the window's **Studio**. See
+[`docs/workflows.md`](docs/workflows.md).
 
 ## Project processes
 

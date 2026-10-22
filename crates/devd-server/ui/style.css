@@ -507,28 +507,53 @@ code, kbd, pre, samp { font-family: var(--mono); }
 }
 .subtab.active { color: var(--fg); border-bottom-color: var(--accent); }
 
+/* One page, one rhythm.
+ *
+ * Every screen is a column of blocks: the heading, then banners, toolbars,
+ * panels and grids. The gap between those blocks is owned by the page, not by
+ * each component, so a banner and a panel cannot disagree about how much air
+ * belongs between them. Components keep their internal spacing; only their
+ * outer top/bottom margins are neutralised when they are a direct child. */
 .page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
   max-width: var(--page-max);
-  padding: var(--s4) clamp(var(--s4), 3vw, var(--s6)) var(--s7);
+  padding: var(--s5) clamp(var(--s4), 3vw, var(--s6)) var(--s7);
 }
+
+/* A direct child does not contribute an outer margin: the page gap is the
+ * margin. Nested components (a panel inside a column, for instance) still use
+ * their own stacking rule. */
+.page > .page-head,
+.page > .home-head,
+.page > .banner,
+.page > .stat-grid,
+.page > .notice-stack,
+.page > .tabs,
+.page > .filter-row,
+.page > .list-bar,
+.page > .ask-box,
+.page > .quick-row { margin-bottom: 0; }
+.page > .panel + .panel,
+.page > .columns + .columns { margin-top: 0; }
 
 .page-head {
   display: flex;
   align-items: flex-start;
   gap: var(--s4);
-  margin-bottom: var(--s4);
   flex-wrap: wrap;
 }
 
 .page-title {
-  font-size: var(--text-xl);
+  font-size: 21px;
   font-weight: 650;
-  letter-spacing: -0.015em;
-  line-height: 1.25;
+  letter-spacing: -0.018em;
+  line-height: 1.2;
 }
 .page-sub {
   max-width: 76ch;
-  margin-top: 3px;
+  margin-top: var(--s1);
   color: var(--fg-mute);
   font-size: var(--text-sm);
   line-height: 1.55;
@@ -569,15 +594,6 @@ code, kbd, pre, samp { font-family: var(--mono); }
 
 /* An example is not output. It is labelled, set apart from a log, and says
    what it is for. */
-.example {
-  margin-top: var(--s3);
-  padding: var(--s3) var(--s4) var(--s4);
-  background: var(--bg-rail);
-  border: var(--hairline) solid var(--line);
-  border-radius: var(--radius-lg);
-}
-.example .section-title { margin-top: 0; }
-.example .log-pre { text-align: left; margin-bottom: var(--s2); }
 
 /* The conversation and the box share one column, so the mark above them and
    the box below it are on the same centre line. */
@@ -863,8 +879,8 @@ code, kbd, pre, samp { font-family: var(--mono); }
   align-items: center;
   justify-content: center;
   gap: 6px;
-  height: 28px;
-  padding: 0 10px;
+  height: var(--h-control);
+  padding: 0 var(--s3);
   background: var(--bg-raised);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
@@ -880,7 +896,7 @@ code, kbd, pre, samp { font-family: var(--mono); }
 .btn:disabled, .btn[disabled] { opacity: 0.45; cursor: not-allowed; }
 .btn .icon { width: 14px; height: 14px; }
 
-.btn-mini { height: 24px; padding: 0 8px; font-size: 11.5px; border-radius: var(--radius-sm); }
+.btn-mini { height: var(--h-control-sm); padding: 0 var(--s2); font-size: 11.5px; border-radius: var(--radius-sm); }
 .btn-primary { background: var(--accent-quiet); border-color: var(--accent-line); color: var(--accent-text); }
 .btn-go { background: var(--accent); border-color: var(--accent); color: #052a1c; font-weight: 600; }
 .btn-danger { background: var(--danger-quiet); border-color: var(--danger-line); color: #ffc9c9; }
@@ -1066,7 +1082,7 @@ kbd {
 .card-title { font-size: var(--text-md); font-weight: 600; }
 .card-meta { margin-top: 2px; color: var(--fg-dim); font-family: var(--mono); font-size: var(--text-xs); }
 .card-stats { display: flex; gap: var(--s2); flex-wrap: wrap; margin-top: var(--s3); }
-.card-actions { display: flex; gap: var(--s2); margin-top: var(--s3); }
+.card-actions { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s3); }
 
 /* A project card carries two controls: the card itself opens the project, and
    a small pin keeps a project at the top of the list. The pin is a view
@@ -1135,12 +1151,12 @@ kbd {
 .pager-buttons { display: flex; align-items: center; gap: var(--s2); margin-left: auto; }
 .pager-page { color: var(--fg-mute); font-size: var(--text-xs); }
 
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--s3); }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--s4); }
 .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.columns { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: var(--s3); align-items: start; }
-.columns + .columns { margin-top: var(--s3); }
-.two-col { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--s5); align-items: start; }
-.form-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: var(--s3); }
+.columns { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: var(--s4); align-items: start; }
+.columns + .columns { margin-top: var(--s4); }
+.two-col { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--s4); align-items: start; }
+.form-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: var(--s4); }
 
 .empty {
   display: flex;
@@ -1209,28 +1225,40 @@ kbd {
   display: flex;
   align-items: flex-start;
   gap: var(--s2);
-  padding: 9px var(--s3);
+  padding: var(--s2) var(--s3);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
   background: var(--bg-surface);
   color: var(--fg-mute);
   font-size: var(--text-sm);
   line-height: 1.55;
+  overflow-wrap: anywhere;
 }
+.notice > .grow { min-width: 0; }
 .notice-warn { border-color: var(--warn-line); background: var(--warn-quiet); color: #efdc9a; }
 .notice-bad { border-color: var(--danger-line); background: var(--danger-quiet); color: #ffc9c9; }
 .notice-ok { border-color: var(--ok-line); background: var(--ok-quiet); color: var(--accent-text); }
-.notice-stack { display: flex; flex-direction: column; gap: var(--s2); margin-bottom: var(--s3); }
-.notice-stack .notice { align-items: center; }
+.notice-stack { display: flex; flex-direction: column; gap: var(--s2); }
+
+/* A notice is a block in its own right. Inside a panel it needs the same
+ * breathing room as any other sibling, and two notices need a gap rather than
+ * a shared border. These rules are why a warning no longer sits flush against
+ * the definition list under it. */
+.panel-body > * + * { margin-top: var(--s3); }
+.panel-body > .kv + .kv { margin-top: var(--s2); }
+.panel-body > .row-sub { margin-top: var(--s2); }
+.panel-body:is(.two-col, .form-grid, .columns) > * + * { margin-top: 0; }
+.panel-body.flush > * + * { margin-top: 0; }
 .chat-notice { margin: var(--s3) var(--s4); }
 .hint { color: var(--fg-dim); font-size: var(--text-xs); }
 
+/* A banner is the state of the whole screen. It is deliberately a little
+ * larger than a notice, and its actions sit on the baseline of its title. */
 .banner {
   display: flex;
   align-items: center;
   gap: var(--s4);
-  margin-bottom: var(--s3);
-  padding: var(--s4);
+  padding: var(--s4) var(--s5);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: var(--bg-surface);
@@ -1238,9 +1266,9 @@ kbd {
 .banner-ok { border-color: var(--ok-line); }
 .banner-warn { border-color: var(--warn-line); }
 .banner-main { flex: 1; min-width: 0; }
-.banner-title { font-size: var(--text-lg); font-weight: 600; letter-spacing: -0.01em; }
-.banner-sub { margin-top: 2px; color: var(--fg-mute); font-size: var(--text-sm); }
-.banner-actions { display: flex; gap: var(--s2); flex-wrap: wrap; }
+.banner-title { font-size: var(--text-lg); font-weight: 600; letter-spacing: -0.01em; line-height: 1.3; }
+.banner-sub { margin-top: var(--s1); color: var(--fg-mute); font-size: var(--text-sm); line-height: 1.5; }
+.banner-actions { display: flex; gap: var(--s2); flex-wrap: wrap; flex: 0 0 auto; }
 
 /* ------------------------------------------------------------------- rows */
 
@@ -1249,8 +1277,8 @@ kbd {
   display: flex;
   align-items: center;
   gap: var(--s2);
-  min-height: 32px;
-  padding: 5px var(--s3);
+  min-height: 34px;
+  padding: var(--s1) var(--s3);
   border-bottom: 1px solid var(--line);
 }
 .row:last-child { border-bottom: 0; }
@@ -1294,7 +1322,7 @@ kbd {
   white-space: nowrap;
 }
 .table td {
-  padding: 7px 10px;
+  padding: var(--s2);
   border-bottom: 1px solid var(--line);
   vertical-align: top;
 }
@@ -1311,7 +1339,7 @@ kbd {
 /* A definition list. The label column is as wide as the widest label in that
    list, not a fixed guess: a fixed column leaves a gap the size of a word
    between "Machine" and what the machine is. */
-.kv { display: grid; grid-template-columns: minmax(72px, max-content) minmax(0, 1fr); gap: 3px var(--s3); font-size: var(--text-sm); }
+.kv { display: grid; grid-template-columns: minmax(72px, max-content) minmax(0, 1fr); gap: var(--s2) var(--s3); font-size: var(--text-sm); line-height: 1.55; }
 .kv dt { color: var(--fg-mute); }
 .kv dd { margin: 0; font-family: var(--mono); font-size: var(--text-sm); overflow-wrap: anywhere; }
 
@@ -1340,6 +1368,8 @@ kbd {
 
 .segmented {
   display: inline-flex;
+  flex-wrap: wrap;
+  max-width: 100%;
   gap: 2px;
   margin-bottom: var(--s3);
   padding: 2px;
@@ -1361,6 +1391,13 @@ kbd {
   cursor: pointer;
 }
 .seg.active { background: var(--bg-raised); color: var(--fg); }
+/* A segmented control is as wide as its buttons, even when the page is a
+ * stretching flex column. */
+.page > .segmented { align-self: flex-start; }
+
+/* A row of controls above a panel: a chooser on the left, the actions on the right. */
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); margin-bottom: var(--s3); }
+.toolbar .select { width: auto; min-width: 200px; max-width: 360px; }
 
 /* ------------------------------------------------------- diffs and logs */
 
@@ -1379,6 +1416,33 @@ kbd {
 .d-hunk { background: rgba(124, 245, 192, 0.06); color: var(--accent); }
 .d-meta { color: var(--fg-dim); }
 .d-ctx { color: var(--fg-mute); }
+
+/* The working tree is a list of groups, and each group names itself. Without
+ * this the group label was plain text glued to the first file, with the count
+ * floating at the end of the panel. */
+.file-group + .file-group { border-top: 1px solid var(--line); }
+.file-group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  min-height: 30px;
+  padding: var(--s1) var(--s3);
+  background: var(--bg-rail);
+  color: var(--fg-mute);
+  font-size: var(--text-2xs);
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+.file-group-head .right { font-family: var(--mono); font-weight: 500; letter-spacing: 0; }
+
+/* A commit is a form with one primary action: the message, then the choice
+ * that changes what the commit means, then the button. */
+.commit-box { display: flex; flex-direction: column; gap: var(--s3); }
+.commit-box .textarea { min-height: 84px; }
+.commit-row { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
+.commit-row .btn { margin-left: auto; }
+.change-summary { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; padding: var(--s2) var(--s3); border-bottom: 1px solid var(--line); }
 
 .patch-block {
   max-height: 420px;
@@ -1805,7 +1869,7 @@ button.svc { width: 100%; background: none; border: 0; border-bottom: 1px solid 
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: var(--s3);
+  gap: var(--s4);
   min-height: 0;
   padding: var(--s5) var(--s4) var(--s4);
   overflow-y: auto;
@@ -1831,20 +1895,36 @@ button.svc { width: 100%; background: none; border: 0; border-bottom: 1px solid 
 }
 .chat-empty .empty-icon { margin-bottom: 0; }
 .chat-empty-title { margin-bottom: 0; font-size: var(--text-xl); font-weight: 650; letter-spacing: -0.015em; }
+.chat-suggests { display: flex; flex-wrap: wrap; gap: var(--s2); justify-content: center; margin-top: var(--s3); }
+.chat-suggest {
+  padding: var(--s2) var(--s3);
+  background: var(--bg-surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  color: var(--fg-mute);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition: border-color var(--fast), color var(--fast), background var(--fast);
+}
+.chat-suggest:hover { border-color: var(--accent-line); color: var(--fg); background: var(--bg-raised); }
 
-.msg { display: flex; gap: 10px; max-width: var(--reading); }
+.msg { display: flex; gap: var(--s3); max-width: var(--reading); }
 .msg-agent { align-items: flex-start; }
 .msg-user { justify-content: flex-end; }
 .bubble {
   min-width: 0;
-  padding: 9px var(--s3);
+  padding: var(--s3);
   border-radius: var(--radius-lg);
   color: var(--fg);
   font-size: var(--text-md);
   line-height: 1.6;
   overflow-wrap: anywhere;
 }
-.msg-agent .bubble { background: var(--bg-surface); border: 1px solid var(--line); }
+/* The agent's answer is prose on the page, not a card. A border around every
+ * reply competes with the code and the tool steps inside it; the avatar and
+ * the reading column are enough to say who is speaking. Only the person's
+ * message is a bubble, because it is a different kind of object. */
+.msg-agent .bubble { padding: var(--s1) 0 0; background: none; border: 0; }
 /* The width cap belongs on the message, not on the bubble.
  *
  * A percentage on the bubble would be a percentage of a box whose width is
@@ -2055,6 +2135,22 @@ pre.code {
 .note-editor { display: flex; flex-direction: column; gap: var(--s2); }
 .note-editor-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); }
 .note-text { width: 100%; min-height: 260px; resize: vertical; line-height: 1.55; }
+
+/* Findings are the unit of a review, an audit or a lesson: a claim with its
+   evidence directly under it, never a floating paragraph. */
+.finding {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--s3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+}
+.finding + .finding { margin-top: var(--s2); }
+.finding-head { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2); }
+.finding-head b { font-weight: 600; }
+.finding .log-block { margin-top: var(--s1); }
 
 /* -------------------------------------------------------------- processes */
 
@@ -2310,8 +2406,8 @@ pre.code {
   .crumbs { display: none; }
   .subnav { padding: 0 var(--s3); }
   .subtab { height: 38px; }
-  .page { padding: var(--s3) var(--s3) var(--s5); }
-  .page-head { gap: var(--s2); margin-bottom: var(--s3); }
+  .page { padding: var(--s3) var(--s3) var(--s5); gap: var(--s3); }
+  .page-head { gap: var(--s2); }
   .page-sub { font-size: var(--text-xs); }
   .page-actions { margin-left: 0; width: 100%; }
   .section-title { margin-top: var(--s4); }

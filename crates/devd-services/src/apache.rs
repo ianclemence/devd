@@ -12,7 +12,7 @@
 //!
 //! The installed Apache is either one devd downloaded (Apache Lounge's Windows
 //! build, checked against the SHA-256 it publishes) or a directory a person
-//! pointed devd at, such as the one Laragon ships. The second is recorded in the
+//! pointed devd at, such as the one a portable stack ships. The second is recorded in the
 //! install manifest as `root`, and nothing in it is modified: devd writes its own
 //! configuration under its own directory and passes it with `-f`.
 
@@ -353,7 +353,7 @@ mod tests {
 
     fn render() -> Render {
         Render {
-            root: "C:/laragon/bin/apache/httpd-2.4.54-win64-VS16".into(),
+            root: "C:/stack/bin/apache/httpd-2.4.54-win64-VS16".into(),
             logs: "C:/devd/logs".into(),
             certs: "C:/devd/certs".into(),
             http: 8080,

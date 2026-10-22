@@ -1,8 +1,8 @@
 //! Moving databases: dump one to a file, restore a file into one, or copy one from
 //! another server on this machine into devd's MariaDB.
 //!
-//! The last is what a move off Laragon needs: its MySQL holds the databases, devd's
-//! MariaDB is where they are going, and a hand-typed `mysqldump | mysql` is the part
+//! The last is what a move from another local stack needs: its MySQL holds the
+//! databases, devd's MariaDB is where they are going, and a hand-typed `mysqldump | mysql` is the part
 //! nobody wants to remember. Both ends must be on this machine; a dump that can name
 //! a remote host is a way to send a database somewhere.
 //!

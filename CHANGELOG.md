@@ -14,17 +14,19 @@ may change capability identifiers where the design was wrong.
 
 ### Added
 
-- **Apache** as a web server (`web.use`, `service.install apache`, `service.adopt`). Laragon's Apache is used as it
+- **Apache** as a web server (`web.use`, `service.install apache`, `service.adopt`). An existing Apache is used as it
   is; Apache Lounge's build is installed against the SHA-256 it publishes. `.htaccess` works; PHP goes to the
   same FastCGI listeners nginx uses.
 - **Park a folder** (`site.park`, `site.sync`): every project directory becomes `<folder>.test`.
-- **Database moves** (`db.dump`, `db.restore`, `db.copy`) from Laragon's MySQL into devd's MariaDB.
+- **Database moves** (`db.dump`, `db.restore`, `db.copy`) from another MySQL on this machine into devd's MariaDB.
 - **Redis** (adopted) and **Mailpit** (downloaded, digest-checked) as managed services; PHP mail goes to Mailpit.
 - **Hosts file with a consent prompt** on Windows (`hosts.sync --elevate`) and **start with sign-in**
   (`autostart.*`).
 - **A definition of done** on team runs, judged by Jev (`judge.*`), with extra passes until it is met.
 - **Run templates** and **schedules** (`template.*`, `schedule.*`): start the team by name and on a clock.
 - **Your own roles** in `<devd home>/roles/`.
+- **Studio**: reviews of a real diff by the reviewer model (`review.*`), `AGENTS.md` changes proposed as a diff and applied only
+  by a person (`memory.*`), and an audit of the instruction files agents read (`compat.*`). See [`docs/workflows.md`](docs/workflows.md).
 - `Registry::define`: capabilities are declared with named properties instead of a twelve-argument helper.
 
 ### Changed
@@ -32,6 +34,10 @@ may change capability identifiers where the design was wrong.
 - Only the process that owns the agents recovers interrupted conversations and runs; a one-line command beside the
   application no longer restarts its live work.
 - A person who starts a run on a folder imports it as a project so the team may work there.
+- The window shares one spacing rhythm and one set of controls across every page: page blocks are spaced by the page
+  rather than by each component, panels inside a page no longer stack double margins, tables scroll instead of
+  stretching the layout, chat prose uses the reading column, and the working tree, commit box and empty states are
+  built from the same tokens as the rest of the application.
 
 ### Removed
 

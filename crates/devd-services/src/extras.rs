@@ -1,9 +1,9 @@
-//! Redis and Mailpit: the two services a PHP developer on Laragon expects beside
-//! the web server and the database.
+//! Redis and Mailpit: the two services a PHP developer expects beside the web
+//! server and the database.
 //!
 //! * **Redis** is supervised like the others. On Windows the only builds are
 //!   third-party and publish no checksum, so devd does not download one: it
-//!   adopts the folder a person already has (Laragon ships one). Elsewhere it
+//!   adopts the folder a person already has. Elsewhere it
 //!   adopts what the system's package manager installed, after checking it
 //!   against the package.
 //! * **Mailpit** catches the mail an application sends. It is downloaded from its
@@ -193,7 +193,7 @@ pub fn point_php_at_mailpit(ctx: &Ctx) -> Result<Vec<String>> {
 pub fn redis_download_refusal() -> DevdError {
     DevdError::unsupported(
         "devd does not download Redis for Windows: the available builds are third-party and publish no \
-         checksum devd could verify. Use the one you already have (Laragon ships one): \
+         checksum devd could verify. Use the one you already have: \
          `devd service find redis`, then `devd service adopt redis <folder>`",
     )
 }

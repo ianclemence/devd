@@ -13,7 +13,7 @@ devd is the local development server you would otherwise assemble by hand: a web
 - **It gives every project a name.** `blog.test`, over HTTPS, with a certificate from devd's own local authority. A Laravel app, a Next.js site, a Django API and a Rails app all sit in the same list.
 - **It serves your dev servers too.** Point a hostname at a program that is already running — `devd site create api --upstream 3000` — and a Node, Python or Rails dev server gets the same `.test` name and HTTPS.
 - **It runs the services.** PHP, nginx or Apache, MariaDB, Redis and a mail catcher are installed (or adopted from where they already are), started, health-checked and kept running. A service is "Ready" only after it has answered, not because its port is open.
-- **It replaces Laragon.** Park a folder and every project in it becomes a site; use Laragon's own Apache and Redis as they are; move a database off its MySQL with one command; start the stack when you sign in. [What carries over and what does not](docs/limitations.md).
+- **It moves you off other local stacks.** Park a folder and every project in it becomes a site; use the Apache and Redis you already have as they are; move a database off an existing MySQL with one command; start the stack when you sign in. [What carries over and what does not](docs/limitations.md).
 - **It sees what you already have.** MySQL, Redis, PostgreSQL and Docker are detected, never assumed healthy and never replaced. You decide whether devd uses them, watches them or leaves them alone.
 - **It works while you do something else.** Start the team from a template, or on a schedule: every weekday at nine, run the security review on this project.
 - **It has its own agents.** An assistant, and a team of fifteen specialists (planner, product, designer, architect, engineers, QA, security, infrastructure, docs). Give the team a goal and a definition of done: a planner proposes the work, you approve it, and specialists do it in isolated copies of the project until the evidence shows it is done.
@@ -153,6 +153,7 @@ logs/             service and session logs
 | [`docs/security.md`](docs/security.md) | The threat model and the specific protections. |
 | [`docs/app.md`](docs/app.md), [`docs/tui.md`](docs/tui.md), [`docs/mcp.md`](docs/mcp.md) | The window and its API, the terminal dashboard, the agent surface. |
 | [`docs/agents.md`](docs/agents.md) | The assistant, the team, skills and models. |
+| [`docs/workflows.md`](docs/workflows.md) | Reviews, agent memory and the Studio. |
 | [`docs/stacks.md`](docs/stacks.md), [`docs/stacks-engine.md`](docs/stacks-engine.md) | Supported stacks and how they are defined. |
 | [`docs/devd-yml.md`](docs/devd-yml.md) | Declaring a project's processes. |
 | [`docs/limitations.md`](docs/limitations.md) | What is not implemented, and what is weaker than intended. |
@@ -166,8 +167,6 @@ logs/             service and session logs
 cargo test --workspace            # everything
 .\scripts\cross-check.ps1         # type-check for Linux and macOS from Windows
 ```
-
-`TODO.md` is the live list of what is being worked on.
 
 ---
 

@@ -874,22 +874,35 @@ pub fn install_system(
     })
 }
 
-/// Redis folders already on this machine, as (path, version): Laragon's, and a plain install.
-pub fn find_local_redis() -> Vec<(PathBuf, String)> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    if cfg!(windows) {
-        for drive in 'A'..='Z' {
-            let root = PathBuf::from(format!("{drive}:\\"));
-            if !root.is_dir() {
-                continue;
+/// Folders where a portable stack keeps `tool` (`X:\<stack>\bin\<tool>\<version>`) or a
+/// program is usually unpacked, on every drive. Only Windows is searched.
+fn portable_candidates(tool: &str, fixed: &[&str]) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if !cfg!(windows) {
+        return out;
+    }
+    for drive in 'A'..='Z' {
+        let root = PathBuf::from(format!("{drive}:\\"));
+        if !root.is_dir() {
+            continue;
+        }
+        out.extend(fixed.iter().map(|f| root.join(f)));
+        let Ok(tops) = std::fs::read_dir(&root) else { continue };
+        for top in tops.flatten().filter(|e| e.path().is_dir()) {
+            let bin = top.path().join("bin").join(tool);
+            if let Ok(kids) = std::fs::read_dir(&bin) {
+                out.extend(kids.flatten().map(|k| k.path()));
             }
-            for parent in ["laragon\\bin\\redis", "wamp64\\bin\\redis", "Redis", "Program Files\\Redis"] {
-                candidates.push(root.join(parent));
-            }
+            out.push(bin);
         }
     }
+    out
+}
+
+/// Redis folders already on this machine, as (path, version).
+pub fn find_local_redis() -> Vec<(PathBuf, String)> {
     let mut out: Vec<(PathBuf, String)> = Vec::new();
-    for candidate in candidates {
+    for candidate in portable_candidates("redis", &["Redis", "Program Files\\Redis"]) {
         let Some(root) = extras::redis_root_of(&candidate) else { continue };
         if out.iter().any(|(p, _)| p == &root) {
             continue;
@@ -901,38 +914,23 @@ pub fn find_local_redis() -> Vec<(PathBuf, String)> {
     out
 }
 
-/// Apache folders already on this machine, as (path, version).
-///
-/// Looks where the Windows distributions put it - Laragon, XAMPP, WampServer, a
-/// plain `C:\Apache24` - on every drive. Nothing is read beyond `httpd -v`.
+/// Apache folders already on this machine, as (path, version): portable stacks,
+/// XAMPP, a plain `C:\Apache24`, the Apache Software Foundation's own folder.
+/// Nothing is read beyond `httpd -v`.
 pub fn find_local_apache() -> Vec<(PathBuf, String)> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
+    let mut candidates = portable_candidates("apache", &["Apache24", "Apache", "xampp\\apache"]);
     if cfg!(windows) {
         for drive in 'A'..='Z' {
-            let root = PathBuf::from(format!("{drive}:\\"));
-            if !root.is_dir() {
-                continue;
+            for parent in ["Program Files", "Program Files\\Apache Software Foundation"] {
+                let Ok(entries) = std::fs::read_dir(PathBuf::from(format!("{drive}:\\")).join(parent)) else { continue };
+                candidates.extend(entries.flatten().filter(|e| e.file_name().to_string_lossy().to_ascii_lowercase().starts_with("apache")).map(|e| e.path()));
             }
-            for parent in ["laragon\\bin\\apache", "wamp64\\bin\\apache", "wamp\\bin\\apache", "Program Files", "Program Files\\Apache Software Foundation"] {
-                if let Ok(entries) = std::fs::read_dir(root.join(parent)) {
-                    for entry in entries.flatten() {
-                        let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
-                        if parent.starts_with("Program Files") && !name.starts_with("apache") {
-                            continue;
-                        }
-                        candidates.push(entry.path());
-                    }
-                }
-            }
-            candidates.push(root.join("Apache24"));
-            candidates.push(root.join("Apache"));
-            candidates.push(root.join("xampp\\apache"));
         }
     }
-    let mut out = Vec::new();
+    let mut out: Vec<(PathBuf, String)> = Vec::new();
     for candidate in candidates {
         let Some(root) = apache_root_of(&candidate) else { continue };
-        if out.iter().any(|(p, _): &(PathBuf, String)| p == &root) {
+        if out.iter().any(|(p, _)| p == &root) {
             continue;
         }
         if let Some(version) = apache::version(&root) {

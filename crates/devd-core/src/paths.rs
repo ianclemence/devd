@@ -1,7 +1,7 @@
 //! Filesystem layout for `devd`.
 //!
 //! Everything `devd` owns lives under a single root so that the "move the
-//! folder and the whole stack moves with it" property Laragon users expect is
+//! folder and the whole stack moves with it" property users of portable stacks expect is
 //! preserved. The root is `%LOCALAPPDATA%\devd` on Windows and
 //! `$XDG_DATA_HOME/devd` (or `~/.local/share/devd`) on Linux, and can be
 //! overridden with `DEVD_HOME` for portable or test use.
@@ -90,7 +90,7 @@ impl Paths {
         self.root.join("certs")
     }
 
-    /// The directory projects are dropped into (Laragon's `www`).
+    /// The directory projects are dropped into (`www`).
     pub fn www(&self) -> PathBuf {
         self.root.join("www")
     }

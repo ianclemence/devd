@@ -55,7 +55,7 @@ args! {
 /// Register every site capability.
 pub fn register(reg: &mut Registry) -> Result<()> {
     reg.define::<NoArgs>("site.parked", "List the folders whose projects become sites")
-    .description("The projects root and every folder added with site.park. Each project directory in them is a site after site.sync, named after the folder, the way Laragon's auto virtual hosts work.")
+    .description("The projects root and every folder added with site.park. Each project directory in them is a site after site.sync, named after the folder, as auto virtual hosts do.")
     .group("site")
     .tier(Tier::Read)
     .effect(Effect::Read)

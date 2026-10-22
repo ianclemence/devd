@@ -1,6 +1,6 @@
 //! Starting the stack when the person signs in.
 //!
-//! Laragon's "start with Windows". devd does it with what each platform already
+//! "Start with Windows". devd does it with what each platform already
 //! offers a user without administrator rights: a `Run` registry value on Windows,
 //! an XDG autostart entry on Linux, a LaunchAgent on macOS. What runs is
 //! `devd stack up`: it starts the enabled services detached and exits, so nothing
