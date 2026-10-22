@@ -5117,7 +5117,7 @@
   function renderLoading(note) {
     el("main").innerHTML =
       '<div class="page"><div class="loading" role="status" aria-live="polite">Loading…</div>' +
-      (note ? '<div class="row-sub">' + esc(note) + "</div>" : "") + "</div>";
+      (note ? '<div class="loading-note">' + esc(note) + "</div>" : "") + "</div>";
   }
 
   /* Reading the server means probing this machine - installed services,

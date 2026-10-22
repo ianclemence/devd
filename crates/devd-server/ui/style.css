@@ -3083,3 +3083,6 @@ textarea,
 .thread-row:hover .thread-del, .thread-del:focus-visible { opacity: 1; }
 .thread-del:hover { background: var(--danger-quiet); color: var(--danger); }
 .threads-head { gap: var(--s2); }
+
+/* The line saying what is being waited for sits centred under the spinner. */
+.loading-note { text-align: center; color: var(--fg-dim); font-size: var(--text-sm); margin-top: calc(var(--s5) * -1); }
