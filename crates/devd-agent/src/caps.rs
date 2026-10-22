@@ -269,6 +269,33 @@ struct TeamAssign {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct ForkArgs {
+    /// The conversation to copy from.
+    thread: String,
+    /// The message to copy up to and including (its event id).
+    event: i64,
+    /// A title for the new conversation; defaults to "Fork of ...".
+    #[serde(default)]
+    title: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct PinArgs {
+    /// The conversation.
+    thread: String,
+    /// The message to mark (its event id).
+    event: i64,
+    /// The chapter's title.
+    title: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct UnpinArgs {
+    /// The chapter's id.
+    id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct PruneArgs {
     /// Only what has not been touched for this many days; omit for everything that is finished.
     #[serde(default)]
@@ -1494,7 +1521,8 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                 let t = ctx.store.get_thread(&a.thread)?.ok_or_else(|| DevdError::not_found("no such conversation"))?;
                 let ev = ctx.store.list_events(&a.thread, a.after.unwrap_or(0), 500)?;
                 let pending = ctx.store.list_requests(true, Some(&a.thread), 50)?;
-                Ok(Outcome::with_data(t.state.clone(), json!({ "thread": t, "events": ev, "pending": pending, "running": hub.is_running(&a.thread) })))
+                let chapters = ctx.store.list_chapters(&a.thread)?;
+                Ok(Outcome::with_data(t.state.clone(), json!({ "thread": t, "events": ev, "pending": pending, "running": hub.is_running(&a.thread), "chapters": chapters })))
             },
     )?;
     }
@@ -1528,7 +1556,71 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
     )?;
     {
         let hub = hub.clone();
-        reg.define::<ThreadArgs>("chat.delete", "Delete a conversation")
+        reg.define::<ForkArgs>("chat.fork", "Start a new conversation from a message")
+    .description("Copies a conversation up to and including one of its messages into a new conversation, so it can go a different way from there. The original stays exactly as it is.")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .human_only()
+    .dry_run()
+    .handlers(
+        |ctx, a| {
+            let t = ctx.store.get_thread(&a.thread)?.ok_or_else(|| DevdError::not_found("no such conversation"))?;
+            Ok(Plan::new("chat.fork", format!("start a new conversation from a message in \"{}\"", t.title)))
+        },
+        |ctx, a| {
+            let t = ctx.store.get_thread(&a.thread)?.ok_or_else(|| DevdError::not_found("no such conversation"))?;
+            let title = a.title.as_deref().map(str::trim).filter(|x| !x.is_empty()).map(str::to_string).unwrap_or_else(|| format!("Fork of {}", t.title));
+            let forked = ctx.store.fork_thread(&a.thread, a.event, &title)?;
+            Ok(Outcome::with_data("forked", json!({ "thread": forked })))
+        },
+    )?;
+    reg.define::<PinArgs>("chat.pin", "Pin a message as a chapter")
+    .description("Marks a message in a conversation as a chapter with a title, so the conversation has an outline to jump around in. Pinning the same message again renames the chapter.")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .human_only()
+    .dry_run()
+    .handlers(
+        |_, a| Ok(Plan::new("chat.pin", format!("pin a message as the chapter \"{}\"", a.title))),
+        |ctx, a| {
+            let title = a.title.trim();
+            if title.is_empty() {
+                return Err(DevdError::invalid("a chapter needs a title"));
+            }
+            ctx.store.get_thread(&a.thread)?.ok_or_else(|| DevdError::not_found("no such conversation"))?;
+            let chapter = ctx.store.pin_chapter(&a.thread, a.event, title)?;
+            Ok(Outcome::with_data("pinned", json!({ "chapter": chapter })))
+        },
+    )?;
+    reg.define::<UnpinArgs>("chat.unpin", "Remove a chapter pin")
+    .description("Removes a chapter from a conversation's outline. The message stays.")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .human_only()
+    .dry_run()
+    .handlers(
+        |_, a| Ok(Plan::new("chat.unpin", format!("remove chapter {}", a.id))),
+        |ctx, a| {
+            if !ctx.store.unpin_chapter(&a.id)? {
+                return Err(DevdError::not_found("no such chapter"));
+            }
+            Ok(Outcome::ok("unpinned"))
+        },
+    )?;
+    reg.define::<ThreadArgs>("chat.chapters", "List a conversation's chapters")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, a| simple("chat.chapters", format!("list the chapters of {}", a.thread)),
+        |ctx, a| {
+            let chapters = ctx.store.list_chapters(&a.thread)?;
+            Ok(Outcome::with_data(format!("{} chapter(s)", chapters.len()), json!({ "chapters": chapters })))
+        },
+    )?;
+    reg.define::<ThreadArgs>("chat.delete", "Delete a conversation")
         .description("Stops the conversation if it is working, then deletes it with its log and the approval requests it made. Cannot be undone.")
         .tier(Tier::Destructive)
         .effect(Effect::Data)

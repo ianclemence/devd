@@ -3198,3 +3198,18 @@ textarea,
 /* The small "checking" state that replaces a button while a re-check runs. */
 .ui-checking { display: inline-flex; align-items: center; gap: var(--s2); color: var(--fg-mute); font-size: var(--text-sm); }
 .ui-checking .spin { width: 13px; height: 13px; border: 1.5px solid var(--line-strong); border-top-color: var(--accent); border-radius: 50%; animation: spin 900ms linear infinite; }
+
+/* ============================================================ message actions
+ * Under a reply: Copy, Fork from here, Pin as chapter. They appear when the reply is hovered or
+ * focused, and always on a touch screen, and never get in the way of the text.
+ */
+.msg-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s1); margin-top: var(--s1); margin-left: calc(var(--s2) * -1); opacity: 0; transition: opacity var(--fast); }
+.msg:hover .msg-actions, .msg:focus-within .msg-actions, .msg-actions:focus-within { opacity: 1; }
+@media (hover: none) { .msg-actions { opacity: 1; } }
+.msg-act { display: inline-flex; align-items: center; gap: 6px; padding: 4px var(--s2); border: 0; border-radius: var(--radius); background: none; color: var(--fg-dim); font-size: var(--text-xs); cursor: pointer; transition: background var(--fast), color var(--fast); }
+.msg-act .icon { width: 14px; height: 14px; }
+.msg-act:hover { background: var(--bg-surface); color: var(--fg); }
+.msg-act-on { color: var(--accent); opacity: 1; }
+.msg:has(.msg-act-on) .msg-actions { opacity: 1; }
+.msg-flash .bubble { animation: flash 1.6s var(--ease-out); }
+@keyframes flash { 0%, 30% { background: var(--accent-quiet); } 100% { background: none; } }

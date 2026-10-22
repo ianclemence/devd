@@ -31,6 +31,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (9, include_str!("../sql/009_drop_sessions.sql")),
     (10, include_str!("../sql/010_schedules.sql")),
     (11, include_str!("../sql/011_runtime_pins.sql")),
+    (12, include_str!("../sql/012_chat_chapters.sql")),
 ];
 
 /// What to record about one capability attempt.
@@ -1161,6 +1162,45 @@ mod tests {
         assert!(s.get_inbox("a").unwrap().is_none());
         assert!(s.get_inbox("b").unwrap().is_some());
         assert!(s.delete_inbox("b").unwrap());
+    }
+
+    #[test]
+    fn a_fork_copies_up_to_a_message_and_leaves_the_original_alone() {
+        let s = store();
+        let t = s.create_thread("plan", Some("C:/p"), None, None).unwrap();
+        let e1 = s.append_event(&t.id, "user", &serde_json::json!({ "text": "one" })).unwrap();
+        let e2 = s.append_event(&t.id, "assistant", &serde_json::json!({ "content": [{ "type": "text", "text": "A" }, { "type": "tool_use", "id": "tu1", "name": "x", "input": {} }] })).unwrap();
+        s.append_event(&t.id, "approval", &serde_json::json!({ "request_id": "r" })).unwrap();
+        s.append_event(&t.id, "tool_result", &serde_json::json!({ "tool_use_id": "tu1", "content": "ok" })).unwrap();
+        let e5 = s.append_event(&t.id, "assistant", &serde_json::json!({ "content": [{ "type": "text", "text": "B" }] })).unwrap();
+        s.append_event(&t.id, "user", &serde_json::json!({ "text": "two" })).unwrap();
+        let fork = s.fork_thread(&t.id, e2, "Fork of plan").unwrap();
+        assert_ne!(fork.id, t.id);
+        assert_eq!(fork.project.as_deref(), Some("C:/p"));
+        let kinds: Vec<String> = s.list_events(&fork.id, 0, 100).unwrap().into_iter().map(|e| e.kind).collect();
+        assert_eq!(kinds, vec!["user", "assistant", "tool_result"], "the open tool call is answered, the pending approval is left out, later messages are not copied");
+        assert_eq!(s.list_events(&t.id, 0, 100).unwrap().len(), 6, "the original keeps everything");
+        assert!(s.fork_thread(&t.id, 9999, "x").is_err());
+        let later = s.fork_thread(&t.id, e5, "later").unwrap();
+        assert_eq!(s.list_events(&later.id, 0, 100).unwrap().len(), 4);
+        let _ = e1;
+    }
+
+    #[test]
+    fn chapters_are_pinned_renamed_listed_in_order_and_removed_with_the_conversation() {
+        let s = store();
+        let t = s.create_thread("c", None, None, None).unwrap();
+        let a = s.append_event(&t.id, "assistant", &serde_json::json!({})).unwrap();
+        let b = s.append_event(&t.id, "assistant", &serde_json::json!({})).unwrap();
+        s.pin_chapter(&t.id, b, "Second").unwrap();
+        let first = s.pin_chapter(&t.id, a, "First").unwrap();
+        let renamed = s.pin_chapter(&t.id, a, "Opening").unwrap();
+        assert_eq!(first.id, renamed.id, "pinning the same message again renames it");
+        let titles: Vec<String> = s.list_chapters(&t.id).unwrap().into_iter().map(|c| c.title).collect();
+        assert_eq!(titles, vec!["Opening", "Second"]);
+        assert!(s.unpin_chapter(&first.id).unwrap());
+        s.delete_thread(&t.id).unwrap();
+        assert!(s.list_chapters(&t.id).unwrap().is_empty());
     }
 
     fn store() -> Store {

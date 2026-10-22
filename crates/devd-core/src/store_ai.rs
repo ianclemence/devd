@@ -4,7 +4,7 @@
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
-use crate::error::Result;
+use crate::error::{DevdError, Result};
 use crate::state::Store;
 use crate::util;
 
@@ -85,6 +85,25 @@ pub struct ChatThread {
     pub created_at: String,
     /// Updated.
     pub updated_at: String,
+}
+
+/// A message pinned as a chapter of its conversation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Chapter {
+    /// Id.
+    pub id: String,
+    /// The conversation.
+    pub thread_id: String,
+    /// The message it marks.
+    pub event_id: i64,
+    /// What it is called.
+    pub title: String,
+    /// When it was pinned.
+    pub created_at: String,
+}
+
+fn row_chapter(r: &rusqlite::Row) -> rusqlite::Result<Chapter> {
+    Ok(Chapter { id: r.get(0)?, thread_id: r.get(1)?, event_id: r.get(2)?, title: r.get(3)?, created_at: r.get(4)? })
 }
 
 /// One entry in a conversation's log.
@@ -381,9 +400,81 @@ impl Store {
         })
     }
 
+    /// Start a new conversation from a point in this one. The new conversation gets the events up
+    /// to and including `upto`, plus the answers to any tool calls those events made, so that it
+    /// can be continued; the original is not touched. Approvals still waiting are not copied.
+    pub fn fork_thread(&self, src: &str, upto: i64, title: &str) -> Result<ChatThread> {
+        let source = self.get_thread(src)?.ok_or_else(|| DevdError::not_found("no such conversation"))?;
+        let all = self.list_events(src, 0, 100_000)?;
+        if !all.iter().any(|e| e.id == upto) {
+            return Err(DevdError::not_found("that message is not in this conversation"));
+        }
+        let mut wanted = std::collections::HashSet::new();
+        let mut keep: Vec<&ChatEvent> = Vec::new();
+        for e in all.iter().filter(|e| e.id <= upto && e.kind != "approval") {
+            if e.kind == "assistant" {
+                for b in e.data["content"].as_array().into_iter().flatten() {
+                    if b["type"] == "tool_use" {
+                        if let Some(id) = b["id"].as_str() {
+                            wanted.insert(id.to_string());
+                        }
+                    }
+                }
+            }
+            if e.kind == "tool_result" {
+                if let Some(id) = e.data["tool_use_id"].as_str() {
+                    wanted.remove(id);
+                }
+            }
+            keep.push(e);
+        }
+        // The answers to tool calls that were still open at the cut come from just after it.
+        for e in all.iter().filter(|e| e.id > upto && e.kind == "tool_result") {
+            if let Some(id) = e.data["tool_use_id"].as_str() {
+                if wanted.remove(id) {
+                    keep.push(e);
+                }
+            }
+        }
+        let thread = self.create_thread(title, source.project.as_deref(), source.provider_id.as_deref(), source.model.as_deref())?;
+        self.with(|c| {
+            for e in &keep {
+                c.execute("INSERT INTO chat_events (thread_id,kind,data,created_at) VALUES (?1,?2,?3,?4)", params![thread.id, e.kind, e.data.to_string(), e.created_at])?;
+            }
+            Ok(())
+        })?;
+        Ok(thread)
+    }
+
+    /// Pin a message as a chapter of its conversation, or rename the chapter already there.
+    pub fn pin_chapter(&self, thread: &str, event: i64, title: &str) -> Result<Chapter> {
+        self.with(|c| {
+            c.execute(
+                "INSERT INTO chat_chapters (id,thread_id,event_id,title,created_at) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(thread_id,event_id) DO UPDATE SET title=excluded.title",
+                params![util::new_id(), thread, event, title, util::now()],
+            )?;
+            Ok(c.query_row("SELECT id,thread_id,event_id,title,created_at FROM chat_chapters WHERE thread_id=?1 AND event_id=?2", params![thread, event], row_chapter)?)
+        })
+    }
+
+    /// Remove a chapter pin.
+    pub fn unpin_chapter(&self, id: &str) -> Result<bool> {
+        self.with(|c| Ok(c.execute("DELETE FROM chat_chapters WHERE id=?1", params![id])? > 0))
+    }
+
+    /// A conversation's chapters, in the order they happened.
+    pub fn list_chapters(&self, thread: &str) -> Result<Vec<Chapter>> {
+        self.with(|c| {
+            let mut st = c.prepare("SELECT id,thread_id,event_id,title,created_at FROM chat_chapters WHERE thread_id=?1 ORDER BY event_id")?;
+            let rows = st.query_map(params![thread], row_chapter)?;
+            Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+        })
+    }
+
     /// Delete a thread, its log and the approval requests it made.
     pub fn delete_thread(&self, id: &str) -> Result<bool> {
         self.with(|c| {
+            c.execute("DELETE FROM chat_chapters WHERE thread_id=?1", params![id])?;
             c.execute("DELETE FROM chat_events WHERE thread_id=?1", params![id])?;
             c.execute("DELETE FROM agent_requests WHERE thread_id=?1", params![id])?;
             Ok(c.execute("DELETE FROM chat_threads WHERE id=?1", params![id])? > 0)

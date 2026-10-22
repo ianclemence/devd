@@ -4516,7 +4516,7 @@
         AI.lastId = e.id;
         if (!full) announceEvent(e);
       });
-      AI.thread = d.thread; AI.pending = d.pending || []; AI.running = d.running;
+      AI.thread = d.thread; AI.pending = d.pending || []; AI.running = d.running; AI.chapters = d.chapters || [];
       var idx = (AI.threads || []).map(function (t) { return t.id; }).indexOf(d.thread.id);
       if (idx >= 0) AI.threads[idx] = d.thread;
     });
@@ -4647,6 +4647,20 @@
     return '<div class="msg-used">Used ' + calls + " " + names.join(", ") + "</div>";
   }
 
+  /* The row under a reply. Copy takes the reply's text; Fork starts a new conversation from it and
+   * leaves this one as it is; Pin marks it as a chapter of this conversation. */
+  function msgActions(eventId, block) {
+    var chapter = (AI.chapters || []).filter(function (c) { return c.event_id === eventId; })[0];
+    var at = ' data-event="' + eventId + '" data-block="' + block + '"';
+    return '<div class="msg-actions">' +
+      '<button type="button" class="msg-act" data-action="msg-copy"' + at + ' title="Copy this reply"><svg class="icon" aria-hidden="true"><use href="#i-copy"></use></svg>Copy</button>' +
+      '<button type="button" class="msg-act" data-action="msg-fork"' + at + ' title="Start a new conversation from this point. This one stays as it is"><svg class="icon" aria-hidden="true"><use href="#i-branch"></use></svg>Fork from here</button>' +
+      (chapter
+        ? '<button type="button" class="msg-act msg-act-on" data-action="msg-pin"' + at + ' title="Remove this chapter"><svg class="icon" aria-hidden="true"><use href="#i-layers"></use></svg>Pinned: ' + esc(clip(chapter.title, 40)) + "</button>"
+        : '<button type="button" class="msg-act" data-action="msg-pin"' + at + ' title="Mark this reply as a chapter of the conversation"><svg class="icon" aria-hidden="true"><use href="#i-layers"></use></svg>Pin as chapter</button>') +
+      "</div>";
+  }
+
   function chatHtml() {
     var results = {};
     var resultAt = {};
@@ -4664,9 +4678,9 @@
         html += '<div class="msg msg-user"><div><div class="bubble">' + md(e.data.text) + '</div><div class="msg-meta">You' + (when ? " · " + when : "") + "</div></div></div>";
       } else if (e.kind === "assistant") {
         html += usedLine(e.data.content);
-        (e.data.content || []).forEach(function (b) {
+        (e.data.content || []).forEach(function (b, bi) {
           if (b.type === "text" && b.text.trim()) {
-            html += '<div class="msg msg-agent"><div class="avatar" aria-hidden="true">d</div><div><div class="bubble">' + md(b.text) + '</div><div class="msg-meta">devd' + (when ? " · " + when : "") + "</div></div></div>";
+            html += '<div class="msg msg-agent" data-event="' + e.id + '"><div class="avatar" aria-hidden="true">d</div><div><div class="bubble">' + md(b.text) + '</div><div class="msg-meta">devd' + (when ? " · " + when : "") + "</div>" + msgActions(e.id, bi) + "</div></div>";
           } else if (b.type === "tool_use") {
             var c = summarizeCall(b), r = results[b.id], open = AI.openSteps[b.id];
             var pend = pendingByTool[b.id];
@@ -4751,7 +4765,7 @@
     // The provider and the model live in the composer, where they are used.
     // The head says what the conversation is and where it stands.
     return '<div class="grow"><div class="chat-title">' + esc(t.title) + '</div><div class="dim mono nowrap">' + esc(t.project || "no project") + " · " + t.input_tokens + " in / " + t.output_tokens + " out tokens</div></div>" +
-      '<span class="pill ' + (t.state === "error" ? "pill-bad" : t.state === "idle" ? "" : "pill-accent") + '">' + esc(t.state.replace("_", " ")) + '</span><button type="button" class="btn btn-mini btn-ghost" data-action="chat-delete" data-id="' + attr(t.id) + '">Delete</button>';
+      (AI.chapters && AI.chapters.length ? '<button type="button" class="btn btn-mini btn-ghost" data-action="chapters-open">Chapters (' + AI.chapters.length + ")</button>" : "") + '<span class="pill ' + (t.state === "error" ? "pill-bad" : t.state === "idle" ? "" : "pill-accent") + '">' + esc(t.state.replace("_", " ")) + '</span><button type="button" class="btn btn-mini btn-ghost" data-action="chat-delete" data-id="' + attr(t.id) + '">Delete</button>';
   }
 
   function paintThreads() {
@@ -6122,6 +6136,73 @@
       window.open("https://skills.sh", "_blank", "noopener");
     },
     "close-drawer": function () { closeDrawer(); },
+    "msg-copy": function (n) {
+      var ev = AI.events.filter(function (e) { return String(e.id) === n.dataset.event; })[0];
+      var b = ev && (ev.data.content || [])[+n.dataset.block];
+      copyText((b && b.text) || "", function () {
+        var old = n.innerHTML;
+        n.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#i-check"></use></svg>Copied';
+        setTimeout(function () { n.innerHTML = old; }, 1400);
+      });
+    },
+    "msg-fork": function (n) {
+      if (!AI.thread) return;
+      run("chat.fork", { thread: AI.thread.id, event: +n.dataset.event }).then(function (o) {
+        var forked = o && o.data && o.data.thread;
+        if (!forked) return;
+        toast("ok", "Forked into a new conversation. The original is unchanged.");
+        return read("chat.list").then(function (list) {
+          AI.threads = list || [];
+          ACTIONS["open-thread"]({ dataset: { id: forked.id } });
+        });
+      });
+    },
+    "msg-pin": function (n) {
+      if (!AI.thread) return;
+      var tid = AI.thread.id, eid = +n.dataset.event;
+      var chapter = (AI.chapters || []).filter(function (c) { return c.event_id === eid; })[0];
+      var refresh = function () {
+        return read("chat.chapters", { thread: tid }).then(function (d) {
+          AI.chapters = (d && d.chapters) || [];
+          paintChat();
+        });
+      };
+      if (chapter) return run("chat.unpin", { id: chapter.id }).then(function (o) { if (o) return refresh(); });
+      var ev = AI.events.filter(function (e) { return e.id === eid; })[0];
+      var b = ev && (ev.data.content || [])[+n.dataset.block];
+      var guess = uiSummary(String((b && b.text) || "").replace(/^#+\s*/, ""), 60) || "Chapter";
+      uiPrompt({ title: "Pin as chapter", text: "Name this point in the conversation. Chapters appear in the Chapters list at the top.", input: { value: guess, placeholder: "Chapter title" }, confirm: "Pin" }).then(function (title) {
+        if (!title) return;
+        return run("chat.pin", { thread: tid, event: eid, title: title }).then(function (o) { if (o) return refresh(); });
+      });
+    },
+    "chapters-open": function () {
+      var rows = (AI.chapters || []).map(function (c) {
+        return uiRow({
+          title: esc(c.title), sub: esc(ago(c.created_at) + " ago"),
+          open: 'data-action="chapter-jump" data-event="' + c.event_id + '"',
+          actions: '<button type="button" class="btn btn-mini" data-action="chapter-jump" data-event="' + c.event_id + '">Jump</button><button type="button" class="btn btn-mini btn-ghost" data-action="chapter-remove" data-id="' + attr(c.id) + '">Remove</button>',
+          hover: true
+        });
+      });
+      uiSheet("Chapters", rows.length ? uiList(rows) : uiEmpty("No chapters yet", "Pin a reply with Pin as chapter to mark a point you will want to find again."));
+    },
+    "chapter-jump": function (n) {
+      closeDrawer();
+      var node = document.querySelector('.msg[data-event="' + n.dataset.event + '"]');
+      if (!node) return toast("warn", "That message is not on screen");
+      node.scrollIntoView({ block: "start", behavior: "smooth" });
+      node.classList.add("msg-flash");
+      setTimeout(function () { node.classList.remove("msg-flash"); }, 1800);
+    },
+    "chapter-remove": function (n) {
+      run("chat.unpin", { id: n.dataset.id }).then(function (o) {
+        if (!o) return;
+        AI.chapters = (AI.chapters || []).filter(function (c) { return c.id !== n.dataset.id; });
+        paintChat();
+        ACTIONS["chapters-open"]();
+      });
+    },
     "copy-code": function (n) {
       var pre = n.closest(".md-code").querySelector("pre");
       var text = pre ? pre.innerText : "";

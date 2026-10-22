@@ -45,7 +45,7 @@ pub use events::{Event, EventBus};
 pub use paths::Paths;
 pub use registry::Registry;
 pub use state::Store;
-pub use store_ai::{AgentRequest, CatalogueModel, ChatEvent, ChatThread, InboxMessage, Provider};
+pub use store_ai::{AgentRequest, CatalogueModel, Chapter, ChatEvent, ChatThread, InboxMessage, Provider};
 pub use store_schedule::Schedule;
 pub use store_team::{GoalLoop, ProviderCheck, RoleModel, ServiceDecision, TeamEvent, TeamRun, TeamTask};
 pub use store_stacks::{StackProject, StackRun};

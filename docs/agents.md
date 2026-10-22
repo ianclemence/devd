@@ -279,3 +279,11 @@ Deleting a conversation stops it first if it is working, then removes its log an
 run removes its tasks, its log and the conversations its tasks had; a run that is still working must be cancelled first, and
 work already merged stays. `prune` never touches a conversation that is working or waiting for you, and a run that is not
 over. Deleted data cannot be recovered.
+
+## Under a reply: copy, fork, chapters
+
+Every reply in the Assistant has three actions beneath it (shown when you hover it):
+
+* **Copy** puts the reply's text on the clipboard as Markdown.
+* **Fork from here** (`chat.fork`) starts a new conversation containing everything up to and including that reply; the original stays exactly as it is. Approvals that were still waiting are not copied, and the answers to any tool calls that were open at that point are.
+* **Pin as chapter** (`chat.pin`, `chat.unpin`, `chat.chapters`) gives that reply a title. **Chapters** at the top of the conversation lists them and jumps to one. Chapters belong to the conversation they were pinned in; a fork starts without them.
