@@ -255,7 +255,7 @@ pub fn import_text(paths: &Paths, raw: &str, fallback_name: &str) -> Result<Skil
         return Err(DevdError::invalid("the skill has no instructions"));
     }
     save(paths, &name, description.lines().next().unwrap_or("").trim(), &kind, &roles, body)?;
-    Ok(get(paths, &name)?)
+    get(paths, &name)
 }
 
 /// The other agents on this machine, and where each keeps its skills.

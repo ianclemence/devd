@@ -135,7 +135,7 @@ pub fn tcp_connect(host: &str, port: u16, timeout: Duration) -> Result<()> {
         }
     }
     Err(DevdError::Io(last_err.unwrap_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::Other, "no addresses")
+        std::io::Error::other("no addresses")
     })))
 }
 

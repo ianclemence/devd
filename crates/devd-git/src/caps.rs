@@ -1703,7 +1703,7 @@ fn register_destructive(reg: &mut Registry, git: &Arc<GitService>) -> Result<()>
             let affected: Vec<String> = status
                 .unstaged
                 .iter()
-                .filter(|c| a.paths.iter().any(|p| c.path == *p))
+                .filter(|c| a.paths.contains(&c.path))
                 .map(|c| c.path.clone())
                 .collect();
             Ok(Plan::new(

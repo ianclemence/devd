@@ -127,7 +127,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
     .agent_safe()
     .dry_run()
     .handlers(
-        |ctx, args| install_plan(ctx, args),
+        install_plan,
         |ctx, args| {
             let thread_safe = args.thread_safe.unwrap_or(false);
             let force = args.force.unwrap_or(false);
@@ -295,7 +295,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
     .idempotent()
     .handlers(
         |ctx, args| {
-            check_pin(ctx, &args)?;
+            check_pin(ctx, args)?;
             Ok(Plan::new("runtime.pin", match &args.version {
                 Some(v) => format!("run {} with {} {v}", args.project, args.kind),
                 None => format!("clear the {} pin of {}", args.kind, args.project),
@@ -303,7 +303,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             .step("record the choice in the state store"))
         },
         |ctx, args| {
-            check_pin(ctx, &args)?;
+            check_pin(ctx, args)?;
             match &args.version {
                 Some(v) => {
                     ctx.store.set_runtime_pin(&args.project, &args.kind, v)?;

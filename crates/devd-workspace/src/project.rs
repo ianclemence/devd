@@ -337,7 +337,7 @@ impl ProjectManager {
     pub fn shutdown(&self) {
         self.running.store(false, Ordering::SeqCst);
         for row in self.supervisor.list() {
-            let _ = process::kill_tree(row.pid);
+            process::kill_tree(row.pid);
         }
         let _ = self.supervisor.stop_all();
     }

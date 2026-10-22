@@ -771,7 +771,7 @@ mod tests {
         let sbin = dir.path().join("sbin");
         std::fs::create_dir_all(&sbin).unwrap();
         std::fs::write(sbin.join("devd-test-server"), b"x").unwrap();
-        let found = find_binary_in(&["devd-test-nothing", "devd-test-server"], &[sbin.clone()]);
+        let found = find_binary_in(&["devd-test-nothing", "devd-test-server"], std::slice::from_ref(&sbin));
         assert_eq!(found, Some(sbin.join("devd-test-server")));
         assert!(find_binary_in(&["devd-test-nothing"], &[sbin]).is_none());
     }

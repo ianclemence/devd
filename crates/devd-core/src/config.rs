@@ -12,8 +12,10 @@ use crate::util;
 /// Which web server fronts PHP for new sites.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum WebServer {
     /// nginx fronting php-cgi (Windows) or php-fpm (Linux).
+    #[default]
     Nginx,
     /// Apache httpd fronting php-cgi.
     Apache,
@@ -29,17 +31,14 @@ impl WebServer {
     }
 }
 
-impl Default for WebServer {
-    fn default() -> Self {
-        Self::Nginx
-    }
-}
 
 /// Which model provider backs the conversational agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[derive(Default)]
 pub enum AgentProvider {
     /// No provider configured; the agent surface reports as unavailable.
+    #[default]
     None,
     /// Anthropic Messages API.
     Anthropic,
@@ -47,11 +46,6 @@ pub enum AgentProvider {
     OpenAiCompatible,
 }
 
-impl Default for AgentProvider {
-    fn default() -> Self {
-        Self::None
-    }
-}
 
 /// All user-editable settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -189,10 +189,8 @@ fn render_text(render: Render, sites: &[Site]) -> String {
     out.push_str("    server_tokens      off;\n");
     out.push_str("    client_max_body_size 64m;\n");
     out.push_str("    fastcgi_read_timeout 120s;\n\n");
-    out.push_str(&format!(
-        "    # One PHP FastCGI listener per installed version. A site that is \
-         pinned to a version is sent to that one; the rest go to the primary.\n"
-    ));
+    out.push_str("    # One PHP FastCGI listener per installed version. A site that is \
+         pinned to a version is sent to that one; the rest go to the primary.\n");
     for (series, port) in &render.php {
         out.push_str(&format!(
             "    upstream devd_php_{} {{\n        server 127.0.0.1:{port};\n    }}\n\n",

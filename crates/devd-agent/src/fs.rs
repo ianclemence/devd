@@ -269,7 +269,7 @@ pub fn delete(ctx: &Ctx, path: &str, recursive: bool) -> Result<Value> {
         return Err(DevdError::not_found(format!("{} does not exist", p.display())));
     }
     let roots = authz::roots(ctx);
-    if roots.iter().any(|r| *r == p) {
+    if roots.contains(&p) {
         return Err(DevdError::denied("refusing to delete a projects root"));
     }
     if p.is_dir() {

@@ -841,11 +841,10 @@ fn finish_install(
 
     // Installing nginx is the moment a PHP listener becomes meaningful, so it is
     // created (stopped) if a PHP runtime exists.
-    if def.name == "nginx" || def.name == "apache" {
-        if devd_runtime::executable(ctx, "php", None).is_ok() {
+    if (def.name == "nginx" || def.name == "apache")
+        && devd_runtime::executable(ctx, "php", None).is_ok() {
             ensure_php_service(ctx)?;
         }
-    }
 
     ctx.events.emit_with(
         format!("service.{}.installed", def.name),
@@ -1390,9 +1389,7 @@ pub fn start(ctx: &Ctx, name: &str) -> Result<Status> {
         if !nginx::config_path(ctx).is_file() {
             nginx::render(ctx)?;
         }
-        if let Err(e) = nginx::test(ctx) {
-            return Err(e);
-        }
+        nginx::test(ctx)?;
     }
 
     if service.name == "redis" {
@@ -1579,11 +1576,10 @@ pub fn stack_up(ctx: &Ctx) -> Result<Vec<Status>> {
     if !installed_php_series(ctx)?.is_empty() {
         prune_php_services(ctx)?;
         ensure_php_services(ctx)?;
-    } else if ctx.store.get_service(PHP_SERVICE)?.is_none() {
-        if php_executable(ctx).is_ok() {
+    } else if ctx.store.get_service(PHP_SERVICE)?.is_none()
+        && php_executable(ctx).is_ok() {
             ensure_php_service(ctx)?;
         }
-    }
 
     // The listeners come first: nginx needs a FastCGI upstream to answer with.
     let services: Vec<Service> = ctx

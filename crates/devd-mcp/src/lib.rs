@@ -308,7 +308,7 @@ impl McpServer {
         // Search returns a page with no total, so ask for everything and slice
         // here; that is what makes `total` honest rather than "at least".
         let all = self.registry.search(query, group, usize::MAX, 0);
-        let items: Vec<Value> = all.iter().take(limit).map(|c| summarise(c)).collect();
+        let items: Vec<Value> = all.iter().take(limit).map(summarise).collect();
 
         ToolOutcome::Content(pretty(&json!({
             "total": all.len(),

@@ -440,9 +440,8 @@ async fn a_destructive_operation_is_not_applied_until_it_is_approved() {
     assert_eq!(body["tier"], "destructive");
     assert!(body["plan"]["destructive"].as_bool().unwrap());
     assert!(!body["token"].as_str().unwrap().is_empty());
-    assert_eq!(
-        fixture.effects.join("alpha.txt").exists(),
-        false,
+    assert!(
+        !fixture.effects.join("alpha.txt").exists(),
         "the effect ran before approval"
     );
 

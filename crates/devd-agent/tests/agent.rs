@@ -431,7 +431,7 @@ fn step_of(seen: &Seen) -> usize {
 
 fn role_of(seen: &Seen) -> String {
     let sys = seen.body["system"].as_str().map(str::to_string).or_else(|| seen.body["system"].as_array().map(|a| a.iter().filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join("\n"))).unwrap_or_default();
-    sys.split("Role: ").nth(1).and_then(|r| r.split(|c: char| c == '.' || c == '\n').next()).unwrap_or("").to_string()
+    sys.split("Role: ").nth(1).and_then(|r| r.split(['.', '\n']).next()).unwrap_or("").to_string()
 }
 
 fn invoke(id: &str, name: &str, args: Value) -> String {

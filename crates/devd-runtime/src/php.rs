@@ -256,10 +256,9 @@ fn commented_extension(line: &str) -> Option<(bool, String)> {
     let rest = line.strip_prefix(';')?.trim_start();
     let (zend, value) = if let Some(v) = rest.strip_prefix("zend_extension=") {
         (true, v)
-    } else if let Some(v) = rest.strip_prefix("extension=") {
-        (false, v)
     } else {
-        return None;
+        let v = rest.strip_prefix("extension=")?;
+        (false, v)
     };
     // Several entries carry a trailing explanation: `;extension=exif ; Must be
     // after mbstring as it depends on it`.

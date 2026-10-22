@@ -661,7 +661,7 @@ impl ToolDef {
         let mut healthy = listening;
         if listening && !svc.health.is_empty() {
             if let Some((exe, _)) = which_in(&svc.health[0], &[]) {
-                healthy = util::run(&exe, &svc.health[1..].to_vec(), None, &[], Some(Duration::from_secs(10)))
+                healthy = util::run(&exe, &svc.health[1..], None, &[], Some(Duration::from_secs(10)))
                     .map(|o| o.ok())
                     .unwrap_or(false);
             }

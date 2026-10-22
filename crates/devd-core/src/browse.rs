@@ -280,8 +280,8 @@ pub fn browse(path: &Path, show_hidden: bool) -> Result<Listing> {
         }
     }
 
-    directories.sort_by(|a, b| sort_key(&a.name).cmp(&sort_key(&b.name)));
-    files.sort_by(|a, b| sort_key(&a.name).cmp(&sort_key(&b.name)));
+    directories.sort_by_key(|a| sort_key(&a.name));
+    files.sort_by_key(|a| sort_key(&a.name));
     let mut entries = directories;
     entries.append(&mut files);
 

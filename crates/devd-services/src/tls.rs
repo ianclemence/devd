@@ -333,7 +333,7 @@ pub fn trust(ctx: &Ctx, machine: bool) -> Result<devd_core::capability::Outcome>
                 stderr: format!("{}{hint}", util::truncate(out.stderr.trim(), 800)),
             });
         }
-        return Ok(devd_core::capability::Outcome::with_data(
+        Ok(devd_core::capability::Outcome::with_data(
             if machine {
                 "the devd certificate authority is trusted machine-wide".to_string()
             } else {
@@ -345,7 +345,7 @@ pub fn trust(ctx: &Ctx, machine: bool) -> Result<devd_core::capability::Outcome>
                 "store": "Root",
                 "output": util::truncate(out.stdout.trim(), 800),
             }),
-        ));
+        ))
     }
 
     #[cfg(target_os = "macos")]
@@ -565,13 +565,13 @@ pub fn untrust(ctx: &Ctx, machine: bool) -> Result<devd_core::capability::Outcom
                 stderr: format!("{}{hint}", util::truncate(out.stderr.trim(), 800)),
             });
         }
-        return Ok(devd_core::capability::Outcome::with_data(
+        Ok(devd_core::capability::Outcome::with_data(
             "the devd certificate authority is no longer trusted".to_string(),
             serde_json::json!({
                 "scope": if machine { "machine" } else { "user" },
                 "output": util::truncate(out.stdout.trim(), 800),
             }),
-        ));
+        ))
     }
 
     #[cfg(target_os = "macos")]

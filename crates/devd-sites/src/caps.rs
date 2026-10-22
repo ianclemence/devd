@@ -331,7 +331,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
     .agent_safe()
     .dry_run()
     .handlers(
-        |ctx, args| create_plan(ctx, args),
+        create_plan,
         |ctx, args| {
             let request = sites::CreateRequest {
                 name: args.name.clone(),

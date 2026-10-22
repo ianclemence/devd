@@ -315,7 +315,7 @@ fn register_service(reg: &mut Registry) -> Result<()> {
     .agent_safe()
     .dry_run()
     .handlers(
-        |ctx, args| start_plan(ctx, args),
+        start_plan,
         |ctx, args| {
             let status = services::start(ctx, &args.name)?;
             Ok(Outcome::with_data(
@@ -336,7 +336,7 @@ fn register_service(reg: &mut Registry) -> Result<()> {
     .dry_run()
     .idempotent()
     .handlers(
-        |ctx, args| stop_plan(ctx, args),
+        stop_plan,
         |ctx, args| {
             let status = services::stop(ctx, &args.name)?;
             Ok(Outcome::with_data(
@@ -354,7 +354,7 @@ fn register_service(reg: &mut Registry) -> Result<()> {
     .agent_safe()
     .dry_run()
     .handlers(
-        |ctx, args| stop_plan(ctx, args),
+        stop_plan,
         |ctx, args| {
             let status = services::restart(ctx, &args.name)?;
             Ok(Outcome::with_data(
