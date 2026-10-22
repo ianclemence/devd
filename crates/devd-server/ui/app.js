@@ -3683,10 +3683,10 @@
   function loadDevelop() {
     return Promise.all([read("project.list").catch(function () { return []; }), read("task.list").catch(function () { return []; })]).then(function (r) {
       DEV.projects = r[0] || []; DEV.procs = r[1] || [];
-    }).then(function () { return DEV.path && !DEV.ctx ? openProject(DEV.path, true) : null; });
+    }).then(function () { return DEV.path && !DEV.ctx ? detectProject(DEV.path, true) : null; });
   }
 
-  function openProject(path, quiet) {
+  function detectProject(path, quiet) {
     DEV.path = path; DEV.busy = true; DEV.error = null;
     return read("project.detect", { path: path }).then(function (c) { DEV.ctx = c; DEV.busy = false; if (!quiet) renderDevelop(); })
       .catch(function (e) { DEV.busy = false; DEV.ctx = null; DEV.error = e.message; if (!quiet) renderDevelop(); });
@@ -5865,7 +5865,7 @@
     "svc-logs": function (n) { read("toolchain.logs", { tool: n.dataset.id }).then(function (d) { openDrawer(n.dataset.id + " logs", '<pre class="log-block">' + esc((d.lines || []).join("\n") || "empty") + "</pre>"); }).catch(function (e) { toast("error", e.message); }); },
     "devices": function () { read("toolchain.devices").then(function (d) { openDrawer("Android devices", d.length ? d.map(function (x) { return '<div class="kv"><dt class="mono">' + esc(x.serial) + "</dt><dd>" + esc(x.state) + " " + esc(x.note) + "</dd></div>"; }).join("") : '<div class="empty">No devices. Connect one with USB debugging enabled, or start an emulator.</div>'); }).catch(function (e) { toast("error", e.message); }); },
     "eas-projects": function () { read("toolchain.eas_projects").then(function (d) { var list = d.projects || []; openDrawer("Expo projects", list.length ? list.map(function (x) { return '<div class="kv"><dt class="mono">' + esc(x.slug) + "</dt><dd>" + esc(x.name || "") + (x.owner ? " · " + esc(x.owner) : "") + "</dd></div>"; }).join("") : '<div class="empty">' + esc(d.message || "No Expo projects. Sign in with `eas login` first.") + "</div>"); }).catch(function (e) { toast("error", e.message); }); },
-    "dev-open": function (n) { openProject(n.dataset.path); },
+    "dev-open": function (n) { detectProject(n.dataset.path); },
     "dev-pick": function () {
       openPicker({
         title: "Choose a project folder",
@@ -5882,12 +5882,12 @@
       });
     },
     "dev-detect": function () {
-      var p = readInput("dev-import"); DEV.importPath = p; if (!p) return;
+      var p = readInput("dev-import"); DEV.importPath = p; if (!p) return toast("warn", "Say where the project is, or choose a folder");
       DEV.busy = true; renderDevelop();
       read("project.detect", { path: p }).then(function (c) { DEV.detect = c; DEV.path = p; DEV.busy = false; renderDevelop(); }).catch(function (e) { DEV.busy = false; DEV.error = e.message; renderDevelop(); });
     },
     "dev-import": function () {
-      var p = readInput("dev-import"); DEV.importPath = p; if (!p) return;
+      var p = readInput("dev-import"); DEV.importPath = p; if (!p) return toast("warn", "Say where the project is, or choose a folder");
       act("project.import", { path: p }).then(function (o) { if (o) { DEV.detect = null; DEV.ctx = null; DEV.path = p; return loadDevelop().then(renderDevelop); } });
     },
     "task-run": function (n) {
@@ -6159,6 +6159,8 @@
     "member-assign-submit": function (node) { submitAssign(node.dataset.id); },
 
     "new-site": function () {
+      // The form lives on the Sites page; from anywhere else the button takes you there with it open.
+      if (state.view !== "sites") { state.siteFormOpen = true; navigate("sites").then(function () { if (el("site-name")) el("site-name").focus(); }); return; }
       state.siteFormOpen = !state.siteFormOpen;
       render();
       if (state.siteFormOpen && el("site-name")) el("site-name").focus();

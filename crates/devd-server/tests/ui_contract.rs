@@ -275,3 +275,36 @@ fn the_logo_has_no_transparent_padding_and_is_square() {
     let rule = &rule[..rule.find('}').unwrap()];
     assert!(rule.contains("object-fit: cover") && !rule.contains("padding") && !rule.contains("margin") && !rule.contains("box-shadow"), "{rule}");
 }
+
+#[test]
+fn no_function_in_the_script_is_declared_twice() {
+    // JavaScript lets the later declaration silently replace the earlier one, which is how a
+    // "click a project" handler once ended up running another screen's function of the same name.
+    let mut seen = std::collections::HashMap::new();
+    for (n, line) in APP.lines().enumerate() {
+        if let Some(rest) = line.strip_prefix("  function ") {
+            let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+            if let Some(first) = seen.insert(name.clone(), n + 1) {
+                panic!("function `{name}` is declared at line {first} and again at line {}", n + 1);
+            }
+        }
+    }
+}
+
+#[test]
+fn every_navigation_button_points_at_a_page() {
+    let render = &APP[APP.find("  function render() {").unwrap()..];
+    let render = &render[..render.find("// ----").unwrap()];
+    let server: Vec<String> = quoted_after(APP, "var SERVER_VIEWS = [");
+    let mut missing = Vec::new();
+    for chunk in APP.split("data-view=\\\"").chain(APP.split("data-view=\"")).skip(1) {
+        let name: String = chunk.chars().take_while(|c| c.is_ascii_lowercase() || *c == '-').collect();
+        if name.is_empty() || name == "project" {
+            continue;
+        }
+        if !(render.contains(&format!("state.view === \"{name}\"")) || server.contains(&name)) && !missing.contains(&name) {
+            missing.push(name);
+        }
+    }
+    assert!(missing.is_empty(), "a button navigates to a view render() cannot draw: {missing:?}");
+}
