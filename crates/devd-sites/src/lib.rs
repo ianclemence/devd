@@ -401,17 +401,14 @@ pub fn create(ctx: &Ctx, request: &CreateRequest) -> Result<Created> {
 /// already been written, and the state store is the truth, so a web server that
 /// is not running does not make the operation a failure.
 fn reconcile(ctx: &Ctx, warnings: &mut Vec<String>) -> Result<bool> {
-    if ctx.settings.web_server.as_str() != "nginx" {
-        return Ok(false);
-    }
-    match devd_services::nginx::render(ctx) {
+    let server = devd_services::web::service_name(ctx);
+    match devd_services::web::render(ctx) {
         Ok(_) => {}
         Err(e) if e.code() == "not_found" => {
-            warnings.push(
+            warnings.push(format!(
                 "the web server is not installed, so nothing serves this site yet; \
-                 `devd service install nginx` installs it"
-                    .to_string(),
-            );
+                 `devd service install {server}` installs it"
+            ));
             return Ok(false);
         }
         Err(e) => return Err(e),
@@ -420,7 +417,7 @@ fn reconcile(ctx: &Ctx, warnings: &mut Vec<String>) -> Result<bool> {
     // The site is already recorded and its configuration written. A web server
     // devd has not installed as a service is not running, which is not a reason
     // to fail the operation that has just succeeded.
-    let running = match devd_services::status(ctx, "nginx") {
+    let running = match devd_services::status(ctx, server) {
         Ok(status) => status.running,
         Err(e) if e.code() == "not_found" => false,
         Err(e) => return Err(e),
@@ -428,7 +425,7 @@ fn reconcile(ctx: &Ctx, warnings: &mut Vec<String>) -> Result<bool> {
     if !running {
         return Ok(false);
     }
-    devd_services::nginx::reload(ctx)?;
+    devd_services::web::reload(ctx)?;
     Ok(true)
 }
 
@@ -643,7 +640,7 @@ pub struct SiteRow {
 /// Every site, with a live check of what is actually on disk.
 pub fn list(ctx: &Ctx) -> Result<Vec<SiteRow>> {
     let managed = hosts::current_entries().unwrap_or_default();
-    let server_running = devd_services::status(ctx, "nginx")
+    let server_running = devd_services::status(ctx, devd_services::web::service_name(ctx))
         .map(|s| s.running)
         .unwrap_or(false);
     let php_installed = devd_services::installed_php_series(ctx).unwrap_or_default();
@@ -740,7 +737,7 @@ pub fn set_php(ctx: &Ctx, name: &str, version: Option<&str>) -> Result<serde_jso
     // The configuration is what decides which upstream a request reaches, so
     // it is re-rendered whenever the pin changes.
     let mut warnings = Vec::new();
-    if let Err(e) = devd_services::nginx::render(ctx) {
+    if let Err(e) = devd_services::web::render(ctx) {
         warnings.push(format!("the web server configuration could not be re-rendered: {e}"));
     }
 

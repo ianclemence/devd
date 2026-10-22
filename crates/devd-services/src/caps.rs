@@ -49,6 +49,10 @@ args! {
     LogsArgs { name: String, lines: Option<u32> }
     /// A service to install.
     InstallArgs { name: String, version: Option<String>, port: Option<u16>, force: Option<bool> }
+    /// Which web server to use.
+    UseWebArgs { server: String }
+    /// An existing program folder to use.
+    AdoptArgs { name: String, path: String, port: Option<u16> }
     /// A certificate to issue.
     HostArgs { host: String }
     /// Whether to trust the CA for every user or just this one.
@@ -174,6 +178,59 @@ fn register_service(reg: &mut Registry) -> Result<()> {
                     "bytes": done.bytes,
                     "from_cache": done.from_cache,
                 }),
+            );
+            for warning in done.warnings {
+                outcome = outcome.warn(warning);
+            }
+            Ok(outcome)
+        },
+    )?;
+
+    reg.define::<NameArgs>("service.find_local", "Find a service's program already on this machine")
+    .description("Looks for an Apache folder from Laragon, XAMPP, WampServer or a plain install on every \
+         drive and reports each with its version. Nothing is changed; `service.adopt` uses one.")
+    .group("service")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .dry_run()
+    .handlers(
+        |_, a| Ok(Plan::new("service.find_local", format!("look for {} folders on this machine", a.name))),
+        |_, a| {
+            if a.name != "apache" {
+                return Err(DevdError::unsupported("only Apache can be found on disk"));
+            }
+            let found: Vec<Value> = services::find_local_apache()
+                .into_iter()
+                .map(|(path, version)| json!({ "path": path.display().to_string(), "version": version }))
+                .collect();
+            Ok(Outcome::with_data(format!("{} Apache folder(s) found", found.len()), json!(found)))
+        },
+    )?;
+
+    reg.define::<AdoptArgs>("service.adopt", "Use a program that is already on disk")
+    .description("Records an existing Apache folder (Laragon's, XAMPP's, a plain install) as devd's Apache. \
+         The folder is not copied or modified: devd writes its own httpd.conf and starts the program with \
+         it. Human only, because the program in that folder is what devd will then run.")
+    .group("service")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .human_only()
+    .dry_run()
+    .handlers(
+        |_, a| {
+            Ok(Plan::new("service.adopt", format!("use {} as devd's {}", a.path, a.name))
+                .step("check the folder holds a working Apache and read its version")
+                .step("record it; nothing in it is changed")
+                .step("render devd's own configuration for it")
+                .effect("adds a service record and a generated configuration file"))
+        },
+        |ctx, a| {
+            let done = services::adopt(ctx, &a.name, std::path::Path::new(&a.path), a.port)?;
+            let mut outcome = Outcome::with_data(
+                format!("{} {} at {} is now devd's {}", done.service.name, done.version, done.path, a.name),
+                json!({ "service": done.service, "version": done.version, "path": done.path }),
             );
             for warning in done.warnings {
                 outcome = outcome.warn(warning);
@@ -321,7 +378,7 @@ fn register_service(reg: &mut Registry) -> Result<()> {
 fn install_plan(args: &InstallArgs) -> Result<Plan> {
     let def = services::definition(&args.name).ok_or_else(|| {
         DevdError::unsupported(format!(
-            "`{}` is not a service devd can install; installable services are nginx and mariadb",
+            "`{}` is not a service devd can install; installable services are nginx, apache and mariadb",
             args.name
         ))
     })?;
@@ -357,7 +414,7 @@ fn install_plan(args: &InstallArgs) -> Result<Plan> {
             args.port.unwrap_or(def.default_port)
         )
     } else {
-        "render the nginx configuration from the state store".to_string()
+        format!("render the {} configuration from the state store", def.name)
     })
     .effect(format!("adds files under <devd>/services/{dest}"))
     .approval(false)
@@ -402,9 +459,10 @@ fn stop_plan(ctx: &Ctx, args: &NameArgs) -> Result<Plan> {
 
 fn register_web(reg: &mut Registry) -> Result<()> {
     reg.define::<NoArgs>("web.render", "Render the web server configuration")
-    .description("Rebuilds nginx.conf from the state store: one server block per site, with the TLS \
-         listener, the redirect, the document root and the FastCGI upstream. The file is \
-         generated, never edited, so it cannot drift from what devd believes.")
+    .description("Rebuilds the web server's configuration (nginx.conf or httpd.conf, whichever the web_server \
+         setting names) from the state store: one server per site, with the TLS listener, the redirect, \
+         the document root and the FastCGI upstream. The file is generated, never edited, so it cannot \
+         drift from what devd believes.")
     .group("web")
     .tier(Tier::Write)
     .effect(Effect::Config)
@@ -415,13 +473,13 @@ fn register_web(reg: &mut Registry) -> Result<()> {
         |_, _| {
             Ok(Plan::new(
                 "web.render",
-                "render nginx.conf from the sites in the state store",
+                "render the web server configuration from the sites in the state store",
             )
             .step("read the sites from the state store")
             .effect("rewrites the generated configuration file"))
         },
         |ctx, _| {
-            let path = services::nginx::render(ctx)?;
+            let path = services::web::render(ctx)?;
             let sites = ctx.store.list_sites()?.len();
             Ok(Outcome::with_data(
                 format!("rendered {sites} site(s) into {}", path.display()),
@@ -431,26 +489,62 @@ fn register_web(reg: &mut Registry) -> Result<()> {
     )?;
 
     reg.define::<NoArgs>("web.test", "Check the web server configuration")
-    .description("Runs `nginx -t` against the generated configuration and reports nginx's own message.")
+    .description("Asks the web server (`nginx -t` or `httpd -t`) to check the generated configuration and reports its own message.")
     .group("web")
     .tier(Tier::Read)
     .effect(Effect::Read)
     .agent_safe()
     .idempotent()
     .handlers(
-        |_, _| Ok(Plan::new("web.test", "run `nginx -t`")),
+        |_, _| Ok(Plan::new("web.test", "check the generated configuration with the web server")),
         |ctx, _| {
-            let output = services::nginx::test(ctx)?;
+            let output = services::web::test(ctx)?;
             Ok(Outcome::with_data(
                 "the configuration is valid",
-                json!({ "nginx": output }),
+                json!({ "server": services::web::service_name(ctx), "output": output }),
+            ))
+        },
+    )?;
+
+    reg.define::<UseWebArgs>("web.use", "Choose the web server: nginx or apache")
+    .description("Sets which web server fronts the sites. Apache reads .htaccess files, so a site written          for Laragon or shared hosting works unchanged; nginx is lighter. The choice is a setting, so it          applies the next time devd starts: stop the running server, restart devd, then bring the stack up.          The server has to be installed first. Human only.")
+    .group("web")
+    .tier(Tier::Write)
+    .effect(Effect::Config)
+    .human_only()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, a| Ok(Plan::new("web.use", format!("serve sites with {}", a.server)).effect("rewrites settings.toml")),
+        |ctx, a| {
+            let chosen = match a.server.as_str() {
+                "nginx" => devd_core::config::WebServer::Nginx,
+                "apache" => devd_core::config::WebServer::Apache,
+                other => return Err(DevdError::invalid(format!("web server must be nginx or apache, not {other}"))),
+            };
+            if ctx.store.get_service(&a.server)?.is_none() {
+                return Err(DevdError::not_found(format!(
+                    "{} is not installed; run `devd service install {}`{}",
+                    a.server,
+                    a.server,
+                    if a.server == "apache" { ", or `devd service adopt apache <folder>` to use one you already have" } else { "" }
+                )));
+            }
+            let file = ctx.paths.settings_file();
+            let mut settings = devd_core::config::Settings::load(&file)?;
+            settings.web_server = chosen;
+            settings.validate()?;
+            settings.save(&file)?;
+            Ok(Outcome::with_data(
+                format!("web_server is now {}; restart devd, stop the other web server and run `devd stack up` to apply it", a.server),
+                json!({ "web_server": a.server, "settings": file.display().to_string() }),
             ))
         },
     )?;
 
     reg.define::<NoArgs>("web.reload", "Reload the web server")
-    .description("Checks the generated configuration and then asks nginx to read it, without dropping \
-         connections. A configuration that does not pass the check is never loaded.")
+    .description("Checks the generated configuration and then has the web server read it: nginx without \
+         dropping connections, Apache by a restart. A configuration that does not pass the check is never loaded.")
     .group("web")
     .tier(Tier::Exec)
     .effect(Effect::Process)
@@ -460,17 +554,17 @@ fn register_web(reg: &mut Registry) -> Result<()> {
         |_, _| {
             Ok(Plan::new(
                 "web.reload",
-                "reload nginx with the generated configuration",
+                "reload the web server with the generated configuration",
             )
-            .step("run `nginx -t`")
-            .step("signal nginx to reload")
+            .step("check the configuration")
+            .step("signal nginx to reload, or restart Apache")
             .effect("reloads a running process"))
         },
         |ctx, _| {
-            let output = services::nginx::reload(ctx)?;
+            let output = services::web::reload(ctx)?;
             Ok(Outcome::with_data(
-                "nginx reloaded",
-                json!({ "nginx": output }),
+                format!("{} reloaded", services::web::service_name(ctx)),
+                json!({ "server": services::web::service_name(ctx), "output": output }),
             ))
         },
     )?;

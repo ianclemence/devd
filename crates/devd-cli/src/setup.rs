@@ -94,7 +94,8 @@ pub fn run(json: bool, plan_only: bool, assume_yes: bool) -> Result<i32> {
             }
         }
     };
-    for name in ["nginx", "mariadb"] {
+    let web_server = app.ctx().settings.web_server.as_str();
+    for name in [web_server, "mariadb"] {
         let ctx = app.ctx();
         if ctx.store.get_service(name)?.is_some() {
             say(&app, &format!("    {name} is already installed"));

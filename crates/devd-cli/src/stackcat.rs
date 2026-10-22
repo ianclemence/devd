@@ -36,6 +36,8 @@ pub fn service(app: &App, cmd: ServiceCommand) -> Result<()> {
             "service.install",
             json!({ "name": name, "version": version, "port": port, "force": force }),
         ),
+        ServiceCommand::Find { name } => app.invoke("service.find_local", json!({ "name": name })),
+        ServiceCommand::Adopt { name, path, port } => app.invoke("service.adopt", json!({ "name": name, "path": path, "port": port })),
         ServiceCommand::Start { name } => app.invoke("service.start", json!({ "name": name })),
         ServiceCommand::Stop { name } => app.invoke("service.stop", json!({ "name": name })),
         ServiceCommand::Restart { name } => app.invoke("service.restart", json!({ "name": name })),
@@ -53,6 +55,7 @@ pub fn web(app: &App, cmd: WebCommand) -> Result<()> {
         WebCommand::Render => app.invoke("web.render", json!({})),
         WebCommand::Test => app.invoke("web.test", json!({})),
         WebCommand::Reload => app.invoke("web.reload", json!({})),
+        WebCommand::Use { server } => app.invoke("web.use", json!({ "server": server })),
     }
 }
 

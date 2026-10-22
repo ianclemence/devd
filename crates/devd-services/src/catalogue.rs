@@ -7,6 +7,7 @@
 //! |---------|-----------|--------|
 //! | nginx | `nginx.org/en/download.html` | not published as a file |
 //! | MariaDB | `downloads.mariadb.org/rest-api` | per-file `sha256sum` in the API |
+//! | Apache httpd | `apachelounge.com/download` (Windows) | `<zip>.txt` beside each archive |
 //!
 //! nginx is the one honest gap. nginx.org publishes a PGP signature
 //! (`nginx-1.28.3.zip.asc`) and no checksum file, so `devd` cannot check the
@@ -24,6 +25,10 @@ use devd_runtime::catalogue::Available;
 /// Where nginx lists its builds.
 const NGINX_DOWNLOAD: &str = "https://nginx.org/en/download.html";
 const NGINX_BASE: &str = "https://nginx.org/download/";
+
+/// Apache Lounge, the Windows builds the Apache project itself points to.
+const APACHE_PAGE: &str = "https://www.apachelounge.com/download/";
+const APACHE_HOST: &str = "https://www.apachelounge.com";
 
 /// Where MariaDB keeps every release's files.
 const MARIADB_BASE: &str = "https://archive.mariadb.org/";
@@ -70,6 +75,69 @@ pub fn nginx_digest(version: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Every Apache build Apache Lounge currently lists for 64-bit Windows, with the
+/// SHA-256 it publishes in the `.txt` file beside each archive.
+pub fn apache() -> Result<Vec<Available>> {
+    let html = download::fetch_text(APACHE_PAGE, TIMEOUT)?;
+    let mut list = Vec::new();
+    for (version, path) in scan_apache(&html) {
+        let url = format!("{APACHE_HOST}{path}");
+        let sums = download::fetch_text(&format!("{url}.txt"), TIMEOUT)?;
+        let sha256 = apache_sha256(&sums).ok_or_else(|| {
+            DevdError::internal(format!("{url}.txt does not contain a SHA256 line devd can read"))
+        })?;
+        list.push(Available {
+            kind: "apache".to_string(),
+            series: devd_runtime::catalogue::series_of(&version),
+            version,
+            channel: "stable".to_string(),
+            url,
+            sha256: Some(sha256),
+            bytes: None,
+            published: None,
+            executable: "Apache24/bin/httpd.exe".to_string(),
+        });
+    }
+    sort_newest_first(&mut list);
+    Ok(list)
+}
+
+/// The 64-bit Windows archives linked from Apache Lounge's download page, as
+/// (version, path). A file name is `httpd-2.4.69-261002-Win64-VS18.zip`.
+fn scan_apache(document: &str) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for piece in document.split("href=\"").skip(1) {
+        let Some(path) = piece.split('"').next() else { continue };
+        let Some(name) = path.rsplit('/').next() else { continue };
+        let lower = name.to_ascii_lowercase();
+        if !(lower.starts_with("httpd-") && lower.contains("-win64-vs") && lower.ends_with(".zip")) {
+            continue;
+        }
+        let version: String = name["httpd-".len()..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '.')
+            .collect();
+        let version = version.trim_end_matches('.').to_string();
+        if version.split('.').count() != 3 || out.iter().any(|(v, _)| v == &version) {
+            continue;
+        }
+        out.push((version, path.to_string()));
+    }
+    out
+}
+
+/// The `SHA256:` line of an Apache Lounge checksum file, lower-cased.
+fn apache_sha256(text: &str) -> Option<String> {
+    text.lines().find_map(|line| {
+        let (label, value) = line.split_once(':')?;
+        if !label.trim().eq_ignore_ascii_case("sha256") {
+            return None;
+        }
+        let digest = value.trim().to_ascii_lowercase();
+        (digest.len() == 64 && digest.chars().all(|c| c.is_ascii_hexdigit())).then_some(digest)
+    })
 }
 
 pub fn nginx() -> Result<Vec<Available>> {
@@ -335,8 +403,14 @@ pub fn for_kind(kind: &str) -> Result<Vec<Available>> {
             }
             mariadb()
         }
+        "apache" => {
+            if !cfg!(windows) {
+                return Ok(Vec::new());
+            }
+            apache()
+        }
         other => Err(DevdError::unsupported(format!(
-            "`{other}` has no upstream catalogue in devd; installable services are nginx and mariadb"
+            "`{other}` has no upstream catalogue in devd; installable services are nginx, apache and mariadb"
         ))),
     }
 }
@@ -401,9 +475,26 @@ mod tests {
 
     #[test]
     fn unknown_kinds_are_refused() {
-        let err = for_kind("apache").unwrap_err();
+        let err = for_kind("lighttpd").unwrap_err();
         assert_eq!(err.code(), "unsupported");
-        assert!(err.to_string().contains("nginx and mariadb"), "{err}");
+        assert!(err.to_string().contains("nginx, apache and mariadb"), "{err}");
+    }
+
+    #[test]
+    fn the_apache_page_yields_the_64_bit_archive_and_not_its_signature() {
+        let page = r#"<a href="/download/VS18/binaries/httpd-2.4.69-261002-Win64-VS18.zip">zip</a>
+            <a href="/download/VS18/binaries/httpd-2.4.69-261002-Win64-VS18.zip.asc">sig</a>
+            <a href="/download/VS18/binaries/httpd-2.4.69-261002-Win64-VS18.zip.txt">sums</a>
+            <a href="/download/VS18/binaries/httpd-2.4.69-261002-win32-vs18.zip">32</a>"#;
+        let found = scan_apache(page);
+        assert_eq!(found, vec![("2.4.69".to_string(), "/download/VS18/binaries/httpd-2.4.69-261002-Win64-VS18.zip".to_string())]);
+    }
+
+    #[test]
+    fn the_sha256_is_read_from_apache_lounges_checksum_file() {
+        let text = "File name: httpd-2.4.69-261002-Win64-VS18.zip\nSHA1:   D7B557581787727CA222C6A5FF0E9E6FA6029893\nSHA256: CA272E0B75ABAD78B1E4029A0753B20FF2232D2D857E8EEBEEA5D469C5776977\nSHA384: 6C32\n";
+        assert_eq!(apache_sha256(text).as_deref(), Some("ca272e0b75abad78b1e4029a0753b20ff2232d2d857e8eebeea5d469c5776977"));
+        assert_eq!(apache_sha256("SHA256: short"), None);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! Managed services: nginx, the PHP FastCGI listener, and MariaDB.
+//! Managed services: nginx or Apache, the PHP FastCGI listener, and MariaDB.
 //!
 //! A service is the piece that turns installed files into a running thing. The
 //! shape here follows from one decision: **`devd` does not require a background
@@ -16,12 +16,14 @@
 //! service that is "started" but not listening is the single most useless state a
 //! development environment can report.
 
+pub mod apache;
 pub mod caps;
 pub mod catalogue;
 pub mod mariadb;
 pub mod nginx;
 pub mod system;
 pub mod tls;
+pub mod web;
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -68,6 +70,15 @@ pub const DEFINITIONS: &[Definition] = &[
         unix_exe: "sbin/nginx",
         default_port: 0,
         startup: Duration::from_secs(10),
+    },
+    Definition {
+        name: "apache",
+        kind: "apache",
+        summary: "Apache httpd, for the sites that depend on .htaccess",
+        windows_exe: "Apache24/bin/httpd.exe",
+        unix_exe: "bin/httpd",
+        default_port: 0,
+        startup: Duration::from_secs(20),
     },
     Definition {
         name: "mariadb",
@@ -493,6 +504,13 @@ pub fn install(
         ))
     })?;
 
+    if def.name == "apache" && Os::current().uses_system_packages() {
+        return Err(DevdError::unsupported(
+            "devd drives Apache on Windows. On Linux and macOS it serves sites with nginx; \
+             set web_server back to \"nginx\"",
+        ));
+    }
+
     // Off Windows the program comes from the system's package manager, not from
     // a download devd verifies itself.
     if Os::current().uses_system_packages() {
@@ -604,11 +622,15 @@ pub fn install(
 
     archive::extract(&fetched.path, &dest, true)?;
 
-    let record = json!({
+    let mut record = json!({
         "url": chosen.url,
         "sha256": fetched.sha256,
         "bytes": fetched.bytes,
     });
+    if def.name == "apache" {
+        // The Apache Lounge archive holds an `Apache24` folder beside its notes.
+        record["root"] = json!(dest.join("Apache24").display().to_string());
+    }
     let (service, extra) = finish_install(
         ctx,
         def,
@@ -670,6 +692,20 @@ fn finish_install(
             // check the moment nginx is installed.
             nginx::render(ctx)?;
         }
+        "apache" => {
+            // The manifest that names the Apache root is written below, so the
+            // render has to look where it will be, not where it is.
+            if let serde_json::Value::Object(fields) = &record {
+                if let Some(root) = fields.get("root").and_then(|v| v.as_str()) {
+                    std::fs::create_dir_all(install_dir(ctx, def.name))?;
+                    util::atomic_write(
+                        &manifest(ctx, def.name),
+                        &json!({ "name": def.name, "version": version, "root": root }).to_string(),
+                    )?;
+                }
+            }
+            apache::render(ctx)?;
+        }
         _ => {}
     }
 
@@ -704,7 +740,7 @@ fn finish_install(
     service.kind = def.kind.to_string();
     service.argv = serde_json::to_string(&service_argv(ctx, def.name, port)?).unwrap_or_default();
     service.port = Some(port.unwrap_or(def.default_port));
-    if def.name == "nginx" {
+    if def.name == "nginx" || def.name == "apache" {
         service.port = Some(ctx.settings.http_port);
     }
     service.health = Some(json!({ "tcp": service.port }).to_string());
@@ -712,7 +748,7 @@ fn finish_install(
 
     // Installing nginx is the moment a PHP listener becomes meaningful, so it is
     // created (stopped) if a PHP runtime exists.
-    if def.name == "nginx" {
+    if def.name == "nginx" || def.name == "apache" {
         if devd_runtime::executable(ctx, "php", None).is_ok() {
             ensure_php_service(ctx)?;
         }
@@ -785,6 +821,105 @@ pub fn install_system(
     })
 }
 
+/// Apache folders already on this machine, as (path, version).
+///
+/// Looks where the Windows distributions put it - Laragon, XAMPP, WampServer, a
+/// plain `C:\Apache24` - on every drive. Nothing is read beyond `httpd -v`.
+pub fn find_local_apache() -> Vec<(PathBuf, String)> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if cfg!(windows) {
+        for drive in 'A'..='Z' {
+            let root = PathBuf::from(format!("{drive}:\\"));
+            if !root.is_dir() {
+                continue;
+            }
+            for parent in ["laragon\\bin\\apache", "wamp64\\bin\\apache", "wamp\\bin\\apache", "Program Files", "Program Files\\Apache Software Foundation"] {
+                if let Ok(entries) = std::fs::read_dir(root.join(parent)) {
+                    for entry in entries.flatten() {
+                        let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+                        if parent.starts_with("Program Files") && !name.starts_with("apache") {
+                            continue;
+                        }
+                        candidates.push(entry.path());
+                    }
+                }
+            }
+            candidates.push(root.join("Apache24"));
+            candidates.push(root.join("Apache"));
+            candidates.push(root.join("xampp\\apache"));
+        }
+    }
+    let mut out = Vec::new();
+    for candidate in candidates {
+        let Some(root) = apache_root_of(&candidate) else { continue };
+        if out.iter().any(|(p, _): &(PathBuf, String)| p == &root) {
+            continue;
+        }
+        if let Some(version) = apache::version(&root) {
+            out.push((root, version));
+        }
+    }
+    out
+}
+
+/// The Apache root inside a folder: the folder itself, or its `Apache24` child.
+fn apache_root_of(folder: &Path) -> Option<PathBuf> {
+    [folder.to_path_buf(), folder.join("Apache24")]
+        .into_iter()
+        .find(|p| p.join(apache::exe_name()).is_file() && p.join("modules").is_dir())
+}
+
+/// Use an Apache that is already on disk, without copying or changing it.
+///
+/// The folder is recorded as the Apache root. devd writes its own configuration
+/// under its own directory and starts `httpd -f <that>`, so the owner's
+/// `httpd.conf` and the rest of the folder are never touched. It is a person's
+/// decision, because the program in that folder is what devd will then run.
+pub fn adopt(ctx: &Ctx, name: &str, path: &Path, port: Option<u16>) -> Result<InstalledService> {
+    let def = definition(name)
+        .filter(|d| d.name == "apache")
+        .ok_or_else(|| DevdError::unsupported("only Apache can be adopted from a folder"))?;
+    if !path.is_absolute() {
+        return Err(DevdError::invalid("give the absolute path of the Apache folder"));
+    }
+    let root = apache_root_of(path).ok_or_else(|| {
+        DevdError::not_found(format!(
+            "{} is not an Apache folder: it needs {} and a modules folder",
+            path.display(),
+            apache::exe_name()
+        ))
+    })?;
+    if let Ok(Some(existing)) = ctx.store.get_service(def.name) {
+        if running_pid(ctx, &existing).is_some() {
+            return Err(DevdError::conflict(
+                "apache is running; stop it first with `devd service stop apache`",
+            ));
+        }
+    }
+    let version = apache::version(&root).ok_or_else(|| {
+        DevdError::invalid(format!("could not read an Apache version from {}", root.display()))
+    })?;
+    let mut warnings = vec![format!(
+        "{} is used as it is. devd does not change it; its own configuration is {}",
+        root.display(),
+        apache::config_path(ctx).display()
+    )];
+    let record = json!({ "source": "adopted", "root": root.display().to_string() });
+    let dest = install_dir(ctx, def.name);
+    std::fs::create_dir_all(&dest)?;
+    let (service, extra) = finish_install(ctx, def, port, &version, record, &dest, &mut warnings)?;
+    Ok(InstalledService {
+        service,
+        version,
+        path: root.display().to_string(),
+        digest: None,
+        bytes: 0,
+        from_cache: false,
+        warnings,
+        details: serde_json::Value::Object(extra),
+    })
+}
+
 /// The builds devd can verify before it installs them.
 ///
 /// nginx publishes a signature and no checksum, so only the versions whose digest
@@ -815,6 +950,16 @@ pub fn service_argv(ctx: &Ctx, name: &str, _port: Option<u16>) -> Result<Vec<Str
                 nginx::prefix(&dir),
                 "-c".to_string(),
                 native(&nginx::config_path(ctx)),
+            ])
+        }
+        "apache" => {
+            let root = apache::directory(ctx);
+            Ok(vec![
+                native(&root.join(apache::exe_name())),
+                "-d".to_string(),
+                apache::root_arg(&root),
+                "-f".to_string(),
+                native(&apache::config_path(ctx)),
             ])
         }
         "mariadb" => {
@@ -1090,6 +1235,13 @@ pub fn start(ctx: &Ctx, name: &str) -> Result<Status> {
         }
     }
 
+    if service.name == "apache" {
+        if !apache::config_path(ctx).is_file() {
+            apache::render(ctx)?;
+        }
+        apache::test(ctx)?;
+    }
+
     // MariaDB needs its configuration on disk and its system tables created
     // before it will start at all. Both are reported as themselves rather than as
     // a server that mysteriously exits.
@@ -1275,7 +1427,10 @@ pub fn stack_up(ctx: &Ctx) -> Result<Vec<Status>> {
             .iter()
             .filter(|s| s.name == "php-cgi" || s.name.starts_with("php-cgi-")),
     );
-    for name in ["mariadb", "nginx"] {
+    // Only the web server the settings name is started: two of them would fight
+    // over the same ports.
+    let web = web::service_name(ctx);
+    for name in ["mariadb", web] {
         ordered.extend(services.iter().filter(|s| s.name == name));
     }
     ordered.extend(services.iter().filter(|s| {
@@ -1283,6 +1438,7 @@ pub fn stack_up(ctx: &Ctx) -> Result<Vec<Status>> {
             && !s.name.starts_with("php-cgi-")
             && s.name != "mariadb"
             && s.name != "nginx"
+            && s.name != "apache"
     }));
 
     for service in ordered {
@@ -1313,7 +1469,7 @@ pub fn stack_up(ctx: &Ctx) -> Result<Vec<Status>> {
 
 /// Stop every running service, in reverse dependency order.
 pub fn stack_down(ctx: &Ctx) -> Result<Vec<Status>> {
-    let order = ["nginx", "mariadb", "php-cgi"];
+    let order = ["nginx", "apache", "mariadb", "php-cgi"];
     let mut stopped = Vec::new();
     let names: Vec<String> = ctx
         .store
@@ -1676,7 +1832,7 @@ mod tests {
             assert_eq!(definition(def.kind).map(|d| d.name), Some(def.name));
             assert!(!def.windows_exe.is_empty() && !def.unix_exe.is_empty());
         }
-        assert!(definition("apache").is_none());
+        assert!(definition("lighttpd").is_none());
     }
 
     #[test]

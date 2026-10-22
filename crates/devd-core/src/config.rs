@@ -148,14 +148,6 @@ impl Settings {
                 "http_port and https_port must differ",
             ));
         }
-        // Accepting a setting nothing acts on is worse than refusing it: sites
-        // would be recorded for a web server that renders no configuration.
-        if self.web_server == WebServer::Apache {
-            return Err(crate::error::DevdError::invalid(
-                "web_server = \"apache\" is not implemented: devd serves sites with nginx. \
-                 Remove the setting, or set it to \"nginx\"",
-            ));
-        }
         Ok(())
     }
 }
@@ -177,13 +169,18 @@ mod tests {
     }
 
     #[test]
-    fn a_web_server_devd_cannot_drive_is_refused_not_silently_ignored() {
-        let mut s = Settings::default();
-        s.web_server = WebServer::Apache;
-        let err = s.validate().unwrap_err().to_string();
-        assert!(err.contains("apache") && err.contains("not implemented"), "{err}");
-        s.web_server = WebServer::Nginx;
-        s.validate().unwrap();
+    fn either_web_server_is_a_valid_choice_and_survives_a_round_trip() {
+        let dir = std::env::temp_dir().join(format!("devd-cfg-ws-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("settings.toml");
+        for server in [WebServer::Nginx, WebServer::Apache] {
+            let mut s = Settings::default();
+            s.web_server = server;
+            s.validate().unwrap();
+            s.save(&f).unwrap();
+            assert_eq!(Settings::load(&f).unwrap().web_server, server);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

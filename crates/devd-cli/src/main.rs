@@ -894,12 +894,27 @@ pub(crate) enum ServiceCommand {
     List,
     /// Show the builds the vendor publishes for a service.
     Available {
-        /// Service name: `nginx` or `mariadb`.
+        /// Service name: `nginx`, `apache` or `mariadb`.
         name: String,
+    },
+    /// Look for a service's program already on this machine (Apache from Laragon, XAMPP, WampServer).
+    Find {
+        /// Service name: `apache`.
+        name: String,
+    },
+    /// Use a program that is already on disk, without copying or changing it.
+    Adopt {
+        /// Service name: `apache`.
+        name: String,
+        /// The program's folder, for example `D:laragoninapachehttpd-2.4.54-win64-VS16`.
+        path: String,
+        /// Port it should listen on; the configured HTTP port by default.
+        #[arg(long)]
+        port: Option<u16>,
     },
     /// Download, verify and install a service.
     Install {
-        /// Service name: `nginx` or `mariadb`.
+        /// Service name: `nginx`, `apache` or `mariadb`.
         name: String,
         /// Version, series or `latest`.
         #[arg(long, default_value = "latest")]
@@ -1010,10 +1025,15 @@ pub(crate) enum HostsCommand {
 pub(crate) enum WebCommand {
     /// Rebuild the web server configuration from the state store.
     Render,
-    /// Check the configuration with `nginx -t`.
+    /// Check the configuration with the web server (`nginx -t` or `httpd -t`).
     Test,
     /// Check and then reload the running web server.
     Reload,
+    /// Serve sites with `nginx` or `apache` (applies when devd next starts).
+    Use {
+        /// `nginx` or `apache`.
+        server: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
