@@ -50,12 +50,106 @@ args! {
     SiteName { name: String }
     /// Whether to ask Windows for permission when the hosts file cannot be written.
     HostsSyncArgs { elevate: Option<bool> }
+    /// A site to share, and for how long.
+    ShareArgs { name: String, minutes: Option<u64> }
     /// A site to pin to a PHP version.
     SetPhpArgs { name: String, version: Option<String> }
 }
 
+fn site_named(ctx: &Ctx, name: &str) -> Result<devd_core::state::Site> {
+    ctx.store.list_sites()?.into_iter().find(|s| s.name == name).ok_or_else(|| DevdError::not_found(format!("no site named {name}")))
+}
+
+/// What in the project folder should not be public.
+fn exposed(site: &devd_core::state::Site) -> Vec<String> {
+    if site.upstream.is_some() {
+        return Vec::new();
+    }
+    let mut out = devd_services::share::exposures(std::path::Path::new(&site.root));
+    for f in devd_services::share::exposures(std::path::Path::new(&site.document_root())) {
+        if !out.contains(&f) {
+            out.push(f);
+        }
+    }
+    out
+}
+
 /// Register every site capability.
 pub fn register(reg: &mut Registry) -> Result<()> {
+    reg.define::<ShareArgs>("share.start", "Open a public link to a site")
+    .description("Makes the site reachable from the internet through a Cloudflare quick tunnel at a random https address, for a limited time (default 2 hours, at most 24). Anyone with the address can open the site; it is closed when the time is up or with share.stop. The first use downloads cloudflared from Cloudflare's GitHub release and checks the SHA-256 GitHub records for it. Warns when the project folder holds a .env, .git or database dump. Human only: it publishes a site.")
+    .group("share")
+    .tier(Tier::Remote)
+    .effect(Effect::Remote)
+    .human_only()
+    .dry_run()
+    .handlers(
+        |ctx, a| {
+            let site = site_named(ctx, &a.name)?;
+            let minutes = a.minutes.unwrap_or(devd_services::share::DEFAULT_MINUTES);
+            let mut plan = Plan::new("share.start", format!("make {} reachable from the internet for {minutes} minutes", a.name));
+            if devd_services::share::installed(ctx).is_none() {
+                let build = devd_services::share::latest_build()?;
+                plan = plan
+                    .step(format!("download cloudflared {} from {}", build.version, build.url))
+                    .step(format!("verify it against SHA-256 {}", build.sha256));
+            }
+            plan = plan
+                .step(format!("open a Cloudflare quick tunnel to {} on this computer", site.host))
+                .step(format!("close it automatically after {minutes} minutes"))
+                .effect("anyone with the address can open the site until then");
+            for found in exposed(&site) {
+                plan = plan.step(format!("WARNING: {found} is in the project folder and may be served"));
+            }
+            Ok(plan)
+        },
+        |ctx, a| {
+            let site = site_named(ctx, &a.name)?;
+            let minutes = a.minutes.unwrap_or(devd_services::share::DEFAULT_MINUTES);
+            if devd_services::share::installed(ctx).is_none() {
+                let build = devd_services::share::latest_build()?;
+                devd_services::share::install(ctx, &build)?;
+            }
+            let share = devd_services::share::start(ctx, &site, minutes)?;
+            let mut outcome = Outcome::with_data(format!("{} is public at {} until {}", a.name, share.url, share.expires_at), serde_json::to_value(&share).unwrap_or(Value::Null));
+            for found in exposed(&site) {
+                outcome = outcome.warn(format!("{found} is in the project folder; make sure the web server does not serve it"));
+            }
+            if !sites::resolves_without_hosts(&site.host) {
+                outcome = outcome.warn("applications that build absolute links from their configured address (WordPress, for one) will send visitors to the local address; set the site address to the public one while the link is open");
+            }
+            Ok(outcome)
+        },
+    )?;
+
+    reg.define::<SiteName>("share.stop", "Close a site's public link")
+    .group("share")
+    .tier(Tier::Write)
+    .effect(Effect::Remote)
+    .agent_safe()
+    .idempotent()
+    .handlers(
+        |_, a| Ok(Plan::new("share.stop", format!("close the public link to {}", a.name))),
+        |ctx, a| {
+            let was = devd_services::share::stop(ctx, &a.name)?;
+            Ok(Outcome::with_data(if was { format!("{} is no longer public", a.name) } else { format!("{} had no open link", a.name) }, json!({ "site": a.name, "was_open": was })))
+        },
+    )?;
+
+    reg.define::<NoArgs>("share.list", "List the open public links")
+    .group("share")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .handlers(
+        |_, _| Ok(Plan::new("share.list", "list public links")),
+        |ctx, _| {
+            let open = devd_services::share::list(ctx)?;
+            Ok(Outcome::with_data(format!("{} open link(s)", open.len()), json!({ "shares": open })))
+        },
+    )?;
+
     reg.define::<SiteName>("site.fix_htaccess", "Make a site's .htaccess readable by Apache")
     .description("Apache runs PHP as FastCGI, so `php_value`, `php_flag` and `php_admin_*` lines in a .htaccess answer every request with a 500. This wraps them in <IfModule mod_php.c> (the form hosts that do run mod_php read the same way), keeps the original as .htaccess.devd-backup, and carries the values into .user.ini, which PHP reads for every setting a .htaccess may change. php_admin_* values are system settings .user.ini cannot change; they are listed. Human only, because it edits a file in the project.")
     .group("site")

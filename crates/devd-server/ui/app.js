@@ -1406,6 +1406,9 @@
                 '<div class="svc-sub mono">' + esc(row.url) + "</div></div>" +
                 '<div class="svc-actions">' +
                 '<button type="button" class="btn btn-mini" data-action="open-url" data-url="' + attr(row.url) + '">Open</button>' +
+        (row.shared
+          ? '<button type="button" class="btn btn-mini" data-action="unshare-site" data-name="' + attr(site.name) + '">Stop sharing</button>'
+          : '<button type="button" class="btn btn-mini btn-ghost" data-action="share-site" data-name="' + attr(site.name) + '" title="Open a public link for two hours">Share</button>') +
                 "</div></div>"
               );
             })
@@ -1543,7 +1546,8 @@
         "<tr>" +
         '<td><div class="cell-strong">' + esc(site.name) + "</div>" +
         (row.present ? "" : '<div class="cell-warn">directory missing</div>') + "</td>" +
-        '<td class="cell-mono"><a href="' + attr(row.url) + '" target="_blank" rel="noreferrer">' + esc(row.url) + "</a></td>" +
+        '<td class="cell-mono"><a href="' + attr(row.url) + '" target="_blank" rel="noreferrer">' + esc(row.url) + "</a>" +
+        (row.shared ? '<div><span class="pill pill-warn">public</span> <a href="' + attr(row.shared) + '" target="_blank" rel="noreferrer">' + esc(row.shared) + "</a></div>" : "") + "</td>" +
         "<td>" + phpCell + "</td>" +
         "<td>" +
         (site.tls_mode === "off"
@@ -6221,6 +6225,8 @@
     },
 
     "remove-site": function (node) { act("site.remove", { name: node.dataset.name }); },
+    "share-site": function (node) { act("share.start", { name: node.dataset.name }); },
+    "unshare-site": function (node) { act("share.stop", { name: node.dataset.name }); },
 
     "open-url": function (node) {
       post("/api/open-url", { url: node.dataset.url }).then(function (res) {

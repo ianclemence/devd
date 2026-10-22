@@ -123,5 +123,6 @@ pub fn spawn_loop(team: Arc<Team>) {
     std::thread::spawn(move || loop {
         std::thread::sleep(TICK);
         let _ = tick(&team);
+        devd_services::share::sweep(team.context());
     });
 }

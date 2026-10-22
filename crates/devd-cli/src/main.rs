@@ -1004,6 +1004,21 @@ pub(crate) enum SiteCommand {
         /// The folder, as an absolute path.
         path: String,
     },
+    /// Open a public link to a site (Cloudflare quick tunnel) for a limited time.
+    Share {
+        /// Site name.
+        name: String,
+        /// How long the link stays open (default 120, at most 1440).
+        #[arg(long)]
+        minutes: Option<u64>,
+    },
+    /// Close a site's public link.
+    Unshare {
+        /// Site name.
+        name: String,
+    },
+    /// List the open public links.
+    Shares,
     /// Guard a site's php_value / php_flag lines in .htaccess so Apache accepts them.
     FixHtaccess {
         /// Site name.

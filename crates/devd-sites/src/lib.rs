@@ -651,6 +651,8 @@ pub struct SiteRow {
     /// How many `php_value`-style directives in the site's `.htaccess` Apache cannot
     /// read (always 0 under nginx).
     pub htaccess_php: usize,
+    /// The public address, while a share link is open.
+    pub shared: Option<String>,
 }
 
 /// Every site, with a live check of what is actually on disk.
@@ -661,6 +663,7 @@ pub fn list(ctx: &Ctx) -> Result<Vec<SiteRow>> {
         .unwrap_or(false);
     let php_installed = devd_services::installed_php_series(ctx).unwrap_or_default();
     let primary = devd_services::primary_php_series(ctx);
+    let shares = devd_services::share::list(ctx).unwrap_or_default();
 
     Ok(ctx
         .store
@@ -695,6 +698,7 @@ pub fn list(ctx: &Ctx) -> Result<Vec<SiteRow>> {
                 php_effective,
                 upstream_listening: upstream_listening(&site),
                 htaccess_php: htaccess_php(ctx, &site),
+                shared: shares.iter().find(|s| s.site == site.name).map(|s| s.url.clone()),
                 site,
             }
         })

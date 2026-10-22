@@ -54,6 +54,10 @@ devd site park D:\www            # a site for every project directory in it
 devd site sync                    # pick up folders added since
 devd site parked
 devd site unpark D:\www           # its sites stay
+devd site fix-htaccess blog       # guard php_value lines so Apache accepts the .htaccess
+devd site share blog --minutes 60 # public https link through a Cloudflare quick tunnel; closes by itself
+devd site shares
+devd site unshare blog
 devd site remove blog             # destructive; keeps files unless --delete-files
 
 devd hosts show                   # what a sync would change

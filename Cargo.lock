@@ -1113,6 +1113,7 @@ dependencies = [
 name = "devd-services"
 version = "0.9.0"
 dependencies = [
+ "chrono",
  "devd-core",
  "devd-runtime",
  "hex",

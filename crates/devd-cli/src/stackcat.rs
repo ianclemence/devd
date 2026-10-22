@@ -95,6 +95,9 @@ pub fn db(app: &App, engine: Option<String>, cmd: DbCommand) -> Result<()> {
 pub fn site(app: &App, cmd: SiteCommand) -> Result<()> {
     match cmd {
         SiteCommand::List => app.invoke("site.list", json!({})),
+        SiteCommand::Share { name, minutes } => app.invoke("share.start", json!({ "name": name, "minutes": minutes })),
+        SiteCommand::Unshare { name } => app.invoke("share.stop", json!({ "name": name })),
+        SiteCommand::Shares => app.invoke("share.list", json!({})),
         SiteCommand::FixHtaccess { name } => app.invoke("site.fix_htaccess", json!({ "name": name })),
         SiteCommand::Parked => app.invoke("site.parked", json!({})),
         SiteCommand::Park { path } => app.invoke("site.park", json!({ "path": path })),
