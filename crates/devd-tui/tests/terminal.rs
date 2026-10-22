@@ -72,7 +72,7 @@ fn fixture(name: &str) -> Fixture {
 ///
 /// `extra_checks` is empty: the Git check is what the CLI contributes, and this
 /// test is about the Git views rather than the doctor.
-fn controller(root: &PathBuf) -> (Controller, Arc<Registry>, Ctx) {
+fn controller(root: &std::path::Path) -> (Controller, Arc<Registry>, Ctx) {
     let paths = Paths::rooted(root.join("home"));
     paths.ensure().unwrap();
     let ctx = Ctx {

@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 
 use devd_core::capability::{Effect, Outcome, Plan, Tier};
 use devd_core::error::{DevdError, Result};
-use devd_core::store_work::{Scratchpad, Todo};
+use devd_core::store_work::{Scratchpad, Todo, TodoChange};
 use devd_core::{util, Registry};
 
 use crate::Workspace;
@@ -648,17 +648,7 @@ fn register_todos(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
             if let Some(priority) = &a.priority {
                 validate_priority(priority)?;
             }
-            let todo = w.store().update_todo(
-                &a.id,
-                a.expected_revision,
-                &ctx.actor.label(),
-                a.title.as_deref(),
-                a.description.as_deref(),
-                a.status.as_deref(),
-                a.priority.as_deref(),
-                a.assignee.as_ref().map(|s| Some(s.as_str())),
-                a.note.as_deref().unwrap_or(""),
-            )?;
+            let todo = w.store().update_todo(&a.id, a.expected_revision, &ctx.actor.label(), TodoChange { title: a.title.as_deref(), description: a.description.as_deref(), status: a.status.as_deref(), priority: a.priority.as_deref(), assignee: a.assignee.as_ref().map(|s| Some(s.as_str())), note: a.note.as_deref().unwrap_or("") })?;
             Ok(Outcome::with_data(
                 format!("todo {} is {}", todo.id, todo.status),
                 serde_json::to_value(&todo).unwrap_or(Value::Null),
@@ -683,17 +673,7 @@ fn register_todos(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
             ))
         },
         move |ctx, a| {
-            let todo = w.store().update_todo(
-                &a.id,
-                a.expected_revision,
-                &ctx.actor.label(),
-                None,
-                None,
-                Some("done"),
-                None,
-                None,
-                a.note.as_deref().unwrap_or("completed"),
-            )?;
+            let todo = w.store().update_todo(&a.id, a.expected_revision, &ctx.actor.label(), TodoChange { status: Some("done"), note: a.note.as_deref().unwrap_or("completed"), ..Default::default() })?;
             Ok(Outcome::with_data(
                 format!("completed {}", todo.id),
                 serde_json::to_value(&todo).unwrap_or(Value::Null),
@@ -713,17 +693,7 @@ fn register_todos(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
     .handlers(
         |_, a| Ok(Plan::new("todo.reopen", format!("reopen todo {}", a.id))),
         move |ctx, a| {
-            let todo = w.store().update_todo(
-                &a.id,
-                a.expected_revision,
-                &ctx.actor.label(),
-                None,
-                None,
-                Some("open"),
-                None,
-                None,
-                a.note.as_deref().unwrap_or("reopened"),
-            )?;
+            let todo = w.store().update_todo(&a.id, a.expected_revision, &ctx.actor.label(), TodoChange { status: Some("open"), note: a.note.as_deref().unwrap_or("reopened"), ..Default::default() })?;
             Ok(Outcome::with_data(
                 format!("reopened {}", todo.id),
                 serde_json::to_value(&todo).unwrap_or(Value::Null),

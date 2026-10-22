@@ -785,7 +785,7 @@ pub fn run(ctx: &Ctx, reg: &StackRegistry, req: &InitRequest) -> Result<InitRepo
         .store
         .begin_stack_run("init", &plan.project_dir, &format!("Create {} project {}", plan.stack_name, plan.name), &exec::redact_line(&plan.command), &ctx.actor.label(), Some(&log.display().to_string()))
         .ok();
-    let result = run_steps(ctx, reg, stack, req, &plan, &run_id, &cancel, &log, started);
+    let result = run_steps(&StepRun { ctx, reg, stack, req, plan: &plan, run_id: &run_id, cancel: &cancel, log: &log, started });
     exec::runs::finish(&run_id);
     if let (Some(h), Ok(r)) = (&history, &result) {
         let _ = ctx.store.finish_stack_run(h, None, r.status == "ok", started.elapsed().as_millis() as i64);
@@ -795,18 +795,21 @@ pub fn run(ctx: &Ctx, reg: &StackRegistry, req: &InitRequest) -> Result<InitRepo
     result
 }
 
-#[allow(clippy::too_many_arguments)]
-fn run_steps(
-    ctx: &Ctx,
-    reg: &StackRegistry,
-    stack: &StackDef,
-    req: &InitRequest,
-    plan: &InitPlan,
-    run_id: &str,
-    cancel: &AtomicBool,
-    log: &Path,
+/// Everything one initialisation run works from.
+struct StepRun<'a> {
+    ctx: &'a Ctx,
+    reg: &'a StackRegistry,
+    stack: &'a StackDef,
+    req: &'a InitRequest,
+    plan: &'a InitPlan,
+    run_id: &'a str,
+    cancel: &'a AtomicBool,
+    log: &'a Path,
     started: Instant,
-) -> Result<InitReport> {
+}
+
+fn run_steps(run: &StepRun) -> Result<InitReport> {
+    let StepRun { ctx, reg, stack, req, plan, run_id, cancel, log, started } = *run;
     let project_dir = PathBuf::from(&plan.project_dir);
     let parent = PathBuf::from(&plan.parent_dir);
     let dirs = toolchain::managed_dirs_for(ctx, &project_dir);

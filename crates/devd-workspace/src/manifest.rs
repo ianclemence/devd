@@ -698,11 +698,9 @@ processes:
     fn dependency_cycles_are_refused() {
         let dir = temp_root();
         let text = GOOD
-            .replace("depends_on: [\"web\"]", "depends_on: [\"web\"]")
             .replace("  web:\n", "  web:\n    depends_on: [\"worker\"]\n")
             .replace("    health:\n      url: \"http://127.0.0.1:3000/\"\n", "");
         // `web` now depends on `worker`, and `worker` on `web`.
-        let text = text.replacen("working_dir: \".\"\n", "working_dir: \".\"\n", 1);
         let err = parse(dir.path(), &text).unwrap_err();
         assert!(err.to_string().contains("cycle"), "{err}");
     }

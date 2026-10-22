@@ -30,12 +30,14 @@ jobs:
       - name: Rust toolchain
         shell: bash
         run: |
-          rustup toolchain install "${{ matrix.toolchain }}" --profile minimal
+          rustup toolchain install "${{ matrix.toolchain }}" --profile minimal --component clippy
           rustup default "${{ matrix.toolchain }}"
           rustc -vV
       - uses: Swatinem/rust-cache@v2
       - name: Build
         run: cargo build --workspace --exclude devd-desktop --all-targets
+      - name: Clippy
+        run: cargo clippy --workspace --exclude devd-desktop --all-targets -- -D warnings
       - name: Test
         run: cargo test --workspace --exclude devd-desktop
       # The desktop shell links each platform's web view, so it is built only

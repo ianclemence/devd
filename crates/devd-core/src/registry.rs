@@ -13,6 +13,7 @@ use serde_json::Value;
 
 use crate::capability::{Approval, Capability, Ctx, InvokeRequest, InvokeResult};
 use crate::error::{DevdError, Result};
+use crate::state::AuditRecord;
 
 /// Every capability `devd` knows about.
 #[derive(Default)]
@@ -272,17 +273,17 @@ impl Registry {
             Ok(_) => (true, "ok".to_string()),
             Err(e) => (false, e.to_string()),
         };
-        let _ = ctx.store.record_audit(
-            &ctx.actor.label(),
-            ctx.actor.surface.as_str(),
-            &cap.id,
-            cap.tier.as_str(),
-            cap.effect.as_str(),
-            req.dry_run,
+        let _ = ctx.store.record_audit(AuditRecord {
+            actor: &ctx.actor.label(),
+            surface: ctx.actor.surface.as_str(),
+            capability: &cap.id,
+            tier: cap.tier.as_str(),
+            effect: cap.effect.as_str(),
+            dry_run: req.dry_run,
             ok,
-            &redact(&req.args),
-            &message,
-        );
+            args: &redact(&req.args),
+            message: &message,
+        });
         if ok {
             ctx.events.emit_with(
                 "capability.applied",

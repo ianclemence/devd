@@ -261,7 +261,7 @@ pub fn installed_php_series(ctx: &Ctx) -> Result<Vec<String>> {
             None => series.push((key, runtime.version.clone())),
         }
     }
-    series.sort_by(|a, b| version_parts(&b.1).cmp(&version_parts(&a.1)));
+    series.sort_by_key(|s| std::cmp::Reverse(version_parts(&s.1)));
     Ok(series.into_iter().map(|(s, _)| s).collect())
 }
 

@@ -402,7 +402,7 @@ impl Host {
                 })
                 .unwrap_or(false);
         Self {
-            os: std::env::consts::OS.replace("macos", "macos"),
+            os: std::env::consts::OS.to_string(),
             arch: std::env::consts::ARCH.to_string(),
             managers,
             root,

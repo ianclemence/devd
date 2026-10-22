@@ -476,7 +476,6 @@ impl Store {
     // ------------------------------------------------------------- requests
 
     /// Queue an operation for a person to approve.
-    #[allow(clippy::too_many_arguments)]
     pub fn create_request(&self, actor: &str, capability: &str, args: &serde_json::Value, plan: Option<&serde_json::Value>, thread_id: Option<&str>, tool_use_id: Option<&str>) -> Result<AgentRequest> {
         let id = util::new_id();
         let now = util::now();

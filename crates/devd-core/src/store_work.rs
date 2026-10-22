@@ -12,6 +12,42 @@ use crate::error::{DevdError, Result};
 use crate::state::Store;
 use crate::util;
 
+/// What a process is now. `desired` and `started_at` keep their value when left out.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ProcessUpdate<'a> {
+    /// `stopped`, `starting`, `running`, `failed` or `stopping`.
+    pub status: &'a str,
+    /// `unknown`, `healthy`, `unhealthy` or `none`.
+    pub health_status: &'a str,
+    /// Its process id.
+    pub pid: Option<u32>,
+    /// Its last exit code.
+    pub exit_code: Option<i32>,
+    /// What went wrong.
+    pub error: Option<&'a str>,
+    /// When it started.
+    pub started_at: Option<&'a str>,
+    /// What it should be doing.
+    pub desired: Option<&'a str>,
+}
+
+/// A change to a todo. Only `Some` fields change.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TodoChange<'a> {
+    /// New title.
+    pub title: Option<&'a str>,
+    /// New description.
+    pub description: Option<&'a str>,
+    /// New status.
+    pub status: Option<&'a str>,
+    /// New priority.
+    pub priority: Option<&'a str>,
+    /// New assignee; `Some(None)` clears it.
+    pub assignee: Option<Option<&'a str>>,
+    /// The note recorded with the transition.
+    pub note: &'a str,
+}
+
 /// A declared project process and its last known state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectProcess {
@@ -210,19 +246,13 @@ impl Store {
     }
 
     /// Update the observed state of a declared process.
-    #[allow(clippy::too_many_arguments)]
     pub fn update_project_process(
         &self,
         project: &str,
         name: &str,
-        status: &str,
-        health_status: &str,
-        pid: Option<u32>,
-        exit_code: Option<i32>,
-        error: Option<&str>,
-        started_at: Option<&str>,
-        desired: Option<&str>,
+        update: ProcessUpdate,
     ) -> Result<()> {
+        let ProcessUpdate { status, health_status, pid, exit_code, error, started_at, desired } = update;
         self.with(|conn| {
             conn.execute(
                 "UPDATE project_processes SET status = ?3, health_status = ?4, pid = ?5,
@@ -571,13 +601,9 @@ impl Store {
         id: &str,
         expected_revision: i64,
         actor: &str,
-        title: Option<&str>,
-        description: Option<&str>,
-        status: Option<&str>,
-        priority: Option<&str>,
-        assignee: Option<Option<&str>>,
-        note: &str,
+        change: TodoChange,
     ) -> Result<Todo> {
+        let TodoChange { title, description, status, priority, assignee, note } = change;
         self.with(|conn| {
             let current: Todo = conn
                 .query_row(
@@ -804,32 +830,12 @@ mod tests {
         };
         store.insert_todo(&todo).unwrap();
         let updated = store
-            .update_todo(
-                &todo.id,
-                1,
-                "agent:a",
-                None,
-                None,
-                Some("in_progress"),
-                None,
-                None,
-                "",
-            )
+            .update_todo(&todo.id, 1, "agent:a", TodoChange { status: Some("in_progress"), ..Default::default() })
             .unwrap();
         assert_eq!(updated.status, "in_progress");
         assert_eq!(updated.revision, 2);
         let done = store
-            .update_todo(
-                &todo.id,
-                2,
-                "agent:a",
-                None,
-                None,
-                Some("done"),
-                None,
-                None,
-                "finished",
-            )
+            .update_todo(&todo.id, 2, "agent:a", TodoChange { status: Some("done"), note: "finished", ..Default::default() })
             .unwrap();
         assert_eq!(done.status, "done");
         assert!(done.completed_at.is_some());
@@ -837,17 +843,7 @@ mod tests {
         assert_eq!(events.len(), 3, "created, in_progress, done");
         assert_eq!(events[0].to_status, "done");
         let stale = store
-            .update_todo(
-                &todo.id,
-                2,
-                "agent:b",
-                None,
-                None,
-                Some("open"),
-                None,
-                None,
-                "",
-            )
+            .update_todo(&todo.id, 2, "agent:b", TodoChange { status: Some("open"), ..Default::default() })
             .unwrap_err();
         assert!(matches!(stale, DevdError::Conflict(_)));
     }

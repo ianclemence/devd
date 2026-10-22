@@ -207,6 +207,9 @@ fn tool_specs() -> Vec<ToolSpec> {
         .collect()
 }
 
+/// A provider, the model to ask it for, and the two labels shown for the pick.
+type Candidate = (Provider, Option<String>, String, String);
+
 impl Hub {
     /// Build the hub over a base context.
     pub fn new(ctx: Ctx) -> Arc<Self> {
@@ -388,7 +391,7 @@ impl Hub {
     /// The models to try for a conversation, best first. An explicit choice on
     /// the conversation is never replaced by a fallback; a role's configured
     /// chain is.
-    fn candidates(&self, t: &ChatThread, role: Option<&str>) -> Result<Vec<(Provider, Option<String>, String, String)>> {
+    fn candidates(&self, t: &ChatThread, role: Option<&str>) -> Result<Vec<Candidate>> {
         let mut out: Vec<(Provider, Option<String>, String, String)> = Vec::new();
         if t.provider_id.is_some() || t.model.is_some() {
             let (p, key) = self.provider_for(t)?;

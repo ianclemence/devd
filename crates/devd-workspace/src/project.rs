@@ -29,7 +29,7 @@ use serde_json::{json, Value};
 use devd_core::error::{DevdError, Result};
 use devd_core::process::{self, SpawnSpec, Supervisor};
 use devd_core::state::Store;
-use devd_core::store_work::ProjectProcess;
+use devd_core::store_work::{ProcessUpdate, ProjectProcess};
 use devd_core::{util, Paths};
 
 use crate::manifest::{self, Manifest, ProcessSpec};
@@ -445,38 +445,18 @@ impl ProjectManager {
         };
         match self.supervisor.start(spawn, util::new_id()) {
             Ok(pid) => {
-                self.store.update_project_process(
-                    &manifest.root,
-                    &spec.name,
-                    "running",
-                    if spec.health.is_some() {
+                self.store.update_project_process(&manifest.root, &spec.name, ProcessUpdate { status: "running", health_status: if spec.health.is_some() {
                         "unknown"
                     } else {
                         "none"
-                    },
-                    Some(pid),
-                    None,
-                    None,
-                    Some(&started),
-                    Some("started"),
-                )?;
+                    }, pid: Some(pid), started_at: Some(&started), desired: Some("started"), ..Default::default() })?;
                 if from_monitor {
                     let _ = self.store.bump_process_restarts(&manifest.root, &spec.name);
                 }
                 Ok(())
             }
             Err(e) => {
-                self.store.update_project_process(
-                    &manifest.root,
-                    &spec.name,
-                    "failed",
-                    "unknown",
-                    None,
-                    None,
-                    Some(&e.to_string()),
-                    None,
-                    Some("started"),
-                )?;
+                self.store.update_project_process(&manifest.root, &spec.name, ProcessUpdate { status: "failed", health_status: "unknown", error: Some(&e.to_string()), desired: Some("started"), ..Default::default() })?;
                 Err(e)
             }
         }
@@ -496,29 +476,9 @@ impl ProjectManager {
         }
         let key = key(&manifest.root, name);
         if let Some((code, _)) = self.supervisor.stop(&key)? {
-            self.store.update_project_process(
-                &manifest.root,
-                name,
-                "stopped",
-                "none",
-                None,
-                Some(code),
-                None,
-                None,
-                Some("stopped"),
-            )?;
+            self.store.update_project_process(&manifest.root, name, ProcessUpdate { status: "stopped", health_status: "none", exit_code: Some(code), desired: Some("stopped"), ..Default::default() })?;
         } else {
-            self.store.update_project_process(
-                &manifest.root,
-                name,
-                "stopped",
-                "none",
-                None,
-                None,
-                None,
-                None,
-                Some("stopped"),
-            )?;
+            self.store.update_project_process(&manifest.root, name, ProcessUpdate { status: "stopped", health_status: "none", desired: Some("stopped"), ..Default::default() })?;
         }
         Ok(())
     }
@@ -626,32 +586,12 @@ impl ProjectManager {
             let manifest = match manifest::load(Path::new(project)) {
                 Ok(m) => m,
                 Err(e) => {
-                    let _ = self.store.update_project_process(
-                        project,
-                        name,
-                        "failed",
-                        "unknown",
-                        None,
-                        Some(code),
-                        Some(&format!("{e}")),
-                        None,
-                        None,
-                    );
+                    let _ = self.store.update_project_process(project, name, ProcessUpdate { status: "failed", health_status: "unknown", exit_code: Some(code), error: Some(&format!("{e}")), ..Default::default() });
                     continue;
                 }
             };
             let Some(spec) = manifest.processes.get(name) else {
-                let _ = self.store.update_project_process(
-                    project,
-                    name,
-                    "stopped",
-                    "none",
-                    None,
-                    Some(code),
-                    Some("the process is no longer declared in devd.yml"),
-                    None,
-                    Some("stopped"),
-                );
+                let _ = self.store.update_project_process(project, name, ProcessUpdate { status: "stopped", health_status: "none", exit_code: Some(code), error: Some("the process is no longer declared in devd.yml"), desired: Some("stopped"), ..Default::default() });
                 continue;
             };
             let row = self.store.get_project_process(project, name).ok().flatten();
@@ -671,41 +611,11 @@ impl ProjectManager {
                 .map(|(hash, _, _)| hash == manifest.hash)
                 .unwrap_or(false);
             if should_restart && !approved {
-                let _ = self.store.update_project_process(
-                    project,
-                    name,
-                    "failed",
-                    "unknown",
-                    None,
-                    Some(code),
-                    Some("devd.yml changed since it was approved; review and approve it before it can restart"),
-                    None,
-                    Some("stopped"),
-                );
+                let _ = self.store.update_project_process(project, name, ProcessUpdate { status: "failed", health_status: "unknown", exit_code: Some(code), error: Some("devd.yml changed since it was approved; review and approve it before it can restart"), desired: Some("stopped"), ..Default::default() });
             } else if should_restart {
-                let _ = self.store.update_project_process(
-                    project,
-                    name,
-                    "starting",
-                    "unknown",
-                    None,
-                    Some(code),
-                    None,
-                    None,
-                    Some("started"),
-                );
+                let _ = self.store.update_project_process(project, name, ProcessUpdate { status: "starting", health_status: "unknown", exit_code: Some(code), desired: Some("started"), ..Default::default() });
                 if let Err(e) = self.spawn_spec(&manifest, spec, true) {
-                    let _ = self.store.update_project_process(
-                        project,
-                        name,
-                        "failed",
-                        "unknown",
-                        None,
-                        Some(code),
-                        Some(&format!("restart failed: {e}")),
-                        None,
-                        Some("stopped"),
-                    );
+                    let _ = self.store.update_project_process(project, name, ProcessUpdate { status: "failed", health_status: "unknown", exit_code: Some(code), error: Some(&format!("restart failed: {e}")), desired: Some("stopped"), ..Default::default() });
                 }
             } else {
                 let state = if code == 0 { "stopped" } else { "failed" };
@@ -716,21 +626,11 @@ impl ProjectManager {
                 if let Some(line) = self.last_log_line(&manifest.root, name) {
                     error.push_str(&format!("; last output: {line}"));
                 }
-                let _ = self.store.update_project_process(
-                    project,
-                    name,
-                    state,
-                    "none",
-                    None,
-                    Some(code),
-                    Some(&error),
-                    None,
-                    if desired == "started" {
+                let _ = self.store.update_project_process(project, name, ProcessUpdate { status: state, health_status: "none", exit_code: Some(code), error: Some(&error), desired: if desired == "started" {
                         Some("stopped")
                     } else {
                         None
-                    },
-                );
+                    }, ..Default::default() });
             }
         }
 
@@ -758,17 +658,7 @@ impl ProjectManager {
                             ),
                             _ => "the process is no longer running".to_string(),
                         };
-                        let _ = self.store.update_project_process(
-                            &row.project,
-                            &row.name,
-                            "failed",
-                            "unknown",
-                            None,
-                            row.last_exit_code,
-                            Some(&note),
-                            None,
-                            Some("stopped"),
-                        );
+                        let _ = self.store.update_project_process(&row.project, &row.name, ProcessUpdate { status: "failed", health_status: "unknown", exit_code: row.last_exit_code, error: Some(&note), desired: Some("stopped"), ..Default::default() });
                     }
                 }
             }
@@ -797,17 +687,7 @@ impl ProjectManager {
                         ),
                         _ => "the process is no longer running".to_string(),
                     };
-                    let _ = self.store.update_project_process(
-                        &row.project,
-                        &row.name,
-                        "failed",
-                        "unknown",
-                        None,
-                        row.last_exit_code,
-                        Some(&note),
-                        None,
-                        Some("stopped"),
-                    );
+                    let _ = self.store.update_project_process(&row.project, &row.name, ProcessUpdate { status: "failed", health_status: "unknown", exit_code: row.last_exit_code, error: Some(&note), desired: Some("stopped"), ..Default::default() });
                 }
             }
         }

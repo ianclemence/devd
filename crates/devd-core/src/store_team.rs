@@ -8,6 +8,42 @@ use crate::error::Result;
 use crate::state::Store;
 use crate::util;
 
+/// A task to add to a run.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NewTask<'a> {
+    /// Unique within the run.
+    pub key: &'a str,
+    /// The role that does it.
+    pub role: &'a str,
+    /// One line.
+    pub title: &'a str,
+    /// What to do.
+    pub instructions: &'a str,
+    /// Keys of the tasks it waits for.
+    pub depends_on: &'a [String],
+    /// Paths it may change.
+    pub scope: &'a [String],
+}
+
+/// A change to a task. Fields left out keep their value, except `state` and `error`, which are always written.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TaskUpdate<'a> {
+    /// The new state.
+    pub state: &'a str,
+    /// What it reported.
+    pub result: Option<&'a str>,
+    /// Why it is not going well.
+    pub error: Option<&'a str>,
+    /// Evidence gathered.
+    pub evidence: Option<&'a serde_json::Value>,
+    /// Where it works.
+    pub workdir: Option<&'a str>,
+    /// Its branch.
+    pub branch: Option<&'a str>,
+    /// Its conversation.
+    pub thread_id: Option<&'a str>,
+}
+
 /// The last check of a provider.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderCheck {
@@ -362,8 +398,8 @@ impl Store {
     // -------------------------------------------------------------- team tasks
 
     /// Add a task to a run.
-    #[allow(clippy::too_many_arguments)]
-    pub fn add_task(&self, run_id: &str, key: &str, role: &str, title: &str, instructions: &str, depends_on: &[String], scope: &[String]) -> Result<TeamTask> {
+    pub fn add_task(&self, run_id: &str, new: NewTask) -> Result<TeamTask> {
+        let NewTask { key, role, title, instructions, depends_on, scope } = new;
         let t = TeamTask {
             id: util::new_id(), run_id: run_id.into(), key: key.into(), role: role.into(), title: title.into(), instructions: instructions.into(),
             depends_on: depends_on.to_vec(), scope: scope.to_vec(), state: "pending".into(), attempts: 0, workdir: None, branch: None, thread_id: None,
@@ -400,8 +436,8 @@ impl Store {
     }
 
     /// Change a task's state and bookkeeping.
-    #[allow(clippy::too_many_arguments)]
-    pub fn update_team_task(&self, id: &str, state: &str, result: Option<&str>, error: Option<&str>, evidence: Option<&serde_json::Value>, workdir: Option<&str>, branch: Option<&str>, thread_id: Option<&str>) -> Result<()> {
+    pub fn update_team_task(&self, id: &str, update: TaskUpdate) -> Result<()> {
+        let TaskUpdate { state, result, error, evidence, workdir, branch, thread_id } = update;
         let now = util::now();
         self.with(|c| {
             c.execute(

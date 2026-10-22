@@ -271,11 +271,11 @@ fn declared_dependencies(dir: &Path) -> BTreeSet<String> {
         deps.extend(re.captures_iter(&t).map(|c| c[1].to_ascii_lowercase()));
     }
     if let Ok(rd) = std::fs::read_dir(dir) {
+        let re = Regex::new(r"(?m)^\s*([A-Za-z0-9][A-Za-z0-9_.\-]*)").unwrap();
         for e in rd.filter_map(|e| e.ok()) {
             let n = e.file_name().to_string_lossy().to_string();
             if n.starts_with("requirements") && n.ends_with(".txt") {
                 if let Some(t) = read(dir, &n) {
-                    let re = Regex::new(r"(?m)^\s*([A-Za-z0-9][A-Za-z0-9_.\-]*)").unwrap();
                     deps.extend(re.captures_iter(&t).map(|c| c[1].to_ascii_lowercase().replace('_', "-")));
                 }
             }
@@ -353,7 +353,7 @@ fn detect_pm(reg: &StackRegistry, dir: &Path, candidates: &[String], default: Op
             }
         }
     }
-    found.sort_by(|a, b| b.2.cmp(&a.2));
+    found.sort_by_key(|f| std::cmp::Reverse(f.2));
     if let Some((id, ev, _)) = found.first() {
         let ids: BTreeSet<&String> = found.iter().map(|f| &f.0).collect();
         if ids.len() > 1 {

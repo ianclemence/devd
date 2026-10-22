@@ -32,6 +32,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use devd_core::capability::{Approval, Ctx, InvokeRequest};
+use devd_core::store_team::{NewTask, TaskUpdate};
 use devd_core::{util, ChatEvent, DevdError, Registry, Result, TeamRun, TeamTask};
 
 use crate::chat::Hub;
@@ -267,7 +268,7 @@ impl Team {
                     if is_active(&t.state) && !t.thread_id.as_deref().map(|id| self.hub.is_running(id)).unwrap_or(false) {
                         let waiting = t.thread_id.as_deref().and_then(|id| self.ctx.store.get_thread(id).ok().flatten()).map(|th| th.state == "waiting_approval").unwrap_or(false);
                         if !waiting {
-                            let _ = self.ctx.store.update_team_task(&t.id, "pending", None, Some("devd restarted while this task was running; it starts again from the conversation so far"), None, None, None, None);
+                            let _ = self.ctx.store.update_team_task(&t.id, TaskUpdate { state: "pending", error: Some("devd restarted while this task was running; it starts again from the conversation so far"), ..Default::default() });
                             self.event(&run.id, Some(&t.id), "recovered", json!({ "task": t.key, "note": "devd restarted; the task will resume" }));
                         }
                     }
@@ -409,11 +410,11 @@ impl Team {
         }
         validate_plan(tasks)?;
         for t in tasks {
-            self.ctx.store.add_task(&run.id, &t.key, &t.role, &t.title, &t.instructions, &t.depends_on, &t.scope)?;
+            self.ctx.store.add_task(&run.id, NewTask { key: &t.key, role: &t.role, title: &t.title, instructions: &t.instructions, depends_on: &t.depends_on, scope: &t.scope })?;
         }
         let auto = self.ctx.store.list_team_events(&run.id, 0, 50)?.iter().any(|e| e.kind == "auto_approve");
         let summary = format!("plan with {} task(s): {}", tasks.len(), tasks.iter().map(|t| format!("{} ({})", t.key, t.role)).collect::<Vec<_>>().join(", "));
-        self.ctx.store.update_team_task(&planner.id, "done", Some(&summary), None, None, None, None, None)?;
+        self.ctx.store.update_team_task(&planner.id, TaskUpdate { state: "done", result: Some(&summary), ..Default::default() })?;
         self.event(&run.id, Some(&planner.id), "plan", json!({ "tasks": tasks.iter().map(|t| json!({ "key": t.key, "role": t.role, "title": t.title, "depends_on": t.depends_on, "scope": t.scope })).collect::<Vec<_>>() }));
         if auto {
             self.ctx.store.approve_run_plan(&run.id)?;
@@ -488,7 +489,7 @@ impl Team {
         };
         let run = self.ctx.store.create_run(&title, instructions, Some(&dir.display().to_string()), 1, &caller.actor.label())?;
         let key = format!("work-{}", &run.id[..6.min(run.id.len())]);
-        self.ctx.store.add_task(&run.id, &key, r.id, &title, instructions, &[], &[])?;
+        self.ctx.store.add_task(&run.id, NewTask { key: &key, role: r.id, title: &title, instructions, ..Default::default() })?;
         self.event(&run.id, None, "started", json!({ "goal": instructions, "project": dir.display().to_string(), "by": caller.actor.label(), "assigned_to": r.id }));
         // One task, named by the person who asked for it: there is no plan to
         // approve, because the person wrote the plan. The work still asks for
@@ -537,7 +538,7 @@ impl Team {
                 }
             }
             if !is_final(&t.state) {
-                self.ctx.store.update_team_task(&t.id, "cancelled", None, Some("the run was cancelled"), None, None, None, None)?;
+                self.ctx.store.update_team_task(&t.id, TaskUpdate { state: "cancelled", error: Some("the run was cancelled"), ..Default::default() })?;
             }
         }
         self.ctx.store.set_run_state(run_id, "cancelled", None, None)?;
@@ -583,7 +584,7 @@ impl Team {
             return Err(DevdError::conflict(format!("the run is {}", run.state)));
         }
         let feedback = note.map(str::to_string).or(t.error.clone());
-        self.ctx.store.update_team_task(&t.id, "pending", None, feedback.as_deref(), None, None, None, None)?;
+        self.ctx.store.update_team_task(&t.id, TaskUpdate { state: "pending", error: feedback.as_deref(), ..Default::default() })?;
         self.event(&run.id, Some(&t.id), "retry", json!({ "task": t.key, "by": caller.actor.label(), "note": note }));
         if matches!(run.state.as_str(), "paused" | "failed") {
             self.ctx.store.set_run_state(&run.id, if run.plan_approved { "running" } else { "planning" }, None, None)?;
@@ -599,7 +600,7 @@ impl Team {
         if !matches!(t.state.as_str(), "unverified" | "blocked" | "failed") {
             return Err(DevdError::conflict("only a task that was not accepted can be accepted by hand"));
         }
-        self.ctx.store.update_team_task(&t.id, "skipped", None, Some(&format!("accepted by {} without the required evidence", caller.actor.label())), None, None, None, None)?;
+        self.ctx.store.update_team_task(&t.id, TaskUpdate { state: "skipped", error: Some(&format!("accepted by {} without the required evidence", caller.actor.label())), ..Default::default() })?;
         self.event(&t.run_id, Some(&t.id), "accepted_by_hand", json!({ "task": t.key, "by": caller.actor.label(), "was": t.state, "error": t.error }));
         let run = self.run(&t.run_id)?;
         if run.state == "paused" {
@@ -627,10 +628,10 @@ impl Team {
             // Revise the plan: drop the unapproved tasks and plan again with the new instruction.
             let tasks = self.ctx.store.list_tasks_of_run(run_id)?;
             for t in tasks.iter().filter(|t| t.role != "planner") {
-                self.ctx.store.update_team_task(&t.id, "cancelled", None, Some("the plan is being revised"), None, None, None, None)?;
+                self.ctx.store.update_team_task(&t.id, TaskUpdate { state: "cancelled", error: Some("the plan is being revised"), ..Default::default() })?;
             }
             if let Some(p) = tasks.iter().find(|t| t.role == "planner") {
-                self.ctx.store.update_team_task(&p.id, "pending", None, Some(&format!("The person changed the requirements: {text}. Submit a revised plan with team.plan_submit.")), None, None, None, None)?;
+                self.ctx.store.update_team_task(&p.id, TaskUpdate { state: "pending", error: Some(&format!("The person changed the requirements: {text}. Submit a revised plan with team.plan_submit.")), ..Default::default() })?;
             }
             self.ctx.store.set_run_state(run_id, "planning", None, None)?;
             effect = "the planner will revise the plan; nothing has started".into();
@@ -674,7 +675,7 @@ impl Team {
         let tasks = self.ctx.store.list_tasks_of_run(&run.id)?;
         let planner = match tasks.iter().find(|t| t.role == "planner") {
             Some(p) => p.clone(),
-            None => self.ctx.store.add_task(&run.id, "plan", "planner", "Plan the work", &format!("Plan this goal for the team:\n\n{}", run.goal), &[], &[])?,
+            None => self.ctx.store.add_task(&run.id, NewTask { key: "plan", role: "planner", title: "Plan the work", instructions: &format!("Plan this goal for the team:\n\n{}", run.goal), ..Default::default() })?,
         };
         match planner.state.as_str() {
             "pending" => self.start_task(run, &planner, &tasks)?,
@@ -736,7 +737,7 @@ impl Team {
         if real.iter().all(|t| is_done(&t.state)) {
             if !real.iter().any(|t| t.key == "final-verify") && real.iter().any(|t| matches!(t.role.as_str(), "implementer" | "docs" | "infra")) {
                 let deps: Vec<String> = real.iter().map(|t| t.key.clone()).collect();
-                self.ctx.store.add_task(&run.id, "final-verify", "qa", "Verify the finished result", "Everything has been implemented and merged. Independently verify the result in the project directory: run the project's own test, lint and build tasks (project.detect shows which exist) and report exactly what passed and what failed. If the project has no checks, say so and exercise the main behaviour by running it. Do not change application code.", &deps, &[])?;
+                self.ctx.store.add_task(&run.id, NewTask { key: "final-verify", role: "qa", title: "Verify the finished result", instructions: "Everything has been implemented and merged. Independently verify the result in the project directory: run the project's own test, lint and build tasks (project.detect shows which exist) and report exactly what passed and what failed. If the project has no checks, say so and exercise the main behaviour by running it. Do not change application code.", depends_on: &deps, ..Default::default() })?;
                 self.event(&run.id, None, "note", json!({ "text": "devd added a final verification task: completion needs an independent check, not only the implementers' reports." }));
                 return Ok(true);
             }
@@ -813,7 +814,7 @@ impl Team {
             }
             None => self.hub.open_thread(&workdir.display().to_string(), &format!("{} · {}", role.title, t.title), &message)?,
         };
-        self.ctx.store.update_team_task(&t.id, "running", None, None, None, Some(&workdir.display().to_string()), branch.as_deref(), Some(&thread.id))?;
+        self.ctx.store.update_team_task(&t.id, TaskUpdate { state: "running", workdir: Some(&workdir.display().to_string()), branch: branch.as_deref(), thread_id: Some(&thread.id), ..Default::default() })?;
         self.event(&run.id, Some(&t.id), "started", json!({ "task": t.key, "role": t.role, "workdir": workdir.display().to_string(), "branch": branch, "thread": thread.id }));
         Ok(())
     }
@@ -830,23 +831,23 @@ impl Team {
     /// Look at a running task's conversation and move it on.
     fn monitor(self: &Arc<Self>, run: &TeamRun, t: &TeamTask) -> Result<()> {
         let Some(tid) = &t.thread_id else {
-            self.ctx.store.update_team_task(&t.id, "pending", None, None, None, None, None, None)?;
+            self.ctx.store.update_team_task(&t.id, TaskUpdate { state: "pending", ..Default::default() })?;
             return Ok(());
         };
         if self.hub.is_running(tid) {
             if t.state == "waiting_approval" {
-                self.ctx.store.update_team_task(&t.id, "running", None, None, None, None, None, None)?;
+                self.ctx.store.update_team_task(&t.id, TaskUpdate { state: "running", ..Default::default() })?;
             }
             return Ok(());
         }
         let Some(thread) = self.ctx.store.get_thread(tid)? else {
-            self.ctx.store.update_team_task(&t.id, "failed", None, Some("its conversation was deleted"), None, None, None, None)?;
+            self.ctx.store.update_team_task(&t.id, TaskUpdate { state: "failed", error: Some("its conversation was deleted"), ..Default::default() })?;
             return Ok(());
         };
         match thread.state.as_str() {
             "waiting_approval" => {
                 if t.state != "waiting_approval" {
-                    self.ctx.store.update_team_task(&t.id, "waiting_approval", None, None, None, None, None, None)?;
+                    self.ctx.store.update_team_task(&t.id, TaskUpdate { state: "waiting_approval", ..Default::default() })?;
                     self.event(&run.id, Some(&t.id), "waiting_approval", json!({ "task": t.key }));
                 }
             }
@@ -859,10 +860,10 @@ impl Team {
 
     fn failed(self: &Arc<Self>, run: &TeamRun, t: &TeamTask, why: &str) -> Result<()> {
         if t.attempts < MAX_ATTEMPTS {
-            self.ctx.store.update_team_task(&t.id, "pending", None, Some(&format!("The previous attempt stopped with an error: {why}")), None, None, None, None)?;
+            self.ctx.store.update_team_task(&t.id, TaskUpdate { state: "pending", error: Some(&format!("The previous attempt stopped with an error: {why}")), ..Default::default() })?;
             self.event(&run.id, Some(&t.id), "retrying", json!({ "task": t.key, "attempt": t.attempts, "why": why }));
         } else {
-            self.ctx.store.update_team_task(&t.id, "failed", None, Some(why), None, None, None, None)?;
+            self.ctx.store.update_team_task(&t.id, TaskUpdate { state: "failed", error: Some(why), ..Default::default() })?;
             self.event(&run.id, Some(&t.id), "failed", json!({ "task": t.key, "why": why }));
         }
         Ok(())
@@ -900,12 +901,12 @@ impl Team {
                 return Ok(());
             }
             let last = events.iter().rev().find(|e| e.kind == "assistant").and_then(|e| e.data["content"].as_array().and_then(|c| c.iter().find(|b| b["type"] == "text").and_then(|b| b["text"].as_str().map(str::to_string)))).unwrap_or_default();
-            self.ctx.store.update_team_task(&t.id, "unverified", Some(&util::truncate(&last, 4000)), Some("it stopped without reporting"), Some(&evidence_json), None, None, None)?;
+            self.ctx.store.update_team_task(&t.id, TaskUpdate { state: "unverified", result: Some(&util::truncate(&last, 4000)), error: Some("it stopped without reporting"), evidence: Some(&evidence_json), ..Default::default() })?;
             self.event(&run.id, Some(&t.id), "unverified", json!({ "task": t.key, "why": "no report" }));
             return Ok(());
         }
         if claimed == "blocked" {
-            self.ctx.store.update_team_task(&t.id, "blocked", Some(&summary), Some(&format!("blocked: {}", util::truncate(&summary, 600))), Some(&evidence_json), None, None, None)?;
+            self.ctx.store.update_team_task(&t.id, TaskUpdate { state: "blocked", result: Some(&summary), error: Some(&format!("blocked: {}", util::truncate(&summary, 600))), evidence: Some(&evidence_json), ..Default::default() })?;
             self.event(&run.id, Some(&t.id), "blocked", json!({ "task": t.key, "summary": summary }));
             return Ok(());
         }
@@ -914,10 +915,10 @@ impl Team {
             let why = format!("It said it was done, but {}. The tool results in its conversation do not show the work.", gaps.join(" and "));
             if t.attempts < MAX_ATTEMPTS {
                 self.event(&run.id, Some(&t.id), "rejected", json!({ "task": t.key, "why": why, "attempt": t.attempts }));
-                self.ctx.store.update_team_task(&t.id, "running", Some(&summary), Some(&why), Some(&evidence_json), None, None, None)?;
+                self.ctx.store.update_team_task(&t.id, TaskUpdate { state: "running", result: Some(&summary), error: Some(&why), evidence: Some(&evidence_json), ..Default::default() })?;
                 self.hub.follow_up(tid, &format!("Your report was not accepted: {why} Do the missing work now (for example run the project's test or build task with project.run and read the result), then call team.report again."))?;
             } else {
-                self.ctx.store.update_team_task(&t.id, "unverified", Some(&summary), Some(&why), Some(&evidence_json), None, None, None)?;
+                self.ctx.store.update_team_task(&t.id, TaskUpdate { state: "unverified", result: Some(&summary), error: Some(&why), evidence: Some(&evidence_json), ..Default::default() })?;
                 self.event(&run.id, Some(&t.id), "unverified", json!({ "task": t.key, "why": why }));
             }
             return Ok(());
@@ -925,12 +926,12 @@ impl Team {
         // Accepted. Isolated work is committed and merged by the harness.
         if let Some(branch) = &t.branch {
             if let Err(why) = self.merge_branch(run, t, branch) {
-                self.ctx.store.update_team_task(&t.id, "blocked", Some(&summary), Some(&why), Some(&evidence_json), None, None, None)?;
+                self.ctx.store.update_team_task(&t.id, TaskUpdate { state: "blocked", result: Some(&summary), error: Some(&why), evidence: Some(&evidence_json), ..Default::default() })?;
                 self.event(&run.id, Some(&t.id), "merge_blocked", json!({ "task": t.key, "why": why }));
                 return Ok(());
             }
         }
-        self.ctx.store.update_team_task(&t.id, "done", Some(&summary), None, Some(&evidence_json), None, None, None)?;
+        self.ctx.store.update_team_task(&t.id, TaskUpdate { state: "done", result: Some(&summary), evidence: Some(&evidence_json), ..Default::default() })?;
         self.event(&run.id, Some(&t.id), "accepted", json!({ "task": t.key, "role": t.role, "evidence": ev.len(), "verified": ev.iter().filter(|f| f["kind"] == "verify" && f["ok"] == true).count() }));
         Ok(())
     }
@@ -1005,11 +1006,11 @@ impl Team {
         for (i, (criterion, _)) in unmet.iter().enumerate() {
             let key = format!("pass{round}-{}", i + 1);
             let instructions = format!("The run is not finished: this requirement of the definition of done is not yet met, judged from the recorded evidence.\n\nRequirement: {criterion}\n\nLook at the project as it is now, make the change that meets it, and prove it with the project's own checks. Do not redo work that is already accepted.");
-            self.ctx.store.add_task(&run.id, &key, "implementer", &format!("Meet: {}", util::truncate(criterion, 60)), &instructions, &before, &[])?;
+            self.ctx.store.add_task(&run.id, NewTask { key: &key, role: "implementer", title: &format!("Meet: {}", util::truncate(criterion, 60)), instructions: &instructions, depends_on: &before, ..Default::default() })?;
             keys.push(key);
         }
         let verify = format!("pass{round}-verify");
-        self.ctx.store.add_task(&run.id, &verify, "qa", "Verify the additional work", "Independently verify the project again: run its own test, lint and build tasks and report exactly what passed and what failed. Do not change application code.", &keys, &[])?;
+        self.ctx.store.add_task(&run.id, NewTask { key: &verify, role: "qa", title: "Verify the additional work", instructions: "Independently verify the project again: run its own test, lint and build tasks and report exactly what passed and what failed. Do not change application code.", depends_on: &keys, ..Default::default() })?;
         self.ctx.store.bump_round(&run.id)?;
         self.event(&run.id, None, "note", json!({ "text": format!("{} requirement(s) of the definition of done are not met; devd started pass {round} of {} to meet them.", unmet.len(), self.ctx.store.goal_loop(&run.id).map(|g| g.max_rounds).unwrap_or(round)) }));
         Ok(true)

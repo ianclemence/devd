@@ -92,9 +92,9 @@ pub fn read_scripts(dir: &Path) -> ProjectScripts {
             }
         }
     }
+    let re = Regex::new(r"(?m)^([A-Za-z0-9][A-Za-z0-9_.-]*)\s*:(?:[^=]|$)").unwrap();
     for name in ["Makefile", "makefile", "GNUmakefile"] {
         if let Ok(t) = std::fs::read_to_string(dir.join(name)) {
-            let re = Regex::new(r"(?m)^([A-Za-z0-9][A-Za-z0-9_.-]*)\s*:(?:[^=]|$)").unwrap();
             for c in re.captures_iter(&t) {
                 let target = c[1].to_string();
                 if !target.starts_with('.') && !s.make.contains(&target) {
@@ -152,7 +152,6 @@ fn availability(reg: &StackRegistry, argv: &[String], needs: &[String], dir: &Pa
 }
 
 /// Resolve the tasks that apply to the project in `dir`.
-#[allow(clippy::too_many_arguments)]
 pub fn resolve(
     reg: &StackRegistry,
     stack: Option<&StackDef>,

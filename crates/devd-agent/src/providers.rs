@@ -118,8 +118,23 @@ fn model(id: &str, display: &str, context: Option<i64>, max_output: Option<i64>,
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn base_preset(id: &str, kind: &str, label: &str, base: &str, env: Option<&str>, requires_key: bool, key_url: Option<&str>, docs: &str, models_from: &str, notes: &str) -> Preset {
+/// How a preset is authenticated.
+struct Key<'a> {
+    env: Option<&'a str>,
+    required: bool,
+    url: Option<&'a str>,
+}
+
+/// Where to read about a preset.
+struct Docs<'a> {
+    page: &'a str,
+    models_from: &'a str,
+    notes: &'a str,
+}
+
+fn base_preset(id: &str, kind: &str, label: &str, base: &str, key: Key, docs: Docs) -> Preset {
+    let Key { env, required: requires_key, url: key_url } = key;
+    let Docs { page: docs, models_from, notes } = docs;
     Preset {
         id: id.into(),
         kind: kind.into(),
@@ -145,30 +160,15 @@ fn base_preset(id: &str, kind: &str, label: &str, base: &str, env: Option<&str>,
 /// prompts and tool loop were developed against the Messages API.
 pub fn presets() -> Vec<Preset> {
     vec![
-        base_preset("anthropic", "anthropic", "Anthropic (Claude)", "https://api.anthropic.com", Some("ANTHROPIC_API_KEY"), true,
-            Some("https://platform.claude.com/settings/keys"), "https://platform.claude.com/docs/en/api/overview",
-            "GET /v1/models with the key; the documentation table needs no key",
-            "Messages API with tool use and prompt caching. Requests send x-api-key and anthropic-version: 2023-06-01. This is the wire format the built-in agent is tuned for.")
+        base_preset("anthropic", "anthropic", "Anthropic (Claude)", "https://api.anthropic.com", Key { env: Some("ANTHROPIC_API_KEY"), required: true, url: Some("https://platform.claude.com/settings/keys") }, Docs { page: "https://platform.claude.com/docs/en/api/overview", models_from: "GET /v1/models with the key; the documentation table needs no key", notes: "Messages API with tool use and prompt caching. Requests send x-api-key and anthropic-version: 2023-06-01. This is the wire format the built-in agent is tuned for." })
             .order(1).discovery("anthropic").tools("documented").suggested("claude-sonnet-4-5"),
-        base_preset("openai", "openai", "OpenAI", "https://api.openai.com/v1", Some("OPENAI_API_KEY"), true,
-            Some("https://platform.openai.com/api-keys"), "https://platform.openai.com/docs/api-reference/chat",
-            "GET /v1/models with the key",
-            "Chat Completions with function tools. Reasoning models are billed and limited differently; devd sends max_completion_tokens for this provider.")
+        base_preset("openai", "openai", "OpenAI", "https://api.openai.com/v1", Key { env: Some("OPENAI_API_KEY"), required: true, url: Some("https://platform.openai.com/api-keys") }, Docs { page: "https://platform.openai.com/docs/api-reference/chat", models_from: "GET /v1/models with the key", notes: "Chat Completions with function tools. Reasoning models are billed and limited differently; devd sends max_completion_tokens for this provider." })
             .order(2).tools("documented"),
-        base_preset("deepseek", "openai-compatible", "DeepSeek", "https://api.deepseek.com/v1", Some("DEEPSEEK_API_KEY"), true,
-            Some("https://platform.deepseek.com/api_keys"), "https://api-docs.deepseek.com/",
-            "GET /models with the key",
-            "OpenAI-compatible chat with function calling on the chat models. The reasoning model streams its thinking and may reject tools; choose a chat model for agent work.")
+        base_preset("deepseek", "openai-compatible", "DeepSeek", "https://api.deepseek.com/v1", Key { env: Some("DEEPSEEK_API_KEY"), required: true, url: Some("https://platform.deepseek.com/api_keys") }, Docs { page: "https://api-docs.deepseek.com/", models_from: "GET /models with the key", notes: "OpenAI-compatible chat with function calling on the chat models. The reasoning model streams its thinking and may reject tools; choose a chat model for agent work." })
             .order(3).tools("documented").suggested("deepseek-chat"),
-        base_preset("moonshot", "openai-compatible", "Moonshot AI (Kimi)", "https://api.moonshot.ai/v1", Some("MOONSHOT_API_KEY"), true,
-            Some("https://platform.moonshot.ai/console/api-keys"), "https://platform.moonshot.ai/docs/api/chat",
-            "GET /models with the key",
-            "Kimi and Moonshot models over an OpenAI-compatible API with tool calling. The mainland endpoint is api.moonshot.cn.")
+        base_preset("moonshot", "openai-compatible", "Moonshot AI (Kimi)", "https://api.moonshot.ai/v1", Key { env: Some("MOONSHOT_API_KEY"), required: true, url: Some("https://platform.moonshot.ai/console/api-keys") }, Docs { page: "https://platform.moonshot.ai/docs/api/chat", models_from: "GET /models with the key", notes: "Kimi and Moonshot models over an OpenAI-compatible API with tool calling. The mainland endpoint is api.moonshot.cn." })
             .order(4).tools("documented").suggested("moonshot-v1-8k"),
-        base_preset("zhipu", "openai-compatible", "Zhipu AI (GLM)", "https://open.bigmodel.cn/api/paas/v4", Some("ZHIPU_API_KEY"), true,
-            Some("https://open.bigmodel.cn/usercenter/apikeys"), "https://open.bigmodel.cn/dev/api",
-            "maintained list: the chat API has no public model listing endpoint",
-            "GLM models over an OpenAI-compatible chat endpoint with tool calling. Model ids are checked against the maintained list, and a model you type yourself is accepted.")
+        base_preset("zhipu", "openai-compatible", "Zhipu AI (GLM)", "https://open.bigmodel.cn/api/paas/v4", Key { env: Some("ZHIPU_API_KEY"), required: true, url: Some("https://open.bigmodel.cn/usercenter/apikeys") }, Docs { page: "https://open.bigmodel.cn/dev/api", models_from: "maintained list: the chat API has no public model listing endpoint", notes: "GLM models over an OpenAI-compatible chat endpoint with tool calling. Model ids are checked against the maintained list, and a model you type yourself is accepted." })
             .order(5).tools("documented").discovery("catalog")
             .catalog(vec![
                 model("glm-4.6", "GLM-4.6", Some(200_000), Some(128_000), "Flagship reasoning and coding"),
@@ -178,52 +178,25 @@ pub fn presets() -> Vec<Preset> {
                 model("glm-4-flash", "GLM-4 Flash", Some(128_000), Some(4_096), "Cheap, fast"),
             ])
             .suggested("glm-4.6"),
-        base_preset("gemini", "openai-compatible", "Google Gemini", "https://generativelanguage.googleapis.com/v1beta/openai", Some("GEMINI_API_KEY"), true,
-            Some("https://aistudio.google.com/apikey"), "https://ai.google.dev/gemini-api/docs/openai",
-            "GET /models with the key",
-            "Google's documented OpenAI-compatibility layer, including function calling. The native Gemini API uses a different schema; devd uses this layer so one adapter covers it.")
+        base_preset("gemini", "openai-compatible", "Google Gemini", "https://generativelanguage.googleapis.com/v1beta/openai", Key { env: Some("GEMINI_API_KEY"), required: true, url: Some("https://aistudio.google.com/apikey") }, Docs { page: "https://ai.google.dev/gemini-api/docs/openai", models_from: "GET /models with the key", notes: "Google's documented OpenAI-compatibility layer, including function calling. The native Gemini API uses a different schema; devd uses this layer so one adapter covers it." })
             .order(6).tools("documented").suggested("gemini-2.5-flash"),
-        base_preset("xai", "openai-compatible", "xAI (Grok)", "https://api.x.ai/v1", Some("XAI_API_KEY"), true,
-            Some("https://console.x.ai/team/default/api-keys"), "https://docs.x.ai/docs/api-reference",
-            "GET /models with the key",
-            "Grok models over an OpenAI-compatible API with function calling.")
+        base_preset("xai", "openai-compatible", "xAI (Grok)", "https://api.x.ai/v1", Key { env: Some("XAI_API_KEY"), required: true, url: Some("https://console.x.ai/team/default/api-keys") }, Docs { page: "https://docs.x.ai/docs/api-reference", models_from: "GET /models with the key", notes: "Grok models over an OpenAI-compatible API with function calling." })
             .order(7).tools("documented"),
-        base_preset("mistral", "openai-compatible", "Mistral AI", "https://api.mistral.ai/v1", Some("MISTRAL_API_KEY"), true,
-            Some("https://console.mistral.ai/api-keys"), "https://docs.mistral.ai/api/",
-            "GET /models with the key",
-            "Mistral models over an OpenAI-compatible API with function calling.")
+        base_preset("mistral", "openai-compatible", "Mistral AI", "https://api.mistral.ai/v1", Key { env: Some("MISTRAL_API_KEY"), required: true, url: Some("https://console.mistral.ai/api-keys") }, Docs { page: "https://docs.mistral.ai/api/", models_from: "GET /models with the key", notes: "Mistral models over an OpenAI-compatible API with function calling." })
             .order(8).tools("documented"),
-        base_preset("groq", "openai-compatible", "Groq", "https://api.groq.com/openai/v1", Some("GROQ_API_KEY"), true,
-            Some("https://console.groq.com/keys"), "https://console.groq.com/docs/openai",
-            "GET /models with the key", "Fast inference of open models over an OpenAI-compatible API.")
+        base_preset("groq", "openai-compatible", "Groq", "https://api.groq.com/openai/v1", Key { env: Some("GROQ_API_KEY"), required: true, url: Some("https://console.groq.com/keys") }, Docs { page: "https://console.groq.com/docs/openai", models_from: "GET /models with the key", notes: "Fast inference of open models over an OpenAI-compatible API." })
             .order(9).tools("model"),
-        base_preset("together", "openai-compatible", "Together AI", "https://api.together.xyz/v1", Some("TOGETHER_API_KEY"), true,
-            Some("https://api.together.ai/settings/api-keys"), "https://docs.together.ai/docs/openai-api-compatibility",
-            "GET /models (public list)", "Many open models behind one OpenAI-compatible API; tool support depends on the model.")
+        base_preset("together", "openai-compatible", "Together AI", "https://api.together.xyz/v1", Key { env: Some("TOGETHER_API_KEY"), required: true, url: Some("https://api.together.ai/settings/api-keys") }, Docs { page: "https://docs.together.ai/docs/openai-api-compatibility", models_from: "GET /models (public list)", notes: "Many open models behind one OpenAI-compatible API; tool support depends on the model." })
             .order(10).tools("model"),
-        base_preset("fireworks", "openai-compatible", "Fireworks AI", "https://api.fireworks.ai/inference/v1", Some("FIREWORKS_API_KEY"), true,
-            Some("https://fireworks.ai/account/api-keys"), "https://docs.fireworks.ai/api-reference/introduction",
-            "GET /models with the key", "Open models with an OpenAI-compatible API; tool support depends on the model.")
+        base_preset("fireworks", "openai-compatible", "Fireworks AI", "https://api.fireworks.ai/inference/v1", Key { env: Some("FIREWORKS_API_KEY"), required: true, url: Some("https://fireworks.ai/account/api-keys") }, Docs { page: "https://docs.fireworks.ai/api-reference/introduction", models_from: "GET /models with the key", notes: "Open models with an OpenAI-compatible API; tool support depends on the model." })
             .order(11).tools("model"),
-        base_preset("openrouter", "openai-compatible", "OpenRouter", "https://openrouter.ai/api/v1", Some("OPENROUTER_API_KEY"), true,
-            Some("https://openrouter.ai/keys"), "https://openrouter.ai/docs/api-reference/overview",
-            "GET /models (public list with prices and supported parameters)",
-            "One key for many vendors. Model ids look like `vendor/model`, and each model advertises whether it supports tools in the public list.")
+        base_preset("openrouter", "openai-compatible", "OpenRouter", "https://openrouter.ai/api/v1", Key { env: Some("OPENROUTER_API_KEY"), required: true, url: Some("https://openrouter.ai/keys") }, Docs { page: "https://openrouter.ai/docs/api-reference/overview", models_from: "GET /models (public list with prices and supported parameters)", notes: "One key for many vendors. Model ids look like `vendor/model`, and each model advertises whether it supports tools in the public list." })
             .order(20).category("aggregator").tools("model"),
-        base_preset("ollama", "openai-compatible", "Ollama (local)", "http://localhost:11434/v1", None, false,
-            None, "https://github.com/ollama/ollama/blob/main/docs/openai.md",
-            "GET /v1/models, falling back to GET /api/tags",
-            "Runs on this machine; nothing leaves it. devd finds a running instance automatically. Tool calling depends on the model you pulled.")
+        base_preset("ollama", "openai-compatible", "Ollama (local)", "http://localhost:11434/v1", Key { env: None, required: false, url: None }, Docs { page: "https://github.com/ollama/ollama/blob/main/docs/openai.md", models_from: "GET /v1/models, falling back to GET /api/tags", notes: "Runs on this machine; nothing leaves it. devd finds a running instance automatically. Tool calling depends on the model you pulled." })
             .order(30).category("local").tools("model").discovery("ollama"),
-        base_preset("lm-studio", "openai-compatible", "LM Studio (local)", "http://localhost:1234/v1", None, false,
-            None, "https://lmstudio.ai/docs/app/api/endpoints/openai",
-            "GET /v1/models (local, no key)",
-            "Start the local server in LM Studio first. Tool calling depends on the model and the server's prompt template.")
+        base_preset("lm-studio", "openai-compatible", "LM Studio (local)", "http://localhost:1234/v1", Key { env: None, required: false, url: None }, Docs { page: "https://lmstudio.ai/docs/app/api/endpoints/openai", models_from: "GET /v1/models (local, no key)", notes: "Start the local server in LM Studio first. Tool calling depends on the model and the server's prompt template." })
             .order(31).category("local").tools("model"),
-        base_preset("custom", "openai-compatible", "Custom OpenAI-compatible endpoint", "https://", None, false,
-            None, "https://platform.openai.com/docs/api-reference/chat",
-            "GET /models",
-            "Any server implementing /models and /chat/completions. Plain http is accepted only for localhost. Capabilities are unknown until you run Verify.")
+        base_preset("custom", "openai-compatible", "Custom OpenAI-compatible endpoint", "https://", Key { env: None, required: false, url: None }, Docs { page: "https://platform.openai.com/docs/api-reference/chat", models_from: "GET /models", notes: "Any server implementing /models and /chat/completions. Plain http is accepted only for localhost. Capabilities are unknown until you run Verify." })
             .order(40).category("local").tools("model"),
     ]
 }
@@ -725,6 +698,7 @@ fn tokens(text: &str) -> Option<i64> {
 /// Parse the model comparison tables from the Anthropic models overview page.
 pub fn parse_anthropic_docs(markdown: &str, now: &str) -> Vec<CatalogueModel> {
     let price = Regex::new(r"\$([\d.]+)\s*/\s*input MTok,\s*(?:From\s*)?\$([\d.]+)\s*/\s*output MTok").unwrap();
+    let page_link = Regex::new(r"\]\(([^)]*)\)").unwrap();
     let mut out: Vec<CatalogueModel> = Vec::new();
     let mut table: Vec<Vec<String>> = Vec::new();
     let mut tables: Vec<Vec<Vec<String>>> = Vec::new();
@@ -744,7 +718,7 @@ pub fn parse_anthropic_docs(markdown: &str, now: &str) -> Vec<CatalogueModel> {
         let Some(header) = t.first() else { continue };
         let row = |label: &str| t.iter().find(|r| plain(&r[0]).eq_ignore_ascii_case(label));
         let Some(ids) = row("Claude API ID") else { continue };
-        for col in 1..header.len() {
+        for (col, head) in header.iter().enumerate().skip(1) {
             let Some(id_cell) = ids.get(col) else { continue };
             let id = plain(id_cell);
             if !id.starts_with("claude-") || out.iter().any(|m| m.model_id == id) {
@@ -752,8 +726,8 @@ pub fn parse_anthropic_docs(markdown: &str, now: &str) -> Vec<CatalogueModel> {
             }
             let cell = |label: &str| row(label).and_then(|r| r.get(col)).map(|c| plain(c)).filter(|c| !c.is_empty() && c != "-");
             let (inp, outp) = cell("Pricing").and_then(|p| price.captures(&p).map(|c| (c[1].parse().ok(), c[2].parse().ok()))).unwrap_or((None, None));
-            let name = plain(&header[col]);
-            let page = row("Model page").and_then(|r| r.get(col)).and_then(|c| Regex::new(r"\]\(([^)]*)\)").unwrap().captures(c).map(|m| m[1].to_string()));
+            let name = plain(head);
+            let page = row("Model page").and_then(|r| r.get(col)).and_then(|c| page_link.captures(c).map(|m| m[1].to_string()));
             out.push(CatalogueModel {
                 source: "anthropic-docs".into(),
                 model_id: id,

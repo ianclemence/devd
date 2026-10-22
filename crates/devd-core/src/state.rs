@@ -33,6 +33,29 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (11, include_str!("../sql/011_runtime_pins.sql")),
 ];
 
+/// What to record about one capability attempt.
+#[derive(Debug, Clone, Copy)]
+pub struct AuditRecord<'a> {
+    /// Who.
+    pub actor: &'a str,
+    /// Which surface.
+    pub surface: &'a str,
+    /// Which capability.
+    pub capability: &'a str,
+    /// Its tier.
+    pub tier: &'a str,
+    /// Its effect.
+    pub effect: &'a str,
+    /// Whether it was a dry run.
+    pub dry_run: bool,
+    /// Whether it succeeded.
+    pub ok: bool,
+    /// The (redacted) arguments.
+    pub args: &'a str,
+    /// The outcome message.
+    pub message: &'a str,
+}
+
 /// One audit row. Every capability attempt, successful or not, writes one.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditEntry {
@@ -327,19 +350,11 @@ impl Store {
     // ---------------------------------------------------------------- audit
 
     /// Append an audit row.
-    #[allow(clippy::too_many_arguments)]
     pub fn record_audit(
         &self,
-        actor: &str,
-        surface: &str,
-        capability: &str,
-        tier: &str,
-        effect: &str,
-        dry_run: bool,
-        ok: bool,
-        args: &str,
-        message: &str,
+        entry: AuditRecord,
     ) -> Result<i64> {
+        let AuditRecord { actor, surface, capability, tier, effect, dry_run, ok, args, message } = entry;
         self.with(|conn| {
             conn.execute(
                 "INSERT INTO audit_log
@@ -1174,17 +1189,7 @@ mod tests {
     #[test]
     fn audit_secrets_are_redacted_by_the_caller_not_the_store() {
         let s = store();
-        s.record_audit(
-            "human:cli",
-            "cli",
-            "demo",
-            "read",
-            "read",
-            false,
-            true,
-            "{}",
-            "ok",
-        )
+        s.record_audit(AuditRecord { actor: "human:cli", surface: "cli", capability: "demo", tier: "read", effect: "read", dry_run: false, ok: true, args: "{}", message: "ok" })
         .unwrap();
         let rows = s.list_audit(10).unwrap();
         assert_eq!(rows.len(), 1);

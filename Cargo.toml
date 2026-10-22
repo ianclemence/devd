@@ -47,6 +47,12 @@ time = "0.3"
 
 devd-core = { path = "crates/devd-core" }
 
+[workspace.lints.clippy]
+# Eight positional arguments is a call nobody can read; take a struct.
+too_many_arguments = "deny"
+# Tests and settings builders read better as `let mut s = Settings::default(); s.x = ..;`.
+field_reassign_with_default = "allow"
+
 [workspace.lints.rust]
 # A warning is a decision nobody made. These fail the build instead of printing:
 # dead code, unused imports and variables, and unused results. Suppressing one
