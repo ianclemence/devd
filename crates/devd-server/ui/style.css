@@ -3051,3 +3051,27 @@ textarea,
 
 /* Screens that are genuinely two-pane get room. */
 .page:has(> .columns), .page:has(> .two-col), .page:has(> .tool-grid) { max-width: 1280px; }
+
+/* Spacing, set once: every row the same height and breathing room, accent rows
+ * separated like cards, sections clearly apart from each other. */
+.ui-row { min-height: 60px; padding: var(--s3) var(--s4); margin: 0 calc(var(--s4) * -1); }
+.ui-row + .ui-row::before { left: var(--s4); right: var(--s4); }
+.ui-row-accent { margin-bottom: var(--s2); padding: var(--s4); }
+.ui-row-accent + .ui-row-accent { margin-top: 0; }
+.ui-row-accent::after { top: var(--s3); bottom: var(--s3); left: var(--s1); }
+.ui-head { margin: var(--s7) 0 var(--s2); }
+.page > .ui-head:first-child, .page-head + .ui-head { margin-top: var(--s5); }
+.ui-controls { margin-bottom: var(--s4); }
+.ui-more { margin-top: var(--s6); }
+.ui-tiles { gap: var(--s4); }
+.ui-tile { padding: var(--s5); gap: var(--s2); min-height: 96px; }
+.ui-empty { padding: var(--s5) 0; gap: var(--s3); }
+.ui-status-line { margin-top: calc(var(--s3) * -1); margin-bottom: var(--s3); }
+.ui-greet { margin-bottom: var(--s4); }
+.ui-ask { margin-bottom: var(--s2); padding: var(--s2) var(--s2) var(--s2) var(--s5); }
+.page-head { margin-bottom: var(--s2); }
+.ui-sheet { gap: var(--s5); }
+.ui-sheet h3 { margin-top: var(--s2); margin-bottom: calc(var(--s2) * -1); }
+.team-result { margin: var(--s4) var(--s5); }
+.preset-grid { gap: var(--s4); }
+.panel + .panel { margin-top: var(--s4); }
