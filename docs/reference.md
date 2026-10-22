@@ -9,6 +9,8 @@ devd runtime available php        # what the vendor publishes, and its digest
 devd runtime install php@8.3
 devd runtime install node@lts
 devd runtime install go@latest
+devd runtime install python@3.12   # python-build-standalone, checked against its SHA256SUMS
+devd runtime install ruby@3.3      # Windows only (RubyInstaller); other platforms use the system Ruby
 devd runtime list
 devd runtime verify php
 devd runtime use php@8.4          # the version new sites use
@@ -221,7 +223,7 @@ which is useful for a portable installation.
 settings.toml     preferences
 state.db          sites, services, runtimes and the audit trail
 www/              projects
-runtimes/         PHP, Node.js and Go
+runtimes/         PHP, Node.js, Go, Python and Ruby
 services/         nginx and MariaDB
 etc/              generated configuration and MariaDB data
 certs/            the authority and per-site certificates

@@ -66,7 +66,8 @@ A portable stack (the other stack, XAMPP, WampServer) serves sites with Apache, 
 | Ports 80 and 443 | Held by the other stack while it runs; stop it, or let `devd setup` move devd to other ports. |
 | Wildcard `*.test` | Not implemented. Names are added to the hosts file one per site. A DNS server cannot be bound to port 53 on a machine where Internet Connection Sharing holds it, and Windows cannot point a resolver rule at another port. |
 | PostgreSQL, MongoDB, Memcached | **Supported by adoption.** `devd service adopt postgres|mongodb|memcached <folder>` runs the program under devd on its own port, bound to 127.0.0.1, with its data under the devd home. devd does not download them: their Windows builds publish no checksum devd could verify. `devd service find <name>` looks for one on this machine. PostgreSQL is initialised with trust authentication for local connections, and `db.*` takes `engine: postgres` (list, create, drop, dump, restore, copy). The supervision, port and data-directory handling was exercised against stand-in programs; it has not been run against a real PostgreSQL, MongoDB or Memcached build. |
-| Node/Python/Ruby version switching, public share links | See the rows below. |
+| Public share links | Not built. |
+| Python and Ruby runtimes | `devd runtime install python@3.12` and `ruby@3.3` download, verify and unpack them like PHP, Node and Go. Ruby binaries exist for Windows only. A project cannot yet pin its own Python or Ruby version; the default set with `runtime use` applies. Not exercised against the live releases beyond the catalogue parsing tests. |
 
 ## Runtimes and services
 
