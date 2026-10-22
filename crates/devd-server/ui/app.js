@@ -3794,6 +3794,7 @@
 
   function loadToolchain() {
     TC.loading = true;
+    if (state.view === "toolchain") renderToolchain();
     return read("toolchain.list")
       .then(function (d) { TC.data = d; })
       .catch(function (e) { toast("error", e.message); })
@@ -3802,9 +3803,11 @@
 
   function renderToolchain() {
     if (state.view !== "toolchain") return;
-    var actions = '<button type="button" class="btn" data-action="refresh">Re-check</button>';
+    var actions = TC.loading
+      ? '<span class="ui-checking"><span class="spin" aria-hidden="true"></span>Checking…</span>'
+      : '<button type="button" class="btn" data-action="refresh">Re-check</button>';
     if (!TC.data) {
-      el("main").innerHTML = page("Tools", "", actions, uiEmpty("Checking this computer", "devd runs each tool it knows to see what is installed. That takes a moment."));
+      el("main").innerHTML = page("Tools", "", "", '<div class="loading" role="status" aria-live="polite">Loading…</div><div class="loading-note">devd runs each tool it knows to see what is installed. That takes a moment.</div>');
       return;
     }
     var host = TC.data.host, tools = TC.data.tools;
@@ -7281,6 +7284,26 @@
   if (mainNode && window.MutationObserver) {
     new MutationObserver(function () { wrapTables(); }).observe(mainNode, { childList: true, subtree: true });
   }
+
+  // Opening a tab paints the page, then paints it again when its data arrives; the second paint
+  // is usually the same page. Setting identical markup would rebuild every element (and reload
+  // the preview's frame), which shows as a flicker, so on these pages an unchanged page is left alone.
+  (function () {
+    var node = el("main");
+    var desc = Object.getOwnPropertyDescriptor(Element.prototype, "innerHTML");
+    var calm = ["overview", "services", "sites", "toolchain", "runtimes", "preview", "certificates", "hosts"];
+    var last = null;
+    if (!node || !desc) return;
+    Object.defineProperty(node, "innerHTML", {
+      configurable: true,
+      get: function () { return desc.get.call(this); },
+      set: function (html) {
+        if (calm.indexOf(state.view) >= 0 && html === last) return;
+        last = html;
+        desc.set.call(this, html);
+      }
+    });
+  })();
 
   boot();
 })();

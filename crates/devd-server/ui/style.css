@@ -3194,3 +3194,7 @@ textarea,
 
 /* Page titles are text only. */
 .page-title { display: block; gap: 0; }
+
+/* The small "checking" state that replaces a button while a re-check runs. */
+.ui-checking { display: inline-flex; align-items: center; gap: var(--s2); color: var(--fg-mute); font-size: var(--text-sm); }
+.ui-checking .spin { width: 13px; height: 13px; border: 1.5px solid var(--line-strong); border-top-color: var(--accent); border-radius: 50%; animation: spin 900ms linear infinite; }
