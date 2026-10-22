@@ -176,6 +176,11 @@ pub(crate) enum Command {
     },
     /// Talk to devd's built-in agent, which can use every capability devd has.
     Chat(ChatArgs),
+    /// List, delete and clear conversations.
+    Chats {
+        #[command(subcommand)]
+        cmd: ChatsCommand,
+    },
     /// The agent team: describe a goal, review the plan, follow the work, see the evidence.
     Team {
         #[command(subcommand)]
@@ -420,6 +425,22 @@ pub(crate) enum ProjectCommand {
     },
 }
 
+#[derive(Subcommand, Debug)]
+pub(crate) enum ChatsCommand {
+    /// List conversations.
+    List,
+    /// Delete one conversation and its log. Asks for approval.
+    Delete { thread: String },
+    /// Delete every finished conversation (or those untouched for --days). Asks for approval.
+    Prune {
+        /// Only conversations not touched for this many days.
+        #[arg(long)]
+        days: Option<u64>,
+    },
+    /// Delete the inbox messages that were answered or dismissed. Asks for approval.
+    ClearInbox,
+}
+
 #[derive(clap::Args, Debug)]
 pub(crate) struct ChatArgs {
     /// What to ask. Omit in a terminal for an interactive conversation.
@@ -522,6 +543,14 @@ pub(crate) enum TeamCommand {
     Resume { run: String },
     /// Stop a run.
     Cancel { run: String },
+    /// Delete a finished run with its tasks, log and conversations. Asks for approval.
+    Delete { run: String },
+    /// Delete every finished run (or those untouched for --days). Asks for approval.
+    Prune {
+        /// Only runs not touched for this many days.
+        #[arg(long)]
+        days: Option<u64>,
+    },
     /// Run a failed, blocked or unverified task again.
     Retry {
         task: String,
@@ -1614,6 +1643,10 @@ fn run(cli: Cli) -> Result<i32> {
         Command::Chat(a) => {
             app.resume_agents();
             aicat::chat(&app, a)?;
+            Ok(0)
+        }
+        Command::Chats { cmd } => {
+            aicat::chats(&app, cmd)?;
             Ok(0)
         }
         Command::Team { cmd } => {

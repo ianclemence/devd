@@ -381,12 +381,33 @@ impl Store {
         })
     }
 
-    /// Delete a thread and its log.
+    /// Delete a thread, its log and the approval requests it made.
     pub fn delete_thread(&self, id: &str) -> Result<bool> {
         self.with(|c| {
             c.execute("DELETE FROM chat_events WHERE thread_id=?1", params![id])?;
+            c.execute("DELETE FROM agent_requests WHERE thread_id=?1", params![id])?;
             Ok(c.execute("DELETE FROM chat_threads WHERE id=?1", params![id])? > 0)
         })
+    }
+
+    /// The conversations that are not in the middle of anything and have not been touched since
+    /// `before` (an RFC 3339 time; every finished conversation when it is in the future).
+    pub fn finished_threads_before(&self, before: &str) -> Result<Vec<ChatThread>> {
+        self.with(|c| {
+            let mut st = c.prepare(&format!("SELECT {THREAD_COLS} FROM chat_threads WHERE state NOT IN ('running','waiting_approval') AND updated_at < ?1 ORDER BY updated_at"))?;
+            let rows = st.query_map(params![before], row_thread)?;
+            Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+        })
+    }
+
+    /// Remove one inbox message, answered or not.
+    pub fn delete_inbox(&self, id: &str) -> Result<bool> {
+        self.with(|c| Ok(c.execute("DELETE FROM inbox WHERE id=?1", params![id])? > 0))
+    }
+
+    /// Remove every message that has been dealt with. Returns how many.
+    pub fn clear_resolved_inbox(&self) -> Result<usize> {
+        self.with(|c| Ok(c.execute("DELETE FROM inbox WHERE state='resolved'", [])?))
     }
 
     /// Append to a thread's log. Returns the sequence number.

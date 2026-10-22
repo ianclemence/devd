@@ -417,6 +417,27 @@ impl Store {
     }
 
     /// Tasks of a run in creation order.
+    /// Delete a run with its tasks, its log and the conversations its tasks had. Returns the
+    /// conversations that were removed. The caller has checked that nothing is still working.
+    pub fn delete_run(&self, id: &str) -> Result<usize> {
+        let threads: Vec<String> = self.list_tasks_of_run(id)?.into_iter().filter_map(|t| t.thread_id).collect();
+        for t in &threads {
+            self.delete_thread(t)?;
+        }
+        self.with(|c| {
+            c.execute("DELETE FROM team_events WHERE run_id=?1", params![id])?;
+            c.execute("DELETE FROM team_tasks WHERE run_id=?1", params![id])?;
+            c.execute("DELETE FROM team_runs WHERE id=?1", params![id])?;
+            Ok(())
+        })?;
+        Ok(threads.len())
+    }
+
+    /// The runs that are over (done, failed or cancelled) and were last touched before `before`.
+    pub fn finished_runs_before(&self, before: &str) -> Result<Vec<TeamRun>> {
+        Ok(self.list_runs(10_000)?.into_iter().filter(|r| matches!(r.state.as_str(), "done" | "failed" | "cancelled") && r.updated_at.as_str() < before).collect())
+    }
+
     pub fn list_tasks_of_run(&self, run_id: &str) -> Result<Vec<TeamTask>> {
         self.with(|c| {
             let mut st = c.prepare(&format!("SELECT {TASK_COLS} FROM team_tasks WHERE run_id=?1 ORDER BY rowid"))?;

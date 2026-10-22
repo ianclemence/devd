@@ -4581,14 +4581,14 @@
     // The provider and the model live in the composer, where they are used.
     // The head says what the conversation is and where it stands.
     return '<div class="grow"><div class="chat-title">' + esc(t.title) + '</div><div class="dim mono nowrap">' + esc(t.project || "no project") + " · " + t.input_tokens + " in / " + t.output_tokens + " out tokens</div></div>" +
-      '<span class="pill ' + (t.state === "error" ? "pill-bad" : t.state === "idle" ? "" : "pill-accent") + '">' + esc(t.state.replace("_", " ")) + "</span>";
+      '<span class="pill ' + (t.state === "error" ? "pill-bad" : t.state === "idle" ? "" : "pill-accent") + '">' + esc(t.state.replace("_", " ")) + '</span><button type="button" class="btn btn-mini btn-ghost" data-action="chat-delete" data-id="' + attr(t.id) + '">Delete</button>';
   }
 
   function paintThreads() {
     var box = el("thread-list");
     if (!box) return;
     box.innerHTML = (AI.threads || []).map(function (t) {
-      return '<button type="button" class="thread' + (AI.thread && AI.thread.id === t.id ? " active" : "") + '" data-action="open-thread" data-id="' + attr(t.id) + '"><span class="dot ' + (t.state === "running" ? "dot-ok" : t.state === "waiting_approval" ? "dot-warn" : t.state === "error" ? "dot-bad" : "dot-off") + '"></span><span class="grow nowrap">' + esc(t.title) + '</span><span class="dim">' + esc(ago(t.updated_at)) + "</span></button>";
+      return '<div class="thread-row"><button type="button" class="thread' + (AI.thread && AI.thread.id === t.id ? " active" : "") + '" data-action="open-thread" data-id="' + attr(t.id) + '"><span class="dot ' + (t.state === "running" ? "dot-ok" : t.state === "waiting_approval" ? "dot-warn" : t.state === "error" ? "dot-bad" : "dot-off") + '"></span><span class="grow nowrap">' + esc(t.title) + '</span><span class="dim">' + esc(ago(t.updated_at)) + '</span></button><button type="button" class="thread-del" data-action="chat-delete" data-id="' + attr(t.id) + '" title="Delete this conversation" aria-label="Delete this conversation">\u00d7</button></div>';
     }).join("") || '<div class="empty-inline">No conversations yet.</div>';
   }
 
@@ -4641,7 +4641,7 @@
       "</div>";
 
     el("main").innerHTML =
-      '<div class="assistant"><aside class="threads"><div class="threads-head"><b>Conversations</b><button type="button" class="btn btn-mini btn-primary" data-action="chat-new">New</button></div><div id="thread-list"></div></aside>' +
+      '<div class="assistant"><aside class="threads"><div class="threads-head"><b>Conversations</b><span class="grow"></span><button type="button" class="btn btn-mini btn-ghost" data-action="chats-prune" title="Delete every conversation that is not working">Clear finished</button><button type="button" class="btn btn-mini btn-primary" data-action="chat-new">New</button></div><div id="thread-list"></div></aside>' +
       '<section class="chat">' +
       (AI.thread ? '<div class="chat-head" id="chat-head"></div>' : '<div class="chat-head"><div class="grow"><div class="chat-title">Assistant</div></div></div>') +
       (!ready ? '<div class="notice notice-warn chat-notice">No usable AI provider yet. <button type="button" class="btn btn-mini btn-primary" data-action="nav" data-view="providers">Set one up</button></div>' : "") +
@@ -4692,7 +4692,7 @@
     var ready = (AI.providers || []).some(function (p) { return p.enabled && (p.has_key || !p.needs_key); });
     var projOpts = '<option value="">Choose a project…</option>' + state.projects.map(function (p) { return '<option value="' + attr(p.path) + '"' + (TEAM.form.project === p.path ? " selected" : "") + ">" + esc(p.name || dirName(p.path)) + "</option>"; }).join("") + '<option value="__new"' + (TEAM.form.project === "__new" ? " selected" : "") + ">A new project…</option>";
     el("main").innerHTML =
-      '<div class="assistant"><aside class="threads"><div class="threads-head"><b>Runs</b><button type="button" class="btn btn-mini btn-primary" data-action="team-new">New</button></div><div id="team-list"></div></aside>' +
+      '<div class="assistant"><aside class="threads"><div class="threads-head"><b>Runs</b><span class="grow"></span><button type="button" class="btn btn-mini btn-ghost" data-action="team-prune" title="Delete every run that is over">Clear finished</button><button type="button" class="btn btn-mini btn-primary" data-action="team-new">New</button></div><div id="team-list"></div></aside>' +
       '<section class="chat"><div id="team-detail" class="team-detail"></div></section></div>';
     TEAM.ready = ready; TEAM.projOpts = projOpts;
     paintTeam();
@@ -4703,7 +4703,8 @@
     var list = el("team-list"), box = el("team-detail");
     if (!list || !box) return;
     list.innerHTML = (TEAM.runs || []).map(function (r) {
-      return '<button type="button" class="thread' + (TEAM.sel === r.id ? " active" : "") + '" data-action="team-open" data-id="' + attr(r.id) + '"><span class="dot ' + (r.state === "running" || r.state === "planning" ? "dot-ok" : r.state === "awaiting_plan" || r.state === "paused" ? "dot-warn" : r.state === "failed" ? "dot-bad" : "dot-off") + '"></span><span class="grow nowrap">' + esc(r.title) + '</span><span class="dim">' + r.tasks_done + "/" + r.tasks_total + "</span></button>";
+      var over = ["done", "failed", "cancelled"].indexOf(r.state) >= 0;
+      return '<div class="thread-row"><button type="button" class="thread' + (TEAM.sel === r.id ? " active" : "") + '" data-action="team-open" data-id="' + attr(r.id) + '"><span class="dot ' + (r.state === "running" || r.state === "planning" ? "dot-ok" : r.state === "awaiting_plan" || r.state === "paused" ? "dot-warn" : r.state === "failed" ? "dot-bad" : "dot-off") + '"></span><span class="grow nowrap">' + esc(r.title) + '</span><span class="dim">' + r.tasks_done + "/" + r.tasks_total + '</span></button>' + (over ? '<button type="button" class="thread-del" data-action="team-delete" data-id="' + attr(r.id) + '" title="Delete this run" aria-label="Delete this run">\u00d7</button>' : "") + "</div>";
     }).join("") || '<div class="empty-inline">No runs yet.</div>';
     if (!TEAM.sel || !TEAM.data) { box.innerHTML = teamForm(); return; }
     var focus = document.activeElement && document.activeElement.id;
@@ -4744,6 +4745,7 @@
     if (r.state === "running") actions += '<button type="button" class="btn" data-action="team-pause" data-id="' + attr(r.id) + '">Pause</button>';
     if (r.state === "paused") actions += '<button type="button" class="btn btn-primary" data-action="team-resume" data-id="' + attr(r.id) + '">Resume</button>';
     if (["planning", "awaiting_plan", "running", "paused"].indexOf(r.state) >= 0) actions += '<button type="button" class="btn btn-danger" data-action="team-cancel" data-id="' + attr(r.id) + '">Cancel</button>';
+    else actions += '<button type="button" class="btn btn-ghost" data-action="team-delete" data-id="' + attr(r.id) + '">Delete</button>';
     var head = '<div class="chat-head"><div class="grow"><div class="chat-title">' + esc(r.title) + '</div><div class="dim mono nowrap">' + esc(r.project || "") + ' · started by ' + esc((r.created_by || "").replace("human:", "")) + " " + esc(ago(r.created_at)) + '</div></div><span class="pill ' + (r.state === "failed" ? "pill-bad" : r.state === "done" ? "pill-ok" : r.state === "awaiting_plan" || r.state === "paused" ? "pill-warn" : "pill-accent") + '">' + esc(RUN_WORD[r.state] || r.state) + "</span>" + actions + "</div>";
     var note = r.error ? '<div class="notice notice-warn" style="margin:12px 16px"><b>Needs you.</b> ' + esc(r.error) + "</div>" : "";
     if (r.state === "planning") note += '<div class="notice" style="margin:12px 16px">The planner is reading the project and writing the plan' + (planner && planner.state === "waiting_approval" ? ", and is waiting for you to approve something" : "") + ".</div>";
@@ -4834,7 +4836,7 @@
     if (needs.length) body += uiHead("Needs you", needs.length) + uiList(needs);
     if (updates.length) body += uiHead("Updates", updates.length) + uiList(updates);
     if (!needs.length && !updates.length) body += uiEmpty("You're caught up", "Questions and approvals from agents show up here.");
-    if (earlier.length) body += uiHead("Earlier", null) + uiList(earlier.slice(0, 8));
+    if (earlier.length) body += uiHead("Earlier", null, '<button type="button" class="btn btn-mini btn-ghost" data-action="inbox-clear" title="Delete every answered or dismissed message">Clear</button>') + uiList(earlier.slice(0, 8));
     el("main").innerHTML = page("Inbox", "", "", body);
   }
 
@@ -5948,6 +5950,40 @@
       window.open("https://skills.sh", "_blank", "noopener");
     },
     "close-drawer": function () { closeDrawer(); },
+    "chat-delete": function (n) {
+      var id = n.dataset.id;
+      run("chat.delete", { thread: id }).then(function (o) {
+        if (!o) return;
+        if (AI.thread && AI.thread.id === id) { AI.thread = null; AI.events = []; AI.pending = []; AI.lastId = 0; }
+        return loadAssistant().then(render);
+      });
+    },
+    "chats-prune": function () {
+      run("chat.prune", {}).then(function (o) {
+        if (!o) return;
+        if (AI.thread && !(AI.threads || []).some(function (t) { return t.id === AI.thread.id; })) AI.thread = null;
+        AI.thread = null; AI.events = []; AI.pending = []; AI.lastId = 0;
+        return loadAssistant().then(render);
+      });
+    },
+    "team-delete": function (n) {
+      var id = n.dataset.id;
+      run("team.delete", { run: id }).then(function (o) {
+        if (!o) return;
+        if (TEAM.sel === id) { TEAM.sel = null; TEAM.data = null; }
+        return refresh();
+      });
+    },
+    "team-prune": function () {
+      run("team.prune", {}).then(function (o) {
+        if (!o) return;
+        TEAM.sel = null; TEAM.data = null;
+        return refresh();
+      });
+    },
+    "inbox-clear": function () {
+      run("inbox.clear", {}).then(function (o) { if (o) return loadInbox().then(render); });
+    },
     "open-audit": function (n) { openAuditSheet(n.dataset.at, n.dataset.cap); },
     "audit-filter": function (n) { state.auditFilter = n.dataset.filter; state.auditPage = 0; render(); },
     "team-report": function (n) { var d = TEAM.data; if (d && d.run && d.run.id === n.dataset.id) uiSheet(d.run.title, uiBody(d.run.summary)); },

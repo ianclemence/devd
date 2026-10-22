@@ -1107,6 +1107,62 @@ fn map_repo(row: &rusqlite::Row<'_>) -> rusqlite::Result<Repo> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn deleting_a_conversation_takes_its_log_and_requests_with_it() {
+        let s = store();
+        let t = s.create_thread("old chat", None, None, None).unwrap();
+        s.append_event(&t.id, "user", &serde_json::json!({ "text": "hi" })).unwrap();
+        s.create_request("agent:x", "site.remove", &serde_json::json!({}), None, Some(&t.id), None).unwrap();
+        let keep = s.create_thread("keep", None, None, None).unwrap();
+        assert!(s.delete_thread(&t.id).unwrap());
+        assert!(s.get_thread(&t.id).unwrap().is_none());
+        assert!(s.list_requests(false, Some(&t.id), 10).unwrap().is_empty());
+        assert!(s.get_thread(&keep.id).unwrap().is_some(), "other conversations are untouched");
+        assert!(!s.delete_thread(&t.id).unwrap(), "deleting twice is not an error, it just finds nothing");
+    }
+
+    #[test]
+    fn only_idle_conversations_are_finished_enough_to_prune() {
+        let s = store();
+        let idle = s.create_thread("idle", None, None, None).unwrap();
+        let busy = s.create_thread("busy", None, None, None).unwrap();
+        s.set_thread_state(&busy.id, "running", None).unwrap();
+        let waiting = s.create_thread("waiting", None, None, None).unwrap();
+        s.set_thread_state(&waiting.id, "waiting_approval", None).unwrap();
+        let future = (chrono::Utc::now() + chrono::Duration::days(1)).to_rfc3339();
+        let ids: Vec<String> = s.finished_threads_before(&future).unwrap().into_iter().map(|t| t.id).collect();
+        assert_eq!(ids, vec![idle.id.clone()]);
+        let past = (chrono::Utc::now() - chrono::Duration::days(1)).to_rfc3339();
+        assert!(s.finished_threads_before(&past).unwrap().is_empty(), "a recent conversation is not old");
+    }
+
+    #[test]
+    fn deleting_a_run_takes_its_tasks_and_their_conversations() {
+        use crate::store_team::NewTask;
+        let s = store();
+        let run = s.create_run("build it", "goal", None, 2, "human:x").unwrap();
+        let thread = s.create_thread("task chat", None, None, None).unwrap();
+        let task = s.add_task(&run.id, NewTask { key: "a", role: "implementer", title: "t", instructions: "i", ..Default::default() }).unwrap();
+        s.update_team_task(&task.id, crate::store_team::TaskUpdate { state: "done", thread_id: Some(&thread.id), ..Default::default() }).unwrap();
+        assert_eq!(s.delete_run(&run.id).unwrap(), 1);
+        assert!(s.get_run(&run.id).unwrap().is_none());
+        assert!(s.list_tasks_of_run(&run.id).unwrap().is_empty());
+        assert!(s.get_thread(&thread.id).unwrap().is_none());
+    }
+
+    #[test]
+    fn answered_inbox_messages_can_be_cleared_and_open_ones_stay() {
+        let s = store();
+        s.with(|c| {
+            c.execute("INSERT INTO inbox (id,from_actor,subject,body,needs_reply,state,created_at) VALUES ('a','agent:x','done','b',0,'resolved','2026-01-01'),('b','agent:x','q','b',1,'open','2026-01-01')", [])?;
+            Ok(())
+        }).unwrap();
+        assert_eq!(s.clear_resolved_inbox().unwrap(), 1);
+        assert!(s.get_inbox("a").unwrap().is_none());
+        assert!(s.get_inbox("b").unwrap().is_some());
+        assert!(s.delete_inbox("b").unwrap());
+    }
+
     fn store() -> Store {
         let s = Store::open_in_memory().unwrap();
         s.migrate().unwrap();

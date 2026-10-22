@@ -103,6 +103,17 @@ fn follow(app: &App, tid: &str, mut after: i64, interactive: bool) -> Result<boo
 }
 
 /// `devd chat`.
+/// `devd chats ...`: managing the conversations that exist.
+pub fn chats(app: &App, cmd: crate::ChatsCommand) -> Result<()> {
+    use crate::ChatsCommand as C;
+    match cmd {
+        C::List => app.invoke("chat.list", json!({})),
+        C::Delete { thread } => app.invoke("chat.delete", json!({ "thread": thread })),
+        C::Prune { days } => app.invoke("chat.prune", json!({ "days": days })),
+        C::ClearInbox => app.invoke("inbox.clear", json!({})),
+    }
+}
+
 pub fn chat(app: &App, a: ChatArgs) -> Result<()> {
     let interactive = std::io::stdin().is_terminal() && !app.json;
     let mut thread = a.thread.clone();
@@ -312,6 +323,8 @@ pub fn team(app: &App, cmd: TeamCommand) -> Result<()> {
         TeamCommand::Pause { run } => app.invoke("team.pause", json!({ "run": run })),
         TeamCommand::Resume { run } => app.invoke("team.resume", json!({ "run": run })),
         TeamCommand::Cancel { run } => app.invoke("team.cancel", json!({ "run": run })),
+        TeamCommand::Delete { run } => app.invoke("team.delete", json!({ "run": run })),
+        TeamCommand::Prune { days } => app.invoke("team.prune", json!({ "days": days })),
         TeamCommand::Retry { task, note } => app.invoke("team.retry", json!({ "task": task, "note": note })),
         TeamCommand::Accept { task } => app.invoke("team.accept", json!({ "task": task })),
     }

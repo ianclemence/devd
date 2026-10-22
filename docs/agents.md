@@ -261,3 +261,21 @@ devd needs it; optional things that are not set up become setup steps and notes,
 never an unhealthy platform. A service is healthy only after it answers. The
 sidebar shows the state compactly, goes stale after 90 seconds, and the
 Diagnostics page lists every component with what it means and the fix.
+
+## Deleting conversations, runs and messages
+
+Nothing is deleted on its own; a person decides, and every deletion asks for approval first (agents cannot do it).
+
+| What | Window | Command | Capability |
+|---|---|---|---|
+| One conversation | the cross beside it in Assistant, or Delete in its header | `devd chats delete <id>` | `chat.delete` |
+| Every finished conversation | Clear finished in the Assistant list | `devd chats prune [--days N]` | `chat.prune` |
+| One finished run | the cross beside it, or Delete in its header (Agents > Runs) | `devd team delete <run>` | `team.delete` |
+| Every finished run | Clear finished in the Runs list | `devd team prune [--days N]` | `team.prune` |
+| One inbox message | Delete in its sheet | `devd call inbox.delete '{"id":"..."}'` | `inbox.delete` |
+| Answered or dismissed messages | Clear under Earlier in the Inbox | `devd chats clear-inbox` | `inbox.clear` |
+
+Deleting a conversation stops it first if it is working, then removes its log and the approval requests it made. Deleting a
+run removes its tasks, its log and the conversations its tasks had; a run that is still working must be cancelled first, and
+work already merged stays. `prune` never touches a conversation that is working or waiting for you, and a run that is not
+over. Deleted data cannot be recovered.

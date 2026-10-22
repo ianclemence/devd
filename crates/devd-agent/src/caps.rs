@@ -269,6 +269,27 @@ struct TeamAssign {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct PruneArgs {
+    /// Only what has not been touched for this many days; omit for everything that is finished.
+    #[serde(default)]
+    days: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct InboxDelete {
+    /// Message id.
+    id: String,
+}
+
+/// The time before which something counts as old enough to prune.
+fn prune_cutoff(days: Option<u64>) -> String {
+    match days {
+        Some(d) => (chrono::Utc::now() - chrono::Duration::days(d as i64)).to_rfc3339(),
+        None => (chrono::Utc::now() + chrono::Duration::days(1)).to_rfc3339(),
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct RunRef {
     /// Run id.
     run: String,
@@ -874,6 +895,45 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
         move |ctx, a| Ok(Outcome::with_data("cancelled", serde_json::to_value(t.cancel(ctx, &a.run)?)?)),
     )?;
     }
+    reg.define::<RunRef>("team.delete", "Delete a finished run")
+    .description("Deletes a run that is over (done, failed or cancelled) with its tasks, its log and the conversations its tasks had. A run that is still working must be cancelled first. Work already merged stays. Cannot be undone.")
+    .tier(Tier::Destructive)
+    .effect(Effect::Data)
+    .human_only()
+    .dry_run()
+    .handlers(
+        |ctx, a| {
+            let r = ctx.store.get_run(&a.run)?.ok_or_else(|| DevdError::not_found("no such run"))?;
+            Ok(Plan::new("team.delete", format!("delete the run \"{}\" and its log", r.title)).destructive(true))
+        },
+        |ctx, a| {
+            let r = ctx.store.get_run(&a.run)?.ok_or_else(|| DevdError::not_found("no such run"))?;
+            if !matches!(r.state.as_str(), "done" | "failed" | "cancelled") {
+                return Err(DevdError::conflict(format!("the run is {}; cancel it before deleting it", r.state.replace('_', " "))));
+            }
+            let conversations = ctx.store.delete_run(&a.run)?;
+            Ok(Outcome::with_data("deleted", json!({ "deleted": 1, "conversations": conversations })))
+        },
+    )?;
+    reg.define::<PruneArgs>("team.prune", "Delete finished runs")
+    .description("Deletes every run that is over (done, failed or cancelled), with its tasks, log and conversations. With days, only those not touched for that long. Cannot be undone.")
+    .tier(Tier::Destructive)
+    .effect(Effect::Data)
+    .human_only()
+    .dry_run()
+    .handlers(
+        |ctx, a| {
+            let n = ctx.store.finished_runs_before(&prune_cutoff(a.days))?.len();
+            Ok(Plan::new("team.prune", format!("delete {n} finished run(s)")).destructive(true))
+        },
+        |ctx, a| {
+            let runs = ctx.store.finished_runs_before(&prune_cutoff(a.days))?;
+            for r in &runs {
+                ctx.store.delete_run(&r.id)?;
+            }
+            Ok(Outcome::with_data(format!("deleted {} run(s)", runs.len()), json!({ "deleted": runs.len() })))
+        },
+    )?;
     {
         let t = team.clone();
         reg.define::<RunRef>("team.pause", "Pause a run")
@@ -1466,17 +1526,79 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             Ok(Outcome::ok("updated"))
         },
     )?;
-    reg.define::<ThreadArgs>("chat.delete", "Delete a conversation")
-    .description("Deletes a conversation and its log. Cannot be undone.")
+    {
+        let hub = hub.clone();
+        reg.define::<ThreadArgs>("chat.delete", "Delete a conversation")
+        .description("Stops the conversation if it is working, then deletes it with its log and the approval requests it made. Cannot be undone.")
+        .tier(Tier::Destructive)
+        .effect(Effect::Data)
+        .human_only()
+        .dry_run()
+        .handlers(
+            |ctx, a| {
+                let t = ctx.store.get_thread(&a.thread)?.ok_or_else(|| DevdError::not_found("no such conversation"))?;
+                Ok(Plan::new("chat.delete", format!("delete the conversation \"{}\" and its log", t.title)).destructive(true))
+            },
+            move |ctx, a| {
+                ctx.store.get_thread(&a.thread)?.ok_or_else(|| DevdError::not_found("no such conversation"))?;
+                hub.stop(ctx, &a.thread)?;
+                ctx.store.delete_thread(&a.thread)?;
+                Ok(Outcome::with_data("deleted", json!({ "deleted": 1 })))
+            },
+        )?;
+    }
+    {
+        let hub = hub.clone();
+        reg.define::<PruneArgs>("chat.prune", "Delete finished conversations")
+        .description("Deletes every conversation that is not in the middle of something. With days, only those not touched for that long. Cannot be undone.")
+        .tier(Tier::Destructive)
+        .effect(Effect::Data)
+        .human_only()
+        .dry_run()
+        .handlers(
+            |ctx, a| {
+                let n = ctx.store.finished_threads_before(&prune_cutoff(a.days))?.len();
+                Ok(Plan::new("chat.prune", format!("delete {n} finished conversation(s)")).destructive(true))
+            },
+            move |ctx, a| {
+                let threads = ctx.store.finished_threads_before(&prune_cutoff(a.days))?;
+                for t in &threads {
+                    hub.stop(ctx, &t.id)?;
+                    ctx.store.delete_thread(&t.id)?;
+                }
+                Ok(Outcome::with_data(format!("deleted {} conversation(s)", threads.len()), json!({ "deleted": threads.len() })))
+            },
+        )?;
+    }
+    reg.define::<InboxDelete>("inbox.delete", "Delete an inbox message")
+    .description("Removes a message from the inbox. Human only.")
     .tier(Tier::Destructive)
     .effect(Effect::Data)
     .human_only()
     .dry_run()
     .handlers(
-        |_, a| Ok(Plan::new("chat.delete", format!("delete conversation {} and its log", a.thread)).destructive(true)),
+        |_, a| Ok(Plan::new("inbox.delete", format!("delete message {}", a.id)).destructive(true)),
         |ctx, a| {
-            ctx.store.delete_thread(&a.thread)?;
-            Ok(Outcome::ok("deleted"))
+            if !ctx.store.delete_inbox(&a.id)? {
+                return Err(DevdError::not_found("no such message"));
+            }
+            Ok(Outcome::with_data("deleted", json!({ "deleted": 1 })))
+        },
+    )?;
+    reg.define::<NoArgs>("inbox.clear", "Clear answered inbox messages")
+    .description("Deletes every message that has been answered or dismissed. Open questions are kept. Human only.")
+    .tier(Tier::Destructive)
+    .effect(Effect::Data)
+    .human_only()
+    .dry_run()
+    .handlers(
+        |ctx, _| {
+            let n = ctx.store.list_inbox(false, 10_000)?.into_iter().filter(|m| m.state == "resolved").count();
+            Ok(Plan::new("inbox.clear", format!("delete {n} answered message(s)")).destructive(true))
+        },
+        |ctx, _| {
+            let n = ctx.store.clear_resolved_inbox()?;
+            Ok(Outcome::with_data(format!("deleted {n} message(s)"), json!({ "deleted": n })))
         },
     )?;
 
