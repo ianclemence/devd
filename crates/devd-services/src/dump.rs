@@ -177,8 +177,64 @@ pub fn restore(ctx: &Ctx, to: &Endpoint, database: &str, file: &Path) -> Result<
     let mut args = vec!["--no-defaults".to_string()];
     args.extend(connection_args(to));
     args.extend(["--connect-timeout=15".to_string(), "--default-character-set=utf8mb4".to_string(), database.to_string()]);
-    run(&client, &args, &envs(to), Some(file), "mysql")?;
-    Ok(json!({ "database": database, "file": file.display().to_string() }))
+    let clean = file.with_extension("mariadb.sql");
+    let rewrites = sanitize_for_mariadb(file, &clean)?;
+    let ran = run(&client, &args, &envs(to), Some(&clean), "mysql");
+    let _ = std::fs::remove_file(&clean);
+    ran?;
+    Ok(json!({
+        "database": database,
+        "file": file.display().to_string(),
+        "rewritten": rewrites.iter().map(|(what, n)| json!({ "what": what, "times": n })).collect::<Vec<_>>(),
+    }))
+}
+
+/// What differs between MySQL 8 and MariaDB in a dump, and what each becomes.
+///
+/// MySQL 8's default collations (`utf8mb4_0900_ai_ci` and its siblings) and the
+/// `utf8mb3` charset name do not exist in MariaDB, and a dump that names them stops
+/// at the first table. They are rewritten to the nearest MariaDB equivalent, and the
+/// count of each is reported so nothing is changed silently.
+const REWRITES: &[(&str, &str)] = &[
+    ("utf8mb4_0900_ai_ci", "utf8mb4_unicode_ci"),
+    ("utf8mb4_0900_as_ci", "utf8mb4_unicode_ci"),
+    ("utf8mb4_0900_as_cs", "utf8mb4_bin"),
+    ("utf8mb4_0900_bin", "utf8mb4_bin"),
+    ("utf8mb3_general_ci", "utf8_general_ci"),
+    ("utf8mb3_unicode_ci", "utf8_unicode_ci"),
+    ("utf8mb3_bin", "utf8_bin"),
+    ("utf8mb3", "utf8"),
+];
+
+/// Copy `source` to `target` with MySQL 8-only names replaced. Returns each rewrite
+/// that happened and how many times. The file is read and written a line at a time,
+/// so a large dump is not held in memory.
+pub fn sanitize_for_mariadb(source: &Path, target: &Path) -> Result<Vec<(String, usize)>> {
+    use std::io::{BufRead, Write};
+    let mut counts = vec![0usize; REWRITES.len()];
+    let reader = std::io::BufReader::new(std::fs::File::open(source)?);
+    let mut writer = std::io::BufWriter::new(std::fs::File::create(target)?);
+    for line in reader.split(b'\n') {
+        let line = line?;
+        match String::from_utf8(line) {
+            // Rows are data, not schema: a value that happens to contain a collation name stays as it is.
+            Ok(mut text) if !text.starts_with("INSERT ") => {
+                for (i, (from, to)) in REWRITES.iter().enumerate() {
+                    if text.contains(from) {
+                        counts[i] += text.matches(from).count();
+                        text = text.replace(from, to);
+                    }
+                }
+                writer.write_all(text.as_bytes())?;
+            }
+            // Rows and binary data in a dump are passed through untouched.
+            Ok(text) => writer.write_all(text.as_bytes())?,
+            Err(bytes) => writer.write_all(bytes.as_bytes())?,
+        }
+        writer.write_all(b"\n")?;
+    }
+    writer.flush()?;
+    Ok(REWRITES.iter().zip(counts).filter(|(_, n)| *n > 0).map(|((from, to), n)| (format!("{from} -> {to}"), n)).collect())
 }
 
 /// A timestamped file name inside the backups directory.
@@ -190,6 +246,29 @@ pub fn default_file(ctx: &Ctx, database: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mysql_8_names_become_the_mariadb_equivalents_and_are_counted() {
+        let dir = std::env::temp_dir().join(format!("devd-sanitize-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dump = dir.join("in.sql");
+        let out = dir.join("out.sql");
+        std::fs::write(
+            &dump,
+            "CREATE TABLE a (n varchar(9) COLLATE utf8mb4_0900_ai_ci) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;\nCREATE TABLE b (n text CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci);\nINSERT INTO a VALUES ('utf8mb4_0900_ai_ci is data here');\n-- plain line\n",
+        )
+        .unwrap();
+        let done = sanitize_for_mariadb(&dump, &out).unwrap();
+        let text = std::fs::read_to_string(&out).unwrap();
+        assert!(!text.contains("COLLATE utf8mb4_0900") && !text.contains("utf8mb3"), "{text}");
+        assert!(text.contains("COLLATE=utf8mb4_unicode_ci") && text.contains("CHARACTER SET utf8 COLLATE utf8_general_ci"));
+        assert!(text.contains("VALUES ('utf8mb4_0900_ai_ci is data here')"), "row data is never rewritten: {text}");
+        assert!(text.ends_with("-- plain line\n"));
+        let by_name: std::collections::HashMap<&str, usize> = done.iter().map(|(k, n)| (k.as_str(), *n)).collect();
+        assert_eq!(by_name["utf8mb4_0900_ai_ci -> utf8mb4_unicode_ci"], 2);
+        assert_eq!(by_name["utf8mb3_general_ci -> utf8_general_ci"], 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn only_a_server_on_this_machine_can_be_a_source() {

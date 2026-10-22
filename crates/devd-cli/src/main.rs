@@ -988,6 +988,11 @@ pub(crate) enum SiteCommand {
         /// The folder, as an absolute path.
         path: String,
     },
+    /// Guard a site's php_value / php_flag lines in .htaccess so Apache accepts them.
+    FixHtaccess {
+        /// Site name.
+        name: String,
+    },
     /// Stop parking a folder. Its sites stay.
     Unpark {
         /// The folder, as an absolute path.

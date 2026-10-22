@@ -275,6 +275,13 @@ fn site_servers(render: &Render, site: &Site) -> String {
     out.push_str(&format!(
         "    ProxyFCGISetEnvIf \"true\" SCRIPT_FILENAME \"{root}%{{reqenv:SCRIPT_NAME}}\"\n"
     ));
+    // `/index.php/extra`: the script is the part through `.php`, the rest is PATH_INFO. PATH_INFO
+    // is set first and SCRIPT_NAME last, because each rule reads SCRIPT_NAME as it is when it runs.
+    for (variable, value) in [("PATH_INFO", "$2".to_string()), ("SCRIPT_FILENAME", format!("{root}$1")), ("SCRIPT_NAME", "$1".to_string())] {
+        out.push_str(&format!(
+            "    ProxyFCGISetEnvIf \"reqenv('SCRIPT_NAME') =~ m#^(.+?\\.php)(/.*)$#\" {variable} \"{value}\"\n"
+        ));
+    }
     out.push_str("    # Dotfiles are not served; certificate challenges still are.\n");
     out.push_str("    <LocationMatch \"/\\.(?!well-known)\">\n        Require all denied\n    </LocationMatch>\n");
     out.push_str("</VirtualHost>\n\n");

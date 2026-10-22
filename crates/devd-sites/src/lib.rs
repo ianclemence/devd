@@ -21,6 +21,7 @@
 
 pub mod caps;
 pub mod hosts;
+pub mod htaccess;
 pub mod park;
 
 use std::path::{Path, PathBuf};
@@ -647,6 +648,9 @@ pub struct SiteRow {
     /// For a proxy site, whether anything is accepting connections at its
     /// upstream right now. `None` for a site that serves a directory.
     pub upstream_listening: Option<bool>,
+    /// How many `php_value`-style directives in the site's `.htaccess` Apache cannot
+    /// read (always 0 under nginx).
+    pub htaccess_php: usize,
 }
 
 /// Every site, with a live check of what is actually on disk.
@@ -690,10 +694,21 @@ pub fn list(ctx: &Ctx) -> Result<Vec<SiteRow>> {
                 php_installed: php_installed.clone(),
                 php_effective,
                 upstream_listening: upstream_listening(&site),
+                htaccess_php: htaccess_php(ctx, &site),
                 site,
             }
         })
         .collect())
+}
+
+/// Directives in a site's `.htaccess` that Apache, which runs PHP as FastCGI, rejects.
+fn htaccess_php(ctx: &Ctx, site: &Site) -> usize {
+    if site.upstream.is_some() || ctx.settings.web_server.as_str() != "apache" {
+        return 0;
+    }
+    std::fs::read_to_string(Path::new(&site.document_root()).join(".htaccess"))
+        .map(|t| htaccess::scan(&t).len())
+        .unwrap_or(0)
 }
 
 /// Pin a site to a PHP version, or unpin it.

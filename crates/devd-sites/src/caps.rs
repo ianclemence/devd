@@ -46,6 +46,8 @@ args! {
     SetUpstreamArgs { name: String, upstream: Option<String> }
     /// A folder of projects.
     FolderArgs { path: String }
+    /// A site by name.
+    SiteName { name: String }
     /// Whether to ask Windows for permission when the hosts file cannot be written.
     HostsSyncArgs { elevate: Option<bool> }
     /// A site to pin to a PHP version.
@@ -54,6 +56,40 @@ args! {
 
 /// Register every site capability.
 pub fn register(reg: &mut Registry) -> Result<()> {
+    reg.define::<SiteName>("site.fix_htaccess", "Make a site's .htaccess readable by Apache")
+    .description("Apache runs PHP as FastCGI, so `php_value`, `php_flag` and `php_admin_*` lines in a .htaccess answer every request with a 500. This wraps them in <IfModule mod_php.c> (the form hosts that do run mod_php read the same way), keeps the original as .htaccess.devd-backup, and carries the values into .user.ini, which PHP reads for every setting a .htaccess may change. php_admin_* values are system settings .user.ini cannot change; they are listed. Human only, because it edits a file in the project.")
+    .group("site")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .human_only()
+    .dry_run()
+    .handlers(
+        |ctx, a| {
+            let site = ctx.store.list_sites()?.into_iter().find(|s| s.name == a.name).ok_or_else(|| DevdError::not_found(format!("no site named {}", a.name)))?;
+            let found = std::fs::read_to_string(std::path::Path::new(&site.document_root()).join(".htaccess")).map(|t| sites::htaccess::scan(&t).len()).unwrap_or(0);
+            Ok(Plan::new("site.fix_htaccess", format!("guard {found} php directive(s) in {}'s .htaccess", a.name))
+                .step("keep the original as .htaccess.devd-backup")
+                .step("wrap the directives in <IfModule mod_php.c>")
+                .step("write the values Apache cannot read into .user.ini")
+                .effect("edits .htaccess and .user.ini in the project"))
+        },
+        |ctx, a| {
+            let site = ctx.store.list_sites()?.into_iter().find(|s| s.name == a.name).ok_or_else(|| DevdError::not_found(format!("no site named {}", a.name)))?;
+            if site.upstream.is_some() {
+                return Err(DevdError::invalid("a site that proxies a running program has no .htaccess"));
+            }
+            let done = sites::htaccess::fix(std::path::Path::new(&site.document_root()))?;
+            let mut outcome = Outcome::with_data(
+                format!("guarded {} directive(s); {} written to .user.ini", done.directives.len(), done.translated.len()),
+                serde_json::to_value(&done).unwrap_or(Value::Null),
+            );
+            for name in &done.not_applied {
+                outcome = outcome.warn(format!("{name} is a system setting .user.ini cannot change; set it in php.ini if it matters"));
+            }
+            Ok(outcome)
+        },
+    )?;
+
     reg.define::<NoArgs>("site.parked", "List the folders whose projects become sites")
     .description("The projects root and every folder added with site.park. Each project directory in them is a site after site.sync, named after the folder, as auto virtual hosts do.")
     .group("site")
@@ -168,6 +204,12 @@ pub fn register(reg: &mut Registry) -> Result<()> {
                     outcome = outcome.warn(format!(
                         "{} has no project directory at {}",
                         row.site.name, row.site.root
+                    ));
+                }
+                if row.htaccess_php > 0 {
+                    outcome = outcome.warn(format!(
+                        "{} has {} php_value-style directive(s) in .htaccess that Apache answers with a 500; `devd site fix-htaccess {}` guards them",
+                        row.site.name, row.htaccess_php, row.site.name
                     ));
                 }
                 if !row.in_hosts && !crate::resolves_without_hosts(&row.site.host) {
