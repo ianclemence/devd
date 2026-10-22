@@ -308,3 +308,14 @@ fn every_navigation_button_points_at_a_page() {
     }
     assert!(missing.is_empty(), "a button navigates to a view render() cannot draw: {missing:?}");
 }
+
+#[test]
+fn every_helper_the_script_calls_is_defined() {
+    // A helper deleted with the feature that used it, while another screen still called it, left
+    // every conversation blank. These are the small shared helpers screens lean on.
+    for name in ["shortTime", "stamp", "ago", "esc", "attr", "md", "uiRow", "uiList", "uiHead", "uiEmpty", "uiSummary", "uiSheet", "uiDialog", "uiConfirm", "uiPrompt", "devdSeries", "dot", "pill", "page"] {
+        let used = APP.contains(&format!("{name}("));
+        let defined = APP.contains(&format!("function {name}("));
+        assert!(!used || defined, "`{name}` is called but never defined");
+    }
+}

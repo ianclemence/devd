@@ -87,7 +87,7 @@
     })
       .then(function (res) {
         if (res.ok && res.body.approval_required) {
-          return askApproval(res.body).then(function (granted) {
+          return askApproval(res.body.args === undefined ? Object.assign({}, res.body, { args: args || {} }) : res.body).then(function (granted) {
             if (!granted) {
               return request("/api/deny", {
                 method: "POST",
@@ -493,6 +493,46 @@
   function closeDrawer() {
     el("drawer").hidden = true;
   }
+
+  // ------------------------------------------------------------------- dialog
+  //
+  // A question the person answers in the application's own style, in place of the browser's
+  // alert boxes: a title, a sentence or two, optionally one text field, and the buttons in the
+  // same place as every other dialog (Cancel, then the action, at the right).
+
+  function uiDialog(o) {
+    return new Promise(function (resolve) {
+      var d = el("dialog"), ok = el("dialog-ok"), cancel = el("dialog-cancel"), inp = el("dialog-input");
+      var back = document.activeElement;
+      el("dialog-title").textContent = o.title || "";
+      el("dialog-text").textContent = o.text || "";
+      el("dialog-text").hidden = !o.text;
+      inp.hidden = !o.input;
+      if (o.input) { inp.value = o.input.value || ""; inp.placeholder = o.input.placeholder || ""; }
+      ok.textContent = o.confirm || "OK";
+      ok.className = "btn " + (o.danger ? "btn-danger" : "btn-go");
+      var close = function (res) {
+        d.hidden = true;
+        ok.onclick = cancel.onclick = d.onclick = d.onkeydown = null;
+        if (back && back.focus) back.focus();
+        resolve(res);
+      };
+      ok.onclick = function () { close({ ok: true, value: inp.value.trim() }); };
+      cancel.onclick = function () { close({ ok: false }); };
+      d.onclick = function (e) { if (e.target === d) close({ ok: false }); };
+      d.onkeydown = function (e) {
+        if (e.key === "Escape") { e.stopPropagation(); close({ ok: false }); }
+        else if (e.key === "Enter" && e.target.tagName !== "BUTTON") { e.preventDefault(); ok.click(); }
+      };
+      d.hidden = false;
+      var first = o.input ? inp : (o.danger ? cancel : ok);
+      first.focus();
+      if (o.input) inp.select();
+    });
+  }
+
+  function uiConfirm(o) { return uiDialog(o).then(function (r) { return r.ok; }); }
+  function uiPrompt(o) { return uiDialog(o).then(function (r) { return r.ok ? r.value : null; }); }
 
   // ------------------------------------------------------------------- picker
   //
@@ -1222,11 +1262,24 @@
     { kind: "ruby", label: "Ruby", note: "RubyInstaller builds (Windows)" }
   ];
 
+  var VIEW_ICON = {
+    home: "i-home", inbox: "i-inbox", assistant: "i-spark", projects: "i-folder", project: "i-folder", create: "i-plus", develop: "i-code",
+    agents: "i-team", team: "i-team", schedules: "i-clock", skills: "i-spark", shared: "i-layers", studio: "i-layers", processes: "i-pulse",
+    overview: "i-server", services: "i-server", sites: "i-server", toolchain: "i-code", runtimes: "i-code", preview: "i-search",
+    certificates: "i-check-circle", hosts: "i-server", providers: "i-sliders", activity: "i-clock", system: "i-check-circle", capabilities: "i-code"
+  };
+
+  /* The heading of a page: its icon, then its name. */
+  function pageTitle(text, view) {
+    var icon = VIEW_ICON[view || state.view] || "i-layers";
+    return '<h1 class="page-title"><svg class="icon title-icon" aria-hidden="true"><use href="#' + icon + '"></use></svg><span>' + esc(text) + "</span></h1>";
+  }
+
   function page(title, sub, actions, body) {
     return (
       '<div class="page">' +
       '<div class="page-head"><div>' +
-      '<h1 class="page-title">' + esc(title) + "</h1></div>" +
+      pageTitle(title) + "</div>" +
       '<div class="page-actions">' + (actions || "") + "</div>" +
       "</div>" + body + "</div>"
     );
@@ -3193,7 +3246,7 @@
       '<div class="page">' +
       '<div class="page-head">' +
       "<div>" +
-      '<h1 class="page-title">' + esc(state.project.name) + "</h1>" +
+      pageTitle(state.project.name, "project") +
       '<div class="page-sub mono nowrap" title="' + attr(state.project.path) + '">' +
       esc(state.project.path) + "</div>" +
       '<div class="inline" style="margin-top:8px">' + badge + "</div>" +
@@ -3300,7 +3353,7 @@
 
     el("main").innerHTML =
       '<div class="page">' +
-      '<div class="page-head"><div><h1 class="page-title">Capabilities</h1>' +
+      '<div class="page-head"><div>' + pageTitle("API and tools", "capabilities") +
       '<div class="page-sub">' + state.caps.total + " of " +
       ((state.session && state.session.registry.capabilities) || 0) +
       " - the same registry the CLI and the agent use.</div></div></div>" +
@@ -3370,7 +3423,7 @@
     var body = tabs + (rows.length ? uiList(rows) + pager(visible.length, pageNo, "audit-page")
       : state.auditError ? uiEmpty("The activity log could not be read", state.auditError)
       : uiEmpty("Nothing here yet", "Rows appear as soon as a capability is called from any surface."));
-    el("main").innerHTML = '<div class="page"><div class="page-head"><div><h1 class="page-title">Activity</h1></div></div>' + body + "</div>";
+    el("main").innerHTML = '<div class="page"><div class="page-head"><div>' + pageTitle("Activity", "activity") + "</div></div>" + body + "</div>";
   }
 
   function openAuditSheet(at, cap) {
@@ -3430,7 +3483,7 @@
 
     el("main").innerHTML =
       '<div class="page">' +
-      '<div class="page-head"><div><h1 class="page-title">Diagnostics</h1></div>' +
+      '<div class="page-head"><div>' + pageTitle("Diagnostics", "system") + '</div>' +
       '<div class="page-actions">' +
       '<button type="button" class="btn" data-action="refresh">Re-check</button>' +
       '<button type="button" class="btn btn-danger" data-action="quit">Quit devd</button>' +
@@ -3810,6 +3863,14 @@
     return relativeTime(Math.floor(t / 1000));
   }
 
+  /* The time of day, for the line under a message. */
+  function shortTime(value) {
+    if (!value) return "";
+    var d = new Date(value);
+    if (isNaN(d.getTime())) return "";
+    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+
   /* A timestamp a person can scan: the clock time for today, the date and the
      time for anything older. The full value stays in the title. */
   function stamp(iso) {
@@ -3823,27 +3884,141 @@
   }
 
   /* A small, safe Markdown renderer: code fences, inline code, bold, lists, links. */
-  function md(text) {
-    var parts = String(text || "").split(/```/);
-    return parts.map(function (part, i) {
-      if (i % 2 === 1) {
-        var nl = part.indexOf("\n");
-        var body = nl >= 0 ? part.slice(nl + 1) : part;
-        return '<pre class="code">' + esc(body.replace(/\n$/, "")) + "</pre>";
+  // ---------------------------------------------------------------- markdown
+  //
+  // Text from a model, a report or a note is Markdown. Everything is escaped before it is
+  // turned into markup, so nothing in the text can add a tag; links are only http, https and
+  // mailto; images are shown as links so a remote file is never fetched on the page's behalf.
+
+  function mdLink(url, label) {
+    return '<a class="link" href="' + url + '" target="_blank" rel="noopener noreferrer">' + label + "</a>";
+  }
+
+  function mdInline(raw) {
+    var codes = [];
+    var s = String(raw).replace(/`([^`\n]+)`/g, function (_, c) { codes.push(c); return "\u0000" + (codes.length - 1) + "\u0000"; });
+    s = esc(s);
+    s = s.replace(/!\[([^\]\n]*)\]\((https?:\/\/[^)\s]+)\)/g, function (_, alt, url) { return mdLink(url, alt || "image"); });
+    s = s.replace(/\[([^\]\n]+)\]\(((?:https?:\/\/|mailto:)[^)\s]+)\)/g, function (_, label, url) { return mdLink(url, label); });
+    s = s.replace(/(^|[\s(])(https?:\/\/[^\s<)]*[^\s<).,;:!?])/g, function (_, pre, url) { return pre + mdLink(url, url); });
+    s = s.replace(/\*\*(?=\S)([^\n]*?\S)\*\*/g, "<strong>$1</strong>");
+    s = s.replace(/(^|[^\w])__(?=\S)([^\n]*?\S)__(?!\w)/g, "$1<strong>$2</strong>");
+    s = s.replace(/~~(?=\S)([^\n]*?\S)~~/g, "<del>$1</del>");
+    s = s.replace(/(^|[^*\w])\*(?=[^\s*])([^*\n]*?[^\s*])\*(?!\w)/g, "$1<em>$2</em>");
+    s = s.replace(/(^|[^\w])_(?=[^\s_])([^_\n]*?[^\s_])_(?!\w)/g, "$1<em>$2</em>");
+    return s.replace(/\u0000(\d+)\u0000/g, function (_, n) { return "<code>" + esc(codes[+n]) + "</code>"; });
+  }
+
+  var MD_ITEM = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/;
+  var MD_FENCE = /^\s{0,3}(```+|~~~+)\s*([\w+#.-]*)[^\n]*$/;
+  var MD_HR = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/;
+  var MD_HEAD = /^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/;
+  var MD_TABLE_SEP = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
+
+  function mdCells(line) {
+    var t = line.trim();
+    if (t.charAt(0) === "|") t = t.slice(1);
+    if (t.charAt(t.length - 1) === "|" && t.charAt(t.length - 2) !== "\\") t = t.slice(0, -1);
+    return t.split(/(?<!\\)\|/).map(function (c) { return c.replace(/\\\|/g, "|").trim(); });
+  }
+
+  function mdStartsBlock(lines, i) {
+    var l = lines[i];
+    return MD_FENCE.test(l) || MD_HEAD.test(l) || MD_HR.test(l) || /^\s{0,3}>/.test(l) || MD_ITEM.test(l) ||
+      (l.indexOf("|") >= 0 && i + 1 < lines.length && MD_TABLE_SEP.test(lines[i + 1]) && lines[i + 1].indexOf("-") >= 0);
+  }
+
+  function mdList(lines, start) {
+    var first = MD_ITEM.exec(lines[start]);
+    var base = first[1].length, ordered = /\d/.test(first[2].charAt(0));
+    var items = [], i = start;
+    while (i < lines.length) {
+      var m = MD_ITEM.exec(lines[i]);
+      if (!m) {
+        if (lines[i].trim() === "") {
+          var j = i + 1;
+          while (j < lines.length && lines[j].trim() === "") j++;
+          var nm = j < lines.length ? MD_ITEM.exec(lines[j]) : null;
+          if (nm && nm[1].length >= base) { i = j; continue; }
+          break;
+        }
+        if (items.length && /^\s+\S/.test(lines[i]) && lines[i].match(/^\s*/)[0].length > base) {
+          items[items.length - 1].text += "\n" + lines[i].trim();
+          i++;
+          continue;
+        }
+        break;
       }
-      var html = esc(part)
-        .replace(/`([^`\n]+)`/g, "<code>$1</code>")
-        .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
-        .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a class="link" href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
-      var out = [], list = false;
-      html.split("\n").forEach(function (line) {
-        var m = /^\s*[-*]\s+(.*)$/.exec(line);
-        if (m) { if (!list) { out.push("<ul>"); list = true; } out.push("<li>" + m[1] + "</li>"); }
-        else { if (list) { out.push("</ul>"); list = false; } out.push(line.trim() ? "<p>" + line + "</p>" : ""); }
-      });
-      if (list) out.push("</ul>");
-      return out.join("");
-    }).join("");
+      var ind = m[1].length;
+      if (ind < base) break;
+      // A different kind of list at the same level is a new list.
+      if (ind === base && /\d/.test(m[2].charAt(0)) !== ordered) break;
+      if (ind > base && items.length) {
+        var sub = mdList(lines, i);
+        items[items.length - 1].children += sub.html;
+        i = sub.next;
+        continue;
+      }
+      items.push({ text: m[3], children: "" });
+      i++;
+    }
+    var startNum = ordered ? parseInt(first[2], 10) : 1;
+    var html = "<" + (ordered ? "ol" : "ul") + (ordered && startNum !== 1 ? ' start="' + startNum + '"' : "") + ">" +
+      items.map(function (it) {
+        var task = /^\[( |x|X)\]\s+([\s\S]*)$/.exec(it.text);
+        var body = task ? it.text.slice(4) : it.text;
+        return "<li" + (task ? ' class="md-task"' : "") + ">" +
+          (task ? '<span class="md-check' + (task[1] === " " ? "" : " on") + '" aria-hidden="true"></span>' : "") +
+          mdInline(body).replace(/\n/g, "<br>") + it.children + "</li>";
+      }).join("") + "</" + (ordered ? "ol" : "ul") + ">";
+    return { html: html, next: i };
+  }
+
+  function mdBlocks(lines) {
+    var out = [], i = 0;
+    while (i < lines.length) {
+      var line = lines[i], m;
+      if (line.trim() === "") { i++; continue; }
+      if ((m = MD_FENCE.exec(line))) {
+        var fence = m[1], lang = m[2], body = [];
+        i++;
+        while (i < lines.length && !(new RegExp("^\\s{0,3}" + fence.charAt(0) + "{" + fence.length + ",}\\s*$").test(lines[i]))) { body.push(lines[i]); i++; }
+        i++;
+        out.push('<div class="md-code"><div class="md-code-head"><span>' + esc(lang || "text") + '</span><button type="button" class="md-copy" data-action="copy-code">Copy</button></div><pre class="code"><code>' + esc(body.join("\n")) + "</code></pre></div>");
+        continue;
+      }
+      if ((m = MD_HEAD.exec(line))) { out.push('<h' + m[1].length + ' class="md-h">' + mdInline(m[2]) + "</h" + m[1].length + ">"); i++; continue; }
+      if (MD_HR.test(line)) { out.push('<hr class="md-hr">'); i++; continue; }
+      if (/^\s{0,3}>/.test(line)) {
+        var quote = [];
+        while (i < lines.length && /^\s{0,3}>/.test(lines[i])) { quote.push(lines[i].replace(/^\s{0,3}>\s?/, "")); i++; }
+        out.push('<blockquote class="md-quote">' + mdBlocks(quote) + "</blockquote>");
+        continue;
+      }
+      if (line.indexOf("|") >= 0 && i + 1 < lines.length && MD_TABLE_SEP.test(lines[i + 1]) && lines[i + 1].indexOf("-") >= 0) {
+        var head = mdCells(line), aligns = mdCells(lines[i + 1]).map(function (c) {
+          return /^:-+:$/.test(c) ? "center" : /^-+:$/.test(c) ? "right" : /^:-+$/.test(c) ? "left" : "";
+        });
+        i += 2;
+        var rows = [];
+        while (i < lines.length && lines[i].trim() !== "" && lines[i].indexOf("|") >= 0) { rows.push(mdCells(lines[i])); i++; }
+        var cell = function (tag, c, k) { return "<" + tag + (aligns[k] ? ' style="text-align:' + aligns[k] + '"' : "") + ">" + mdInline(c) + "</" + tag + ">"; };
+        out.push('<div class="md-table"><table><thead><tr>' + head.map(function (c, k) { return cell("th", c, k); }).join("") + "</tr></thead><tbody>" +
+          rows.map(function (r) { return "<tr>" + head.map(function (_, k) { return cell("td", r[k] || "", k); }).join("") + "</tr>"; }).join("") + "</tbody></table></div>");
+        continue;
+      }
+      if (MD_ITEM.test(line)) { var list = mdList(lines, i); out.push(list.html); i = list.next; continue; }
+      var para = [line];
+      i++;
+      while (i < lines.length && lines[i].trim() !== "" && !mdStartsBlock(lines, i)) { para.push(lines[i]); i++; }
+      out.push("<p>" + para.map(function (l) { return mdInline(l.trim()); }).join("<br>") + "</p>");
+    }
+    return out.join("");
+  }
+
+  function md(text) {
+    var html = mdBlocks(String(text || "").replace(/\r\n?/g, "\n").split("\n"));
+    return html ? '<div class="md">' + html + "</div>" : "";
   }
 
   var AI = {
@@ -4119,7 +4294,7 @@
 
     el("main").innerHTML =
       '<div class="page home">' +
-      '<div class="ui-greet"><h1 class="page-title">' + greeting() + '</h1><div class="sub">' + new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" }) + "</div></div>" +
+      '<div class="ui-greet">' + pageTitle(greeting(), "home") + '<div class="sub">' + new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" }) + "</div></div>" +
       ask + needsHtml + setup +
       uiHead("Projects", d.projects.length || null, d.projects.length ? '<button type="button" class="btn btn-mini btn-ghost" data-action="nav" data-view="create">New</button>' : "") + projects +
       (live.length ? uiHead("Working now", live.length) + uiList(live) : "") +
@@ -5650,9 +5825,11 @@
       if (opt === "clear") return run("services.decide", { tool: tool, clear: true }).then(done);
       if (opt === "adopt" || opt === "observe" || opt === "ignore") return run("services.decide", { tool: tool, mode: opt }).then(done);
       if (opt === "external") {
-        var port = parseInt(window.prompt("Which port does your own " + tool + " instance listen on?", ""), 10);
-        if (!port) return;
-        return run("services.decide", { tool: tool, mode: "external", port: port }).then(done);
+        return uiPrompt({ title: "Your own " + tool, text: "Which port does your instance listen on?", input: { placeholder: "e.g. 5432" }, confirm: "Use this port" }).then(function (v) {
+          var port = parseInt(v, 10);
+          if (!port) return null;
+          return run("services.decide", { tool: tool, mode: "external", port: port }).then(done);
+        });
       }
       if (opt === "start") return run("toolchain.service", { tool: tool, action: "start" }).then(done);
       if (opt === "install") return run("toolchain.install", { tool: tool }).then(done);
@@ -5680,8 +5857,8 @@
     "team-pause": function (n) { run("team.pause", { run: n.dataset.id }); },
     "team-resume": function (n) { run("team.resume", { run: n.dataset.id }); },
     "team-cancel": function (n) { run("team.cancel", { run: n.dataset.id }); },
-    "team-retry": function (n) { var note = window.prompt("What should it do differently? (optional)", ""); if (note === null) return; run("team.retry", { task: n.dataset.id, note: note || undefined }); },
-    "team-accept": function (n) { if (window.confirm("Accept this task without the proof devd asked for? The final report will say it was accepted by hand.")) run("team.accept", { task: n.dataset.id }); },
+    "team-retry": function (n) { uiPrompt({ title: "Try this task again", text: "What should it do differently? You can leave this empty.", input: { placeholder: "Optional note for the agent" }, confirm: "Retry" }).then(function (note) { if (note === null) return; run("team.retry", { task: n.dataset.id, note: note || undefined }); }); },
+    "team-accept": function (n) { uiConfirm({ title: "Accept without the proof?", text: "devd asked for proof that this task worked and did not get it. The final report will say you accepted it by hand.", confirm: "Accept anyway", danger: true }).then(function (yes) { if (yes) run("team.accept", { task: n.dataset.id }); }); },
     "team-say": function (n) { var i = el("team-say"); if (!i.value.trim()) return; var t = i.value.trim(); i.value = ""; run("team.say", { run: n.dataset.id, text: t }); },
     "team-open-from": function (n) { TEAM.sel = n.dataset.id; TEAM.data = null; navigate("team"); },
     "home-team": function () {
@@ -5950,6 +6127,13 @@
       window.open("https://skills.sh", "_blank", "noopener");
     },
     "close-drawer": function () { closeDrawer(); },
+    "copy-code": function (n) {
+      var pre = n.closest(".md-code").querySelector("pre");
+      var text = pre ? pre.innerText : "";
+      var done = function () { n.textContent = "Copied"; setTimeout(function () { n.textContent = "Copy"; }, 1400); };
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, done);
+      else { var t = document.createElement("textarea"); t.value = text; document.body.appendChild(t); t.select(); try { document.execCommand("copy"); } catch (e) { /* nothing to do */ } t.remove(); done(); }
+    },
     "chat-delete": function (n) {
       var id = n.dataset.id;
       run("chat.delete", { thread: id }).then(function (o) {
@@ -6091,9 +6275,9 @@
     },
 
     "adopt-found": function (node) {
-      if (window.confirm("Run the " + node.dataset.name + " in " + node.dataset.path + " under devd? The folder is not changed; devd keeps its own data and configuration.")) {
-        act("service.adopt", { name: node.dataset.name, path: node.dataset.path });
-      }
+      uiConfirm({ title: "Run " + node.dataset.name + " with devd?", text: "Found in " + node.dataset.path + ". The folder is not changed; devd keeps its own data and configuration.", confirm: "Run it with devd" }).then(function (yes) {
+        if (yes) act("service.adopt", { name: node.dataset.name, path: node.dataset.path });
+      });
     },
 
     "adopt-service": function (node) {
@@ -6101,8 +6285,9 @@
       read("service.find_local", { name: name }).then(function (found) {
         if (!found || !found.length) return toast("warn", "No " + name + " folder was found on this computer.");
         var f = found[0];
-        if (!window.confirm("Use " + name + " " + f.version + " at " + f.path + "? devd does not change that folder; it writes its own configuration.")) return;
-        act("service.adopt", { name: name, path: f.path });
+        return uiConfirm({ title: "Use " + name + " " + f.version + "?", text: "Found in " + f.path + ". devd does not change that folder; it writes its own configuration.", confirm: "Use it" }).then(function (yes) {
+          if (yes) act("service.adopt", { name: name, path: f.path });
+        });
       });
     },
 
@@ -6130,7 +6315,7 @@
 
     "schedule-toggle": function (node) { run("schedule.enable", { name: node.dataset.name, enabled: node.dataset.on !== "1" }).then(function () { return loadSchedules().then(renderSchedules); }); },
 
-    "schedule-delete": function (node) { if (window.confirm("Delete the schedule " + node.dataset.name + "? Runs it already started are not touched.")) run("schedule.delete", { name: node.dataset.name }).then(function () { return loadSchedules().then(renderSchedules); }); },
+    "schedule-delete": function (node) { uiConfirm({ title: "Delete the schedule " + node.dataset.name + "?", text: "Runs it already started are not touched.", confirm: "Delete", danger: true }).then(function (yes) { if (yes) run("schedule.delete", { name: node.dataset.name }).then(function () { return loadSchedules().then(renderSchedules); }); }); },
 
     "start-service": function (node) { act("service.start", { name: node.dataset.name }); },
 
@@ -6457,15 +6642,11 @@
           // files the target branch also changes, which are the ones a switch
           // would overwrite.
           if (check && check.safe === false) {
-            var files = (check.at_risk || []).join("\n  ");
-            var go = window.confirm(
-              "Switching to " + branch + " would overwrite local changes in:\n\n  " +
-              files + "\n\nThose edits are not committed. Switch anyway?"
-            );
-            if (!go) {
-              toast("warn", "Switch to " + branch + " cancelled - local changes preserved");
-              return null;
-            }
+            var files = (check.at_risk || []).join("\n");
+            return uiConfirm({ title: "Switch to " + branch + "?", text: "This would overwrite local changes that are not committed, in:\n\n" + files, confirm: "Switch anyway", danger: true }).then(function (go) {
+              if (!go) { toast("warn", "Switch to " + branch + " cancelled - local changes preserved"); return null; }
+              return act("git.switch", { repo: project(), name: branch });
+            });
           }
           return act("git.switch", { repo: project(), name: branch });
         })
@@ -6479,9 +6660,10 @@
     },
 
     "rename-branch": function (node) {
-      var to = window.prompt("Rename " + node.dataset.from + " to:", node.dataset.from);
-      if (!to || to === node.dataset.from) return;
-      act("git.branch.rename", { repo: project(), from: node.dataset.from, to: to });
+      uiPrompt({ title: "Rename " + node.dataset.from, input: { value: node.dataset.from, placeholder: "New branch name" }, confirm: "Rename" }).then(function (to) {
+        if (!to || to === node.dataset.from) return;
+        act("git.branch.rename", { repo: project(), from: node.dataset.from, to: to });
+      });
     },
 
     "delete-branch": function (node) {
