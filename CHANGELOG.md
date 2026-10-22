@@ -27,6 +27,12 @@ may change capability identifiers where the design was wrong.
 - **Your own roles** in `<devd home>/roles/`.
 - **Studio**: reviews of a real diff by the reviewer model (`review.*`), `AGENTS.md` changes proposed as a diff and applied only
   by a person (`memory.*`), and an audit of the instruction files agents read (`compat.*`). See [`docs/workflows.md`](docs/workflows.md).
+- **PostgreSQL, MongoDB and Memcached** as adopted services; `db.*` takes `engine: postgres`.
+- **Python and Ruby runtimes** (`runtime install python@3.12`, `ruby@3.3` on Windows) and `.7z` archives; **per-project pins**
+  (`runtime.pin`, `runtime.pins`) so a project's commands run with the version it names.
+- **Public share links** (`share.start`, `share.stop`, `share.list`): a Cloudflare quick tunnel with an expiry, shown on the site.
+- **`project.terminal`**: the system terminal in a project folder with its pinned runtimes first on PATH.
+- `site.fix_htaccess`: guard `php_value` lines Apache cannot read; PATH_INFO works under Apache.
 - `Registry::define`: capabilities are declared with named properties instead of a twelve-argument helper.
 
 ### Changed
@@ -38,6 +44,11 @@ may change capability identifiers where the design was wrong.
   rather than by each component, panels inside a page no longer stack double margins, tables scroll instead of
   stretching the layout, chat prose uses the reading column, and the working tree, commit box and empty states are
   built from the same tokens as the rest of the application.
+
+### Fixed
+
+- **Composer version constraints such as `^13.0` reached Composer as `13.0`** when run through a `.bat` shim on Windows, because `cmd.exe` eats `^`. Arguments with cmd metacharacters are now quoted.
+- Composer's coloured `--version` output hid its version from detection; colour codes are stripped first.
 
 ### Removed
 
