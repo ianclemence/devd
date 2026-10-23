@@ -123,7 +123,7 @@ fn state_check(paths: &Paths) -> Check {
                         ),
                     )
                 } else {
-                    Check::fail("state", format!("integrity check returned `{integrity}`"))
+                    Check::fail("state", format!("the database is damaged; close devd and run `devd repair-state` ({})", integrity.lines().next().unwrap_or("")))
                 }
             }
             (Ok(_), Err(e)) => Check::fail("state", format!("schema version unreadable: {e}")),

@@ -21,6 +21,7 @@ pub mod platform;
 pub mod ports;
 pub mod process;
 pub mod registry;
+pub mod repair;
 pub mod schedule;
 pub mod state;
 pub mod store_ai;

@@ -239,6 +239,8 @@ pub(crate) enum Command {
     },
     /// Check the environment for problems.
     Doctor,
+    /// Rebuild a damaged state database from what can still be read. Close devd first; the damaged files are kept.
+    RepairState,
 }
 
 #[derive(clap::Args, Debug)]
@@ -1615,6 +1617,11 @@ fn run(cli: Cli) -> Result<i32> {
         return doctor(cli.json);
     }
 
+    // The database is what is being repaired, so nothing may have it open yet.
+    if let Command::RepairState = cli.command {
+        return repair_state(cli.json);
+    }
+
     let app = App::bootstrap(cli.json, cli.plan, cli.yes)?;
 
     match cli.command {
@@ -1765,6 +1772,7 @@ fn run(cli: Cli) -> Result<i32> {
             Ok(0)
         }
         Command::Doctor => unreachable!("handled before bootstrap"),
+        Command::RepairState => unreachable!("handled before bootstrap"),
         Command::Tui => {
             app.resume_agents();
             let git_executable = app.settings.git_executable.clone();
@@ -1876,6 +1884,21 @@ fn list_capabilities(app: &App, group: Option<&str>, query: Option<&str>) -> Res
 /// here, because that is the single split that lets `devd doctor` and the
 /// application's System panel report identical results: the core contributes
 /// what it can see, and each entry point adds what only it can reach.
+fn repair_state(json: bool) -> Result<i32> {
+    let paths = Paths::discover()?;
+    let report = devd_core::repair::repair_state(&paths)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report).map_err(|e| DevdError::internal(e.to_string()))?);
+    } else {
+        println!("rebuilt {}", paths.state_db().display());
+        for t in report.tables.iter().filter(|t| t.kept > 0 || t.lost > 0) {
+            println!("  {:<20} kept {:>6}   could not be read {:>5}", t.name, t.kept, t.lost);
+        }
+        println!("the damaged files are kept in {}", report.backup.display());
+    }
+    Ok(0)
+}
+
 fn doctor(json: bool) -> Result<i32> {
     let paths = Paths::discover()?;
     let settings = Settings::load(&paths.settings_file()).unwrap_or_default();
