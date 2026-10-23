@@ -32,3 +32,6 @@ Thumbs.db
 /launch.vbs
 /add-to-path.ps1
 /remove-from-path.ps1
+
+# Projects served by devd when its www folder is this repository's www
+/www
