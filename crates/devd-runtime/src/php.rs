@@ -287,10 +287,10 @@ fn development_defaults(logs: &Path, version: &str) -> String {
          display_startup_errors = On\n\
          log_errors = On\n\
          error_log = \"{error_log}\"\n\
-         memory_limit = 512M\n\
-         upload_max_filesize = 64M\n\
-         post_max_size = 64M\n\
-         max_execution_time = 120\n\
+         memory_limit = 2G\n\
+         upload_max_filesize = 2G\n\
+         post_max_size = 2G\n\
+         max_execution_time = 36000\n\
          max_input_time = 120\n\
          date.timezone = UTC\n\
          ; nginx hands over the script path, so the fix-up has to be on.\n\
@@ -571,7 +571,7 @@ mod tests {
         fake_build(&dir, &["curl"]);
         configure_ini(&dir, &dir, "8.3.35").unwrap();
         let ini = std::fs::read_to_string(dir.join("php.ini")).unwrap();
-        let bound = ini.find("memory_limit = 512M").expect("a bound is set");
+        let bound = ini.find("memory_limit = 2G").expect("a bound is set");
         assert!(
             bound > ini.find("memory_limit = 128M").unwrap(),
             "the appended value must win"

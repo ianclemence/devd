@@ -45,6 +45,14 @@ struct Render {
     /// One per installed PHP version, so a site pinned to a version is served
     /// by that version and a site that is not pinned is served by the primary.
     php: Vec<(String, u16)>,
+    /// How many FastCGI processes serve each series.
+    workers: u8,
+    /// Each site's redirects, by site name.
+    redirects: std::collections::BTreeMap<String, Vec<crate::redirects::Redirect>>,
+    /// Sites served by the pool that runs the other PHP limits profile.
+    alt_sites: std::collections::BTreeSet<String>,
+    /// Each site's own directives, by site name.
+    extras: std::collections::BTreeMap<String, String>,
     /// The series the primary PHP version belongs to.
     primary: Option<String>,
 }
@@ -99,6 +107,11 @@ pub fn php_port(ctx: &Ctx) -> u16 {
         .unwrap_or(9000)
 }
 
+/// Whether nginx's program is installed, so a configuration can be checked.
+pub fn exe_present(ctx: &Ctx) -> bool {
+    directory(ctx).join(exe_name()).is_file()
+}
+
 /// nginx's prefix argument. The trailing separator is required by nginx.
 pub fn prefix(install: &Path) -> String {
     slashy(install) + "/"
@@ -113,9 +126,13 @@ fn render_context(ctx: &Ctx) -> Render {
         prefix: prefix(&directory(ctx)),
         logs: slashy(&ctx.paths.logs()),
         certs: slashy(&ctx.paths.certs()),
-        http: ctx.settings.http_port,
-        https: ctx.settings.https_port,
+        http: crate::http_port(ctx),
+        https: crate::https_port(ctx),
         php: php_listeners(ctx),
+        workers: crate::php_workers(ctx),
+        redirects: crate::redirects::by_site(ctx),
+        alt_sites: crate::alt_sites(ctx),
+        extras: crate::siteconf::extras_by_site(ctx),
         primary: crate::primary_php_series(ctx),
     }
 }
@@ -187,15 +204,26 @@ fn render_text(render: Render, sites: &[Site]) -> String {
     out.push_str("    sendfile           on;\n");
     out.push_str("    keepalive_timeout  65;\n");
     out.push_str("    server_tokens      off;\n");
-    out.push_str("    client_max_body_size 64m;\n");
-    out.push_str("    fastcgi_read_timeout 120s;\n\n");
+    out.push_str("    client_max_body_size 2g;\n");
+    out.push_str("    fastcgi_read_timeout 36000s;\n\n");
     out.push_str("    # One PHP FastCGI listener per installed version. A site that is \
          pinned to a version is sent to that one; the rest go to the primary.\n");
     for (series, port) in &render.php {
+        // A pool: worker 1 is on the series' port, the others 100 apart (see `php_worker_port`).
+        let servers: String = (0..render.workers)
+            .map(|i| format!("        server 127.0.0.1:{};\n", port.saturating_add(100 * u16::from(i))))
+            .collect();
         out.push_str(&format!(
-            "    upstream devd_php_{} {{\n        server 127.0.0.1:{port};\n    }}\n\n",
+            "    upstream devd_php_{} {{\n{servers}    }}\n\n",
             upstream_name(series)
         ));
+        if !render.alt_sites.is_empty() {
+            // The pool that runs the other limits profile, 50 ports above.
+            let alt: String = (0..render.workers)
+                .map(|i| format!("        server 127.0.0.1:{};\n", port.saturating_add(50 + 100 * u16::from(i))))
+                .collect();
+            out.push_str(&format!("    upstream devd_php_{}_alt {{\n{alt}    }}\n\n", upstream_name(series)));
+        }
     }
     if sites.iter().any(|s| s.upstream.is_some()) {
         // Only a request that asks to upgrade keeps the connection open for it.
@@ -229,6 +257,15 @@ fn upstream_name(series: &str) -> String {
 /// is not installed falls back to the primary rather than to a listener that
 /// does not exist, because a missing upstream is a 502 for every request.
 fn site_upstream(render: &Render, site: &Site) -> String {
+    let base = site_upstream_base(render, site);
+    if render.alt_sites.contains(&site.name) && base != "devd_php_default" {
+        format!("{base}_alt")
+    } else {
+        base
+    }
+}
+
+fn site_upstream_base(render: &Render, site: &Site) -> String {
     let pinned = site.php.as_deref().map(crate::php_series).filter(|s| !s.is_empty());
     if let Some(series) = pinned {
         if render.php.iter().any(|(s, _)| s == &series) {
@@ -331,6 +368,12 @@ fn site_servers(render: &Render, site: &Site) -> String {
         out.push_str(&proxy_location(upstream));
         out.push_str("    }\n\n");
         return out;
+    }
+    if let Some(text) = render.extras.get(&site.name) {
+        out.push_str(&crate::siteconf::block_text(text));
+    }
+    if let Some(list) = render.redirects.get(&site.name) {
+        out.push_str(&crate::redirects::nginx_block(list));
     }
     out.push_str("        location / {\n            try_files $uri $uri/ /index.php?$query_string;\n        }\n\n");
     out.push_str("        location ~ \\.php$ {\n");
@@ -464,6 +507,10 @@ mod tests {
                 http,
                 https,
                 php: vec![("8.3".to_string(), 9000), ("8.5".to_string(), 9085)],
+                workers: 1,
+                redirects: Default::default(),
+                alt_sites: Default::default(),
+                extras: Default::default(),
                 primary: Some("8.3".to_string()),
             },
             sites,
@@ -549,6 +596,58 @@ mod tests {
             !text.contains(":\\"),
             "no Windows path separator may reach nginx: {text}"
         );
+    }
+
+    #[test]
+    fn php_is_served_by_a_pool_of_workers() {
+        let text = render_text(
+            Render {
+                prefix: "D:/devd-home/services/nginx/".to_string(),
+                logs: "D:/devd-home/logs".to_string(),
+                certs: "D:/devd-home/certs".to_string(),
+                http: 80,
+                https: 443,
+                php: vec![("8.4".to_string(), 9084)],
+                workers: 3,
+                redirects: Default::default(),
+                alt_sites: Default::default(),
+                extras: Default::default(),
+                primary: Some("8.4".to_string()),
+            },
+            &[site("shop", "internal")],
+        );
+        let upstream = &text[text.find("upstream devd_php_8_4 {").unwrap()..];
+        let upstream = &upstream[..upstream.find('}').unwrap()];
+        for port in [9084, 9184, 9284] {
+            assert!(upstream.contains(&format!("server 127.0.0.1:{port};")), "{upstream}");
+        }
+    }
+
+    #[test]
+    fn a_site_with_the_other_limits_profile_has_its_own_upstream() {
+        let mut shop = site("shop", "internal");
+        shop.php = Some("8.4".to_string());
+        let text = render_text(
+            Render {
+                prefix: "D:/devd-home/services/nginx/".to_string(),
+                logs: "D:/devd-home/logs".to_string(),
+                certs: "D:/devd-home/certs".to_string(),
+                http: 80,
+                https: 443,
+                php: vec![("8.4".to_string(), 9084)],
+                workers: 2,
+                redirects: Default::default(),
+                alt_sites: std::collections::BTreeSet::from(["shop".to_string()]),
+                extras: Default::default(),
+                primary: Some("8.4".to_string()),
+            },
+            &[shop, site("blog", "internal")],
+        );
+        let alt = &text[text.find("upstream devd_php_8_4_alt {").expect("the other pool is declared")..];
+        let alt = &alt[..alt.find('}').unwrap()];
+        assert!(alt.contains("server 127.0.0.1:9134;") && alt.contains("server 127.0.0.1:9234;"), "{alt}");
+        assert!(text.contains("fastcgi_pass  devd_php_8_4_alt;"), "shop uses it: {text}");
+        assert!(text.contains("fastcgi_pass  devd_php_8_4;"), "blog stays on the main pool: {text}");
     }
 
     #[test]

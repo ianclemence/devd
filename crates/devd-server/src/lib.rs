@@ -239,6 +239,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/open-url", post(api::open_url))
         .route("/api/pick-folder", post(api::pick_folder))
         .route("/api/upload", post(api::upload))
+        // The push-to-deploy hook. Not under /api: it carries its own secret in the path, so a service
+        // that cannot hold the bearer token (GitHub) can start a deploy.
+        .route("/hooks/deploy/:site/:token", post(api::deploy_hook))
         .with_state(state.clone());
 
     let pages = Router::new()
@@ -373,6 +376,16 @@ pub fn probe_instance(port: u16) -> Option<String> {
 
 /// The guard that runs before every handler.
 async fn guard(State(state): State<Arc<AppState>>, req: Request<Body>, next: Next) -> Response {
+    // A deploy hook is called from outside, through a public link, so its Host is not a loopback
+    // name. It is POST only, and the secret in its path is what authorises it.
+    if req.uri().path().starts_with("/hooks/deploy/") {
+        return if req.method() == Method::POST {
+            next.run(req).await
+        } else {
+            refuse(StatusCode::METHOD_NOT_ALLOWED, "post_only", "a deploy hook accepts POST only")
+        };
+    }
+
     let host = req
         .headers()
         .get(header::HOST)

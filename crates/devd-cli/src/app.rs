@@ -96,6 +96,7 @@ impl App {
     /// must not take work from the application running beside it.
     pub fn resume_agents(&self) {
         self.agents.resume(&self.paths);
+        devd_bootstrap::start_ops(&self.paths, &self.store, &self.settings, &self.events);
     }
 
     /// Build an execution context for the configured actor.

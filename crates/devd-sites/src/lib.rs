@@ -1246,11 +1246,27 @@ mod tests {
     }
 
     #[test]
+    fn a_public_folder_of_assets_beside_an_index_html_is_not_the_document_root() {
+        let c = ctx("vite");
+        let created = create(&c, &request("viteapp")).unwrap();
+        let dir = Path::new(&created.directory);
+        std::fs::write(dir.join("index.html"), "<html></html>").unwrap();
+        std::fs::create_dir_all(dir.join("public")).unwrap();
+        std::fs::write(dir.join("public").join("favicon.ico"), "x").unwrap();
+        let rows = list(&c).unwrap();
+        assert_eq!(rows[0].document_root, created.directory, "{}", rows[0].document_root);
+        std::fs::write(dir.join("public").join("index.php"), "<?php").unwrap();
+        assert!(list(&c).unwrap()[0].document_root.ends_with("public"));
+        let _ = std::fs::remove_dir_all(c.paths.root());
+    }
+
+    #[test]
     fn the_document_root_prefers_a_public_directory() {
         let c = ctx("public");
         let created = create(&c, &request("laravel")).unwrap();
         assert_eq!(created.document_root, created.directory, "no public/ yet");
         std::fs::create_dir_all(Path::new(&created.directory).join("public")).unwrap();
+        std::fs::write(Path::new(&created.directory).join("public").join("index.php"), "<?php").unwrap();
         let rows = list(&c).unwrap();
         assert!(
             rows[0].document_root.ends_with("public"),

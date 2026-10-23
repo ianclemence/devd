@@ -151,7 +151,9 @@ Section "devd (required)" SecMain
   FileWrite $9 'Set fso = CreateObject("Scripting.FileSystemObject")$\r$\n'
   FileWrite $9 'Set sh = CreateObject("WScript.Shell")$\r$\n'
   FileWrite $9 'app = "$INSTDIR"$\r$\n'
-  FileWrite $9 'home = sh.ExpandEnvironmentStrings("%LOCALAPPDATA%") & "\devd"$\r$\n'
+  FileWrite $9 'Rem A portable install sets DEVD_HOME; the default is %LOCALAPPDATA%\devd.$\r$\n'
+  FileWrite $9 'home = sh.ExpandEnvironmentStrings("%DEVD_HOME%")$\r$\n'
+  FileWrite $9 'If home = "%DEVD_HOME%" Then home = sh.ExpandEnvironmentStrings("%LOCALAPPDATA%") & "\devd"$\r$\n'
   FileWrite $9 'If Not fso.FileExists(home & "\services\nginx\nginx.exe") Then$\r$\n'
   FileWrite $9 '  code = sh.Run("""" & app & "\devd.exe"" setup --yes", 1, True)$\r$\n'
   FileWrite $9 '  If code <> 0 Then$\r$\n'
@@ -243,17 +245,23 @@ Section "Uninstall"
   ; certificates and their settings. Removing devd must not remove those
   ; unless they say so.
   ;
+  ; A portable install can put the data anywhere through DEVD_HOME, so the
+  ; prompt and the removal follow that rather than assuming the default.
+  ReadEnvStr $9 "DEVD_HOME"
+  StrCmp $9 "" 0 +2
+  StrCpy $9 "$LOCALAPPDATA\devd"
+  ;
   ; A silent uninstall asks nobody, so it keeps the data. That is the only
   ; safe default for an unattended removal, and it is the same answer the
   ; question gives when it is dismissed without one.
-  DetailPrint "Your data is in $LOCALAPPDATA\devd"
+  DetailPrint "Your data is in $9"
   ${IfNot} ${Silent}
-    MessageBox MB_YESNO|MB_ICONQUESTION "devd has kept your data in$\r$\n$LOCALAPPDATA\devd$\r$\n$\r$\nIt holds your projects, your databases, your certificates and your settings.$\r$\n$\r$\nKeep it?$\r$\n$\r$\nYes, keep my data (the default).$\r$\nNo, remove it as well." IDNO remove_data
+    MessageBox MB_YESNO|MB_ICONQUESTION "devd has kept your data in$\r$\n$9$\r$\n$\r$\nIt holds your projects, your databases, your certificates and your settings.$\r$\n$\r$\nKeep it?$\r$\n$\r$\nYes, keep my data (the default).$\r$\nNo, remove it as well." IDNO remove_data
   ${EndIf}
-  DetailPrint "Keeping your data in $LOCALAPPDATA\devd"
+  DetailPrint "Keeping your data in $9"
   Goto after_data
   remove_data:
-  DetailPrint "Removing devd's data from $LOCALAPPDATA\devd ..."
-  RMDir /r "$LOCALAPPDATA\devd"
+  DetailPrint "Removing devd's data from $9 ..."
+  RMDir /r "$9"
   after_data:
 SectionEnd

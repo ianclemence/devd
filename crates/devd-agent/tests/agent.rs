@@ -438,7 +438,7 @@ fn invoke(id: &str, name: &str, args: Value) -> String {
     anthropic_tool_use(id, "devd_invoke", json!({ "id": name, "args": args }))
 }
 
-/// A project whose `test` task is `echo ok`, registered through an extension stack.
+/// A project whose `test` task is `rustc --version`, registered through an extension stack.
 fn team_project(e: &Env) -> std::path::PathBuf {
     let stacks = e.root.join("home").join("stacks");
     std::fs::create_dir_all(&stacks).unwrap();
@@ -453,7 +453,7 @@ verified: {method: docs, against: test, date: "2026-10-20"}
 versions: [{id: one, label: One, value: "1", default: true}]
 init: {creates_dir: true, steps: []}
 tasks:
-  - {id: test, title: Test, kind: test, run: [echo, ok]}
+  - {id: test, title: Test, kind: test, run: [rustc, --version]}
 detect:
   rules: [{file: marker.txt, weight: 9, evidence: marker.txt}]
 "#).unwrap();

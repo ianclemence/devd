@@ -17,8 +17,35 @@ use devd_core::Result;
 
 use crate::app::App;
 use crate::{
-    DbCommand, HostsCommand, ServiceCommand, SiteCommand, StackCommand, TlsCommand, WebCommand,
+    DbCommand, HostsCommand, PhpCommand, ServiceCommand, SiteCommand, StackCommand, TlsCommand, WebCommand,
 };
+
+/// Run a `devd php` subcommand.
+pub fn php(app: &App, cmd: PhpCommand) -> Result<()> {
+    match cmd {
+        PhpCommand::Settings { series } => app.invoke("php.settings", json!({ "series": series })),
+        PhpCommand::Configure { profile, workers, set, series } => {
+            let mut values = serde_json::Map::new();
+            for pair in set {
+                let (k, v) = pair.split_once('=').ok_or_else(|| devd_core::DevdError::invalid(format!("`{pair}` is not key=value")))?;
+                values.insert(k.trim().to_string(), json!(v.trim()));
+            }
+            app.invoke(
+                "php.configure",
+                json!({ "profile": profile, "workers": workers, "series": series, "values": if values.is_empty() { serde_json::Value::Null } else { serde_json::Value::Object(values) } }),
+            )
+        }
+        PhpCommand::Extensions { series } => app.invoke("php.extensions", json!({ "series": series })),
+        PhpCommand::Ext { name, state, series } => {
+            let enabled = match state.to_lowercase().as_str() {
+                "on" | "enable" | "true" => true,
+                "off" | "disable" | "false" => false,
+                other => return Err(devd_core::DevdError::invalid(format!("`{other}` is not on or off"))),
+            };
+            app.invoke("php.extension_set", json!({ "name": name, "enabled": enabled, "series": series }))
+        }
+    }
+}
 
 /// Run a `devd service` subcommand.
 pub fn service(app: &App, cmd: ServiceCommand) -> Result<()> {
@@ -55,6 +82,9 @@ pub fn web(app: &App, cmd: WebCommand) -> Result<()> {
         WebCommand::Render => app.invoke("web.render", json!({})),
         WebCommand::Test => app.invoke("web.test", json!({})),
         WebCommand::Reload => app.invoke("web.reload", json!({})),
+        WebCommand::Ports { http, https } => {
+            app.invoke("web.ports", json!({ "http": http, "https": https }))
+        }
         WebCommand::Use { server } => app.invoke("web.use", json!({ "server": server })),
     }
 }

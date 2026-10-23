@@ -25,6 +25,9 @@ pub mod dump;
 pub mod engines;
 pub mod extras;
 pub mod mariadb;
+pub mod phpcaps;
+pub mod redirects;
+pub mod siteconf;
 pub mod nginx;
 pub mod system;
 pub mod tls;
@@ -116,7 +119,7 @@ pub const DEFINITIONS: &[Definition] = &[
         name: "memcached",
         kind: "memcached",
         summary: "Memcached, an in-memory cache",
-        windows_exe: "memcached.exe",
+        windows_exe: "bin/memcached.exe",
         unix_exe: "memcached",
         default_port: 11211,
         startup: Duration::from_secs(10),
@@ -207,6 +210,125 @@ pub fn php_port_for_series(series: &str) -> u16 {
     // The offset is bounded so that a nonsense version cannot produce a port
     // outside the range the supervisor and the firewall rules expect.
     PHP_PORT.saturating_add(offset.min(99))
+}
+
+/// How many PHP workers each series has, as the settings file says now (the `Ctx` holds a snapshot
+/// from start-up, and a change made through `php.configure` must show at once).
+pub fn php_workers(ctx: &Ctx) -> u8 {
+    devd_core::config::Settings::load(&ctx.paths.settings_file())
+        .map(|s| s.php_workers)
+        .unwrap_or(ctx.settings.php_workers)
+        .clamp(1, 16)
+}
+
+/// The port of worker `k` (counted from 1) in the pool for a PHP series.
+///
+/// `php-cgi` answers one request at a time, so a series is served by a small pool of them. Worker 1 is
+/// the series' own port; the others are 100 apart (9085, 9185, 9285), clear of every other series.
+pub fn php_worker_port(series: &str, k: u8) -> u16 {
+    php_port_for_series(series).saturating_add(100u16.saturating_mul(u16::from(k.max(1)) - 1))
+}
+
+/// The service name of worker `k` in the pool for a PHP series: `php-cgi-8.4`, `php-cgi-8.4-2`, ...
+pub fn php_worker_name(series: &str, k: u8) -> String {
+    if k <= 1 {
+        php_service_name(series)
+    } else {
+        format!("{}-{k}", php_service_name(series))
+    }
+}
+
+/// The series and pool of a PHP listener's service name: `php-cgi-8.4-3` is (`8.4`, false), `php-cgi-8.4-alt` is
+/// (`8.4`, true). `None` for any other service, including the legacy single `php-cgi`.
+pub fn php_pool_of(name: &str) -> Option<(String, bool)> {
+    let rest = name.strip_prefix(&format!("{PHP_SERVICE}-"))?;
+    let (series, alt, _) = split_pool(rest);
+    series.chars().next().filter(char::is_ascii_digit).map(|_| (series, alt))
+}
+
+/// The port of worker `k` in the pool that runs the *other* PHP profile: 50 above the main pool.
+///
+/// A site can run with a limits profile different from the machine's (`php.site_profile`). Those sites
+/// are served by a second pool of PHP processes started with the other profile's ini.
+pub fn php_alt_port(series: &str, k: u8) -> u16 {
+    php_worker_port(series, k).saturating_add(50)
+}
+
+/// The service name of worker `k` in the other-profile pool: `php-cgi-8.4-alt`, `php-cgi-8.4-alt-2`, ...
+pub fn php_alt_name(series: &str, k: u8) -> String {
+    if k <= 1 {
+        format!("{}-alt", php_service_name(series))
+    } else {
+        format!("{}-alt-{k}", php_service_name(series))
+    }
+}
+
+/// Split what follows `php-cgi-` into the series, whether it is the other-profile pool, and the worker
+/// number: `8.4-3` is (`8.4`, false, 3) and `8.4-alt-2` is (`8.4`, true, 2).
+fn split_pool(rest: &str) -> (String, bool, u8) {
+    let (head, k) = match rest.rsplit_once('-') {
+        Some((h, k)) if k.parse::<u8>().is_ok() => (h, k.parse::<u8>().unwrap_or(1).max(1)),
+        _ => (rest, 1),
+    };
+    match head.strip_suffix("-alt") {
+        Some(series) => (series.to_string(), true, k),
+        None => (head.to_string(), false, k),
+    }
+}
+
+/// The limits profile the machine runs, from the settings file as it is now.
+fn global_profile(ctx: &Ctx) -> String {
+    devd_core::config::Settings::load(&ctx.paths.settings_file()).map(|s| s.php_profile).unwrap_or_else(|_| ctx.settings.php_profile.clone())
+}
+
+/// The profile that is not the machine's: what the second pool runs.
+pub fn alt_profile(ctx: &Ctx) -> &'static str {
+    if global_profile(ctx) == "production" {
+        "local"
+    } else {
+        "production"
+    }
+}
+
+/// The limits profile a site was given with `php.site_profile`, when it was given one.
+pub fn site_profile(ctx: &Ctx, site: &str) -> Option<String> {
+    ctx.store.ops_get("site_profile", site).ok().flatten().and_then(|i| i.data["profile"].as_str().map(str::to_string))
+}
+
+/// The sites that are served by the other-profile pool: those whose own profile is not the machine's.
+pub fn alt_sites(ctx: &Ctx) -> std::collections::BTreeSet<String> {
+    let alt = alt_profile(ctx);
+    ctx.store
+        .ops_list("site_profile", None)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|i| i.data["profile"].as_str() == Some(alt))
+        .map(|i| i.site)
+        .collect()
+}
+
+/// The file name of the other-profile ini, beside `php.ini`.
+fn alt_ini_name(ctx: &Ctx) -> String {
+    format!("php.{}.ini", alt_profile(ctx))
+}
+
+/// Write the other-profile ini for a series: the current `php.ini` with the other profile's limits on top.
+fn write_alt_ini(ctx: &Ctx, series: &str) -> Result<()> {
+    let php = php_executable_for_series(ctx, series)?;
+    let dir = php.parent().ok_or_else(|| DevdError::internal("a PHP with no folder"))?;
+    let main = dir.join("php.ini");
+    if !main.is_file() {
+        return Ok(());
+    }
+    let alt = dir.join(alt_ini_name(ctx));
+    // The other profile's file from an earlier machine profile is stale now.
+    for stale in ["php.local.ini", "php.production.ini"] {
+        if stale != alt_ini_name(ctx) {
+            let _ = std::fs::remove_file(dir.join(stale));
+        }
+    }
+    std::fs::copy(&main, &alt)?;
+    devd_runtime::phpconf::apply_profile(&alt, alt_profile(ctx))
 }
 
 /// The PHP listeners, as series and port.
@@ -568,10 +690,10 @@ pub fn install(
         ));
     }
 
-    if def.name == "redis" && cfg!(windows) {
-        return Err(extras::redis_download_refusal());
-    }
-    if let Some(engine) = engines::get(def.name) {
+    // Redis and memcached have Windows builds whose digests GitHub records, so they are downloaded and
+    // checked like Mailpit. PostgreSQL and MongoDB still have none devd can verify and are adopted.
+    let downloadable = matches!(def.name, "redis" | "memcached") && cfg!(windows);
+    if let Some(engine) = engines::get(def.name).filter(|_| !downloadable) {
         return Err(engines::download_refusal(engine));
     }
 
@@ -695,6 +817,9 @@ pub fn install(
     if def.name == "apache" {
         // The Apache Lounge archive holds an `Apache24` folder beside its notes.
         record["root"] = json!(dest.join("Apache24").display().to_string());
+    }
+    if engines::get(def.name).is_some() {
+        record["root"] = json!(dest.display().to_string());
     }
     let (service, extra) = finish_install(
         ctx,
@@ -1136,14 +1261,17 @@ pub fn service_argv(ctx: &Ctx, name: &str, port: Option<u16>) -> Result<Vec<Stri
         }
         PHP_SERVICE => {
             let php = php_executable(ctx)?;
-            Ok(php_cgi_argv(ctx, &php, PHP_PORT))
+            Ok(php_cgi_argv(ctx, &php, PHP_PORT, None))
         }
         // A listener for one PHP series: `php-cgi-8.3`.
         other if other.starts_with(&format!("{PHP_SERVICE}-")) => {
-            let series = other.trim_start_matches(&format!("{PHP_SERVICE}-"));
-            let php = php_executable_for_series(ctx, series)?;
-            let port = php_port_for_series(series);
-            Ok(php_cgi_argv(ctx, &php, port))
+            let (series, alt, k) = split_pool(other.trim_start_matches(&format!("{PHP_SERVICE}-")));
+            let php = php_executable_for_series(ctx, &series)?;
+            Ok(if alt {
+                php_cgi_argv(ctx, &php, php_alt_port(&series, k), Some(alt_ini_name(ctx)))
+            } else {
+                php_cgi_argv(ctx, &php, php_worker_port(&series, k), None)
+            })
         }
         other => Err(DevdError::unsupported(format!(
             "there is no driver for the service `{other}`"
@@ -1152,13 +1280,13 @@ pub fn service_argv(ctx: &Ctx, name: &str, port: Option<u16>) -> Result<Vec<Stri
 }
 
 /// The argument array for a PHP FastCGI listener.
-fn php_cgi_argv(_ctx: &Ctx, php_exe: &Path, port: u16) -> Vec<String> {
+fn php_cgi_argv(_ctx: &Ctx, php_exe: &Path, port: u16, ini_name: Option<String>) -> Vec<String> {
     let dir = php_exe
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| php_exe.to_path_buf());
     let cgi = dir.join(if cfg!(windows) { "php-cgi.exe" } else { "php-cgi" });
-    let ini = dir.join("php.ini");
+    let ini = dir.join(ini_name.unwrap_or_else(|| "php.ini".to_string()));
     let mut argv = vec![
         native(&cgi),
         "-b".to_string(),
@@ -1273,8 +1401,21 @@ pub fn ensure_php_service(ctx: &Ctx) -> Result<Service> {
 /// removes.
 pub fn ensure_php_services(ctx: &Ctx) -> Result<Vec<Service>> {
     let mut out = Vec::new();
-    for (series, port) in php_listeners(ctx)? {
-        let name = php_service_name(&series);
+    let workers = php_workers(ctx);
+    let alt_needed = !alt_sites(ctx).is_empty();
+    let mut pool: Vec<(String, u8, u16, String)> = Vec::new();
+    for (series, _) in php_listeners(ctx)? {
+        for k in 1..=workers {
+            pool.push((series.clone(), k, php_worker_port(&series, k), php_worker_name(&series, k)));
+            if alt_needed {
+                pool.push((series.clone(), k, php_alt_port(&series, k), php_alt_name(&series, k)));
+            }
+        }
+        if alt_needed {
+            write_alt_ini(ctx, &series)?;
+        }
+    }
+    for (series, _k, port, name) in pool {
         let argv = service_argv(ctx, &name, Some(port))?;
         let runtime_id = ctx
             .store
@@ -1312,13 +1453,26 @@ pub fn ensure_php_services(ctx: &Ctx) -> Result<Vec<Service>> {
 /// A runtime that is uninstalled must not leave a listener behind that points
 /// at an interpreter that is gone.
 pub fn prune_php_services(ctx: &Ctx) -> Result<Vec<String>> {
+    let workers = php_workers(ctx);
+    let alt_needed = !alt_sites(ctx).is_empty();
     let wanted: Vec<String> = installed_php_series(ctx)?
         .into_iter()
-        .map(|s| php_service_name(&s))
+        .flat_map(|s| {
+            (1..=workers).flat_map(move |k| {
+                let mut v = vec![php_worker_name(&s, k)];
+                if alt_needed {
+                    v.push(php_alt_name(&s, k));
+                }
+                v
+            })
+        })
         .collect();
     let mut removed = Vec::new();
     for service in ctx.store.list_services()? {
-        if !service.name.starts_with(&format!("{PHP_SERVICE}-")) {
+        // The single `php-cgi` of before there was a listener per version is replaced by those listeners:
+        // it points at whichever interpreter was primary and nothing is sent to it any more.
+        let legacy = service.name == PHP_SERVICE && !wanted.is_empty();
+        if !legacy && !service.name.starts_with(&format!("{PHP_SERVICE}-")) {
             continue;
         }
         if wanted.contains(&service.name) {
@@ -1359,6 +1513,47 @@ fn spawn_spec(ctx: &Ctx, service: &Service) -> Result<SpawnSpec> {
     })
 }
 
+/// The HTTP port `settings.toml` currently states.
+///
+/// Read from disk rather than from `ctx.settings` so that a change made by
+/// another process - or by `web.ports` in a long-lived one - is seen without a
+/// restart. Rendering and starting both use it, so the generated configuration
+/// and the port devd verifies cannot disagree.
+pub fn http_port(ctx: &Ctx) -> u16 {
+    devd_core::config::Settings::load(&ctx.paths.settings_file())
+        .map(|s| s.http_port)
+        .unwrap_or(ctx.settings.http_port)
+}
+
+/// The HTTPS port `settings.toml` currently states.
+pub fn https_port(ctx: &Ctx) -> u16 {
+    devd_core::config::Settings::load(&ctx.paths.settings_file())
+        .map(|s| s.https_port)
+        .unwrap_or(ctx.settings.https_port)
+}
+
+/// Write new web ports to `settings.toml` and to the web server's row.
+///
+/// The row is how `service status`, `doctor` and the start verification know
+/// which port to expect, so it moves with the setting; a row left at the
+/// install-time value is what made a port changed by hand fail to start.
+pub fn set_web_ports(ctx: &Ctx, http: u16, https: u16) -> Result<()> {
+    let file = ctx.paths.settings_file();
+    let mut settings = devd_core::config::Settings::load(&file)?;
+    settings.http_port = http;
+    settings.https_port = https;
+    settings.validate()?;
+    settings.save(&file)?;
+    for name in ["nginx", "apache"] {
+        if let Some(mut service) = ctx.store.get_service(name)? {
+            service.port = Some(http);
+            service.health = Some(json!({ "tcp": http }).to_string());
+            ctx.store.upsert_service(&service)?;
+        }
+    }
+    Ok(())
+}
+
 /// Start a service and confirm it is answering.
 pub fn start(ctx: &Ctx, name: &str) -> Result<Status> {
     // The PHP listener has no installer of its own: it comes from a PHP runtime.
@@ -1369,7 +1564,7 @@ pub fn start(ctx: &Ctx, name: &str) -> Result<Status> {
         ensure_php_service(ctx)?;
     }
 
-    let service = ctx.store.get_service(name)?.ok_or_else(|| {
+    let mut service = ctx.store.get_service(name)?.ok_or_else(|| {
         DevdError::not_found(format!(
             "`{name}` is not a devd service; run `devd service install {name}`"
         ))
@@ -1380,6 +1575,18 @@ pub fn start(ctx: &Ctx, name: &str) -> Result<Status> {
         let mut current = status(ctx, name)?;
         current.message = format!("{name} was already running (pid {pid})");
         return Ok(current);
+    }
+
+    // A port changed in settings.toml applies from here on. Without this the row
+    // keeps the port from install time, so the start is verified against a port
+    // nothing is listening on and reported as a failure while the server is up.
+    if service.name == "nginx" || service.name == "apache" {
+        let http = http_port(ctx);
+        if service.port != Some(http) {
+            service.port = Some(http);
+            service.health = Some(json!({ "tcp": http }).to_string());
+            ctx.store.upsert_service(&service)?;
+        }
     }
 
     // For nginx the configuration is checked before the process is started, so a
@@ -1444,7 +1651,6 @@ pub fn start(ctx: &Ctx, name: &str) -> Result<Status> {
         listening = local_tcp_open(port);
     }
 
-    let mut service = service;
     service.desired_state = "running".to_string();
     ctx.store.upsert_service(&service)?;
 
@@ -1851,6 +2057,73 @@ fn running_pid_for_check(paths: &Paths, service: &Service) -> Option<u32> {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn a_pool_has_one_port_per_worker_and_names_that_round_trip() {
+        assert_eq!(php_worker_port("8.4", 1), 9084);
+        assert_eq!(php_worker_port("8.4", 3), 9284);
+        assert_eq!(php_worker_name("8.4", 1), "php-cgi-8.4");
+        assert_eq!(php_worker_name("8.4", 3), "php-cgi-8.4-3");
+        assert_eq!(split_pool("8.4"), ("8.4".to_string(), false, 1));
+        assert_eq!(split_pool("8.4-3"), ("8.4".to_string(), false, 3));
+        assert_eq!(split_pool("8.4-alt"), ("8.4".to_string(), true, 1));
+        assert_eq!(split_pool("8.4-alt-2"), ("8.4".to_string(), true, 2));
+        assert_eq!(php_alt_port("8.4", 1), 9134);
+        assert_eq!(php_alt_port("8.4", 3), 9334);
+        assert_eq!(php_alt_name("8.4", 1), "php-cgi-8.4-alt");
+        assert_eq!(php_alt_name("8.4", 2), "php-cgi-8.4-alt-2");
+        assert_eq!(php_pool_of("php-cgi-8.4"), Some(("8.4".to_string(), false)));
+        assert_eq!(php_pool_of("php-cgi-8.4-3"), Some(("8.4".to_string(), false)));
+        assert_eq!(php_pool_of("php-cgi-8.5-alt-2"), Some(("8.5".to_string(), true)));
+        assert_eq!(php_pool_of("php-cgi"), None, "the legacy single listener is not part of a pool");
+        assert_eq!(php_pool_of("nginx"), None);
+    }
+
+    #[test]
+    fn a_port_changed_in_settings_is_used_by_the_next_start() {
+        let ctx = ctx("ports");
+        let file = ctx.paths.settings_file();
+        let booted_http = ctx.settings.http_port;
+        let http = if booted_http == 8081 { 8082 } else { 8081 };
+        let https = if http == 8443 { 8444 } else { 8443 };
+        let mut settings = devd_core::config::Settings::load(&file).unwrap();
+        settings.http_port = http;
+        settings.https_port = https;
+        settings.save(&file).unwrap();
+
+        // The long-lived context still holds the values it booted with; the port
+        // is read from disk, so a change made after boot is not lost.
+        assert_eq!(http_port(&ctx), http);
+        assert_eq!(https_port(&ctx), https);
+
+        // The web server's row moves with the setting: it is what a start is
+        // verified against, so a stale row is what fails a correct start.
+        let row = Service {
+            id: util::new_id(),
+            name: "nginx".to_string(),
+            kind: "web".to_string(),
+            runtime_id: None,
+            argv: "[]".to_string(),
+            port: Some(booted_http),
+            health: Some(json!({ "tcp": booted_http }).to_string()),
+            desired_state: "stopped".to_string(),
+            restart_policy: "on-failure".to_string(),
+            enabled: true,
+            created_at: util::now(),
+        };
+        ctx.store.upsert_service(&row).unwrap();
+        set_web_ports(&ctx, http, https).unwrap();
+
+        let stored = ctx.store.get_service("nginx").unwrap().unwrap();
+        assert_eq!(stored.port, Some(http));
+        assert_eq!(stored.health, Some(json!({ "tcp": http }).to_string()));
+        let reloaded = devd_core::config::Settings::load(&file).unwrap();
+        assert_eq!((reloaded.http_port, reloaded.https_port), (http, https));
+
+        if let Some(dir) = file.parent() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
 
     /// A forward-slash path, for asserting on stored argument arrays.
     fn slashy(path: &Path) -> String {

@@ -57,9 +57,7 @@ uninstall() {
 
   step "Removing the program"
   rm -f "$BIN_DIR/devd"
-  if [ -n "$DESKTOP_BINARY" ]; then
-    rm -f "$BIN_DIR/devd-desktop"
-  fi
+  rm -f "$BIN_DIR/devd-desktop"
   rm -f "$APP_DIR/devd.desktop"
   rm -f "$ICON_DIR/devd.png"
   say "    removed $BIN_DIR/devd"

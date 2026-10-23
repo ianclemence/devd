@@ -102,6 +102,11 @@ pub(crate) enum Command {
         #[command(subcommand)]
         cmd: SiteCommand,
     },
+    /// PHP limits, the worker pool and extensions.
+    Php {
+        #[command(subcommand)]
+        cmd: PhpCommand,
+    },
     /// The managed block in the system hosts file.
     Hosts {
         #[command(subcommand)]
@@ -141,7 +146,20 @@ pub(crate) enum Command {
     /// Safe to run again; steps that are already done are skipped. Without
     /// `--yes` it stops before anything that needs approval, which today is
     /// trusting the local certificate authority.
-    Setup,
+    ///
+    /// PHP and the web server are always installed. Pick the rest with `--services`: a comma-separated
+    /// list from mariadb, redis, memcached, mailpit, or `none`. The default is `mariadb`.
+    Setup {
+        /// The services to install besides PHP and the web server.
+        #[arg(long, value_delimiter = ',')]
+        services: Option<Vec<String>>,
+        /// The PHP series to install, e.g. `8.4`. The default is the latest stable.
+        #[arg(long)]
+        php: Option<String>,
+        /// The PHP limits profile: `local` (generous) or `production` (a typical Ploi server).
+        #[arg(long)]
+        profile: Option<String>,
+    },
     /// Open the devd application: projects, Git and the capability registry.
     Ui {
         /// Port to listen on. Defaults to the last used port, then 8787 upward.
@@ -1030,6 +1048,45 @@ pub(crate) enum ServiceCommand {
 }
 
 #[derive(Subcommand, Debug)]
+pub(crate) enum PhpCommand {
+    /// Show the PHP limits, the profile and the worker count.
+    Settings {
+        /// A series such as 8.4. Omit for every installed one.
+        series: Option<String>,
+    },
+    /// Change the profile (`local` or `production`), the worker count, or single values.
+    Configure {
+        /// `local` (generous limits) or `production` (a typical Ploi server).
+        #[arg(long)]
+        profile: Option<String>,
+        /// PHP worker processes per version, 1 to 16.
+        #[arg(long)]
+        workers: Option<u8>,
+        /// A value to set, as `key=value` (memory_limit, upload_max_filesize, post_max_size, max_execution_time, ...). Repeatable.
+        #[arg(long = "set", value_name = "KEY=VALUE")]
+        set: Vec<String>,
+        /// Limit the value changes to one series.
+        #[arg(long)]
+        series: Option<String>,
+    },
+    /// List a PHP version's extensions and which are on.
+    Extensions {
+        /// A series such as 8.4. Omit for the primary one.
+        series: Option<String>,
+    },
+    /// Switch an extension on or off.
+    Ext {
+        /// The extension, e.g. gd.
+        name: String,
+        /// `on` or `off`.
+        state: String,
+        /// A series such as 8.4. Omit for the primary one.
+        #[arg(long)]
+        series: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 pub(crate) enum SiteCommand {
     /// List the sites.
     List,
@@ -1229,6 +1286,15 @@ pub(crate) enum WebCommand {
     Test,
     /// Check and then reload the running web server.
     Reload,
+    /// Serve sites on different HTTP and HTTPS ports; the running server restarts.
+    Ports {
+        /// Port for plain HTTP.
+        #[arg(long)]
+        http: Option<u16>,
+        /// Port for HTTPS.
+        #[arg(long)]
+        https: Option<u16>,
+    },
     /// Serve sites with `nginx` or `apache` (applies when devd next starts).
     Use {
         /// `nginx` or `apache`.
@@ -1718,6 +1784,10 @@ fn run(cli: Cli) -> Result<i32> {
             stackcat::site(&app, cmd)?;
             Ok(0)
         }
+        Command::Php { cmd } => {
+            stackcat::php(&app, cmd)?;
+            Ok(0)
+        }
         Command::Hosts { cmd } => {
             stackcat::hosts(&app, cmd)?;
             Ok(0)
@@ -1811,7 +1881,7 @@ fn run(cli: Cli) -> Result<i32> {
             server.serve_stdio()?;
             Ok(0)
         }
-        Command::Setup => setup::run(cli.json, cli.plan, cli.yes),
+        Command::Setup { services, php, profile } => setup::run(cli.json, cli.plan, cli.yes, setup::Choices { services, php, profile }),
         Command::Ui { port, no_open } => {
             app.resume_agents();
             web::serve(app, port, !no_open)?;

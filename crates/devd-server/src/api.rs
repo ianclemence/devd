@@ -162,6 +162,25 @@ pub struct InvokeBody {
     pub dry_run: bool,
 }
 
+/// `POST /hooks/deploy/:site/:token` - start a deploy of a site whose push-to-deploy hook is on.
+///
+/// Every refusal is the same `404`, so a wrong site, a wrong secret and a hook that is off cannot be told apart.
+pub async fn deploy_hook(State(state): State<Arc<AppState>>, axum::extract::Path((site, token)): axum::extract::Path<(String, String)>) -> Response {
+    let ctx = state.ctx.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        if !devd_ops::deploy::hook_ok(&ctx, &site, &token) {
+            return None;
+        }
+        Some(devd_ops::deploy::start(&ctx, &site, "hook", None))
+    })
+    .await;
+    match result {
+        Ok(Some(Ok(d))) => (StatusCode::ACCEPTED, axum::Json(json!({ "ok": true, "deployment": d.id, "state": d.state }))).into_response(),
+        Ok(Some(Err(e))) => error_response(&e),
+        _ => refuse(StatusCode::NOT_FOUND, "not_found", "there is no such hook"),
+    }
+}
+
 /// `POST /api/invoke` - run a capability, or open an approval for one.
 ///
 /// Three outcomes, and which one happens is decided by the capability's tier,

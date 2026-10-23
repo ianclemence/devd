@@ -43,12 +43,12 @@ init:
 verify:
   files: [hello.txt]
 tasks:
-  - {id: say, title: Print, kind: other, run: [echo, "{name}"]}
-  - {id: wipe, title: Wipe, kind: other, risk: destructive, run: [echo, wiping]}
+  - {id: say, title: Print, kind: other, run: [rustc, --version]}
+  - {id: wipe, title: Wipe, kind: other, risk: destructive, run: [rustc, --version]}
 detect:
   rules: [{file: hello.txt, weight: 5, evidence: hello.txt}]
 exec:
-  programs: [echo]
+  programs: [rustc]
   destructive_args: [--nuke]
 "#;
 
@@ -226,7 +226,7 @@ fn tasks_run_with_evidence_and_destructive_ones_need_a_human() {
     let ran = dispatch(&reg, &human, "project.run", json!({"path": path, "task": "say"}), Approval::None).unwrap();
     assert_eq!(ran["ok"], true);
     assert_eq!(ran["data"]["exit_code"], 0);
-    assert!(ran["data"]["output_tail"].as_array().unwrap().iter().any(|l| l == "proj"));
+    assert!(ran["data"]["output_tail"].as_array().unwrap().iter().any(|l| l.as_str().is_some_and(|s| s.contains("rustc"))));
 
     // A destructive task is refused on the safe path and needs approval on its own.
     let err = dispatch(&reg, &human, "project.run", json!({"path": path, "task": "wipe"}), Approval::None).unwrap_err();
@@ -247,9 +247,9 @@ fn tasks_run_with_evidence_and_destructive_ones_need_a_human() {
     // project.exec: allow-listed programs only, never a shell, destructive flags redirected.
     let e = dispatch(&reg, &human, "project.exec", json!({"path": path, "argv": ["sh", "-c", "echo hi"]}), Approval::None).unwrap_err();
     assert_eq!(e.code(), "permission_denied");
-    let e = dispatch(&reg, &human, "project.exec", json!({"path": path, "argv": ["echo", "--nuke"]}), Approval::None).unwrap_err();
+    let e = dispatch(&reg, &human, "project.exec", json!({"path": path, "argv": ["rustc", "--nuke"]}), Approval::None).unwrap_err();
     assert!(e.to_string().contains("project.exec_destructive"));
-    let fine = dispatch(&reg, &human, "project.exec", json!({"path": path, "argv": ["echo", "ok"]}), Approval::None).unwrap();
+    let fine = dispatch(&reg, &human, "project.exec", json!({"path": path, "argv": ["rustc", "--version"]}), Approval::None).unwrap();
     assert_eq!(fine["data"]["exit_code"], 0);
 }
 

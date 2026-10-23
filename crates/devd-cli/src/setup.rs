@@ -29,14 +29,56 @@ const FIRST_HOST: &str = "localhost";
 /// How long to wait when asking whether a port is already accepting connections.
 const PROBE: Duration = Duration::from_millis(250);
 
+/// What the person chose on the first run. Nothing set means the defaults.
+#[derive(Debug, Default, Clone)]
+pub struct Choices {
+    /// Services beside PHP and the web server. `None` is the default (`mariadb`); `none` is nothing.
+    pub services: Option<Vec<String>>,
+    /// The PHP series, e.g. `8.4`.
+    pub php: Option<String>,
+    /// The PHP limits profile.
+    pub profile: Option<String>,
+}
+
+/// The services a first run may install besides PHP and the web server.
+const OPTIONAL: &[&str] = &["mariadb", "redis", "memcached", "mailpit"];
+
+impl Choices {
+    /// The optional services to install, validated.
+    pub fn extra_services(&self) -> Result<Vec<String>> {
+        let Some(list) = &self.services else { return Ok(vec!["mariadb".to_string()]) };
+        let mut out = Vec::new();
+        for raw in list {
+            let name = raw.trim().to_lowercase();
+            if name.is_empty() || name == "none" {
+                continue;
+            }
+            if !OPTIONAL.contains(&name.as_str()) {
+                return Err(DevdError::invalid(format!("`{name}` is not a service setup installs; choose from {} or `none`", OPTIONAL.join(", "))));
+            }
+            if !out.contains(&name) {
+                out.push(name);
+            }
+        }
+        Ok(out)
+    }
+}
+
 /// Run the first-time setup.
-pub fn run(json: bool, plan_only: bool, assume_yes: bool) -> Result<i32> {
+pub fn run(json: bool, plan_only: bool, assume_yes: bool, choices: Choices) -> Result<i32> {
+    let extra = choices.extra_services()?;
+    if let Some(p) = &choices.profile {
+        if p != "local" && p != "production" {
+            return Err(DevdError::invalid("--profile must be `local` or `production`"));
+        }
+    }
     let mut app = App::bootstrap(json, plan_only, assume_yes)?;
 
     if plan_only {
         for line in plan_lines() {
             println!("{line}");
         }
+        println!("also install: {}", if extra.is_empty() { "nothing else".to_string() } else { extra.join(", ") });
         return Ok(0);
     }
 
@@ -67,7 +109,7 @@ pub fn run(json: bool, plan_only: bool, assume_yes: bool) -> Result<i32> {
         match invoke(
             &app,
             "runtime.install",
-            json!({ "kind": "php", "version": "latest" }),
+            json!({ "kind": "php", "version": choices.php.clone().unwrap_or_else(|| "latest".to_string()) }),
         ) {
             Ok(step) => steps.push(step),
             // Off Windows a missing program is something to fix and carry on
@@ -80,6 +122,17 @@ pub fn run(json: bool, plan_only: bool, assume_yes: bool) -> Result<i32> {
         }
     } else {
         say(&app, "    PHP is already installed");
+    }
+
+    if let Some(profile) = &choices.profile {
+        say(&app, &format!("    applying the `{profile}` PHP limits"));
+        match invoke(&app, "php.configure", json!({ "profile": profile })) {
+            Ok(step) => steps.push(step),
+            Err(e) => {
+                say(&app, &format!("    {e}"));
+                problems.push(e.to_string());
+            }
+        }
     }
 
     say(&app, "==> Services");
@@ -95,7 +148,9 @@ pub fn run(json: bool, plan_only: bool, assume_yes: bool) -> Result<i32> {
         }
     };
     let web_server = app.ctx().settings.web_server.as_str();
-    for name in [web_server, "mariadb"] {
+    let mut wanted: Vec<&str> = vec![web_server];
+    wanted.extend(extra.iter().map(String::as_str));
+    for name in wanted {
         let ctx = app.ctx();
         if ctx.store.get_service(name)?.is_some() {
             say(&app, &format!("    {name} is already installed"));
@@ -133,6 +188,20 @@ pub fn run(json: bool, plan_only: bool, assume_yes: bool) -> Result<i32> {
         Err(e) => {
             say(&app, &format!("    could not start every managed service: {e}"));
             problems.push(format!("a managed service did not start: {e}"));
+        }
+    }
+
+    // `stack.up` starts the web server, PHP and MariaDB; the other services chosen are started here.
+    for name in extra.iter().filter(|n| n.as_str() != "mariadb") {
+        if app.ctx().store.get_service(name)?.is_none() {
+            continue;
+        }
+        match invoke(&app, "service.start", json!({ "name": name })) {
+            Ok(step) => steps.push(step),
+            Err(e) => {
+                say(&app, &format!("    could not start {name}: {e}"));
+                problems.push(format!("{name} did not start: {e}"));
+            }
         }
     }
 

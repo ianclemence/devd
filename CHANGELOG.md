@@ -10,9 +10,39 @@ may change capability identifiers where the design was wrong.
 
 ---
 
-## [Unreleased]
+## [0.10.0] - 2026-10-24 - Operations, remote deploys and PHP pools
 
 ### Added
+
+- **Operations**, what a server panel such as Ploi shows for a site, as capabilities and a **Server → Operations** screen: the
+  `.env` file with secrets hidden and a diff against another environment (`env.*`), cron jobs and the Laravel scheduler
+  (`cron.*`), queue workers (`queue.*`), redirects written into nginx and Apache (`redirects.*`), the Laravel log as entries
+  (`logs.*`), a deploy script per site with history, rollback, a repository link and a push-to-deploy hook (`deploy.*`,
+  `repo.*`), alerts to the inbox, Slack, Discord or a webhook (`notify.*`), and Ploi's own API (`ploi.*`: servers, sites,
+  environment, deploy). See [`docs/operations.md`](docs/operations.md).
+- **PHP workers**: a pool of PHP processes per version (`php_workers`, default 4) behind an nginx upstream, so a page that makes
+  many requests no longer queues behind itself.
+- **PHP settings** (`php.settings`, `php.configure`, `php.extensions`, `php.extension_set`): a `local` or `production` limits
+  profile (128M / 5M / 30 s, like a Ploi server), single values, and an extension manager.
+- **Redis and memcached are downloaded** on Windows and checked against the SHA-256 GitHub records, like Mailpit.
+- **`devd setup --services`, `--php`, `--profile`** choose what a first run installs.
+- `php` command group; `devd call` reaches every new capability.
+- **A PHP limits profile per site** (`php.site_profile`): a site can run with the other profile, served by a second pool of PHP
+  processes started with that profile's ini.
+- **Deploy warnings** (`deploy.check`, `ploi.limits_set`): every PHP limit that is looser here than on your server, in the
+  deploy plan and the deployment's log. Ploi's API does not expose a server's limits, so devd is told them.
+- **Apache balances PHP workers** through `mod_proxy_balancer` when the build has its modules.
+- **Set up devd** on the Overview screen: a first run shows what it will install, with sizes, and lets you choose.
+- **Deploy to any server over SSH** (`server.*`, `remote.*`): register DigitalOcean, Hetzner, Vultr, Ploi or Forge machines; devd pins
+  each host key in its own file, provisions a fresh Ubuntu or Debian server for PHP sites, and deploys either as atomic releases
+  (local build, upload, switch `current`, instant rollback) or by having the server pull and run the deploy script. See
+  [`docs/operations.md`](docs/operations.md).
+- **The Laravel tab** (`laravel.*`): artisan commands, maintenance mode, `storage:link`, clearing caches.
+- **Database users and scheduled backups** (`db.user_*`, `backup.*`).
+- **Per-site nginx directives** with presets, checked by `nginx -t` and rolled back on failure (`nginx.*`).
+- **Deploy variables, scheduled deploys and staging sites** (`deploy.vars_set`, `deploy.schedule`, `deploy.staging_*`).
+- **Health checks and machine monitoring** (`health.*`, `monitor.stats`) and **SSH key management** (`ssh.*`).
+- PHP processes are shown as one row per version; the old single `php-cgi` listener is retired.
 
 - **Apache** as a web server (`web.use`, `service.install apache`, `service.adopt`). An existing Apache is used as it
   is; Apache Lounge's build is installed against the SHA-256 it publishes. `.htaccess` works; PHP goes to the
@@ -34,6 +64,9 @@ may change capability identifiers where the design was wrong.
 - **`project.terminal`**: the system terminal in a project folder with its pinned runtimes first on PATH.
 - `site.fix_htaccess`: guard `php_value` lines Apache cannot read; PATH_INFO works under Apache.
 - `Registry::define`: capabilities are declared with named properties instead of a twelve-argument helper.
+- **Changing the ports sites are served on** (`web.ports`, `devd web ports --http 8080 --https 8443`): writes
+  `settings.toml`, rewrites the generated configuration, moves the web server's recorded port with it and restarts
+  the running server. A port another program is listening on is refused.
 
 ### Changed
 
@@ -49,9 +82,21 @@ may change capability identifiers where the design was wrong.
 
 - **Composer version constraints such as `^13.0` reached Composer as `13.0`** when run through a `.bat` shim on Windows, because `cmd.exe` eats `^`. Arguments with cmd metacharacters are now quoted.
 - Composer's coloured `--version` output hid its version from detection; colour codes are stripped first.
+- **A port changed outside devd no longer makes a correct start look broken.** `service start` reads the HTTP port
+  from `settings.toml` before it verifies the start, instead of waiting on the port recorded at install time, and the
+  nginx and Apache configurations are rendered with the current ports.
+- **Apache's current checksum format.** Apache Lounge now publishes `SHA256-Checksum for: <file>:` followed by the
+  digest on the next line; the catalogue reads the digest token instead of the old `SHA256:` label.
+- The installer's launcher and uninstaller honour `DEVD_HOME`, so a portable install such as `D:\devd` reads and
+  keeps the right data folder. The Linux uninstall also removes `devd-desktop`, with or without `--desktop-binary`.
+- The runtime catalogue names the executable each archive actually yields after devd strips its top-level folder
+  (`bin/node`, `bin/go`), instead of a path that only happened to be unused by the installer.
 
 ### Removed
 
+- **The "Use existing" button beside an available service.** The Available list offers Install; a service that is
+  already on the machine is still listed under **Already on this computer** with **Run it with devd**, which records
+  the choice without moving or changing the existing folder.
 - The **Terminals** tab and everything behind it: terminal sessions, delegation to Claude Code and OpenCode
   (`session.*`, `agent.*`), the PTY manager, xterm and `@agent` mentions. devd has its own agents.
 

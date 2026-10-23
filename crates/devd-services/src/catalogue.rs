@@ -9,6 +9,8 @@
 //! | MariaDB | `downloads.mariadb.org/rest-api` | per-file `sha256sum` in the API |
 //! | Apache httpd | `apachelounge.com/download` (Windows) | `<zip>.txt` beside each archive |
 //! | Mailpit | GitHub releases of `axllent/mailpit` | the `digest` GitHub records for each asset |
+//! | Redis (Windows) | GitHub releases of `redis-windows/redis-windows` (Redis 8, MSYS2 build) | the `digest` GitHub records for each asset |
+//! | memcached (Windows) | GitHub releases of `jefyt/memcached-windows` | the `digest` GitHub records for each asset |
 //!
 //! nginx is the one honest gap. nginx.org publishes a PGP signature
 //! (`nginx-1.28.3.zip.asc`) and no checksum file, so `devd` cannot check the
@@ -33,6 +35,12 @@ const APACHE_HOST: &str = "https://www.apachelounge.com";
 
 /// Mailpit's releases, with the SHA-256 GitHub records for each file.
 const MAILPIT_API: &str = "https://api.github.com/repos/axllent/mailpit/releases?per_page=10";
+
+/// Redis builds for Windows. Redis itself publishes none; this project builds each release.
+const REDIS_API: &str = "https://api.github.com/repos/redis-windows/redis-windows/releases?per_page=10";
+
+/// memcached builds for Windows. Only the release that records digests is offered.
+const MEMCACHED_API: &str = "https://api.github.com/repos/jefyt/memcached-windows/releases?per_page=10";
 
 /// Where MariaDB keeps every release's files.
 const MARIADB_BASE: &str = "https://archive.mariadb.org/";
@@ -132,16 +140,15 @@ fn scan_apache(document: &str) -> Vec<(String, String)> {
     out
 }
 
-/// The `SHA256:` line of an Apache Lounge checksum file, lower-cased.
+/// The SHA-256 line of an Apache Lounge checksum file, lower-cased.
+///
+/// Apache Lounge has used two layouts: `SHA256: <digest>`, and (since late
+/// 2026) `SHA256-Checksum for: <file>:` with the digest on the next line. Read
+/// the digest itself rather than the label, which is the part that changes.
 fn apache_sha256(text: &str) -> Option<String> {
-    text.lines().find_map(|line| {
-        let (label, value) = line.split_once(':')?;
-        if !label.trim().eq_ignore_ascii_case("sha256") {
-            return None;
-        }
-        let digest = value.trim().to_ascii_lowercase();
-        (digest.len() == 64 && digest.chars().all(|c| c.is_ascii_hexdigit())).then_some(digest)
-    })
+    text.split(|c: char| !c.is_ascii_hexdigit())
+        .find(|token| token.len() == 64)
+        .map(str::to_ascii_lowercase)
 }
 
 /// The Mailpit asset name for this platform, e.g. `mailpit-windows-amd64.zip`.
@@ -203,6 +210,82 @@ fn mailpit_from(json_text: &str, asset: &str) -> Result<Vec<Available>> {
     }
     sort_newest_first(&mut list);
     Ok(list)
+}
+
+/// The releases of a GitHub project that have an asset the matcher accepts and a recorded digest.
+/// `version_of` turns the release tag and the asset name into a version, or rejects the asset.
+fn github_assets(
+    json_text: &str,
+    kind: &str,
+    executable: &str,
+    accept: &dyn Fn(&str) -> bool,
+    version_of: &dyn Fn(&str, &str) -> Option<String>,
+) -> Result<Vec<Available>> {
+    let releases: serde_json::Value = serde_json::from_str(json_text)
+        .map_err(|e| DevdError::internal(format!("the {kind} release list is not JSON: {e}")))?;
+    let mut list = Vec::new();
+    for release in releases.as_array().into_iter().flatten() {
+        if release["prerelease"].as_bool().unwrap_or(false) || release["draft"].as_bool().unwrap_or(false) {
+            continue;
+        }
+        let Some(tag) = release["tag_name"].as_str() else { continue };
+        for file in release["assets"].as_array().into_iter().flatten() {
+            let Some(name) = file["name"].as_str().filter(|n| accept(n)) else { continue };
+            let Some(version) = version_of(tag, name) else { continue };
+            let digest = file["digest"].as_str().and_then(|d| d.strip_prefix("sha256:")).map(|d| d.to_ascii_lowercase());
+            let (Some(url), Some(sha256)) = (file["browser_download_url"].as_str(), digest) else { continue };
+            list.push(Available {
+                kind: kind.to_string(),
+                series: devd_runtime::catalogue::series_of(&version),
+                version,
+                channel: "stable".to_string(),
+                url: url.to_string(),
+                sha256: Some(sha256),
+                bytes: file["size"].as_u64(),
+                published: release["published_at"].as_str().map(str::to_string),
+                executable: executable.to_string(),
+            });
+        }
+    }
+    sort_newest_first(&mut list);
+    Ok(list)
+}
+
+fn redis_from(json_text: &str) -> Result<Vec<Available>> {
+    github_assets(
+        json_text,
+        "redis",
+        "redis-server.exe",
+        // The plain MSYS2 build: no Windows service wrapper, which devd's own supervisor replaces.
+        &|n| n.starts_with("Redis-") && n.ends_with("-Windows-x64-msys2.zip"),
+        &|tag, _| Some(tag.trim_start_matches('v').to_string()),
+    )
+}
+
+/// Redis for Windows, from the project that builds it.
+pub fn redis() -> Result<Vec<Available>> {
+    if !cfg!(windows) {
+        return Ok(Vec::new());
+    }
+    redis_from(&download::fetch_text(REDIS_API, TIMEOUT)?)
+}
+
+fn memcached_from(json_text: &str) -> Result<Vec<Available>> {
+    github_assets(
+        json_text,
+        "memcached",
+        "bin/memcached.exe",
+        &|n| n.starts_with("memcached-") && n.ends_with("-win64-mingw.zip"),
+        &|_, name| name.strip_prefix("memcached-")?.split("-win64").next().map(str::to_string),
+    )
+}
+
+/// memcached for Windows.
+pub fn memcached() -> Result<Vec<Available>> {
+    if !cfg!(windows) {
+        return Ok(Vec::new());
+    }
+    memcached_from(&download::fetch_text(MEMCACHED_API, TIMEOUT)?)
 }
 
 pub fn nginx() -> Result<Vec<Available>> {
@@ -475,10 +558,10 @@ pub fn for_kind(kind: &str) -> Result<Vec<Available>> {
             apache()
         }
         "mailpit" => mailpit(),
-        // Redis has no build devd can verify; it is adopted, not downloaded.
-        "redis" => Ok(Vec::new()),
+        "redis" => redis(),
+        "memcached" => memcached(),
         other => Err(DevdError::unsupported(format!(
-            "`{other}` has no upstream catalogue in devd; installable services are nginx, apache, mariadb, redis and mailpit"
+            "`{other}` has no upstream catalogue in devd; installable services are nginx, apache, mariadb, redis, memcached and mailpit"
         ))),
     }
 }
@@ -545,7 +628,27 @@ mod tests {
     fn unknown_kinds_are_refused() {
         let err = for_kind("lighttpd").unwrap_err();
         assert_eq!(err.code(), "unsupported");
-        assert!(err.to_string().contains("nginx, apache, mariadb, redis and mailpit"), "{err}");
+        assert!(err.to_string().contains("nginx, apache, mariadb, redis, memcached and mailpit"), "{err}");
+    }
+
+    #[test]
+    fn redis_and_memcached_are_offered_only_with_a_recorded_digest() {
+        let redis = r#"[{"tag_name":"8.10.2","prerelease":false,"published_at":"2026-09-18T01:28:52Z","assets":[
+            {"name":"Redis-8.10.2-Windows-x64-msys2.zip","size":13938657,"browser_download_url":"https://x/r.zip","digest":"sha256:7C8CEBD50347EABA"},
+            {"name":"Redis-8.10.2-Windows-x64-cygwin.zip","size":1,"browser_download_url":"https://x/c.zip","digest":"sha256:AA"}]},
+            {"tag_name":"5.0.14.1","prerelease":false,"assets":[{"name":"Redis-x64-5.0.14.1.zip","size":1,"browser_download_url":"https://x/o.zip","digest":null}]}]"#;
+        let list = redis_from(redis).unwrap();
+        assert_eq!(list.len(), 1, "{list:?}");
+        assert_eq!(list[0].version, "8.10.2");
+        assert_eq!(list[0].sha256.as_deref(), Some("7c8cebd50347eaba"));
+        let mc = r#"[{"tag_name":"1.6.8_mingw_libressl","prerelease":false,"assets":[
+            {"name":"memcached-1.6.8-win64-mingw.zip","size":3540169,"browser_download_url":"https://x/m.zip","digest":"sha256:48EC"},
+            {"name":"hashes.txt","size":1,"browser_download_url":"https://x/h","digest":"sha256:67"}]},
+            {"tag_name":"1.6.8_mingw","prerelease":false,"assets":[{"name":"memcached-1.6.8-win64-mingw.zip","size":1,"browser_download_url":"https://x/old.zip","digest":null}]}]"#;
+        let list = memcached_from(mc).unwrap();
+        assert_eq!(list.len(), 1, "{list:?}");
+        assert_eq!(list[0].version, "1.6.8");
+        assert_eq!(list[0].executable, "bin/memcached.exe");
     }
 
     #[test]
@@ -576,6 +679,8 @@ mod tests {
     fn the_sha256_is_read_from_apache_lounges_checksum_file() {
         let text = "File name: httpd-2.4.69-261002-Win64-VS18.zip\nSHA1:   D7B557581787727CA222C6A5FF0E9E6FA6029893\nSHA256: CA272E0B75ABAD78B1E4029A0753B20FF2232D2D857E8EEBEEA5D469C5776977\nSHA384: 6C32\n";
         assert_eq!(apache_sha256(text).as_deref(), Some("ca272e0b75abad78b1e4029a0753b20ff2232d2d857e8eebeea5d469c5776977"));
+        let current = "Checksums created with GPGHash by SmartJuwel\n\nSHA1-Checksum for: httpd.zip:\nD7B557581787727CA222C6A5FF0E9E6FA6029893\n\nSHA256-Checksum for: httpd.zip:\nCA272E0B75ABAD78B1E4029A0753B20FF2232D2D857E8EEBEEA5D469C5776977\n\nSHA512-Checksum for: httpd.zip:\nBDB569BC13B02E5F5227CA1DC168AA0907FA6D3422314CE242C121647044F67B5A72EA0E15A2FC14F706739A2376B1F7851AABCC7DFD843A881EA8F12B2E71B0\n";
+        assert_eq!(apache_sha256(current).as_deref(), Some("ca272e0b75abad78b1e4029a0753b20ff2232d2d857e8eebeea5d469c5776977"));
         assert_eq!(apache_sha256("SHA256: short"), None);
     }
 

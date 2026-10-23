@@ -44,6 +44,10 @@ const MODULES: &[&str] = &[
     "proxy_fcgi",
     "proxy_http",
     "proxy_wstunnel",
+    // Spreading PHP requests over the worker pool needs all three; without them one process serves a version.
+    "slotmem_shm",
+    "proxy_balancer",
+    "lbmethod_byrequests",
 ];
 
 /// Everything the renderer needs that is not a site.
@@ -64,6 +68,19 @@ struct Render {
     primary: Option<String>,
     /// Modules whose files exist, so only those are loaded.
     modules: Vec<String>,
+    /// Each site's redirects, by site name.
+    redirects: std::collections::BTreeMap<String, Vec<crate::redirects::Redirect>>,
+    /// Sites served by the pool that runs the other PHP limits profile.
+    alt_sites: std::collections::BTreeSet<String>,
+    /// How many PHP processes serve each series.
+    workers: u8,
+}
+
+impl Render {
+    /// Whether requests can be spread over the PHP workers: more than one, and the balancer modules are there.
+    fn balanced(&self) -> bool {
+        self.workers > 1 && ["slotmem_shm", "proxy_balancer", "lbmethod_byrequests"].iter().all(|m| self.modules.iter().any(|x| x == m))
+    }
 }
 
 /// Where Apache's files are: the directory devd installed it in, or the one a
@@ -111,11 +128,14 @@ fn render_context(ctx: &Ctx) -> Render {
         root: slashy(&root),
         logs: slashy(&ctx.paths.logs()),
         certs: slashy(&ctx.paths.certs()),
-        http: ctx.settings.http_port,
-        https: ctx.settings.https_port,
+        http: crate::http_port(ctx),
+        https: crate::https_port(ctx),
         php: crate::nginx::php_listeners(ctx),
         primary: crate::primary_php_series(ctx),
         modules,
+        redirects: crate::redirects::by_site(ctx),
+        alt_sites: crate::alt_sites(ctx),
+        workers: crate::php_workers(ctx),
     }
 }
 
@@ -174,6 +194,15 @@ fn render_text(render: &Render, sites: &[Site]) -> String {
         out.push_str("SSLSessionCache \"shmcb:logs/ssl_scache(512000)\"\n");
         out.push_str("SSLSessionCacheTimeout 300\n\n");
     }
+    if render.balanced() {
+        for (series, port) in &render.php {
+            out.push_str(&balancer(series, *port, render.workers, 0));
+            if !render.alt_sites.is_empty() {
+                out.push_str(&balancer(series, *port, render.workers, 50));
+            }
+        }
+        out.push('\n');
+    }
     out.push_str(&default_server(render));
     for site in sites {
         out.push_str(&site_servers(render, site));
@@ -181,10 +210,43 @@ fn render_text(render: &Render, sites: &[Site]) -> String {
     out
 }
 
+/// A balancer over the PHP workers of one series: worker 1 on the series' port, the others 100 apart.
+/// `offset` 50 is the pool that runs the other limits profile.
+fn balancer(series: &str, port: u16, workers: u8, offset: u16) -> String {
+    let name = format!("devd_php_{}{}", series.replace('.', "_"), if offset == 0 { "" } else { "_alt" });
+    let members: String = (0..workers).map(|i| format!("    BalancerMember \"fcgi://127.0.0.1:{}\"\n", port.saturating_add(offset + 100 * u16::from(i)))).collect();
+    format!("<Proxy \"balancer://{name}\">\n{members}</Proxy>\n")
+}
+
+/// Where a site's PHP requests go: the balancer over its series' workers when they can be balanced, else one port.
+fn php_target(render: &Render, site: &Site) -> String {
+    if render.balanced() {
+        let pinned = site.php.as_deref().map(crate::php_series).filter(|s| render.php.iter().any(|(p, _)| p == s));
+        let series = pinned
+            .or_else(|| render.primary.clone().filter(|s| render.php.iter().any(|(p, _)| p == s)))
+            .or_else(|| render.php.first().map(|(s, _)| s.clone()));
+        if let Some(series) = series {
+            let alt = render.alt_sites.contains(&site.name);
+            return format!("balancer://devd_php_{}{}", series.replace('.', "_"), if alt { "_alt" } else { "" });
+        }
+    }
+    format!("fcgi://127.0.0.1:{}", site_php_port(render, site))
+}
+
 /// The listener name of the PHP series a site is sent to: pinned if installed,
 /// else the primary, else the first. A site pinned to a version that is not
 /// installed falls back, because a missing upstream is an error for every request.
 fn site_php_port(render: &Render, site: &Site) -> u16 {
+    let port = site_php_port_main(render, site);
+    // The pool that runs the other limits profile is 50 ports above the main one.
+    if render.alt_sites.contains(&site.name) {
+        port.saturating_add(50)
+    } else {
+        port
+    }
+}
+
+fn site_php_port_main(render: &Render, site: &Site) -> u16 {
     let pinned = site.php.as_deref().map(crate::php_series).filter(|s| !s.is_empty());
     if let Some(series) = pinned {
         if let Some((_, port)) = render.php.iter().find(|(s, _)| s == &series) {
@@ -257,6 +319,9 @@ fn site_servers(render: &Render, site: &Site) -> String {
         return out;
     }
 
+    if let Some(list) = render.redirects.get(&site.name) {
+        out.push_str(&crate::redirects::apache_block(list));
+    }
     out.push_str(&format!("    DocumentRoot \"{root}\"\n"));
     out.push_str(&format!("    <Directory \"{root}\">\n"));
     out.push_str("        Options FollowSymLinks\n");
@@ -267,8 +332,8 @@ fn site_servers(render: &Render, site: &Site) -> String {
     // appends the file name to the address, and on Windows a name that starts with a
     // drive letter produces `:9000C:/...`, which Apache cannot parse.
     out.push_str(&format!(
-        "    ProxyPassMatch \"^/(.*\\.php(/.*)?)$\" \"fcgi://127.0.0.1:{}/{root}/$1\"\n",
-        site_php_port(render, site)
+        "    ProxyPassMatch \"^/(.*\\.php(/.*)?)$\" \"{}/{root}/$1\"\n",
+        php_target(render, site)
     ));
     // The same URL makes SCRIPT_FILENAME `/C:/...` on Windows, which php-cgi answers with
     // "No input file specified". The real path is the document root and the script name.
@@ -368,7 +433,37 @@ mod tests {
             php: vec![("8.3".into(), 9083), ("8.5".into(), 9085)],
             primary: Some("8.5".into()),
             modules: vec!["rewrite".into(), "ssl".into(), "proxy".into(), "proxy_fcgi".into()],
+            redirects: Default::default(),
+            alt_sites: Default::default(),
+            workers: 1,
         }
+    }
+
+    #[test]
+    fn php_requests_are_spread_over_the_workers_when_the_balancer_modules_are_there() {
+        let mut r = render();
+        r.workers = 3;
+        r.modules.extend(["slotmem_shm", "proxy_balancer", "lbmethod_byrequests"].map(String::from));
+        let text = render_text(&r, &[site("blog", "internal", Some("8.5"), None)]);
+        assert!(text.contains("<Proxy \"balancer://devd_php_8_5\">"), "{text}");
+        for port in [9085, 9185, 9285] {
+            assert!(text.contains(&format!("BalancerMember \"fcgi://127.0.0.1:{port}\"")), "{text}");
+        }
+        assert!(text.contains("\"balancer://devd_php_8_5/C:/www/blog/$1\"") || text.contains("balancer://devd_php_8_5/"), "{text}");
+        // Without the modules one process serves the version, as before.
+        let mut plain = render();
+        plain.workers = 3;
+        let text = render_text(&plain, &[site("blog", "internal", Some("8.5"), None)]);
+        assert!(!text.contains("balancer://") && text.contains("fcgi://127.0.0.1:9085/"), "{text}");
+    }
+
+    #[test]
+    fn a_site_with_the_other_limits_profile_goes_to_the_other_pool() {
+        let mut r = render();
+        r.alt_sites.insert("blog".into());
+        let text = render_text(&r, &[site("blog", "internal", Some("8.5"), None), site("shop", "internal", Some("8.5"), None)]);
+        assert!(text.contains("fcgi://127.0.0.1:9135/"), "blog is 50 ports up: {text}");
+        assert!(text.contains("fcgi://127.0.0.1:9085/"), "shop stays on the main pool: {text}");
     }
 
     #[test]

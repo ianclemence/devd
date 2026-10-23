@@ -32,6 +32,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (10, include_str!("../sql/010_schedules.sql")),
     (11, include_str!("../sql/011_runtime_pins.sql")),
     (12, include_str!("../sql/012_chat_chapters.sql")),
+    (13, include_str!("../sql/013_ops.sql")),
 ];
 
 /// What to record about one capability attempt.
@@ -114,11 +115,14 @@ pub struct Site {
 
 impl Site {
     /// Document root to hand to a web server: `public/` when it exists, which
-    /// is what Laravel, Symfony and WordPress layouts expect.
+    /// is what Laravel, Symfony and WordPress layouts expect. A `public/` that
+    /// holds only static assets beside a project that has its own `index.html`
+    /// (a Vite app, say) is not a document root: the project folder is.
     pub fn document_root(&self) -> String {
         let root = std::path::Path::new(&self.root);
         let public = root.join("public");
-        if public.is_dir() {
+        let has_entry = |dir: &std::path::Path| ["index.php", "index.html", "index.htm"].iter().any(|n| dir.join(n).is_file());
+        if public.is_dir() && (has_entry(&public) || !has_entry(root)) {
             public.to_string_lossy().to_string()
         } else {
             self.root.clone()

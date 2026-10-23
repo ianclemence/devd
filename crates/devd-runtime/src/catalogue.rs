@@ -342,7 +342,7 @@ pub fn node() -> Result<Vec<Available>> {
             sha256: None,
             bytes: None,
             published: row.date,
-            executable: if cfg!(windows) { "node.exe" } else { "node" }.to_string(),
+            executable: if cfg!(windows) { "node.exe" } else { "bin/node" }.to_string(),
         });
     }
     sort_newest_first(&mut list);
@@ -439,7 +439,7 @@ pub fn go() -> Result<Vec<Available>> {
             sha256: Some(file.sha256.to_lowercase()),
             bytes: if file.size > 0 { Some(file.size) } else { None },
             published: None,
-            executable: if cfg!(windows) { "go.exe" } else { "go" }.to_string(),
+            executable: if cfg!(windows) { "bin/go.exe" } else { "bin/go" }.to_string(),
         });
     }
     sort_newest_first(&mut list);

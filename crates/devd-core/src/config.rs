@@ -63,6 +63,11 @@ pub struct Settings {
     pub web_server: WebServer,
     /// PHP version used when a site does not pin one.
     pub primary_php: Option<String>,
+    /// How many PHP FastCGI processes serve each PHP version. `php-cgi` handles one request at a
+    /// time, so a page that makes many requests at once needs several; nginx spreads requests across them.
+    pub php_workers: u8,
+    /// The PHP limits profile: `local` is generous, `production` matches a typical Ploi server.
+    pub php_profile: String,
     /// Override for the `git` executable. Discovered from `PATH` when unset.
     pub git_executable: Option<String>,
     /// Refuse to run operations that would discard uncommitted work unless the
@@ -96,6 +101,8 @@ impl Default for Settings {
             www_root: None,
             web_server: WebServer::default(),
             primary_php: None,
+            php_workers: 4,
+            php_profile: "local".to_string(),
             git_executable: None,
             git_protect_uncommitted: true,
             git_default_branch: "main".to_string(),
@@ -145,6 +152,12 @@ impl Settings {
             return Err(crate::error::DevdError::invalid(
                 "http_port and https_port must differ",
             ));
+        }
+        if self.php_workers == 0 || self.php_workers > 16 {
+            return Err(crate::error::DevdError::invalid("php_workers must be between 1 and 16"));
+        }
+        if self.php_profile != "local" && self.php_profile != "production" {
+            return Err(crate::error::DevdError::invalid("php_profile must be `local` or `production`"));
         }
         Ok(())
     }

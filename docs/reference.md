@@ -19,6 +19,25 @@ devd runtime pins
 devd runtime remove php@8.2       # destructive: asks for approval
 ```
 
+## PHP, operations and deploys
+
+```bash
+devd php settings                         # limits, profile, workers
+devd php configure --profile production   # 128M / 5M / 30 s, like a Ploi server
+devd php configure --workers 8 --set memory_limit=512M
+devd php extensions
+devd php ext gd on
+devd setup --services mariadb,redis --php 8.4 --profile production
+devd call env.diff --arg site=shop --arg against_ploi=true
+devd call cron.laravel --arg site=shop
+devd call queue.add --arg site=shop --arg processes=2
+devd call redirects.add --arg site=shop --arg from=/old --arg to=/new
+devd call deploy.run --arg site=shop
+devd call ploi.deploy --arg local=shop
+```
+
+Environment files, cron jobs, workers, redirects, logs, deploys, alerts and Ploi are in [`operations.md`](operations.md).
+
 ## Services
 
 ```bash
@@ -30,6 +49,8 @@ devd service find apache          # Apache or Redis folders already on this mach
 devd service adopt apache 'C:\Apache24'   # use one as it is
 devd service adopt redis 'C:\Redis' --port 6379
 devd service install mailpit      # mail catcher; checked against the digest GitHub records
+devd service install redis        # Windows: Redis 8 from redis-windows/redis-windows, checked the same way
+devd service install memcached    # Windows: memcached 1.6.8 from jefyt/memcached-windows, checked the same way
 devd service adopt postgres 'C:\pgsql'    # also mongodb and memcached: run one you already have
 devd db list --engine postgres
 devd service start nginx
@@ -68,6 +89,7 @@ devd web use apache               # or nginx; applies when devd next starts
 devd web render                   # rebuild nginx.conf or httpd.conf from the site table
 devd web test                     # nginx -t or httpd -t
 devd web reload                   # nginx reloads; Apache restarts
+devd web ports --http 8080 --https 8443  # settings.toml, config and a restart
 
 devd db dump blog                 # a SQL file under <devd home>/backups
 devd db copy blog --from-port 3306   # from a MySQL on this machine into devd's MariaDB
@@ -250,9 +272,16 @@ written when `devd` changes a setting; missing keys take the default below.
 | `www_root` | `<data>/www` | Where new projects are created. |
 | `web_server` | `nginx` | Web server driver. |
 | `primary_php` | newest installed | PHP version new sites use. |
+| `php_workers` | `4` | PHP processes per version (1 to 16); nginx spreads requests across them. |
+| `php_profile` | `local` | `local` (generous limits) or `production` (128M memory, 5M uploads, 30 s). |
 | `git_executable` | `git` on `PATH` | Git binary to drive. |
 | `git_protect_uncommitted` | `true` | Refuse branch switches that would overwrite local work. |
 | `git_default_branch` | `main` | Name given to a new repository's first branch. |
+
+Change `http_port` or `https_port` with `devd web ports`, not by editing the
+file: it rewrites the generated configuration, moves the web server's recorded
+port with it and restarts a running server. The other settings take effect the
+next time devd starts.
 
 Environment variables:
 

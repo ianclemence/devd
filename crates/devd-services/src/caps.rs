@@ -51,6 +51,8 @@ args! {
     InstallArgs { name: String, version: Option<String>, port: Option<u16>, force: Option<bool> }
     /// Which web server to use.
     UseWebArgs { server: String }
+    /// The ports sites are served on; an omitted one keeps its current value.
+    PortsArgs { http: Option<u16>, https: Option<u16> }
     /// An existing program folder to use.
     AdoptArgs { name: String, path: String, port: Option<u16> }
     /// A certificate to issue.
@@ -78,6 +80,9 @@ pub fn register(reg: &mut Registry) -> Result<()> {
     register_stack(reg)?;
     register_tls(reg)?;
     register_db(reg)?;
+    crate::phpcaps::register(reg)?;
+    crate::redirects::register(reg)?;
+    crate::siteconf::register(reg)?;
     Ok(())
 }
 
@@ -523,6 +528,24 @@ fn stop_plan(ctx: &Ctx, args: &NameArgs) -> Result<Plan> {
 
 // --------------------------------------------------------------- web server
 
+/// The ports `web.ports` asks for, falling back to the ones in settings.toml.
+///
+/// Read from disk, not `ctx.settings`, so a second change in the same window
+/// builds on the first rather than on the values the window started with.
+fn ports_for(ctx: &Ctx, a: &PortsArgs) -> Result<(u16, u16)> {
+    let settings = devd_core::config::Settings::load(&ctx.paths.settings_file())
+        .unwrap_or_else(|_| (*ctx.settings).clone());
+    let http = a.http.unwrap_or(settings.http_port);
+    let https = a.https.unwrap_or(settings.https_port);
+    if http == 0 || https == 0 {
+        return Err(DevdError::invalid("ports must be non-zero"));
+    }
+    if http == https {
+        return Err(DevdError::invalid("the HTTP and HTTPS ports must differ"));
+    }
+    Ok((http, https))
+}
+
 fn register_web(reg: &mut Registry) -> Result<()> {
     reg.define::<NoArgs>("web.render", "Render the web server configuration")
     .description("Rebuilds the web server's configuration (nginx.conf or httpd.conf, whichever the web_server \
@@ -568,6 +591,71 @@ fn register_web(reg: &mut Registry) -> Result<()> {
             Ok(Outcome::with_data(
                 "the configuration is valid",
                 json!({ "server": services::web::service_name(ctx), "output": output }),
+            ))
+        },
+    )?;
+
+    reg.define::<PortsArgs>("web.ports", "Serve sites on different HTTP and HTTPS ports")
+    .description("Sets the HTTP and HTTPS ports in settings.toml, rewrites the generated configuration and \
+         restarts the web server on them when it is running. A port another program is already listening on \
+         is refused. Other devd windows pick the new setting up when they restart; the server itself \
+         switches immediately. Human only.")
+    .group("web")
+    .tier(Tier::Exec)
+    .effect(Effect::Process)
+    .human_only()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |ctx, a| {
+            let (http, https) = ports_for(ctx, a)?;
+            Ok(Plan::new(
+                "web.ports",
+                format!("serve sites on HTTP {http} and HTTPS {https}"),
+            )
+            .step("write the ports to settings.toml")
+            .step(format!("rewrite {} for them", services::web::service_name(ctx)))
+            .step("restart the web server if it is running")
+            .effect("rewrites settings.toml and restarts a process")
+            .data(json!({ "http": http, "https": https })))
+        },
+        |ctx, a| {
+            let (http, https) = ports_for(ctx, a)?;
+            let file = ctx.paths.settings_file();
+            let before = devd_core::config::Settings::load(&file)?;
+            for (port, old) in [(http, before.http_port), (https, before.https_port)] {
+                if port != old && services::local_tcp_open(port) {
+                    return Err(DevdError::invalid(format!(
+                        "port {port} is already in use; stop what is on it or choose another port"
+                    )));
+                }
+            }
+            services::set_web_ports(ctx, http, https)?;
+            let path = services::web::render(ctx)?;
+            let name = services::web::service_name(ctx);
+            let running = services::status(ctx, name)?.running;
+            if running {
+                services::restart(ctx, name)?;
+            }
+            let settings = devd_core::config::Settings::load(&file)?;
+            Ok(Outcome::with_data(
+                format!(
+                    "sites are served on http://*.{}:{http} and https://*.{}:{https}{}",
+                    settings.tld,
+                    settings.tld,
+                    if running {
+                        ""
+                    } else {
+                        " (the web server is not running; `devd stack up` starts it)"
+                    }
+                ),
+                json!({
+                    "http": http,
+                    "https": https,
+                    "tld": settings.tld,
+                    "restarted": running,
+                    "config": path.display().to_string(),
+                }),
             ))
         },
     )?;

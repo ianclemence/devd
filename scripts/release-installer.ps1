@@ -59,7 +59,7 @@ $name = "devd-setup-$version.exe"
 $sums = Join-Path $repo "dist\SHA256SUMS.txt"
 $lines = @()
 if (Test-Path $sums) {
-    $lines = Get-Content $sums | Where-Object { $_ -and $_ -notmatch [regex]::Escape($name) }
+    $lines = @(Get-Content $sums | Where-Object { $_ -and $_ -notmatch [regex]::Escape($name) })
 }
 $lines += "$sha  $name"
 $lines | Out-File -Encoding ascii $sums

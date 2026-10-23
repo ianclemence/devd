@@ -3213,3 +3213,39 @@ textarea,
 .msg:has(.msg-act-on) .msg-actions { opacity: 1; }
 .msg-flash .bubble { animation: flash 1.6s var(--ease-out); }
 @keyframes flash { 0%, 30% { background: var(--accent-quiet); } 100% { background: none; } }
+
+/* ------------------------------------------------------------- operations */
+
+.ops-tabs { flex-wrap: wrap; margin-bottom: var(--s4); }
+.ops-site { display: flex; align-items: center; gap: var(--s2); margin-bottom: var(--s4); color: var(--fg-dim); font-size: var(--text-sm); }
+.ops-note { margin: var(--s3) 0 var(--s5); font-size: var(--text-sm); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: var(--s3) 0 var(--s4); }
+button.chip { background: transparent; cursor: pointer; }
+button.chip:hover { border-color: var(--line-strong); color: var(--fg); }
+button.chip.chip-on { border-color: var(--accent); color: var(--fg); }
+
+/* ------------------------------------------------------------ first-run setup */
+
+.setup-choice { display: flex; gap: var(--s3); align-items: flex-start; padding: var(--s2) 0; font-size: var(--text-sm); cursor: pointer; }
+.setup-choice input { margin-top: 3px; }
+.setup-row { display: flex; align-items: center; gap: var(--s3); margin-top: var(--s3); font-size: var(--text-sm); color: var(--fg-dim); }
+.setup-row label { min-width: 96px; }
+.setup-steps { display: flex; flex-direction: column; gap: var(--s2); }
+.setup-step { font-size: var(--text-sm); color: var(--fg-dim); }
+.setup-step.setup-running { color: var(--fg); }
+.setup-step.setup-done { color: var(--fg); }
+.setup-step.setup-failed { color: var(--danger, #e5484d); }
+.setup-mark { display: inline-block; width: 16px; text-align: center; }
+
+/* ---------------------------------------------------- one name, once */
+
+.crumbs:empty { display: none; }
+/* A page whose title only repeats the open tab keeps its title for screen readers, draws it once (in the tab),
+   and keeps its buttons where they were. With no buttons the head disappears altogether. */
+.page-head.dup .page-title { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.page-head.dup { justify-content: flex-end; }
+.page-head.dup:not(:has(.page-actions > *)) { display: none; }
+
+/* The first section after the site picker sits close to it; the larger gap is for sections that follow others. */
+.ops-site + .ui-head, .ops-site + .notice { margin-top: var(--s3); }
+.ops-site { margin-bottom: var(--s2); }

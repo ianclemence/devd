@@ -319,3 +319,18 @@ fn every_helper_the_script_calls_is_defined() {
         assert!(!used || defined, "`{name}` is called but never defined");
     }
 }
+
+#[test]
+fn the_script_is_valid_javascript() {
+    // A string escape lost in an edit left the whole window blank while every structural check passed. When Node is
+    // installed it parses the file; on a machine without it the check says so instead of passing quietly.
+    let dir = std::env::temp_dir().join(format!("devd-ui-parse-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("app.js");
+    std::fs::write(&file, APP).unwrap();
+    match std::process::Command::new("node").arg("--check").arg(&file).output() {
+        Ok(out) => assert!(out.status.success(), "app.js does not parse:\n{}", String::from_utf8_lossy(&out.stderr)),
+        Err(_) => eprintln!("node is not installed: app.js was not parsed"),
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -65,6 +65,28 @@ reconfigured.
   on the release, so everything but Windows starts on 8080/8443. Sites are served
   at `https://name.test:8443`.
 
+## When Windows has reserved a port
+
+Windows gives blocks of ports to Hyper-V and to the Windows NAT driver (WinNAT)
+at boot, and those blocks can cover a port a local stack already uses. MariaDB's
+3306 is the usual victim: the server refuses to start with
+
+```text
+[ERROR] Can't start server: Bind on TCP/IP port. Got error: 10013
+```
+
+while nothing is listening and `devd doctor` says the port is free. A reservation
+is not a listener, so neither sees it. `netsh` does:
+
+```powershell
+netsh int ipv4 show excludedportrange protocol=tcp
+```
+
+`scripts\fix-port-reservation.ps1 -Port 3306` stops and starts WinNAT, which
+releases the dynamic reservations until the next boot. It asks for administrator
+rights itself. The reservations return after a reboot, often in different
+ranges, so the script is something to run again rather than a fix applied once.
+
 ## What has been verified, and what has not
 
 | | State |

@@ -55,6 +55,7 @@ pub fn run() {
         }
     };
     boot.agents.resume(&boot.paths);
+    devd_bootstrap::start_ops(&boot.paths, &boot.store, &boot.settings, &boot.events);
     if let Err(e) = run_with(boot) {
         startup_log(&format!("window/backend failed: {e}"));
         show_error(format!("devd could not open its window.\n\n{e}"));

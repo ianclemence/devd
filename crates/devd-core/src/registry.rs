@@ -300,6 +300,7 @@ const SECRET_KEY_MARKERS: &[&str] = &[
     "passwd",
     "secret",
     "token",
+    "app_key",
     "api_key",
     "apikey",
     "private_key",

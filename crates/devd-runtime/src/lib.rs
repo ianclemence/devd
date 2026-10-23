@@ -25,6 +25,7 @@
 pub mod caps;
 pub mod catalogue;
 pub mod php;
+pub mod phpconf;
 pub mod system;
 
 use std::path::PathBuf;
@@ -246,6 +247,8 @@ pub fn install(
     let verified_version = match kind {
         "php" => {
             let setup = php::configure_and_verify(&dest, &ctx.paths.logs(), &chosen.version)?;
+            // A new PHP starts with the limits profile the machine is set to.
+            phpconf::apply_profile(&dest.join("php.ini"), &persisted_settings(ctx).php_profile)?;
             enabled = setup.enabled;
             disabled = setup.disabled;
             warnings.extend(setup.info.warnings);

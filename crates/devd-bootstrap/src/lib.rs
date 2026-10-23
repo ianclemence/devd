@@ -57,6 +57,20 @@ impl Agents {
     }
 }
 
+/// Start the loop that runs cron jobs, in this process, if no other devd process already runs it.
+/// Only a long-lived command calls this (the application window, `devd ui`, `devd serve`): a
+/// one-shot command must not start every due job. Returns whether this process runs them.
+pub fn start_ops(paths: &Paths, store: &Arc<Store>, settings: &Arc<Settings>, events: &EventBus) -> bool {
+    devd_ops::runner::start(devd_core::capability::Ctx {
+        store: store.clone(),
+        paths: Arc::new(paths.clone()),
+        settings: settings.clone(),
+        events: events.clone(),
+        actor: devd_core::capability::Actor::system(),
+        dry_run: false,
+    })
+}
+
 impl Bootstrap {
     /// Assemble from the environment.
     pub fn discover() -> Result<Self> {
@@ -83,6 +97,7 @@ impl Bootstrap {
         devd_sites::caps::register(&mut registry)?;
         devd_workspace::caps::register(&mut registry, workspace.clone())?;
         devd_stacks::caps::register(&mut registry)?;
+        devd_ops::caps::register(&mut registry)?;
 
         // The built-in agent needs the shared store, settings and event bus, and
         // - once it exists - the registry it acts through.

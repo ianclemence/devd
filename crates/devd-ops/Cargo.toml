@@ -1,0 +1,23 @@
+[package]
+name = "devd-ops"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "What Ploi shows for a server, for a local one: environment files, cron jobs, queue workers, redirects, logs, deploys, notifications and Ploi itself."
+
+[dependencies]
+devd-core = { path = "../devd-core" }
+devd-runtime = { path = "../devd-runtime" }
+devd-services = { path = "../devd-services" }
+devd-sites = { path = "../devd-sites" }
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+ureq.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

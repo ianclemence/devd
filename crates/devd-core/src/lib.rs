@@ -25,6 +25,7 @@ pub mod repair;
 pub mod schedule;
 pub mod state;
 pub mod store_ai;
+pub mod store_ops;
 pub mod store_pins;
 pub mod store_schedule;
 pub mod store_team;

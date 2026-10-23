@@ -16,6 +16,7 @@ devd-stacks = { path = "../devd-stacks" }
 devd-agent = { path = "../devd-agent" }
 devd-services = { path = "../devd-services" }
 devd-sites = { path = "../devd-sites" }
+devd-ops = { path = "../devd-ops" }
 devd-workspace = { path = "../devd-workspace" }
 
 serde = { workspace = true }

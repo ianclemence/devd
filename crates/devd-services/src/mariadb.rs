@@ -291,7 +291,7 @@ fn bootstrap(ctx: &Ctx, port: u16, password: Option<&str>) -> Result<()> {
 /// The password reaches the client through `MYSQL_PWD` rather than `argv`, so it
 /// is not visible to another user listing processes, and the SQL is a fixed
 /// statement built from a validated identifier.
-fn query(ctx: &Ctx, port: u16, sql: &str) -> Result<Value> {
+pub fn query(ctx: &Ctx, port: u16, sql: &str) -> Result<Value> {
     let exe = client_exe(ctx);
     if !exe.is_file() {
         return Err(DevdError::not_found(format!(

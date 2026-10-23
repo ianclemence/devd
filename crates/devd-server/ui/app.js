@@ -1106,13 +1106,13 @@
     assistant: "assistant", team: "agents",
     projects: "projects", project: "projects", create: "projects", develop: "projects",
     agents: "agents", schedules: "agents", shared: "agents", skills: "agents",
-    overview: "server", services: "server", sites: "server", toolchain: "server", runtimes: "server",
+    overview: "server", services: "server", sites: "server", operations: "server", toolchain: "server", runtimes: "server",
     preview: "server", certificates: "server", hosts: "server"
   };
   var TABS = {
     projects: [["projects", "Projects"], ["create", "New project"], ["develop", "Stacks and tasks"]],
     agents: [["agents", "Team"], ["team", "Runs"], ["schedules", "Schedules"], ["skills", "Skills"], ["shared", "Notes"]],
-    server: [["overview", "Overview"], ["services", "Services"], ["sites", "Sites"], ["toolchain", "Tools"], ["runtimes", "Runtimes"], ["preview", "Preview"], ["certificates", "Certificates"], ["hosts", "Hosts"]]
+    server: [["overview", "Overview"], ["services", "Services"], ["sites", "Sites"], ["operations", "Operations"], ["toolchain", "Tools"], ["runtimes", "Runtimes"], ["preview", "Preview"], ["certificates", "Certificates"], ["hosts", "Hosts"]]
   };
   var AREA_HOME = { assistant: "assistant", projects: "projects", agents: "agents", server: "overview" };
 
@@ -1135,9 +1135,59 @@
     activity: "i-clock", system: "i-check-circle", capabilities: "i-code"
   };
 
+  // ------------------------------------------------- the PHP processes are one thing
+  //
+  // php-cgi answers one request at a time, so each PHP version runs as a small pool: php-cgi-8.4,
+  // php-cgi-8.4-2 and so on. To a person that is "PHP 8.4", running or not, so the screens show one row
+  // for the pool and count it once.
+
+  function phpPoolOf(name) {
+    var m = /^php-cgi-(\d+\.\d+)(-alt)?(?:-(\d+))?$/.exec(name || "");
+    return m ? { series: m[1], alt: !!m[2] } : null;
+  }
+
+  /* The services as the person sees them: each ordinary service, and one unit per PHP pool. */
+  function serviceUnits(rows) {
+    var units = [], groups = {};
+    (rows || []).forEach(function (r) {
+      var pool = phpPoolOf(r.name);
+      if (!pool) { units.push({ row: r, running: !!r.running }); return; }
+      var key = pool.series + (pool.alt ? "-alt" : "");
+      if (!groups[key]) { groups[key] = { php: pool, rows: [] }; units.push(groups[key]); }
+      groups[key].rows.push(r);
+    });
+    units.forEach(function (u) { if (u.rows) u.running = u.rows.length > 0 && u.rows.every(function (r) { return r.running; }); });
+    return units;
+  }
+
+  function serviceCounts(rows) {
+    var units = serviceUnits(rows);
+    return { total: units.length, up: units.filter(function (u) { return u.running; }).length };
+  }
+
+  function phpUnitRow(u, compact) {
+    var n = u.rows.length;
+    var up = u.rows.filter(function (r) { return r.running; }).length;
+    var ports = u.rows.map(function (r) { return r.port; }).filter(Boolean).join(", ");
+    var tag = (u.php.alt ? "other limits profile · " : "") + n + (n === 1 ? " worker" : " workers");
+    var series = attr(u.php.series);
+    return uiRow({
+      dot: up === n ? "ok" : up ? "warn" : "off",
+      title: brandImg("php-cgi", "brand-dot") + "PHP " + esc(u.php.series) + ' <span class="ui-quiet" style="display:inline;padding:0">' + esc(tag) + "</span>",
+      sub: esc((up === n ? "running" : up ? up + " of " + n + " running" : "stopped") + (compact || !ports ? "" : " · ports " + ports)),
+      actions: (up
+        ? '<button type="button" class="btn btn-mini" data-action="php-pool" data-do="stop" data-series="' + series + '">Stop</button>' +
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="php-pool" data-do="restart" data-series="' + series + '">Restart</button>'
+        : '<button type="button" class="btn btn-mini btn-primary" data-action="php-pool" data-do="start" data-series="' + series + '">Start</button>') +
+        (compact ? "" : '<button type="button" class="btn btn-mini btn-ghost" data-action="service-logs" data-name="' + attr(u.rows[0].name) + '">Logs</button>'),
+      hover: !compact
+    });
+  }
+
   function rail() {
     var server = state.server;
-    var running = server.services.filter(function (s) { return s.running; }).length;
+    var counts = serviceCounts(server.services);
+    var running = counts.up;
     var attention = (AI.counts.approvals + AI.counts.questions) || null;
     var working = AI.threads ? (AI.threads.filter(function (t) { return t.state === "running"; }).length || null) : null;
     var groups = [
@@ -1153,7 +1203,7 @@
         { view: "processes", label: "Processes" }
       ] },
       { label: "Run", items: [
-        { view: "overview", label: "Server", count: server.services.length ? running + "/" + server.services.length : null }
+        { view: "overview", label: "Server", count: counts.total ? running + "/" + counts.total : null }
       ] },
       { label: "Manage", items: [
         { view: "providers", label: "Models" },
@@ -1175,41 +1225,15 @@
     }).join("");
   }
 
+  /* The path above the page, only when it says something the title and the tabs do not: a project is
+   * "Projects / name". A page's own name is already the title, and the tab, and the rail entry. */
   function crumbs() {
-    var labels = {
-      home: "Home",
-      team: "Team runs",
-      assistant: "Assistant",
-      inbox: "Inbox",
-      providers: "Models",
-      overview: "Server",
-      sites: "Sites",
-      preview: "Preview",
-      agents: "Agents",
-      studio: "Studio",
-      processes: "Processes",
-      shared: "Shared",
-      services: "Services",
-      runtimes: "Runtimes",
-      certificates: "Certificates",
-      hosts: "Hosts",
-      projects: "Projects",
-      create: "Create a project",
-      develop: "Develop",
-      toolchain: "Tools",
-      capabilities: "API and tools",
-      activity: "Activity",
-      system: "Diagnostics"
-    };
-    var parts = [];
+    var html = "";
     if (state.view === "project" && state.project) {
-      parts.push('<button type="button" data-action="nav" data-view="projects">Projects</button>');
-      parts.push('<span class="sep">/</span>');
-      parts.push("<span>" + esc(state.project.name) + "</span>");
-    } else {
-      parts.push("<span>" + esc(labels[state.view] || state.view) + "</span>");
+      html = '<button type="button" data-action="nav" data-view="projects">Projects</button>' +
+        '<span class="sep">/</span><span>' + esc(state.project.name) + "</span>";
     }
-    el("crumbs").innerHTML = parts.join("");
+    el("crumbs").innerHTML = html;
   }
 
   function statusbar() {
@@ -1224,8 +1248,9 @@
       if (st.behind) left.push(st.behind + " behind");
     }
     if (state.server.loaded) {
-      var total = state.server.services.length;
-      var up = state.server.services.filter(function (s) { return s.running; }).length;
+      var counts = serviceCounts(state.server.services);
+      var total = counts.total;
+      var up = counts.up;
       if (total) left.push(up + "/" + total + " services up");
     }
     var chats = AI.threads ? AI.threads.filter(function (t) { return t.state === "running"; }).length : 0;
@@ -1240,7 +1265,7 @@
 
   // -------------------------------------------------------------------- server
 
-  var SERVER_VIEWS = ["overview", "sites", "preview", "services", "toolchain", "runtimes", "certificates", "hosts"];
+  var SERVER_VIEWS = ["overview", "sites", "operations", "preview", "services", "toolchain", "runtimes", "certificates", "hosts"];
 
   var KNOWN_SERVICES = [
     { name: "nginx", label: "nginx", note: "web server" },
@@ -1267,10 +1292,19 @@
     return '<h1 class="page-title">' + esc(text) + "</h1>";
   }
 
+  /* The label of the tab that is open, when this screen is one of an area's tabs. */
+  function activeTabLabel() {
+    var tabs = TABS[AREA[state.view]] || [];
+    for (var i = 0; i < tabs.length; i++) if (tabs[i][0] === state.view) return tabs[i][1];
+    return "";
+  }
+
   function page(title, sub, actions, body) {
+    // A title that only repeats the open tab stays for screen readers and is not drawn twice.
+    var dup = activeTabLabel() === title;
     return (
       '<div class="page">' +
-      '<div class="page-head"><div>' +
+      '<div class="page-head' + (dup ? " dup" : "") + '"><div>' +
       pageTitle(title) + "</div>" +
       '<div class="page-actions">' + (actions || "") + "</div>" +
       "</div>" + body + "</div>"
@@ -1459,8 +1493,9 @@
   function renderOverview() {
     if (state.view !== "overview") return;
     var s = state.server;
-    var total = s.services.length;
-    var up = s.services.filter(function (x) { return x.running; }).length;
+    var counts = serviceCounts(s.services);
+    var total = counts.total;
+    var up = counts.up;
     var healthy = total > 0 && up === total;
     var hosts = s.hosts || {};
     var pending = (hosts.adding || []).length + (hosts.removing || []).length;
@@ -1471,7 +1506,7 @@
       "<span>" + (total ? (healthy ? "All " + total + " services are running" : up + " of " + total + " services running") : "Nothing is installed yet") + (ports ? " · " + esc(ports) : "") + "</span></div>";
     var actions = total
       ? '<button type="button" class="btn" data-action="stack-down"' + (up ? "" : " disabled") + '>Stop all</button><button type="button" class="btn btn-primary" data-action="stack-up">Start all</button>'
-      : '<button type="button" class="btn btn-primary" data-action="nav" data-view="services">Install services</button>';
+      : '<button type="button" class="btn btn-primary" data-action="setup-open">Set up devd</button>';
 
     var notices = [];
     if (pending) {
@@ -1497,7 +1532,9 @@
         hover: true
       });
     });
-    var services = s.services.map(function (svc) {
+    var services = serviceUnits(s.services).map(function (unit) {
+      if (unit.rows) return phpUnitRow(unit, true);
+      var svc = unit.row;
       return uiRow({
         dot: svc.running ? "ok" : "off",
         title: brandImg(svc.kind || svc.name, "brand-dot") + esc(svc.name),
@@ -1511,9 +1548,9 @@
     el("main").innerHTML = page("Server", "", actions,
       head + (notices.length ? uiList(notices) : "") +
       uiHead("Sites", s.sites.length || null, '<button type="button" class="btn btn-mini btn-ghost" data-action="new-site">New site</button>') +
-      (sites.length ? uiList(sites) : uiEmpty("No sites yet", "A site is a folder, a hostname and a certificate.", '<button type="button" class="btn btn-primary" data-action="new-site">Create a site</button>')) +
+      (sites.length ? uiList(sites.slice(0, 6)) + (sites.length > 6 ? '<div class="ui-more"><button type="button" data-action="nav" data-view="sites">All ' + sites.length + " sites</button></div>" : "") : uiEmpty("No sites yet", "A site is a folder, a hostname and a certificate.", '<button type="button" class="btn btn-primary" data-action="new-site">Create a site</button>')) +
       uiHead("Services", total ? up + " of " + total : null) +
-      (services.length ? uiList(services) : uiEmpty("No services installed", "devd installs PHP, a web server and MariaDB from their makers.", '<button type="button" class="btn btn-primary" data-action="nav" data-view="services">Install services</button>')) +
+      (services.length ? uiList(services) : uiEmpty("No services installed", "devd installs PHP, a web server and MariaDB from their makers.", '<button type="button" class="btn btn-primary" data-action="setup-open">Set up devd</button>')) +
       '<div class="ui-more">Also: <button type="button" data-action="nav" data-view="toolchain">Tools</button> · <button type="button" data-action="nav" data-view="runtimes">Runtimes</button> · <button type="button" data-action="nav" data-view="certificates">Certificates</button> · <button type="button" data-action="nav" data-view="hosts">Hosts</button> · <button type="button" data-action="nav" data-view="preview">Preview</button></div>');
   }
 
@@ -1563,6 +1600,552 @@
     el("main").innerHTML = page("Sites", "", '<button type="button" class="btn btn-primary" data-action="new-site">New site</button>', body);
   }
 
+  // --------------------------------------------------------------- operations
+  //
+  // What a server panel shows for a site, for the machine you develop on: the .env, the
+  // scheduler, queue workers, redirects, logs, deploys, alerts, PHP and Ploi. Every control
+  // calls a capability, so an agent can do the same thing and the same approvals apply.
+
+  var OPS = { site: "", tab: "env", data: {}, loading: false, error: "" };
+  var OPS_TABS = [["env", "Environment"], ["cron", "Scheduler"], ["queue", "Workers"], ["redirects", "Redirects"], ["logs", "Logs"], ["laravel", "Laravel"], ["nginx", "Nginx"], ["deploy", "Deploy"], ["db", "Databases"], ["health", "Health"], ["servers", "Servers"], ["keys", "SSH keys"], ["notify", "Alerts"], ["php", "PHP"], ["ploi", "Ploi"]];
+  var OPS_SITELESS = { notify: 1, php: 1, ploi: 1, db: 1, health: 1, servers: 1, keys: 1 };
+
+  function opsSiteNames() {
+    return (state.server.sites || []).map(function (r) { return r.site && r.site.name; }).filter(Boolean);
+  }
+
+  function opsEnsureSite() {
+    var names = opsSiteNames();
+    if (!OPS.site || names.indexOf(OPS.site) < 0) OPS.site = names[0] || "";
+  }
+
+  function opsLoad(tab) {
+    tab = tab || OPS.tab;
+    opsEnsureSite();
+    OPS.loading = true;
+    OPS.error = "";
+    var s = { site: OPS.site };
+    var jobs;
+    if (!OPS_SITELESS[tab] && !OPS.site) { OPS.loading = false; render(); return Promise.resolve(); }
+    if (tab === "env") jobs = [read("env.get", s)];
+    else if (tab === "cron") jobs = [read("cron.list", s)];
+    else if (tab === "queue") jobs = [read("queue.list", s)];
+    else if (tab === "redirects") jobs = [read("redirects.list", s)];
+    else if (tab === "logs") jobs = [read("logs.laravel", { site: OPS.site, limit: 40, levels: OPS.levels || [] }), read("logs.site", { site: OPS.site, kind: OPS.logKind || "nginx_error", lines: 80 })];
+    else if (tab === "deploy") jobs = [read("deploy.history", { site: OPS.site, limit: 15 }), read("deploy.script", s), read("repo.status", s), read("deploy.check", s), read("remote.links", s), read("deploy.vars", s), read("deploy.scheduled", s), read("deploy.staging", {})];
+    else if (tab === "laravel") jobs = [read("laravel.status", s)];
+    else if (tab === "nginx") jobs = [read("nginx.site_show", s), read("nginx.presets", {})];
+    else if (tab === "db") jobs = [read("db.users", {}), read("backup.list", {})];
+    else if (tab === "health") jobs = [read("health.list", {}), read("monitor.stats", {})];
+    else if (tab === "servers") jobs = [read("server.list", {}), read("remote.links", {})];
+    else if (tab === "keys") jobs = [read("ssh.keys", {})];
+    else if (tab === "notify") jobs = [read("notify.list", {})];
+    else if (tab === "php") jobs = [read("php.settings", {}), read("php.extensions", {})];
+    else jobs = [read("ploi.status", {})];
+    return Promise.all(jobs).then(function (res) {
+      OPS.data[tab] = res;
+      if (tab === "ploi" && res[0] && res[0].connected) {
+        return read("ploi.servers", {}).then(function (srv) { OPS.data.ploiServers = srv && srv.servers || []; });
+      }
+      return null;
+    }).catch(function (e) {
+      OPS.error = e.message;
+    }).then(function () {
+      OPS.loading = false;
+      if (state.view === "operations") render();
+    });
+  }
+
+  function opsAct(id, args, after) {
+    return run(id, args).then(function (o) {
+      if (o && after) after(o);
+      return o ? opsLoad(OPS.tab) : null;
+    });
+  }
+
+  function opsTabs() {
+    return '<div class="segmented ops-tabs">' + OPS_TABS.map(function (t) {
+      return '<button type="button" class="seg' + (OPS.tab === t[0] ? " active" : "") + '" data-action="ops-tab" data-tab="' + t[0] + '">' + esc(t[1]) + "</button>";
+    }).join("") + "</div>";
+  }
+
+  function opsSitePicker() {
+    var names = opsSiteNames();
+    if (!names.length || OPS_SITELESS[OPS.tab]) return "";
+    return '<div class="ops-site"><label for="ops-site">Site</label><select id="ops-site" class="select compact" data-change="ops-site">' +
+      names.map(function (n) { return '<option value="' + attr(n) + '"' + (n === OPS.site ? " selected" : "") + ">" + esc(n) + "</option>"; }).join("") + "</select></div>";
+  }
+
+  function opsBody() {
+    if (OPS.error) return '<div class="notice notice-bad">' + esc(OPS.error) + "</div>";
+    var d = OPS.data[OPS.tab];
+    if (!d) return '<div class="loading"></div>';
+    var fn = { env: opsEnv, cron: opsCron, queue: opsQueue, redirects: opsRedirects, logs: opsLogs, laravel: opsLaravel, nginx: opsNginx, deploy: opsDeploy, db: opsDb, health: opsHealth, servers: opsServers, keys: opsKeys, notify: opsNotify, php: opsPhp, ploi: opsPloi }[OPS.tab];
+    return fn(d);
+  }
+
+  function renderOperations() {
+    if (state.view !== "operations") return;
+    opsEnsureSite();
+    var needSite = !OPS_SITELESS[OPS.tab] && !OPS.site;
+    var body = opsTabs() + opsSitePicker() +
+      (needSite ? uiEmpty("No sites yet", "Create a site first; operations belong to a site.", '<button type="button" class="btn btn-primary" data-action="nav" data-view="sites">Create a site</button>') : opsBody());
+    el("main").innerHTML = page("Operations", "", "", body);
+    if (!OPS.data[OPS.tab] && !OPS.loading && !needSite && !OPS.error) opsLoad(OPS.tab);
+  }
+
+  // ------------------------------------------------------------- environment
+
+  function opsEnv(d) {
+    var e = d[0] || {};
+    var vars = e.vars || {};
+    var names = Object.keys(vars);
+    var rows = names.map(function (k) {
+      var hidden = /^\[hidden/.test(vars[k]);
+      return uiRow({
+        title: '<span class="mono">' + esc(k) + "</span>",
+        sub: hidden ? '<span class="dim">' + esc(vars[k]) + "</span>" : '<span class="mono">' + esc(vars[k] === "" ? "(empty)" : vars[k]) + "</span>",
+        wrap: true, hover: true,
+        actions: '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-env-set" data-name="' + attr(k) + '">Change</button>' +
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-env-unset" data-name="' + attr(k) + '">Remove</button>'
+      });
+    });
+    var actions = '<button type="button" class="btn btn-mini btn-primary" data-action="ops-env-set">Add variable</button>' +
+      '<button type="button" class="btn btn-mini" data-action="ops-env-diff">Compare…</button>' +
+      '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-env-reveal">Show secrets</button>';
+    return uiHead(".env", names.length, actions) +
+      (e.exists ? "" : '<div class="notice notice-warn">This project has no .env file yet. Adding a variable creates one.</div>') +
+      (names.length ? uiList(rows) : uiEmpty("No variables", "")) +
+      '<p class="dim ops-note">Secrets are hidden. Every change keeps the old file as <code>.env.devd-backup-&lt;time&gt;</code>.</p>';
+  }
+
+  // --------------------------------------------------------------- scheduler
+
+  function opsCron(d) {
+    var jobs = (d[0] && d[0].jobs) || [];
+    var rows = jobs.map(function (j) {
+      var ok = j.last_exit === null || j.last_exit === undefined ? "off" : j.last_exit === 0 ? "ok" : "bad";
+      return uiRow({
+        dot: j.enabled ? ok : "off",
+        title: '<span class="mono">' + esc(j.schedule) + "</span> &nbsp;" + esc(j.command),
+        sub: (j.enabled ? "next " + esc(j.next_run_at ? shortTime(j.next_run_at) : "never") : "off") + (j.last_run_at ? " · last ran " + esc(shortTime(j.last_run_at)) + " (exit " + j.last_exit + ")" : " · has not run"),
+        hover: true,
+        actions: '<button type="button" class="btn btn-mini" data-action="ops-cron-run" data-id="' + attr(j.id) + '">Run now</button>' +
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-cron-log" data-id="' + attr(j.id) + '" data-log="' + attr(j.log) + '">Log</button>' +
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-cron-toggle" data-id="' + attr(j.id) + '" data-on="' + (j.enabled ? "0" : "1") + '">' + (j.enabled ? "Turn off" : "Turn on") + "</button>" +
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-cron-remove" data-id="' + attr(j.id) + '">Remove</button>'
+      });
+    });
+    var actions = '<button type="button" class="btn btn-mini btn-primary" data-action="ops-cron-add">Add job</button>' +
+      '<button type="button" class="btn btn-mini" data-action="ops-cron-laravel">Run the Laravel scheduler</button>';
+    return uiHead("Cron jobs", jobs.length, actions) +
+      (jobs.length ? uiList(rows) : uiEmpty("No cron jobs", "A job runs a command on a schedule in this site's folder, with its PHP. Laravel needs one job: its scheduler, every minute.")) +
+      '<p class="dim ops-note">Jobs run while devd is open. One that was due while it was closed is skipped, not run late.</p>';
+  }
+
+  // ----------------------------------------------------------------- workers
+
+  function opsQueue(d) {
+    var list = (d[0] && d[0].workers) || [];
+    var rows = list.map(function (w) {
+      return uiRow({
+        dot: w.running === w.processes ? "ok" : w.running ? "warn" : "off",
+        title: esc(w.name) + ' <span class="pill">' + w.running + "/" + w.processes + " running</span>",
+        sub: '<span class="mono">' + esc(w.command) + "</span>", wrap: true, hover: true,
+        actions: '<button type="button" class="btn btn-mini" data-action="ops-queue" data-do="' + (w.running ? "restart" : "start") + '" data-id="' + attr(w.id) + '">' + (w.running ? "Restart" : "Start") + "</button>" +
+          (w.running ? '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-queue" data-do="stop" data-id="' + attr(w.id) + '">Stop</button>' : "") +
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-queue-log" data-id="' + attr(w.id) + '">Log</button>' +
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-queue-remove" data-id="' + attr(w.id) + '">Remove</button>'
+      });
+    });
+    var actions = '<button type="button" class="btn btn-mini btn-primary" data-action="ops-queue-add">Add queue worker</button>' +
+      '<button type="button" class="btn btn-mini" data-action="ops-queue-add-command">Add a program</button>';
+    return uiHead("Workers", list.length, actions) +
+      (list.length ? uiList(rows) : uiEmpty("No workers", "A queue worker runs `php artisan queue:work` with this site's PHP and is restarted if it stops.")) +
+      '<p class="dim ops-note">Restart a worker after a deploy so it runs the new code.</p>';
+  }
+
+  // --------------------------------------------------------------- redirects
+
+  function opsRedirects(d) {
+    var list = (d[0] && d[0].redirects) || [];
+    var rows = list.map(function (r) {
+      return uiRow({
+        title: '<span class="mono">' + esc(r.from) + "</span> → <span class=\"mono\">" + esc(r.to) + "</span>",
+        sub: r.status === 301 || r.status === 308 ? "permanent (" + r.status + ")" : "temporary (" + r.status + ")", hover: true,
+        actions: '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-redirect-remove" data-id="' + attr(r.id) + '">Remove</button>'
+      });
+    });
+    return uiHead("Redirects", list.length, '<button type="button" class="btn btn-mini btn-primary" data-action="ops-redirect-add">Add redirect</button>') +
+      (list.length ? uiList(rows) : uiEmpty("No redirects", "Send a path to another path or an https address. `/blog/*` covers everything under /blog/.")) +
+      '<p class="dim ops-note">Redirects are written into the web server\'s configuration, which is reloaded.</p>';
+  }
+
+  // -------------------------------------------------------------------- logs
+
+  function opsLogs(d) {
+    var lv = d[0] || {}, site = d[1] || {};
+    var levels = ["ERROR", "WARNING", "INFO", "DEBUG"];
+    var active = OPS.levels || [];
+    var chips = '<div class="segmented">' + levels.map(function (l) {
+      return '<button type="button" class="seg' + (active.indexOf(l) >= 0 ? " active" : "") + '" data-action="ops-level" data-level="' + l + '">' + l + "</button>";
+    }).join("") + "</div>";
+    var entries = (lv.entries || []).map(function (e) {
+      var kind = /ERROR|CRITICAL|ALERT|EMERGENCY/.test(e.level) ? "bad" : e.level === "WARNING" ? "warn" : "off";
+      return uiRow({ dot: kind, title: esc(e.message), sub: esc(e.at) + " · " + esc(e.env + "." + e.level) + (e.origin ? " · " + esc(e.origin) : ""), wrap: true });
+    });
+    var kinds = [["nginx_error", "Web server errors"], ["nginx_access", "Web server access"], ["php", "PHP"]];
+    var picker = '<select class="select compact" data-change="ops-logkind">' + kinds.map(function (k) { return '<option value="' + k[0] + '"' + ((OPS.logKind || "nginx_error") === k[0] ? " selected" : "") + ">" + k[1] + "</option>"; }).join("") + "</select>";
+    return uiHead("Laravel log", lv.matching, chips + '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-log-clear">Empty</button>') +
+      (lv.file ? (entries.length ? uiList(entries) : uiEmpty("No entries", "Nothing matches.")) : uiEmpty("No Laravel log", lv.note || "")) +
+      uiHead("Server logs", null, picker) +
+      '<pre class="log-block">' + esc((site.lines || []).join("\n") || (site.exists ? "The log is empty." : "No log yet: the site has not been requested.")) + "</pre>";
+  }
+
+  // ------------------------------------------------------------------ deploy
+
+  function opsDeploy(d) {
+    var hist = (d[0] && d[0].deployments) || [], script = d[1] || {}, repo = d[2] || {}, check = d[3] || {};
+    var warn = (check.warnings || []).map(function (w) { return '<div class="notice notice-warn">' + esc(w) + "</div>"; }).join("");
+    if (warn) warn += '<div class="inline" style="margin:0 0 12px"><button type="button" class="btn btn-mini" data-action="ops-limits">' + (check.server_assumed ? "Tell devd what your server allows" : "Change the server limits") + '</button><button type="button" class="btn btn-mini btn-ghost" data-action="ops-site-profile-go" data-profile="production">Try this site with the server\'s limits</button></div>';
+    var rows = hist.map(function (x) {
+      var ok = x.state === "success" ? "ok" : x.state === "failed" ? "bad" : "warn";
+      return uiRow({
+        dot: ok, title: esc(x.message || (x.state === "running" ? "Deploying…" : x.state)) + ' <span class="pill">' + esc(x.trigger) + "</span>",
+        sub: esc(shortTime(x.started_at)) + (x.seconds ? " · " + Math.round(x.seconds) + "s" : "") + (x.commit_after ? " · " + esc(x.commit_after.slice(0, 8)) : "") + (x.failed_line ? " · failed at " + esc(x.failed_line) : ""),
+        wrap: true, hover: true,
+        actions: '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-deploy-log" data-id="' + attr(x.id) + '">Output</button>' +
+          (x.state === "success" && x.commit_after ? '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-rollback" data-id="' + attr(x.id) + '">Roll back to this</button>' : "")
+      });
+    });
+    var link = repo.linked && repo.link ? "Follows " + esc(repo.link.branch) + (repo.link.deploy_on_push ? " · push-to-deploy on" : "") : repo.is_repository ? "Not linked to a branch yet" : "Not a Git repository";
+    var repoRow = uiRow({
+      dot: repo.linked ? "ok" : "off", title: "Repository",
+      sub: link + (repo.head ? " · at " + esc(String(repo.head).slice(0, 8)) : "") + (repo.uncommitted_files ? " · " + repo.uncommitted_files + " uncommitted" : ""),
+      actions: (repo.is_repository ? '<button type="button" class="btn btn-mini" data-action="ops-repo-link">' + (repo.linked ? "Change" : "Link") + "</button>" : "") +
+        (repo.linked ? '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-hook" data-on="' + (repo.link && repo.link.deploy_on_push ? "0" : "1") + '">' + (repo.link && repo.link.deploy_on_push ? "Turn push-to-deploy off" : "Turn push-to-deploy on") + "</button>" : "")
+    });
+    var head = uiHead("Deployments", hist.length, '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-script">' + (script.saved ? "Edit script" : "Deploy script") + '</button><button type="button" class="btn btn-mini btn-primary" data-action="ops-deploy">Deploy now</button>');
+    return warn + uiList([repoRow]) + opsDeployExtras(d) + head + (hist.length ? uiList(rows) : uiEmpty("No deployments yet", "Deploy runs the script: " + (script.saved ? "yours." : "the default one for this project. Open it to see or change it.")));
+  }
+
+  // ------------------------------------------------------------------ alerts
+
+  function opsNotify(d) {
+    var list = (d[0] && d[0].targets) || [];
+    var rows = list.map(function (t) {
+      return uiRow({
+        title: esc(t.channel) + (t.site ? ' <span class="pill">' + esc(t.site) + "</span>" : ""),
+        sub: esc(t.destination) + " · " + esc(t.events.join(", ")), wrap: true, hover: true,
+        actions: '<button type="button" class="btn btn-mini" data-action="ops-notify-test" data-id="' + attr(t.id) + '">Send a test</button>' +
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-notify-remove" data-id="' + attr(t.id) + '">Remove</button>'
+      });
+    });
+    return uiHead("Alerts", list.length, '<button type="button" class="btn btn-mini btn-primary" data-action="ops-notify-add">Add</button>') +
+      (list.length ? uiList(rows) : uiEmpty("Nobody is told yet", "Tell the inbox, Slack, Discord or a webhook when a deploy finishes or fails, or a cron job fails.")) ;
+  }
+
+  // --------------------------------------------------------------------- php
+
+  function opsPhp(d) {
+    var s = d[0] || {}, x = d[1] || {};
+    var versions = (s.versions || []).map(function (v) {
+      var vals = v.values || {};
+      var keys = ["memory_limit", "upload_max_filesize", "post_max_size", "max_execution_time"];
+      return uiRow({
+        title: "PHP " + esc(v.version), sub: keys.map(function (k) { return esc(k) + " " + esc(vals[k] || "default"); }).join(" · "), wrap: true,
+        actions: '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-php-value" data-series="' + attr(v.series) + '">Set a value</button>'
+      });
+    });
+    var profile = '<select class="select compact" data-change="ops-php-profile"><option value="local"' + (s.profile === "local" ? " selected" : "") + '>Local (generous)</option><option value="production"' + (s.profile === "production" ? " selected" : "") + ">Production (like a Ploi server)</option></select>";
+    var workers = '<select class="select compact" data-change="ops-php-workers">' + [1, 2, 4, 6, 8, 12, 16].map(function (n) { return '<option value="' + n + '"' + (s.workers === n ? " selected" : "") + ">" + n + (n === 1 ? " worker" : " workers") + "</option>"; }).join("") + "</select>";
+    var exts = (x.extensions || []).filter(function (e) { return e.shipped; }).map(function (e) {
+      return '<button type="button" class="chip' + (e.enabled ? " chip-on" : "") + '" data-action="ops-ext" data-name="' + attr(e.name) + '" data-on="' + (e.enabled ? "0" : "1") + '" aria-pressed="' + (e.enabled ? "true" : "false") + '">' + esc(e.name) + "</button>";
+    }).join("");
+    var siteRows = (opsSiteNames() || []).map(function (n) {
+      var own = ((s.site_profiles || []).filter(function (p) { return p.site === n; })[0] || {}).profile || "";
+      return uiRow({
+        title: esc(n), sub: own ? "runs with the " + esc(own) + " limits" : "follows the machine (" + esc(s.profile) + ")", hover: true,
+        actions: '<select class="select compact" data-change="ops-site-profile" data-site="' + attr(n) + '"><option value=""' + (own ? "" : " selected") + '>Follow the machine</option><option value="local"' + (own === "local" ? " selected" : "") + '>Local limits</option><option value="production"' + (own === "production" ? " selected" : "") + ">Production limits</option></select>"
+      });
+    });
+    return uiHead("Limits", null, profile + workers) + uiList(versions) +
+      '<p class="dim ops-note">The profile sets memory, upload size and time limits for every PHP. Workers are how many PHP processes serve each version at once.</p>' +
+      uiHead("Sites", null, "") + uiList(siteRows) +
+      '<p class="dim ops-note">A site can run with the other profile (for example production limits, to try it the way your server runs it). It is then served by a second pool of PHP processes.</p>' +
+      uiHead("Extensions", (x.extensions || []).filter(function (e) { return e.enabled; }).length + " on", "") +
+      '<div class="chips">' + (exts || '<span class="dim">No PHP is installed.</span>') + "</div>" +
+      '<p class="dim ops-note">Changing a setting restarts PHP; requests in flight are dropped.</p>';
+  }
+
+  // -------------------------------------------------------------------- ploi
+
+  function opsPloi(d) {
+    var st = d[0] || {};
+    if (!st.connected) {
+      return uiHead("Ploi", null, "") +
+        uiEmpty(st.error ? "Ploi refused the token" : "Not connected", st.error || "Give devd an API token from ploi.io/profile/api-keys and it can show your servers, compare environments and deploy. Give the token only the scopes you want agents to use.",
+          '<button type="button" class="btn btn-primary" data-action="ops-ploi-connect">Connect Ploi</button>');
+    }
+    var servers = OPS.data.ploiServers || [];
+    var rows = servers.map(function (s) {
+      return uiRow({
+        dot: /active/i.test(s.status || "") ? "ok" : "warn", title: esc(s.name), sub: esc(s.ip) + " · PHP " + esc(s.php) + " · " + esc(s.sites) + " sites", hover: true,
+        actions: '<button type="button" class="btn btn-mini" data-action="ops-ploi-sites" data-server="' + attr(s.id) + '">Sites</button>'
+      });
+    });
+    var sites = (OPS.ploiSites || []).map(function (x) {
+      return uiRow({
+        dot: x.status === "active" ? "ok" : "warn", title: esc(x.domain), sub: "PHP " + esc(x.php) + " · " + esc(x.project_type || "") + (x.last_deploy_at ? " · deployed " + esc(x.last_deploy_at) : ""), hover: true,
+        actions: '<button type="button" class="btn btn-mini" data-action="ops-ploi-link" data-server="' + attr(OPS.ploiServer) + '" data-site="' + attr(x.id) + '">Link to a local site</button>' +
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-ploi-deploy" data-server="' + attr(OPS.ploiServer) + '" data-site="' + attr(x.id) + '" data-domain="' + attr(x.domain) + '">Deploy</button>'
+      });
+    });
+    var who = st.user ? esc(st.user.name || st.user.email || "") : "";
+    return uiHead("Ploi", who, '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-ploi-disconnect">Disconnect</button>') +
+      (rows.length ? uiList(rows) : uiEmpty("No servers", "")) +
+      (OPS.ploiSites ? uiHead("Sites on the server", OPS.ploiSites.length, "") + (sites.length ? uiList(sites) : uiEmpty("No sites", "")) : "") +
+      '<p class="dim ops-note">Deploying changes a live server, so devd asks you first. Link a site and `Compare…` in Environment shows how its .env differs from production.</p>';
+  }
+
+
+  // ------------------------------------------------------------ first-run setup
+  //
+  // What a first run installs is the person's choice, with what each thing is and how big it is shown
+  // before anything downloads. It runs the same capabilities `devd setup` does, one after another, so
+  // each is audited and each asks for approval where it needs it.
+
+  var SETUP_SERVICES = [
+    { name: "mariadb", label: "MariaDB", note: "the database, MySQL-compatible", size: "about 100 MB", on: true },
+    { name: "redis", label: "Redis", note: "cache, queues and sessions (Redis 8 from redis-windows)", size: "about 14 MB", on: false },
+    { name: "memcached", label: "memcached", note: "an in-memory cache", size: "about 4 MB", on: false },
+    { name: "mailpit", label: "Mailpit", note: "catches the mail your apps send", size: "about 12 MB", on: false }
+  ];
+
+  function setupForm() {
+    var svc = SETUP_SERVICES.map(function (s) {
+      return '<label class="setup-choice"><input type="checkbox" id="setup-' + s.name + '"' + (s.on ? " checked" : "") + "> <span><b>" + esc(s.label) + "</b> <span class=\"dim\">" + esc(s.size) + "</span><br><span class=\"dim\">" + esc(s.note) + "</span></span></label>";
+    }).join("");
+    return '<p class="dim">devd always installs PHP and the web server (nginx). Choose what else you want; anything can be added later from Services.</p>' +
+      '<label class="setup-choice"><input type="checkbox" checked disabled> <span><b>PHP</b> <span class="dim">about 35 MB</span><br><span class="dim">from php.net, checked against the digest it publishes</span></span></label>' +
+      '<label class="setup-choice"><input type="checkbox" checked disabled> <span><b>nginx</b> <span class="dim">about 2 MB</span><br><span class="dim">the web server that fronts every site</span></span></label>' +
+      svc +
+      '<div class="setup-row"><label for="setup-php">PHP version</label><select id="setup-php" class="select compact"><option value="latest">Latest stable</option><option value="8.4">8.4</option><option value="8.3">8.3</option><option value="8.2">8.2</option></select></div>' +
+      '<div class="setup-row"><label for="setup-profile">PHP limits</label><select id="setup-profile" class="select compact"><option value="local">Generous (local): a big import is never cut off</option><option value="production">Like a typical server (production): 128M memory, 5M uploads, 30 s</option></select></div>' +
+      '<div class="inline" style="margin-top:16px"><button type="button" class="btn btn-primary" data-action="setup-go">Install</button></div>';
+  }
+
+  function setupProgress(steps) {
+    return '<div class="setup-steps">' + steps.map(function (s) {
+      var mark = s.state === "done" ? "✓" : s.state === "failed" ? "✗" : s.state === "running" ? "…" : "·";
+      return '<div class="setup-step setup-' + s.state + '"><span class="setup-mark">' + mark + "</span> " + esc(s.label) + (s.note ? '<div class="dim">' + esc(s.note) + "</div>" : "") + "</div>";
+    }).join("") + "</div>";
+  }
+
+  function setupRun(plan) {
+    var steps = plan.map(function (p) { return { label: p.label, state: "waiting", note: "" }; });
+    function show() { uiSheet("Setting up devd", setupProgress(steps)); }
+    function next(i) {
+      if (i >= plan.length) {
+        steps.push({ label: "Done. Open Operations to look after a site, or create one.", state: "done", note: "" });
+        show();
+        return loadServer().then(render);
+      }
+      steps[i].state = "running";
+      show();
+      return plan[i].go().then(function (o) {
+        if (!o) { steps[i].state = "failed"; steps[i].note = "stopped here; nothing after it ran"; show(); return loadServer().then(render); }
+        steps[i].state = "done";
+        return next(i + 1);
+      });
+    }
+    return next(0);
+  }
+
+  /* Something already installed is a step that is already done, not an error that stops the rest. */
+  function skipIf(have, go) { return have ? Promise.resolve({ ok: true }) : go(); }
+
+  function setupStart() {
+    var chosen = SETUP_SERVICES.filter(function (s) { return checked("setup-" + s.name); });
+    var php = (el("setup-php") && el("setup-php").value) || "latest";
+    var profile = (el("setup-profile") && el("setup-profile").value) || "local";
+    var web = (state.session && state.session.settings && state.session.settings.web_server) || "nginx";
+    var plan = [
+      { label: "Install PHP " + (php === "latest" ? "(latest stable)" : php), go: function () { return skipIf((state.server.runtimes || []).some(function (r) { return r.kind === "php"; }), function () { return run("runtime.install", { kind: "php", version: php }); }); } },
+      { label: "Install " + web, go: function () { return skipIf(managedService(web), function () { return run("service.install", { name: web }); }); } }
+    ];
+    chosen.forEach(function (s) {
+      plan.push({ label: "Install " + s.label, go: function () { return skipIf(managedService(s.name), function () { return run("service.install", { name: s.name }); }); } });
+    });
+    if (profile !== "local") plan.push({ label: "Use the " + profile + " PHP limits", go: function () { return run("php.configure", { profile: profile }); } });
+    plan.push({ label: "Start everything", go: function () { return run("stack.up", {}); } });
+    if (!(state.server.sites || []).length) plan.push({ label: "Create the first site", go: function () { return run("site.create", { name: "welcome", host: "localhost" }); } });
+    chosen.filter(function (s) { return s.name !== "mariadb"; }).forEach(function (s) {
+      plan.push({ label: "Start " + s.label, go: function () { return run("service.start", { name: s.name }); } });
+    });
+    return setupRun(plan);
+  }
+
+
+  // ------------------------------------------------- operations: laravel, databases, nginx, health, servers, keys
+
+  function opsSheetText(title, text) {
+    uiSheet(title, '<pre class="log-block">' + esc(text) + "</pre>");
+  }
+
+  function opsLaravel(d) {
+    var s = d[0] || {};
+    if (!s.is_laravel) return uiEmpty("Not a Laravel project", "This folder has no artisan file, so there is nothing to run here.");
+    var debugWarn = s.app_debug === "true" && s.app_env === "production";
+    var rows = [
+      uiRow({
+        dot: s.maintenance ? "warn" : "ok", title: s.maintenance ? "In maintenance mode" : "Up",
+        sub: s.maintenance ? (s.maintenance_bypass_path ? "bypass path " + esc(s.maintenance_bypass_path) : "visitors see the maintenance page") : "visitors see the site",
+        actions: s.maintenance ? '<button type="button" class="btn btn-mini btn-primary" data-action="ops-lv-up">Bring it back</button>' : '<button type="button" class="btn btn-mini" data-action="ops-lv-down">Maintenance mode</button>'
+      }),
+      uiRow({
+        dot: s.storage_linked ? "ok" : "warn", title: "Storage link",
+        sub: s.storage_linked ? "public/storage points at storage/app/public" : "uploaded files are not served until it is linked",
+        actions: s.storage_linked ? "" : '<button type="button" class="btn btn-mini btn-primary" data-action="ops-lv-storage">Link storage</button>'
+      }),
+      uiRow({
+        dot: debugWarn ? "bad" : "off", title: "Environment",
+        sub: "APP_ENV " + esc(s.app_env || "not set") + " · APP_DEBUG " + esc(s.app_debug || "not set") + (debugWarn ? " · debug is on in production" : ""),
+        actions: '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-tab" data-tab="env">Open .env</button>'
+      }),
+      uiRow({
+        dot: "off", title: "Caches",
+        sub: (s.config_cached ? "configuration cached" : "configuration not cached") + " · " + (s.routes_cached ? "routes cached" : "routes not cached"),
+        actions: '<button type="button" class="btn btn-mini" data-action="ops-lv-clear">Clear…</button>'
+      })
+    ];
+    return uiHead("Laravel", null, '<button type="button" class="btn btn-mini btn-primary" data-action="ops-lv-artisan">Run an artisan command…</button>') + uiList(rows) +
+      '<p class="dim ops-note">Commands run with this site\'s PHP in its folder, as an argument list and never through a shell. Clearing the application cache empties whatever the cache driver holds, so it is only done when you name it.</p>';
+  }
+
+  function opsDb(d) {
+    var users = (d[0] && d[0].users) || [], backups = (d[1] && d[1].schedules) || [];
+    var userRows = users.map(function (u) {
+      return uiRow({ title: '<span class="mono">' + esc(u.user) + "</span>", sub: "from " + esc(u.host), hover: true,
+        actions: '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-db-user-drop" data-user="' + attr(u.user) + '" data-host="' + attr(u.host) + '">Drop</button>' });
+    });
+    var backupRows = backups.map(function (b) {
+      return uiRow({
+        dot: b.enabled === false ? "off" : b.last_ok === false ? "bad" : "ok", title: esc(b.database) + ' <span class="pill">' + esc(b.schedule) + "</span>",
+        sub: (b.last_run_at ? "last " + esc(shortTime(b.last_run_at)) + (b.last_ok === false ? " · failed: " + esc(b.last_error || "") : "") : "has not run") + " · keeps " + esc(String(b.keep)) + (b.next_run_at ? " · next " + esc(shortTime(b.next_run_at)) : ""), wrap: true, hover: true,
+        actions: '<button type="button" class="btn btn-mini" data-action="ops-backup-run" data-id="' + attr(b.id) + '">Back up now</button>' +
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-backup-files" data-db="' + attr(b.database) + '">Files</button>' +
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-backup-remove" data-id="' + attr(b.id) + '">Stop</button>'
+      });
+    });
+    return uiHead("Database users", users.length, '<button type="button" class="btn btn-mini btn-primary" data-action="ops-db-user-add">Add user</button>') +
+      (userRows.length ? uiList(userRows) : uiEmpty("No users yet", "Apps connect as root now. A user with its own password and one database is what a server has.")) +
+      uiHead("Backups", backups.length, '<button type="button" class="btn btn-mini btn-primary" data-action="ops-backup-add">Back up a database</button>') +
+      (backupRows.length ? uiList(backupRows) : uiEmpty("No backups scheduled", "devd dumps a database on a schedule while it is open, keeps the newest few, and tells you when one fails.")) +
+      '<p class="dim ops-note">A backup is a plain SQL file under the devd backups folder. Restore one by giving its path to <code>db.restore</code>.</p>';
+  }
+
+  function opsNginx(d) {
+    var s = d[0] || {}, presets = (d[1] && d[1].presets) || [];
+    var mine = s.directives;
+    var body = uiHead("Your directives", null, '<button type="button" class="btn btn-mini btn-primary" data-action="ops-nx-edit">' + (mine ? "Edit" : "Add") + '</button>' + (mine ? '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-nx-clear">Remove</button>' : "")) +
+      (mine ? '<pre class="log-block">' + esc(mine) + "</pre>" : uiEmpty("None", "devd generates this site's server block. What it cannot know (a bigger upload limit, CORS headers, a cache rule) goes here."));
+    body += uiHead("Add a preset", null, "") + '<div class="chips">' + presets.map(function (p) {
+      return '<button type="button" class="chip" data-action="ops-nx-preset" data-name="' + attr(p.name) + '" title="' + attr(p.does) + '">' + esc(p.name) + "</button>";
+    }).join("") + "</div>";
+    body += uiHead("Generated", null, '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-nx-generated">Show the server block</button>');
+    body += '<p class="dim ops-note">Directives are checked with <code>nginx -t</code> before they are kept; if nginx rejects them the previous ones are put back. ' + (s.web_server === "apache" ? "The Apache driver does not use them." : "") + "</p>";
+    return body;
+  }
+
+  function opsHealth(d) {
+    var checks = (d[0] && d[0].checks) || [], m = d[1] || {};
+    var mem = m.memory || {};
+    var disks = (m.disks || []).map(function (x) { return esc(x.mount) + " " + esc(String(x.free_gb)) + " GB free of " + esc(String(x.total_gb)); }).join(" · ");
+    var machine = uiList([
+      uiRow({ dot: "off", title: "This machine", sub: esc([m.cpu_percent != null ? "CPU " + Math.round(m.cpu_percent) + "%" : (m.load_average != null ? "load " + m.load_average : ""), mem.total_mb ? "memory " + Math.round(mem.used_mb / 1024 * 10) / 10 + " of " + Math.round(mem.total_mb / 1024 * 10) / 10 + " GB" : "", m.uptime_hours != null ? "up " + m.uptime_hours + " h" : "", m.devd ? m.devd.running + "/" + m.devd.services + " devd services" : ""].filter(Boolean).join(" · ")), wrap: true }),
+      disks ? uiRow({ dot: "off", title: "Disks", sub: disks, wrap: true }) : ""
+    ].filter(Boolean));
+    var rows = checks.map(function (c) {
+      return uiRow({
+        dot: c.state === "up" ? "ok" : c.state === "down" ? "bad" : "off", title: esc(c.site) + ' <span class="pill">' + esc(c.state || "unknown") + "</span>",
+        sub: (c.last_at ? "asked " + esc(shortTime(c.last_at)) : "not asked yet") + (c.last_status ? " · answered " + c.last_status + " in " + c.last_ms + " ms" : "") + (c.last_error ? " · " + esc(c.last_error) : "") + (c.url ? " · " + esc(c.url) : " · through devd's own web server"), wrap: true, hover: true,
+        actions: '<button type="button" class="btn btn-mini" data-action="ops-health-check" data-site="' + attr(c.site) + '">Ask now</button><button type="button" class="btn btn-mini btn-ghost" data-action="ops-health-remove" data-site="' + attr(c.site) + '">Stop</button>'
+      });
+    });
+    return uiHead("Machine", null, "") + machine +
+      uiHead("Site health", checks.length, '<button type="button" class="btn btn-mini btn-primary" data-action="ops-health-add">Watch a site</button>') +
+      (rows.length ? uiList(rows) : uiEmpty("No sites are watched", "devd asks the site for its front page every minute while it is open and tells the alert targets when it goes down and when it is back.")) ;
+  }
+
+  function opsServers(d) {
+    var list = (d[0] && d[0].servers) || [], links = (d[1] && d[1].links) || [];
+    var rows = list.map(function (s) {
+      return uiRow({
+        dot: s.host_key_pinned ? "ok" : "warn", title: esc(s.name) + ' <span class="pill">' + esc(s.provider) + "</span>",
+        sub: esc(s.user + "@" + s.host + (s.port !== 22 ? ":" + s.port : "")) + " · key " + esc(s.key) + (s.host_key_pinned ? " · host key pinned" : " · not connected yet") + (s.last_ok_at ? " · answered " + esc(shortTime(s.last_ok_at)) : ""), wrap: true, hover: true,
+        actions: '<button type="button" class="btn btn-mini' + (s.host_key_pinned ? "" : " btn-primary") + '" data-action="ops-srv-connect" data-name="' + attr(s.name) + '">' + (s.host_key_pinned ? "Test" : "Connect") + "</button>" +
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-srv-info" data-name="' + attr(s.name) + '">Look</button>' +
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-srv-provision" data-name="' + attr(s.name) + '">Set up for PHP</button>' +
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-srv-run" data-name="' + attr(s.name) + '">Run…</button>' +
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-srv-remove" data-name="' + attr(s.name) + '">Forget</button>'
+      });
+    });
+    var linkRows = links.map(function (l) {
+      return uiRow({ title: esc(l.site) + " → " + esc(l.server) + ' <span class="pill">' + esc(l.mode) + "</span>", sub: '<span class="mono">' + esc(l.path) + "</span>" + (l.domain ? " · " + esc(l.domain) : ""), wrap: true, hover: true,
+        actions: '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-link-remove" data-id="' + attr(l.id) + '">Unlink</button>' });
+    });
+    return uiHead("Servers", list.length, '<button type="button" class="btn btn-mini btn-primary" data-action="ops-srv-add">Add a server</button>') +
+      (rows.length ? uiList(rows) : uiEmpty("No servers yet", "Any machine you can SSH into: DigitalOcean, Hetzner, Vultr, a Ploi or Forge server, a Raspberry Pi. Add it, connect once to pin its host key, and deploy to it from the Deploy tab.")) +
+      uiHead("Where sites deploy", links.length, "") + (linkRows.length ? uiList(linkRows) : uiEmpty("No site is linked to a server", "Open a site's Deploy tab and choose Link to a server.")) +
+      '<p class="dim ops-note">devd reaches servers with the key you name and pins each server\'s host key in its own file, never your known_hosts. Setting a server up and deploying are approved by you each time.</p>';
+  }
+
+  function opsKeys(d) {
+    var keys = (d[0] && d[0].keys) || [];
+    var rows = keys.map(function (k) {
+      return uiRow({ title: '<span class="mono">' + esc(k.name) + "</span> " + (k.has_private_key ? "" : '<span class="pill pill-warn">no private key here</span>'), sub: esc((k.type || "") + (k.comment ? " · " + k.comment : "")) + (k.fingerprint ? " · " + esc(k.fingerprint) : ""), wrap: true, hover: true,
+        actions: '<button type="button" class="btn btn-mini" data-action="ops-key-public" data-name="' + attr(k.name) + '">Show public key</button>' });
+    });
+    return uiHead("SSH keys", keys.length, '<button type="button" class="btn btn-mini btn-primary" data-action="ops-key-new">Make a key</button><button type="button" class="btn btn-mini" data-action="ops-key-adopt">Take in a key</button>') +
+      (rows.length ? uiList(rows) : uiEmpty("No keys in ~/.ssh", "Make one, or take in a private key you already have. The public half is what a server's authorized_keys and GitHub want.")) +
+      '<p class="dim ops-note">Private keys are never shown. A new key has no passphrase; add one with <code>ssh-keygen -p</code> if you want one.</p>';
+  }
+
+  /* What the Deploy tab shows beyond the history: servers, variables, scheduled deploys, the staging site. */
+  function opsDeployExtras(d) {
+    var links = (d[4] && d[4].links) || [], vars = (d[5] && d[5].vars) || {}, sched = ((d[6] && d[6].scheduled) || []).filter(function (x) { return x.state === "pending"; });
+    var staging = ((d[7] && d[7].staging) || []).filter(function (x) { return x.of === OPS.site; })[0];
+    var nv = Object.keys(vars).length;
+    var linkRows = links.map(function (l) {
+      var id = attr(l.id);
+      return uiRow({
+        dot: "ok", title: "Deploys to " + esc(l.server) + ' <span class="pill">' + esc(l.mode) + "</span>",
+        sub: '<span class="mono">' + esc(l.path) + "</span>" + (l.domain ? " · " + esc(l.domain) : ""), wrap: true, hover: true,
+        actions: '<button type="button" class="btn btn-mini btn-primary" data-action="ops-remote-deploy" data-link="' + id + '">Deploy</button>' +
+          (l.mode === "releases" ? '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-remote-releases" data-link="' + id + '">Releases</button><button type="button" class="btn btn-mini btn-ghost" data-action="ops-remote-rollback" data-link="' + id + '">Roll back</button>' : "") +
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-remote-env" data-link="' + id + '">Send .env</button>' +
+          (l.domain ? '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-remote-site" data-link="' + id + '">Create site</button><button type="button" class="btn btn-mini btn-ghost" data-action="ops-remote-ssl" data-link="' + id + '">HTTPS</button>' : "") +
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-link-remove" data-id="' + id + '">Unlink</button>'
+      });
+    });
+    var more = [
+      uiRow({ dot: nv ? "ok" : "off", title: "Variables", sub: nv ? esc(Object.keys(vars).join(", ")) : "none: values a deploy gets as {NAME} and as environment variables", wrap: true,
+        actions: '<button type="button" class="btn btn-mini" data-action="ops-vars-edit">Edit…</button>' }),
+      uiRow({ dot: sched.length ? "warn" : "off", title: "Scheduled", sub: sched.length ? sched.map(function (x) { return esc(shortTime(x.at)); }).join(", ") : "nothing is scheduled", wrap: true,
+        actions: '<button type="button" class="btn btn-mini" data-action="ops-sched-add">Deploy later…</button>' }),
+      uiRow({ dot: staging ? "ok" : "off", title: "Staging", sub: staging ? esc(staging.staging_site) + " on branch " + esc(staging.branch) : "a second copy of this site on its own branch", wrap: true,
+        actions: staging ? '<button type="button" class="btn btn-mini btn-primary" data-action="ops-staging-promote">Ship to production</button><button type="button" class="btn btn-mini btn-ghost" data-action="ops-staging-remove">Remove</button>' : '<button type="button" class="btn btn-mini" data-action="ops-staging-create">Make a staging site</button>' })
+    ];
+    var schedRows = sched.map(function (x) {
+      return uiRow({ dot: "warn", title: "Deploy at " + esc(shortTime(x.at)), sub: esc(x.note || ""), actions: '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-sched-cancel" data-id="' + attr(x.id) + '">Cancel</button>' });
+    });
+    return uiHead("Servers", links.length, '<button type="button" class="btn btn-mini" data-action="ops-link-add">Link to a server</button>') +
+      (linkRows.length ? uiList(linkRows) : '<p class="dim ops-note">Not linked to a server. Link it, and Deploy ships it over SSH.</p>') +
+      uiList(more) + (schedRows.length ? uiList(schedRows) : "");
+  }
+
+
   function inventoryRows() {
     var inv = state.server.inventory || [];
     return inv.map(function (v) {
@@ -1594,8 +2177,11 @@
     var rows = state.server.services;
     var byName = {};
     rows.forEach(function (r) { byName[r.name] = r; });
-    var up = rows.filter(function (r) { return r.running; }).length;
-    var installed = rows.map(function (svc) {
+    var counts = serviceCounts(rows);
+    var up = counts.up;
+    var installed = serviceUnits(rows).map(function (unit) {
+      if (unit.rows) return phpUnitRow(unit, false);
+      var svc = unit.row;
       return uiRow({
         dot: svc.running ? "ok" : "off",
         title: brandImg(svc.kind || svc.name, "brand-dot") + esc(svc.name) + (svc.version ? ' <span class="ui-quiet" style="display:inline;padding:0">' + esc(svc.version) + "</span>" : ""),
@@ -1622,12 +2208,11 @@
           dot: "off", title: esc(k.label), sub: esc(k.note),
           actions: k.name === "php-cgi"
             ? '<button type="button" class="btn btn-mini" data-action="nav" data-view="runtimes">Install a PHP runtime</button>'
-            : (k.download === false ? "" : '<button type="button" class="btn btn-mini btn-primary" data-action="install-service" data-name="' + attr(k.name) + '">Install</button>') +
-              (k.find ? '<button type="button" class="btn btn-mini" data-action="adopt-service" data-name="' + attr(k.name) + '">Use existing</button>' : "")
+            : (k.download === false ? "" : '<button type="button" class="btn btn-mini btn-primary" data-action="install-service" data-name="' + attr(k.name) + '">Install</button>')
         });
       });
     var body = "";
-    body += uiHead("Installed", rows.length ? up + " of " + rows.length + " running" : null) +
+    body += uiHead("Installed", counts.total ? up + " of " + counts.total + " running" : null) +
       (installed.length ? uiList(installed) : uiEmpty("Nothing installed yet", "Install a web server, MariaDB and a PHP runtime to serve sites."));
     if (found.length) body += uiHead("Already on this computer", found.length) + uiList(found) +
       '<div class="ui-more">devd never replaces what you have. Using or watching a service only records your choice.</div>';
@@ -4278,8 +4863,8 @@
       live.push(uiRow({ dot: "live", title: esc(t.title), meta: "team · " + esc(t.state),
         actions: '<button type="button" class="btn btn-mini" data-action="team-open-from" data-id="' + attr(t.id) + '">Open</button>' }));
     });
-    var svcUp = state.server.services.filter(function (x) { return x.running; });
-    if (svcUp.length) live.push(uiRow({ dot: "ok", title: svcUp.length + " service" + (svcUp.length === 1 ? "" : "s") + " running", sub: esc(svcUp.map(function (x) { return x.name; }).join(", ")),
+    var svcUp = serviceUnits(state.server.services).filter(function (u) { return u.running; }).map(function (u) { return u.rows ? "PHP " + u.php.series : u.row.name; });
+    if (svcUp.length) live.push(uiRow({ dot: "ok", title: svcUp.length + " service" + (svcUp.length === 1 ? "" : "s") + " running", sub: esc(svcUp.join(", ")),
       actions: '<button type="button" class="btn btn-mini" data-action="nav" data-view="services">Open</button>' }));
 
     var feed = d.audit.filter(function (a) { return !a.dry_run && a.tier !== "read"; }).slice(0, 5).map(function (a) {
@@ -5109,6 +5694,7 @@
     overview: "/server",
     services: "/server/services",
     sites: "/server/sites",
+    operations: "/server/operations",
     toolchain: "/server/tools",
     runtimes: "/server/runtimes",
     preview: "/server/preview",
@@ -5337,6 +5923,7 @@
       if (!state.server.loaded && state.view !== "toolchain") return renderLoadingServer();
       if (state.view === "overview") renderOverview();
       else if (state.view === "sites") renderSites();
+      else if (state.view === "operations") renderOperations();
       else if (state.view === "preview") renderPreview();
       else if (state.view === "services") renderServices();
       else if (state.view === "runtimes") renderRuntimes();
@@ -6356,17 +6943,6 @@
       });
     },
 
-    "adopt-service": function (node) {
-      var name = node.dataset.name;
-      read("service.find_local", { name: name }).then(function (found) {
-        if (!found || !found.length) return toast("warn", "No " + name + " folder was found on this computer.");
-        var f = found[0];
-        return uiConfirm({ title: "Use " + name + " " + f.version + "?", text: "Found in " + f.path + ". devd does not change that folder; it writes its own configuration.", confirm: "Use it" }).then(function (yes) {
-          if (yes) act("service.adopt", { name: name, path: f.path });
-        });
-      });
-    },
-
     "schedule-create": function () {
       var f = SCHED.form;
       var params = {};
@@ -7123,6 +7699,10 @@
   });
 
   document.addEventListener("change", function (event) {
+    if (event.target.dataset && event.target.dataset.change && ACTIONS[event.target.dataset.change]) {
+      ACTIONS[event.target.dataset.change](event.target);
+      return;
+    }
     if (event.target.dataset && event.target.dataset.action === "site-php") {
       ACTIONS["site-php"](event.target);
       return;
@@ -7372,7 +7952,7 @@
   (function () {
     var node = el("main");
     var desc = Object.getOwnPropertyDescriptor(Element.prototype, "innerHTML");
-    var calm = ["overview", "services", "sites", "toolchain", "runtimes", "preview", "certificates", "hosts"];
+    var calm = ["overview", "services", "sites", "operations", "toolchain", "runtimes", "preview", "certificates", "hosts"];
     var last = null;
     if (!node || !desc) return;
     Object.defineProperty(node, "innerHTML", {
@@ -7385,6 +7965,411 @@
       }
     });
   })();
+
+  // ----------------------------------------------------------------- actions
+
+  function opsLines(text) { return String(text || "").split(/\r?\n/); }
+
+  Object.assign(ACTIONS, {
+    "ops-tab": function (n) { OPS.tab = n.dataset.tab; OPS.error = ""; render(); opsLoad(OPS.tab); },
+    "ops-site": function (n) { OPS.site = n.value; OPS.data = {}; OPS.error = ""; render(); opsLoad(OPS.tab); },
+    "ops-level": function (n) {
+      var l = n.dataset.level, a = OPS.levels || [];
+      OPS.levels = a.indexOf(l) >= 0 ? a.filter(function (x) { return x !== l; }) : a.concat([l]);
+      opsLoad("logs");
+    },
+    "ops-logkind": function (n) { OPS.logKind = n.value; opsLoad("logs"); },
+    "ops-log-clear": function () {
+      uiConfirm({ title: "Empty the Laravel log?", text: "A copy of each file is kept as .log.bak.", confirm: "Empty", danger: true }).then(function (ok) {
+        if (ok) opsAct("logs.laravel_clear", { site: OPS.site });
+      });
+    },
+    "ops-env-set": function (n) {
+      var name = n.dataset.name;
+      uiPrompt({ title: name ? "Change " + name : "Add a variable", text: name ? "The new value." : "Write it as NAME=value.", confirm: "Save", input: { placeholder: name ? "value" : "APP_ENV=local" } }).then(function (v) {
+        if (v === null || v === "") return;
+        var k = name, val = v;
+        if (!name) { var i = v.indexOf("="); if (i < 1) return toast("error", "write it as NAME=value"); k = v.slice(0, i).trim(); val = v.slice(i + 1); }
+        var vars = {}; vars[k] = val;
+        opsAct("env.set", { site: OPS.site, vars: vars });
+      });
+    },
+    "ops-env-unset": function (n) {
+      uiConfirm({ title: "Remove " + n.dataset.name + "?", text: "The old file is kept as a backup beside it.", confirm: "Remove", danger: true }).then(function (ok) {
+        if (ok) opsAct("env.unset", { site: OPS.site, names: [n.dataset.name] });
+      });
+    },
+    "ops-env-reveal": function () {
+      read("env.reveal", { site: OPS.site }).then(function (r) {
+        var lines = Object.keys(r.vars || {}).map(function (k) { return k + "=" + r.vars[k]; });
+        uiSheet(".env of " + OPS.site, '<pre class="log-block">' + esc(lines.join("\n")) + "</pre>");
+      }).catch(function (e) { toast("error", e.message); });
+    },
+    "ops-env-diff": function () {
+      uiPrompt({ title: "Compare the .env", text: "Type a file to compare with (a copy of the production .env), or leave empty to compare with the linked Ploi site.", confirm: "Compare", input: { placeholder: "C:\\path\\to\\production.env" } }).then(function (f) {
+        if (f === null) return;
+        read("env.diff", f ? { site: OPS.site, against_file: f } : { site: OPS.site, against_ploi: true }).then(function (r) {
+          var d = r.diff || {};
+          var html = "";
+          (d.warnings || []).forEach(function (w) { html += '<div class="notice notice-warn">' + esc(w) + "</div>"; });
+          function list(title, names) { return names && names.length ? "<h3>" + esc(title) + " (" + names.length + ")</h3><p class=\"mono\">" + names.map(esc).join("<br>") + "</p>" : ""; }
+          html += list("Only here", d.only_here) + list("Only in " + r.against, d.only_there);
+          if ((d.different || []).length) html += "<h3>Different (" + d.different.length + ')</h3><p class="mono">' + d.different.map(function (c) { return esc(c.name) + ": " + esc(c.here) + " → " + esc(c.there); }).join("<br>") + "</p>";
+          html += '<p class="dim">' + d.same + " variables are the same.</p>";
+          uiSheet("Compared with " + r.against, html);
+        }).catch(function (e) { toast("error", e.message); });
+      });
+    },
+    "ops-cron-add": function () {
+      uiPrompt({ title: "When should it run?", text: "Five fields: minute hour day-of-month month day-of-week. Or @hourly, @daily.", confirm: "Next", input: { placeholder: "*/5 * * * *" } }).then(function (sch) {
+        if (!sch) return;
+        uiPrompt({ title: "What should it run?", text: "One command, run in the site's folder with its PHP.", confirm: "Add job", input: { placeholder: "php artisan reports:send" } }).then(function (cmd) {
+          if (cmd) opsAct("cron.add", { site: OPS.site, schedule: sch, command: cmd });
+        });
+      });
+    },
+    "ops-cron-laravel": function () { opsAct("cron.laravel", { site: OPS.site }); },
+    "ops-cron-run": function (n) {
+      run("cron.run", { id: n.dataset.id }).then(function (o) {
+        if (o && o.data) uiSheet("Output", '<pre class="log-block">' + esc(o.data.log_tail || "") + "</pre>");
+        opsLoad("cron");
+      });
+    },
+    "ops-cron-log": function (n) {
+      uiSheet("Cron log", '<div class="dim">Loading…</div>');
+      read("cron.log", { id: n.dataset.id, lines: 200 }).then(function (r) { uiSheet("Cron log", '<pre class="log-block">' + esc((r.lines || []).join("\n") || "The job has not printed anything.") + "</pre>"); }).catch(function (e) { uiSheet("Cron log", '<div class="notice notice-bad">' + esc(e.message) + "</div>"); });
+    },
+    "ops-cron-toggle": function (n) { opsAct("cron.enable", { id: n.dataset.id, enabled: n.dataset.on === "1" }); },
+    "ops-cron-remove": function (n) {
+      uiConfirm({ title: "Remove this job?", confirm: "Remove", danger: true }).then(function (ok) { if (ok) opsAct("cron.remove", { id: n.dataset.id }); });
+    },
+    "ops-queue-add": function () {
+      uiPrompt({ title: "Add a queue worker", text: "How many processes? (1 to 8)", confirm: "Add", input: { value: "1" } }).then(function (p) {
+        if (p) opsAct("queue.add", { site: OPS.site, processes: Math.max(1, Math.min(8, parseInt(p, 10) || 1)) });
+      });
+    },
+    "ops-queue-add-command": function () {
+      uiPrompt({ title: "Run a program in the background", text: "A command to run in the site's folder; devd restarts it if it stops.", confirm: "Add", input: { placeholder: "npm run dev" } }).then(function (c) {
+        if (c) opsAct("queue.add", { site: OPS.site, command: c });
+      });
+    },
+    "ops-queue": function (n) { opsAct("queue." + n.dataset["do"], { id: n.dataset.id }); },
+    "ops-queue-remove": function (n) {
+      uiConfirm({ title: "Remove this worker?", text: "It is stopped first; a running job is cut off.", confirm: "Remove", danger: true }).then(function (ok) { if (ok) opsAct("queue.remove", { id: n.dataset.id }); });
+    },
+    "ops-queue-log": function (n) {
+      uiSheet("Worker log", '<div class="dim">Loading…</div>');
+      read("queue.logs", { id: n.dataset.id, lines: 200 }).then(function (r) { uiSheet("Worker log", '<pre class="log-block">' + esc((r.lines || []).join("\n") || "The log is empty.") + "</pre>"); }).catch(function (e) { uiSheet("Worker log", '<div class="notice notice-bad">' + esc(e.message) + "</div>"); });
+    },
+    "ops-redirect-add": function () {
+      uiPrompt({ title: "Add a redirect", text: "Write the old path, a space, then where it goes. /blog/* covers a folder, and $1 is what the star matched.", confirm: "Add", input: { placeholder: "/old /new" } }).then(function (v) {
+        if (!v) return;
+        var parts = v.trim().split(/\s+/);
+        if (parts.length < 2) return toast("error", "write the old path, a space, then the new one");
+        opsAct("redirects.add", { site: OPS.site, from: parts[0], to: parts[1], status: parts[2] ? parseInt(parts[2], 10) : 301 });
+      });
+    },
+    "ops-redirect-remove": function (n) { opsAct("redirects.remove", { id: n.dataset.id }); },
+    "ops-deploy": function () {
+      run("deploy.run", { site: OPS.site }).then(function (o) {
+        opsLoad("deploy");
+        if (o) setTimeout(function () { opsLoad("deploy"); }, 4000);
+      });
+    },
+    "ops-script": function () {
+      var d = OPS.data.deploy && OPS.data.deploy[1];
+      uiSheet("Deploy script", '<p class="dim">One command per line. {BRANCH} and {SITE_DIRECTORY} are filled in. A failing line stops the deploy. Lines for a server (cd, sudo, PHP-FPM reloads) are skipped here.</p>' +
+        '<textarea id="ops-script-text" class="textarea mono" rows="14" spellcheck="false">' + esc((d && d.script) || "") + '</textarea>' +
+        '<div class="inline" style="margin-top:12px"><button type="button" class="btn btn-primary" data-action="ops-script-save">Save script</button></div>');
+    },
+    "ops-script-save": function () {
+      var t = el("ops-script-text");
+      if (!t) return;
+      opsAct("deploy.script_set", { site: OPS.site, script: t.value }, function () { closeDrawer(); });
+    },
+    "ops-deploy-log": function (n) {
+      uiSheet("Deployment output", '<div class="dim">Loading…</div>');
+      read("deploy.log", { id: n.dataset.id, lines: 300 }).then(function (r) { uiSheet("Deployment output", '<pre class="log-block">' + esc((r.lines || []).join("\n")) + "</pre>"); }).catch(function (e) { uiSheet("Deployment output", '<div class="notice notice-bad">' + esc(e.message) + "</div>"); });
+    },
+    "ops-rollback": function (n) {
+      uiConfirm({ title: "Roll back to this deployment?", text: "Checks out the code it ended on and runs the script without pulling. Refused while there are uncommitted changes.", confirm: "Roll back", danger: true }).then(function (ok) {
+        if (ok) opsAct("deploy.rollback", { site: OPS.site, deployment: n.dataset.id });
+      });
+    },
+    "ops-repo-link": function () {
+      uiPrompt({ title: "Branch to deploy", text: "The branch deploys pull. Leave empty for the current one.", confirm: "Link", input: { placeholder: "main" } }).then(function (b) {
+        if (b !== null) opsAct("repo.link", { site: OPS.site, branch: b || null });
+      });
+    },
+    "ops-hook": function (n) {
+      var on = n.dataset.on === "1";
+      run("deploy.hook", { site: OPS.site, enabled: on }).then(function (o) {
+        if (o && on && o.data && o.data.path) uiSheet("Push-to-deploy address", '<p>POST to this path on the devd server to deploy. It is a secret.</p><pre class="log-block">' + esc(o.data.path) + '</pre><p class="dim">' + esc(o.data.note) + "</p>");
+        opsLoad("deploy");
+      });
+    },
+    "ops-notify-add": function () {
+      uiPrompt({ title: "Where should alerts go?", text: "Type inbox, or the https address of a Slack, Discord or other webhook.", confirm: "Add", input: { placeholder: "inbox" } }).then(function (v) {
+        if (!v) return;
+        var channel = "inbox", url = null;
+        if (v !== "inbox") { url = v; channel = /discord/i.test(v) ? "discord" : /slack/i.test(v) ? "slack" : "webhook"; }
+        opsAct("notify.add", { channel: channel, url: url });
+      });
+    },
+    "ops-notify-test": function (n) { run("notify.test", { id: n.dataset.id }); },
+    "ops-notify-remove": function (n) { opsAct("notify.remove", { id: n.dataset.id }); },
+    "ops-php-profile": function (n) { opsAct("php.configure", { profile: n.value }); },
+    "ops-php-workers": function (n) { opsAct("php.configure", { workers: parseInt(n.value, 10) }); },
+    "ops-site-profile": function (n) { opsAct("php.site_profile", { site: n.dataset.site, profile: n.value || null }); },
+    "ops-site-profile-go": function (n) { opsAct("php.site_profile", { site: OPS.site, profile: n.dataset.profile }); },
+    "ops-limits": function () {
+      uiPrompt({ title: "What does your server allow?", text: "Read them from the PHP tab of your server in Ploi. Write them as name=value, separated by commas: memory_limit=128M, upload_max_filesize=5M, post_max_size=8M, max_execution_time=30.", confirm: "Save", input: { placeholder: "memory_limit=128M, upload_max_filesize=5M" } }).then(function (v) {
+        if (!v) return;
+        var args = {};
+        v.split(",").forEach(function (part) { var i = part.indexOf("="); if (i > 0) args[part.slice(0, i).trim()] = part.slice(i + 1).trim(); });
+        if (!Object.keys(args).length) return toast("error", "write them as name=value");
+        opsAct("ploi.limits_set", args);
+      });
+    },
+    "ops-php-value": function (n) {
+      uiPrompt({ title: "Set a PHP value for " + n.dataset.series, text: "Write it as name=value, e.g. memory_limit=512M.", confirm: "Save", input: { placeholder: "memory_limit=512M" } }).then(function (v) {
+        if (!v) return;
+        var i = v.indexOf("=");
+        if (i < 1) return toast("error", "write it as name=value");
+        var vals = {}; vals[v.slice(0, i).trim()] = v.slice(i + 1).trim();
+        opsAct("php.configure", { values: vals, series: n.dataset.series });
+      });
+    },
+    "ops-ext": function (n) { opsAct("php.extension_set", { name: n.dataset.name, enabled: n.dataset.on === "1" }); },
+    "ops-ploi-connect": function () {
+      uiPrompt({ title: "Connect Ploi", text: "Paste an API token from ploi.io/profile/api-keys. It is stored privately on this computer and never shown again.", confirm: "Connect", input: { placeholder: "API token" } }).then(function (t) {
+        if (t) opsAct("ploi.connect", { api_token: t });
+      });
+    },
+    "ops-ploi-disconnect": function () {
+      uiConfirm({ title: "Disconnect Ploi?", text: "The stored token is deleted. It still exists in Ploi until you delete it there.", confirm: "Disconnect", danger: true }).then(function (ok) { if (ok) { OPS.ploiSites = null; opsAct("ploi.disconnect", {}); } });
+    },
+    "ops-ploi-sites": function (n) {
+      OPS.ploiServer = n.dataset.server;
+      read("ploi.sites", { server: parseInt(n.dataset.server, 10) }).then(function (r) { OPS.ploiSites = r.sites || []; render(); }).catch(function (e) { toast("error", e.message); });
+    },
+    "ops-ploi-link": function (n) {
+      uiPrompt({ title: "Link to a local site", text: "Which local site is this? One of: " + opsSiteNames().join(", "), confirm: "Link", input: { value: OPS.site } }).then(function (local) {
+        if (local) opsAct("ploi.link", { local: local, server: parseInt(n.dataset.server, 10), site: parseInt(n.dataset.site, 10) });
+      });
+    },
+    "ops-ploi-deploy": function (n) {
+      uiConfirm({ title: "Deploy " + n.dataset.domain + " on Ploi?", text: "This starts a deployment on your live server.", confirm: "Deploy", danger: true }).then(function (ok) {
+        if (ok) run("ploi.deploy", { server: parseInt(n.dataset.server, 10), site: parseInt(n.dataset.site, 10) });
+      });
+    }
+  });
+
+
+  Object.assign(ACTIONS, {
+    "php-pool": function (n) { act("php.pool", { series: n.dataset.series, action: n.dataset["do"] }); },
+    "setup-open": function () { uiSheet("Set up devd", setupForm()); },
+    "setup-go": function () { setupStart(); }
+  });
+
+  // ------------------------------------------------ operations: actions for the tabs added after the first nine
+
+  function opsWords(text) { return String(text || "").trim().split(/\s+/).filter(Boolean); }
+
+  Object.assign(ACTIONS, {
+    // Laravel
+    "ops-lv-down": function () {
+      uiPrompt({ title: "Maintenance mode", text: "Optionally a secret path that still reaches the site while it is down, e.g. let-me-in. Leave empty for none.", confirm: "Put it down", input: { placeholder: "secret (optional)" } }).then(function (secret) {
+        if (secret === null) return;
+        opsAct("laravel.down", { site: OPS.site, secret: secret || null });
+      });
+    },
+    "ops-lv-up": function () { opsAct("laravel.up", { site: OPS.site }); },
+    "ops-lv-storage": function () { opsAct("laravel.storage_link", { site: OPS.site }); },
+    "ops-lv-clear": function () {
+      uiPrompt({ title: "Clear caches", text: "What: all (views, configuration, routes, events), or any of views, config, routes, events, cache. The application cache empties what the cache driver holds.", confirm: "Clear", input: { value: "all" } }).then(function (w) {
+        if (w === null) return;
+        opsAct("laravel.clear", { site: OPS.site, what: opsWords(w.replace(/,/g, " ")) });
+      });
+    },
+    "ops-lv-artisan": function () {
+      uiPrompt({ title: "Run an artisan command", text: "Written as after `php artisan`, e.g. migrate:status. It runs with this site's PHP in its folder.", confirm: "Run", input: { placeholder: "migrate:status" } }).then(function (c) {
+        if (!c) return;
+        run("laravel.artisan", { site: OPS.site, command: c }).then(function (o) {
+          if (o && o.data) opsSheetText("artisan " + o.data.command + " (exit " + o.data.exit + ")", o.data.output || "(no output)");
+          opsLoad("laravel");
+        });
+      });
+    },
+    // databases
+    "ops-db-user-add": function () {
+      uiPrompt({ title: "Add a database user", text: "A name, then optionally a database it gets every privilege on: shop_app shop", confirm: "Create", input: { placeholder: "name [database]" } }).then(function (v) {
+        var w = opsWords(v);
+        if (!w.length) return;
+        run("db.user_create", { name: w[0], database: w[1] || null }).then(function (o) {
+          if (o && o.data) uiSheet("Database user " + o.data.user, "<p>" + esc(o.data.note) + "</p>" + (o.data.password ? '<pre class="log-block">' + esc("user: " + o.data.user + "\npassword: " + o.data.password) + "</pre>" : ""));
+          opsLoad("db");
+        });
+      });
+    },
+    "ops-db-user-drop": function (n) {
+      uiConfirm({ title: "Drop " + n.dataset.user + "?", text: "Apps that connect as this user stop working. Its databases are not touched.", confirm: "Drop", danger: true }).then(function (ok) { if (ok) opsAct("db.user_drop", { name: n.dataset.user, host: n.dataset.host }); });
+    },
+    "ops-backup-add": function () {
+      uiPrompt({ title: "Back up a database", text: "The database, when (cron, or @daily), and optionally how many to keep: shop @daily 7", confirm: "Schedule", input: { placeholder: "shop @daily 7" } }).then(function (v) {
+        var w = opsWords(v);
+        if (w.length < 2) return;
+        var keep = /^\d+$/.test(w[w.length - 1]) && w.length > 2 ? parseInt(w.pop(), 10) : null;
+        opsAct("backup.add", { database: w[0], schedule: w.slice(1).join(" "), keep: keep });
+      });
+    },
+    "ops-backup-run": function (n) { opsAct("backup.run", { id: n.dataset.id }); },
+    "ops-backup-remove": function (n) {
+      uiConfirm({ title: "Stop this backup schedule?", text: "The files already taken stay.", confirm: "Stop", danger: true }).then(function (ok) { if (ok) opsAct("backup.remove", { id: n.dataset.id }); });
+    },
+    "ops-backup-files": function (n) {
+      read("backup.files", { database: n.dataset.db }).then(function (r) {
+        var f = r.files || [];
+        uiSheet("Backups of " + n.dataset.db, f.length ? '<pre class="log-block">' + esc(f.map(function (x) { return x.name + "  " + Math.round(x.bytes / 1024) + " KB\n" + x.file; }).join("\n\n")) + '</pre><p class="dim">Restore one by giving its path to db.restore.</p>' : '<p class="dim">No backup has been taken yet.</p>');
+      }).catch(function (e) { toast("error", e.message); });
+    },
+    // nginx
+    "ops-nx-edit": function () {
+      var cur = (OPS.data.nginx && OPS.data.nginx[0] && OPS.data.nginx[0].directives) || "";
+      uiSheet("nginx directives for " + OPS.site, '<p class="dim">Written as in an nginx config, inside this site\'s server block. They are checked with nginx -t and put back if nginx rejects them.</p><textarea id="ops-nx-text" class="textarea mono" rows="12" spellcheck="false">' + esc(cur) + '</textarea><div class="inline" style="margin-top:12px"><button type="button" class="btn btn-primary" data-action="ops-nx-save">Save</button></div>');
+    },
+    "ops-nx-save": function () {
+      var t = el("ops-nx-text"); if (!t) return;
+      opsAct("nginx.site_set", { site: OPS.site, directives: t.value }, function () { closeDrawer(); });
+    },
+    "ops-nx-preset": function (n) { opsAct("nginx.site_set", { site: OPS.site, presets: [n.dataset.name] }); },
+    "ops-nx-clear": function () {
+      uiConfirm({ title: "Remove the custom directives?", text: "The site goes back to the generated configuration only.", confirm: "Remove", danger: true }).then(function (ok) { if (ok) opsAct("nginx.site_clear", { site: OPS.site }); });
+    },
+    "ops-nx-generated": function () {
+      var g = (OPS.data.nginx && OPS.data.nginx[0] && OPS.data.nginx[0].generated) || [];
+      opsSheetText("Generated for " + OPS.site, g.join("\n\n") || "No server block was found; start the web server once.");
+    },
+    // health
+    "ops-health-add": function () {
+      uiPrompt({ title: "Watch a site", text: "The site, and optionally an address to ask instead of devd's own web server (your public URL).", confirm: "Watch", input: { value: OPS.site } }).then(function (v) {
+        var w = opsWords(v);
+        if (!w.length) return;
+        opsAct("health.add", { site: w[0], url: w[1] || null });
+      });
+    },
+    "ops-health-check": function (n) { opsAct("health.check", { site: n.dataset.site }); },
+    "ops-health-remove": function (n) { opsAct("health.remove", { site: n.dataset.site }); },
+    // servers
+    "ops-srv-add": function () {
+      uiPrompt({ title: "Add a server", text: "name host user key [provider] [port], e.g. hetzner-prod 203.0.113.7 deploy id_ed25519 hetzner. The key is a name from the SSH keys tab; provider is a label (digitalocean, hetzner, vultr, linode, aws, ploi, forge, other).", confirm: "Add", input: { placeholder: "name host user key" } }).then(function (v) {
+        var w = opsWords(v);
+        if (w.length < 4) return toast("error", "write at least: name host user key");
+        var port = w.length > 5 ? parseInt(w[5], 10) : null;
+        opsAct("server.add", { name: w[0], host: w[1], user: w[2], key: w[3], provider: w[4] || null, port: port });
+      });
+    },
+    "ops-srv-connect": function (n) {
+      run("server.connect", { server: n.dataset.name }).then(function (o) {
+        if (o && o.data) {
+          var s = o.data.server || {};
+          uiSheet("Connected to " + n.dataset.name, "<p>" + esc(o.data.os || o.data.kernel || "") + " · logged in as " + esc(o.data.login_user || "") + "</p>" + (s.fingerprint ? '<p class="dim">The host key devd pinned (compare it with your provider\'s console):</p><pre class="log-block">' + esc(s.fingerprint) + "</pre>" : ""));
+        }
+        opsLoad("servers");
+      });
+    },
+    "ops-srv-info": function (n) {
+      run("server.info", { server: n.dataset.name }).then(function (o) {
+        if (o && o.data) opsSheetText(n.dataset.name, Object.keys(o.data.info || {}).map(function (k) { return k + ": " + o.data.info[k]; }).join("\n"));
+      });
+    },
+    "ops-srv-provision": function (n) {
+      uiPrompt({ title: "Set " + n.dataset.name + " up for PHP", text: "PHP version, database (mariadb, mysql or none), Redis (yes or no). Installs nginx, PHP-FPM, Composer, Node, the database, supervisor and certbot, and turns the firewall on with SSH, HTTP and HTTPS open. Ubuntu or Debian, as root or with passwordless sudo.", confirm: "Install", input: { value: "8.4 mariadb no" } }).then(function (v) {
+        if (v === null) return;
+        var w = opsWords(v);
+        run("server.provision", { server: n.dataset.name, php: w[0] || null, database: w[1] || null, redis: /^y/i.test(w[2] || "") });
+      });
+    },
+    "ops-srv-run": function (n) {
+      uiPrompt({ title: "Run on " + n.dataset.name, text: "One command line, run as the server's SSH user.", confirm: "Run", input: { placeholder: "df -h" } }).then(function (c) {
+        if (!c) return;
+        run("server.run", { server: n.dataset.name, command: c }).then(function (o) { if (o && o.data) opsSheetText("exit " + o.data.code, (o.data.stdout || "") + (o.data.stderr || "")); });
+      });
+    },
+    "ops-srv-remove": function (n) {
+      uiConfirm({ title: "Forget " + n.dataset.name + "?", text: "devd forgets the server and the links that deploy to it. The machine and what is on it are not touched.", confirm: "Forget", danger: true }).then(function (ok) { if (ok) opsAct("server.remove", { server: n.dataset.name }); });
+    },
+    "ops-link-remove": function (n) {
+      uiConfirm({ title: "Unlink " + n.dataset.id + "?", text: "Only devd's record goes. Nothing on the server changes.", confirm: "Unlink", danger: true }).then(function (ok) { if (ok) opsAct("remote.unlink", { link: n.dataset.id }); });
+    },
+    // keys
+    "ops-key-public": function (n) {
+      read("ssh.public", { name: n.dataset.name }).then(function (r) { uiSheet("Public key " + n.dataset.name, '<pre class="log-block">' + esc(r.public_key) + '</pre><p class="dim">Paste this into the server\'s ~/.ssh/authorized_keys, or into GitHub or your provider.</p>'); }).catch(function (e) { toast("error", e.message); });
+    },
+    "ops-key-new": function () {
+      uiPrompt({ title: "Make an SSH key", text: "A name for the file in ~/.ssh.", confirm: "Make", input: { placeholder: "id_ed25519" } }).then(function (name) {
+        if (!name) return;
+        run("ssh.keygen", { name: name }).then(function (o) { if (o && o.data) uiSheet("New key " + name, '<pre class="log-block">' + esc(o.data.public_key) + "</pre>"); opsLoad("keys"); });
+      });
+    },
+    "ops-key-adopt": function () {
+      uiPrompt({ title: "Take in a private key", text: "The path of the key file you already have, then the name to give it: C:\\keys\\old_server_key old_server. It is copied, not moved.", confirm: "Take in", input: { placeholder: "path name" } }).then(function (v) {
+        var w = opsWords(v);
+        if (w.length < 2) return toast("error", "write the path, a space, then a name");
+        var name = w.pop();
+        opsAct("ssh.adopt", { path: w.join(" ").replace(/^"|"$/g, ""), name: name });
+      });
+    },
+    // deploy: remote, variables, schedule, staging
+    "ops-link-add": function () {
+      uiPrompt({ title: "Deploy " + OPS.site + " to a server", text: "server /folder/on/the/server [releases|git] [domain]. releases ships a build and switches atomically (default); git has the server pull and run your deploy script (for Ploi or Forge machines).", confirm: "Link", input: { placeholder: "hetzner-prod /var/www/shop releases shop.example.com" } }).then(function (v) {
+        var w = opsWords(v);
+        if (w.length < 2) return toast("error", "write the server and the folder on it");
+        opsAct("remote.link", { site: OPS.site, server: w[0], path: w[1], mode: w[2] || null, domain: w[3] || null });
+      });
+    },
+    "ops-remote-deploy": function (n) {
+      run("remote.deploy", { link: n.dataset.link, wait: false }).then(function (o) { opsLoad("deploy"); if (o) { setTimeout(function () { opsLoad("deploy"); }, 5000); setTimeout(function () { opsLoad("deploy"); }, 20000); } });
+    },
+    "ops-remote-releases": function (n) {
+      run("remote.releases", { link: n.dataset.link }).then(function (o) {
+        if (o && o.data) opsSheetText("Releases of " + n.dataset.link, (o.data.releases || []).map(function (r) { return (r.current ? "-> " : "   ") + r.release + (r.commit ? "  " + r.commit.slice(0, 10) : ""); }).join("\n") || "no releases yet");
+      });
+    },
+    "ops-remote-rollback": function (n) {
+      uiConfirm({ title: "Roll " + n.dataset.link + " back?", text: "The previous release goes live with one atomic switch. Database migrations are not undone.", confirm: "Roll back", danger: true }).then(function (ok) { if (ok) opsAct("remote.rollback", { link: n.dataset.link }); });
+    },
+    "ops-remote-env": function (n) {
+      uiConfirm({ title: "Send the .env to the server?", text: "It goes to shared/.env with APP_ENV=production, APP_DEBUG=false and APP_URL set. Review database and mail settings there afterwards. An existing file is not replaced.", confirm: "Send", danger: true }).then(function (ok) { if (ok) run("remote.env_push", { link: n.dataset.link }); });
+    },
+    "ops-remote-site": function (n) { run("remote.site_create", { link: n.dataset.link }); },
+    "ops-remote-ssl": function (n) {
+      uiPrompt({ title: "HTTPS certificate", text: "An email address for Let's Encrypt. The domain must already point at the server.", confirm: "Get it", input: { placeholder: "you@example.com" } }).then(function (e) { if (e) run("remote.ssl", { link: n.dataset.link, email: e }); });
+    },
+    "ops-vars-edit": function () {
+      var names = Object.keys((OPS.data.deploy && OPS.data.deploy[5] && OPS.data.deploy[5].vars) || {});
+      uiPrompt({ title: "Deploy variables", text: "Write NAME=value to set one, or NAME= to remove it. They are {NAME} in the deploy script and environment variables to its commands." + (names.length ? " Now: " + names.join(", ") : ""), confirm: "Save", input: { placeholder: "NAME=value" } }).then(function (v) {
+        if (!v) return;
+        var i = v.indexOf("="); if (i < 1) return toast("error", "write NAME=value");
+        var vars = {}; vars[v.slice(0, i).trim()] = v.slice(i + 1) === "" ? null : v.slice(i + 1);
+        opsAct("deploy.vars_set", { site: OPS.site, vars: vars });
+      });
+    },
+    "ops-sched-add": function () {
+      uiPrompt({ title: "Deploy " + OPS.site + " later", text: "in 30m, in 2h, in 1d, or a time like 2026-10-24T09:00:00+07:00. It runs while devd is open; if devd is closed then, it is marked missed.", confirm: "Schedule", input: { placeholder: "in 2h" } }).then(function (v) { if (v) opsAct("deploy.schedule", { site: OPS.site, at: v }); });
+    },
+    "ops-sched-cancel": function (n) { opsAct("deploy.unschedule", { id: n.dataset.id }); },
+    "ops-staging-create": function () {
+      uiPrompt({ title: "Make a staging site", text: "A second working folder of this repository on its own branch, served as " + OPS.site + "-staging. Branch name:", confirm: "Make it", input: { value: "staging" } }).then(function (b) { if (b !== null) run("deploy.staging_create", { site: OPS.site, branch: b || null }).then(function () { opsLoad("deploy"); }); });
+    },
+    "ops-staging-promote": function () {
+      uiConfirm({ title: "Ship staging to production?", text: "The staging branch is merged into " + OPS.site + " (fast-forward only) and production is deployed.", confirm: "Ship it", danger: true }).then(function (ok) { if (ok) run("deploy.staging_promote", { site: OPS.site }).then(function () { opsLoad("deploy"); }); });
+    },
+    "ops-staging-remove": function () {
+      uiConfirm({ title: "Remove the staging site?", text: "Its working folder goes, including the copied .env and installed dependencies. The branch stays.", confirm: "Remove", danger: true }).then(function (ok) { if (ok) run("deploy.staging_remove", { site: OPS.site }).then(function () { opsLoad("deploy"); }); });
+    }
+  });
+
 
   boot();
 })();

@@ -11,6 +11,7 @@ authors.workspace = true
 [dependencies]
 devd-core = { workspace = true }
 devd-workspace = { path = "../devd-workspace" }
+devd-ops = { path = "../devd-ops" }
 
 axum = { workspace = true }
 serde = { workspace = true }
