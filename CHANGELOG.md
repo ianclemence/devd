@@ -87,6 +87,9 @@ may change capability identifiers where the design was wrong.
   nginx and Apache configurations are rendered with the current ports.
 - **Apache's current checksum format.** Apache Lounge now publishes `SHA256-Checksum for: <file>:` followed by the
   digest on the next line; the catalogue reads the digest token instead of the old `SHA256:` label.
+- **`service install --plan` names the build the install will actually use.** An nginx release with no recorded
+  digest is skipped for `latest`, and an explicitly requested unverifiable build is shown as refused rather than
+  promised.
 - The installer's launcher and uninstaller honour `DEVD_HOME`, so a portable install such as `D:\devd` reads and
   keeps the right data folder. The Linux uninstall also removes `devd-desktop`, with or without `--desktop-binary`.
 - The runtime catalogue names the executable each archive actually yields after devd strips its top-level folder

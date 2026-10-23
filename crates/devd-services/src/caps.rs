@@ -455,10 +455,18 @@ fn install_plan(args: &InstallArgs) -> Result<Plan> {
     })?;
     let (list, _) = services::available(def.kind)?;
     let spec = args.version.clone().unwrap_or_else(|| "latest".to_string());
-    let chosen = devd_runtime::catalogue::resolve(&list, &spec, None)?;
+    // `install` will not use an nginx build whose digest devd has not recorded.
+    // Resolve against the same set here, or the plan names a build the install
+    // then refuses.
+    let installable = services::verifiable(def.name, &list);
+    let chosen = devd_runtime::catalogue::resolve(&installable, &spec, None)
+        .or_else(|_| devd_runtime::catalogue::resolve(&list, &spec, None))?;
     let dest = def.name.to_string();
     let digest = match &chosen.sha256 {
         Some(d) => format!("{d} (published by the vendor)"),
+        None if def.name == "nginx" => {
+            "REFUSED: nginx publishes no checksum and devd has no digest recorded for this build".to_string()
+        }
         None if def.name == "mariadb" => "published in the release's sha256sums.txt".to_string(),
         None => "NOT PUBLISHED by the vendor; only the HTTPS transport is checked".to_string(),
     };

@@ -1188,7 +1188,7 @@ pub fn adopt(ctx: &Ctx, name: &str, path: &Path, port: Option<u16>) -> Result<In
 /// nginx publishes a signature and no checksum, so only the versions whose digest
 /// devd has recorded qualify. The others (MariaDB, whose digest comes from its
 /// release API when a build is chosen) are all candidates.
-fn verifiable(name: &str, list: &[Available]) -> Vec<Available> {
+pub(crate) fn verifiable(name: &str, list: &[Available]) -> Vec<Available> {
     if name == "nginx" {
         list.iter().filter(|a| a.sha256.is_some()).cloned().collect()
     } else {
