@@ -23,3 +23,12 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# Files the installer places when devd is installed into this folder
+/devd.exe
+/devd-desktop.exe
+/WebView2Loader.dll
+/uninstall.exe
+/launch.vbs
+/add-to-path.ps1
+/remove-from-path.ps1
