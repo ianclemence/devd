@@ -257,9 +257,11 @@ fn register_read(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
     .handlers_with(
         git,
         |_ctx, a: &RepoArgs, _git| Ok(read_plan("git.status", format!("read status of {}", a.repo))),
-        |ctx: &Ctx, a: &RepoArgs, git: &GitService| {
+        |_ctx: &Ctx, a: &RepoArgs, git: &GitService| {
             let repo = repo_of(git, &a.repo)?;
-            track_repo(ctx, git, &repo);
+            // Reading a status must not index the repository. It used to, and that meant a project
+            // the person had removed from devd came back the next time its page was opened - a Read
+            // capability writing state, which is exactly what the capability model forbids.
             let status = git.status(&repo)?;
             Ok(Outcome::with_data(
                 format!(
@@ -2190,8 +2192,15 @@ fn register_destructive(reg: &mut Registry, git: &Arc<GitService>) -> Result<()>
     .handlers_with(
         git,
         |_ctx, a: &RepoArgs, _git| Ok(Plan::new("git.repo.untrack", format!("forget {}", a.repo))),
-        |ctx: &Ctx, a: &RepoArgs, _git| {
-            let removed = ctx.store.delete_repo(&a.repo)?;
+        |ctx: &Ctx, a: &RepoArgs, _git: &GitService| {
+            // The same folder may be stored under another spelling; remove every row that is it.
+            let mut removed = false;
+            for row in ctx.store.list_repos()? {
+                if devd_core::util::same_folder(std::path::Path::new(&row.path), std::path::Path::new(&a.repo)) {
+                    removed |= ctx.store.delete_repo(&row.path)?;
+                }
+            }
+            removed |= ctx.store.delete_repo(&a.repo)?;
             Ok(Outcome::ok(if removed {
                 format!("forgot {}", a.repo)
             } else {

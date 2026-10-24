@@ -1490,7 +1490,17 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
         |_, a| simple("chat.send", format!("send a message to the built-in agent{}", a.project.as_ref().map(|p| format!(" in {p}")).unwrap_or_default())),
         move |ctx, a| {
                 let t = hub.send(ctx, SendRequest { thread_id: a.thread.clone(), message: a.message.clone(), project: a.project.clone(), provider: a.provider.clone(), model: a.model.clone() })?;
-                Ok(Outcome::with_data("sent; the agent is working", serde_json::to_value(&t)?))
+                let queued = ctx.store.queued_count(&t.id)?;
+                let mut data = serde_json::to_value(&t)?;
+                if let Some(obj) = data.as_object_mut() {
+                    obj.insert("queued".into(), json!(queued));
+                }
+                let message = if queued > 0 {
+                    format!("queued; the agent will read it when the current step finishes ({queued} waiting)")
+                } else {
+                    "sent; the agent is working".to_string()
+                };
+                Ok(Outcome::with_data(message, data))
             },
     )?;
     }
@@ -1522,7 +1532,8 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                 let ev = ctx.store.list_events(&a.thread, a.after.unwrap_or(0), 500)?;
                 let pending = ctx.store.list_requests(true, Some(&a.thread), 50)?;
                 let chapters = ctx.store.list_chapters(&a.thread)?;
-                Ok(Outcome::with_data(t.state.clone(), json!({ "thread": t, "events": ev, "pending": pending, "running": hub.is_running(&a.thread), "chapters": chapters })))
+                let queued = ctx.store.queued_count(&a.thread)?;
+                Ok(Outcome::with_data(t.state.clone(), json!({ "thread": t, "events": ev, "pending": pending, "running": hub.is_running(&a.thread), "chapters": chapters, "queued": queued })))
             },
     )?;
     }

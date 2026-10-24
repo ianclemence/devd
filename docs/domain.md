@@ -14,8 +14,11 @@ thing. When a screen, a command and an agent disagree, this page says which of t
 
 A project has **zero, one or several** sites (`Site::project_dir()` is the one definition of which project a
 site belongs to: its folder, or the folder above a `public/`). A site can exist for a project devd has not
-registered; `site.list` says which (`project_known`). `project.list` lists the sites that serve each project.
-Removing a site never removes a project, and removing a project from devd never touches its files.
+registered; `site.list` says which (`project_known`). `project.list` is the one list every surface shows: the
+projects that were imported, the repositories that were indexed, **and the folders a site serves even if
+nobody imported them** (`source: "site"`), each with the sites that serve it. A site therefore never hides the
+project it belongs to. Removing a site never removes a project, and removing a project from devd never touches
+its files.
 
 There is no "workspace" noun in the product. The word in the code (`devd-workspace`) is the isolated Git
 worktree an agent works in.
@@ -101,11 +104,17 @@ schema. A database from before this build's newest migration is reported as wait
 `state` reports the file's own version. When a process has the database open, `health.status` and the window's
 Diagnostics check that one rather than re-opening the file.
 
+No **Read** capability writes state either. `git.status` used to index the repository it read, so a project
+the person had removed from devd came back the next time its page was opened. Indexing is now an explicit
+Write (`git.repo.track`, `git.repo.init`, `git.clone`), and `project.forget` matches the folder by identity
+rather than by spelling.
+
 ## Lifecycle: who runs the background work
 
 | Responsibility | Runs in | Survives closing the window? |
 | --- | --- | --- |
 | Web server, databases, PHP pools, mail | their own processes, started by `stack up` | **Yes** |
+| Web-server configuration reconciliation | a 5-second loop in the same claimed process (`ops-host.pid`), re-rendering and reloading only when a site's effective serving changes | **No** (the configuration and the running server persist; only the watch stops) |
 | Cron jobs, scheduled database backups, scheduled deploys, health checks | a loop inside the first long-lived devd process: the window, `devd ui`, or `devd serve` (`ops-host.pid` claims it) | **No** |
 | Agent conversations and team runs | the same kind of process (`agent-host.pid`) | No |
 
@@ -114,6 +123,17 @@ service) and used to be invisible. Diagnostics now has a **Scheduled jobs** comp
 process holds the claim or nothing is scheduled; degraded, and saying so, when jobs are scheduled and nothing
 is running them. To keep scheduled work running without a window, leave `devd serve` running. A hidden
 `devd serve` started at sign-in is the missing piece and is recorded in `limitations.md`.
+
+## External tools (MCP servers)
+
+A **Model Context Protocol server** another program provides is configuration, not a domain noun: the
+`mcp_servers` table plus an owner-only environment file (`devd-mcp/src/client.rs`). Its tools are **not**
+devd capabilities and are not in the registry; the assistant sees them as `mcp__<server>__<tool>` and
+calls one through `mcp.call` (or `mcp.call_trusted` for a server a person marked `allow`), which is how
+they get the same validation, approval queue and audit record as everything else. A server's `trust` is
+a person's decision and is enforced in the executing handler, not in a prompt. Adding, removing or
+trusting a server is human-only; an agent can list, test and (under the trust rule) call them. See
+[`mcp.md`](mcp.md).
 
 ## Authority
 
@@ -126,6 +146,13 @@ Every interface dispatches through `Registry::dispatch`; the checks live there, 
 5. `Destructive`, `Remote` and `Admin` tiers need a person's approval;
 6. **`agent_needs_approval`**: an agent that supplies the code devd will run waits for a person to read it.
 
+`project.exec` and `project.run` stay open to agents: they run the stack's allow-listed programs and the
+project's own tasks, with no shell, and they are the core of an agent's work loop. The allow-list includes
+interpreters (`php`, `node`, `python`), so the flags that hand an interpreter code on its command line
+(`php -r`, `node -e`, `python -c`, `npx -c`, `ruby -e`, `php artisan tinker`) are refused for an agent and
+named in the refusal; a person at the command line is not restricted. A program on the list can still have
+side effects, which is intended.
+
 The Exec tier means "starts something devd already manages" (start a service, restart a pool) and needs no
 approval for anyone. It does **not** cover a caller who writes the code, and before this change several capabilities
 that do (`cron.add`, `queue.add`, `deploy.script_set`, `deploy.vars_set`, `laravel.artisan`, `ploi.pull_script`)
@@ -135,7 +162,8 @@ A person at the command line or in the window is not asked: they wrote it.
 
 A test (`devd-bootstrap/tests/authority.rs`) walks the whole shipped registry and fails when an agent-callable,
 ungated capability takes a `command`, `script`, `steps`, `argv`, `program` or `directives` argument and is not on
-the reviewed list, with the reason each is reviewed.
+the reviewed list, with the reason each is reviewed. A second test in the same file drives the real registry and
+proves an agent cannot hand an interpreter code through `project.exec`'s allow-list.
 
 **Open decision.** `project.exec` and `project.run` stay open to agents: they run the stack's allow-listed
 programs and the project's own tasks, with no shell, and they are the core of an agent's work loop. The

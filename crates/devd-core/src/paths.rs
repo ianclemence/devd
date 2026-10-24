@@ -100,6 +100,14 @@ impl Paths {
         self.root.join("logs")
     }
 
+    /// Configuration for the Model Context Protocol servers devd connects to as a client.
+    ///
+    /// The environment values a server is given live here, one owner-only file per server,
+    /// because they often carry an API token.
+    pub fn mcp(&self) -> PathBuf {
+        self.root.join("mcp")
+    }
+
     /// Supervision data for project processes: logs and pid records.
     pub fn projects(&self) -> PathBuf {
         self.root.join("projects")
@@ -138,6 +146,7 @@ impl Paths {
             self.cache(),
             self.snapshots(),
             self.projects(),
+            self.mcp(),
         ]
     }
 

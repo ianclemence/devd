@@ -927,6 +927,7 @@
     ["assistant", "Assistant", "talk to the built-in agent"], ["projects", "Projects", "repositories and stacks"],
     ["create", "New project", "start from a stack"], ["develop", "Stacks and tasks", "detect and run project tasks"],
     ["agents", "Agents", "your team and what each member does"], ["schedules", "Schedules", "team runs on a clock"], ["shared", "Shared notes", "notes agents share"],
+    ["mcp", "MCP servers", "tools from other programs"],
     ["processes", "Processes", "supervised project processes and logs"], ["overview", "Server", "local web server overview"],
     ["services", "Services", "nginx, PHP, MariaDB and others"], ["sites", "Sites", "projects served on local hostnames"],
     ["toolchain", "Tools", "CLI tools and package managers"], ["runtimes", "Runtimes", "language versions and PHP settings"],
@@ -1106,13 +1107,13 @@
   var AREA = {
     assistant: "assistant", team: "agents",
     projects: "projects", project: "projects", create: "projects", develop: "projects",
-    agents: "agents", schedules: "agents", shared: "agents", skills: "agents",
+    agents: "agents", schedules: "agents", shared: "agents", skills: "agents", mcp: "agents",
     overview: "server", services: "server", sites: "server", site: "server", operations: "server", toolchain: "server", runtimes: "server",
     databases: "server", remote: "server", preview: "server", certificates: "server", hosts: "server"
   };
   var TABS = {
     projects: [["projects", "Projects"], ["create", "New project"], ["develop", "Stacks and tasks"]],
-    agents: [["agents", "Team"], ["team", "Runs"], ["schedules", "Schedules"], ["skills", "Skills"], ["shared", "Notes"]],
+    agents: [["agents", "Team"], ["team", "Runs"], ["schedules", "Schedules"], ["skills", "Skills"], ["shared", "Notes"], ["mcp", "MCP"]],
     server: [["overview", "Overview"], ["sites", "Sites"], ["services", "Services"], ["toolchain", "Tools"], ["runtimes", "Runtimes"], ["databases", "Databases"], ["remote", "Remote"], ["certificates", "Certificates"], ["hosts", "Hosts"]]
   };
   var AREA_HOME = { assistant: "assistant", projects: "projects", agents: "agents", server: "overview" };
@@ -3078,6 +3079,7 @@
    * skills published on skills.sh live - or imported from another agent that
    * already has them. */
   var SKILLS = { list: null, sources: null, tab: "installed" };
+  var MCP = { servers: null, error: "" };
   var STUDIO = { tab: "review", project: "", reviews: null, selected: null, memory: null, memoryOpen: null, compat: null };
 
   var SCHED = { list: null, templates: [], form: { name: "", spec: "weekdays 09:30", project: "", template: "", params: "", goal: "", done: "", waive: false } };
@@ -3548,14 +3550,16 @@
           dotKind = changes ? "warn" : "ok";
         } else if (p.is_repository) bits.push("repository");
         if (p.exists === false) { bits.push("folder is gone"); dotKind = "bad"; }
-        if (!p.registered) bits.push("not imported");
+        if (!p.registered) bits.push(p.source === "site" ? "served by a site" : "not imported");
+        if (p.sites && p.sites.length) bits.push("site: " + p.sites.join(", "));
         var isPinned = pinned.indexOf(p.path) !== -1;
         return uiRow({
           dot: dotKind, title: (isPinned ? "★ " : "") + esc(p.name),
           sub: esc(bits.join(" · ")) + '<span class="ui-path" title="' + attr(p.path) + '"> · ' + esc(p.path) + "</span>",
           open: 'data-action="open-project" data-path="' + attr(p.path) + '"',
           actions: '<button type="button" class="btn btn-mini btn-primary" data-action="open-project" data-path="' + attr(p.path) + '">Open</button>' +
-            '<button type="button" class="btn btn-mini btn-ghost" data-action="pin-project" data-path="' + attr(p.path) + '" title="' + (isPinned ? "Unpin" : "Pin to the top") + '">' + (isPinned ? "Unpin" : "Pin") + "</button>",
+            '<button type="button" class="btn btn-mini btn-ghost" data-action="pin-project" data-path="' + attr(p.path) + '" title="' + (isPinned ? "Unpin" : "Pin to the top") + '">' + (isPinned ? "Unpin" : "Pin") + "</button>" +
+            '<button type="button" class="btn btn-mini btn-ghost" data-action="project-forget" data-path="' + attr(p.path) + '" title="Remove it from devd; the folder is kept">Remove</button>',
           hover: true
         });
       });
@@ -3565,7 +3569,7 @@
       '<button type="button" class="btn" data-action="clone-form">Clone</button><button type="button" class="btn btn-primary" data-action="add-project">Add a folder</button>', body);
   }
 
-  function loadProjects() {
+  function loadProjects(quiet) {
     return read("project.list")
       .then(function (rows) {
         var list = Array.isArray(rows) ? rows : [];
@@ -3579,6 +3583,7 @@
             registered: p.registered,
             is_repository: p.is_repository,
             exists: p.exists,
+            sites: p.sites || [],
             updated_at: p.updated_at,
             status: null,
             error: null
@@ -3596,8 +3601,10 @@
         );
       })
       .catch(function (e) {
-        state.projects = [];
-        toast("error", e.message);
+        if (!quiet) {
+          state.projects = [];
+          toast("error", e.message);
+        }
       });
   }
 
@@ -4963,8 +4970,8 @@
     counts: { approvals: 0, questions: 0 },
     home: null, askText: "", askProject: "",
     providers: null, presets: null, catalogue: null, provForm: null, provBusy: {}, localFound: null,
-    threads: null, thread: null, events: [], pending: [], running: false, lastId: 0,
-    composer: "", project: "", timer: null, openSteps: {},
+    threads: null, thread: null, events: [], pending: [], running: false, lastId: 0, queued: 0,
+    composer: "", project: "", timer: null, openSteps: {}, todos: [], todosAt: 0,
     inbox: null, requests: null, history: null
   };
 
@@ -5459,8 +5466,19 @@
         if (!full) announceEvent(e);
       });
       AI.thread = d.thread; AI.pending = d.pending || []; AI.running = d.running; AI.chapters = d.chapters || [];
+      AI.queued = d.queued || 0;
       var idx = (AI.threads || []).map(function (t) { return t.id; }).indexOf(d.thread.id);
       if (idx >= 0) AI.threads[idx] = d.thread;
+      // The plan the agent wrote is project state, not conversation state. Read it when a thread
+      // opens and every few seconds after, so it stays true while the person works elsewhere.
+      var project = d.thread.project;
+      if (project && Date.now() - (AI.todosAt || 0) > 5000) {
+        AI.todosAt = Date.now();
+        read("todo.list", { project: project }).then(function (list) {
+          AI.todos = Array.isArray(list) ? list : [];
+          paintChatPlan();
+        }).catch(function () { /* the plan is optional */ });
+      }
     });
   }
 
@@ -5675,29 +5693,74 @@
       "</div></div>";
   }
 
-  function paintChat() {
-    var box = el("chat-stream");
+  /* Everything the conversation's markup depends on.
+   *
+   * The stream used to be rebuilt from scratch every 800ms, changed or not. A full innerHTML
+   * replacement drops the browser's scroll anchor, so while a person was reading further up the
+   * conversation - or selecting text - the view crept and jumped under them. Painting only when this
+   * key changes, and putting the scroll position back exactly, makes the idle case cost nothing and
+   * the busy case keep the reader's place. */
+  /* The plan, above the conversation. The agent writes it with todo.create; this is the same
+   * project state the person can see in Agents → Notes, not a private scratch list. */
+  function paintChatPlan() {
+    var box = el("chat-plan");
     if (!box) return;
+    var all = AI.todos || [];
+    var open = all.filter(function (t) { return t.status !== "done" && t.status !== "cancelled"; });
+    if (!open.length) { box.hidden = true; box.innerHTML = ""; return; }
+    var done = all.filter(function (t) { return t.status === "done"; }).length;
+    box.hidden = false;
+    box.innerHTML = '<span class="chat-plan-label">Plan</span><span class="chat-plan-count">' + done + "/" + all.length + "</span>" +
+      open.slice(0, 3).map(function (t) { return '<span class="chat-plan-item" title="' + attr(t.title) + '">' + esc(t.title) + "</span>"; }).join("") +
+      (open.length > 3 ? '<span class="dim">+' + (open.length - 3) + "</span>" : "") +
+      '<button type="button" class="btn btn-mini btn-ghost" data-action="chat-plan">View</button>';
+  }
+
+  function chatPaintKey() {
+    var t = AI.thread || {};
+    return [
+      AI.events.length,
+      AI.lastId || 0,
+      AI.events.length ? AI.events[0].id : "",
+      t.id || "", t.state || "", t.title || "", t.project || "", t.input_tokens || 0, t.output_tokens || 0,
+      AI.running ? "1" : "0",
+      AI.queued || 0,
+      (AI.pending || []).map(function (r) { return r.id + (r.state || ""); }).join(","),
+      (AI.chapters || []).map(function (c) { return c.event_id + ":" + c.title; }).join(","),
+      Object.keys(AI.openSteps || {}).filter(function (k) { return AI.openSteps[k]; }).sort().join(",")
+    ].join("|");
+  }
+
+  function paintChat(force) {    var box = el("chat-stream");
+    if (!box) return;
+    var key = chatPaintKey();
+    if (!force && key === AI.paintKey) return;
+    // A text selection lives in the DOM; replacing it just to redraw the same conversation is rude.
+    var sel = window.getSelection ? window.getSelection() : null;
+    if (!force && sel && sel.rangeCount && !sel.isCollapsed && sel.anchorNode && box.contains(sel.anchorNode)) return;
+    AI.paintKey = key;
     var near = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+    var top = box.scrollTop;
     var busy = AI.thread && (AI.thread.state === "running" || AI.running);
     box.setAttribute("aria-busy", busy ? "true" : "false");
     box.innerHTML = chatHtml();
-    if (near) box.scrollTop = box.scrollHeight;
+    // Follow the bottom only when the person was already there; otherwise stay exactly where they were.
+    box.scrollTop = near ? box.scrollHeight : top;
     var t = AI.thread;
     var head = el("chat-head");
     if (head && t) head.innerHTML = chatHeadHtml();
     var send = el("chat-send");
     if (send) {
       var busy = t && (t.state === "running" || AI.running);
-      // The button is an arrow while it sends and a square while it stops, so
-      // the control never changes its size under the pointer.
-      send.innerHTML = busy
-        ? '<svg class="icon" aria-hidden="true"><use href="#i-stop"></use></svg>'
-        : '<svg class="icon" aria-hidden="true"><use href="#i-arrow-up"></use></svg>';
-      send.setAttribute("data-action", busy ? "chat-stop" : "chat-send");
-      send.setAttribute("aria-label", busy ? "Stop" : "Send");
-      send.setAttribute("title", busy ? "Stop" : "Send");
-      send.className = "composer-send" + (busy ? " is-busy" : "");
+      // The arrow always sends or queues. While it works, the square beside it stops; a message
+      // written now is kept for the next step instead of being refused.
+      send.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#i-arrow-up"></use></svg>';
+      send.setAttribute("data-action", "chat-send");
+      send.setAttribute("aria-label", busy ? "Queue this message" : "Send");
+      send.setAttribute("title", busy ? "Queue this message for the next step" : "Send");
+      send.className = "composer-send";
+      var stop = el("chat-stop");
+      if (stop) stop.hidden = !busy;
     }
     syncComposerAction();
   }
@@ -5707,6 +5770,7 @@
     // The provider and the model live in the composer, where they are used.
     // The head says what the conversation is and where it stands.
     return '<div class="grow"><div class="chat-title">' + esc(t.title) + '</div><div class="dim mono nowrap">' + esc(t.project || "no project") + " · " + t.input_tokens + " in / " + t.output_tokens + " out tokens</div></div>" +
+      (AI.queued > 0 ? '<span class="pill pill-warn" title="Messages waiting for the next step">' + AI.queued + " queued</span>" : "") +
       (AI.chapters && AI.chapters.length ? '<button type="button" class="btn btn-mini btn-ghost" data-action="chapters-open">Chapters (' + AI.chapters.length + ")</button>" : "") + '<span class="pill ' + (t.state === "error" ? "pill-bad" : t.state === "idle" ? "" : "pill-accent") + '">' + esc(t.state.replace("_", " ")) + '</span><button type="button" class="btn btn-mini btn-ghost" data-action="chat-delete" data-id="' + attr(t.id) + '">Delete</button>';
   }
 
@@ -5749,8 +5813,9 @@
       '<input class="composer-picker mono" list="chat-models" data-chat="model" value="' + attr(currentModel) + '" placeholder="model" spellcheck="false" aria-label="Model"><datalist id="chat-models">' + modelOpts + "</datalist>" +
       "</div>" +
       '<div class="composer-right">' +
-      // One slot for the two things you can do next. The microphone holds it
-      // until there is something to send; the arrow takes it over from then.
+      // While it works, a stop button sits beside the slot; the arrow still
+      // queues what you write for the next step rather than refusing it.
+      '<button type="button" class="composer-stop" id="chat-stop" data-action="chat-stop" title="Stop after this step" aria-label="Stop" hidden><svg class="icon" aria-hidden="true"><use href="#i-stop"></use></svg></button>' +
       '<span class="composer-slot">' +
       '<button type="button" class="composer-tool" id="chat-mic" data-action="chat-dictate" title="Dictate with Whisper" aria-label="Dictate with Whisper"><svg class="icon" aria-hidden="true"><use href="#i-mic"></use></svg></button>' +
       '<button type="button" class="composer-send" id="chat-send" data-action="chat-send" title="Send" aria-label="Send"><svg class="icon" aria-hidden="true"><use href="#i-arrow-up"></use></svg></button>' +
@@ -5771,6 +5836,7 @@
       '<section class="chat">' +
       (AI.thread ? '<div class="chat-head" id="chat-head"></div>' : '<div class="chat-head"><div class="grow"><div class="chat-title">Assistant</div></div></div>') +
       (!ready ? '<div class="notice notice-warn chat-notice">No usable AI provider yet. <button type="button" class="btn btn-mini btn-primary" data-action="nav" data-view="providers">Set one up</button></div>' : "") +
+      '<div class="chat-plan" id="chat-plan" hidden></div>' +
       // The conversation and the box share one column, and the box sits at the
       // bottom of it: the conversation scrolls above, the box never moves.
       '<div class="chat-body">' +
@@ -5779,8 +5845,10 @@
       "</div>" +
       '<input type="file" id="chat-file" multiple hidden>' +
       "</section></div>";
-    paintThreads(); paintChat();
+    paintThreads(); paintChat(true);
+    paintChatPlan();
     paintAttachments();
+    fitComposer();
     var box = el("chat-stream"); if (box) box.scrollTop = box.scrollHeight;
     startThreadTimer();
   }
@@ -5991,6 +6059,73 @@
       '<button type="button" class="btn btn-danger" data-action="req-decide" data-id="' + attr(r.id) + '" data-approve="0">Decline</button></div>');
   }
 
+  // ------------------------------------------------------------------- MCP
+  //
+  // Other programs' Model Context Protocol servers. devd is the client here:
+  // their tools are offered to the assistant as mcp__<server>__<tool>, and the
+  // trust column decides whether an agent's call waits for a person.
+
+  function loadMcp() {
+    return read("mcp.list").then(function (d) {
+      MCP.servers = (d && d.servers) || [];
+      MCP.error = "";
+    }).catch(function (e) {
+      MCP.servers = MCP.servers || [];
+      MCP.error = e.message;
+    });
+  }
+
+  function mcpWhat(s) {
+    if (s.transport === "http") return s.url || "(no address)";
+    return [s.command || "(no command)"].concat(s.args || []).join(" ");
+  }
+
+  function mcpTrustSelect(s) {
+    var opts = [["ask", "Ask me each time"], ["allow", "Let agents use it without asking"], ["deny", "Agents may not use it"]];
+    return '<select class="select compact" data-change="mcp-trust" data-name="' + attr(s.name) + '" aria-label="What agents may do with ' + attr(s.name) + '">' +
+      opts.map(function (o) { return '<option value="' + o[0] + '"' + (s.trust === o[0] ? " selected" : "") + ">" + esc(o[1]) + "</option>"; }).join("") + "</select>";
+  }
+
+  function renderMcp() {
+    if (state.view !== "mcp") return;
+    if (!MCP.servers) return renderLoading();
+    var rows = MCP.servers.map(function (s) {
+      var env = (s.env_keys || []).length ? " · env: " + (s.env_keys || []).join(", ") : "";
+      var tools = s.tool_count ? s.tool_count + (s.tool_count === 1 ? " tool" : " tools") : "no tools discovered yet";
+      var sub = esc(mcpWhat(s)) + " · " + esc(tools) + esc(env) +
+        (s.last_error ? '<div class="warn-text">' + esc(s.last_error) + "</div>" : "");
+      return uiRow({
+        dot: s.enabled ? (s.last_error ? "warn" : "ok") : "off",
+        title: esc(s.name) + ' <span class="dim">' + esc(s.transport) + "</span>",
+        sub: sub,
+        actions: mcpTrustSelect(s) +
+          '<button type="button" class="btn btn-mini" data-action="mcp-test" data-name="' + attr(s.name) + '">Test</button>' +
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="mcp-enable" data-name="' + attr(s.name) + '" data-on="' + (s.enabled ? "1" : "0") + '">' + (s.enabled ? "Turn off" : "Turn on") + "</button>" +
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="mcp-remove" data-name="' + attr(s.name) + '">Remove</button>'
+      });
+    }).join("");
+    var toolsLine = MCP.servers.length
+      ? uiHead("Servers", MCP.servers.length)
+      : "";
+    el("main").innerHTML = page("MCP servers", "tools from other programs, for the assistant", "",
+      (MCP.error ? '<div class="notice notice-bad">' + esc(MCP.error) + "</div>" : "") +
+      '<p class="dim">These are Model Context Protocol servers another program provides. The assistant sees each tool as <span class="mono">mcp__&lt;server&gt;__&lt;tool&gt;</span> and gets its result as data, never as an instruction. <b>Ask me each time</b> is the default; <b>Let agents use it without asking</b> means a model can use whatever that server can do with your permissions.</p>' +
+      toolsLine + (rows ? uiList(rows) : uiEmpty("No MCP servers yet", "Add a program that speaks MCP, or import the servers Claude Code or Claude Desktop already has.", "")) +
+      '<div class="panel"><div class="panel-head"><span>Add a server</span><span class="panel-note">names are lower-case; they become the tool prefix</span></div><div class="panel-body">' +
+      '<div class="form-grid">' +
+      '<div class="field"><label class="field-label">Name</label><input class="input" id="mcp-name" placeholder="files" spellcheck="false" autocomplete="off"></div>' +
+      '<div class="field"><label class="field-label">Timeout <span class="dim">(seconds, 5-600)</span></label><input class="input" id="mcp-timeout" placeholder="120" inputmode="numeric"></div>' +
+      '<div class="field field-wide"><label class="field-label">Program <span class="dim">(stdio server)</span></label><input class="input mono" id="mcp-command" placeholder="npx" spellcheck="false" autocomplete="off"></div>' +
+      '<div class="field field-wide"><label class="field-label">Arguments <span class="dim">(one per line; never passed through a shell)</span></label><textarea class="input mono" id="mcp-args" rows="2" placeholder="-y&#10;@modelcontextprotocol/server-filesystem&#10;D:\\devd\\www" spellcheck="false"></textarea></div>' +
+      '<div class="field field-wide"><label class="field-label">Address <span class="dim">(http server instead of a program)</span></label><input class="input mono" id="mcp-url" placeholder="https://example.test/mcp" spellcheck="false" autocomplete="off"></div>' +
+      '<div class="field"><label class="field-label">Environment <span class="dim">(KEY=value, one per line; kept in a private file)</span></label><textarea class="input mono" id="mcp-env" rows="2" spellcheck="false"></textarea></div>' +
+      '<div class="field"><label class="field-label">Working directory <span class="dim">(optional)</span></label><input class="input mono" id="mcp-cwd" placeholder="D:\\devd\\www" spellcheck="false"></div>' +
+      "</div>" +
+      '<div class="ui-actions" style="margin-top:var(--s3)"><button type="button" class="btn btn-primary" data-action="mcp-add">Add the server</button>' +
+      '<button type="button" class="btn" data-action="mcp-import" title="Read ~/.claude.json, Claude Desktop, Cursor and a project .mcp.json">Import from another program</button></div>' +
+      "</div></div>");
+  }
+
   // ------------------------------------------------------------------- refresh
 
   function refresh() {
@@ -6017,6 +6152,7 @@
     if (state.view === "develop") return loadDevelop().then(render);
     if (state.view === "agents") return loadRoster().then(render);
     if (state.view === "skills") return loadSkills().then(render);
+    if (state.view === "mcp") return loadMcp().then(render);
     if (state.view === "processes") return loadProcesses().then(render);
     if (state.view === "schedules") return loadSchedules().then(render);
     if (state.view === "shared") return loadShared().then(render);
@@ -6046,6 +6182,7 @@
     skills: "/skills",
     schedules: "/schedules",
     shared: "/shared",
+    mcp: "/agents/mcp",
     studio: "/studio",
     processes: "/processes",
     overview: "/server",
@@ -6323,6 +6460,7 @@
     else if (state.view === "develop") renderDevelop();
     else if (state.view === "agents") renderRoster();
     else if (state.view === "skills") renderSkills();
+    else if (state.view === "mcp") renderMcp();
     else if (state.view === "processes") renderProcesses();
     else if (state.view === "schedules") renderSchedules();
     else if (state.view === "shared") renderShared();
@@ -6538,6 +6676,7 @@
     try { inp.setSelectionRange(pos, pos); } catch (e) { /* not a text control */ }
     closeMentions();
     syncComposerAction();
+    fitComposer();
     if (item.kind === "project" && item.path && !AI.thread) {
       AI.project = item.path;
       var sel = el("chat-project");
@@ -6561,8 +6700,24 @@
     if (!inp || !send || !mic) return;
     var busy = !!(AI.thread && (AI.thread.state === "running" || AI.running));
     var hasText = !!(inp.value || "").trim() || ATTACHMENTS.length;
-    send.hidden = !busy && !hasText;
+    // With text there is always something to do - send it, or queue it while it works.
+    send.hidden = !hasText;
     mic.hidden = busy || hasText;
+    var stop = el("chat-stop");
+    if (stop) stop.hidden = !busy;
+  }
+
+  /* The box grows with what is written in it, up to a share of the window, and
+   * then scrolls inside itself. It rests at its normal height again when it is
+   * emptied, so a long draft never leaves the conversation cramped afterwards. */
+  function fitComposer() {
+    var inp = el("chat-input");
+    if (!inp) return;
+    var max = Math.max(120, Math.min(360, Math.round(window.innerHeight * 0.4)));
+    inp.style.height = "auto";
+    var natural = inp.scrollHeight;
+    inp.style.height = Math.min(natural, max) + "px";
+    inp.style.overflowY = natural > max ? "auto" : "hidden";
   }
 
   /* Record 16 kHz mono PCM and encode it as a WAV file.
@@ -6915,7 +7070,17 @@
       writeRoute("assistant", false);
       pollThread(true).then(function () { renderAssistant(); });
     },
-    "chat-new": function () { AI.thread = null; AI.events = []; AI.pending = []; AI.lastId = 0; writeRoute("assistant", false); renderAssistant(); },
+    "chat-new": function () { AI.thread = null; AI.events = []; AI.pending = []; AI.lastId = 0; AI.todos = []; AI.todosAt = 0; AI.queued = 0; writeRoute("assistant", false); renderAssistant(); },
+    "chat-plan": function () {
+      var rows = (AI.todos || []).map(function (t) {
+        var st = t.status || "open";
+        var cls = st === "blocked" ? "pill-warn" : st === "done" ? "" : "pill-accent";
+        return '<div class="plan-row"><span class="pill ' + cls + '">' + esc(st.replace("_", " ")) + "</span>" +
+          '<span class="grow">' + esc(t.title) + '</span><span class="dim mono">' + esc(t.priority || "normal") + "</span></div>" +
+          (t.description ? '<div class="dim plan-note">' + esc(t.description) + "</div>" : "");
+      }).join("");
+      uiSheet("Plan", rows || '<div class="empty-inline">No todos in this project yet.</div>');
+    },
     "chat-send": function () {
       var inp = el("chat-input"); var text = (inp.value || "").trim();
       if (!text && !ATTACHMENTS.length) return;
@@ -6927,6 +7092,7 @@
       inp.value = ""; AI.composer = "";
       ATTACHMENTS = [];
       paintAttachments();
+      fitComposer();
       if (AI.thread && AI.thread.id) return sendChat({ message: text, thread: AI.thread.id });
       var sel = el("chat-project"); startChat(text, sel ? sel.value : "");
     },
@@ -7365,6 +7531,50 @@
 
     "schedule-delete": function (node) { uiConfirm({ title: "Delete the schedule " + node.dataset.name + "?", text: "Runs it already started are not touched.", confirm: "Delete", danger: true }).then(function (yes) { if (yes) run("schedule.delete", { name: node.dataset.name }).then(function () { return loadSchedules().then(renderSchedules); }); }); },
 
+    "mcp-add": function () {
+      var name = readInput("mcp-name");
+      var command = readInput("mcp-command");
+      var url = readInput("mcp-url");
+      var args = (el("mcp-args") ? el("mcp-args").value : "").split(/\r?\n/).map(function (x) { return x.trim(); }).filter(Boolean);
+      var env = {};
+      (el("mcp-env") ? el("mcp-env").value : "").split(/\r?\n/).forEach(function (line) {
+        var i = line.indexOf("=");
+        if (i > 0) { var k = line.slice(0, i).trim(); if (k) env[k] = line.slice(i + 1); }
+      });
+      var cwd = readInput("mcp-cwd");
+      var timeout = parseInt(readInput("mcp-timeout"), 10);
+      if (!name) return toast("error", "Give the server a name.");
+      if (name !== name.toLowerCase() || !/^[a-z0-9-]+$/.test(name)) return toast("error", "A name is lower-case letters, digits and `-`.");
+      if (!command && !url) return toast("error", "Give a program to start (stdio), or an http address.");
+      run("mcp.add", { name: name, command: command || null, args: args, url: url || null, env: env, cwd: cwd || null, timeout_secs: timeout || 120 })
+        .then(function (o) { if (!o) return; toast("ok", "Added " + name + ". Use Test to discover its tools."); return loadMcp().then(renderMcp); })
+        .catch(function (e) { toast("error", e.message); });
+    },
+    "mcp-import": function () {
+      run("mcp.import", {}).then(function (o) {
+        if (!o) return;
+        var imported = (o.imported || []).length, skipped = (o.skipped || []).length;
+        toast(imported ? "ok" : "info", imported + " imported" + (skipped ? ", " + skipped + " skipped" : "") + ((o.files || []).length ? " from " + (o.files || []).join(", ") : ". No configuration file was found."));
+        return loadMcp().then(renderMcp);
+      }).catch(function (e) { toast("error", e.message); });
+    },
+    "mcp-test": function (node) {
+      run("mcp.test", { name: node.dataset.name }).then(function (o) {
+        if (o) toast("ok", node.dataset.name + " answered with " + ((o.tools || []).length) + " tool(s).");
+        return loadMcp().then(renderMcp);
+      }).catch(function (e) { toast("error", e.message); loadMcp().then(renderMcp); });
+    },
+    "mcp-enable": function (node) {
+      run("mcp.enable", { name: node.dataset.name, enabled: node.dataset.on !== "1" }).then(function () { return loadMcp().then(renderMcp); }).catch(function (e) { toast("error", e.message); });
+    },
+    "mcp-trust": function (node) {
+      run("mcp.trust", { name: node.dataset.name, trust: node.value }).then(function () { return loadMcp().then(renderMcp); }).catch(function (e) { toast("error", e.message); loadMcp().then(renderMcp); });
+    },
+    "mcp-remove": function (node) {
+      uiConfirm({ title: "Remove the MCP server " + node.dataset.name + "?", text: "Its tools stop being offered and its private environment file is deleted. The program itself is not uninstalled.", confirm: "Remove", danger: true })
+        .then(function (yes) { if (yes) run("mcp.remove", { name: node.dataset.name }).then(function () { return loadMcp().then(renderMcp); }); });
+    },
+
     "start-service": function (node) { act("service.start", { name: node.dataset.name }); },
 
     "stop-service": function (node) { act("service.stop", { name: node.dataset.name }); },
@@ -7594,6 +7804,18 @@
     },
 
     "open-project": function (node) { openProject(node.dataset.path); },
+
+    "project-forget": function (node) {
+      var path = node.dataset.path;
+      uiConfirm({
+        title: "Remove " + dirName(path) + " from devd?",
+        text: "devd forgets the project and any index entry for it. The folder and everything in it are kept, and it can be added again later.",
+        confirm: "Remove",
+        danger: true
+      }).then(function (yes) {
+        if (yes) act("project.forget", { path: path });
+      });
+    },
 
     "project-refresh": function () {
       return loadProject().then(function () { return loadTab(state.tab); }).then(render);
@@ -8187,7 +8409,15 @@
       if (!o) return;
       var id = (o.data && (o.data.id || o.data.thread)) || args.thread;
       if (!id) return;
-      AI.thread = { id: id, title: "", state: "running", input_tokens: 0, output_tokens: 0 }; AI.lastId = 0; AI.events = []; AI.pending = [];
+      var queued = (o.data && o.data.queued) || 0;
+      if (queued > 0 && AI.thread && AI.thread.id === id) {
+        // It is working; the message is waiting for the next step.
+        AI.queued = queued;
+        toast("info", "Queued for the next step");
+        pollThread(false).then(function () { paintChat(); });
+        return;
+      }
+      AI.thread = { id: id, title: "", state: "running", input_tokens: 0, output_tokens: 0 }; AI.lastId = 0; AI.events = []; AI.pending = []; AI.queued = queued;
       state.view = "assistant"; render();
       read("chat.list").then(function (t) { AI.threads = t; return pollThread(true); }).then(renderAssistant);
     });
@@ -8215,6 +8445,7 @@
     else if (t.id === "chat-input") {
       AI.composer = t.value;
       syncComposerAction();
+      fitComposer();
       // "@" opens the list of things a message can refer to.
       var trig = mentionTrigger(t.value, t.selectionStart);
       if (!trig) closeMentions();
@@ -8232,6 +8463,9 @@
       }, 120);
     }
   });
+  /* The drafting box's height depends on the window, so it is measured again when the window changes. */
+  window.addEventListener("resize", function () { fitComposer(); });
+
   document.addEventListener("change", function (e) {
     var t = e.target;
     if (t.id === "home-project") AI.askProject = t.value;
@@ -8370,6 +8604,45 @@
     loadHealth().then(function () { healthChip(); rail(); statusbar(); });
   }, 30000);
 
+  // ------------------------------------------------------------------ live sync
+  //
+  // The projects, folders and files on this machine are changed by other programs too: an editor
+  // saves a file, a package manager creates a folder, a build removes a lock file. The screen is
+  // re-read on a cadence, and the markup guard below repaints only when the answer actually changed,
+  // so an unchanged machine costs nothing and a changed one appears without a reload. Nothing is
+  // re-read while a person is typing, dragging a selection, or has a sheet open: pulling the page
+  // from under them is worse than a five-second lag.
+
+  var LIVE = { busy: false, last: 0 };
+  function liveIsEditing() {
+    var a = document.activeElement;
+    if (a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" || a.tagName === "SELECT" || a.isContentEditable)) return true;
+    if (state.palette && state.palette.open) return true;
+    if (document.querySelector(".drawer, .modal, [role=\"dialog\"]")) return true;
+    var sel = window.getSelection ? window.getSelection() : null;
+    if (sel && sel.rangeCount && !sel.isCollapsed) return true;
+    return false;
+  }
+  function liveTick() {
+    if (document.hidden || LIVE.busy || state.busy) return;
+    var every = { projects: 15000, project: 7000, sites: 5000, site: 6000, inbox: 5000, mcp: 10000, home: 20000 }[state.view];
+    if (!every) return;
+    var now = Date.now();
+    if (now - LIVE.last < every || liveIsEditing()) return;
+    var load;
+    if (state.view === "projects") load = function () { return loadProjects(true); };
+    else if (state.view === "sites" || state.view === "site") load = loadServer;
+    else if (state.view === "inbox") load = loadInbox;
+    else if (state.view === "mcp") load = loadMcp;
+    else if (state.view === "home") load = loadHome;
+    else if (state.view === "project") load = function () { return loadProject().then(function () { return loadTab(state.tab); }); };
+    if (!load) return;
+    LIVE.last = now;
+    LIVE.busy = true;
+    load().then(function () { render(); }).catch(function () { /* the next tick tries again */ }).then(function () { LIVE.busy = false; });
+  }
+  setInterval(liveTick, 1000);
+
   // Views that repaint a panel in place (the assistant poll, provider actions)
   // bypass render(), so a small observer keeps their tables scrollable too.
   var mainNode = el("main");
@@ -8383,7 +8656,7 @@
   (function () {
     var node = el("main");
     var desc = Object.getOwnPropertyDescriptor(Element.prototype, "innerHTML");
-    var calm = ["overview", "services", "sites", "site", "operations", "toolchain", "runtimes", "databases", "remote", "preview", "certificates", "hosts"];
+    var calm = ["projects", "home", "inbox", "mcp", "project", "overview", "services", "sites", "site", "operations", "toolchain", "runtimes", "databases", "remote", "preview", "certificates", "hosts"];
     var last = null;
     if (!node || !desc) return;
     Object.defineProperty(node, "innerHTML", {
@@ -8391,6 +8664,15 @@
       get: function () { return desc.get.call(this); },
       set: function (html) {
         if (calm.indexOf(state.view) >= 0 && html === last) return;
+        // A live refresh may replace a page the person is reading; keep their place when it does.
+        if (calm.indexOf(state.view) >= 0) {
+          var scroller = document.scrollingElement || document.documentElement;
+          var top = scroller ? scroller.scrollTop : 0;
+          last = html;
+          desc.set.call(this, html);
+          if (scroller) scroller.scrollTop = top;
+          return;
+        }
         last = html;
         desc.set.call(this, html);
       }

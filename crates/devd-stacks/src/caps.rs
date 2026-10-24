@@ -478,7 +478,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
     )?;
 
     reg.define::<NoArgs>("project.list", "List known projects")
-    .description("Every project devd knows about: the ones it created or imported, and the repositories that were indexed. One list, so the application, the terminal and an agent all see the same projects. Each row says where the project is, what stack was detected, how it was added, and whether the folder is still there.")
+    .description("Every project devd knows about: the ones it created or imported, the repositories that were indexed, and the folders a site serves even if nobody imported them. One list, so the application, the terminal and an agent all see the same projects. Each row says where the project is, what stack was detected, how it was added, whether the folder is still there, and which sites serve it.")
     .tier(Tier::Read)
     .effect(Effect::Read)
     .agent_safe()
@@ -528,7 +528,38 @@ pub fn register(reg: &mut Registry) -> Result<()> {
                     "registered": false,
                     "is_repository": true,
                     "exists": Path::new(&r.path).is_dir(),
+                    "sites": sites_of(&r.path),
                     "updated_at": r.last_seen_at,
+                }));
+            }
+            // A folder a site serves is a project the person is working on even when it was
+            // never imported or indexed - which is the common case for a folder they added
+            // through the Sites screen. Without this, the Sites screen would be the only place
+            // those projects appeared, and Projects would look like it had lost them.
+            let mut by_folder: Vec<(String, Vec<String>)> = Vec::new();
+            for s in &sites {
+                let folder = authz::normalise(&s.project_dir()).display().to_string();
+                match by_folder.iter_mut().find(|(p, _)| *p == folder) {
+                    Some((_, names)) => names.push(s.name.clone()),
+                    None => by_folder.push((folder, vec![s.name.clone()])),
+                }
+            }
+            for (path, names) in by_folder {
+                if seen.iter().any(|s| s == &path) {
+                    continue;
+                }
+                seen.push(path.clone());
+                v.push(json!({
+                    "path": path,
+                    "name": Path::new(&path).file_name().and_then(|n| n.to_str()).unwrap_or(&path),
+                    "stack": Value::Null,
+                    "package_manager": Value::Null,
+                    "source": "site",
+                    "registered": false,
+                    "is_repository": Path::new(&path).join(".git").exists(),
+                    "exists": Path::new(&path).is_dir(),
+                    "sites": names,
+                    "updated_at": Value::Null,
                 }));
             }
             v.sort_by(|a, b| {
@@ -549,8 +580,21 @@ pub fn register(reg: &mut Registry) -> Result<()> {
     .handlers(
         |_, a| Ok(Plan::new("project.forget", format!("forget {} (the folder is kept)", a.path))),
         |ctx, a| {
-            let p = authz::normalise(Path::new(&a.path)).display().to_string();
+            // Match by folder, not by spelling: a stored path may be `D:\x`, `D:/x` or a different
+            // case, and a removal that silently misses the row is reported as "not registered".
+            let want = authz::normalise(Path::new(&a.path));
             let mut removed = false;
+            for row in ctx.store.list_stack_projects()? {
+                if devd_core::util::same_folder(&authz::normalise(Path::new(&row.path)), &want) && ctx.store.delete_stack_project(&row.path)? {
+                    removed = true;
+                }
+            }
+            for row in ctx.store.list_repos()? {
+                if devd_core::util::same_folder(&authz::normalise(Path::new(&row.path)), &want) && ctx.store.delete_repo(&row.path)? {
+                    removed = true;
+                }
+            }
+            let p = want.display().to_string();
             if ctx.store.delete_stack_project(&p)? {
                 removed = true;
             }
@@ -632,6 +676,9 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             let stack = c.primary.as_deref().and_then(|s| r.stack(s));
             let mut p = Plan::new("project.exec", format!("run `{}`", crate::template::display(&exec::redact_argv(&a.argv)))).step(format!("in {}", a.path));
             if let Some(m) = tasks::is_destructive(stack, &a.argv) { p = p.effect(format!("DESTRUCTIVE ({m}): refused here; use project.exec_destructive")); }
+            if ctx.actor.is_agent() {
+                if let Some(flag) = tasks::inline_code(&a.argv) { p = p.effect(format!("REFUSED for an agent: `{flag}` gives an interpreter code to run")); }
+            }
             Ok(p)
         },
         |ctx, a| exec_cmd(ctx, a, false),
@@ -1092,6 +1139,13 @@ fn exec_cmd(ctx: &Ctx, a: &ExecArgs, destructive: bool) -> Result<Outcome> {
     let r = stacks(ctx);
     let (dir, c) = detect_ctx(ctx, &r, &a.path, None)?;
     let stack = c.primary.as_deref().and_then(|s| r.stack(s));
+    if ctx.actor.is_agent() {
+        if let Some(flag) = tasks::inline_code(&a.argv) {
+            return Err(DevdError::denied(format!(
+                "`{flag}` gives an interpreter code to run, which the program allow-list does not cover. An agent can run the project's own scripts and commands; a person can run this one"
+            )));
+        }
+    }
     let mark = tasks::is_destructive(stack, &a.argv);
     if mark.is_some() && !destructive {
         return Err(DevdError::denied(format!("`{}` contains `{}` and can destroy data. Use project.exec_destructive, which needs a human's approval.", a.argv.join(" "), mark.unwrap_or_default())));

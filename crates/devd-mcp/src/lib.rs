@@ -53,6 +53,10 @@ use devd_core::capability::{Actor, Approval, Ctx};
 use devd_core::doctor::{self, Check, Level};
 use devd_core::{DevdError, InvokeRequest, Registry, Result};
 
+/// The client side: the MCP servers devd connects to, as opposed to the one it serves.
+pub mod caps;
+pub mod client;
+
 /// Protocol version this server speaks. A client that wants an older version
 /// negotiates it in `initialize`; the tool surface does not depend on it.
 pub const PROTOCOL_VERSION: &str = "2025-06-18";

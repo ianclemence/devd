@@ -518,6 +518,41 @@ pub fn exec_allowed(ctx: &Ctx, reg: &StackRegistry, stack: Option<&StackDef>, pm
     )
 }
 
+/// Whether the command hands an interpreter code to run on its command line, and which flag does.
+///
+/// `project.exec` admits a program, not what the program is told to do, and `php`, `node`, `python`,
+/// `npx` and `artisan tinker` will each run code given as an argument. For a caller that is an agent
+/// that is an arbitrary-code capability behind an allow-list that looks like it prevents one, so the
+/// flags that carry code are refused for agents. A person at the command line is not restricted.
+pub fn inline_code(argv: &[String]) -> Option<String> {
+    let program = argv.first()?.replace('\\', "/");
+    let name = program.rsplit('/').next().unwrap_or(&program).to_ascii_lowercase();
+    let name = name.trim_end_matches(".exe").trim_end_matches(".cmd").trim_end_matches(".bat").to_string();
+    let rest = &argv[1..];
+    let flags: &[&str] = match name.as_str() {
+        "php" => &["-r", "-R", "-B", "-E", "--run"],
+        "node" | "bun" | "deno" => &["-e", "--eval", "-p", "--print"],
+        "python" | "python3" | "py" => &["-c"],
+        "ruby" | "perl" => &["-e", "-E"],
+        "npx" | "npm" | "pnpm" | "yarn" => &["-c", "--call"],
+        _ => &[],
+    };
+    for arg in rest {
+        if flags.iter().any(|f| arg == f || (f.starts_with("--") && arg.starts_with(&format!("{f}=")))) {
+            return Some(format!("{name} {arg}"));
+        }
+        // `-rcode` and `-ecode`: the flag and its value in one argument.
+        if flags.iter().any(|f| f.len() == 2 && arg.len() > 2 && arg.starts_with(f) && !arg.starts_with("--") && name != "npx") && matches!(name.as_str(), "php" | "ruby" | "perl" | "python" | "python3" | "py") {
+            return Some(format!("{name} {}", &arg[..2]));
+        }
+    }
+    // Laravel's REPL runs whatever it is given.
+    if name == "php" && rest.iter().any(|a| a == "tinker") {
+        return Some("php artisan tinker".to_string());
+    }
+    None
+}
+
 /// Whether any argument marks the command destructive for this stack.
 pub fn is_destructive(stack: Option<&StackDef>, argv: &[String]) -> Option<String> {
     let joined = argv.join(" ");
@@ -531,6 +566,34 @@ pub fn is_destructive(stack: Option<&StackDef>, argv: &[String]) -> Option<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_flag_that_carries_code_is_found_whatever_the_program_is_called() {
+        let v = |s: &[&str]| s.iter().map(|x| x.to_string()).collect::<Vec<String>>();
+        for (argv, expected) in [
+            (v(&["php", "-r", "system('x');"]), "php -r"),
+            (v(&["C:\\tools\\php.exe", "-r", "x"]), "php -r"),
+            (v(&["php", "-rsystem('x');"]), "php -r"),
+            (v(&["node", "--eval=process.exit()"]), "node --eval=process.exit()"),
+            (v(&["node", "-p", "1"]), "node -p"),
+            (v(&["python3", "-c", "import os"]), "python3 -c"),
+            (v(&["npx", "-c", "echo hi"]), "npx -c"),
+            (v(&["php", "artisan", "tinker", "--execute=1"]), "php artisan tinker"),
+        ] {
+            assert_eq!(inline_code(&argv).as_deref(), Some(expected), "{argv:?}");
+        }
+        for argv in [
+            v(&["php", "artisan", "make:model", "Post"]),
+            v(&["php", "artisan", "migrate:status"]),
+            v(&["composer", "install", "--no-interaction"]),
+            v(&["vendor/bin/pint", "--test"]),
+            v(&["npm", "run", "build"]),
+            v(&["php", "-v"]),
+            v(&["node", "scripts/build.js"]),
+        ] {
+            assert_eq!(inline_code(&argv), None, "an ordinary command is not blocked: {argv:?}");
+        }
+    }
 
     #[test]
     fn scripts_are_classified_by_name_and_body() {

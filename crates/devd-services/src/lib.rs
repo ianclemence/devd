@@ -1568,7 +1568,56 @@ pub fn set_web_ports(ctx: &Ctx, http: u16, https: u16) -> Result<()> {
     Ok(())
 }
 
-/// Start a service and confirm it is answering.
+/// Write the web server's configuration from the records, every time it is about to start.
+///
+/// The file is derived output: the records are the truth and the renderer is code. Rendering only
+/// when the file was missing meant a new devd, with a renderer that knows more, kept starting the web
+/// server on the file the previous version wrote, until something happened to change a site.
+/// Rendering is atomic and the same every time for the same records, so doing it at each start costs
+/// nothing and cannot disagree with what the running code believes.
+pub fn refresh_web_config(ctx: &Ctx, name: &str) -> Result<()> {
+    match name {
+        "nginx" => nginx::render(ctx).map(|_| ()),
+        "apache" => apache::render(ctx).map(|_| ()),
+        _ => Ok(()),
+    }
+}
+
+/// Re-render the web server configuration and reload the server if it is running.
+///
+/// This is the other half of a site knowing what it serves: the answer is read from the folder, so
+/// another program creating or removing an entry file changes it. Called by the background reconciler
+/// when that answer changes; a render is atomic and only reaches a reload after `-t` accepts it, so a
+/// bad render leaves the running server on the configuration it already had.
+pub fn reconcile_web(ctx: &Ctx) -> Result<Vec<String>> {
+    let mut reloaded = Vec::new();
+    for name in ["nginx", "apache"] {
+        let Ok(status) = status(ctx, name) else { continue };
+        if !status.installed {
+            continue;
+        }
+        refresh_web_config(ctx, name)?;
+        match name {
+            "nginx" => {
+                nginx::test(ctx)?;
+                if status.running {
+                    nginx::reload(ctx)?;
+                    reloaded.push(name.to_string());
+                }
+            }
+            "apache" => {
+                apache::test(ctx)?;
+                if status.running {
+                    restart(ctx, name)?;
+                    reloaded.push(name.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(reloaded)
+}
+
 pub fn start(ctx: &Ctx, name: &str) -> Result<Status> {
     // The PHP listener has no installer of its own: it comes from a PHP runtime.
     // Asking for it to start before anything has created the row is a reasonable
@@ -1606,10 +1655,8 @@ pub fn start(ctx: &Ctx, name: &str) -> Result<Status> {
     // For nginx the configuration is checked before the process is started, so a
     // bad render is reported as a configuration error with nginx's own message
     // rather than as a service that exits immediately after it starts.
+    refresh_web_config(ctx, &service.name)?;
     if service.name == "nginx" {
-        if !nginx::config_path(ctx).is_file() {
-            nginx::render(ctx)?;
-        }
         nginx::test(ctx)?;
     }
 
@@ -1623,9 +1670,6 @@ pub fn start(ctx: &Ctx, name: &str) -> Result<Status> {
     }
 
     if service.name == "apache" {
-        if !apache::config_path(ctx).is_file() {
-            apache::render(ctx)?;
-        }
         apache::test(ctx)?;
     }
 

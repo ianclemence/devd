@@ -34,6 +34,8 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (12, include_str!("../sql/012_chat_chapters.sql")),
     (13, include_str!("../sql/013_ops.sql")),
     (14, include_str!("../sql/014_site_serving.sql")),
+    (15, include_str!("../sql/015_mcp.sql")),
+    (16, include_str!("../sql/016_chat_queue.sql")),
 ];
 
 /// The newest schema this build knows. A database below it is migrated the first time devd

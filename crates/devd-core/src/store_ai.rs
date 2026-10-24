@@ -8,6 +8,21 @@ use crate::error::{DevdError, Result};
 use crate::state::Store;
 use crate::util;
 
+/// A message a person wrote while the assistant was working, waiting for the next step.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueuedMessage {
+    /// Row id, in the order the messages were written.
+    pub id: i64,
+    /// The conversation it belongs to.
+    pub thread_id: String,
+    /// What the person wrote.
+    pub text: String,
+    /// Who wrote it.
+    pub from_actor: String,
+    /// When it was queued.
+    pub created_at: String,
+}
+
 /// A configured model provider. The API key is never part of this row.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Provider {
@@ -446,9 +461,57 @@ impl Store {
         Ok(thread)
     }
 
-    /// Pin a message as a chapter of its conversation, or rename the chapter already there.
-    pub fn pin_chapter(&self, thread: &str, event: i64, title: &str) -> Result<Chapter> {
+    /// Queue a message for the next step of a conversation that is already working.
+    pub fn queue_message(&self, thread_id: &str, text: &str, from: &str) -> Result<i64> {
         self.with(|c| {
+            c.execute(
+                "INSERT INTO chat_queue (thread_id, text, from_actor, created_at) VALUES (?1,?2,?3,?4)",
+                params![thread_id, text, from, util::now()],
+            )?;
+            Ok(c.last_insert_rowid())
+        })
+    }
+
+    /// How many messages are waiting for the next step.
+    pub fn queued_count(&self, thread_id: &str) -> Result<usize> {
+        self.with(|c| {
+            Ok(c.query_row("SELECT COUNT(*) FROM chat_queue WHERE thread_id=?1", params![thread_id], |r| r.get::<_, i64>(0))? as usize)
+        })
+    }
+
+    /// Take every queued message, in the order it was written, and remove it from the queue.
+    ///
+    /// The select and the delete are one transaction, so a crash cannot deliver the same message
+    /// twice or lose one between the two statements.
+    pub fn take_queued(&self, thread_id: &str) -> Result<Vec<QueuedMessage>> {
+        self.with(|c| {
+            let tx = c.unchecked_transaction()?;
+            let rows = {
+                let mut st = tx.prepare("SELECT id, thread_id, text, from_actor, created_at FROM chat_queue WHERE thread_id=?1 ORDER BY id")?;
+                let rows = st.query_map(params![thread_id], |r| {
+                    Ok(QueuedMessage {
+                        id: r.get(0)?,
+                        thread_id: r.get(1)?,
+                        text: r.get(2)?,
+                        from_actor: r.get(3)?,
+                        created_at: r.get(4)?,
+                    })
+                })?;
+                rows.collect::<std::result::Result<Vec<_>, _>>()?
+            };
+            tx.execute("DELETE FROM chat_queue WHERE thread_id=?1", params![thread_id])?;
+            tx.commit()?;
+            Ok(rows)
+        })
+    }
+
+    /// Discard everything queued for a conversation. Returns how many.
+    pub fn clear_queued(&self, thread_id: &str) -> Result<usize> {
+        self.with(|c| Ok(c.execute("DELETE FROM chat_queue WHERE thread_id=?1", params![thread_id])?))
+    }
+
+    /// Pin a message as a chapter of its conversation, or rename the chapter already there.
+    pub fn pin_chapter(&self, thread: &str, event: i64, title: &str) -> Result<Chapter> {        self.with(|c| {
             c.execute(
                 "INSERT INTO chat_chapters (id,thread_id,event_id,title,created_at) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(thread_id,event_id) DO UPDATE SET title=excluded.title",
                 params![util::new_id(), thread, event, title, util::now()],
@@ -475,6 +538,7 @@ impl Store {
     pub fn delete_thread(&self, id: &str) -> Result<bool> {
         self.with(|c| {
             c.execute("DELETE FROM chat_chapters WHERE thread_id=?1", params![id])?;
+            c.execute("DELETE FROM chat_queue WHERE thread_id=?1", params![id])?;
             c.execute("DELETE FROM chat_events WHERE thread_id=?1", params![id])?;
             c.execute("DELETE FROM agent_requests WHERE thread_id=?1", params![id])?;
             Ok(c.execute("DELETE FROM chat_threads WHERE id=?1", params![id])? > 0)

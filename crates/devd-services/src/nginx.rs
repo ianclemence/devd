@@ -836,4 +836,42 @@ mod tests {
         let text = render_for(&[ghost], 8080, 8443);
         assert!(block_of(&text, "ghost").contains("try_files $uri $uri/ =404;"), "{text}");
     }
+
+    #[test]
+    fn starting_the_web_server_replaces_a_configuration_an_older_devd_wrote() {
+        use devd_core::capability::{Actor, Ctx};
+        use devd_core::config::Settings;
+        use devd_core::events::EventBus;
+        use devd_core::paths::Paths;
+        use devd_core::state::Store;
+        use std::sync::Arc;
+
+        let dir = std::env::temp_dir().join(format!("devd-start-render-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let paths = Paths::rooted(&dir);
+        paths.ensure().unwrap();
+        let ctx = Ctx { store: Arc::new(Store::open_in_memory().unwrap()), paths: Arc::new(paths), settings: Arc::new(Settings::default()), events: EventBus::new(), actor: Actor::system(), dry_run: false };
+        // nginx "installed": the renderer only needs the program to exist.
+        std::fs::create_dir_all(directory(&ctx)).unwrap();
+        std::fs::write(directory(&ctx).join(exe_name()), b"").unwrap();
+        // A site that serves nothing, and a configuration file the previous devd wrote for it.
+        let go = dir.join("www").join("ghost");
+        std::fs::create_dir_all(&go).unwrap();
+        std::fs::write(go.join("go.mod"), "module ghost").unwrap();
+        let mut s = site("ghost", "internal");
+        s.php = Some("8.5.12".to_string());
+        s.serving = None;
+        s.root = go.display().to_string();
+        ctx.store.upsert_site(&s).unwrap();
+        std::fs::create_dir_all(config_path(&ctx).parent().unwrap()).unwrap();
+        std::fs::write(config_path(&ctx), "# written by 0.11: ghost { fastcgi_pass devd_php_8_5; root ghost; }\n").unwrap();
+
+        crate::refresh_web_config(&ctx, "nginx").unwrap();
+
+        let text = std::fs::read_to_string(config_path(&ctx)).unwrap();
+        assert!(!text.contains("written by 0.11"), "the stale file is gone");
+        assert!(text.contains("ghost has no web entry point"), "{text}");
+        assert!(crate::refresh_web_config(&ctx, "mariadb").is_ok(), "a service that has no configuration of this kind is left alone");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -27,6 +27,7 @@ pub mod serving;
 pub mod shims;
 pub mod state;
 pub mod store_ai;
+pub mod store_mcp;
 pub mod store_ops;
 pub mod store_pins;
 pub mod store_schedule;
@@ -49,7 +50,8 @@ pub use events::{Event, EventBus};
 pub use paths::Paths;
 pub use registry::Registry;
 pub use state::Store;
-pub use store_ai::{AgentRequest, CatalogueModel, Chapter, ChatEvent, ChatThread, InboxMessage, Provider};
+pub use store_ai::{AgentRequest, CatalogueModel, Chapter, ChatEvent, ChatThread, InboxMessage, Provider, QueuedMessage};
+pub use store_mcp::{McpServer, McpTool, McpTrust};
 pub use store_schedule::Schedule;
 pub use store_team::{GoalLoop, ProviderCheck, RoleModel, ServiceDecision, TeamEvent, TeamRun, TeamTask};
 pub use store_stacks::{StackProject, StackRun};
@@ -100,6 +102,8 @@ pub mod error {
         },
         #[error("timed out: {0}")]
         Timeout(String),
+        #[error("mcp error: {0}")]
+        Mcp(String),
         #[error("internal error: {0}")]
         Internal(String),
     }
@@ -132,6 +136,10 @@ pub mod error {
         pub fn conflict(msg: impl Into<String>) -> Self {
             Self::Conflict(msg.into())
         }
+        /// Construct an [`DevdError::Mcp`].
+        pub fn mcp(msg: impl Into<String>) -> Self {
+            Self::Mcp(msg.into())
+        }
 
         /// Stable machine-readable error code, used by the HTTP and MCP
         /// surfaces.
@@ -149,6 +157,7 @@ pub mod error {
                 Self::ApprovalRequired { .. } => "approval_required",
                 Self::Command { .. } => "command_failed",
                 Self::Timeout(_) => "timeout",
+                Self::Mcp(_) => "mcp_error",
                 Self::Internal(_) => "internal_error",
             }
         }

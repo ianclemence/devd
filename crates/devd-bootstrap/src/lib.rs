@@ -71,6 +71,82 @@ pub fn start_ops(paths: &Paths, store: &Arc<Store>, settings: &Arc<Settings>, ev
     })
 }
 
+/// Watch what sites serve, and keep the web server's configuration in step.
+///
+/// What a site serves is read from its folder, so another program creating or removing an entry file
+/// changes the answer without devd being told. This loop compares the effective answer every few
+/// seconds; when it changes, the configuration is rendered again, checked with the server's own
+/// `-t`, and only then reloaded. It runs only in the process that already owns the background work
+/// (see [`start_ops`]), so two open devd processes cannot fight over the reload.
+///
+/// A failure is reported as an event and retried, never as a success, and the running server keeps
+/// the configuration it already had until the replacement passes its check.
+pub fn start_reconcile(paths: &Paths, store: &Arc<Store>, settings: &Arc<Settings>, events: &EventBus) {
+    let ctx = devd_core::capability::Ctx {
+        store: store.clone(),
+        paths: Arc::new(paths.clone()),
+        settings: settings.clone(),
+        events: events.clone(),
+        actor: devd_core::capability::Actor::system(),
+        dry_run: false,
+    };
+    let events = events.clone();
+    let _ = std::thread::Builder::new().name("devd-serve-watch".into()).spawn(move || {
+        let mut last: Option<String> = None;
+        let mut last_error = String::new();
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            let Ok(fingerprint) = web_fingerprint(&ctx) else { continue };
+            if last.as_deref() == Some(fingerprint.as_str()) {
+                continue;
+            }
+            match devd_services::reconcile_web(&ctx) {
+                Ok(services) => {
+                    // The first pass is the render a fresh process does anyway. Only a later change
+                    // is news worth telling the window about.
+                    if last.is_some() && !services.is_empty() {
+                        events.emit_with(
+                            "web.reconciled",
+                            format!("reloaded {}", services.join(", ")),
+                            serde_json::json!({ "services": services, "reason": "a site's effective serving changed" }),
+                        );
+                    }
+                    last = Some(fingerprint);
+                    last_error.clear();
+                }
+                Err(e) => {
+                    let message = e.to_string();
+                    if message != last_error {
+                        events.emit_with(
+                            "web.reconcile_failed",
+                            "the web server configuration could not be updated",
+                            serde_json::json!({ "error": message }),
+                        );
+                        last_error = message;
+                    }
+                }
+            }
+        }
+    });
+}
+
+/// What would change the web server's configuration: each site and what it currently serves.
+fn web_fingerprint(ctx: &devd_core::capability::Ctx) -> Result<String> {
+    let sites = ctx.store.list_sites()?;
+    let rows: Vec<serde_json::Value> = sites
+        .iter()
+        .map(|s| {
+            serde_json::json!({
+                "site": s,
+                "effective": s.effective_serving(),
+                "http": devd_services::http_port(ctx),
+                "https": devd_services::https_port(ctx),
+            })
+        })
+        .collect();
+    Ok(devd_core::util::sha256_hex(serde_json::to_string(&rows)?.as_bytes()))
+}
+
 impl Bootstrap {
     /// Assemble from the environment.
     pub fn discover() -> Result<Self> {
@@ -105,6 +181,7 @@ impl Bootstrap {
         devd_workspace::caps::register(&mut registry, workspace.clone())?;
         devd_stacks::caps::register(&mut registry)?;
         devd_ops::caps::register(&mut registry)?;
+        devd_mcp::caps::register(&mut registry)?;
 
         // The built-in agent needs the shared store, settings and event bus, and
         // - once it exists - the registry it acts through.
@@ -141,5 +218,66 @@ impl Bootstrap {
             workspace,
             agents: Agents { hub, team },
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use devd_core::capability::Actor;
+    use devd_core::state::Site;
+
+    fn ctx(tag: &str) -> (devd_core::capability::Ctx, Paths) {
+        let dir = std::env::temp_dir().join(format!("devd-reconcile-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let paths = Paths::rooted(&dir);
+        paths.ensure().unwrap();
+        let ctx = devd_core::capability::Ctx {
+            store: Arc::new(Store::open_in_memory().unwrap()),
+            paths: Arc::new(paths.clone()),
+            settings: Arc::new(Settings::default()),
+            events: EventBus::new(),
+            actor: Actor::system(),
+            dry_run: false,
+        };
+        (ctx, paths)
+    }
+
+    #[test]
+    fn a_file_another_program_creates_changes_what_the_web_server_must_do() {
+        let (ctx, paths) = ctx("fingerprint");
+        let root = paths.www().join("shop");
+        std::fs::create_dir_all(&root).unwrap();
+        ctx.store
+            .upsert_site(&Site {
+                id: "site-shop".into(),
+                name: "shop".into(),
+                host: "shop.test".into(),
+                root: root.display().to_string(),
+                web_server: "nginx".into(),
+                php: None,
+                serving: None,
+                tls_mode: "off".into(),
+                db_name: None,
+                upstream: None,
+                created_at: devd_core::util::now(),
+            })
+            .unwrap();
+
+        let empty = web_fingerprint(&ctx).unwrap();
+        // An editor or a scaffold writes a static entry: the site now serves files.
+        std::fs::write(root.join("index.html"), "<!doctype html>").unwrap();
+        let static_site = web_fingerprint(&ctx).unwrap();
+        assert_ne!(empty, static_site, "a new index.html changes what is served");
+
+        // A tool adds a PHP entry point: the same folder must switch to PHP.
+        std::fs::write(root.join("index.php"), "<?php").unwrap();
+        let php = web_fingerprint(&ctx).unwrap();
+        assert_ne!(static_site, php, "a new index.php changes what is served");
+
+        // Reading it again is stable, so the watcher does not reload on every pass.
+        assert_eq!(php, web_fingerprint(&ctx).unwrap());
+
+        let _ = std::fs::remove_dir_all(ctx.paths.root());
     }
 }

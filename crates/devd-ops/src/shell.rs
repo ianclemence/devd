@@ -78,8 +78,13 @@ fn version_of(exe: &Path) -> String {
 /// The PHP for a folder, and why.
 pub fn php_for_dir(ctx: &Ctx, cwd: &Path) -> Result<(PathBuf, String)> {
     if let Some(site) = site_for_dir(ctx, cwd)? {
-        let exe = php_for_site(ctx, &site)?;
-        return Ok((exe.clone(), format!("`{}` is served with PHP {}", site.name, version_of(&exe))));
+        // Only a site that serves PHP has a PHP of its own. A Go module or a static site has none, and a
+        // pin left on it by an older devd is reported as unused everywhere else, so it must not steer the
+        // terminal either: the folder falls through to its own pin, or the default.
+        if site.effective_serving().serving.uses_php() {
+            let exe = php_for_site(ctx, &site)?;
+            return Ok((exe.clone(), format!("`{}` is served with PHP {}", site.name, version_of(&exe))));
+        }
     }
     for ancestor in cwd.ancestors() {
         let key = ancestor.display().to_string();

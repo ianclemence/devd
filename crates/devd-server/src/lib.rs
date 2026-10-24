@@ -495,7 +495,7 @@ pub fn error_response(err: &DevdError) -> Response {
         DevdError::Conflict(_) => StatusCode::CONFLICT,
         DevdError::Denied(_) | DevdError::ApprovalRequired { .. } => StatusCode::FORBIDDEN,
         DevdError::Timeout(_) => StatusCode::GATEWAY_TIMEOUT,
-        DevdError::Command { .. } => StatusCode::BAD_GATEWAY,
+        DevdError::Command { .. } | DevdError::Mcp(_) => StatusCode::BAD_GATEWAY,
         DevdError::Io(_) | DevdError::Db(_) | DevdError::Internal(_) => {
             StatusCode::INTERNAL_SERVER_ERROR
         }

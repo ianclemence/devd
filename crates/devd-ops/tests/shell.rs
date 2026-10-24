@@ -68,7 +68,12 @@ fn setup(tag: &str) -> (Ctx, PathBuf) {
     std::fs::create_dir_all(work.join("shop").join("app")).unwrap();
     std::fs::create_dir_all(work.join("shopping")).unwrap();
     std::fs::create_dir_all(work.join("elsewhere")).unwrap();
+    // `shop` serves PHP (it has an entry point); `tool` is a Go module that an older devd pinned to PHP 8.3.
+    std::fs::write(work.join("shop").join("public").join("index.php"), "<?php").unwrap();
+    std::fs::create_dir_all(work.join("tool")).unwrap();
+    std::fs::write(work.join("tool").join("go.mod"), "module tool").unwrap();
     site(&ctx, "shop", &work.join("shop").join("public"), Some("8.3"));
+    site(&ctx, "tool", &work.join("tool"), Some("8.3"));
     (ctx, work)
 }
 
@@ -132,5 +137,16 @@ fn composer_runs_its_phar_with_the_php_of_the_folder_and_says_so_when_it_is_miss
     assert_eq!(r.prefix, vec![phar.display().to_string()]);
 
     assert!(shell::resolve(&ctx, "node", &work).unwrap_err().to_string().contains("no launcher for `node`"));
+    let _ = std::fs::remove_dir_all(ctx.paths.root());
+}
+
+#[test]
+fn a_leftover_pin_on_a_site_that_serves_no_php_does_not_steer_the_terminal() {
+    let (ctx, work) = setup("unused-pin");
+    let r = shell::resolve(&ctx, "php", &work.join("tool")).unwrap();
+    assert_eq!(version(&r.program), "8.4.2", "`tool` serves no PHP, so its 8.3 pin is unused and the default applies: {}", r.reason);
+    assert!(r.reason.contains("default"), "{}", r.reason);
+    // The same pin on a site that does serve PHP still decides.
+    assert_eq!(version(&shell::resolve(&ctx, "php", &work.join("shop")).unwrap().program), "8.3.1");
     let _ = std::fs::remove_dir_all(ctx.paths.root());
 }

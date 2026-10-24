@@ -5,7 +5,7 @@ partially, and the platform-specific behaviour worth knowing before relying on
 it. Each entry states the consequence and, where one exists, the change that
 would close it.
 
-This document describes the current release, v0.12.0. See
+This document describes the current release, v0.13.0. See
 [`CHANGELOG.md`](../CHANGELOG.md) for what it contains.
 
 ## The command line
@@ -16,11 +16,12 @@ A Composer installed by winget (`Composer.Composer`) is the vendor's own launche
 
 ## Open decisions and known gaps
 
-* **`project.exec` and `project.run` are open to agents.** They run the stack's allow-listed programs and the
-  project's own tasks, without a shell. The allow-list includes interpreters (`php`, `node`, `python`), which can
-  run code given on their command line, so an agent can run code of its own through them. Gating them would
-  change the agent work loop and is a decision to make deliberately; the capabilities that take a command
-  line, script or steps directly are gated (`docs/domain.md`).
+* **`project.exec` and `project.run` stay open to agents, within the stack's allow-list.** They run the
+  project's own tasks and the programs its stack names, without a shell. An agent can no longer hand an
+  interpreter code through them: `php -r`, `node -e`, `python -c`, `npx -c`, `ruby -e` and `php artisan
+  tinker` are refused for an agent and named as the reason (a person at the command line is not
+  restricted). What remains is intended: a program on the allow-list can still have side effects, and
+  the agent's work loop depends on running it.
 * **Scheduled work runs only in an open devd process.** Cron jobs, scheduled backups and deploys and health
   checks run inside the window, `devd ui` or `devd serve`; services outlive the window, these do not.
   Diagnostics says when jobs are scheduled and nothing runs them. A hidden `devd serve` started at sign-in
@@ -32,8 +33,11 @@ A Composer installed by winget (`Composer.Composer`) is the vendor's own launche
 * **A Node project with an `index.html` is detected as static.** Its `index.html` is usually a development
   entry for a dev server, so the site page says a proxy site to the running dev server is usually the better fit.
   devd does not start the dev server for you through a site.
-* **The Projects screen does not list each project's sites.** `project.list` returns them (`sites`) and the
-  site page shows its project; the Projects list itself has not been redrawn to show them.
+* **The MCP client speaks stdio and Streamable HTTP, not the older HTTP+SSE transport.** A server that only
+  offers the two-endpoint SSE transport is not usable yet; it says so when it is added rather than being
+  half-supported. Tool calls are not streamed and cannot be cancelled while the server is working: the Stop
+  button stops the agent between steps, not a tool already in flight. A stdio server runs as you, with your
+  filesystem access; `mcp.trust allow` is the decision to let a model use whatever it can do.
 
 ## Not implemented at all
 

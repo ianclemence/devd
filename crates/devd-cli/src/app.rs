@@ -96,7 +96,11 @@ impl App {
     /// must not take work from the application running beside it.
     pub fn resume_agents(&self) {
         self.agents.resume(&self.paths);
-        devd_bootstrap::start_ops(&self.paths, &self.store, &self.settings, &self.events);
+        // Cron, backups and the web-configuration watcher belong to one process. If another devd
+        // already runs them, this one must not start a second set.
+        if devd_bootstrap::start_ops(&self.paths, &self.store, &self.settings, &self.events) {
+            devd_bootstrap::start_reconcile(&self.paths, &self.store, &self.settings, &self.events);
+        }
     }
 
     /// Build an execution context for the configured actor.

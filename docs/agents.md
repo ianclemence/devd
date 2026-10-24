@@ -232,6 +232,56 @@ metadata addresses refused and re-checked across redirects), `skills.*`,
 `team.*`, `services.inventory`, `environment.get`, and the file, git, project,
 toolchain and stack capabilities.
 
+Tools from **other programs' MCP servers** join the same list when a person
+configures one in *Agents → MCP*. They are named `mcp__<server>__<tool>`, they
+are not devd capabilities, and their output is data rather than instruction. A
+call to a server marked `ask` waits for a person's approval; `allow` means a
+person decided a model may use it without asking; `deny` keeps it out of the
+list. Only a person can add, remove or trust a server. See [`mcp.md`](mcp.md) for
+the whole model.
+
+The assistant also carries its open todo list for the project into every turn,
+and a short list of the calls it uses most (read, edit, run, status), so common
+work does not spend turns rediscovering argument shapes.
+
+### Direct tools, and why they are still capabilities
+
+Discovery stays the default: five tools reach every capability, so the surface
+does not grow with the catalogue. But the work an agent does constantly has a
+short name beside them:
+
+| Tool | Capability |
+| --- | --- |
+| `read_file`, `write_file`, `edit_file`, `list_files`, `search_files` | `fs.*` |
+| `project_info`, `project_tasks`, `run_task` | `project.detect`, `project.tasks`, `project.run` |
+| `git_status`, `git_diff` | `git.status`, `git.diff` |
+| `todo_list`, `todo_create`, `todo_complete` | `todo.*` |
+
+Each is only a name. The schema and description come from the registered
+capability at the start of the run, and the call is turned into `devd_invoke` of
+that capability, so it has the same validation, tier rules, approval queue and
+audit record as the long way around. A direct tool cannot mean something
+different from the capability it names, and adding one does not add a code path.
+
+### The plan is visible
+
+`todo.create` writes project state, and the Assistant shows it: a strip above
+the conversation with done/total and the next few titles, and a sheet with every
+item. The strip is re-read while the conversation is open, so a plan the agent
+changes in one turn is visible in the next. A conversation with no open todos
+shows nothing.
+
+### Writing while it works
+
+A message written while the assistant is working is **queued**, not refused. It
+waits in `chat_queue` until the loop reaches a step boundary, then becomes an
+ordinary user turn in the log; the header shows how many are waiting. Appending
+it immediately would put a user message between a tool call and its result,
+which is not a valid model conversation, so the boundary is the earliest safe
+place. Stopping discards the queue and says so. The queue is durable: a process
+that stops with messages waiting delivers them and resumes the conversation when
+the host starts again.
+
 ## Local and production
 
 `environment.set` marks the machine `production` (a person's decision, with

@@ -227,7 +227,12 @@ fn the_agent_loop_calls_tools_and_finishes() {
     let first = &seen[0].body;
     assert_eq!(seen[0].path, "/v1/messages");
     assert!(first["system"][0]["text"].as_str().unwrap().contains("built-in engineer"));
-    assert_eq!(first["tools"].as_array().unwrap().len(), 5, "progressive disclosure: five tools, not hundreds");
+    let names: Vec<&str> = first["tools"].as_array().unwrap().iter().filter_map(|t| t["name"].as_str()).collect();
+    for tool in ["devd_groups", "devd_capabilities", "devd_describe", "devd_invoke", "devd_doctor"] {
+        assert!(names.contains(&tool), "discovery tool {tool} is offered: {names:?}");
+    }
+    assert!(names.contains(&"read_file"), "common work has a direct name: {names:?}");
+    assert!(names.len() < 40, "a bounded surface, not one tool per capability: {}", names.len());
     let second = &seen[1].body;
     assert_eq!(second["messages"][2]["content"][0]["type"], "tool_result");
     assert_eq!(second["messages"][2]["content"][0]["tool_use_id"], "toolu_1");
@@ -245,9 +250,10 @@ fn dangerous_operations_wait_for_a_person_and_the_agent_resumes_after() {
     let m = mock(move |n, req| match n {
         0 => (200, anthropic_tool_use("toolu_d", "devd_invoke", json!({ "id": "fs.delete", "args": { "path": v2 } }))),
         _ => {
-            let last = req.body["messages"].as_array().unwrap().last().unwrap().clone();
-            let content = last["content"][0]["content"].as_str().unwrap_or("").to_string();
-            (200, anthropic_text(&format!("saw: {}", if content.contains("approved_by_a_person") { "approved" } else if content.contains("declined") { "declined" } else { "other" })))
+            // A message written while the approval was pending is delivered at the next step, so
+            // the result may not be the last message in the request; look at the whole exchange.
+            let all = serde_json::to_string(&req.body["messages"]).unwrap_or_default();
+            (200, anthropic_text(&format!("saw: {}", if all.contains("approved_by_a_person") { "approved" } else if all.contains("declined") { "declined" } else { "other" })))
         }
     });
     add_provider(&e, "anthropic", &m.base);
@@ -261,8 +267,11 @@ fn dangerous_operations_wait_for_a_person_and_the_agent_resumes_after() {
     assert_eq!(pending[0]["capability"], "fs.delete");
     let rid = pending[0]["id"].as_str().unwrap().to_string();
 
-    // The conversation cannot move on, and an agent cannot approve its own request.
-    assert_eq!(call(&e, &e.human, "chat.send", json!({ "message": "hurry", "thread": tid }), Approval::None).unwrap_err().code(), "conflict");
+    // The conversation cannot move on, and an agent cannot approve its own request. A person writing
+    // while it waits is not refused: the message is queued for the next step.
+    let queued = call(&e, &e.human, "chat.send", json!({ "message": "hurry", "thread": tid }), Approval::None).unwrap();
+    assert_eq!(queued["queued"], 1, "the message waits for the approval to be decided");
+    assert!(victim.exists());
     assert_eq!(call(&e, &e.agent, "approval.decide", json!({ "id": rid, "approve": true }), Approval::Granted).unwrap_err().code(), "permission_denied");
     assert!(victim.exists());
 

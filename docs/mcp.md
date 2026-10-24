@@ -1,4 +1,14 @@
-# The MCP server
+# The Model Context Protocol, both ways
+
+devd speaks MCP in two directions, and they are deliberately different code paths:
+
+* **devd as a server** - `devd mcp` publishes devd's capability registry to an outside agent. That is
+  the rest of this page up to "devd as a client".
+* **devd as a client** - the `mcp.*` capabilities connect the built-in assistant to *other programs'*
+  MCP servers, the way Claude Code uses the servers configured for it. Their tools join the assistant's
+  tool list; they do not become devd capabilities, and they are not trusted like them.
+
+## The MCP server
 
 `devd mcp` serves the Model Context Protocol on stdin/stdout. It is the third
 projection of the same registry, after the CLI and the application window, and it
@@ -141,9 +151,87 @@ agent:claude-code  git.reset    destructive  ok         <- the plan, dry run
 
 and `HEAD` was unchanged by the attempt.
 
+## devd as a client: the `mcp.*` capabilities
+
+The assistant can use tools from servers another program provides. The server configuration is
+devd's; the tools are not. That is the whole design:
+
+| Capability | Tier | Who | What it does |
+| --- | --- | --- | --- |
+| `mcp.list` | read | anyone | The configured servers: transport, enabled, trust, tool count and last error. Environment **names** only, never values. |
+| `mcp.add` | write | a person | Validate and store a server: a `command` (stdio) or a `url` (http), arguments, environment, working directory, timeout. |
+| `mcp.update` | write | a person | Replace that definition; the next call reconnects. |
+| `mcp.remove` | write | a person | Forget the server and delete its owner-only environment file. The program itself is not uninstalled. |
+| `mcp.enable` | write | a person | Turn it on or off without losing the definition. |
+| `mcp.trust` | write | a person | `ask`, `allow` or `deny` for agents. This is the security decision. |
+| `mcp.test` | exec | anyone | Start or reach the server, perform the initialize handshake, ask for its tools, record the catalogue or the error. Calls no tool. |
+| `mcp.call` | exec | a person directly; an agent after approval | Call one tool and return its result as data. |
+| `mcp.call_trusted` | exec | the assistant | The path used for a server marked `allow`; its handler refuses an agent unless the stored trust is exactly `allow`. |
+| `mcp.import` | write | a person | Read `~/.claude.json`, Claude Desktop's `claude_desktop_config.json`, `~/.cursor/mcp.json` or a project `.mcp.json` and add the servers it finds. |
+
+The assistant sees each tool as `mcp__<server>__<tool>`, with the server's own description and input
+schema. It calls it through `devd_invoke` like every other operation, so the call is validated by the
+registry, recorded in the audit trail with its arguments redacted, and appears in the approval queue
+when it needs a person.
+
+### Trust is enforced where the call runs
+
+| Trust | An agent's call |
+| --- | --- |
+| `ask` (default) | `mcp.call` is refused by the registry with `approval_required`; the plan names the server, the tool and the redacted arguments, and a person approves or declines it. |
+| `allow` | The assistant uses `mcp.call_trusted`, whose handler re-reads the stored trust and refuses anything that is not exactly `allow`. A prompt cannot grant this; only `mcp.trust` can. |
+| `deny` | The tools are not offered, and both call paths refuse an agent. |
+
+A person calling `mcp.call` directly (CLI, window) is not asked: they chose the server and they are the
+one acting. Only the configuration capabilities and `mcp.trust` are human-only, so an agent can never
+add a server for devd to run or widen its own access.
+
+### Transports
+
+* **stdio** - devd starts `command` with `args`, speaks newline-delimited JSON-RPC over its pipes, and
+  stops the whole process tree when the connection is dropped or a request times out. `cwd` is optional.
+* **http** - the Streamable HTTP transport: one POST per message, a JSON or `text/event-stream`
+  response, and the `mcp-session-id` the server returns is carried on later requests. Redirects are
+  refused so a credential cannot be forwarded to a third host.
+* The older two-endpoint HTTP+SSE transport is **not** implemented. A server that needs it is not
+  half-supported; it is recorded in `limitations.md`.
+
+### Secrets and the environment
+
+A stdio server is started with a small, named environment (`PATH`, `SystemRoot`, `APPDATA`,
+`USERPROFILE`, `TEMP`, the proxy variables and the platform equivalents) and **not** devd's environment,
+so `.env` values, provider keys and session tokens are not inherited. Anything the server needs is given
+with `env` on `mcp.add`; the values are written to `<devd home>/mcp/<id>.env.json`, readable only by the
+current user, and never stored in the database, the audit trail, logs or API responses. `mcp.list`
+returns their names only.
+
+Arguments are passed as an argument vector, never through a shell, so a value containing `&`, `;` or a
+quote is not interpreted. Tool output is data: the assistant's prompt says so, and a result the server
+marks `isError` is recorded as a failed tool result, not a successful one.
+
+### Bounds
+
+* A request's timeout is 5-600 seconds (default 120). On timeout the process tree is killed and the
+  error names the method and the server's last standard-error lines.
+* `tools/list` follows pagination cursors, capped at 50 pages.
+* A result is capped at 200,000 characters before the conversation's own, smaller, cap applies.
+* Connections are pooled per server, keyed on the configuration's `updated_at`; a call is **never**
+  retried after a failure, because a tool may already have had its side effect.
+* Tools are discovered at the start of an assistant run. A server that cannot be reached is reported
+  as a notice in the conversation and recorded on its row (`last_error`); it does not stop the run.
+
+### Observed
+
+`devd-mcp/tests/client.rs` starts a real child process (the crate's `fake-mcp` bin), performs the real
+handshake, discovers `echo` and `fail`, calls them, and asserts that the server's `isError` is
+preserved. A second test drives the actual registry: an agent's `mcp.call` on an `ask` server returns
+`ApprovalRequired` without reaching the handler, a person's call succeeds, `mcp.call_trusted` refuses an
+agent for a non-`allow` server and succeeds for an `allow` one, and `deny` refuses both. A third checks
+that external tools are prefixed, and that a denied server is not offered.
+
 ## Testing
 
-21 tests in `devd-mcp`, none of which need a subprocess:
+24 unit tests and 3 end-to-end tests in `devd-mcp`:
 
 * the protocol: `initialize` (including echoing an unknown version), notifications
   getting no reply, an unknown method, a missing required argument;
@@ -154,7 +242,9 @@ and `HEAD` was unchanged by the attempt.
 * refusal: a destructive operation does not run and its plan is returned; an
   operation that cannot plan says so; a `human_only` operation is refused; a dry
   run changes nothing;
-* `devd_doctor`, including an appended check and the `ok` computation.
+* `devd_doctor`, including an appended check and the `ok` computation;
+* the client, against a real child process: discovery, calls, the `isError`
+  result, the trust/approval boundary, and the tool naming.
 
 The refusal tests assert against a counter incremented by the handler, so
 "nothing ran" is a measurement rather than an inference.

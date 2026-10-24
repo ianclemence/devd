@@ -249,6 +249,10 @@ code, kbd, pre, samp { font-family: var(--mono); }
 .nowrap { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .right { margin-left: auto; }
 .stack { display: flex; flex-direction: column; gap: var(--s2); }
+/* Long forms read better in two columns on a wide window and one on a narrow one. */
+.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--s3) var(--s4); }
+.form-grid .field { margin-bottom: 0; }
+.form-grid .field-wide { grid-column: 1 / -1; }
 .inline { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
 .grow { flex: 1; min-width: 0; }
 .link { color: var(--accent); text-decoration: none; }
@@ -543,6 +547,8 @@ code, kbd, pre, samp { font-family: var(--mono); }
   align-items: flex-start;
   gap: var(--s4);
   flex-wrap: wrap;
+  padding-bottom: var(--s4);
+  border-bottom: 1px solid var(--line);
 }
 
 .page-title {
@@ -550,6 +556,7 @@ code, kbd, pre, samp { font-family: var(--mono); }
   font-weight: 650;
   letter-spacing: -0.018em;
   line-height: 1.2;
+  text-wrap: balance;
 }
 .page-sub {
   max-width: 76ch;
@@ -557,6 +564,7 @@ code, kbd, pre, samp { font-family: var(--mono); }
   color: var(--fg-mute);
   font-size: var(--text-sm);
   line-height: 1.55;
+  text-wrap: pretty;
 }
 .page-actions { display: flex; align-items: center; gap: var(--s2); margin-left: auto; flex-wrap: wrap; }
 
@@ -633,7 +641,10 @@ code, kbd, pre, samp { font-family: var(--mono); }
 .composer-input {
   width: 100%;
   min-height: 44px;
-  max-height: 220px;
+  /* The script sets the height from the content, up to a share of the window;
+     the box then scrolls inside itself rather than making the conversation
+     disappear. */
+  max-height: none;
   padding: 0;
   background: none;
   border: 0;
@@ -643,6 +654,7 @@ code, kbd, pre, samp { font-family: var(--mono); }
   font-size: var(--text-md);
   line-height: 1.55;
   resize: none;
+  overflow-y: hidden;
 }
 .composer-bar { display: flex; align-items: center; gap: var(--s2); }
 .composer-left { display: flex; align-items: center; gap: var(--s1); min-width: 0; flex: 1; }
@@ -706,6 +718,22 @@ code, kbd, pre, samp { font-family: var(--mono); }
 .composer-send .icon { width: var(--icon); height: var(--icon); }
 .composer-send:hover { background: var(--bg-hover); color: var(--fg); border-color: var(--line-strong); }
 .composer-send.is-busy { color: var(--danger); border-color: var(--danger-line); background: var(--danger-quiet); }
+
+/* Stop sits beside the slot while the assistant works; the arrow keeps its
+   meaning (send, or queue when it is already running). */
+.composer-stop {
+  display: grid;
+  place-items: center;
+  width: var(--h-control-lg);
+  height: var(--h-control-lg);
+  background: var(--danger-quiet);
+  border: var(--hairline) solid var(--danger-line);
+  border-radius: var(--radius);
+  color: var(--danger);
+  cursor: pointer;
+}
+.composer-stop .icon { width: var(--icon); height: var(--icon); }
+.composer-stop:hover { background: var(--bg-hover); }
 
 /* What devd is, where it is working, and which branch: the state of the
    session, in one line under the box. */
@@ -1860,10 +1888,32 @@ button.svc { width: 100%; background: none; border: 0; border-bottom: 1px solid 
   background: var(--bg-surface);
   border-bottom: 1px solid var(--line);
 }
-.chat-title { font-size: var(--text-md); font-weight: 600; }
-.chat-head .input { width: auto; }
+.chat-title { font-size: var(--text-md); font-weight: 600; }.chat-head .input { width: auto; }
 .chat-head select.input { max-width: 190px; }
 .chat-head input.input { width: 180px; }
+
+/* The plan the assistant is working through, above the conversation. It is
+   project state, so it survives a reload and is the same list the person sees
+   in Agents -> Notes. */
+.chat-plan {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex: none;
+  padding: var(--s2) var(--s4);
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--line);
+  font-size: var(--text-sm);
+  overflow: hidden;
+}
+.chat-plan-label { font-size: var(--text-2xs); letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-dim); }
+.chat-plan-count { color: var(--accent); font-variant-numeric: tabular-nums; }
+.chat-plan-item { min-width: 0; max-width: 28ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-mute); }
+.chat-plan-item::before { content: "·"; margin-right: var(--s2); color: var(--fg-dim); }
+.chat-plan .btn { margin-left: auto; }
+.plan-row { display: flex; align-items: center; gap: var(--s2); padding: var(--s2) 0; border-bottom: 1px solid var(--line); }
+.plan-row + .plan-note { padding: 0 0 var(--s2); }
+@media (max-width: 700px) { .chat-plan-item { display: none; } }
 
 .chat-stream {
   flex: 1;
@@ -1874,6 +1924,10 @@ button.svc { width: 100%; background: none; border: 0; border-bottom: 1px solid 
   padding: var(--s5) var(--s4) var(--s4);
   overflow-y: auto;
   overscroll-behavior: contain;
+  /* The conversation is repainted only when it changed, and paintChat puts the
+     scroll position back itself. Browser scroll anchoring would second-guess
+     that restore and shift the reader's place while a reply streams. */
+  overflow-anchor: none;
 }
 /* The conversation scrolls. Its children must not shrink to fit the box:
    a flex column squeezes anything that can be squeezed, and a row with
@@ -2582,6 +2636,14 @@ textarea,
     text-decoration: underline;
     text-underline-offset: 2px;
   }
+  /* A link styled as a button is a button: "Choose a provider" must not grow
+     an underline under the pointer. */
+  a.btn:hover,
+  a.btn:focus,
+  button:hover,
+  .btn:hover {
+    text-decoration: none;
+  }
   ::-webkit-scrollbar-thumb:hover {
     background: #4a4a54;
     background-clip: padding-box;
@@ -3023,7 +3085,10 @@ textarea,
 
 .ui-status-line { display: flex; align-items: center; gap: var(--s2); color: var(--fg-mute); font-size: var(--text-md); }
 .ui-more { margin-top: var(--s5); color: var(--fg-dim); font-size: var(--text-sm); }
-.ui-more a, .ui-more button { color: var(--fg-mute); background: none; border: 0; cursor: pointer; font-size: inherit; text-decoration: underline; text-underline-offset: 3px; }
+.ui-more a { color: var(--fg-mute); background: none; border: 0; cursor: pointer; font-size: inherit; text-decoration: underline; text-underline-offset: 3px; }
+/* These are buttons even when they look like links; button text is never underlined. */
+.ui-more button { color: var(--fg-mute); background: none; border: 0; cursor: pointer; font-size: inherit; text-decoration: none; }
+.ui-more button:hover { color: var(--fg); text-decoration: none; }
 
 .drawer-title { font-family: var(--sans); font-size: var(--text-lg); font-weight: 600; }
 .drawer-body { padding: var(--s5) var(--s6); }

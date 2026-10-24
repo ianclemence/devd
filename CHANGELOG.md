@@ -10,6 +10,86 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.13.0] - 2026-10-24 - Other programs' MCP servers; a conversation that holds still
+
+### Added
+
+- **devd connects to other programs' Model Context Protocol servers**, the way Claude Code connects to
+  the servers configured for it. `mcp.add` stores a stdio server (a program devd starts and speaks
+  JSON-RPC to) or a Streamable HTTP endpoint; `mcp.update`, `mcp.remove`, `mcp.enable` and `mcp.trust`
+  manage it; `mcp.test` performs the initialise handshake and records the tool catalogue; `mcp.list`
+  shows it. The assistant sees each tool as `mcp__<server>__<tool>` and calls it through the same
+  capability registry, approval queue and audit trail as everything else. `mcp.import` reads
+  `~/.claude.json`, Claude Desktop's `claude_desktop_config.json`, Cursor's `mcp.json` or a project
+  `.mcp.json` and adds the servers it finds.
+- **A server's tools are untrusted by default.** `mcp.trust` records `ask` (every agent call waits for a
+  person), `allow` (a person opted in) or `deny` (agents never see it). Only a person may change it.
+  The handler for the trusted path checks the stored decision itself, so the permission is enforced
+  where the call runs, not in the prompt. A stdio server is started with a small, named environment
+  (never devd's), inherits no API keys, and its environment values live in an owner-only file outside
+  the database. Tool results are data: the prompt says so, and a result that is marked `isError` is
+  recorded as a failed tool result rather than a success.
+- **The Projects list includes every folder a site serves**, not only the folders someone imported or
+  indexed. A folder added through the Sites screen is a project the person is working on.
+- **The assistant knows the calls it uses most** (`project.detect`, `project.run`, `fs.read`/`fs.edit`,
+  `git.status`, the todo list) without spending three turns discovering them, and its open todo list is
+  carried into every turn.
+- **Common operations are direct tools, with schemas from the registry.** `read_file`, `write_file`,
+  `edit_file`, `list_files`, `search_files`, `project_info`, `project_tasks`, `run_task`, `git_status`,
+  `git_diff`, `todo_list`, `todo_create` and `todo_complete` are offered beside the five discovery tools.
+  Each is a name for a registered capability: its schema, description and permission rules are the
+  capability's own, and the call is dispatched through the same registry, approval queue and audit
+  trail. An agent no longer spends a turn describing `fs.read` before reading a file.
+- **A message written while the assistant is working is queued, not refused.** It is kept in a durable
+  queue and appended as an ordinary user turn at the next step boundary, where no tool call is waiting
+  for its result; the conversation header shows how many are waiting. Stopping discards what was
+  queued, and the queue survives a restart (the host delivers it and resumes the conversation).
+- **The plan is visible above the conversation.** The todos the assistant writes with `todo.create` are
+  shown as a compact strip (done/total and the next few titles) with a sheet listing every item, and are
+  re-read while the conversation is open. It is the same project state shown in Agents → Notes.
+- **The screen stays in step with the disk.** Projects, Sites, Inbox, MCP, Home and a project page are
+  re-read on a cadence (5-20 seconds by view) and repainted only when the answer changed; nothing is
+  replaced while a person is typing, has a sheet open or is selecting text. A changed page keeps its
+  scroll position.
+- **A site's web-server configuration is reconciled when another program changes what it serves.**
+  A background loop in the process that owns devd's background work compares each site's effective
+  serving and rewrites the web-server configuration when a file appears or disappears, checks it with
+  `-t`, and only then reloads. A failed check leaves the running server on its working configuration.
+- **The message box grows with the draft**, up to 40% of the window, and then scrolls inside itself. It
+  returns to its resting height when emptied, so the conversation is not left cramped.
+
+### Fixed
+
+- **The conversation no longer jitters while it streams or while you read it.** The stream rebuilt its
+  entire DOM every 800ms, changed or not, which dropped the browser's scroll anchor and could pull the
+  view under a reader or a text selection. It now repaints only when something it shows has changed,
+  puts the scroll position back exactly when the reader is not at the bottom, and leaves a selection
+  alone. Idle conversations do no DOM work at all.
+- **Removing a project from devd now sticks.** `git.status` is a Read capability and wrote a repository
+  index row, so opening a project's page re-added it after `project.forget` removed it. Reading a status
+  no longer writes, and `project.forget` matches the folder by identity rather than by spelling, so
+  `D:\x`, `D:/x` and a different case all remove the same row. The Projects list has a Remove action.
+- **Buttons have no underline**, including a link styled as one ("Choose a provider") and the text
+  buttons under a page.
+- **An agent cannot hand an interpreter code through `project.exec`.** `php -r`, `node -e`,
+  `python -c`, `npx -c`, `ruby -e` and `php artisan tinker` are refused for an agent, with the flag
+  named; a person at the command line is not restricted. The plan says it before anything runs.
+- **A PHP pin left on a site that does not serve PHP no longer steers the terminal.** The launcher
+  follows the site's effective serving, so an unused pin falls through to the project pin or the
+  default.
+- **The web server's configuration is re-derived every time it starts.** It used to be rendered only
+  when the file was missing, so an upgraded devd kept starting nginx on the file the previous version
+  wrote. Rendering is atomic and idempotent, and a test proves a stale file is replaced.
+
+### Changed
+
+- Migration 015 adds `mcp_servers`. It is additive: an older devd ignores the table, and an existing
+  database gets it the first time this version starts.
+- `project.list` rows say `source: "site"` for a folder that is only known because a site serves it,
+  and every row lists the sites that serve it.
+
+---
+
 ## [0.12.0] - 2026-10-24 - Sites know what they serve; agents wait for code they write
 
 ### Security

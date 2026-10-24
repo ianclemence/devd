@@ -330,7 +330,7 @@ fn the_folder_picker_is_the_normal_way_to_choose_a_project() {
     // screen offers the picker, and the only place a path is typed is the
     // picker's own advanced field.
     let projects = &APP[APP.find("function renderProjects()").unwrap()..];
-    let projects = &projects[..projects.find("function loadProjects()").unwrap()];
+    let projects = &projects[..projects.find("function loadProjects(").unwrap()];
     assert!(
         projects.contains("data-action=\"add-project\""),
         "the Projects screen has no Add existing project action"

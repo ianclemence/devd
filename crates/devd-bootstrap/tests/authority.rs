@@ -150,3 +150,28 @@ fn every_agent_callable_capability_that_takes_code_is_gated_or_reviewed() {
         "these capabilities let an agent supply code that devd runs, with no approval: {open:?}. Mark them .agent_needs_approval(), or review and list them here."
     );
 }
+
+#[test]
+fn an_agent_cannot_hand_an_interpreter_code_through_the_program_allow_list() {
+    let app = booted("inline");
+    let dir = app.paths.www().join("shop");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("composer.json"), "{}").unwrap();
+    std::fs::write(dir.join("artisan"), "").unwrap();
+    let agent = as_actor(&app, Actor::agent("assistant"));
+    let path = dir.display().to_string();
+
+    // `php` is on the allow-list; `php -r` is arbitrary code.
+    for argv in [json!(["php", "-r", "echo 1;"]), json!(["php", "artisan", "tinker"]), json!(["npx", "-c", "echo hi"])] {
+        let err = call(&app, &agent, "project.exec", json!({ "path": path, "argv": argv }), false, Approval::None).unwrap_err();
+        assert!(matches!(err, devd_core::DevdError::Denied(_)), "{argv}: {err:?}");
+        assert!(err.to_string().contains("interpreter code"), "it says why: {err}");
+    }
+    // The plan tells the reader before anything runs, and an ordinary command is not marked.
+    let plan = |argv: Value| {
+        let r = call(&app, &agent, "project.exec", json!({ "path": path, "argv": argv }), true, Approval::None).unwrap();
+        serde_json::to_string(&r.plan).unwrap()
+    };
+    assert!(plan(json!(["php", "-r", "echo 1;"])).contains("REFUSED for an agent"));
+    assert!(!plan(json!(["php", "artisan", "migrate:status"])).contains("REFUSED"));
+}
