@@ -2,19 +2,26 @@
 
 A server panel such as Ploi gives each site an environment editor, cron jobs, queue workers, redirects, logs, deploys and alerts, and gives the server its PHP settings and services. devd has the same things for a local site, so a project behaves here the way it does on the server, and an agent can look after all of it through the same capabilities.
 
-Open **Server → Operations**, pick a site, and use the tabs. Everything on the screen is a capability, so it is also `devd call <id>` and an MCP tool, with the same approvals.
+Open **Server > Sites**, choose **Manage** on a site, and use its tabs. The whole-machine screens are **Server > Databases** (users and backups), **Server > Remote** (servers, SSH keys and Ploi) and **Server > Runtimes** (PHP settings). Everything on these screens is a capability, so it is also `devd call <id>` and an MCP tool, with the same approvals. The old **Server > Operations** screen is still reachable by its route for one release but is no longer in the strip.
 
-| Tab | What it does | Capabilities |
+| Where | What it does | Capabilities |
 | --- | --- | --- |
-| Environment | The site's `.env`, secrets hidden; change or remove a variable; compare with another environment | `env.get`, `env.reveal`, `env.set`, `env.unset`, `env.diff` |
-| Scheduler | Cron jobs, with the Laravel scheduler as one click | `cron.add`, `cron.laravel`, `cron.list`, `cron.run`, `cron.log`, `cron.enable`, `cron.remove` |
-| Workers | `php artisan queue:work` (or any program), supervised and restarted | `queue.add`, `queue.list`, `queue.start`, `queue.stop`, `queue.restart`, `queue.logs`, `queue.remove` |
-| Redirects | A path to another path or an https address, written into the web server | `redirects.add`, `redirects.list`, `redirects.remove` |
-| Logs | The Laravel log as entries; web server and PHP logs | `logs.laravel`, `logs.site`, `logs.laravel_clear` |
-| Deploy | A script per site, history, rollback, repository link, push-to-deploy | `deploy.script`, `deploy.script_set`, `deploy.run`, `deploy.history`, `deploy.status`, `deploy.log`, `deploy.check`, `deploy.rollback`, `repo.status`, `repo.link`, `deploy.hook` |
-| Alerts | Tell the inbox, Slack, Discord or a webhook when a deploy finishes or fails, or a cron job fails | `notify.add`, `notify.list`, `notify.test`, `notify.remove` |
-| PHP | The limits profile (machine-wide or per site), the worker pool and the extension list | `php.settings`, `php.configure`, `php.site_profile`, `php.extensions`, `php.extension_set` |
-| Ploi | Your real server: servers, sites, compare `.env`, deploy | `ploi.connect`, `ploi.status`, `ploi.servers`, `ploi.sites`, `ploi.link`, `ploi.deploy`, `ploi.env`, `ploi.script`, `ploi.script_set`, `ploi.pull_script`, `ploi.limits_set`, `ploi.disconnect` |
+| Site: Environment | The site's `.env`, secrets hidden; change or remove a variable; compare with another environment | `env.get`, `env.reveal`, `env.set`, `env.unset`, `env.diff` |
+| Site: Cron | Cron jobs, with the Laravel scheduler as one click | `cron.add`, `cron.laravel`, `cron.list`, `cron.run`, `cron.log`, `cron.enable`, `cron.remove` |
+| Site: Queue | `php artisan queue:work` (or any program), supervised and restarted | `queue.add`, `queue.list`, `queue.start`, `queue.stop`, `queue.restart`, `queue.logs`, `queue.remove` |
+| Site: Redirects | A path to another path or an https address, written into the web server | `redirects.add`, `redirects.list`, `redirects.remove` |
+| Site: Logs | The Laravel log as entries; web server and PHP logs | `logs.laravel`, `logs.site`, `logs.laravel_clear` |
+| Site: Deploy | A script per site, history, rollback, repository link, push-to-deploy | `deploy.script`, `deploy.script_set`, `deploy.run`, `deploy.history`, `deploy.status`, `deploy.log`, `deploy.check`, `deploy.rollback`, `repo.status`, `repo.link`, `deploy.hook` |
+| Site: Laravel | Maintenance mode, storage link, caches and Artisan commands | `laravel.status`, `laravel.artisan`, `laravel.down`, `laravel.up`, `laravel.storage_link`, `laravel.clear` |
+| Site: Web server | Per-site nginx directives, validated before they are applied | `nginx.site_set`, `nginx.site_show`, `nginx.site_clear` |
+| Site: Database | The database this site uses and whether a backup is scheduled; read-only | `backup.list` (the full users and backup screens are under Server > Databases) |
+| Site: Preview | Embed the running site, reload it, or open it in the system browser | none (the site's own URL) |
+| Server > Databases | Database users, scheduled dumps and files for the whole machine | `db.users`, `db.user_create`, `db.user_drop`, `backup.add`, `backup.run`, `backup.list`, `backup.files`, `backup.remove`, `db.restore` |
+| Server > Remote | Remote servers, SSH keys and Ploi | `server.*`, `ssh.*`, `ploi.*` |
+| Server > Runtimes | PHP limits profile, worker pool and extensions; site defaults and runtime versions | `php.settings`, `php.configure`, `php.extensions`, `php.extension_set`, `php.pool`, `runtime.*` |
+| Server > Overview | Machine CPU, memory and disks; services, sites and pending hostnames or certificates | `monitor.stats`, `service.list`, `site.list`, `hosts.show`, `tls.list` |
+| Server > Diagnostics | Alerts, health checks and the machine's state | `notify.add`, `notify.list`, `notify.test`, `notify.remove`, `health.*`, `monitor.stats` |
+| Site: Overview | The site's PHP version and per-site limits profile | `php.site_profile`, `site.set_php` |
 
 ## Who may do what
 
@@ -73,7 +80,7 @@ The script is one command per line, run in the site's folder, stopping at the fi
 
 With the Apache driver the workers are balanced through `mod_proxy_balancer` when its modules are in the Apache build; without them Apache uses a single process per version.
 
-**A profile for one site.** `php.site_profile` serves a site with the other profile whatever the machine's is, so you can try a site against your server's limits while everything else stays generous. A site whose profile differs from the machine's is served by a second pool of PHP processes started with the other profile's ini (`php.<profile>.ini` beside `php.ini`), 50 ports above the main pool; the pool exists only while some site needs it.
+**A profile for one site.** `php.site_profile` serves a site with the other profile whatever the machine's is, so you can try a site against your server's limits while everything else stays generous. It is set on the site's **Overview** tab; the machine-wide profile and extension list are under **Server > Runtimes**. A site whose profile differs from the machine's is served by a second pool of PHP processes started with the other profile's ini (`php.<profile>.ini` beside `php.ini`), 50 ports above the main pool; the pool exists only while some site needs it.
 
 **Your server's limits.** Ploi's API does not expose a server's PHP limits, so tell devd what yours has (read them from the PHP tab of your server in Ploi) with `ploi.limits_set`. `deploy.check` then lists every limit that is looser here than there, and `deploy.run` shows the same notes in its plan and in the deployment's log. Until you do, devd assumes a default Ploi server (the `production` profile) and says it is assuming.
 

@@ -12,7 +12,7 @@ following each part into its code, and what was decided.
 | Projects, Create, Develop | Three pages for one thing: Projects listed git repos, Develop held stack projects, Create scaffolded. | One **Projects** entry with tabs: Projects, New project, Stacks and tasks. |
 | Agent sessions, Shared notes | Notes exist only for agents sharing a project. | Shared notes became a tab of **Agents**; terminal sessions were later removed. |
 | Processes | Distinct (supervised project processes and logs). | Kept. |
-| Overview, Sites, Preview, Services, Runtimes, Toolchain, Certificates, Hosts | Eight rail items for one subject; Overview duplicated Home. | One **Server** entry; tabs for Overview, Services, Sites, Tools, Runtimes, Preview, Certificates, Hosts. |
+| Overview, Sites, Preview, Services, Runtimes, Toolchain, Certificates, Hosts | Eight rail items for one subject; Overview duplicated Home. | One **Server** entry; tabs for Overview, Sites, Services, Tools, Runtimes, Databases, Remote, Certificates, Hosts. A site opens its own page for Environment, Deploy, Cron, Queue, Logs, Laravel, Redirects, Web server, Database and Preview. |
 | Capabilities, Activity, System | "Capabilities" is an API reference, not a daily destination; System was an unlabelled dump. | Moved to Manage as **API and tools**, **Activity**, **Diagnostics** (health model first, raw checks below). |
 
 The rail went from 24 entries to 12.

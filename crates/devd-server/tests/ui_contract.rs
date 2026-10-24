@@ -151,6 +151,96 @@ fn every_element_the_script_looks_up_exists_in_the_markup() {
 }
 
 #[test]
+fn inventory_does_not_show_services_devd_manages_or_programs_that_are_not_there() {
+    // devd's MariaDB is mysqld.exe on Windows. The host inventory sees it
+    // holding port 3306 and would list MariaDB and MySQL as "Not installed"
+    // next to the managed MariaDB row. Missing programs also belong under
+    // Available, not under "Already on this computer".
+    let start = APP.find("  function inventoryRows()").expect("inventoryRows");
+    let end = start + APP[start..].find("  function renderServices()").expect("renderServices");
+    let body = &APP[start..end];
+    assert!(APP.contains("function managedServicePid(pid)"), "inventory needs to match a port owner against managed services");
+    assert!(body.contains("managedServicePid(v.port_owner.pid)"), "managed services must not appear in the host inventory");
+    assert!(
+        body.contains("!(v.status === \"missing\" && !v.path && !v.port_owner)"),
+        "missing programs must not be counted as already on this computer"
+    );
+}
+
+#[test]
+fn server_and_site_tabs_match_the_agreed_information_architecture() {
+    // The server strip is the whole machine. A site's own controls belong on
+    // its page, reached by Manage from the Sites list, not on this strip.
+    let server = APP
+        .split("server: [[")
+        .nth(1)
+        .expect("server tabs")
+        .split("]]")
+        .next()
+        .unwrap();
+    let labels = ["Overview", "Sites", "Services", "Tools", "Runtimes", "Databases", "Remote", "Certificates", "Hosts"];
+    let mut at = 0;
+    for label in labels {
+        let needle = format!("\"{label}\"");
+        let found = server[at..]
+            .find(&needle)
+            .unwrap_or_else(|| panic!("{label} is missing or out of order in the server tabs"));
+        at += found + needle.len();
+    }
+    assert!(!server.contains("\"operations\""), "Operations is a fallback route, not a visible server tab");
+    assert!(!server.contains("\"preview\""), "Preview belongs to the site page");
+
+    let site = quoted_after(APP, "var SITE_TABS = [");
+    assert_eq!(
+        site,
+        vec![
+            "overview", "Overview", "env", "Environment", "deploy", "Deploy", "cron", "Cron",
+            "queue", "Queue", "logs", "Logs", "laravel", "Laravel", "redirects", "Redirects",
+            "nginx", "Web server", "db", "Database", "preview", "Preview"
+        ]
+    );
+    assert!(APP.contains("data-action=\"open-site\" data-name="), "the Sites list needs a Manage action");
+    assert!(APP.contains("function renderSite()"));
+    assert!(APP.contains("function renderDatabases()"));
+    assert!(APP.contains("function renderRemote()"));
+    assert!(APP.contains("function machineSummary(m)"), "the server Overview has a machine summary");
+    assert!(APP.contains("read(\"monitor.stats\""), "the machine summary is read from monitor.stats");
+
+    let sites = APP.find("function renderSites()").expect("renderSites");
+    let sites = &APP[sites..sites + APP[sites..].find("function siteDatabase(row)").expect("siteDatabase")];
+    assert!(!sites.contains("data-action=\"remove-site\""), "Remove lives on the site page, not the list");
+    assert!(!sites.contains("data-action=\"share-site\""), "Share lives on the site page, not the list");
+
+    let db = APP.find("function siteDatabase(row)").expect("siteDatabase");
+    let db = &APP[db..db + APP[db..].find("function sitePreview(row)").expect("sitePreview")];
+    assert!(db.contains("belong to the whole server"));
+    assert!(!db.contains("data-action=\"ops-backup-run\""), "site Database is read-only");
+    assert!(!db.contains("data-action=\"ops-backup-remove\""));
+}
+
+#[test]
+fn tools_and_runtimes_do_not_offer_the_same_install() {
+    let start = APP.find("function toolOwnedElsewhere(t)").expect("Tools ownership filter");
+    let end = start + APP[start..].find("function loadToolchain()").expect("loadToolchain");
+    let body = &APP[start..end];
+    assert!(body.contains("t.tool.category === \"database\""));
+    assert!(body.contains("t.tool.category === \"container\""));
+    assert!(body.contains("t.tool.id === \"nginx\""));
+    assert!(body.contains("TOOL_RUNTIME_IDS[t.tool.id]"));
+    assert!(APP.contains("opsPhp(OPS.data.php, false)"), "Runtimes shows PHP settings but not the per-site profile table");
+    assert!(APP.contains("Notifications</summary>"), "alerts live in Diagnostics");
+}
+
+#[test]
+fn site_detail_has_an_address_and_its_own_preview() {
+    assert!(APP.contains("return SITE.name ? \"/server/sites/\" + encodeURIComponent(SITE.name) : \"/server/sites\";"));
+    assert!(APP.contains("p.indexOf(\"/server/sites/\") === 0"));
+    assert!(APP.contains("data-action=\"site-tab\" data-tab=\"preview\""));
+    assert!(APP.contains("function sitePreview(row)"));
+    assert!(APP.contains("function siteDatabase(row)"));
+}
+
+#[test]
 fn every_action_handler_does_something() {
     // A handler that is empty is worse than no handler: the control looks
     // real, the click does nothing, and the default action is swallowed.

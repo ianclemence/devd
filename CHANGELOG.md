@@ -10,6 +10,45 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.11.0] - 2026-10-24 - Server tabs by scope, one page per site
+
+### Added
+
+- **A page for each site.** `/server/sites/<name>` has its own tabs: Overview, Environment, Deploy,
+  Cron, Queue, Logs, Laravel, Redirects, Web server, Database and Preview. The Sites list and the
+  server Overview now offer **Manage**; share, remove, PHP version, PHP limits and every site-scoped
+  operation live on that page instead of a site picker.
+- **Server -> Databases** holds database users and scheduled backups for the whole machine.
+- **Server -> Remote** holds remote servers, SSH keys and Ploi. Deploy links and remote servers are
+  still linked from a site's Deploy tab.
+- **Diagnostics** has a Notifications section for alerts, so Alerts is no longer a server tab.
+- **Runtimes** now carries the PHP limits profile, worker count and extension list.
+- **Overview** shows the machine's CPU, memory, disks and uptime beside services, sites, pending hosts and certificates.
+
+### Changed
+
+- **Server tabs follow scope:** Overview, Sites, Services, Tools, Runtimes, Databases, Remote,
+  Certificates, Hosts. Operations and Preview are removed from the strip; their old routes stay as a
+  one-release fallback for bookmarks.
+- **Sites is a list.** Each row has Manage and Open. Inline share, remove and PHP controls moved to
+  the site page.
+- **Tools is only CLI tools and package managers.** Databases, services, containers, nginx and the
+  runtimes managed by Runtimes (PHP, Node, Go, Python, Ruby) no longer appear there.
+- **The site Database tab is read-only.** It shows the database name and whether a backup is
+  scheduled; users, schedules and dump files stay under Server -> Databases.
+- Health remains in Overview and Diagnostics; the old Operations screen still works but is hidden
+  for one release.
+
+### Fixed
+
+- **MariaDB appearing twice on Services.** devd's MariaDB runs as `mysqld.exe` on Windows. The
+  "Already on this computer" inventory saw that process holding port 3306 and listed MariaDB and
+  MySQL as "Not installed, port held by mysqld.exe", next to the managed MariaDB row. Inventory
+  rows whose port owner is a devd-managed process are now omitted, and programs that are not
+  present are no longer counted under "Already on this computer".
+
+---
+
 ## [0.10.0] - 2026-10-24 - Operations, remote deploys and PHP pools
 
 ### Added

@@ -53,7 +53,7 @@ uninstaller under `%LOCALAPPDATA%\Programs\devd`. NSIS 3 is required; pass
 
 The installer must be exercised, not just built: install it, let the finish page
 run `devd setup`, check the Start Menu shortcut opens the native window, exercise
-Agents, Processes, Shared and Preview, then uninstall it. The per-user install and
+Agents, Processes, Shared and a site's Preview tab, then uninstall it. The per-user install and
 its uninstaller are both reversible without administrator rights.
 
 The binary is built for `x86_64-pc-windows-gnu` with `rust-lld`, as configured in

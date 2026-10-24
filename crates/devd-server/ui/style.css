@@ -3217,6 +3217,7 @@ textarea,
 /* ------------------------------------------------------------- operations */
 
 .ops-tabs { flex-wrap: wrap; margin-bottom: var(--s4); }
+.site-tabs { margin-bottom: var(--s4); }
 .ops-site { display: flex; align-items: center; gap: var(--s2); margin-bottom: var(--s4); color: var(--fg-dim); font-size: var(--text-sm); }
 .ops-note { margin: var(--s3) 0 var(--s5); font-size: var(--text-sm); }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: var(--s3) 0 var(--s4); }

@@ -5,7 +5,7 @@ partially, and the platform-specific behaviour worth knowing before relying on
 it. Each entry states the consequence and, where one exists, the change that
 would close it.
 
-This document describes the current release, v0.10.0. See
+This document describes the current release, v0.11.0. See
 [`CHANGELOG.md`](../CHANGELOG.md) for what it contains.
 
 ## Not implemented at all
@@ -20,7 +20,7 @@ This document describes the current release, v0.10.0. See
 | Licensing / redistribution checks | Not started. |
 | Self-update and upgrade check | Not started. Nothing in `devd` contacts GitHub. The release list the mechanism will read is public and reachable (`GET /repos/ianclemence/devd/releases?per_page=3`), and the releases carry the source archives GitHub generates, but no code reads them yet. |
 | Prebuilt Linux binary | Not attached to this release: an artifact is published only after it has been executed on its target platform, and the release is built on Windows. `scripts/release-linux.sh` produces one on any Linux machine, or through WSL or Docker on Windows, and `scripts/install-linux.sh` installs it. |
-| Runtime, service and site screens in the **terminal dashboard** | Not built. The web application has Overview, Sites, Services, Tools, Runtimes, Preview, Certificates and Hosts; the terminal dashboard has neither. |
+| Runtime, service and site screens in the **terminal dashboard** | Not built. The web application has Overview, Sites, Services, Tools, Runtimes, Databases, Remote, Certificates and Hosts, plus a page per site with Environment, Deploy, Cron, Queue, Logs, Laravel, Redirects, Web server, Database and Preview tabs; the terminal dashboard has neither. |
 | Per-site PHP version routing | **Done.** Each installed PHP version gets its own FastCGI listener, and a site is pinned to one with `devd site php <name> <version>` or `site.set_php`. A site that is not pinned follows the default. A site pinned to a version that is not installed falls back to the default rather than to a missing upstream, which would be a 502 for every request. |
 | HTTP/2 | The TLS listener is HTTP/1.1. `http2` is not enabled in the generated vhosts. |
 | Focus management in the detail drawer | The drawer is a `role="dialog"`, but focus is not moved into it and it is not part of the focus trap. The palette and the approval dialog are. |

@@ -929,8 +929,9 @@
     ["agents", "Agents", "your team and what each member does"], ["schedules", "Schedules", "team runs on a clock"], ["shared", "Shared notes", "notes agents share"],
     ["processes", "Processes", "supervised project processes and logs"], ["overview", "Server", "local web server overview"],
     ["services", "Services", "nginx, PHP, MariaDB and others"], ["sites", "Sites", "projects served on local hostnames"],
-    ["toolchain", "Tools", "languages, package managers, databases"], ["runtimes", "Runtimes", "PHP, Node and Go versions"],
-    ["preview", "Preview", "see a site in the browser"], ["certificates", "Certificates", "local HTTPS"], ["hosts", "Hosts", "hostname entries"],
+    ["toolchain", "Tools", "CLI tools and package managers"], ["runtimes", "Runtimes", "language versions and PHP settings"],
+    ["databases", "Databases", "database users and backups"], ["remote", "Remote", "servers, SSH keys and Ploi"],
+    ["certificates", "Certificates", "local HTTPS"], ["hosts", "Hosts", "hostname entries"],
     ["providers", "Models", "AI providers, keys and models"], ["activity", "Activity", "what was done, by whom"],
     ["system", "Diagnostics", "health checks and fixes"], ["capabilities", "API and tools", "every capability, for scripts and agents"]
   ];
@@ -975,7 +976,7 @@
     state.server.sites.forEach(function (st) {
       var nm = st.name || st.host || "";
       var sc = hit(nm + " " + (st.host || ""), nm);
-      if (sc >= 0 && toks.length) out.push({ key: "site:" + nm, group: "Sites", title: nm, detail: st.host || "", score: sc + 10, run: function () { navigate("sites"); } });
+      if (sc >= 0 && toks.length) out.push({ key: "site:" + nm, group: "Sites", title: nm, detail: st.host || "", score: sc + 10, run: function () { openSite(nm); } });
     });
     return out;
   }
@@ -1106,13 +1107,13 @@
     assistant: "assistant", team: "agents",
     projects: "projects", project: "projects", create: "projects", develop: "projects",
     agents: "agents", schedules: "agents", shared: "agents", skills: "agents",
-    overview: "server", services: "server", sites: "server", operations: "server", toolchain: "server", runtimes: "server",
-    preview: "server", certificates: "server", hosts: "server"
+    overview: "server", services: "server", sites: "server", site: "server", operations: "server", toolchain: "server", runtimes: "server",
+    databases: "server", remote: "server", preview: "server", certificates: "server", hosts: "server"
   };
   var TABS = {
     projects: [["projects", "Projects"], ["create", "New project"], ["develop", "Stacks and tasks"]],
     agents: [["agents", "Team"], ["team", "Runs"], ["schedules", "Schedules"], ["skills", "Skills"], ["shared", "Notes"]],
-    server: [["overview", "Overview"], ["services", "Services"], ["sites", "Sites"], ["operations", "Operations"], ["toolchain", "Tools"], ["runtimes", "Runtimes"], ["preview", "Preview"], ["certificates", "Certificates"], ["hosts", "Hosts"]]
+    server: [["overview", "Overview"], ["sites", "Sites"], ["services", "Services"], ["toolchain", "Tools"], ["runtimes", "Runtimes"], ["databases", "Databases"], ["remote", "Remote"], ["certificates", "Certificates"], ["hosts", "Hosts"]]
   };
   var AREA_HOME = { assistant: "assistant", projects: "projects", agents: "agents", server: "overview" };
 
@@ -1125,7 +1126,8 @@
     if (!tabs || state.view === "project") { box.hidden = true; box.innerHTML = ""; return; }
     box.hidden = false;
     box.innerHTML = tabs.map(function (t) {
-      return '<button type="button" class="subtab' + (state.view === t[0] ? " active" : "") + '" data-action="nav" data-view="' + t[0] + '">' + esc(t[1]) + "</button>";
+      var active = state.view === t[0] || (t[0] === "sites" && state.view === "site");
+      return '<button type="button" class="subtab' + (active ? " active" : "") + '" data-action="nav" data-view="' + t[0] + '">' + esc(t[1]) + "</button>";
     }).join("");
   }
 
@@ -1233,6 +1235,10 @@
       html = '<button type="button" data-action="nav" data-view="projects">Projects</button>' +
         '<span class="sep">/</span><span>' + esc(state.project.name) + "</span>";
     }
+    if (state.view === "site" && SITE.name) {
+      html = '<button type="button" data-action="nav" data-view="sites">Sites</button>' +
+        '<span class="sep">/</span><span>' + esc(SITE.name) + "</span>";
+    }
     el("crumbs").innerHTML = html;
   }
 
@@ -1265,7 +1271,7 @@
 
   // -------------------------------------------------------------------- server
 
-  var SERVER_VIEWS = ["overview", "sites", "operations", "preview", "services", "toolchain", "runtimes", "certificates", "hosts"];
+  var SERVER_VIEWS = ["overview", "sites", "site", "services", "toolchain", "runtimes", "databases", "remote", "operations", "preview", "certificates", "hosts"];
 
   var KNOWN_SERVICES = [
     { name: "nginx", label: "nginx", note: "web server" },
@@ -1490,6 +1496,34 @@
 
   // ------------------------------------------------------------------ overview
 
+  function loadMachine() {
+    if (MACHINE.loading || MACHINE.data) return Promise.resolve();
+    MACHINE.loading = true;
+    MACHINE.error = "";
+    return read("monitor.stats", {})
+      .then(function (d) { MACHINE.data = d; })
+      .catch(function (e) { MACHINE.error = e.message; })
+      .then(function () {
+        MACHINE.loading = false;
+        if (state.view === "overview") render();
+      });
+  }
+
+  function machineSummary(m) {
+    var mem = m.memory || {};
+    var parts = [
+      m.cpu_percent != null ? "CPU " + Math.round(m.cpu_percent) + "%" : (m.load_average != null ? "load " + m.load_average : ""),
+      mem.total_mb ? "memory " + Math.round(mem.used_mb / 1024 * 10) / 10 + " of " + Math.round(mem.total_mb / 1024 * 10) / 10 + " GB" : "",
+      m.uptime_hours != null ? "up " + m.uptime_hours + " h" : "",
+      m.devd ? m.devd.running + "/" + m.devd.services + " devd services" : ""
+    ].filter(Boolean);
+    var disks = (m.disks || []).map(function (x) { return esc(x.mount) + " " + esc(String(x.free_gb)) + " GB free of " + esc(String(x.total_gb)) + " GB"; }).join(" \u00b7 ");
+    return uiHead("Machine", null, "") + uiList([
+      uiRow({ dot: "off", title: "This machine", sub: esc(parts.join(" \u00b7 ")), wrap: true }),
+      disks ? uiRow({ dot: "off", title: "Disks", sub: disks, wrap: true }) : ""
+    ].filter(Boolean));
+  }
+
   function renderOverview() {
     if (state.view !== "overview") return;
     var s = state.server;
@@ -1501,6 +1535,8 @@
     var pending = (hosts.adding || []).length + (hosts.removing || []).length;
     var ports = state.session && state.session.settings ? "HTTP " + state.session.settings.http_port + " · HTTPS " + state.session.settings.https_port : "";
 
+    if (!MACHINE.data && !MACHINE.loading && !MACHINE.error) loadMachine();
+    var machine = MACHINE.data ? machineSummary(MACHINE.data) : "";
     var head =
       '<div class="ui-status-line">' + uiDot(healthy ? "ok" : total ? "warn" : "off") +
       "<span>" + (total ? (healthy ? "All " + total + " services are running" : up + " of " + total + " services running") : "Nothing is installed yet") + (ports ? " · " + esc(ports) : "") + "</span></div>";
@@ -1525,10 +1561,8 @@
         title: esc(row.site.name),
         sub: esc(row.url) + (row.shared ? ' · <a href="' + attr(row.shared) + '" target="_blank" rel="noreferrer">public link</a>' : ""),
         open: 'data-action="open-url" data-url="' + attr(row.url) + '"',
-        actions: '<button type="button" class="btn btn-mini" data-action="open-url" data-url="' + attr(row.url) + '">Open</button>' +
-          (row.shared
-            ? '<button type="button" class="btn btn-mini" data-action="unshare-site" data-name="' + attr(row.site.name) + '">Stop sharing</button>'
-            : '<button type="button" class="btn btn-mini btn-ghost" data-action="share-site" data-name="' + attr(row.site.name) + '">Share</button>'),
+        actions: '<button type="button" class="btn btn-mini btn-primary" data-action="open-site" data-name="' + attr(row.site.name) + '">Manage</button>' +
+          '<button type="button" class="btn btn-mini" data-action="open-url" data-url="' + attr(row.url) + '">Open</button>',
         hover: true
       });
     });
@@ -1546,12 +1580,12 @@
     });
 
     el("main").innerHTML = page("Server", "", actions,
-      head + (notices.length ? uiList(notices) : "") +
+      head + (notices.length ? uiList(notices) : "") + machine +
       uiHead("Sites", s.sites.length || null, '<button type="button" class="btn btn-mini btn-ghost" data-action="new-site">New site</button>') +
       (sites.length ? uiList(sites.slice(0, 6)) + (sites.length > 6 ? '<div class="ui-more"><button type="button" data-action="nav" data-view="sites">All ' + sites.length + " sites</button></div>" : "") : uiEmpty("No sites yet", "A site is a folder, a hostname and a certificate.", '<button type="button" class="btn btn-primary" data-action="new-site">Create a site</button>')) +
       uiHead("Services", total ? up + " of " + total : null) +
       (services.length ? uiList(services) : uiEmpty("No services installed", "devd installs PHP, a web server and MariaDB from their makers.", '<button type="button" class="btn btn-primary" data-action="setup-open">Set up devd</button>')) +
-      '<div class="ui-more">Also: <button type="button" data-action="nav" data-view="toolchain">Tools</button> · <button type="button" data-action="nav" data-view="runtimes">Runtimes</button> · <button type="button" data-action="nav" data-view="certificates">Certificates</button> · <button type="button" data-action="nav" data-view="hosts">Hosts</button> · <button type="button" data-action="nav" data-view="preview">Preview</button></div>');
+      '<div class="ui-more">Also: <button type="button" data-action="nav" data-view="toolchain">Tools</button> \u00b7 <button type="button" data-action="nav" data-view="runtimes">Runtimes</button> \u00b7 <button type="button" data-action="nav" data-view="databases">Databases</button> \u00b7 <button type="button" data-action="nav" data-view="remote">Remote</button> \u00b7 <button type="button" data-action="nav" data-view="certificates">Certificates</button> \u00b7 <button type="button" data-action="nav" data-view="hosts">Hosts</button> \u00b7 <button type="button" data-action="nav" data-view="system">Diagnostics</button></div>');
   }
 
   // --------------------------------------------------------------------- sites
@@ -1565,28 +1599,18 @@
     });
     var rows = matching.map(function (row) {
       var site = row.site;
-      var installed = row.php_installed || [];
-      var pinned = site.php ? devdSeries(site.php) : "";
       var proxied = !!site.upstream;
       var meta = proxied ? "proxy" : esc(row.php_effective ? "PHP " + row.php_effective : "static");
       var sub = esc(row.url) + (proxied ? " → " + esc(site.upstream) + (row.upstream_listening ? "" : " (not running)") : " · " + esc(row.document_root)) +
         (row.shared ? ' · <a href="' + attr(row.shared) + '" target="_blank" rel="noreferrer">public link</a>' : "") +
         (row.present ? "" : " · directory missing");
-      var phpSelect = !proxied && installed.length
-        ? '<select class="select compact" data-action="site-php" data-name="' + attr(site.name) + '" aria-label="PHP version for ' + attr(site.name) + '"><option value=""' + (pinned ? "" : " selected") + ">Default PHP</option>" +
-          installed.map(function (v) { return '<option value="' + attr(v) + '"' + (pinned === v ? " selected" : "") + ">" + esc(v) + "</option>"; }).join("") + "</select>"
-        : "";
       return uiRow({
         dot: row.server_running ? (row.certificate || site.tls_mode === "off" ? "ok" : "warn") : "off",
         title: esc(site.name) + (site.tls_mode === "off" ? "" : ' <span class="pill ' + (row.certificate ? "pill-ok" : "pill-warn") + '">' + (row.certificate ? "https" : "no certificate") + "</span>"),
         sub: sub, meta: meta,
         open: 'data-action="open-url" data-url="' + attr(row.url) + '"',
-        actions: phpSelect +
-          '<button type="button" class="btn btn-mini" data-action="open-url" data-url="' + attr(row.url) + '">Open</button>' +
-          (row.shared
-            ? '<button type="button" class="btn btn-mini" data-action="unshare-site" data-name="' + attr(site.name) + '">Stop sharing</button>'
-            : '<button type="button" class="btn btn-mini btn-ghost" data-action="share-site" data-name="' + attr(site.name) + '">Share</button>') +
-          '<button type="button" class="btn btn-mini btn-ghost" data-action="remove-site" data-name="' + attr(site.name) + '">Remove</button>',
+        actions: '<button type="button" class="btn btn-mini btn-primary" data-action="open-site" data-name="' + attr(site.name) + '">Manage</button>' +
+          '<button type="button" class="btn btn-mini" data-action="open-url" data-url="' + attr(row.url) + '">Open</button>',
         hover: true
       });
     });
@@ -1606,9 +1630,16 @@
   // scheduler, queue workers, redirects, logs, deploys, alerts, PHP and Ploi. Every control
   // calls a capability, so an agent can do the same thing and the same approvals apply.
 
-  var OPS = { site: "", tab: "env", data: {}, loading: false, error: "" };
+  var OPS = { site: "", tab: "env", data: {}, loading: false, error: "", errorTab: "" };
+  var OPS_LOADING = {};
   var OPS_TABS = [["env", "Environment"], ["cron", "Scheduler"], ["queue", "Workers"], ["redirects", "Redirects"], ["logs", "Logs"], ["laravel", "Laravel"], ["nginx", "Nginx"], ["deploy", "Deploy"], ["db", "Databases"], ["health", "Health"], ["servers", "Servers"], ["keys", "SSH keys"], ["notify", "Alerts"], ["php", "PHP"], ["ploi", "Ploi"]];
-  var OPS_SITELESS = { notify: 1, php: 1, ploi: 1, db: 1, health: 1, servers: 1, keys: 1 };
+  var OPS_SITELESS = { overview: 1, notify: 1, php: 1, ploi: 1, db: 1, health: 1, servers: 1, keys: 1 };
+  var SITE = { name: "", tab: "overview" };
+  var SITE_TABS = [["overview", "Overview"], ["env", "Environment"], ["deploy", "Deploy"], ["cron", "Cron"], ["queue", "Queue"], ["logs", "Logs"], ["laravel", "Laravel"], ["redirects", "Redirects"], ["nginx", "Web server"], ["db", "Database"], ["preview", "Preview"]];
+  var REMOTE = { tab: "servers" };
+  var REMOTE_TABS = [["servers", "Servers"], ["keys", "SSH keys"], ["ploi", "Ploi"]];
+  var NOTIFY = { data: null, loading: false, error: "" };
+  var MACHINE = { data: null, loading: false, error: "" };
 
   function opsSiteNames() {
     return (state.server.sites || []).map(function (r) { return r.site && r.site.name; }).filter(Boolean);
@@ -1619,15 +1650,48 @@
     if (!OPS.site || names.indexOf(OPS.site) < 0) OPS.site = names[0] || "";
   }
 
+  function siteRowByName(name) {
+    return (state.server.sites || []).filter(function (r) { return r.site && r.site.name === name; })[0] || null;
+  }
+
+  function openSite(name) {
+    if (!name) return;
+    SITE.name = name;
+    SITE.tab = "overview";
+    OPS.site = name;
+    OPS.data = {};
+    OPS.error = "";
+    OPS.errorTab = "";
+    navigate("site");
+  }
+
+  function activeOpsTab() {
+    if (state.view === "site") return SITE.tab === "preview" ? "overview" : SITE.tab;
+    if (state.view === "databases") return "db";
+    if (state.view === "remote") return REMOTE.tab;
+    if (state.view === "runtimes") return "php";
+    return OPS.tab;
+  }
+
   function opsLoad(tab) {
     tab = tab || OPS.tab;
     opsEnsureSite();
+    var key = tab + "|" + (OPS_SITELESS[tab] ? "" : OPS.site);
+    if (OPS_LOADING[key]) return Promise.resolve();
+    OPS_LOADING[key] = true;
     OPS.loading = true;
     OPS.error = "";
+    OPS.errorTab = "";
     var s = { site: OPS.site };
     var jobs;
-    if (!OPS_SITELESS[tab] && !OPS.site) { OPS.loading = false; render(); return Promise.resolve(); }
-    if (tab === "env") jobs = [read("env.get", s)];
+    if (!OPS_SITELESS[tab] && !OPS.site) {
+      OPS_LOADING[key] = false;
+      OPS.loading = false;
+      render();
+      return Promise.resolve();
+    }
+    if (tab === "overview") jobs = [read("php.settings", {})];
+    else if (tab === "env") jobs = [read("env.get", s)];
     else if (tab === "cron") jobs = [read("cron.list", s)];
     else if (tab === "queue") jobs = [read("queue.list", s)];
     else if (tab === "redirects") jobs = [read("redirects.list", s)];
@@ -1643,23 +1707,37 @@
     else if (tab === "php") jobs = [read("php.settings", {}), read("php.extensions", {})];
     else jobs = [read("ploi.status", {})];
     return Promise.all(jobs).then(function (res) {
+      if (!OPS_SITELESS[tab] && OPS.site !== s.site) return null;
       OPS.data[tab] = res;
       if (tab === "ploi" && res[0] && res[0].connected) {
         return read("ploi.servers", {}).then(function (srv) { OPS.data.ploiServers = srv && srv.servers || []; });
       }
       return null;
     }).catch(function (e) {
+      if (!OPS_SITELESS[tab] && OPS.site !== s.site) return;
       OPS.error = e.message;
+      OPS.errorTab = tab;
     }).then(function () {
+      OPS_LOADING[key] = false;
       OPS.loading = false;
-      if (state.view === "operations") render();
+      if (state.view === "operations" || state.view === "site" || state.view === "databases" || state.view === "remote" || state.view === "runtimes") render();
     });
   }
 
   function opsAct(id, args, after) {
     return run(id, args).then(function (o) {
       if (o && after) after(o);
-      return o ? opsLoad(OPS.tab) : null;
+      return o ? opsLoad(activeOpsTab()) : null;
+    });
+  }
+
+  function notifyAct(id, args) {
+    return run(id, args).then(function (o) {
+      if (!o) return null;
+      NOTIFY.data = null;
+      NOTIFY.error = "";
+      if (state.view === "system") return loadNotifications();
+      return opsLoad("notify");
     });
   }
 
@@ -1676,12 +1754,13 @@
       names.map(function (n) { return '<option value="' + attr(n) + '"' + (n === OPS.site ? " selected" : "") + ">" + esc(n) + "</option>"; }).join("") + "</select></div>";
   }
 
-  function opsBody() {
-    if (OPS.error) return '<div class="notice notice-bad">' + esc(OPS.error) + "</div>";
-    var d = OPS.data[OPS.tab];
+  function opsBody(tab) {
+    tab = tab || OPS.tab;
+    if (OPS.error && OPS.errorTab === tab) return '<div class="notice notice-bad">' + esc(OPS.error) + "</div>";
+    var d = OPS.data[tab];
     if (!d) return '<div class="loading"></div>';
-    var fn = { env: opsEnv, cron: opsCron, queue: opsQueue, redirects: opsRedirects, logs: opsLogs, laravel: opsLaravel, nginx: opsNginx, deploy: opsDeploy, db: opsDb, health: opsHealth, servers: opsServers, keys: opsKeys, notify: opsNotify, php: opsPhp, ploi: opsPloi }[OPS.tab];
-    return fn(d);
+    var fn = { env: opsEnv, cron: opsCron, queue: opsQueue, redirects: opsRedirects, logs: opsLogs, laravel: opsLaravel, nginx: opsNginx, deploy: opsDeploy, db: opsDb, health: opsHealth, servers: opsServers, keys: opsKeys, notify: opsNotify, php: opsPhp, ploi: opsPloi }[tab];
+    return fn ? fn(d) : "";
   }
 
   function renderOperations() {
@@ -1689,9 +1768,157 @@
     opsEnsureSite();
     var needSite = !OPS_SITELESS[OPS.tab] && !OPS.site;
     var body = opsTabs() + opsSitePicker() +
-      (needSite ? uiEmpty("No sites yet", "Create a site first; operations belong to a site.", '<button type="button" class="btn btn-primary" data-action="nav" data-view="sites">Create a site</button>') : opsBody());
+      (needSite ? uiEmpty("No sites yet", "Create a site first; operations belong to a site.", '<button type="button" class="btn btn-primary" data-action="nav" data-view="sites">Create a site</button>') : opsBody(OPS.tab));
     el("main").innerHTML = page("Operations", "", "", body);
-    if (!OPS.data[OPS.tab] && !OPS.loading && !needSite && !OPS.error) opsLoad(OPS.tab);
+    if (!OPS.data[OPS.tab] && !needSite && !(OPS.error && OPS.errorTab === OPS.tab)) opsLoad(OPS.tab);
+  }
+
+  // --------------------------------------------------------------- site detail
+  //
+  // A site has enough of its own settings to deserve a page. The site comes
+  // from the address, not from a picker, so every control on the page acts on
+  // the site named at the top. The old Operations screen stays reachable as a
+  // fallback for one release.
+
+  function siteTabs() {
+    return '<div class="segmented site-tabs">' + SITE_TABS.map(function (t) {
+      return '<button type="button" class="seg' + (SITE.tab === t[0] ? " active" : "") + '" data-action="site-tab" data-tab="' + t[0] + '">' + esc(t[1]) + "</button>";
+    }).join("") + "</div>";
+  }
+
+  function siteOverview(row) {
+    var site = row.site;
+    var php = row.php_effective ? "PHP " + row.php_effective : (site.upstream ? "proxy to " + site.upstream : "static files");
+    var profileData = OPS.data.overview && OPS.data.overview[0];
+    var own = profileData ? ((profileData.site_profiles || []).filter(function (p) { return p.site === site.name; })[0] || {}).profile || "" : "";
+    var installed = row.php_installed || [];
+    var pinned = site.php ? devdSeries(site.php) : "";
+    var phpSelect = !site.upstream && installed.length
+      ? '<select class="select compact" data-action="site-php" data-name="' + attr(site.name) + '" aria-label="PHP version for ' + attr(site.name) + '"><option value=""' + (pinned ? "" : " selected") + ">Default PHP</option>" +
+        installed.map(function (v) { return '<option value="' + attr(v) + '"' + (pinned === v ? " selected" : "") + ">" + esc(v) + "</option>"; }).join("") + "</select>"
+      : "";
+    var profileSelect = profileData
+      ? '<select class="select compact" data-change="ops-site-profile" data-site="' + attr(site.name) + '"><option value=""' + (own ? "" : " selected") + '>Follow the machine (' + esc(profileData.profile || "local") + ")</option>" +
+        '<option value="local"' + (own === "local" ? " selected" : "") + '>Local limits</option><option value="production"' + (own === "production" ? " selected" : "") + ">Production limits</option></select>"
+      : "";
+    var details = [
+      uiRow({
+        dot: row.server_running ? "ok" : "off",
+        title: esc(row.url),
+        sub: esc(row.document_root || "") + (row.present === false ? " (directory missing)" : ""),
+        actions: '<button type="button" class="btn btn-mini btn-primary" data-action="open-url" data-url="' + attr(row.url) + '">Open</button>' +
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="site-tab" data-tab="preview">Preview</button>'
+      }),
+      uiRow({ title: "Runtime", sub: esc(php) + (row.upstream_listening === false ? " (not running)" : "") }),
+      uiRow({ title: "TLS", sub: site.tls_mode === "off" ? "off" : row.certificate ? "HTTPS, certificate present" : "HTTPS, no certificate yet" }),
+      uiRow({ title: "Database", sub: site.db_name ? '<span class="mono">' + esc(site.db_name) + "</span>" : "none", actions: '<button type="button" class="btn btn-mini btn-ghost" data-action="site-tab" data-tab="db">Database</button>' }),
+      uiRow({ title: "Sharing", sub: row.shared ? '<a href="' + attr(row.shared) + '" target="_blank" rel="noreferrer">' + esc(row.shared) + "</a>" : "only on this machine" })
+    ];
+    var settings = uiList([
+      uiRow({ title: "PHP version", sub: pinned ? "pinned to " + esc(pinned) : "follows the machine default", actions: phpSelect }),
+      uiRow({ title: "PHP limits", sub: own ? "uses the " + esc(own) + " profile" : "follows the machine", actions: profileSelect + '<button type="button" class="btn btn-mini btn-ghost" data-action="nav" data-view="runtimes">Runtimes</button>' })
+    ]);
+    if (!OPS.data.overview && !(OPS.error && OPS.errorTab === "overview")) opsLoad("overview");
+    var loadError = OPS.error && OPS.errorTab === "overview" ? '<div class="notice notice-bad">' + esc(OPS.error) + "</div>" : "";
+    return uiHead("Site", null, "") + uiList(details) +
+      uiHead("PHP", null, "") + settings + loadError +
+      '<div class="ui-more">Environment, deploys, cron, workers, logs, Laravel, redirects and the web server are on the tabs above.</div>';
+  }
+
+  function siteDatabase(row) {
+    var db = row.site.db_name;
+    var open = '<button type="button" class="btn btn-mini btn-ghost" data-action="nav" data-view="databases">All databases</button>';
+    if (!db) {
+      return uiHead("Database", null, "") +
+        uiEmpty("No database", "This site was created without one. Database users and backups are under Server \u2192 Databases.", '<button type="button" class="btn btn-primary" data-action="nav" data-view="databases">Open Databases</button>');
+    }
+    var data = OPS.data.db;
+    var backups = data ? ((data[1] && data[1].schedules) || []).filter(function (b) { return String(b.database) === String(db); }) : [];
+    var backupNote = !data
+      ? (OPS.error && OPS.errorTab === "db" ? "backup schedules could not be read" : "checking backup schedules")
+      : backups.length
+        ? backups.length + (backups.length === 1 ? " scheduled backup" : " scheduled backups")
+        : "no scheduled backups";
+    return uiHead("Database", null, open) +
+      uiList([uiRow({ title: '<span class="mono">' + esc(db) + "</span>", sub: "this site's database on the devd server \u00b7 " + esc(backupNote) })]) +
+      '<p class="dim ops-note">Database users and backups belong to the whole server. Manage users, schedules and dump files under Server \u2192 Databases.</p>';
+  }
+
+  function sitePreview(row) {
+    var notice = caTrusted()
+      ? ""
+      : '<div class="notice" style="margin-bottom:12px"><div class="grow">The certificate authority is not trusted yet, so an HTTPS preview may show a warning.</div>' +
+        '<button type="button" class="btn btn-mini" data-action="ca-trust" data-machine="false">Trust the CA</button></div>';
+    return notice +
+      '<div class="panel"><div class="panel-head"><span class="mono">' + esc(row.url) + '</span><span class="panel-note">' +
+      '<button type="button" class="btn btn-mini btn-ghost" data-action="reload-preview">Reload</button>' +
+      '<button type="button" class="btn btn-mini btn-ghost" data-action="open-url" data-url="' + attr(row.url) + '">Open externally</button>' +
+      "</span></div>" +
+      '<div class="panel-body flush"><iframe id="preview-frame" class="preview-frame" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads allow-modals" src="' +
+      attr(row.url) + '" title="' + attr(row.site.name) + '"></iframe></div></div>';
+  }
+
+  function siteBody(row) {
+    var tab = SITE.tab;
+    if (tab === "overview") return siteOverview(row);
+    if (tab === "preview") return sitePreview(row);
+    if (tab === "db") {
+      if (!OPS.data.db && !(OPS.error && OPS.errorTab === "db")) opsLoad("db");
+      return siteDatabase(row);
+    }
+    if (!OPS.data[tab] && !(OPS.error && OPS.errorTab === tab)) opsLoad(tab);
+    return opsBody(tab);
+  }
+
+  function renderSite() {
+    if (state.view !== "site") return;
+    var row = siteRowByName(SITE.name);
+    if (!row) {
+      el("main").innerHTML = page("Site", "", '<button type="button" class="btn" data-action="nav" data-view="sites">All sites</button>',
+        uiEmpty("Site not found", "It may have been removed, or the address may be old.", '<button type="button" class="btn btn-primary" data-action="nav" data-view="sites">Back to sites</button>'));
+      return;
+    }
+    SITE.name = row.site.name;
+    OPS.site = SITE.name;
+    var actions = '<button type="button" class="btn" data-action="open-url" data-url="' + attr(row.url) + '">Open</button>' +
+      (row.shared
+        ? '<button type="button" class="btn" data-action="unshare-site" data-name="' + attr(SITE.name) + '">Stop sharing</button>'
+        : '<button type="button" class="btn" data-action="share-site" data-name="' + attr(SITE.name) + '">Share</button>') +
+      '<button type="button" class="btn btn-ghost" data-action="remove-site" data-name="' + attr(SITE.name) + '">Remove</button>';
+    el("main").innerHTML = page(SITE.name, "", actions, siteTabs() + siteBody(row));
+  }
+
+  // ---------------------------------------------------------------- databases
+
+  function renderDatabases() {
+    if (state.view !== "databases") return;
+    var failed = OPS.error && OPS.errorTab === "db";
+    if (!OPS.data.db && !failed) opsLoad("db");
+    var body = failed
+      ? '<div class="notice notice-bad">' + esc(OPS.error) + "</div>"
+      : OPS.data.db ? opsDb(OPS.data.db) : '<div class="loading"></div>';
+    el("main").innerHTML = page("Databases", "", "",
+      '<div class="ui-quiet">Users and scheduled backups for the databases devd runs.</div>' + body);
+  }
+
+  // ------------------------------------------------------------------- remote
+
+  function remoteTabs() {
+    return '<div class="segmented remote-tabs">' + REMOTE_TABS.map(function (t) {
+      return '<button type="button" class="seg' + (REMOTE.tab === t[0] ? " active" : "") + '" data-action="remote-tab" data-tab="' + t[0] + '">' + esc(t[1]) + "</button>";
+    }).join("") + "</div>";
+  }
+
+  function renderRemote() {
+    if (state.view !== "remote") return;
+    var tab = REMOTE.tab;
+    var failed = OPS.error && OPS.errorTab === tab;
+    if (!OPS.data[tab] && !failed) opsLoad(tab);
+    var body = failed
+      ? '<div class="notice notice-bad">' + esc(OPS.error) + "</div>"
+      : OPS.data[tab] ? opsBody(tab) : '<div class="loading"></div>';
+    el("main").innerHTML = page("Remote", "", "", remoteTabs() +
+      '<div class="ui-quiet">Servers you deploy to, the keys that reach them, and Ploi.</div>' + body);
   }
 
   // ------------------------------------------------------------- environment
@@ -1847,7 +2074,8 @@
 
   // --------------------------------------------------------------------- php
 
-  function opsPhp(d) {
+  function opsPhp(d, withSites) {
+    withSites = withSites !== false;
     var s = d[0] || {}, x = d[1] || {};
     var versions = (s.versions || []).map(function (v) {
       var vals = v.values || {};
@@ -1871,8 +2099,8 @@
     });
     return uiHead("Limits", null, profile + workers) + uiList(versions) +
       '<p class="dim ops-note">The profile sets memory, upload size and time limits for every PHP. Workers are how many PHP processes serve each version at once.</p>' +
-      uiHead("Sites", null, "") + uiList(siteRows) +
-      '<p class="dim ops-note">A site can run with the other profile (for example production limits, to try it the way your server runs it). It is then served by a second pool of PHP processes.</p>' +
+      (withSites ? uiHead("Sites", null, "") + uiList(siteRows) +
+        '<p class="dim ops-note">A site can run with the other profile (for example production limits, to try it the way your server runs it). It is then served by a second pool of PHP processes.</p>' : "") +
       uiHead("Extensions", (x.extensions || []).filter(function (e) { return e.enabled; }).length + " on", "") +
       '<div class="chips">' + (exts || '<span class="dim">No PHP is installed.</span>') + "</div>" +
       '<p class="dim ops-note">Changing a setting restarts PHP; requests in flight are dropped.</p>';
@@ -2061,7 +2289,7 @@
   function opsHealth(d) {
     var checks = (d[0] && d[0].checks) || [], m = d[1] || {};
     var mem = m.memory || {};
-    var disks = (m.disks || []).map(function (x) { return esc(x.mount) + " " + esc(String(x.free_gb)) + " GB free of " + esc(String(x.total_gb)); }).join(" · ");
+    var disks = (m.disks || []).map(function (x) { return esc(x.mount) + " " + esc(String(x.free_gb)) + " GB free of " + esc(String(x.total_gb)) + " GB"; }).join(" · ");
     var machine = uiList([
       uiRow({ dot: "off", title: "This machine", sub: esc([m.cpu_percent != null ? "CPU " + Math.round(m.cpu_percent) + "%" : (m.load_average != null ? "load " + m.load_average : ""), mem.total_mb ? "memory " + Math.round(mem.used_mb / 1024 * 10) / 10 + " of " + Math.round(mem.total_mb / 1024 * 10) / 10 + " GB" : "", m.uptime_hours != null ? "up " + m.uptime_hours + " h" : "", m.devd ? m.devd.running + "/" + m.devd.services + " devd services" : ""].filter(Boolean).join(" · ")), wrap: true }),
       disks ? uiRow({ dot: "off", title: "Disks", sub: disks, wrap: true }) : ""
@@ -2146,10 +2374,24 @@
   }
 
 
+  function managedServicePid(pid) {
+    return (state.server.services || []).some(function (x) { return x.pid === pid; });
+  }
+
   function inventoryRows() {
     var inv = state.server.inventory || [];
-    return inv.map(function (v) {
+    return inv.filter(function (v) {
+      // devd's MariaDB runs as mysqld.exe on Windows. The inventory sees the
+      // port owner but does not know devd started it, so without this it shows
+      // a second MariaDB/MySQL under "Already on this computer".
+      if (v.port_owner && v.port_owner.pid && managedServicePid(v.port_owner.pid)) return false;
+      // Programs that are not on this machine belong under Available, not in
+      // the list of things already here.
+      return !(v.status === "missing" && !v.path && !v.port_owner);
+    }).map(function (v) {
       var rec = v.recommendation || {};
+      var stateLabel = INV_LABEL[v.status] || v.status;
+      if (v.status === "missing" && v.port_owner) stateLabel = "Not found on PATH";
       var opts = v.options.filter(function (o) { return o.available && o.action !== "ignore"; });
       function label(o) { return o.action === "adopt" ? "Use it" : o.action === "watch" ? "Only watch" : o.action === "install" ? "Install" : o.action === "remove" ? "Remove" : o.action; }
       var btns = opts.map(function (o) {
@@ -2166,7 +2408,7 @@
         dot: v.status === "ready" ? "ok" : v.status === "installed_stopped" ? "warn" : v.status === "missing" ? "off" : "bad",
         title: brandImg(v.tool, "brand-dot") + esc(v.name) + (v.decision ? ' <span class="pill pill-accent">' + esc(v.decision.mode) + "</span>" : "") +
           (v.required ? ' <span class="pill pill-warn">needed by ' + v.required_by.length + "</span>" : ""),
-        sub: esc(INV_LABEL[v.status] + (v.path ? " · " + v.path : "") + (v.port_owner && v.port_owner.program ? " · port held by " + v.port_owner.program : "")),
+        sub: esc(stateLabel + (v.path ? " · " + v.path : "") + (v.port_owner && v.port_owner.program ? " · port held by " + v.port_owner.program : "")),
         actions: btns
       });
     });
@@ -2260,6 +2502,14 @@
   function renderRuntimes() {
     if (state.view !== "runtimes") return;
     var q = state.filters.runtimes || "";
+    var phpBody;
+    if (OPS.data.php) {
+      phpBody = uiHead("PHP settings", null, "") + opsPhp(OPS.data.php, false);
+    } else {
+      var failed = OPS.error && OPS.errorTab === "php";
+      if (!failed) opsLoad("php");
+      phpBody = uiHead("PHP settings", null, "") + (failed ? '<div class="notice notice-bad">' + esc(OPS.error) + "</div>" : '<div class="loading"></div>');
+    }
     var body = RUNTIME_KINDS.map(function (kind) {
       var installed = state.server.runtimes.filter(function (r) {
         return r.runtime.kind === kind.kind && keeps(q, r.runtime.version, r.runtime.path, kind.label, kind.kind);
@@ -2277,9 +2527,11 @@
         });
       });
       return uiHead(kind.label, installed.length || null, '<button type="button" class="btn btn-mini" data-action="install-runtime" data-kind="' + attr(kind.kind) + '">' + (installed.length ? "Install another" : "Install latest") + "</button>") +
-        (rows.length ? uiList(rows) : '<div class="ui-quiet">' + esc(kind.note) + " \u2014 not installed.</div>");
+        (rows.length ? uiList(rows) : '<div class="ui-quiet">' + esc(kind.note) + " \u2014 not installed.</div>") +
+        (kind.kind === "php" ? phpBody : "");
     });
-    el("main").innerHTML = page("Runtimes", "", "", body.join("") + '<div class="ui-more">Each runtime is downloaded from its maker and checked against the digest they publish. A project can use its own version with <span class="mono">devd runtime pin</span>.</div>');
+    el("main").innerHTML = page("Runtimes", "", "", body.join("") +
+      '<div class="ui-more">Each runtime is downloaded from its maker and checked against the digest they publish. A project can use its own version with <span class="mono">devd runtime pin</span>. PHP limits for one site are set on that site\'s page.</div>');
   }
 
   // -------------------------------------------------------------- certificates
@@ -4029,8 +4281,28 @@
 
   // ---------------------------------------------------------------------- system
 
+  function loadNotifications() {
+    if (NOTIFY.loading || NOTIFY.data) return Promise.resolve();
+    NOTIFY.loading = true;
+    NOTIFY.error = "";
+    return read("notify.list", {})
+      .then(function (d) { NOTIFY.data = d; })
+      .catch(function (e) { NOTIFY.error = e.message; })
+      .then(function () {
+        NOTIFY.loading = false;
+        if (state.view === "system") render();
+      });
+  }
+
+  function notificationsBody() {
+    if (NOTIFY.error) return '<div class="notice notice-bad">' + esc(NOTIFY.error) + "</div>";
+    if (!NOTIFY.data) return '<div class="loading"></div>';
+    return opsNotify([NOTIFY.data]);
+  }
+
   function renderSystem() {
     if (state.view !== "system") return;
+    if (!NOTIFY.data && !NOTIFY.error && !NOTIFY.loading) loadNotifications();
     var checks = (state.doctor && state.doctor.checks) || [];
     var checkRows = checks
       .map(function (c) {
@@ -4089,6 +4361,7 @@
       '<div class="panel"><div class="panel-head"><span>Registry</span>' +
       '<span class="panel-note">' + ((s.registry && s.registry.capabilities) || 0) + " capabilities</span></div>" +
       '<div class="panel-body inline">' + groups + "</div></div></details>" +
+      '<details class="ui-fold"><summary>Notifications</summary>' + notificationsBody() + "</details>" +
       "</div>";
   }
 
@@ -4376,6 +4649,16 @@
   // -------------------------------------------------------------- toolchain
 
   var TC = { data: null, devices: null, loading: false };
+  var TOOL_RUNTIME_IDS = { php: 1, node: 1, python: 1, ruby: 1, go: 1 };
+
+  // Runtimes, services and databases have their own screens. Keeping them out
+  // of Tools means each install, start and version appears in one place.
+  function toolOwnedElsewhere(t) {
+    if (!t || !t.tool) return true;
+    if (t.tool.category === "database" || t.tool.category === "container") return true;
+    if (t.tool.id === "nginx") return true;
+    return !!TOOL_RUNTIME_IDS[t.tool.id];
+  }
 
   function loadToolchain() {
     TC.loading = true;
@@ -4398,12 +4681,13 @@
     var host = TC.data.host, tools = TC.data.tools;
     var q = state.filters.toolchain || "";
     var cats = {};
-    tools.filter(function (t) { return keeps(q, t.tool.id, t.tool.name, t.tool.purpose, t.tool.category); })
+    tools.filter(function (t) { return !toolOwnedElsewhere(t) && keeps(q, t.tool.id, t.tool.name, t.tool.purpose, t.tool.category); })
       .forEach(function (t) { (cats[t.tool.category] = cats[t.tool.category] || []).push(t); });
     var notes = [];
     if (!host.root && !host.sudo && host.os === "linux") notes.push("devd has neither root nor passwordless sudo, so package installs show the exact command to run yourself.");
     if (!host.managers.length) notes.push("No supported package manager was found; installs will show manual steps.");
     var html = '<div class="ui-quiet">' + esc(host.os + " " + host.arch) + " \u00b7 package managers: " + esc(host.managers.join(", ") || "none") + "</div>" +
+      '<div class="ui-more">Tools here are CLI tools and package managers. Services, runtimes and databases have their own tabs.</div>' +
       notes.map(function (n) { return uiRow({ accent: true, dot: "warn", title: esc(n) }); }).join("") +
       '<div class="filter-row">' + filterBox("toolchain", "Search tools") + "</div>";
     if (!Object.keys(cats).length) html += uiEmpty('No tool matches "' + q + '"');
@@ -5697,6 +5981,8 @@
     operations: "/server/operations",
     toolchain: "/server/tools",
     runtimes: "/server/runtimes",
+    databases: "/server/databases",
+    remote: "/server/remote",
     preview: "/server/preview",
     certificates: "/server/certificates",
     hosts: "/server/hosts",
@@ -5715,6 +6001,9 @@
     if (view === "assistant") {
       return AI.thread && AI.thread.id ? "/assistant/" + encodeURIComponent(AI.thread.id) : "/assistant";
     }
+    if (view === "site") {
+      return SITE.name ? "/server/sites/" + encodeURIComponent(SITE.name) : "/server/sites";
+    }
     return ROUTES[view] || "/";
   }
 
@@ -5724,6 +6013,7 @@
     if (p === "/" ) return "home";
     if (p.indexOf("/projects/") === 0) return "project";
     if (p.indexOf("/assistant/") === 0) return "assistant";
+    if (p.indexOf("/server/sites/") === 0) return "site";
     for (var k in ROUTES) {
       if (ROUTES[k] === p) return k;
     }
@@ -5743,6 +6033,14 @@
   function readRoute() {
     var view = viewFor(location.pathname);
     var parts = location.pathname.split("/").filter(Boolean);
+    var site = "";
+    if (view === "site") {
+      var rawSite = parts.slice(2).join("/");
+      if (rawSite) {
+        try { site = decodeURIComponent(rawSite); } catch (e) { site = ""; }
+      }
+      if (!site) view = "sites";
+    }
     if (view === "project") {
       var raw = parts.slice(1).join("/");
       if (raw) {
@@ -5752,7 +6050,17 @@
     if (view === "assistant" && parts[1]) {
       state.pendingThread = decodeURIComponent(parts[1]);
     }
-    if (state.view === view && !state.pendingThread) return;
+    var siteChanged = view === "site" && site !== SITE.name;
+    if (site) {
+      SITE.name = site;
+      if (siteChanged) {
+        SITE.tab = "overview";
+        OPS.data = {};
+        OPS.error = "";
+        OPS.errorTab = "";
+      }
+    }
+    if (state.view === view && !state.pendingThread && !siteChanged) return;
     navigate(view, true);
   }
 
@@ -5923,10 +6231,13 @@
       if (!state.server.loaded && state.view !== "toolchain") return renderLoadingServer();
       if (state.view === "overview") renderOverview();
       else if (state.view === "sites") renderSites();
+      else if (state.view === "site") renderSite();
       else if (state.view === "operations") renderOperations();
       else if (state.view === "preview") renderPreview();
       else if (state.view === "services") renderServices();
       else if (state.view === "runtimes") renderRuntimes();
+      else if (state.view === "databases") renderDatabases();
+      else if (state.view === "remote") renderRemote();
       else if (state.view === "certificates") renderCertificates();
       else if (state.view === "hosts") renderHosts();
       else if (state.view === "toolchain") renderToolchain();
@@ -7024,7 +7335,15 @@
       });
     },
 
-    "remove-site": function (node) { act("site.remove", { name: node.dataset.name }); },
+    "remove-site": function (node) {
+      var name = node.dataset.name;
+      act("site.remove", { name: name }).then(function (o) {
+        if (o && state.view === "site" && SITE.name === name) {
+          SITE.name = "";
+          navigate("sites");
+        }
+      });
+    },
     "share-site": function (node) { act("share.start", { name: node.dataset.name }); },
     "unshare-site": function (node) { act("share.stop", { name: node.dataset.name }); },
 
@@ -7952,7 +8271,7 @@
   (function () {
     var node = el("main");
     var desc = Object.getOwnPropertyDescriptor(Element.prototype, "innerHTML");
-    var calm = ["overview", "services", "sites", "operations", "toolchain", "runtimes", "preview", "certificates", "hosts"];
+    var calm = ["overview", "services", "sites", "site", "operations", "toolchain", "runtimes", "databases", "remote", "preview", "certificates", "hosts"];
     var last = null;
     if (!node || !desc) return;
     Object.defineProperty(node, "innerHTML", {
@@ -7971,8 +8290,29 @@
   function opsLines(text) { return String(text || "").split(/\r?\n/); }
 
   Object.assign(ACTIONS, {
-    "ops-tab": function (n) { OPS.tab = n.dataset.tab; OPS.error = ""; render(); opsLoad(OPS.tab); },
-    "ops-site": function (n) { OPS.site = n.value; OPS.data = {}; OPS.error = ""; render(); opsLoad(OPS.tab); },
+    "ops-tab": function (n) {
+      var tab = n.dataset.tab;
+      if (state.view === "site") SITE.tab = tab;
+      else OPS.tab = tab;
+      OPS.error = "";
+      OPS.errorTab = "";
+      render();
+      opsLoad(tab);
+    },
+    "site-tab": function (n) {
+      SITE.tab = n.dataset.tab;
+      OPS.error = "";
+      OPS.errorTab = "";
+      render();
+    },
+    "remote-tab": function (n) {
+      REMOTE.tab = n.dataset.tab;
+      OPS.error = "";
+      OPS.errorTab = "";
+      render();
+    },
+    "open-site": function (n) { openSite(n.dataset.name); },
+    "ops-site": function (n) { OPS.site = n.value; OPS.data = {}; OPS.error = ""; OPS.errorTab = ""; render(); opsLoad(OPS.tab); },
     "ops-level": function (n) {
       var l = n.dataset.level, a = OPS.levels || [];
       OPS.levels = a.indexOf(l) >= 0 ? a.filter(function (x) { return x !== l; }) : a.concat([l]);
@@ -8113,11 +8453,11 @@
         if (!v) return;
         var channel = "inbox", url = null;
         if (v !== "inbox") { url = v; channel = /discord/i.test(v) ? "discord" : /slack/i.test(v) ? "slack" : "webhook"; }
-        opsAct("notify.add", { channel: channel, url: url });
+        notifyAct("notify.add", { channel: channel, url: url });
       });
     },
     "ops-notify-test": function (n) { run("notify.test", { id: n.dataset.id }); },
-    "ops-notify-remove": function (n) { opsAct("notify.remove", { id: n.dataset.id }); },
+    "ops-notify-remove": function (n) { notifyAct("notify.remove", { id: n.dataset.id }); },
     "ops-php-profile": function (n) { opsAct("php.configure", { profile: n.value }); },
     "ops-php-workers": function (n) { opsAct("php.configure", { workers: parseInt(n.value, 10) }); },
     "ops-site-profile": function (n) { opsAct("php.site_profile", { site: n.dataset.site, profile: n.value || null }); },

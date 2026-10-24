@@ -236,10 +236,7 @@ people and agents use the same capability API.
 
 ## Preview
 
-**Preview** embeds the running site in the window: pick a site, see it render,
-reload it, or open it in the system browser. The certificate authority has to be
-trusted for an HTTPS site to render without a warning, and the page says so when
-it is not.
+**Preview** embeds the running site in the window: on a site's page choose the **Preview** tab, see it render, reload it, or open it in the system browser. The certificate authority has to be trusted for an HTTPS site to render without a warning, and the page says so when it is not.
 
 ## Configuration
 
