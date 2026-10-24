@@ -133,6 +133,10 @@ fn leak_list(items: Vec<String>) -> &'static [&'static str] {
 
 /// Read one role file. The error says which file and what is wrong with it.
 fn parse(file: &str, raw: &str) -> Result<Role, String> {
+    // A Windows checkout, or a role file written in Notepad, has CRLF. The
+    // front matter is line-based, so normalise once rather than failing every
+    // role on that platform.
+    let raw = raw.replace("\r\n", "\n");
     let bad = |why: &str| format!("roles/{file}.md: {why}");
     let rest = raw.strip_prefix("---\n").ok_or_else(|| bad("must start with a front matter block"))?;
     let (front, body) = rest.split_once("\n---\n").ok_or_else(|| bad("front matter is not closed"))?;
@@ -318,6 +322,14 @@ mod tests {
         assert!(errors.iter().any(|e| e.contains("up to the exec tier")), "{errors:?}");
         assert!(errors.iter().any(|e| e.contains("already exists")));
         assert!(errors.iter().any(|e| e.contains("no-such-skill")));
+    }
+
+    #[test]
+    fn a_role_with_windows_line_endings_parses() {
+        let raw = include_str!("../roles/planner.md").replace('\n', "\r\n");
+        let role = parse("planner", &raw).expect("a CRLF role parses");
+        assert_eq!(role.id, "planner");
+        assert_eq!(role.title, "Planner");
     }
 
     #[test]

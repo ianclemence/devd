@@ -139,8 +139,9 @@ pub fn fetch(paths: &Paths, source: &str, revision: Option<&str>) -> Result<Vec<
 
 /// A skill's name, description, kind, roles and body.
 fn split_skill(raw: &str) -> Option<(String, String, String, Vec<String>, String)> {
-    let (name, description, kind, roles) = crate::skills::front_matter(raw)?;
-    let rest = raw.strip_prefix("---\n").or_else(|| raw.strip_prefix("---\r\n"))?;
+    let raw = raw.replace("\r\n", "\n");
+    let (name, description, kind, roles) = crate::skills::front_matter(&raw)?;
+    let rest = raw.strip_prefix("---\n")?;
     let end = rest.find("\n---")?;
     let body = rest[end + 4..].trim_start_matches('-').trim_start_matches('\n').trim().to_string();
     Some((name, description, kind, roles, body))

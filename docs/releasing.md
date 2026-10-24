@@ -1,8 +1,9 @@
 # Releasing
 
-`devd` is released from a developer machine. There is no CI pipeline and no
-automatic publication: a release is a deliberate sequence of local commands, and
-an artifact is only attached after it has run on the platform it targets.
+`devd` is released from a developer machine. CI builds, lints and tests the
+workspace on Windows, Linux and macOS, but there is no automatic release or
+publication: a release is a deliberate sequence of local commands, and an
+artifact is only attached after it has run on the platform it targets.
 
 ## The rule
 

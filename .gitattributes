@@ -1,2 +1,11 @@
 # Shell scripts run on Linux, where a carriage return is not whitespace.
 *.sh text eol=lf
+
+# The agent reads Markdown front matter line by line, and a Windows checkout
+# must not turn a working role, skill or template into a malformed one.
+*.md text eol=lf
+*.rs text eol=lf
+*.toml text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf

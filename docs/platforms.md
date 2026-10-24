@@ -92,13 +92,13 @@ ranges, so the script is something to run again rather than a fix applied once.
 | | State |
 |---|---|
 | Windows | `cargo test --workspace` passes |
-| Linux, macOS compile | `scripts/cross-check.ps1` type-checks the whole workspace (tests included) for `x86_64-unknown-linux-gnu` and `aarch64-apple-darwin` from a Windows machine. Nothing is linked or run |
+| Linux, macOS build and test | CI builds the workspace and runs its tests on Ubuntu and macOS. It does not build the desktop shell, start nginx/MariaDB/PHP, or install anything |
 | Package-manager parsing, verification decisions, argument lists for `security`, the generated nginx files | unit-tested on canned output, on every platform |
-| Linking into the layout, `install_system` end to end | tests exist (`cfg(unix)`) and compile for Linux and macOS; **they have not been run** - there was no Linux or macOS machine |
+| Linking into the layout, `install_system` end to end | tests exist (`cfg(unix)`) and compile for Linux and macOS; **they have not been run** |
 | Starting nginx / MariaDB / php-cgi as an ordinary user, `mariadb-install-db` against a real package, `security` against a real keychain | **never executed** |
 
-Treat Linux and macOS support as written, compiled and unit-tested, not as proven.
-The first run on a real machine is expected to find things; `cargo test
+Treat Linux and macOS support as written, compiled and unit-tested in CI, not as
+proven. The first run on a real machine is expected to find things; `cargo test
 --workspace` there is the first thing to do.
 
 ## Not done yet
@@ -106,6 +106,7 @@ The first run on a real machine is expected to find things; `cargo test
 * **Resolving `*.test`.** On Linux and macOS the hosts file is the only mechanism;
   there is no wildcard and no resolver. A loopback resolver (dnsmasq,
   `/etc/resolver`) is milestone M3 in the roadmap.
-* **Installers.** There is a per-user Linux install script (never executed on
-  Linux) and no macOS package.
+* **Linux and macOS installers.** There is a per-user Linux install script that
+  has never been run on Linux, and no macOS package. The Windows installer is
+  separate and is exercised on every release.
 * **Several PHP versions at once** from one package manager.

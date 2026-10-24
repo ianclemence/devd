@@ -231,7 +231,7 @@ that external tools are prefixed, and that a denied server is not offered.
 
 ## Testing
 
-24 unit tests and 3 end-to-end tests in `devd-mcp` (26 unit tests including the argument-redaction and address cases):
+`devd-mcp` has 26 unit tests and 4 end-to-end tests (the end-to-end suite runs against a real child process):
 
 * the protocol: `initialize` (including echoing an unknown version), notifications
   getting no reply, an unknown method, a missing required argument;

@@ -52,6 +52,7 @@ pub struct Skill {
 }
 
 fn parse(raw: &str, source: &str) -> Option<Skill> {
+    let raw = raw.replace("\r\n", "\n");
     let rest = raw.strip_prefix("---\n")?;
     let (front, body) = rest.split_once("\n---\n")?;
     let field = |k: &str| front.lines().find_map(|l| l.strip_prefix(&format!("{k}:")).map(|v| v.trim().to_string()));
@@ -185,7 +186,8 @@ pub fn normalise_name(raw: &str) -> String {
 /// write it: `description: >` and the words on the lines below. A folded
 /// description is one sentence with the line breaks turned back into spaces.
 pub fn front_matter(raw: &str) -> Option<(String, String, String, Vec<String>)> {
-    let rest = raw.strip_prefix("---\n").or_else(|| raw.strip_prefix("---\r\n"))?;
+    let raw = raw.replace("\r\n", "\n");
+    let rest = raw.strip_prefix("---\n")?;
     let end = rest.find("\n---")?;
     let front = &rest[..end];
 
