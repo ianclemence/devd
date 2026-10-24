@@ -319,9 +319,30 @@ fn proxy_location(upstream: &str) -> String {
     )
 }
 
+/// What a directory that serves nothing answers with. The folder is not exposed, and the
+/// response says what the directory is and what to do, instead of a bare 404 or a listing of
+/// source files. Only characters that are safe inside an nginx string are used.
+fn no_entry_location(site: &Site, detection: Option<&devd_core::serving::Detection>) -> String {
+    let what = detection
+        .map(|d| d.language_names())
+        .filter(|l| !l.is_empty())
+        .map(|l| l.join(" + "))
+        .unwrap_or_else(|| "no recognised project files".to_string());
+    format!(
+        "        location / {{\n\
+         \x20           default_type text/plain;\n\
+         \x20           return 404 \"devd: {name} has no web entry point ({what}): there is no index.php or index.html to serve. \
+         If it is a program that listens on a port, point the site at it with: devd site upstream {name} <port>\\n\";\n\
+         \x20       }}\n",
+        name = site.name,
+    )
+}
+
 /// The server blocks for one site.
 fn site_servers(render: &Render, site: &Site) -> String {
     let root = slashy(Path::new(&site.document_root()));
+    let serving = site.effective_serving();
+    let kind = serving.serving;
     let host = &site.host;
     let tls = site.tls_mode != "off";
     let mut out = String::new();
@@ -352,9 +373,18 @@ fn site_servers(render: &Render, site: &Site) -> String {
         out.push_str("        ssl_session_cache    shared:devd:2m;\n");
         out.push_str("        ssl_session_timeout  10m;\n");
     }
-    if site.upstream.is_none() {
-        out.push_str(&format!("        root         \"{root}\";\n"));
-        out.push_str("        index        index.php index.html index.htm;\n");
+    match kind {
+        devd_core::serving::Serving::Php => {
+            out.push_str(&format!("        root         \"{root}\";\n"));
+            out.push_str("        index        index.php index.html index.htm;\n");
+        }
+        devd_core::serving::Serving::Static => {
+            out.push_str(&format!("        root         \"{root}\";\n"));
+            out.push_str("        index        index.html index.htm;\n");
+        }
+        // A proxy site serves a program; a directory with no entry point serves nothing, and
+        // naming its folder as the root would let the web server hand out whatever is in it.
+        devd_core::serving::Serving::Proxy | devd_core::serving::Serving::NoEntry => {}
     }
     out.push_str(&format!(
         "        access_log   \"{}/nginx-{host}.access.log\";\n",
@@ -369,26 +399,35 @@ fn site_servers(render: &Render, site: &Site) -> String {
         out.push_str("    }\n\n");
         return out;
     }
+    if kind == devd_core::serving::Serving::NoEntry {
+        out.push_str(&no_entry_location(site, serving.detection.as_ref()));
+        out.push_str("    }\n\n");
+        return out;
+    }
     if let Some(text) = render.extras.get(&site.name) {
         out.push_str(&crate::siteconf::block_text(text));
     }
     if let Some(list) = render.redirects.get(&site.name) {
         out.push_str(&crate::redirects::nginx_block(list));
     }
-    out.push_str("        location / {\n            try_files $uri $uri/ /index.php?$query_string;\n        }\n\n");
-    out.push_str("        location ~ \\.php$ {\n");
-    out.push_str("            try_files $uri =404;\n");
-    out.push_str(&format!(
-        "            fastcgi_pass  {};\n",
-        site_upstream(render, site)
-    ));
-    out.push_str("            fastcgi_index index.php;\n");
-    out.push_str(&format!(
-        "            include       \"{}conf/fastcgi_params\";\n",
-        render.prefix
-    ));
-    out.push_str("            fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;\n");
-    out.push_str("        }\n\n");
+    if kind == devd_core::serving::Serving::Static {
+        out.push_str("        location / {\n            try_files $uri $uri/ =404;\n        }\n\n");
+    } else {
+        out.push_str("        location / {\n            try_files $uri $uri/ /index.php?$query_string;\n        }\n\n");
+        out.push_str("        location ~ \\.php$ {\n");
+        out.push_str("            try_files $uri =404;\n");
+        out.push_str(&format!(
+            "            fastcgi_pass  {};\n",
+            site_upstream(render, site)
+        ));
+        out.push_str("            fastcgi_index index.php;\n");
+        out.push_str(&format!(
+            "            include       \"{}conf/fastcgi_params\";\n",
+            render.prefix
+        ));
+        out.push_str("            fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;\n");
+        out.push_str("        }\n\n");
+    }
     out.push_str("        # Certificate challenges and well-known files stay reachable;\n");
     out.push_str("        # every other dotfile is not served.\n");
     out.push_str("        location ~ /\\.(?!well-known) {\n            deny all;\n        }\n");
@@ -487,6 +526,7 @@ mod tests {
             tls_mode: tls.to_string(),
             db_name: None,
             upstream: None,
+            serving: Some(devd_core::serving::Content::Php),
             created_at: devd_core::util::now(),
         }
     }
@@ -733,5 +773,67 @@ mod tests {
             text.contains("root         \"C:/devd-home/www/laravel/public\";"),
             "{text}"
         );
+    }
+
+    /// A site whose directory is really on disk, so what it serves is read from its files.
+    fn on_disk(tag: &str, name: &str, files: &[&str]) -> Site {
+        let dir = std::env::temp_dir().join(format!("devd-nginx-{tag}-{}", std::process::id())).join(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for f in files {
+            std::fs::write(dir.join(f), "x").unwrap();
+        }
+        let mut s = site(name, "internal");
+        s.php = None;
+        s.serving = None;
+        s.root = dir.display().to_string();
+        s
+    }
+
+    fn block_of<'a>(text: &'a str, name: &str) -> &'a str {
+        let start = text.find(&format!("listen       8443 ssl;\n        server_name  {name}.test;")).expect("the site's TLS block");
+        &text[start..]
+    }
+
+    #[test]
+    fn a_site_that_serves_php_gets_php_and_one_that_serves_files_does_not() {
+        let php = on_disk("php", "blog", &["index.php"]);
+        let files = on_disk("files", "brochure", &["index.html"]);
+        let text = render_for(&[php, files], 8080, 8443);
+        assert!(block_of(&text, "blog").contains("fastcgi_pass"), "{text}");
+        let brochure = block_of(&text, "brochure");
+        let brochure = &brochure[..brochure.find("    }\n\n").unwrap_or(brochure.len())];
+        assert!(!brochure.contains("fastcgi_pass"), "a static site has no PHP in its configuration:\n{brochure}");
+        assert!(brochure.contains("try_files $uri $uri/ =404;"), "{brochure}");
+        assert!(brochure.contains("index        index.html index.htm;"), "{brochure}");
+    }
+
+    #[test]
+    fn a_directory_with_no_web_entry_point_is_not_rooted_and_says_why() {
+        let ghost = on_disk("noentry", "ghost", &["go.mod", "main.go"]);
+        let text = render_for(&[ghost], 8080, 8443);
+        let block = block_of(&text, "ghost");
+        let block = &block[..block.find("    }\n\n").unwrap_or(block.len())];
+        assert!(!block.contains("root "), "the folder must not be handed to the web server:\n{block}");
+        assert!(!block.contains("fastcgi_pass") && !block.contains("try_files"), "{block}");
+        assert!(block.contains("return 404 \"devd: ghost has no web entry point (go)"), "{block}");
+        assert!(block.contains("devd site upstream ghost <port>"), "it says what to do: {block}");
+    }
+
+    #[test]
+    fn a_php_pin_on_a_site_that_does_not_serve_php_reaches_no_listener() {
+        let mut brochure = on_disk("pin", "brochure", &["index.html"]);
+        brochure.php = Some("8.5".to_string());
+        let text = render_for(&[brochure], 8080, 8443);
+        let block = block_of(&text, "brochure");
+        assert!(!block.contains("devd_php_8_5") && !block.contains("fastcgi_pass"), "{block}");
+    }
+
+    #[test]
+    fn what_a_person_chose_overrides_what_the_files_say() {
+        let mut ghost = on_disk("chosen", "ghost", &["go.mod"]);
+        ghost.serving = Some(devd_core::serving::Content::Static);
+        let text = render_for(&[ghost], 8080, 8443);
+        assert!(block_of(&text, "ghost").contains("try_files $uri $uri/ =404;"), "{text}");
     }
 }

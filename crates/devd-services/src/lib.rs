@@ -1950,7 +1950,11 @@ pub fn mariadb_service(ctx: &Ctx) -> Option<(u16, bool)> {
 /// a machine restart, a task manager kill - and reporting it as healthy would be
 /// a lie the user would only discover by opening a browser.
 pub fn doctor_check(paths: &Paths) -> Vec<Check> {
-    let Ok(store) = Store::open(&paths.state_db()) else {
+    // No database yet is an empty install, not a broken one; looking does not create it.
+    if !paths.state_db().is_file() {
+        return vec![Check::info("services", "none installed; `devd service install nginx` installs the web server")];
+    }
+    let Ok(store) = Store::open_read_only(&paths.state_db()) else {
         return vec![Check::fail("services", "the state store could not be read")];
     };
     let Ok(services) = store.list_services() else {

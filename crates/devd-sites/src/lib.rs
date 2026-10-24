@@ -258,6 +258,9 @@ pub struct CreateRequest {
     /// A running program to forward every request to, instead of serving a
     /// directory: `3000`, `localhost:5173`, `http://127.0.0.1:8000`.
     pub upstream: Option<String>,
+    /// What the directory serves, when the caller knows. `None` leaves it to be
+    /// read from the directory, which is what almost every caller wants.
+    pub serving: Option<devd_core::serving::Content>,
 }
 
 /// Create a site: directory, certificate, record, configuration.
@@ -332,11 +335,12 @@ pub(crate) fn create_with(ctx: &Ctx, request: &CreateRequest, starter_page: bool
         host: host.clone(),
         root: directory.display().to_string(),
         web_server: ctx.settings.web_server.as_str().to_string(),
-        php: if upstream.is_some() {
-            None
-        } else {
-            ctx.settings.primary_php.clone().filter(|v| !v.is_empty())
-        },
+        // A new site follows the default PHP. Writing today's default into the
+        // record froze it: after the default moved, sites created earlier kept the
+        // old version and later ones followed the new one, for no reason a person
+        // could see. A version is pinned only by `site.set_php`.
+        php: None,
+        serving: request.serving,
         tls_mode: tls.as_str().to_string(),
         db_name: None,
         upstream: upstream.clone(),
@@ -442,12 +446,19 @@ pub(crate) fn reconcile(ctx: &Ctx, warnings: &mut Vec<String>) -> Result<bool> {
     Ok(true)
 }
 
-/// Write a starter page when the project directory has nothing to serve.
+/// Write a starter page into a directory that is new: one with nothing in it.
+///
+/// A directory that already holds files is somebody's project, whatever it is. Writing an
+/// `index.php` into a Go module or a Node app would change what it is (it would become a PHP
+/// site) and put a file the person did not write into their repository. Such a directory is
+/// left as it is; if it has nothing to serve, the site says so and `site.set_serving` is how
+/// to override that.
 fn write_starter_page(directory: &Path, name: &str) -> Result<Option<String>> {
-    for candidate in ["index.php", "index.html", "index.htm"] {
-        if directory.join(candidate).is_file() {
-            return Ok(None);
-        }
+    let has_content = std::fs::read_dir(directory)
+        .map(|entries| entries.flatten().any(|e| !e.file_name().to_string_lossy().starts_with('.')))
+        .unwrap_or(false);
+    if has_content {
+        return Ok(None);
     }
     let php = directory.join("index.php");
     let page = format!(
@@ -643,8 +654,28 @@ pub struct SiteRow {
     pub server_running: bool,
     /// The PHP versions that are installed, so a surface can offer them.
     pub php_installed: Vec<String>,
-    /// The PHP version the site is served by: its own, or the default.
+    /// The project this site serves (its folder, or the folder above a `public/`).
+    pub project: String,
+    /// Whether devd knows that folder as a project: imported, created, or an indexed repository.
+    pub project_known: bool,
+    /// What the site is served as: a proxy, PHP, static files, or nothing (a directory with
+    /// no web entry point, which answers with an explanation instead of exposing itself).
+    pub serving: devd_core::serving::Serving,
+    /// Where that came from: the upstream, a person's choice, or what the files are.
+    pub serving_source: devd_core::serving::Source,
+    /// What the directory contains. `None` for a proxy site, which has none.
+    pub detection: Option<devd_core::serving::Detection>,
+    /// That, as a sentence a person can read: what the directory is and why it is or is not served.
+    pub detected: Option<String>,
+    /// The PHP version the site is served by. `None` unless the site serves PHP: a version
+    /// means nothing for a Go module, a static site or a proxy.
     pub php_effective: Option<String>,
+    /// How that version came about: `pinned` (a person chose it) or `inherited` (it follows
+    /// the default). `None` unless the site serves PHP.
+    pub php_source: Option<&'static str>,
+    /// A PHP version recorded for the site that nothing uses, because the site does not
+    /// serve PHP. Shown so it can be removed, not presented as the site's runtime.
+    pub php_unused_pin: Option<String>,
     /// For a proxy site, whether anything is accepting connections at its
     /// upstream right now. `None` for a site that serves a directory.
     pub upstream_listening: Option<bool>,
@@ -664,6 +695,14 @@ pub fn list(ctx: &Ctx) -> Result<Vec<SiteRow>> {
     let php_installed = devd_services::installed_php_series(ctx).unwrap_or_default();
     let primary = devd_services::primary_php_series(ctx);
     let shares = devd_services::share::list(ctx).unwrap_or_default();
+    let known_projects: Vec<PathBuf> = ctx
+        .store
+        .list_stack_projects()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| PathBuf::from(p.path))
+        .chain(ctx.store.list_repos().unwrap_or_default().into_iter().map(|r| PathBuf::from(r.path)))
+        .collect();
 
     Ok(ctx
         .store
@@ -678,15 +717,34 @@ pub fn list(ctx: &Ctx) -> Result<Vec<SiteRow>> {
                 .as_deref()
                 .map(devd_services::php_series)
                 .filter(|s| !s.is_empty());
-            let php_effective = match &pinned {
-                Some(series) if php_installed.iter().any(|s| s == series) => Some(series.clone()),
-                // The pinned version is gone, so the default takes over - unless
-                // there is no default either, in which case the pin is what the
-                // site says it wants.
-                Some(series) => primary.clone().or_else(|| Some(series.clone())),
-                None => primary.clone(),
+            let effective = site.effective_serving();
+            let uses_php = effective.serving.uses_php();
+            let php_effective = if !uses_php {
+                None
+            } else {
+                match &pinned {
+                    Some(series) if php_installed.iter().any(|s| s == series) => Some(series.clone()),
+                    // The pinned version is gone, so the default takes over - unless
+                    // there is no default either, in which case the pin is what the
+                    // site says it wants.
+                    Some(series) => primary.clone().or_else(|| Some(series.clone())),
+                    None => primary.clone(),
+                }
             };
+            let php_source = uses_php.then_some(if pinned.is_some() { "pinned" } else { "inherited" });
+            let php_unused_pin = if uses_php { None } else { site.php.clone() };
+            let detected = effective.detection.as_ref().map(|d| d.summary());
+            let project_dir = site.project_dir();
+            let project_known = known_projects.iter().any(|p| util::same_folder(p, &project_dir));
             SiteRow {
+                project: project_dir.display().to_string(),
+                project_known,
+                serving: effective.serving,
+                serving_source: effective.source,
+                detected,
+                detection: effective.detection,
+                php_source,
+                php_unused_pin,
                 // A proxy site has no project directory to be missing.
                 present: site.upstream.is_some() || Path::new(&site.root).is_dir(),
                 url: url_for(ctx, &site),
@@ -780,13 +838,54 @@ pub fn set_php(ctx: &Ctx, name: &str, version: Option<&str>) -> Result<serde_jso
     }))
 }
 
+/// Say what a directory site serves, or clear the choice so it is read from the directory again.
+///
+/// Only a directory site has content to choose; a proxy site serves a program, and changing
+/// that is `site.set_upstream`. The web server configuration is re-rendered, because it is what
+/// decides whether PHP runs for the site.
+pub fn set_serving(ctx: &Ctx, name: &str, serving: Option<devd_core::serving::Content>) -> Result<serde_json::Value> {
+    let mut site = ctx
+        .store
+        .list_sites()?
+        .into_iter()
+        .find(|s| s.name == name)
+        .ok_or_else(|| DevdError::not_found(format!("no site named `{name}`")))?;
+    if site.upstream.is_some() {
+        return Err(DevdError::conflict(format!(
+            "`{name}` is a proxy site: it serves the program at {}, and has no directory content to choose. `site.set_upstream` changes what it points at",
+            site.upstream.as_deref().unwrap_or_default()
+        )));
+    }
+    site.serving = serving;
+    ctx.store.upsert_site(&site)?;
+
+    let mut warnings = Vec::new();
+    if let Err(e) = devd_services::web::render(ctx) {
+        warnings.push(format!("the web server configuration could not be re-rendered: {e}"));
+    }
+    let effective = site.effective_serving();
+    if let (Some(pin), false) = (&site.php, effective.serving.uses_php()) {
+        warnings.push(format!("{name} keeps a PHP {pin} pin that nothing uses now; `site.set_php` with no version clears it"));
+    }
+    Ok(json!({
+        "site": site,
+        "serving": effective.serving,
+        "source": effective.source,
+        "warnings": warnings,
+    }))
+}
+
 /// The site component of the environment check.
 ///
 /// The useful check is the second one: a site whose directory has gone is
 /// recorded, is in the hosts file, and returns 404 from the web server. Nothing
 /// else in `devd` would notice, and the user would see an unexplained 404.
 pub fn doctor_check(paths: &Paths) -> Vec<Check> {
-    let Ok(store) = Store::open(&paths.state_db()) else {
+    // No database yet is an empty install, not a broken one; looking does not create it.
+    if !paths.state_db().is_file() {
+        return vec![Check::info("sites", "none defined; `devd site create <name>` creates one")];
+    }
+    let Ok(store) = Store::open_read_only(&paths.state_db()) else {
         return vec![Check::fail("sites", "the state store could not be read")];
     };
     let Ok(sites) = store.list_sites() else {
@@ -885,38 +984,184 @@ mod tests {
             tls: true,
             db: false,
             upstream: None,
+            serving: None,
         }
+    }
+
+    /// A project directory holding the given files (a name ending in `/` is a folder).
+    fn project(parent: &Path, name: &str, files: &[&str]) -> PathBuf {
+        let dir = parent.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        for f in files {
+            let path = dir.join(f);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, "x").unwrap();
+        }
+        dir
     }
 
     #[test]
     fn parking_a_folder_makes_a_site_of_each_project_once_and_writes_nothing_into_them() {
         let c = ctx("park");
         let folder = c.paths.root().join("parked");
-        std::fs::create_dir_all(folder.join("My Blog").join("public")).unwrap();
-        std::fs::create_dir_all(folder.join("shop")).unwrap();
+        project(&folder, "My Blog", &["public/index.php"]);
+        project(&folder, "shop", &["index.html"]);
         std::fs::create_dir_all(folder.join(".git")).unwrap();
         std::fs::create_dir_all(folder.join("node_modules")).unwrap();
         std::fs::write(folder.join("notes.txt"), "not a project").unwrap();
 
-        let report = park::sync(&c, std::slice::from_ref(&folder)).unwrap();
+        let report = park::sync(&c, std::slice::from_ref(&folder), None).unwrap();
         let mut made: Vec<String> = report.created.iter().map(|(n, h)| format!("{n} {h}")).collect();
         made.sort();
         assert_eq!(made, vec!["my-blog my-blog.test", "shop shop.test"], "{report:?}");
         assert!(report.skipped.is_empty(), "{report:?}");
         // No starter page was written into a person's project.
         assert!(!folder.join("shop").join("index.php").exists());
-        assert!(!folder.join("My Blog").join("public").join("index.php").exists());
+        assert_eq!(std::fs::read_to_string(folder.join("My Blog").join("public").join("index.php")).unwrap(), "x");
         let site = c.store.list_sites().unwrap().into_iter().find(|s| s.name == "my-blog").unwrap();
         assert!(site.document_root().ends_with("public"));
 
-        let again = park::sync(&c, std::slice::from_ref(&folder)).unwrap();
+        let again = park::sync(&c, std::slice::from_ref(&folder), None).unwrap();
         assert!(again.created.is_empty());
         assert_eq!(again.existing.len(), 2);
 
         std::fs::remove_dir_all(folder.join("shop")).unwrap();
-        let gone = park::sync(&c, std::slice::from_ref(&folder)).unwrap();
+        let gone = park::sync(&c, std::slice::from_ref(&folder), None).unwrap();
         assert_eq!(gone.gone, vec!["shop"], "a site whose folder vanished is reported, not removed");
         assert_eq!(c.store.list_sites().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn discovery_changes_nothing_and_gives_the_same_answer_every_time() {
+        let c = ctx("discover");
+        let folder = c.paths.root().join("parked");
+        project(&folder, "blog", &["index.php"]);
+        project(&folder, "ghost", &["go.mod", "main.go"]);
+        let before = c.store.list_sites().unwrap();
+
+        let first = serde_json::to_value(park::discover(&c, std::slice::from_ref(&folder)).unwrap()).unwrap();
+        let second = serde_json::to_value(park::discover(&c, std::slice::from_ref(&folder)).unwrap()).unwrap();
+
+        assert_eq!(first, second, "repeating discovery cannot change what it says");
+        assert_eq!(c.store.list_sites().unwrap(), before, "discovery writes no site");
+        assert!(!c.paths.certs().join("blog.test.crt").exists(), "and issues no certificate");
+    }
+
+    #[test]
+    fn only_a_directory_with_a_web_entry_point_becomes_a_site() {
+        let c = ctx("eligible");
+        let folder = c.paths.root().join("parked");
+        project(&folder, "blog", &["public/index.php", "artisan", "composer.json"]);
+        project(&folder, "brochure", &["index.html"]);
+        project(&folder, "ghost", &["go.mod", "main.go"]);
+        project(&folder, "scout", &["go.mod"]);
+        project(&folder, "web-app", &["package.json", "src/main.jsx"]);
+        project(&folder, "php-library", &["composer.json", "src/Thing.php"]);
+        project(&folder, "empty", &[]);
+
+        let found = park::discover(&c, std::slice::from_ref(&folder)).unwrap();
+        let eligible: Vec<&str> = found.eligible().filter_map(|c| c.name.as_deref()).collect();
+        assert_eq!(eligible, vec!["blog", "brochure"], "{found:#?}");
+
+        let report = park::sync(&c, std::slice::from_ref(&folder), None).unwrap();
+        let mut made: Vec<&str> = report.created.iter().map(|(n, _)| n.as_str()).collect();
+        made.sort();
+        assert_eq!(made, vec!["blog", "brochure"]);
+        assert_eq!(report.skipped.len(), 5, "{report:?}");
+        assert!(report.skipped.iter().all(|s| s.reason.contains("not a web project")), "{report:?}");
+        let ghost = report.skipped.iter().find(|s| s.folder.ends_with("ghost")).unwrap();
+        assert!(ghost.reason.contains("go; no web entry point"), "it says what the directory is: {}", ghost.reason);
+    }
+
+    #[test]
+    fn creating_a_site_never_pins_the_default_php_into_it() {
+        let mut c = ctx("nopin");
+        std::sync::Arc::get_mut(&mut c.settings).unwrap().primary_php = Some("8.5.12".to_string());
+        let created = create(&c, &request("blog")).unwrap();
+        assert_eq!(created.site.php, None, "a site follows the default until someone pins a version");
+        assert_eq!(c.store.get_site("blog").unwrap().unwrap().php, None);
+    }
+
+    #[test]
+    fn a_go_module_is_never_shown_with_a_php_runtime() {
+        let c = ctx("gorow");
+        let dir = project(&c.paths.root().join("www"), "ghost", &["go.mod", "main.go"]);
+        // Created by hand (a person's explicit `site.create --root`), and with an old PHP pin on it,
+        // as the sites a parked folder produced once were.
+        let mut site = create(&c, &CreateRequest { root: Some(dir.display().to_string()), ..request("ghost") }).unwrap().site;
+        assert!(!dir.join("index.php").exists(), "a project with files in it is never given a starter page");
+        site.php = Some("8.5.12".to_string());
+        c.store.upsert_site(&site).unwrap();
+
+        let row = list(&c).unwrap().into_iter().find(|r| r.site.name == "ghost").unwrap();
+        assert_eq!(row.serving, devd_core::serving::Serving::NoEntry);
+        assert_eq!(row.php_effective, None, "PHP is not this site's runtime");
+        assert_eq!(row.php_source, None);
+        assert_eq!(row.php_unused_pin.as_deref(), Some("8.5.12"), "the leftover pin is shown as unused, so it can be cleared");
+        assert!(row.detection.unwrap().language_names().contains(&"go".to_string()));
+    }
+
+    #[test]
+    fn a_php_site_says_whether_its_version_is_pinned_or_follows_the_default() {
+        let c = ctx("phprow");
+        let dir = project(&c.paths.root().join("www"), "blog", &["index.php"]);
+        create(&c, &CreateRequest { root: Some(dir.display().to_string()), ..request("blog") }).unwrap();
+        let inherited = list(&c).unwrap().into_iter().find(|r| r.site.name == "blog").unwrap();
+        assert_eq!(inherited.serving, devd_core::serving::Serving::Php);
+        assert_eq!(inherited.php_source, Some("inherited"));
+
+        let mut site = c.store.get_site("blog").unwrap().unwrap();
+        site.php = Some("8.4".to_string());
+        c.store.upsert_site(&site).unwrap();
+        let pinned = list(&c).unwrap().into_iter().find(|r| r.site.name == "blog").unwrap();
+        assert_eq!(pinned.php_source, Some("pinned"));
+    }
+
+    #[test]
+    fn two_folders_with_the_same_site_name_are_a_conflict_not_two_sites() {
+        let c = ctx("clash");
+        let folder = c.paths.root().join("parked");
+        project(&folder, "My Blog", &["index.php"]);
+        project(&folder, "my-blog", &["index.php"]);
+        let found = park::discover(&c, std::slice::from_ref(&folder)).unwrap();
+        assert_eq!(found.eligible().count(), 1, "{found:#?}");
+        let loser = found.candidates.iter().find(|c| !c.eligible).unwrap();
+        assert!(loser.reason.as_deref().unwrap().contains("already taken"), "{loser:?}");
+        let report = park::sync(&c, std::slice::from_ref(&folder), None).unwrap();
+        assert_eq!(report.created.len(), 1);
+        assert_eq!(c.store.list_sites().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn naming_a_project_that_is_not_a_web_project_does_not_create_it_anyway() {
+        let c = ctx("named");
+        let folder = c.paths.root().join("parked");
+        project(&folder, "blog", &["index.php"]);
+        project(&folder, "ghost", &["go.mod"]);
+        let only = vec!["ghost".to_string(), "missing".to_string()];
+        let report = park::sync(&c, std::slice::from_ref(&folder), Some(&only)).unwrap();
+        assert!(report.created.is_empty(), "{report:?}");
+        assert_eq!(report.skipped.len(), 2, "ghost has no web entry and `missing` is not there: {report:?}");
+        assert!(c.store.list_sites().unwrap().is_empty());
+    }
+
+    #[test]
+    fn what_a_site_serves_can_be_chosen_and_cleared_and_a_proxy_has_no_such_choice() {
+        let c = ctx("choose");
+        let dir = project(&c.paths.root().join("www"), "docs", &["go.mod"]);
+        create(&c, &CreateRequest { root: Some(dir.display().to_string()), ..request("docs") }).unwrap();
+        assert_eq!(list(&c).unwrap()[0].serving, devd_core::serving::Serving::NoEntry);
+
+        set_serving(&c, "docs", Some(devd_core::serving::Content::Static)).unwrap();
+        let row = list(&c).unwrap().into_iter().next().unwrap();
+        assert_eq!((row.serving, row.serving_source), (devd_core::serving::Serving::Static, devd_core::serving::Source::Configured));
+
+        let cleared = set_serving(&c, "docs", None).unwrap();
+        assert_eq!(cleared["serving"], "no_entry");
+
+        create(&c, &CreateRequest { upstream: Some("3000".into()), ..request("app") }).unwrap();
+        let err = set_serving(&c, "app", Some(devd_core::serving::Content::Php)).unwrap_err();
+        assert!(err.to_string().contains("proxy site"), "{err}");
     }
 
     #[test]
@@ -1298,6 +1543,7 @@ mod tests {
                 tls_mode: "internal".into(),
                 db_name: None,
                 upstream: None,
+                serving: None,
                 created_at: util::now(),
             })
             .unwrap();

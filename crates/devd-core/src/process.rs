@@ -523,6 +523,14 @@ pub fn pid_alive(pid: u32) -> bool {
     }
 }
 
+/// The process that holds a claim file: the id written in it, when that process is still running
+/// and is a devd program. A claim whose process has gone, or whose id was reused by something else,
+/// is stale and held by nobody.
+pub fn live_devd_holder(file: &std::path::Path) -> Option<u32> {
+    let pid = std::fs::read_to_string(file).ok()?.trim().parse::<u32>().ok()?;
+    (pid_alive(pid) && process_image(pid).is_some_and(|image| image.to_ascii_lowercase().contains("devd"))).then_some(pid)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

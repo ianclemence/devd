@@ -21,12 +21,17 @@ fn claim_file(paths: &Paths) -> PathBuf {
 pub fn claim(paths: &Paths) -> bool {
     let file = claim_file(paths);
     let me = std::process::id();
-    if let Some(owner) = std::fs::read_to_string(&file).ok().and_then(|s| s.trim().parse::<u32>().ok()) {
-        if owner != me && devd_core::process::pid_alive(owner) && devd_core::process::process_image(owner).map(|i| i.to_ascii_lowercase().contains("devd")).unwrap_or(false) {
-            return false;
-        }
+    if devd_core::process::live_devd_holder(&file).is_some_and(|owner| owner != me) {
+        return false;
     }
     std::fs::write(&file, me.to_string()).is_ok()
+}
+
+/// The devd process that is running the jobs, if any is. Cron jobs, scheduled backups and deploys
+/// and health checks run in a long-lived devd process (the window, `devd ui` or `devd serve`);
+/// when none is open nothing runs them, which is worth saying out loud.
+pub fn holder(paths: &Paths) -> Option<u32> {
+    devd_core::process::live_devd_holder(&claim_file(paths))
 }
 
 /// Start the loop in this process, once, if it may. Returns whether this process runs the jobs.

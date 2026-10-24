@@ -1590,6 +1590,19 @@
 
   // --------------------------------------------------------------------- sites
 
+  /* What a site is served as, said once, from what the server reports. The server decides
+     (devd-core serving.rs); this only words it. A PHP version appears only for a site that
+     serves PHP, and says whether it is pinned or follows the default. */
+  function servingLabel(row) {
+    switch (row.serving) {
+      case "proxy": return "proxy";
+      case "php": return "PHP " + (row.php_effective || "") + (row.php_source === "inherited" ? " \u00b7 default" : "");
+      case "static": return "static files";
+      case "no_entry": return "no web entry point";
+      default: return "";
+    }
+  }
+
   function renderSites() {
     if (state.view !== "sites") return;
     var all = state.server.sites;
@@ -1600,8 +1613,8 @@
     var rows = matching.map(function (row) {
       var site = row.site;
       var proxied = !!site.upstream;
-      var meta = proxied ? "proxy" : esc(row.php_effective ? "PHP " + row.php_effective : "static");
-      var sub = esc(row.url) + (proxied ? " → " + esc(site.upstream) + (row.upstream_listening ? "" : " (not running)") : " · " + esc(row.document_root)) +
+      var meta = esc(servingLabel(row));
+      var sub = esc(row.url) + (proxied ? " → " + esc(site.upstream) + (row.upstream_listening ? "" : " (not running)") : row.serving === "no_entry" ? " · " + esc(row.detected || "nothing to serve") : " · " + esc(row.document_root)) +
         (row.shared ? ' · <a href="' + attr(row.shared) + '" target="_blank" rel="noreferrer">public link</a>' : "") +
         (row.present ? "" : " · directory missing");
       return uiRow({
@@ -1788,12 +1801,15 @@
 
   function siteOverview(row) {
     var site = row.site;
-    var php = row.php_effective ? "PHP " + row.php_effective : (site.upstream ? "proxy to " + site.upstream : "static files");
+    var runtime = row.serving === "proxy" ? "proxy to " + site.upstream
+      : row.serving === "php" ? "PHP " + (row.php_effective || "") + (row.php_source === "pinned" ? " (pinned for this site)" : " (follows the default)")
+      : row.serving === "static" ? "static files"
+      : "not served: " + (row.detected || "nothing to serve");
     var profileData = OPS.data.overview && OPS.data.overview[0];
     var own = profileData ? ((profileData.site_profiles || []).filter(function (p) { return p.site === site.name; })[0] || {}).profile || "" : "";
     var installed = row.php_installed || [];
     var pinned = site.php ? devdSeries(site.php) : "";
-    var phpSelect = !site.upstream && installed.length
+    var phpSelect = row.serving === "php" && installed.length
       ? '<select class="select compact" data-action="site-php" data-name="' + attr(site.name) + '" aria-label="PHP version for ' + attr(site.name) + '"><option value=""' + (pinned ? "" : " selected") + ">Default PHP</option>" +
         installed.map(function (v) { return '<option value="' + attr(v) + '"' + (pinned === v ? " selected" : "") + ">" + esc(v) + "</option>"; }).join("") + "</select>"
       : "";
@@ -1809,19 +1825,34 @@
         actions: '<button type="button" class="btn btn-mini btn-primary" data-action="open-url" data-url="' + attr(row.url) + '">Open</button>' +
           '<button type="button" class="btn btn-mini btn-ghost" data-action="site-tab" data-tab="preview">Preview</button>'
       }),
-      uiRow({ title: "Runtime", sub: esc(php) + (row.upstream_listening === false ? " (not running)" : "") }),
+      uiRow({
+        title: "Project",
+        sub: '<span class="mono">' + esc(row.project || site.root) + "</span>" + (row.project_known ? "" : " \u00b7 not a project devd knows"),
+        actions: row.project_known ? '<button type="button" class="btn btn-mini btn-ghost" data-action="home-open" data-path="' + attr(row.project) + '">Open project</button>' : ""
+      }),
+      uiRow({ title: "Serves", sub: esc(runtime) + (row.upstream_listening === false ? " (not running)" : "") + (row.serving_source === "detected" && row.serving !== "proxy" ? " \u00b7 read from the folder" : row.serving_source === "configured" ? " \u00b7 your choice" : "") }),
       uiRow({ title: "TLS", sub: site.tls_mode === "off" ? "off" : row.certificate ? "HTTPS, certificate present" : "HTTPS, no certificate yet" }),
       uiRow({ title: "Database", sub: site.db_name ? '<span class="mono">' + esc(site.db_name) + "</span>" : "not managed by devd", actions: '<button type="button" class="btn btn-mini btn-ghost" data-action="site-tab" data-tab="db">Database</button>' }),
       uiRow({ title: "Sharing", sub: row.shared ? '<a href="' + attr(row.shared) + '" target="_blank" rel="noreferrer">' + esc(row.shared) + "</a>" : "only on this machine" })
     ];
-    var settings = uiList([
-      uiRow({ title: "PHP version", sub: pinned ? "pinned to " + esc(pinned) : "follows the machine default", actions: phpSelect }),
-      uiRow({ title: "PHP limits", sub: own ? "uses the " + esc(own) + " profile" : "follows the machine", actions: profileSelect + '<button type="button" class="btn btn-mini btn-ghost" data-action="nav" data-view="runtimes">Runtimes</button>' })
-    ]);
+    var servingSelect = site.upstream ? "" :
+      '<select class="select compact" data-change="site-serving" data-name="' + attr(site.name) + '" aria-label="What ' + attr(site.name) + ' serves">' +
+      '<option value=""' + (site.serving ? "" : " selected") + ">Read from the folder</option>" +
+      '<option value="php"' + (site.serving === "php" ? " selected" : "") + ">PHP</option>" +
+      '<option value="static"' + (site.serving === "static" ? " selected" : "") + ">Static files</option></select>";
+    var rowsSettings = [];
+    if (servingSelect) rowsSettings.push(uiRow({ title: "What it serves", sub: site.serving ? "set to " + esc(site.serving) : "read from the folder: " + esc(row.detected || ""), actions: servingSelect }));
+    if (row.serving === "php") {
+      rowsSettings.push(uiRow({ title: "PHP version", sub: pinned ? "pinned to " + esc(pinned) : "follows the machine default", actions: phpSelect }));
+      rowsSettings.push(uiRow({ title: "PHP limits", sub: own ? "uses the " + esc(own) + " profile" : "follows the machine", actions: profileSelect + '<button type="button" class="btn btn-mini btn-ghost" data-action="nav" data-view="runtimes">Runtimes</button>' }));
+    } else if (row.php_unused_pin) {
+      rowsSettings.push(uiRow({ title: "PHP " + esc(row.php_unused_pin) + " is recorded but unused", sub: "this site does not serve PHP, so the version does nothing", actions: '<button type="button" class="btn btn-mini btn-ghost" data-action="site-clear-php" data-name="' + attr(site.name) + '">Clear it</button>' }));
+    }
+    var settings = uiList(rowsSettings);
     if (!OPS.data.overview && !(OPS.error && OPS.errorTab === "overview")) opsLoad("overview");
     var loadError = OPS.error && OPS.errorTab === "overview" ? '<div class="notice notice-bad">' + esc(OPS.error) + "</div>" : "";
     return uiHead("Site", null, "") + uiList(details) +
-      uiHead("PHP", null, "") + settings + loadError +
+      uiHead("Serving", null, "") + settings + loadError +
       '<div class="ui-more">Environment, deploys, cron, workers, logs, Laravel, redirects and the web server are on the tabs above.</div>';
   }
 
@@ -7366,6 +7397,20 @@
       state.siteFormOpen = !state.siteFormOpen;
       render();
       if (state.siteFormOpen && el("site-name")) el("site-name").focus();
+    },
+
+    "site-serving": function (node) {
+      run("site.set_serving", { name: node.dataset.name, serving: node.value || null }).then(function (o) {
+        if (o) return loadServer().then(render);
+        return null;
+      });
+    },
+
+    "site-clear-php": function (node) {
+      run("site.set_php", { name: node.dataset.name, version: null }).then(function (o) {
+        if (o) return loadServer().then(render);
+        return null;
+      });
     },
 
     "site-php": function (node) {

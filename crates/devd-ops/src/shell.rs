@@ -36,15 +36,9 @@ pub struct Resolved {
     pub reason: String,
 }
 
-/// The folder a site's project lives in: the site's root, or the folder above it when the
-/// root is a web directory such as `public`.
+/// The folder a site's project lives in.
 pub fn project_dir(site: &Site) -> PathBuf {
-    let root = PathBuf::from(&site.root);
-    let web = root.file_name().and_then(|n| n.to_str()).map(|n| matches!(n.to_ascii_lowercase().as_str(), "public" | "public_html" | "web" | "www" | "htdocs" | "dist")).unwrap_or(false);
-    match (web, root.parent()) {
-        (true, Some(parent)) => parent.to_path_buf(),
-        _ => root,
-    }
+    site.project_dir()
 }
 
 fn normal(p: &Path) -> String {
@@ -224,6 +218,7 @@ mod tests {
             tls_mode: "internal".into(),
             db_name: None,
             upstream: None,
+            serving: None,
             web_server: "nginx".into(),
             created_at: String::new(),
         }

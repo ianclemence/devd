@@ -125,9 +125,9 @@ impl Paths {
         self.root.join("settings.toml")
     }
 
-    /// Create every directory in the layout, if missing.
-    pub fn ensure(&self) -> Result<()> {
-        for dir in [
+    /// Every directory the layout needs.
+    pub fn layout(&self) -> Vec<PathBuf> {
+        vec![
             self.root.clone(),
             self.runtimes(),
             self.services(),
@@ -138,7 +138,17 @@ impl Paths {
             self.cache(),
             self.snapshots(),
             self.projects(),
-        ] {
+        ]
+    }
+
+    /// The directories of the layout that do not exist. Looks, and creates nothing.
+    pub fn missing(&self) -> Vec<PathBuf> {
+        self.layout().into_iter().filter(|d| !d.is_dir()).collect()
+    }
+
+    /// Create every directory in the layout, if missing.
+    pub fn ensure(&self) -> Result<()> {
+        for dir in self.layout() {
             std::fs::create_dir_all(&dir)?;
         }
         Ok(())

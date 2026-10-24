@@ -490,10 +490,17 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             let rows = ctx.store.list_stack_projects()?;
             let mut v: Vec<Value> = Vec::new();
             let mut seen: Vec<String> = Vec::new();
+            // The sites that serve each project, by the one definition of which project a site is of.
+            let sites = ctx.store.list_sites()?;
+            let sites_of = |path: &str| -> Vec<String> {
+                let want = authz::normalise(Path::new(path));
+                sites.iter().filter(|s| devd_core::util::same_folder(&authz::normalise(&s.project_dir()), &want)).map(|s| s.name.clone()).collect()
+            };
             for p in &rows {
                 let path = authz::normalise(Path::new(&p.path)).display().to_string();
                 seen.push(path.clone());
                 v.push(json!({
+                    "sites": sites_of(&p.path),
                     "path": path,
                     "name": p.name,
                     "stack": p.stack_id,

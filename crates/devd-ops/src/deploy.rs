@@ -498,7 +498,7 @@ pub fn staging_create(ctx: &Ctx, site: &str, branch: Option<&str>) -> Result<Val
     } else {
         git(ctx, &root, &["worktree", "add", "-b", branch, &path_text, "HEAD"])?;
     }
-    let created = devd_sites::create(ctx, &devd_sites::CreateRequest { name: name.clone(), host: None, root: Some(path_text.clone()), tls: true, db: false, upstream: None });
+    let created = devd_sites::create(ctx, &devd_sites::CreateRequest { name: name.clone(), host: None, root: Some(path_text.clone()), tls: true, db: false, upstream: None, serving: s.serving });
     let created = match created {
         Ok(c) => c,
         Err(e) => {
@@ -506,6 +506,12 @@ pub fn staging_create(ctx: &Ctx, site: &str, branch: Option<&str>) -> Result<Val
             return Err(e);
         }
     };
+    // Staging runs on what production runs on: a PHP version someone pinned for production is pinned here too,
+    // and a site that follows the default follows it here.
+    if let (Some(pin), Ok(Some(mut staging_site))) = (s.php.clone(), ctx.store.get_site(&name)) {
+        staging_site.php = Some(pin);
+        let _ = ctx.store.upsert_site(&staging_site);
+    }
     // The environment: the same file, told it is staging and where it lives.
     if let Ok(text) = std::fs::read_to_string(crate::env::path_of(&root)) {
         let host = ctx.store.get_site(&name)?.map(|x| x.host).unwrap_or_else(|| format!("{name}.{}", ctx.settings.tld));

@@ -208,7 +208,7 @@ impl AppState {
 
     /// Every check the environment can produce, core first.
     pub fn checks(&self) -> Vec<Check> {
-        let mut checks = doctor::core_checks(&self.ctx.paths, &self.ctx.settings);
+        let mut checks = doctor::core_checks_for(&self.ctx.paths, &self.ctx.settings, Some(&self.ctx.store));
         for extra in &self.extra_checks {
             checks.extend(extra());
         }

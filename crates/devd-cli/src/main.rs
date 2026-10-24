@@ -1103,7 +1103,9 @@ pub(crate) enum SiteCommand {
     List,
     /// List the folders whose projects become sites.
     Parked,
-    /// Park a folder: a site for each project in it, named after the folder.
+    /// Report the projects in the parked folders: what each is, and whether it could be a site. Changes nothing.
+    Discover,
+    /// Park a folder: look for projects in it. This creates no site; `devd site sync` does.
     Park {
         /// The folder, as an absolute path.
         path: String,
@@ -1133,8 +1135,18 @@ pub(crate) enum SiteCommand {
         /// The folder, as an absolute path.
         path: String,
     },
-    /// Make a site of every project directory in the parked folders that has none.
-    Sync,
+    /// Make a site of each project in the parked folders that has a web entry point and no site yet.
+    Sync {
+        /// Only these site names (as `devd site discover` lists them).
+        names: Vec<String>,
+    },
+    /// Say what a site's directory serves: `php` or `static`. With no value, read it from the folder again.
+    Serving {
+        /// Site name.
+        name: String,
+        /// `php` or `static`. Omit to read it from the folder.
+        serving: Option<String>,
+    },
     /// Create a site: directory, certificate, record and web server block.
     Create {
         /// Project name, used for the directory and, by default, the hostname.
@@ -1155,6 +1167,9 @@ pub(crate) enum SiteCommand {
         /// port such as `3000`, or an address such as `localhost:5173`.
         #[arg(long)]
         upstream: Option<String>,
+        /// What the directory serves, when you know: `php` or `static`. Left out, it is read from the folder.
+        #[arg(long)]
+        serving: Option<String>,
     },
     /// Point a site at a running program, or back at its directory.
     Upstream {
@@ -1708,7 +1723,15 @@ fn shim_context() -> Result<devd_core::capability::Ctx> {
         )));
     }
     let settings = devd_core::config::Settings::load(&paths.settings_file())?;
-    let store = devd_core::state::Store::open(&paths.state_db())?;
+    // Read only: a launcher runs somebody's program and must not write devd's database. A database
+    // from before this build's newest migration cannot answer, and the first thing that starts devd
+    // migrates it, so the launcher then waits for that rather than doing it itself.
+    let store = devd_core::state::Store::open_read_only(&paths.state_db())?;
+    if store.schema_version()? < devd_core::state::LATEST_SCHEMA {
+        return Err(DevdError::conflict(
+            "devd was updated and has not started since; start devd once (`devd doctor` does not count, it changes nothing) and this command will work",
+        ));
+    }
     Ok(devd_core::capability::Ctx {
         store: Arc::new(store),
         paths: Arc::new(paths),
@@ -2073,7 +2096,7 @@ fn doctor(json: bool) -> Result<i32> {
     checks.push(app::git_check(settings.git_executable.as_deref()));
     // The component checks open the state database, which would create a home that is not
     // there. With no home there is nothing for them to inspect.
-    if paths.root().exists() {
+    if devd_core::doctor::state_is_current(&paths) {
         checks.extend(devd_runtime::doctor_check(&paths));
         checks.extend(devd_services::doctor_check(&paths));
         checks.extend(devd_sites::doctor_check(&paths));

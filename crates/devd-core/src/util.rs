@@ -244,6 +244,18 @@ pub fn cli_exe() -> Result<std::path::PathBuf> {
     Err(DevdError::not_found("the devd command-line program was not found beside this one"))
 }
 
+/// Whether two paths name the same folder, ignoring case, slash direction, a `\\?\` prefix and a
+/// trailing separator. Paths come from a registry, a settings file, a canonicalised lookup and a
+/// person's typing, so comparing them as given would call one folder two.
+pub fn same_folder(a: &std::path::Path, b: &std::path::Path) -> bool {
+    let norm = |p: &std::path::Path| {
+        let s = p.to_string_lossy().replace('\\', "/");
+        s.strip_prefix("//?/").unwrap_or(&s).trim_end_matches('/').to_lowercase()
+    };
+    let (a, b) = (norm(a), norm(b));
+    !a.is_empty() && a == b
+}
+
 /// Remove ANSI colour and cursor sequences. Composer, for one, colours "Composer version 2.9.4"
 /// word by word even when its output is captured.
 pub fn strip_ansi(text: &str) -> String {
@@ -484,6 +496,18 @@ pub fn display_path(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
+    #[test]
+    fn one_folder_spelled_four_ways_is_one_folder() {
+        let a = Path::new("D:\\devd\\www\\Shop");
+        for same in ["d:/devd/www/shop", "D:\\devd\\www\\shop\\", "\\\\?\\D:\\devd\\www\\shop", "D:/DEVD/www/SHOP/"] {
+            assert!(super::same_folder(a, Path::new(same)), "{same}");
+        }
+        assert!(!super::same_folder(a, Path::new("D:\\devd\\www\\shopping")), "a longer name is another folder");
+        assert!(!super::same_folder(Path::new(""), Path::new("")), "nothing is not a folder");
+    }
+
     #[test]
     fn colour_codes_do_not_hide_a_version() {
         let composer = "\u{1b}[32mComposer\u{1b}[39m version \u{1b}[33m2.9.4\u{1b}[39m 2026-01-22";

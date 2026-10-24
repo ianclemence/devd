@@ -274,6 +274,7 @@ fn default_server(render: &Render) -> String {
 /// The virtual hosts for one site.
 fn site_servers(render: &Render, site: &Site) -> String {
     let root = slashy(Path::new(&site.document_root()));
+    let kind = site.effective_serving().serving;
     let host = &site.host;
     let tls = site.tls_mode != "off";
     let mut out = String::new();
@@ -319,6 +320,17 @@ fn site_servers(render: &Render, site: &Site) -> String {
         return out;
     }
 
+    if kind == devd_core::serving::Serving::NoEntry {
+        // Nothing to serve: no DocumentRoot, so the folder is not exposed, and an answer that says why.
+        out.push_str(&format!(
+            "    ErrorDocument 404 \"devd: {} has no web entry point: there is no index.php or index.html to serve. \
+             If it is a program that listens on a port, point the site at it with: devd site upstream {} <port>\"\n",
+            site.name, site.name
+        ));
+        out.push_str("    <IfModule rewrite_module>\n        RewriteEngine On\n        RewriteRule ^ - [R=404,L]\n    </IfModule>\n");
+        out.push_str("</VirtualHost>\n\n");
+        return out;
+    }
     if let Some(list) = render.redirects.get(&site.name) {
         out.push_str(&crate::redirects::apache_block(list));
     }
@@ -328,6 +340,12 @@ fn site_servers(render: &Render, site: &Site) -> String {
     out.push_str("        AllowOverride All\n");
     out.push_str("        Require all granted\n");
     out.push_str("    </Directory>\n");
+    if kind == devd_core::serving::Serving::Static {
+        out.push_str("    # Dotfiles are not served; certificate challenges still are.\n");
+        out.push_str("    <LocationMatch \"/\\.(?!well-known)\">\n        Require all denied\n    </LocationMatch>\n");
+        out.push_str("</VirtualHost>\n\n");
+        return out;
+    }
     // The script path goes into the URL explicitly. A `SetHandler proxy:fcgi://` handler
     // appends the file name to the address, and on Windows a name that starts with a
     // drive letter produces `:9000C:/...`, which Apache cannot parse.
@@ -419,6 +437,7 @@ mod tests {
             tls_mode: tls.into(),
             db_name: None,
             upstream: upstream.map(str::to_string),
+            serving: Some(devd_core::serving::Content::Php),
             created_at: "2026-10-22T00:00:00Z".into(),
         }
     }
@@ -514,5 +533,37 @@ mod tests {
     fn the_version_is_read_from_the_banner() {
         assert_eq!(parse_version("Server version: Apache/2.4.54 (Win64)\nServer built:   Jun  8 2022").as_deref(), Some("2.4.54"));
         assert_eq!(parse_version("nothing here"), None);
+    }
+
+    fn on_disk(tag: &str, name: &str, files: &[&str]) -> Site {
+        let dir = std::env::temp_dir().join(format!("devd-apache-{tag}-{}", std::process::id())).join(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for f in files {
+            std::fs::write(dir.join(f), "x").unwrap();
+        }
+        let mut s = site(name, "internal", None, None);
+        s.serving = None;
+        s.root = dir.display().to_string();
+        s
+    }
+
+    #[test]
+    fn php_is_handed_over_only_for_a_site_that_serves_php() {
+        let text = render_text(&render(), &[on_disk("a-php", "blog", &["index.php"]), on_disk("a-static", "brochure", &["index.html"])]);
+        let brochure = &text[text.find("ServerName brochure.test\n    SSLEngine").expect("the static site's host")..];
+        let brochure = &brochure[..brochure.find("</VirtualHost>").unwrap()];
+        assert!(brochure.contains("DocumentRoot"), "{brochure}");
+        assert!(!brochure.contains("ProxyPassMatch") && !brochure.contains("fcgi"), "a static site has no PHP:\n{brochure}");
+        assert!(text.contains("ProxyPassMatch"), "the PHP site still has it:\n{text}");
+    }
+
+    #[test]
+    fn a_directory_with_no_web_entry_point_gets_no_document_root_and_an_explanation() {
+        let text = render_text(&render(), &[on_disk("a-none", "ghost", &["go.mod"])]);
+        let block = &text[text.find("ServerName ghost.test\n    SSLEngine").expect("the host")..];
+        let block = &block[..block.find("</VirtualHost>").unwrap()];
+        assert!(!block.contains("DocumentRoot") && !block.contains("<Directory"), "the folder is not exposed:\n{block}");
+        assert!(block.contains("ErrorDocument 404 \"devd: ghost has no web entry point"), "{block}");
     }
 }

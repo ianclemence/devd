@@ -636,7 +636,11 @@ pub fn executable_for(ctx: &Ctx, project: Option<&str>, kind: &str) -> Result<Pa
 
 /// The runtime component of the environment check.
 pub fn doctor_check(paths: &Paths) -> Vec<Check> {
-    let Ok(store) = Store::open(&paths.state_db()) else {
+    // No database yet is an empty install, not a broken one; looking does not create it.
+    if !paths.state_db().is_file() {
+        return vec![Check::info("runtimes", "none installed yet; `devd runtime install php@8.3` adds one")];
+    }
+    let Ok(store) = Store::open_read_only(&paths.state_db()) else {
         return vec![Check::fail("runtimes", "the state store could not be read")];
     };
     let Ok(rows) = store.list_runtimes() else {

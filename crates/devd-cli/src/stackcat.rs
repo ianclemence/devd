@@ -130,9 +130,11 @@ pub fn site(app: &App, cmd: SiteCommand) -> Result<()> {
         SiteCommand::Shares => app.invoke("share.list", json!({})),
         SiteCommand::FixHtaccess { name } => app.invoke("site.fix_htaccess", json!({ "name": name })),
         SiteCommand::Parked => app.invoke("site.parked", json!({})),
+        SiteCommand::Discover => app.invoke("site.discover", json!({})),
+        SiteCommand::Serving { name, serving } => app.invoke("site.set_serving", json!({ "name": name, "serving": serving })),
         SiteCommand::Park { path } => app.invoke("site.park", json!({ "path": path })),
         SiteCommand::Unpark { path } => app.invoke("site.unpark", json!({ "path": path })),
-        SiteCommand::Sync => app.invoke("site.sync", json!({})),
+        SiteCommand::Sync { names } => app.invoke("site.sync", json!({ "names": if names.is_empty() { None } else { Some(names) } })),
         SiteCommand::Create {
             name,
             host,
@@ -140,6 +142,7 @@ pub fn site(app: &App, cmd: SiteCommand) -> Result<()> {
             no_tls,
             db,
             upstream,
+            serving,
         } => app.invoke(
             "site.create",
             json!({
@@ -149,6 +152,7 @@ pub fn site(app: &App, cmd: SiteCommand) -> Result<()> {
                 "tls": !no_tls,
                 "db": db,
                 "upstream": upstream,
+                "serving": serving,
             }),
         ),
         SiteCommand::Upstream { name, upstream } => app.invoke(

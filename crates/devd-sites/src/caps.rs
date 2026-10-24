@@ -39,7 +39,11 @@ args! {
     /// No arguments.
     NoArgs {}
     /// A site to create.
-    CreateArgs { name: String, host: Option<String>, root: Option<String>, tls: Option<bool>, db: Option<bool>, upstream: Option<String> }
+    CreateArgs { name: String, host: Option<String>, root: Option<String>, tls: Option<bool>, db: Option<bool>, upstream: Option<String>, serving: Option<String> }
+    /// Which discovered projects to make sites of; omit for every eligible one.
+    SyncArgs { names: Option<Vec<String>> }
+    /// What a directory site serves: `php` or `static`, or nothing to read it from the directory.
+    SetServingArgs { name: String, serving: Option<String> }
     /// A site to remove.
     RemoveArgs { name: String, delete_files: Option<bool> }
     /// A site to point at a running program, or back at its directory.
@@ -208,24 +212,53 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
-    reg.define::<FolderArgs>("site.park", "Park a folder: its projects become sites")
-    .description("Adds a folder to the parked list in the settings file and makes a site of each project directory in it (site.sync). A site is <folder name>.<tld>, served from the folder, from its public/ directory when it has one. Nothing is written into the projects. Human only, because it makes everything in the folder reachable by name.")
+    reg.define::<FolderArgs>("site.park", "Park a folder: look for projects in it")
+    .description("Adds a folder to the parked list in the settings file and reports what is in it (site.discover). It creates no site, \
+         certificate or configuration: a folder being parked is not a decision to publish what is in it. site.sync makes sites of \
+         the projects that have a web entry point. Human only, because it changes which folders devd looks in.")
     .group("site")
     .tier(Tier::Write)
     .effect(Effect::Config)
     .human_only()
     .dry_run()
     .handlers(
-        |_, a| Ok(Plan::new("site.park", format!("park {} and make a site of each project in it", a.path)).effect("rewrites settings.toml and the web server configuration")),
+        |_, a| Ok(Plan::new("site.park", format!("park {} and report what is in it", a.path)).effect("rewrites settings.toml; creates no site")),
         |ctx, a| {
             let folder = sites::park::park(ctx, std::path::Path::new(&a.path))?;
-            let report = sites::park::sync(ctx, std::slice::from_ref(&folder))?;
+            let found = sites::park::discover(ctx, std::slice::from_ref(&folder))?;
+            let eligible = found.eligible().count();
             let mut outcome = Outcome::with_data(
-                format!("parked {}; {} site(s) created", folder.display(), report.created.len()),
-                serde_json::to_value(&report).unwrap_or(Value::Null),
+                format!("parked {}: {} project(s), {} could be sites; `site.sync` makes them", folder.display(), found.candidates.len(), eligible),
+                serde_json::to_value(&found).unwrap_or(Value::Null),
             );
-            for w in &report.warnings {
-                outcome = outcome.warn(w.clone());
+            for c in found.candidates.iter().filter(|c| !c.eligible && c.site.is_none()) {
+                outcome = outcome.warn(format!("{} is not a site: {}", c.folder, c.reason.clone().unwrap_or_else(|| c.summary.clone())));
+            }
+            Ok(outcome)
+        },
+    )?;
+
+    reg.define::<NoArgs>("site.discover", "Report the projects in the parked folders")
+    .description("Reads the projects root and every parked folder and reports each directory: what it contains (languages and the file that says so), \
+         whether a site already serves it, whether it could be one, the name and hostname it would get, and why not when it cannot. \
+         Changes nothing and gives the same answer however often it is run.")
+    .group("site")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .dry_run()
+    .handlers(
+        |_, _| Ok(Plan::new("site.discover", "read the parked folders")),
+        |ctx, _| {
+            let found = sites::park::discover(ctx, &sites::park::folders(ctx))?;
+            let eligible = found.eligible().count();
+            let mut outcome = Outcome::with_data(
+                format!("{} project(s): {} could become sites, {} already have one", found.candidates.len(), eligible, found.candidates.iter().filter(|c| c.site.is_some()).count()),
+                serde_json::to_value(&found).unwrap_or(Value::Null),
+            );
+            for g in &found.gone {
+                outcome = outcome.warn(format!("{g} has no folder any more; site.remove removes the site"));
             }
             Ok(outcome)
         },
@@ -247,8 +280,12 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
-    reg.define::<NoArgs>("site.sync", "Make a site of every project in the parked folders")
-    .description("For each project directory in the projects root and the parked folders that has no site, creates one (<folder>.<tld>, with a certificate) and re-renders the web server once. Sites whose folder has gone are reported, not removed. The names still need the hosts file: hosts.sync.")
+    reg.define::<SyncArgs>("site.sync", "Make sites of the projects that have a web entry point")
+    .description("For each project directory in the projects root and the parked folders that has no site and has something a web server can \
+         serve (an index.php, an index.html, PHP files), creates a site (<folder>.<tld>, with a certificate) and re-renders the web server once. \
+         A Go module, a Node app without a web entry point or a PHP library is not a site and is reported as skipped with the reason. \
+         The plan names exactly what will be created. Sites whose folder has gone are reported, not removed. The names still need the \
+         hosts file: hosts.sync. Pass names to create only some.")
     .group("site")
     .tier(Tier::Write)
     .effect(Effect::Config)
@@ -256,9 +293,23 @@ pub fn register(reg: &mut Registry) -> Result<()> {
     .dry_run()
     .idempotent()
     .handlers(
-        |_, _| Ok(Plan::new("site.sync", "create a site for each project directory that has none").effect("adds sites and rewrites the web server configuration")),
-        |ctx, _| {
-            let report = sites::park::sync(ctx, &sites::park::folders(ctx))?;
+        |ctx, a| {
+            let found = sites::park::discover(ctx, &sites::park::folders(ctx))?;
+            let chosen = |c: &sites::park::Candidate| a.names.as_ref().is_none_or(|n| c.name.as_ref().is_some_and(|x| n.contains(x)));
+            let create: Vec<&sites::park::Candidate> = found.eligible().filter(|c| chosen(c)).collect();
+            let mut plan = Plan::new("site.sync", format!("create {} site(s)", create.len()))
+                .effect("adds sites and rewrites the web server configuration");
+            for c in &create {
+                plan = plan.step(format!("{} -> {} ({})", c.name.clone().unwrap_or_default(), c.host.clone().unwrap_or_default(), c.summary));
+            }
+            let skipped = found.candidates.iter().filter(|c| c.site.is_none() && !c.eligible && chosen(c)).count();
+            if skipped > 0 {
+                plan = plan.step(format!("{skipped} project(s) are not sites and are left alone; site.discover says why"));
+            }
+            Ok(plan.data(json!({ "create": create.iter().map(|c| json!({ "name": c.name, "host": c.host, "folder": c.folder })).collect::<Vec<_>>() })))
+        },
+        |ctx, a| {
+            let report = sites::park::sync(ctx, &sites::park::folders(ctx), a.names.as_deref())?;
             let mut outcome = Outcome::with_data(
                 format!("{} created, {} already had a site, {} skipped", report.created.len(), report.existing.len(), report.skipped.len()),
                 serde_json::to_value(&report).unwrap_or(Value::Null),
@@ -340,6 +391,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
                 tls: args.tls.unwrap_or(true),
                 db: args.db.unwrap_or(false),
                 upstream: args.upstream.clone(),
+                serving: args.serving.as_deref().map(sites::park::parse_serving).transpose()?,
             };
             let created = sites::create(ctx, &request)?;
             let mut outcome = Outcome::with_data(
@@ -473,6 +525,55 @@ pub fn register(reg: &mut Registry) -> Result<()> {
                 },
                 result,
             ))
+        },
+    )?;
+
+    reg.define::<SetServingArgs>("site.set_serving", "Say what a site's directory serves")
+    .description("Sets what a directory site serves: `php` (PHP through FastCGI) or `static` (files as they are). With no value the choice is \
+         cleared and devd reads the directory again. A directory site that serves nothing (no index.php or index.html) answers with an \
+         explanation instead of exposing the folder; choosing here is how to override a wrong reading. A proxy site has no directory \
+         content: use site.set_upstream. The web server configuration is re-rendered.")
+    .group("site")
+    .tier(Tier::Write)
+    .effect(Effect::Config)
+    .agent_safe()
+    .idempotent()
+    .dry_run()
+    .handlers(
+        |ctx, a| {
+            let site = site_named(ctx, &a.name)?;
+            let chosen = a.serving.as_deref().filter(|s| !s.trim().is_empty()).map(sites::park::parse_serving).transpose()?;
+            let before = site.effective_serving();
+            let mut plan = Plan::new(
+                "site.set_serving",
+                match chosen {
+                    Some(c) => format!("serve {} as {}", a.name, c.as_str()),
+                    None => format!("read what {} serves from its directory", a.name),
+                },
+            )
+            .step("re-render the web server configuration")
+            .data(json!({ "now": before.serving, "source": before.source }));
+            if site.upstream.is_some() {
+                plan = plan.effect("PROBLEM this is a proxy site; it has no directory content to choose");
+            }
+            Ok(plan)
+        },
+        |ctx, a| {
+            let chosen = a.serving.as_deref().filter(|s| !s.trim().is_empty()).map(sites::park::parse_serving).transpose()?;
+            let result = sites::set_serving(ctx, &a.name, chosen)?;
+            let mut outcome = Outcome::with_data(
+                match chosen {
+                    Some(c) => format!("{} is served as {}", a.name, c.as_str()),
+                    None => format!("{} is read from its directory again", a.name),
+                },
+                result.clone(),
+            );
+            if let Some(list) = result["warnings"].as_array() {
+                for w in list.iter().filter_map(|w| w.as_str()) {
+                    outcome = outcome.warn(w.to_string());
+                }
+            }
+            Ok(outcome)
         },
     )?;
 

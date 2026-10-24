@@ -445,6 +445,7 @@ mod tests {
             tls_mode: "internal".to_string(),
             db_name: None,
             upstream: None,
+            serving: None,
             created_at: util::now(),
         }
     }

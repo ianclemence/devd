@@ -33,7 +33,12 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (11, include_str!("../sql/011_runtime_pins.sql")),
     (12, include_str!("../sql/012_chat_chapters.sql")),
     (13, include_str!("../sql/013_ops.sql")),
+    (14, include_str!("../sql/014_site_serving.sql")),
 ];
+
+/// The newest schema this build knows. A database below it is migrated the first time devd
+/// starts; one above it was written by a newer devd, and is read as far as this one understands.
+pub const LATEST_SCHEMA: i32 = MIGRATIONS.len() as i32;
 
 /// What to record about one capability attempt.
 #[derive(Debug, Clone, Copy)]
@@ -94,12 +99,19 @@ pub struct Site {
     pub name: String,
     /// Fully qualified local hostname, e.g. `blog.test`.
     pub host: String,
-    /// Document root on disk.
+    /// The project directory the site is served from. The folder the web server
+    /// is rooted at is [`Site::document_root`], which may be a `public/` inside it.
     pub root: String,
     /// `nginx` or `apache`.
     pub web_server: String,
-    /// Pinned PHP version, when set.
+    /// A PHP version the person pinned for this site. `None` means the site
+    /// follows the default; it is never filled in just because a default exists.
+    /// Only meaningful for a site that serves PHP.
     pub php: Option<String>,
+    /// What the directory serves, when a person said so. `None` means devd
+    /// reads the directory (see `serving::effective`).
+    #[serde(default)]
+    pub serving: Option<crate::serving::Content>,
     /// `off`, `internal` or `trusted`.
     pub tls_mode: String,
     /// Database created alongside the site, when set.
@@ -120,12 +132,27 @@ impl Site {
     /// (a Vite app, say) is not a document root: the project folder is.
     pub fn document_root(&self) -> String {
         let root = std::path::Path::new(&self.root);
-        let public = root.join("public");
-        let has_entry = |dir: &std::path::Path| ["index.php", "index.html", "index.htm"].iter().any(|n| dir.join(n).is_file());
-        if public.is_dir() && (has_entry(&public) || !has_entry(root)) {
-            public.to_string_lossy().to_string()
-        } else {
-            self.root.clone()
+        let web = crate::serving::web_root(root);
+        if web == root { self.root.clone() } else { web.to_string_lossy().to_string() }
+    }
+
+    /// What this site is served as, and where that answer came from.
+    pub fn effective_serving(&self) -> crate::serving::Effective {
+        crate::serving::effective(self)
+    }
+
+    /// The project this site serves: its directory, or the folder above it when the directory is a
+    /// web root such as `public`. A project is what a person is building; a site is how part of it
+    /// is exposed, so one project can have no site, or several, and this is the key between them.
+    pub fn project_dir(&self) -> std::path::PathBuf {
+        let root = std::path::PathBuf::from(&self.root);
+        let web = root
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| matches!(n.to_ascii_lowercase().as_str(), "public" | "public_html" | "web" | "www" | "htdocs" | "dist"));
+        match (web, root.parent()) {
+            (true, Some(parent)) => parent.to_path_buf(),
+            _ => root,
         }
     }
 }
@@ -294,6 +321,24 @@ impl Store {
         Ok(store)
     }
 
+    /// Open an existing database to look at it, changing nothing.
+    ///
+    /// [`Store::open`] creates the folder and the file, switches the journal mode and migrates
+    /// the schema, which is right for devd starting and wrong for anything that only asks a
+    /// question: a diagnostic that runs the migration of the database it is diagnosing has
+    /// already changed the answer. This one fails if there is no database, never writes, and
+    /// does not migrate, so [`Store::schema_version`] says what the file really is. A newer
+    /// schema's columns may be missing from an older file; callers check
+    /// [`LATEST_SCHEMA`] before reading tables a migration added.
+    pub fn open_read_only(path: &Path) -> Result<Self> {
+        if !path.is_file() {
+            return Err(crate::error::DevdError::not_found(format!("there is no state database at {}", path.display())));
+        }
+        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        conn.busy_timeout(std::time::Duration::from_secs(10))?;
+        Ok(Self { conn: Mutex::new(conn) })
+    }
+
     /// Open a private in-memory database, for tests.
     ///
     /// Migrated, like [`Store::open`]. An in-memory store with no schema is a
@@ -446,8 +491,8 @@ impl Store {
     pub fn upsert_site(&self, site: &Site) -> Result<()> {
         self.with(|conn| {
             conn.execute(
-                "INSERT INTO sites (id, name, host, root, web_server, php, tls_mode, db_name, upstream, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                "INSERT INTO sites (id, name, host, root, web_server, php, tls_mode, db_name, upstream, created_at, serving)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
                  ON CONFLICT(name) DO UPDATE SET
                    host = excluded.host,
                    root = excluded.root,
@@ -455,7 +500,8 @@ impl Store {
                    php = excluded.php,
                    tls_mode = excluded.tls_mode,
                    db_name = excluded.db_name,
-                   upstream = excluded.upstream",
+                   upstream = excluded.upstream,
+                   serving = excluded.serving",
                 params![
                     site.id,
                     site.name,
@@ -466,7 +512,8 @@ impl Store {
                     site.tls_mode,
                     site.db_name,
                     site.upstream,
-                    site.created_at
+                    site.created_at,
+                    site.serving.map(|c| c.as_str())
                 ],
             )?;
             Ok(())
@@ -478,7 +525,7 @@ impl Store {
         self.with(|conn| {
             let s = conn
                 .query_row(
-                    "SELECT id, name, host, root, web_server, php, tls_mode, db_name, upstream, created_at
+                    "SELECT id, name, host, root, web_server, php, tls_mode, db_name, upstream, created_at, serving
                      FROM sites WHERE name = ?1",
                     params![name],
                     map_site,
@@ -492,7 +539,7 @@ impl Store {
     pub fn list_sites(&self) -> Result<Vec<Site>> {
         self.with(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, host, root, web_server, php, tls_mode, db_name, upstream, created_at
+                "SELECT id, name, host, root, web_server, php, tls_mode, db_name, upstream, created_at, serving
                  FROM sites ORDER BY name",
             )?;
             let rows = stmt.query_map([], map_site)?;
@@ -1064,6 +1111,7 @@ fn map_site(row: &rusqlite::Row<'_>) -> rusqlite::Result<Site> {
         db_name: row.get(7)?,
         upstream: row.get(8)?,
         created_at: row.get(9)?,
+        serving: row.get::<_, Option<String>>(10)?.as_deref().and_then(crate::serving::Content::parse),
     })
 }
 
@@ -1250,6 +1298,40 @@ mod tests {
     }
 
     #[test]
+    fn looking_at_a_database_neither_creates_nor_migrates_nor_writes_it() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // No database: an error, and nothing made.
+        let missing = dir.path().join("home").join("state.db");
+        assert!(Store::open_read_only(&missing).is_err());
+        assert!(!dir.path().join("home").exists(), "looking must not create the folder");
+
+        // A database from before the newest migration stays exactly as it is.
+        let old = dir.path().join("old.db");
+        {
+            let conn = rusqlite::Connection::open(&old).unwrap();
+            for (_, sql) in &MIGRATIONS[..LATEST_SCHEMA as usize - 1] {
+                conn.execute_batch(sql).unwrap();
+            }
+            conn.execute_batch(&format!("PRAGMA user_version = {};", LATEST_SCHEMA - 1)).unwrap();
+        }
+        let seen = Store::open_read_only(&old).unwrap();
+        assert_eq!(seen.schema_version().unwrap(), LATEST_SCHEMA - 1, "doctor must report the file's own version");
+        assert_eq!(seen.integrity_check().unwrap(), "ok");
+        assert!(seen.upsert_site(&Site {
+            id: "x".into(), name: "x".into(), host: "x.test".into(), root: "x".into(), web_server: "nginx".into(),
+            php: None, serving: None, tls_mode: "off".into(), db_name: None, upstream: None, created_at: String::new(),
+        }).is_err(), "a read-only handle cannot write");
+        drop(seen);
+        let again = Store::open_read_only(&old).unwrap();
+        assert_eq!(again.schema_version().unwrap(), LATEST_SCHEMA - 1, "still not migrated after being read twice");
+
+        // Starting devd is what migrates it.
+        let started = Store::open(&old).unwrap();
+        assert_eq!(started.schema_version().unwrap(), LATEST_SCHEMA);
+    }
+
+    #[test]
     fn migrations_set_schema_version() {
         let s = store();
         assert!(s.schema_version().unwrap() >= 1);
@@ -1277,6 +1359,7 @@ mod tests {
             tls_mode: "internal".into(),
             db_name: Some("blog".into()),
             upstream: None,
+            serving: None,
             created_at: util::now(),
         };
         s.upsert_site(&site).unwrap();
@@ -1329,6 +1412,20 @@ mod tests {
     }
 
     #[test]
+    fn a_site_belongs_to_the_project_above_its_web_root() {
+        let site = |root: &str| Site {
+            id: "1".into(), name: "s".into(), host: "s.test".into(), root: root.into(), web_server: "nginx".into(),
+            php: None, serving: None, tls_mode: "off".into(), db_name: None, upstream: None, created_at: String::new(),
+        };
+        let sep = std::path::MAIN_SEPARATOR;
+        let shop = format!("{sep}work{sep}shop");
+        assert_eq!(site(&format!("{shop}{sep}public")).project_dir(), std::path::PathBuf::from(&shop), "a web root belongs to the project above it");
+        assert_eq!(site(&shop).project_dir(), std::path::PathBuf::from(&shop), "a project folder is its own project");
+        // Two sites over one project (the app and its docs, say) share the project.
+        assert_eq!(site(&format!("{shop}{sep}public")).project_dir(), site(&shop).project_dir());
+    }
+
+    #[test]
     fn document_root_prefers_public_dir() {
         let dir = std::env::temp_dir().join(format!("devd-site-{}", std::process::id()));
         let public = dir.join("public");
@@ -1343,6 +1440,7 @@ mod tests {
             tls_mode: "off".into(),
             db_name: None,
             upstream: None,
+            serving: None,
             created_at: util::now(),
         };
         assert!(site.document_root().ends_with("public"));

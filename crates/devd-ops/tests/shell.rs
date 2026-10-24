@@ -40,6 +40,7 @@ fn site(ctx: &Ctx, name: &str, root: &Path, php: Option<&str>) {
             tls_mode: "off".into(),
             db_name: None,
             upstream: None,
+            serving: None,
             created_at: "2026-10-24T00:00:00Z".into(),
         })
         .unwrap();

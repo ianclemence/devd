@@ -458,3 +458,24 @@ fn the_setup_sheet_reads_the_runtime_kind_where_runtime_list_puts_it() {
     }
     assert!(APP.contains("r.runtime && r.runtime.kind === \"php\""), "the sheet skips PHP that is already installed");
 }
+
+#[test]
+fn the_site_screens_word_what_the_server_says_and_never_assume_php() {
+    // A site's runtime comes from the server's `serving`, `php_effective` and `php_source`. The
+    // old screens treated "no PHP version" as "static" and "a PHP version" as the site's runtime,
+    // which is how a Go module came to be listed as PHP 8.5.
+    assert!(APP.contains("function servingLabel(row)"), "one place words what a site serves");
+    for case in ["\"proxy\"", "\"php\"", "\"static\"", "\"no_entry\""] {
+        assert!(APP.contains(&format!("case {case}:")), "servingLabel handles {case}");
+    }
+    assert!(
+        !APP.contains("row.php_effective ? \"PHP \" + row.php_effective : \"static\""),
+        "a missing PHP version does not mean static files"
+    );
+    assert!(
+        APP.contains("row.serving === \"php\" && installed.length"),
+        "the PHP version picker is offered only to a site that serves PHP"
+    );
+    assert!(APP.contains("php_unused_pin"), "a pin that nothing uses is shown as unused, with a way to clear it");
+    assert!(APP.contains("data-change=\"site-serving\""), "what a directory serves can be chosen from the site page");
+}

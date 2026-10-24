@@ -26,6 +26,7 @@ use devd_core::{util, Result};
 
 use crate::secrets;
 
+#[derive(Debug)]
 struct Component {
     id: String,
     label: String,
@@ -44,6 +45,8 @@ impl Component {
 fn label_of(name: &str) -> &'static str {
     match name {
         "home" => "devd data directory",
+        "home.conflict" => "Two devd data directories",
+        "home.other" => "Another devd data directory",
         "layout" => "Directory layout",
         "settings" => "Settings",
         "state" => "State database",
@@ -81,18 +84,42 @@ fn explain(id: &str, state: &str, detail: &str) -> (String, Value) {
 }
 
 /// Compute the health of everything devd depends on.
+/// Whether anything is running the scheduled work, and whether there is any to run.
+///
+/// Cron jobs, database backups, scheduled deploys and health checks are run by a loop inside a
+/// long-lived devd process. With none open the jobs simply do not happen, and nothing else says so.
+fn background_jobs(ctx: &Ctx) -> Component {
+    let count = |kind: &str| ctx.store.ops_list(kind, None).map(|rows| rows.len()).unwrap_or(0);
+    let jobs = count("cron") + count("db_backup") + count("deploy_schedule") + count("health");
+    let holder = devd_core::process::live_devd_holder(&ctx.paths.root().join("ops-host.pid"));
+    let label = "Scheduled jobs";
+    match (holder, jobs) {
+        (Some(pid), _) => Component::new("jobs", label, "core", "healthy", false, format!("{jobs} job(s); devd (pid {pid}) is running them")),
+        (None, 0) => Component::new("jobs", label, "core", "healthy", false, "none scheduled; cron jobs, backups, scheduled deploys and health checks run only while the window, `devd ui` or `devd serve` is open"),
+        (None, n) => Component::new(
+            "jobs",
+            label,
+            "core",
+            "degraded",
+            false,
+            format!("{n} job(s) are scheduled but nothing is running them: cron jobs, backups, scheduled deploys and health checks run only while the window, `devd ui` or `devd serve` is open, and none is"),
+        ),
+    }
+}
+
 pub fn status(ctx: &Ctx) -> Result<Value> {
     let started = std::time::Instant::now();
     let mut comps: Vec<Component> = Vec::new();
 
     // ---- devd itself and the tools it needs
-    let mut checks = doctor::core_checks(&ctx.paths, &ctx.settings);
+    let mut checks = doctor::core_checks_for(&ctx.paths, &ctx.settings, Some(&ctx.store));
     checks.push(devd_git::doctor_check(ctx.settings.git_executable.as_deref()));
     for c in &checks {
         let (state, required, group) = match (c.name.as_str(), c.level) {
             ("git", Level::Fail) => ("unavailable", true, "tools"),
             ("git", Level::Info) => ("degraded", true, "tools"),
             ("git", Level::Ok) => ("healthy", true, "tools"),
+            (n, Level::Info) if n.starts_with("home.") => ("degraded", false, "core"),
             (n, Level::Info) if n.starts_with("port.") => ("degraded", false, "server"),
             (n, Level::Ok) if n.starts_with("port.") => ("healthy", false, "server"),
             (n, Level::Fail) if n.starts_with("port.") => ("unknown", false, "server"),
@@ -123,6 +150,9 @@ pub fn status(ctx: &Ctx) -> Result<Value> {
         };
         comps.push(Component::new(&format!("service.{}", s.name), &s.name, "server", state, wanted, detail));
     }
+
+    // ---- the loop that runs scheduled work
+    comps.push(background_jobs(ctx));
 
     // ---- AI provider
     let providers = ctx.store.list_providers()?;
@@ -210,6 +240,44 @@ pub fn status(ctx: &Ctx) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ctx() -> (Ctx, std::path::PathBuf) {
+        use devd_core::capability::Actor;
+        use devd_core::config::Settings;
+        use devd_core::events::EventBus;
+        use devd_core::paths::Paths;
+        use devd_core::state::Store;
+        use std::sync::Arc;
+        let dir = std::env::temp_dir().join(format!("devd-jobs-{}-{}", std::process::id(), util::new_id()));
+        let paths = Paths::rooted(&dir);
+        paths.ensure().unwrap();
+        let store = Store::open_in_memory().unwrap();
+        (Ctx { store: Arc::new(store), paths: Arc::new(paths), settings: Arc::new(Settings::default()), events: EventBus::new(), actor: Actor::system(), dry_run: false }, dir)
+    }
+
+    #[test]
+    fn scheduled_jobs_with_nothing_running_them_are_reported_not_assumed_to_run() {
+        let (c, dir) = ctx();
+        let none = background_jobs(&c);
+        assert_eq!(none.state, "healthy", "no jobs, nothing to run: {none:?}");
+
+        c.store.ops_put("cron", "j1", "shop", &json!({ "schedule": "* * * * *", "command": "echo hi" })).unwrap();
+        let waiting = background_jobs(&c);
+        assert_eq!(waiting.state, "degraded", "{waiting:?}");
+        assert!(waiting.detail.contains("nothing is running them") && waiting.detail.contains("devd serve"), "{}", waiting.detail);
+        assert!(!waiting.required, "a stopped scheduler does not make devd itself unhealthy");
+
+        // This test process is a devd program holding the claim, so the jobs are being run.
+        std::fs::write(dir.join("ops-host.pid"), std::process::id().to_string()).unwrap();
+        let running = background_jobs(&c);
+        assert_eq!(running.state, "healthy", "{running:?}");
+        assert!(running.detail.contains(&std::process::id().to_string()));
+
+        // A claim naming a process that is gone is nobody.
+        std::fs::write(dir.join("ops-host.pid"), "4294967").unwrap();
+        assert_eq!(background_jobs(&c).state, "degraded");
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn a_port_note_does_not_call_devd_its_own_web_server_another_program() {

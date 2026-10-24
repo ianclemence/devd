@@ -36,6 +36,7 @@ fn ctx(tag: &str) -> (Ctx, std::path::PathBuf) {
             tls_mode: "off".into(),
             db_name: None,
             upstream: None,
+            serving: None,
             created_at: "2026-10-23T00:00:00Z".into(),
         })
         .unwrap();
