@@ -146,6 +146,8 @@ fn register_laravel(reg: &mut Registry) -> Result<()> {
         .tier(Tier::Exec)
         .effect(Effect::Process)
         .agent_safe()
+        .agent_needs_approval()
+        .dry_run()
         .handlers(
             |_, a| {
                 let args = laravel::split_args(&a.command)?;
@@ -376,6 +378,8 @@ fn register_deploy(reg: &mut Registry) -> Result<()> {
         .tier(Tier::Exec)
         .effect(Effect::Config)
         .agent_safe()
+        .agent_needs_approval()
+        .dry_run()
         .idempotent()
         .handlers(
             |_, a| Ok(Plan::new("deploy.vars_set", format!("change {} deploy variable(s) of {}", a.vars.len(), a.site)).effect("future deploys run with these values")),

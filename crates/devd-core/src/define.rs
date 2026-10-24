@@ -91,6 +91,13 @@ impl<A> Define<'_, A> {
         self
     }
 
+    /// An agent's call waits for a person to approve it, because the caller supplies the code
+    /// that will run. A person calling it is not asked.
+    pub fn agent_needs_approval(mut self) -> Self {
+        self.builder = self.builder.agent_needs_approval(true);
+        self
+    }
+
     /// It can describe what it would do without doing it.
     pub fn dry_run(mut self) -> Self {
         self.builder = self.builder.dry_run(true);

@@ -463,6 +463,8 @@ fn register_cron(reg: &mut Registry) -> Result<()> {
         .tier(Tier::Exec)
         .effect(Effect::Process)
         .agent_safe()
+        .agent_needs_approval()
+        .dry_run()
         .handlers(
             |ctx, a| {
                 cron::parse(&a.schedule)?;
@@ -591,6 +593,8 @@ fn register_queue(reg: &mut Registry) -> Result<()> {
         .tier(Tier::Exec)
         .effect(Effect::Process)
         .agent_safe()
+        .agent_needs_approval()
+        .dry_run()
         .handlers(
             |ctx, a| {
                 let spec = spec_of(a);
@@ -755,6 +759,8 @@ fn register_deploy(reg: &mut Registry) -> Result<()> {
         .tier(Tier::Exec)
         .effect(Effect::Write)
         .agent_safe()
+        .agent_needs_approval()
+        .dry_run()
         .idempotent()
         .handlers(
             |ctx, a| {
@@ -1179,6 +1185,8 @@ fn register_ploi(reg: &mut Registry) -> Result<()> {
         .tier(Tier::Exec)
         .effect(Effect::Write)
         .agent_safe()
+        .agent_needs_approval()
+        .dry_run()
         .handlers(
             |_, a| Ok(Plan::new("ploi.pull_script", format!("copy the Ploi deploy script to {}", a.local)).effect("contacts ploi.io; future local deploys run the script")),
             |ctx, a| {

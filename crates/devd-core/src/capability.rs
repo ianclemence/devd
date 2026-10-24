@@ -446,6 +446,14 @@ pub struct Capability {
     pub agent_safe: bool,
     /// When true, an agent can never satisfy the approval requirement.
     pub human_only: bool,
+    /// When true, an agent's call waits for a person's approval whatever the tier.
+    ///
+    /// For a capability whose caller writes the code devd will run (a command for a
+    /// cron job, a deploy script, an artisan command). The tier says how much damage an
+    /// operation can do to what devd manages; this says that the *content* is the
+    /// caller's own, which a person should see before it runs. A person at the command line
+    /// or in the window is not asked: they wrote it.
+    pub agent_needs_approval: bool,
     /// Whether repeating the call is harmless.
     pub idempotent: bool,
     /// Implementation.
@@ -476,6 +484,7 @@ impl Capability {
             supports_dry_run: false,
             agent_safe: true,
             human_only: false,
+            agent_needs_approval: false,
             idempotent: false,
             handler: None,
         }
@@ -494,6 +503,7 @@ pub struct CapabilityBuilder {
     supports_dry_run: bool,
     agent_safe: bool,
     human_only: bool,
+    agent_needs_approval: bool,
     idempotent: bool,
     handler: Option<Arc<dyn Handler>>,
 }
@@ -542,6 +552,12 @@ impl CapabilityBuilder {
         }
         self
     }
+    /// Declare that an agent's call waits for a person's approval, because the caller supplies
+    /// the code that will run.
+    pub fn agent_needs_approval(mut self, yes: bool) -> Self {
+        self.agent_needs_approval = yes;
+        self
+    }
     /// Declare the operation idempotent.
     pub fn idempotent(mut self, yes: bool) -> Self {
         self.idempotent = yes;
@@ -587,6 +603,7 @@ impl CapabilityBuilder {
             supports_dry_run: self.supports_dry_run,
             agent_safe: self.agent_safe,
             human_only: self.human_only,
+            agent_needs_approval: self.agent_needs_approval,
             idempotent: self.idempotent,
             handler,
         })

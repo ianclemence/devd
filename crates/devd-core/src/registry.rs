@@ -145,6 +145,7 @@ impl Registry {
             "effect": cap.effect.as_str(),
             "agent_safe": cap.agent_safe,
             "human_only": cap.human_only,
+            "agent_needs_approval": cap.agent_needs_approval,
             "supports_dry_run": cap.supports_dry_run,
             "idempotent": cap.idempotent,
             "requires_approval": cap.tier.requires_approval(),
@@ -222,6 +223,23 @@ impl Registry {
                     "`{}` is a {} operation and requires explicit human approval",
                     cap.id,
                     cap.tier.as_str()
+                ),
+            });
+        }
+
+        // 3b. An agent that supplies the code devd will run (a cron command, a deploy script)
+        //     waits for a person to read it, whatever the tier. The plan, which carries the
+        //     code, is what the person approves, and a plan itself needs no approval.
+        if cap.agent_needs_approval
+            && ctx.actor.is_agent()
+            && !req.dry_run
+            && approval != Approval::Granted
+        {
+            return Err(DevdError::ApprovalRequired {
+                capability: cap.id.clone(),
+                reason: format!(
+                    "`{}` runs code the caller wrote, so an agent needs a person's approval to use it",
+                    cap.id
                 ),
             });
         }
