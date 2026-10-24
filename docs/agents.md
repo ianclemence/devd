@@ -288,8 +288,11 @@ the host starts again.
 approval). In production an agent needs a person's approval for every operation
 above read - writing a file included - plan approval cannot be waived, and the
 status bar says so. Destructive, remote and admin operations need approval in
-both modes. devd has no deploy capability, and agents cannot open ports or edit a
-production database through it.
+both modes, with one scoped exception: removing files inside the conversation's
+project is ordinary work (the project root, `.git` and secrets files are still
+refused), while any path outside that project, and every other destructive
+operation, needs a person. devd has no deploy capability, and agents cannot open
+ports or edit a production database through it.
 
 ## Services that already exist
 

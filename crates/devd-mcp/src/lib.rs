@@ -45,6 +45,7 @@
 //! produced by a human decision.
 
 use std::io::{BufRead, Write};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde_json::{json, Value};
@@ -96,6 +97,10 @@ pub struct McpServer {
     ctx: Ctx,
     extra_checks: Vec<ExtraChecks>,
     approval_queue: Option<ApprovalQueue>,
+    /// The conversation's project, when the built-in harness hosts this server.
+    /// It is the boundary for autonomous file work; an external MCP client has
+    /// no such scope and keeps the stricter approval rules.
+    project: Option<PathBuf>,
 }
 
 /// The outcome of a tool call.
@@ -120,7 +125,17 @@ impl McpServer {
             ctx,
             extra_checks: Vec::new(),
             approval_queue: None,
+            project: None,
         }
+    }
+
+    /// Give this server the conversation's project. The built-in assistant uses
+    /// it to let an agent clear files it was asked to clear inside that project,
+    /// while a path outside it still needs a person's approval. An external MCP
+    /// client does not call this, so it never gets the exception.
+    pub fn with_project(mut self, project: Option<String>) -> Self {
+        self.project = project.map(PathBuf::from);
+        self
     }
 
     /// Queue operations that need approval so a person can decide them in the
@@ -350,7 +365,35 @@ impl McpServer {
             dry_run,
         };
 
-        match self.registry.dispatch(&self.ctx, &request, Approval::None) {
+        // The conversation's project is the boundary. Reading or changing
+        // anything outside it is not an error to work around: it is a decision
+        // for the person, so it takes the ordinary approval path. A dry run is
+        // only a plan and stays free.
+        if !dry_run {
+            if let Some(reason) = self.outside_scope(id, &cap_args) {
+                let e = DevdError::ApprovalRequired {
+                    capability: id.to_string(),
+                    reason,
+                };
+                let plan = self.plan_for(id, &cap_args);
+                return ToolOutcome::Failed(pretty(&error_body(&e, plan, Some(id))));
+            }
+        }
+
+        // Clearing files inside the project the person attached to this
+        // conversation is ordinary work, not a destructive decision. The
+        // capability still refuses the project root, `.git` and secrets; every
+        // path outside the project took the approval branch above.
+        let approval = if !dry_run
+            && self.clears_inside_project(id, &cap_args)
+            && self.ctx.store.environment_mode() != "production"
+        {
+            Approval::Granted
+        } else {
+            Approval::None
+        };
+
+        match self.registry.dispatch(&self.ctx, &request, approval) {
             Ok(result) => {
                 let value = serde_json::to_value(&result).unwrap_or(Value::Null);
                 ToolOutcome::Content(pretty(&json!({
@@ -390,6 +433,49 @@ impl McpServer {
                 ToolOutcome::Failed(pretty(&body))
             }
         }
+    }
+
+    /// Why this call needs a person: it names a path outside the conversation's
+    /// project. Only the built-in harness sets a project; an external MCP client
+    /// has no boundary here and keeps the registry's ordinary rules.
+    fn outside_scope(&self, id: &str, args: &Value) -> Option<String> {
+        let root = self.project.as_deref()?;
+        if self.registry.get(id).is_none() {
+            return None;
+        }
+        if !["fs.", "project.", "git.", "shell."].iter().any(|p| id.starts_with(p)) {
+            return None;
+        }
+        let root = canonicalish(root);
+        for path in path_values(args) {
+            let p = Path::new(path);
+            if !p.is_absolute() {
+                continue;
+            }
+            if !canonicalish(p).starts_with(&root) {
+                return Some(format!(
+                    "`{id}` touches `{path}`, which is outside the conversation's project `{}`. A person must approve access outside the project.",
+                    root.display()
+                ));
+            }
+        }
+        None
+    }
+
+    /// Whether this is `fs.delete` and every path it names is inside the
+    /// conversation's project (and not the project root itself).
+    fn clears_inside_project(&self, id: &str, args: &Value) -> bool {
+        if id != "fs.delete" {
+            return false;
+        }
+        let Some(root) = self.project.as_deref() else { return false };
+        let root = canonicalish(root);
+        let paths: Vec<&str> = path_values(args);
+        !paths.is_empty()
+            && paths.iter().all(|path| {
+                let p = Path::new(path);
+                p.is_absolute() && canonicalish(p).starts_with(&root) && canonicalish(p) != root
+            })
     }
 
     /// Ask the registry for a plan without applying anything.
@@ -550,6 +636,43 @@ fn summarise(cap: &Arc<devd_core::capability::Capability>) -> Value {
 
 /// The body of a tool failure. Shaped like the HTTP API's error envelope so a
 /// reader that knows one knows the other.
+/// Every absolute path a scoped capability names. The keys are the ones the
+/// file, project, Git and shell capabilities use.
+fn path_values(args: &Value) -> Vec<&str> {
+    let mut out = Vec::new();
+    let Some(obj) = args.as_object() else { return out };
+    for key in ["path", "from", "to", "cwd", "repo", "project", "root", "directory", "workdir"] {
+        if let Some(value) = obj.get(key).and_then(Value::as_str) {
+            out.push(value);
+        }
+    }
+    out
+}
+
+/// Canonicalise a path that may not exist yet: canonicalise the nearest existing
+/// ancestor, then append the missing components. This is what makes a symlink
+/// out of the project fail the boundary rather than pass it.
+fn canonicalish(path: &Path) -> PathBuf {
+    if let Ok(c) = std::fs::canonicalize(path) {
+        return c;
+    }
+    let mut current = path.to_path_buf();
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    while !current.exists() {
+        if let Some(name) = current.file_name() {
+            tail.push(name.to_os_string());
+        }
+        if !current.pop() {
+            break;
+        }
+    }
+    let mut base = std::fs::canonicalize(&current).unwrap_or(current);
+    for part in tail.into_iter().rev() {
+        base.push(part);
+    }
+    base
+}
+
 fn error_body(error: &DevdError, plan: Option<Value>, id: Option<&str>) -> Value {
     let mut body = json!({
         "ok": false,
@@ -1089,6 +1212,67 @@ mod tests {
             }),
         );
         assert_eq!(response["error"]["code"], -32602);
+    }
+
+    #[test]
+    fn an_agent_clears_inside_its_project_and_asks_outside() {
+        let root = std::env::temp_dir().join(format!("devd-mcp-scope-{}", std::process::id()));
+        let project = root.join("project");
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(project.join("old.txt"), "old").unwrap();
+        std::fs::write(outside.join("elsewhere.txt"), "elsewhere").unwrap();
+
+        let counter = Arc::new(AtomicUsize::new(0));
+        let mut registry = Registry::new();
+        let apply = counter.clone();
+        registry
+            .register(
+                Capability::builder("fs.delete", "Delete a file or directory")
+                    .group("fs")
+                    .tier(Tier::Destructive)
+                    .effect(Effect::Data)
+                    .agent_safe(true)
+                    .dry_run(true)
+                    .handler(
+                        |_ctx, _a: &Value| {
+                            Ok(devd_core::capability::Plan::new("fs.delete", "delete").destructive(true))
+                        },
+                        move |_ctx, _a: &Value| {
+                            apply.fetch_add(1, Ordering::SeqCst);
+                            Ok(devd_core::capability::Outcome::ok("deleted"))
+                        },
+                    )
+                    .build()
+                    .unwrap(),
+            )
+            .unwrap();
+        let paths = Paths::rooted(root.join("home"));
+        paths.ensure().unwrap();
+        let ctx = Ctx {
+            store: Arc::new(Store::open_in_memory().unwrap()),
+            paths: Arc::new(paths),
+            settings: Arc::new(Settings::default()),
+            events: EventBus::new(),
+            actor: Actor::human(Surface::Cli),
+            dry_run: false,
+        };
+        let server = McpServer::new(Arc::new(registry), ctx, "test")
+            .with_project(Some(project.display().to_string()));
+
+        let inside = project.join("old.txt").display().to_string();
+        let (err, text) = server.call("devd_invoke", &json!({ "id": "fs.delete", "args": { "path": inside } }));
+        assert!(!err, "{text}");
+        assert_eq!(counter.load(Ordering::SeqCst), 1, "an in-project delete runs");
+
+        let outside = outside.join("elsewhere.txt").display().to_string();
+        let (err, text) = server.call("devd_invoke", &json!({ "id": "fs.delete", "args": { "path": outside } }));
+        assert!(err, "{text}");
+        let body: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(body["error"]["code"], "approval_required");
+        assert_eq!(counter.load(Ordering::SeqCst), 1, "an outside delete must not run");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

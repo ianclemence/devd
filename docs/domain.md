@@ -143,7 +143,12 @@ Every interface dispatches through `Registry::dispatch`; the checks live there, 
 2. `human_only` cannot be performed by an agent, and no approval an agent holds unlocks it;
 3. a capability not marked `agent_safe` is not available to agents;
 4. in production mode an agent needs approval for every change;
-5. `Destructive`, `Remote` and `Admin` tiers need a person's approval;
+5. `Destructive`, `Remote` and `Admin` tiers need a person's approval. The one
+   scoped exception is the built-in harness: `fs.delete` inside the conversation's
+   project runs as ordinary work, because the project is the boundary the person
+   chose. The project root, `.git` and secrets are refused; a path outside the
+   project takes the ordinary approval route. An external MCP client has no
+   conversation project and gets no exception.
 6. **`agent_needs_approval`**: an agent that supplies the code devd will run waits for a person to read it.
 
 `project.exec` and `project.run` stay open to agents: they run the stack's allow-listed programs and the

@@ -723,8 +723,9 @@ code, kbd, pre, samp { font-family: var(--mono); }
 .composer-send:hover { background: var(--bg-hover); color: var(--fg); border-color: var(--line-strong); }
 .composer-send.is-busy { color: var(--danger); border-color: var(--danger-line); background: var(--danger-quiet); }
 
-/* Stop sits beside the slot while the assistant works; the arrow keeps its
-   meaning (send, or queue when it is already running). */
+/* Stop occupies the send/microphone slot while the assistant works and there
+   is nothing to send. It is the same control, in the same place, not a second
+   button beside it. */
 .composer-stop {
   display: grid;
   place-items: center;
@@ -752,20 +753,6 @@ code, kbd, pre, samp { font-family: var(--mono); }
 }
 .status-chip { color: var(--fg-mute); }
 .status-sep { color: var(--fg-dim); }
-.status-select {
-  height: auto;
-  padding: 0 14px 0 0;
-  background-color: transparent;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237a7a83' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 0 center;
-  background-size: 9px 9px;
-  border: 0;
-  color: var(--fg-mute);
-  font-size: var(--text-xs);
-  cursor: pointer;
-}
-.status-select:hover { color: var(--fg); }
 
 /* The mark, shown when there is no conversation yet. */
 .chat-wordmark {
@@ -989,6 +976,39 @@ select optgroup { color: var(--fg-mute); font-style: normal; }
 .select.compact, select.compact { padding-right: 22px; background-position: right 5px center; background-size: 10px 10px; }
 .composer-picker { padding-right: 24px; background-position: right 6px center; background-size: 10px 10px; }
 select.input { appearance: none; }
+
+/* One select everywhere. The Home "No project" control used to be the only
+   bordered picker; the conversation project, composer provider and the forms
+   now share its surface, border, chevron, height and focus ring. */
+.select-field {
+  width: auto;
+  max-width: 100%;
+  height: var(--h-control);
+  min-height: var(--h-control);
+  padding: 0 30px 0 9px;
+  background-color: var(--bg-deep);
+  background-position: right 9px center;
+  background-size: 12px 12px;
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius);
+  color: var(--fg);
+  font-family: var(--sans);
+  font-size: 12.5px;
+  line-height: 1;
+}
+.select-field:hover:not(:disabled) {
+  border-color: var(--fg-dim);
+  background-color: var(--bg-surface);
+}
+.select-field:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+.select-field:disabled { opacity: 0.55; cursor: not-allowed; }
+.ui-ask .select-field { max-width: 180px; }
+.composer-picker.select-field { max-width: 200px; background-position: right 8px center; }
+.composer-status .select-field { height: 26px; min-height: 26px; max-width: 220px; font-size: var(--text-xs); padding-right: 24px; background-position: right 6px center; }
 
 .field { display: flex; flex-direction: column; gap: 5px; margin-bottom: var(--s3); }
 .field:last-child { margin-bottom: 0; }
@@ -1643,6 +1663,24 @@ kbd {
   padding: var(--s4);
   border-bottom: 1px solid var(--line);
 }
+.modal-head > div:first-child { flex: 1; min-width: 0; }
+.modal-close {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--fg-mute);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+.modal-close:hover { background: var(--bg-hover); color: var(--fg); }
+.modal-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .modal-kicker { color: var(--fg-dim); font-family: var(--mono); font-size: var(--text-xs); }
 .modal-head h2 { margin-top: 3px; font-size: var(--text-lg); font-weight: 600; line-height: 1.35; }
 .modal-body {
@@ -1668,6 +1706,15 @@ kbd {
 .steps li { display: flex; gap: var(--s2); color: var(--fg-mute); font-size: var(--text-sm); line-height: 1.5; }
 .steps li::before { content: "→"; flex: 0 0 auto; color: var(--accent); }
 
+.drawer-scrim {
+  position: fixed;
+  inset: 0 0 var(--status-h) 0;
+  z-index: 29;
+  background: rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(1px);
+  animation: fade var(--fast) var(--ease-out);
+}
+.drawer-scrim[hidden] { display: none; }
 .drawer {
   position: fixed;
   top: 0;
@@ -1696,7 +1743,8 @@ kbd {
   padding: 0 var(--s4);
   border-bottom: 1px solid var(--line);
 }
-.drawer-title { font-family: var(--mono); font-size: var(--text-sm); }
+.drawer-title { flex: 1; min-width: 0; font-family: var(--mono); font-size: var(--text-sm); }
+.drawer-close { margin-left: auto; }
 .drawer-body {
   display: flex;
   flex-direction: column;

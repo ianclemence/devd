@@ -299,8 +299,8 @@ touches the outside world, and it is reachable only through the dispatcher.
 
 | Guarantee | How it is enforced |
 | --- | --- |
-| A destructive action cannot run without approval | `Tier::Destructive` and `Tier::Remote` are checked in `Registry::dispatch`, before the handler |
-| An agent cannot approve its own action | `Actor::is_agent()` fails the approval check unconditionally; there is no agent-supplied approval path |
+| A destructive action cannot run without approval | `Tier::Destructive` and `Tier::Remote` are checked in `Registry::dispatch`, before the handler. The built-in harness may pre-authorise `fs.delete` only inside the conversation's project; the root, `.git`, secrets and outside paths still need a person |
+| An agent cannot approve its own action | `Actor::is_agent()` fails the approval check unconditionally; there is no agent-supplied approval path. The in-project delete policy is the harness's decision, made before dispatch |
 | Some operations are reserved for humans | `human_only` is checked before approval is considered |
 | A declined action does not run | `Approval::Denied` short-circuits the dispatcher, and the attempt is still audited |
 | A refusal cannot be bypassed from another interface | Every interface calls the same dispatcher |

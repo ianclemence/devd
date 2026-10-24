@@ -66,7 +66,11 @@ order and refuses before the handler is reached:
 4. **Agent-safety reservation.** If the capability is not `agent_safe` and the
    actor is an agent, refuse.
 5. **The tier's approval requirement.** `Destructive` and `Remote` cannot be
-   invoked without an approval. An agent cannot supply one.
+   invoked without an approval. An agent cannot supply one. The built-in harness
+   is the single scoped exception: it may pre-authorise `fs.delete` inside the
+   conversation's project, because the project is the boundary the person chose.
+   The root, `.git`, secrets and every path outside it still take the approval
+   route, and no other capability gets the exception.
 6. **Dry-run support.** A dry run is refused for a capability that cannot
    describe itself without acting.
 7. **Run the handler**, then record the outcome.

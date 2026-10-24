@@ -88,6 +88,7 @@
         <h2 id="modal-title"></h2>
       </div>
       <span class="pill" id="modal-tier"></span>
+      <button type="button" class="modal-close" id="modal-close" aria-label="Close this dialog" title="Close">&times;</button>
     </div>
     <div class="modal-body" id="modal-body"></div>
     <div class="modal-foot">
@@ -102,7 +103,7 @@
 
 <div class="overlay" id="dialog" hidden>
   <div class="modal modal-sm" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
-    <div class="modal-head"><div><h2 id="dialog-title"></h2></div></div>
+    <div class="modal-head"><div><h2 id="dialog-title"></h2></div><button type="button" class="modal-close" id="dialog-close" aria-label="Close this dialog" title="Close">&times;</button></div>
     <div class="modal-body">
       <div class="dialog-text" id="dialog-text"></div>
       <input type="text" class="input" id="dialog-input" autocomplete="off" spellcheck="false" hidden>
@@ -116,10 +117,11 @@
   </div>
 </div>
 
-<div class="drawer" id="drawer" role="dialog" aria-label="Details" hidden>
+<div class="drawer-scrim" id="drawer-scrim" hidden></div>
+<div class="drawer" id="drawer" role="dialog" aria-modal="true" aria-label="Details" hidden>
   <div class="drawer-head">
     <span class="drawer-title" id="drawer-title"></span>
-    <button type="button" class="btn btn-ghost" data-action="close-drawer">Close</button>
+    <button type="button" class="btn btn-ghost drawer-close" data-action="close-drawer" aria-label="Close details">Close</button>
   </div>
   <div class="drawer-body" id="drawer-body"></div>
 </div>

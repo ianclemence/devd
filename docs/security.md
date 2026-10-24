@@ -30,9 +30,9 @@ sentence in a system prompt**. A prompt is a request. The registry is a gate.
 
 | Protection | Enforced by |
 | --- | --- |
-| A destructive action needs approval | `Tier::requires_approval()` checked in `Registry::dispatch_inner`, before the handler is called |
+| A destructive action needs approval | `Tier::requires_approval()` checked in `Registry::dispatch_inner`, before the handler is called. One scoped policy exception exists: the built-in harness may pre-authorise `fs.delete` inside the conversation's project, because that is the boundary the person chose; the root, `.git` and secrets are refused and any outside path still needs approval |
 | A remote action needs approval | `Tier::Remote`, same check |
-| An agent cannot approve its own action | The approval check refuses when `Actor::is_agent()`; no interface can pass an approval on an agent's behalf, because the dispatcher is the only entry point |
+| An agent cannot approve its own action | The approval check refuses when `Actor::is_agent()`; no interface can pass an approval on an agent's behalf, because the dispatcher is the only entry point. The in-project `fs.delete` policy is decided by the harness before dispatch, not by the model, and cannot be widened to another capability or path |
 | Some operations are human-only | `human_only` is checked *before* the approval check, so an approval cannot unlock it |
 | A refusal is not local to a surface | Every surface calls the same dispatcher; there is no second path |
 | A declined action does not run | `Approval::Denied` returns before the handler, and the attempt is still audited |
@@ -40,8 +40,10 @@ sentence in a system prompt**. A prompt is a request. The registry is a gate.
 | A capability that needs approval can always explain itself | A test asserts `requires_approval` implies `supports_dry_run` for every capability |
 | A plan cannot contradict itself | `Plan::destructive(true)` also sets `requires_approval` |
 
-An agent's request for a destructive operation is therefore a well-formed
-request that fails. That failure is the feature.
+An agent's request for a destructive operation outside its project is therefore a
+well-formed request that fails. That failure is the feature. The narrow exception
+is deleting inside the project the conversation was attached to: that is ordinary
+work, and the harness - not the model - is what decides the path is inside.
 
 ## Approvals
 

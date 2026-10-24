@@ -353,6 +353,16 @@
     return parts[parts.length - 1] || p;
   }
 
+  /* Make sure a project picked outside the Assistant is one the composer can
+     show. The Home row comes from the same list, but a stale or filtered list
+     must not leave the select with no matching option. */
+  function rememberProject(path) {
+    if (!path) return;
+    if (!(state.projects || []).some(function (p) { return p.path === path; })) {
+      state.projects = (state.projects || []).concat([{ name: dirName(path), path: path }]);
+    }
+  }
+
   /* The series of a PHP version: "8.5.11" is the series "8.5". */
   function devSeries(version) {
     var parts = String(version || "").split(".");
@@ -488,10 +498,12 @@
     el("drawer-title").textContent = title;
     el("drawer-body").innerHTML = html;
     el("drawer").hidden = false;
+    el("drawer-scrim").hidden = false;
   }
 
   function closeDrawer() {
     el("drawer").hidden = true;
+    el("drawer-scrim").hidden = true;
   }
 
   // ------------------------------------------------------------------- dialog
@@ -514,11 +526,13 @@
       var close = function (res) {
         d.hidden = true;
         ok.onclick = cancel.onclick = d.onclick = d.onkeydown = null;
+        el("dialog-close").onclick = null;
         if (back && back.focus) back.focus();
         resolve(res);
       };
       ok.onclick = function () { close({ ok: true, value: inp.value.trim() }); };
       cancel.onclick = function () { close({ ok: false }); };
+      el("dialog-close").onclick = function () { close({ ok: false }); };
       d.onclick = function (e) { if (e.target === d) close({ ok: false }); };
       d.onkeydown = function (e) {
         if (e.key === "Escape") { e.stopPropagation(); close({ ok: false }); }
@@ -5167,7 +5181,7 @@
 
     var ask = ready
       ? '<div class="ui-ask"><textarea id="home-ask" rows="1" placeholder="Ask devd to do something…" style="flex:1;background:none;border:0;outline:0;resize:none;color:var(--fg);font:inherit;font-size:var(--text-lg);padding:12px 0">' + esc(AI.askText) + "</textarea>" +
-        '<select class="input" id="home-project" style="max-width:150px">' + projOptions + "</select>" +
+        '<select class="input select-field" id="home-project" aria-label="Project for this request">' + projOptions + "</select>" +
         '<button type="button" class="btn btn-ghost" data-action="home-team" title="A planner, specialists working in parallel, and proof before anything counts as done">Team</button>' +
         '<button type="button" class="btn btn-primary" data-action="home-ask">Ask</button></div>'
       : '<div class="ui-ask"><span class="grow" style="flex:1;color:var(--fg-mute);padding:12px 0">Connect a model to ask devd for things.</span><button type="button" class="btn btn-primary" data-action="nav" data-view="providers">Connect a model</button></div>';
@@ -5807,16 +5821,17 @@
       '<div class="composer-bar">' +
       '<div class="composer-left">' +
       '<button type="button" class="composer-tool" data-action="chat-attach" title="Attach a file" aria-label="Attach a file"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg></button>' +
-      '<select class="composer-picker" data-chat="provider" aria-label="Provider">' +
+      '<select class="composer-picker select-field" data-chat="provider" aria-label="Provider">' +
       (provs.length ? provs.map(function (p) { return '<option value="' + attr(p.id) + '"' + (p.id === cur ? " selected" : "") + ">" + esc(p.label) + "</option>"; }).join("") : '<option value="">no provider</option>') +
       "</select>" +
       '<input class="composer-picker mono" list="chat-models" data-chat="model" value="' + attr(currentModel) + '" placeholder="model" spellcheck="false" aria-label="Model"><datalist id="chat-models">' + modelOpts + "</datalist>" +
       "</div>" +
       '<div class="composer-right">' +
-      // While it works, a stop button sits beside the slot; the arrow still
-      // queues what you write for the next step rather than refusing it.
-      '<button type="button" class="composer-stop" id="chat-stop" data-action="chat-stop" title="Stop after this step" aria-label="Stop" hidden><svg class="icon" aria-hidden="true"><use href="#i-stop"></use></svg></button>' +
+      // The slot holds exactly one primary action. While it works and the box
+      // is empty that is Stop, in the send button's place; once there is text
+      // it is the arrow, which queues that text for the next step.
       '<span class="composer-slot">' +
+      '<button type="button" class="composer-stop" id="chat-stop" data-action="chat-stop" title="Stop after this step" aria-label="Stop" hidden><svg class="icon" aria-hidden="true"><use href="#i-stop"></use></svg></button>' +
       '<button type="button" class="composer-tool" id="chat-mic" data-action="chat-dictate" title="Dictate with Whisper" aria-label="Dictate with Whisper"><svg class="icon" aria-hidden="true"><use href="#i-mic"></use></svg></button>' +
       '<button type="button" class="composer-send" id="chat-send" data-action="chat-send" title="Send" aria-label="Send"><svg class="icon" aria-hidden="true"><use href="#i-arrow-up"></use></svg></button>' +
       "</span>" +
@@ -5828,7 +5843,7 @@
       '<span class="status-sep" aria-hidden="true">/</span>' +
       (AI.thread
         ? '<span class="status-chip">' + esc(dirName(AI.thread.project || "no project")) + "</span>"
-        : '<select class="status-chip status-select" id="chat-project" aria-label="Project">' + projOpts + "</select>") +
+        : '<select class="select-field" id="chat-project" aria-label="Project">' + projOpts + "</select>") +
       "</div>";
 
     el("main").innerHTML =
@@ -6701,11 +6716,12 @@
     if (!inp || !send || !mic) return;
     var busy = !!(AI.thread && (AI.thread.state === "running" || AI.running));
     var hasText = !!(inp.value || "").trim() || ATTACHMENTS.length;
-    // With text there is always something to do - send it, or queue it while it works.
-    send.hidden = !hasText;
+    // One primary action in the slot: Stop while it works and there is nothing
+    // to send; the arrow once there is text (send, or queue while it works).
+    send.hidden = busy ? hasText : !hasText;
     mic.hidden = busy || hasText;
     var stop = el("chat-stop");
-    if (stop) stop.hidden = !busy;
+    if (stop) stop.hidden = !busy || hasText;
   }
 
   /* The box grows with what is written in it, up to a share of the window, and
@@ -7059,7 +7075,25 @@
       run(n.dataset.cap, args).then(function (o) { if (o) loadHealth().then(function () { healthChip(); openHealth(); }); });
     },
     "home-open": function (n) { DEV.path = n.dataset.path; DEV.ctx = null; DEV.detect = null; navigate("develop"); },
-    "home-chat": function () { AI.thread = null; AI.events = []; navigate("assistant"); },
+    "home-chat": function (n) {
+      var path = (n && n.dataset.path) || "";
+      AI.thread = null;
+      AI.events = [];
+      AI.pending = [];
+      AI.lastId = 0;
+      AI.todos = [];
+      AI.todosAt = 0;
+      AI.queued = 0;
+      AI.openSteps = {};
+      AI.composer = "";
+      AI.project = path;
+      AI.askProject = path;
+      rememberProject(path);
+      navigate("assistant").then(function () {
+        var input = el("chat-input");
+        if (input) input.focus();
+      });
+    },
     "home-ask": function () {
       var text = (el("home-ask").value || "").trim();
       if (!text) return toast("warn", "Write what you want done first");
@@ -8324,6 +8358,8 @@
     // common keyboard trap in a single-page app.
     if (event.key === "Tab") {
       var dialog = !el("modal").hidden ? el("modal")
+        : !el("dialog").hidden ? el("dialog")
+        : !el("drawer").hidden ? el("drawer")
         : picker.open ? document.querySelector("#picker .picker")
         : state.palette.open ? document.querySelector("#palette .palette") : null;
       if (!dialog) return;
@@ -8434,7 +8470,12 @@
   });
 
   el("modal-cancel").addEventListener("click", function () { decideModal(false); });
+  el("modal-close").addEventListener("click", function () { decideModal(false); });
+  el("drawer-scrim").addEventListener("click", closeDrawer);
   el("modal-confirm").addEventListener("click", function () { decideModal(true); });
+  el("picker").addEventListener("click", function (event) {
+    if (event.target === el("picker")) closePicker(null);
+  });
   el("palette").addEventListener("click", function (event) {
     if (event.target === el("palette")) closePalette();
   });
@@ -8455,9 +8496,9 @@
       if (!id) return;
       var queued = (o.data && o.data.queued) || 0;
       if (queued > 0 && AI.thread && AI.thread.id === id) {
-        // It is working; the message is waiting for the next step.
+        // It is working; the header's queue count is the acknowledgement. A
+        // toast on every message was noise, not information.
         AI.queued = queued;
-        toast("info", "Queued for the next step");
         pollThread(false).then(function () { paintChat(); });
         return;
       }

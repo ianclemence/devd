@@ -1909,7 +1909,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
         |ctx, a| Ok(Outcome::with_data("moved", fs::mv(ctx, &a.from, &a.to)?)),
     )?;
     reg.define::<FsDelete>("fs.delete", "Delete a file or directory")
-    .description("Deletes a file, or a directory (recursive for a non-empty one). Needs a person's approval.")
+    .description("Deletes a file, or a directory (recursive for a non-empty one). A person's approval is required, except when an agent deletes inside the conversation's project: there it is ordinary work. The project root, `.git` and secrets files are refused.")
     .tier(Tier::Destructive)
     .effect(Effect::Data)
     .agent_safe()
