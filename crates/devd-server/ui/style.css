@@ -2410,6 +2410,12 @@ pre.code {
   .page-head { gap: var(--s2); }
   .page-sub { font-size: var(--text-xs); }
   .page-actions { margin-left: 0; width: 100%; }
+  /* On a phone a row has no room for a long title and four controls on one
+     line. Keep the name and its status on the first line, then put the actions
+     underneath, where they stay visible and large enough to tap. */
+  .ui-row { flex-wrap: wrap; row-gap: var(--s2); }
+  .ui-row-main { flex-basis: calc(100% - 32px); }
+  .ui-row-actions, .ui-row-actions.hover { flex-basis: 100%; opacity: 1; justify-content: flex-end; flex-wrap: wrap; }
   .section-title { margin-top: var(--s4); }
   .quick-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .presets, .preset-grid { grid-template-columns: minmax(0, 1fr); }
@@ -2978,6 +2984,11 @@ textarea,
 .ui-row-actions { flex: none; display: flex; align-items: center; gap: var(--s2); }
 .ui-row-actions.hover { opacity: 0; transition: opacity var(--base); }
 .ui-row:hover .ui-row-actions.hover, .ui-row:focus-within .ui-row-actions.hover { opacity: 1; }
+/* A touch screen cannot hover. Without this, a row's Manage, Open, Stop and
+   Remove controls stay transparent and a phone or tablet has no way to act. */
+@media (hover: none) {
+  .ui-row-actions.hover { opacity: 1; }
+}
 .ui-row-accent { background: var(--accent-quiet); }
 .ui-row-accent:hover { background: var(--accent-quiet); }
 .ui-row-accent::after { content: ""; position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px; border-radius: 2px; background: var(--accent); }

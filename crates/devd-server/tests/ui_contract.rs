@@ -424,3 +424,37 @@ fn the_script_is_valid_javascript() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn row_actions_are_visible_without_hover_on_touch_and_narrow_windows() {
+    // A phone cannot hover. The rows use a hover-only reveal for Manage, Open,
+    // Stop and Remove, so without an explicit touch rule those controls are in
+    // the document but invisible and unreachable.
+    assert!(
+        CSS.contains("@media (hover: none) {\n  .ui-row-actions.hover { opacity: 1; }\n}"),
+        "touch screens need the row actions visible"
+    );
+    let narrow = &CSS[CSS.find("@media (max-width: 720px)").expect("the narrow layout")..];
+    assert!(
+        narrow.contains(".ui-row { flex-wrap: wrap; row-gap: var(--s2); }"),
+        "the row wraps on a phone"
+    );
+    assert!(
+        narrow.contains(".ui-row-actions, .ui-row-actions.hover { flex-basis: 100%; opacity: 1;"),
+        "the actions get their own line on a phone"
+    );
+}
+
+#[test]
+fn the_setup_sheet_reads_the_runtime_kind_where_runtime_list_puts_it() {
+    // runtime.list returns each runtime as { runtime: { kind, ... } }. Reading
+    // `kind` off the row itself never matches, so a machine that already had
+    // PHP was told to install it again and the sheet stopped before nginx.
+    for line in APP.lines().filter(|l| l.contains("runtime.install")) {
+        assert!(
+            !line.contains("r.kind === \"php\""),
+            "a runtime row keeps its kind under `runtime`: {line}"
+        );
+    }
+    assert!(APP.contains("r.runtime && r.runtime.kind === \"php\""), "the sheet skips PHP that is already installed");
+}

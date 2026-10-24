@@ -1277,10 +1277,10 @@
     { name: "nginx", label: "nginx", note: "web server" },
     { name: "apache", label: "Apache", note: "reads .htaccess; use the one you already have", find: true, download: true },
     { name: "mariadb", label: "MariaDB", note: "database" },
-    { name: "redis", label: "Redis", note: "cache, queues and sessions; uses the one you already have", find: true, download: false },
+    { name: "redis", label: "Redis", note: "cache, queues and sessions; downloaded and checked, or the one you already have", find: true, download: true },
     { name: "postgres", label: "PostgreSQL", note: "uses the one you already have", find: true, download: false },
     { name: "mongodb", label: "MongoDB", note: "uses the one you already have", find: true, download: false },
-    { name: "memcached", label: "Memcached", note: "uses the one you already have", find: true, download: false },
+    { name: "memcached", label: "Memcached", note: "object cache; downloaded and checked, or the one you already have", find: true, download: true },
     { name: "mailpit", label: "Mailpit", note: "catches the mail your applications send" },
     { name: "php-cgi", label: "php-cgi", note: "PHP FastCGI listener, built from the installed runtime" }
   ];
@@ -1811,7 +1811,7 @@
       }),
       uiRow({ title: "Runtime", sub: esc(php) + (row.upstream_listening === false ? " (not running)" : "") }),
       uiRow({ title: "TLS", sub: site.tls_mode === "off" ? "off" : row.certificate ? "HTTPS, certificate present" : "HTTPS, no certificate yet" }),
-      uiRow({ title: "Database", sub: site.db_name ? '<span class="mono">' + esc(site.db_name) + "</span>" : "none", actions: '<button type="button" class="btn btn-mini btn-ghost" data-action="site-tab" data-tab="db">Database</button>' }),
+      uiRow({ title: "Database", sub: site.db_name ? '<span class="mono">' + esc(site.db_name) + "</span>" : "not managed by devd", actions: '<button type="button" class="btn btn-mini btn-ghost" data-action="site-tab" data-tab="db">Database</button>' }),
       uiRow({ title: "Sharing", sub: row.shared ? '<a href="' + attr(row.shared) + '" target="_blank" rel="noreferrer">' + esc(row.shared) + "</a>" : "only on this machine" })
     ];
     var settings = uiList([
@@ -1830,7 +1830,7 @@
     var open = '<button type="button" class="btn btn-mini btn-ghost" data-action="nav" data-view="databases">All databases</button>';
     if (!db) {
       return uiHead("Database", null, "") +
-        uiEmpty("No database", "This site was created without one. Database users and backups are under Server \u2192 Databases.", '<button type="button" class="btn btn-primary" data-action="nav" data-view="databases">Open Databases</button>');
+        uiEmpty("No database managed by devd", "This site was created without one. If the application uses SQLite or a database on another server, it is not managed here. Database users and backups are under Server \u2192 Databases.", '<button type="button" class="btn btn-primary" data-action="nav" data-view="databases">Open Databases</button>');
     }
     var data = OPS.data.db;
     var backups = data ? ((data[1] && data[1].schedules) || []).filter(function (b) { return String(b.database) === String(db); }) : [];
@@ -2175,7 +2175,7 @@
     function show() { uiSheet("Setting up devd", setupProgress(steps)); }
     function next(i) {
       if (i >= plan.length) {
-        steps.push({ label: "Done. Open Operations to look after a site, or create one.", state: "done", note: "" });
+        steps.push({ label: "Done. Open a site from Sites to look after it, or create one.", state: "done", note: "" });
         show();
         return loadServer().then(render);
       }
@@ -2199,7 +2199,7 @@
     var profile = (el("setup-profile") && el("setup-profile").value) || "local";
     var web = (state.session && state.session.settings && state.session.settings.web_server) || "nginx";
     var plan = [
-      { label: "Install PHP " + (php === "latest" ? "(latest stable)" : php), go: function () { return skipIf((state.server.runtimes || []).some(function (r) { return r.kind === "php"; }), function () { return run("runtime.install", { kind: "php", version: php }); }); } },
+      { label: "Install PHP " + (php === "latest" ? "(latest stable)" : php), go: function () { return skipIf((state.server.runtimes || []).some(function (r) { return r.runtime && r.runtime.kind === "php"; }), function () { return run("runtime.install", { kind: "php", version: php }); }); } },
       { label: "Install " + web, go: function () { return skipIf(managedService(web), function () { return run("service.install", { name: web }); }); } }
     ];
     chosen.forEach(function (s) {
@@ -2440,7 +2440,7 @@
       });
     });
     var found = inventoryRows();
-    var missing = KNOWN_SERVICES.filter(function (k) { return !byName[k.name]; })
+    var missing = KNOWN_SERVICES.filter(function (k) { return !byName[k.name] && !(k.name === "php-cgi" && rows.some(function (r) { return /^php-cgi/.test(r.name); })); })
       .filter(function (k) {
         var tool = k.name === "postgres" ? "postgresql" : k.name;
         return !k.find || k.name === "apache" || !(state.server.inventory || []).some(function (v) { return v.tool === tool && v.path; });
@@ -2499,6 +2499,48 @@
 
   // ------------------------------------------------------------------ runtimes
 
+  /* php and composer from a terminal. devd keeps one folder of launchers; this shows whether that
+     folder is on the person's PATH and lets them put it there (or take it off). */
+  var SHELL = { data: null, loading: false };
+
+  function loadShell() {
+    SHELL.loading = true;
+    return read("shell.status").then(function (d) { SHELL.data = d; }, function () { SHELL.data = { error: true }; }).then(function () {
+      SHELL.loading = false;
+      if (state.view === "runtimes") renderRuntimes();
+    });
+  }
+
+  function shellPanel() {
+    var d = SHELL.data;
+    if (!d) {
+      if (!SHELL.loading) loadShell();
+      return "";
+    }
+    if (d.error) return "";
+    var have = [];
+    if (d.php_installed) have.push("php");
+    if (d.composer_installed) have.push("composer");
+    var sub = !have.length
+      ? "Once a PHP is installed, php and composer work in any terminal."
+      : d.on_path
+        ? have.join(" and ") + (have.length === 1 ? " works" : " work") + " in new terminals, using the PHP of the folder you are in."
+        : "New terminals will not find " + have.join(" or ") + " until devd's folder is on your PATH.";
+    var actions = "";
+    if (d.php_installed) {
+      actions += d.on_path
+        ? '<button type="button" class="btn btn-mini btn-ghost" data-action="shell-path" data-mode="disable">Take off PATH</button>'
+        : '<button type="button" class="btn btn-mini btn-primary" data-action="shell-path" data-mode="enable">Add to PATH</button>';
+      if (!d.composer_installed) actions += '<button type="button" class="btn btn-mini" data-action="install-composer">Install Composer</button>';
+    }
+    return uiHead("Command line") + uiList([uiRow({
+      dot: d.on_path && have.length ? "ok" : "off",
+      title: "php and composer in any terminal",
+      sub: esc(sub),
+      actions: actions
+    })]);
+  }
+
   function renderRuntimes() {
     if (state.view !== "runtimes") return;
     var q = state.filters.runtimes || "";
@@ -2530,7 +2572,7 @@
         (rows.length ? uiList(rows) : '<div class="ui-quiet">' + esc(kind.note) + " \u2014 not installed.</div>") +
         (kind.kind === "php" ? phpBody : "");
     });
-    el("main").innerHTML = page("Runtimes", "", "", body.join("") +
+    el("main").innerHTML = page("Runtimes", "", "", shellPanel() + body.join("") +
       '<div class="ui-more">Each runtime is downloaded from its maker and checked against the digest they publish. A project can use its own version with <span class="mono">devd runtime pin</span>. PHP limits for one site are set on that site\'s page.</div>');
   }
 
@@ -6782,7 +6824,19 @@
       var r = findRequirement(n.dataset.id);
       if (!r) return;
       var fix = r.fix || {};
-      if (fix.capability) return run(fix.capability, fix.args || {});
+      if (fix.capability) {
+        // The list was read before the fix ran, so it still says the thing is
+        // missing. Read it again, and redraw the sheet if it is the one open.
+        return Promise.resolve(run(fix.capability, fix.args || {})).then(function () {
+          return read("setup.requirements").catch(function () { return null; });
+        }).then(function (fresh) {
+          if (!fresh) return;
+          AI.requirements = fresh;
+          if (AI.home) AI.home.requirements = fresh;
+          if (document.querySelector(".ui-sheet .req-row")) openSetupSheet();
+          if (state.view === "home") render();
+        });
+      }
       if (fix.view) return navigate(fix.view);
       return ACTIONS["req-how"](n);
     },
@@ -7353,9 +7407,22 @@
       });
     },
 
+    "shell-path": function (node) {
+      run(node.dataset.mode === "disable" ? "shell.path_disable" : "shell.path_enable", {}).then(function (o) {
+        if (o) toast("info", node.dataset.mode === "disable" ? "devd's folder is off your PATH" : "open a new terminal to use php and composer");
+        return loadShell();
+      });
+    },
+    "install-composer": function () {
+      toast("info", "downloading Composer and checking it against the published digest");
+      run("composer.install", {}).then(function () { return loadShell(); });
+    },
     "install-runtime": function (node) {
       toast("info", "installing " + node.dataset.kind + " — the vendor download can take a minute");
-      act("runtime.install", { kind: node.dataset.kind, version: "latest" });
+      act("runtime.install", { kind: node.dataset.kind, version: "latest" }).then(function () {
+        SHELL.data = null;
+        if (state.view === "runtimes") renderRuntimes();
+      });
     },
 
     "remove-runtime": function (node) {
