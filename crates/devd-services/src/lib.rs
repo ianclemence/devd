@@ -1226,8 +1226,9 @@ pub fn service_argv(ctx: &Ctx, name: &str, port: Option<u16>) -> Result<Vec<Stri
             engines::argv(ctx, engine, &root, port)
         }
         "redis" => {
-            let exe = extras::redis_directory(ctx).join(extras::redis_exe_name());
-            Ok(vec![native(&exe), native(&extras::redis_config_path(ctx))])
+            let root = extras::redis_directory(ctx);
+            let exe = root.join(extras::redis_exe_name());
+            Ok(vec![native(&exe), extras::redis_config_arg(&root, &extras::redis_config_path(ctx))])
         }
         "mailpit" => {
             let exe = dir.join(extras::mailpit_exe_name());
@@ -1343,11 +1344,24 @@ pub fn planned_argv(ctx: &Ctx, name: &str) -> Result<Vec<String>> {
             "`{name}` is not a devd service; run `devd service install {name}`"
         ))
     })?;
-    serde_json::from_str(&service.argv).map_err(|e| {
+    current_argv(ctx, &service).map_err(|e| {
         DevdError::internal(format!(
             "the stored command for `{name}` is unreadable: {e}"
         ))
     })
+}
+
+/// The command a service starts with. It is the one stored at install time,
+/// except for Redis: the way its configuration path must be written depends on
+/// the build and was once wrong, so it is worked out again and a record written
+/// by an earlier devd starts too.
+fn current_argv(ctx: &Ctx, service: &Service) -> std::result::Result<Vec<String>, serde_json::Error> {
+    if service.kind == "redis" {
+        if let Ok(argv) = service_argv(ctx, "redis", service.port) {
+            return Ok(argv);
+        }
+    }
+    serde_json::from_str(&service.argv)
 }
 
 fn php_executable(ctx: &Ctx) -> Result<PathBuf> {
@@ -1489,7 +1503,7 @@ pub fn prune_php_services(ctx: &Ctx) -> Result<Vec<String>> {
 
 /// Build the spawn specification for a service.
 fn spawn_spec(ctx: &Ctx, service: &Service) -> Result<SpawnSpec> {
-    let argv: Vec<String> = serde_json::from_str(&service.argv)
+    let argv = current_argv(ctx, service)
         .map_err(|e| DevdError::internal(format!("unreadable command: {e}")))?;
     let (program, args) = argv
         .split_first()

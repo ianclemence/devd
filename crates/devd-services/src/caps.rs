@@ -449,7 +449,7 @@ fn register_service(reg: &mut Registry) -> Result<()> {
 fn install_plan(args: &InstallArgs) -> Result<Plan> {
     let def = services::definition(&args.name).ok_or_else(|| {
         DevdError::unsupported(format!(
-            "`{}` is not a service devd can install; installable services are nginx, apache, mariadb, redis and mailpit",
+            "`{}` is not a service devd can install; installable services are nginx, apache, mariadb, redis, memcached and mailpit",
             args.name
         ))
     })?;

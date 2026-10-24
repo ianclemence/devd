@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use devd_core::capability::Ctx;
 use devd_core::util;
-use devd_core::{DevdError, Result};
+use devd_core::Result;
 
 /// Where Mailpit takes mail from the applications.
 pub const SMTP_PORT: u16 = 1025;
@@ -58,6 +58,31 @@ pub fn redis_data_dir(ctx: &Ctx) -> PathBuf {
 /// The generated configuration.
 pub fn redis_config_path(ctx: &Ctx) -> PathBuf {
     ctx.paths.etc().join("redis").join("redis.conf")
+}
+
+/// The configuration path as `redis-server` must be given it.
+///
+/// The Redis build devd downloads for Windows is an MSYS program. It reads a
+/// path that starts with a drive letter as relative to the working directory
+/// and then cannot find its own configuration, exiting with an empty log. It
+/// accepts the same file as `/cygdrive/c/...`. A native build (an adopted
+/// Memurai, say) wants the ordinary path, so only a folder that carries the
+/// MSYS runtime is converted.
+pub fn redis_config_arg(root: &Path, config: &Path) -> String {
+    let plain = config.to_string_lossy().into_owned();
+    if !cfg!(windows) || !root.join("msys-2.0.dll").is_file() {
+        return plain;
+    }
+    cygdrive_path(&plain).unwrap_or(plain)
+}
+
+/// `C:\a\b` as `/cygdrive/c/a/b`, or `None` for a path without a drive letter.
+fn cygdrive_path(path: &str) -> Option<String> {
+    let mut chars = path.chars();
+    let drive = chars.next().filter(char::is_ascii_alphabetic)?;
+    let rest = chars.as_str().strip_prefix(':')?;
+    let rest = rest.replace('\\', "/");
+    Some(format!("/cygdrive/{}/{}", drive.to_ascii_lowercase(), rest.trim_start_matches('/')))
 }
 
 /// The text of `redis.conf`: loopback only, a snapshot on disk, logs to standard
@@ -189,15 +214,6 @@ pub fn point_php_at_mailpit(ctx: &Ctx) -> Result<Vec<String>> {
     Ok(changed)
 }
 
-/// Why Redis is adopted rather than downloaded on this platform.
-pub fn redis_download_refusal() -> DevdError {
-    DevdError::unsupported(
-        "devd does not download Redis for Windows: the available builds are third-party and publish no \
-         checksum devd could verify. Use the one you already have: \
-         `devd service find redis`, then `devd service adopt redis <folder>`",
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,6 +224,27 @@ mod tests {
         assert!(text.contains("bind 127.0.0.1") && text.contains("port 6380"));
         assert!(text.contains("dir \"C:/devd/etc/redis/data\""), "{text}");
         assert!(text.contains("protected-mode yes"));
+    }
+
+    #[test]
+    fn a_drive_path_becomes_a_cygdrive_path_for_the_msys_redis() {
+        assert_eq!(cygdrive_path("D:\\devd\\etc\\redis\\redis.conf").as_deref(), Some("/cygdrive/d/devd/etc/redis/redis.conf"));
+        assert_eq!(cygdrive_path("C:/a/b").as_deref(), Some("/cygdrive/c/a/b"));
+        assert_eq!(cygdrive_path("/etc/redis.conf"), None);
+    }
+
+    #[test]
+    fn a_folder_without_the_msys_runtime_gets_the_ordinary_path() {
+        let dir = std::env::temp_dir().join(format!("devd-redis-arg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let conf = dir.join("redis.conf");
+        assert_eq!(redis_config_arg(&dir, &conf), conf.to_string_lossy());
+        #[cfg(windows)]
+        {
+            std::fs::write(dir.join("msys-2.0.dll"), b"").unwrap();
+            assert!(redis_config_arg(&dir, &conf).starts_with("/cygdrive/"));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
