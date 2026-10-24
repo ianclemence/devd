@@ -59,7 +59,7 @@ fn explain(id: &str, state: &str, detail: &str) -> (String, Value) {
     let (text, fix): (String, Value) = match id {
         "git" => ("Git is needed for every repository feature, and for the isolated workspaces the agent team uses.".into(), json!({ "label": "Install Git", "capability": "toolchain.install", "args": { "tool": "git" } })),
         "port.http" | "port.https" => (
-            "Another program is using a port devd would serve sites on. devd itself is fine; start your sites on another port, or stop that program.".into(),
+            "Nothing is wrong if the program named above is devd's own nginx or Apache: it is expected to hold this port. If it is another program, start your sites on another port or stop that program.".into(),
             json!({ "label": "See what is using it", "view": "overview" }),
         ),
         "state" => (format!("devd's database could not be opened or is damaged ({detail}). Nothing is saved until this is fixed. Check free disk space and permissions on the devd directory."), json!({ "label": "Open diagnostics", "view": "system" })),
@@ -205,4 +205,22 @@ pub fn status(ctx: &Ctx) -> Result<Value> {
         "setup": setup, "attention": attention, "checks": rows,
         "checked_at": util::now(), "took_ms": started.elapsed().as_millis() as u64,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_port_note_does_not_call_devd_its_own_web_server_another_program() {
+        let (meaning, fix) = explain(
+            "port.http",
+            "degraded",
+            "80 is held by nginx.exe (pid 1) on 0.0.0.0:80",
+        );
+        assert!(!meaning.contains("80 is held"), "the detail is shown beside the note, not repeated in it: {meaning}");
+        assert!(meaning.contains("expected"), "{meaning}");
+        assert!(!meaning.contains("Another program"), "{meaning}");
+        assert_eq!(fix["view"], "overview");
+    }
 }

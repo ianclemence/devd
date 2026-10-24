@@ -120,7 +120,7 @@ pub fn list(ctx: &Ctx) -> Result<Value> {
             fix: Some(json!({
                 "label": "Install PHP",
                 "capability": "runtime.install",
-                "args": { "kind": "php" }
+                "args": { "kind": "php", "version": "latest" }
             })),
         });
     }
@@ -281,6 +281,28 @@ mod tests {
         assert_eq!(v["state"], "missing");
         assert!(v["required"].as_bool().unwrap());
         assert!(v["fix"]["label"].is_string());
+    }
+
+    #[test]
+    fn the_php_fix_names_a_version_because_runtime_install_requires_one() {
+        use devd_core::capability::Actor;
+        use devd_core::config::Settings;
+        use devd_core::events::EventBus;
+        use devd_core::paths::Paths;
+        use devd_core::state::Store;
+        use std::sync::Arc;
+
+        let d = tempfile::tempdir().unwrap();
+        let paths = Paths::rooted(d.path().join("home"));
+        paths.ensure().unwrap();
+        let store = Store::open_in_memory().unwrap();
+        store.migrate().unwrap();
+        let ctx = Ctx { store: Arc::new(store), paths: Arc::new(paths), settings: Arc::new(Settings::default()), events: EventBus::new(), actor: Actor::agent("t"), dry_run: false };
+        let all = list(&ctx).unwrap();
+        let php = all["requirements"].as_array().unwrap().iter().find(|r| r["id"] == "runtime:php").expect("a machine with no managed PHP is asked to install it");
+        assert_eq!(php["fix"]["capability"], "runtime.install");
+        assert_eq!(php["fix"]["args"]["kind"], "php");
+        assert!(php["fix"]["args"]["version"].is_string(), "the install capability rejects a call without a version: {php}");
     }
 
     #[cfg(windows)]
