@@ -96,6 +96,10 @@ pub fn ca_exists(ctx: &Ctx) -> bool {
 /// system's store by that name therefore reports another installation's CA as
 /// trusted, and deleting by that name removes every installation's CA. The
 /// serial identifies this certificate only.
+///
+/// Only the Windows certificate store addresses a root by serial; the Unix
+/// stores use the certificate itself, so this function has no caller there.
+#[cfg(windows)]
 fn ca_serial_hex(ctx: &Ctx) -> Option<String> {
     let pem = std::fs::read_to_string(ca_cert_path(ctx)).ok()?;
     let params = CertificateParams::from_ca_cert_pem(&pem).ok()?;
@@ -818,6 +822,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(c.paths.root());
     }
 
+    #[cfg(windows)]
     #[test]
     fn the_ca_serial_identifies_this_certificate() {
         let c = ctx("serial");
