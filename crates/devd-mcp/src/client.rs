@@ -402,7 +402,7 @@ impl Connection {
                 }
                 let value: Value = if text.0.trim().is_empty() {
                     return Err(DevdError::mcp(format!("`{name}` answered `{method}` with nothing")));
-                } else if text.0.trim_start().starts_with("event:") || text.0.contains("\ndata:") {
+                } else if text.0.trim_start().starts_with("event:") || text.0.trim_start().starts_with("data:") || text.0.contains("\ndata:") {
                     sse_response(&text.0, id)?
                 } else {
                     serde_json::from_str(&text.0).map_err(|e| DevdError::mcp(format!("`{name}` answered `{method}` with data that is not JSON: {e}")))?
@@ -432,6 +432,11 @@ impl Connection {
                         description: item.get("description").and_then(Value::as_str).unwrap_or("").to_string(),
                         schema: item.get("inputSchema").cloned().unwrap_or_else(|| json!({ "type": "object" })),
                     });
+                    if out.last().map(|t| t.schema.to_string().len() > 64_000).unwrap_or(false) {
+                        // A tool whose schema is larger than this cannot be a sane argument contract, and
+                        // handing it to a model would spend the context before the work starts.
+                        out.pop();
+                    }
                 }
             }
             cursor = result.get("nextCursor").and_then(Value::as_str).map(str::to_string);

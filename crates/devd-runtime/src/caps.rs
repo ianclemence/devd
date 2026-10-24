@@ -326,6 +326,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
     )?;
 
     reg.define::<PinsArgs>("runtime.pins", "List the runtime versions projects are pinned to")
+    .description("Lists the runtime versions pinned with `devd runtime use`, for one project or for every project, by project, runtime kind and version. A pin decides which `php`, `node` or `composer` runs in that folder; it is not a record of what is installed.")
     .group("runtime")
     .tier(Tier::Read)
     .effect(Effect::Read)

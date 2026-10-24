@@ -37,11 +37,11 @@ A client configuration looks like this:
 ## Five tools, and they do not grow
 
 The obvious design is one MCP tool per capability. That is the design that gets
-worse every time the product gets better: 98 capabilities today, across Git,
-runtimes, services, sites, TLS, the database and hosts, with DNS, agents and
-deployment still to come, would be a tool list hundreds of entries long, loaded
-into every conversation whether or not it is relevant, and regenerated whenever
-the registry changed.
+worse every time the product gets better: nearly 400 capabilities today, across
+Git, runtimes, services, sites, TLS, the database, agents, operations and remote
+servers, would be a tool list hundreds of entries long, loaded into every
+conversation whether or not it is relevant, and regenerated whenever the registry
+changed.
 
 `devd` publishes **discovery** tools that read the registry instead:
 
@@ -160,7 +160,7 @@ devd's; the tools are not. That is the whole design:
 | --- | --- | --- | --- |
 | `mcp.list` | read | anyone | The configured servers: transport, enabled, trust, tool count and last error. Environment **names** only, never values. |
 | `mcp.add` | write | a person | Validate and store a server: a `command` (stdio) or a `url` (http), arguments, environment, working directory, timeout. |
-| `mcp.update` | write | a person | Replace that definition; the next call reconnects. |
+| `mcp.update` | write | a person | Change that definition; omitted fields keep their stored value (an empty environment clears it), and the next call reconnects. |
 | `mcp.remove` | write | a person | Forget the server and delete its owner-only environment file. The program itself is not uninstalled. |
 | `mcp.enable` | write | a person | Turn it on or off without losing the definition. |
 | `mcp.trust` | write | a person | `ask`, `allow` or `deny` for agents. This is the security decision. |
@@ -231,7 +231,7 @@ that external tools are prefixed, and that a denied server is not offered.
 
 ## Testing
 
-24 unit tests and 3 end-to-end tests in `devd-mcp`:
+24 unit tests and 3 end-to-end tests in `devd-mcp` (26 unit tests including the argument-redaction and address cases):
 
 * the protocol: `initialize` (including echoing an unknown version), notifications
   getting no reply, an unknown method, a missing required argument;

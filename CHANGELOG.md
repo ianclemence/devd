@@ -74,6 +74,20 @@ may change capability identifiers where the design was wrong.
 - **An agent cannot hand an interpreter code through `project.exec`.** `php -r`, `node -e`,
   `python -c`, `npx -c`, `ruby -e` and `php artisan tinker` are refused for an agent, with the flag
   named; a person at the command line is not restricted. The plan says it before anything runs.
+- **A credential in an MCP server's arguments is redacted** wherever the server is listed or described,
+  including in plans a person is asked to approve. An MCP address carrying a username or password is
+  refused; a credential-looking URL query value is redacted. Secrets belong in the owner-only
+  environment file. An external server's own tool description and schema are capped before they reach
+  the model.
+- **An MCP server can be edited from the window**, and an update keeps every field it was not given:
+  trust, enabled, timeout, arguments and the stored environment are no longer reset by changing one
+  thing. "Keep" is the default, so a partial edit cannot silently un-trust a server.
+- **The interface was audited as a system**: six unused icon symbols were removed and every remaining
+  icon resolves; the tertiary text colour now clears 5:1 and control borders have a 3:1 token; selects
+  have a consistent chevron, dark option menu, hover and focus state, and no longer fall back to the
+  system's white dropdown. Create/read/update/delete was exercised against a disposable home for
+  projects, sites, env, cron, schedules, todos, notes, MCP servers and providers (23 paths), including
+  that removing a site or project never deletes its folder.
 - **A PHP pin left on a site that does not serve PHP no longer steers the terminal.** The launcher
   follows the site's effective serving, so an unused pin falls through to the project pin or the
   default.

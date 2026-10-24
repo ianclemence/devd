@@ -127,6 +127,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
     )?;
 
     reg.define::<SiteName>("share.stop", "Close a site's public link")
+    .description("Closes the public link a site opened with share.start and stops its tunnel. The site keeps serving locally. Idempotent: a site with no open link is reported as such.")
     .group("share")
     .tier(Tier::Write)
     .effect(Effect::Remote)
@@ -141,6 +142,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
     )?;
 
     reg.define::<NoArgs>("share.list", "List the open public links")
+    .description("Lists the sites currently reachable from the internet through a Cloudflare quick tunnel, with each site's address and when the link expires.")
     .group("share")
     .tier(Tier::Read)
     .effect(Effect::Read)

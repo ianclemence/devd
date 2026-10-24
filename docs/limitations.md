@@ -35,9 +35,14 @@ A Composer installed by winget (`Composer.Composer`) is the vendor's own launche
   devd does not start the dev server for you through a site.
 * **The MCP client speaks stdio and Streamable HTTP, not the older HTTP+SSE transport.** A server that only
   offers the two-endpoint SSE transport is not usable yet; it says so when it is added rather than being
-  half-supported. Tool calls are not streamed and cannot be cancelled while the server is working: the Stop
-  button stops the agent between steps, not a tool already in flight. A stdio server runs as you, with your
-  filesystem access; `mcp.trust allow` is the decision to let a model use whatever it can do.
+  half-supported. Custom HTTP request headers are not configurable: an http server is reached by its URL,
+  and a URL carrying a username or password is refused. Put a token in `env` (owner-only file) and have the
+  server read it there; an argument or URL query that looks like a credential is redacted in the list, but
+  arguments are still stored in the database. Tool calls are not streamed and cannot be cancelled while the
+  server is working: the Stop button stops the agent between steps, not a tool already in flight. A stdio
+  server runs as you, with your filesystem access; `mcp.trust allow` is the decision to let a model use
+  whatever it can do. A server controls its own tool name, description and schema; they are shown to the
+  model (description capped), so add a server you trust not to inject instructions through them.
 
 ## Not implemented at all
 

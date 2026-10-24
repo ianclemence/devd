@@ -150,9 +150,11 @@ logs/             service and session logs
 | [`docs/reference.md`](docs/reference.md) | Every command, the settings table and how approval works. |
 | [`docs/platforms.md`](docs/platforms.md) | Windows, Linux and macOS: what differs and what is verified. |
 | [`docs/architecture.md`](docs/architecture.md) | The registry, the dispatcher, the state store, the crates. |
+| [`docs/domain.md`](docs/domain.md) | What a project, site, runtime, service and external MCP server are, and who owns each. |
 | [`docs/security.md`](docs/security.md) | The threat model and the specific protections. |
 | [`docs/app.md`](docs/app.md), [`docs/tui.md`](docs/tui.md), [`docs/mcp.md`](docs/mcp.md) | The window and its API, the terminal dashboard, the agent surface. |
 | [`docs/agents.md`](docs/agents.md) | The assistant, the team, skills and models. |
+| [`docs/operations.md`](docs/operations.md) | The server-panel operations: env, cron, workers, deploys, backups, servers. |
 | [`docs/workflows.md`](docs/workflows.md) | Reviews, agent memory and the Studio. |
 | [`docs/stacks.md`](docs/stacks.md), [`docs/stacks-engine.md`](docs/stacks-engine.md) | Supported stacks and how they are defined. |
 | [`docs/devd-yml.md`](docs/devd-yml.md) | Declaring a project's processes. |

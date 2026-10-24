@@ -111,16 +111,68 @@ fn server_named(ctx: &Ctx, name: &str) -> Result<McpServer> {
 
 fn describe(s: &McpServer) -> String {
     match s.transport.as_str() {
-        "http" => s.url.clone().unwrap_or_else(|| "(no address)".into()),
+        "http" => s.url.as_deref().map(redacted_url).unwrap_or_else(|| "(no address)".into()),
         _ => {
             let mut line = s.command.clone().unwrap_or_else(|| "(no command)".into());
-            for a in &s.args {
+            for a in redacted_args(&s.args) {
                 line.push(' ');
-                line.push_str(a);
+                line.push_str(&a);
             }
             line
         }
     }
+}
+
+/// Whether a query or argument name says its value is a credential.
+fn looks_secret(key: &str) -> bool {
+    ["token", "secret", "password", "passwd", "api-key", "apikey", "api_key", "authorization", "credential", "private-key"].iter().any(|m| key.contains(m))
+}
+
+/// A URL with a credential-looking query value replaced.
+fn redacted_url(url: &str) -> String {
+    let Some((base, query)) = url.split_once('?') else { return url.to_string() };
+    let pairs: Vec<String> = query
+        .split('&')
+        .map(|pair| match pair.split_once('=') {
+            Some((key, _)) if looks_secret(&key.to_ascii_lowercase()) => format!("{key}=[redacted]"),
+            _ => pair.to_string(),
+        })
+        .collect();
+    format!("{base}?{}", pairs.join("&"))
+}
+
+/// Arguments with a credential-looking value replaced.
+///
+/// Some MCP servers take a token as an argument (`--token=...`) instead of an environment variable.
+/// Arguments are stored in the database, so they are redacted wherever the list is returned to a
+/// model or written to a log; `env` is the private place for a secret.
+fn redacted_args(args: &[String]) -> Vec<String> {
+    let mut out = Vec::with_capacity(args.len());
+    let mut hide_next = false;
+    for a in args {
+        if hide_next {
+            hide_next = false;
+            if !a.starts_with('-') {
+                out.push("[redacted]".to_string());
+                continue;
+            }
+        }
+        let lower = a.to_ascii_lowercase();
+        if let Some(eq) = lower.find('=') {
+            let key = &lower[..eq];
+            if key.starts_with('-') && looks_secret(key) {
+                out.push(format!("{}=[redacted]", &a[..eq]));
+                continue;
+            }
+        }
+        if a.starts_with('-') && looks_secret(&lower) && !lower.contains('=') {
+            out.push(a.clone());
+            hide_next = true;
+            continue;
+        }
+        out.push(a.clone());
+    }
+    out
 }
 
 fn valid_env_key(k: &str) -> bool {
@@ -189,6 +241,11 @@ fn definition(a: &AddArgs, id: String, created_at: String) -> Result<McpServer> 
         (None, Some(u)) => {
             if !(u.starts_with("http://") || u.starts_with("https://")) {
                 return Err(DevdError::invalid("an MCP address must start with http:// or https://"));
+            }
+            // Credentials in a URL are visible in the list, the audit trail and the process table.
+            let authority = u.split("://").nth(1).unwrap_or("").split('/').next().unwrap_or("");
+            if authority.contains('@') {
+                return Err(DevdError::invalid("an MCP address must not contain a username or password; use `env`, which is stored privately"));
             }
             if !args.is_empty() {
                 return Err(DevdError::invalid("an http server takes no command arguments"));
@@ -277,15 +334,15 @@ pub fn register(reg: &mut Registry) -> Result<()> {
                             "name": s.name,
                             "transport": s.transport,
                             "command": s.command,
-                            "args": s.args,
-                            "url": s.url,
+                            "args": redacted_args(&s.args),
+                            "url": s.url.as_deref().map(redacted_url),
                             "cwd": s.cwd,
                             "enabled": s.enabled,
                             "trust": s.trust.as_str(),
                             "timeout_secs": s.timeout_secs,
                             "tool_count": s.tools.len(),
-                            "tools": s.tools.iter().map(|t| json!({ "name": t.name, "description": t.description })).collect::<Vec<_>>(),
-                            "last_error": s.last_error,
+                            "tools": s.tools.iter().map(|t| json!({ "name": t.name, "description": devd_core::util::truncate(&t.description, 500) })).collect::<Vec<_>>(),
+                            "last_error": s.last_error.as_deref().map(|e| devd_core::util::truncate(e, 1000)),
                             "env_keys": client::env_keys(&ctx.paths, &s.id),
                         })
                     })
@@ -295,7 +352,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         )?;
 
     reg.define::<AddArgs>("mcp.add", "Connect to another program's MCP server")
-        .description("Adds a Model Context Protocol server for the assistant to use, the way Claude Code connects to the servers configured for it. A stdio server is a program devd starts and speaks JSON-RPC to; an http server is a Streamable HTTP endpoint. The environment is stored in an owner-only file, never in the database. `trust` decides what agents may do with its tools: ask (default) makes every agent call wait for a person, allow lets them run, deny hides them. Human only: this decides which programs devd runs.")
+        .description("Adds a Model Context Protocol server for the assistant to use, the way Claude Code connects to the servers configured for it. A stdio server is a program devd starts and speaks JSON-RPC to; an http server is a Streamable HTTP endpoint. The environment is stored in an owner-only file, never in the database; a secret belongs in `env`, not in `args` (arguments are stored in the database and are redacted, not hidden, in the list). `trust` decides what agents may do with its tools: ask (default) makes every agent call wait for a person, allow lets them run, deny hides them. Human only: this decides which programs devd runs.")
         .group("mcp")
         .tier(Tier::Write)
         .effect(Effect::Config)
@@ -332,7 +389,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         )?;
 
     reg.define::<AddArgs>("mcp.update", "Change an MCP server")
-        .description("Replaces an MCP server's definition: its command or url, arguments, working directory, environment, timeout, trust and whether it is enabled. Omitted environment values are removed. Human only.")
+        .description("Changes an MCP server's definition. Omitted fields keep their stored value: an omitted environment keeps it (an empty one clears it), omitted arguments keep them, and omitted trust, enabled and timeout keep them. Human only.")
         .group("mcp")
         .tier(Tier::Write)
         .effect(Effect::Config)
@@ -349,13 +406,23 @@ pub fn register(reg: &mut Registry) -> Result<()> {
                 Ok(Plan::new("mcp.update", format!("change the MCP server `{}`", existing.name))
                     .step(format!("now: {}", describe(&existing)))
                     .step(format!("after: {after}"))
+                    .step(if a.env.is_some() { "replace the environment values" } else { "keep the stored environment" })
                     .step("the next call reconnects with the new definition"))
             },
             |ctx, a| {
                 let existing = server_named(ctx, &a.name)?;
-                let env = env_from(a.env.clone())?;
+                let env = match a.env.clone() {
+                    Some(e) => env_from(Some(e))?,
+                    None => client::read_env(&ctx.paths, &existing.id)?,
+                };
                 let mut server = definition(a, existing.id.clone(), existing.created_at.clone())?;
                 server.tools = existing.tools.clone();
+                // An omitted field is "leave it as it is", not "reset it".
+                server.args = a.args.clone().unwrap_or_else(|| existing.args.clone());
+                server.cwd = a.cwd.clone().or_else(|| existing.cwd.clone());
+                server.enabled = a.enabled.unwrap_or(existing.enabled);
+                server.trust = if a.trust.is_some() { trust_from(a.trust.as_deref())? } else { existing.trust };
+                server.timeout_secs = a.timeout_secs.unwrap_or(existing.timeout_secs);
                 ctx.store.mcp_put(&server)?;
                 client::save_env(&ctx.paths, &server.id, &env)?;
                 client::pool().forget(&server.id);
@@ -624,6 +691,10 @@ fn discover_configs(explicit: Option<&str>) -> Result<Discovered> {
         if !path.is_file() {
             continue;
         }
+        // A configuration file this big is not a server list; do not let it exhaust memory.
+        if std::fs::metadata(&path).map(|m| m.len() > 8 * 1024 * 1024).unwrap_or(false) {
+            continue;
+        }
         let text = std::fs::read_to_string(&path)?;
         let value: Value = match serde_json::from_str(&text) {
             Ok(v) => v,
@@ -668,4 +739,46 @@ fn discover_configs(explicit: Option<&str>) -> Result<Discovered> {
         }
     }
     Ok(Discovered { files, entries })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn v(s: &[&str]) -> Vec<String> {
+        s.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn a_credential_in_an_argument_is_redacted_but_ordinary_arguments_are_not() {
+        assert_eq!(redacted_args(&v(&["--token", "abc123"])), v(&["--token", "[redacted]"]));
+        assert_eq!(redacted_args(&v(&["--api-key=abc123"])), v(&["--api-key=[redacted]"]));
+        assert_eq!(redacted_args(&v(&["server.js", "--port", "3000"])), v(&["server.js", "--port", "3000"]));
+        // A flag after a value-looking flag is not the value.
+        assert_eq!(redacted_args(&v(&["--token", "--verbose"])), v(&["--token", "--verbose"]));
+        assert_eq!(redacted_url("https://example.test/mcp?token=abc&x=1"), "https://example.test/mcp?token=[redacted]&x=1");
+        assert_eq!(redacted_url("https://example.test/mcp"), "https://example.test/mcp");
+    }
+
+    #[test]
+    fn an_address_cannot_carry_a_username_or_password() {
+        let base = AddArgs {
+            name: "remote".into(),
+            command: None,
+            args: Some(vec![]),
+            url: None,
+            env: None,
+            cwd: None,
+            timeout_secs: None,
+            trust: None,
+            enabled: None,
+        };
+        let mut with_credentials = base.clone();
+        with_credentials.url = Some("https://user:pass@example.test/mcp".into());
+        assert!(definition(&with_credentials, "id".into(), "now".into()).is_err());
+
+        let mut plain = base;
+        plain.url = Some("https://example.test/mcp".into());
+        assert!(definition(&plain, "id".into(), "now".into()).is_ok());
+    }
 }

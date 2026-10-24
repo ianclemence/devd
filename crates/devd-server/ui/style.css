@@ -35,11 +35,15 @@
   --bg-hover: #1e1e22;
   --line: #26262b;
   --line-strong: #3a3a42;
+  /* A control's edge is a UI boundary, not decoration: 3:1 against the page. */
+  --line-control: #5c5c66;
+  --overlay: rgba(0, 0, 0, 0.66);
+  --selection: rgba(124, 245, 192, 0.24);
 
-  /* Text. */
+  /* Text. `--fg-dim` is the tertiary label colour; it clears 5:1 on a surface. */
   --fg: #ededf0;
   --fg-mute: #a5a5ad;
-  --fg-dim: #7a7a83;
+  --fg-dim: #85858e;
 
   /* The one accent: a mint that reads as "devd" without shouting. */
   --accent: #7cf5c0;
@@ -202,7 +206,7 @@ a { color: var(--accent); text-decoration: none; }
 button { font: inherit; color: inherit; }
 code, kbd, pre, samp { font-family: var(--mono); }
 
-::selection { background: rgba(124, 245, 192, 0.24); color: var(--fg); }
+::selection { background: var(--selection); color: var(--fg); }
 
 :focus-visible {
   outline: 2px solid var(--accent);
@@ -692,14 +696,14 @@ code, kbd, pre, samp { font-family: var(--mono); }
   height: var(--h-control);
   max-width: 220px;
   padding: 0 var(--s2);
-  background: none;
+  background-color: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius);
   color: var(--fg-mute);
   font-family: var(--sans);
   font-size: var(--text-sm);
 }
-.composer-picker:hover { background: var(--bg-hover); color: var(--fg); }
+.composer-picker:hover { background-color: var(--bg-hover); color: var(--fg); }
 .composer-picker:focus-visible { border-color: var(--accent-line); color: var(--fg); }
 
 /* The send control is an arrow, and a square while it stops. */
@@ -750,8 +754,12 @@ code, kbd, pre, samp { font-family: var(--mono); }
 .status-sep { color: var(--fg-dim); }
 .status-select {
   height: auto;
-  padding: 0;
-  background: none;
+  padding: 0 14px 0 0;
+  background-color: transparent;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237a7a83' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0 center;
+  background-size: 9px 9px;
   border: 0;
   color: var(--fg-mute);
   font-size: var(--text-xs);
@@ -934,13 +942,13 @@ code, kbd, pre, samp { font-family: var(--mono); }
   width: 100%;
   min-height: 30px;
   padding: 5px 9px;
-  background: var(--bg-deep);
-  border: 1px solid var(--line-strong);
+  background-color: var(--bg-deep);
+  border: 1px solid var(--line-control);
   border-radius: var(--radius);
   color: var(--fg);
   font-family: var(--sans);
   font-size: 12.5px;
-  transition: border-color var(--fast), box-shadow var(--fast);
+  transition: border-color var(--fast), box-shadow var(--fast), background-color var(--fast);
 }
 .input:focus, .textarea:focus, .select:focus {
   outline: none;
@@ -952,7 +960,35 @@ code, kbd, pre, samp { font-family: var(--mono); }
 .textarea { min-height: 76px; resize: vertical; line-height: 1.55; }
 .select { width: auto; max-width: 100%; }
 .select.compact { height: 24px; min-height: 24px; padding: 1px 6px; font-size: var(--text-xs); }
-select.input { appearance: auto; }
+
+/* A select is its own control, not a text input with a list attached: it gets
+   a consistent chevron, a pointer, room for the chevron, and options that match
+   the dark surfaces instead of the operating system's white menu. */
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 30px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a5a5ad' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  background-size: 12px 12px;
+  cursor: pointer;
+}
+select:hover:not(:disabled) {
+  border-color: var(--fg-dim);
+  background-color: var(--bg-surface);
+}
+select:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+select:disabled { opacity: 0.55; cursor: not-allowed; }
+select option, select optgroup { background: var(--bg-raised); color: var(--fg); }
+select optgroup { color: var(--fg-mute); font-style: normal; }
+.select.compact, select.compact { padding-right: 22px; background-position: right 5px center; background-size: 10px 10px; }
+.composer-picker { padding-right: 24px; background-position: right 6px center; background-size: 10px 10px; }
+select.input { appearance: none; }
 
 .field { display: flex; flex-direction: column; gap: 5px; margin-bottom: var(--s3); }
 .field:last-child { margin-bottom: 0; }
@@ -1511,7 +1547,7 @@ kbd {
   align-items: flex-start;
   justify-content: center;
   padding: 9vh var(--s4) var(--s4);
-  background: rgba(0, 0, 0, 0.66);
+  background: var(--overlay);
   backdrop-filter: blur(2px);
   animation: fade var(--fast) var(--ease-out);
   overflow-y: auto;

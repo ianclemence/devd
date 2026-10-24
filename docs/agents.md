@@ -13,7 +13,7 @@ The structure follows Anthropic's published guidance on building agents
 | Principle | In devd |
 |---|---|
 | Start with a simple loop; add structure only where it pays | One loop (`devd-agent::chat`): ask the model, run the tools it asked for, append results. The team is that loop plus a scheduler. |
-| Tools are the interface; keep the surface small and progressive | Five MCP tools (`devd_groups`, `devd_capabilities`, `devd_describe`, `devd_invoke`, `devd_doctor`) reach every capability. Agents load detail only when needed. |
+| Tools are the interface; keep the surface small and progressive | Five MCP tools (`devd_groups`, `devd_capabilities`, `devd_describe`, `devd_invoke`, `devd_doctor`) reach every capability; the built-in assistant also has a small set of direct names for the operations it uses constantly. Agents load detail only when needed. |
 | Keep the session log outside the model; the harness is replaceable | Conversations are append-only rows (`chat_events`). A restart loses nothing; runs resume from the log. |
 | Orchestrator and workers for work that splits | `team.*`: a planner, a deterministic scheduler, and specialist conversations. |
 | Verify with evidence, not claims | A task is accepted only when the tool results in its conversation show the work (below). |

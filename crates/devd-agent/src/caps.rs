@@ -1619,6 +1619,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
         },
     )?;
     reg.define::<ThreadArgs>("chat.chapters", "List a conversation's chapters")
+    .description("Lists the replies a person pinned as chapters in one conversation, with their titles and the event each points at. Chapters belong to the conversation they were pinned in; a fork starts without them.")
     .tier(Tier::Read)
     .effect(Effect::Read)
     .agent_safe()

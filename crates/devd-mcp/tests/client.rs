@@ -118,6 +118,39 @@ fn an_agent_waits_for_a_person_and_a_trusted_server_does_not() {
 }
 
 #[test]
+fn updating_a_server_keeps_the_fields_it_was_not_given() {
+    use std::collections::BTreeMap;
+
+    let (ctx, paths) = setup("update");
+    let mut reg = Registry::new();
+    devd_mcp::caps::register(&mut reg).unwrap();
+    let mut server = fake("edit", McpTrust::Allow);
+    server.args = vec!["--flag".into()];
+    server.enabled = false;
+    server.timeout_secs = 30;
+    ctx.store.mcp_put(&server).unwrap();
+    let mut env = BTreeMap::new();
+    env.insert("TOKEN".to_string(), "kept".to_string());
+    devd_mcp::client::save_env(&paths, &server.id, &env).unwrap();
+
+    let req = InvokeRequest {
+        id: "mcp.update".into(),
+        args: json!({ "name": "edit", "command": env!("CARGO_BIN_EXE_fake-mcp"), "timeout_secs": 45 }),
+        dry_run: false,
+    };
+    reg.dispatch(&ctx, &req, Approval::None).unwrap();
+
+    let got = ctx.store.mcp_server("edit").unwrap().unwrap();
+    assert_eq!(got.trust, McpTrust::Allow, "omitted trust is kept");
+    assert!(!got.enabled, "omitted enabled is kept");
+    assert_eq!(got.timeout_secs, 45, "a given timeout is used");
+    assert_eq!(got.args, vec!["--flag".to_string()], "omitted arguments are kept");
+    assert_eq!(devd_mcp::client::read_env(&paths, &server.id).unwrap()["TOKEN"], "kept", "omitted environment is kept");
+
+    let _ = std::fs::remove_dir_all(ctx.paths.root());
+}
+
+#[test]
 fn the_tools_offered_to_the_model_are_prefixed_and_come_from_the_servers() {
     let (ctx, _paths) = setup("external");
     ctx.store.mcp_put(&fake("files", McpTrust::Ask)).unwrap();

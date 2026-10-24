@@ -6099,6 +6099,7 @@
         title: esc(s.name) + ' <span class="dim">' + esc(s.transport) + "</span>",
         sub: sub,
         actions: mcpTrustSelect(s) +
+          '<button type="button" class="btn btn-mini" data-action="mcp-edit" data-name="' + attr(s.name) + '">Edit</button>' +
           '<button type="button" class="btn btn-mini" data-action="mcp-test" data-name="' + attr(s.name) + '">Test</button>' +
           '<button type="button" class="btn btn-mini btn-ghost" data-action="mcp-enable" data-name="' + attr(s.name) + '" data-on="' + (s.enabled ? "1" : "0") + '">' + (s.enabled ? "Turn off" : "Turn on") + "</button>" +
           '<button type="button" class="btn btn-mini btn-ghost" data-action="mcp-remove" data-name="' + attr(s.name) + '">Remove</button>'
@@ -7065,7 +7066,7 @@
       startChat(text, el("home-project").value);
     },
     "open-thread": function (n) {
-      AI.thread = { id: n.dataset.id, title: "", state: "idle", input_tokens: 0, output_tokens: 0 }; AI.lastId = 0; AI.events = []; AI.pending = [];
+      AI.thread = { id: n.dataset.id, title: "", state: "idle", input_tokens: 0, output_tokens: 0 }; AI.lastId = 0; AI.events = []; AI.pending = []; AI.todos = []; AI.todosAt = 0; AI.queued = 0;
       if (state.view !== "assistant") { state.view = "assistant"; render(); }
       writeRoute("assistant", false);
       pollThread(true).then(function () { renderAssistant(); });
@@ -7531,8 +7532,51 @@
 
     "schedule-delete": function (node) { uiConfirm({ title: "Delete the schedule " + node.dataset.name + "?", text: "Runs it already started are not touched.", confirm: "Delete", danger: true }).then(function (yes) { if (yes) run("schedule.delete", { name: node.dataset.name }).then(function () { return loadSchedules().then(renderSchedules); }); }); },
 
-    "mcp-add": function () {
-      var name = readInput("mcp-name");
+    "mcp-edit": function (node) {
+      var s = (MCP.servers || []).filter(function (x) { return x.name === node.dataset.name; })[0];
+      if (!s) return;
+      var args = (s.args || []).join("\n");
+      var trust = [["ask", "Ask me each time"], ["allow", "Let agents use it without asking"], ["deny", "Agents may not use it"]]
+        .map(function (o) { return '<option value="' + o[0] + '"' + (s.trust === o[0] ? " selected" : "") + ">" + esc(o[1]) + "</option>"; }).join("");
+      uiSheet("Edit " + s.name,
+        '<div class="stack">' +
+        '<div class="field"><label class="field-label">Program <span class="dim">(stdio)</span></label><input class="input mono" id="mcp-edit-command" value="' + attr(s.command || "") + '" spellcheck="false"></div>' +
+        '<div class="field"><label class="field-label">Address <span class="dim">(http)</span></label><input class="input mono" id="mcp-edit-url" value="' + attr(s.url || "") + '" spellcheck="false"></div>' +
+        '<div class="field"><label class="field-label">Arguments <span class="dim">(one per line)</span></label><textarea class="input mono" id="mcp-edit-args" rows="3" spellcheck="false">' + esc(args) + "</textarea></div>" +
+        (args.indexOf("[redacted]") >= 0 ? '<div class="notice notice-warn">A credential-looking argument is shown as [redacted] and is kept unchanged. To replace it, remove the server and add it again.</div>' : "") +
+        '<div class="inline"><div class="field grow"><label class="field-label">Timeout <span class="dim">(seconds)</span></label><input class="input" id="mcp-edit-timeout" value="' + attr(String(s.timeout_secs)) + '" inputmode="numeric"></div>' +
+        '<div class="field grow"><label class="field-label">Working directory</label><input class="input mono" id="mcp-edit-cwd" value="' + attr(s.cwd || "") + '" spellcheck="false"></div></div>' +
+        '<div class="inline"><div class="field grow"><label class="field-label">Agents</label><select class="select" id="mcp-edit-trust">' + trust + "</select></div>" +
+        '<label class="check"><input type="checkbox" id="mcp-edit-enabled"' + (s.enabled ? " checked" : "") + "> Enabled</label></div>" +
+        '<p class="dim">Environment: ' + esc((s.env_keys || []).join(", ") || "none") + ". It is kept as it is; remove and re-add the server to replace it.</p>" +
+        '<div class="ui-actions"><button type="button" class="btn btn-primary" data-action="mcp-edit-save" data-name="' + attr(s.name) + '">Save</button></div>' +
+        "</div>");
+    },
+    "mcp-edit-save": function (node) {
+      var name = node.dataset.name;
+      var command = readInput("mcp-edit-command");
+      var url = readInput("mcp-edit-url");
+      var args = (el("mcp-edit-args") ? el("mcp-edit-args").value : "").split(/\r?\n/).map(function (x) { return x.trim(); }).filter(Boolean);
+      var keepArgs = args.some(function (a) { return a.indexOf("[redacted]") >= 0; });
+      var cwd = readInput("mcp-edit-cwd");
+      var payload = {
+        name: name,
+        command: command || null,
+        url: url || null,
+        timeout_secs: parseInt(readInput("mcp-edit-timeout"), 10) || 120,
+        cwd: cwd || null,
+        trust: readInput("mcp-edit-trust") || "ask",
+        enabled: checked("mcp-edit-enabled")
+      };
+      if (!keepArgs) payload.args = args;
+      run("mcp.update", payload).then(function (o) {
+        if (!o) return;
+        closeDrawer();
+        toast("ok", "Changed " + name);
+        return loadMcp().then(renderMcp);
+      }).catch(function (e) { toast("error", e.message); });
+    },
+    "mcp-add": function () {      var name = readInput("mcp-name");
       var command = readInput("mcp-command");
       var url = readInput("mcp-url");
       var args = (el("mcp-args") ? el("mcp-args").value : "").split(/\r?\n/).map(function (x) { return x.trim(); }).filter(Boolean);
@@ -8420,6 +8464,11 @@
       AI.thread = { id: id, title: "", state: "running", input_tokens: 0, output_tokens: 0 }; AI.lastId = 0; AI.events = []; AI.pending = []; AI.queued = queued;
       state.view = "assistant"; render();
       read("chat.list").then(function (t) { AI.threads = t; return pollThread(true); }).then(renderAssistant);
+    }).catch(function (e) {
+      // The draft was cleared before the call; put it back so a refusal does not lose it.
+      var inp = el("chat-input");
+      if (inp && !inp.value) { inp.value = args.message || ""; AI.composer = inp.value; fitComposer(); syncComposerAction(); }
+      toast("error", e.message);
     });
   }
 
@@ -8637,9 +8686,10 @@
     else if (state.view === "home") load = loadHome;
     else if (state.view === "project") load = function () { return loadProject().then(function () { return loadTab(state.tab); }); };
     if (!load) return;
+    var view = state.view;
     LIVE.last = now;
     LIVE.busy = true;
-    load().then(function () { render(); }).catch(function () { /* the next tick tries again */ }).then(function () { LIVE.busy = false; });
+    load().then(function () { if (state.view === view) render(); }).catch(function () { /* the next tick tries again */ }).then(function () { LIVE.busy = false; });
   }
   setInterval(liveTick, 1000);
 

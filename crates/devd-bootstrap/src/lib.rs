@@ -5,7 +5,7 @@
 //! skill's capabilities against that same workspace. The CLI and the desktop
 //! shell both call this function. If they assembled their own registries, an
 //! agent connected over MCP and a button in the window could end up talking to
-//! different session managers - a bug that would look like a missing terminal.
+//! different registries - a bug that would look like a missing capability.
 
 use std::sync::Arc;
 
