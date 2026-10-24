@@ -176,6 +176,11 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             for warning in done.warnings {
                 outcome = outcome.warn(warning);
             }
+            if done.runtime.kind == "php" {
+                if let Some(note) = command_line_note(ctx) {
+                    outcome = outcome.warn(note);
+                }
+            }
             Ok(outcome)
         },
     )?;
@@ -250,6 +255,9 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         },
         |ctx, args| {
             let data = runtimes::remove(ctx, &args.kind, &args.version)?;
+            if args.kind == "php" {
+                refresh_launchers(ctx);
+            }
             Ok(Outcome::with_data(
                 format!("removed {} {}", args.kind, args.version),
                 data,
@@ -351,6 +359,24 @@ fn check_pin(ctx: &Ctx, args: &PinArgs) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Write or update the `php` and `composer` launchers for what is installed now.
+fn refresh_launchers(ctx: &Ctx) {
+    if let Ok(exe) = devd_core::util::cli_exe() {
+        let _ = devd_core::shims::ensure(&ctx.paths, &exe);
+    }
+}
+
+/// After a PHP install: make `php` runnable from a terminal, and say what is left
+/// for the person to do when it is not on their `PATH` yet.
+fn command_line_note(ctx: &Ctx) -> Option<String> {
+    refresh_launchers(ctx);
+    let state = devd_core::shims::path_state(&ctx.paths).ok()?;
+    if state.on_path || !state.commands.iter().any(|c| c == "php") {
+        return None;
+    }
+    Some("`php` is not on your PATH yet: run `devd path enable` once to use it from any terminal".to_string())
 }
 
 /// The plan for an install: resolve first, so the URL and digest are visible

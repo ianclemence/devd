@@ -180,6 +180,9 @@ Section "devd (required)" SecMain
   FileClose $9
 
   nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\add-to-path.ps1"'
+  ; devd's own folder of `php` and `composer` launchers. It is empty until PHP or Composer is
+  ; installed, and fills as they are, so nothing has to be added to PATH again afterwards.
+  nsExec::ExecToLog '"$INSTDIR\devd.exe" path enable --yes'
 
   CreateDirectory "$SMPROGRAMS\devd"
   CreateShortcut "$SMPROGRAMS\devd\devd.lnk" "$INSTDIR\devd-desktop.exe" "" "$INSTDIR\devd-desktop.exe" 0
@@ -219,6 +222,7 @@ Section "Uninstall"
   nsExec::ExecToLog 'taskkill /F /IM devd-desktop.exe'
   Sleep 500
 
+  nsExec::ExecToLog '"$INSTDIR\devd.exe" path disable --yes'
   nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\remove-from-path.ps1"'
 
   Delete "$SMPROGRAMS\devd\devd.lnk"

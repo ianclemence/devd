@@ -23,6 +23,7 @@ pub mod process;
 pub mod registry;
 pub mod repair;
 pub mod schedule;
+pub mod shims;
 pub mod state;
 pub mod store_ai;
 pub mod store_ops;

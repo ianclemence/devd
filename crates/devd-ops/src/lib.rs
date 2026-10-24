@@ -17,6 +17,7 @@
 pub mod caps;
 pub mod caps_more;
 pub mod caps_remote;
+pub mod caps_shell;
 pub mod cron;
 pub mod daemons;
 pub mod dbadmin;
@@ -31,6 +32,7 @@ pub mod ploi;
 pub mod remote;
 pub mod runner;
 pub mod servers;
+pub mod shell;
 pub mod ssh;
 
 use std::path::{Path, PathBuf};

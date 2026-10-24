@@ -24,6 +24,7 @@ devd-mcp = { path = "../devd-mcp" }
 devd-tui = { path = "../devd-tui" }
 devd-workspace = { path = "../devd-workspace" }
 devd-stacks = { path = "../devd-stacks" }
+devd-ops = { path = "../devd-ops" }
 
 clap = { workspace = true }
 serde = { workspace = true }

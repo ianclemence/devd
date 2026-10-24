@@ -87,6 +87,13 @@ impl Bootstrap {
         let store = Store::open(&paths.state_db())?;
         store.migrate()?;
 
+        // The launchers follow what is installed: written when PHP or Composer
+        // arrives, rewritten if devd moved, removed when what they run is gone.
+        // A failure here must never stop devd from starting.
+        if let Ok(exe) = devd_core::util::cli_exe() {
+            let _ = devd_core::shims::ensure(&paths, &exe);
+        }
+
         let git = Arc::new(GitService::discover(settings.git_executable.as_deref())?);
         let workspace = Workspace::new(Arc::new(store), Arc::new(paths.clone()))?;
 

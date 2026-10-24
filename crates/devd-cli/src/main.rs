@@ -255,6 +255,17 @@ pub(crate) enum Command {
         #[command(subcommand)]
         cmd: AutostartCommand,
     },
+    /// Make `php` and `composer` work from any terminal: `status`, `enable` or `disable`.
+    #[command(name = "path")]
+    PathSetup {
+        #[command(subcommand)]
+        cmd: PathCommand,
+    },
+    /// Install Composer, checked against the digest getcomposer.org publishes.
+    Composer {
+        #[command(subcommand)]
+        cmd: ComposerCommand,
+    },
     /// Check the environment for problems.
     Doctor,
     /// Rebuild a damaged state database from what can still be read. Close devd first; the damaged files are kept.
@@ -1269,6 +1280,26 @@ pub(crate) enum ScheduleCommand {
 }
 
 #[derive(Subcommand, Debug)]
+pub(crate) enum PathCommand {
+    /// Whether devd's `php` and `composer` are on your PATH, and which exist.
+    Status,
+    /// Put devd's folder first on your user PATH. No administrator rights; new terminals see it.
+    Enable,
+    /// Take it off again. Every other PATH entry is left alone.
+    Disable,
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum ComposerCommand {
+    /// Download and install the newest stable Composer.
+    Install {
+        /// Replace an installed Composer.
+        #[arg(long)]
+        force: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 pub(crate) enum AutostartCommand {
     /// Whether the stack starts when you sign in.
     Status,
@@ -1665,7 +1696,57 @@ pub(crate) enum ResetArg {
     Hard,
 }
 
+/// What a launcher needs to decide which program to run: the existing state, read, and nothing
+/// else. It does not start the application (which needs Git, registers every capability and
+/// would create a missing home), so `php` works on a machine without Git and is quick.
+fn shim_context() -> Result<devd_core::capability::Ctx> {
+    let paths = Paths::discover()?;
+    if !paths.state_db().is_file() {
+        return Err(DevdError::not_found(format!(
+            "devd has no data at {} yet; if devd lives elsewhere, set DEVD_HOME to its folder",
+            paths.root().display()
+        )));
+    }
+    let settings = devd_core::config::Settings::load(&paths.settings_file())?;
+    let store = devd_core::state::Store::open(&paths.state_db())?;
+    Ok(devd_core::capability::Ctx {
+        store: Arc::new(store),
+        paths: Arc::new(paths),
+        settings: Arc::new(settings),
+        events: devd_core::events::EventBus::new(),
+        actor: devd_core::capability::Actor::human(devd_core::capability::Surface::Cli),
+        dry_run: false,
+    })
+}
+
+/// `devd shim <command> [arguments]`: what the `php` and `composer` launchers call.
+///
+/// It is read from the raw arguments, before the command line is parsed, because devd's own
+/// options (`--json`, `--plan`, `-y`) would otherwise take arguments meant for the program, and
+/// `php artisan route:list --json` is a real command.
+fn shim_main(raw: &[String]) -> i32 {
+    let Some((command, args)) = raw.split_first() else {
+        eprintln!("devd: shim needs a command name (php or composer)");
+        return 2;
+    };
+    let result = shim_context().and_then(|ctx| {
+        let cwd = std::env::current_dir()?;
+        devd_ops::shell::run(&ctx, command, args, &cwd)
+    });
+    match result {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!("devd: {e}");
+            exit_code_for(&e)
+        }
+    }
+}
+
 fn main() {
+    let raw: Vec<String> = std::env::args().skip(1).collect();
+    if raw.first().map(String::as_str) == Some("shim") {
+        std::process::exit(shim_main(&raw[1..]));
+    }
     let cli = Cli::parse();
     match run(cli) {
         Ok(code) => std::process::exit(code),
@@ -1841,6 +1922,21 @@ fn run(cli: Cli) -> Result<i32> {
             app.invoke(id, serde_json::json!({}))?;
             Ok(0)
         }
+        Command::PathSetup { cmd } => {
+            let id = match cmd {
+                PathCommand::Status => "shell.status",
+                PathCommand::Enable => "shell.path_enable",
+                PathCommand::Disable => "shell.path_disable",
+            };
+            app.invoke(id, serde_json::json!({}))?;
+            Ok(0)
+        }
+        Command::Composer { cmd } => {
+            match cmd {
+                ComposerCommand::Install { force } => app.invoke("composer.install", serde_json::json!({ "force": force }))?,
+            }
+            Ok(0)
+        }
         Command::Doctor => unreachable!("handled before bootstrap"),
         Command::RepairState => unreachable!("handled before bootstrap"),
         Command::Tui => {
@@ -1975,9 +2071,13 @@ fn doctor(json: bool) -> Result<i32> {
 
     let mut checks = devd_core::doctor::core_checks(&paths, &settings);
     checks.push(app::git_check(settings.git_executable.as_deref()));
-    checks.extend(devd_runtime::doctor_check(&paths));
-    checks.extend(devd_services::doctor_check(&paths));
-    checks.extend(devd_sites::doctor_check(&paths));
+    // The component checks open the state database, which would create a home that is not
+    // there. With no home there is nothing for them to inspect.
+    if paths.root().exists() {
+        checks.extend(devd_runtime::doctor_check(&paths));
+        checks.extend(devd_services::doctor_check(&paths));
+        checks.extend(devd_sites::doctor_check(&paths));
+    }
 
     let failures = checks.iter().filter(|c| c.is_fail()).count();
 

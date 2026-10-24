@@ -85,11 +85,23 @@ impl Check {
 pub fn core_checks(paths: &Paths, settings: &Settings) -> Vec<Check> {
     let mut checks = Vec::new();
 
+    // A check is a question, not an installation: it must not create the home
+    // folder. `DEVD_HOME` may point at a folder nobody has made yet (a stale
+    // variable, a typo, a path on a drive that is not there), and making it
+    // here would leave a second, empty devd home behind.
+    let home_exists = paths.root().exists();
     checks.push(Check::ok("home", paths.root().display().to_string()));
 
-    match paths.ensure() {
-        Ok(()) => checks.push(Check::ok("layout", "all directories exist")),
-        Err(e) => checks.push(Check::fail("layout", e.to_string())),
+    if home_exists {
+        match paths.ensure() {
+            Ok(()) => checks.push(Check::ok("layout", "all directories exist")),
+            Err(e) => checks.push(Check::fail("layout", e.to_string())),
+        }
+    } else {
+        checks.push(Check::info(
+            "layout",
+            "this folder does not exist yet; devd creates it the first time something needs it",
+        ));
     }
 
     match settings.validate() {
@@ -103,7 +115,11 @@ pub fn core_checks(paths: &Paths, settings: &Settings) -> Vec<Check> {
         Err(e) => checks.push(Check::fail("settings", e.to_string())),
     }
 
-    checks.push(state_check(paths));
+    checks.push(if home_exists {
+        state_check(paths)
+    } else {
+        Check::info("state", "no state database yet")
+    });
     checks.extend(port_checks(settings));
     checks.push(www_root_check(paths, settings));
 
@@ -247,6 +263,21 @@ mod tests {
         let http = checks.iter().find(|c| c.name == "port.http").unwrap();
         assert_eq!(http.level, Level::Info, "{http:?}");
         let _ = std::fs::remove_dir_all(paths.root());
+    }
+
+    #[test]
+    fn a_check_does_not_create_a_home_that_is_not_there() {
+        let paths = scratch("absent");
+        assert!(!paths.root().exists());
+        let checks = core_checks(&paths, &Settings::default());
+        assert!(
+            !paths.root().exists(),
+            "doctor created {}",
+            paths.root().display()
+        );
+        assert!(!checks.iter().any(|c| c.is_fail()), "{checks:#?}");
+        assert_eq!(checks.iter().find(|c| c.name == "layout").unwrap().level, Level::Info);
+        assert_eq!(checks.iter().find(|c| c.name == "state").unwrap().level, Level::Info);
     }
 
     #[test]
