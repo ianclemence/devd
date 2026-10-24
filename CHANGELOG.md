@@ -99,6 +99,8 @@ may change capability identifiers where the design was wrong.
 
 - Migration 015 adds `mcp_servers`. It is additive: an older devd ignores the table, and an existing
   database gets it the first time this version starts.
+- Migration 016 adds `chat_queue` for input written while the assistant works; both migrations are
+  additive and an older devd ignores them.
 - `project.list` rows say `source: "site"` for a folder that is only known because a site serves it,
   and every row lists the sites that serve it.
 
