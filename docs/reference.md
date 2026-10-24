@@ -71,8 +71,11 @@ devd site create blog             # --host and --root override the defaults
 devd site create api --upstream 3000   # serve a running dev server at api.test
 devd site upstream api 5173       # point it at another port; omit to serve a directory again
 devd site list
-devd site park D:\www            # a site for every project directory in it
-devd site sync                    # pick up folders added since
+devd site discover                # what is in the parked folders and which could be sites; changes nothing
+devd site park D:\www            # look in this folder too; creates no site
+devd site sync                    # make sites of the projects that have a web entry point
+devd site sync blog shop          # only these
+devd site serving blog static     # what a directory serves: php or static (omit to read it from the folder)
 devd site parked
 devd site unpark D:\www           # its sites stay
 devd site fix-htaccess blog       # guard php_value lines so Apache accepts the .htaccess
@@ -268,7 +271,7 @@ written when `devd` changes a setting; missing keys take the default below.
 | `https_port` | `443` | Port for TLS. |
 | `www_root` | `<data>/www` | Where new projects are created. |
 | `web_server` | `nginx` | Web server driver. |
-| `primary_php` | newest installed | PHP version new sites use. |
+| `primary_php` | newest installed | The default PHP: what a site follows until someone pins a version for it with `site.set_php`, and what `php` runs outside any site. |
 | `php_workers` | `4` | PHP processes per version (1 to 16); nginx spreads requests across them. |
 | `php_profile` | `local` | `local` (generous limits) or `production` (128M memory, 5M uploads, 30 s). |
 | `git_executable` | `git` on `PATH` | Git binary to drive. |

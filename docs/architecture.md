@@ -93,12 +93,19 @@ from a different shell is the same request.
 | --- | --- | --- |
 | `Read` | Inspection. Changes nothing. | No |
 | `Write` | A reversible, project-scoped change. | No |
-| `Exec` | Runs a process to accomplish the task. | No |
+| `Exec` | Starts or stops something devd already manages. | No |
 | `Destructive` | Can lose data — history, uncommitted work, a file. | **Yes** |
 | `Remote` | Affects a machine `devd` does not own. | **Yes** |
+| `Admin` | Changes the machine outside devd's folder: the hosts file, the trust store, the user `PATH`. | **Yes** |
 
 Approval is required by the *tier*, not by the handler, so a new capability of
 the same risk inherits the gate. A handler cannot forget to ask.
+
+The tier says how much a capability can damage what devd manages. It does not say whose code runs. A
+capability whose caller *writes* the code devd will run (a cron command, a deploy script, an artisan command)
+is marked `agent_needs_approval`: an agent's call waits for a person to read it, whatever the tier, and a
+person calling it is not asked. A test walks the shipped registry for any that were missed. See
+[`domain.md`](domain.md#authority).
 
 A plan must be able to describe a destructive capability before it runs, so
 "requires approval" implies "supports a dry run". A test asserts that for every
@@ -315,9 +322,16 @@ devd-core  ←  devd-runtime  ←  devd-services  ←  devd-sites
   overwritten rather than merged. Config *content* uses forward slashes (nginx
   treats `\` as an escape); `argv` uses native paths, because arguments are
   passed as an array and never through a shell.
-* **`php-cgi` is not downloaded.** It is the `php-cgi.exe` of the primary PHP
-  runtime, turned into a service row on demand — by `service start php-cgi`, by
-  installing nginx, or by `stack up`. One FastCGI upstream serves every site.
+* **`php-cgi` is not downloaded.** It is the `php-cgi.exe` of each installed PHP
+  runtime, turned into a pool of service rows on demand — by `service start php-cgi`,
+  by installing nginx, or by `stack up`. A site is sent to the pool of the version it
+  runs, and **only a site that serves PHP has PHP in its configuration**: what a site
+  serves is decided once, in `devd-core::serving`, and both renderers follow it.
+* **A site is not a project.** A project is a codebase and a site is how part of it is
+  exposed over HTTP, so a project has zero, one or several sites. Finding projects,
+  registering sites, configuring them and activating names are separate steps. The
+  definitions, the precedence rules and who owns each piece of state are in
+  [`domain.md`](domain.md).
 
 ## Skill crates
 

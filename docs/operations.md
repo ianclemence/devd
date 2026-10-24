@@ -25,7 +25,9 @@ Open **Server > Sites**, choose **Manage** on a site, and use its tabs. The whol
 
 ## Who may do what
 
-Reads are free. Changing a project's own files or devd's records is `write`. Anything that **runs a command** (a cron job, a worker, a deploy script, saving a deploy script) is `exec`, so an agent can propose it and only you approve it. Restoring an earlier commit and emptying logs are `destructive`. Anything that changes the Ploi server is `remote`.
+Reads are free. Changing a project's own files or devd's records is `write`. Anything that runs a command is `exec`. Restoring an earlier commit and emptying logs are `destructive`. Anything that changes the Ploi server is `remote`.
+
+`exec` alone does not make an agent wait: it covers starting and stopping what devd already manages. What makes an agent wait for you is that **it wrote the code**: `cron.add`, `queue.add`, `deploy.script_set`, `deploy.vars_set`, `laravel.artisan` and `ploi.pull_script` take a command line or script from the caller, so when an agent calls them the request is queued with its plan (which shows the code) and nothing runs until you approve it. When you call them yourself you are not asked. (`deploy.run`, `cron.run` and the like run what was already saved and approved.)
 
 Secrets get extra care:
 

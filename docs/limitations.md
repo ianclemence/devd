@@ -5,7 +5,7 @@ partially, and the platform-specific behaviour worth knowing before relying on
 it. Each entry states the consequence and, where one exists, the change that
 would close it.
 
-This document describes the current release, v0.11.1. See
+This document describes the current release, v0.12.0. See
 [`CHANGELOG.md`](../CHANGELOG.md) for what it contains.
 
 ## The command line
@@ -13,6 +13,27 @@ This document describes the current release, v0.11.1. See
 `php` and `composer` in a terminal need devd's folder on your `PATH` (`devd path enable`, **Server → Runtimes → Command line**, or the Windows installer). A terminal opened before that does not see it. The launcher is not a shell function, so a program that starts `php` by an absolute path (`C:\...\php.exe`) is not redirected. Only `php` and `composer` have launchers; `node`, `npm`, `python` and `go` are not wrapped. The `PATH` edit on Linux and macOS is written and tested against a scratch file but has not been run on a real login shell.
 
 A Composer installed by winget (`Composer.Composer`) is the vendor's own launcher and needs `php` on `PATH`; with devd's folder on `PATH` it finds devd's PHP. `devd composer install` gives devd its own copy that does not depend on that.
+
+## Open decisions and known gaps
+
+* **`project.exec` and `project.run` are open to agents.** They run the stack's allow-listed programs and the
+  project's own tasks, without a shell. The allow-list includes interpreters (`php`, `node`, `python`), which can
+  run code given on their command line, so an agent can run code of its own through them. Gating them would
+  change the agent work loop and is a decision to make deliberately; the capabilities that take a command
+  line, script or steps directly are gated (`docs/domain.md`).
+* **Scheduled work runs only in an open devd process.** Cron jobs, scheduled backups and deploys and health
+  checks run inside the window, `devd ui` or `devd serve`; services outlive the window, these do not.
+  Diagnostics says when jobs are scheduled and nothing runs them. A hidden `devd serve` started at sign-in
+  (the existing user-level sign-in entry, no resident privileged service) would close the gap and is not built.
+* **Sites registered by older versions keep what was written into them.** Before this change, creating a site
+  pinned the default PHP into it. Nothing rewrites those records: such a pin is reported (`php_unused_pin` for a
+  site that does not serve PHP) and cleared with `site.set_php` and no version. A site that does serve PHP and was
+  pinned at creation keeps its pin until someone unpins it, which is the one thing a person must do by hand.
+* **A Node project with an `index.html` is detected as static.** Its `index.html` is usually a development
+  entry for a dev server, so the site page says a proxy site to the running dev server is usually the better fit.
+  devd does not start the dev server for you through a site.
+* **The Projects screen does not list each project's sites.** `project.list` returns them (`sites`) and the
+  site page shows its project; the Projects list itself has not been redrawn to show them.
 
 ## Not implemented at all
 
@@ -63,7 +84,7 @@ A portable stack (the other stack, XAMPP, WampServer) serves sites with Apache, 
 | Other stacks | devd |
 | --- | --- |
 | Apache | **Supported.** `devd service adopt apache <folder>` uses an existing Apache as it is (nothing in its folder is changed); `devd service install apache` downloads Apache Lounge's build and checks it against the SHA-256 Apache Lounge publishes. `devd web use apache` serves sites with it. Sites render to an `httpd.conf` with `AllowOverride All`, so `.htaccess` rewrites work. PHP runs through the same FastCGI listeners nginx uses, not `mod_php`, so an `.htaccess` that sets `php_value` or `php_flag` fails (Apache has no such directive without mod_php): move those to `.user.ini`. A request of the form `/index.php/extra` runs the script but sets no `PATH_INFO`. Apache is restarted rather than reloaded when sites change. Linux and macOS use nginx. |
-| Auto virtual hosts for every folder in `www` | **Supported.** `devd site park <folder>` (the projects root is always parked) makes `<folder>.test` of each project directory, serving `public/` when it has one and writing nothing into the project. `devd site sync` picks up folders added later; a site whose folder is gone is reported, not removed. |
+| Auto virtual hosts for every folder in `www` | **Supported for web projects.** `devd site discover` reports every project directory (what it is, the file that says so, whether it could be a site). `devd site sync` makes `<folder>.test` of each one that has a web entry point (an `index.php`, an `index.html` or PHP files), serving `public/` when it has one and writing nothing into the project; the plan names exactly what it will create. A Go module, a Node app with no `index.html`, a PHP library or an empty folder is a project, not a site, and is skipped with the reason. `devd site park <folder>` only adds a folder to look in. A site whose folder is gone is reported, not removed. |
 | Adding names to the hosts file | **Supported with a prompt.** `devd hosts sync --elevate` (the window's button) asks Windows for permission the way an installer does and runs the same sync elevated. devd never sees a password. |
 | MySQL 8 | devd manages **MariaDB**, not MySQL. `devd db copy <database> --from-port 3306` moves a database from a running MySQL into devd's MariaDB (dump, create, restore; the source is only read), and `db dump` / `db restore` do the two halves. Sources must be on this machine. Dumping from MySQL 8 with MariaDB's client works for ordinary schemas; a database that uses MySQL-only features (the JSON schema validation functions, `caching_sha2_password` accounts the client lacks) may not restore. |
 | Redis | **Supported by adoption.** `devd service adopt redis <folder>` runs an existing Redis under devd, on its own port, bound to 127.0.0.1. `devd service install redis` downloads Redis 8 from `redis-windows/redis-windows`, checked against the SHA-256 GitHub records for the file; Redis itself publishes no Windows build, so this is a third party and devd says so. Adopting an existing folder still works. On Linux and macOS the system's Redis is adopted after the package check. The window's *Found on this machine* list can also start a detected Redis through the toolchain; use one or the other. |

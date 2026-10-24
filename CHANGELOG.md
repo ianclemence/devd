@@ -10,6 +10,57 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.12.0] - 2026-10-24 - Sites know what they serve; agents wait for code they write
+
+### Security
+
+- **An agent can no longer have devd run code it wrote without a person's approval.** The Exec tier needs no
+  approval by design (it starts what devd already manages), but `cron.add`, `queue.add`,
+  `deploy.script_set`, `deploy.vars_set`, `laravel.artisan` and `ploi.pull_script` take a command line or
+  script from the caller and were Exec and agent-callable: an agent could add a cron job running any command
+  every minute. They now carry `agent_needs_approval` and support dry runs, so the approver reads the code in
+  the plan. A person calling them is not asked. A test walks the shipped registry and fails when a new
+  agent-callable capability takes a `command`, `script`, `steps`, `argv`, `program` or `directives` argument
+  and is neither gated nor on the reviewed list. `project.exec` / `project.run` remain open, recorded in
+  `docs/limitations.md`.
+
+### Fixed
+
+- **A Go module or a Node app was listed as "PHP 8.5", and its source folder was served.** devd had no idea
+  what a site served: every directory site got PHP in its nginx and Apache configuration, `site.sync` made a
+  site of any folder, and `site.create` pinned today's default PHP into the record, so six of twelve sites
+  froze at 8.5.12 while the default moved to 8.4. A site is now served as what it is (`proxy`, `php`,
+  `static`, or `no_entry`), read from the folder unless a person chose; PHP is configured only for a site that
+  serves PHP, a PHP version is shown only there and says whether it is pinned or follows the default, and a
+  directory with nothing to serve has no document root and answers with an explanation. A leftover pin on a
+  site that does not serve PHP is reported as unused and can be cleared.
+- **Parking a folder made a site of everything in it.** `site.park` now only records the folder and reports
+  what is in it; `site.sync` registers only projects with a web entry point, names what it will create in its
+  plan, and skips the rest with the reason. New: `site.discover` (read only), `site.set_serving`, and
+  `site sync <names>`.
+- **`site.create` wrote an `index.php` into any existing project that had no index file.** A starter page is
+  now written only into an empty directory.
+- **`doctor` changed the database it was diagnosing.** Opening it created the file and folder, switched the
+  journal mode and migrated the schema. Diagnostics (`doctor`, `health.status`, the `php`/`composer`
+  launchers) now open it read-only; `doctor` reports a database that is behind the build as waiting to migrate,
+  and the window's Diagnostics checks the database the process is actually using.
+- **Two devd data folders on one machine went unnoticed.** A process that keeps an old `DEVD_HOME` works on a
+  different devd than a new terminal or the window. `doctor` now reports it (`home.conflict`, `home.other`);
+  it never picks, moves or deletes one.
+- **Nobody was told that scheduled jobs were not running.** Diagnostics has a Scheduled jobs component:
+  healthy when a devd process runs them or none is scheduled, degraded and explicit otherwise.
+- **The no-entry explanation and its docs named a command that does not exist** (`set-upstream`); it is
+  `devd site upstream`.
+
+### Changed
+
+- **Sites know their project.** `Site::project_dir()` is the one definition of which project a site serves;
+  `site.list` returns `project` and `project_known`, and `project.list` returns each project's `sites`.
+- Migration 014 adds a nullable `sites.serving` column. Existing rows are untouched, an older devd ignores the
+  column, and it is applied the first time a new devd starts.
+
+---
+
 ## [0.11.1] - 2026-10-24 - Touch rows, honest diagnostics, scoped CA trust
 
 ### Added
