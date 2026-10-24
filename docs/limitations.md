@@ -5,8 +5,14 @@ partially, and the platform-specific behaviour worth knowing before relying on
 it. Each entry states the consequence and, where one exists, the change that
 would close it.
 
-This document describes the current release, v0.11.0. See
+This document describes the current release, v0.11.1. See
 [`CHANGELOG.md`](../CHANGELOG.md) for what it contains.
+
+## The command line
+
+`php` and `composer` in a terminal need devd's folder on your `PATH` (`devd path enable`, **Server → Runtimes → Command line**, or the Windows installer). A terminal opened before that does not see it. The launcher is not a shell function, so a program that starts `php` by an absolute path (`C:\...\php.exe`) is not redirected. Only `php` and `composer` have launchers; `node`, `npm`, `python` and `go` are not wrapped. The `PATH` edit on Linux and macOS is written and tested against a scratch file but has not been run on a real login shell.
+
+A Composer installed by winget (`Composer.Composer`) is the vendor's own launcher and needs `php` on `PATH`; with devd's folder on `PATH` it finds devd's PHP. `devd composer install` gives devd its own copy that does not depend on that.
 
 ## Not implemented at all
 

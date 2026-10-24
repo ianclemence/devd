@@ -27,7 +27,7 @@ The whole point of the project is **this person's workflow**: develop locally in
 | The person's projects (each is a devd site `<name>.test`) | `D:\devd\www\<name>` (chitchatter, ghost, ghost-app, icmosha, kindlebox, luna, nairobiunwind, nairobiunwind-app, schoolmate, scout, staffroom) |
 | devd's data (state.db, runtimes, services, certs, logs, cache, backups) | `D:\devd` - the same folder as the program (`DEVD_HOME` is set to it as a user environment variable) |
 | Rust toolchain | `C:\tools\cargo\bin`, rustup home `C:\Users\User\.rustup`, toolchain `stable-x86_64-pc-windows-gnu`; also needs `C:\tools\mingw64\bin` on PATH; NSIS for the installer at `C:\tools\nsis\nsis-3.13\makensis.exe` |
-| Installer output | `D:\devd\www\devd\dist\devd-setup-0.11.0.exe` (silent install: `devd-setup-0.11.0.exe /S /D=D:\devd`) |
+| Installer output | `D:\devd\www\devd\dist\devd-setup-0.11.1.exe` (silent install: `devd-setup-0.11.1.exe /S /D=D:\devd`) |
 | Old Laragon | removed 2026-10-24; backup in `D:\devd\backups\laragon-20261024`; the `ploi_openssh` key was recovered from the Recycle Bin to `C:\Users\User\.ssh` |
 
 Build and check from the repository root (PowerShell or Git Bash):
@@ -64,11 +64,9 @@ Documentation of what exists is in `docs/operations.md` (read it fully), `docs/r
 
 **NOT verified, and the first things to do:**
 
-* The 0.11.0 build is installed in `D:\devd` and `devd doctor` is green (12 sites, PHP 8.4/8.5, nginx, MariaDB). Still unverified on a second machine: a clean install from the published artifacts, the first-run setup sheet, and the Apache install path.
+* **Checked on 2026-10-24 (0.11.1), on the person's machine in isolated homes, not on a second computer:** the published 0.11.0 binary matches its checksum and a clean first run installs PHP, nginx, MariaDB, Redis, memcached and Mailpit; the Apache download, checksum, config, HTTPS and the `mod_proxy_balancer` pool run against a real Apache 2.4.69; the "Set up devd" sheet completes in the window; every screen was read against the machine's real state at 1280 and 375 px. Found and fixed on the way: Redis never started (MSYS path), the first-run Install PHP sent no version, the sheet reinstalled PHP that was there. **Still unverified:** a truly separate machine, the NSIS installer run end to end, a program other than devd holding port 80 during first run (the sheet reports success when something answers on the port), and `devd path enable` on a real user PATH (its registry code is tested against a throwaway key).
 * **Nothing in section 4.4 has ever run against a real server.** The tests cover the generated scripts, the archive contents, the SSH arguments, host-key handling and (Linux CI only, `crates/devd-ops/tests/remote_e2e.rs`) the whole releases flow through a stand-in `ssh`. It was not run on Windows (no symlinks, no `mv -T`) and not against a real machine. When the person has a throwaway server (a DigitalOcean or Hetzner droplet), do: `ssh.keygen` (or `ssh.adopt`), put the public key in `authorized_keys`, `server.add`, `server.connect`, `server.info`, read the plan of `server.provision`, run it, `remote.link`, `remote.env_push`, `remote.site_create`, `remote.ssl`, `remote.deploy`, change something, deploy again, `remote.rollback`. Fix what breaks and add a test for each fix. Never run server-touching capabilities against the person's real Ploi server (206.81.14.76) without their explicit instruction.
-* Apache's balancer (`mod_proxy_balancer`) and the Apache redirects were only tested as generated text. The Apache download itself is fixed (`apachelounge`'s `.zip.txt` now writes `SHA256-Checksum for: ...` on one line and the digest on the next; `catalogue::apache_sha256` reads the digest token), but no Apache install has been run since the fix.
 * The Ploi API calls (`ploi.*`) have never run: there is no token. `ploi.connect` is human-only.
-* The first-run "Set up devd" sheet was rendered but never clicked through to completion.
 
 ## 5. What to build next (in this order; decide the details yourself)
 

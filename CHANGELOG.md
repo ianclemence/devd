@@ -10,6 +10,67 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.11.1] - 2026-10-24 - Touch rows, honest diagnostics, scoped CA trust
+
+### Added
+
+- **`php` and `composer` work from any terminal.** Composer reported "'php' is not recognized"
+  because devd's PHP is not on `PATH`, and putting each version's folder there would break when
+  the default changes. devd now keeps one folder, `<home>/bin`, of launchers that ask devd at the
+  moment of the call which PHP applies: the PHP the site in the current folder is served with, else
+  a pin, else the default. `devd path status|enable|disable` (also **Server → Runtimes → Command
+  line**, and the Windows installer) manages the one `PATH` entry; the launchers appear when PHP or
+  Composer is installed, follow devd if it moves, and go when what they run does. Arguments and exit
+  codes pass through, including `--json`, `-y` and `--plan`. New capabilities: `shell.status`,
+  `shell.resolve`, `shell.path_enable`, `shell.path_disable` (human only), `composer.install`.
+- **`devd composer install`** downloads the newest stable Composer and checks it against the SHA-256
+  getcomposer.org publishes for that release; it runs with devd's PHP, so it needs no PHP on `PATH`.
+
+### Fixed
+
+- **`doctor` and the launchers no longer create a devd home.** A stale `DEVD_HOME` naming a folder
+  nobody made left a second, empty home behind after one `doctor` run. `doctor` now reports that the
+  folder does not exist and checks nothing in it; a launcher says where it looked and stops.
+- **Row actions work on a touch screen.** Manage and Open on sites, and Stop,
+  Restart, Logs and Remove on services, were revealed only on hover. A phone or
+  tablet could see the row but not the controls. They are now visible where the
+  device cannot hover, and they move to their own line in a narrow window.
+- **Diagnostics no longer calls devd's own web server "another program."** The
+  HTTP and HTTPS port notes name the process that is listening and explain that
+  devd's own nginx or Apache holding the port is expected.
+- **Trust checks and "remove trust" identify this installation's CA.** The
+  Windows store was queried and changed by the shared common name, so a second
+  devd installation could be reported as trusted when only an older CA was, and
+  removing trust could remove every devd CA. The certificate serial now scopes
+  both operations. A regression test covers a fresh CA on a machine that already
+  trusts another devd CA.
+- **The site Database tab says "No database managed by devd"** instead of
+  implying the application has no database, so SQLite and external databases are
+  not misreported.
+- **Redis starts on a clean Windows install.** The Redis build devd downloads is an
+  MSYS program that reads a `C:\...` configuration path as relative to its working
+  directory, so it exited at once with an empty log. devd now passes it as
+  `/cygdrive/c/...` (only for a folder that carries the MSYS runtime; an adopted
+  native build keeps the ordinary path) and works the command out again at start, so
+  a record written by an earlier devd starts too.
+- **The first-run sheet's "Install PHP" works.** The requirement's fix called
+  `runtime.install` without the `version` it requires, so the button failed with a
+  400 and, because the message was a brief toast, looked like it did nothing. The
+  sheet also redraws after a fix instead of still listing what was just installed.
+- **"Set up devd" no longer tries to reinstall PHP that is already there.** It read
+  the runtime kind from the wrong level of `runtime.list`, never saw PHP, hit
+  "already installed" and stopped before nginx, MariaDB and the first site.
+- **Redis and Memcached offer Install on Services**, as they have since 0.10.0, and
+  `php-cgi` is no longer listed as "available" beside the PHP pools that run.
+- **Port notes in Diagnostics say it once.** The explanation no longer repeats the
+  line that names the program holding the port.
+- **The starter page names the web server that answers**, not always nginx.
+- **The install-failure message lists memcached** among the installable services.
+
+### Changed
+
+- **Version 0.11.1.** Capabilities were added (below); none was renamed or removed.
+
 ## [0.11.0] - 2026-10-24 - Server tabs by scope, one page per site
 
 ### Added

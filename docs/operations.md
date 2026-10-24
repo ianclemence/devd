@@ -86,6 +86,31 @@ With the Apache driver the workers are balanced through `mod_proxy_balancer` whe
 
 **Extensions.** `php.extensions` lists what the build ships and which are on; `php.extension_set` switches one.
 
+## `php` and `composer` in a terminal
+
+PHP and Composer that devd installs live under devd's own folder, which is not on your `PATH`, so a terminal (or a tool that shells out to `php`) cannot find them. Putting each PHP version's folder on `PATH` would break the day the default version changes, or the moment one project needs another version. devd puts **one** folder on `PATH` instead, `<devd home>/bin`, and fills it with small launchers.
+
+A launcher does nothing but run `devd shim <command>`, which decides **at that moment** which program to run, from the folder you are standing in:
+
+1. a site whose project folder contains it runs with the PHP that site is served with (`php artisan migrate` in a project behaves as the project does in the browser);
+2. else a runtime pin on the folder or one above it (`devd runtime pin`);
+3. else devd's default PHP.
+
+`composer` is the vendor's `composer.phar` run by that same PHP. Arguments reach the program untouched, including the ones devd uses itself (`php artisan route:list --json` works), and its exit code is yours.
+
+```
+devd path status         # is the folder on your PATH, which launchers exist
+devd path enable         # put it first on your user PATH; no administrator rights
+devd path disable        # take it off; every other entry is left alone
+devd composer install    # newest stable Composer, checked against getcomposer.org's published SHA-256
+```
+
+`devd path enable` is human only, like signing in at start-up, because it changes what every program you start can run. On Windows it edits the user `PATH` in the registry and keeps its type, so entries such as `%USERPROFILE%\bin` still expand; elsewhere it adds a marked block to `~/.profile`. A terminal that is already open does not see the change; a new one does. The Windows installer does this for you, and **Server → Runtimes → Command line** shows the state and does it from the window.
+
+The launchers follow what is installed: `php` appears when a PHP is installed (never before, so devd cannot put a command on `PATH` that can only fail in front of a PHP you installed another way), `composer` when Composer is, and each is rewritten if devd moves and removed when what it runs is gone. Capabilities: `shell.status`, `shell.resolve` (which program a command would run from a folder, and why), `shell.path_enable`, `shell.path_disable`, `composer.install`.
+
+`devd doctor` and the launchers never create a devd home. If `DEVD_HOME` names a folder that does not exist, `doctor` says so and a launcher fails with the path it looked in.
+
 ## Services
 
 `devd service install redis` and `devd service install memcached` download Windows builds and check them against the SHA-256 GitHub records for each file (Redis 8 from `redis-windows/redis-windows`, memcached 1.6.8 from `jefyt/memcached-windows`). Neither project is the vendor, so devd says where the build comes from. MariaDB is the MySQL-compatible server; devd does not download MySQL itself because MySQL publishes no SHA-256 for its Windows archives.
