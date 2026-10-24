@@ -469,7 +469,7 @@ fn write_starter_page(directory: &Path, name: &str) -> Result<Option<String>> {
          <body>\n\
            <h1>{name} is served by devd</h1>\n\
            <p>Host <code><?= htmlspecialchars($_SERVER['HTTP_HOST'] ?? '') ?></code> is answering\n\
-              through nginx, and PHP is running as FastCGI.</p>\n\
+              through <?= htmlspecialchars(strtok($_SERVER['SERVER_SOFTWARE'] ?? 'the web server', '/')) ?>, and PHP is running as FastCGI.</p>\n\
            <p>PHP <code><?= PHP_VERSION ?></code> on <?= PHP_OS_FAMILY ?>\n\
               (<?= htmlspecialchars(php_sapi_name()) ?>).</p>\n\
            <p>Document root <code><?= htmlspecialchars(__DIR__) ?></code>.</p>\n\
