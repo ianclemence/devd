@@ -89,6 +89,19 @@ pub fn ca_exists(ctx: &Ctx) -> bool {
     ca_cert_path(ctx).is_file() && ca_key_path(ctx).is_file()
 }
 
+/// The CA certificate's serial number, lowercase hex.
+///
+/// The common name is not unique: two devd installations on one machine both
+/// call their authority `devd local development CA`. Asking the operating
+/// system's store by that name therefore reports another installation's CA as
+/// trusted, and deleting by that name removes every installation's CA. The
+/// serial identifies this certificate only.
+fn ca_serial_hex(ctx: &Ctx) -> Option<String> {
+    let pem = std::fs::read_to_string(ca_cert_path(ctx)).ok()?;
+    let params = CertificateParams::from_ca_cert_pem(&pem).ok()?;
+    params.serial_number.map(|serial| hex::encode(serial.as_ref()))
+}
+
 fn stamp(days: i64) -> (time::OffsetDateTime, time::OffsetDateTime) {
     let now = time::OffsetDateTime::now_utc();
     // Backdated an hour so a clock that is slightly behind does not see a
@@ -457,6 +470,14 @@ pub fn trust_status(ctx: &Ctx) -> Result<TrustStatus> {
                 machine: false,
             });
         };
+        // If the certificate cannot be parsed, report "not trusted": the answer
+        // is unknown, and claiming trust would be worse.
+        let Some(serial) = ca_serial_hex(ctx) else {
+            return Ok(TrustStatus {
+                user: false,
+                machine: false,
+            });
+        };
         let present = |machine: bool| -> bool {
             let mut args = Vec::new();
             if !machine {
@@ -464,7 +485,7 @@ pub fn trust_status(ctx: &Ctx) -> Result<TrustStatus> {
             }
             args.push("-store".to_string());
             args.push("Root".to_string());
-            args.push(CA_COMMON_NAME.to_string());
+            args.push(serial.clone());
             util::run(&certutil, &args, None, &[], Some(Duration::from_secs(20)))
                 .map(|out| out.ok())
                 .unwrap_or(false)
@@ -538,14 +559,16 @@ pub fn untrust(ctx: &Ctx, machine: bool) -> Result<devd_core::capability::Outcom
         let certutil = util::which("certutil").ok_or_else(|| {
             DevdError::not_found("certutil was not found on PATH; it ships with Windows")
         })?;
+        // Delete this installation's certificate, not every devd certificate in
+        // the store. The common name is shared by every devd installation.
+        let serial = ca_serial_hex(ctx)
+            .ok_or_else(|| DevdError::not_found("the devd certificate authority could not be read"))?;
         let mut args = vec!["-delstore".to_string()];
         if !machine {
             args.push("-user".to_string());
         }
         args.push("Root".to_string());
-        // certutil accepts the subject common name as the identifier, which is
-        // stable and does not require parsing the DER for a serial number.
-        args.push(CA_COMMON_NAME.to_string());
+        args.push(serial);
         let out = util::run(
             &certutil,
             &args,
@@ -792,6 +815,32 @@ mod tests {
         let first_key = std::fs::read_to_string(ca_key_path(&c)).unwrap();
         ensure_ca(&c).unwrap();
         assert_eq!(first_key, std::fs::read_to_string(ca_key_path(&c)).unwrap());
+        let _ = std::fs::remove_dir_all(c.paths.root());
+    }
+
+    #[test]
+    fn the_ca_serial_identifies_this_certificate() {
+        let c = ctx("serial");
+        ensure_ca(&c).unwrap();
+        let serial = ca_serial_hex(&c).expect("the CA serial is readable");
+        assert_eq!(serial.len(), 32, "a P-256 CA serial is 16 bytes: {serial}");
+        assert!(
+            serial.chars().all(|ch| ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase()),
+            "certutil and the operating system stores use lowercase hex: {serial}"
+        );
+        let _ = std::fs::remove_dir_all(c.paths.root());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn an_untrusted_ca_is_not_confused_with_another_devd_ca() {
+        let c = ctx("untrusted");
+        ensure_ca(&c).unwrap();
+        let status = trust_status(&c).unwrap();
+        assert!(
+            !status.user && !status.machine,
+            "a fresh CA must not inherit the trust of another devd installation"
+        );
         let _ = std::fs::remove_dir_all(c.paths.root());
     }
 
