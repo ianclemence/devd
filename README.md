@@ -79,8 +79,8 @@ On Linux and macOS devd does not download a second copy of nginx or MariaDB. It 
 Download and run the installer from the [latest release](https://github.com/ianclemence/devd/releases/latest):
 
 ```powershell
-curl.exe -LO https://github.com/ianclemence/devd/releases/download/v0.13.0/devd-setup-0.13.0.exe
-.\devd-setup-0.13.0.exe
+curl.exe -LO https://github.com/ianclemence/devd/releases/download/v0.13.1/devd-setup-0.13.1.exe
+.\devd-setup-0.13.1.exe
 ```
 
 It installs for the current user only, adds `devd` to `PATH` and creates Start Menu entries. Uninstalling keeps your sites and data in `%LOCALAPPDATA%\devd`. The installer is not code-signed, so SmartScreen warns once; `SHA256SUMS.txt` on the release lets you check what you downloaded. A portable `devd.exe` and a portable window are attached to each release as well.
@@ -155,7 +155,7 @@ logs/             service and session logs
 | [`docs/app.md`](docs/app.md), [`docs/tui.md`](docs/tui.md), [`docs/mcp.md`](docs/mcp.md) | The window and its API, the terminal dashboard, the agent surface. |
 | [`docs/agents.md`](docs/agents.md) | The assistant, the team, skills and models. |
 | [`docs/operations.md`](docs/operations.md) | The server-panel operations: env, cron, workers, deploys, backups, servers. |
-| [`docs/workflows.md`](docs/workflows.md) | Reviews, agent memory and the Studio. |
+| [`docs/workflows.md`](docs/workflows.md) | Reviews, agent memory and the project workspace. |
 | [`docs/stacks.md`](docs/stacks.md), [`docs/stacks-engine.md`](docs/stacks-engine.md) | Supported stacks and how they are defined. |
 | [`docs/devd-yml.md`](docs/devd-yml.md) | Declaring a project's processes. |
 | [`docs/limitations.md`](docs/limitations.md) | What is not implemented, and what is weaker than intended. |

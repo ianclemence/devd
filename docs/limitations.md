@@ -5,7 +5,7 @@ partially, and the platform-specific behaviour worth knowing before relying on
 it. Each entry states the consequence and, where one exists, the change that
 would close it.
 
-This document describes the current release, v0.13.0. See
+This document describes the current release, v0.13.1. See
 [`CHANGELOG.md`](../CHANGELOG.md) for what it contains.
 
 ## The command line
@@ -308,7 +308,7 @@ Stated plainly, so nothing is assumed:
 * **`docs.fetch` checks the address before connecting;** a hostile DNS server could
   still answer differently between that check and the connection.
 
-## Reviews, memory and the Studio (what is not done)
+## Reviews, memory and the project workspace (what is not done)
 
 * **A review is one model's opinion, not an oracle.** `review.run` sends a diff
   (truncated at 60,000 characters, and the record says when it was) to the
@@ -324,9 +324,10 @@ Stated plainly, so nothing is assumed:
   command-shaped lines (build/test/run) and explicit statements; a conflict
   expressed in prose that does not share a subject is not detected. Only
   root-level instruction files are read, not nested packages.
-* **The Studio has no streaming and no background jobs.** A review or an advice
-  call blocks the request until the model answers; closing the window does not
-  cancel it, and there is no notification when it finishes.
+* **Reviews and memory are synchronous.** A review or a memory proposal blocks the
+  request until the model answers; closing the window does not cancel it, and there
+  is no notification when it finishes. They are tabs of a project, not a background
+  service.
 * **These capabilities are new and lightly used.** They are covered by unit and
   integration tests and were exercised against the release binary, but they have
   not been used by a team over weeks, which is where most of the rough edges in a

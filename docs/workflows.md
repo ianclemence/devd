@@ -2,7 +2,7 @@
 
 Two things that happen around a change belong in the same capability surface as
 everything else in devd: having it reviewed, and keeping what was learned where
-every agent will read it. The window's **Studio**, the CLI (`devd call ...`), the
+every agent will read it. A project's **Reviews** and **Agent memory** tabs, the CLI (`devd call ...`), the
 HTTP API and MCP reach the same capabilities.
 
 | Group | Capabilities |

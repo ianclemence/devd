@@ -925,6 +925,17 @@ code, kbd, pre, samp { font-family: var(--mono); }
 .btn-danger { background: var(--danger-quiet); border-color: var(--danger-line); color: #ffc9c9; }
 .btn-ghost { background: transparent; border-color: transparent; color: var(--fg-mute); }
 
+/* Remove and forget are destructive words: give them the delete colour, not
+   the neutral ghost one. The selector covers project, site, MCP, cron, worker,
+   remote and attachment removals without a second class on every button. */
+.btn-ghost[data-action*="remove"], .btn-ghost[data-action="project-forget"], .btn-ghost[data-action="untrack"] {
+  color: var(--danger);
+}
+.btn-ghost[data-action*="remove"]:hover, .btn-ghost[data-action="project-forget"]:hover, .btn-ghost[data-action="untrack"]:hover {
+  background: var(--danger-quiet);
+  color: var(--danger);
+}
+
 .input, .textarea, .select {
   width: 100%;
   min-height: 30px;
@@ -1699,7 +1710,7 @@ kbd {
   border-top: 1px solid var(--line);
   background: var(--bg-rail);
 }
-.modal-buttons { display: flex; gap: var(--s2); margin-left: auto; }
+.modal-buttons { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--s2); margin-left: auto; }
 .modal-expiry { color: var(--fg-dim); font-family: var(--mono); font-size: var(--text-xs); }
 
 .steps { display: flex; flex-direction: column; gap: 6px; }
@@ -1743,7 +1754,7 @@ kbd {
   padding: 0 var(--s4);
   border-bottom: 1px solid var(--line);
 }
-.drawer-title { flex: 1; min-width: 0; font-family: var(--mono); font-size: var(--text-sm); }
+.drawer-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: var(--text-sm); }
 .drawer-close { margin-left: auto; }
 .drawer-body {
   display: flex;
@@ -3159,7 +3170,7 @@ textarea,
 .ui-sheet { display: flex; flex-direction: column; gap: var(--s4); font-size: var(--text-md); line-height: 1.65; }
 .ui-sheet h3 { font-size: var(--text-md); font-weight: 600; margin-top: var(--s3); }
 .ui-sheet .ui-pre { white-space: pre-wrap; word-break: break-word; font-family: var(--sans); color: var(--fg-mute); }
-.ui-sheet .ui-actions { display: flex; gap: var(--s2); flex-wrap: wrap; }
+.ui-sheet .ui-actions { display: flex; gap: var(--s2); flex-wrap: wrap; justify-content: flex-end; }
 
 .ui-greet { display: flex; flex-direction: column; gap: var(--s1); margin-bottom: var(--s2); }
 .ui-greet .sub { color: var(--fg-mute); font-size: var(--text-md); }
@@ -3311,7 +3322,9 @@ textarea,
 .msg { margin-bottom: var(--s3); }
 .msg-meta { font-size: var(--text-xs); margin-top: var(--s1); }
 .msg-note { margin: var(--s2) 0; font-size: var(--text-sm); }
-.step { margin: var(--s2) 0; }
+.step { margin: 1px 0; }
+.step + .step { margin-top: 2px; }
+.step::before { bottom: -4px; }
 .msg-used { margin: var(--s2) 0; font-size: var(--text-sm); }
 
 /* ================================================================ dialogs

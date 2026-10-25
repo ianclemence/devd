@@ -51,7 +51,20 @@ pub fn authorize(ctx: &Ctx, path: &str, write: bool) -> Result<PathBuf> {
     }
     let norm = authz::authorize_dir(ctx, p)?;
     let home = authz::normalise(ctx.paths.root());
-    if norm.starts_with(&home) {
+    // A portable install can put the projects root (and therefore every site)
+    // inside the devd home. That folder is the person's work, not devd's data,
+    // so it is carved out of the home fence. Uploads are the one other folder
+    // inside the home that an agent must be able to read: an attached file is
+    // useless if the tool cannot open it.
+    let roots = authz::roots(ctx);
+    let in_projects = roots.iter().any(|r| norm.starts_with(r))
+        || ctx
+            .store
+            .list_stack_projects()
+            .map(|ps| ps.iter().any(|p| norm.starts_with(authz::normalise(Path::new(&p.path)))))
+            .unwrap_or(false);
+    let uploads = authz::normalise(&ctx.paths.root().join("uploads"));
+    if norm.starts_with(&home) && !in_projects && !norm.starts_with(&uploads) {
         return Err(DevdError::denied("devd's own data directory (database, keys, logs) is not accessible to file tools"));
     }
     if norm.components().any(|c| c.as_os_str() == ".git") {
@@ -313,6 +326,44 @@ mod tests {
         for f in [".env.example", "README.md", "src/keys.rs", "environment.ts"] {
             assert!(!is_secret_file(Path::new(f)), "{f}");
         }
+    }
+
+    #[test]
+    fn a_site_inside_the_devd_home_is_project_work_not_internal_data() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("home");
+        let www = home.join("www");
+        let project = www.join("luna");
+        std::fs::create_dir_all(&project).unwrap();
+        let file = project.join("report.json");
+        std::fs::write(&file, "{}").unwrap();
+        let uploads = home.join("uploads");
+        std::fs::create_dir_all(&uploads).unwrap();
+        let upload = uploads.join("screenshot.png");
+        std::fs::write(&upload, "png").unwrap();
+
+        let paths = Paths::rooted(&home);
+        paths.ensure().unwrap();
+        let mut s = Settings::default();
+        s.www_root = Some(www.clone());
+        let store = Store::open_in_memory().unwrap();
+        store.migrate().unwrap();
+        let c = Ctx {
+            store: Arc::new(store),
+            paths: Arc::new(paths),
+            settings: Arc::new(s),
+            events: EventBus::new(),
+            actor: Actor::agent("t"),
+            dry_run: false,
+        };
+
+        assert!(authorize(&c, &file.display().to_string(), false).is_ok(), "a site under www is readable");
+        assert!(authorize(&c, &upload.display().to_string(), false).is_ok(), "an upload is readable");
+        assert_eq!(
+            authorize(&c, &home.join("state.db").display().to_string(), false).unwrap_err().code(),
+            "permission_denied",
+            "devd's own state stays fenced"
+        );
     }
 
     #[test]

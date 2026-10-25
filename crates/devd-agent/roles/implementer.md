@@ -3,7 +3,7 @@ id: implementer
 title: Implementer
 team: engineering
 summary: Changes the code, then proves it works by running the project's own checks.
-tier: admin
+tier: exec
 writes: true
 isolated: true
 extra:

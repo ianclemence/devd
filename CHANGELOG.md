@@ -10,6 +10,59 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.13.1] - 2026-10-25 - The project is the workspace
+
+### Added
+
+- **A portable install can put sites under the devd home.** When `DEVD_HOME=D:\devd`,
+  a project at `D:\devd\www\app` is the person's work, not devd's database, keys or
+  logs. File tools, Git and project tasks now cross that boundary; state, services,
+  keys and logs stay fenced. This was the reason the assistant refused every file
+  operation in a normal portable install.
+- **An implementer may clear files in its own task worktree.** `fs.delete` there is
+  ordinary work, not a destructive escalation; read-only roles still cannot, and
+  every path outside the worktree keeps the role's normal ceiling.
+- **`delete_file` is a direct tool**, so clearing a worktree is one obvious call
+  rather than a discovery trip through `fs.delete`.
+- **Reviews and Agent memory are tabs of a project.** The separate Studio screen is
+  gone from the rail and routes. Every project carries its own review history,
+  memory proposals, instruction-file audit and the action to start a review.
+- **Uploads are readable by the agent.** Attached files live under the devd home's
+  `uploads` folder, which is now a workspace root; the rest of the home is still not.
+- **The composer accepts dropped files** as well as the file picker.
+
+### Changed
+
+- **Stop, send and microphone share one primary slot.** While it works and the box
+  is empty the slot is Stop; once there is text it is the queue arrow, in the same
+  place. Stop no longer sits beside the slot.
+- **One select style everywhere.** The Home project picker's surface, border,
+  chevron and focus treatment now apply to the conversation project, provider and
+  form selects.
+- **Home → Ask attaches the project.** The row's Ask action opens a new Assistant
+  conversation with that project selected and the message field focused.
+- **The queue acknowledgement is quiet.** Sending while the assistant works no
+  longer raises a toast; the header count is the feedback.
+- **Tool actions in a reply are tighter.** The vertical gap between calls was
+  reduced without losing the connecting rail.
+- **Remove and Forget use the destructive text colour**, not the neutral ghost one.
+- **Every overlay has the same close grammar.** The approval modal and dialog gained
+  a top-right X; the drawer's Close is pinned to the far right of its header behind
+  an ellipsised title; a drawer scrim, the modal backdrop and the folder-picker
+  backdrop all close on outside click, and focus stays inside.
+- **The Implementer role is `exec`, not `admin`.** It changes code and runs checks;
+  installing machine-wide tools belongs to Infrastructure and still asks a person.
+
+### Fixed
+
+- A file-tool path was rejected as “devd's own data directory” whenever the project
+  lived under the devd home. A site under `www` is now a project; `state.db`,
+  services, keys, logs and runtime files are still refused.
+- The role gate refused `fs.delete` for an implementer even inside its own worktree.
+- The project page had no reviews or memory; the Studio route was the only way in.
+
+---
+
 ## [0.13.0] - 2026-10-24 - Other programs' MCP servers; a conversation that holds still
 
 ### Added

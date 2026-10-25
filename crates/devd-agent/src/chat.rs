@@ -115,7 +115,7 @@ const COMMON_CALLS: &str = r#"
 - project.run {"path":"<dir>","task":"install|build|test|lint|typecheck|dev"}
 - project.exec {"path":"<dir>","argv":["git","status"]} - an allow-listed program, never a shell
 - fs.list {"path":"<dir>"} ; fs.search {"path":"<dir>","pattern":"regex","glob":"*.ts"} ; fs.read {"path":"<file>"}
-- fs.write {"path":"<file>","content":"..."} ; fs.edit {"path":"<file>","old":"exact text","new":"exact text"}
+- fs.write {"path":"<file>","content":"..."} ; fs.edit {"path":"<file>","old":"exact text","new":"exact text"} ; delete_file {"path":"<file or dir>","recursive":true|false}
 - git.status {"repo":"<dir>"} ; git.diff {"repo":"<dir>"}
 - todo.list {"project":"<dir>"} ; todo.create {"project":"<dir>","title":"..."} ; todo.complete {"id":"...","expected_revision":N}
 For any capability not in this list, use devd_capabilities and then devd_describe before invoking it.
@@ -238,6 +238,7 @@ const DIRECT: &[(&str, &str)] = &[
     ("read_file", "fs.read"),
     ("write_file", "fs.write"),
     ("edit_file", "fs.edit"),
+    ("delete_file", "fs.delete"),
     ("list_files", "fs.list"),
     ("search_files", "fs.search"),
     ("project_info", "project.detect"),
@@ -737,7 +738,35 @@ impl Hub {
         let role = crate::roles::get(&task.role).ok_or_else(|| "unknown role".to_string())?;
         let registry = self.registry.get().ok_or_else(|| "registry not attached".to_string())?;
         let Some(cap) = registry.get(&cap_id) else { return Ok(()) };
-        crate::roles::allows(role, &cap)?;
+        // An implementer may clear files inside its own task worktree. That is
+        // ordinary work, not a destructive escalation; every path outside the
+        // worktree still goes through the role ceiling, and a read-only role
+        // never gets the exception.
+        let scoped_delete = cap_id == "fs.delete"
+            && task.workdir.as_ref().is_some_and(|work| {
+                let root = devd_stacks::authz::normalise(std::path::Path::new(work));
+                let paths: Vec<&str> = input["args"]
+                    .as_object()
+                    .map(|args| {
+                        ["path", "from", "to"]
+                            .iter()
+                            .filter_map(|k| args.get(*k).and_then(|v| v.as_str()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                !paths.is_empty()
+                    && paths.iter().all(|p| {
+                        let p = std::path::Path::new(p);
+                        p.is_absolute() && devd_stacks::authz::normalise(p).starts_with(&root)
+                    })
+            });
+        if scoped_delete {
+            if !role.writes {
+                return Err(format!("the {} role does not change files; clearing them is out of scope", role.title));
+            }
+        } else {
+            crate::roles::allows(role, &cap)?;
+        }
         if cap_id.starts_with("team.") {
             if !input["args"].is_object() {
                 input["args"] = json!({});

@@ -191,7 +191,7 @@ goals, both running through the providers you configure. See
 [`docs/agents.md`](docs/agents.md).
 
 Reviews, agent memory and instruction-file audits (`review.*`, `memory.*`, `compat.*`) are
-capabilities too, reachable from `devd call`, the HTTP API, MCP and the window's **Studio**. See
+capabilities too, reachable from `devd call`, the HTTP API, MCP and a project's **Reviews** and **Agent memory** tabs. See
 [`docs/workflows.md`](docs/workflows.md).
 
 ## Project processes

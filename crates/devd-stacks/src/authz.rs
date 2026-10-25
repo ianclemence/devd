@@ -13,6 +13,10 @@ use devd_core::{DevdError, Result};
 pub fn roots(ctx: &Ctx) -> Vec<PathBuf> {
     let mut out = vec![ctx.settings.effective_www_root(&ctx.paths.www())];
     out.extend(ctx.settings.project_roots.iter().cloned());
+    // A file a person attached to a message is stored under the devd home. The
+    // agent has to be able to read it, so the uploads folder is a workspace root
+    // even though it is not a project.
+    out.push(ctx.paths.root().join("uploads"));
     out.into_iter().map(|p| normalise(&p)).collect()
 }
 

@@ -184,7 +184,7 @@ risk of what you are about to run.
 | Capabilities | the registry |
 | Activity | the audit table |
 | System | the shared doctor checks, paths, settings |
-| Studio | `review.*`, `memory.*`, `compat.*` |
+| Project → Reviews / Agent memory | `review.*`, `memory.*`, `compat.*` |
 | Services, sites, runtimes, certificates, hosts | the Server screen, each tab reading its own capability group |
 
 Every panel reads a real capability. There are no placeholder controls, because a
