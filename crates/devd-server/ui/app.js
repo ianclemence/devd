@@ -106,7 +106,7 @@
                 return null;
               }
               var outcome = done.body.outcome;
-              toast("ok", (outcome && outcome.message) || id + " applied");
+              if (!opts.quiet) toast("ok", (outcome && outcome.message) || id + " applied");
               return outcome || { ok: true, message: id + " applied" };
             });
           });
@@ -116,7 +116,7 @@
           return null;
         }
         var outcome = res.body.outcome;
-        toast("ok", (outcome && outcome.message) || id + " done");
+        if (!opts.quiet) toast("ok", (outcome && outcome.message) || id + " done");
         return outcome || { ok: true, message: id + " done" };
       })
       .catch(function (e) {
@@ -962,6 +962,7 @@
     var acts = [
       { key: "a:new", title: "Create a project", detail: stackCount() ? "from " + stackCount() + " stacks" : "from a stack", run: function () { navigate("create"); } },
       { key: "a:import", title: "Import an existing project", detail: "detect its stack and tasks", run: function () { navigate("develop"); } },
+      { key: "a:terminal", title: "Open a terminal in this project", detail: "its pinned runtimes first on PATH", run: function () { var p = palContext(); if (!p) return toast("warn", "Choose a project first"); run("project.terminal", { path: p }); } },
       { key: "a:provider", title: "Add an AI provider", detail: "key and default model", run: function () { navigate("providers"); } },
       { key: "a:models", title: "Refresh the official model list", detail: "reads Anthropic's documentation", run: function () { run("models.refresh_official", {}); } },
       { key: "a:health", title: "Check system health", detail: "re-runs every check", run: function () { ACTIONS["health-recheck"](); } },
@@ -1189,6 +1190,14 @@
   function serviceCounts(rows) {
     var units = serviceUnits(rows);
     return { total: units.length, up: units.filter(function (u) { return u.running; }).length };
+  }
+
+  /* The web server is chosen with web.use, and PHP listeners follow the
+     installed runtimes. The rest are a person's choice, recorded here. */
+  function startupToggle(svc) {
+    if (!svc.installed || svc.kind === "php-cgi" || svc.name === "nginx" || svc.name === "apache") return "";
+    return '<label class="check svc-startup" title="Include this service when you press Start all or devd starts with your account. It does not start it now.">' +
+      '<input type="checkbox" data-change="service-startup" data-name="' + attr(svc.name) + '"' + (svc.enabled ? " checked" : "") + "> Startup</label>";
   }
 
   function phpUnitRow(u, compact) {
@@ -2539,7 +2548,7 @@
         dot: svc.running ? "ok" : "off",
         title: brandImg(svc.kind || svc.name, "brand-dot") + esc(svc.name) + (svc.version ? ' <span class="ui-quiet" style="display:inline;padding:0">' + esc(svc.version) + "</span>" : ""),
         sub: esc([servicePorts(svc), svc.running && svc.pid ? "pid " + svc.pid : svc.installed ? "stopped" : "files missing"].filter(Boolean).join(" · ")),
-        actions: (svc.running
+        actions: startupToggle(svc) + (svc.running
           ? '<button type="button" class="btn btn-mini" data-action="stop-service" data-name="' + attr(svc.name) + '">Stop</button>'
           : svc.installed
             ? '<button type="button" class="btn btn-mini btn-primary" data-action="start-service" data-name="' + attr(svc.name) + '">Start</button>'
@@ -2570,7 +2579,8 @@
       { label: "Available", value: String(missing.length), detail: missing.length ? "ready to install or adopt" : "nothing else to install" }
     ]);
     body += uiHead("Installed", counts.total ? up + " of " + counts.total + " running" : null) +
-      (installed.length ? uiList(installed) : uiEmpty("Nothing installed yet", "Install a web server, MariaDB and a PHP runtime to serve sites."));
+      (installed.length ? uiList(installed) : uiEmpty("Nothing installed yet", "Install a web server, MariaDB and a PHP runtime to serve sites.")) +
+      (installed.length ? '<div class="ui-more">Startup means the service is included when you press Start all, or when devd starts with your account. It does not start the service now. The web server is chosen with web.use; PHP listeners follow the installed runtimes.</div>' : "");
     if (found.length) body += uiHead("Already on this computer", found.length) + uiList(found) +
       '<div class="ui-more">devd never replaces what you have. Using or watching a service only records your choice.</div>';
     if (missing.length) body += uiHead("Available", missing.length) + uiList(missing);
@@ -4424,6 +4434,7 @@
         esc(state.project.error) + "</div>" : "") +
       "</div>" +
       '<div class="page-actions">' +
+      '<button type="button" class="btn" data-action="open-terminal" data-path="' + attr(state.project.path) + '" title="Open your terminal in this project, with its pinned runtimes and devd first on PATH">Terminal</button>' +
       '<button type="button" class="btn" data-action="project-refresh">Refresh</button>' +
       '<button type="button" class="btn btn-ghost" data-action="untrack">Remove from devd</button>' +
       '<button type="button" class="btn btn-ghost btn-danger" data-action="delete-folder">Delete from disk</button>' +
@@ -4941,7 +4952,7 @@
     if (!DEV.projects) return renderLoading();
     var list = DEV.projects.map(function (p) {
       return '<button type="button" class="svc ' + (DEV.path === p.path ? "active" : "") + '" data-action="dev-open" data-path="' + attr(p.path) + '" style="width:100%;text-align:left">' +
-        '<div class="svc-main"><div class="svc-name">' + esc(p.name) + '</div><div class="svc-sub mono nowrap">' + esc(p.stack || "unknown stack") + " · " + esc(p.path) + "</div></div></button>";
+        '<div class="svc-main"><div class="svc-name">' + esc(p.name) + '</div><div class="svc-sub mono nowrap">' + esc(p.stack || "not detected yet") + " · " + esc(p.path) + "</div></div></button>";
     }).join("") || '<div class="panel-body empty-inline">No projects yet. Create one or import a checkout.</div>';
     var imp = '<div class="panel"><div class="panel-head"><span>Import an existing project</span></div><div class="panel-body">' +
       '<div class="inline"><input class="input mono grow" id="dev-import" placeholder="Where the project is" value="' + attr(DEV.importPath) + '" spellcheck="false">' +
@@ -4961,18 +4972,59 @@
     }).join("") + "</div>";
   }
 
+  /* A project can ask for one runtime in several places (package.json engines,
+     .nvmrc, a lockfile). That is one requirement with evidence, not three
+     unrelated ones. Group by the tool and keep every source. */
+  function runtimeNeeds(list) {
+    var order = [], by = {};
+    (list || []).forEach(function (r) {
+      var tool = r.tool || "runtime";
+      if (!by[tool]) { by[tool] = { tool: tool, wants: [], installed: {}, satisfied: null, sources: {} }; order.push(tool); }
+      var g = by[tool];
+      var want = String(r.constraint || "").trim();
+      if (want && g.wants.indexOf(want) === -1) g.wants.push(want);
+      if (r.installed) g.installed[r.installed] = true;
+      if (r.source) g.sources[r.source] = true;
+      if (r.satisfied === false) g.satisfied = false;
+      else if (r.satisfied === true && g.satisfied !== false) g.satisfied = true;
+    });
+    return order.map(function (k) { return by[k]; });
+  }
+
+  function missingNeeds(list) {
+    var order = [], by = {};
+    (list || []).forEach(function (m) {
+      var tool = m.tool || "tool";
+      if (!by[tool]) { by[tool] = { tool: tool, why: [] }; order.push(tool); }
+      if (m.why && by[tool].why.indexOf(m.why) === -1) by[tool].why.push(m.why);
+    });
+    return order.map(function (k) { return by[k]; });
+  }
+
   function devDetail() {
     if (DEV.busy) return '<div class="panel"><div class="panel-body dim">Inspecting…</div></div>';
     if (DEV.error) return '<div class="panel"><div class="panel-body notice notice-bad">' + esc(DEV.error) + "</div></div>";
     var c = DEV.detect || DEV.ctx;
     if (!c) return '<div class="panel"><div class="panel-body empty-inline">Select a project.</div></div>';
-    var h = '<div class="panel"><div class="panel-head"><span>' + esc(c.name) + '</span><span class="panel-note mono">' + esc(c.path) + '</span></div><div class="panel-body"><div class="toolbar"><button type="button" class="btn btn-mini" data-action="open-terminal" data-path="' + attr(c.path) + '" title="Your terminal, in this folder, with its pinned runtimes first on PATH">Open a terminal here</button></div>';
+    var h = '<div class="panel"><div class="panel-head"><span>' + esc(c.name) + '</span><span class="panel-note mono">' + esc(c.path) + '</span></div><div class="panel-body">';
     if (c.ambiguous) h += '<div class="notice notice-warn">' + esc(c.ambiguity) + "</div>";
     h += '<div class="kv"><dt>Stack</dt><dd>' + (c.stacks.length ? c.stacks.map(function (s, i) { return (i === 0 ? "<b>" : "") + esc(s.name) + " " + pill(s.confidence === "high" ? "ok" : "warn", s.confidence) + (i === 0 ? "</b>" : ""); }).join(" · ") : "unknown") + "</dd></div>";
     if (c.stacks.length) h += '<div class="row-sub">' + esc(c.stacks[0].evidence.join("; ")) + "</div>";
     h += '<div class="kv"><dt>Package manager</dt><dd>' + esc(c.package_manager || "-") + ' <span class="dim">' + esc(c.package_manager_evidence || "") + "</span></dd></div>";
-    (c.runtimes || []).forEach(function (r) { h += '<div class="kv"><dt>' + esc(r.tool) + '</dt><dd>wants ' + esc(r.constraint) + ' <span class="dim">(' + esc(r.source) + ")</span> - installed " + esc(r.installed || "none") + " " + (r.satisfied === true ? pill("ok", "satisfied") : r.satisfied === false ? pill("bad", "not satisfied") : "") + "</dd></div>"; });
-    (c.missing || []).forEach(function (m) { h += '<div class="notice notice-warn"><b>' + esc(m.tool) + "</b>: " + esc(m.why) + ' <button type="button" class="btn btn-mini" data-action="tool-install" data-id="' + attr(m.tool) + '">Install</button></div>'; });
+    var needs = runtimeNeeds(c.runtimes || []);
+    var needTools = {};
+    needs.forEach(function (g) { needTools[g.tool] = true; });
+    needs.forEach(function (g) {
+      var installed = Object.keys(g.installed).join(", ") || "none";
+      var wants = g.wants.join(" / ") || "any version";
+      var state = g.satisfied === true ? pill("ok", "satisfied") : g.satisfied === false ? pill("bad", "not satisfied") : pill("warn", "not checked");
+      h += '<div class="kv"><dt>' + esc(g.tool) + '</dt><dd>wants ' + esc(wants) + ' <span class="dim">(' + esc(Object.keys(g.sources).join(", ")) + ")</span> · installed " + esc(installed) + " " + state +
+        (g.satisfied === false ? ' <button type="button" class="btn btn-mini" data-action="nav" data-view="runtimes">Runtimes</button>' : "") + "</dd></div>";
+    });
+    missingNeeds(c.missing || []).forEach(function (m) {
+      h += '<div class="notice notice-warn"><span class="grow"><b>' + esc(m.tool) + "</b>: " + esc(m.why.join("; ")) + "</span>" +
+        (needTools[m.tool] ? "" : '<button type="button" class="btn btn-mini" data-action="tool-install" data-id="' + attr(m.tool) + '">Install</button>') + "</div>";
+    });
     (c.services || []).forEach(function (sv) { h += '<div class="kv"><dt>Service</dt><dd>' + esc(sv.tool) + " " + (sv.running ? pill("ok", "running") : sv.installed ? pill("warn", "stopped") : pill("bad", "missing")) + ' <span class="dim">' + esc(sv.why) + "</span></dd></div>"; });
     if (c.env && c.env.keys.length) h += '<div class="kv"><dt>Environment</dt><dd>' + c.env.keys.length + " variables in " + esc(c.env.example_files.join(", ")) + (c.env.unset_keys.length ? "; unset: " + esc(c.env.unset_keys.join(", ")) : "") + ' <span class="dim">(values are never shown)</span></dd></div>';
     if (c.docs.length) h += '<div class="kv"><dt>Docs</dt><dd class="mono">' + esc(c.docs.join(", ")) + "</dd></div>";
@@ -4991,6 +5043,7 @@
 
   var TC = { data: null, devices: null, loading: false };
   var TOOL_RUNTIME_IDS = { php: 1, node: 1, python: 1, ruby: 1, go: 1 };
+  var TOOL_CATEGORY = { vcs: "Version control", "package-manager": "Package managers", runtime: "Runtimes", build: "Build tools", mobile: "Mobile", framework: "Frameworks", editor: "Editors", browser: "Browsers", design: "Design", container: "Containers", database: "Databases", ai: "AI tools" };
 
   // Runtimes, services and databases have their own screens. Keeping them out
   // of Tools means each install, start and version appears in one place.
@@ -4999,6 +5052,13 @@
     if (t.tool.category === "database" || t.tool.category === "container") return true;
     if (t.tool.id === "nginx") return true;
     return !!TOOL_RUNTIME_IDS[t.tool.id];
+  }
+
+  /* Rails is a framework command, not a package manager. The catalogue's
+     category is metadata, but the Tools screen groups by what the tool is for. */
+  function toolCategory(t) {
+    if (t && t.tool && t.tool.id === "rails") return "framework";
+    return (t && t.tool && t.tool.category) || "utility";
   }
 
   function loadToolchain() {
@@ -5023,18 +5083,17 @@
     var q = state.filters.toolchain || "";
     var cats = {};
     tools.filter(function (t) { return !toolOwnedElsewhere(t) && keeps(q, t.tool.id, t.tool.name, t.tool.purpose, t.tool.category); })
-      .forEach(function (t) { (cats[t.tool.category] = cats[t.tool.category] || []).push(t); });
+      .forEach(function (t) { var c = toolCategory(t); (cats[c] = cats[c] || []).push(t); });
     var notes = [];
     if (!host.root && !host.sudo && host.os === "linux") notes.push("devd has neither root nor passwordless sudo, so package installs show the exact command to run yourself.");
     if (!host.managers.length) notes.push("No supported package manager was found; installs will show manual steps.");
-    var html = '<div class="ui-quiet">' + esc(host.os + " " + host.arch) + " \u00b7 package managers: " + esc(host.managers.join(", ") || "none") + "</div>" +
-      '<div class="ui-more">Tools here are CLI tools and package managers. Services, runtimes and databases have their own tabs.</div>' +
+    var html = '<div class="ui-more">The command-line tools and package managers projects use. Runtimes, services and databases each have their own tab.</div>' +
       notes.map(function (n) { return uiRow({ accent: true, dot: "warn", title: esc(n) }); }).join("") +
       '<div class="filter-row">' + filterBox("toolchain", "Search tools") + "</div>";
     if (!Object.keys(cats).length) html += uiEmpty('No tool matches "' + q + '"');
     Object.keys(cats).forEach(function (c) {
       var list = cats[c].slice().sort(function (a, b) { return (a.status.installed ? 1 : 0) - (b.status.installed ? 1 : 0); });
-      html += uiHead(c.charAt(0).toUpperCase() + c.slice(1), list.length) + uiList(list.map(function (t) {
+      html += uiHead(TOOL_CATEGORY[c] || (c.charAt(0).toUpperCase() + c.slice(1)), list.length) + uiList(list.map(function (t) {
         var st = t.status, sv = t.service, id = t.tool.id;
         var acts = "";
         if (!st.installed && !t.tool.per_project) acts += '<button type="button" class="btn btn-mini btn-primary" data-action="tool-install" data-id="' + attr(id) + '">Install</button>';
@@ -5232,6 +5291,7 @@
     home: null, askText: "", askProject: "",
     providers: null, presets: null, catalogue: null, provForm: null, provBusy: {}, localFound: null,
     threads: null, thread: null, events: [], pending: [], running: false, lastId: 0, queued: 0,
+    pickProvider: "", pickModel: "",
     composer: "", project: "", timer: null, openSteps: {}, todos: [], todosAt: 0,
     inbox: null, requests: null, history: null
   };
@@ -5847,6 +5907,8 @@
         if (!full) announceEvent(e);
       });
       AI.thread = d.thread; AI.pending = d.pending || []; AI.running = d.running; AI.chapters = d.chapters || [];
+      if (d.thread.provider_id) AI.pickProvider = d.thread.provider_id;
+      if (d.thread.model) AI.pickModel = d.thread.model;
       AI.queued = d.queued || 0;
       var idx = (AI.threads || []).map(function (t) { return t.id; }).indexOf(d.thread.id);
       if (idx >= 0) AI.threads[idx] = d.thread;
@@ -5997,8 +6059,8 @@
       '<button type="button" class="msg-act" data-action="msg-copy"' + at + ' title="Copy this reply"><svg class="icon" aria-hidden="true"><use href="#i-copy"></use></svg>Copy</button>' +
       '<button type="button" class="msg-act" data-action="msg-fork"' + at + ' title="Start a new conversation from this point. This one stays as it is"><svg class="icon" aria-hidden="true"><use href="#i-branch"></use></svg>Fork from here</button>' +
       (chapter
-        ? '<button type="button" class="msg-act msg-act-on" data-action="msg-pin"' + at + ' title="Remove this chapter"><svg class="icon" aria-hidden="true"><use href="#i-layers"></use></svg>Pinned: ' + esc(clip(chapter.title, 40)) + "</button>"
-        : '<button type="button" class="msg-act" data-action="msg-pin"' + at + ' title="Mark this reply as a chapter of the conversation"><svg class="icon" aria-hidden="true"><use href="#i-layers"></use></svg>Pin as chapter</button>') +
+        ? '<button type="button" class="msg-act msg-act-on" data-action="msg-pin"' + at + ' title="Remove this chapter"><svg class="icon" aria-hidden="true"><use href="#i-pin"></use></svg>Pinned: ' + esc(clip(chapter.title, 40)) + "</button>"
+        : '<button type="button" class="msg-act" data-action="msg-pin"' + at + ' title="Mark this reply as a chapter of the conversation"><svg class="icon" aria-hidden="true"><use href="#i-pin"></use></svg>Pin as chapter</button>') +
       "</div>";
   }
 
@@ -6173,11 +6235,27 @@
     // The model picker lives in the composer, where it is used, rather than in
     // a header above the conversation.
     var provs = (AI.providers || []).filter(function (p) { return p.enabled; });
-    var cur = (AI.thread && AI.thread.provider_id) ||
+    var cur = (AI.thread && AI.thread.provider_id) || AI.pickProvider ||
       (provs.filter(function (p) { return p.is_default; })[0] || provs[0] || {}).id;
-    var modelOpts = modelOptions(cur).map(function (m) { return '<option value="' + attr(m.model_id) + '"></option>'; }).join("");
     var current = provs.filter(function (p) { return p.id === cur; })[0];
-    var currentModel = (AI.thread && AI.thread.model) || (current && current.default_model) || "";
+    var currentModel = (AI.thread && AI.thread.model) || AI.pickModel || (current && current.default_model) || "";
+    var models = modelOptions(cur);
+    if (!currentModel && models.length) currentModel = models[0].model_id;
+    if (!AI.thread && !AI.pickModel && currentModel) AI.pickModel = currentModel;
+    var known = {};
+    var currentLabel = currentModel;
+    var modelRows = models.map(function (m) {
+      known[m.model_id] = true;
+      var label = m.display || m.model_id;
+      if (m.model_id === currentModel) currentLabel = label;
+      return '<option value="' + attr(m.model_id) + '" title="' + attr(label + (m.model_id !== label ? " (" + m.model_id + ")" : "")) + '"' + (m.model_id === currentModel ? " selected" : "") + ">" + esc(label) + "</option>";
+    }).join("");
+    if (currentModel && !known[currentModel]) {
+      modelRows = '<option value="' + attr(currentModel) + '" selected>' + esc(currentModel) + (models.length ? " (not in provider list)" : "") + "</option>" + modelRows;
+    }
+    if (!modelRows) {
+      modelRows = '<option value="' + attr(currentModel) + '" selected>' + (currentModel ? esc(currentModel) : "provider default") + "</option>";
+    }
     var projectName = AI.project || (state.project && state.project.path) || "";
 
     var composer =
@@ -6191,7 +6269,7 @@
       '<select class="composer-picker select-field" data-chat="provider" aria-label="Provider">' +
       (provs.length ? provs.map(function (p) { return '<option value="' + attr(p.id) + '"' + (p.id === cur ? " selected" : "") + ">" + esc(p.label) + "</option>"; }).join("") : '<option value="">no provider</option>') +
       "</select>" +
-      '<input class="composer-picker composer-model select-field mono" list="chat-models" data-chat="model" value="' + attr(currentModel) + '" placeholder="model" spellcheck="false" aria-label="Model"><datalist id="chat-models">' + modelOpts + "</datalist>" +
+      '<select class="composer-picker composer-model select-field" data-chat="model" aria-label="Model" title="' + attr(currentLabel + (currentModel && currentLabel !== currentModel ? " (" + currentModel + ")" : "")) + '">' + modelRows + "</select>" +
       "</div>" +
       '<div class="composer-right">' +
       // The slot holds exactly one primary action. While it works and the box
@@ -8049,6 +8127,14 @@
 
     "start-service": function (node) { act("service.start", { name: node.dataset.name }); },
 
+    "service-startup": function (node) {
+      var wanted = !!node.checked;
+      run("service.set_startup", { name: node.dataset.name, enabled: wanted }, { quiet: true }).then(function (o) {
+        if (!o) { node.checked = !wanted; return null; }
+        return loadServer().then(renderServices);
+      });
+    },
+
     "databases-start": function () {
       run("service.start", { name: "mariadb" }).then(function (outcome) {
         if (!outcome) return null;
@@ -8900,10 +8986,16 @@
   }
 
   function sendChat(args) {
-    run("chat.send", args).then(function (o) {
+    if (!args.thread) {
+      if (AI.pickProvider) args.provider = AI.pickProvider;
+      if (AI.pickModel) args.model = AI.pickModel;
+    }
+    run("chat.send", args, { quiet: true }).then(function (o) {
       if (!o) return;
       var id = (o.data && (o.data.id || o.data.thread)) || args.thread;
       if (!id) return;
+      if (o.data && o.data.provider_id) AI.pickProvider = o.data.provider_id;
+      if (o.data && o.data.model) AI.pickModel = o.data.model;
       var queued = (o.data && o.data.queued) || 0;
       if (queued > 0 && AI.thread && AI.thread.id === id) {
         // It is working; the header's queue count is the acknowledgement. A
@@ -8970,10 +9062,31 @@
     var t = e.target;
     if (t.id === "home-project") AI.askProject = t.value;
     if (t.id === "chat-project") AI.project = t.value;
-    if (t.dataset && t.dataset.chat && AI.thread) {
-      var args = { thread: AI.thread.id };
-      args[t.dataset.chat] = t.value;
-      run("chat.update", args).then(function () { return pollThread(false); }).then(paintChat);
+    if (t.dataset && t.dataset.chat === "provider") {
+      var provider = (AI.providers || []).filter(function (x) { return x.id === t.value; })[0];
+      var nextModel = (provider && provider.default_model) || (modelOptions(t.value)[0] || {}).model_id || "";
+      AI.pickProvider = t.value;
+      AI.pickModel = nextModel;
+      if (AI.thread) {
+        AI.thread.provider_id = t.value;
+        AI.thread.model = nextModel;
+        run("chat.update", { thread: AI.thread.id, provider: t.value, model: nextModel || "" }, { quiet: true })
+          .then(function () { return pollThread(false); })
+          .then(renderAssistant);
+      } else {
+        renderAssistant();
+      }
+      return;
+    }
+    if (t.dataset && t.dataset.chat === "model") {
+      AI.pickModel = t.value;
+      if (AI.thread) {
+        AI.thread.model = t.value;
+        run("chat.update", { thread: AI.thread.id, model: t.value }, { quiet: true })
+          .then(function () { return pollThread(false); })
+          .then(paintChat);
+      }
+      return;
     }
     if (t.dataset && t.dataset.provModel !== undefined && t.dataset.provModel !== "") setProviderModel(t.dataset.provModel, t.value.trim());
   });

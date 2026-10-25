@@ -45,6 +45,8 @@ args! {
     NoArgs {}
     /// A service by name.
     NameArgs { name: String }
+    /// A service and whether it belongs to the startup set.
+    StartupArgs { name: String, enabled: bool }
     /// A service and how many log lines to read.
     LogsArgs { name: String, lines: Option<u32> }
     /// A service to install.
@@ -388,6 +390,32 @@ fn register_service(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
+    reg.define::<StartupArgs>("service.set_startup", "Choose whether a service starts with the stack")
+    .description("Adds an installed service to, or removes it from, the set that `devd stack up` and the sign-in entry start. It changes the next startup, not whether the service is running now. The web server is chosen with web.use, and PHP listeners follow the installed runtimes. Human only: this decides what runs every time the stack starts.")
+    .group("service")
+    .tier(Tier::Write)
+    .effect(Effect::Config)
+    .human_only()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |ctx, a| {
+            ctx.store.get_service(&a.name)?.ok_or_else(|| DevdError::not_found(format!("`{}` is not a devd service", a.name)))?;
+            Ok(Plan::new(
+                "service.set_startup",
+                format!("{} {} in the startup set", if a.enabled { "add" } else { "remove" }, a.name),
+            )
+            .effect("changes which services the next stack up starts"))
+        },
+        |ctx, a| {
+            let status = services::set_startup(ctx, &a.name, a.enabled)?;
+            Ok(Outcome::with_data(
+                format!("{} is {} in the startup set", a.name, if a.enabled { "now" } else { "no longer" }),
+                serde_json::to_value(&status).unwrap_or(Value::Null),
+            ))
+        },
+    )?;
+
     reg.define::<LogsArgs>("service.logs", "Read a service log")
     .description("The last lines of a service's own log file - nginx's error output, the PHP \
          FastCGI listener's startup messages, MariaDB's error log.")
@@ -697,6 +725,18 @@ fn register_web(reg: &mut Registry) -> Result<()> {
             settings.web_server = chosen;
             settings.validate()?;
             settings.save(&file)?;
+            // Exactly one web server belongs to the stack. Choosing one also
+            // makes that choice true for the next `stack up`; otherwise the
+            // setting and the startup set would disagree.
+            for server in ["nginx", "apache"] {
+                if let Some(mut row) = ctx.store.get_service(server)? {
+                    let want = server == a.server;
+                    if row.enabled != want {
+                        row.enabled = want;
+                        ctx.store.upsert_service(&row)?;
+                    }
+                }
+            }
             Ok(Outcome::with_data(
                 format!("web_server is now {}; restart devd, stop the other web server and run `devd stack up` to apply it", a.server),
                 json!({ "web_server": a.server, "settings": file.display().to_string() }),

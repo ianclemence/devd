@@ -10,6 +10,59 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.13.6] - 2026-10-25 - The model picker is a selector, not a text box
+
+### Fixed
+
+- **The assistant model picker is now a real selector.** It uses the same
+  native `<select>` surface and interaction as the provider beside it. The
+  options are the models the selected provider actually lists, the current
+  choice is selected, and an unknown current model is shown as such rather than
+  silently disappearing. A provider change selects that provider's default
+  model, and a choice made before the first message is carried into that
+  message instead of being lost when the composer repaints.
+- **Sending a message no longer raises a toast.** “sent; the agent is working”
+  was the capability's result message being shown as a success notification on
+  every submission. The conversation's running state is the acknowledgement;
+  failures still report normally.
+- **Pin as chapter uses a pin.** The layers icon was the wrong metaphor for the
+  action and for the pinned state. A dedicated pin symbol is used for both,
+  with the same tooltip, accessible name and chapter behaviour.
+- **The terminal belongs to the project, not Stacks and tasks.** The action was
+  removed from the Develop page and added to the project page and the command
+  palette, where it opens the person's terminal in the project folder with its
+  pinned runtimes and `devd` first on `PATH`. The Develop page still detects and
+  runs tasks.
+- **Tools no longer prints machine implementation details.** The
+  `windows x86_64 · package managers: npm` line is gone; the screen says what
+  the tools are for and leaves runtimes, services and databases to their own
+  tabs.
+
+### Added
+
+- **A startup set for services.** `service.set_startup` records whether an
+  installed service is included when `stack up` runs, including the sign-in
+  entry. The Services screen shows a Startup checkbox for the services a person
+  may choose; the web server remains controlled by `web.use`, and PHP listeners
+  follow installed runtimes. Newly installed optional infrastructure (Redis,
+  Mailpit, a second database) starts out of the startup set instead of joining
+  every startup silently.
+
+### Changed
+
+- **Project detection says what it knows.** The Develop project list shows
+  “not detected yet” rather than “unknown stack” for rows the list has not
+  inspected. Runtime requirements are grouped by tool and keep every source
+  (for example `package.json engines.node` and `.nvmrc`) instead of repeating
+  the same tool as if it were several unrelated requirements. An unsatisfied
+  requirement links to Runtimes rather than implying that a generic install
+  will choose the exact version the project asked for.
+- **The README and limitations page are UTF-8 again.** An earlier Windows text
+  round-trip had left `â€”`, `â€¦` and `â†’` in the first documents a user reads.
+  A contract test now refuses that class of regression there too.
+
+---
+
 ## [0.13.5] - 2026-10-25 - One control group in the composer
 
 ### Fixed

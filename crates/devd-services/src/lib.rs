@@ -162,6 +162,16 @@ pub fn definition(name: &str) -> Option<&'static Definition> {
         .find(|d| d.name == name || d.kind == name)
 }
 
+/// Whether a newly installed service joins `stack.up` without being asked.
+///
+/// The web server and database are the stack every site needs; optional
+/// infrastructure (Redis, Mailpit, a second database) is installed for a reason
+/// but should not quietly add itself to every startup. A person can add it with
+/// `service.set_startup`.
+fn startup_default(name: &str) -> bool {
+    matches!(name, "nginx" | "mariadb") || name.starts_with(PHP_SERVICE)
+}
+
 /// The PHP FastCGI listener that nginx hands PHP requests to.
 ///
 /// It is not "installed" like the others: it comes from a PHP runtime, so its
@@ -601,6 +611,43 @@ pub fn status(ctx: &Ctx, name: &str) -> Result<Status> {
     })
 }
 
+/// Add a service to, or remove it from, the set `stack.up` starts.
+///
+/// This changes the next startup, not the currently running process: a person
+/// who removes a running service from the startup set still has to stop it.
+pub fn set_startup(ctx: &Ctx, name: &str, enabled: bool) -> Result<Status> {
+    if name.starts_with(PHP_SERVICE) {
+        return Err(DevdError::denied(
+            "PHP listeners follow the installed PHP runtimes; install or remove a runtime on Runtimes instead",
+        ));
+    }
+    if matches!(name, "nginx" | "apache") {
+        return Err(DevdError::denied(
+            "the web server in the stack is chosen with `web.use`; it keeps exactly one web server enabled",
+        ));
+    }
+    let mut service = ctx.store.get_service(name)?.ok_or_else(|| {
+        DevdError::not_found(format!(
+            "`{name}` is not a devd service; run `devd service install {name}`"
+        ))
+    })?;
+    if !program_of(&service).map(|p| p.is_file()).unwrap_or(false) {
+        return Err(DevdError::invalid(format!(
+            "{name} is recorded but its files are not installed; install it before adding it to startup"
+        )));
+    }
+    if service.enabled != enabled {
+        service.enabled = enabled;
+        ctx.store.upsert_service(&service)?;
+        ctx.events.emit_with(
+            "service.startup",
+            format!("{} {}", name, if enabled { "added to" } else { "removed from" }),
+            json!({ "name": name, "enabled": enabled, "by": ctx.actor.label() }),
+        );
+    }
+    status(ctx, name)
+}
+
 /// Every service `devd` knows about.
 pub fn list(ctx: &Ctx) -> Result<Vec<Status>> {
     let mut out = Vec::new();
@@ -950,7 +997,7 @@ fn finish_install(
         health: None,
         desired_state: "stopped".to_string(),
         restart_policy: "on-failure".to_string(),
-        enabled: true,
+        enabled: startup_default(def.name),
         created_at: util::now(),
     });
 
@@ -2119,6 +2166,43 @@ fn running_pid_for_check(paths: &Paths, service: &Service) -> Option<u32> {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn optional_services_do_not_join_startup_by_default() {
+        assert!(startup_default("nginx"));
+        assert!(startup_default("mariadb"));
+        assert!(startup_default("php-cgi-8.4"));
+        assert!(!startup_default("apache"));
+        assert!(!startup_default("redis"));
+        assert!(!startup_default("mailpit"));
+    }
+
+    #[test]
+    fn a_startup_choice_persists_and_the_web_server_is_not_toggled_here() {
+        let c = ctx("startup-choice");
+        let exe = c.paths.root().join("redis-server.exe");
+        std::fs::write(&exe, b"binary").unwrap();
+        c.store
+            .upsert_service(&Service {
+                id: util::new_id(),
+                name: "redis".into(),
+                kind: "redis".into(),
+                runtime_id: None,
+                argv: serde_json::to_string(&vec![exe.display().to_string()]).unwrap(),
+                port: Some(6379),
+                health: None,
+                desired_state: "stopped".into(),
+                restart_policy: "on-failure".into(),
+                enabled: false,
+                created_at: util::now(),
+            })
+            .unwrap();
+        let after = set_startup(&c, "redis", true).unwrap();
+        assert!(after.enabled);
+        assert!(c.store.get_service("redis").unwrap().unwrap().enabled);
+        assert!(set_startup(&c, "nginx", true).is_err());
+        let _ = std::fs::remove_dir_all(c.paths.root());
+    }
 
     #[test]
     fn a_pool_has_one_port_per_worker_and_names_that_round_trip() {

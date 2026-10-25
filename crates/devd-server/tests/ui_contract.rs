@@ -7,6 +7,8 @@ use base64::Engine;
 const APP: &str = include_str!("../ui/app.js");
 const HTML: &str = include_str!("../ui/index.html");
 const CSS: &str = include_str!("../ui/style.css");
+const README: &str = include_str!("../../../README.md");
+const LIMITATIONS: &str = include_str!("../../../docs/limitations.md");
 
 fn quoted_after(src: &str, marker: &str) -> Vec<String> {
     // every "word" inside the first [...] or {...} block following `marker`
@@ -34,6 +36,17 @@ fn the_interface_text_is_not_double_encoded() {
                 !src.contains(bad),
                 "{name} contains double-encoded text ({bad:?}); write UI files as UTF-8 without a BOM"
             );
+        }
+    }
+}
+
+#[test]
+fn the_readme_and_limitations_are_not_double_encoded() {
+    // The same ANSI round-trip that hit the interface files had reached the
+    // README and the limitations page. The user reads those first.
+    for (name, src) in [("README.md", README), ("docs/limitations.md", LIMITATIONS)] {
+        for bad in ["Ã", "Â", "â€", "ï»¿", "\u{FFFD}"] {
+            assert!(!src.contains(bad), "{name} contains double-encoded text ({bad:?})");
         }
     }
 }
@@ -512,4 +525,54 @@ fn the_site_screens_word_what_the_server_says_and_never_assume_php() {
     );
     assert!(APP.contains("php_unused_pin"), "a pin that nothing uses is shown as unused, with a way to clear it");
     assert!(APP.contains("data-change=\"site-serving\""), "what a directory serves can be chosen from the site page");
+}
+
+#[test]
+fn the_model_picker_uses_the_provider_selector_pattern() {
+    // A datalist input looked like a select but never behaved like the provider
+    // next to it: no options until focus, no shared dismiss/keyboard behaviour,
+    // and a selection made before the first message was lost on the next paint.
+    assert!(APP.contains("data-chat=\"model\" aria-label=\"Model\""));
+    assert!(!APP.contains("id=\"chat-models\""), "the model picker is not a datalist any more");
+    assert!(APP.contains("AI.pickProvider") && APP.contains("AI.pickModel"), "a model picked before the first message is remembered");
+    assert!(APP.contains("args.provider = AI.pickProvider"), "the first message carries the picked provider");
+    assert!(APP.contains("args.model = AI.pickModel"), "the first message carries the picked model");
+}
+
+#[test]
+fn chapters_use_a_pin_icon_not_a_layers_icon() {
+    assert!(HTML.contains("symbol id=\"i-pin\""), "there is a pin symbol");
+    assert!(APP.contains("href=\"#i-pin\""), "the chapter action uses the pin");
+    assert!(!APP.contains("href=\"#i-layers\""), "the chapter action no longer uses the layers icon");
+}
+
+#[test]
+fn normal_message_sending_does_not_toast() {
+    // The conversation's own running state is the acknowledgement. The
+    // capability's message is still available to a CLI caller, but the window
+    // does not turn every submission into a toast.
+    assert!(APP.contains("run(\"chat.send\", args, { quiet: true })"));
+}
+
+#[test]
+fn tools_do_not_show_machine_implementation_metadata() {
+    assert!(
+        !APP.contains("package managers: "),
+        "the Tools screen is about tools, not the operating system and package-manager list"
+    );
+}
+
+#[test]
+fn the_terminal_action_belongs_to_the_project_not_the_develop_page() {
+    assert_eq!(
+        APP.matches("data-action=\"open-terminal\"").count(),
+        1,
+        "there is one terminal action, on the project page"
+    );
+    let start = APP.find("function renderProject()").expect("project page");
+    let end = start + APP[start..].find("// -------------------------------------------------------------- capabilities").expect("next section");
+    assert!(APP[start..end].contains("data-action=\"open-terminal\""), "the project page offers the terminal");
+    let dev = APP.find("function renderDevelop()").expect("develop page");
+    let dev_end = dev + APP[dev..].find("function procPanel()").expect("procPanel");
+    assert!(!APP[dev..dev_end].contains("data-action=\"open-terminal\""), "the Stacks and tasks page no longer launches a terminal");
 }

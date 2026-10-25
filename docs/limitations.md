@@ -1,16 +1,16 @@
-﻿# Known limitations
+# Known limitations
 
 This document lists what `devd` does not implement, what it implements
 partially, and the platform-specific behaviour worth knowing before relying on
 it. Each entry states the consequence and, where one exists, the change that
 would close it.
 
-This document describes the current release, v0.13.3. See
+This document describes the current release, v0.13.6. See
 [`CHANGELOG.md`](../CHANGELOG.md) for what it contains.
 
 ## The command line
 
-`php` and `composer` in a terminal need devd's folder on your `PATH` (`devd path enable`, **Server â†’ Runtimes â†’ Command line**, or the Windows installer). A terminal opened before that does not see it. The launcher is not a shell function, so a program that starts `php` by an absolute path (`C:\...\php.exe`) is not redirected. Only `php` and `composer` have launchers; `node`, `npm`, `python` and `go` are not wrapped. The `PATH` edit on Linux and macOS is written and tested against a scratch file but has not been run on a real login shell.
+`php` and `composer` in a terminal need devd's folder on your `PATH` (`devd path enable`, **Server → Runtimes → Command line**, or the Windows installer). A terminal opened before that does not see it. The launcher is not a shell function, so a program that starts `php` by an absolute path (`C:\...\php.exe`) is not redirected. Only `php` and `composer` have launchers; `node`, `npm`, `python` and `go` are not wrapped. The `PATH` edit on Linux and macOS is written and tested against a scratch file but has not been run on a real login shell.
 
 A Composer installed by winget (`Composer.Composer`) is the vendor's own launcher and needs `php` on `PATH`; with devd's folder on `PATH` it finds devd's PHP. `devd composer install` gives devd its own copy that does not depend on that.
 
@@ -111,7 +111,7 @@ A portable stack (the other stack, XAMPP, WampServer) serves sites with Apache, 
 | Item | What it is | What it would be |
 | --- | --- | --- |
 | nginx's download | nginx.org publishes a PGP signature and no checksum file. `devd` checks the length and says, in the install result and here, that it could not check a digest. | Verify the detached PGP signature against nginx's key, which requires a PGP implementation in-process. This is the one honest gap in the digest story; PHP, Node, Go and MariaDB are all verified against a digest the vendor publishes. |
-| Service versions | One version per service name. Installing another replaces the directory after the running service is stopped, and `--force` is required to replace an existing install. | Side-by-side service versions, selected per site â€” which is what the PHP record on a site implies but does not yet deliver. |
+| Service versions | One version per service name. Installing another replaces the directory after the running service is stopped, and `--force` is required to replace an existing install. | Side-by-side service versions, selected per site — which is what the PHP record on a site implies but does not yet deliver. |
 | Startup detection | The port opening is the health check, with a per-service window (nginx 10s, MariaDB 60s, php-cgi 10s). A service that opens its port and then fails is not detected. | A real health endpoint per service, and restart-on-failure driven by the supervisor rather than only by the next command. |
 | Supervision | Each service is spawned detached and tracked by a pid file, verified against the process image so a recycled pid is not mistaken for the service. There is no daemon holding a job object. | A Windows Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, and a small background supervisor, so children die with `devd` even when it is terminated abruptly. Today every ordinary start/stop/restart path is covered; `TerminateProcess` is not. |
 | Orphan recovery | If the pid file is lost, `devd` no longer knows the pid of a running service and `service stop` cannot find it. The port check still reports the service as running. | Rediscovery by listening port and image name. |
@@ -131,7 +131,7 @@ A portable stack (the other stack, XAMPP, WampServer) serves sites with Apache, 
 | Revocation | No OCSP, no CRL, no certificate transparency. A leaf is trusted because the CA is trusted. | Revocation is not meaningful for a local CA of this size; a short leaf lifetime is the current mitigation. |
 | Hosts file | Writing it needs elevation on Windows. The operation is a separate, explicitly approved capability (`hosts.sync`, `Tier::Admin`), snapshots the file first and preserves every line outside its own block. `DEVD_HOSTS_FILE` points it at another file, which is what makes it testable without elevation. | A DNS server on loopback, which removes the elevation requirement and gives wildcard names. |
 | Site removal | `site.remove` deletes the site row, its vhost and its certificate, and keeps the project directory unless `--delete-files` is passed. It refuses to delete a directory outside the `www` root. | A trash/undo window before the directory is removed. |
-| Hosts and DNS as one step | Adding a site and publishing its name are two capabilities with two tiers, on purpose. A script that forgets the second leaves the site unreachable by name. | Nothing â€” the split is the design. `site list` reports which names are not published. |
+| Hosts and DNS as one step | Adding a site and publishing its name are two capabilities with two tiers, on purpose. A script that forgets the second leaves the site unreachable by name. | Nothing — the split is the design. `site list` reports which names are not published. |
 
 ## The terminal dashboard
 
@@ -220,7 +220,7 @@ and are recorded so they are not rediscovered:
 * **The final link must not go through Zig on this host.** With no MSVC build
   tools, the GNU target's default linker here is a `cc` that forwards to Zig.
   Linking the release `devd` that way produced a binary that faulted at
-  `0xc0000005` inside its own code before `main`, with no output â€” release only,
+  `0xc0000005` inside its own code before `main`, with no output — release only,
   while debug and the whole test suite were fine. `.cargo/config.toml` pins
   `linker = "rust-lld"` for `x86_64-pc-windows-gnu` alone, with the reason
   recorded beside it. C sources are still compiled by `cc`, and a build on MSVC
@@ -230,19 +230,19 @@ and are recorded so they are not rediscovered:
   frame that clap's derive macro generates for this command line outgrew it, so
   `devd --help` died with "has overflowed its stack" before parsing anything,
   while the release build was fine. The same config section raises the reserve to
-  8 MB â€” what a Linux main thread and a spawned Rust thread already get. It is
+  8 MB — what a Linux main thread and a spawned Rust thread already get. It is
   reserved address space, not committed memory.
 * **A detached service must not inherit the caller's handles.** On Windows a
   service started with `DETACHED_PROCESS` still inherited `devd`'s own stdout.
-  When that stdout was a pipe â€” `devd stack up | Tee-Object out.txt`, or an
-  editor's terminal â€” the shell waited for the pipe to close, which meant waiting
+  When that stdout was a pipe — `devd stack up | Tee-Object out.txt`, or an
+  editor's terminal — the shell waited for the pipe to close, which meant waiting
   for nginx to exit, which is forever. The command printed its result and then
   appeared to hang. `process::isolate_standard_handles` clears the inheritance
   flag on `devd`'s own three standard handles before a service is spawned; every
   child gets its handles explicitly, so nothing is lost.
 * **`Path::with_extension` replaces everything after the last dot.** Certificate
   files are named after the host (`certs/blog.test.crt`, `certs/blog.test.key`),
-  and building those paths with `with_extension` produced `certs/blog.crt` â€” so
+  and building those paths with `with_extension` produced `certs/blog.crt` — so
   nginx was told to load a file that `devd` had never written, and refused to
   start. The paths are now built from the whole file name, `atomic_write` derives
   its temporary name the same way, and a test asserts the exact leaf paths.
