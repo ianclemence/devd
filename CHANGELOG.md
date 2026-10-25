@@ -10,6 +10,18 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.13.5] - 2026-10-25 - One control group in the composer
+
+### Fixed
+
+- **The model picker now matches the provider picker.** In the Assistant
+  composer the editable model/datalist input now uses the same surface, border,
+  height, padding, text colour, hover and focus treatment, and chevron as the
+  provider select directly beside it. The two read as one control group rather
+  than a select followed by a bare text field.
+
+---
+
 ## [0.13.4] - 2026-10-25 - The team room
 
 ### Added

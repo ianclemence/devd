@@ -6191,7 +6191,7 @@
       '<select class="composer-picker select-field" data-chat="provider" aria-label="Provider">' +
       (provs.length ? provs.map(function (p) { return '<option value="' + attr(p.id) + '"' + (p.id === cur ? " selected" : "") + ">" + esc(p.label) + "</option>"; }).join("") : '<option value="">no provider</option>') +
       "</select>" +
-      '<input class="composer-picker mono" list="chat-models" data-chat="model" value="' + attr(currentModel) + '" placeholder="model" spellcheck="false" aria-label="Model"><datalist id="chat-models">' + modelOpts + "</datalist>" +
+      '<input class="composer-picker composer-model select-field mono" list="chat-models" data-chat="model" value="' + attr(currentModel) + '" placeholder="model" spellcheck="false" aria-label="Model"><datalist id="chat-models">' + modelOpts + "</datalist>" +
       "</div>" +
       '<div class="composer-right">' +
       // The slot holds exactly one primary action. While it works and the box
