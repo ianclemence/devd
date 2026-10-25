@@ -2544,11 +2544,18 @@
     var installed = serviceUnits(rows).map(function (unit) {
       if (unit.rows) return phpUnitRow(unit, false);
       var svc = unit.row;
+      var activeWeb = (state.session && state.session.settings && state.session.settings.web_server) || "nginx";
+      var webControl = "";
+      if (svc.name === "nginx" || svc.name === "apache") {
+        webControl = activeWeb === svc.name
+          ? '<span class="pill pill-accent">serving sites</span>'
+          : (svc.installed ? '<button type="button" class="btn btn-mini" data-action="web-use" data-name="' + attr(svc.name) + '">Use for sites</button>' : "");
+      }
       return uiRow({
         dot: svc.running ? "ok" : "off",
         title: brandImg(svc.kind || svc.name, "brand-dot") + esc(svc.name) + (svc.version ? ' <span class="ui-quiet" style="display:inline;padding:0">' + esc(svc.version) + "</span>" : ""),
         sub: esc([servicePorts(svc), svc.running && svc.pid ? "pid " + svc.pid : svc.installed ? "stopped" : "files missing"].filter(Boolean).join(" · ")),
-        actions: startupToggle(svc) + (svc.running
+        actions: webControl + startupToggle(svc) + (svc.running
           ? '<button type="button" class="btn btn-mini" data-action="stop-service" data-name="' + attr(svc.name) + '">Stop</button>'
           : svc.installed
             ? '<button type="button" class="btn btn-mini btn-primary" data-action="start-service" data-name="' + attr(svc.name) + '">Start</button>'
@@ -8132,6 +8139,13 @@
       run("service.set_startup", { name: node.dataset.name, enabled: wanted }, { quiet: true }).then(function (o) {
         if (!o) { node.checked = !wanted; return null; }
         return loadServer().then(renderServices);
+      });
+    },
+
+    "web-use": function (node) {
+      run("web.use", { server: node.dataset.name }).then(function (o) {
+        if (!o) return null;
+        return loadSession().catch(function () {}).then(function () { return loadServer(); }).then(renderServices);
       });
     },
 

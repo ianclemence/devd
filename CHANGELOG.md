@@ -47,6 +47,10 @@ may change capability identifiers where the design was wrong.
   follow installed runtimes. Newly installed optional infrastructure (Redis,
   Mailpit, a second database) starts out of the startup set instead of joining
   every startup silently.
+- **The active web server is visible and selectable.** When both nginx and
+  Apache are installed, the Services screen marks which one serves sites and
+  offers “Use for sites” on the other; choosing one updates the setting and the
+  startup set together, so the next stack starts the server the person chose.
 
 ### Changed
 

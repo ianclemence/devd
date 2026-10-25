@@ -697,7 +697,7 @@ fn register_web(reg: &mut Registry) -> Result<()> {
     )?;
 
     reg.define::<UseWebArgs>("web.use", "Choose the web server: nginx or apache")
-    .description("Sets which web server fronts the sites. Apache reads .htaccess files, so a site written          for shared hosting or XAMPP works unchanged; nginx is lighter. The choice is a setting, so it          applies the next time devd starts: stop the running server, restart devd, then bring the stack up.          The server has to be installed first. Human only.")
+    .description("Sets which web server fronts the sites. Apache reads .htaccess files, so a site written for shared hosting or XAMPP works unchanged; nginx is lighter. The chosen server joins the startup set and the other leaves it. The setting applies the next time devd starts: stop the running server, restart devd, then bring the stack up. The server has to be installed first. Human only.")
     .group("web")
     .tier(Tier::Write)
     .effect(Effect::Config)
@@ -738,7 +738,7 @@ fn register_web(reg: &mut Registry) -> Result<()> {
                 }
             }
             Ok(Outcome::with_data(
-                format!("web_server is now {}; restart devd, stop the other web server and run `devd stack up` to apply it", a.server),
+                format!("web_server is now {}; it is in the startup set and the other web server is not. Restart devd, stop the running server and run `devd stack up` to apply it", a.server),
                 json!({ "web_server": a.server, "settings": file.display().to_string() }),
             ))
         },
