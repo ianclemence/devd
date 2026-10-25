@@ -10,6 +10,22 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.13.3] - 2026-10-25 - The punctuation is text, not bytes
+
+### Fixed
+
+- **Double-encoded UI text is repaired.** A Windows text rewrite had encoded
+  `…`, `·`, `→`, `—`, `≥`, `≈`, `✓`, `★` and `–` as their UTF-8 bytes read through
+  Windows-1252, so the window showed strings such as `â€¦` and `Â·`. The UI source
+  is now plain UTF-8 again.
+- **A UI contract test now refuses that class of regression.** Every embedded
+  interface file is checked for `Ã`, `Â`, `â€`, a UTF-8 BOM and U+FFFD, so a future
+  ANSI round-trip fails the build instead of shipping.
+- An incomplete, uncommitted navigation experiment was removed; the committed
+  server/site information architecture is the one in this build.
+
+---
+
 ## [0.13.2] - 2026-10-25 - Approval is the person's authority
 
 ### Fixed

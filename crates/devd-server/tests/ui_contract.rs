@@ -24,6 +24,21 @@ fn quoted_after(src: &str, marker: &str) -> Vec<String> {
 }
 
 #[test]
+fn the_interface_text_is_not_double_encoded() {
+    // The UI is embedded with include_str!; one write through a Windows ANSI
+    // code page can turn every ellipsis, middot and arrow into `Ã¢â‚¬Â¦` and ship
+    // silently. These are the fingerprints of that mistake, plus U+FFFD.
+    for (name, src) in [("app.js", APP), ("index.html", HTML), ("style.css", CSS)] {
+        for bad in ["Ã", "Â", "â€", "ï»¿", "\u{FFFD}"] {
+            assert!(
+                !src.contains(bad),
+                "{name} contains double-encoded text ({bad:?}); write UI files as UTF-8 without a BOM"
+            );
+        }
+    }
+}
+
+#[test]
 fn every_destination_has_a_page() {
     let mut views: Vec<String> = Vec::new();
     // the rail
@@ -178,17 +193,36 @@ fn server_and_site_tabs_match_the_agreed_information_architecture() {
         .split("]]")
         .next()
         .unwrap();
-    let labels = ["Overview", "Sites", "Services", "Tools", "Runtimes", "Databases", "Remote", "Certificates", "Hosts"];
+    let labels = ["Overview", "Services", "Runtimes", "Databases", "Tools", "Remote"];
     let mut at = 0;
     for label in labels {
         let needle = format!("\"{label}\"");
         let found = server[at..]
             .find(&needle)
-            .unwrap_or_else(|| panic!("{label} is missing or out of order in the server tabs"));
+            .unwrap_or_else(|| panic!("{label} is missing or out of order in the environment tabs"));
         at += found + needle.len();
     }
-    assert!(!server.contains("\"operations\""), "Operations is a fallback route, not a visible server tab");
+    assert!(!server.contains("\"sites\""), "Sites is a top-level destination, not an Environment tab");
+    assert!(!server.contains("\"operations\""), "Operations is a fallback route, not a visible Environment tab");
     assert!(!server.contains("\"preview\""), "Preview belongs to the site page");
+
+    let sites = APP
+        .split("sites: [[")
+        .nth(1)
+        .expect("site tabs")
+        .split("]]")
+        .next()
+        .unwrap();
+    let mut at = 0;
+    for label in ["All sites", "Hosts", "Certificates"] {
+        let needle = format!("\"{label}\"");
+        let found = sites[at..]
+            .find(&needle)
+            .unwrap_or_else(|| panic!("{label} is missing or out of order in the Sites tabs"));
+        at += found + needle.len();
+    }
+    assert!(APP.contains("{ view: \"sites\", label: \"Sites\""), "Sites is a first-class rail destination");
+    assert!(APP.contains("page(\"Environment\""), "the environment screen does not call itself a single server");
 
     let site = quoted_after(APP, "var SITE_TABS = [");
     assert_eq!(

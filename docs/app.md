@@ -170,9 +170,17 @@ risk of what you are about to run.
 
 ## Navigation
 
+The window has one primary axis and one permanent context layer. A person
+works on **projects**; their **sites** are the addresses through which that work
+is reached; the **environment** is the stack underneath both. Sites is therefore
+a destination of its own, not a tab inside the environment, and Home shows the
+state of all three at once.
+
 | Area | Source of truth |
 | --- | --- |
+| Home | projects, sites, services, runtimes, approvals, the audit trail |
 | Projects | `git.repo.list`, `git.status` |
+| Sites | `site.list`; hosts under `hosts.show`, certificates under `tls.list` |
 | Working tree | `git.status`, `git.diff`, `git.stage`, `git.unstage`, `git.commit` |
 | History | `git.log`, `git.show`, `git.search`, `git.revert`, `git.cherry.pick` |
 | Branches | `git.branch.list`, `git.switch`, `git.switch.check`, `git.merge`, `git.branch.create`, `git.branch.rename`, `git.branch.delete` |
@@ -185,7 +193,8 @@ risk of what you are about to run.
 | Activity | the audit table |
 | System | the shared doctor checks, paths, settings |
 | Project → Reviews / Agent memory | `review.*`, `memory.*`, `compat.*` |
-| Services, sites, runtimes, certificates, hosts | the Server screen, each tab reading its own capability group |
+| Environment (services, runtimes, databases, tools, remote) | the Environment screen, each tab reading its own capability group |
+| Hosts and certificates | tabs of Sites; both are properties of an address |
 
 Every panel reads a real capability. There are no placeholder controls, because a
 switch that does nothing is worse than an honest empty state.

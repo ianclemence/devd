@@ -141,6 +141,8 @@
     doctor: null,
     health: null,
     projects: [],
+    projectsLoaded: false,
+    projectsError: "",
     projectQuery: "",
     projectSort: "name",
     project: null,
@@ -216,7 +218,7 @@
   function clip(text, max) {
     var s = String(text == null ? "" : text);
     if (s.length <= max) return s;
-    return s.slice(0, max) + "\nâ€¦ " + (s.length - max) + " more characters (full output is in the transcript)";
+    return s.slice(0, max) + "\n… " + (s.length - max) + " more characters (full output is in the transcript)";
   }
 
   function el(id) {
@@ -239,7 +241,7 @@
     var to = Math.min(total, (page + 1) * PAGE_SIZE);
     return (
       '<div class="pager">' +
-      '<span class="pager-count">Showing ' + from + "â€“" + to + " of " + total + "</span>" +
+      '<span class="pager-count">Showing ' + from + "–" + to + " of " + total + "</span>" +
       '<div class="pager-buttons">' +
       '<button type="button" class="btn btn-mini" data-action="' + action + '" data-page="' + (page - 1) + '"' + (page === 0 ? " disabled" : "") + ">Previous</button>" +
       '<span class="pager-page">Page ' + (page + 1) + " of " + pages + "</span>" +
@@ -689,7 +691,7 @@
     });
     if (listing) {
       (listing.roots || []).forEach(function (r) {
-        chips.push('<span class="picker-place-sep" aria-hidden="true">Â·</span>');
+        chips.push('<span class="picker-place-sep" aria-hidden="true">·</span>');
         chips.push(
           '<button type="button" class="picker-place" data-action="picker-goto" data-path="' + attr(r.path) + '">' +
           esc(r.label) + "</button>"
@@ -938,12 +940,13 @@
 
   var GO_TO = [
     ["home", "Home", "what needs you, what is running"], ["inbox", "Inbox", "approvals and questions from agents"],
-    ["assistant", "Assistant", "talk to the built-in agent"], ["projects", "Projects", "repositories and stacks"],
+    ["projects", "Projects", "repositories, folders and stacks"], ["sites", "Sites", "addresses, serving and certificates"],
+    ["assistant", "Assistant", "talk to the built-in agent"], ["agents", "Team", "your team and what each member does"],
     ["create", "New project", "start from a stack"], ["develop", "Stacks and tasks", "detect and run project tasks"],
-    ["agents", "Agents", "your team and what each member does"], ["schedules", "Schedules", "team runs on a clock"], ["shared", "Shared notes", "notes agents share"],
+    ["schedules", "Schedules", "team runs on a clock"], ["shared", "Shared notes", "notes agents share"],
     ["mcp", "MCP servers", "tools from other programs"],
-    ["processes", "Processes", "supervised project processes and logs"], ["overview", "Server", "local web server overview"],
-    ["services", "Services", "nginx, PHP, MariaDB and others"], ["sites", "Sites", "projects served on local hostnames"],
+    ["processes", "Processes", "supervised project processes and logs"], ["overview", "Environment", "services, runtimes and sites"],
+    ["services", "Services", "nginx, PHP, MariaDB and others"],
     ["toolchain", "Tools", "CLI tools and package managers"], ["runtimes", "Runtimes", "language versions and PHP settings"],
     ["databases", "Databases", "database users and backups"], ["remote", "Remote", "servers, SSH keys and Ploi"],
     ["certificates", "Certificates", "local HTTPS"], ["hosts", "Hosts", "hostname entries"],
@@ -1068,7 +1071,7 @@
     el("palette").hidden = false;
     var input = el("palette-input");
     input.value = "";
-    input.placeholder = "Search projects, files, conversations, modelsâ€¦ or type > to do something, ? to ask";
+    input.placeholder = "Search projects, files, conversations, models… or type > to do something, ? to ask";
     input.focus();
     paletteSearch("");
   }
@@ -1097,8 +1100,8 @@
     }
     var src = (PAL.sources || []).map(function (s) {
       return s.searched ? s.source + (s.complete === false ? " (partial)" : "") : s.source + " (not searched: " + s.note + ")";
-    }).join(" Â· ");
-    el("palette-foot").innerHTML = '<span>â†‘â†“ move</span><span>Enter open</span><span>Esc close</span>' + (src ? '<span class="grow nowrap" title="' + attr(src) + '">searched: ' + esc(src) + "</span>" : '<span class="grow dim nowrap">> do Â· / files Â· ~ text Â· @ projects Â· # conversations Â· ? ask</span>');
+    }).join(" · ");
+    el("palette-foot").innerHTML = '<span>↑↓ move</span><span>Enter open</span><span>Esc close</span>' + (src ? '<span class="grow nowrap" title="' + attr(src) + '">searched: ' + esc(src) + "</span>" : '<span class="grow dim nowrap">> do · / files · ~ text · @ projects · # conversations · ? ask</span>');
   }
 
   function paletteActivate(index) {
@@ -1121,16 +1124,18 @@
   var AREA = {
     assistant: "assistant", team: "agents",
     projects: "projects", project: "projects", create: "projects", develop: "projects",
+    sites: "sites", site: "sites", hosts: "sites", certificates: "sites",
     agents: "agents", schedules: "agents", shared: "agents", skills: "agents", mcp: "agents",
-    overview: "server", services: "server", sites: "server", site: "server", operations: "server", toolchain: "server", runtimes: "server",
-    databases: "server", remote: "server", preview: "server", certificates: "server", hosts: "server"
+    overview: "server", services: "server", operations: "server", toolchain: "server", runtimes: "server",
+    databases: "server", remote: "server", preview: "server"
   };
   var TABS = {
     projects: [["projects", "Projects"], ["create", "New project"], ["develop", "Stacks and tasks"]],
+    sites: [["sites", "All sites"], ["hosts", "Hosts"], ["certificates", "Certificates"]],
     agents: [["agents", "Team"], ["team", "Runs"], ["schedules", "Schedules"], ["skills", "Skills"], ["shared", "Notes"], ["mcp", "MCP"]],
-    server: [["overview", "Overview"], ["sites", "Sites"], ["services", "Services"], ["toolchain", "Tools"], ["runtimes", "Runtimes"], ["databases", "Databases"], ["remote", "Remote"], ["certificates", "Certificates"], ["hosts", "Hosts"]]
+    server: [["overview", "Overview"], ["services", "Services"], ["runtimes", "Runtimes"], ["databases", "Databases"], ["toolchain", "Tools"], ["remote", "Remote"]]
   };
-  var AREA_HOME = { assistant: "assistant", projects: "projects", agents: "agents", server: "overview" };
+  var AREA_HOME = { assistant: "assistant", projects: "projects", sites: "sites", agents: "agents", server: "overview" };
 
   function areaOf(view) { return AREA[view] || view; }
 
@@ -1138,7 +1143,7 @@
     var area = AREA[state.view];
     var tabs = area && TABS[area];
     var box = el("subnav");
-    if (!tabs || state.view === "project") { box.hidden = true; box.innerHTML = ""; return; }
+    if (!tabs || state.view === "project" || state.view === "site") { box.hidden = true; box.innerHTML = ""; return; }
     box.hidden = false;
     box.innerHTML = tabs.map(function (t) {
       var active = state.view === t[0] || (t[0] === "sites" && state.view === "site");
@@ -1148,8 +1153,8 @@
 
   var RAIL_ICON = {
     home: "i-home", inbox: "i-inbox", assistant: "i-spark", projects: "i-folder",
-    agents: "i-team", processes: "i-pulse", overview: "i-server", providers: "i-sliders",
-    activity: "i-clock", system: "i-check-circle", capabilities: "i-code"
+    sites: "i-globe", agents: "i-team", processes: "i-pulse", overview: "i-server",
+    providers: "i-sliders", activity: "i-clock", system: "i-check-circle", capabilities: "i-code"
   };
 
   // ------------------------------------------------- the PHP processes are one thing
@@ -1186,12 +1191,12 @@
     var n = u.rows.length;
     var up = u.rows.filter(function (r) { return r.running; }).length;
     var ports = u.rows.map(function (r) { return r.port; }).filter(Boolean).join(", ");
-    var tag = (u.php.alt ? "other limits profile Â· " : "") + n + (n === 1 ? " worker" : " workers");
+    var tag = (u.php.alt ? "other limits profile · " : "") + n + (n === 1 ? " worker" : " workers");
     var series = attr(u.php.series);
     return uiRow({
       dot: up === n ? "ok" : up ? "warn" : "off",
       title: brandImg("php-cgi", "brand-dot") + "PHP " + esc(u.php.series) + ' <span class="ui-quiet" style="display:inline;padding:0">' + esc(tag) + "</span>",
-      sub: esc((up === n ? "running" : up ? up + " of " + n + " running" : "stopped") + (compact || !ports ? "" : " Â· ports " + ports)),
+      sub: esc((up === n ? "running" : up ? up + " of " + n + " running" : "stopped") + (compact || !ports ? "" : " · ports " + ports)),
       actions: (up
         ? '<button type="button" class="btn btn-mini" data-action="php-pool" data-do="stop" data-series="' + series + '">Stop</button>' +
           '<button type="button" class="btn btn-mini btn-ghost" data-action="php-pool" data-do="restart" data-series="' + series + '">Restart</button>'
@@ -1213,15 +1218,16 @@
         { view: "inbox", label: "Inbox", count: attention, hot: !!attention }
       ] },
       { label: "Work", items: [
-        { view: "assistant", label: "Assistant", count: working },
-        { view: "agents", label: "Agents" },
         { view: "projects", label: "Projects", count: state.projects.length || null },
+        { view: "sites", label: "Sites", count: (server.sites || []).length || null },
+        { view: "assistant", label: "Assistant", count: working },
+        { view: "agents", label: "Team" },
         { view: "processes", label: "Processes" }
       ] },
       { label: "Run", items: [
-        { view: "overview", label: "Server", count: counts.total ? running + "/" + counts.total : null }
+        { view: "overview", label: "Environment", count: counts.total ? running + "/" + counts.total : null }
       ] },
-      { label: "Manage", items: [
+      { label: "System", items: [
         { view: "providers", label: "Models" },
         { view: "activity", label: "Activity" },
         { view: "system", label: "Diagnostics" },
@@ -1280,7 +1286,7 @@
     var prod = AI.env && AI.env.mode === "production";
     right.push(prod ? '<span class="sb-bad" title="Production mode: agents need your approval for every change">production</span>' : '<span title="devd only changes this machine. Switch to production mode in Diagnostics to require approval for every agent change.">local</span>');
     if (state.session) right.push('<span title="The address agents and scripts use">api :' + esc(state.session.port) + "</span>");
-    el("statusbar").innerHTML = '<div class="sb-left">' + (left.join('<span class="sb-sep">Â·</span>') || "Ready") + '</div><div class="sb-right">' + right.join('<span class="sb-sep">Â·</span>') + "</div>";
+    el("statusbar").innerHTML = '<div class="sb-left">' + (left.join('<span class="sb-sep">·</span>') || "Ready") + '</div><div class="sb-right">' + right.join('<span class="sb-sep">·</span>') + "</div>";
   }
 
   // -------------------------------------------------------------------- server
@@ -1367,6 +1373,21 @@
     return '<div class="ui-empty"><b>' + esc(title) + "</b>" + (hint ? "<span>" + esc(hint) + "</span>" : "") + (action || "") + "</div>";
   }
 
+  /* A compact ledger of the state of the environment.
+   *
+   * It is one bordered surface with a few facts, not a grid of dashboard cards.
+   * A value is always paired with its label, and a warning carries its own
+   * explanation, so a colour is never the only thing that communicates state. */
+  function summaryBand(items) {
+    return '<div class="summary-band">' + items.map(function (i) {
+      return '<div class="summary-item' + (i.tone ? " summary-" + i.tone : "") + '">' +
+        '<div class="summary-label">' + (i.dot ? uiDot(i.dot) : "") + esc(i.label) + "</div>" +
+        '<div class="summary-value">' + esc(i.value) + "</div>" +
+        (i.detail ? '<div class="summary-detail">' + esc(i.detail) + "</div>" : "") +
+        "</div>";
+    }).join("") + "</div>";
+  }
+
   /* One readable line from a long report: no markdown, no truncation markers,
    * the first sentence, never more than `max` characters. */
   function uiSummary(text, max) {
@@ -1374,7 +1395,7 @@
     var m = t.match(/^(.{20,}?[.!?])(\s|$)/);
     var s = m ? m[1] : t;
     max = max || 150;
-    return s.length > max ? s.slice(0, max - 1).trimEnd() + "â€¦" : s;
+    return s.length > max ? s.slice(0, max - 1).trimEnd() + "…" : s;
   }
 
   /* The full text of a stored report, without the markers the store left. */
@@ -1435,7 +1456,7 @@
 
   function servicePorts(svc) {
     if (svc.kind === "nginx" && state.session && state.session.settings) {
-      return "http " + state.session.settings.http_port + " Â· https " + state.session.settings.https_port;
+      return "http " + state.session.settings.http_port + " · https " + state.session.settings.https_port;
     }
     return svc.port ? "port " + svc.port : "";
   }
@@ -1482,7 +1503,12 @@
     // seconds. The screen does not wait for it: services, sites and runtimes
     // are enough to draw the page, and the inventory panel appears when its
     // answer arrives.
-    return Promise.all([
+    //
+    // The same reads are needed by the rail, Home and several screens during
+    // one boot. They share one request instead of each asking the machine
+    // again; a second caller joins the answer that is already on its way.
+    if (state.server.pending) return state.server.pending;
+    var request = Promise.all([
       read("service.list").catch(function () { return []; }),
       read("site.list").catch(function () { return []; }),
       read("runtime.list").catch(function () { return []; }),
@@ -1506,6 +1532,11 @@
         })
         .catch(function () { /* the panel simply stays out of the page */ });
     });
+    state.server.pending = request.then(
+      function (value) { state.server.pending = null; return value; },
+      function (error) { state.server.pending = null; throw error; }
+    );
+    return state.server.pending;
   }
 
   // ------------------------------------------------------------------ overview
@@ -1544,16 +1575,11 @@
     var counts = serviceCounts(s.services);
     var total = counts.total;
     var up = counts.up;
-    var healthy = total > 0 && up === total;
     var hosts = s.hosts || {};
     var pending = (hosts.adding || []).length + (hosts.removing || []).length;
-    var ports = state.session && state.session.settings ? "HTTP " + state.session.settings.http_port + " Â· HTTPS " + state.session.settings.https_port : "";
 
     if (!MACHINE.data && !MACHINE.loading && !MACHINE.error) loadMachine();
     var machine = MACHINE.data ? machineSummary(MACHINE.data) : "";
-    var head =
-      '<div class="ui-status-line">' + uiDot(healthy ? "ok" : total ? "warn" : "off") +
-      "<span>" + (total ? (healthy ? "All " + total + " services are running" : up + " of " + total + " services running") : "Nothing is installed yet") + (ports ? " Â· " + esc(ports) : "") + "</span></div>";
     var actions = total
       ? '<button type="button" class="btn" data-action="stack-down"' + (up ? "" : " disabled") + '>Stop all</button><button type="button" class="btn btn-primary" data-action="stack-up">Start all</button>'
       : '<button type="button" class="btn btn-primary" data-action="setup-open">Set up devd</button>';
@@ -1569,16 +1595,14 @@
         actions: '<button type="button" class="btn btn-primary btn-mini" data-action="ca-trust">Trust it</button>' }));
     }
 
-    var sites = s.sites.map(function (row) {
-      return uiRow({
-        dot: row.server_running ? "ok" : "off",
-        title: esc(row.site.name),
-        sub: esc(row.url) + (row.shared ? ' Â· <a href="' + attr(row.shared) + '" target="_blank" rel="noreferrer">public link</a>' : ""),
-        open: 'data-action="open-url" data-url="' + attr(row.url) + '"',
-        actions: '<button type="button" class="btn btn-mini btn-primary" data-action="open-site" data-name="' + attr(row.site.name) + '">Manage</button>' +
-          '<button type="button" class="btn btn-mini" data-action="open-url" data-url="' + attr(row.url) + '">Open</button>',
-        hover: true
-      });
+    var noEntry = (s.sites || []).filter(function (row) { return row.serving === "no_entry"; });
+    var siteLine = uiRow({
+      dot: noEntry.length ? "warn" : s.sites.length ? "ok" : "off",
+      title: s.sites.length + (s.sites.length === 1 ? " site" : " sites") + " · " + (s.sites.length - noEntry.length) + " can serve",
+      sub: noEntry.length
+        ? noEntry.length + (noEntry.length === 1 ? " site has" : " sites have") + " no web entry point. The address still exists; the folder has nothing to serve."
+        : s.sites.length ? "Every site has a defined entry point. Open Sites to inspect an address, serving mode or certificate." : "A site is a folder, a hostname and a certificate.",
+      actions: '<button type="button" class="btn btn-mini btn-primary" data-action="nav" data-view="sites">Sites</button>'
     });
     var services = serviceUnits(s.services).map(function (unit) {
       if (unit.rows) return phpUnitRow(unit, true);
@@ -1593,13 +1617,18 @@
       });
     });
 
-    el("main").innerHTML = page("Server", "", actions,
-      head + (notices.length ? uiList(notices) : "") + machine +
-      uiHead("Sites", s.sites.length || null, '<button type="button" class="btn btn-mini btn-ghost" data-action="new-site">New site</button>') +
-      (sites.length ? uiList(sites.slice(0, 6)) + (sites.length > 6 ? '<div class="ui-more"><button type="button" data-action="nav" data-view="sites">All ' + sites.length + " sites</button></div>" : "") : uiEmpty("No sites yet", "A site is a folder, a hostname and a certificate.", '<button type="button" class="btn btn-primary" data-action="new-site">Create a site</button>')) +
+    el("main").innerHTML = page("Environment", "", actions,
+      (notices.length ? uiList(notices) : "") +
+      summaryBand([
+        { label: "Services", value: total ? up + " of " + total + " running" : "Not installed", detail: total && up === total ? "the stack answered" : total ? "start it when a site needs it" : "install the stack to begin", tone: total && up === total ? "ok" : up ? "warn" : "", dot: total && up === total ? "ok" : up ? "warn" : "off" },
+        { label: "Sites", value: s.sites.length + " configured", detail: noEntry.length ? noEntry.length + " with no entry point" : "all can serve", tone: noEntry.length ? "warn" : "", dot: noEntry.length ? "warn" : "ok" },
+        { label: "Hostnames", value: pending ? pending + " pending" : "In sync", detail: pending ? "publish them in Hosts" : "every site address resolves locally", tone: pending ? "warn" : "", dot: pending ? "warn" : "ok" },
+        { label: "Runtimes", value: (s.runtimes || []).length ? (s.runtimes || []).length + " installed" : "None", detail: phpRuntime() ? "default PHP " + phpPrimary() : "install one in Runtimes", dot: (s.runtimes || []).length ? "ok" : "off" }
+      ]) +
+      siteLine + machine +
       uiHead("Services", total ? up + " of " + total : null) +
       (services.length ? uiList(services) : uiEmpty("No services installed", "devd installs PHP, a web server and MariaDB from their makers.", '<button type="button" class="btn btn-primary" data-action="setup-open">Set up devd</button>')) +
-      '<div class="ui-more">Also: <button type="button" data-action="nav" data-view="toolchain">Tools</button> \u00b7 <button type="button" data-action="nav" data-view="runtimes">Runtimes</button> \u00b7 <button type="button" data-action="nav" data-view="databases">Databases</button> \u00b7 <button type="button" data-action="nav" data-view="remote">Remote</button> \u00b7 <button type="button" data-action="nav" data-view="certificates">Certificates</button> \u00b7 <button type="button" data-action="nav" data-view="hosts">Hosts</button> \u00b7 <button type="button" data-action="nav" data-view="system">Diagnostics</button></div>');
+      '<div class="ui-more">Also: <button type="button" data-action="nav" data-view="toolchain">Tools</button> \u00b7 <button type="button" data-action="nav" data-view="runtimes">Runtimes</button> \u00b7 <button type="button" data-action="nav" data-view="databases">Databases</button> \u00b7 <button type="button" data-action="nav" data-view="remote">Remote</button> \u00b7 <button type="button" data-action="nav" data-view="system">Diagnostics</button></div>');
   }
 
   // --------------------------------------------------------------------- sites
@@ -1609,7 +1638,7 @@
      serves PHP, and says whether it is pinned or follows the default. */
   function servingLabel(row) {
     switch (row.serving) {
-      case "proxy": return "proxy";
+      case "proxy": return "proxy" + (row.site && row.site.upstream ? " → " + row.site.upstream : "");
       case "php": return "PHP " + (row.php_effective || "") + (row.php_source === "inherited" ? " \u00b7 default" : "");
       case "static": return "static files";
       case "no_entry": return "no web entry point";
@@ -1617,34 +1646,68 @@
     }
   }
 
+  function siteNeedsAttention(row) {
+    return row.present === false || row.serving === "no_entry" ||
+      (row.site && row.site.tls_mode !== "off" && !row.certificate);
+  }
+
+  function siteAttentionReason(row) {
+    if (row.present === false) return "the folder is missing";
+    if (row.serving === "no_entry") return "nothing in the folder can be served";
+    if (row.site && row.site.tls_mode !== "off" && !row.certificate) return "no HTTPS certificate";
+    return "";
+  }
+
   function renderSites() {
     if (state.view !== "sites") return;
-    var all = state.server.sites;
+    var all = (state.server.sites || []).slice().sort(function (a, b) {
+      return String(a.site && a.site.name).localeCompare(String(b.site && b.site.name));
+    });
     var q = state.filters.sites || "";
+    var mode = state.siteFilter || "all";
+    var noEntry = all.filter(function (row) { return row.serving === "no_entry"; });
+    var serving = all.length - noEntry.length;
+    var attention = all.filter(siteNeedsAttention);
+    var pendingHosts = ((state.server.hosts && (state.server.hosts.adding || []).concat(state.server.hosts.removing || [])) || []).length;
+    var inHosts = all.filter(function (row) { return row.in_hosts; }).length;
+    var missingCerts = all.filter(function (row) { return row.site && row.site.tls_mode !== "off" && !row.certificate; }).length;
     var matching = all.filter(function (row) {
-      return keeps(q, row.site && row.site.name, row.url, row.document_root, row.php_effective, row.site && row.site.upstream);
+      if (mode === "serving" && row.serving === "no_entry") return false;
+      if (mode === "attention" && !siteNeedsAttention(row)) return false;
+      return keeps(q, row.site && row.site.name, row.url, row.document_root, row.php_effective, row.site && row.site.upstream, row.detected);
     });
     var rows = matching.map(function (row) {
       var site = row.site;
       var proxied = !!site.upstream;
-      var meta = esc(servingLabel(row));
-      var sub = esc(row.url) + (proxied ? " â†’ " + esc(site.upstream) + (row.upstream_listening ? "" : " (not running)") : row.serving === "no_entry" ? " Â· " + esc(row.detected || "nothing to serve") : " Â· " + esc(row.document_root)) +
-        (row.shared ? ' Â· <a href="' + attr(row.shared) + '" target="_blank" rel="noreferrer">public link</a>' : "") +
-        (row.present ? "" : " Â· directory missing");
+      var reason = siteAttentionReason(row);
+      var dot = row.present === false ? "bad" : row.serving === "no_entry" || reason ? "warn" : row.server_running ? "ok" : "off";
+      var tls = site.tls_mode === "off" ? "http" : row.certificate ? "https" : "no certificate";
+      var sub = esc(row.url) + (proxied ? " → " + esc(site.upstream) + (row.upstream_listening ? "" : " (not running)") : row.serving === "no_entry" ? " · " + esc(reason || "not served") : " · " + esc(row.document_root)) +
+        (row.shared ? ' · <a href="' + attr(row.shared) + '" target="_blank" rel="noreferrer">public link</a>' : "");
       return uiRow({
-        dot: row.server_running ? (row.certificate || site.tls_mode === "off" ? "ok" : "warn") : "off",
-        title: esc(site.name) + (site.tls_mode === "off" ? "" : ' <span class="pill ' + (row.certificate ? "pill-ok" : "pill-warn") + '">' + (row.certificate ? "https" : "no certificate") + "</span>"),
-        sub: sub, meta: meta,
+        dot: dot,
+        title: esc(site.name) + ' <span class="pill ' + (row.serving === "no_entry" ? "pill-warn" : site.tls_mode !== "off" && !row.certificate ? "pill-warn" : "pill-ok") + '">' + esc(servingLabel(row) || "not serving") + "</span>",
+        sub: sub, meta: esc(tls + (row.in_hosts ? "" : " · not in hosts")),
         open: 'data-action="open-url" data-url="' + attr(row.url) + '"',
         actions: '<button type="button" class="btn btn-mini btn-primary" data-action="open-site" data-name="' + attr(site.name) + '">Manage</button>' +
           '<button type="button" class="btn btn-mini" data-action="open-url" data-url="' + attr(row.url) + '">Open</button>',
         hover: true
       });
     });
+    var filters = '<div class="segmented site-filter" role="group" aria-label="Filter sites">' +
+      '<button type="button" class="seg' + (mode === "all" ? " active" : "") + '" data-action="site-filter" data-filter="all">All <span class="seg-count">' + all.length + "</span></button>" +
+      '<button type="button" class="seg' + (mode === "serving" ? " active" : "") + '" data-action="site-filter" data-filter="serving">Serving <span class="seg-count">' + serving + "</span></button>" +
+      '<button type="button" class="seg' + (mode === "attention" ? " active" : "") + '" data-action="site-filter" data-filter="attention">Needs attention <span class="seg-count">' + attention.length + "</span></button></div>";
     var body = state.siteFormOpen ? siteForm() : "";
-    if (all.length > 6) body += '<div class="filter-row">' + filterBox("sites", "Search sites") + "</div>";
     if (all.length) {
-      body += matching.length ? uiList(rows) : uiEmpty('No site matches "' + q + '"');
+      body += summaryBand([
+        { label: "Sites", value: all.length + (all.length === 1 ? " site" : " sites"), detail: serving + " can serve · " + noEntry.length + " with no entry point" },
+        { label: "Needs attention", value: attention.length ? String(attention.length) : "None", detail: attention.length ? (missingCerts ? missingCerts + " missing a certificate" : "open a site to see what to fix") : "every site can serve", tone: attention.length ? "warn" : "ok", dot: attention.length ? "warn" : "ok" },
+        { label: "Hostnames", value: pendingHosts ? pendingHosts + " pending" : "Published", detail: inHosts + " of " + all.length + " resolve locally", tone: pendingHosts ? "warn" : "", dot: pendingHosts ? "warn" : "off" },
+        { label: "Local HTTPS", value: caTrusted() ? "Trusted" : "Not trusted", detail: (state.server.certs || []).length + " certificates issued", tone: caTrusted() ? "ok" : "warn", dot: caTrusted() ? "ok" : "warn" }
+      ]);
+      body += '<div class="filter-row site-filter-row">' + filterBox("sites", "Search by name, address, folder or runtime") + filters + "</div>";
+      body += matching.length ? uiList(rows) : uiEmpty('No site matches "' + q + '"', "Clear the search or choose another filter.", '<button type="button" class="btn" data-action="site-filter" data-filter="all">Show all sites</button>');
     } else if (!state.siteFormOpen) {
       body += uiEmpty("No sites yet", "A site is a project folder, a hostname, a certificate and a URL.", '<button type="button" class="btn btn-primary" data-action="new-site">Create a site</button>');
     }
@@ -1828,7 +1891,7 @@
         installed.map(function (v) { return '<option value="' + attr(v) + '"' + (pinned === v ? " selected" : "") + ">" + esc(v) + "</option>"; }).join("") + "</select>"
       : "";
     var profileSelect = profileData
-      ? '<select class="select compact" data-change="ops-site-profile" data-site="' + attr(site.name) + '"><option value=""' + (own ? "" : " selected") + '>Follow the machine (' + esc(profileData.profile || "local") + ")</option>" +
+      ? '<select class="select compact" data-change="ops-site-profile" data-site="' + attr(site.name) + '" aria-label="PHP limits for ' + attr(site.name) + '"><option value=""' + (own ? "" : " selected") + '>Follow the machine (' + esc(profileData.profile || "local") + ")</option>" +
         '<option value="local"' + (own === "local" ? " selected" : "") + '>Local limits</option><option value="production"' + (own === "production" ? " selected" : "") + ">Production limits</option></select>"
       : "";
     var details = [
@@ -1841,8 +1904,8 @@
       }),
       uiRow({
         title: "Project",
-        sub: '<span class="mono">' + esc(row.project || site.root) + "</span>" + (row.project_known ? "" : " \u00b7 not a project devd knows"),
-        actions: row.project_known ? '<button type="button" class="btn btn-mini btn-ghost" data-action="home-open" data-path="' + attr(row.project) + '">Open project</button>' : ""
+        sub: '<span class="mono">' + esc(row.project || site.root) + "</span>" + (row.project_known ? "" : " \u00b7 not registered in Projects yet"),
+        actions: '<button type="button" class="btn btn-mini btn-ghost" data-action="home-open" data-path="' + attr(row.project) + '">' + (row.project_known ? "Open project" : "Open folder") + "</button>"
       }),
       uiRow({ title: "Serves", sub: esc(runtime) + (row.upstream_listening === false ? " (not running)" : "") + (row.serving_source === "detected" && row.serving !== "proxy" ? " \u00b7 read from the folder" : row.serving_source === "configured" ? " \u00b7 your choice" : "") }),
       uiRow({ title: "TLS", sub: site.tls_mode === "off" ? "off" : row.certificate ? "HTTPS, certificate present" : "HTTPS, no certificate yet" }),
@@ -1875,7 +1938,7 @@
     var open = '<button type="button" class="btn btn-mini btn-ghost" data-action="nav" data-view="databases">All databases</button>';
     if (!db) {
       return uiHead("Database", null, "") +
-        uiEmpty("No database managed by devd", "This site was created without one. If the application uses SQLite or a database on another server, it is not managed here. Database users and backups are under Server \u2192 Databases.", '<button type="button" class="btn btn-primary" data-action="nav" data-view="databases">Open Databases</button>');
+        uiEmpty("No database managed by devd", "This site was created without one. If the application uses SQLite or a database on another server, it is not managed here. Database users and backups are under Environment \u2192 Databases.", '<button type="button" class="btn btn-primary" data-action="nav" data-view="databases">Open Databases</button>');
     }
     var data = OPS.data.db;
     var backups = data ? ((data[1] && data[1].schedules) || []).filter(function (b) { return String(b.database) === String(db); }) : [];
@@ -1886,7 +1949,7 @@
         : "no scheduled backups";
     return uiHead("Database", null, open) +
       uiList([uiRow({ title: '<span class="mono">' + esc(db) + "</span>", sub: "this site's database on the devd server \u00b7 " + esc(backupNote) })]) +
-      '<p class="dim ops-note">Database users and backups belong to the whole server. Manage users, schedules and dump files under Server \u2192 Databases.</p>';
+      '<p class="dim ops-note">Database users and backups belong to the whole environment. Manage users, schedules and dump files under Environment \u2192 Databases.</p>';
   }
 
   function sitePreview(row) {
@@ -1938,10 +2001,18 @@
   function renderDatabases() {
     if (state.view !== "databases") return;
     var failed = OPS.error && OPS.errorTab === "db";
-    if (!OPS.data.db && !failed) opsLoad("db");
-    var body = failed
-      ? '<div class="notice notice-bad">' + esc(OPS.error) + "</div>"
-      : OPS.data.db ? opsDb(OPS.data.db) : '<div class="loading"></div>';
+    var mariadb = (state.server.services || []).filter(function (s) { return s.name === "mariadb"; })[0];
+    var stopped = mariadb && !mariadb.running;
+    if (!OPS.data.db && !failed && !stopped) opsLoad("db");
+    var body;
+    if (stopped) {
+      body = uiEmpty("MariaDB is not running", "Users, grants and scheduled backups live inside MariaDB. Start it to inspect them; nothing is changed by looking.", '<button type="button" class="btn btn-primary" data-action="databases-start">Start MariaDB</button>');
+    } else if (failed) {
+      body = '<div class="notice notice-bad">' + esc(OPS.error) + "</div>" +
+        '<div class="inline"><button type="button" class="btn btn-primary" data-action="databases-start">Start MariaDB</button><button type="button" class="btn" data-action="nav" data-view="services">Open Services</button></div>';
+    } else {
+      body = OPS.data.db ? opsDb(OPS.data.db) : '<div class="loading" role="status" aria-live="polite">Reading databases…</div>';
+    }
     el("main").innerHTML = page("Databases", "", "",
       '<div class="ui-quiet">Users and scheduled backups for the databases devd runs.</div>' + body);
   }
@@ -1983,7 +2054,7 @@
       });
     });
     var actions = '<button type="button" class="btn btn-mini btn-primary" data-action="ops-env-set">Add variable</button>' +
-      '<button type="button" class="btn btn-mini" data-action="ops-env-diff">Compareâ€¦</button>' +
+      '<button type="button" class="btn btn-mini" data-action="ops-env-diff">Compare…</button>' +
       '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-env-reveal">Show secrets</button>';
     return uiHead(".env", names.length, actions) +
       (e.exists ? "" : '<div class="notice notice-warn">This project has no .env file yet. Adding a variable creates one.</div>') +
@@ -2000,7 +2071,7 @@
       return uiRow({
         dot: j.enabled ? ok : "off",
         title: '<span class="mono">' + esc(j.schedule) + "</span> &nbsp;" + esc(j.command),
-        sub: (j.enabled ? "next " + esc(j.next_run_at ? shortTime(j.next_run_at) : "never") : "off") + (j.last_run_at ? " Â· last ran " + esc(shortTime(j.last_run_at)) + " (exit " + j.last_exit + ")" : " Â· has not run"),
+        sub: (j.enabled ? "next " + esc(j.next_run_at ? shortTime(j.next_run_at) : "never") : "off") + (j.last_run_at ? " · last ran " + esc(shortTime(j.last_run_at)) + " (exit " + j.last_exit + ")" : " · has not run"),
         hover: true,
         actions: '<button type="button" class="btn btn-mini" data-action="ops-cron-run" data-id="' + attr(j.id) + '">Run now</button>' +
           '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-cron-log" data-id="' + attr(j.id) + '" data-log="' + attr(j.log) + '">Log</button>' +
@@ -2043,7 +2114,7 @@
     var list = (d[0] && d[0].redirects) || [];
     var rows = list.map(function (r) {
       return uiRow({
-        title: '<span class="mono">' + esc(r.from) + "</span> â†’ <span class=\"mono\">" + esc(r.to) + "</span>",
+        title: '<span class="mono">' + esc(r.from) + "</span> → <span class=\"mono\">" + esc(r.to) + "</span>",
         sub: r.status === 301 || r.status === 308 ? "permanent (" + r.status + ")" : "temporary (" + r.status + ")", hover: true,
         actions: '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-redirect-remove" data-id="' + attr(r.id) + '">Remove</button>'
       });
@@ -2064,7 +2135,7 @@
     }).join("") + "</div>";
     var entries = (lv.entries || []).map(function (e) {
       var kind = /ERROR|CRITICAL|ALERT|EMERGENCY/.test(e.level) ? "bad" : e.level === "WARNING" ? "warn" : "off";
-      return uiRow({ dot: kind, title: esc(e.message), sub: esc(e.at) + " Â· " + esc(e.env + "." + e.level) + (e.origin ? " Â· " + esc(e.origin) : ""), wrap: true });
+      return uiRow({ dot: kind, title: esc(e.message), sub: esc(e.at) + " · " + esc(e.env + "." + e.level) + (e.origin ? " · " + esc(e.origin) : ""), wrap: true });
     });
     var kinds = [["nginx_error", "Web server errors"], ["nginx_access", "Web server access"], ["php", "PHP"]];
     var picker = '<select class="select compact" data-change="ops-logkind">' + kinds.map(function (k) { return '<option value="' + k[0] + '"' + ((OPS.logKind || "nginx_error") === k[0] ? " selected" : "") + ">" + k[1] + "</option>"; }).join("") + "</select>";
@@ -2083,17 +2154,17 @@
     var rows = hist.map(function (x) {
       var ok = x.state === "success" ? "ok" : x.state === "failed" ? "bad" : "warn";
       return uiRow({
-        dot: ok, title: esc(x.message || (x.state === "running" ? "Deployingâ€¦" : x.state)) + ' <span class="pill">' + esc(x.trigger) + "</span>",
-        sub: esc(shortTime(x.started_at)) + (x.seconds ? " Â· " + Math.round(x.seconds) + "s" : "") + (x.commit_after ? " Â· " + esc(x.commit_after.slice(0, 8)) : "") + (x.failed_line ? " Â· failed at " + esc(x.failed_line) : ""),
+        dot: ok, title: esc(x.message || (x.state === "running" ? "Deploying…" : x.state)) + ' <span class="pill">' + esc(x.trigger) + "</span>",
+        sub: esc(shortTime(x.started_at)) + (x.seconds ? " · " + Math.round(x.seconds) + "s" : "") + (x.commit_after ? " · " + esc(x.commit_after.slice(0, 8)) : "") + (x.failed_line ? " · failed at " + esc(x.failed_line) : ""),
         wrap: true, hover: true,
         actions: '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-deploy-log" data-id="' + attr(x.id) + '">Output</button>' +
           (x.state === "success" && x.commit_after ? '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-rollback" data-id="' + attr(x.id) + '">Roll back to this</button>' : "")
       });
     });
-    var link = repo.linked && repo.link ? "Follows " + esc(repo.link.branch) + (repo.link.deploy_on_push ? " Â· push-to-deploy on" : "") : repo.is_repository ? "Not linked to a branch yet" : "Not a Git repository";
+    var link = repo.linked && repo.link ? "Follows " + esc(repo.link.branch) + (repo.link.deploy_on_push ? " · push-to-deploy on" : "") : repo.is_repository ? "Not linked to a branch yet" : "Not a Git repository";
     var repoRow = uiRow({
       dot: repo.linked ? "ok" : "off", title: "Repository",
-      sub: link + (repo.head ? " Â· at " + esc(String(repo.head).slice(0, 8)) : "") + (repo.uncommitted_files ? " Â· " + repo.uncommitted_files + " uncommitted" : ""),
+      sub: link + (repo.head ? " · at " + esc(String(repo.head).slice(0, 8)) : "") + (repo.uncommitted_files ? " · " + repo.uncommitted_files + " uncommitted" : ""),
       actions: (repo.is_repository ? '<button type="button" class="btn btn-mini" data-action="ops-repo-link">' + (repo.linked ? "Change" : "Link") + "</button>" : "") +
         (repo.linked ? '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-hook" data-on="' + (repo.link && repo.link.deploy_on_push ? "0" : "1") + '">' + (repo.link && repo.link.deploy_on_push ? "Turn push-to-deploy off" : "Turn push-to-deploy on") + "</button>" : "")
     });
@@ -2108,7 +2179,7 @@
     var rows = list.map(function (t) {
       return uiRow({
         title: esc(t.channel) + (t.site ? ' <span class="pill">' + esc(t.site) + "</span>" : ""),
-        sub: esc(t.destination) + " Â· " + esc(t.events.join(", ")), wrap: true, hover: true,
+        sub: esc(t.destination) + " · " + esc(t.events.join(", ")), wrap: true, hover: true,
         actions: '<button type="button" class="btn btn-mini" data-action="ops-notify-test" data-id="' + attr(t.id) + '">Send a test</button>' +
           '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-notify-remove" data-id="' + attr(t.id) + '">Remove</button>'
       });
@@ -2126,7 +2197,7 @@
       var vals = v.values || {};
       var keys = ["memory_limit", "upload_max_filesize", "post_max_size", "max_execution_time"];
       return uiRow({
-        title: "PHP " + esc(v.version), sub: keys.map(function (k) { return esc(k) + " " + esc(vals[k] || "default"); }).join(" Â· "), wrap: true,
+        title: "PHP " + esc(v.version), sub: keys.map(function (k) { return esc(k) + " " + esc(vals[k] || "default"); }).join(" · "), wrap: true,
         actions: '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-php-value" data-series="' + attr(v.series) + '">Set a value</button>'
       });
     });
@@ -2163,13 +2234,13 @@
     var servers = OPS.data.ploiServers || [];
     var rows = servers.map(function (s) {
       return uiRow({
-        dot: /active/i.test(s.status || "") ? "ok" : "warn", title: esc(s.name), sub: esc(s.ip) + " Â· PHP " + esc(s.php) + " Â· " + esc(s.sites) + " sites", hover: true,
+        dot: /active/i.test(s.status || "") ? "ok" : "warn", title: esc(s.name), sub: esc(s.ip) + " · PHP " + esc(s.php) + " · " + esc(s.sites) + " sites", hover: true,
         actions: '<button type="button" class="btn btn-mini" data-action="ops-ploi-sites" data-server="' + attr(s.id) + '">Sites</button>'
       });
     });
     var sites = (OPS.ploiSites || []).map(function (x) {
       return uiRow({
-        dot: x.status === "active" ? "ok" : "warn", title: esc(x.domain), sub: "PHP " + esc(x.php) + " Â· " + esc(x.project_type || "") + (x.last_deploy_at ? " Â· deployed " + esc(x.last_deploy_at) : ""), hover: true,
+        dot: x.status === "active" ? "ok" : "warn", title: esc(x.domain), sub: "PHP " + esc(x.php) + " · " + esc(x.project_type || "") + (x.last_deploy_at ? " · deployed " + esc(x.last_deploy_at) : ""), hover: true,
         actions: '<button type="button" class="btn btn-mini" data-action="ops-ploi-link" data-server="' + attr(OPS.ploiServer) + '" data-site="' + attr(x.id) + '">Link to a local site</button>' +
           '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-ploi-deploy" data-server="' + attr(OPS.ploiServer) + '" data-site="' + attr(x.id) + '" data-domain="' + attr(x.domain) + '">Deploy</button>'
       });
@@ -2178,7 +2249,7 @@
     return uiHead("Ploi", who, '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-ploi-disconnect">Disconnect</button>') +
       (rows.length ? uiList(rows) : uiEmpty("No servers", "")) +
       (OPS.ploiSites ? uiHead("Sites on the server", OPS.ploiSites.length, "") + (sites.length ? uiList(sites) : uiEmpty("No sites", "")) : "") +
-      '<p class="dim ops-note">Deploying changes a live server, so devd asks you first. Link a site and `Compareâ€¦` in Environment shows how its .env differs from production.</p>';
+      '<p class="dim ops-note">Deploying changes a live server, so devd asks you first. Link a site and `Compare…` in Environment shows how its .env differs from production.</p>';
   }
 
 
@@ -2210,7 +2281,7 @@
 
   function setupProgress(steps) {
     return '<div class="setup-steps">' + steps.map(function (s) {
-      var mark = s.state === "done" ? "âœ“" : s.state === "failed" ? "âœ—" : s.state === "running" ? "â€¦" : "Â·";
+      var mark = s.state === "done" ? "✓" : s.state === "failed" ? "✗" : s.state === "running" ? "…" : "·";
       return '<div class="setup-step setup-' + s.state + '"><span class="setup-mark">' + mark + "</span> " + esc(s.label) + (s.note ? '<div class="dim">' + esc(s.note) + "</div>" : "") + "</div>";
     }).join("") + "</div>";
   }
@@ -2283,16 +2354,16 @@
       }),
       uiRow({
         dot: debugWarn ? "bad" : "off", title: "Environment",
-        sub: "APP_ENV " + esc(s.app_env || "not set") + " Â· APP_DEBUG " + esc(s.app_debug || "not set") + (debugWarn ? " Â· debug is on in production" : ""),
+        sub: "APP_ENV " + esc(s.app_env || "not set") + " · APP_DEBUG " + esc(s.app_debug || "not set") + (debugWarn ? " · debug is on in production" : ""),
         actions: '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-tab" data-tab="env">Open .env</button>'
       }),
       uiRow({
         dot: "off", title: "Caches",
-        sub: (s.config_cached ? "configuration cached" : "configuration not cached") + " Â· " + (s.routes_cached ? "routes cached" : "routes not cached"),
-        actions: '<button type="button" class="btn btn-mini" data-action="ops-lv-clear">Clearâ€¦</button>'
+        sub: (s.config_cached ? "configuration cached" : "configuration not cached") + " · " + (s.routes_cached ? "routes cached" : "routes not cached"),
+        actions: '<button type="button" class="btn btn-mini" data-action="ops-lv-clear">Clear…</button>'
       })
     ];
-    return uiHead("Laravel", null, '<button type="button" class="btn btn-mini btn-primary" data-action="ops-lv-artisan">Run an artisan commandâ€¦</button>') + uiList(rows) +
+    return uiHead("Laravel", null, '<button type="button" class="btn btn-mini btn-primary" data-action="ops-lv-artisan">Run an artisan command…</button>') + uiList(rows) +
       '<p class="dim ops-note">Commands run with this site\'s PHP in its folder, as an argument list and never through a shell. Clearing the application cache empties whatever the cache driver holds, so it is only done when you name it.</p>';
   }
 
@@ -2305,7 +2376,7 @@
     var backupRows = backups.map(function (b) {
       return uiRow({
         dot: b.enabled === false ? "off" : b.last_ok === false ? "bad" : "ok", title: esc(b.database) + ' <span class="pill">' + esc(b.schedule) + "</span>",
-        sub: (b.last_run_at ? "last " + esc(shortTime(b.last_run_at)) + (b.last_ok === false ? " Â· failed: " + esc(b.last_error || "") : "") : "has not run") + " Â· keeps " + esc(String(b.keep)) + (b.next_run_at ? " Â· next " + esc(shortTime(b.next_run_at)) : ""), wrap: true, hover: true,
+        sub: (b.last_run_at ? "last " + esc(shortTime(b.last_run_at)) + (b.last_ok === false ? " · failed: " + esc(b.last_error || "") : "") : "has not run") + " · keeps " + esc(String(b.keep)) + (b.next_run_at ? " · next " + esc(shortTime(b.next_run_at)) : ""), wrap: true, hover: true,
         actions: '<button type="button" class="btn btn-mini" data-action="ops-backup-run" data-id="' + attr(b.id) + '">Back up now</button>' +
           '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-backup-files" data-db="' + attr(b.database) + '">Files</button>' +
           '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-backup-remove" data-id="' + attr(b.id) + '">Stop</button>'
@@ -2334,15 +2405,15 @@
   function opsHealth(d) {
     var checks = (d[0] && d[0].checks) || [], m = d[1] || {};
     var mem = m.memory || {};
-    var disks = (m.disks || []).map(function (x) { return esc(x.mount) + " " + esc(String(x.free_gb)) + " GB free of " + esc(String(x.total_gb)) + " GB"; }).join(" Â· ");
+    var disks = (m.disks || []).map(function (x) { return esc(x.mount) + " " + esc(String(x.free_gb)) + " GB free of " + esc(String(x.total_gb)) + " GB"; }).join(" · ");
     var machine = uiList([
-      uiRow({ dot: "off", title: "This machine", sub: esc([m.cpu_percent != null ? "CPU " + Math.round(m.cpu_percent) + "%" : (m.load_average != null ? "load " + m.load_average : ""), mem.total_mb ? "memory " + Math.round(mem.used_mb / 1024 * 10) / 10 + " of " + Math.round(mem.total_mb / 1024 * 10) / 10 + " GB" : "", m.uptime_hours != null ? "up " + m.uptime_hours + " h" : "", m.devd ? m.devd.running + "/" + m.devd.services + " devd services" : ""].filter(Boolean).join(" Â· ")), wrap: true }),
+      uiRow({ dot: "off", title: "This machine", sub: esc([m.cpu_percent != null ? "CPU " + Math.round(m.cpu_percent) + "%" : (m.load_average != null ? "load " + m.load_average : ""), mem.total_mb ? "memory " + Math.round(mem.used_mb / 1024 * 10) / 10 + " of " + Math.round(mem.total_mb / 1024 * 10) / 10 + " GB" : "", m.uptime_hours != null ? "up " + m.uptime_hours + " h" : "", m.devd ? m.devd.running + "/" + m.devd.services + " devd services" : ""].filter(Boolean).join(" · ")), wrap: true }),
       disks ? uiRow({ dot: "off", title: "Disks", sub: disks, wrap: true }) : ""
     ].filter(Boolean));
     var rows = checks.map(function (c) {
       return uiRow({
         dot: c.state === "up" ? "ok" : c.state === "down" ? "bad" : "off", title: esc(c.site) + ' <span class="pill">' + esc(c.state || "unknown") + "</span>",
-        sub: (c.last_at ? "asked " + esc(shortTime(c.last_at)) : "not asked yet") + (c.last_status ? " Â· answered " + c.last_status + " in " + c.last_ms + " ms" : "") + (c.last_error ? " Â· " + esc(c.last_error) : "") + (c.url ? " Â· " + esc(c.url) : " Â· through devd's own web server"), wrap: true, hover: true,
+        sub: (c.last_at ? "asked " + esc(shortTime(c.last_at)) : "not asked yet") + (c.last_status ? " · answered " + c.last_status + " in " + c.last_ms + " ms" : "") + (c.last_error ? " · " + esc(c.last_error) : "") + (c.url ? " · " + esc(c.url) : " · through devd's own web server"), wrap: true, hover: true,
         actions: '<button type="button" class="btn btn-mini" data-action="ops-health-check" data-site="' + attr(c.site) + '">Ask now</button><button type="button" class="btn btn-mini btn-ghost" data-action="ops-health-remove" data-site="' + attr(c.site) + '">Stop</button>'
       });
     });
@@ -2356,16 +2427,16 @@
     var rows = list.map(function (s) {
       return uiRow({
         dot: s.host_key_pinned ? "ok" : "warn", title: esc(s.name) + ' <span class="pill">' + esc(s.provider) + "</span>",
-        sub: esc(s.user + "@" + s.host + (s.port !== 22 ? ":" + s.port : "")) + " Â· key " + esc(s.key) + (s.host_key_pinned ? " Â· host key pinned" : " Â· not connected yet") + (s.last_ok_at ? " Â· answered " + esc(shortTime(s.last_ok_at)) : ""), wrap: true, hover: true,
+        sub: esc(s.user + "@" + s.host + (s.port !== 22 ? ":" + s.port : "")) + " · key " + esc(s.key) + (s.host_key_pinned ? " · host key pinned" : " · not connected yet") + (s.last_ok_at ? " · answered " + esc(shortTime(s.last_ok_at)) : ""), wrap: true, hover: true,
         actions: '<button type="button" class="btn btn-mini' + (s.host_key_pinned ? "" : " btn-primary") + '" data-action="ops-srv-connect" data-name="' + attr(s.name) + '">' + (s.host_key_pinned ? "Test" : "Connect") + "</button>" +
           '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-srv-info" data-name="' + attr(s.name) + '">Look</button>' +
           '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-srv-provision" data-name="' + attr(s.name) + '">Set up for PHP</button>' +
-          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-srv-run" data-name="' + attr(s.name) + '">Runâ€¦</button>' +
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-srv-run" data-name="' + attr(s.name) + '">Run…</button>' +
           '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-srv-remove" data-name="' + attr(s.name) + '">Forget</button>'
       });
     });
     var linkRows = links.map(function (l) {
-      return uiRow({ title: esc(l.site) + " â†’ " + esc(l.server) + ' <span class="pill">' + esc(l.mode) + "</span>", sub: '<span class="mono">' + esc(l.path) + "</span>" + (l.domain ? " Â· " + esc(l.domain) : ""), wrap: true, hover: true,
+      return uiRow({ title: esc(l.site) + " → " + esc(l.server) + ' <span class="pill">' + esc(l.mode) + "</span>", sub: '<span class="mono">' + esc(l.path) + "</span>" + (l.domain ? " · " + esc(l.domain) : ""), wrap: true, hover: true,
         actions: '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-link-remove" data-id="' + attr(l.id) + '">Unlink</button>' });
     });
     return uiHead("Servers", list.length, '<button type="button" class="btn btn-mini btn-primary" data-action="ops-srv-add">Add a server</button>') +
@@ -2377,7 +2448,7 @@
   function opsKeys(d) {
     var keys = (d[0] && d[0].keys) || [];
     var rows = keys.map(function (k) {
-      return uiRow({ title: '<span class="mono">' + esc(k.name) + "</span> " + (k.has_private_key ? "" : '<span class="pill pill-warn">no private key here</span>'), sub: esc((k.type || "") + (k.comment ? " Â· " + k.comment : "")) + (k.fingerprint ? " Â· " + esc(k.fingerprint) : ""), wrap: true, hover: true,
+      return uiRow({ title: '<span class="mono">' + esc(k.name) + "</span> " + (k.has_private_key ? "" : '<span class="pill pill-warn">no private key here</span>'), sub: esc((k.type || "") + (k.comment ? " · " + k.comment : "")) + (k.fingerprint ? " · " + esc(k.fingerprint) : ""), wrap: true, hover: true,
         actions: '<button type="button" class="btn btn-mini" data-action="ops-key-public" data-name="' + attr(k.name) + '">Show public key</button>' });
     });
     return uiHead("SSH keys", keys.length, '<button type="button" class="btn btn-mini btn-primary" data-action="ops-key-new">Make a key</button><button type="button" class="btn btn-mini" data-action="ops-key-adopt">Take in a key</button>') +
@@ -2394,7 +2465,7 @@
       var id = attr(l.id);
       return uiRow({
         dot: "ok", title: "Deploys to " + esc(l.server) + ' <span class="pill">' + esc(l.mode) + "</span>",
-        sub: '<span class="mono">' + esc(l.path) + "</span>" + (l.domain ? " Â· " + esc(l.domain) : ""), wrap: true, hover: true,
+        sub: '<span class="mono">' + esc(l.path) + "</span>" + (l.domain ? " · " + esc(l.domain) : ""), wrap: true, hover: true,
         actions: '<button type="button" class="btn btn-mini btn-primary" data-action="ops-remote-deploy" data-link="' + id + '">Deploy</button>' +
           (l.mode === "releases" ? '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-remote-releases" data-link="' + id + '">Releases</button><button type="button" class="btn btn-mini btn-ghost" data-action="ops-remote-rollback" data-link="' + id + '">Roll back</button>' : "") +
           '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-remote-env" data-link="' + id + '">Send .env</button>' +
@@ -2404,9 +2475,9 @@
     });
     var more = [
       uiRow({ dot: nv ? "ok" : "off", title: "Variables", sub: nv ? esc(Object.keys(vars).join(", ")) : "none: values a deploy gets as {NAME} and as environment variables", wrap: true,
-        actions: '<button type="button" class="btn btn-mini" data-action="ops-vars-edit">Editâ€¦</button>' }),
+        actions: '<button type="button" class="btn btn-mini" data-action="ops-vars-edit">Edit…</button>' }),
       uiRow({ dot: sched.length ? "warn" : "off", title: "Scheduled", sub: sched.length ? sched.map(function (x) { return esc(shortTime(x.at)); }).join(", ") : "nothing is scheduled", wrap: true,
-        actions: '<button type="button" class="btn btn-mini" data-action="ops-sched-add">Deploy laterâ€¦</button>' }),
+        actions: '<button type="button" class="btn btn-mini" data-action="ops-sched-add">Deploy later…</button>' }),
       uiRow({ dot: staging ? "ok" : "off", title: "Staging", sub: staging ? esc(staging.staging_site) + " on branch " + esc(staging.branch) : "a second copy of this site on its own branch", wrap: true,
         actions: staging ? '<button type="button" class="btn btn-mini btn-primary" data-action="ops-staging-promote">Ship to production</button><button type="button" class="btn btn-mini btn-ghost" data-action="ops-staging-remove">Remove</button>' : '<button type="button" class="btn btn-mini" data-action="ops-staging-create">Make a staging site</button>' })
     ];
@@ -2453,7 +2524,7 @@
         dot: v.status === "ready" ? "ok" : v.status === "installed_stopped" ? "warn" : v.status === "missing" ? "off" : "bad",
         title: brandImg(v.tool, "brand-dot") + esc(v.name) + (v.decision ? ' <span class="pill pill-accent">' + esc(v.decision.mode) + "</span>" : "") +
           (v.required ? ' <span class="pill pill-warn">needed by ' + v.required_by.length + "</span>" : ""),
-        sub: esc(stateLabel + (v.path ? " Â· " + v.path : "") + (v.port_owner && v.port_owner.program ? " Â· port held by " + v.port_owner.program : "")),
+        sub: esc(stateLabel + (v.path ? " · " + v.path : "") + (v.port_owner && v.port_owner.program ? " · port held by " + v.port_owner.program : "")),
         actions: btns
       });
     });
@@ -2472,7 +2543,7 @@
       return uiRow({
         dot: svc.running ? "ok" : "off",
         title: brandImg(svc.kind || svc.name, "brand-dot") + esc(svc.name) + (svc.version ? ' <span class="ui-quiet" style="display:inline;padding:0">' + esc(svc.version) + "</span>" : ""),
-        sub: esc([servicePorts(svc), svc.running && svc.pid ? "pid " + svc.pid : svc.installed ? "stopped" : "files missing"].filter(Boolean).join(" Â· ")),
+        sub: esc([servicePorts(svc), svc.running && svc.pid ? "pid " + svc.pid : svc.installed ? "stopped" : "files missing"].filter(Boolean).join(" · ")),
         actions: (svc.running
           ? '<button type="button" class="btn btn-mini" data-action="stop-service" data-name="' + attr(svc.name) + '">Stop</button>'
           : svc.installed
@@ -2498,7 +2569,11 @@
             : (k.download === false ? "" : '<button type="button" class="btn btn-mini btn-primary" data-action="install-service" data-name="' + attr(k.name) + '">Install</button>')
         });
       });
-    var body = "";
+    var body = summaryBand([
+      { label: "Stack", value: counts.total ? up + " of " + counts.total + " running" : "Not installed", detail: counts.total && up === counts.total ? "every managed service answered" : counts.total ? "start services when a site needs them" : "install a web server, database and PHP", tone: counts.total && up === counts.total ? "ok" : up ? "warn" : "", dot: counts.total && up === counts.total ? "ok" : up ? "warn" : "off" },
+      { label: "Managed here", value: String(counts.total), detail: counts.total === 1 ? "service devd supervises" : "services devd supervises" },
+      { label: "Available", value: String(missing.length), detail: missing.length ? "ready to install or adopt" : "nothing else to install" }
+    ]);
     body += uiHead("Installed", counts.total ? up + " of " + counts.total + " running" : null) +
       (installed.length ? uiList(installed) : uiEmpty("Nothing installed yet", "Install a web server, MariaDB and a PHP runtime to serve sites."));
     if (found.length) body += uiHead("Already on this computer", found.length) + uiList(found) +
@@ -2604,10 +2679,19 @@
       var rows = installed.map(function (r) {
         var rt = r.runtime;
         var own = r.managed !== false;
+        var series = devdSeries(rt.version);
+        var serving = kind.kind === "php" ? (state.server.sites || []).filter(function (row) {
+          return row.serving === "php" && devdSeries(row.php_effective) === series;
+        }) : [];
+        var pinned = serving.filter(function (row) { return row.php_source === "pinned"; }).length;
+        var usage = kind.kind !== "php" || !serving.length
+          ? (kind.kind === "php" ? "not used by a site" : "")
+          : serving.length + (serving.length === 1 ? " site" : " sites") + (pinned ? " · " + pinned + " pinned" : "");
         return uiRow({
           dot: "ok",
           title: esc(rt.version) + (r.primary ? ' <span class="pill pill-accent">default</span>' : "") + (own ? "" : ' <span class="pill">found on this computer</span>'),
           sub: '<span title="' + attr(rt.path) + '">' + esc(rt.path) + "</span>",
+          meta: usage ? esc(usage) : "",
           actions: (kind.kind === "php" && !r.primary && own ? '<button type="button" class="btn btn-mini" data-action="use-runtime" data-version="' + attr(rt.version) + '">Use for new sites</button>' : "") +
             (own ? '<button type="button" class="btn btn-mini btn-ghost" data-action="remove-runtime" data-kind="' + attr(kind.kind) + '" data-version="' + attr(rt.version) + '">Remove</button>' : ""),
           hover: true
@@ -2871,7 +2955,7 @@
   function projectOptions(selected) {
     return cwdChoices().map(function (c) {
       return '<option value="' + attr(c.path) + '"' + (c.path === selected ? " selected" : "") + ">" +
-        esc(c.label) + " â€” " + esc(c.path) + "</option>";
+        esc(c.label) + " — " + esc(c.path) + "</option>";
     }).join("");
   }
 
@@ -2910,7 +2994,7 @@
       loadProcesses().then(renderProcesses);
     }
     if (p.loading && !p.plan) {
-      el("main").innerHTML = page("Processes", "", "", '<div class="loading">Loadingâ€¦</div>');
+      el("main").innerHTML = page("Processes", "", "", '<div class="loading">Loading…</div>');
       return;
     }
 
@@ -2951,8 +3035,8 @@
       return '<tr><td><div class="cell-strong">' + esc(spec.name) + "</div>" +
         '<div class="cell-mono">' + esc((spec.command || []).join(" ")) + "</div></td>" +
         '<td><span class="pill ' + (stateName === "running" ? "pill-ok" : stateName === "failed" ? "pill-bad" : "") + '">' + esc(stateName) + "</span>" +
-        '<div class="cell-mono">' + esc(health) + (row.pid ? " Â· pid " + esc(row.pid) : "") + "</div></td>" +
-        '<td class="cell-mono">' + esc((spec.depends_on || []).join(", ") || "â€”") + "</td>" +
+        '<div class="cell-mono">' + esc(health) + (row.pid ? " · pid " + esc(row.pid) : "") + "</div></td>" +
+        '<td class="cell-mono">' + esc((spec.depends_on || []).join(", ") || "—") + "</td>" +
         '<td>' + actions + "</td></tr>";
     }).join("");
 
@@ -2965,7 +3049,7 @@
       var lines = (p.log && p.log.lines) || [];
       var q = (p.logQuery || "").toLowerCase();
       if (q) lines = lines.filter(function (l) { return l.toLowerCase().indexOf(q) !== -1; });
-      log = '<div class="panel process-log"><div class="panel-head"><span>Logs â€” ' + esc(p.selected) + "</span>" +
+      log = '<div class="panel process-log"><div class="panel-head"><span>Logs — ' + esc(p.selected) + "</span>" +
         '<input class="input mono process-log-filter" id="process-log-query" value="' + attr(p.logQuery || "") + '" placeholder="Filter lines">' +
         '<button type="button" class="btn btn-mini" data-action="close-process-logs">Close</button></div>' +
         '<div class="panel-body flush"><pre class="log-pre" id="process-log">' +
@@ -3121,7 +3205,7 @@
     var rows = SCHED.list.map(function (sc) {
       var what = sc.template ? "template " + sc.template : "a goal";
       return "<tr>" +
-        '<td><b>' + esc(sc.name) + "</b><div class=\"dim\">" + esc(sc.spec) + (sc.auto_approve ? " Â· plan approval waived" : "") + "</div></td>" +
+        '<td><b>' + esc(sc.name) + "</b><div class=\"dim\">" + esc(sc.spec) + (sc.auto_approve ? " · plan approval waived" : "") + "</div></td>" +
         "<td>" + esc(what) + '<div class="dim mono">' + esc(sc.project) + "</div></td>" +
         "<td>" + (sc.enabled ? esc(whenText(sc.next_run_at)) : '<span class="dim">off</span>') + "</td>" +
         "<td>" + (sc.last_run_at ? esc(whenText(sc.last_run_at)) : '<span class="dim">not yet</span>') +
@@ -3134,7 +3218,7 @@
     var tpl = SCHED.templates.map(function (t) { return '<option value="' + attr(t.id) + '"' + (f.template === t.id ? " selected" : "") + ">" + esc(t.title) + "</option>"; }).join("");
     var chosen = SCHED.templates.filter(function (t) { return t.id === f.template; })[0];
     var hint = chosen ? (chosen.params || []).map(function (p) { return p.name + "=" + (p.help || "") + (p.optional ? " (optional)" : ""); }).join("\n") : "";
-    var projects = '<option value="">Choose a projectâ€¦</option>' + state.projects.map(function (p) { return '<option value="' + attr(p.path) + '"' + (f.project === p.path ? " selected" : "") + ">" + esc(p.name || dirName(p.path)) + "</option>"; }).join("");
+    var projects = '<option value="">Choose a project…</option>' + state.projects.map(function (p) { return '<option value="' + attr(p.path) + '"' + (f.project === p.path ? " selected" : "") + ">" + esc(p.name || dirName(p.path)) + "</option>"; }).join("");
     el("main").innerHTML = page("Schedules", "Team runs devd starts on a clock", "",
       '<div class="panel"><div class="panel-head"><span>Schedules</span><span class="panel-note">they run only while devd is open or serving</span></div>' +
       (SCHED.list.length ? '<div class="table-wrap"><table class="table"><thead><tr><th>Name</th><th>What</th><th>Next</th><th>Last</th><th></th></tr></thead><tbody>' + rows + "</tbody></table></div>"
@@ -3258,7 +3342,7 @@
           '<div class="todo-title">' + esc(t.title) + ' <span class="pill ' + (t.status === "done" ? "pill-ok" : t.status === "blocked" ? "pill-warn" : "") + '">' + esc(t.status) + "</span>" +
           ' <span class="pill">' + esc(t.priority) + "</span></div>" +
           (t.description ? '<div class="todo-desc">' + esc(t.description) + "</div>" : "") +
-          '<div class="todo-meta mono">' + esc(t.assignee || "unassigned") + " Â· rev " + esc(t.revision) + " Â· " + esc(t.updated_at || "") + "</div></div>" +
+          '<div class="todo-meta mono">' + esc(t.assignee || "unassigned") + " · rev " + esc(t.revision) + " · " + esc(t.updated_at || "") + "</div></div>" +
           '<div class="inline">' +
           '<select class="select compact" data-action="todo-status" data-id="' + attr(t.id) + '" data-rev="' + attr(t.revision) + '">' +
           ["open", "in_progress", "blocked", "done", "cancelled"].map(function (st) {
@@ -3276,7 +3360,7 @@
       var noteList = s.notes.length ? s.notes.map(function (n) {
         return '<button type="button" class="note-row' + (s.activeNote === n.name ? " active" : "") + '" data-action="note-open" data-name="' + attr(n.name) + '">' +
           '<span class="cell-strong">' + esc(n.name) + "</span>" +
-          '<span class="cell-mono">rev ' + esc(n.revision) + " Â· " + esc(n.author) + "</span></button>";
+          '<span class="cell-mono">rev ' + esc(n.revision) + " · " + esc(n.author) + "</span></button>";
       }).join("") : '<div class="empty-inline">No scratchpads yet.</div>';
       var editor = s.activeNote
         ? '<div class="note-editor"><div class="note-editor-head"><span class="cell-strong">' + esc(s.activeNote) + "</span>" +
@@ -3298,7 +3382,7 @@
 
     el("main").innerHTML = page(
       "Shared",
-      "Project notes and todos for humans and agents â€” durable across sessions and reloads.",
+      "Project notes and todos for humans and agents — durable across sessions and reloads.",
       tabs,
       head + body
     );
@@ -3419,7 +3503,7 @@
       .map(function (s) {
         return (
           '<option value="' + attr(s.site.name) + '"' + (s.site.name === row.site.name ? " selected" : "") + ">" +
-          esc(s.site.name) + " â€” " + esc(s.url) + "</option>"
+          esc(s.site.name) + " — " + esc(s.url) + "</option>"
         );
       })
       .join("");
@@ -3519,14 +3603,29 @@
     return (st.staged || []).length + (st.unstaged || []).length + (st.untracked || []).length;
   }
 
+  /* Git refuses a repository owned by another account. That is a real,
+     actionable condition, not a reason to pretend the project has no changes. */
+  function gitErrorShort(message) {
+    var m = String(message || "");
+    if (/dubious ownership/i.test(m)) return "Git cannot read it: owned by another user";
+    if (/not a Git repository/i.test(m)) return "not a Git repository";
+    if (/could not|failed|error/i.test(m)) return "Git could not read it";
+    return "";
+  }
+
   function renderProjects() {
     if (state.view !== "projects") return;
     var query = state.projectQuery.trim().toLowerCase();
     var pinned = pinnedProjects();
     var all = state.projects.slice();
+    var siteFor = {};
+    (state.server.sites || []).forEach(function (row) {
+      if (row.project && !siteFor[row.project]) siteFor[row.project] = row;
+    });
     var visible = all.filter(function (p) {
       if (!query) return true;
-      return (p.name || "").toLowerCase().indexOf(query) !== -1 || (p.path || "").toLowerCase().indexOf(query) !== -1;
+      var site = siteFor[p.path];
+      return keeps(query, p.name, p.path, p.stack, site && site.site && site.site.name, site && servingLabel(site));
     });
     visible.sort(function (a, b) {
       var ap = pinned.indexOf(a.path) !== -1 ? 0 : 1;
@@ -3541,14 +3640,20 @@
     });
 
     var body;
-    if (!all.length) {
+    if (!state.projectsLoaded) {
+      body = '<div class="loading" role="status" aria-live="polite">Reading your projects…</div>';
+    } else if (state.projectsError && !all.length) {
+      body = uiEmpty("Projects could not be read", state.projectsError, '<button type="button" class="btn btn-primary" data-action="projects-reload">Try again</button>');
+    } else if (!all.length) {
       body = uiEmpty("No projects yet", "devd works with projects on your disk. Add a folder that has one, or start a new one from a stack.",
         '<div class="inline"><button type="button" class="btn btn-primary" data-action="nav" data-view="create">Create a project</button><button type="button" class="btn" data-action="add-project">Add a folder</button></div>');
     } else {
+      var exposed = all.filter(function (p) { return (p.sites || []).length; }).length;
+      var registered = all.filter(function (p) { return p.registered; }).length;
       var sorts = PROJECT_SORTS.map(function (s) {
         return '<button type="button" class="ui-sort' + (state.projectSort === s.id ? " active" : "") + '" data-action="project-sort" data-sort="' + attr(s.id) + '">' + esc(s.label) + "</button>";
       }).join("");
-      var controls = '<div class="ui-controls"><input type="search" id="project-search" class="ui-search" placeholder="Search projects" value="' + attr(state.projectQuery) + '" aria-label="Search projects"><span class="grow"></span>' + sorts + "</div>";
+      var controls = '<div class="ui-controls"><input type="search" id="project-search" class="ui-search" placeholder="Search projects, stacks or site names" value="' + attr(state.projectQuery) + '" aria-label="Search projects"><span class="grow"></span><span class="sort-label">Sort</span>' + sorts + "</div>";
       var rows = visible.map(function (p) {
         var st = p.status;
         var bits = [];
@@ -3563,29 +3668,40 @@
           dotKind = changes ? "warn" : "ok";
         } else if (p.is_repository) bits.push("repository");
         if (p.exists === false) { bits.push("folder is gone"); dotKind = "bad"; }
-        if (!p.registered) bits.push(p.source === "site" ? "served by a site" : "not imported");
-        if (p.sites && p.sites.length) bits.push("site: " + p.sites.join(", "));
+        if (p.error) { bits.push("Git unavailable"); dotKind = "warn"; }
+        if (!p.registered) bits.push(p.source === "site" ? "known from its site" : "not imported");
+        var site = siteFor[p.path];
         var isPinned = pinned.indexOf(p.path) !== -1;
         return uiRow({
-          dot: dotKind, title: (isPinned ? "â˜… " : "") + esc(p.name),
-          sub: esc(bits.join(" Â· ")) + '<span class="ui-path" title="' + attr(p.path) + '"> Â· ' + esc(p.path) + "</span>",
+          dot: dotKind, title: (isPinned ? "★ " : "") + esc(p.name),
+          sub: esc(bits.join(" · ")) + '<span class="ui-path" title="' + attr(p.path) + '"> · ' + esc(p.path) + "</span>" +
+            (p.error ? ' <span class="row-warn" title="' + attr(p.error) + '">· ' + esc(gitErrorShort(p.error) || "Git could not read it") + "</span>" : ""),
+          meta: site ? esc(servingLabel(site)) : "no site",
           open: 'data-action="open-project" data-path="' + attr(p.path) + '"',
           actions: '<button type="button" class="btn btn-mini btn-primary" data-action="open-project" data-path="' + attr(p.path) + '">Open</button>' +
+            (site ? '<button type="button" class="btn btn-mini" data-action="open-site" data-name="' + attr(site.site.name) + '">Site</button>' : "") +
             '<button type="button" class="btn btn-mini btn-ghost" data-action="pin-project" data-path="' + attr(p.path) + '" title="' + (isPinned ? "Unpin" : "Pin to the top") + '">' + (isPinned ? "Unpin" : "Pin") + "</button>" +
             '<button type="button" class="btn btn-mini btn-ghost" data-action="project-forget" data-path="' + attr(p.path) + '" title="Remove it from devd; the folder is kept">Remove</button>',
           hover: true
         });
       });
-      body = (all.length > 4 ? controls : "") + (visible.length ? uiList(rows) : uiEmpty('No project matches "' + state.projectQuery + '"', "Clear the search to see the rest."));
+      body = summaryBand([
+        { label: "Projects", value: all.length + (all.length === 1 ? " project" : " projects"), detail: "in the folders devd knows" },
+        { label: "With an address", value: String(exposed), detail: exposed === all.length ? "every project has a site" : (all.length - exposed) + " not exposed as a site" },
+        { label: "Registered", value: String(registered), detail: registered === all.length ? "all imported into devd" : (all.length - registered) + " known only because a site serves them" }
+      ]) + (all.length > 4 ? controls : "") + (visible.length ? uiList(rows) : uiEmpty('No project matches "' + state.projectQuery + '"', "Clear the search to see the rest."));
     }
     el("main").innerHTML = page("Projects", "",
       '<button type="button" class="btn" data-action="clone-form">Clone</button><button type="button" class="btn btn-primary" data-action="add-project">Add a folder</button>', body);
   }
 
   function loadProjects(quiet) {
-    return read("project.list")
+    if (state.projectsPending) return state.projectsPending;
+    state.projectsPending = read("project.list")
       .then(function (rows) {
         var list = Array.isArray(rows) ? rows : [];
+        state.projectsLoaded = true;
+        state.projectsError = "";
         state.projects = list.map(function (p) {
           return {
             path: p.path,
@@ -3614,11 +3730,15 @@
         );
       })
       .catch(function (e) {
+        state.projectsLoaded = true;
+        state.projectsError = e.message;
         if (!quiet) {
           state.projects = [];
           toast("error", e.message);
         }
-      });
+      })
+      .then(function () { state.projectsPending = null; });
+    return state.projectsPending;
   }
 
   // ------------------------------------------------------------------- project
@@ -3768,7 +3888,7 @@
     var left =
       '<div class="panel"><div class="panel-head"><span>Working tree</span>' +
       '<span class="panel-note">' + esc(st.branch || "(detached)") +
-      (total ? " Â· " + total + " file" + (total === 1 ? "" : "s") : "") + "</span>" +
+      (total ? " · " + total + " file" + (total === 1 ? "" : "s") : "") + "</span>" +
       '<span class="inline right">' +
       mini("Stage all", "stage-all") +
       mini("Unstage all", "unstage-all") +
@@ -4565,7 +4685,7 @@
   function docLinks(docs) {
     return (docs || []).map(function (d) {
       return '<a class="link" href="' + attr(d.url) + '" target="_blank" rel="noopener noreferrer">' + esc(d.title) + "</a>";
-    }).join(" Â· ");
+    }).join(" · ");
   }
 
   function renderCreate() {
@@ -4635,18 +4755,18 @@
     if (!box) return;
     if (CREATE.planError) { box.innerHTML = '<div class="panel-head"><span>Review</span></div><div class="panel-body notice notice-bad">' + esc(CREATE.planError) + "</div>"; return; }
     var p = CREATE.plan;
-    if (!p) { box.innerHTML = '<div class="panel-head"><span>Review</span></div><div class="panel-body dim">Checkingâ€¦</div>'; return; }
+    if (!p) { box.innerHTML = '<div class="panel-head"><span>Review</span></div><div class="panel-body dim">Checking…</div>'; return; }
     var h = '<div class="panel-head"><span>Review</span><span class="panel-note">' + (p.valid ? (p.ready ? pill("ok", "ready") : pill("warn", "prerequisites missing")) : pill("bad", "needs attention")) + "</span></div><div class=\"panel-body\">";
     (p.issues || []).forEach(function (i) { h += '<div class="notice notice-bad"><b>' + esc(i.field) + "</b>: " + esc(i.message) + "</div>"; });
     if (p.valid) {
       h += '<div class="kv"><dt>Directory</dt><dd class="mono">' + esc(p.project_dir) + "</dd></div>";
       h += '<div class="field-label" style="margin-top:12px">Command devd will run</div><pre class="log-block">' + esc(p.command) + "</pre>";
-      if ((p.steps || []).length > 1) h += '<div class="row-sub">' + p.steps.map(function (s) { return esc(s.title); }).join(" â†’ ") + "</div>";
+      if ((p.steps || []).length > 1) h += '<div class="row-sub">' + p.steps.map(function (s) { return esc(s.title); }).join(" → ") + "</div>";
     }
     h += '<div class="field-label" style="margin-top:12px">Prerequisites</div>';
     (p.prerequisites || []).forEach(function (q) {
       var ok = q.status === "ok" || q.status === "unknown_version";
-      h += '<div class="inline" style="margin:4px 0">' + pill(ok ? "ok" : "bad", ok ? "ok" : q.status.replace("_", " ")) + "<span>" + esc(q.name) + " " + esc(q.found || "") + (q.min ? ' <span class="dim">needs â‰¥ ' + esc(q.min) + "</span>" : "") + "</span>" +
+      h += '<div class="inline" style="margin:4px 0">' + pill(ok ? "ok" : "bad", ok ? "ok" : q.status.replace("_", " ")) + "<span>" + esc(q.name) + " " + esc(q.found || "") + (q.min ? ' <span class="dim">needs ≥ ' + esc(q.min) + "</span>" : "") + "</span>" +
         (!ok && q.status === "missing" ? '<button type="button" class="btn btn-mini" data-action="tool-install" data-id="' + attr(q.tool) + '">Install</button>' : "") + "</div>" +
         (!ok && q.fix ? '<div class="row-sub">' + esc(q.fix) + "</div>" : "");
     });
@@ -4709,11 +4829,11 @@
     if (!DEV.projects) return renderLoading();
     var list = DEV.projects.map(function (p) {
       return '<button type="button" class="svc ' + (DEV.path === p.path ? "active" : "") + '" data-action="dev-open" data-path="' + attr(p.path) + '" style="width:100%;text-align:left">' +
-        '<div class="svc-main"><div class="svc-name">' + esc(p.name) + '</div><div class="svc-sub mono nowrap">' + esc(p.stack || "unknown stack") + " Â· " + esc(p.path) + "</div></div></button>";
+        '<div class="svc-main"><div class="svc-name">' + esc(p.name) + '</div><div class="svc-sub mono nowrap">' + esc(p.stack || "unknown stack") + " · " + esc(p.path) + "</div></div></button>";
     }).join("") || '<div class="panel-body empty-inline">No projects yet. Create one or import a checkout.</div>';
     var imp = '<div class="panel"><div class="panel-head"><span>Import an existing project</span></div><div class="panel-body">' +
       '<div class="inline"><input class="input mono grow" id="dev-import" placeholder="Where the project is" value="' + attr(DEV.importPath) + '" spellcheck="false">' +
-      '<button type="button" class="btn" data-action="dev-pick">Choose folderâ€¦</button>' +
+      '<button type="button" class="btn" data-action="dev-pick">Choose folder…</button>' +
       '<button type="button" class="btn" data-action="dev-detect">Detect</button><button type="button" class="btn btn-primary" data-action="dev-import">Import</button></div>' +
       '<div class="row-sub">Nothing is changed in the project. Clone a repository first with <span class="mono">git clone</span> or the Projects view.</div></div></div>';
     el("main").innerHTML = page("Develop", "Detect any project's stack, run its tasks, and make it available to agents.", "",
@@ -4723,20 +4843,20 @@
   function procPanel() {
     if (!DEV.procs.length) return "";
     return '<div class="panel"><div class="panel-head"><span>Running tasks</span></div>' + DEV.procs.map(function (p) {
-      return '<div class="svc"><div class="svc-main"><div class="svc-name">' + dot(p.running) + " " + esc(p.name) + '</div><div class="svc-sub mono">pid ' + esc(p.pid) + (p.running ? "" : " Â· exited " + esc(p.exit_code)) + "</div></div>" +
+      return '<div class="svc"><div class="svc-main"><div class="svc-name">' + dot(p.running) + " " + esc(p.name) + '</div><div class="svc-sub mono">pid ' + esc(p.pid) + (p.running ? "" : " · exited " + esc(p.exit_code)) + "</div></div>" +
         '<div class="svc-actions"><button type="button" class="btn btn-mini" data-action="proc-log" data-name="' + attr(p.name) + '">Log</button>' +
         '<button type="button" class="btn btn-mini btn-danger" data-action="proc-stop" data-name="' + attr(p.name) + '">Stop</button></div></div>';
     }).join("") + "</div>";
   }
 
   function devDetail() {
-    if (DEV.busy) return '<div class="panel"><div class="panel-body dim">Inspectingâ€¦</div></div>';
+    if (DEV.busy) return '<div class="panel"><div class="panel-body dim">Inspecting…</div></div>';
     if (DEV.error) return '<div class="panel"><div class="panel-body notice notice-bad">' + esc(DEV.error) + "</div></div>";
     var c = DEV.detect || DEV.ctx;
     if (!c) return '<div class="panel"><div class="panel-body empty-inline">Select a project.</div></div>';
     var h = '<div class="panel"><div class="panel-head"><span>' + esc(c.name) + '</span><span class="panel-note mono">' + esc(c.path) + '</span></div><div class="panel-body"><div class="toolbar"><button type="button" class="btn btn-mini" data-action="open-terminal" data-path="' + attr(c.path) + '" title="Your terminal, in this folder, with its pinned runtimes first on PATH">Open a terminal here</button></div>';
     if (c.ambiguous) h += '<div class="notice notice-warn">' + esc(c.ambiguity) + "</div>";
-    h += '<div class="kv"><dt>Stack</dt><dd>' + (c.stacks.length ? c.stacks.map(function (s, i) { return (i === 0 ? "<b>" : "") + esc(s.name) + " " + pill(s.confidence === "high" ? "ok" : "warn", s.confidence) + (i === 0 ? "</b>" : ""); }).join(" Â· ") : "unknown") + "</dd></div>";
+    h += '<div class="kv"><dt>Stack</dt><dd>' + (c.stacks.length ? c.stacks.map(function (s, i) { return (i === 0 ? "<b>" : "") + esc(s.name) + " " + pill(s.confidence === "high" ? "ok" : "warn", s.confidence) + (i === 0 ? "</b>" : ""); }).join(" · ") : "unknown") + "</dd></div>";
     if (c.stacks.length) h += '<div class="row-sub">' + esc(c.stacks[0].evidence.join("; ")) + "</div>";
     h += '<div class="kv"><dt>Package manager</dt><dd>' + esc(c.package_manager || "-") + ' <span class="dim">' + esc(c.package_manager_evidence || "") + "</span></dd></div>";
     (c.runtimes || []).forEach(function (r) { h += '<div class="kv"><dt>' + esc(r.tool) + '</dt><dd>wants ' + esc(r.constraint) + ' <span class="dim">(' + esc(r.source) + ")</span> - installed " + esc(r.installed || "none") + " " + (r.satisfied === true ? pill("ok", "satisfied") : r.satisfied === false ? pill("bad", "not satisfied") : "") + "</dd></div>"; });
@@ -4781,10 +4901,10 @@
   function renderToolchain() {
     if (state.view !== "toolchain") return;
     var actions = TC.loading
-      ? '<span class="ui-checking"><span class="spin" aria-hidden="true"></span>Checkingâ€¦</span>'
+      ? '<span class="ui-checking"><span class="spin" aria-hidden="true"></span>Checking…</span>'
       : '<button type="button" class="btn" data-action="refresh">Re-check</button>';
     if (!TC.data) {
-      el("main").innerHTML = page("Tools", "", "", '<div class="loading" role="status" aria-live="polite">Loadingâ€¦</div><div class="loading-note">devd runs each tool it knows to see what is installed. That takes a moment.</div>');
+      el("main").innerHTML = page("Tools", "", "", '<div class="loading" role="status" aria-live="polite">Loading…</div><div class="loading-note">devd runs each tool it knows to see what is installed. That takes a moment.</div>');
       return;
     }
     var host = TC.data.host, tools = TC.data.tools;
@@ -5009,16 +5129,21 @@
   var HEALTH_WORD = { healthy: "Healthy", degraded: "Degraded", starting: "Starting", unavailable: "Unavailable", critical: "Critical", setup_incomplete: "Setup incomplete", unknown: "Unknown" };
 
   function loadHealth() {
+    if (AI.healthPending) return AI.healthPending;
     AI.healthLoading = true;
     var timeout = new Promise(function (_, rej) { setTimeout(function () { rej(new Error("health check timed out after 15 s")); }, 15000); });
-    return Promise.race([read("health.status"), timeout]).then(function (h) {
+    AI.healthPending = Promise.race([read("health.status"), timeout]).then(function (h) {
       AI.health = h; AI.healthError = null; AI.healthAt = Date.now();
       read("environment.get").then(function (e) { AI.env = e; }).catch(function () {});
       return Promise.all([read("approval.list", { pending_only: true }), read("inbox.list", { open_only: true })]).then(function (r) {
         AI.counts.approvals = (r[0] || []).length;
         AI.counts.questions = (r[1] || []).filter(function (m) { return m.needs_reply; }).length;
       });
-    }).catch(function (e) { AI.healthError = e.message; }).then(function () { AI.healthLoading = false; });
+    }).catch(function (e) { AI.healthError = e.message; }).then(function () {
+      AI.healthLoading = false;
+      AI.healthPending = null;
+    });
+    return AI.healthPending;
   }
 
   function healthStale() { return AI.health && Date.now() - AI.healthAt > 90000; }
@@ -5028,7 +5153,7 @@
     var st = AI.healthError && !h ? "unknown" : h ? h.state : "checking";
     if (healthStale() || (AI.healthError && h)) st = "stale";
     var title, sub;
-    if (st === "checking") { title = "Checkingâ€¦"; sub = ""; }
+    if (st === "checking") { title = "Checking…"; sub = ""; }
     else if (st === "stale") { title = "Status is old"; sub = AI.healthError ? "last check failed" : "checked " + Math.round((Date.now() - AI.healthAt) / 60000) + " min ago"; }
     else if (!h) { title = "Cannot check"; sub = AI.healthError; }
     else { title = HEALTH_WORD[h.state] || h.state; sub = h.state === "healthy" ? (h.notes ? h.notes + " optional note" + (h.notes === 1 ? "" : "s") : "") : h.headline; }
@@ -5055,7 +5180,7 @@
     return '<div class="notice ' + tone + '"><b>' + esc(h.headline) + ".</b> Checked " + esc(ago(h.checked_at) || "just now") + " in " + h.took_ms + " ms." + (healthStale() ? " This is out of date." : "") + (AI.healthError ? " The last re-check failed: " + esc(AI.healthError) : "") + "</div>" +
       (h.attention.length ? '<div class="section-title">Waiting for you</div>' + h.attention.map(function (a) { return '<div class="hrow"><span class="health-dot" style="background:var(--warn)"></span><div class="grow">' + esc(a.label) + '</div><button type="button" class="btn btn-mini" data-action="health-go" data-view="' + attr(a.view) + '">Open</button></div>'; }).join("") : "") +
       '<div class="section-title">Components</div>' + rows +
-      '<div class="inline" style="margin-top:14px"><button type="button" class="btn" data-action="health-recheck"' + (AI.healthLoading ? " disabled" : "") + ">" + (AI.healthLoading ? "Checkingâ€¦" : "Check again") + "</button>" + (withClose ? '<button type="button" class="btn btn-ghost" data-action="health-go" data-view="system">Open diagnostics</button>' : "") + "</div>";
+      '<div class="inline" style="margin-top:14px"><button type="button" class="btn" data-action="health-recheck"' + (AI.healthLoading ? " disabled" : "") + ">" + (AI.healthLoading ? "Checking…" : "Check again") + "</button>" + (withClose ? '<button type="button" class="btn btn-ghost" data-action="health-go" data-view="system">Open diagnostics</button>' : "") + "</div>";
   }
 
   function openHealth() { openDrawer("devd status", healthBody(true)); }
@@ -5110,7 +5235,7 @@
   function approvalCard(r, compact) {
     var steps = (r.plan && r.plan.steps || []).slice(0, compact ? 3 : 12).map(function (x) { return "<li>" + esc(x) + "</li>"; }).join("");
     var effects = (r.plan && r.plan.effects || []).slice(0, 4).map(function (x) { return '<li class="warn-text">' + esc(x) + "</li>"; }).join("");
-    return '<div class="ask ask-approval"><div class="ask-head"><span class="pill pill-warn">approval</span><b>' + esc(r.capability) + '</b><span class="dim">' + esc(r.actor.replace("agent:", "")) + " Â· " + esc(ago(r.created_at)) + "</span></div>" +
+    return '<div class="ask ask-approval"><div class="ask-head"><span class="pill pill-warn">approval</span><b>' + esc(r.capability) + '</b><span class="dim">' + esc(r.actor.replace("agent:", "")) + " · " + esc(ago(r.created_at)) + "</span></div>" +
       ((r.plan && r.plan.summary) ? '<div class="ask-body">' + esc(r.plan.summary) + "</div>" : "") +
       (steps || effects ? '<ul class="ask-steps">' + steps + effects + "</ul>" : "") +
       '<div class="mono ask-args nowrap" title="' + attr(JSON.stringify(r.args)) + '">' + esc(JSON.stringify(r.args)) + "</div>" +
@@ -5119,7 +5244,7 @@
   }
 
   function messageCard(m) {
-    return '<div class="ask"><div class="ask-head"><span class="pill ' + (m.needs_reply ? "pill-accent" : "") + '">' + (m.needs_reply ? "question" : "message") + "</span><b>" + esc(m.subject) + '</b><span class="dim">' + esc(m.from_actor.replace("agent:", "")) + " Â· " + esc(ago(m.created_at)) + "</span></div>" +
+    return '<div class="ask"><div class="ask-head"><span class="pill ' + (m.needs_reply ? "pill-accent" : "") + '">' + (m.needs_reply ? "question" : "message") + "</span><b>" + esc(m.subject) + '</b><span class="dim">' + esc(m.from_actor.replace("agent:", "")) + " · " + esc(ago(m.created_at)) + "</span></div>" +
       '<div class="ask-body">' + md(m.body) + "</div>" +
       (m.needs_reply ? '<div class="inline"><input class="input grow" id="reply-' + attr(m.id) + '" placeholder="Your answer"><button type="button" class="btn btn-primary btn-mini" data-action="inbox-reply" data-id="' + attr(m.id) + '">Send</button></div>'
         : '<div class="inline"><button type="button" class="btn btn-mini" data-action="inbox-reply" data-id="' + attr(m.id) + '" data-resolve="1">Mark as read</button></div>') + "</div>";
@@ -5180,7 +5305,7 @@
     return uiRow({
       accent: true, dot: "warn",
       title: esc(m.subject), sub: esc(uiSummary(m.body, 170)), wrap: true,
-      meta: esc(who + " Â· " + ago(m.created_at)),
+      meta: esc(who + " · " + ago(m.created_at)),
       open: 'data-action="open-message" data-id="' + attr(m.id) + '"',
       actions: '<button type="button" class="btn btn-primary btn-mini" data-action="open-message" data-id="' + attr(m.id) + '">Answer</button>'
     });
@@ -5195,7 +5320,7 @@
     var projOptions = '<option value="">No project</option>' + d.projects.map(function (p) { return '<option value="' + attr(p.path) + '"' + (AI.askProject === p.path ? " selected" : "") + ">" + esc(p.name) + "</option>"; }).join("");
 
     var ask = ready
-      ? '<div class="ui-ask"><textarea id="home-ask" rows="1" placeholder="Ask devd to do somethingâ€¦" style="flex:1;background:none;border:0;outline:0;resize:none;color:var(--fg);font:inherit;font-size:var(--text-lg);padding:12px 0">' + esc(AI.askText) + "</textarea>" +
+      ? '<div class="ui-ask"><textarea id="home-ask" rows="1" placeholder="Ask devd to do something…" style="flex:1;background:none;border:0;outline:0;resize:none;color:var(--fg);font:inherit;font-size:var(--text-lg);padding:12px 0">' + esc(AI.askText) + "</textarea>" +
         '<select class="input select-field" id="home-project" aria-label="Project for this request">' + projOptions + "</select>" +
         '<button type="button" class="btn btn-ghost" data-action="home-team" title="A planner, specialists working in parallel, and proof before anything counts as done">Team</button>' +
         '<button type="button" class="btn btn-primary" data-action="home-ask">Ask</button></div>'
@@ -5231,21 +5356,73 @@
 
     var reqs = ((AI.requirements && AI.requirements.requirements) || []).filter(function (r) { return r.state !== "ready"; });
     var setup = reqs.length
-      ? uiList([uiRow({ dot: "warn", title: "Finish setting up devd", sub: reqs.length + " thing" + (reqs.length === 1 ? "" : "s") + " to install: " + esc(reqs.slice(0, 3).map(function (r) { return r.title; }).join(", ")) + (reqs.length > 3 ? "â€¦" : ""),
+      ? uiList([uiRow({ dot: "warn", title: "Finish setting up devd", sub: reqs.length + " thing" + (reqs.length === 1 ? "" : "s") + " to install: " + esc(reqs.slice(0, 3).map(function (r) { return r.title; }).join(", ")) + (reqs.length > 3 ? "…" : ""),
           actions: '<button type="button" class="btn btn-mini" data-action="open-setup">Review</button>' })])
       : "";
 
-    var projects = d.projects.length
-      ? uiList(d.projects.slice(0, 6).map(function (p) {
+    // Projects and sites are two views of the same work. The map is built here,
+    // once, so a project row can say which address serves it without a second
+    // capability call or a guess about the folder.
+    var siteFor = {};
+    (state.server.sites || []).forEach(function (row) {
+      if (row.project && !siteFor[row.project]) siteFor[row.project] = row;
+    });
+    var allSites = state.server.sites || [];
+    var allProjects = d.projects || [];
+    var exposed = allProjects.filter(function (p) { return siteFor[p.path]; }).length;
+
+    var projects = allProjects.length
+      ? uiList(allProjects.slice(0, 8).map(function (p) {
+        var site = siteFor[p.path];
         return uiRow({
-          title: esc(p.name), sub: esc((p.stack ? p.stack + " Â· " : "") + p.path),
+          dot: site ? (site.serving === "no_entry" ? "warn" : "ok") : "off",
+          title: esc(p.name),
+          sub: esc((p.stack ? p.stack + " · " : "") + p.path),
+          meta: site ? esc(servingLabel(site)) : "no site",
           open: 'data-action="home-open" data-path="' + attr(p.path) + '"',
-          actions: '<button type="button" class="btn btn-mini" data-action="home-open" data-path="' + attr(p.path) + '">Open</button>' + (ready ? '<button type="button" class="btn btn-mini btn-ghost" data-action="home-chat" data-path="' + attr(p.path) + '">Ask</button>' : ""),
+          actions: '<button type="button" class="btn btn-mini btn-primary" data-action="home-open" data-path="' + attr(p.path) + '">Open</button>' +
+            (site ? '<button type="button" class="btn btn-mini" data-action="open-site" data-name="' + attr(site.site.name) + '">Site</button>' : "") +
+            (ready ? '<button type="button" class="btn btn-mini btn-ghost" data-action="home-chat" data-path="' + attr(p.path) + '">Ask</button>' : ""),
           hover: true
         });
       }))
       : uiEmpty("No projects yet", "Create one from a stack, or point devd at a folder that already exists.",
         '<div class="inline"><button type="button" class="btn btn-primary" data-action="nav" data-view="create">Create a project</button><button type="button" class="btn" data-action="nav" data-view="develop">Import a folder</button></div>');
+
+    var counts = serviceCounts(state.server.services);
+    var noEntry = allSites.filter(function (row) { return row.serving === "no_entry"; });
+    var siteAttention = allSites.filter(siteNeedsAttention);
+    var pendingHosts = ((state.server.hosts && (state.server.hosts.adding || []).concat(state.server.hosts.removing || [])) || []).length;
+    var phps = (state.server.runtimes || []).filter(function (r) { return r.runtime && r.runtime.kind === "php"; });
+    var defaultPhp = phpPrimary();
+    var env = state.server.loaded
+      ? summaryBand([
+        { label: "Services", value: counts.up + " of " + counts.total + " running", detail: counts.up === counts.total && counts.total ? "the stack is ready" : counts.total ? "start the stack when you need it" : "nothing installed yet", tone: counts.up === counts.total && counts.total ? "ok" : counts.up ? "warn" : "", dot: counts.up === counts.total && counts.total ? "ok" : counts.up ? "warn" : "off" },
+        { label: "Sites", value: (allSites.length - noEntry.length) + " can serve", detail: noEntry.length ? noEntry.length + " with no entry point" : "every site has something to serve", tone: noEntry.length ? "warn" : "ok", dot: noEntry.length ? "warn" : "ok" },
+        { label: "Runtimes", value: (state.server.runtimes || []).length ? (state.server.runtimes || []).length + " installed" : "None installed", detail: phps.length ? phps.length + " PHP · default " + (defaultPhp || "not selected") : "install one from Runtimes", tone: "", dot: (state.server.runtimes || []).length ? "ok" : "off" }
+      ])
+      : '<div class="loading">Reading the environment…</div>';
+    var envLinks = '<div class="env-links">' +
+      (counts.up < counts.total ? '<button type="button" class="btn btn-mini btn-primary" data-action="stack-up">Start all services</button>' : "") +
+      '<button type="button" class="btn btn-mini" data-action="nav" data-view="overview">Environment</button>' +
+      (noEntry.length ? '<button type="button" class="btn btn-mini btn-ghost" data-action="nav" data-view="sites">Review ' + noEntry.length + " site" + (noEntry.length === 1 ? "" : "s") + "</button>" : "") +
+      (pendingHosts ? '<button type="button" class="btn btn-mini btn-ghost" data-action="nav" data-view="hosts">Publish ' + pendingHosts + " hostname" + (pendingHosts === 1 ? "" : "s") + "</button>" : "") +
+      "</div>";
+
+    var sites = allSites.length
+      ? uiList(allSites.slice(0, 6).map(function (row) {
+        return uiRow({
+          dot: row.serving === "no_entry" ? "warn" : row.server_running ? "ok" : "off",
+          title: esc(row.site.name),
+          sub: esc(row.url),
+          meta: esc(servingLabel(row) || "not serving"),
+          open: 'data-action="open-url" data-url="' + attr(row.url) + '"',
+          actions: '<button type="button" class="btn btn-mini" data-action="open-site" data-name="' + attr(row.site.name) + '">Manage</button>' +
+            '<button type="button" class="btn btn-mini btn-ghost" data-action="open-url" data-url="' + attr(row.url) + '">Open</button>',
+          hover: true
+        });
+      }))
+      : uiEmpty("No sites yet", "Create a site to give a project an address.", '<button type="button" class="btn btn-primary btn-mini" data-action="new-site">Create a site</button>');
 
     var live = [];
     d.threads.filter(function (t) { return t.state === "running" || t.state === "waiting_approval"; }).forEach(function (t) {
@@ -5253,7 +5430,7 @@
         actions: '<button type="button" class="btn btn-mini" data-action="open-thread" data-id="' + attr(t.id) + '">Open</button>' }));
     });
     (d.teamRuns || []).filter(function (t) { return ["planning", "running"].indexOf(t.state) >= 0; }).forEach(function (t) {
-      live.push(uiRow({ dot: "live", title: esc(t.title), meta: "team Â· " + esc(t.state),
+      live.push(uiRow({ dot: "live", title: esc(t.title), meta: "team · " + esc(t.state),
         actions: '<button type="button" class="btn btn-mini" data-action="team-open-from" data-id="' + attr(t.id) + '">Open</button>' }));
     });
     var svcUp = serviceUnits(state.server.services).filter(function (u) { return u.running; }).map(function (u) { return u.rows ? "PHP " + u.php.series : u.row.name; });
@@ -5267,11 +5444,22 @@
 
     el("main").innerHTML =
       '<div class="page home">' +
-      '<div class="ui-greet">' + pageTitle(greeting(), "home") + '<div class="sub">' + new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" }) + "</div></div>" +
+      '<div class="ui-greet">' + pageTitle(greeting(), "home") +
+      '<div class="sub">' + new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" }) +
+      ' <span class="greet-sep" aria-hidden="true">·</span> <button type="button" class="greet-link" data-action="nav" data-view="overview">' + (state.server.loaded ? "Local environment" : "Reading the environment") + "</button></div></div>" +
       ask + needsHtml + setup +
-      uiHead("Projects", d.projects.length || null, d.projects.length ? '<button type="button" class="btn btn-mini btn-ghost" data-action="nav" data-view="create">New</button>' : "") + projects +
-      (live.length ? uiHead("Working now", live.length) + uiList(live) : "") +
-      (feed.length ? uiHead("Recently", null) + uiList(feed) : "") +
+      '<section class="home-env" aria-label="Environment">' + env + envLinks + "</section>" +
+      '<div class="home-grid">' +
+        '<div class="home-col home-main-col">' +
+          uiHead("Projects", allProjects.length || null, '<button type="button" class="btn btn-mini btn-ghost" data-action="nav" data-view="projects">All projects</button>') + projects +
+          (live.length ? uiHead("Working now", live.length) + uiList(live) : "") +
+        "</div>" +
+        '<aside class="home-col home-side-col" aria-label="Sites and recent work">' +
+          uiHead("Sites", allSites.length || null, '<button type="button" class="btn btn-mini btn-ghost" data-action="nav" data-view="sites">All sites</button>') + sites +
+          (siteAttention.length ? '<div class="home-note">' + esc(siteAttention.length + (siteAttention.length === 1 ? " site needs" : " sites need") + " attention") + ' <button type="button" data-action="nav" data-view="sites">Review</button></div>' : "") +
+          (feed.length ? uiHead("Recently", null) + uiList(feed) : "") +
+        "</aside>" +
+      "</div>" +
       "</div>";
   }
 
@@ -5288,8 +5476,8 @@
     });
   }
 
-  function money(v) { return v === null || v === undefined ? "â€“" : "$" + (v < 1 ? v.toFixed(2) : String(v)); }
-  function tok(v) { return !v ? "â€“" : v >= 1000000 ? (v / 1000000) + "M" : Math.round(v / 1000) + "K"; }
+  function money(v) { return v === null || v === undefined ? "–" : "$" + (v < 1 ? v.toFixed(2) : String(v)); }
+  function tok(v) { return !v ? "–" : v >= 1000000 ? (v / 1000000) + "M" : Math.round(v / 1000) + "K"; }
 
   function curlExample(kind, base, env) {
     if (kind === "anthropic") return 'curl ' + base + '/v1/messages \\\n  -H "x-api-key: $' + (env || "ANTHROPIC_API_KEY") + '" \\\n  -H "anthropic-version: 2023-06-01" \\\n  -H "content-type: application/json" \\\n  -d \'{"model":"MODEL","max_tokens":256,"messages":[{"role":"user","content":"Hello"}]}\'';
@@ -5384,13 +5572,13 @@
       '<div class="field"><label class="field-label" for="pf-base">Base URL</label><input class="input mono" id="pf-base" data-pf="base_url" value="' + attr(f.base_url) + '" spellcheck="false"><div class="row-sub">https only (plain http is allowed for localhost). The key is sent here, so check it.</div></div>' +
       '<div class="field"><label class="field-label" for="pf-kind">Wire format</label><select class="input" id="pf-kind" data-pf="kind"><option value="openai-compatible"' + (f.kind !== "anthropic" && f.kind !== "openai" ? " selected" : "") + '>OpenAI-compatible chat</option><option value="openai"' + (f.kind === "openai" ? " selected" : "") + ">OpenAI</option><option value=\"anthropic\"" + (f.kind === "anthropic" ? " selected" : "") + ">Anthropic Messages</option></select></div>" +
       '<div class="field"><label class="field-label" for="pf-key">API key' + (f.editing ? " (leave empty to keep the current one)" : "") + '</label><input class="input mono" id="pf-key" type="password" autocomplete="off" data-pf="api_key" value="" placeholder="' + (pr.requires_key === false ? "not needed for local servers" : "paste your key") + '"><div class="row-sub">Stored in a file only you can read, never in the database, logs or responses. Or leave empty and set the environment variable below.</div></div>' +
-      '<div class="field"><label class="field-label" for="pf-keyenv">â€¦or read the key from an environment variable</label><input class="input mono" id="pf-keyenv" data-pf="key_env" value="' + attr(f.key_env || "") + '" placeholder="' + attr(pr.key_env || "MY_API_KEY") + '" spellcheck="false"></div>' +
+      '<div class="field"><label class="field-label" for="pf-keyenv">…or read the key from an environment variable</label><input class="input mono" id="pf-keyenv" data-pf="key_env" value="' + attr(f.key_env || "") + '" placeholder="' + attr(pr.key_env || "MY_API_KEY") + '" spellcheck="false"></div>' +
       '<div class="field"><label class="field-label" for="pf-model">Default model</label><input class="input mono" id="pf-model" list="pf-models" data-pf="default_model" value="' + attr(f.default_model || "") + '" spellcheck="false"><datalist id="pf-models">' + modelOptions(f.id).map(function (m) { return '<option value="' + attr(m.model_id) + '"></option>'; }).join("") + "</datalist></div>" +
       '<label class="check"><input type="checkbox" data-pf="make_default"' + (f.make_default ? " checked" : "") + "> Use for new conversations</label>" +
       '<div class="inline" style="margin-top:14px"><button type="button" class="btn btn-primary" data-action="prov-save">' + (f.editing ? "Save" : "Add provider") + "</button></div></div>" +
       '<div><div class="field-label">API setup</div>' +
       (pr.key_url ? '<div class="row-sub">1. Create a key: <a class="link" href="' + attr(pr.key_url) + '" target="_blank" rel="noopener noreferrer">' + esc(pr.key_url) + "</a></div>" : '<div class="row-sub">No key is needed for a local server. Make sure it is running.</div>') +
-      '<div class="row-sub">2. Paste it here, or export it: <span class="mono">export ' + esc(pr.key_env || "API_KEY") + "=â€¦</span></div>" +
+      '<div class="row-sub">2. Paste it here, or export it: <span class="mono">export ' + esc(pr.key_env || "API_KEY") + "=…</span></div>" +
       '<div class="row-sub">3. Test the connection, fetch the model list, pick a default model.</div>' +
       '<div class="row-sub">Docs: <a class="link" href="' + attr(pr.docs_url || "#") + '" target="_blank" rel="noopener noreferrer">' + esc(pr.docs_url || "") + "</a></div>" +
       '<div class="row-sub">Models come from: ' + esc(pr.models_from || "") + "</div>" +
@@ -5420,7 +5608,7 @@
     out += AI.providers.map(function (p) {
       var ms = (AI.catalogue || []).filter(function (m) { return m.source === "provider:" + p.id; });
       if (!ms.length) return "";
-      return '<div class="panel"><div class="panel-head"><span>Models available to ' + esc(p.label) + '</span><span class="panel-note">' + ms.length + " Â· fetched " + esc(ago(ms[0].fetched_at)) + '</span></div><div class="table-wrap"><table class="table"><tbody>' +
+      return '<div class="panel"><div class="panel-head"><span>Models available to ' + esc(p.label) + '</span><span class="panel-note">' + ms.length + " · fetched " + esc(ago(ms[0].fetched_at)) + '</span></div><div class="table-wrap"><table class="table"><tbody>' +
         ms.slice(0, 60).map(function (m) { return '<tr><td class="cell-mono">' + esc(m.model_id) + '</td><td class="dim">' + esc(m.display === m.model_id ? "" : m.display) + "</td><td>" + tok(m.context_window) + '</td><td><button type="button" class="btn btn-mini" data-action="prov-pick" data-id="' + attr(p.id) + '" data-model="' + attr(m.model_id) + '">Use</button></td></tr>'; }).join("") +
         (ms.length > 60 ? '<tr><td colspan="4" class="cell-dim">' + (ms.length - 60) + " more models are in the catalogue; the API lists all of them.</td></tr>" : "") +
         "</tbody></table></div></div>";
@@ -5436,7 +5624,7 @@
       var cat = pr.category === "local" ? "local" : pr.category === "aggregator" ? "aggregator" : "cloud";
       return '<button type="button" class="preset" data-action="prov-new" data-preset="' + attr(pr.id) + '">' +
         '<span class="preset-head">' + brandImg(pr.id, "brand-dot") + "<b>" + esc(pr.label) + '</b><span class="preset-cat">' + esc(cat) + "</span></span>" +
-        "<span>" + esc(pr.requires_key ? "Needs an API key" : "No key") + " Â· " + esc(pr.tools === "documented" ? "tool calling" : "tools depend on the model") + "</span>" +
+        "<span>" + esc(pr.requires_key ? "Needs an API key" : "No key") + " · " + esc(pr.tools === "documented" ? "tool calling" : "tools depend on the model") + "</span>" +
         "<small>" + esc(pr.models_from || "") + "</small></button>";
     }).join("");
     var empty = '<div class="panel"><div class="empty"><div class="empty-icon"><svg class="icon" aria-hidden="true"><use href="#i-sliders"></use></svg></div>' +
@@ -5664,12 +5852,12 @@
     AI.events.forEach(function (e) {
       var when = shortTime(e.created_at);
       if (e.kind === "user") {
-        html += '<div class="msg msg-user"><div><div class="bubble">' + md(e.data.text) + '</div><div class="msg-meta">You' + (when ? " Â· " + when : "") + "</div></div></div>";
+        html += '<div class="msg msg-user"><div><div class="bubble">' + md(e.data.text) + '</div><div class="msg-meta">You' + (when ? " · " + when : "") + "</div></div></div>";
       } else if (e.kind === "assistant") {
         html += usedLine(e.data.content);
         (e.data.content || []).forEach(function (b, bi) {
           if (b.type === "text" && b.text.trim()) {
-            html += '<div class="msg msg-agent" data-event="' + e.id + '"><div class="avatar" aria-hidden="true">d</div><div><div class="bubble">' + md(b.text) + '</div><div class="msg-meta">devd' + (when ? " Â· " + when : "") + "</div>" + msgActions(e.id, bi) + "</div></div>";
+            html += '<div class="msg msg-agent" data-event="' + e.id + '"><div class="avatar" aria-hidden="true">d</div><div><div class="bubble">' + md(b.text) + '</div><div class="msg-meta">devd' + (when ? " · " + when : "") + "</div>" + msgActions(e.id, bi) + "</div></div>";
           } else if (b.type === "tool_use") {
             var c = summarizeCall(b), r = results[b.id], open = AI.openSteps[b.id];
             var pend = pendingByTool[b.id];
@@ -5682,7 +5870,7 @@
               if (ms > 0 && ms < 3600000) took = duration(ms);
             }
             html += '<div class="step' + (r && r.is_error ? " step-bad" : "") + (open ? " open" : "") + '">' +
-              '<button type="button" class="step-head" data-action="step-toggle" data-id="' + attr(b.id) + '" aria-expanded="' + (open ? "true" : "false") + '" title="' + attr(c.title + (c.detail ? " â€” " + c.detail : "")) + '">' +
+              '<button type="button" class="step-head" data-action="step-toggle" data-id="' + attr(b.id) + '" aria-expanded="' + (open ? "true" : "false") + '" title="' + attr(c.title + (c.detail ? " — " + c.detail : "")) + '">' +
               '<span class="step-arrow" aria-hidden="true"><svg class="icon"><use href="#i-chevron-down"></use></svg></span>' +
               '<span class="step-dot ' + (pend ? "wait" : r ? (r.is_error ? "bad" : "ok") : "run") + '" aria-hidden="true"></span>' +
               '<span class="step-title">' + esc(c.title) + "</span>" +
@@ -5730,7 +5918,7 @@
    * key changes, and putting the scroll position back exactly, makes the idle case cost nothing and
    * the busy case keep the reader's place. */
   /* The plan, above the conversation. The agent writes it with todo.create; this is the same
-   * project state the person can see in Agents â†’ Notes, not a private scratch list. */
+   * project state the person can see in Agents → Notes, not a private scratch list. */
   function paintChatPlan() {
     var box = el("chat-plan");
     if (!box) return;
@@ -5798,7 +5986,7 @@
     var t = AI.thread;
     // The provider and the model live in the composer, where they are used.
     // The head says what the conversation is and where it stands.
-    return '<div class="grow"><div class="chat-title">' + esc(t.title) + '</div><div class="dim mono nowrap">' + esc(t.project || "no project") + " Â· " + t.input_tokens + " in / " + t.output_tokens + " out tokens</div></div>" +
+    return '<div class="grow"><div class="chat-title">' + esc(t.title) + '</div><div class="dim mono nowrap">' + esc(t.project || "no project") + " · " + t.input_tokens + " in / " + t.output_tokens + " out tokens</div></div>" +
       (AI.queued > 0 ? '<span class="pill pill-warn" title="Messages waiting for the next step">' + AI.queued + " queued</span>" : "") +
       (AI.chapters && AI.chapters.length ? '<button type="button" class="btn btn-mini btn-ghost" data-action="chapters-open">Chapters (' + AI.chapters.length + ")</button>" : "") + '<span class="pill ' + (t.state === "error" ? "pill-bad" : t.state === "idle" ? "" : "pill-accent") + '">' + esc(t.state.replace("_", " ")) + '</span><button type="button" class="btn btn-mini btn-ghost" data-action="chat-delete" data-id="' + attr(t.id) + '">Delete</button>';
   }
@@ -5914,7 +6102,7 @@
     if (state.view !== "team") return;
     if (!TEAM.runs) return renderLoading();
     var ready = (AI.providers || []).some(function (p) { return p.enabled && (p.has_key || !p.needs_key); });
-    var projOpts = '<option value="">Choose a projectâ€¦</option>' + state.projects.map(function (p) { return '<option value="' + attr(p.path) + '"' + (TEAM.form.project === p.path ? " selected" : "") + ">" + esc(p.name || dirName(p.path)) + "</option>"; }).join("") + '<option value="__new"' + (TEAM.form.project === "__new" ? " selected" : "") + ">A new projectâ€¦</option>";
+    var projOpts = '<option value="">Choose a project…</option>' + state.projects.map(function (p) { return '<option value="' + attr(p.path) + '"' + (TEAM.form.project === p.path ? " selected" : "") + ">" + esc(p.name || dirName(p.path)) + "</option>"; }).join("") + '<option value="__new"' + (TEAM.form.project === "__new" ? " selected" : "") + ">A new project…</option>";
     el("main").innerHTML =
       '<div class="assistant"><aside class="threads"><div class="threads-head"><b>Runs</b><span class="grow"></span><button type="button" class="btn btn-mini btn-ghost" data-action="team-prune" title="Delete every run that is over">Clear finished</button><button type="button" class="btn btn-mini btn-primary" data-action="team-new">New</button></div><div id="team-list"></div></aside>' +
       '<section class="chat"><div id="team-detail" class="team-detail"></div></section></div>';
@@ -5942,7 +6130,7 @@
     return '<div class="team-new"><div class="chat-title">Describe what you want built</div>' +
       '<div class="row-sub">A planner turns this into tasks. You review the plan and approve it before anything runs. Specialists then work in parallel where it is safe, and a task only counts as done when devd can see the proof.</div>' +
       (TEAM.ready ? "" : '<div class="notice notice-warn" style="margin-top:12px">No usable AI provider yet. <button type="button" class="btn btn-mini btn-primary" data-action="nav" data-view="providers">Set one up</button></div>') +
-      (TEAM.templates && TEAM.templates.length ? '<div class="field" style="margin-top:14px"><label class="field-label">Start from a template <span class="dim">(optional)</span></label><select class="input" id="team-template"><option value="">Write the goal myself</option>' + TEAM.templates.map(function (t) { return '<option value="' + attr(t.id) + '"' + (TEAM.form.template === t.id ? " selected" : "") + ">" + esc(t.title) + " â€” " + esc(t.summary) + "</option>"; }).join("") + "</select></div>" : "") +
+      (TEAM.templates && TEAM.templates.length ? '<div class="field" style="margin-top:14px"><label class="field-label">Start from a template <span class="dim">(optional)</span></label><select class="input" id="team-template"><option value="">Write the goal myself</option>' + TEAM.templates.map(function (t) { return '<option value="' + attr(t.id) + '"' + (TEAM.form.template === t.id ? " selected" : "") + ">" + esc(t.title) + " — " + esc(t.summary) + "</option>"; }).join("") + "</select></div>" : "") +
       '<div class="field" style="margin-top:14px"><label class="field-label">Goal</label><textarea class="input" id="team-goal" rows="5" placeholder="e.g. Add password reset by email to the app, with tests. Or: Build a small Laravel blog with posts and comments.">' + esc(f.goal) + "</textarea></div>" +
       '<div class="field" style="margin-top:10px"><label class="field-label">Definition of done <span class="dim">(optional, one per line)</span></label><textarea class="input" id="team-done" rows="3" placeholder="e.g. The tests pass&#10;The README documents every command">' + esc(f.done) + "</textarea><div class=\"row-sub\">When the work is finished devd checks each line against what the team recorded and starts another pass for any that are not met. Needs the Jev key (judge.configure); without it the lines are listed for you to confirm.</div></div>" +
       '<div class="inline" style="margin-top:10px"><select class="input" id="team-project" style="max-width:280px">' + TEAM.projOpts + "</select>" +
@@ -5957,7 +6145,7 @@
     var ch = ev.filter(function (f) { return f.kind === "change" && f.ok; }).length;
     var vp = ev.filter(function (f) { return f.kind === "verify" && f.ok; }).length, vf = ev.filter(function (f) { return f.kind === "verify" && !f.ok; }).length;
     var rd = ev.filter(function (f) { return f.kind === "read" && f.ok; }).length, cm = ev.filter(function (f) { return f.kind === "command"; }).length;
-    return [ch ? ch + " change" + (ch === 1 ? "" : "s") : "", vp ? vp + " check" + (vp === 1 ? "" : "s") + " passed" : "", vf ? vf + " failed" : "", rd ? rd + " read" : "", cm ? cm + " command" + (cm === 1 ? "" : "s") : ""].filter(Boolean).join(" Â· ");
+    return [ch ? ch + " change" + (ch === 1 ? "" : "s") : "", vp ? vp + " check" + (vp === 1 ? "" : "s") + " passed" : "", vf ? vf + " failed" : "", rd ? rd + " read" : "", cm ? cm + " command" + (cm === 1 ? "" : "s") : ""].filter(Boolean).join(" · ");
   }
 
   function teamDetail(d) {
@@ -5970,7 +6158,7 @@
     if (r.state === "paused") actions += '<button type="button" class="btn btn-primary" data-action="team-resume" data-id="' + attr(r.id) + '">Resume</button>';
     if (["planning", "awaiting_plan", "running", "paused"].indexOf(r.state) >= 0) actions += '<button type="button" class="btn btn-danger" data-action="team-cancel" data-id="' + attr(r.id) + '">Cancel</button>';
     else actions += '<button type="button" class="btn btn-ghost" data-action="team-delete" data-id="' + attr(r.id) + '">Delete</button>';
-    var head = '<div class="chat-head"><div class="grow"><div class="chat-title">' + esc(r.title) + '</div><div class="dim mono nowrap">' + esc(r.project || "") + ' Â· started by ' + esc((r.created_by || "").replace("human:", "")) + " " + esc(ago(r.created_at)) + '</div></div><span class="pill ' + (r.state === "failed" ? "pill-bad" : r.state === "done" ? "pill-ok" : r.state === "awaiting_plan" || r.state === "paused" ? "pill-warn" : "pill-accent") + '">' + esc(RUN_WORD[r.state] || r.state) + "</span>" + actions + "</div>";
+    var head = '<div class="chat-head"><div class="grow"><div class="chat-title">' + esc(r.title) + '</div><div class="dim mono nowrap">' + esc(r.project || "") + ' · started by ' + esc((r.created_by || "").replace("human:", "")) + " " + esc(ago(r.created_at)) + '</div></div><span class="pill ' + (r.state === "failed" ? "pill-bad" : r.state === "done" ? "pill-ok" : r.state === "awaiting_plan" || r.state === "paused" ? "pill-warn" : "pill-accent") + '">' + esc(RUN_WORD[r.state] || r.state) + "</span>" + actions + "</div>";
     var note = r.error ? '<div class="notice notice-warn" style="margin:12px 16px"><b>Needs you.</b> ' + esc(r.error) + "</div>" : "";
     if (r.state === "planning") note += '<div class="notice" style="margin:12px 16px">The planner is reading the project and writing the plan' + (planner && planner.state === "waiting_approval" ? ", and is waiting for you to approve something" : "") + ".</div>";
     var cards = work.map(function (t) {
@@ -5979,7 +6167,7 @@
       if (["unverified", "blocked", "failed"].indexOf(t.state) >= 0) btns = '<button type="button" class="btn btn-mini btn-primary" data-action="team-retry" data-id="' + attr(t.id) + '">Retry</button><button type="button" class="btn btn-mini" data-action="team-accept" data-id="' + attr(t.id) + '" title="Accept it without the proof devd asked for. This is recorded.">Accept as is</button>';
       if (t.thread_id) btns += '<button type="button" class="btn btn-mini btn-ghost" data-action="open-thread" data-id="' + attr(t.thread_id) + '">Conversation</button>';
       return '<div class="tcard tstate-' + t.state + '"><div class="tcard-head"><span class="step-dot ' + (t.state === "done" || t.state === "skipped" ? "ok" : t.state === "running" ? "run" : t.state === "waiting_approval" ? "wait" : ["failed", "unverified", "blocked"].indexOf(t.state) >= 0 ? "bad" : "") + '"></span><b>' + esc(t.title) + '</b><span class="pill">' + esc(t.role) + '</span><span class="pill ' + (t.state === "done" ? "pill-ok" : ["failed", "unverified", "blocked"].indexOf(t.state) >= 0 ? "pill-bad" : t.state === "running" ? "pill-accent" : "") + '">' + esc(TASK_WORD[t.state] || t.state) + '</span><span class="grow"></span><button type="button" class="btn btn-mini btn-ghost" data-action="team-toggle" data-id="' + attr(t.id) + '">' + (open ? "Hide" : "Details") + "</button></div>" +
-        '<div class="row-sub">' + esc(dep) + (t.attempts > 1 ? " Â· attempt " + t.attempts : "") + (t.branch ? " Â· own copy on " + esc(t.branch) : "") + (evidenceLine(t) ? " Â· " + esc(evidenceLine(t)) : "") + "</div>" +
+        '<div class="row-sub">' + esc(dep) + (t.attempts > 1 ? " · attempt " + t.attempts : "") + (t.branch ? " · own copy on " + esc(t.branch) : "") + (evidenceLine(t) ? " · " + esc(evidenceLine(t)) : "") + "</div>" +
         (t.error && ["unverified", "blocked", "failed"].indexOf(t.state) >= 0 ? '<div class="row-sub warn-text">' + esc(t.error) + "</div>" : "") +
         (open ? '<div class="field-label" style="margin-top:8px">Instructions</div><div class="ask-body">' + md(t.instructions) + (t.result ? '<div class="field-label" style="margin-top:8px">What it reported</div>' + md(t.result) : "") + '<div class="field-label" style="margin-top:8px">Evidence devd recorded</div>' + ((t.evidence || []).length ? '<table class="table"><tbody>' + t.evidence.map(function (f) { return "<tr><td><span class=\"pill " + (f.ok ? "pill-ok" : "pill-bad") + '">' + esc(f.kind) + '</span></td><td class="cell-mono">' + esc(f.capability) + '</td><td class="cell-mono nowrap">' + esc(f.summary || "") + "</td></tr>"; }).join("") + "</tbody></table>" : '<div class="empty-inline">None yet.</div>') + "</div>" : "") +
         (btns ? '<div class="inline" style="margin-top:8px">' + btns + "</div>" : "") + "</div>";
@@ -6000,7 +6188,7 @@
       return '<div class="feed"><span class="dim mono">' + esc(ago(e.at)) + '</span><span class="grow">' + esc(text) + "</span></div>";
     }).join("");
     var summary = r.summary ? '<div class="team-result"><div class="ui-row-title">Result</div><div class="ui-row-sub wrap">' + esc(uiSummary(r.summary, 260)) + '</div><button type="button" class="btn btn-mini" data-action="team-report" data-id="' + attr(r.id) + '">Read the full report</button></div>' : "";
-    var say = ["done", "failed", "cancelled"].indexOf(r.state) < 0 ? '<div class="composer"><div class="inline"><input class="input grow" id="team-say" placeholder="Tell the team something new (new requirement, a correction)â€¦"><button type="button" class="btn btn-primary" data-action="team-say" data-id="' + attr(r.id) + '">Send</button></div></div>' : "";
+    var say = ["done", "failed", "cancelled"].indexOf(r.state) < 0 ? '<div class="composer"><div class="inline"><input class="input grow" id="team-say" placeholder="Tell the team something new (new requirement, a correction)…"><button type="button" class="btn btn-primary" data-action="team-say" data-id="' + attr(r.id) + '">Send</button></div></div>' : "";
     return head + '<div class="team-scroll">' + note + approvals + (summary) + '<div class="section-title" style="margin:16px 16px 8px">Tasks <span class="count">' + work.length + "</span></div>" + '<div class="tlist">' + cards + "</div>" + '<div class="section-title" style="margin:16px 16px 8px">Log</div><div class="panel" style="margin:0 16px 16px">' + (log || '<div class="empty-inline">Nothing yet.</div>') + "</div></div>" + say;
   }
 
@@ -6037,14 +6225,14 @@
         needs.push(uiRow({
           accent: true, dot: "warn",
           title: esc(m.subject), sub: esc(uiSummary(m.body, 170)), wrap: true,
-          meta: esc(who + " Â· " + ago(m.created_at)),
+          meta: esc(who + " · " + ago(m.created_at)),
           open: 'data-action="open-message" data-id="' + attr(m.id) + '"',
           actions: '<button type="button" class="btn btn-primary btn-mini" data-action="open-message" data-id="' + attr(m.id) + '">Answer</button>'
         }));
       } else {
         updates.push(uiRow({
           dot: "ok", title: esc(m.subject), sub: esc(uiSummary(m.body)),
-          meta: esc(who + " Â· " + ago(m.created_at)),
+          meta: esc(who + " · " + ago(m.created_at)),
           open: 'data-action="open-message" data-id="' + attr(m.id) + '"',
           actions: '<button type="button" class="btn btn-mini btn-ghost" data-action="inbox-reply" data-id="' + attr(m.id) + '" data-resolve="1">Dismiss</button>',
           hover: true
@@ -6069,7 +6257,7 @@
     if (!m) return;
     var who = m.from_actor.replace("agent:", "");
     uiSheet(m.subject,
-      '<div class="ui-quiet">' + esc(who) + " Â· " + esc(ago(m.created_at)) + "</div>" +
+      '<div class="ui-quiet">' + esc(who) + " · " + esc(ago(m.created_at)) + "</div>" +
       "<div>" + uiBody(m.body) + "</div>" +
       (m.needs_reply
         ? '<div class="inline"><input class="input grow" id="reply-' + attr(m.id) + '" placeholder="Your answer"><button type="button" class="btn btn-primary" data-action="inbox-reply" data-id="' + attr(m.id) + '">Send</button></div>'
@@ -6082,7 +6270,7 @@
     var steps = (r.plan && r.plan.steps || []).map(function (x) { return "<li>" + esc(x) + "</li>"; }).join("");
     var effects = (r.plan && r.plan.effects || []).map(function (x) { return '<li class="warn-text">' + esc(x) + "</li>"; }).join("");
     uiSheet((r.plan && r.plan.summary) || r.capability,
-      '<div class="ui-quiet">' + esc(r.actor.replace("agent:", "")) + " Â· " + esc(ago(r.created_at)) + " Â· <span class=\"mono\">" + esc(r.capability) + "</span></div>" +
+      '<div class="ui-quiet">' + esc(r.actor.replace("agent:", "")) + " · " + esc(ago(r.created_at)) + " · <span class=\"mono\">" + esc(r.capability) + "</span></div>" +
       (steps || effects ? "<h3>What will happen</h3><ul class=\"ask-steps\">" + steps + effects + "</ul>" : "") +
       '<h3>Arguments</h3><pre class="log-block">' + esc(JSON.stringify(r.args, null, 2)) + "</pre>" +
       '<div class="ui-actions"><button type="button" class="btn btn-go" data-action="req-decide" data-id="' + attr(r.id) + '" data-approve="1">Approve and run</button>' +
@@ -6120,9 +6308,9 @@
     if (state.view !== "mcp") return;
     if (!MCP.servers) return renderLoading();
     var rows = MCP.servers.map(function (s) {
-      var env = (s.env_keys || []).length ? " Â· env: " + (s.env_keys || []).join(", ") : "";
+      var env = (s.env_keys || []).length ? " · env: " + (s.env_keys || []).join(", ") : "";
       var tools = s.tool_count ? s.tool_count + (s.tool_count === 1 ? " tool" : " tools") : "no tools discovered yet";
-      var sub = esc(mcpWhat(s)) + " Â· " + esc(tools) + esc(env) +
+      var sub = esc(mcpWhat(s)) + " · " + esc(tools) + esc(env) +
         (s.last_error ? '<div class="warn-text">' + esc(s.last_error) + "</div>" : "");
       return uiRow({
         dot: s.enabled ? (s.last_error ? "warn" : "ok") : "off",
@@ -6363,7 +6551,7 @@
       var count = (r.findings || []).length;
       return '<button type="button" class="note-row' + (selected && selected.id === r.id ? " active" : "") + '" data-action="studio-open-review" data-id="' + attr(r.id) + '">' +
         '<span class="cell-strong">' + esc(r.summary || "(no summary)") + "</span>" +
-        '<span class="cell-mono">' + (count ? count + " finding" + (count === 1 ? "" : "s") : "no findings") + " Â· " + esc(ago(r.created_at)) + "</span></button>";
+        '<span class="cell-mono">' + (count ? count + " finding" + (count === 1 ? "" : "s") : "no findings") + " · " + esc(ago(r.created_at)) + "</span></button>";
     }).join("");
     var detail = "";
     if (selected) {
@@ -6432,7 +6620,7 @@
 
   function renderLoading(note) {
     el("main").innerHTML =
-      '<div class="page"><div class="loading" role="status" aria-live="polite">Loadingâ€¦</div>' +
+      '<div class="page"><div class="loading" role="status" aria-live="polite">Loading…</div>' +
       (note ? '<div class="loading-note">' + esc(note) + "</div>" : "") + "</div>";
   }
 
@@ -6531,7 +6719,7 @@
     box.hidden = !ATTACHMENTS.length;
     box.innerHTML = ATTACHMENTS.map(function (a, i) {
       return '<span class="composer-attachment"><b title="' + attr(a.path) + '">' + esc(a.name) + "</b>" +
-        '<button type="button" data-action="chat-remove-file" data-index="' + i + '" aria-label="Remove ' + attr(a.name) + '">Ã—</button></span>';
+        '<button type="button" data-action="chat-remove-file" data-index="' + i + '" aria-label="Remove ' + attr(a.name) + '">×</button></span>';
     }).join("");
     syncComposerAction();
   }
@@ -7222,7 +7410,7 @@
     "create-back": function () { CREATE.id = null; CREATE.def = null; CREATE.plan = null; renderCreate(); },
     "create-run": function () {
       if (CREATE.running) return;
-      CREATE.running = true; CREATE.report = null; CREATE.log = ["startingâ€¦"]; CREATE.runId = "ui-" + Date.now().toString(36);
+      CREATE.running = true; CREATE.report = null; CREATE.log = ["starting…"]; CREATE.runId = "ui-" + Date.now().toString(36);
       var req = createRequest(); req.run_id = CREATE.runId;
       paintReview(); paintProgress(); pollCreateLog();
       request("/api/invoke", { method: "POST", body: JSON.stringify({ id: "project.init", args: req, dry_run: false }) }).then(function (res) {
@@ -7240,7 +7428,7 @@
     "svc": function (n) { act("toolchain.service", { tool: n.dataset.id, action: n.dataset.act }); },
     "svc-logs": function (n) { read("toolchain.logs", { tool: n.dataset.id }).then(function (d) { openDrawer(n.dataset.id + " logs", '<pre class="log-block">' + esc((d.lines || []).join("\n") || "empty") + "</pre>"); }).catch(function (e) { toast("error", e.message); }); },
     "devices": function () { read("toolchain.devices").then(function (d) { openDrawer("Android devices", d.length ? d.map(function (x) { return '<div class="kv"><dt class="mono">' + esc(x.serial) + "</dt><dd>" + esc(x.state) + " " + esc(x.note) + "</dd></div>"; }).join("") : '<div class="empty">No devices. Connect one with USB debugging enabled, or start an emulator.</div>'); }).catch(function (e) { toast("error", e.message); }); },
-    "eas-projects": function () { read("toolchain.eas_projects").then(function (d) { var list = d.projects || []; openDrawer("Expo projects", list.length ? list.map(function (x) { return '<div class="kv"><dt class="mono">' + esc(x.slug) + "</dt><dd>" + esc(x.name || "") + (x.owner ? " Â· " + esc(x.owner) : "") + "</dd></div>"; }).join("") : '<div class="empty">' + esc(d.message || "No Expo projects. Sign in with `eas login` first.") + "</div>"); }).catch(function (e) { toast("error", e.message); }); },
+    "eas-projects": function () { read("toolchain.eas_projects").then(function (d) { var list = d.projects || []; openDrawer("Expo projects", list.length ? list.map(function (x) { return '<div class="kv"><dt class="mono">' + esc(x.slug) + "</dt><dd>" + esc(x.name || "") + (x.owner ? " · " + esc(x.owner) : "") + "</dd></div>"; }).join("") : '<div class="empty">' + esc(d.message || "No Expo projects. Sign in with `eas login` first.") + "</div>"); }).catch(function (e) { toast("error", e.message); }); },
     "dev-open": function (n) { detectProject(n.dataset.path); },
     "dev-pick": function () {
       openPicker({
@@ -7268,7 +7456,7 @@
     },
     "task-run": function (n) {
       var id = n.dataset.task, destructive = n.dataset.risk === "destructive";
-      DEV.log = "running " + id + "â€¦"; renderDevelop();
+      DEV.log = "running " + id + "…"; renderDevelop();
       run(destructive ? "project.run_destructive" : "project.run", { path: DEV.path, task: id }).then(function (o) {
         if (o && o.data) DEV.log = (o.data.output_tail || []).join("\n") || o.message; else DEV.log = null;
         return loadDevelop();
@@ -7472,6 +7660,18 @@
       renderProjects();
     },
 
+    "projects-reload": function () {
+      state.projectsLoaded = false;
+      state.projectsError = "";
+      renderProjects();
+      loadProjects().then(render);
+    },
+
+    "site-filter": function (node) {
+      state.siteFilter = node.dataset.filter || "all";
+      renderSites();
+    },
+
     // ------------------------------------------------------------- picker
 
     "picker-goto": function (node) {
@@ -7536,7 +7736,7 @@
     "stack-down": function () { act("stack.down", {}); },
 
     "install-service": function (node) {
-      toast("info", "installing " + node.dataset.name + " â€” the vendor download can take a minute");
+      toast("info", "installing " + node.dataset.name + " — the vendor download can take a minute");
       act("service.install", { name: node.dataset.name, version: null });
     },
 
@@ -7661,6 +7861,16 @@
 
     "start-service": function (node) { act("service.start", { name: node.dataset.name }); },
 
+    "databases-start": function () {
+      run("service.start", { name: "mariadb" }).then(function (outcome) {
+        if (!outcome) return null;
+        OPS.error = "";
+        OPS.errorTab = "";
+        OPS.data.db = null;
+        return loadServer();
+      }).then(function () { return opsLoad("db"); }).then(render);
+    },
+
     "stop-service": function (node) { act("service.stop", { name: node.dataset.name }); },
 
     "restart-service": function (node) { act("service.restart", { name: node.dataset.name }); },
@@ -7669,7 +7879,7 @@
 
     "service-logs": function (node) {
       var name = node.dataset.name;
-      openDrawer("service.logs " + name, '<div class="dim">Loadingâ€¦</div>');
+      openDrawer("service.logs " + name, '<div class="dim">Loading…</div>');
       read("service.logs", { name: name, lines: 400 })
         .then(function (data) {
           var lines = (data && data.lines) || [];
@@ -7757,7 +7967,7 @@
       run("composer.install", {}).then(function () { return loadShell(); });
     },
     "install-runtime": function (node) {
-      toast("info", "installing " + node.dataset.kind + " â€” the vendor download can take a minute");
+      toast("info", "installing " + node.dataset.kind + " — the vendor download can take a minute");
       act("runtime.install", { kind: node.dataset.kind, version: "latest" }).then(function () {
         SHELL.data = null;
         if (state.view === "runtimes") renderRuntimes();
@@ -7857,7 +8067,7 @@
           '<input class="input mono" id="clone-url" placeholder="https://host/owner/repo.git"></div>' +
           '<div class="field"><label class="field-label" for="clone-dest">Destination</label>' +
           '<div class="inline"><input class="input mono grow" id="clone-dest" placeholder="Where the clone should go">' +
-          '<button type="button" class="btn" data-action="clone-pick">Choose folderâ€¦</button></div></div>' +
+          '<button type="button" class="btn" data-action="clone-pick">Choose folder…</button></div></div>' +
           '<div class="inline"><button type="button" class="btn btn-primary" data-action="clone-go">Clone</button>' +
           '<span class="faint">Credentials come from your Git credential manager; devd never stores them.</span></div>' +
           "</div>"
@@ -8635,34 +8845,52 @@
   });
   // ----------------------------------------------------------------------- boot
 
+  /* Repaint only the parts around the page: the rail count, the tabs, the
+     breadcrumb and the status bar. Background work uses this so a slow probe
+     cannot rebuild a screen while somebody is typing in it. */
+  function paintChrome() {
+    rail();
+    subnav();
+    crumbs();
+    statusbar();
+    healthChip();
+  }
+
   function boot() {
     render();
     // The address is read first: a link to a screen, a bookmark or the back
     // button all say where the person wants to be.
     readRoute();
-    // Session first, then the server data, then the environment check. The
-    // dashboard must not wait for a slow doctor run to show what is running.
+    // Session first, then only the data the current screen needs. The rest of
+    // the environment is read beside it and repaints the chrome as it arrives.
+    // A doctor run or a health probe must never hold the first screen hostage.
     return loadSession()
-      .then(loadServer)
-      .then(render)
-      .then(loadProjects)
-      .then(render)
-      .then(loadCreate)
-      .then(render)
-      // The home page needs the assistant and health, not a full doctor run.
-      // Diagnostics can take seconds on a cold machine; it must not hold the
-      // first screen hostage.
-      .then(function () { return state.view === "home" ? loadHome() : loadHealth(); })
-      .then(render)
-      .then(loadDoctor)
-      .then(render)
       .then(function () {
-        if (!state.session) return;
-        var pending = state.session.pending_approvals;
-        if (pending) toast("warn", pending + " operations are awaiting a decision");
+        var current = state.view;
+        var first = refresh();
+        if (current !== "home" && current !== "projects" && current !== "project") {
+          loadProjects().then(paintChrome).catch(function () {});
+        }
+        if (SERVER_VIEWS.indexOf(current) === -1 && current !== "home") {
+          loadServer().then(paintChrome).catch(function () {});
+        }
+        return first.then(function () { render(); });
       })
       .then(function () {
-        // A conversation named in the address is opened once the list is in.
+        if (state.session && state.session.pending_approvals) {
+          toast("warn", state.session.pending_approvals + " operations are awaiting a decision");
+        }
+        // The health chip is useful on every screen, but it is not a gate.
+        loadHealth().then(function () {
+          paintChrome();
+          if (state.view === "home") render();
+        }).catch(function () {});
+        loadDoctor().then(function () {
+          if (state.view === "system" || state.view === "home") render();
+        }).catch(function () {});
+      })
+      .then(function () {
+        // A conversation named in the address is opened once its list is in.
         var id = state.pendingThread;
         if (!id) return;
         state.pendingThread = null;
@@ -8863,7 +9091,7 @@
           (d.warnings || []).forEach(function (w) { html += '<div class="notice notice-warn">' + esc(w) + "</div>"; });
           function list(title, names) { return names && names.length ? "<h3>" + esc(title) + " (" + names.length + ")</h3><p class=\"mono\">" + names.map(esc).join("<br>") + "</p>" : ""; }
           html += list("Only here", d.only_here) + list("Only in " + r.against, d.only_there);
-          if ((d.different || []).length) html += "<h3>Different (" + d.different.length + ')</h3><p class="mono">' + d.different.map(function (c) { return esc(c.name) + ": " + esc(c.here) + " â†’ " + esc(c.there); }).join("<br>") + "</p>";
+          if ((d.different || []).length) html += "<h3>Different (" + d.different.length + ')</h3><p class="mono">' + d.different.map(function (c) { return esc(c.name) + ": " + esc(c.here) + " → " + esc(c.there); }).join("<br>") + "</p>";
           html += '<p class="dim">' + d.same + " variables are the same.</p>";
           uiSheet("Compared with " + r.against, html);
         }).catch(function (e) { toast("error", e.message); });
@@ -8885,7 +9113,7 @@
       });
     },
     "ops-cron-log": function (n) {
-      uiSheet("Cron log", '<div class="dim">Loadingâ€¦</div>');
+      uiSheet("Cron log", '<div class="dim">Loading…</div>');
       read("cron.log", { id: n.dataset.id, lines: 200 }).then(function (r) { uiSheet("Cron log", '<pre class="log-block">' + esc((r.lines || []).join("\n") || "The job has not printed anything.") + "</pre>"); }).catch(function (e) { uiSheet("Cron log", '<div class="notice notice-bad">' + esc(e.message) + "</div>"); });
     },
     "ops-cron-toggle": function (n) { opsAct("cron.enable", { id: n.dataset.id, enabled: n.dataset.on === "1" }); },
@@ -8907,7 +9135,7 @@
       uiConfirm({ title: "Remove this worker?", text: "It is stopped first; a running job is cut off.", confirm: "Remove", danger: true }).then(function (ok) { if (ok) opsAct("queue.remove", { id: n.dataset.id }); });
     },
     "ops-queue-log": function (n) {
-      uiSheet("Worker log", '<div class="dim">Loadingâ€¦</div>');
+      uiSheet("Worker log", '<div class="dim">Loading…</div>');
       read("queue.logs", { id: n.dataset.id, lines: 200 }).then(function (r) { uiSheet("Worker log", '<pre class="log-block">' + esc((r.lines || []).join("\n") || "The log is empty.") + "</pre>"); }).catch(function (e) { uiSheet("Worker log", '<div class="notice notice-bad">' + esc(e.message) + "</div>"); });
     },
     "ops-redirect-add": function () {
@@ -8937,7 +9165,7 @@
       opsAct("deploy.script_set", { site: OPS.site, script: t.value }, function () { closeDrawer(); });
     },
     "ops-deploy-log": function (n) {
-      uiSheet("Deployment output", '<div class="dim">Loadingâ€¦</div>');
+      uiSheet("Deployment output", '<div class="dim">Loading…</div>');
       read("deploy.log", { id: n.dataset.id, lines: 300 }).then(function (r) { uiSheet("Deployment output", '<pre class="log-block">' + esc((r.lines || []).join("\n")) + "</pre>"); }).catch(function (e) { uiSheet("Deployment output", '<div class="notice notice-bad">' + esc(e.message) + "</div>"); });
     },
     "ops-rollback": function (n) {
@@ -9122,7 +9350,7 @@
       run("server.connect", { server: n.dataset.name }).then(function (o) {
         if (o && o.data) {
           var s = o.data.server || {};
-          uiSheet("Connected to " + n.dataset.name, "<p>" + esc(o.data.os || o.data.kernel || "") + " Â· logged in as " + esc(o.data.login_user || "") + "</p>" + (s.fingerprint ? '<p class="dim">The host key devd pinned (compare it with your provider\'s console):</p><pre class="log-block">' + esc(s.fingerprint) + "</pre>" : ""));
+          uiSheet("Connected to " + n.dataset.name, "<p>" + esc(o.data.os || o.data.kernel || "") + " · logged in as " + esc(o.data.login_user || "") + "</p>" + (s.fingerprint ? '<p class="dim">The host key devd pinned (compare it with your provider\'s console):</p><pre class="log-block">' + esc(s.fingerprint) + "</pre>" : ""));
         }
         opsLoad("servers");
       });
