@@ -1,7 +1,7 @@
-# devd
+﻿# devd
 
 > **Your development environment, on your machine, with your rules.**
-> *One program for your sites, your services, your runtimes and your agents — and nothing it does happens without your say-so.*
+> *One program for your sites, your services, your runtimes and your agents â€” and nothing it does happens without your say-so.*
 
 ---
 
@@ -9,9 +9,9 @@
 
 devd is the local development server you would otherwise assemble by hand: a web server, a database, a few runtimes, a hosts file and a pile of terminal tabs. It knows what is installed, what is running and what each project needs, and it shows all of it in one place.
 
-- **It finds your project.** Browse to the folder with your operating system's own dialog. devd reads what is inside — the stack, the package manager, the runtimes it asks for, the services it talks to — and sets it up from there.
+- **It finds your project.** Browse to the folder with your operating system's own dialog. devd reads what is inside â€” the stack, the package manager, the runtimes it asks for, the services it talks to â€” and sets it up from there.
 - **It gives every project a name.** `blog.test`, over HTTPS, with a certificate from devd's own local authority. A Laravel app, a Next.js site, a Django API and a Rails app all sit in the same list.
-- **It serves your dev servers too.** Point a hostname at a program that is already running — `devd site create api --upstream 3000` — and a Node, Python or Rails dev server gets the same `.test` name and HTTPS.
+- **It serves your dev servers too.** Point a hostname at a program that is already running â€” `devd site create api --upstream 3000` â€” and a Node, Python or Rails dev server gets the same `.test` name and HTTPS.
 - **It runs the services.** PHP, nginx or Apache, MariaDB, Redis and a mail catcher are installed (or adopted from where they already are), started, health-checked and kept running. A service is "Ready" only after it has answered, not because its port is open.
 - **It moves you off other local stacks.** Park a folder and every project in it becomes a site; use the Apache and Redis you already have as they are; move a database off an existing MySQL with one command; start the stack when you sign in. [What carries over and what does not](docs/limitations.md).
 - **It sees what you already have.** MySQL, Redis, PostgreSQL and Docker are detected, never assumed healthy and never replaced. You decide whether devd uses them, watches them or leaves them alone.
@@ -31,7 +31,7 @@ Everything in devd follows from these, and they are why it can be trusted with y
 - **Approval is enforced, not suggested.** Destructive, privileged and remote operations return a plan and wait for an explicit human decision. An agent cannot approve its own action, and a declined operation never runs, from any interface.
 
 ```
-you or an agent → capability registry → plan, tier, approval, audit → the work
+you or an agent â†’ capability registry â†’ plan, tier, approval, audit â†’ the work
 ```
 
 Machine-level changes are always their own approved step. Creating a site never edits your hosts file; `devd hosts sync` does, and asks first.
@@ -46,7 +46,7 @@ A project can declare its dev processes in `devd.yml`. devd shows the exact comm
 
 ## An agent team that works and proves it
 
-Describe what you want built (`devd team start "…" --project .`, or Assistant → Team runs in the window). A planner proposes tasks; you approve the plan; specialists work in parallel in isolated copies of the project. A task counts only when devd can see the files that changed and a check that passed. Configure providers, and which model does which work, under **Models**. See [`docs/agents.md`](docs/agents.md).
+Describe what you want built (`devd team start "â€¦" --project .`, or Assistant â†’ Team runs in the window). A planner proposes tasks; you approve the plan; specialists work in parallel in isolated copies of the project. A task counts only when devd can see the files that changed and a check that passed. Configure providers, and which model does which work, under **Models**. See [`docs/agents.md`](docs/agents.md).
 
 ---
 
@@ -79,8 +79,8 @@ On Linux and macOS devd does not download a second copy of nginx or MariaDB. It 
 Download and run the installer from the [latest release](https://github.com/ianclemence/devd/releases/latest):
 
 ```powershell
-curl.exe -LO https://github.com/ianclemence/devd/releases/download/v0.13.1/devd-setup-0.13.1.exe
-.\devd-setup-0.13.1.exe
+curl.exe -LO https://github.com/ianclemence/devd/releases/download/v0.13.2/devd-setup-0.13.2.exe
+.\devd-setup-0.13.2.exe
 ```
 
 It installs for the current user only, adds `devd` to `PATH` and creates Start Menu entries. Uninstalling keeps your sites and data in `%LOCALAPPDATA%\devd`. The installer is not code-signed, so SmartScreen warns once; `SHA256SUMS.txt` on the release lets you check what you downloaded. A portable `devd.exe` and a portable window are attached to each release as well.
@@ -177,3 +177,4 @@ cargo test --workspace            # everything
 MIT. See [`LICENSE`](LICENSE).
 
 devd bundles no third-party binaries. PHP, Node.js, Go, nginx and MariaDB are downloaded from their publishers on first use and verified against the digest the publisher gives; where a publisher gives none, the install says so. The window vendors xterm.js and its fit addon (both MIT); their licences are in [`crates/devd-server/ui/vendor/`](crates/devd-server/ui/vendor/).
+

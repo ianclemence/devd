@@ -10,6 +10,21 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.13.2] - 2026-10-25 - Approval is the person's authority
+
+### Fixed
+
+- **An approval now runs with the person's authority.** devd queued the request,
+  took the person's approval, then re-dispatched the operation as the agent — so an
+  approved path outside the project was refused by the same fence that raised the
+  request. The decision is recorded against the person and the operation now runs as
+  the person approved it.
+- Two regression tests now prove both sides: deleting inside the project is
+  automatic, and deleting outside waits for a person and actually executes after
+  approval. Declining still leaves the file and tells the agent not to retry.
+
+---
+
 ## [0.13.1] - 2026-10-25 - The project is the workspace
 
 ### Added

@@ -244,7 +244,9 @@ fn the_agent_loop_calls_tools_and_finishes() {
 #[test]
 fn dangerous_operations_wait_for_a_person_and_the_agent_resumes_after() {
     let e = env();
-    let victim = e.root.join("www/proj/old.txt");
+    // Outside the conversation's project: this is the operation that still asks.
+    std::fs::create_dir_all(e.root.join("outside")).unwrap();
+    let victim = e.root.join("outside/old.txt");
     std::fs::write(&victim, "x").unwrap();
     let v2 = victim.display().to_string();
     let m = mock(move |n, req| match n {
@@ -286,9 +288,34 @@ fn dangerous_operations_wait_for_a_person_and_the_agent_resumes_after() {
 }
 
 #[test]
+fn an_agent_clears_files_in_its_project_without_asking() {
+    let e = env();
+    let victim = e.root.join("www/proj/old.txt");
+    std::fs::write(&victim, "x").unwrap();
+    let v2 = victim.display().to_string();
+    let m = mock(move |n, req| match n {
+        0 => (200, anthropic_tool_use("toolu_d", "devd_invoke", json!({ "id": "fs.delete", "args": { "path": v2 } }))),
+        _ => {
+            let all = serde_json::to_string(&req.body["messages"]).unwrap_or_default();
+            (200, anthropic_text(if all.contains("deleted") { "cleared" } else { "??" }))
+        }
+    });
+    add_provider(&e, "anthropic", &m.base);
+    let sent = call(&e, &e.human, "chat.send", json!({ "message": "clean up old.txt", "project": e.root.join("www/proj").display().to_string() }), Approval::None).unwrap();
+    let tid = sent["id"].as_str().unwrap().to_string();
+    let v = wait_for(&e, &tid, &["idle", "error"]);
+    assert_eq!(v["thread"]["state"], "idle", "{v}");
+    assert!(v["pending"].as_array().unwrap().is_empty(), "an in-project delete does not ask: {v}");
+    assert!(!victim.exists(), "the file is gone");
+    let last = v["events"].as_array().unwrap().last().unwrap();
+    assert_eq!(last["data"]["content"][0]["text"], "cleared");
+}
+
+#[test]
 fn declining_tells_the_agent_not_to_retry() {
     let e = env();
-    let victim = e.root.join("www/proj/keep.txt");
+    std::fs::create_dir_all(e.root.join("outside")).unwrap();
+    let victim = e.root.join("outside/keep.txt");
     std::fs::write(&victim, "x").unwrap();
     let v2 = victim.display().to_string();
     let m = mock(move |n, req| match n {

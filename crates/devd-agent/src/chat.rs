@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use serde_json::{json, Value};
 
-use devd_core::capability::{Actor, Approval, Ctx, InvokeRequest};
+use devd_core::capability::{Approval, Ctx, InvokeRequest};
 use devd_core::{util, AgentRequest, ChatEvent, ChatThread, DevdError, Provider, Registry, Result};
 use devd_mcp::McpServer;
 
@@ -810,13 +810,13 @@ impl Hub {
             return Err(DevdError::conflict(format!("that request was already {}", req.state)));
         }
         let registry = self.registry()?.clone();
-        let agent_name = req.actor.strip_prefix("agent:").unwrap_or(&req.actor).to_string();
-        let mut actx = caller.clone();
-        actx.actor = Actor::agent(agent_name);
         let invoke = InvokeRequest { id: req.capability.clone(), args: req.args.clone(), dry_run: false };
         let decider = caller.actor.label();
         if approve {
-            match registry.dispatch(&actx, &invoke, Approval::Granted) {
+            // A person approved this. Run it with the person's authority, not the agent's:
+            // the agent's fence is what asked in the first place, and re-applying it would
+            // make an approval of an outside path impossible to carry out.
+            match registry.dispatch(caller, &invoke, Approval::Granted) {
                 Ok(res) => {
                     let out = serde_json::to_value(res.outcome).unwrap_or(Value::Null);
                     self.ctx.store.decide_request(request_id, "approved", &decider, Some(&out), None)?;
@@ -824,7 +824,7 @@ impl Hub {
                 Err(e) => self.ctx.store.decide_request(request_id, "failed", &decider, None, Some(&e.to_string()))?,
             }
         } else {
-            let _ = registry.dispatch(&actx, &invoke, Approval::Denied);
+            let _ = registry.dispatch(caller, &invoke, Approval::Denied);
             self.ctx.store.decide_request(request_id, "declined", &decider, None, None)?;
         }
         let done = self.ctx.store.get_request(request_id)?.expect("exists");
