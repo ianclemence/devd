@@ -1,9 +1,9 @@
-﻿[workspace]
+[workspace]
 resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.13.3"
+version = "0.13.4"
 edition = "2021"
 rust-version = "1.77"
 license = "MIT"

@@ -1,4 +1,4 @@
-﻿# devd
+# devd
 
 > **Your development environment, on your machine, with your rules.**
 > *One program for your sites, your services, your runtimes and your agents â€” and nothing it does happens without your say-so.*
@@ -152,7 +152,7 @@ logs/             service and session logs
 | [`docs/architecture.md`](docs/architecture.md) | The registry, the dispatcher, the state store, the crates. |
 | [`docs/domain.md`](docs/domain.md) | What a project, site, runtime, service and external MCP server are, and who owns each. |
 | [`docs/security.md`](docs/security.md) | The threat model and the specific protections. |
-| [`docs/app.md`](docs/app.md), [`docs/tui.md`](docs/tui.md), [`docs/mcp.md`](docs/mcp.md) | The window and its API, the terminal dashboard, the agent surface. |
+| [`docs/app.md`](docs/app.md), [`docs/design.md`](docs/design.md), [`docs/tui.md`](docs/tui.md), [`docs/mcp.md`](docs/mcp.md) | The window, its design system, its API, the terminal dashboard and the agent surface. |
 | [`docs/agents.md`](docs/agents.md) | The assistant, the team, skills and models. |
 | [`docs/operations.md`](docs/operations.md) | The server-panel operations: env, cron, workers, deploys, backups, servers. |
 | [`docs/workflows.md`](docs/workflows.md) | Reviews, agent memory and the project workspace. |

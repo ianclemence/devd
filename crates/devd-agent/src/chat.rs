@@ -604,6 +604,10 @@ impl Hub {
         } else {
             s.push_str("This project is not registered yet; call project.detect, then project.import if it should be remembered.\n");
         }
+        // The same team room the specialists receive. A conversation is part of
+        // the team; it should not have to rediscover the north star, the site
+        // addresses or the project's written memory on every turn.
+        s.push_str(&crate::charter::prompt_context(&self.ctx, project));
         s
     }
 
@@ -638,7 +642,7 @@ impl Hub {
             let events = self.ctx.store.list_events(tid, 0, 100_000)?;
             let messages = build_messages(&events);
             let system = match &binding {
-                Some(b) => format!("{}\n\n{COMMON_CALLS}\n\n{}\n\n## Skills for your role\nLoad one with devd_invoke skills.get before you start the work it covers.\n{}", crate::team::system_prompt(&self.ctx.store, b), crate::skills::CORE, crate::skills::index_for(&self.ctx.paths, Some(&b.role))),
+                Some(b) => format!("{}\n\n{COMMON_CALLS}\n\n{}\n\n## Skills for your role\nLoad one with devd_invoke skills.get before you start the work it covers.\n{}", crate::team::system_prompt(&self.ctx, b), crate::skills::CORE, crate::skills::index_for(&self.ctx.paths, Some(&b.role))),
                 None => self.system_prompt(&thread),
             };
             let mut chosen = None;

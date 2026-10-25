@@ -27,6 +27,7 @@
 //!   the agent is told plainly that it must not claim they happened.
 
 pub mod caps;
+pub mod charter;
 pub mod chat;
 pub mod dictation;
 pub mod docs;

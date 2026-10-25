@@ -551,8 +551,8 @@ code, kbd, pre, samp { font-family: var(--mono); }
   align-items: flex-start;
   gap: var(--s4);
   flex-wrap: wrap;
-  padding-bottom: var(--s4);
-  border-bottom: 1px solid var(--line);
+  padding-bottom: 0;
+  border-bottom: 0;
 }
 
 .page-title {
@@ -1928,6 +1928,18 @@ button.svc { width: 100%; background: none; border: 0; border-bottom: 1px solid 
 
 /* ------------------------------------------------------------- assistant */
 
+/* Full-height workspaces (Assistant, Runs) keep a normal page heading above
+   their two panes, so every destination has the same title orientation. */
+.workspace { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.workspace-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s4);
+  padding: var(--s5) clamp(var(--s4), 3vw, var(--s6)) var(--s3);
+}
+.workspace > .assistant { flex: 1 1 auto; height: auto; min-height: 0; }
+
 .assistant {
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr);
@@ -2608,8 +2620,24 @@ pre.code {
 
 @media (max-width: 460px) {
   .brand-text { display: none; }
-  .rail-item .rail-label { display: none; }
+  .rail-item .rail-label, .rail-item .rail-count { display: none; }
   .rail-item { padding: 0 8px; }
+  /* A waiting decision is the one count that must survive the icon-only rail. */
+  .rail-item .rail-count-hot {
+    display: inline-block;
+    position: absolute;
+    top: 1px;
+    right: 1px;
+    min-width: 14px;
+    height: 14px;
+    padding: 0 3px;
+    border-radius: 999px;
+    background: var(--warn);
+    color: #1a1500;
+    font-size: 9px;
+    line-height: 14px;
+    text-align: center;
+  }
   .rail-foot { border-left: 0; }
   .quick-row { grid-template-columns: minmax(0, 1fr); }
   .chat-empty-title { font-size: var(--text-lg); }
@@ -3174,6 +3202,7 @@ textarea,
 
 .ui-greet { display: flex; flex-direction: column; gap: var(--s1); margin-bottom: var(--s2); }
 .ui-greet .sub { color: var(--fg-mute); font-size: var(--text-md); }
+.ui-kicker { color: var(--fg-dim); font-size: var(--text-2xs); font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; }
 .ui-ask { display: flex; gap: var(--s2); align-items: center; padding: var(--s2) var(--s2) var(--s2) var(--s4); background: var(--bg-surface); border-radius: var(--radius-lg); }
 .ui-ask input { flex: 1; background: none; border: 0; outline: 0; color: var(--fg); font-size: var(--text-lg); padding: var(--s3) 0; }
 .ui-ask input::placeholder { color: var(--fg-dim); }
@@ -3415,11 +3444,6 @@ button.chip.chip-on { border-color: var(--accent); color: var(--fg); }
 /* ---------------------------------------------------- one name, once */
 
 .crumbs:empty { display: none; }
-/* A page whose title only repeats the open tab keeps its title for screen readers, draws it once (in the tab),
-   and keeps its buttons where they were. With no buttons the head disappears altogether. */
-.page-head.dup .page-title { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-.page-head.dup { justify-content: flex-end; }
-.page-head.dup:not(:has(.page-actions > *)) { display: none; }
 
 /* The first section after the site picker sits close to it; the larger gap is for sections that follow others. */
 .ops-site + .ui-head, .ops-site + .notice { margin-top: var(--s3); }
@@ -3521,7 +3545,102 @@ button.chip.chip-on { border-color: var(--accent); color: var(--fg); }
   .summary-band { grid-template-columns: 1fr; }
   .summary-item { border-left: 0; border-top: 1px solid var(--line); }
   .summary-item:first-child { border-top: 0; }
-  .site-filter { width: 100%; margin-left: 0; }
+  .site-filter { width: 100%; flex: 1 1 100%; margin-left: 0; }
   .site-filter .seg { flex: 1; }
 }
+
+@media (max-width: 620px) {
+  .site-filter .seg-count { display: none; }
+}
+
+/* ------------------------------------------------------------- team room
+ *
+ * The written context a human and their agents share: the north star, the
+ * owner, the working agreement, the project's addresses and the record of what
+ * the team has learned. It is deliberately a place in the product, not a
+ * prompt hidden in a run.
+ */
+
+.team-room { margin-bottom: var(--s5); }
+.team-room .panel-head { min-height: 48px; gap: var(--s2); flex-wrap: wrap; }
+.team-project { width: min(280px, 34vw); height: 28px; }
+.team-room-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(260px, 0.92fr);
+  gap: var(--s5);
+  align-items: start;
+}
+.team-north {
+  max-width: 58ch;
+  margin-top: var(--s1);
+  color: var(--fg);
+  font-size: var(--text-xl);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.4;
+  text-wrap: pretty;
+}
+.team-north-empty { color: var(--fg-mute); font-size: var(--text-md); font-weight: 400; letter-spacing: 0; line-height: 1.6; }
+.team-meta { margin-top: var(--s3); color: var(--fg-mute); font-size: var(--text-sm); }
+.team-meta .field-label { margin-right: var(--s2); }
+.team-rules, .team-lessons { margin: var(--s1) 0 0 var(--s4); list-style: disc; color: var(--fg-mute); font-size: var(--text-sm); line-height: 1.6; }
+.team-rules li + li, .team-lessons li + li { margin-top: 4px; }
+.team-proactive { display: flex; flex-wrap: wrap; gap: 6px; }
+.team-context { border-left: 1px solid var(--line); padding-left: var(--s5); min-width: 0; }
+.context-section + .context-section { margin-top: var(--s3); }
+.context-line { color: var(--fg-mute); font-size: var(--text-sm); line-height: 1.6; overflow-wrap: anywhere; }
+.trust-line { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2); font-size: var(--text-sm); }
+.trust-line + .trust-line { margin-top: 4px; }
+.team-memory { max-height: 200px; margin-top: var(--s2); white-space: pre-wrap; }
+.team-charter-form .check-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 2px var(--s4);
+  margin-top: var(--s2);
+}
+.team-north-line {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  margin-top: var(--s3);
+  padding: var(--s2) var(--s3);
+  border-radius: var(--radius);
+  background: var(--accent-quiet);
+  color: var(--accent-text);
+  font-size: var(--text-sm);
+}
+.team-north-line button {
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+@media (max-width: 1100px) {
+  .team-room-body { grid-template-columns: minmax(0, 1fr); }
+  .team-context { border-left: 0; border-top: 1px solid var(--line); padding-left: 0; padding-top: var(--s3); }
+}
+@media (max-width: 720px) {
+  .team-project { width: 100%; }
+}
 .ops-site { margin-bottom: var(--s2); }
+
+/* One search control across list screens: the Projects pattern. */
+.ui-controls { flex-wrap: wrap; row-gap: var(--s2); }
+.ui-controls .segmented { margin-bottom: 0; }
+.ui-search { flex: 1 1 240px; max-width: 280px; }
+.site-controls .site-filter { margin-left: 0; }
+
+@media (max-width: 620px) {
+  /* The composer is one line on a desktop and two rows on a phone: the text
+     keeps the full width; the project and the actions sit underneath. */
+  .ui-ask { flex-wrap: wrap; align-items: stretch; padding: var(--s2) var(--s2) var(--s2) var(--s3); }
+  .ui-ask textarea { flex: 1 0 100% !important; min-height: 42px; }
+  .ui-ask input[type="text"], .ui-ask .select-field { flex: 1 1 150px; max-width: none; min-width: 0; }
+  .ui-ask .btn { flex: none; }
+}

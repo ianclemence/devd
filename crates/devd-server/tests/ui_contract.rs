@@ -247,7 +247,7 @@ fn server_and_site_tabs_match_the_agreed_information_architecture() {
 
     let db = APP.find("function siteDatabase(row)").expect("siteDatabase");
     let db = &APP[db..db + APP[db..].find("function sitePreview(row)").expect("sitePreview")];
-    assert!(db.contains("belong to the whole server"));
+    assert!(db.contains("belong to the whole environment"));
     assert!(!db.contains("data-action=\"ops-backup-run\""), "site Database is read-only");
     assert!(!db.contains("data-action=\"ops-backup-remove\""));
 }

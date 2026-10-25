@@ -20,6 +20,7 @@ use devd_core::capability::{Ctx, Effect, Outcome, Plan, Tier};
 use devd_core::{browse, util, DevdError, Provider, Registry, Result};
 
 use crate::chat::{Hub, SendRequest};
+use crate::charter;
 use crate::team::{PlanTask, StartRequest, Team};
 use crate::providers;
 use crate::{dictation, docs, fs, health, judge, requirements, roles, schedule, search, secrets, skills, templates};
@@ -360,6 +361,29 @@ struct ReportArgs {
     status: String,
     /// What you did and what you saw; for `blocked`, exactly what you need.
     summary: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct ProjectRef {
+    /// Absolute project directory.
+    project: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct CharterSet {
+    /// Absolute project directory.
+    project: String,
+    /// The one ambitious outcome the team should move toward.
+    north_star: String,
+    /// The person who owns the outcome and makes the final decisions.
+    #[serde(default)]
+    owner: String,
+    /// How the team works together, one rule per line. Empty uses the defaults.
+    #[serde(default)]
+    working_agreement: Vec<String>,
+    /// Roles a person invites to suggest the next workstream.
+    #[serde(default)]
+    proactive_roles: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -783,6 +807,58 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             ctx.store.set_environment_mode(&a.mode)?;
             ctx.events.emit_with("environment.changed", a.mode.clone(), json!({ "mode": a.mode }));
             Ok(Outcome::ok(format!("this machine is now treated as {}", a.mode)))
+        },
+    )?;
+
+    // ------------------------------------------------------------- the team room
+    reg.define::<ProjectRef>("team.charter.get", "Read the project's team charter")
+    .description("The written north star, human owner, working agreement and proactive roles for a project. This is the context every assistant and team member is given; it is visible so the person and the agents cannot quietly disagree about what matters.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, a| simple("team.charter.get", format!("read the team charter for {}", a.project)),
+        |ctx, a| {
+            let charter = charter::load(&ctx, &a.project)?;
+            let data = match charter {
+                Some(c) => {
+                    let mut value = serde_json::to_value(c)?;
+                    value["configured"] = json!(true);
+                    value
+                }
+                None => json!({ "project": a.project, "north_star": "", "owner": "", "working_agreement": charter::DEFAULT_AGREEMENT, "proactive_roles": [], "updated_by": "", "updated_at": "", "configured": false }),
+            };
+            Ok(Outcome::with_data("read the team charter", data))
+        },
+    )?;
+    reg.define::<ProjectRef>("team.context", "The context every team member works from")
+    .description("A read-only brief assembled from devd's own records: the project's charter, sites and addresses, managed services, installed runtimes, project memory from AGENTS.md, recent lessons and the team's trust record. No project scan and no model call; the same information is injected into the assistant and the team.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, a| simple("team.context", format!("read the shared context for {}", a.project)),
+        |ctx, a| {
+            let data = charter::context(&ctx, &a.project)?;
+            Ok(Outcome::with_data("read the shared context", data))
+        },
+    )?;
+    reg.define::<CharterSet>("team.charter.set", "Write the project's team charter")
+    .description("Sets the project's north star, the human owner, the working agreement and the roles invited to propose next work. A person writes this: it is the shared standard the agents are held to, not a request an agent may rewrite. Writes one devd record; nothing in the project changes.")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .human_only()
+    .dry_run()
+    .handlers(
+        |_, a| Ok(Plan::new("team.charter.set", format!("write the team charter for {}", a.project)).effect("the assistant and every team member will work from this north star and agreement")),
+        |ctx, a| {
+            let data = charter::save(&ctx, &a.project, &a.north_star, &a.owner, &a.working_agreement, &a.proactive_roles, &ctx.actor.label())?;
+            ctx.events.emit_with("team.charter.changed", "team charter updated", json!({ "project": a.project }));
+            Ok(Outcome::with_data("team charter updated", data))
         },
     )?;
 

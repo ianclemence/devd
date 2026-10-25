@@ -10,7 +10,72 @@ may change capability identifiers where the design was wrong.
 
 ---
 
-## [0.13.3] - 2026-10-25 - The punctuation is text, not bytes
+## [0.13.4] - 2026-10-25 - The team room
+
+### Added
+
+- **A written team room for every project.** `team.charter.get` and
+  `team.charter.set` store the north star, the human owner, the working
+  agreement and the roles invited to propose next work. The charter is
+  human-only, persists under the devd home, and is shown on Team > Team room.
+- **One shared context for the assistant and the team.** `team.context` assembles
+  the project's sites and addresses, managed services, installed runtimes,
+  `AGENTS.md`/`CLAUDE.md` knowledge, recent lessons and the trust record. The
+  same bounded brief is injected into every assistant turn and every specialist
+  prompt; the window shows it rather than hiding it in a prompt.
+- **A trust record.** The team page counts accepted work, work accepted by hand,
+  unverified work and repeated attempts per role. It informs the person; it does
+  not bypass approval or the role's tier.
+- **Lessons and missteps in the record.** A finished run appends the failures,
+  unverified tasks, hand-accepted work and repeated attempts to its summary and
+  to the context of the next run. These are derived from task records, not from a
+  model's recollection.
+
+### Changed
+
+- The `Team` screen is now the room plus the roster: north star, owner,
+  agreement, sites, services, runtimes, project knowledge, trust and lessons,
+  followed by the people who do the work.
+- Assistant and Team runs both offer a direct link back to the room.
+- PHP FastCGI workers are grouped as one `PHP 8.x` service in the shared context
+  instead of repeating every worker.
+
+### Fixed
+
+- A project with no site no longer shows a visible “no site” label; the absence
+  is represented by the absence of a serving mode, not by a label that competes
+  with real status.
+
+---
+
+## [0.13.3] - 2026-10-25 - The interface is a workbench
+
+### Changed
+
+- **Sites is a first-class destination.** Projects, Sites and Environment now
+  answer the three questions a person actually has: what am I building, at what
+  address is it reachable, and what is running underneath it. Hosts and
+  certificates live with Sites; services, runtimes and databases live with
+  Environment.
+- **Home is the workbench.** A compact environment ledger shows services, sites
+  and runtimes beside the projects and their addresses, followed by what needs a
+  person and what recently happened.
+- **Lists tell the truth.** Projects distinguish loaded, empty and failed; a Git
+  repository the operating system will not let Git read says so on the row; a
+  site with no entry point is not presented as if it can serve; a stopped stack
+  is a state, not automatically a warning.
+- **The environment screen no longer duplicates the site list**, and Databases
+  explains a stopped MariaDB instead of printing the failed `mysql` command.
+- **Every screen names itself.** Pages that previously hid their title because a
+  tab repeated it now show it, including Projects, Services, Runtimes and
+  Databases; the Assistant and Team workspaces have the same page heading.
+  The divider under the page header is gone.
+- **List search is one control.** Sites, Skills and Tools now use the same flat
+  search field as Projects instead of a second icon-and-input design.
+- **The model catalogue is the configured catalogue.** It lists the models of
+  the providers in this installation, marks each provider's default, and allows
+  changing it. The official Claude list is only a reference and appears only
+  when Anthropic is configured.
 
 ### Fixed
 
@@ -21,8 +86,6 @@ may change capability identifiers where the design was wrong.
 - **A UI contract test now refuses that class of regression.** Every embedded
   interface file is checked for `Ã`, `Â`, `â€`, a UTF-8 BOM and U+FFFD, so a future
   ANSI round-trip fails the build instead of shipping.
-- An incomplete, uncommitted navigation experiment was removed; the committed
-  server/site information architecture is the one in this build.
 
 ---
 

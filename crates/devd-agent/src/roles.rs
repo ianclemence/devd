@@ -101,7 +101,7 @@ pub fn rank(t: Tier) -> u8 {
 }
 
 /// Capabilities every team member may use to talk back.
-pub const COMMON: &[&str] = &["team.report", "inbox.post", "approval.get", "todo.create", "todo.update", "todo.list", "scratch.write", "scratch.read", "skills.get", "skills.list"];
+pub const COMMON: &[&str] = &["team.report", "team.context", "team.charter.get", "inbox.post", "approval.get", "todo.create", "todo.update", "todo.list", "scratch.write", "scratch.read", "skills.get", "skills.list"];
 
 /// The role files, in roster order: (id, contents).
 const FILES: &[(&str, &str)] = &[

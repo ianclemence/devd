@@ -141,8 +141,12 @@
     doctor: null,
     health: null,
     projects: [],
+    projectCount: 0,
     projectsLoaded: false,
     projectsError: "",
+    rosterProject: "",
+    rosterCharter: null,
+    rosterContext: null,
     projectQuery: "",
     projectSort: "name",
     project: null,
@@ -1218,7 +1222,7 @@
         { view: "inbox", label: "Inbox", count: attention, hot: !!attention }
       ] },
       { label: "Work", items: [
-        { view: "projects", label: "Projects", count: state.projects.length || null },
+        { view: "projects", label: "Projects", count: state.projects.length || state.projectCount || null },
         { view: "sites", label: "Sites", count: (server.sites || []).length || null },
         { view: "assistant", label: "Assistant", count: working },
         { view: "agents", label: "Team" },
@@ -1318,20 +1322,11 @@
     return '<h1 class="page-title">' + esc(text) + "</h1>";
   }
 
-  /* The label of the tab that is open, when this screen is one of an area's tabs. */
-  function activeTabLabel() {
-    var tabs = TABS[AREA[state.view]] || [];
-    for (var i = 0; i < tabs.length; i++) if (tabs[i][0] === state.view) return tabs[i][1];
-    return "";
-  }
-
   function page(title, sub, actions, body) {
-    // A title that only repeats the open tab stays for screen readers and is not drawn twice.
-    var dup = activeTabLabel() === title;
     return (
       '<div class="page">' +
-      '<div class="page-head' + (dup ? " dup" : "") + '"><div>' +
-      pageTitle(title) + "</div>" +
+      '<div class="page-head"><div class="page-heading">' +
+      pageTitle(title) + (sub ? '<div class="page-sub">' + esc(sub) + "</div>" : "") + "</div>" +
       '<div class="page-actions">' + (actions || "") + "</div>" +
       "</div>" + body + "</div>"
     );
@@ -1419,11 +1414,7 @@
    */
   function filterBox(key, placeholder) {
     var v = state.filters[key] || "";
-    return '<div class="filter">' +
-      '<svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg>' +
-      '<input class="filter-input" data-filter="' + key + '" value="' + attr(v) + '" placeholder="' + attr(placeholder) + '" aria-label="' + attr(placeholder) + '" spellcheck="false">' +
-      (v ? '<button type="button" class="filter-clear" data-action="filter-clear" data-key="' + key + '" aria-label="Clear the filter" title="Clear the filter">&times;</button>' : "") +
-      "</div>";
+    return '<input type="search" class="ui-search" data-filter="' + key + '" value="' + attr(v) + '" placeholder="' + attr(placeholder) + '" aria-label="' + attr(placeholder) + '" spellcheck="false">';
   }
 
   /* Whether a row survives the filter. */
@@ -1681,13 +1672,15 @@
       var proxied = !!site.upstream;
       var reason = siteAttentionReason(row);
       var dot = row.present === false ? "bad" : row.serving === "no_entry" || reason ? "warn" : row.server_running ? "ok" : "off";
-      var tls = site.tls_mode === "off" ? "http" : row.certificate ? "https" : "no certificate";
+      var metaBits = [];
+      if (!row.in_hosts) metaBits.push("not in hosts");
+      if (site.tls_mode !== "off" && !row.certificate) metaBits.push("no certificate");
       var sub = esc(row.url) + (proxied ? " → " + esc(site.upstream) + (row.upstream_listening ? "" : " (not running)") : row.serving === "no_entry" ? " · " + esc(reason || "not served") : " · " + esc(row.document_root)) +
         (row.shared ? ' · <a href="' + attr(row.shared) + '" target="_blank" rel="noreferrer">public link</a>' : "");
       return uiRow({
         dot: dot,
         title: esc(site.name) + ' <span class="pill ' + (row.serving === "no_entry" ? "pill-warn" : site.tls_mode !== "off" && !row.certificate ? "pill-warn" : "pill-ok") + '">' + esc(servingLabel(row) || "not serving") + "</span>",
-        sub: sub, meta: esc(tls + (row.in_hosts ? "" : " · not in hosts")),
+        sub: sub, meta: esc(metaBits.join(" · ")),
         open: 'data-action="open-url" data-url="' + attr(row.url) + '"',
         actions: '<button type="button" class="btn btn-mini btn-primary" data-action="open-site" data-name="' + attr(site.name) + '">Manage</button>' +
           '<button type="button" class="btn btn-mini" data-action="open-url" data-url="' + attr(row.url) + '">Open</button>',
@@ -1706,7 +1699,9 @@
         { label: "Hostnames", value: pendingHosts ? pendingHosts + " pending" : "Published", detail: inHosts + " of " + all.length + " resolve locally", tone: pendingHosts ? "warn" : "", dot: pendingHosts ? "warn" : "off" },
         { label: "Local HTTPS", value: caTrusted() ? "Trusted" : "Not trusted", detail: (state.server.certs || []).length + " certificates issued", tone: caTrusted() ? "ok" : "warn", dot: caTrusted() ? "ok" : "warn" }
       ]);
-      body += '<div class="filter-row site-filter-row">' + filterBox("sites", "Search by name, address, folder or runtime") + filters + "</div>";
+      body += '<div class="ui-controls site-controls">' +
+        '<input type="search" class="ui-search" data-filter="sites" placeholder="Search by name, address, folder or runtime" value="' + attr(q) + '" aria-label="Search sites">' +
+        '<span class="grow"></span>' + filters + "</div>";
       body += matching.length ? uiList(rows) : uiEmpty('No site matches "' + q + '"', "Clear the search or choose another filter.", '<button type="button" class="btn" data-action="site-filter" data-filter="all">Show all sites</button>');
     } else if (!state.siteFormOpen) {
       body += uiEmpty("No sites yet", "A site is a project folder, a hostname, a certificate and a URL.", '<button type="button" class="btn btn-primary" data-action="new-site">Create a site</button>');
@@ -2597,6 +2592,7 @@
       '<label class="field"><span class="field-label">Serve a running program, optional</span>' +
       '<input class="input mono" id="site-upstream" placeholder="3000 or localhost:5173" autocomplete="off" spellcheck="false"></label>' +
       "</div>" +
+      '<div class="ui-quiet">A site records an address and how it answers. HTTPS issues a local certificate for that address; a database is created inside MariaDB. Publishing the hostname and starting the stack are separate, explicit steps.</div>' +
       '<div class="inline" style="margin-top:12px">' +
       '<label class="check"><input type="checkbox" id="site-tls" checked> HTTPS with a local certificate</label>' +
       '<label class="check"><input type="checkbox" id="site-db"> Create a database</label>' +
@@ -2850,10 +2846,25 @@
    * prove, and which skills each carries. Read from team.roles, so this screen
    * cannot disagree with the capability the agents themselves use. */
   function loadRoster() {
-    return read("team.roles").then(function (rows) {
-      state.roster = rows || [];
+    return Promise.all([
+      read("team.roles"),
+      state.projects.length ? Promise.resolve() : loadProjects()
+    ]).then(function (r) {
+      state.roster = r[0] || [];
+      var path = state.rosterProject || (state.project && state.project.path) || (state.projects[0] && state.projects[0].path) || "";
+      state.rosterProject = path;
+      if (!path) return;
+      return Promise.all([
+        read("team.charter.get", { project: path }).catch(function () { return null; }),
+        read("team.context", { project: path }).catch(function () { return null; })
+      ]).then(function (data) {
+        state.rosterCharter = data[0];
+        state.rosterContext = data[1];
+      });
     }).catch(function () {
       state.roster = state.roster || [];
+      state.rosterCharter = state.rosterCharter || null;
+      state.rosterContext = state.rosterContext || null;
     });
   }
 
@@ -2879,6 +2890,99 @@
     });
   }
 
+  function roleTitle(id) {
+    var r = (state.roster || []).filter(function (x) { return x.id === id; })[0];
+    return r ? r.title : id;
+  }
+
+  function rolePills(ids) {
+    if (!ids || !ids.length) return '<span class="dim">No roles invited yet.</span>';
+    return ids.map(function (id) { return '<span class="pill pill-accent">' + esc(roleTitle(id)) + "</span>"; }).join(" ");
+  }
+
+  function teamContextHtml(ctx) {
+    var sites = ctx.sites || [];
+    var services = ctx.services || [];
+    var runtimes = ctx.runtimes || [];
+    var memory = ctx.memory || {};
+    var lessons = ctx.lessons || [];
+    var trust = ctx.trust || [];
+    var siteHtml = sites.length
+      ? sites.map(function (s) {
+        return '<div class="context-line"><a href="' + attr(s.url) + '" target="_blank" rel="noreferrer">' + esc(s.url) + '</a> <span class="dim">' + esc(s.serving) + "</span></div>";
+      }).join("")
+      : '<div class="dim">No site is configured for this project.</div>';
+    var serviceHtml = services.length
+      ? '<div class="context-line">' + services.map(function (s) { return esc(s.name) + ' <span class="dim">' + esc(s.desired) + "</span>"; }).join(" · ") + "</div>"
+      : '<div class="dim">No managed service.</div>';
+    var runtimeHtml = runtimes.length
+      ? '<div class="context-line">' + runtimes.map(function (r) { return esc(r.kind + " " + r.version); }).join(" · ") + "</div>"
+      : '<div class="dim">No installed runtime.</div>';
+    var memoryHtml = memory.present
+      ? '<div class="context-line"><span class="mono">' + esc(memory.file) + "</span> <span class=\"dim\">" + (memory.truncated ? "read in part" : "read") + '</span></div><details class="ui-fold"><summary>Read the project knowledge</summary><pre class="log-block team-memory">' + esc(memory.excerpt) + "</pre></details>"
+      : '<div class="dim">No AGENTS.md or CLAUDE.md in the project yet. The team has no written project knowledge.</div>';
+    var lessonHtml = lessons.length
+      ? '<ul class="team-lessons">' + lessons.slice(0, 5).map(function (l) { return "<li>" + esc(l) + "</li>"; }).join("") + "</ul>"
+      : '<div class="dim">No lessons recorded yet. The first run starts the record.</div>';
+    var trustHtml = trust.length
+      ? trust.map(function (t) {
+        return '<div class="trust-line"><span class="mono">' + esc(t.role) + '</span><span class="pill ' + (t.level === "proven" ? "pill-ok" : t.level === "building" ? "pill-accent" : "") + '">' + esc(t.level) + "</span><span class=\"dim\">" + t.done + " done" + (t.unverified || t.blocked_or_failed ? " · " + (t.unverified + t.blocked_or_failed) + " not accepted" : "") + "</span></div>";
+      }).join("")
+      : '<div class="dim">No completed task yet. Trust begins with the first verified run.</div>';
+    return '<div class="team-context">' +
+      '<div class="context-section"><div class="field-label">Sites</div>' + siteHtml + "</div>" +
+      '<div class="context-section"><div class="field-label">Services</div>' + serviceHtml + "</div>" +
+      '<div class="context-section"><div class="field-label">Runtimes</div>' + runtimeHtml + "</div>" +
+      '<div class="context-section"><div class="field-label">Project knowledge</div>' + memoryHtml + "</div>" +
+      '<div class="context-section"><div class="field-label">Trust record</div>' + trustHtml + "</div>" +
+      '<div class="context-section"><div class="field-label">Lessons and missteps</div>' + lessonHtml + "</div>" +
+      "</div>";
+  }
+
+  function teamRoomPanel() {
+    var ctx = state.rosterContext || {};
+    var charter = ctx.charter || state.rosterCharter || {};
+    var north = charter.north_star || "";
+    var owner = charter.owner || "";
+    var rules = charter.working_agreement || [];
+    var options = '<option value="">Choose a project…</option>' + projectOptions(state.rosterProject);
+    return '<section class="panel team-room" aria-labelledby="team-room-title">' +
+      '<div class="panel-head"><span id="team-room-title">Team room</span><span class="panel-note">the context every agent receives</span><span class="grow"></span>' +
+        '<select class="select mono team-project" id="roster-project" aria-label="Project for the team room">' + options + "</select>" +
+        '<button type="button" class="btn btn-mini" data-action="team-charter-edit">' + (north ? "Edit charter" : "Write the charter") + "</button></div>" +
+      '<div class="panel-body team-room-body">' +
+        '<div class="team-charter-block">' +
+          '<div class="field-label">North star</div>' +
+          (north ? '<div class="team-north">' + esc(north) + "</div>" : '<div class="team-north team-north-empty">No north star yet. Write what the team is trying to make true; it becomes the standard for every plan, question and review.</div>') +
+          '<div class="team-meta"><span class="field-label">Human owner</span> ' + (owner ? esc(owner) : '<span class="dim">not named</span>') + "</div>" +
+          '<div class="field-label" style="margin-top:14px">Working agreement</div>' +
+          (rules.length ? '<ul class="team-rules">' + rules.map(function (r) { return "<li>" + esc(r) + "</li>"; }).join("") + "</ul>" : '<div class="dim">No agreement written.</div>') +
+          '<div class="field-label" style="margin-top:14px">Invited to propose next work</div>' +
+          '<div class="team-proactive">' + rolePills(charter.proactive_roles) + "</div>" +
+        "</div>" +
+        teamContextHtml(ctx) +
+      "</div></section>";
+  }
+
+  function openCharterDrawer() {
+    if (!state.rosterProject) return toast("warn", "Choose a project for the team room first");
+    var ctx = state.rosterContext || {};
+    var charter = ctx.charter || state.rosterCharter || {};
+    var chosen = charter.proactive_roles || [];
+    var roleBoxes = (state.roster || []).map(function (r) {
+      return '<label class="check"><input type="checkbox" name="charter-role" value="' + attr(r.id) + '"' + (chosen.indexOf(r.id) !== -1 ? " checked" : "") + "> " + esc(r.title) + "</label>";
+    }).join("");
+    openDrawer("Team charter", '<div class="stack team-charter-form">' +
+      '<div class="ui-quiet">' + esc(state.rosterProject) + "</div>" +
+      '<div class="field"><label class="field-label" for="charter-owner">Human owner</label><input class="input" id="charter-owner" value="' + attr(charter.owner || "") + '" placeholder="Who owns the outcome and makes the final call?"></div>' +
+      '<div class="field"><label class="field-label" for="charter-north">North star</label><textarea class="input" id="charter-north" rows="3" placeholder="One ambitious outcome the team can point every decision at.">' + esc(charter.north_star || "") + "</textarea></div>" +
+      '<div class="field"><label class="field-label" for="charter-rules">Working agreement <span class="dim">(one rule per line)</span></label><textarea class="input" id="charter-rules" rows="5">' + esc((charter.working_agreement || []).join("\n")) + "</textarea></div>" +
+      '<div class="field"><div class="field-label">Invite to propose next work</div><div class="check-grid">' + roleBoxes + "</div>" +
+      '<div class="row-sub">These roles may suggest a next workstream that moves toward the north star. A person still approves the plan before anything runs.</div></div>' +
+      '<div class="inline"><span class="grow"></span><button type="button" class="btn" data-action="team-charter-cancel">Cancel</button><button type="button" class="btn btn-primary" data-action="team-charter-save">Save charter</button></div>' +
+      "</div>");
+  }
+
   function renderRoster() {
     if (state.view !== "agents") return;
     var rows = state.roster || [];
@@ -2888,10 +2992,17 @@
       if (!g) { g = { key: r.team, title: r.team_title || r.team, members: [] }; groups.push(g); }
       g.members.push(r);
     });
-    var body = groups.length
-      ? groups.map(function (g) { return uiHead(g.title, g.members.length) + uiList(g.members.map(memberCard)); }).join("")
-      : uiEmpty("The team is not available", "team.roles did not answer.");
-    el("main").innerHTML = page("Team", "",
+    var owner = state.rosterContext && state.rosterContext.charter ? state.rosterContext.charter.owner : "";
+    var human = uiHead("Human", 1) + uiList([uiRow({
+      dot: "ok",
+      title: esc(owner || "You"),
+      sub: "Owns the north star, the working agreement and the decisions that cannot be delegated.",
+      meta: "human · final say"
+    })]);
+    var body = teamRoomPanel() + human + (groups.length
+      ? uiHead("The roster", rows.length) + groups.map(function (g) { return uiHead(g.title, g.members.length) + uiList(g.members.map(memberCard)); }).join("")
+      : uiEmpty("The team is not available", "team.roles did not answer."));
+    el("main").innerHTML = page("Team", "The people, the written agreement, and the context every agent works from.",
       '<button type="button" class="btn btn-primary" data-action="nav" data-view="team">Give the team a goal</button>', body);
   }
 
@@ -3668,15 +3779,15 @@
           dotKind = changes ? "warn" : "ok";
         } else if (p.is_repository) bits.push("repository");
         if (p.exists === false) { bits.push("folder is gone"); dotKind = "bad"; }
-        if (p.error) { bits.push("Git unavailable"); dotKind = "warn"; }
+        if (p.error) dotKind = "warn";
         if (!p.registered) bits.push(p.source === "site" ? "known from its site" : "not imported");
         var site = siteFor[p.path];
         var isPinned = pinned.indexOf(p.path) !== -1;
         return uiRow({
-          dot: dotKind, title: (isPinned ? "★ " : "") + esc(p.name),
-          sub: esc(bits.join(" · ")) + '<span class="ui-path" title="' + attr(p.path) + '"> · ' + esc(p.path) + "</span>" +
-            (p.error ? ' <span class="row-warn" title="' + attr(p.error) + '">· ' + esc(gitErrorShort(p.error) || "Git could not read it") + "</span>" : ""),
-          meta: site ? esc(servingLabel(site)) : "no site",
+          dot: dotKind, title: (isPinned ? "★ " : "") + esc(p.name) +
+            (p.error ? ' <span class="pill pill-warn" title="' + attr(p.is_repository ? "Git cannot open this repository. " + p.error : gitErrorShort(p.error) || p.error) + '">Git unavailable</span>' : ""),
+          sub: esc(bits.join(" · ")) + '<span class="ui-path" title="' + attr(p.path) + '"> · ' + esc(p.path) + "</span>",
+          meta: site ? esc(servingLabel(site)) : "",
           open: 'data-action="open-project" data-path="' + attr(p.path) + '"',
           actions: '<button type="button" class="btn btn-mini btn-primary" data-action="open-project" data-path="' + attr(p.path) + '">Open</button>' +
             (site ? '<button type="button" class="btn btn-mini" data-action="open-site" data-name="' + attr(site.site.name) + '">Site</button>' : "") +
@@ -3718,6 +3829,7 @@
             error: null
           };
         });
+        state.projectCount = state.projects.length;
         // The state of a repository is worth knowing, but a folder that is not
         // a repository is not an error - it simply has no Git state.
         return Promise.all(
@@ -5224,6 +5336,7 @@
         requirements: AI.requirements || null
       };
       AI.providers = r[4] || [];
+      state.projectCount = AI.home.projects.length;
     });
   }
 
@@ -5378,7 +5491,7 @@
           dot: site ? (site.serving === "no_entry" ? "warn" : "ok") : "off",
           title: esc(p.name),
           sub: esc((p.stack ? p.stack + " · " : "") + p.path),
-          meta: site ? esc(servingLabel(site)) : "no site",
+          meta: site ? esc(servingLabel(site)) : "",
           open: 'data-action="home-open" data-path="' + attr(p.path) + '"',
           actions: '<button type="button" class="btn btn-mini btn-primary" data-action="home-open" data-path="' + attr(p.path) + '">Open</button>' +
             (site ? '<button type="button" class="btn btn-mini" data-action="open-site" data-name="' + attr(site.site.name) + '">Site</button>' : "") +
@@ -5444,7 +5557,7 @@
 
     el("main").innerHTML =
       '<div class="page home">' +
-      '<div class="ui-greet">' + pageTitle(greeting(), "home") +
+      '<div class="ui-greet"><div class="ui-kicker">Home</div>' + pageTitle(greeting(), "home") +
       '<div class="sub">' + new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" }) +
       ' <span class="greet-sep" aria-hidden="true">·</span> <button type="button" class="greet-link" data-action="nav" data-view="overview">' + (state.server.loaded ? "Local environment" : "Reading the environment") + "</button></div></div>" +
       ask + needsHtml + setup +
@@ -5510,7 +5623,10 @@
       var i = info[role] || { title: "Everything else", summary: "Used when a kind of work has no model of its own, and for the assistant." };
       return '<tr><td><div class="cell-strong">' + esc(i.title || role) + '</div><div class="cell-dim">' + esc(i.summary) + "</div></td><td>" + cell(0) + "</td><td>" + cell(1) + '</td><td><button type="button" class="btn btn-mini btn-primary" data-action="role-save" data-role="' + attr(role) + '">Save</button></td></tr>';
     }).join("");
-    var all = {}; (AI.catalogue || []).forEach(function (m) { all[m.model_id] = 1; });
+    var all = {};
+    (AI.providers || []).forEach(function (p) { if (p.default_model) all[p.default_model] = 1; });
+    (AI.catalogue || []).filter(function (m) { return String(m.source || "").indexOf("provider:") === 0; })
+      .forEach(function (m) { all[m.model_id] = 1; });
     return '<div class="section-title">Which model does which work</div><div class="panel"><div class="table-wrap"><table class="table roles-table"><thead><tr><th>Work</th><th>First choice</th><th>Fallback if it fails</th><th></th></tr></thead><tbody>' + rows + "</tbody></table><datalist id=\"rm-models\">" + Object.keys(all).map(function (m) { return '<option value="' + attr(m) + '"></option>'; }).join("") + "</datalist></div>" +
       '<div class="panel-body panel-foot row-sub">The fallback is used only when the first choice fails, and only the providers you list here are ever used. A conversation where you pick a model yourself never falls back. Each reply records which model answered and why.</div></div>';
   }
@@ -5596,24 +5712,72 @@
     return '<div class="section-title">On this machine</div><div class="panel">' + rows + "</div>";
   }
 
-  function modelPanels() {
+  /* The catalogue is the models this installation is actually configured to
+     use, not a vendor page. A provider contributes its selected default first,
+     then the models its own API returned. The official Claude list is only a
+     reference, and only when Anthropic is one of the configured providers. */
+  function configuredModels() {
+    var rows = [];
+    (AI.providers || []).forEach(function (p) {
+      var seen = {};
+      var listed = (AI.catalogue || []).filter(function (m) { return m.source === "provider:" + p.id; });
+      if (p.default_model) {
+        seen[p.default_model] = 1;
+        rows.push({ provider: p, model: { model_id: p.default_model, context_window: null }, isDefault: true, source: "configured default" });
+      }
+      listed.forEach(function (m) {
+        if (!m.model_id || seen[m.model_id]) return;
+        seen[m.model_id] = 1;
+        rows.push({ provider: p, model: m, isDefault: false, source: "provider list" });
+      });
+      if (!p.default_model && !listed.length) rows.push({ provider: p, model: null });
+    });
+    return rows;
+  }
+
+  function officialClaudePanel() {
     var official = (AI.catalogue || []).filter(function (m) { return m.source === "anthropic-docs"; });
     var offRows = official.map(function (m) {
       return '<tr><td class="cell-mono">' + esc(m.model_id) + '</td><td class="cell-strong">' + esc(m.display) + "</td><td>" + tok(m.context_window) + "</td><td>" + tok(m.max_output) + "</td><td>" + money(m.input_price) + " / " + money(m.output_price) + '</td><td class="dim">' + esc(m.retirement || "") + "</td>" +
         '<td><button type="button" class="btn btn-mini" data-action="prov-use-model" data-model="' + attr(m.model_id) + '">Use</button></td></tr>';
     }).join("");
-    var out = '<div class="panel"><div class="panel-head"><span>Official Claude models</span><span class="panel-note">' + (official.length ? "fetched " + esc(ago(official[0].fetched_at)) + " from " + '<a class="link" target="_blank" rel="noopener noreferrer" href="https://platform.claude.com/docs/en/about-claude/models/overview">Anthropic docs</a>' : "not fetched yet") + "</span></div>" +
+    return '<div class="panel"><div class="panel-head"><span>Official Claude models</span><span class="panel-note">' + (official.length ? "fetched " + esc(ago(official[0].fetched_at)) + " from " + '<a class="link" target="_blank" rel="noopener noreferrer" href="https://platform.claude.com/docs/en/about-claude/models/overview">Anthropic docs</a>' : "not fetched yet") + "</span></div>" +
       (offRows ? '<div class="table-wrap"><table class="table"><thead><tr><th>API id</th><th>Name</th><th>Context</th><th>Max output</th><th>$/MTok in / out</th><th>Retirement</th><th></th></tr></thead><tbody>' + offRows + "</tbody></table></div>" : '<div class="panel-body empty-inline">The official list is read from Anthropic\'s documentation and needs no API key.</div>') +
       '<div class="panel-body panel-foot"><button type="button" class="btn btn-primary btn-mini" data-action="models-refresh">' + (official.length ? "Refresh from Anthropic" : "Fetch the official list") + "</button></div></div>";
-    out += AI.providers.map(function (p) {
-      var ms = (AI.catalogue || []).filter(function (m) { return m.source === "provider:" + p.id; });
-      if (!ms.length) return "";
-      return '<div class="panel"><div class="panel-head"><span>Models available to ' + esc(p.label) + '</span><span class="panel-note">' + ms.length + " · fetched " + esc(ago(ms[0].fetched_at)) + '</span></div><div class="table-wrap"><table class="table"><tbody>' +
-        ms.slice(0, 60).map(function (m) { return '<tr><td class="cell-mono">' + esc(m.model_id) + '</td><td class="dim">' + esc(m.display === m.model_id ? "" : m.display) + "</td><td>" + tok(m.context_window) + '</td><td><button type="button" class="btn btn-mini" data-action="prov-pick" data-id="' + attr(p.id) + '" data-model="' + attr(m.model_id) + '">Use</button></td></tr>'; }).join("") +
-        (ms.length > 60 ? '<tr><td colspan="4" class="cell-dim">' + (ms.length - 60) + " more models are in the catalogue; the API lists all of them.</td></tr>" : "") +
+  }
+
+  function modelPanels() {
+    var rows = configuredModels();
+    var models = rows.filter(function (row) { return row.model; });
+    var body = "";
+    if (rows.length) {
+      body = '<div class="panel"><div class="panel-head"><span>Configured models</span><span class="panel-note">' + models.length + " model" + (models.length === 1 ? "" : "s") + " from " + (AI.providers || []).length + " provider" + ((AI.providers || []).length === 1 ? "" : "s") + "</span></div>" +
+        '<div class="table-wrap"><table class="table"><thead><tr><th>Provider</th><th>Model</th><th>Context</th><th>Source</th><th></th></tr></thead><tbody>' +
+        rows.map(function (row) {
+          var p = row.provider;
+          var label = brandImg(p.preset || p.id, "brand-dot") + esc(p.label) +
+            (p.is_default ? ' <span class="pill pill-accent">default provider</span>' : "") +
+            (p.enabled === false ? ' <span class="pill">disabled</span>' : "");
+          if (!row.model) {
+            return '<tr><td><div class="cell-strong">' + label + '</div><div class="cell-dim">' + esc(p.kind) + "</div></td>" +
+              '<td colspan="3" class="cell-dim">No model selected. Fetch this provider\'s models, or edit its default.</td>' +
+              '<td><button type="button" class="btn btn-mini" data-action="prov-edit" data-id="' + attr(p.id) + '">Edit</button></td></tr>';
+          }
+          return '<tr><td><div class="cell-strong">' + label + '</div><div class="cell-dim">' + esc(p.kind) + "</div></td>" +
+            '<td class="cell-mono">' + esc(row.model.model_id) + "</td>" +
+            "<td>" + tok(row.model.context_window) + "</td>" +
+            '<td class="dim">' + esc(row.source) + "</td>" +
+            "<td>" + (row.isDefault ? '<span class="pill pill-accent">default</span>' : '<button type="button" class="btn btn-mini" data-action="prov-pick" data-id="' + attr(p.id) + '" data-model="' + attr(row.model.model_id) + '">Use as default</button>') + "</td></tr>";
+        }).join("") +
         "</tbody></table></div></div>";
-    }).join("");
-    return out;
+    } else {
+      body = uiEmpty("No provider configured", "Add a provider below, then fetch its models. The catalogue shows what this installation can actually use.");
+    }
+    var anthropic = (AI.providers || []).some(function (p) { return p.kind === "anthropic"; });
+    if (anthropic) {
+      body += '<details class="ui-fold"><summary>Official Claude reference</summary>' + officialClaudePanel() + "</details>";
+    }
+    return body;
   }
 
   function renderProviders() {
@@ -6050,9 +6214,11 @@
       "</div>";
 
     el("main").innerHTML =
+      '<div class="workspace">' +
+      '<div class="workspace-head">' + pageTitle("Assistant") + '<span class="grow"></span><button type="button" class="btn btn-mini" data-action="nav" data-view="agents">Team room</button></div>' +
       '<div class="assistant"><aside class="threads"><div class="threads-head"><b>Conversations</b><span class="grow"></span><button type="button" class="btn btn-mini btn-ghost" data-action="chats-prune" title="Delete every conversation that is not working">Clear finished</button><button type="button" class="btn btn-mini btn-primary" data-action="chat-new">New</button></div><div id="thread-list"></div></aside>' +
       '<section class="chat">' +
-      (AI.thread ? '<div class="chat-head" id="chat-head"></div>' : '<div class="chat-head"><div class="grow"><div class="chat-title">Assistant</div></div></div>') +
+      (AI.thread ? '<div class="chat-head" id="chat-head"></div>' : "") +
       (!ready ? '<div class="notice notice-warn chat-notice">No usable AI provider yet. <button type="button" class="btn btn-mini btn-primary" data-action="nav" data-view="providers">Set one up</button></div>' : "") +
       '<div class="chat-plan" id="chat-plan" hidden></div>' +
       // The conversation and the box share one column, and the box sits at the
@@ -6062,7 +6228,7 @@
       composer +
       "</div>" +
       '<input type="file" id="chat-file" multiple hidden>' +
-      "</section></div>";
+      "</section></div></div>";
     paintThreads(); paintChat(true);
     paintChatPlan();
     paintAttachments();
@@ -6104,8 +6270,10 @@
     var ready = (AI.providers || []).some(function (p) { return p.enabled && (p.has_key || !p.needs_key); });
     var projOpts = '<option value="">Choose a project…</option>' + state.projects.map(function (p) { return '<option value="' + attr(p.path) + '"' + (TEAM.form.project === p.path ? " selected" : "") + ">" + esc(p.name || dirName(p.path)) + "</option>"; }).join("") + '<option value="__new"' + (TEAM.form.project === "__new" ? " selected" : "") + ">A new project…</option>";
     el("main").innerHTML =
+      '<div class="workspace">' +
+      '<div class="workspace-head">' + pageTitle("Team") + '<span class="grow"></span><button type="button" class="btn btn-mini" data-action="nav" data-view="agents">Team room</button></div>' +
       '<div class="assistant"><aside class="threads"><div class="threads-head"><b>Runs</b><span class="grow"></span><button type="button" class="btn btn-mini btn-ghost" data-action="team-prune" title="Delete every run that is over">Clear finished</button><button type="button" class="btn btn-mini btn-primary" data-action="team-new">New</button></div><div id="team-list"></div></aside>' +
-      '<section class="chat"><div id="team-detail" class="team-detail"></div></section></div>';
+      '<section class="chat"><div id="team-detail" class="team-detail"></div></section></div></div>';
     TEAM.ready = ready; TEAM.projOpts = projOpts;
     paintTeam();
     startTeamTimer();
@@ -6128,6 +6296,7 @@
   function teamForm() {
     var f = TEAM.form;
     return '<div class="team-new"><div class="chat-title">Describe what you want built</div>' +
+      '<div class="team-north-line">The team works from the project\'s north star, owner and shared context. <button type="button" data-action="nav" data-view="agents">Team room</button></div>' +
       '<div class="row-sub">A planner turns this into tasks. You review the plan and approve it before anything runs. Specialists then work in parallel where it is safe, and a task only counts as done when devd can see the proof.</div>' +
       (TEAM.ready ? "" : '<div class="notice notice-warn" style="margin-top:12px">No usable AI provider yet. <button type="button" class="btn btn-mini btn-primary" data-action="nav" data-view="providers">Set one up</button></div>') +
       (TEAM.templates && TEAM.templates.length ? '<div class="field" style="margin-top:14px"><label class="field-label">Start from a template <span class="dim">(optional)</span></label><select class="input" id="team-template"><option value="">Write the goal myself</option>' + TEAM.templates.map(function (t) { return '<option value="' + attr(t.id) + '"' + (TEAM.form.template === t.id ? " selected" : "") + ">" + esc(t.title) + " — " + esc(t.summary) + "</option>"; }).join("") + "</select></div>" : "") +
@@ -7182,6 +7351,25 @@
       if (opt === "remove") return run("toolchain.remove", { tool: tool }).then(done);
       if (opt === "logs") return read("toolchain.logs", { tool: tool }).then(function (d) { openDrawer(tool + " logs", '<pre class="log-block">' + esc((d.lines || []).join("\n") || "(no log lines)") + "</pre>"); }).catch(function (e) { toast("error", e.message); });
     },
+    "team-charter-edit": function () { openCharterDrawer(); },
+    "team-charter-cancel": function () { closeDrawer(); },
+    "team-charter-save": function () {
+      if (!state.rosterProject) return toast("warn", "Choose a project for the team room first");
+      var roles = Array.prototype.map.call(document.querySelectorAll('input[name="charter-role"]:checked'), function (n) { return n.value; });
+      var args = {
+        project: state.rosterProject,
+        north_star: el("charter-north").value.trim(),
+        owner: el("charter-owner").value.trim(),
+        working_agreement: el("charter-rules").value.split("\n").map(function (l) { return l.trim(); }).filter(Boolean),
+        proactive_roles: roles
+      };
+      run("team.charter.set", args).then(function (outcome) {
+        if (!outcome) return null;
+        closeDrawer();
+        return loadRoster();
+      }).then(function () { if (state.view === "agents") renderRoster(); });
+    },
+
     "team-new": function () { TEAM.sel = null; TEAM.data = null; paintTeam(); },
     "team-open": function (n) { TEAM.sel = n.dataset.id; read("team.get", { run: TEAM.sel }).then(function (d) { TEAM.data = d; paintTeam(); }); },
     "team-toggle": function (n) { TEAM.open[n.dataset.id] = !TEAM.open[n.dataset.id]; paintTeam(); },
@@ -7363,7 +7551,7 @@
       // The preset is only set when the provider really is one of the known
       // presets. A custom provider has no preset, and saying so is what lets
       // it be edited.
-      AI.provForm = { preset: p.preset || null, kind: p.kind, label: p.label, id: p.id, base_url: p.base_url, key_env: p.key_env || "", default_model: p.default_model || "", make_default: false, editing: true };
+      AI.provForm = { preset: p.preset || null, kind: p.kind, label: p.label, id: p.id, base_url: p.base_url, key_env: p.key_env || "", default_model: p.default_model || "", make_isDefault: false, editing: true };
       renderProviders();
     },
     "prov-cancel": function () { AI.provForm = null; renderProviders(); },
@@ -8673,6 +8861,12 @@
       state.shared.activeNote = null;
       state.shared.noteContent = "";
       loadShared().then(renderShared);
+    }
+    if (event.target.id === "roster-project") {
+      state.rosterProject = event.target.value;
+      state.rosterCharter = null;
+      state.rosterContext = null;
+      loadRoster().then(renderRoster);
     }
     if (event.target.dataset && event.target.dataset.action === "todo-status") {
       setTodoStatus(event.target.dataset.id, event.target.dataset.rev, event.target.value);

@@ -125,6 +125,49 @@ goal -> planner -> [you approve the plan] -> scheduler -> specialists -> final v
 the window has Assistant > Team runs; the terminal dashboard has a Team view and an
 Inbox view; all read `team.get`.
 
+### The team room
+
+A team is more than a planner and a task queue. devd gives every project a
+**team room**: the written context that a person and their agents share, before
+and during a run. The design follows Anthropic's
+[Building effective human-agent teams](https://claude.com/resources/articles/building-effective-human-agent-teams):
+a north star, clear owners, broad but bounded context, a shared bar for quality,
+and room to learn from mistakes.
+
+The room has five parts:
+
+| Part | Where it lives | Who can change it |
+|---|---|---|
+| **North star** | `team.charter.set` file for the project | a person only |
+| **Human owner and working agreement** | the same charter | a person only |
+| **Invited proactive roles** | the charter; a record of which roles may suggest the next work | a person only |
+| **Shared context** | `team.context`: sites and addresses, managed services, installed runtimes, `AGENTS.md`/`CLAUDE.md` knowledge, recent lessons, trust record | read-only, assembled from devd's records |
+| **The record** | team tasks, evidence, acceptances by hand, lessons and missteps in the run summary | devd writes it; a person reads it |
+
+`team.charter.get` and `team.context` are readable by the assistant and by every
+team member. `team.charter.set` is human-only: the person writes the standard;
+an agent may not quietly rewrite the north star it is judged against.
+
+The context is injected into every assistant turn and every specialist prompt,
+bounded to a short brief, so agents do not have to rediscover the project,
+the site that exposes it, the services it needs, or the lessons from the last
+run. The window shows the same brief under **Team > Team room**; it is not a
+hidden prompt.
+
+**Trust is earned, but it is not a permission bypass.** The trust record counts
+what each role has had accepted, what was accepted by hand, what was unverified,
+and how many attempts it took. It is shown to the person. Approvals, evidence
+and the role tier still decide what may run; a good record never removes a
+person's decision.
+
+**Lessons are recorded, not invented.** When a run ends, devd appends the
+failures, unverified tasks, accepted-by-hand work and repeated attempts to the
+summary and to the context of the next run. A model's reflection is useful, but
+it is not allowed to replace the events the harness observed.
+
+`devd team.roles` remains the roster. The team room does not add another copy of
+it: the roster, the charter and the context are three views of the same project.
+
 ### A definition of done
 
 `team.start` takes `done_when`, a list of statements the finished work must
