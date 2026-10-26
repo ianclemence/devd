@@ -56,6 +56,13 @@ pub fn authorize(ctx: &Ctx, path: &str, write: bool) -> Result<PathBuf> {
     // so it is carved out of the home fence. Uploads are the one other folder
     // inside the home that an agent must be able to read: an attached file is
     // useless if the tool cannot open it.
+    //
+    // The fence is devd's own data - the state database, the secrets, the logs -
+    // and it lives directly in the home. A folder nested below a workspace root
+    // is inside the person's projects even when the root has not been imported
+    // yet, so the test is "is this one of devd's own folders", not "does this
+    // path start with the home". A prefix test refused every file under
+    // `D:\devd\www\...` because the home happened to be `D:\devd`.
     let roots = authz::roots(ctx);
     let in_projects = roots.iter().any(|r| norm.starts_with(r))
         || ctx
@@ -64,7 +71,7 @@ pub fn authorize(ctx: &Ctx, path: &str, write: bool) -> Result<PathBuf> {
             .map(|ps| ps.iter().any(|p| norm.starts_with(authz::normalise(Path::new(&p.path)))))
             .unwrap_or(false);
     let uploads = authz::normalise(&ctx.paths.root().join("uploads"));
-    if norm.starts_with(&home) && !in_projects && !norm.starts_with(&uploads) {
+    if devd_data_path(ctx, &home, &norm) && !in_projects && !norm.starts_with(&uploads) {
         return Err(DevdError::denied("devd's own data directory (database, keys, logs) is not accessible to file tools"));
     }
     if norm.components().any(|c| c.as_os_str() == ".git") {
@@ -78,6 +85,31 @@ pub fn authorize(ctx: &Ctx, path: &str, write: bool) -> Result<PathBuf> {
         )));
     }
     Ok(norm)
+}
+
+/// Whether `path` is one of devd's own folders inside its home.
+///
+/// `state.db`, `secrets/`, `logs/`, `services/`, `runtimes/` and the rest of
+/// the home belong to devd and stay closed to file tools. Everything else
+/// below the home is the person's: a portable install keeps its projects in
+/// `<home>/www`, and any other folder a person made there is theirs too.
+fn devd_data_path(ctx: &Ctx, home: &Path, path: &Path) -> bool {
+    let Ok(rest) = path.strip_prefix(home) else { return false };
+    let mut parts = rest.components();
+    let Some(first) = parts.next() else { return false };
+    if parts.next().is_some() {
+        // Two or more levels below the home: a project, not devd's own file.
+        return false;
+    }
+    let name = first.as_os_str().to_string_lossy().to_ascii_lowercase();
+    let known = [
+        "state.db", "state.db-wal", "state.db-shm", "state.db-journal", "settings.toml", "agent-host.pid",
+        "ops-host.pid", "desktop.log", "secrets", "logs", "backups", "snapshots", "certs", "mcp", "config",
+        "templates", "workflows", "cache", "tmp", "uploads", "runtimes", "services", "tools", "etc", "bin",
+        "roles", "skills",
+    ];
+    known.contains(&name.as_str())
+        || (ctx.paths.root().join(name.as_str()).is_file() && !is_secret_file(path) && name.ends_with(".db"))
 }
 
 fn looks_binary(bytes: &[u8]) -> bool {
@@ -363,6 +395,56 @@ mod tests {
             authorize(&c, &home.join("state.db").display().to_string(), false).unwrap_err().code(),
             "permission_denied",
             "devd's own state stays fenced"
+        );
+        for own in ["secrets", "logs", "services", "runtimes"] {
+            let dir = home.join(own);
+            std::fs::create_dir_all(&dir).unwrap();
+            let inner = dir.join("x.txt");
+            std::fs::write(&inner, "x").unwrap();
+            assert_eq!(
+                authorize(&c, &inner.display().to_string(), false).unwrap_err().code(),
+                "permission_denied",
+                "devd's own {own} stays fenced"
+            );
+        }
+    }
+
+    #[test]
+    fn a_project_folder_inside_the_home_is_not_fenced_as_internal_data() {
+        // The home can be the same folder an install keeps its projects in
+        // (`D:\devd\www\...` under `D:\devd`). A folder nested below a workspace
+        // root is the person's work even when it has not been imported yet, so a
+        // prefix test against the home refused every file in every project.
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("home");
+        let www = home.join("www");
+        let project = www.join("luna");
+        std::fs::create_dir_all(project.join("app")).unwrap();
+        let file = project.join("app/package.json");
+        std::fs::write(&file, "{}").unwrap();
+
+        let paths = Paths::rooted(&home);
+        paths.ensure().unwrap();
+        let mut s = Settings::default();
+        s.www_root = Some(www.clone());
+        let store = Store::open_in_memory().unwrap();
+        store.migrate().unwrap();
+        let c = Ctx {
+            store: Arc::new(store),
+            paths: Arc::new(paths),
+            settings: Arc::new(s),
+            events: EventBus::new(),
+            actor: Actor::agent("t"),
+            dry_run: false,
+        };
+        assert!(
+            authorize(&c, &file.display().to_string(), false).is_ok(),
+            "a project folder under the home is readable even before it is imported"
+        );
+        assert_eq!(
+            authorize(&c, &home.join("settings.toml").display().to_string(), false).unwrap_err().code(),
+            "permission_denied",
+            "the home's own files stay fenced"
         );
     }
 

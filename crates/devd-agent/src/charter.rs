@@ -294,6 +294,44 @@ pub fn trust(ctx: &Ctx, project: &str) -> Value {
     json!(rows)
 }
 
+/// What the project's own files say it is, as the workbench's detector reads
+/// them. Detected, not configured: no approval, no state written, and nothing
+/// the person did not already have on disk. A folder the detector cannot read
+/// adds nothing rather than a guess.
+fn detected(ctx: &Ctx, project: &Path) -> Option<String> {
+    let stacks = devd_stacks::registry::StackRegistry::builtin();
+    let found = devd_stacks::detect::detect(ctx, stacks, project, None).ok()?;
+    let mut s = String::from("\n## What the project is (detected from its files, not from what serves it)\n");
+    let primary = found.primary.clone().unwrap_or_else(|| "no known stack".to_string());
+    s.push_str(&format!("Detected stack: {primary}\n"));
+    if let Some(top) = found.stacks.first() {
+        if !top.evidence.is_empty() {
+            let evidence: Vec<String> = top.evidence.iter().take(4).cloned().collect();
+            s.push_str(&format!("Evidence: {}\n", evidence.join("; ")));
+        }
+    }
+    if let Some(pm) = &found.package_manager {
+        s.push_str(&format!("Package manager: {pm}\n"));
+    }
+    let needs: Vec<String> = found
+        .runtimes
+        .iter()
+        .map(|r| format!("{} {}", r.tool, r.constraint))
+        .collect();
+    if !needs.is_empty() {
+        let mut seen = std::collections::HashSet::new();
+        let unique: Vec<&String> = needs.iter().filter(|n| seen.insert((*n).clone())).collect();
+        s.push_str(&format!("Wants: {}\n", unique.iter().map(|n| n.as_str()).collect::<Vec<_>>().join(", ")));
+    }
+    if found.ambiguous {
+        if let Some(why) = &found.ambiguity {
+            s.push_str(&format!("Ambiguous: {why}\n"));
+        }
+    }
+    s.push_str("Describe the project from this, not from the addresses devd serves.\n");
+    Some(s)
+}
+
 /// A concise, bounded context for a model prompt. The model gets the written
 /// agreement, the addresses and the knowledge it needs; it does not get the
 /// whole project dumped into the window.
@@ -337,6 +375,14 @@ pub fn prompt_context(ctx: &Ctx, project: &str) -> String {
                 site["serving"].as_str().unwrap_or("")
             ));
         }
+    }
+    // What the code is. A site is an address, not a property of the project:
+    // a folder registered as a PHP site can still be a mobile app or a Go
+    // module, and a model that only saw the site would describe the wrong
+    // project. The detector is the one place that answers this, so its answer
+    // is what the model is given.
+    if let Some(profile) = detected(ctx, &project_path) {
+        s.push_str(&profile);
     }
     if !services.is_empty() {
         let list: Vec<String> = services

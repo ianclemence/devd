@@ -3358,7 +3358,7 @@
       '<div class="inline"><select class="input" id="sched-template" style="max-width:320px"><option value="">A goal I write</option>' + tpl + "</select></div>" +
       (chosen ? '<div class="field"><label class="field-label">Values <span class="dim">(name=value, one per line)</span></label><textarea class="input mono" id="sched-params" rows="3" placeholder="' + attr(hint) + '">' + esc(f.params) + "</textarea></div>"
         : '<div class="field"><label class="field-label">Goal</label><textarea class="input" id="sched-goal" rows="3" placeholder="What the team should do each time">' + esc(f.goal) + "</textarea></div>") +
-      '<div class="field"><label class="field-label">More to prove <span class="dim">(optional, one per line)</span></label><textarea class="input" id="sched-done" rows="2">' + esc(f.done) + "</textarea></div>" +
+      '<div class="field"><label class="field-label">More to prove <span class="dim">(optional, one per line)</span></label><textarea class="input" id="sched-done" rows="4">' + esc(f.done) + "</textarea></div>" +
       '<label class="check"><input type="checkbox" id="sched-waive"' + (f.waive ? " checked" : "") + '> Start each run without asking me to approve the plan <span class="dim">(not in production mode)</span></label>' +
       '<div><button type="button" class="btn btn-primary" data-action="schedule-create">Create the schedule</button></div></div></div>');
   }
@@ -6082,14 +6082,20 @@
     var pendingByTool = {};
     AI.pending.forEach(function (r) { pendingByTool[r.tool_use_id] = r; });
     var html = "";
+    var group = "";  // an open run of steps, closed by anything that is not a step
+    var closeGroup = function () {
+      if (group) html += "</div>";
+      group = "";
+    };
     AI.events.forEach(function (e) {
       var when = shortTime(e.created_at);
       if (e.kind === "user") {
+        closeGroup();
         html += '<div class="msg msg-user"><div><div class="bubble">' + md(e.data.text) + '</div><div class="msg-meta">You' + (when ? " · " + when : "") + "</div></div></div>";
       } else if (e.kind === "assistant") {
-        html += usedLine(e.data.content);
         (e.data.content || []).forEach(function (b, bi) {
           if (b.type === "text" && b.text.trim()) {
+            closeGroup();
             html += '<div class="msg msg-agent" data-event="' + e.id + '"><div class="avatar" aria-hidden="true">d</div><div><div class="bubble">' + md(b.text) + '</div><div class="msg-meta">devd' + (when ? " · " + when : "") + "</div>" + msgActions(e.id, bi) + "</div></div>";
           } else if (b.type === "tool_use") {
             var c = summarizeCall(b), r = results[b.id], open = AI.openSteps[b.id];
@@ -6101,6 +6107,14 @@
             if (r && resultAt[b.id] && e.created_at) {
               var ms = Date.parse(resultAt[b.id]) - Date.parse(e.created_at);
               if (ms > 0 && ms < 3600000) took = duration(ms);
+            }
+            // Consecutive actions read as one run: they are wrapped in a
+            // group whose first visible row says for how many calls, so the
+            // "Used N" count and the rows it describes are one block rather
+            // than a caption that scrolls away from what it counts.
+            if (!group) {
+              group = "open";
+              html += '<div class="msg-tools">' + usedLine(e.data.content);
             }
             html += '<div class="step' + (r && r.is_error ? " step-bad" : "") + (open ? " open" : "") + '">' +
               '<button type="button" class="step-head" data-action="step-toggle" data-id="' + attr(b.id) + '" aria-expanded="' + (open ? "true" : "false") + '" title="' + attr(c.title + (c.detail ? " — " + c.detail : "")) + '">' +
@@ -6121,11 +6135,18 @@
           }
         });
       } else if (e.kind === "approval") {
+        closeGroup();
         var req = AI.pending.filter(function (r) { return r.id === e.data.request_id; })[0];
         if (req) html += approvalCard(req, false);
-      } else if (e.kind === "notice") html += '<div class="msg-note">' + esc(e.data.text) + "</div>";
-      else if (e.kind === "error") html += '<div class="msg-note msg-error">' + esc(e.data.message) + "</div>";
+      } else if (e.kind === "notice") {
+        closeGroup();
+        html += '<div class="msg-note">' + esc(e.data.text) + "</div>";
+      } else if (e.kind === "error") {
+        closeGroup();
+        html += '<div class="msg-note msg-error">' + esc(e.data.message) + "</div>";
+      }
     });
+    closeGroup();
     if (AI.thread && (AI.thread.state === "running" || AI.running)) {
       html += '<div class="msg msg-agent"><div class="avatar" aria-hidden="true">d</div><div class="bubble typing" role="status" aria-label="devd is working"><span></span><span></span><span></span></div></div>';
     }
@@ -6386,7 +6407,7 @@
       (TEAM.ready ? "" : '<div class="notice notice-warn" style="margin-top:12px">No usable AI provider yet. <button type="button" class="btn btn-mini btn-primary" data-action="nav" data-view="providers">Set one up</button></div>') +
       (TEAM.templates && TEAM.templates.length ? '<div class="field" style="margin-top:14px"><label class="field-label">Start from a template <span class="dim">(optional)</span></label><select class="input" id="team-template"><option value="">Write the goal myself</option>' + TEAM.templates.map(function (t) { return '<option value="' + attr(t.id) + '"' + (TEAM.form.template === t.id ? " selected" : "") + ">" + esc(t.title) + " — " + esc(t.summary) + "</option>"; }).join("") + "</select></div>" : "") +
       '<div class="field" style="margin-top:14px"><label class="field-label">Goal</label><textarea class="input" id="team-goal" rows="5" placeholder="e.g. Add password reset by email to the app, with tests. Or: Build a small Laravel blog with posts and comments.">' + esc(f.goal) + "</textarea></div>" +
-      '<div class="field" style="margin-top:10px"><label class="field-label">Definition of done <span class="dim">(optional, one per line)</span></label><textarea class="input" id="team-done" rows="3" placeholder="e.g. The tests pass&#10;The README documents every command">' + esc(f.done) + "</textarea><div class=\"row-sub\">When the work is finished devd checks each line against what the team recorded and starts another pass for any that are not met. Needs the Jev key (judge.configure); without it the lines are listed for you to confirm.</div></div>" +
+      '<div class="field" style="margin-top:10px"><label class="field-label">Definition of done <span class="dim">(optional, one per line)</span></label><textarea class="input" id="team-done" rows="4" placeholder="e.g. The tests pass&#10;The README documents every command">' + esc(f.done) + "</textarea><div class=\"row-sub\">When the work is finished devd checks each line against what the team recorded and starts another pass for any that are not met. Needs the Jev key (judge.configure); without it the lines are listed for you to confirm.</div></div>" +
       '<div class="inline" style="margin-top:10px"><select class="input" id="team-project" style="max-width:280px">' + TEAM.projOpts + "</select>" +
       (f.project === "__new" ? '<input class="input mono" id="team-name" placeholder="new-project-name" value="' + attr(f.name) + '" style="max-width:220px" spellcheck="false">' : "") +
       '<label class="field-label">At most</label><select class="input" id="team-parallel" style="max-width:110px">' + [1, 2, 3, 4].map(function (n) { return '<option value="' + n + '"' + (f.parallel === n ? " selected" : "") + ">" + n + " at once</option>"; }).join("") + "</select>" +
@@ -6589,9 +6610,9 @@
       '<div class="field"><label class="field-label">Name</label><input class="input" id="mcp-name" placeholder="files" spellcheck="false" autocomplete="off"></div>' +
       '<div class="field"><label class="field-label">Timeout <span class="dim">(seconds, 5-600)</span></label><input class="input" id="mcp-timeout" placeholder="120" inputmode="numeric"></div>' +
       '<div class="field field-wide"><label class="field-label">Program <span class="dim">(stdio server)</span></label><input class="input mono" id="mcp-command" placeholder="npx" spellcheck="false" autocomplete="off"></div>' +
-      '<div class="field field-wide"><label class="field-label">Arguments <span class="dim">(one per line; never passed through a shell)</span></label><textarea class="input mono" id="mcp-args" rows="2" placeholder="-y&#10;@modelcontextprotocol/server-filesystem&#10;D:\\devd\\www" spellcheck="false"></textarea></div>' +
+      '<div class="field field-wide"><label class="field-label">Arguments <span class="dim">(one per line; never passed through a shell)</span></label><textarea class="input mono" id="mcp-args" rows="5" placeholder="-y&#10;@modelcontextprotocol/server-filesystem&#10;D:\\devd\\www" spellcheck="false"></textarea></div>' +
       '<div class="field field-wide"><label class="field-label">Address <span class="dim">(http server instead of a program)</span></label><input class="input mono" id="mcp-url" placeholder="https://example.test/mcp" spellcheck="false" autocomplete="off"></div>' +
-      '<div class="field"><label class="field-label">Environment <span class="dim">(KEY=value, one per line; kept in a private file)</span></label><textarea class="input mono" id="mcp-env" rows="2" spellcheck="false"></textarea></div>' +
+      '<div class="field"><label class="field-label">Environment <span class="dim">(KEY=value, one per line; kept in a private file)</span></label><textarea class="input mono" id="mcp-env" rows="4" spellcheck="false"></textarea></div>' +
       '<div class="field"><label class="field-label">Working directory <span class="dim">(optional)</span></label><input class="input mono" id="mcp-cwd" placeholder="D:\\devd\\www" spellcheck="false"></div>' +
       "</div>" +
       '<div class="ui-actions" style="margin-top:var(--s3)"><button type="button" class="btn btn-primary" data-action="mcp-add">Add the server</button>' +
@@ -7169,8 +7190,10 @@
     if (!inp || !send || !mic) return;
     var busy = !!(AI.thread && (AI.thread.state === "running" || AI.running));
     var hasText = !!(inp.value || "").trim() || ATTACHMENTS.length;
-    // One primary action in the slot: Stop while it works and there is nothing
-    // to send; the arrow once there is text (send, or queue while it works).
+    // One primary action in the slot, and it says what pressing it does now:
+    // while the agent works with nothing typed, it stops; the moment there is
+    // text it becomes the arrow, which sends (or queues when it is still
+    // working); clearing the draft brings the stop back.
     send.hidden = busy ? hasText : !hasText;
     mic.hidden = busy || hasText;
     var stop = el("chat-stop");
@@ -8055,7 +8078,7 @@
         '<div class="stack">' +
         '<div class="field"><label class="field-label">Program <span class="dim">(stdio)</span></label><input class="input mono" id="mcp-edit-command" value="' + attr(s.command || "") + '" spellcheck="false"></div>' +
         '<div class="field"><label class="field-label">Address <span class="dim">(http)</span></label><input class="input mono" id="mcp-edit-url" value="' + attr(s.url || "") + '" spellcheck="false"></div>' +
-        '<div class="field"><label class="field-label">Arguments <span class="dim">(one per line)</span></label><textarea class="input mono" id="mcp-edit-args" rows="3" spellcheck="false">' + esc(args) + "</textarea></div>" +
+        '<div class="field"><label class="field-label">Arguments <span class="dim">(one per line)</span></label><textarea class="input mono" id="mcp-edit-args" rows="5" spellcheck="false">' + esc(args) + "</textarea></div>" +
         (args.indexOf("[redacted]") >= 0 ? '<div class="notice notice-warn">A credential-looking argument is shown as [redacted] and is kept unchanged. To replace it, remove the server and add it again.</div>' : "") +
         '<div class="inline"><div class="field grow"><label class="field-label">Timeout <span class="dim">(seconds)</span></label><input class="input" id="mcp-edit-timeout" value="' + attr(String(s.timeout_secs)) + '" inputmode="numeric"></div>' +
         '<div class="field grow"><label class="field-label">Working directory</label><input class="input mono" id="mcp-edit-cwd" value="' + attr(s.cwd || "") + '" spellcheck="false"></div></div>' +

@@ -576,3 +576,60 @@ fn the_terminal_action_belongs_to_the_project_not_the_develop_page() {
     let dev_end = dev + APP[dev..].find("function procPanel()").expect("procPanel");
     assert!(!APP[dev..dev_end].contains("data-action=\"open-terminal\""), "the Stacks and tasks page no longer launches a terminal");
 }
+
+#[test]
+fn one_class_carries_every_dropdown() {
+    // A second, shorter select style is how the forms drifted away from the
+    // composer's picker. Every select the app writes resolves to the one
+    // control, so the test checks that the classes in the markup are covered by
+    // that rule and that nothing re-declares a smaller one.
+    let rule = CSS
+        .find("One dropdown in the whole application")
+        .map(|i| &CSS[i..])
+        .expect("the one-dropdown rule");
+    let rule = &rule[..rule.find("}").map(|i| i + 1).unwrap_or(rule.len())];
+    for class in ["select-field", "select.input", "select.select", "select.composer-picker", "select.role-provider"] {
+        assert!(rule.contains(class), "the one-dropdown rule covers {class}");
+    }
+    assert!(
+        !CSS.contains(".select.compact { height: 24px"),
+        "compact no longer makes a different height"
+    );
+    assert!(
+        !APP.contains("class=\"input select-field\"") || rule.contains(".select-field"),
+        "a select that also carries `.input` still resolves to the one control"
+    );
+}
+
+#[test]
+fn the_composer_has_one_primary_action() {
+    // Stop while it works, the arrow as soon as there is something to send, and
+    // stop again when the draft is cleared. One function decides; nothing else
+    // hides the stop behind its back.
+    let start = APP.find("function syncComposerAction()").expect("syncComposerAction");
+    let end = start + APP[start..].find("\n  }").expect("end of function");
+    let body = &APP[start..end];
+    assert!(body.contains("stop.hidden = !busy || hasText"), "stop follows the draft");
+    assert!(body.contains("send.hidden = busy ? hasText : !hasText"), "send follows the draft");
+    let later = &APP[end..];
+    assert!(
+        !later.contains("stop.hidden ="),
+        "no later code hides the stop after syncComposerAction decided"
+    );
+}
+
+#[test]
+fn agent_actions_are_grouped_with_their_count() {
+    assert!(APP.contains("class=\"msg-tools\""), "steps are wrapped in one group");
+    assert!(APP.contains("closeGroup()"), "the group is closed by whatever is not a step");
+    assert!(CSS.contains(".msg-tools > .msg-used"), "the count is the group's heading");
+}
+
+#[test]
+fn text_areas_for_line_lists_have_room() {
+    for (id, rows) in [("mcp-args", 5), ("mcp-env", 4), ("mcp-edit-args", 5), ("team-done", 4), ("sched-done", 4)] {
+        let needle = format!("id=\"{id}\" rows=\"{rows}\"");
+        assert!(APP.contains(&needle), "{id} has at least {rows} rows");
+    }
+}
+

@@ -691,20 +691,12 @@ code, kbd, pre, samp { font-family: var(--mono); }
 /* The microphone sits in the send slot, so it takes the slot's shape. */
 .composer-slot .composer-tool { width: var(--h-control-lg); height: var(--h-control-lg); }
 
-/* The provider and model pickers, in the bar where they are used. */
+/* The provider and model pickers, in the bar where they are used. They are the
+   reference for every dropdown in the application (see "One dropdown" below):
+   this rule only decides where they sit. */
 .composer-picker {
-  height: var(--h-control);
   max-width: 220px;
-  padding: 0 var(--s2);
-  background-color: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius);
-  color: var(--fg-mute);
-  font-family: var(--sans);
-  font-size: var(--text-sm);
 }
-.composer-picker:hover { background-color: var(--bg-hover); color: var(--fg); }
-.composer-picker:focus-visible { border-color: var(--accent-line); color: var(--fg); }
 
 
 /* The send control is an arrow, and a square while it stops. */
@@ -724,9 +716,10 @@ code, kbd, pre, samp { font-family: var(--mono); }
 .composer-send:hover { background: var(--bg-hover); color: var(--fg); border-color: var(--line-strong); }
 .composer-send.is-busy { color: var(--danger); border-color: var(--danger-line); background: var(--danger-quiet); }
 
-/* Stop occupies the send/microphone slot while the assistant works and there
-   is nothing to send. It is the same control, in the same place, not a second
-   button beside it. */
+/* Stop occupies the send/microphone slot while the assistant works. It is the
+   same control, in the same place, not a second button beside it. The filled
+   square is the conventional stop glyph, so the button is read as "stop" at a
+   glance rather than only by its colour. */
 .composer-stop {
   display: grid;
   place-items: center;
@@ -739,7 +732,8 @@ code, kbd, pre, samp { font-family: var(--mono); }
   cursor: pointer;
 }
 .composer-stop .icon { width: var(--icon); height: var(--icon); }
-.composer-stop:hover { background: var(--bg-hover); }
+.composer-stop:hover { background: var(--bg-hover); border-color: var(--danger); }
+.composer-stop:focus-visible { outline: none; box-shadow: var(--focus-ring); border-color: var(--danger); }
 
 /* What devd is, where it is working, and which branch: the state of the
    session, in one line under the box. */
@@ -957,67 +951,83 @@ code, kbd, pre, samp { font-family: var(--mono); }
 .input::placeholder, .textarea::placeholder { color: var(--fg-dim); }
 .input.mono, .textarea.mono { font-family: var(--mono); font-size: var(--text-sm); }
 .textarea { min-height: 76px; resize: vertical; line-height: 1.55; }
-.select { width: auto; max-width: 100%; }
-.select.compact { height: 24px; min-height: 24px; padding: 1px 6px; font-size: var(--text-xs); }
-
-/* A select is its own control, not a text input with a list attached: it gets
-   a consistent chevron, a pointer, room for the chevron, and options that match
-   the dark surfaces instead of the operating system's white menu. */
-select {
-  appearance: none;
-  -webkit-appearance: none;
-  padding-right: 30px;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a5a5ad' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 9px center;
-  background-size: 12px 12px;
-  cursor: pointer;
-}
-select:hover:not(:disabled) {
-  border-color: var(--fg-dim);
-  background-color: var(--bg-surface);
-}
-select:focus-visible {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: var(--focus-ring);
-}
-select:disabled { opacity: 0.55; cursor: not-allowed; }
 select option, select optgroup { background: var(--bg-raised); color: var(--fg); }
 select optgroup { color: var(--fg-mute); font-style: normal; }
-.select.compact, select.compact { padding-right: 22px; background-position: right 5px center; background-size: 10px 10px; }
-.composer-picker { padding-right: 24px; background-position: right 6px center; background-size: 10px 10px; }
-select.input { appearance: none; }
+/* The conversation's project picker is the same control as the others; it is
+   only a little smaller because it sits in the one-line status strip. */
+.composer-status .select-field {
+  height: var(--h-control-sm);
+  min-height: var(--h-control-sm);
+  padding: 0 26px 0 8px;
+  background-position: right 7px center;
+  background-size: 11px 11px;
+  font-size: var(--text-xs);
+}
 
-/* One select everywhere. The Home "No project" control used to be the only
-   bordered picker; the conversation project, composer provider and the forms
-   now share its surface, border, chevron, height and focus ring. */
-.select-field {
+/* One dropdown in the whole application.
+ *
+ * The composer's provider and model pickers are the reference: a deep
+ * surface, a visible control edge, one chevron, one height, one focus ring.
+ * Every other class this app has used for a select - `.input`, `.select`,
+ * `.select.compact`, `.role-provider`, the bare element - resolves to that
+ * same control, so a picker cannot look like a different program on a
+ * different screen. */
+.select-field,
+select.input,
+select.select,
+select.select.compact,
+select.composer-picker,
+select.role-provider,
+select:not([class]),
+.toolbar select {
   width: auto;
   max-width: 100%;
   height: var(--h-control);
   min-height: var(--h-control);
   padding: 0 30px 0 9px;
   background-color: var(--bg-deep);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a5a5ad' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
   background-position: right 9px center;
   background-size: 12px 12px;
+  appearance: none;
+  -webkit-appearance: none;
   border: 1px solid var(--line-control);
   border-radius: var(--radius);
   color: var(--fg);
   font-family: var(--sans);
   font-size: 12.5px;
   line-height: 1;
+  cursor: pointer;
+  transition: border-color var(--fast), box-shadow var(--fast), background-color var(--fast);
 }
-.select-field:hover:not(:disabled) {
+.select-field:hover:not(:disabled),
+select.input:hover:not(:disabled),
+select.select:hover:not(:disabled),
+select.composer-picker:hover:not(:disabled),
+select.role-provider:hover:not(:disabled),
+select:not([class]):hover:not(:disabled) {
   border-color: var(--fg-dim);
   background-color: var(--bg-surface);
 }
-.select-field:focus-visible {
+.select-field:focus-visible,
+select.input:focus-visible,
+select.select:focus-visible,
+select.composer-picker:focus-visible,
+select.role-provider:focus-visible,
+select:not([class]):focus-visible {
   outline: none;
   border-color: var(--accent);
   box-shadow: var(--focus-ring);
 }
-.select-field:disabled { opacity: 0.55; cursor: not-allowed; }
+.select-field:disabled,
+select.input:disabled,
+select.select:disabled,
+select.composer-picker:disabled,
+select.role-provider:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
 .svc-startup {
   display: inline-flex;
   align-items: center;
@@ -1029,8 +1039,7 @@ select.input { appearance: none; }
 }
 .svc-startup input { margin: 0; }
 .ui-ask .select-field { max-width: 180px; }
-.composer-picker.select-field { max-width: 200px; background-position: right 8px center; }
-.composer-status .select-field { height: 26px; min-height: 26px; max-width: 220px; font-size: var(--text-xs); padding-right: 24px; background-position: right 6px center; }
+.composer-picker.select-field { max-width: 200px; }
 
 .field { display: flex; flex-direction: column; gap: 5px; margin-bottom: var(--s3); }
 .field:last-child { margin-bottom: 0; }
@@ -2007,7 +2016,8 @@ button.svc { width: 100%; background: none; border: 0; border-bottom: 1px solid 
   border-bottom: 1px solid var(--line);
 }
 .chat-title { font-size: var(--text-md); font-weight: 600; }.chat-head .input { width: auto; }
-.chat-head select.input { max-width: 190px; }
+.chat-head select.input { max-width: 220px; }
+
 .chat-head input.input { width: 180px; }
 
 /* The plan the assistant is working through, above the conversation. It is
@@ -2082,7 +2092,7 @@ button.svc { width: 100%; background: none; border: 0; border-bottom: 1px solid 
 
 .msg { display: flex; gap: var(--s3); max-width: var(--reading); }
 .msg-agent { align-items: flex-start; }
-.msg-user { justify-content: flex-end; }
+.msg-user { justify-content: flex-end; justify-self: end; }
 .bubble {
   min-width: 0;
   padding: var(--s3);
@@ -2102,7 +2112,7 @@ button.svc { width: 100%; background: none; border: 0; border-bottom: 1px solid 
  * A percentage on the bubble would be a percentage of a box whose width is
  * decided by the bubble, and the browser resolves that by shrinking the text
  * until it fits - a short message ends up one letter wide. */
-.msg-user > div { max-width: min(78%, 620px); }
+.msg-user > div { max-width: min(78%, 620px); margin-left: auto; }
 .msg-user .bubble { max-width: none; background: var(--accent-quiet); border: 1px solid var(--accent-line); }
 .bubble p { margin: 0 0 6px; }
 .bubble p:last-child { margin: 0; }
@@ -2158,6 +2168,30 @@ pre.code {
   margin-right: auto;
   padding-left: 28px;
 }
+
+/* A run of actions the agent took, with the "Used N" line as its heading.
+ *
+ * The count and the rows it describes are one block: the count used to be a
+ * sibling of the rows, so every row carried the stream's gap and the count
+ * drifted a hundred pixels above its own steps. Inside the group the rows sit
+ * tight, joined by the timeline, and the group itself takes the conversation's
+ * spacing from its neighbours. */
+.msg-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  max-width: var(--reading);
+  margin-inline: auto;
+  width: 100%;
+}
+.msg-tools > .msg-used {
+  margin: 0 0 2px;
+  padding-left: 28px;
+  color: var(--fg-dim);
+  font-size: var(--text-xs);
+  letter-spacing: 0.01em;
+}
+.chat-stream > .msg-tools { gap: 0; }
 .step::before {
   content: "";
   position: absolute;
@@ -3367,6 +3401,9 @@ textarea,
 .step + .step { margin-top: 2px; }
 .step::before { bottom: -4px; }
 .msg-used { margin: var(--s2) 0; font-size: var(--text-sm); }
+/* Inside a group the heading is the count; the rule above only positions a
+   standalone one. */
+.msg-tools > .msg-used { margin: 0 0 4px; font-size: var(--text-xs); }
 
 /* ================================================================ dialogs
  * Every dialog (approval, question, folder picker) is centred, has its title at the left and

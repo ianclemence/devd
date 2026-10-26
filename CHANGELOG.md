@@ -10,6 +10,53 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.13.7] - 2026-10-26 - One dropdown, and the truth about the project
+
+### Fixed
+
+- **Every dropdown is the composer's dropdown.** The provider and model pickers
+  were the reference; every other select in the application kept a different
+  shape. `.input`, `.select`, `.select.compact`, `.role-provider` and a bare
+  `<select>` now all resolve to one control: the same surface, border, height,
+  chevron, padding, hover and focus ring, on every screen. The conversation's
+  project picker stays one step smaller because it sits in the one-line status
+  strip, and it is still the same control.
+- **Stop, then send, then stop again.** While the assistant works, the primary
+  control in the composer is a filled stop square; typing replaces it with the
+  send arrow in the same place; clearing the draft brings the stop back. The
+  behaviour was already computed, but a second rule ran after it and hid the
+  stop again, so the state now has one owner.
+- **A project inside the devd home is readable again.** The file fence tested
+  whether a path started with the devd home, so with a portable install at
+  `D:\devd` every file under `D:\devd\www\...` was refused as "devd's own data
+  directory". Agents fell back to `git show`, and the assistant told the person
+  it "cannot read files here". The fence now names devd's own folders (state
+  database, secrets, logs, services, runtimes, backups, ...) and leaves the rest
+  of the home - the projects folder included - to the person. Secrets files are
+  still refused by name, and `.git` is still git's.
+- **The assistant no longer infers a project from what devd serves.** It has the
+  project's detector output in its context (stack and evidence, package manager,
+  runtime requirements, ambiguity) and is told plainly that a site is an address,
+  not a property of the project. A folder served as PHP that is really an Expo
+  app is now described as an Expo app.
+- **A refused read is reported as a refusal.** The prompt says to check the path
+  and name what was refused, never to conclude that it cannot read files and
+  never to reach for git as a way around the policy.
+
+### Changed
+
+- **The "Used N" line belongs to the steps it counts.** Consecutive actions are
+  grouped under one heading inside the same block, instead of a caption sitting
+  a hundred pixels above them in the stream. The heading is the same width as
+  the rows and one type step smaller.
+- **Longer text areas where a line-oriented list goes.** MCP arguments (2 → 5
+  rows), MCP environment (2 → 4), MCP edit arguments (3 → 5), the team's
+  definition of done (3 → 4), a schedule's extra proof (2 → 4).
+- **The stop square is filled.** It reads as "stop" from the glyph alone, not
+  only from its colour.
+
+---
+
 ## [0.13.6] - 2026-10-25 - The model picker is a selector, not a text box
 
 ### Fixed
