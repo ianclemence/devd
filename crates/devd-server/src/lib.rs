@@ -43,6 +43,7 @@
 
 pub mod api;
 pub mod approval;
+pub mod events;
 pub mod picker;
 pub mod ui;
 
@@ -224,6 +225,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/capabilities/:id", get(api::capability))
         .route("/api/groups", get(api::groups))
         .route("/api/invoke", post(api::invoke))
+        // What is happening, as it happens: the window's one live channel.
+        .route("/api/events", get(events::events))
         .route("/api/approve", post(api::approve))
         .route("/api/deny", post(api::deny))
         .route("/api/audit", get(api::audit))
@@ -428,8 +431,13 @@ async fn guard(State(state): State<Arc<AppState>>, req: Request<Body>, next: Nex
     // `/api` and everything under `/api/` is the API. A screen whose address merely
     // begins with the letters (`/api-tools`) is a page, and refusing it for want of
     // a token made a reload or a shared link show a JSON error.
+    //
+    // The event stream is the one exception: `EventSource` cannot send an
+    // Authorization header at all. It is still fenced by the two rules above -
+    // a loopback Host and a loopback Origin, or no Origin at all - which is what
+    // stops another site from reading it through this browser.
     let path = req.uri().path();
-    if path == "/api" || path.starts_with("/api/") {
+    if (path == "/api" || path.starts_with("/api/")) && path != "/api/events" {
         let presented = req
             .headers()
             .get(header::AUTHORIZATION)

@@ -10,6 +10,45 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.13.8] - 2026-10-26 - One reply, written as it happens
+
+### Fixed
+
+- **One question is one assistant turn.** A reply is the whole answer to a
+  person's message, however many model calls it takes: a line of intent, a tool
+  call, the result and the final explanation. Those calls used to render as
+  separate assistant messages with their own avatars and timestamps, so one
+  question could look like two assistants answering. They now share one turn and
+  one attribution, in the order the agent produced them; a person's message is
+  its own row.
+- **The same answer is no longer shown twice.** While a reply was being written,
+  the live text and the persisted reply could both be on screen. The live text is
+  now an overlay that is cleared as soon as the reply is logged, leaving the
+  persisted event in exactly the same place.
+- **Overlapping reads cannot duplicate a reply.** The timer, the live channel and
+  a person's click can all ask for new events at once. An event at or below the
+  last id already shown is ignored, so whichever answer arrives second cannot
+  append it again.
+
+### Added
+
+- **Replies stream as the provider writes them.** The agent asks Anthropic and
+  OpenAI-compatible providers for their event stream, reads it as it arrives, and
+  publishes batched `chat.delta` frames. The window paints the growing text into
+  the turn being written instead of waiting for the whole paragraph. Providers
+  that ignore `stream` still work: their answer arrives whole and is logged once.
+- **`GET /api/events` is the window's live channel.** Server-sent events carry
+  `chat.delta`, logged chat events, approvals, inbox messages and team activity.
+  The stream is read-only and carries only what the screens already show;
+  `EventSource` cannot send the bearer token, so this one route is fenced by the
+  loopback `Host` and `Origin` checks instead. Noisy process output is not
+  forwarded.
+- **The turn settles before the dots return.** The working indicator gives way to
+  the streamed text, and the caret belongs to the last paragraph rather than to a
+  line of its own.
+
+---
+
 ## [0.13.7] - 2026-10-26 - One dropdown, and the truth about the project
 
 ### Fixed

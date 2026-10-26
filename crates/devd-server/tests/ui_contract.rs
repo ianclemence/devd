@@ -626,6 +626,38 @@ fn agent_actions_are_grouped_with_their_count() {
 }
 
 #[test]
+fn one_question_gets_one_assistant_turn() {
+    // A turn is the span from a person's message to the next one. Every model
+    // call in it - the intent, the tool calls, the final answer - is part of
+    // that turn, with one avatar and one attribution. A person's message is
+    // its own row, which is what separates one turn from the next.
+    assert!(
+        APP.contains("blocks.push({ type: \"turn\", turn: current });"),
+        "assistant calls are grouped into one turn"
+    );
+    assert!(
+        APP.contains("blocks.push({ type: \"user\", at: e.created_at"),
+        "a person's message is its own row"
+    );
+    assert!(CSS.contains(".turn {"), "the turn has its own layout");
+    assert!(CSS.contains(".msg-user {"), "the person's row stays separate");
+}
+
+#[test]
+fn a_streamed_reply_is_replaced_by_the_log_not_duplicated() {
+    let start = APP.find("function onLive(event)").expect("the live handler");
+    let end = start + APP[start..].find("\n  }").expect("the end of the handler");
+    let body = &APP[start..end];
+    assert!(body.contains("AI.streamTail += piece"), "tokens are added to the turn being written");
+    assert!(body.contains("clearStreamTail(false)"), "the live copy is dropped when the reply is logged");
+    assert!(body.contains("pollThread(false)"), "the record is re-read after every event");
+    assert!(
+        APP.contains("if (e.id <= AI.lastId) return;"),
+        "overlapping polls cannot append the same event twice"
+    );
+}
+
+#[test]
 fn text_areas_for_line_lists_have_room() {
     for (id, rows) in [("mcp-args", 5), ("mcp-env", 4), ("mcp-edit-args", 5), ("team-done", 4), ("sched-done", 4)] {
         let needle = format!("id=\"{id}\" rows=\"{rows}\"");

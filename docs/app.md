@@ -61,7 +61,10 @@ Four defences, all enforced in the server, not in the UI:
    system CSPRNG, injected into the served HTML and required on every `/api`
    request. A page from another origin cannot read our HTML, so it cannot learn
    the token. Nothing about it is written to disk, and no read endpoint returns
-   it.
+   it. The one exception is `GET /api/events`: a browser's `EventSource` cannot
+   send an `Authorization` header, so that stream is fenced by the loopback
+   `Host` and `Origin` checks instead. It carries only what the window already
+   shows, and another site cannot read it.
 2. **A loopback bind.** `127.0.0.1` only. There is no configuration that serves
    the UI to the network.
 3. **A `Host` and `Origin` check.** Only `127.0.0.1:<port>`, `localhost:<port>`
@@ -74,9 +77,10 @@ Four defences, all enforced in the server, not in the UI:
    complete a preflight, so it cannot send a request that a browser would let it
    read the response to.
 
-A request without a valid token gets `401` and changes nothing. Every one of
-these four is covered by a test in `crates/devd-server/tests/http.rs`, three of
-them against a real socket.
+A request without a valid token gets `401` and changes nothing; the read-only
+event stream above is the sole exception, and it is still fenced by `Host` and
+`Origin`. Every one of these four is covered by a test in
+`crates/devd-server/tests/http.rs`, three of them against a real socket.
 
 ## The API surface
 
@@ -94,6 +98,7 @@ them against a real socket.
 | `POST /api/deny` | Decline it, and record the refusal |
 | `GET /api/audit` | Recent capability attempts, arguments redacted |
 | `GET /api/doctor` | The environment check, identical to `devd doctor` |
+| `GET /api/events` | Server-sent events: the live conversation, approvals and team activity |
 | `POST /api/shutdown` | Stop the server |
 | `POST /api/pick-folder` | Ask the operating system for a folder |
 

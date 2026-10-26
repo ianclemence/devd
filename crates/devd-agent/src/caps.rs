@@ -821,7 +821,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
     .handlers(
         |_, a| simple("team.charter.get", format!("read the team charter for {}", a.project)),
         |ctx, a| {
-            let charter = charter::load(&ctx, &a.project)?;
+            let charter = charter::load(ctx, &a.project)?;
             let data = match charter {
                 Some(c) => {
                     let mut value = serde_json::to_value(c)?;
@@ -843,7 +843,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
     .handlers(
         |_, a| simple("team.context", format!("read the shared context for {}", a.project)),
         |ctx, a| {
-            let data = charter::context(&ctx, &a.project)?;
+            let data = charter::context(ctx, &a.project)?;
             Ok(Outcome::with_data("read the shared context", data))
         },
     )?;
@@ -856,7 +856,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
     .handlers(
         |_, a| Ok(Plan::new("team.charter.set", format!("write the team charter for {}", a.project)).effect("the assistant and every team member will work from this north star and agreement")),
         |ctx, a| {
-            let data = charter::save(&ctx, &a.project, &a.north_star, &a.owner, &a.working_agreement, &a.proactive_roles, &ctx.actor.label())?;
+            let data = charter::save(ctx, &a.project, &a.north_star, &a.owner, &a.working_agreement, &a.proactive_roles, &ctx.actor.label())?;
             ctx.events.emit_with("team.charter.changed", "team charter updated", json!({ "project": a.project }));
             Ok(Outcome::with_data("team charter updated", data))
         },

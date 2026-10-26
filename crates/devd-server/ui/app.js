@@ -5297,6 +5297,7 @@
     counts: { approvals: 0, questions: 0 },
     home: null, askText: "", askProject: "",
     providers: null, presets: null, catalogue: null, provForm: null, provBusy: {}, localFound: null,
+    live: null, streamTail: "", streamPainted: "", streamFrame: 0, streamThread: "",
     threads: null, thread: null, events: [], pending: [], running: false, lastId: 0, queued: 0,
     pickProvider: "", pickModel: "",
     composer: "", project: "", timer: null, openSteps: {}, todos: [], todosAt: 0,
@@ -5907,8 +5908,12 @@
   function pollThread(full) {
     if (!AI.thread) return Promise.resolve();
     return read("chat.get", { thread: AI.thread.id, after: full ? 0 : AI.lastId }).then(function (d) {
-      if (full) AI.events = [];
+      if (full) { AI.events = []; AI.lastId = 0; }
       d.events.forEach(function (e) {
+        // Two polls can overlap (the timer and the live channel, or a click and
+        // an event). Whichever answers second must not append what the first
+        // already did: duplicate events are duplicate replies on screen.
+        if (e.id <= AI.lastId) return;
         AI.events.push(e);
         AI.lastId = e.id;
         if (!full) announceEvent(e);
@@ -5934,6 +5939,9 @@
 
   function startThreadTimer() {
     clearInterval(AI.timer);
+    // The stream is the update; the timer is only a safety net for a browser
+    // that cannot hold an EventSource open, and it runs far less often than the
+    // 800 ms it used to.
     AI.timer = setInterval(function () {
       if (state.view !== "assistant") return clearInterval(AI.timer);
       if (!AI.thread) return;
@@ -5943,7 +5951,126 @@
         paintChat();
         if (was && !now) { read("chat.list").then(function (t) { AI.threads = t; paintThreads(); }); loadHealth().then(healthChip); }
       }).catch(function () {});
-    }, 800);
+    }, AI.live ? 20000 : 800);
+    openLive();
+  }
+
+  /* The live channel.
+   *
+   * Everything a working agent does is published on the server's event bus:
+   * a reply being written (`chat.delta`), a step starting or finishing
+   * (`chat.event`). This subscribes once for the whole window instead of
+   * asking the server whether anything changed, so the text appears as it is
+   * written rather than in a burst when the turn ends.
+   *
+   * The event stream is a hint, never the record: on open, on reconnect and on
+   * every event the conversation re-reads `chat.get` past the last id it has.
+   * The deltas are what make it look alive between those reads. */
+  function openLive() {
+    if (AI.live) return;
+    if (typeof window.EventSource !== "function") return;
+    var source;
+    try {
+      source = new window.EventSource("/api/events");
+    } catch (e) {
+      return;
+    }
+    AI.live = source;
+    source.addEventListener("devd", function (message) {
+      var event;
+      try { event = JSON.parse(message.data); } catch (e) { return; }
+      onLive(event);
+    });
+    source.onopen = function () {
+      // Events emitted before the subscription existed are not replayed. One
+      // read of the record closes that gap.
+      if (!AI.thread) return;
+      pollThread(false).then(paintChat).catch(function () {});
+    };
+    source.onerror = function () {
+      // The browser retries by itself; the safety-net poll keeps the view
+      // correct until it does.
+      if (!AI.thread) return;
+      pollThread(false).then(paintChat).catch(function () {});
+    };
+  }
+
+  function onLive(event) {
+    if (!event || !event.data) return;
+    var data = event.data;
+    if (data.thread && (!AI.thread || data.thread !== AI.thread.id)) return;
+    if (!AI.thread) return;
+    if (event.kind === "chat.delta") {
+      if (state.view !== "assistant") return;
+      if (data.start) {
+        // A new model call (or a new provider after a failure) begins. The
+        // previous call's text is about to be logged; hide it now so the new
+        // words do not appear underneath it.
+        clearStreamTail(true);
+        return;
+      }
+      var piece = String(data.text || "");
+      if (!piece) return;
+      AI.streamTail += piece;
+      scheduleStreamPaint();
+      return;
+    }
+    // A reply has been logged, a step finished, or the turn ended. The record
+    // is the truth; one read and one render answer for it. When the reply is
+    // logged its streamed copy has to go before that render, or the same words
+    // appear twice: once as the persisted bubble and once as the live tail.
+    var done = event.kind === "chat.event" && (data.kind === "assistant" || data.kind === "error" || data.kind === "notice");
+    if (done) clearStreamTail(false);
+    pollThread(false).then(function () {
+      paintChat();
+      if (state.view === "assistant") loadHealth().then(healthChip);
+    }).catch(function () {});
+  }
+
+  /* The text of the turn being written. It is one bubble, filled as tokens
+     arrive; when the reply is logged this tail is cleared and the persisted
+     bubble takes exactly the same place. */
+  function paintStreamTail() {
+    var text = AI.streamTail || "";
+    var typing = el("chat-typing");
+    var box = el("chat-tail");
+    if (typing) typing.hidden = !!text;
+    if (!box) return;
+    var stream = el("chat-stream");
+    // Follow the bottom only when the person is already reading there.
+    var near = stream ? stream.scrollHeight - stream.scrollTop - stream.clientHeight < 90 : false;
+    box.hidden = !text;
+    if (AI.streamPainted !== text) {
+      box.innerHTML = text ? '<div class="bubble">' + md(text) + "</div>" : "";
+      AI.streamPainted = text;
+    }
+    if (stream && near) stream.scrollTop = stream.scrollHeight;
+  }
+
+  /* Tokens can arrive faster than a screen can usefully repaint. Coalescing
+     them into one frame keeps the text smooth without re-parsing markdown for
+     every character. */
+  function scheduleStreamPaint() {
+    if (AI.streamFrame) return;
+    var run = function () { AI.streamFrame = 0; paintStreamTail(); };
+    AI.streamFrame = window.requestAnimationFrame ? window.requestAnimationFrame(run) : window.setTimeout(run, 50);
+  }
+
+  function stopStreamPaint() {
+    if (!AI.streamFrame) return;
+    if (window.cancelAnimationFrame) window.cancelAnimationFrame(AI.streamFrame);
+    else window.clearTimeout(AI.streamFrame);
+    AI.streamFrame = 0;
+  }
+
+  function clearStreamTail(paintNow) {
+    AI.streamTail = "";
+    AI.streamPainted = "";
+    stopStreamPaint();
+    // When the reply is about to be re-read from the record, the existing
+    // bubble already holds the same words; leaving it until the render avoids
+    // a flash of the working dots between the two.
+    if (paintNow) paintStreamTail();
   }
 
   /* What a tool call was, in one line.
@@ -6081,42 +6208,74 @@
     });
     var pendingByTool = {};
     AI.pending.forEach(function (r) { pendingByTool[r.tool_use_id] = r; });
-    var html = "";
-    var group = "";  // an open run of steps, closed by anything that is not a step
+
+    /* A reply is one turn, not one bubble per model call.
+     *
+     * The model speaks more than once per answer: a sentence of intent, then a
+     * call, then the real reply. Every one of those calls used to become its
+     * own message with its own avatar and timestamp, which is why a single
+     * question produced "I'll check the project's files first." and then the
+     * answer as if two assistants had spoken. A turn is the span from a person's
+     * message to the next one; its steps and its text are arranged in the order
+     * the agent produced them, under one heading. */
+    var blocks = []; // the conversation in order: a person's message, then one assistant turn
+    var current = null; // the assistant turn being built, if any
+    var activity = ""; // an open run of steps in that turn
+    // Steps stay in one group until something that is not a step arrives.
     var closeGroup = function () {
-      if (group) html += "</div>";
-      group = "";
+      if (!activity) return;
+      activity += "</div>";
+      if (current) current.items.push(activity);
+      activity = "";
     };
+    var openTurn = function (at) {
+      current = { at: at || "", items: [], copy: null, last: "none" };
+      blocks.push({ type: "turn", turn: current });
+    };
+    var endTurn = function () {
+      if (!current) return;
+      closeGroup();
+      current = null;
+    };
+
     AI.events.forEach(function (e) {
-      var when = shortTime(e.created_at);
       if (e.kind === "user") {
+        // A person's message stands on its own. The assistant's reply is the
+        // turn that follows it; it does not share the person's row or avatar.
+        endTurn();
+        blocks.push({ type: "user", at: e.created_at, text: e.data.text || "" });
+        return;
+      }
+      if (e.kind === "assistant") {
+        if (!current) openTurn(e.created_at);
+        // Each model call's tool run gets its own count. Flushing here keeps
+        // "Used N" honest when a turn makes several tool calls in a row across
+        // model calls; they stay in one turn because the turn is the container.
         closeGroup();
-        html += '<div class="msg msg-user"><div><div class="bubble">' + md(e.data.text) + '</div><div class="msg-meta">You' + (when ? " · " + when : "") + "</div></div></div>";
-      } else if (e.kind === "assistant") {
-        (e.data.content || []).forEach(function (b, bi) {
+        (e.data.content || []).forEach(function (b) {
           if (b.type === "text" && b.text.trim()) {
+            // The first words of a turn that has only run tools so far are the
+            // turn's opening line, not a caption on the steps below it: they sit
+            // above them, as the assistant speaking before it works. The row
+            // under a turn acts on the turn: copy, fork, pin.
             closeGroup();
-            html += '<div class="msg msg-agent" data-event="' + e.id + '"><div class="avatar" aria-hidden="true">d</div><div><div class="bubble">' + md(b.text) + '</div><div class="msg-meta">devd' + (when ? " · " + when : "") + "</div>" + msgActions(e.id, bi) + "</div></div>";
+            current.items.push('<div class="bubble" data-event="' + e.id + '">' + md(b.text) + "</div>");
+            current.copy = e.id;
+            current.last = "text";
           } else if (b.type === "tool_use") {
             var c = summarizeCall(b), r = results[b.id], open = AI.openSteps[b.id];
             var pend = pendingByTool[b.id];
             var out = r ? clip(String(r.content == null ? "" : r.content), 20000) : "";
-            // How long the action took: from the moment the agent asked for it
-            // to the moment the answer came back.
             var took = "";
             if (r && resultAt[b.id] && e.created_at) {
               var ms = Date.parse(resultAt[b.id]) - Date.parse(e.created_at);
               if (ms > 0 && ms < 3600000) took = duration(ms);
             }
-            // Consecutive actions read as one run: they are wrapped in a
-            // group whose first visible row says for how many calls, so the
-            // "Used N" count and the rows it describes are one block rather
-            // than a caption that scrolls away from what it counts.
-            if (!group) {
-              group = "open";
-              html += '<div class="msg-tools">' + usedLine(e.data.content);
-            }
-            html += '<div class="step' + (r && r.is_error ? " step-bad" : "") + (open ? " open" : "") + '">' +
+            // Consecutive actions read as one run with its own count, inside the
+            // turn: "Used 2 Read, List" and the two rows are one block.
+            if (!activity) activity = '<div class="msg-tools">' + usedLine(e.data.content);
+            current.last = "tools";
+            activity += '<div class="step' + (r && r.is_error ? " step-bad" : "") + (open ? " open" : "") + '">' +
               '<button type="button" class="step-head" data-action="step-toggle" data-id="' + attr(b.id) + '" aria-expanded="' + (open ? "true" : "false") + '" title="' + attr(c.title + (c.detail ? " — " + c.detail : "")) + '">' +
               '<span class="step-arrow" aria-hidden="true"><svg class="icon"><use href="#i-chevron-down"></use></svg></span>' +
               '<span class="step-dot ' + (pend ? "wait" : r ? (r.is_error ? "bad" : "ok") : "run") + '" aria-hidden="true"></span>' +
@@ -6134,22 +6293,59 @@
               "</div>";
           }
         });
-      } else if (e.kind === "approval") {
+        return;
+      }
+      if (!current) openTurn(e.created_at);
+      if (e.kind === "approval") {
         closeGroup();
         var req = AI.pending.filter(function (r) { return r.id === e.data.request_id; })[0];
-        if (req) html += approvalCard(req, false);
+        if (req) current.items.push(approvalCard(req, false));
+        current.last = "note";
       } else if (e.kind === "notice") {
         closeGroup();
-        html += '<div class="msg-note">' + esc(e.data.text) + "</div>";
+        current.items.push('<div class="msg-note">' + esc(e.data.text) + "</div>");
+        current.last = "note";
       } else if (e.kind === "error") {
         closeGroup();
-        html += '<div class="msg-note msg-error">' + esc(e.data.message) + "</div>";
+        current.items.push('<div class="msg-note msg-error">' + esc(e.data.message) + "</div>");
+        current.last = "note";
       }
     });
-    closeGroup();
-    if (AI.thread && (AI.thread.state === "running" || AI.running)) {
-      html += '<div class="msg msg-agent"><div class="avatar" aria-hidden="true">d</div><div class="bubble typing" role="status" aria-label="devd is working"><span></span><span></span><span></span></div></div>';
+
+    endTurn();
+
+    var working = AI.thread && (AI.thread.state === "running" || AI.running);
+    // The moment a person sends, before the first assistant event exists, there
+    // is still a reply coming: show it as an empty turn with the working dots.
+    if (working && (!blocks.length || blocks[blocks.length - 1].type === "user")) {
+      blocks.push({ type: "turn", turn: { at: "", items: [], copy: null, last: "none" } });
     }
+
+    var html = blocks.map(function (block, i) {
+      if (block.type === "user") {
+        var when = shortTime(block.at);
+        return '<div class="msg msg-user"><div><div class="bubble">' + md(block.text) + '</div><div class="msg-meta">You' + (when ? " · " + when : "") + "</div></div></div>";
+      }
+      var turn = block.turn;
+      var active = i === blocks.length - 1 && working;
+      var body = turn.items.join("");
+      // The working dots are the wait before the first word (or while a tool
+      // runs). Once text has been written they give way to the text itself.
+      var typing = active && turn.last !== "text"
+        ? '<div class="bubble typing typing-inline" id="chat-typing" role="status" aria-label="devd is working"><span></span><span></span><span></span></div>'
+        : "";
+      // The text being written is placed here; paintStreamTail fills it. It is
+      // an overlay so a token does not re-render the whole conversation.
+      var tail = active ? '<div class="msg-tail" id="chat-tail" hidden></div>' : "";
+      return '<div class="turn msg-agent">' +
+        '<div class="avatar" aria-hidden="true">d</div>' +
+        '<div class="turn-body">' + body + typing + tail +
+        (body || typing || tail ? '<div class="msg-meta">devd' + (shortTime(turn.at) ? " · " + shortTime(turn.at) : "") + "</div>" : "") +
+        (turn.copy && !active ? msgActions(turn.copy, 0) : "") +
+        "</div></div>";
+    }).join("");
+
+    // A conversation with no turns yet: the empty state explains itself.
     return html || '<div class="chat-empty">' +
       '<div class="empty-icon" aria-hidden="true"><svg class="icon"><use href="#i-spark"></use></svg></div>' +
       '<div class="chat-empty-title">What should devd do?</div>' +
@@ -6202,7 +6398,8 @@
     ].join("|");
   }
 
-  function paintChat(force) {    var box = el("chat-stream");
+  function paintChat(force) {
+    var box = el("chat-stream");
     if (!box) return;
     var key = chatPaintKey();
     if (!force && key === AI.paintKey) return;
@@ -6210,19 +6407,35 @@
     var sel = window.getSelection ? window.getSelection() : null;
     if (!force && sel && sel.rangeCount && !sel.isCollapsed && sel.anchorNode && box.contains(sel.anchorNode)) return;
     AI.paintKey = key;
+    var busy = AI.thread && (AI.thread.state === "running" || AI.running);
+    var tid = (AI.thread && AI.thread.id) || "";
+    if (AI.streamThread !== tid) {
+      AI.streamThread = tid;
+      AI.streamTail = "";
+      AI.streamPainted = "";
+      stopStreamPaint();
+    }
+    if (!busy) {
+      AI.streamTail = "";
+      AI.streamPainted = "";
+      stopStreamPaint();
+    }
     var near = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
     var top = box.scrollTop;
-    var busy = AI.thread && (AI.thread.state === "running" || AI.running);
     box.setAttribute("aria-busy", busy ? "true" : "false");
     box.innerHTML = chatHtml();
+    // The render replaced the tail element with a fresh empty one.
+    AI.streamPainted = "";
     // Follow the bottom only when the person was already there; otherwise stay exactly where they were.
     box.scrollTop = near ? box.scrollHeight : top;
+    // The text of the turn being written is an overlay on the last turn; a
+    // re-render rebuilds the boxes under it, so it is laid down again.
+    paintStreamTail();
     var t = AI.thread;
     var head = el("chat-head");
     if (head && t) head.innerHTML = chatHeadHtml();
     var send = el("chat-send");
     if (send) {
-      var busy = t && (t.state === "running" || AI.running);
       // The arrow always sends or queues. While it works, the square beside it stops; a message
       // written now is kept for the next step instead of being refused.
       send.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#i-arrow-up"></use></svg>';

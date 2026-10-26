@@ -11,6 +11,7 @@ use std::collections::{HashMap, HashSet};
 use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
@@ -666,7 +667,33 @@ impl Hub {
                     continue;
                 }
                 let request = ChatRequest { model: model.clone(), system: system.clone(), messages: messages.clone(), tools: tools.clone(), tool_choice: None, max_tokens: 16_000 };
-                match providers::chat(provider, key.as_deref(), &request) {
+                // The reply is shown as it is written, not after it is finished.
+                // Each model call begins with a `start` so the window drops the
+                // tail of a previous call or a failed provider instead of
+                // stacking two answers on top of each other. The whole answer is
+                // still logged once, below, which is what the conversation keeps
+                // and what the model is sent next turn.
+                self.ctx.events.emit_with("chat.delta", format!("{tid} is writing"), json!({ "thread": tid, "start": true }));
+                let mut pending = String::new();
+                let mut last_emit = Instant::now();
+                let result = {
+                    // Tokens arrive faster than a screen can usefully redraw. A
+                    // short batch keeps the event bus quiet without making the
+                    // text look like it is being typed by a machine in bursts.
+                    let mut on_piece = |piece: &str| {
+                        pending.push_str(piece);
+                        if last_emit.elapsed() >= Duration::from_millis(40) {
+                            let text = std::mem::take(&mut pending);
+                            self.ctx.events.emit_with("chat.delta", format!("{tid} is writing"), json!({ "thread": tid, "text": text }));
+                            last_emit = Instant::now();
+                        }
+                    };
+                    providers::chat_stream(provider, key.as_deref(), &request, &mut on_piece)
+                };
+                if !pending.is_empty() {
+                    self.ctx.events.emit_with("chat.delta", format!("{tid} is writing"), json!({ "thread": tid, "text": pending }));
+                }
+                match result {
                     Ok(r) => {
                         if i > 0 {
                             self.log(tid, "notice", json!({ "text": format!("Used {} ({}) after the first choice failed: {}", model, provider.label, last_err) }))?;

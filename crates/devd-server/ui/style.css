@@ -2062,6 +2062,42 @@ button.svc { width: 100%; background: none; border: 0; border-bottom: 1px solid 
    `overflow: hidden` can be squeezed all the way to nothing. */
 .chat-stream > * { flex: 0 0 auto; width: 100%; max-width: var(--reading); margin-inline: auto; }
 
+/* One turn of the conversation.
+ *
+ * A reply is what the assistant has to say in answer to one message from a
+ * person. The model speaks in several calls behind that one answer - a line of
+ * intent, a tool call, the real reply - and those calls are one turn, not
+ * several speakers. The turn carries one avatar, one column of text and steps,
+ * and one attribution at its end; a person's message above it is what separates
+ * one turn from the next. */
+.turn {
+  display: flex;
+  gap: var(--s3);
+  align-items: flex-start;
+  max-width: var(--reading);
+}
+.turn + .turn, .msg-user + .turn { margin-top: var(--s2); }
+.turn-body { min-width: 0; flex: 1 1 auto; width: 100%; display: flex; flex-direction: column; gap: var(--s1); }
+.turn-body > .bubble:first-child { padding-top: 0; }
+/* The text being written now, under the steps it follows. It is a real bubble,
+ * in the same place the finished text will occupy, so nothing jumps when the
+ * turn completes and this is replaced by the logged reply. */
+.msg-tail > .bubble { color: var(--fg); }
+/* The caret belongs to the last paragraph of the growing text, not to the
+ * container: an inline-block after a block would sit on a line of its own. */
+.msg-tail .bubble > :last-child::after {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 1.05em;
+  margin-left: 2px;
+  background: var(--accent);
+  vertical-align: -0.15em;
+  animation: caret 1s steps(2, start) infinite;
+}
+@keyframes caret { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+.turn .typing-inline { align-self: flex-start; padding: 4px 0; }
+
 /* The empty conversation. It uses the same arrangement as every other empty
    state - a centred icon, a title, a sentence - so the screen reads as a
    designed place rather than as a panel that happens to be empty. */
@@ -2090,9 +2126,19 @@ button.svc { width: 100%; background: none; border: 0; border-bottom: 1px solid 
 }
 .chat-suggest:hover { border-color: var(--accent-line); color: var(--fg); background: var(--bg-raised); }
 
-.msg { display: flex; gap: var(--s3); max-width: var(--reading); }
-.msg-agent { align-items: flex-start; }
-.msg-user { justify-content: flex-end; justify-self: end; }
+/* The person's message is the one bubble on the page: it is a different kind
+ * of object from the assistant's prose, and a paper trail is easier to follow
+ * when the two never look alike. */
+.msg-user {
+  display: flex;
+  justify-content: flex-end;
+  /* The one place a chat row is narrower than the reading column. A wide,
+   * right-aligned pane re-centres the column and squeezes the turn under it to
+   * a few characters, so it keeps the column's width and only its contents
+   * move to the right. */
+  width: 100%;
+  margin-inline: auto;
+}
 .bubble {
   min-width: 0;
   padding: var(--s3);
@@ -2102,11 +2148,10 @@ button.svc { width: 100%; background: none; border: 0; border-bottom: 1px solid 
   line-height: 1.6;
   overflow-wrap: anywhere;
 }
-/* The agent's answer is prose on the page, not a card. A border around every
+/* The assistant's answer is prose on the page, not a card. A border around every
  * reply competes with the code and the tool steps inside it; the avatar and
- * the reading column are enough to say who is speaking. Only the person's
- * message is a bubble, because it is a different kind of object. */
-.msg-agent .bubble { padding: var(--s1) 0 0; background: none; border: 0; }
+ * the reading column are enough to say who is speaking. */
+.turn .bubble { padding: var(--s1) 0 0; background: none; border: 0; }
 /* The width cap belongs on the message, not on the bubble.
  *
  * A percentage on the bubble would be a percentage of a box whose width is
@@ -2180,9 +2225,8 @@ pre.code {
   display: flex;
   flex-direction: column;
   gap: 0;
-  max-width: var(--reading);
-  margin-inline: auto;
   width: 100%;
+  margin: 0;
 }
 .msg-tools > .msg-used {
   margin: 0 0 2px;
@@ -2688,7 +2732,7 @@ pre.code {
   .chat-empty-title { font-size: var(--text-lg); }
   .page-title { font-size: var(--text-lg); }
   .empty { padding: var(--s5) var(--s3); }
-  .msg .avatar { display: none; }
+  .turn .avatar { display: none; }
   .bubble { font-size: 12.5px; }
   .composer .btn { padding: 0 12px; }
 }
@@ -3394,7 +3438,7 @@ textarea,
 .ask-body .md, .ui-sheet .md { font-size: var(--text-md); }
 .bubble p, .bubble ul, .bubble ol { margin-top: 0; }
 .bubble { padding-top: var(--s2); padding-bottom: var(--s2); }
-.msg { margin-bottom: var(--s3); }
+.turn { margin-bottom: var(--s2); }
 .msg-meta { font-size: var(--text-xs); margin-top: var(--s1); }
 .msg-note { margin: var(--s2) 0; font-size: var(--text-sm); }
 .step { margin: 1px 0; }

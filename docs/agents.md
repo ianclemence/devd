@@ -325,6 +325,22 @@ place. Stopping discards the queue and says so. The queue is durable: a process
 that stops with messages waiting delivers them and resumes the conversation when
 the host starts again.
 
+### One reply, written live
+
+A person's message gets one assistant turn, however many model calls it takes to
+answer. A line of intent, a tool call, the result and the final explanation are
+parts of the same turn: they share one avatar and one timestamp, in the order the
+agent produced them. They used to render as separate messages, which made one
+question look like two assistants speaking.
+
+The reply is streamed as the provider writes it. The server asks for the
+provider's event stream, forwards each piece on `GET /api/events` as
+`chat.delta`, and the window paints it into the turn being written. The live text
+is only an overlay: when the reply is logged, the persisted event replaces it in
+exactly the same place. Nothing is shown twice, and a reload shows the same
+conversation from the log. Providers that ignore `stream` still work; their
+answer arrives whole and is logged once.
+
 ## Local and production
 
 `environment.set` marks the machine `production` (a person's decision, with

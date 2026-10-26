@@ -114,6 +114,11 @@ enum ToolOutcome {
 }
 
 impl McpServer {
+    /// The project this server keeps its caller inside, when one was given.
+    pub fn scoped_project(&self) -> Option<&std::path::Path> {
+        self.project.as_deref()
+    }
+
     /// Build a server.
     ///
     /// The actor in `ctx` is **discarded** and replaced with an agent actor, so
@@ -440,9 +445,7 @@ impl McpServer {
     /// has no boundary here and keeps the registry's ordinary rules.
     fn outside_scope(&self, id: &str, args: &Value) -> Option<String> {
         let root = self.project.as_deref()?;
-        if self.registry.get(id).is_none() {
-            return None;
-        }
+        self.registry.get(id)?;
         if !["fs.", "project.", "git.", "shell."].iter().any(|p| id.starts_with(p)) {
             return None;
         }

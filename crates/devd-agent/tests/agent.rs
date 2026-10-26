@@ -81,6 +81,7 @@ struct Env {
     team: Arc<devd_agent::team::Team>,
     human: Ctx,
     agent: Ctx,
+    events: EventBus,
 }
 
 fn ctx_for(root: &std::path::Path, store: Arc<Store>, events: EventBus, actor: Actor) -> Ctx {
@@ -109,7 +110,8 @@ fn env() -> Env {
     std::fs::create_dir_all(root.join("www").join("proj")).unwrap();
     Env {
         human: ctx_for(&root, store.clone(), events.clone(), Actor::human(Surface::Http)),
-        agent: ctx_for(&root, store, events, Actor::agent("claude-code")),
+        agent: ctx_for(&root, store, events.clone(), Actor::agent("claude-code")),
+        events,
         _dir: dir,
         root,
         reg,
@@ -348,6 +350,37 @@ fn a_missing_provider_or_key_is_explained_not_hidden() {
     let sent = call(&e, &e.human, "chat.send", json!({ "message": "hello" }), Approval::None).unwrap();
     let v = wait_for(&e, sent["id"].as_str().unwrap(), &["error"]);
     assert!(v["thread"]["error"].as_str().unwrap().contains("no API key"), "{v}");
+}
+
+#[test]
+fn a_reply_is_streamed_once_and_logged_once() {
+    let e = env();
+    let mut events = e.events.subscribe();
+    let m = mock(|_, _| (200, anthropic_text("The answer.")));
+    add_provider(&e, "anthropic", &m.base);
+    let sent = call(&e, &e.human, "chat.send", json!({ "message": "hello" }), Approval::None).unwrap();
+    let v = wait_for(&e, sent["id"].as_str().unwrap(), &["idle", "error"]);
+    assert_eq!(v["thread"]["state"], "idle", "{v}");
+
+    let mut streamed = String::new();
+    let mut replies = 0;
+    let mut start = 0;
+    while let Ok(event) = events.try_recv() {
+        if event.kind != "chat.delta" && !(event.kind == "chat.event" && event.data["kind"] == "assistant") {
+            continue;
+        }
+        if event.data["start"] == true {
+            start += 1;
+        } else if let Some(text) = event.data["text"].as_str() {
+            streamed.push_str(text);
+        }
+        if event.kind == "chat.event" {
+            replies += 1;
+        }
+    }
+    assert_eq!(start, 1, "one model call begins one stream");
+    assert_eq!(streamed, "The answer.", "the text is streamed once");
+    assert_eq!(replies, 1, "the answer is logged once, not twice");
 }
 
 #[test]

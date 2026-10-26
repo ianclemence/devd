@@ -222,6 +222,37 @@ async fn a_screen_whose_address_starts_with_api_is_a_page_not_the_api() {
 }
 
 #[tokio::test]
+async fn the_event_stream_needs_no_token_but_refuses_another_site() {
+    // `EventSource` cannot send an Authorization header, so the stream is
+    // fenced by its Host and Origin instead. This is the whole reason the
+    // exception is safe, so both halves are checked.
+    let fixture = Fixture::new();
+    let (state, _rx) = fixture.state(8787);
+    let port = 8787;
+
+    let ok = router(state.clone())
+        .oneshot(request("GET", "/api/events", port, None, None))
+        .await
+        .unwrap();
+    assert_eq!(ok.status(), StatusCode::OK, "the window's own origin may subscribe");
+    assert_eq!(
+        ok.headers().get("content-type").and_then(|v| v.to_str().ok()),
+        Some("text/event-stream"),
+        "the answer is an event stream"
+    );
+
+    let mut foreign = Request::builder().method("GET").uri("/api/events");
+    foreign = foreign
+        .header("host", format!("127.0.0.1:{port}"))
+        .header("origin", "https://evil.example");
+    let refused = router(state)
+        .oneshot(foreign.body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), StatusCode::FORBIDDEN, "another site may not subscribe");
+}
+
+#[tokio::test]
 async fn the_api_is_unreachable_without_a_token() {
     let fixture = Fixture::new();
     let (state, _rx) = fixture.state(8787);

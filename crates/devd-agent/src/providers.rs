@@ -8,6 +8,7 @@
 //! Every other provider is read from its `/models` endpoint, since those vendors
 //! publish model lists in the API rather than in a parseable page.
 
+use std::io::{BufRead, BufReader, Read};
 use std::time::{Duration, Instant};
 
 use regex::Regex;
@@ -338,6 +339,75 @@ fn send(method: &str, url: &str, headers: &[(String, String)], body: Option<&str
         Err(ureq::Error::Status(code, r)) => {
             let retry_after = r.header("retry-after").and_then(|v| v.parse::<u64>().ok());
             Ok(Reply { status: code, retry_after, body: r.into_string().unwrap_or_default() })
+        }
+        Err(e) => Err(DevdError::Io(std::io::Error::new(
+            std::io::ErrorKind::ConnectionAborted,
+            format!("could not reach {}: {e}", host_of(url)),
+        ))),
+    }
+}
+
+/// A response body that may arrive a piece at a time.
+enum Answer {
+    /// An ordinary JSON body, read in full before it is parsed.
+    Whole(String),
+    /// A server-sent event stream, read as the provider writes it.
+    Events(BufReader<Box<dyn Read + Send + Sync>>),
+}
+
+struct LiveReply {
+    status: u16,
+    retry_after: Option<u64>,
+    answer: Answer,
+}
+
+/// The streaming form of [`send`]: a successful event stream is handed over
+/// still open, so each token can reach the window as it arrives. Anything else
+/// (an error, or a provider that ignored `stream`) is a whole body.
+fn send_live(url: &str, headers: &[(String, String)], body: &str) -> Result<LiveReply> {
+    let a = agent_for(url);
+    let mut req = a.request("POST", url);
+    for (k, v) in headers {
+        req = req.set(k, v);
+    }
+    let res = req
+        .set("content-type", "application/json")
+        .send_string(body);
+    match res {
+        Ok(r) => {
+            let status = r.status();
+            let retry_after = r.header("retry-after").and_then(|v| v.parse::<u64>().ok());
+            let events = r
+                .header("content-type")
+                .map(|c| c.to_ascii_lowercase().contains("text/event-stream"))
+                .unwrap_or(false);
+            if events {
+                Ok(LiveReply {
+                    status,
+                    retry_after,
+                    answer: Answer::Events(BufReader::new(r.into_reader())),
+                })
+            } else {
+                let text = r.into_string().map_err(|e| {
+                    DevdError::internal(format!(
+                        "could not read the response from {}: {e}",
+                        host_of(url)
+                    ))
+                })?;
+                Ok(LiveReply {
+                    status,
+                    retry_after,
+                    answer: Answer::Whole(text),
+                })
+            }
+        }
+        Err(ureq::Error::Status(code, r)) => {
+            let retry_after = r.header("retry-after").and_then(|v| v.parse::<u64>().ok());
+            Ok(LiveReply {
+                status: code,
+                retry_after,
+                answer: Answer::Whole(r.into_string().unwrap_or_default()),
+            })
         }
         Err(e) => Err(DevdError::Io(std::io::Error::new(
             std::io::ErrorKind::ConnectionAborted,
@@ -1179,30 +1249,371 @@ fn parse_openai(v: &Value) -> Result<ChatResponse> {
 
 /// Send one request, retrying transient failures (rate limits, overload).
 pub fn chat(p: &Provider, key: Option<&str>, req: &ChatRequest) -> Result<ChatResponse> {
+    chat_with(p, key, req, &mut |_| {})
+}
+
+/// Send one request and report the answer as it arrives.
+///
+/// `on` receives each piece of visible text as the provider produces it, so a
+/// surface can show the reply being written instead of a silence followed by a
+/// whole paragraph. The full answer is what `chat` returns either way: the
+/// callback is a view of the answer, never a substitute for it.
+pub fn chat_stream(
+    p: &Provider,
+    key: Option<&str>,
+    req: &ChatRequest,
+    on: &mut dyn FnMut(&str),
+) -> Result<ChatResponse> {
+    chat_with(p, key, req, on)
+}
+
+fn chat_with(
+    p: &Provider,
+    key: Option<&str>,
+    req: &ChatRequest,
+    on: &mut dyn FnMut(&str),
+) -> Result<ChatResponse> {
     let (url, body) = if p.kind == "anthropic" {
-        (format!("{}/v1/messages", p.base_url.trim_end_matches('/')), anthropic_body(req))
+        (
+            format!("{}/v1/messages", p.base_url.trim_end_matches('/')),
+            anthropic_body(req),
+        )
     } else {
-        (format!("{}/chat/completions", p.base_url.trim_end_matches('/')), openai_body(p, req))
+        (
+            format!("{}/chat/completions", p.base_url.trim_end_matches('/')),
+            openai_body(p, req),
+        )
     };
     let headers = auth_headers(p, key);
-    let text = body.to_string();
+    let mut text = body;
+    // Ask for the streamed form. The adapters parse whichever form comes back,
+    // so a provider that ignores `stream` still answers correctly.
+    text["stream"] = json!(true);
+    let text = text.to_string();
     let mut last: Option<DevdError> = None;
     for attempt in 0..3u32 {
-        let r = send("POST", &url, &headers, Some(&text))?;
+        let r = send_live(&url, &headers, &text)?;
         if r.status == 200 {
-            let v: Value = serde_json::from_str(&r.body).map_err(|e| DevdError::internal(format!("{} returned something that is not JSON: {e}", p.label)))?;
-            return if p.kind == "anthropic" { parse_anthropic(&v) } else { parse_openai(&v) };
+            let answer = match r.answer {
+                Answer::Events(reader) => {
+                    return if p.kind == "anthropic" {
+                        parse_anthropic_stream(reader, on)
+                    } else {
+                        parse_openai_stream(reader, on)
+                    };
+                }
+                Answer::Whole(body) => {
+                    // A provider may ignore `stream` and send the ordinary JSON
+                    // answer. Some, though, stream while calling it plain text.
+                    if body
+                        .lines()
+                        .any(|line| line.trim_start().starts_with("data:"))
+                    {
+                        return if p.kind == "anthropic" {
+                            parse_anthropic_stream(std::io::Cursor::new(body), on)
+                        } else {
+                            parse_openai_stream(std::io::Cursor::new(body), on)
+                        };
+                    }
+                    body
+                }
+            };
+            let v: Value = serde_json::from_str(&answer).map_err(|e| {
+                DevdError::internal(format!(
+                    "{} returned something that is not JSON: {e}",
+                    p.label
+                ))
+            })?;
+            let answer = if p.kind == "anthropic" {
+                parse_anthropic(&v)?
+            } else {
+                parse_openai(&v)?
+            };
+            // A provider that ignored `stream` still gets the same visible
+            // result: its text is reported once, in full.
+            let full = text_of(&answer.content);
+            if !full.is_empty() {
+                on(&full);
+            }
+            return Ok(answer);
         }
-        let transient = matches!(r.status, 429 | 500 | 502 | 503 | 504 | 529);
-        let err = status_error(p, &r);
+        let Answer::Whole(body) = r.answer else {
+            return Err(DevdError::internal(format!(
+                "{} returned HTTP {} with an unreadable stream",
+                p.label, r.status
+            )));
+        };
+        let reply = Reply {
+            status: r.status,
+            body,
+            retry_after: r.retry_after,
+        };
+        let transient = matches!(reply.status, 429 | 500 | 502 | 503 | 504 | 529);
+        let err = status_error(p, &reply);
         if !transient || attempt == 2 {
             return Err(err);
         }
-        let wait = r.retry_after.unwrap_or(1u64 << attempt).min(20);
+        let wait = reply.retry_after.unwrap_or(1u64 << attempt).min(20);
         std::thread::sleep(Duration::from_secs(wait));
         last = Some(err);
     }
     Err(last.unwrap_or_else(|| DevdError::internal("request failed")))
+}
+
+/// Read a server-sent event stream as it arrives.
+///
+/// Events are separated by a blank line and may spread their payload over
+/// several `data:` lines. Reading line by line is what makes the answer appear
+/// while the provider is still writing it; waiting for the whole body would
+/// only replay it after the fact.
+fn for_each_event(
+    mut reader: impl BufRead,
+    mut on_data: impl FnMut(&str) -> Result<()>,
+) -> Result<()> {
+    let mut data = String::new();
+    loop {
+        let mut line = String::new();
+        let read = reader
+            .read_line(&mut line)
+            .map_err(|e| DevdError::internal(format!("the provider's stream stopped: {e}")))?;
+        if read == 0 {
+            break;
+        }
+        let line = line.trim_end_matches(['\r', '\n']);
+        if line.is_empty() {
+            if !data.is_empty() {
+                on_data(&data)?;
+                data.clear();
+            }
+            continue;
+        }
+        if let Some(payload) = line.strip_prefix("data:") {
+            if !data.is_empty() {
+                data.push('\n');
+            }
+            data.push_str(payload.strip_prefix(' ').unwrap_or(payload));
+        }
+        // `event:`, `id:`, `retry:` and comments describe the frame; the JSON
+        // inside `data:` already carries its own type, so they need no parsing.
+    }
+    if !data.is_empty() {
+        on_data(&data)?;
+    }
+    Ok(())
+}
+
+fn parse_anthropic_stream(reader: impl BufRead, on: &mut dyn FnMut(&str)) -> Result<ChatResponse> {
+    let mut blocks: Vec<Value> = Vec::new();
+    let mut tool_json: std::collections::HashMap<usize, String> = std::collections::HashMap::new();
+    let mut stop_reason = String::from("end_turn");
+    let (mut input_tokens, mut output_tokens) = (0i64, 0i64);
+    let mut saw_message_stop = false;
+    let mut feed = |payload: &str| -> Result<()> {
+        let Ok(v) = serde_json::from_str::<Value>(payload) else {
+            return Ok(());
+        };
+        match v["type"].as_str().unwrap_or("") {
+            "message_start" => {
+                input_tokens += v
+                    .pointer("/message/usage/input_tokens")
+                    .and_then(|x| x.as_i64())
+                    .unwrap_or(0)
+                    + v.pointer("/message/usage/cache_read_input_tokens")
+                        .and_then(|x| x.as_i64())
+                        .unwrap_or(0)
+                    + v.pointer("/message/usage/cache_creation_input_tokens")
+                        .and_then(|x| x.as_i64())
+                        .unwrap_or(0);
+            }
+            "content_block_start" => {
+                let index = v["index"].as_u64().unwrap_or(0) as usize;
+                let block = v["content_block"].clone();
+                // A streamed tool call arrives as an empty shell whose input is
+                // filled by the deltas below. A text block may already carry
+                // its first words.
+                if block["type"] == "tool_use" {
+                    while blocks.len() <= index {
+                        blocks.push(Value::Null);
+                    }
+                    let mut shell = block;
+                    shell["input"] = json!({});
+                    blocks[index] = shell;
+                } else {
+                    while blocks.len() <= index {
+                        blocks.push(Value::Null);
+                    }
+                    let first = block["text"].as_str().unwrap_or("");
+                    if !first.is_empty() {
+                        on(first);
+                    }
+                    blocks[index] = block;
+                }
+            }
+            "content_block_delta" => {
+                let index = v["index"].as_u64().unwrap_or(0) as usize;
+                let Some(block) = blocks.get_mut(index) else {
+                    return Ok(());
+                };
+                match v
+                    .pointer("/delta/type")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("")
+                {
+                    "text_delta" => {
+                        let piece = v
+                            .pointer("/delta/text")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("");
+                        if !piece.is_empty() {
+                            let so_far = block["text"].as_str().unwrap_or("").to_string();
+                            block["text"] = json!(format!("{so_far}{piece}"));
+                            on(piece);
+                        }
+                    }
+                    "input_json_delta" => {
+                        let piece = v
+                            .pointer("/delta/partial_json")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("");
+                        tool_json.entry(index).or_default().push_str(piece);
+                    }
+                    _ => {}
+                }
+            }
+            "content_block_stop" => {
+                let index = v["index"].as_u64().unwrap_or(0) as usize;
+                if let Some(raw) = tool_json.remove(&index) {
+                    if let Some(block) = blocks.get_mut(index) {
+                        if block["type"] == "tool_use" {
+                            block["input"] =
+                                serde_json::from_str::<Value>(&raw).unwrap_or_else(|_| json!({}));
+                        }
+                    }
+                }
+            }
+            "message_delta" => {
+                if let Some(r) = v.pointer("/delta/stop_reason").and_then(|t| t.as_str()) {
+                    stop_reason = r.to_string();
+                }
+                output_tokens = v
+                    .pointer("/usage/output_tokens")
+                    .and_then(|x| x.as_i64())
+                    .unwrap_or(output_tokens);
+            }
+            "message_stop" => saw_message_stop = true,
+            "error" => {
+                let msg = v
+                    .pointer("/error/message")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("the stream failed");
+                return Err(DevdError::internal(format!(
+                    "the provider's stream failed: {msg}"
+                )));
+            }
+            _ => {}
+        }
+        Ok(())
+    };
+    for_each_event(reader, &mut feed)?;
+    let content: Vec<Value> = blocks.into_iter().filter(|b| !b.is_null()).collect();
+    if content.is_empty() && !saw_message_stop {
+        return Err(DevdError::internal("the streamed answer had no content"));
+    }
+    Ok(ChatResponse {
+        content,
+        stop_reason,
+        input_tokens,
+        output_tokens,
+    })
+}
+
+fn parse_openai_stream(reader: impl BufRead, on: &mut dyn FnMut(&str)) -> Result<ChatResponse> {
+    let mut text = String::new();
+    let mut calls: Vec<(String, String, String)> = Vec::new(); // id, name, arguments
+    let mut finish = String::new();
+    let (mut input_tokens, mut output_tokens) = (0i64, 0i64);
+    let mut feed = |payload: &str| -> Result<()> {
+        if payload.trim() == "[DONE]" {
+            return Ok(());
+        }
+        let Ok(v) = serde_json::from_str::<Value>(payload) else {
+            return Ok(());
+        };
+        if let Some(u) = v.get("usage").filter(|u| !u.is_null()) {
+            input_tokens = u["prompt_tokens"].as_i64().unwrap_or(input_tokens);
+            output_tokens = u["completion_tokens"].as_i64().unwrap_or(output_tokens);
+        }
+        let Some(choice) = v.pointer("/choices/0") else {
+            return Ok(());
+        };
+        if let Some(piece) = choice.pointer("/delta/content").and_then(|c| c.as_str()) {
+            if !piece.is_empty() {
+                text.push_str(piece);
+                on(piece);
+            }
+        }
+        for c in choice
+            .pointer("/delta/tool_calls")
+            .and_then(|c| c.as_array())
+            .cloned()
+            .unwrap_or_default()
+        {
+            let index = c["index"].as_u64().unwrap_or(0) as usize;
+            while calls.len() <= index {
+                calls.push((String::new(), String::new(), String::new()));
+            }
+            let slot = &mut calls[index];
+            if let Some(id) = c["id"].as_str().filter(|s| !s.is_empty()) {
+                slot.0 = id.to_string();
+            }
+            if let Some(name) = c
+                .pointer("/function/name")
+                .and_then(|n| n.as_str())
+                .filter(|s| !s.is_empty())
+            {
+                slot.1 = name.to_string();
+            }
+            if let Some(args) = c.pointer("/function/arguments").and_then(|a| a.as_str()) {
+                slot.2.push_str(args);
+            }
+        }
+        if let Some(f) = choice["finish_reason"].as_str() {
+            finish = f.to_string();
+        }
+        Ok(())
+    };
+    for_each_event(reader, &mut feed)?;
+    let mut content = Vec::new();
+    if !text.is_empty() {
+        content.push(json!({ "type": "text", "text": text }));
+    }
+    for (i, (id, name, args)) in calls.into_iter().enumerate() {
+        if name.is_empty() {
+            continue;
+        }
+        content.push(json!({
+            "type": "tool_use",
+            "id": if id.is_empty() { format!("call_{i}") } else { id },
+            "name": name,
+            "input": serde_json::from_str::<Value>(&args).unwrap_or_else(|_| json!({})),
+        }));
+    }
+    if content.is_empty() && finish.is_empty() {
+        return Err(DevdError::internal("the streamed answer had no content"));
+    }
+    let has_calls = content.iter().any(|b| b["type"] == "tool_use");
+    Ok(ChatResponse {
+        content,
+        stop_reason: if has_calls {
+            "tool_use".into()
+        } else if finish == "length" {
+            "max_tokens".into()
+        } else {
+            "end_turn".into()
+        },
+        input_tokens,
+        output_tokens,
+    })
 }
 
 #[cfg(test)]
@@ -1220,6 +1631,181 @@ mod tests {
 | Max output | 128K tokens | 64K tokens |
 | [Retirement](https://r) | Not sooner than September 1, 2027 | Not sooner than 2027 |
 ";
+
+    #[test]
+    fn a_streamed_answer_is_read_over_the_wire() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let Ok((mut socket, _)) = listener.accept() else {
+                return;
+            };
+            // Consume the whole request first. Closing a socket with unread
+            // request bytes turns the answer into a reset on Windows.
+            let mut request = Vec::new();
+            let mut tmp = [0u8; 4096];
+            let mut end = 0usize;
+            let mut want = 0usize;
+            loop {
+                let n = socket.read(&mut tmp).unwrap_or(0);
+                if n == 0 {
+                    break;
+                }
+                request.extend_from_slice(&tmp[..n]);
+                if end == 0 {
+                    if let Some(i) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                        end = i + 4;
+                        let head = String::from_utf8_lossy(&request[..i]);
+                        want = head
+                            .lines()
+                            .find_map(|l| {
+                                l.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                            })
+                            .unwrap_or(0);
+                    }
+                }
+                if end > 0 && request.len() >= end + want {
+                    break;
+                }
+            }
+            let body = "data: {\"choices\":[{\"delta\":{\"content\":\"Luna is \"}}]}\n\n\
+data: {\"choices\":[{\"delta\":{\"content\":\"a music app.\"}}]}\n\n\
+data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":4}}\n\n\
+data: [DONE]\n\n";
+            let head = format!("HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n", body.len());
+            let _ = socket.write_all(head.as_bytes());
+            let _ = socket.write_all(body.as_bytes());
+        });
+
+        let p = Provider {
+            id: "test".into(),
+            kind: "openai-compatible".into(),
+            label: "Test".into(),
+            base_url: base,
+            key_env: None,
+            default_model: Some("model-1".into()),
+            is_default: false,
+            enabled: true,
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        let req = ChatRequest {
+            model: "model-1".into(),
+            system: "s".into(),
+            messages: vec![
+                json!({ "role": "user", "content": [{ "type": "text", "text": "hi" }] }),
+            ],
+            tools: vec![],
+            tool_choice: None,
+            max_tokens: 32,
+        };
+        let mut seen = String::new();
+        let answer = chat_stream(&p, None, &req, &mut |piece| seen.push_str(piece)).unwrap();
+        assert_eq!(
+            seen, "Luna is a music app.",
+            "each delta reaches the caller as it is read"
+        );
+        assert_eq!(text_of(&answer.content), "Luna is a music app.");
+        assert_eq!((answer.input_tokens, answer.output_tokens), (3, 4));
+    }
+
+    #[test]
+    fn an_openai_stream_is_rebuilt_from_its_deltas() {
+        let body = "\
+data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"Luna is a \"}}]}
+
+data: {\"choices\":[{\"delta\":{\"content\":\"React Native app.\"}}]}
+
+data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\"}}]}}]}
+
+data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"README.md\\\"}\"}}]}}]}
+
+data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":7}}
+
+data: [DONE]
+";
+        let mut seen = String::new();
+        let answer =
+            parse_openai_stream(std::io::Cursor::new(body), &mut |p| seen.push_str(p)).unwrap();
+        assert_eq!(
+            seen, "Luna is a React Native app.",
+            "text arrives as it was written"
+        );
+        assert_eq!(text_of(&answer.content), "Luna is a React Native app.");
+        assert_eq!(answer.stop_reason, "tool_use");
+        let call = answer
+            .content
+            .iter()
+            .find(|b| b["type"] == "tool_use")
+            .expect("the tool call is rebuilt");
+        assert_eq!(call["id"], "call_1");
+        assert_eq!(call["name"], "read_file");
+        assert_eq!(
+            call["input"]["path"], "README.md",
+            "arguments are joined from their pieces"
+        );
+        assert_eq!((answer.input_tokens, answer.output_tokens), (11, 7));
+    }
+
+    #[test]
+    fn an_anthropic_stream_is_rebuilt_from_its_events() {
+        let body = "\
+event: message_start
+data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":9}}}
+
+event: content_block_start
+data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}
+
+event: content_block_delta
+data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Yes, I \"}}
+
+event: content_block_delta
+data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"read it.\"}}
+
+event: content_block_stop
+data: {\"type\":\"content_block_stop\",\"index\":0}
+
+event: content_block_start
+data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tu_1\",\"name\":\"read_file\",\"input\":{}}}
+
+event: content_block_delta
+data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"path\\\": \\\"README.md\\\"}\"}}
+
+event: content_block_stop
+data: {\"type\":\"content_block_stop\",\"index\":1}
+
+event: message_delta
+data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":5}}
+
+event: message_stop
+data: {\"type\":\"message_stop\"}
+";
+        let mut pieces = Vec::new();
+        let answer = parse_anthropic_stream(std::io::Cursor::new(body), &mut |p| {
+            pieces.push(p.to_string())
+        })
+        .unwrap();
+        assert_eq!(pieces.join(""), "Yes, I read it.");
+        assert_eq!(answer.content[0]["text"], "Yes, I read it.");
+        assert_eq!(answer.content[1]["type"], "tool_use");
+        assert_eq!(answer.content[1]["input"]["path"], "README.md");
+        assert_eq!(answer.stop_reason, "tool_use");
+        assert_eq!((answer.input_tokens, answer.output_tokens), (9, 5));
+    }
+
+    #[test]
+    fn a_stream_that_fails_says_so_instead_of_answering_nothing() {
+        let body = "data: {\"type\":\"error\",\"error\":{\"message\":\"overloaded\"}}\n";
+        let err = parse_anthropic_stream(std::io::Cursor::new(body), &mut |_| {}).unwrap_err();
+        assert!(err.to_string().contains("overloaded"), "{err}");
+        let err = parse_anthropic_stream(std::io::Cursor::new(""), &mut |_| {}).unwrap_err();
+        assert!(err.to_string().contains("no content"), "{err}");
+    }
 
     #[test]
     fn the_official_model_table_is_parsed() {
