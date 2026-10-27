@@ -451,13 +451,16 @@ impl McpServer {
             }
             Err(e) => {
                 // The queued request is the durable record of what is waiting,
-                // so the run waits with it rather than claiming a failure.
+                // so the run waits with it rather than claiming a failure. It
+                // goes to `blocked`, not back to `awaiting_approval`: the call
+                // had already started, and the state machine does not pretend
+                // it did not.
                 if let Some(run) = &owned {
                     if e.code() == "approval_required" {
                         let _ = self.ctx.store.transition_run(
                             &run.id,
-                            RunState::AwaitingApproval,
-                            None,
+                            RunState::Blocked,
+                            Some("a person must approve this operation"),
                         );
                     } else {
                         self.ctx.store.conclude_run(&run.id, Some(&e.to_string()));
@@ -1259,6 +1262,10 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("working tree"));
+        // The refusal is a run that waits for a person, not a silent audit line.
+        let runs = server.ctx.store.recent_runs(10).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].typed_state(), devd_core::RunState::Blocked);
         assert!(body["next_step"].as_str().unwrap().contains("human"));
         // And nothing ran.
         assert_eq!(applications.load(Ordering::SeqCst), 0);

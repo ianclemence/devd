@@ -53,8 +53,8 @@ not produce evidence.
 
 An outside agent that drives devd through `devd mcp` brings no run of its own:
 its session belongs to another program. Each call it makes is one headless run,
-settled when the call returns, or left `awaiting_approval` when a person must
-decide the queued request first. A caller that already has a run - the built-in
+settled when the call returns, or left `blocked` with the queued request named
+when a person must decide first. A caller that already has a run - the built-in
 assistant, a team member - keeps it, so one tool call never opens a second,
 competing timeline.
 

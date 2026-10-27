@@ -839,6 +839,21 @@ fn mcp_agents_get_their_approvals_queued() {
     let body: Value = serde_json::from_str(&text).unwrap();
     let rid = body["request_id"].as_str().expect("queued").to_string();
     assert!(victim.exists());
+    // The refused call left a headless run blocked on that request, and the
+    // request belongs to it, so the approval has a run to execute into.
+    let runs = e.agent.store.recent_runs(10).unwrap();
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    let mcp_run = runs[0].id.clone();
+    assert_eq!(runs[0].typed_mode(), devd_core::RunMode::Headless);
+    assert_eq!(runs[0].typed_state(), devd_core::RunState::Blocked);
+    let request = e.agent.store.get_request(&rid).unwrap().unwrap();
+    let approval = e
+        .agent
+        .store
+        .get_approval(request.approval_id.as_deref().unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(approval.run_id.as_deref(), Some(mcp_run.as_str()));
     // Human-only operations are never queued: an approval cannot make them agent-runnable.
     let (_, t2) = server.call(
         "devd_invoke",
@@ -854,6 +869,16 @@ fn mcp_agents_get_their_approvals_queued() {
     )
     .unwrap();
     assert!(!victim.exists());
+    // Approving ran the operation in the run that asked, and settled it.
+    let settled = e.agent.store.run_by_id(&mcp_run).unwrap().unwrap();
+    assert!(
+        !matches!(
+            settled.typed_state(),
+            devd_core::RunState::Executing | devd_core::RunState::Blocked
+        ),
+        "the run is finished, not left executing: {:?}",
+        settled.typed_state()
+    );
     let polled = call(
         &e,
         &e.agent,
