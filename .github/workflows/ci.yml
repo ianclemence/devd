@@ -39,7 +39,10 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --exclude devd-desktop --all-targets -- -D warnings
       - name: Test
-        run: cargo test --workspace --exclude devd-desktop
+        # Report every failing test on every crate, not just the first one to
+        # fail: a broken Windows-only test in one crate used to hide a broken
+        # Unix-only test in another.
+        run: cargo test --workspace --exclude devd-desktop --no-fail-fast
       # The desktop shell links each platform's web view, so it is built only
       # where the project ships it.
       - name: Build the desktop shell
