@@ -788,12 +788,377 @@ pub const VERIFY_TASKS: &[&str] = &[
     "fmt-check",
 ];
 
+/// Capabilities that only observe state.
+///
+/// A read is not a change and not a readiness check, however successfully it
+/// returned. Classifying reads as changes let a `site.list` satisfy the change
+/// half of a site goal and a `service.list` satisfy a service goal, which is the
+/// exact false positive this function exists to prevent.
+fn is_read_capability(capability: &str) -> bool {
+    const READ: &[&str] = &[
+        "fs.read",
+        "fs.list",
+        "fs.search",
+        "fs.browse",
+        "git.diff",
+        "git.blame",
+        "git.search",
+        "git.reflog",
+        "git.switch.check",
+        "git.stash.list",
+        "git.stash.show",
+        "git.conflicts.list",
+        "git.conflicts.show",
+        "git.sync.preview",
+        "health.status",
+        "health.list",
+        "search.query",
+        "docs.fetch",
+        "compat.audit",
+        "env.get",
+        "env.diff",
+        "env.reveal",
+        "php.extensions",
+        "php.settings",
+        "php.pool",
+        "php.site_profile",
+        "hosts.show",
+        "tls.ca.status",
+        "shell.status",
+        "shell.resolve",
+        "ssh.keys",
+        "ssh.public",
+        "judge.status",
+        "memory.list",
+        "mcp.list",
+        "approval.list",
+        "approval.get",
+        "chat.list",
+        "chat.get",
+        "chat.chapters",
+        "team.list",
+        "team.get",
+        "team.report",
+        "team.roles",
+        "team.context",
+        "team.charter.get",
+        "schedule.list",
+        "template.list",
+        "template.get",
+        "todo.list",
+        "todo.get",
+        "todo.history",
+        "scratch.list",
+        "scratch.get",
+        "inbox.list",
+        "logs.site",
+        "logs.laravel",
+        "review.list",
+        "review.get",
+        "deploy.status",
+        "deploy.history",
+        "deploy.log",
+        "deploy.vars",
+        "deploy.scheduled",
+        "deploy.check",
+        "nginx.site_show",
+        "nginx.presets",
+        "redirects.list",
+        "cron.list",
+        "cron.log",
+        "queue.list",
+        "queue.logs",
+        "share.list",
+        "remote.links",
+        "remote.releases",
+        "server.list",
+        "server.info",
+        "tls.list",
+        "tls.ca.show",
+        "backup.list",
+        "notify.list",
+        "autostart.status",
+        "dictation.status",
+        "toolchain.eas_projects",
+        "stacks.schema",
+        "stacks.matrix",
+        "environment.get",
+        "environment.manifest",
+        "models.catalogue",
+        "models.roles",
+        "provider.presets",
+        "skills.sources",
+    ];
+    READ.contains(&capability)
+        || [
+            ".list",
+            ".get",
+            ".show",
+            ".logs",
+            ".log",
+            ".status",
+            ".history",
+            ".pins",
+            ".inventory",
+            ".available",
+            ".discover",
+            ".parked",
+            ".detect",
+            ".tasks",
+            ".users",
+            ".catalogue",
+            ".roles",
+            ".presets",
+            ".sources",
+            ".matrix",
+            ".schema",
+            ".runs",
+            ".describe",
+            ".preview",
+            ".read",
+            ".diff",
+            ".blame",
+            ".search",
+            ".reflog",
+            ".audit",
+            ".extensions",
+            ".settings",
+            ".pool",
+            ".profile",
+            ".resolve",
+            ".keys",
+            ".public",
+            ".fetch",
+            ".query",
+            ".stats",
+            ".devices",
+            ".plan",
+        ]
+        .iter()
+        .any(|suffix| capability.ends_with(suffix))
+}
+
+/// Capabilities whose successful call changed something a person can inspect.
+fn is_change_capability(capability: &str) -> bool {
+    const CHANGE: &[&str] = &[
+        "git.commit",
+        "git.stage",
+        "git.unstage",
+        "git.merge",
+        "git.revert",
+        "git.reset",
+        "git.discard",
+        "git.cherry.pick",
+        "git.rebase",
+        "git.squash",
+        "git.switch",
+        "git.pull",
+        "git.stash.push",
+        "git.stash.apply",
+        "git.stash.drop",
+        "git.branch.create",
+        "git.branch.delete",
+        "git.branch.rename",
+        "git.tag.create",
+        "git.tag.delete",
+        "git.remote.add",
+        "git.remote.remove",
+        "git.remote.rename",
+        "git.ignore.add",
+        "git.repo.init",
+        "git.repo.track",
+        "git.repo.untrack",
+        "git.worktree.add",
+        "git.worktree.remove",
+        "git.worktree.prune",
+        "git.conflicts.resolve",
+        "git.op.abort",
+        "git.op.continue",
+        "project.init",
+        "project.import",
+        "project.forget",
+        "project.start",
+        "project.stop",
+        "project.restart",
+        "project.approve",
+        "site.create",
+        "site.sync",
+        "site.set_upstream",
+        "site.set_php",
+        "site.set_serving",
+        "site.remove",
+        "site.fix_htaccess",
+        "site.park",
+        "site.unpark",
+        "tls.issue",
+        "tls.trust",
+        "tls.untrust",
+        "tls.ca.ensure",
+        "hosts.sync",
+        "service.install",
+        "service.adopt",
+        "service.remove",
+        "service.set_startup",
+        "runtime.remove",
+        "runtime.pin",
+        "runtime.use",
+        "toolchain.install",
+        "toolchain.remove",
+        "db.create",
+        "db.drop",
+        "db.restore",
+        "db.copy",
+        "db.user_create",
+        "db.user_drop",
+        "environment.set",
+        "env.set",
+        "env.unset",
+        "stack.up",
+        "stack.down",
+        "cron.add",
+        "cron.enable",
+        "cron.remove",
+        "cron.run",
+        "queue.add",
+        "queue.remove",
+        "redirects.add",
+        "redirects.remove",
+        "nginx.site_set",
+        "nginx.site_clear",
+        "php.configure",
+        "php.extension_set",
+        "deploy.script_set",
+        "deploy.vars_set",
+        "deploy.schedule",
+        "deploy.unschedule",
+        "backup.add",
+        "backup.remove",
+        "backup.run",
+        "memory.apply",
+        "skills.save",
+        "skills.delete",
+        "skills.install",
+        "mcp.add",
+        "mcp.remove",
+        "mcp.trust",
+        "mcp.update",
+        "mcp.enable",
+        "mcp.import",
+        "provider.save",
+        "provider.remove",
+        "provider.default",
+        "models.assign",
+        "team.charter.set",
+        "team.plan_submit",
+        "team.start",
+        "team.cancel",
+        "team.pause",
+        "team.resume",
+        "team.retry",
+        "team.accept",
+        "team.approve_plan",
+        "team.say",
+        "team.assign",
+        "chat.send",
+        "chat.stop",
+        "chat.update",
+        "chat.fork",
+        "chat.pin",
+        "chat.unpin",
+        "chat.delete",
+        "chat.prune",
+        "todo.create",
+        "todo.update",
+        "todo.complete",
+        "todo.reopen",
+        "todo.delete",
+        "todo.note",
+        "scratch.create",
+        "scratch.update",
+        "scratch.delete",
+        "scratch.append",
+        "schedule.create",
+        "schedule.delete",
+        "schedule.enable",
+        "inbox.post",
+        "inbox.reply",
+        "inbox.delete",
+        "inbox.clear",
+        "review.run",
+        "review.delete",
+        "judge.configure",
+        "shell.path_enable",
+        "shell.path_disable",
+        "autostart.enable",
+        "autostart.disable",
+        "notify.add",
+        "notify.remove",
+        "approval.decide",
+        "ssh.adopt",
+        "ssh.keygen",
+        "dictation.install",
+        "workflow.setup",
+        "services.decide",
+    ];
+    CHANGE.contains(&capability)
+        || capability.starts_with("fs.write")
+        || capability.starts_with("fs.edit")
+        || capability.starts_with("fs.move")
+        || capability.starts_with("fs.delete")
+        || capability.starts_with("fs.create")
+}
+
+/// Whether evidence proves an inspectable code or repository change.
+///
+/// A site record or an installed service is a change, but it is not the diff a
+/// code goal has to show. Keeping the two apart is what makes "a code change
+/// requires an inspectable change" true rather than approximate.
+pub fn is_code_change(evidence: &Evidence) -> bool {
+    evidence.kind == EvidenceKind::Change.as_str()
+        && (evidence.capability.starts_with("fs.write")
+            || evidence.capability.starts_with("fs.edit")
+            || evidence.capability.starts_with("fs.move")
+            || evidence.capability.starts_with("fs.delete")
+            || evidence.capability.starts_with("fs.create")
+            || evidence.capability == "git.commit"
+            || evidence.capability == "git.stage"
+            || evidence.capability == "git.merge"
+            || evidence.capability == "git.revert"
+            || evidence.capability == "project.init")
+}
+
+/// `Some(true)` only when every named field is present and true.
+///
+/// A readiness payload that does not say whether the service is answering is not
+/// evidence that it is. Failing closed here is deliberate: an older or unexpected
+/// shape must not be read as success.
+fn all_true(data: &Value, keys: &[&str]) -> Option<bool> {
+    let mut seen = false;
+    for key in keys {
+        if let Some(value) = data.get(*key).and_then(Value::as_bool) {
+            seen = true;
+            if !value {
+                return Some(false);
+            }
+        }
+    }
+    seen.then_some(true)
+}
+
 /// Normalize one capability result into evidence at the registry boundary.
 ///
 /// The capability id decides the category, never the exposed tool name: a call
 /// through `run_task`, `devd_invoke` or an MCP bridge reaches the same branch.
 /// A failed call still records evidence, marked as not passing.
-pub fn evidence_for(capability: &str, args: &Value, outcome: Option<&Outcome>) -> EvidenceDraft {
+///
+/// Most calls produce one fact. A call that both changes something and proves it
+/// usable - installing a runtime does exactly that - produces both, because
+/// collapsing them would make one of the two claims unprovable.
+pub fn evidence_for(
+    capability: &str,
+    args: &Value,
+    outcome: Option<&Outcome>,
+) -> Vec<EvidenceDraft> {
     let ok = outcome.map(|o| o.ok).unwrap_or(false);
     let data = outcome.map(|o| &o.data).unwrap_or(&Value::Null);
     let exit_code = data.get("exit_code").and_then(Value::as_i64);
@@ -802,77 +1167,137 @@ pub fn evidence_for(capability: &str, args: &Value, outcome: Option<&Outcome>) -
         && data.get("timed_out").and_then(Value::as_bool) != Some(true)
         && data.get("cancelled").and_then(Value::as_bool) != Some(true);
     let label = |what: &str| format!("{capability}: {what}");
+    let draft = |kind: EvidenceKind, passed: bool, summary: String| EvidenceDraft {
+        kind,
+        passed,
+        summary,
+        detail: outcome.map(|o| {
+            let detail = serde_json::json!({
+                "message": o.message,
+                "data": o.data,
+                "warnings": o.warnings,
+            });
+            util::truncate(&detail.to_string(), 4000)
+        }),
+        exit_code,
+    };
 
-    let (kind, passed, summary) = if capability.starts_with("fs.write")
-        || capability.starts_with("fs.edit")
-        || capability.starts_with("fs.move")
-        || capability.starts_with("fs.delete")
-        || capability.starts_with("fs.create")
-        || capability == "project.init"
-        || capability == "git.commit"
-        || capability == "git.stage"
-        || capability == "git.merge"
-        || capability == "git.revert"
-        || capability.starts_with("site.")
-        || capability.starts_with("tls.")
-        || capability.starts_with("stack.")
-    {
-        let path = args.get("path").and_then(Value::as_str).unwrap_or("");
-        (
-            EvidenceKind::Change,
+    // A site probe observes the hostname, the listener and the HTTP status. It is
+    // the only capability that can honestly satisfy a site goal's verification.
+    if capability == "site.verify" {
+        let host = data.get("host").and_then(Value::as_str).unwrap_or("");
+        let status = data.get("status").and_then(Value::as_u64);
+        let verified = ok && data.get("ok").and_then(Value::as_bool) == Some(true);
+        let summary = match (verified, status) {
+            (true, Some(code)) => format!("{host} answered HTTP {code}"),
+            (false, Some(code)) => {
+                format!("{host} answered HTTP {code}, which is not a healthy route")
+            }
+            (false, None) => format!("{host} did not answer"),
+            (true, None) => format!("{host} verified"),
+        };
+        return vec![draft(EvidenceKind::Http, verified, label(&summary))];
+    }
+
+    if capability == "web.test" {
+        return vec![draft(
+            EvidenceKind::Verify,
             ok,
-            if path.is_empty() {
-                label("changed state")
+            label(if ok {
+                "the web server accepted the generated configuration"
             } else {
-                label(&format!("changed {path}"))
-            },
-        )
-    } else if capability == "environment.manifest" {
-        let what = args.get("path").and_then(Value::as_str).unwrap_or("");
-        (
-            EvidenceKind::Read,
-            ok,
-            label(if what.is_empty() {
-                "described the environment"
-            } else {
-                what
+                "the web server rejected the generated configuration"
             }),
-        )
-    } else if capability == "workflow.setup" {
-        let verified = data.get("verified").and_then(Value::as_bool) == Some(true);
-        (
-            if verified {
-                EvidenceKind::Verify
-            } else {
-                EvidenceKind::Structured
-            },
-            ok && verified,
-            if verified {
-                label("environment set up and verified")
-            } else {
-                label("environment setup did not verify")
-            },
-        )
-    } else if capability.starts_with("fs.read")
-        || capability.starts_with("fs.list")
-        || capability.starts_with("fs.search")
-        || capability.starts_with("git.diff")
-        || capability.starts_with("git.status")
-        || capability.starts_with("git.log")
-        || capability.starts_with("git.show")
-        || capability.starts_with("project.detect")
-        || capability.starts_with("project.tasks")
-    {
-        let what = args
-            .get("path")
-            .and_then(Value::as_str)
-            .unwrap_or_else(|| args.get("pattern").and_then(Value::as_str).unwrap_or(""));
-        (
-            EvidenceKind::Read,
+        )];
+    }
+
+    if capability == "stacks.validate" {
+        return vec![draft(
+            EvidenceKind::Verify,
             ok,
-            label(if what.is_empty() { "read state" } else { what }),
-        )
-    } else if capability == "project.run" || capability == "project.run_destructive" {
+            label(if ok {
+                "the stack definition validated"
+            } else {
+                "the stack definition did not validate"
+            }),
+        )];
+    }
+
+    if capability == "toolchain.check" {
+        let all_ok = data
+            .as_array()
+            .map(|rows| {
+                rows.iter()
+                    .all(|r| r.get("status").and_then(Value::as_str) == Some("ok"))
+            })
+            .unwrap_or(false);
+        return vec![draft(
+            EvidenceKind::Verify,
+            ok && all_ok,
+            label(if all_ok {
+                "every prerequisite is satisfied"
+            } else {
+                "at least one prerequisite is not satisfied"
+            }),
+        )];
+    }
+
+    if capability == "workflow.setup" {
+        let verified = data.get("verified").and_then(Value::as_bool) == Some(true);
+        return vec![draft(
+            EvidenceKind::Verify,
+            ok && verified,
+            label(if verified {
+                "environment set up and verified"
+            } else {
+                "environment setup did not verify"
+            }),
+        )];
+    }
+
+    // Readiness is what the payload observed, not that the call returned. A
+    // `service.status` of a stopped service is a check that ran and failed, not a
+    // passing verification.
+    if matches!(
+        capability,
+        "service.start" | "service.restart" | "service.status"
+    ) {
+        let name = args
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("service");
+        let ready = ok && all_true(data, &["running", "listening"]) == Some(true);
+        let summary = if ready {
+            format!("{name} is running and answering")
+        } else if ok && data.get("running").and_then(Value::as_bool) == Some(true) {
+            format!("{name} is running but nothing is answering")
+        } else {
+            format!("{name} is not running")
+        };
+        return vec![draft(EvidenceKind::Service, ready, label(&summary))];
+    }
+
+    if capability == "service.stop" {
+        let name = args
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("service");
+        let stopped = ok && all_true(data, &["running"]) == Some(false);
+        return vec![draft(
+            EvidenceKind::Service,
+            stopped,
+            label(&format!(
+                "{name} {}",
+                if stopped {
+                    "is stopped"
+                } else {
+                    "is still running"
+                }
+            )),
+        )];
+    }
+
+    if capability == "project.run" || capability == "project.run_destructive" {
         let task = args.get("task").and_then(Value::as_str).unwrap_or("");
         let is_verify = capability == "project.run"
             && VERIFY_TASKS.contains(&task.to_ascii_lowercase().as_str());
@@ -886,8 +1311,10 @@ pub fn evidence_for(capability: &str, args: &Value, outcome: Option<&Outcome>) -
         } else {
             label(&format!("task `{task}`"))
         };
-        (kind, process_ok, summary)
-    } else if capability.starts_with("project.exec") {
+        return vec![draft(kind, process_ok, summary)];
+    }
+
+    if capability.starts_with("project.exec") {
         let argv = args
             .get("argv")
             .and_then(Value::as_array)
@@ -898,50 +1325,92 @@ pub fn evidence_for(capability: &str, args: &Value, outcome: Option<&Outcome>) -
                     .join(" ")
             })
             .unwrap_or_default();
-        (
+        return vec![draft(
             EvidenceKind::Command,
             process_ok,
             label(&format!("`{argv}`")),
-        )
-    } else if capability.starts_with("services.")
-        || capability.starts_with("service.")
-        || capability.starts_with("toolchain.service")
-        || capability.starts_with("task.")
-    {
-        (EvidenceKind::Service, ok, label("service state"))
-    } else if capability.starts_with("site.http")
-        || capability.starts_with("http.")
-        || capability.starts_with("probe.")
-        || capability.starts_with("site.check")
-        || capability.starts_with("site.verify")
-    {
-        (EvidenceKind::Http, ok, label("HTTP/TLS probe"))
-    } else if capability.starts_with("toolchain.") || capability.starts_with("runtime.") {
-        (EvidenceKind::Runtime, ok, label("runtime"))
-    } else if capability.starts_with("db.")
-        || capability.starts_with("database.")
-        || capability.starts_with("mysql.")
-    {
-        (EvidenceKind::Database, ok, label("database"))
-    } else {
-        (EvidenceKind::Structured, ok, label("completed"))
-    };
-
-    EvidenceDraft {
-        kind,
-        passed,
-        summary,
-        detail: outcome.map(|o| {
-            let detail = serde_json::json!({
-                "message": o.message,
-                "data": o.data,
-                "warnings": o.warnings,
-            });
-            let text = detail.to_string();
-            util::truncate(&text, 4000)
-        }),
-        exit_code,
+        )];
     }
+
+    // An install is two facts: the change on disk, and the runtime proving that
+    // it starts. The install records the version it actually ran.
+    if capability == "runtime.install" {
+        let proven = data
+            .get("verified_version")
+            .and_then(Value::as_str)
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false);
+        let kind = args
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("runtime");
+        let version = args
+            .get("version")
+            .and_then(Value::as_str)
+            .unwrap_or("requested version");
+        return vec![
+            draft(
+                EvidenceKind::Change,
+                ok,
+                label(&format!("installed {kind} {version}")),
+            ),
+            draft(
+                EvidenceKind::Runtime,
+                ok && proven,
+                label(&format!(
+                    "{kind} {version} {}",
+                    if proven {
+                        "starts and reports its version"
+                    } else {
+                        "was installed but did not prove it starts"
+                    }
+                )),
+            ),
+        ];
+    }
+
+    // Database reads connect to the server, so they observe connectivity. They
+    // are kept apart from reads of files and records, which observe neither a
+    // change nor a service.
+    if capability.starts_with("db.") || capability.starts_with("database.") {
+        let (kind, passed) = if is_change_capability(capability) {
+            (EvidenceKind::Change, ok)
+        } else {
+            (EvidenceKind::Database, ok)
+        };
+        return vec![draft(kind, passed, label("database"))];
+    }
+
+    if is_read_capability(capability) {
+        let what = args
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| args.get("pattern").and_then(Value::as_str).unwrap_or(""));
+        return vec![draft(
+            EvidenceKind::Read,
+            ok,
+            label(if what.is_empty() { "read state" } else { what }),
+        )];
+    }
+
+    if is_change_capability(capability) {
+        let path = args.get("path").and_then(Value::as_str).unwrap_or("");
+        return vec![draft(
+            EvidenceKind::Change,
+            ok,
+            if path.is_empty() {
+                label("changed state")
+            } else {
+                label(&format!("changed {path}"))
+            },
+        )];
+    }
+
+    if capability.starts_with("toolchain.") || capability.starts_with("runtime.") {
+        return vec![draft(EvidenceKind::Runtime, ok, label("runtime"))];
+    }
+
+    vec![draft(EvidenceKind::Structured, ok, label("completed"))]
 }
 
 /// Check the evidence recorded for a run against its completion policy.
@@ -951,8 +1420,22 @@ pub fn evaluate(policy: &CompletionPolicy, evidence: &[Evidence]) -> CompletionV
         |kind: EvidenceKind| evidence.iter().any(|e| e.kind == kind.as_str() && e.passed);
     let has_kind = |kind: EvidenceKind| evidence.iter().any(|e| e.kind == kind.as_str());
 
-    if policy.requires_change && !has_pass(EvidenceKind::Change) {
-        missing.push("no inspectable change was recorded".to_string());
+    if policy.requires_change {
+        // A code goal needs an inspectable code or repository change. A site
+        // record or an installed service is a change, but it is not the diff a
+        // code goal promised, so it does not stand in for one.
+        let change_ok = if matches!(policy.kind.as_str(), "code" | "test") {
+            evidence.iter().any(|e| e.passed && is_code_change(e))
+        } else {
+            has_pass(EvidenceKind::Change)
+        };
+        if !change_ok {
+            missing.push(if matches!(policy.kind.as_str(), "code" | "test") {
+                "no inspectable code change was recorded".to_string()
+            } else {
+                "no inspectable change was recorded".to_string()
+            });
+        }
     }
     if policy.requires_verify {
         let kinds = policy.verifying_kinds();
@@ -1107,6 +1590,17 @@ mod tests {
     }
 
     fn fact(kind: EvidenceKind, passed: bool) -> Evidence {
+        // The capability has to agree with the kind, because a code change is
+        // recognised by the capability that produced it, not by the label alone.
+        let capability = match kind {
+            EvidenceKind::Change => "fs.write",
+            EvidenceKind::Verify => "project.run",
+            EvidenceKind::Http => "site.verify",
+            EvidenceKind::Service => "service.status",
+            EvidenceKind::Runtime => "runtime.install",
+            EvidenceKind::Database => "db.list",
+            _ => "c",
+        };
         Evidence {
             id: util::new_id(),
             run_id: "r".into(),
@@ -1114,7 +1608,7 @@ mod tests {
             tool_call_id: None,
             artifact_id: None,
             kind: kind.as_str().into(),
-            capability: "c".into(),
+            capability: capability.into(),
             passed,
             claim: None,
             summary: "s".into(),
@@ -1174,8 +1668,139 @@ mod tests {
         let args = json!({ "path": "src/lib.rs" });
         let outcome = Outcome::with_data("edited", json!({}));
         let e = evidence_for("fs.edit", &args, Some(&outcome));
-        assert_eq!(e.kind, EvidenceKind::Change);
-        assert!(e.passed);
+        assert_eq!(e[0].kind, EvidenceKind::Change);
+        assert!(e[0].passed);
+    }
+
+    #[test]
+    fn a_read_is_not_a_change_and_not_a_readiness_check() {
+        // Listing a site, a service or a runtime observes state. It must not
+        // stand in for the change or the check a goal asked for.
+        let ok = Outcome::with_data("listed", json!({ "sites": [] }));
+        for capability in [
+            "site.list",
+            "service.list",
+            "runtime.list",
+            "environment.get",
+            "git.status",
+        ] {
+            let drafts = evidence_for(capability, &json!({}), Some(&ok));
+            assert_eq!(
+                drafts.len(),
+                1,
+                "{capability} should produce one fact, not {drafts:?}"
+            );
+            assert_eq!(drafts[0].kind, EvidenceKind::Read, "{capability}");
+            assert!(drafts[0].passed, "{capability}");
+        }
+
+        // A database read observes a live connection, so it is database evidence
+        // rather than a file read; it is still not a change.
+        let db = evidence_for("db.list", &json!({}), Some(&ok));
+        assert_eq!(db[0].kind, EvidenceKind::Database);
+
+        // A code goal refuses a change that is not a code change.
+        let policy = CompletionPolicy::for_goal("fix the parser", &[]);
+        let mut site_change = fact(EvidenceKind::Change, true);
+        site_change.capability = "site.create".into();
+        let verdict = evaluate(&policy, &[site_change, fact(EvidenceKind::Verify, true)]);
+        assert_eq!(verdict.state, RunState::Unverified);
+        assert!(
+            verdict.missing.iter().any(|m| m.contains("code change")),
+            "{:?}",
+            verdict.missing
+        );
+    }
+
+    #[test]
+    fn a_stopped_service_is_not_ready_evidence() {
+        let stopped = Outcome::with_data(
+            "not running",
+            json!({ "running": false, "listening": false }),
+        );
+        let drafts = evidence_for(
+            "service.status",
+            &json!({ "name": "nginx" }),
+            Some(&stopped),
+        );
+        assert_eq!(drafts.len(), 1);
+        assert_eq!(drafts[0].kind, EvidenceKind::Service);
+        assert!(
+            !drafts[0].passed,
+            "a status call that observed a stopped service did not pass readiness"
+        );
+
+        let running = Outcome::with_data("running", json!({ "running": true, "listening": true }));
+        let drafts = evidence_for(
+            "service.status",
+            &json!({ "name": "nginx" }),
+            Some(&running),
+        );
+        assert!(drafts[0].passed);
+
+        // A payload that does not say whether it is listening fails closed.
+        let vague = Outcome::with_data("ok", json!({}));
+        let drafts = evidence_for("service.status", &json!({ "name": "nginx" }), Some(&vague));
+        assert!(!drafts[0].passed);
+    }
+
+    #[test]
+    fn site_verify_is_the_only_http_readiness_fact() {
+        let good = Outcome::with_data(
+            "answered",
+            json!({ "host": "blog.test", "status": 200, "ok": true }),
+        );
+        let drafts = evidence_for("site.verify", &json!({ "host": "blog.test" }), Some(&good));
+        assert_eq!(drafts.len(), 1);
+        assert_eq!(drafts[0].kind, EvidenceKind::Http);
+        assert!(drafts[0].passed);
+        assert!(
+            drafts[0].summary.contains("HTTP 200"),
+            "{}",
+            drafts[0].summary
+        );
+
+        let bad = Outcome::with_data(
+            "server error",
+            json!({ "host": "blog.test", "status": 502, "ok": false }),
+        );
+        let drafts = evidence_for("site.verify", &json!({ "host": "blog.test" }), Some(&bad));
+        assert!(!drafts[0].passed);
+
+        // A successful call that did not observe a healthy answer is not proof.
+        let silent = Outcome::with_data("no answer", json!({ "host": "blog.test" }));
+        let drafts = evidence_for(
+            "site.verify",
+            &json!({ "host": "blog.test" }),
+            Some(&silent),
+        );
+        assert!(!drafts[0].passed);
+    }
+
+    #[test]
+    fn installing_a_runtime_records_both_the_change_and_the_proof() {
+        let installed = Outcome::with_data("installed", json!({ "verified_version": "8.3.14" }));
+        let drafts = evidence_for(
+            "runtime.install",
+            &json!({ "kind": "php", "version": "8.3" }),
+            Some(&installed),
+        );
+        assert_eq!(drafts.len(), 2);
+        assert_eq!(drafts[0].kind, EvidenceKind::Change);
+        assert!(drafts[0].passed);
+        assert_eq!(drafts[1].kind, EvidenceKind::Runtime);
+        assert!(drafts[1].passed);
+
+        // An install whose binary never reported a version changed the disk but
+        // did not prove the runtime works.
+        let unproven = Outcome::with_data("unpacked", json!({}));
+        let drafts = evidence_for(
+            "runtime.install",
+            &json!({ "kind": "php", "version": "8.3" }),
+            Some(&unproven),
+        );
+        assert!(drafts[0].passed);
+        assert!(!drafts[1].passed);
     }
 
     #[test]
@@ -1186,16 +1811,16 @@ mod tests {
                 "project.exec",
                 &json!({ "argv": ["git", "status"] }),
                 Some(&ok)
-            )
+            )[0]
             .kind,
             EvidenceKind::Command
         );
         assert_eq!(
-            evidence_for("project.run", &json!({ "task": "test" }), Some(&ok)).kind,
+            evidence_for("project.run", &json!({ "task": "test" }), Some(&ok))[0].kind,
             EvidenceKind::Verify
         );
         assert_eq!(
-            evidence_for("project.run", &json!({ "task": "dev" }), Some(&ok)).kind,
+            evidence_for("project.run", &json!({ "task": "dev" }), Some(&ok))[0].kind,
             EvidenceKind::Command
         );
     }
@@ -1206,7 +1831,7 @@ mod tests {
             "timed out",
             json!({ "ok": false, "exit_code": 0, "timed_out": true }),
         );
-        assert!(!evidence_for("project.run", &json!({ "task": "test" }), Some(&out)).passed);
+        assert!(!evidence_for("project.run", &json!({ "task": "test" }), Some(&out))[0].passed);
     }
 
     #[test]

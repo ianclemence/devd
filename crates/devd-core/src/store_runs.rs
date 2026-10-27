@@ -729,11 +729,18 @@ impl Store {
     }
 
     /// Find a completed call by idempotency key, for safe retry.
-    pub fn completed_call_by_key(&self, key: &str) -> Result<Option<ToolCall>> {
+    ///
+    /// The lookup is scoped to the capability as well as the key: a key is the
+    /// caller's name for one operation, and two capabilities that happen to pick
+    /// the same name are two different operations. The arguments are compared by
+    /// the dispatcher, which refuses a key reused for different arguments.
+    pub fn completed_call_by_key(&self, key: &str, capability: &str) -> Result<Option<ToolCall>> {
         self.with(|c| {
             Ok(c.query_row(
-                &format!("SELECT {TOOL_COLS} FROM tool_calls WHERE idempotency_key=?1 AND ok=1"),
-                params![key],
+                &format!(
+                    "SELECT {TOOL_COLS} FROM tool_calls WHERE idempotency_key=?1 AND capability=?2 AND ok=1 ORDER BY started_at LIMIT 1"
+                ),
+                params![key, capability],
                 tool_row,
             )
             .optional()?)

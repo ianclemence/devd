@@ -191,15 +191,24 @@ impl Registry {
 
         // A completed call for this exact key is the answer, not a second side
         // effect. Only successful calls are reused: a failure may be retried.
+        // The key is scoped to the capability and the arguments, so two callers
+        // that happen to pick the same key cannot replay each other's work.
+        let args_hash = crate::util::sha256_hex(req.args.to_string().as_bytes());
         if let Some(key) = opts.idempotency_key {
-            if let Some(previous) = ctx.store.completed_call_by_key(key)? {
-                if let Some(result) = previous
-                    .result
-                    .as_ref()
-                    .and_then(|v| serde_json::from_value::<InvokeResult>(v.clone()).ok())
-                {
+            if let Some(previous) = ctx.store.completed_call_by_key(key, &cap.id)? {
+                if previous.args_hash != args_hash {
+                    return Err(DevdError::conflict(format!(
+                        "the idempotency key `{key}` was already used for `{}` with different arguments; refusing to replay a different operation",
+                        cap.id
+                    )));
+                }
+                if let Some(result) = replay_result(ctx, &previous) {
                     return Ok(result);
                 }
+                return Err(DevdError::conflict(format!(
+                    "`{}` already completed for that key but its recorded result cannot be read; refusing to run the side effect again",
+                    cap.id
+                )));
             }
         }
 
@@ -384,12 +393,18 @@ impl Registry {
                 let args_hash = crate::util::sha256_hex(req.args.to_string().as_bytes());
                 let outcome = result.as_ref().ok().and_then(|r| r.outcome.as_ref());
                 let evidence = crate::runs::evidence_for(&cap.id, &req.args, outcome);
+                let exit_code = evidence.iter().find_map(|e| e.exit_code);
                 let error_code = result.as_ref().err().map(|e| e.code());
                 let error = result.as_ref().err().map(|e| e.to_string());
                 let serialized = result
                     .as_ref()
                     .ok()
                     .and_then(|r| serde_json::to_value(r).ok());
+                // A row holds a summary. The whole output is a bounded file that
+                // the evidence and the timeline point at, so a large build log
+                // stays inspectable without being copied into every row and
+                // every model request.
+                let (stored, pending) = prepare_result(ctx, &run.run_id, &cap.id, serialized);
                 let call = ctx.store.record_tool_call(crate::store_runs::NewToolCall {
                     run_id: Some(&run.run_id),
                     step_id: run.step_id.as_deref(),
@@ -404,24 +419,42 @@ impl Registry {
                     ok,
                     error_code,
                     error: error.as_deref(),
-                    exit_code: evidence.exit_code,
+                    exit_code,
                     duration_ms,
-                    result: serialized.as_ref(),
+                    result: stored.as_ref(),
                     started_at,
                 });
                 if let Ok(call) = call {
-                    let _ = ctx.store.add_evidence(crate::store_runs::NewEvidence {
-                        run_id: &run.run_id,
-                        step_id: run.step_id.as_deref(),
-                        tool_call_id: Some(&call.id),
-                        artifact_id: None,
-                        kind: evidence.kind.as_str(),
-                        capability: &cap.id,
-                        passed: evidence.passed,
-                        claim: None,
-                        summary: &evidence.summary,
-                        detail: evidence.detail.as_deref(),
+                    let artifact = pending.and_then(|p| {
+                        ctx.store
+                            .add_artifact(crate::store_runs::NewArtifact {
+                                run_id: Some(&run.run_id),
+                                tool_call_id: Some(&call.id),
+                                kind: "output",
+                                name: &p.name,
+                                mime: Some("application/json"),
+                                bytes: p.bytes,
+                                path: Some(&p.path),
+                                sha256: Some(&p.sha256),
+                                summary: Some(&p.summary),
+                            })
+                            .ok()
                     });
+                    let artifact_id = artifact.as_ref().map(|a| a.id.as_str());
+                    for draft in evidence {
+                        let _ = ctx.store.add_evidence(crate::store_runs::NewEvidence {
+                            run_id: &run.run_id,
+                            step_id: run.step_id.as_deref(),
+                            tool_call_id: Some(&call.id),
+                            artifact_id,
+                            kind: draft.kind.as_str(),
+                            capability: &cap.id,
+                            passed: draft.passed,
+                            claim: None,
+                            summary: &draft.summary,
+                            detail: draft.detail.as_deref(),
+                        });
+                    }
                 }
             }
         }
@@ -434,6 +467,122 @@ impl Registry {
             );
         }
     }
+}
+
+/// Largest result kept inline in a tool-call row and in the model's context.
+///
+/// A row and every model request should carry a summary. The whole output is a
+/// bounded file that the evidence and the timeline point at, so a large build log
+/// stays inspectable without being copied into every row and every request.
+const MAX_INLINE_RESULT: usize = 24_000;
+
+/// Largest output written to an artifact file.
+///
+/// A runaway command must not be able to fill the disk. Output above this size is
+/// still recorded inline as a bounded preview, but it is not replayed: repeating
+/// the side effect would be worse than an honest conflict.
+const MAX_ARTIFACT_BYTES: usize = 8 * 1024 * 1024;
+
+/// A bounded copy of a large result, waiting to be filed against its tool call.
+struct PendingArtifact {
+    name: String,
+    path: String,
+    bytes: i64,
+    sha256: String,
+    summary: String,
+}
+
+/// Split one result into the value stored in the row and, when it is large, a
+/// bounded file beside the run.
+///
+/// The row keeps a small envelope naming the file, its size and its digest, plus
+/// a preview. The file keeps the complete serialized [`InvokeResult`], which is
+/// what an idempotent retry replays.
+fn prepare_result(
+    ctx: &Ctx,
+    run_id: &str,
+    capability: &str,
+    value: Option<Value>,
+) -> (Option<Value>, Option<PendingArtifact>) {
+    let Some(value) = value else {
+        return (None, None);
+    };
+    let text = value.to_string();
+    if text.len() <= MAX_INLINE_RESULT {
+        return (Some(value), None);
+    }
+
+    let sha256 = crate::util::sha256_hex(text.as_bytes());
+    let bytes = text.len() as i64;
+    let preview = crate::util::truncate(&text, MAX_INLINE_RESULT);
+
+    if text.len() > MAX_ARTIFACT_BYTES {
+        // Refuse to write an unbounded file. The row still says what happened and
+        // how much was omitted, and a retry fails closed instead of guessing.
+        return (
+            Some(serde_json::json!({
+                "truncated": true,
+                "too_large": true,
+                "bytes": bytes,
+                "sha256": sha256,
+                "preview": preview,
+            })),
+            None,
+        );
+    }
+
+    let name = format!("{capability}-{}.json", crate::util::new_id());
+    let relative = format!("artifacts/{run_id}/{name}");
+    let path = ctx.paths.root().join(&relative);
+    if let Err(err) = crate::util::atomic_write(&path, &text) {
+        // Filing the transcript must never fail the operation that produced it.
+        return (
+            Some(serde_json::json!({
+                "truncated": true,
+                "artifact_error": err.to_string(),
+                "bytes": bytes,
+                "sha256": sha256,
+                "preview": preview,
+            })),
+            None,
+        );
+    }
+
+    (
+        Some(serde_json::json!({
+            "truncated": true,
+            "bytes": bytes,
+            "sha256": sha256,
+            "artifact": relative,
+            "preview": preview,
+        })),
+        Some(PendingArtifact {
+            name,
+            path: relative,
+            bytes,
+            sha256,
+            summary: format!("{capability} output, {bytes} bytes"),
+        }),
+    )
+}
+
+/// Read back the result recorded for a completed call.
+///
+/// A small result is the row itself. A large one is the file named by the row's
+/// envelope. Anything else - a missing file, an unreadable file, a shape this
+/// version does not understand - returns `None`, so the caller can refuse to run
+/// the side effect a second time.
+fn replay_result(ctx: &Ctx, previous: &crate::runs::ToolCall) -> Option<InvokeResult> {
+    let value = previous.result.as_ref()?;
+    if let Ok(result) = serde_json::from_value::<InvokeResult>(value.clone()) {
+        return Some(result);
+    }
+    if value.get("truncated").and_then(Value::as_bool) != Some(true) {
+        return None;
+    }
+    let relative = value.get("artifact").and_then(Value::as_str)?;
+    let text = std::fs::read_to_string(ctx.paths.root().join(relative)).ok()?;
+    serde_json::from_str::<InvokeResult>(&text).ok()
 }
 
 /// Run-scoped metadata for one dispatch.
@@ -711,5 +860,178 @@ mod tests {
         assert!(!s.contains("abc123"));
         assert!(s.contains("\"user\":\"ian\""));
         assert!(s.contains("yes"));
+    }
+
+    fn run_ctx() -> (Ctx, String, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::rooted(dir.path().join("devd"));
+        paths.ensure().unwrap();
+        let store = Arc::new(Store::open_in_memory().unwrap());
+        store.migrate().unwrap();
+        let run = store
+            .start_run(crate::store_runs::RunSpec {
+                goal: "exercise the dispatcher",
+                mode: crate::runs::RunMode::Api,
+                project: None,
+                actor: "human:test",
+                thread_id: None,
+                team_run_id: None,
+                acceptance: &[],
+            })
+            .unwrap();
+        let ctx = Ctx {
+            store: store.clone(),
+            paths: Arc::new(paths),
+            settings: Arc::new(Settings::default()),
+            events: EventBus::new(),
+            actor: Actor::human(Surface::Cli),
+            run: Some(crate::runs::RunContext::new(&run.id).with_store(store)),
+            dry_run: false,
+        };
+        (ctx, run.id, dir)
+    }
+
+    fn registry_with_large_output(counter: Arc<std::sync::atomic::AtomicUsize>) -> Registry {
+        let mut reg = Registry::new();
+        reg.register(
+            Capability::builder("demo.build", "build something")
+                .tier(Tier::Write)
+                .effect(crate::capability::Effect::Write)
+                .handler(
+                    |_, _| Ok(Plan::new("demo.build", "would build")),
+                    move |_, _| {
+                        counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        Ok(Outcome::with_data(
+                            "built",
+                            serde_json::json!({ "log": "x".repeat(50_000) }),
+                        ))
+                    },
+                )
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
+        reg
+    }
+
+    #[test]
+    fn a_large_output_becomes_a_bounded_artifact_and_replays_without_rerunning() {
+        let (ctx, run_id, _dir) = run_ctx();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let reg = registry_with_large_output(calls.clone());
+        let req = InvokeRequest {
+            id: "demo.build".into(),
+            args: serde_json::json!({ "target": "release" }),
+            dry_run: false,
+        };
+        let opts = DispatchOptions {
+            idempotency_key: Some("build-release"),
+            ..Default::default()
+        };
+        let first = reg
+            .dispatch_with(&ctx, &req, Approval::Granted, &opts)
+            .unwrap();
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        // The row carries a small envelope, not half a megabyte of log.
+        let call = ctx.store.list_tool_calls(&run_id, 10).unwrap().remove(0);
+        let stored = call.result.as_ref().unwrap();
+        assert_eq!(stored["truncated"], true);
+        assert!(
+            stored["preview"].as_str().unwrap().len() < MAX_INLINE_RESULT + 64,
+            "the preview is bounded"
+        );
+        assert!(stored.get("artifact").is_some());
+
+        // The whole output is a file, and the evidence points at it.
+        let artifacts = ctx.store.list_artifacts(&run_id, 10).unwrap();
+        assert_eq!(artifacts.len(), 1);
+        let path = ctx.paths.root().join(artifacts[0].path.as_ref().unwrap());
+        assert!(path.exists(), "{} should exist", path.display());
+        assert!(std::fs::metadata(&path).unwrap().len() > MAX_INLINE_RESULT as u64);
+        let evidence = ctx.store.list_evidence(&run_id, 10).unwrap();
+        assert_eq!(
+            evidence[0].artifact_id.as_deref(),
+            Some(artifacts[0].id.as_str())
+        );
+
+        // A retry returns the original result and runs nothing.
+        let replay = reg
+            .dispatch_with(&ctx, &req, Approval::Granted, &opts)
+            .unwrap();
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            replay.outcome.unwrap().data["log"].as_str().unwrap().len(),
+            50_000
+        );
+        assert_eq!(
+            first.outcome.unwrap().data["log"].as_str().unwrap().len(),
+            50_000
+        );
+    }
+
+    #[test]
+    fn an_idempotency_key_is_scoped_to_one_capability_and_its_arguments() {
+        let (ctx, _run_id, _dir) = run_ctx();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let reg = registry_with_large_output(calls.clone());
+        let req = InvokeRequest {
+            id: "demo.build".into(),
+            args: serde_json::json!({ "target": "release" }),
+            dry_run: false,
+        };
+        let opts = DispatchOptions {
+            idempotency_key: Some("shared"),
+            ..Default::default()
+        };
+        reg.dispatch_with(&ctx, &req, Approval::Granted, &opts)
+            .unwrap();
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        // The same key with different arguments is a conflict, not a replay of
+        // the first build.
+        let different = InvokeRequest {
+            args: serde_json::json!({ "target": "debug" }),
+            ..req.clone()
+        };
+        let err = reg
+            .dispatch_with(&ctx, &different, Approval::Granted, &opts)
+            .unwrap_err();
+        assert!(matches!(err, DevdError::Conflict(_)), "got {err:?}");
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        // A different capability may reuse the caller's key: it is a different
+        // operation with its own record.
+        let mut other = Registry::new();
+        let other_calls = calls.clone();
+        other
+            .register(
+                Capability::builder("demo.publish", "publish something")
+                    .tier(Tier::Write)
+                    .effect(crate::capability::Effect::Write)
+                    .handler(
+                        |_, _| Ok(Plan::new("demo.publish", "would publish")),
+                        move |_, _| {
+                            other_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            Ok(Outcome::ok("published"))
+                        },
+                    )
+                    .build()
+                    .unwrap(),
+            )
+            .unwrap();
+        other
+            .dispatch_with(
+                &ctx,
+                &InvokeRequest {
+                    id: "demo.publish".into(),
+                    args: serde_json::json!({}),
+                    dry_run: false,
+                },
+                Approval::Granted,
+                &opts,
+            )
+            .unwrap();
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 }

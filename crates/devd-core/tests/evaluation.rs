@@ -149,8 +149,8 @@ fn a_workflow_records_calls_and_only_real_evidence_completes_it() {
 
     // The registry normalizes the outcome into evidence at the boundary.
     let draft = evidence_for("fs.write", &json!({ "n": 1 }), change.outcome.as_ref());
-    assert_eq!(draft.kind, EvidenceKind::Change);
-    assert!(draft.passed);
+    assert_eq!(draft[0].kind, EvidenceKind::Change);
+    assert!(draft[0].passed);
 
     let policy = CompletionPolicy::for_goal("fix the parser", &[]);
     let after_change = evaluate(&policy, &store.list_evidence(&run_id, 100).unwrap());
@@ -174,8 +174,8 @@ fn a_workflow_records_calls_and_only_real_evidence_completes_it() {
         &json!({ "task": "test" }),
         verify.outcome.as_ref(),
     );
-    assert_eq!(verify_draft.kind, EvidenceKind::Verify);
-    assert!(verify_draft.passed);
+    assert_eq!(verify_draft[0].kind, EvidenceKind::Verify);
+    assert!(verify_draft[0].passed);
     let verdict = evaluate(&policy, &store.list_evidence(&run_id, 100).unwrap());
     assert!(verdict.passed(), "{:?}", verdict.missing);
 
