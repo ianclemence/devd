@@ -165,6 +165,24 @@ pub struct Hub {
     cancel: Mutex<HashMap<String, Arc<AtomicBool>>>,
 }
 
+/// The advertised context window for a model, when the catalogue has one.
+///
+/// The name is what the provider calls the model and what the catalogue stores,
+/// so this is an exact lookup rather than a guess from the name. When several
+/// sources list the same id, the largest window is the safest to plan for; when
+/// none does, the estimator in `ContextBudget` is used instead.
+fn catalogue_context_window(store: &devd_core::state::Store, model: &str) -> Option<usize> {
+    store
+        .list_catalogue(None)
+        .ok()?
+        .into_iter()
+        .filter(|m| m.model_id == model)
+        .filter_map(|m| m.context_window)
+        .filter_map(|w| usize::try_from(w).ok())
+        .filter(|w| *w > 0)
+        .max()
+}
+
 fn cap_text(text: &str, max: usize) -> String {
     if text.chars().count() <= max {
         return text.to_string();
@@ -993,7 +1011,10 @@ impl Hub {
                 .first()
                 .map(|c| c.2.clone())
                 .unwrap_or_else(|| thread.model.clone().unwrap_or_default());
-            let budget = ContextBudget::for_model(&model_hint, None);
+            let budget = ContextBudget::for_model(
+                &model_hint,
+                catalogue_context_window(&self.ctx.store, &model_hint),
+            );
             let working = context::build_working_set(&events, &budget, &system);
             let messages = working.messages;
             let _ = self.ctx.store.append_run_event(
@@ -1419,54 +1440,80 @@ impl Hub {
         // the HTTP token flow and this path all race on the same row update.
         let approval_id = req.approval_id.clone().unwrap_or_else(|| req.id.clone());
         if approve {
+            // One approval authorises one application. If another surface has
+            // already consumed it, the recorded outcome is the answer: dispatching
+            // again would repeat a side effect the person agreed to exactly once.
+            let already_applied: Option<(Option<Value>, Option<String>)>;
             let approval = match self.ctx.store.consume_approval_by_id(&approval_id) {
-                Ok(a) => a,
-                Err(e) => {
-                    // Another surface may have consumed it a moment ago. Its
-                    // recorded result is still the truth, so adopt it rather than
-                    // failing an approval the person did make.
-                    match self.ctx.store.get_approval(&approval_id)? {
-                        Some(a) if a.state == "consumed" || a.state == "approved" => a,
-                        _ => return Err(e),
+                Ok(a) => {
+                    already_applied = None;
+                    a
+                }
+                Err(e) => match self.ctx.store.get_approval(&approval_id)? {
+                    Some(a) if a.state == "consumed" || a.state == "failed" => {
+                        already_applied = Some((a.result.clone(), a.error.clone()));
+                        a
                     }
+                    // Granted but not consumed: this decision is the one that
+                    // applies it, so it is safe to dispatch below.
+                    Some(a) if a.state == "approved" => {
+                        already_applied = None;
+                        a
+                    }
+                    _ => return Err(e),
+                },
+            };
+            let dispatched = already_applied.is_none();
+            let result: Result<Value> = match already_applied {
+                Some((_stored, Some(error))) => Err(DevdError::conflict(format!(
+                    "that approval was already applied and failed: {error}"
+                ))),
+                Some((stored, None)) => Ok(stored.unwrap_or(Value::Null)),
+                None => {
+                    let mut ctx = caller.clone();
+                    if let Some(rid) = &approval.run_id {
+                        let _ = self
+                            .ctx
+                            .store
+                            .transition_run(rid, RunState::Executing, None);
+                        ctx.run =
+                            Some(RunContext::new(rid.clone()).with_store(self.ctx.store.clone()));
+                    }
+                    // A person approved this. Run it with the person's authority, not the agent's:
+                    // the agent's fence is what asked in the first place, and re-applying it would
+                    // make an approval of an outside path impossible to carry out.
+                    //
+                    // The approval id is also the idempotency key, so a retry that
+                    // reaches the dispatcher after the call was recorded replays
+                    // rather than applying the operation twice.
+                    let opts = devd_core::DispatchOptions {
+                        approval_id: Some(&approval_id),
+                        idempotency_key: approval.run_id.as_ref().map(|_| approval_id.as_str()),
+                        ..Default::default()
+                    };
+                    let result = registry.dispatch_with(&ctx, &invoke, Approval::Granted, &opts);
+                    // A headless run (an outside MCP call) is one invocation. The
+                    // operation it was waiting on is the last thing it needed, so the
+                    // run is settled here. A conversation's run continues to its next
+                    // turn and is settled by the agent loop, not by this decision.
+                    if let Some(rid) = approval.run_id.clone() {
+                        if self
+                            .ctx
+                            .store
+                            .run_by_id(&rid)?
+                            .is_some_and(|r| r.typed_mode() == RunMode::Headless)
+                        {
+                            match &result {
+                                Ok(_) => self.ctx.store.conclude_run(&rid, None),
+                                Err(e) => self.ctx.store.conclude_run(&rid, Some(&e.to_string())),
+                            }
+                        }
+                    }
+                    result.map(|res| serde_json::to_value(res.outcome).unwrap_or(Value::Null))
                 }
             };
-            let mut ctx = caller.clone();
-            if let Some(rid) = &approval.run_id {
-                let _ = self
-                    .ctx
-                    .store
-                    .transition_run(rid, RunState::Executing, None);
-                ctx.run = Some(RunContext::new(rid.clone()).with_store(self.ctx.store.clone()));
-            }
-            // A person approved this. Run it with the person's authority, not the agent's:
-            // the agent's fence is what asked in the first place, and re-applying it would
-            // make an approval of an outside path impossible to carry out.
-            let opts = devd_core::DispatchOptions {
-                approval_id: Some(&approval_id),
-                ..Default::default()
-            };
-            let result = registry.dispatch_with(&ctx, &invoke, Approval::Granted, &opts);
-            // A headless run (an outside MCP call) is one invocation. The
-            // operation it was waiting on is the last thing it needed, so the
-            // run is settled here. A conversation's run continues to its next
-            // turn and is settled by the agent loop, not by this decision.
-            if let Some(rid) = approval.run_id.clone() {
-                if self
-                    .ctx
-                    .store
-                    .run_by_id(&rid)?
-                    .is_some_and(|r| r.typed_mode() == RunMode::Headless)
-                {
-                    match &result {
-                        Ok(_) => self.ctx.store.conclude_run(&rid, None),
-                        Err(e) => self.ctx.store.conclude_run(&rid, Some(&e.to_string())),
-                    }
-                }
-            }
             match result {
-                Ok(res) => {
-                    let out = serde_json::to_value(res.outcome).unwrap_or(Value::Null);
+                Ok(out) => {
                     self.ctx.store.decide_request(
                         request_id,
                         "approved",
@@ -1474,9 +1521,11 @@ impl Hub {
                         Some(&out),
                         None,
                     )?;
-                    self.ctx
-                        .store
-                        .finish_approval(&approval_id, Some(&out), None)?;
+                    if dispatched {
+                        self.ctx
+                            .store
+                            .finish_approval(&approval_id, Some(&out), None)?;
+                    }
                 }
                 Err(e) => {
                     self.ctx.store.decide_request(
@@ -1486,9 +1535,11 @@ impl Hub {
                         None,
                         Some(&e.to_string()),
                     )?;
-                    self.ctx
-                        .store
-                        .finish_approval(&approval_id, None, Some(&e.to_string()))?;
+                    if dispatched {
+                        self.ctx
+                            .store
+                            .finish_approval(&approval_id, None, Some(&e.to_string()))?;
+                    }
                 }
             }
         } else {
@@ -1774,5 +1825,102 @@ mod tests {
         let (surface, invoke, _) = route_call("devd_groups", json!({}), &direct, &HashMap::new());
         assert_eq!(surface, "devd_groups");
         assert_eq!(invoke, json!({}));
+    }
+
+    #[test]
+    fn the_catalogue_window_is_used_for_the_context_budget() {
+        use devd_core::store_ai::CatalogueModel;
+        let ctx = test_ctx("window");
+        ctx.store
+            .replace_catalogue(
+                "provider:test",
+                &[CatalogueModel {
+                    source: "provider:test".into(),
+                    model_id: "test-model".into(),
+                    display: "Test".into(),
+                    description: None,
+                    context_window: Some(500_000),
+                    max_output: None,
+                    input_price: None,
+                    output_price: None,
+                    retirement: None,
+                    url: None,
+                    fetched_at: "".into(),
+                }],
+            )
+            .unwrap();
+        assert_eq!(
+            catalogue_context_window(&ctx.store, "test-model"),
+            Some(500_000)
+        );
+        assert_eq!(catalogue_context_window(&ctx.store, "not-listed"), None);
+    }
+
+    #[test]
+    fn an_approval_another_surface_applied_is_not_applied_again() {
+        use devd_core::capability::{Effect, Outcome, Plan, Tier};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let ctx = test_ctx("decide");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = calls.clone();
+        let mut reg = Registry::new();
+        reg.define::<ReadArgs>("demo.write", "Write something")
+            .tier(Tier::Write)
+            .effect(Effect::Write)
+            .agent_safe()
+            .handlers(
+                |_, a: &ReadArgs| Ok(Plan::new("demo.write", format!("write {}", a.path))),
+                move |_, a: &ReadArgs| {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                    Ok(Outcome::ok(format!("wrote {}", a.path)))
+                },
+            )
+            .unwrap();
+        let hub = Hub::new(ctx.clone());
+        hub.attach(Arc::new(reg));
+
+        let request = ctx
+            .store
+            .create_request(
+                "agent:test",
+                "demo.write",
+                &json!({ "path": "x" }),
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        let approval_id = request.approval_id.clone().unwrap();
+
+        // Another surface - the HTTP token flow, or a second window - consumed
+        // the same approval and recorded what it did.
+        ctx.store.consume_approval_by_id(&approval_id).unwrap();
+        ctx.store
+            .finish_approval(
+                &approval_id,
+                Some(&json!({
+                    "ok": true,
+                    "message": "already wrote x",
+                    "data": null,
+                    "warnings": [],
+                })),
+                None,
+            )
+            .unwrap();
+
+        let decided = hub.decide(&ctx, &request.id, true).unwrap();
+        assert_eq!(decided.state, "approved");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "a single-use approval must not run its side effect twice"
+        );
+        let approval = ctx.store.get_approval(&approval_id).unwrap().unwrap();
+        assert_eq!(
+            approval.result.unwrap()["message"],
+            "already wrote x",
+            "the recorded outcome is what the decision reports"
+        );
     }
 }
