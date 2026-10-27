@@ -48,6 +48,8 @@ A project can declare its dev processes in `devd.yml`. devd shows the exact comm
 
 Describe what you want built (`devd team start "…" --project .`, or Assistant → Team runs in the window). A planner proposes tasks; you approve the plan; specialists work in parallel in isolated copies of the project. A task counts only when devd can see the files that changed and a check that passed. Configure providers, and which model does which work, under **Models**. See [`docs/agents.md`](docs/agents.md).
 
+A conversation, a team run, a scheduled job and an API call write the same record: steps, capability calls, evidence, approvals and a replayable timeline. The conversation header and the team run open that record in place; there is no separate place to look. See [`docs/runs.md`](docs/runs.md).
+
 ---
 
 ## Platforms
@@ -79,8 +81,8 @@ On Linux and macOS devd does not download a second copy of nginx or MariaDB. It 
 Download and run the installer from the [latest release](https://github.com/ianclemence/devd/releases/latest):
 
 ```powershell
-curl.exe -LO https://github.com/ianclemence/devd/releases/download/v0.13.8/devd-setup-0.13.8.exe
-.\devd-setup-0.13.8.exe
+curl.exe -LO https://github.com/ianclemence/devd/releases/download/v0.14.0/devd-setup-0.14.0.exe
+.\devd-setup-0.14.0.exe
 ```
 
 It installs for the current user only, adds `devd` to `PATH` and creates Start Menu entries. Uninstalling keeps your sites and data in `%LOCALAPPDATA%\devd`. The installer is not code-signed, so SmartScreen warns once; `SHA256SUMS.txt` on the release lets you check what you downloaded. A portable `devd.exe` and a portable window are attached to each release as well.
@@ -154,6 +156,7 @@ logs/             service and session logs
 | [`docs/security.md`](docs/security.md) | The threat model and the specific protections. |
 | [`docs/app.md`](docs/app.md), [`docs/design.md`](docs/design.md), [`docs/tui.md`](docs/tui.md), [`docs/mcp.md`](docs/mcp.md) | The window, its design system, its API, the terminal dashboard and the agent surface. |
 | [`docs/agents.md`](docs/agents.md) | The assistant, the team, skills and models. |
+| [`docs/runs.md`](docs/runs.md) | Runs, evidence, approvals, context, events and recovery. |
 | [`docs/operations.md`](docs/operations.md) | The server-panel operations: env, cron, workers, deploys, backups, servers. |
 | [`docs/workflows.md`](docs/workflows.md) | Reviews, agent memory and the project workspace. |
 | [`docs/stacks.md`](docs/stacks.md), [`docs/stacks-engine.md`](docs/stacks-engine.md) | Supported stacks and how they are defined. |
