@@ -9,8 +9,8 @@ use serde_json::Value;
 
 use crate::error::{DevdError, Result};
 use crate::runs::{
-    ApprovalRecord, ArtifactRecord, CompletionPolicy, Evidence, Run, RunEvent, RunMode, RunState,
-    RunStep, ToolCall,
+    evaluate, ApprovalRecord, ArtifactRecord, CompletionPolicy, Evidence, Run, RunEvent, RunMode,
+    RunState, RunStep, ToolCall,
 };
 use crate::state::Store;
 use crate::util;
@@ -354,6 +354,51 @@ impl Store {
         })?;
         self.run_by_id(&id)?
             .ok_or_else(|| DevdError::internal("the run was not stored"))
+    }
+
+    /// Start a run for one invocation whose caller brought no run of its own.
+    ///
+    /// An outside MCP agent owns its session, not a devd run, so the call it
+    /// makes becomes the unit of work: one run, executed immediately, with the
+    /// tool call and derived evidence the registry writes at the boundary. The
+    /// HTTP API uses the same shape for a deploy hook.
+    pub fn start_standalone_run(
+        &self,
+        mode: RunMode,
+        goal: &str,
+        actor: &str,
+    ) -> Result<Run> {
+        let run = self.start_run(RunSpec {
+            goal,
+            mode,
+            project: None,
+            actor,
+            thread_id: None,
+            team_run_id: None,
+            acceptance: &[],
+        })?;
+        let _ = self.transition_run(&run.id, RunState::Executing, None);
+        Ok(run)
+    }
+
+    /// Finish a standalone run from the evidence the call left.
+    ///
+    /// A failed invocation is a failed run. A successful one is only
+    /// `completed` when its completion policy is satisfied; otherwise it is
+    /// `unverified`, which is the honest word for "the call returned but
+    /// nothing proved the goal".
+    pub fn conclude_run(&self, run_id: &str, error: Option<&str>) {
+        let Some(run) = self.run_by_id(run_id).ok().flatten() else {
+            return;
+        };
+        let (next, error) = match error {
+            Some(e) => (RunState::Failed, Some(e)),
+            None => {
+                let evidence = self.list_evidence(run_id, 10_000).unwrap_or_default();
+                (evaluate(&run.completion_policy, &evidence).state, None)
+            }
+        };
+        let _ = self.transition_run(run_id, next, error);
     }
 
     /// One run.

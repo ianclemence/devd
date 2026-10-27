@@ -1184,6 +1184,7 @@ impl Hub {
                                 &invoke["args"],
                                 body.get("plan"),
                                 Some(tid),
+                                None,
                                 Some(&id),
                             )?;
                             self.log(tid, "approval", json!({ "request_id": req.id, "tool_use_id": id, "capability": cap, "args": invoke["args"], "plan": body.get("plan") }))?;
@@ -1445,7 +1446,25 @@ impl Hub {
                 approval_id: Some(&approval_id),
                 ..Default::default()
             };
-            match registry.dispatch_with(&ctx, &invoke, Approval::Granted, &opts) {
+            let result = registry.dispatch_with(&ctx, &invoke, Approval::Granted, &opts);
+            // A headless run (an outside MCP call) is one invocation. The
+            // operation it was waiting on is the last thing it needed, so the
+            // run is settled here. A conversation's run continues to its next
+            // turn and is settled by the agent loop, not by this decision.
+            if let Some(rid) = approval.run_id.clone() {
+                if self
+                    .ctx
+                    .store
+                    .run_by_id(&rid)?
+                    .is_some_and(|r| r.typed_mode() == RunMode::Headless)
+                {
+                    match &result {
+                        Ok(_) => self.ctx.store.conclude_run(&rid, None),
+                        Err(e) => self.ctx.store.conclude_run(&rid, Some(&e.to_string())),
+                    }
+                }
+            }
+            match result {
                 Ok(res) => {
                     let out = serde_json::to_value(res.outcome).unwrap_or(Value::Null);
                     self.ctx.store.decide_request(

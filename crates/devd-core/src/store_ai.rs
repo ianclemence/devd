@@ -743,6 +743,10 @@ impl Store {
     /// approval mechanism. Every surface - the conversation, the HTTP API, the
     /// CLI's MCP queue - therefore sees the same pending decision, the same
     /// expiry, and the same single-use consumption.
+    /// Every argument is one column of the request, and the two optional
+    /// contexts (`thread_id`, `run_id`) are not always both known: the
+    /// conversation supplies a thread, an outside MCP call supplies a run.
+    #[allow(clippy::too_many_arguments)]
     pub fn create_request(
         &self,
         actor: &str,
@@ -750,13 +754,17 @@ impl Store {
         args: &serde_json::Value,
         plan: Option<&serde_json::Value>,
         thread_id: Option<&str>,
+        run_id: Option<&str>,
         tool_use_id: Option<&str>,
     ) -> Result<AgentRequest> {
         let id = util::new_id();
         let now = util::now();
-        let run_id = match thread_id {
-            Some(t) => self.run_for_thread(t)?.map(|r| r.id),
-            None => None,
+        let run_id = match run_id {
+            Some(r) => Some(r.to_string()),
+            None => match thread_id {
+                Some(t) => self.run_for_thread(t)?.map(|r| r.id),
+                None => None,
+            },
         };
         let args_hash = util::sha256_hex(args.to_string().as_bytes());
         let (_token, approval) = self.create_approval(crate::store_runs::NewApproval {

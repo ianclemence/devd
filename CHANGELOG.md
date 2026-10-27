@@ -10,6 +10,26 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.14.1] - 2026-10-27 - Every agent call is a run
+
+0.14.0 said an MCP tool call left the same trail as a direct call. It did not:
+an outside agent driving `devd mcp` had its calls audited, but no run, tool call
+or evidence row was written, because the server had no run to attach them to.
+This release makes the claim true.
+
+### Fixed
+
+- **An outside MCP call is a run.** `devd mcp` starts one headless run per call
+  when the caller did not bring one, so the capability, its redacted arguments,
+  the result and the derived evidence are recorded where the assistant and the
+  team record theirs. A dry run still opens none, and a caller that already has
+  a run - the built-in assistant - keeps it rather than opening a second,
+  competing timeline.
+- **A queued approval belongs to that run.** The request an outside agent queues
+  now carries the run id, so approving it records the operation in the run that
+  asked and settles that run when the operation returns, instead of leaving it
+  executing after the decision.
+
 ## [0.14.0] - 2026-10-27 - One run behind every piece of work
 
 A conversation, a team run, a scheduled job, an HTTP call and an MCP tool were

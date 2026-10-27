@@ -1197,6 +1197,7 @@ mod tests {
             None,
             Some(&t.id),
             None,
+            None,
         )
         .unwrap();
         let keep = s.create_thread("keep", None, None, None).unwrap();

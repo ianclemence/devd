@@ -18,7 +18,7 @@ use serde_json::{json, Value};
 
 use devd_core::capability::{Approval, Ctx, InvokeRequest};
 use devd_core::{
-    evaluate, DevdError, DispatchOptions, InvokeResult, RunContext, RunMode, RunSpec, RunState,
+    DevdError, DispatchOptions, InvokeResult, RunContext, RunMode, RunState,
     Store, Tier,
 };
 
@@ -781,43 +781,20 @@ fn begin_run(state: &Arc<AppState>, goal: &str) -> Option<(Ctx, String)> {
     let run = state
         .ctx
         .store
-        .start_run(RunSpec {
-            goal,
-            mode: RunMode::Api,
-            project: None,
-            actor: &actor,
-            thread_id: None,
-            team_run_id: None,
-            acceptance: &[],
-        })
+        .start_standalone_run(RunMode::Api, goal, &actor)
         .ok()?;
-    let _ = state
-        .ctx
-        .store
-        .transition_run(&run.id, RunState::Executing, None);
     let mut ctx = state.ctx.clone();
     ctx.run = Some(RunContext::new(run.id.clone()).with_store(state.ctx.store.clone()));
     Some((ctx, run.id))
 }
 
 /// Decide how a run ended, from the evidence the registry recorded.
-///
-/// A failed invocation is a failed run. A successful one is only `completed`
-/// when its completion policy is satisfied; otherwise it is `unverified`, which
-/// is the honest word for "the call returned but nothing proved the goal".
 fn settle(store: &Store, run_id: Option<&str>, result: &devd_core::Result<InvokeResult>) {
     let Some(run_id) = run_id else { return };
-    let Some(run) = store.run_by_id(run_id).ok().flatten() else {
-        return;
-    };
-    let (next, error) = match result {
-        Ok(_) => {
-            let evidence = store.list_evidence(run_id, 10_000).unwrap_or_default();
-            (evaluate(&run.completion_policy, &evidence).state, None)
-        }
-        Err(e) => (RunState::Failed, Some(e.to_string())),
-    };
-    let _ = store.transition_run(run_id, next, error.as_deref());
+    match result {
+        Ok(_) => store.conclude_run(run_id, None),
+        Err(e) => store.conclude_run(run_id, Some(&e.to_string())),
+    }
 }
 
 /// Compute a plan for a capability, tolerating one that cannot plan.

@@ -823,9 +823,9 @@ fn mcp_agents_get_their_approvals_queued() {
     let victim = e.root.join("www/proj/q.txt");
     std::fs::write(&victim, "x").unwrap();
     let store = e.agent.store.clone();
-    let queue: devd_mcp::ApprovalQueue = Arc::new(move |cap, args, plan| {
+    let queue: devd_mcp::ApprovalQueue = Arc::new(move |cap, args, plan, run_id| {
         store
-            .create_request("agent:claude-code", cap, args, plan, None, None)
+            .create_request("agent:claude-code", cap, args, plan, None, run_id, None)
             .ok()
             .map(|r| r.id)
     });

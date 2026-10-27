@@ -1990,9 +1990,9 @@ fn run(cli: Cli) -> Result<i32> {
                 vec![Arc::new(move || vec![git_check(git_executable.as_deref())])];
             let queue_store = app.store.clone();
             let actor_label = format!("agent:{client}");
-            let queue: devd_mcp::ApprovalQueue = Arc::new(move |cap, args, plan| {
+            let queue: devd_mcp::ApprovalQueue = Arc::new(move |cap, args, plan, run_id| {
                 queue_store
-                    .create_request(&actor_label, cap, args, plan, None, None)
+                    .create_request(&actor_label, cap, args, plan, None, run_id, None)
                     .ok()
                     .map(|r| r.id)
             });

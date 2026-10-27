@@ -52,7 +52,7 @@ use serde_json::{json, Value};
 
 use devd_core::capability::{Actor, Approval, Ctx};
 use devd_core::doctor::{self, Check, Level};
-use devd_core::{DevdError, InvokeRequest, Registry, Result};
+use devd_core::{DevdError, InvokeRequest, Registry, Result, RunContext, RunMode, RunState};
 
 /// The client side: the MCP servers devd connects to, as opposed to the one it serves.
 pub mod caps;
@@ -86,10 +86,12 @@ pub type ExtraChecks = Arc<dyn Fn() -> Vec<Check> + Send + Sync>;
 
 /// Called when an agent asks for an operation that needs a person's approval.
 ///
-/// Receives the capability id, its arguments and the plan, and returns the id of
-/// the queued request so the agent can poll for the decision. The queue lives
-/// outside this crate, which owns no storage.
-pub type ApprovalQueue = Arc<dyn Fn(&str, &Value, Option<&Value>) -> Option<String> + Send + Sync>;
+/// Receives the capability id, its arguments, the plan and the run the call
+/// belongs to (when there is one), and returns the id of the queued request so
+/// the agent can poll for the decision. The queue lives outside this crate,
+/// which owns no storage.
+pub type ApprovalQueue =
+    Arc<dyn Fn(&str, &Value, Option<&Value>, Option<&str>) -> Option<String> + Send + Sync>;
 
 /// The MCP server over the shared registry.
 pub struct McpServer {
@@ -410,11 +412,36 @@ impl McpServer {
             approval_id: None,
         };
 
+        // An outside agent brings no run: its session belongs to another
+        // program, not to devd. The call itself is the unit of work, so it gets
+        // a headless run, and the registry records the call and its evidence
+        // against it. A caller that already has a run - devd's own assistant -
+        // keeps it, so one tool call cannot open a second, competing timeline.
+        let owned = if self.ctx.run.is_none() && !dry_run {
+            self.ctx
+                .store
+                .start_standalone_run(
+                    RunMode::Headless,
+                    &format!("{id} over MCP"),
+                    &self.ctx.actor.label(),
+                )
+                .ok()
+        } else {
+            None
+        };
+        let mut ctx = self.ctx.clone();
+        if let Some(run) = &owned {
+            ctx.run = Some(RunContext::new(run.id.clone()).with_store(self.ctx.store.clone()));
+        }
+
         match self
             .registry
-            .dispatch_with(&self.ctx, &request, approval, &opts)
+            .dispatch_with(&ctx, &request, approval, &opts)
         {
             Ok(result) => {
+                if let Some(run) = &owned {
+                    self.ctx.store.conclude_run(&run.id, None);
+                }
                 let value = serde_json::to_value(&result).unwrap_or(Value::Null);
                 ToolOutcome::Content(pretty(&json!({
                     "ok": true,
@@ -423,6 +450,19 @@ impl McpServer {
                 })))
             }
             Err(e) => {
+                // The queued request is the durable record of what is waiting,
+                // so the run waits with it rather than claiming a failure.
+                if let Some(run) = &owned {
+                    if e.code() == "approval_required" {
+                        let _ = self.ctx.store.transition_run(
+                            &run.id,
+                            RunState::AwaitingApproval,
+                            None,
+                        );
+                    } else {
+                        self.ctx.store.conclude_run(&run.id, Some(&e.to_string()));
+                    }
+                }
                 // An operation that needs approval is not an error the model can
                 // fix, so hand it the plan and the next step. Producing the plan
                 // is itself a dry run: it changes nothing and is recorded as a
@@ -440,7 +480,9 @@ impl McpServer {
                         .map(|c| c.agent_safe && !c.human_only)
                         .unwrap_or(false);
                     if let (true, Some(queue)) = (queueable, &self.approval_queue) {
-                        if let Some(request_id) = queue(id, &cap_args, plan.as_ref()) {
+                        if let Some(request_id) =
+                            queue(id, &cap_args, plan.as_ref(), owned.as_ref().map(|r| r.id.as_str()))
+                        {
                             body["request_id"] = json!(request_id);
                             body["next_step"] = json!(format!(
                                 "The request was queued as {request_id} and shows in the devd inbox for a person to approve or decline. \
@@ -1115,6 +1157,86 @@ mod tests {
         let body = tool_json(&response);
         assert_eq!(body["ok"], true);
         assert_eq!(body["result"]["outcome"]["message"], "inspected");
+    }
+
+    #[test]
+    fn a_call_from_an_outside_agent_becomes_a_run_with_its_call_and_evidence() {
+        let (server, _) = fixture();
+        let response = call(
+            &server,
+            1,
+            "tools/call",
+            json!({
+                "name": "devd_invoke", "arguments": { "id": "test.inspect" }
+            }),
+        );
+        assert_eq!(response["result"]["isError"], false, "{response}");
+
+        let runs = server.ctx.store.recent_runs(10).unwrap();
+        assert_eq!(runs.len(), 1, "one outside call is one unit of work");
+        let run = &runs[0];
+        assert_eq!(run.typed_mode(), devd_core::RunMode::Headless);
+        assert_eq!(
+            run.typed_state(),
+            devd_core::RunState::Completed,
+            "a read that returned with nothing to prove is complete"
+        );
+        assert_eq!(run.actor, "agent:test-client");
+        let calls = server.ctx.store.list_tool_calls(&run.id, 10).unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].capability, "test.inspect");
+        let evidence = server.ctx.store.list_evidence(&run.id, 10).unwrap();
+        assert_eq!(evidence.len(), 1, "the call leaves evidence, not only an audit line");
+    }
+
+    #[test]
+    fn a_dry_run_from_an_outside_agent_opens_no_run() {
+        let (server, _) = fixture();
+        let response = call(
+            &server,
+            1,
+            "tools/call",
+            json!({
+                "name": "devd_invoke",
+                "arguments": { "id": "test.reset", "dry_run": true }
+            }),
+        );
+        assert_eq!(response["result"]["isError"], false, "{response}");
+        assert!(
+            server.ctx.store.recent_runs(10).unwrap().is_empty(),
+            "a plan is not a piece of work and must not leave a run claiming one"
+        );
+    }
+
+    #[test]
+    fn a_call_inside_a_run_joins_it_instead_of_opening_a_second() {
+        let (mut server, _) = fixture();
+        let existing = server
+            .ctx
+            .store
+            .start_standalone_run(devd_core::RunMode::Assistant, "a conversation turn", "agent:devd-agent")
+            .unwrap();
+        server.ctx.run = Some(RunContext::new(existing.id.clone()).with_store(server.ctx.store.clone()));
+        let response = call(
+            &server,
+            1,
+            "tools/call",
+            json!({
+                "name": "devd_invoke", "arguments": { "id": "test.inspect" }
+            }),
+        );
+        assert_eq!(response["result"]["isError"], false, "{response}");
+        let runs = server.ctx.store.recent_runs(10).unwrap();
+        assert_eq!(runs.len(), 1, "a caller that has a run keeps it");
+        assert_eq!(
+            server
+                .ctx
+                .store
+                .list_tool_calls(&existing.id, 10)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]
