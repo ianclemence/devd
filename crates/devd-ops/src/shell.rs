@@ -71,8 +71,21 @@ pub fn site_for_dir(ctx: &Ctx, cwd: &Path) -> Result<Option<Site>> {
     Ok(best.map(|(_, s)| s))
 }
 
+/// The version a runtime launcher belongs to.
+///
+/// The executable sits directly in the version folder on Windows
+/// (`php\8.3.1\php.exe`) and under `bin` on Unix
+/// (`php/8.3.1/bin/php`), so the version is the nearest folder that is named
+/// like one rather than the executable's immediate parent.
 fn version_of(exe: &Path) -> String {
-    exe.parent().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+    for part in exe.ancestors().filter_map(|p| p.file_name()) {
+        let name = part.to_string_lossy();
+        let mut chars = name.chars();
+        if chars.next().is_some_and(|c| c.is_ascii_digit()) && name.contains('.') {
+            return name.into_owned();
+        }
+    }
+    String::new()
 }
 
 /// The PHP for a folder, and why.
@@ -247,6 +260,16 @@ mod tests {
             assert!(within(Path::new("D:\\Work\\Shop\\x"), Path::new("d:/work/shop")));
             assert!(within(Path::new("\\\\?\\D:\\work\\shop\\x"), Path::new("D:\\work\\shop")), "a canonical path with its \\\\?\\ prefix still matches");
         }
+    }
+
+    #[test]
+    fn a_launcher_is_attributed_to_its_version_folder_on_every_platform() {
+        // Windows puts the executable in the version folder; Unix puts it in
+        // `bin` below it. Reading the immediate parent gave "bin" on Unix, so a
+        // site's PHP was reported as the wrong version there.
+        assert_eq!(version_of(Path::new("/devd/runtimes/php/8.3.1/bin/php")), "8.3.1");
+        assert_eq!(version_of(Path::new("D:\\devd\\runtimes\\php\\8.3.1\\php.exe")), "8.3.1");
+        assert_eq!(version_of(Path::new("/opt/php/bin/php")), "");
     }
 
     #[test]
