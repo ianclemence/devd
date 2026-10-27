@@ -78,13 +78,20 @@ fn setup(tag: &str) -> (Ctx, PathBuf) {
     (ctx, work)
 }
 
+/// The version folder in a launcher path.
+///
+/// The executable is `php.exe` directly in the version folder on Windows and
+/// `bin/php` inside it on Unix, so the folder is found by its shape rather than
+/// by counting components.
 fn version(program: &Path) -> String {
-    program
-        .parent()
-        .and_then(|p| p.file_name())
-        .unwrap()
-        .to_string_lossy()
-        .into_owned()
+    for part in program.ancestors().filter_map(|p| p.file_name()) {
+        let name = part.to_string_lossy();
+        let mut chars = name.chars();
+        if chars.next().is_some_and(|c| c.is_ascii_digit()) && name.contains('.') {
+            return name.into_owned();
+        }
+    }
+    panic!("no version folder in {}", program.display());
 }
 
 #[test]

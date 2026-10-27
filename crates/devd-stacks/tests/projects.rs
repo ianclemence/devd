@@ -12,7 +12,13 @@ use devd_core::state::{Site, Store};
 use devd_core::{InvokeRequest, Paths, Registry};
 
 fn setup(tag: &str) -> (Ctx, Paths) {
-    let dir = std::env::temp_dir().join(format!("devd-projects-{tag}-{}", std::process::id()));
+    // The temporary directory can be spelled with an 8.3 short name on Windows
+    // (`RUNNER~1`); a path the code canonicalizes comes back long, so start from
+    // the long form and compare like with like.
+    let base = std::fs::canonicalize(std::env::temp_dir())
+        .map(|p| devd_core::util::strip_verbatim(&p))
+        .unwrap_or_else(|_| std::env::temp_dir());
+    let dir = base.join(format!("devd-projects-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let paths = Paths::rooted(&dir);
     paths.ensure().unwrap();
