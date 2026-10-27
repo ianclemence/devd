@@ -62,7 +62,7 @@ pub async fn events(
     Query(q): Query<EventQuery>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(reason) = same_origin(&headers) {
+    if let Err(reason) = same_origin(&headers, state.port) {
         return (StatusCode::FORBIDDEN, reason).into_response();
     }
     // The cursor is the durable event id, not a byte offset. A reconnecting
@@ -187,10 +187,22 @@ pub async fn events(
         .into_response()
 }
 
-/// Refuse a request the browser marks as coming from another site.
-fn same_origin(headers: &HeaderMap) -> Result<(), &'static str> {
+/// Refuse a request that did not address this server by a loopback name, or
+/// that a browser marks as coming from another site.
+///
+/// The middleware applies both rules to every route. They are repeated here
+/// because this is the one route without a bearer token, so a future change to
+/// the router must not be able to leave it reachable from a foreign page.
+fn same_origin(headers: &HeaderMap, port: u16) -> Result<(), &'static str> {
+    let host = headers
+        .get("host")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    if !crate::host_is_local(host, port) {
+        return Err("the event stream is only for the devd window");
+    }
     if let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) {
-        if !origin.starts_with("http://127.0.0.1") && !origin.starts_with("http://localhost") {
+        if !crate::origin_is_local(origin, port) {
             return Err("the event stream is only for the devd window");
         }
     }
@@ -214,10 +226,21 @@ mod tests {
     #[test]
     fn another_site_cannot_subscribe() {
         let mut h = HeaderMap::new();
-        assert!(same_origin(&h).is_ok());
+        // No Host header at all is not an addressed request.
+        assert!(same_origin(&h, 8787).is_err());
+        h.insert("host", "127.0.0.1:8787".parse().unwrap());
+        assert!(same_origin(&h, 8787).is_ok());
         h.insert("origin", "https://evil.example".parse().unwrap());
-        assert!(same_origin(&h).is_err());
+        assert!(same_origin(&h, 8787).is_err());
         h.insert("origin", "http://127.0.0.1:26688".parse().unwrap());
-        assert!(same_origin(&h).is_ok());
+        assert!(same_origin(&h, 8787).is_err());
+        h.insert("origin", "http://127.0.0.1:8787".parse().unwrap());
+        assert!(same_origin(&h, 8787).is_ok());
+        // A prefix that only looks like loopback is not loopback.
+        h.insert("origin", "http://127.0.0.1.evil.example".parse().unwrap());
+        assert!(same_origin(&h, 8787).is_err());
+        h.insert("origin", "http://127.0.0.1:8787".parse().unwrap());
+        h.insert("host", "evil.example:8787".parse().unwrap());
+        assert!(same_origin(&h, 8787).is_err());
     }
 }

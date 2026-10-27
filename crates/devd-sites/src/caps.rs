@@ -370,6 +370,46 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
+    reg.define::<SiteName>("site.verify", "Check that a site is really being served")
+    .description("Requests a site's address and reports what actually answered, in the order that can fail: \
+         whether the hostname is in devd's managed hosts block (or resolves without one), whether it resolves, \
+         whether something is listening on the site's port, whether a TLS site completes a handshake that chains \
+         to devd's own certificate authority, and whether the request answers with a status below 500. \
+         A record, a certificate on disk or a running web server is not enough on its own: this is the check that \
+         the address a person would open serves the site. Reads only: one connection, one request.")
+    .group("site")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .dry_run()
+    .handlers(
+        |ctx, a| {
+            let site = site_named(ctx, &a.name)?;
+            Ok(Plan::new(
+                "site.verify",
+                format!("request {} and check the hosts entry, the listener, TLS and the HTTP status", sites::url_for(ctx, &site)),
+            ))
+        },
+        |ctx, a| {
+            let site = site_named(ctx, &a.name)?;
+            let report = sites::verify::check(ctx, &site)?;
+            let mut outcome = Outcome {
+                ok: report.ok,
+                message: report.detail.clone(),
+                data: sites::verify::payload(&report),
+                warnings: Vec::new(),
+            };
+            if !report.in_hosts && !sites::resolves_without_hosts(&site.host) {
+                outcome = outcome.warn(format!(
+                    "{} is not in the hosts file; `devd hosts sync` adds it",
+                    site.host
+                ));
+            }
+            Ok(outcome)
+        },
+    )?;
+
     reg.define::<CreateArgs>("site.create", "Create a site")
     .description("Creates the project directory with a starter page, issues a certificate for the \
          hostname from the local authority, records the site and re-renders the web server \

@@ -23,6 +23,7 @@ pub mod caps;
 pub mod hosts;
 pub mod htaccess;
 pub mod park;
+pub mod verify;
 
 use std::path::{Path, PathBuf};
 
