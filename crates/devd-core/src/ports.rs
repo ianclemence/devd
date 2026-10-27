@@ -64,10 +64,69 @@ pub fn listeners() -> Result<Vec<Listener>> {
     {
         listeners_windows()
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        listeners_macos()
+    }
+    #[cfg(all(not(windows), not(target_os = "macos")))]
     {
         listeners_linux()
     }
+}
+
+/// Listening TCP sockets on macOS.
+///
+/// macOS has neither `ss` nor `/proc`, so the Linux scan silently reported that
+/// every port was free. `lsof` asks the kernel for the same table and is part of
+/// the base system, though at `/usr/sbin/lsof`, which a non-interactive process
+/// does not always have on `PATH`.
+#[cfg(target_os = "macos")]
+fn listeners_macos() -> Result<Vec<Listener>> {
+    let lsof = util::which("lsof").or_else(|| {
+        let path = std::path::PathBuf::from("/usr/sbin/lsof");
+        path.is_file().then_some(path)
+    });
+    let Some(lsof) = lsof else {
+        return Ok(Vec::new());
+    };
+    let out = util::run(
+        &lsof,
+        &[
+            "-nP".to_string(),
+            "-iTCP".to_string(),
+            "-sTCP:LISTEN".to_string(),
+        ],
+        None,
+        &[],
+        Some(std::time::Duration::from_secs(20)),
+    )?;
+    Ok(parse_lsof(&out.stdout))
+}
+
+#[cfg(target_os = "macos")]
+fn parse_lsof(text: &str) -> Vec<Listener> {
+    let mut seen = Vec::new();
+    for line in text.lines().skip(1) {
+        // COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME [(LISTEN)]
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        if cols.len() < 9 {
+            continue;
+        }
+        let mut name = cols[cols.len() - 1];
+        if name == "(LISTEN)" {
+            name = cols[cols.len() - 2];
+        }
+        let Some(port) = port_of(name) else { continue };
+        let pid = cols[1].parse::<u32>().ok();
+        seen.push(Listener {
+            port,
+            protocol: if cols[4] == "IPv6" { "tcp6" } else { "tcp" }.to_string(),
+            address: name.to_string(),
+            pid,
+            program: Some(cols[0].to_string()),
+        });
+    }
+    seen
 }
 
 #[cfg(windows)]
@@ -131,7 +190,7 @@ fn process_names(pids: &[u32]) -> std::collections::HashMap<u32, String> {
     map
 }
 
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(target_os = "macos")))]
 fn listeners_linux() -> Result<Vec<Listener>> {
     let Some(ss) = util::which("ss") else {
         return Ok(listeners_proc());
@@ -174,7 +233,7 @@ fn listeners_linux() -> Result<Vec<Listener>> {
 
 /// Listening TCP sockets from the kernel's own table, for hosts without `ss`.
 /// Process ids are not available this way, so `pid` and `program` are `None`.
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(target_os = "macos")))]
 fn listeners_proc() -> Vec<Listener> {
     let mut out = Vec::new();
     for (file, proto) in [("/proc/net/tcp", "tcp"), ("/proc/net/tcp6", "tcp6")] {
@@ -206,7 +265,7 @@ fn port_of(addr: &str) -> Option<u16> {
 
 /// The process id in an `ss` line, which names it as `pid=1234`. Only the Unix
 /// listener scan reads `ss`; Windows resolves names through `tasklist`.
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(target_os = "macos")))]
 fn extract_pid(line: &str) -> Option<u32> {
     let idx = line.find("pid=")?;
     let rest = &line[idx + 4..];
@@ -267,7 +326,7 @@ mod tests {
         assert_eq!(port_of("garbage"), None);
     }
 
-    #[cfg(not(windows))]
+    #[cfg(all(not(windows), not(target_os = "macos")))]
     #[test]
     fn extracted_pid_from_ss_line() {
         let line = r#"LISTEN 0 511 0.0.0.0:80 0.0.0.0:* users:(("nginx",pid=1234,fd=6))"#;
@@ -288,6 +347,20 @@ mod tests {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = l.local_addr().unwrap().port();
         assert!(!is_free(port));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn lsof_lines_become_listeners() {
+        let text = "COMMAND   PID USER   FD   TYPE             DEVICE SIZE/OFF NODE NAME\nnode    12345 me   23u  IPv4 0x1234567890abcdef      0t0  TCP 127.0.0.1:49404 (LISTEN)\nnginx   23456 me    6u  IPv6 0x1234567890abcdee      0t0  TCP *:8080 (LISTEN)\n";
+        let seen = parse_lsof(text);
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[0].port, 49404);
+        assert_eq!(seen[0].program.as_deref(), Some("node"));
+        assert_eq!(seen[0].pid, Some(12345));
+        assert_eq!(seen[0].protocol, "tcp");
+        assert_eq!(seen[1].port, 8080);
+        assert_eq!(seen[1].protocol, "tcp6");
     }
 
     #[test]

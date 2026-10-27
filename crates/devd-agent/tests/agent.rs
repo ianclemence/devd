@@ -1056,7 +1056,10 @@ fn wait_run(e: &Env, run: &str, states: &[&str]) -> Value {
             return v;
         }
         assert!(
-            t0.elapsed() < Duration::from_secs(40),
+            // A budget for a hang, not for a fast machine: a team run makes up
+            // to three attempts, each in a fresh copy of the project, and a
+            // two-core CI runner shares that with every other test.
+            t0.elapsed() < Duration::from_secs(120),
             "run stuck in {st}: {}",
             serde_json::to_string_pretty(&v["tasks"]).unwrap()
         );

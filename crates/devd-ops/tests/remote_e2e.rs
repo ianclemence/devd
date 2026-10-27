@@ -105,9 +105,8 @@ fn a_site_is_deployed_switched_pruned_and_rolled_back() {
     )
     .unwrap();
     let connected = servers::connect(&ctx, "box").unwrap();
-    assert_eq!(
+    assert!(
         connected["login_user"].as_str().is_some(),
-        true,
         "{connected}"
     );
 
