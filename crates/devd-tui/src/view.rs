@@ -499,11 +499,22 @@ fn changes(state: &State) -> (String, Vec<Line<'static>>) {
     };
 
     let items = status.items();
-    let title = format!(
-        "Changes - {} in {}",
-        status.summary(),
-        state.repo.as_deref().unwrap_or("(no repository)")
-    );
+    // The repository's own name, not the whole path: a deep path is truncated
+    // before the name a person uses to recognise it, which is the point of a
+    // title. The full path is in Projects.
+    let label = state
+        .repo
+        .as_deref()
+        .map(|repo| {
+            let trimmed = repo.trim_end_matches(['/', '\\']);
+            let path = if trimmed.is_empty() { repo } else { trimmed };
+            std::path::Path::new(path)
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| repo.to_string())
+        })
+        .unwrap_or_else(|| "(no repository)".to_string());
+    let title = format!("Changes - {} in {}", status.summary(), label);
 
     if items.is_empty() {
         let mut lines = vec![Line::from(Span::styled("The working tree is clean", ok()))];
