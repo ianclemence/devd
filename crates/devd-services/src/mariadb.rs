@@ -573,6 +573,15 @@ mod tests {
 
     #[test]
     fn the_root_password_is_read_from_the_environment_and_never_defaulted() {
+        // Off Windows the password cannot be applied at all (`mariadb-install-db`
+        // has no option for it), so a value in the environment is deliberately
+        // ignored rather than presented to a server that never learned it.
+        if !cfg!(windows) {
+            std::env::set_var(ENV_ROOT_PASSWORD, "s3cret");
+            assert_eq!(root_password(), None);
+            std::env::remove_var(ENV_ROOT_PASSWORD);
+            return;
+        }
         let previous = std::env::var(ENV_ROOT_PASSWORD).ok();
         std::env::remove_var(ENV_ROOT_PASSWORD);
         assert_eq!(root_password(), None);

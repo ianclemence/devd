@@ -952,9 +952,11 @@ mod tests {
             run: None,
             dry_run: false,
         };
-        // nginx "installed": the renderer only needs the program to exist.
-        std::fs::create_dir_all(directory(&ctx)).unwrap();
-        std::fs::write(directory(&ctx).join(exe_name()), b"").unwrap();
+        // nginx "installed": the renderer only needs the program to exist. The
+        // executable sits in `sbin/` off Windows, so its folder comes first.
+        let exe = directory(&ctx).join(exe_name());
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(exe, b"").unwrap();
         // A site that serves nothing, and a configuration file the previous devd wrote for it.
         let go = dir.join("www").join("ghost");
         std::fs::create_dir_all(&go).unwrap();
