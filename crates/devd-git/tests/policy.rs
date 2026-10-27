@@ -76,6 +76,7 @@ impl Harness {
             settings: Arc::new(Settings::default()),
             events: EventBus::new(),
             actor,
+            run: None,
             dry_run: false,
         };
 

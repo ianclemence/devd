@@ -16,13 +16,27 @@ The structure follows Anthropic's published guidance on building agents
 | Tools are the interface; keep the surface small and progressive | Five MCP tools (`devd_groups`, `devd_capabilities`, `devd_describe`, `devd_invoke`, `devd_doctor`) reach every capability; the built-in assistant also has a small set of direct names for the operations it uses constantly. Agents load detail only when needed. |
 | Keep the session log outside the model; the harness is replaceable | Conversations are append-only rows (`chat_events`). A restart loses nothing; runs resume from the log. |
 | Orchestrator and workers for work that splits | `team.*`: a planner, a deterministic scheduler, and specialist conversations. |
-| Verify with evidence, not claims | A task is accepted only when the tool results in its conversation show the work (below). |
-| Human approval for consequential actions | One approval queue. Agents queue; only a person decides. |
-| Keep the context lean | Tool results are shortened and old ones cleared; skills are loaded on demand. |
+| Verify with evidence, not claims | Every capability call is recorded against a run, and completion is decided from typed evidence rows, never from the model's sentence that it finished (see [`runs.md`](runs.md)). |
+| Human approval for consequential actions | One durable approval service with scope, expiry and single-use decisions. Agents queue; only a person decides. |
+| Keep the context lean | A model-aware budget keeps the goal, plan, approvals, errors and recent work; older content is compacted and raw output stays as a bounded artifact. |
 
 devd does not launch other coding agents. Its own agents, the assistant and the
 team, run through the providers you configure, and an outside agent that speaks
 MCP can still drive devd through the same capabilities and permission model.
+
+## One run model
+
+The assistant, the team scheduler, the HTTP API and MCP share one durable run
+(`runs`, `run_steps`, `tool_calls`, `evidence`, `artifacts`, `approvals`,
+`run_events`). A conversation has one current run, reopened only by a deliberate
+new message; a team run mirrors its state into the same spine. Direct tool
+aliases, `devd_invoke` and internal calls all go through `Registry::dispatch_with`,
+so schema validation, permissions, approval, the tool-call record and derived
+evidence cannot differ by entry point. Completion is decided by a policy over
+typed evidence: a change needs an inspectable diff and a passing check, a service
+needs a readiness probe, and a model's claim that it finished is not evidence.
+See [`runs.md`](runs.md) for the lifecycle, policies, context budget, replay
+cursor and recovery rules.
 
 ## Providers and models
 
@@ -107,19 +121,25 @@ goal -> planner -> [you approve the plan] -> scheduler -> specialists -> final v
   parses, that every skill it names exists, and that the permissions are
   coherent (a role that must prove a change may change files, one that must run
   a check may run commands, nobody may use destructive or remote operations).
-* **Evidence.** After a specialist reports, devd reads the tool results in its
-  conversation. An implementer must have changed files *and* had a verification
-  (a `project.run` of test, build, lint, check...) exit 0; a reviewer must have
-  read the change; QA must have run checks; infra must have run something that
-  succeeded. Otherwise the report is rejected twice with the reason, then the
-  task is `unverified`, its dependants do not start, and the run pauses with
-  what is needed (retry with a note, or accept by hand - recorded as such).
+* **Evidence.** Every specialist tool call is recorded in the run's `tool_calls`
+  and normalized into `evidence` at the registry boundary, whether the model used
+  a direct tool name or `devd_invoke`. After a specialist reports, devd reads
+  those rows, not the conversation text. An implementer must have changed files
+  *and* had a verification (a `project.run` of test, build, lint, check... exit 0)
+  pass; a reviewer must have read the change; QA must have run checks; infra must
+  have run something that succeeded. `project.exec` and a command that is not a
+  check are `command` evidence, not verification. Otherwise the report is rejected
+  twice with the reason, then the task is `unverified`, its dependants do not
+  start, and the run pauses with what is needed (retry with a note, or accept by
+  hand - recorded as such).
 * **Final verification.** When every task is done devd adds a QA task that runs the
   project's own checks independently. The run's summary is built by devd from the
-  recorded evidence, not from what agents wrote about themselves.
-* **Persistence.** `team_runs`, `team_tasks`, `team_events`. On restart, running
-  tasks go back to pending and their conversations continue; paused and
-  waiting runs stay as they were.
+  recorded evidence, not from what agents wrote about themselves. The team run
+  mirrors its state into the unified run, so the Evidence sheet on the team run
+  reads the same steps, evidence and approvals the scheduler used.
+* **Persistence.** `team_runs`, `team_tasks`, `team_events`, mirrored into the
+  unified run. On restart, running tasks go back to pending and their conversations
+  continue; paused and waiting runs stay as they were.
 
 `devd team start "..." --project .` follows the run in the terminal;
 the window has Assistant > Team runs; the terminal dashboard has a Team view and an

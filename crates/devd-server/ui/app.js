@@ -5299,10 +5299,141 @@
     providers: null, presets: null, catalogue: null, provForm: null, provBusy: {}, localFound: null,
     live: null, streamTail: "", streamPainted: "", streamFrame: 0, streamThread: "",
     threads: null, thread: null, events: [], pending: [], running: false, lastId: 0, queued: 0,
+    run: null,
     pickProvider: "", pickModel: "",
     composer: "", project: "", timer: null, openSteps: {}, todos: [], todosAt: 0,
     inbox: null, requests: null, history: null
   };
+
+  /* A run is not another destination. It is the durable record behind a
+   * conversation or a team run, and it is opened from that work, in place, as a
+   * sheet. The sheet is a snapshot: it says what was recorded, not what the
+   * live stream happened to deliver. */
+  var RUN = { id: null, data: null, events: [], hasOlder: false, error: null };
+
+  var RUN_STATE_WORD = {
+    intake: "intake", planning: "planning", awaiting_approval: "needs your decision",
+    executing: "working", verifying: "verifying", review: "ready for review",
+    completed: "completed", unverified: "not verified", paused: "paused",
+    blocked: "blocked", failed: "failed", cancelled: "cancelled"
+  };
+
+  function runPill(state) {
+    var cls = state === "failed" || state === "blocked" ? "pill-bad"
+      : state === "unverified" || state === "awaiting_approval" || state === "paused" || state === "review" ? "pill-warn"
+      : state === "completed" ? "pill-ok"
+      : state === "cancelled" ? ""
+      : "pill-accent";
+    return '<span class="pill ' + cls + '">' + esc(RUN_STATE_WORD[state] || state) + "</span>";
+  }
+
+  function runCanRetry(state) {
+    return ["failed", "unverified", "paused", "blocked", "review", "completed", "cancelled"].indexOf(state) !== -1;
+  }
+
+  function runCanCancel(state) {
+    return ["intake", "planning", "awaiting_approval", "executing", "verifying", "review"].indexOf(state) !== -1;
+  }
+
+  function openRun(id) {
+    RUN.id = id;
+    RUN.data = null;
+    RUN.events = [];
+    RUN.hasOlder = false;
+    RUN.error = null;
+    uiSheet("Run", '<div class="loading">Loading the run...</div>');
+    loadRun(id).then(function () {
+      if (RUN.id === id) paintRunSheet();
+    });
+  }
+
+  function loadRun(id) {
+    return request("/api/runs/" + encodeURIComponent(id)).then(function (res) {
+      if (!res.ok) throw new Error(errorOf(res.body, "that run could not be read"));
+      RUN.data = res.body;
+      return request("/api/runs/" + encodeURIComponent(id) + "/events?limit=200").then(function (page) {
+        if (page.ok) {
+          RUN.events = (page.body && page.body.items) || [];
+          RUN.hasOlder = RUN.events.length >= 200;
+        }
+      });
+    }).catch(function (e) {
+      RUN.error = e.message;
+      RUN.data = null;
+    });
+  }
+
+  function paintRunSheet() {
+    if (!RUN.id) return;
+    uiSheet("Run", runDetailHtml());
+  }
+
+  function runEventRow(e) {
+    var at = String(e.created_at || "");
+    var when = at.length > 10 ? at.slice(11, 19) : at;
+    var detail = e.data && Object.keys(e.data).length ? '<details class="run-event-data"><summary>details</summary><pre>' + esc(clip(JSON.stringify(e.data, null, 2), 4000)) + "</pre></details>" : "";
+    return '<div class="run-event"><span class="run-event-at mono">' + esc(when) + '</span><span class="run-event-kind">' + esc(e.kind) + '</span><span class="run-event-msg">' + esc(e.message || "") + "</span>" + detail + "</div>";
+  }
+
+  function runDetailHtml() {
+    var d = RUN.data;
+    if (!d) return '<div class="empty-inline">' + (RUN.error ? esc(RUN.error) : "That run could not be read.") + "</div>";
+    var run = d.run || {};
+    var state = run.state || "intake";
+    var pending = (d.approvals || []).filter(function (a) { return a.state === "pending"; });
+    var evidence = d.evidence || [];
+    var passed = evidence.filter(function (e) { return e.passed; }).length;
+    var failed = evidence.length - passed;
+    var acceptance = (run.acceptance || []).map(function (a) { return "<li>" + esc(a) + "</li>"; }).join("");
+    // A team run is started, paused and resumed from the team run itself, not
+    // from its record. Offering the conversation controls here would promise a
+    // behaviour the server refuses for team runs.
+    var team = run.mode === "team";
+    var actions =
+      (run.thread_id ? '<button type="button" class="btn btn-mini" data-action="run-chat" data-id="' + attr(run.thread_id) + '">Conversation</button>' : "") +
+      (team && run.team_run_id ? '<button type="button" class="btn btn-mini" data-action="run-team-open" data-id="' + attr(run.team_run_id) + '">Open the team run</button>' : "") +
+      (!team && runCanCancel(state) ? '<button type="button" class="btn btn-mini" data-action="run-cancel" data-id="' + attr(run.id) + '">Stop</button>' : "") +
+      (!team && runCanRetry(state) ? '<button type="button" class="btn btn-mini btn-primary" data-action="run-retry" data-id="' + attr(run.id) + '">Continue</button>' : "");
+    var steps = (d.steps || []).map(function (s) {
+      return '<div class="run-step"><span class="dot ' + (s.state === "done" ? "dot-ok" : s.state === "failed" ? "dot-bad" : s.state === "running" ? "dot-warn" : "dot-off") + '"></span><span class="grow"><b>' + esc(s.title) + "</b> <span class=\"dim\">" + esc(s.kind) + "</span></span><span class=\"dim\">" + esc(s.state) + "</span></div>";
+    }).join("") || '<div class="empty-inline">No steps yet.</div>';
+    var calls = (d.tool_calls || []).map(function (c) {
+      return uiRow({
+        dot: c.ok ? "ok" : "bad",
+        title: esc(c.capability) + (c.exit_code !== null && c.exit_code !== undefined ? ' <span class="dim">exit ' + c.exit_code + "</span>" : ""),
+        sub: esc((c.ok ? "succeeded" : c.error_code || "failed") + ", " + c.duration_ms + " ms, " + (c.surface || "") + (c.error ? ", " + c.error : "")),
+        wrap: true
+      });
+    }).join("") || '<div class="empty-inline">No capability calls recorded.</div>';
+    var ev = evidence.map(function (e) {
+      return uiRow({ dot: e.passed ? "ok" : "warn", title: esc(e.summary), sub: esc(e.kind + ", " + e.capability + (e.claim ? ", supports " + e.claim : "")), wrap: true });
+    }).join("") || '<div class="empty-inline">No evidence recorded. The run cannot be verified on a claim alone.</div>';
+    var arts = (d.artifacts || []).map(function (a) {
+      return uiRow({ title: esc(a.name), sub: esc(a.kind + ", " + a.bytes + " bytes" + (a.summary ? ", " + a.summary : "")), meta: a.path ? '<span class="dim mono">' + esc(a.path) + "</span>" : "" });
+    }).join("");
+    return '<div class="run-detail">' +
+      '<div class="chat-head"><div class="grow"><div class="chat-title">' + esc(run.goal || "Untitled run") + '</div><div class="dim mono">' + esc(run.mode || "") + (run.project ? ", " + esc(run.project) : "") + ", started " + esc(ago(run.created_at) || "") + '</div></div>' + runPill(state) + actions + "</div>" +
+      (run.error ? '<div class="notice notice-warn">' + esc(run.error) + "</div>" : "") +
+      (pending.length ? '<div class="panel"><div class="panel-head"><span>Waiting for a person</span><span class="panel-note">' + pending.length + '</span></div><div class="panel-body">' + pending.map(function (a) {
+        return '<div class="run-approval"><div class="grow"><div><b>' + esc(a.capability) + "</b> " + (a.risk === "destructive" ? '<span class="pill pill-bad">destructive</span>' : a.risk === "sensitive" ? '<span class="pill pill-warn">sensitive</span>' : "") + "</div>" +
+          '<div class="dim">asked by ' + esc(a.actor || "") + ", expires " + esc(ago(a.expires_at) || a.expires_at || "") + "</div>" +
+          '<details class="run-event-data"><summary>the exact operation</summary><pre>' + esc(clip(JSON.stringify(a.args || {}, null, 2), 4000)) + "</pre></details></div></div>";
+      }).join("") + '<div class="inline" style="margin-top:8px"><button type="button" class="btn btn-mini" data-action="nav" data-view="inbox">Decide in Inbox</button></div></div></div>' : "") +
+      (acceptance ? '<div class="panel"><div class="panel-head"><span>Acceptance criteria</span></div><div class="panel-body"><ul class="run-acceptance">' + acceptance + "</ul></div></div>" : "") +
+      '<div class="summary-band">' +
+      '<div class="summary-item"><div class="summary-label">Evidence</div><div class="summary-value">' + passed + " passed</div><div class=\"summary-detail\">" + (failed ? failed + " failed or inconclusive" : evidence.length ? "all recorded evidence supports the claim" : "none recorded") + "</div></div>" +
+      '<div class="summary-item"><div class="summary-label">Steps</div><div class="summary-value">' + (d.steps || []).length + '</div><div class="summary-detail">' + (d.events || []).length + " recorded events</div></div>" +
+      '<div class="summary-item"><div class="summary-label">Capability calls</div><div class="summary-value">' + (d.tool_calls || []).length + '</div><div class="summary-detail">' + (d.artifacts || []).length + " artifacts</div></div>" +
+      "</div>" +
+      '<div class="panel"><div class="panel-head"><span>Timeline</span><span class="panel-note">newest 200</span></div><div class="panel-body flush">' +
+      (RUN.hasOlder ? '<div class="inline" style="padding:8px 12px"><button type="button" class="btn btn-mini" data-action="run-older" data-id="' + attr(run.id) + '">Show earlier events</button></div>' : "") +
+      (RUN.events.length ? RUN.events.map(runEventRow).join("") : '<div class="empty-inline">No events yet.</div>') + "</div></div>" +
+      '<div class="panel"><div class="panel-head"><span>Steps</span></div><div class="panel-body">' + steps + "</div></div>" +
+      '<div class="panel"><div class="panel-head"><span>Capability calls</span></div><div class="panel-body flush">' + calls + "</div></div>" +
+      '<div class="panel"><div class="panel-head"><span>Evidence</span><span class="panel-note">' + evidence.length + "</span></div><div class=\"panel-body flush\">" + ev + "</div></div>" +
+      (arts ? '<div class="panel"><div class="panel-head"><span>Artifacts</span></div><div class="panel-body flush">' + arts + "</div></div>" : "") +
+      "</div>";
+  }
 
   // ------------------------------------------------------------------ health
 
@@ -5918,7 +6049,7 @@
         AI.lastId = e.id;
         if (!full) announceEvent(e);
       });
-      AI.thread = d.thread; AI.pending = d.pending || []; AI.running = d.running; AI.chapters = d.chapters || [];
+      AI.thread = d.thread; AI.pending = d.pending || []; AI.running = d.running; AI.chapters = d.chapters || []; AI.run = d.run || null;
       if (d.thread.provider_id) AI.pickProvider = d.thread.provider_id;
       if (d.thread.model) AI.pickModel = d.thread.model;
       AI.queued = d.queued || 0;
@@ -5976,14 +6107,28 @@
       return;
     }
     AI.live = source;
+    // Durable run events have stable ids and are replayed from Last-Event-ID by
+    // the server, so a reconnect reconstructs the timeline instead of silently
+    // losing frames. Live text remains a non-durable hint.
+    source.addEventListener("run", function (message) {
+      var event;
+      try { event = JSON.parse(message.data); } catch (e) { return; }
+      onDurable(event);
+    });
+    source.addEventListener("live", function (message) {
+      var event;
+      try { event = JSON.parse(message.data); } catch (e) { return; }
+      onLive(event);
+    });
+    // Older servers named the one stream "devd"; keep working with one.
     source.addEventListener("devd", function (message) {
       var event;
       try { event = JSON.parse(message.data); } catch (e) { return; }
       onLive(event);
     });
     source.onopen = function () {
-      // Events emitted before the subscription existed are not replayed. One
-      // read of the record closes that gap.
+      // The durable replay closes the history gap; the conversation itself is
+      // re-read past the last event it already has.
       if (!AI.thread) return;
       pollThread(false).then(paintChat).catch(function () {});
     };
@@ -5993,6 +6138,20 @@
       if (!AI.thread) return;
       pollThread(false).then(paintChat).catch(function () {});
     };
+  }
+
+  /* A durable run event. It is a notification, not the record: the run's own
+   * endpoints are re-read so the view never depends on having seen every frame. */
+  function onDurable(event) {
+    if (!event || !event.run) return;
+    // A lag in the live text is not a gap in the durable timeline: the
+    // conversation is re-read from the log, which is the record.
+    if (AI.thread && AI.run && AI.run.id === event.run) {
+      pollThread(false).then(paintChat).catch(function () {});
+    }
+    if (String(event.kind || "").indexOf("approval.") === 0) {
+      loadHealth().then(healthChip).catch(function () {});
+    }
   }
 
   function onLive(event) {
@@ -6451,11 +6610,16 @@
 
   function chatHeadHtml() {
     var t = AI.thread;
+    var r = AI.run;
     // The provider and the model live in the composer, where they are used.
     // The head says what the conversation is and where it stands.
     return '<div class="grow"><div class="chat-title">' + esc(t.title) + '</div><div class="dim mono nowrap">' + esc(t.project || "no project") + " · " + t.input_tokens + " in / " + t.output_tokens + " out tokens</div></div>" +
       (AI.queued > 0 ? '<span class="pill pill-warn" title="Messages waiting for the next step">' + AI.queued + " queued</span>" : "") +
-      (AI.chapters && AI.chapters.length ? '<button type="button" class="btn btn-mini btn-ghost" data-action="chapters-open">Chapters (' + AI.chapters.length + ")</button>" : "") + '<span class="pill ' + (t.state === "error" ? "pill-bad" : t.state === "idle" ? "" : "pill-accent") + '">' + esc(t.state.replace("_", " ")) + '</span><button type="button" class="btn btn-mini btn-ghost" data-action="chat-delete" data-id="' + attr(t.id) + '">Delete</button>';
+      (AI.chapters && AI.chapters.length ? '<button type="button" class="btn btn-mini btn-ghost" data-action="chapters-open">Chapters (' + AI.chapters.length + ")</button>" : "") +
+      (r ? '<button type="button" class="btn btn-mini btn-ghost" data-action="open-run" data-id="' + attr(r.id) + '" title="See this conversation as a run: steps, capability calls, evidence and the durable timeline">' + runPill(r.state) + "</button>" : "") +
+      (r && !(t.state === "running" || AI.running) && runCanRetry(r.state) ? '<button type="button" class="btn btn-mini btn-primary" data-action="run-retry" data-id="' + attr(r.id) + '">Continue</button>' : "") +
+      (r ? "" : '<span class="pill ' + (t.state === "error" ? "pill-bad" : t.state === "idle" ? "" : "pill-accent") + '">' + esc(t.state.replace("_", " ")) + '</span>') +
+      '<button type="button" class="btn btn-mini btn-ghost" data-action="chat-delete" data-id="' + attr(t.id) + '">Delete</button>';
   }
 
   function paintThreads() {
@@ -6646,6 +6810,7 @@
     if (r.state === "paused") actions += '<button type="button" class="btn btn-primary" data-action="team-resume" data-id="' + attr(r.id) + '">Resume</button>';
     if (["planning", "awaiting_plan", "running", "paused"].indexOf(r.state) >= 0) actions += '<button type="button" class="btn btn-danger" data-action="team-cancel" data-id="' + attr(r.id) + '">Cancel</button>';
     else actions += '<button type="button" class="btn btn-ghost" data-action="team-delete" data-id="' + attr(r.id) + '">Delete</button>';
+    if (d.run_id) actions += '<button type="button" class="btn btn-ghost" data-action="open-run" data-id="' + attr(d.run_id) + '" title="What devd recorded for this run: steps, capability calls, evidence and the durable timeline">Evidence</button>';
     var head = '<div class="chat-head"><div class="grow"><div class="chat-title">' + esc(r.title) + '</div><div class="dim mono nowrap">' + esc(r.project || "") + ' · started by ' + esc((r.created_by || "").replace("human:", "")) + " " + esc(ago(r.created_at)) + '</div></div><span class="pill ' + (r.state === "failed" ? "pill-bad" : r.state === "done" ? "pill-ok" : r.state === "awaiting_plan" || r.state === "paused" ? "pill-warn" : "pill-accent") + '">' + esc(RUN_WORD[r.state] || r.state) + "</span>" + actions + "</div>";
     var note = r.error ? '<div class="notice notice-warn" style="margin:12px 16px"><b>Needs you.</b> ' + esc(r.error) + "</div>" : "";
     if (r.state === "planning") note += '<div class="notice" style="margin:12px 16px">The planner is reading the project and writing the plan' + (planner && planner.state === "waiting_approval" ? ", and is waiting for you to approve something" : "") + ".</div>";
@@ -7505,6 +7670,8 @@
     try { input.setSelectionRange(at, at); } catch (e) { /* not a text field */ }
   }
 
+
+
   var ACTIONS = {
     "chat-attach": function () {
       var input = el("chat-file");
@@ -7835,6 +8002,48 @@
       var sel = el("chat-project"); startChat(text, sel ? sel.value : "");
     },
     "chat-stop": function () { if (AI.thread) run("chat.stop", { thread: AI.thread.id }).then(function () { pollThread(false).then(paintChat); }); },
+    "open-run": function (n) { openRun(n.dataset.id); },
+    "run-team-open": function (n) {
+      TEAM.sel = n.dataset.id;
+      closeDrawer();
+      navigate("team").then(function () { return loadTeam(); }).then(function () { renderTeam(); });
+    },
+    "run-chat": function (n) {
+      AI.thread = { id: n.dataset.id, title: "", state: "idle", input_tokens: 0, output_tokens: 0 };
+      AI.lastId = 0; AI.events = []; AI.pending = []; AI.todos = []; AI.todosAt = 0; AI.queued = 0; AI.run = null;
+      closeDrawer();
+      navigate("assistant").then(function () { return pollThread(true); }).then(function () { renderAssistant(); });
+    },
+    "run-cancel": function (n) {
+      n.disabled = true;
+      request("/api/runs/" + encodeURIComponent(n.dataset.id) + "/cancel", { method: "POST", body: "{}" }).then(function (res) {
+        if (!res.ok) { toast("error", errorOf(res.body, "the run could not be stopped")); n.disabled = false; return; }
+        toast("ok", "Stopping. The run closes when the executor reaches a safe point.");
+        if (RUN.id === n.dataset.id) loadRun(RUN.id).then(paintRunSheet);
+        if (state.view === "assistant" && AI.thread) pollThread(false).then(paintChat).catch(function () {});
+      });
+    },
+    "run-retry": function (n) {
+      n.disabled = true;
+      request("/api/runs/" + encodeURIComponent(n.dataset.id) + "/retry", { method: "POST", body: "{}" }).then(function (res) {
+        if (!res.ok) { toast("error", errorOf(res.body, "the run could not be continued")); n.disabled = false; return; }
+        toast("ok", "Continuing the run. Its recorded work is not replayed.");
+        if (RUN.id === n.dataset.id) loadRun(RUN.id).then(paintRunSheet);
+        if (state.view === "assistant" && AI.thread) pollThread(false).then(paintChat).catch(function () {});
+      });
+    },
+    "run-older": function (n) {
+      var first = RUN.events.length ? RUN.events[0].seq : 0;
+      if (!first) return;
+      n.disabled = true;
+      request("/api/runs/" + encodeURIComponent(n.dataset.id) + "/events?before=" + encodeURIComponent(first) + "&limit=200").then(function (res) {
+        if (!res.ok) { toast("error", errorOf(res.body, "earlier events could not be read")); return; }
+        var items = (res.body && res.body.items) || [];
+        RUN.events = items.concat(RUN.events);
+        RUN.hasOlder = items.length >= 200;
+        paintRunSheet();
+      });
+    },
     "mention-pick": function (n) {
       var it = MENTIONS.items[Number(n.dataset.index)];
       if (it) applyMention(it);

@@ -84,7 +84,11 @@ pub fn read_scripts(dir: &Path) -> ProjectScripts {
                 for (k, val) in o {
                     let body = match val {
                         Value::String(c) => c.clone(),
-                        Value::Array(a) => a.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(" && "),
+                        Value::Array(a) => a
+                            .iter()
+                            .filter_map(|x| x.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" && "),
                         _ => continue,
                     };
                     s.composer.insert(k.clone(), body);
@@ -114,8 +118,16 @@ pub fn classify_script(name: &str, body: &str) -> (String, Risk, bool) {
     let destructive = Regex::new(r"(drop|reset|wipe|destroy|purge|nuke|deploy|publish|release|rm -rf|migrate:fresh|--force|truncate|clean:all|db:push)")
         .unwrap()
         .is_match(&format!("{n} {b}"));
-    let risk = if destructive { Risk::Destructive } else { Risk::Mutating };
-    let has = |words: &[&str]| words.iter().any(|w| n == *w || n.starts_with(&format!("{w}:")) || n.starts_with(&format!("{w}-")));
+    let risk = if destructive {
+        Risk::Destructive
+    } else {
+        Risk::Mutating
+    };
+    let has = |words: &[&str]| {
+        words
+            .iter()
+            .any(|w| n == *w || n.starts_with(&format!("{w}:")) || n.starts_with(&format!("{w}-")))
+    };
     let (kind, long, base) = if has(&["dev", "start", "serve", "watch", "preview"]) {
         ("dev", true, Risk::Mutating)
     } else if has(&["build", "compile", "bundle", "generate"]) {
@@ -136,11 +148,24 @@ pub fn classify_script(name: &str, body: &str) -> (String, Risk, bool) {
     (kind.to_string(), final_risk, long)
 }
 
-fn availability(reg: &StackRegistry, argv: &[String], needs: &[String], dir: &Path, tools: &BTreeMap<String, ToolStatus>, extra: &[PathBuf]) -> (bool, Option<String>) {
+fn availability(
+    reg: &StackRegistry,
+    argv: &[String],
+    needs: &[String],
+    dir: &Path,
+    tools: &BTreeMap<String, ToolStatus>,
+    extra: &[PathBuf],
+) -> (bool, Option<String>) {
     for n in needs {
         if !tools.get(n).map(|t| t.installed).unwrap_or(false) {
-            let name = reg.tool(n).map(|t| t.name.clone()).unwrap_or_else(|| n.clone());
-            return (false, Some(format!("{name} is not installed (toolchain.install {n})")));
+            let name = reg
+                .tool(n)
+                .map(|t| t.name.clone())
+                .unwrap_or_else(|| n.clone());
+            return (
+                false,
+                Some(format!("{name} is not installed (toolchain.install {n})")),
+            );
         }
     }
     if let Some(p) = argv.first() {
@@ -165,13 +190,20 @@ pub fn resolve(
     let mut claimed_scripts: Vec<String> = Vec::new();
     if let Some(stack) = stack {
         let version = stack.default_version();
-        let options: BTreeMap<String, Value> = stack.options.iter().map(|o| (o.id.clone(), o.default.clone())).collect();
+        let options: BTreeMap<String, Value> = stack
+            .options
+            .iter()
+            .map(|o| (o.id.clone(), o.default.clone()))
+            .collect();
         let env = env::build(&EnvInput {
             stack,
             catalogue: &reg.catalogue,
             version,
             pm,
-            name: dir.file_name().and_then(|n| n.to_str()).unwrap_or("project"),
+            name: dir
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("project"),
             dir,
             parent: dir.parent().unwrap_or(dir),
             options: &options,
@@ -192,7 +224,9 @@ pub fn resolve(
                 }
                 claimed_scripts.push(sname.clone());
             }
-            let Ok(argv) = template::expand(&t.run, &env) else { continue };
+            let Ok(argv) = template::expand(&t.run, &env) else {
+                continue;
+            };
             let (available, reason) = availability(reg, &argv, &t.needs, dir, tools, extra);
             out.push(TaskInfo {
                 id: t.id.clone(),
@@ -211,7 +245,11 @@ pub fn resolve(
         }
     }
     // Scripts the project defines itself.
-    let npm_pm = if pm.is_empty() || !["npm", "pnpm", "yarn", "bun"].contains(&pm) { "npm" } else { pm };
+    let npm_pm = if pm.is_empty() || !["npm", "pnpm", "yarn", "bun"].contains(&pm) {
+        "npm"
+    } else {
+        pm
+    };
     let run_prefix: Vec<String> = reg
         .catalogue
         .package_managers
@@ -247,7 +285,11 @@ pub fn resolve(
             continue;
         }
         let (kind, risk, long) = classify_script(name, body);
-        let argv = vec!["composer".to_string(), "run-script".to_string(), name.clone()];
+        let argv = vec![
+            "composer".to_string(),
+            "run-script".to_string(),
+            name.clone(),
+        ];
         let (available, reason) = availability(reg, &argv, &[], dir, tools, extra);
         out.push(TaskInfo {
             id: format!("composer:{name}"),
@@ -335,21 +377,36 @@ pub struct TaskResult {
 }
 
 fn validate_args(args: &[String]) -> Result<()> {
-    if args.len() > 64 || args.iter().any(|a| a.contains('\0') || a.contains('\n') || a.len() > 2000) {
-        return Err(DevdError::invalid("arguments must be at most 64 single-line strings"));
+    if args.len() > 64
+        || args
+            .iter()
+            .any(|a| a.contains('\0') || a.contains('\n') || a.len() > 2000)
+    {
+        return Err(DevdError::invalid(
+            "arguments must be at most 64 single-line strings",
+        ));
     }
     Ok(())
 }
 
 /// Name for a background process.
 pub fn process_name(dir: &Path, task: &str) -> String {
-    let base = dir.file_name().and_then(|n| n.to_str()).unwrap_or("project");
+    let base = dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("project");
     format!("task:{base}:{task}")
 }
 
 /// Run a task (foreground or background). The caller has already authorised
 /// the directory and the task's risk class.
-pub fn run(ctx: &Ctx, dir: &Path, task: &TaskInfo, args: &[String], req: &RunTask) -> Result<Value> {
+pub fn run(
+    ctx: &Ctx,
+    dir: &Path,
+    task: &TaskInfo,
+    args: &[String],
+    req: &RunTask,
+) -> Result<Value> {
     validate_args(args)?;
     if !task.available {
         return Err(DevdError::conflict(format!(
@@ -361,7 +418,9 @@ pub fn run(ctx: &Ctx, dir: &Path, task: &TaskInfo, args: &[String], req: &RunTas
     let mut argv = task.argv.clone();
     if !args.is_empty() {
         // `npm run dev -- --port 4000`: the separator is needed for npm-style runners.
-        let needs_sep = matches!(argv.first().map(|s| s.as_str()), Some("npm")) && argv.get(1).map(|s| s == "run").unwrap_or(false) && !args.is_empty();
+        let needs_sep = matches!(argv.first().map(|s| s.as_str()), Some("npm"))
+            && argv.get(1).map(|s| s == "run").unwrap_or(false)
+            && !args.is_empty();
         if needs_sep {
             argv.push("--".into());
         }
@@ -369,9 +428,23 @@ pub fn run(ctx: &Ctx, dir: &Path, task: &TaskInfo, args: &[String], req: &RunTas
     }
     let dirs = toolchain::managed_dirs_for(ctx, dir);
     let run_id = req.run_id.clone().unwrap_or_else(util::new_id);
-    let log = ctx.paths.logs().join("stacks").join(format!("task-{run_id}.log"));
+    let log = ctx
+        .paths
+        .logs()
+        .join("stacks")
+        .join(format!("task-{run_id}.log"));
     let display = exec::redact_argv(&argv).join(" ");
-    let hist = ctx.store.begin_stack_run("task", &dir.display().to_string(), &task.title, &display, &ctx.actor.label(), Some(&log.display().to_string())).ok();
+    let hist = ctx
+        .store
+        .begin_stack_run(
+            "task",
+            &dir.display().to_string(),
+            &task.title,
+            &display,
+            &ctx.actor.label(),
+            Some(&log.display().to_string()),
+        )
+        .ok();
 
     let background = req.background.unwrap_or(task.long_running);
     if background {
@@ -379,7 +452,11 @@ pub fn run(ctx: &Ctx, dir: &Path, task: &TaskInfo, args: &[String], req: &RunTas
         let name = process_name(dir, &task.id);
         let mut spec_args: Vec<String> = lead;
         spec_args.extend(argv[1..].iter().cloned());
-        let mut envs: Vec<(String, String)> = vec![("CI".into(), "".into()), ("FORCE_COLOR".into(), "0".into()), ("NO_COLOR".into(), "1".into())];
+        let mut envs: Vec<(String, String)> = vec![
+            ("CI".into(), "".into()),
+            ("FORCE_COLOR".into(), "0".into()),
+            ("NO_COLOR".into(), "1".into()),
+        ];
         if !dirs.is_empty() {
             let mut p: Vec<PathBuf> = dirs.clone();
             if let Some(cur) = std::env::var_os("PATH") {
@@ -398,7 +475,7 @@ pub fn run(ctx: &Ctx, dir: &Path, task: &TaskInfo, args: &[String], req: &RunTas
             args: spec_args,
             cwd: Some(dir.to_path_buf()),
             envs,
-            clear_env: false,
+            clear_env: true,
             log_path: log.clone(),
             restarts: 0,
         };
@@ -408,15 +485,28 @@ pub fn run(ctx: &Ctx, dir: &Path, task: &TaskInfo, args: &[String], req: &RunTas
         std::thread::sleep(Duration::from_millis(900));
         let info = sup.list().into_iter().find(|p| p.name == name);
         let running = info.as_ref().map(|i| i.running).unwrap_or(false);
-        let tail = sup.tail_log(&log, 30).unwrap_or_default().into_iter().map(|l| exec::redact_line(&l)).collect::<Vec<_>>();
+        let tail = sup
+            .tail_log(&log, 30)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|l| exec::redact_line(&l))
+            .collect::<Vec<_>>();
         if let Some(h) = &hist {
-            let _ = ctx.store.finish_stack_run(h, info.as_ref().and_then(|i| i.exit_code), running, 900);
+            let _ = ctx.store.finish_stack_run(
+                h,
+                info.as_ref().and_then(|i| i.exit_code),
+                running,
+                900,
+            );
         }
         if !running {
             return Err(DevdError::Command {
                 program: argv[0].clone(),
                 code: info.and_then(|i| i.exit_code).unwrap_or(-1),
-                stderr: format!("the process exited right after starting:\n{}", tail.join("\n")),
+                stderr: format!(
+                    "the process exited right after starting:\n{}",
+                    tail.join("\n")
+                ),
             });
         }
         return Ok(json!({
@@ -435,15 +525,29 @@ pub fn run(ctx: &Ctx, dir: &Path, task: &TaskInfo, args: &[String], req: &RunTas
     let cancel = exec::runs::register(&run_id);
     let timeout = Duration::from_secs(req.timeout_secs.unwrap_or(600).clamp(1, 3600));
     let r = exec::run_streaming(
-        &RunSpec { argv: argv.clone(), cwd: dir.to_path_buf(), env: vec![], extra_path: dirs, timeout: Some(timeout) },
+        &RunSpec {
+            argv: argv.clone(),
+            cwd: dir.to_path_buf(),
+            env: vec![],
+            extra_path: dirs,
+            timeout: Some(timeout),
+        },
         &cancel,
         Some(&log),
-        &mut |l| ctx.events.emit_with("stack.output", l.to_string(), json!({"run_id": run_id, "task": task.id})),
+        &mut |l| {
+            ctx.events.emit_with(
+                "stack.output",
+                l.to_string(),
+                json!({"run_id": run_id, "task": task.id}),
+            )
+        },
     );
     exec::runs::finish(&run_id);
     let r = r?;
     if let Some(h) = &hist {
-        let _ = ctx.store.finish_stack_run(h, r.code, r.ok, r.duration_ms as i64);
+        let _ = ctx
+            .store
+            .finish_stack_run(h, r.code, r.ok, r.duration_ms as i64);
     }
     let res = TaskResult {
         run_id,
@@ -474,16 +578,33 @@ pub fn background() -> Vec<Value> {
 /// Stop a background task by process name.
 pub fn stop(name: &str) -> Result<Option<(i32, String)>> {
     if !name.starts_with("task:") {
-        return Err(DevdError::denied("only processes started by the task runner can be stopped here"));
+        return Err(DevdError::denied(
+            "only processes started by the task runner can be stopped here",
+        ));
     }
     process::shared().stop(name)
 }
 
 /// Run an arbitrary allow-listed program in a project.
-pub fn exec_allowed(ctx: &Ctx, reg: &StackRegistry, stack: Option<&StackDef>, pm: &str, dir: &Path, argv: &[String], timeout: u64) -> Result<exec::RunResult> {
-    let program = argv.first().ok_or_else(|| DevdError::invalid("empty command"))?;
+pub fn exec_allowed(
+    ctx: &Ctx,
+    reg: &StackRegistry,
+    stack: Option<&StackDef>,
+    pm: &str,
+    dir: &Path,
+    argv: &[String],
+    timeout: u64,
+) -> Result<exec::RunResult> {
+    let program = argv
+        .first()
+        .ok_or_else(|| DevdError::invalid("empty command"))?;
     validate_args(argv)?;
-    let base = Path::new(program).file_name().and_then(|n| n.to_str()).unwrap_or(program).trim_end_matches(".exe").to_string();
+    let base = Path::new(program)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(program)
+        .trim_end_matches(".exe")
+        .to_string();
     let mut allowed: Vec<String> = vec![
         "git".into(), // read-only subcommands are policed below
     ];
@@ -498,20 +619,35 @@ pub fn exec_allowed(ctx: &Ctx, reg: &StackRegistry, stack: Option<&StackDef>, pm
             }
         }
     }
-    let ok = allowed.iter().any(|a| a == program || Path::new(a).file_name().and_then(|n| n.to_str()) == Some(base.as_str()) || a == &base);
+    let ok = allowed.iter().any(|a| {
+        a == program
+            || Path::new(a).file_name().and_then(|n| n.to_str()) == Some(base.as_str())
+            || a == &base
+    });
     if !ok {
         return Err(DevdError::denied(format!(
             "`{program}` is not an allowed command for this project's stack. Allowed: {}. For other tools use a task from project.tasks.",
             if allowed.is_empty() { "none (the stack could not be determined)".to_string() } else { allowed.join(", ") }
         )));
     }
-    if matches!(base.as_str(), "sh" | "bash" | "zsh" | "cmd" | "powershell" | "pwsh" | "sudo" | "su") {
-        return Err(DevdError::denied("shells and privilege tools are never allowed"));
+    if matches!(
+        base.as_str(),
+        "sh" | "bash" | "zsh" | "cmd" | "powershell" | "pwsh" | "sudo" | "su"
+    ) {
+        return Err(DevdError::denied(
+            "shells and privilege tools are never allowed",
+        ));
     }
     let dirs = toolchain::managed_dirs_for(ctx, dir);
     let cancel = AtomicBool::new(false);
     exec::run_streaming(
-        &RunSpec { argv: argv.to_vec(), cwd: dir.to_path_buf(), env: vec![], extra_path: dirs, timeout: Some(Duration::from_secs(timeout.clamp(1, 3600))) },
+        &RunSpec {
+            argv: argv.to_vec(),
+            cwd: dir.to_path_buf(),
+            env: vec![],
+            extra_path: dirs,
+            timeout: Some(Duration::from_secs(timeout.clamp(1, 3600))),
+        },
         &cancel,
         None,
         &mut |_| {},
@@ -526,8 +662,16 @@ pub fn exec_allowed(ctx: &Ctx, reg: &StackRegistry, stack: Option<&StackDef>, pm
 /// flags that carry code are refused for agents. A person at the command line is not restricted.
 pub fn inline_code(argv: &[String]) -> Option<String> {
     let program = argv.first()?.replace('\\', "/");
-    let name = program.rsplit('/').next().unwrap_or(&program).to_ascii_lowercase();
-    let name = name.trim_end_matches(".exe").trim_end_matches(".cmd").trim_end_matches(".bat").to_string();
+    let name = program
+        .rsplit('/')
+        .next()
+        .unwrap_or(&program)
+        .to_ascii_lowercase();
+    let name = name
+        .trim_end_matches(".exe")
+        .trim_end_matches(".cmd")
+        .trim_end_matches(".bat")
+        .to_string();
     let rest = &argv[1..];
     let flags: &[&str] = match name.as_str() {
         "php" => &["-r", "-R", "-B", "-E", "--run"],
@@ -538,11 +682,23 @@ pub fn inline_code(argv: &[String]) -> Option<String> {
         _ => &[],
     };
     for arg in rest {
-        if flags.iter().any(|f| arg == f || (f.starts_with("--") && arg.starts_with(&format!("{f}=")))) {
+        if flags
+            .iter()
+            .any(|f| arg == f || (f.starts_with("--") && arg.starts_with(&format!("{f}="))))
+        {
             return Some(format!("{name} {arg}"));
         }
         // `-rcode` and `-ecode`: the flag and its value in one argument.
-        if flags.iter().any(|f| f.len() == 2 && arg.len() > 2 && arg.starts_with(f) && !arg.starts_with("--") && name != "npx") && matches!(name.as_str(), "php" | "ruby" | "perl" | "python" | "python3" | "py") {
+        if flags.iter().any(|f| {
+            f.len() == 2
+                && arg.len() > 2
+                && arg.starts_with(f)
+                && !arg.starts_with("--")
+                && name != "npx"
+        }) && matches!(
+            name.as_str(),
+            "php" | "ruby" | "perl" | "python" | "python3" | "py"
+        ) {
             return Some(format!("{name} {}", &arg[..2]));
         }
     }
@@ -558,9 +714,13 @@ pub fn is_destructive(stack: Option<&StackDef>, argv: &[String]) -> Option<Strin
     let joined = argv.join(" ");
     let mut generic = vec!["--force", "rm", "drop", "reset --hard", "push --force"];
     generic.retain(|g| g.contains(' ') || *g == "--force");
-    let mut marks: Vec<String> = stack.map(|s| s.exec.destructive_args.clone()).unwrap_or_default();
+    let mut marks: Vec<String> = stack
+        .map(|s| s.exec.destructive_args.clone())
+        .unwrap_or_default();
     marks.extend(generic.into_iter().map(|g| g.to_string()));
-    marks.into_iter().find(|m| argv.iter().any(|a| a == m) || (m.contains(' ') && joined.contains(m.as_str())))
+    marks
+        .into_iter()
+        .find(|m| argv.iter().any(|a| a == m) || (m.contains(' ') && joined.contains(m.as_str())))
 }
 
 #[cfg(test)]
@@ -574,11 +734,17 @@ mod tests {
             (v(&["php", "-r", "system('x');"]), "php -r"),
             (v(&["C:\\tools\\php.exe", "-r", "x"]), "php -r"),
             (v(&["php", "-rsystem('x');"]), "php -r"),
-            (v(&["node", "--eval=process.exit()"]), "node --eval=process.exit()"),
+            (
+                v(&["node", "--eval=process.exit()"]),
+                "node --eval=process.exit()",
+            ),
             (v(&["node", "-p", "1"]), "node -p"),
             (v(&["python3", "-c", "import os"]), "python3 -c"),
             (v(&["npx", "-c", "echo hi"]), "npx -c"),
-            (v(&["php", "artisan", "tinker", "--execute=1"]), "php artisan tinker"),
+            (
+                v(&["php", "artisan", "tinker", "--execute=1"]),
+                "php artisan tinker",
+            ),
         ] {
             assert_eq!(inline_code(&argv).as_deref(), Some(expected), "{argv:?}");
         }
@@ -591,7 +757,11 @@ mod tests {
             v(&["php", "-v"]),
             v(&["node", "scripts/build.js"]),
         ] {
-            assert_eq!(inline_code(&argv), None, "an ordinary command is not blocked: {argv:?}");
+            assert_eq!(
+                inline_code(&argv),
+                None,
+                "an ordinary command is not blocked: {argv:?}"
+            );
         }
     }
 
@@ -602,16 +772,26 @@ mod tests {
         assert_eq!(classify_script("test:unit", "vitest").1, Risk::Safe);
         assert_eq!(classify_script("build", "tsc").1, Risk::Safe);
         assert_eq!(classify_script("deploy", "ssh host").1, Risk::Destructive);
-        assert_eq!(classify_script("db:reset", "prisma migrate reset").1, Risk::Destructive);
+        assert_eq!(
+            classify_script("db:reset", "prisma migrate reset").1,
+            Risk::Destructive
+        );
         // A friendly name does not hide a destructive body.
-        assert_eq!(classify_script("test", "rm -rf data && jest").1, Risk::Destructive);
+        assert_eq!(
+            classify_script("test", "rm -rf data && jest").1,
+            Risk::Destructive
+        );
         assert_eq!(classify_script("whatever", "node x.js").1, Risk::Mutating);
     }
 
     #[test]
     fn makefile_targets_are_found_and_variables_ignored() {
         let d = tempfile::tempdir().unwrap();
-        std::fs::write(d.path().join("Makefile"), "CC := gcc\n.PHONY: all\nall: build\nbuild:\n\tcc x.c\ntest: build\n\t./a.out\n").unwrap();
+        std::fs::write(
+            d.path().join("Makefile"),
+            "CC := gcc\n.PHONY: all\nall: build\nbuild:\n\tcc x.c\ntest: build\n\t./a.out\n",
+        )
+        .unwrap();
         let s = read_scripts(d.path());
         assert_eq!(s.make, vec!["all", "build", "test"]);
     }

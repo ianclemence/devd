@@ -25,19 +25,58 @@ use devd_stacks::authz;
 
 const MAX_READ_BYTES: u64 = 2_000_000;
 const MAX_WRITE_BYTES: usize = 2_000_000;
-pub(crate) const SKIP_DIRS: &[&str] = &[".git", "node_modules", "target", "vendor", ".venv", "venv", "__pycache__", ".next", ".nuxt", "dist", "build", ".gradle", ".idea"];
+pub(crate) const SKIP_DIRS: &[&str] = &[
+    ".git",
+    "node_modules",
+    "target",
+    "vendor",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".next",
+    ".nuxt",
+    "dist",
+    "build",
+    ".gradle",
+    ".idea",
+];
 
 /// Whether a file name conventionally holds secrets.
 pub fn is_secret_file(path: &Path) -> bool {
-    let name = path.file_name().map(|n| n.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-    if name == ".env" || (name.starts_with(".env.") && !matches!(name.as_str(), ".env.example" | ".env.sample" | ".env.dist" | ".env.template")) {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    if name == ".env"
+        || (name.starts_with(".env.")
+            && !matches!(
+                name.as_str(),
+                ".env.example" | ".env.sample" | ".env.dist" | ".env.template"
+            ))
+    {
         return true;
     }
-    let exact = [".npmrc", ".pypirc", ".netrc", "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa", "credentials", "credentials.json", "secrets.json", "secrets.yml", "secrets.yaml", "master.key"];
+    let exact = [
+        ".npmrc",
+        ".pypirc",
+        ".netrc",
+        "id_rsa",
+        "id_ed25519",
+        "id_ecdsa",
+        "id_dsa",
+        "credentials",
+        "credentials.json",
+        "secrets.json",
+        "secrets.yml",
+        "secrets.yaml",
+        "master.key",
+    ];
     if exact.contains(&name.as_str()) {
         return true;
     }
-    [".pem", ".key", ".p12", ".pfx", ".jks", ".keystore"].iter().any(|e| name.ends_with(e))
+    [".pem", ".key", ".p12", ".pfx", ".jks", ".keystore"]
+        .iter()
+        .any(|e| name.ends_with(e))
 }
 
 /// Authorise a path for a tool and return it normalised.
@@ -68,14 +107,21 @@ pub fn authorize(ctx: &Ctx, path: &str, write: bool) -> Result<PathBuf> {
         || ctx
             .store
             .list_stack_projects()
-            .map(|ps| ps.iter().any(|p| norm.starts_with(authz::normalise(Path::new(&p.path)))))
+            .map(|ps| {
+                ps.iter()
+                    .any(|p| norm.starts_with(authz::normalise(Path::new(&p.path))))
+            })
             .unwrap_or(false);
     let uploads = authz::normalise(&ctx.paths.root().join("uploads"));
     if devd_data_path(ctx, &home, &norm) && !in_projects && !norm.starts_with(&uploads) {
-        return Err(DevdError::denied("devd's own data directory (database, keys, logs) is not accessible to file tools"));
+        return Err(DevdError::denied(
+            "devd's own data directory (database, keys, logs) is not accessible to file tools",
+        ));
     }
     if norm.components().any(|c| c.as_os_str() == ".git") {
-        return Err(DevdError::denied("`.git` is managed through the git capabilities, not file tools"));
+        return Err(DevdError::denied(
+            "`.git` is managed through the git capabilities, not file tools",
+        ));
     }
     if is_secret_file(&norm) {
         return Err(DevdError::denied(format!(
@@ -94,22 +140,51 @@ pub fn authorize(ctx: &Ctx, path: &str, write: bool) -> Result<PathBuf> {
 /// below the home is the person's: a portable install keeps its projects in
 /// `<home>/www`, and any other folder a person made there is theirs too.
 fn devd_data_path(ctx: &Ctx, home: &Path, path: &Path) -> bool {
-    let Ok(rest) = path.strip_prefix(home) else { return false };
+    let Ok(rest) = path.strip_prefix(home) else {
+        return false;
+    };
     let mut parts = rest.components();
-    let Some(first) = parts.next() else { return false };
+    let Some(first) = parts.next() else {
+        return false;
+    };
     if parts.next().is_some() {
         // Two or more levels below the home: a project, not devd's own file.
         return false;
     }
     let name = first.as_os_str().to_string_lossy().to_ascii_lowercase();
     let known = [
-        "state.db", "state.db-wal", "state.db-shm", "state.db-journal", "settings.toml", "agent-host.pid",
-        "ops-host.pid", "desktop.log", "secrets", "logs", "backups", "snapshots", "certs", "mcp", "config",
-        "templates", "workflows", "cache", "tmp", "uploads", "runtimes", "services", "tools", "etc", "bin",
-        "roles", "skills",
+        "state.db",
+        "state.db-wal",
+        "state.db-shm",
+        "state.db-journal",
+        "settings.toml",
+        "agent-host.pid",
+        "ops-host.pid",
+        "desktop.log",
+        "secrets",
+        "logs",
+        "backups",
+        "snapshots",
+        "certs",
+        "mcp",
+        "config",
+        "templates",
+        "workflows",
+        "cache",
+        "tmp",
+        "uploads",
+        "runtimes",
+        "services",
+        "tools",
+        "etc",
+        "bin",
+        "roles",
+        "skills",
     ];
     known.contains(&name.as_str())
-        || (ctx.paths.root().join(name.as_str()).is_file() && !is_secret_file(path) && name.ends_with(".db"))
+        || (ctx.paths.root().join(name.as_str()).is_file()
+            && !is_secret_file(path)
+            && name.ends_with(".db"))
 }
 
 fn looks_binary(bytes: &[u8]) -> bool {
@@ -120,7 +195,10 @@ fn looks_binary(bytes: &[u8]) -> bool {
 pub fn list(ctx: &Ctx, path: &str, depth: usize, limit: usize) -> Result<Value> {
     let root = authorize(ctx, path, false)?;
     if !root.is_dir() {
-        return Err(DevdError::not_found(format!("{} is not a directory", root.display())));
+        return Err(DevdError::not_found(format!(
+            "{} is not a directory",
+            root.display()
+        )));
     }
     let mut entries = Vec::new();
     let mut truncated = false;
@@ -129,14 +207,22 @@ pub fn list(ctx: &Ctx, path: &str, depth: usize, limit: usize) -> Result<Value> 
         .max_depth(depth.clamp(1, 4))
         .sort_by_file_name()
         .into_iter()
-        .filter_entry(|e| !(e.file_type().is_dir() && SKIP_DIRS.contains(&e.file_name().to_string_lossy().as_ref())))
+        .filter_entry(|e| {
+            !(e.file_type().is_dir()
+                && SKIP_DIRS.contains(&e.file_name().to_string_lossy().as_ref()))
+        })
         .filter_map(|e| e.ok())
     {
         if entries.len() >= limit {
             truncated = true;
             break;
         }
-        let rel = e.path().strip_prefix(&root).unwrap_or(e.path()).to_string_lossy().replace('\\', "/");
+        let rel = e
+            .path()
+            .strip_prefix(&root)
+            .unwrap_or(e.path())
+            .to_string_lossy()
+            .replace('\\', "/");
         let secret = is_secret_file(e.path());
         entries.push(json!({
             "path": rel,
@@ -145,28 +231,41 @@ pub fn list(ctx: &Ctx, path: &str, depth: usize, limit: usize) -> Result<Value> 
             "secret": secret,
         }));
     }
-    Ok(json!({ "root": root.display().to_string(), "entries": entries, "truncated": truncated, "skipped_directories": SKIP_DIRS }))
+    Ok(
+        json!({ "root": root.display().to_string(), "entries": entries, "truncated": truncated, "skipped_directories": SKIP_DIRS }),
+    )
 }
 
 /// Read a text file with line numbers.
 pub fn read(ctx: &Ctx, path: &str, offset: usize, limit: usize) -> Result<Value> {
     let p = authorize(ctx, path, false)?;
-    let meta = std::fs::metadata(&p).map_err(|_| DevdError::not_found(format!("{} does not exist", p.display())))?;
+    let meta = std::fs::metadata(&p)
+        .map_err(|_| DevdError::not_found(format!("{} does not exist", p.display())))?;
     if !meta.is_file() {
-        return Err(DevdError::invalid(format!("{} is not a file; use fs.list", p.display())));
+        return Err(DevdError::invalid(format!(
+            "{} is not a file; use fs.list",
+            p.display()
+        )));
     }
     if meta.len() > MAX_READ_BYTES {
         return Err(DevdError::invalid(format!("{} is {} bytes; read a part of it with offset and limit after searching with fs.search", p.display(), meta.len())));
     }
     let bytes = std::fs::read(&p)?;
     if looks_binary(&bytes) {
-        return Err(DevdError::invalid(format!("{} looks like a binary file", p.display())));
+        return Err(DevdError::invalid(format!(
+            "{} looks like a binary file",
+            p.display()
+        )));
     }
     let text = String::from_utf8_lossy(&bytes);
     let lines: Vec<&str> = text.lines().collect();
     let start = offset.saturating_sub(1).min(lines.len());
     let end = (start + limit.clamp(1, 2000)).min(lines.len());
-    let body: Vec<String> = lines[start..end].iter().enumerate().map(|(i, l)| format!("{:>6}\t{}", start + i + 1, l)).collect();
+    let body: Vec<String> = lines[start..end]
+        .iter()
+        .enumerate()
+        .map(|(i, l)| format!("{:>6}\t{}", start + i + 1, l))
+        .collect();
     Ok(json!({
         "path": p.display().to_string(),
         "total_lines": lines.len(),
@@ -178,12 +277,24 @@ pub fn read(ctx: &Ctx, path: &str, offset: usize, limit: usize) -> Result<Value>
 }
 
 /// Search file contents with a regular expression.
-pub fn search(ctx: &Ctx, path: &str, pattern: &str, glob: Option<&str>, limit: usize, context: usize) -> Result<Value> {
+pub fn search(
+    ctx: &Ctx,
+    path: &str,
+    pattern: &str,
+    glob: Option<&str>,
+    limit: usize,
+    context: usize,
+) -> Result<Value> {
     let root = authorize(ctx, path, false)?;
-    let re = Regex::new(pattern).map_err(|e| DevdError::invalid(format!("invalid regular expression: {e}")))?;
+    let re = Regex::new(pattern)
+        .map_err(|e| DevdError::invalid(format!("invalid regular expression: {e}")))?;
     let glob_re = glob.map(|g| {
-        let esc = regex::escape(g).replace("\\*\\*", ".*").replace("\\*", "[^/]*").replace("\\?", ".");
-        Regex::new(&format!("(^|/){esc}$")).map_err(|e| DevdError::invalid(format!("invalid glob: {e}")))
+        let esc = regex::escape(g)
+            .replace("\\*\\*", ".*")
+            .replace("\\*", "[^/]*")
+            .replace("\\?", ".");
+        Regex::new(&format!("(^|/){esc}$"))
+            .map_err(|e| DevdError::invalid(format!("invalid glob: {e}")))
     });
     let glob_re = match glob_re {
         Some(r) => Some(r?),
@@ -194,7 +305,10 @@ pub fn search(ctx: &Ctx, path: &str, pattern: &str, glob: Option<&str>, limit: u
     } else {
         WalkDir::new(&root)
             .into_iter()
-            .filter_entry(|e| !(e.file_type().is_dir() && SKIP_DIRS.contains(&e.file_name().to_string_lossy().as_ref())))
+            .filter_entry(|e| {
+                !(e.file_type().is_dir()
+                    && SKIP_DIRS.contains(&e.file_name().to_string_lossy().as_ref()))
+            })
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().is_file())
             .map(|e| e.into_path())
@@ -206,17 +320,25 @@ pub fn search(ctx: &Ctx, path: &str, pattern: &str, glob: Option<&str>, limit: u
         if is_secret_file(&f) {
             continue;
         }
-        let rel = f.strip_prefix(&root).unwrap_or(&f).to_string_lossy().replace('\\', "/");
+        let rel = f
+            .strip_prefix(&root)
+            .unwrap_or(&f)
+            .to_string_lossy()
+            .replace('\\', "/");
         if let Some(g) = &glob_re {
             if !g.is_match(&rel) {
                 continue;
             }
         }
-        let Ok(meta) = std::fs::metadata(&f) else { continue };
+        let Ok(meta) = std::fs::metadata(&f) else {
+            continue;
+        };
         if meta.len() > 1_000_000 {
             continue;
         }
-        let Ok(bytes) = std::fs::read(&f) else { continue };
+        let Ok(bytes) = std::fs::read(&f) else {
+            continue;
+        };
         if looks_binary(&bytes) {
             continue;
         }
@@ -249,19 +371,27 @@ pub fn write(ctx: &Ctx, path: &str, content: &str, create_dirs: bool) -> Result<
         return Err(DevdError::invalid("content is larger than 2 MB"));
     }
     if p.is_dir() {
-        return Err(DevdError::invalid(format!("{} is a directory", p.display())));
+        return Err(DevdError::invalid(format!(
+            "{} is a directory",
+            p.display()
+        )));
     }
     if let Some(parent) = p.parent() {
         if !parent.exists() {
             if !create_dirs {
-                return Err(DevdError::not_found(format!("{} does not exist; pass create_dirs to create it", parent.display())));
+                return Err(DevdError::not_found(format!(
+                    "{} does not exist; pass create_dirs to create it",
+                    parent.display()
+                )));
             }
             std::fs::create_dir_all(parent)?;
         }
     }
     let existed = p.exists();
     devd_core::util::atomic_write(&p, content)?;
-    Ok(json!({ "path": p.display().to_string(), "created": !existed, "bytes": content.len(), "lines": content.lines().count() }))
+    Ok(
+        json!({ "path": p.display().to_string(), "created": !existed, "bytes": content.len(), "lines": content.lines().count() }),
+    )
 }
 
 /// Replace text in a file. The old text must match exactly once unless
@@ -269,12 +399,16 @@ pub fn write(ctx: &Ctx, path: &str, content: &str, create_dirs: bool) -> Result<
 pub fn edit(ctx: &Ctx, path: &str, old: &str, new: &str, replace_all: bool) -> Result<Value> {
     let p = authorize(ctx, path, true)?;
     if old.is_empty() {
-        return Err(DevdError::invalid("`old` must not be empty; use fs.write to create or replace a whole file"));
+        return Err(DevdError::invalid(
+            "`old` must not be empty; use fs.write to create or replace a whole file",
+        ));
     }
     if old == new {
         return Err(DevdError::invalid("`old` and `new` are identical"));
     }
-    let text = std::fs::read_to_string(&p).map_err(|_| DevdError::not_found(format!("{} does not exist or is not text", p.display())))?;
+    let text = std::fs::read_to_string(&p).map_err(|_| {
+        DevdError::not_found(format!("{} does not exist or is not text", p.display()))
+    })?;
     let count = text.matches(old).count();
     if count == 0 {
         return Err(DevdError::conflict("`old` was not found. The file may have changed; read it again with fs.read and copy the text exactly, including whitespace."));
@@ -282,12 +416,18 @@ pub fn edit(ctx: &Ctx, path: &str, old: &str, new: &str, replace_all: bool) -> R
     if count > 1 && !replace_all {
         return Err(DevdError::conflict(format!("`old` matches {count} places. Include more surrounding lines to make it unique, or pass replace_all.")));
     }
-    let updated = if replace_all { text.replace(old, new) } else { text.replacen(old, new, 1) };
+    let updated = if replace_all {
+        text.replace(old, new)
+    } else {
+        text.replacen(old, new, 1)
+    };
     if updated.len() > MAX_WRITE_BYTES {
         return Err(DevdError::invalid("the result would be larger than 2 MB"));
     }
     devd_core::util::atomic_write(&p, &updated)?;
-    Ok(json!({ "path": p.display().to_string(), "replacements": if replace_all { count } else { 1 } }))
+    Ok(
+        json!({ "path": p.display().to_string(), "replacements": if replace_all { count } else { 1 } }),
+    )
 }
 
 /// Move or rename a file or directory. Never overwrites.
@@ -295,10 +435,16 @@ pub fn mv(ctx: &Ctx, from: &str, to: &str) -> Result<Value> {
     let a = authorize(ctx, from, true)?;
     let b = authorize(ctx, to, true)?;
     if !a.exists() {
-        return Err(DevdError::not_found(format!("{} does not exist", a.display())));
+        return Err(DevdError::not_found(format!(
+            "{} does not exist",
+            a.display()
+        )));
     }
     if b.exists() {
-        return Err(DevdError::conflict(format!("{} already exists; move never overwrites", b.display())));
+        return Err(DevdError::conflict(format!(
+            "{} already exists; move never overwrites",
+            b.display()
+        )));
     }
     if let Some(parent) = b.parent() {
         std::fs::create_dir_all(parent)?;
@@ -311,7 +457,10 @@ pub fn mv(ctx: &Ctx, from: &str, to: &str) -> Result<Value> {
 pub fn delete(ctx: &Ctx, path: &str, recursive: bool) -> Result<Value> {
     let p = authorize(ctx, path, true)?;
     if !p.exists() {
-        return Err(DevdError::not_found(format!("{} does not exist", p.display())));
+        return Err(DevdError::not_found(format!(
+            "{} does not exist",
+            p.display()
+        )));
     }
     let roots = authz::roots(ctx);
     if roots.contains(&p) {
@@ -323,7 +472,12 @@ pub fn delete(ctx: &Ctx, path: &str, recursive: bool) -> Result<Value> {
             std::fs::remove_dir_all(&p)?;
             return Ok(json!({ "deleted": p.display().to_string(), "entries": n }));
         }
-        std::fs::remove_dir(&p).map_err(|_| DevdError::conflict(format!("{} is not empty; pass recursive to delete it with its contents", p.display())))?;
+        std::fs::remove_dir(&p).map_err(|_| {
+            DevdError::conflict(format!(
+                "{} is not empty; pass recursive to delete it with its contents",
+                p.display()
+            ))
+        })?;
     } else {
         std::fs::remove_file(&p)?;
     }
@@ -347,12 +501,28 @@ mod tests {
         s.www_root = Some(root.join("www"));
         let store = Store::open_in_memory().unwrap();
         store.migrate().unwrap();
-        Ctx { store: Arc::new(store), paths: Arc::new(paths), settings: Arc::new(s), events: EventBus::new(), actor, dry_run: false }
+        Ctx {
+            store: Arc::new(store),
+            paths: Arc::new(paths),
+            settings: Arc::new(s),
+            events: EventBus::new(),
+            actor,
+            run: None,
+            dry_run: false,
+        }
     }
 
     #[test]
     fn secrets_and_internals_are_off_limits() {
-        for f in [".env", ".env.local", "a/.env.production", "id_rsa", "server.pem", ".npmrc", "config/master.key"] {
+        for f in [
+            ".env",
+            ".env.local",
+            "a/.env.production",
+            "id_rsa",
+            "server.pem",
+            ".npmrc",
+            "config/master.key",
+        ] {
             assert!(is_secret_file(Path::new(f)), "{f}");
         }
         for f in [".env.example", "README.md", "src/keys.rs", "environment.ts"] {
@@ -386,13 +556,22 @@ mod tests {
             settings: Arc::new(s),
             events: EventBus::new(),
             actor: Actor::agent("t"),
+            run: None,
             dry_run: false,
         };
 
-        assert!(authorize(&c, &file.display().to_string(), false).is_ok(), "a site under www is readable");
-        assert!(authorize(&c, &upload.display().to_string(), false).is_ok(), "an upload is readable");
+        assert!(
+            authorize(&c, &file.display().to_string(), false).is_ok(),
+            "a site under www is readable"
+        );
+        assert!(
+            authorize(&c, &upload.display().to_string(), false).is_ok(),
+            "an upload is readable"
+        );
         assert_eq!(
-            authorize(&c, &home.join("state.db").display().to_string(), false).unwrap_err().code(),
+            authorize(&c, &home.join("state.db").display().to_string(), false)
+                .unwrap_err()
+                .code(),
             "permission_denied",
             "devd's own state stays fenced"
         );
@@ -402,7 +581,9 @@ mod tests {
             let inner = dir.join("x.txt");
             std::fs::write(&inner, "x").unwrap();
             assert_eq!(
-                authorize(&c, &inner.display().to_string(), false).unwrap_err().code(),
+                authorize(&c, &inner.display().to_string(), false)
+                    .unwrap_err()
+                    .code(),
                 "permission_denied",
                 "devd's own {own} stays fenced"
             );
@@ -435,6 +616,7 @@ mod tests {
             settings: Arc::new(s),
             events: EventBus::new(),
             actor: Actor::agent("t"),
+            run: None,
             dry_run: false,
         };
         assert!(
@@ -442,7 +624,9 @@ mod tests {
             "a project folder under the home is readable even before it is imported"
         );
         assert_eq!(
-            authorize(&c, &home.join("settings.toml").display().to_string(), false).unwrap_err().code(),
+            authorize(&c, &home.join("settings.toml").display().to_string(), false)
+                .unwrap_err()
+                .code(),
             "permission_denied",
             "the home's own files stay fenced"
         );
@@ -457,8 +641,14 @@ mod tests {
         let f = proj.join("a.txt");
         std::fs::write(&f, "one\ntwo\ntwo\n").unwrap();
         let fs = f.display().to_string();
-        assert_eq!(edit(&c, &fs, "two", "2", false).unwrap_err().code(), "conflict");
-        assert_eq!(edit(&c, &fs, "nine", "9", false).unwrap_err().code(), "conflict");
+        assert_eq!(
+            edit(&c, &fs, "two", "2", false).unwrap_err().code(),
+            "conflict"
+        );
+        assert_eq!(
+            edit(&c, &fs, "nine", "9", false).unwrap_err().code(),
+            "conflict"
+        );
         edit(&c, &fs, "one", "1", false).unwrap();
         edit(&c, &fs, "two", "2", true).unwrap();
         assert_eq!(std::fs::read_to_string(&f).unwrap(), "1\n2\n2\n");
@@ -472,10 +662,26 @@ mod tests {
         std::fs::create_dir_all(&proj).unwrap();
         std::fs::write(proj.join(".env"), "SECRET=1").unwrap();
         std::fs::write(proj.join("ok.txt"), "hello\nworld\n").unwrap();
-        assert_eq!(read(&c, &proj.join(".env").display().to_string(), 1, 10).unwrap_err().code(), "permission_denied");
-        assert_eq!(write(&c, &proj.join(".env").display().to_string(), "x", false).unwrap_err().code(), "permission_denied");
+        assert_eq!(
+            read(&c, &proj.join(".env").display().to_string(), 1, 10)
+                .unwrap_err()
+                .code(),
+            "permission_denied"
+        );
+        assert_eq!(
+            write(&c, &proj.join(".env").display().to_string(), "x", false)
+                .unwrap_err()
+                .code(),
+            "permission_denied"
+        );
         assert!(read(&c, "/etc/passwd", 1, 10).is_err());
-        assert!(read(&c, &d.path().join("home").join("state.db").display().to_string(), 1, 10).is_err());
+        assert!(read(
+            &c,
+            &d.path().join("home").join("state.db").display().to_string(),
+            1,
+            10
+        )
+        .is_err());
         assert!(read(&c, &format!("{}/../../etc/passwd", proj.display()), 1, 10).is_err());
         assert!(read(&c, "relative.txt", 1, 10).is_err());
         let r = read(&c, &proj.join("ok.txt").display().to_string(), 2, 10).unwrap();
@@ -484,7 +690,11 @@ mod tests {
         let s = search(&c, &proj.display().to_string(), "SECRET|hello", None, 10, 0).unwrap();
         assert_eq!(s["matches"].as_array().unwrap().len(), 1);
         let l = list(&c, &proj.display().to_string(), 1, 50).unwrap();
-        assert!(l["entries"].as_array().unwrap().iter().any(|e| e["path"] == ".env" && e["secret"] == true));
+        assert!(l["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["path"] == ".env" && e["secret"] == true));
     }
 
     #[test]
@@ -499,6 +709,11 @@ mod tests {
         assert_eq!(mv(&c, &p("a"), &p("b")).unwrap_err().code(), "conflict");
         mv(&c, &p("a"), &p("c")).unwrap();
         delete(&c, &p("c"), false).unwrap();
-        assert_eq!(delete(&c, &d.path().join("www").display().to_string(), true).unwrap_err().code(), "permission_denied");
+        assert_eq!(
+            delete(&c, &d.path().join("www").display().to_string(), true)
+                .unwrap_err()
+                .code(),
+            "permission_denied"
+        );
     }
 }

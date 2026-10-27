@@ -118,7 +118,13 @@ pub struct Chapter {
 }
 
 fn row_chapter(r: &rusqlite::Row) -> rusqlite::Result<Chapter> {
-    Ok(Chapter { id: r.get(0)?, thread_id: r.get(1)?, event_id: r.get(2)?, title: r.get(3)?, created_at: r.get(4)? })
+    Ok(Chapter {
+        id: r.get(0)?,
+        thread_id: r.get(1)?,
+        event_id: r.get(2)?,
+        title: r.get(3)?,
+        created_at: r.get(4)?,
+    })
 }
 
 /// One entry in a conversation's log.
@@ -190,6 +196,8 @@ pub struct AgentRequest {
     pub decided_at: Option<String>,
     /// Who decided.
     pub decided_by: Option<String>,
+    /// The durable approval this request mirrors, when it has one.
+    pub approval_id: Option<String>,
 }
 
 fn j(v: &Option<String>) -> Option<serde_json::Value> {
@@ -211,9 +219,10 @@ fn row_provider(r: &rusqlite::Row) -> rusqlite::Result<Provider> {
     })
 }
 
-const PROVIDER_COLS: &str = "id,kind,label,base_url,key_env,default_model,is_default,enabled,created_at,updated_at";
+const PROVIDER_COLS: &str =
+    "id,kind,label,base_url,key_env,default_model,is_default,enabled,created_at,updated_at";
 const THREAD_COLS: &str = "id,title,project,provider_id,model,state,error,input_tokens,output_tokens,created_at,updated_at";
-const REQ_COLS: &str = "id,actor,capability,args,plan,state,result,error,thread_id,tool_use_id,created_at,decided_at,decided_by";
+const REQ_COLS: &str = "id,actor,capability,args,plan,state,result,error,thread_id,tool_use_id,created_at,decided_at,decided_by,approval_id";
 
 fn row_thread(r: &rusqlite::Row) -> rusqlite::Result<ChatThread> {
     Ok(ChatThread {
@@ -249,6 +258,7 @@ fn row_request(r: &rusqlite::Row) -> rusqlite::Result<AgentRequest> {
         created_at: r.get(10)?,
         decided_at: r.get(11)?,
         decided_by: r.get(12)?,
+        approval_id: r.get(13)?,
     })
 }
 
@@ -274,7 +284,9 @@ impl Store {
     /// Every provider.
     pub fn list_providers(&self) -> Result<Vec<Provider>> {
         self.with(|c| {
-            let mut st = c.prepare(&format!("SELECT {PROVIDER_COLS} FROM providers ORDER BY is_default DESC, label"))?;
+            let mut st = c.prepare(&format!(
+                "SELECT {PROVIDER_COLS} FROM providers ORDER BY is_default DESC, label"
+            ))?;
             let rows = st.query_map([], row_provider)?;
             Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
         })
@@ -282,13 +294,23 @@ impl Store {
 
     /// One provider.
     pub fn get_provider(&self, id: &str) -> Result<Option<Provider>> {
-        self.with(|c| Ok(c.query_row(&format!("SELECT {PROVIDER_COLS} FROM providers WHERE id=?1"), params![id], row_provider).optional()?))
+        self.with(|c| {
+            Ok(c.query_row(
+                &format!("SELECT {PROVIDER_COLS} FROM providers WHERE id=?1"),
+                params![id],
+                row_provider,
+            )
+            .optional()?)
+        })
     }
 
     /// Remove a provider and its cached models.
     pub fn delete_provider(&self, id: &str) -> Result<bool> {
         self.with(|c| {
-            c.execute("DELETE FROM model_catalogue WHERE source=?1", params![format!("provider:{id}")])?;
+            c.execute(
+                "DELETE FROM model_catalogue WHERE source=?1",
+                params![format!("provider:{id}")],
+            )?;
             Ok(c.execute("DELETE FROM providers WHERE id=?1", params![id])? > 0)
         })
     }
@@ -349,7 +371,13 @@ impl Store {
     // -------------------------------------------------------------- threads
 
     /// Create a thread.
-    pub fn create_thread(&self, title: &str, project: Option<&str>, provider_id: Option<&str>, model: Option<&str>) -> Result<ChatThread> {
+    pub fn create_thread(
+        &self,
+        title: &str,
+        project: Option<&str>,
+        provider_id: Option<&str>,
+        model: Option<&str>,
+    ) -> Result<ChatThread> {
         let now = util::now();
         let t = ChatThread {
             id: util::new_id(),
@@ -376,13 +404,22 @@ impl Store {
 
     /// One thread.
     pub fn get_thread(&self, id: &str) -> Result<Option<ChatThread>> {
-        self.with(|c| Ok(c.query_row(&format!("SELECT {THREAD_COLS} FROM chat_threads WHERE id=?1"), params![id], row_thread).optional()?))
+        self.with(|c| {
+            Ok(c.query_row(
+                &format!("SELECT {THREAD_COLS} FROM chat_threads WHERE id=?1"),
+                params![id],
+                row_thread,
+            )
+            .optional()?)
+        })
     }
 
     /// Recent threads.
     pub fn list_threads(&self, limit: i64) -> Result<Vec<ChatThread>> {
         self.with(|c| {
-            let mut st = c.prepare(&format!("SELECT {THREAD_COLS} FROM chat_threads ORDER BY updated_at DESC LIMIT ?1"))?;
+            let mut st = c.prepare(&format!(
+                "SELECT {THREAD_COLS} FROM chat_threads ORDER BY updated_at DESC LIMIT ?1"
+            ))?;
             let rows = st.query_map(params![limit], row_thread)?;
             Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
         })
@@ -391,13 +428,22 @@ impl Store {
     /// Update a thread's state.
     pub fn set_thread_state(&self, id: &str, state: &str, error: Option<&str>) -> Result<()> {
         self.with(|c| {
-            c.execute("UPDATE chat_threads SET state=?2, error=?3, updated_at=?4 WHERE id=?1", params![id, state, error, util::now()])?;
+            c.execute(
+                "UPDATE chat_threads SET state=?2, error=?3, updated_at=?4 WHERE id=?1",
+                params![id, state, error, util::now()],
+            )?;
             Ok(())
         })
     }
 
     /// Update a thread's title or model selection.
-    pub fn update_thread(&self, id: &str, title: Option<&str>, provider_id: Option<&str>, model: Option<&str>) -> Result<()> {
+    pub fn update_thread(
+        &self,
+        id: &str,
+        title: Option<&str>,
+        provider_id: Option<&str>,
+        model: Option<&str>,
+    ) -> Result<()> {
         self.with(|c| {
             c.execute(
                 "UPDATE chat_threads SET title=COALESCE(?2,title), provider_id=COALESCE(?3,provider_id), model=COALESCE(?4,model), updated_at=?5 WHERE id=?1",
@@ -419,10 +465,14 @@ impl Store {
     /// to and including `upto`, plus the answers to any tool calls those events made, so that it
     /// can be continued; the original is not touched. Approvals still waiting are not copied.
     pub fn fork_thread(&self, src: &str, upto: i64, title: &str) -> Result<ChatThread> {
-        let source = self.get_thread(src)?.ok_or_else(|| DevdError::not_found("no such conversation"))?;
+        let source = self
+            .get_thread(src)?
+            .ok_or_else(|| DevdError::not_found("no such conversation"))?;
         let all = self.list_events(src, 0, 100_000)?;
         if !all.iter().any(|e| e.id == upto) {
-            return Err(DevdError::not_found("that message is not in this conversation"));
+            return Err(DevdError::not_found(
+                "that message is not in this conversation",
+            ));
         }
         let mut wanted = std::collections::HashSet::new();
         let mut keep: Vec<&ChatEvent> = Vec::new();
@@ -444,17 +494,28 @@ impl Store {
             keep.push(e);
         }
         // The answers to tool calls that were still open at the cut come from just after it.
-        for e in all.iter().filter(|e| e.id > upto && e.kind == "tool_result") {
+        for e in all
+            .iter()
+            .filter(|e| e.id > upto && e.kind == "tool_result")
+        {
             if let Some(id) = e.data["tool_use_id"].as_str() {
                 if wanted.remove(id) {
                     keep.push(e);
                 }
             }
         }
-        let thread = self.create_thread(title, source.project.as_deref(), source.provider_id.as_deref(), source.model.as_deref())?;
+        let thread = self.create_thread(
+            title,
+            source.project.as_deref(),
+            source.provider_id.as_deref(),
+            source.model.as_deref(),
+        )?;
         self.with(|c| {
             for e in &keep {
-                c.execute("INSERT INTO chat_events (thread_id,kind,data,created_at) VALUES (?1,?2,?3,?4)", params![thread.id, e.kind, e.data.to_string(), e.created_at])?;
+                c.execute(
+                    "INSERT INTO chat_events (thread_id,kind,data,created_at) VALUES (?1,?2,?3,?4)",
+                    params![thread.id, e.kind, e.data.to_string(), e.created_at],
+                )?;
             }
             Ok(())
         })?;
@@ -475,7 +536,11 @@ impl Store {
     /// How many messages are waiting for the next step.
     pub fn queued_count(&self, thread_id: &str) -> Result<usize> {
         self.with(|c| {
-            Ok(c.query_row("SELECT COUNT(*) FROM chat_queue WHERE thread_id=?1", params![thread_id], |r| r.get::<_, i64>(0))? as usize)
+            Ok(c.query_row(
+                "SELECT COUNT(*) FROM chat_queue WHERE thread_id=?1",
+                params![thread_id],
+                |r| r.get::<_, i64>(0),
+            )? as usize)
         })
     }
 
@@ -507,11 +572,17 @@ impl Store {
 
     /// Discard everything queued for a conversation. Returns how many.
     pub fn clear_queued(&self, thread_id: &str) -> Result<usize> {
-        self.with(|c| Ok(c.execute("DELETE FROM chat_queue WHERE thread_id=?1", params![thread_id])?))
+        self.with(|c| {
+            Ok(c.execute(
+                "DELETE FROM chat_queue WHERE thread_id=?1",
+                params![thread_id],
+            )?)
+        })
     }
 
     /// Pin a message as a chapter of its conversation, or rename the chapter already there.
-    pub fn pin_chapter(&self, thread: &str, event: i64, title: &str) -> Result<Chapter> {        self.with(|c| {
+    pub fn pin_chapter(&self, thread: &str, event: i64, title: &str) -> Result<Chapter> {
+        self.with(|c| {
             c.execute(
                 "INSERT INTO chat_chapters (id,thread_id,event_id,title,created_at) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(thread_id,event_id) DO UPDATE SET title=excluded.title",
                 params![util::new_id(), thread, event, title, util::now()],
@@ -566,13 +637,21 @@ impl Store {
     }
 
     /// Append to a thread's log. Returns the sequence number.
-    pub fn append_event(&self, thread_id: &str, kind: &str, data: &serde_json::Value) -> Result<i64> {
+    pub fn append_event(
+        &self,
+        thread_id: &str,
+        kind: &str,
+        data: &serde_json::Value,
+    ) -> Result<i64> {
         self.with(|c| {
             c.execute(
                 "INSERT INTO chat_events (thread_id,kind,data,created_at) VALUES (?1,?2,?3,?4)",
                 params![thread_id, kind, data.to_string(), util::now()],
             )?;
-            c.execute("UPDATE chat_threads SET updated_at=?2 WHERE id=?1", params![thread_id, util::now()])?;
+            c.execute(
+                "UPDATE chat_threads SET updated_at=?2 WHERE id=?1",
+                params![thread_id, util::now()],
+            )?;
             Ok(c.last_insert_rowid())
         })
     }
@@ -592,7 +671,14 @@ impl Store {
     // ---------------------------------------------------------------- inbox
 
     /// Post a message.
-    pub fn post_inbox(&self, from: &str, project: Option<&str>, subject: &str, body: &str, needs_reply: bool) -> Result<InboxMessage> {
+    pub fn post_inbox(
+        &self,
+        from: &str,
+        project: Option<&str>,
+        subject: &str,
+        body: &str,
+        needs_reply: bool,
+    ) -> Result<InboxMessage> {
         let m = InboxMessage {
             id: util::new_id(),
             from_actor: from.into(),
@@ -652,13 +738,46 @@ impl Store {
     // ------------------------------------------------------------- requests
 
     /// Queue an operation for a person to approve.
-    pub fn create_request(&self, actor: &str, capability: &str, args: &serde_json::Value, plan: Option<&serde_json::Value>, thread_id: Option<&str>, tool_use_id: Option<&str>) -> Result<AgentRequest> {
+    ///
+    /// The request is a projection of one durable approval row, not a second
+    /// approval mechanism. Every surface - the conversation, the HTTP API, the
+    /// CLI's MCP queue - therefore sees the same pending decision, the same
+    /// expiry, and the same single-use consumption.
+    pub fn create_request(
+        &self,
+        actor: &str,
+        capability: &str,
+        args: &serde_json::Value,
+        plan: Option<&serde_json::Value>,
+        thread_id: Option<&str>,
+        tool_use_id: Option<&str>,
+    ) -> Result<AgentRequest> {
         let id = util::new_id();
         let now = util::now();
+        let run_id = match thread_id {
+            Some(t) => self.run_for_thread(t)?.map(|r| r.id),
+            None => None,
+        };
+        let args_hash = util::sha256_hex(args.to_string().as_bytes());
+        let (_token, approval) = self.create_approval(crate::store_runs::NewApproval {
+            run_id: run_id.as_deref(),
+            task_id: None,
+            tool_call_id: None,
+            capability,
+            args,
+            args_hash: &args_hash,
+            plan,
+            plan_hash: None,
+            scope: "single",
+            tier: "approval",
+            risk: "normal",
+            actor,
+            requested_by: actor,
+        })?;
         self.with(|c| {
             c.execute(
-                "INSERT INTO agent_requests (id,actor,capability,args,plan,state,thread_id,tool_use_id,created_at) VALUES (?1,?2,?3,?4,?5,'pending',?6,?7,?8)",
-                params![id, actor, capability, args.to_string(), plan.map(|p| p.to_string()), thread_id, tool_use_id, now],
+                "INSERT INTO agent_requests (id,actor,capability,args,plan,state,thread_id,tool_use_id,created_at,approval_id) VALUES (?1,?2,?3,?4,?5,'pending',?6,?7,?8,?9)",
+                params![id, actor, capability, args.to_string(), plan.map(|p| p.to_string()), thread_id, tool_use_id, now, approval.id],
             )?;
             Ok(())
         })?;
@@ -667,11 +786,28 @@ impl Store {
 
     /// One request.
     pub fn get_request(&self, id: &str) -> Result<Option<AgentRequest>> {
-        self.with(|c| Ok(c.query_row(&format!("SELECT {REQ_COLS} FROM agent_requests WHERE id=?1"), params![id], row_request).optional()?))
+        self.with(|c| {
+            Ok(c.query_row(
+                &format!("SELECT {REQ_COLS} FROM agent_requests WHERE id=?1"),
+                params![id],
+                row_request,
+            )
+            .optional()?)
+        })
+    }
+
+    /// The conversation request that mirrors one durable approval.
+    pub fn request_by_approval(&self, approval_id: &str) -> Result<Option<AgentRequest>> {
+        self.with(|c| Ok(c.query_row(&format!("SELECT {REQ_COLS} FROM agent_requests WHERE approval_id=?1 ORDER BY created_at DESC LIMIT 1"), params![approval_id], row_request).optional()?))
     }
 
     /// Requests, optionally only pending, newest first.
-    pub fn list_requests(&self, only_pending: bool, thread_id: Option<&str>, limit: i64) -> Result<Vec<AgentRequest>> {
+    pub fn list_requests(
+        &self,
+        only_pending: bool,
+        thread_id: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<AgentRequest>> {
         self.with(|c| {
             let mut st = c.prepare(&format!(
                 "SELECT {REQ_COLS} FROM agent_requests WHERE (?1=0 OR state='pending') AND (?2 IS NULL OR thread_id=?2) ORDER BY created_at DESC LIMIT ?3"
@@ -682,7 +818,14 @@ impl Store {
     }
 
     /// Record a decision.
-    pub fn decide_request(&self, id: &str, state: &str, decided_by: &str, result: Option<&serde_json::Value>, error: Option<&str>) -> Result<()> {
+    pub fn decide_request(
+        &self,
+        id: &str,
+        state: &str,
+        decided_by: &str,
+        result: Option<&serde_json::Value>,
+        error: Option<&str>,
+    ) -> Result<()> {
         self.with(|c| {
             c.execute(
                 "UPDATE agent_requests SET state=?2, decided_by=?3, decided_at=?4, result=?5, error=?6 WHERE id=?1",

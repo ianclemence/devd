@@ -16,7 +16,11 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use devd_core::capability::{Approval, Ctx, InvokeRequest};
-use devd_core::{util, AgentRequest, ChatEvent, ChatThread, DevdError, Provider, Registry, Result};
+use devd_core::context::{self, ContextBudget};
+use devd_core::{
+    evaluate, util, AgentRequest, ChatEvent, ChatThread, DevdError, Provider, Registry, Result,
+    Run, RunContext, RunMode, RunSpec, RunState,
+};
 use devd_mcp::McpServer;
 
 use crate::providers::{self, ChatRequest, ToolSpec};
@@ -166,7 +170,14 @@ fn cap_text(text: &str, max: usize) -> String {
         return text.to_string();
     }
     let head: String = text.chars().take(max * 2 / 3).collect();
-    let tail: String = text.chars().rev().take(max / 4).collect::<Vec<_>>().into_iter().rev().collect();
+    let tail: String = text
+        .chars()
+        .rev()
+        .take(max / 4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
     format!("{head}\n\n… [{} characters omitted to save context. Ask for a narrower result, or read the part you need.] …\n\n{tail}", text.chars().count() - head.chars().count() - tail.chars().count())
 }
 
@@ -200,14 +211,40 @@ fn repair(msgs: &mut Vec<Value>) {
     let mut i = 0;
     while i < msgs.len() {
         if msgs[i]["role"] == "assistant" {
-            let ids: Vec<String> = msgs[i]["content"].as_array().map(|c| c.iter().filter(|b| b["type"] == "tool_use").filter_map(|b| b["id"].as_str().map(|s| s.to_string())).collect()).unwrap_or_default();
+            let ids: Vec<String> = msgs[i]["content"]
+                .as_array()
+                .map(|c| {
+                    c.iter()
+                        .filter(|b| b["type"] == "tool_use")
+                        .filter_map(|b| b["id"].as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
             if !ids.is_empty() {
-                let have: HashSet<String> = msgs.get(i + 1).and_then(|m| m["content"].as_array()).map(|c| c.iter().filter(|b| b["type"] == "tool_result").filter_map(|b| b["tool_use_id"].as_str().map(|s| s.to_string())).collect()).unwrap_or_default();
+                let have: HashSet<String> = msgs
+                    .get(i + 1)
+                    .and_then(|m| m["content"].as_array())
+                    .map(|c| {
+                        c.iter()
+                            .filter(|b| b["type"] == "tool_result")
+                            .filter_map(|b| b["tool_use_id"].as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 let missing: Vec<Value> = ids.iter().filter(|id| !have.contains(*id)).map(|id| json!({ "type": "tool_result", "tool_use_id": id, "content": "(no result was recorded; the run was interrupted. Call the tool again if you still need it.)", "is_error": true })).collect();
                 if !missing.is_empty() {
                     match msgs.get_mut(i + 1) {
-                        Some(next) if next["role"] == "user" && next["content"].as_array().map(|c| c.iter().all(|b| b["type"] == "tool_result")).unwrap_or(false) => {
-                            next["content"].as_array_mut().expect("array").extend(missing);
+                        Some(next)
+                            if next["role"] == "user"
+                                && next["content"]
+                                    .as_array()
+                                    .map(|c| c.iter().all(|b| b["type"] == "tool_result"))
+                                    .unwrap_or(false) =>
+                        {
+                            next["content"]
+                                .as_array_mut()
+                                .expect("array")
+                                .extend(missing);
                         }
                         _ => msgs.insert(i + 1, json!({ "role": "user", "content": missing })),
                     }
@@ -221,7 +258,15 @@ fn repair(msgs: &mut Vec<Value>) {
 /// Keep only the most recent tool results in full. The log still has them; the
 /// model is told it can call the tool again.
 fn clear_old_results(msgs: &mut [Value], keep: usize) {
-    let total: usize = msgs.iter().map(|m| m["content"].as_array().map(|c| c.iter().filter(|b| b["type"] == "tool_result").count()).unwrap_or(0)).sum();
+    let total: usize = msgs
+        .iter()
+        .map(|m| {
+            m["content"]
+                .as_array()
+                .map(|c| c.iter().filter(|b| b["type"] == "tool_result").count())
+                .unwrap_or(0)
+        })
+        .sum();
     let mut to_clear = total.saturating_sub(keep);
     for m in msgs.iter_mut() {
         if to_clear == 0 {
@@ -232,7 +277,10 @@ fn clear_old_results(msgs: &mut [Value], keep: usize) {
                 if to_clear == 0 {
                     break;
                 }
-                let long = b["content"].as_str().map(|s| s.len() > 300).unwrap_or(false);
+                let long = b["content"]
+                    .as_str()
+                    .map(|s| s.len() > 300)
+                    .unwrap_or(false);
                 if long {
                     b["content"] = json!("[older tool result cleared to save context; call the tool again if you need it]");
                 }
@@ -272,20 +320,34 @@ type ToolSurface = (Vec<ToolSpec>, ExternalTools, DirectTools, Vec<String>);
 fn tool_specs(ctx: &Ctx, registry: &Registry) -> ToolSurface {
     let mut specs: Vec<ToolSpec> = devd_mcp::tools()
         .into_iter()
-        .map(|t| ToolSpec { name: t["name"].as_str().unwrap_or("").to_string(), description: t["description"].as_str().unwrap_or("").to_string(), schema: t["inputSchema"].clone() })
+        .map(|t| ToolSpec {
+            name: t["name"].as_str().unwrap_or("").to_string(),
+            description: t["description"].as_str().unwrap_or("").to_string(),
+            schema: t["inputSchema"].clone(),
+        })
         .collect();
     // Direct names for the common capabilities. The schema and the permission rules are the
     // capability's own, so a direct call cannot mean something different from `devd_invoke`.
     let mut direct = HashMap::new();
     for (tool, id) in DIRECT {
-        let Some(cap) = registry.get(id) else { continue };
+        let Some(cap) = registry.get(id) else {
+            continue;
+        };
         let mut schema = cap.args_schema.clone();
         if let Some(obj) = schema.as_object_mut() {
             obj.remove("$schema");
             obj.remove("title");
         }
-        let description = format!("{} - {}. The same operation as `{id}`, called directly.", cap.summary, util::truncate(cap.description.trim(), 400));
-        specs.push(ToolSpec { name: (*tool).to_string(), description, schema });
+        let description = format!(
+            "{} - {}. The same operation as `{id}`, called directly.",
+            cap.summary,
+            util::truncate(cap.description.trim(), 400)
+        );
+        specs.push(ToolSpec {
+            name: (*tool).to_string(),
+            description,
+            schema,
+        });
         direct.insert((*tool).to_string(), *id);
     }
     let mut external = HashMap::new();
@@ -296,7 +358,11 @@ fn tool_specs(ctx: &Ctx, registry: &Registry) -> ToolSurface {
             util::truncate(t.tool.description.trim(), 600),
             t.server.name
         );
-        specs.push(ToolSpec { name: t.exposed.clone(), description, schema: t.tool.schema.clone() });
+        specs.push(ToolSpec {
+            name: t.exposed.clone(),
+            description,
+            schema: t.tool.schema.clone(),
+        });
         external.insert(t.exposed.clone(), t);
     }
     (specs, external, direct, failures)
@@ -315,10 +381,18 @@ fn route_call(
 ) -> (String, Value, String) {
     if let Some(cap) = direct.get(name) {
         let args = if input.is_object() { input } else { json!({}) };
-        return ("devd_invoke".to_string(), json!({ "id": cap, "args": args }), name.to_string());
+        return (
+            "devd_invoke".to_string(),
+            json!({ "id": cap, "args": args }),
+            name.to_string(),
+        );
     }
     if let Some(t) = external.get(name) {
-        let cap = if t.server.trust == devd_core::McpTrust::Allow { "mcp.call_trusted" } else { "mcp.call" };
+        let cap = if t.server.trust == devd_core::McpTrust::Allow {
+            "mcp.call_trusted"
+        } else {
+            "mcp.call"
+        };
         let args = if input.is_object() { input } else { json!({}) };
         return (
             "devd_invoke".to_string(),
@@ -335,7 +409,12 @@ type Candidate = (Provider, Option<String>, String, String);
 impl Hub {
     /// Build the hub over a base context.
     pub fn new(ctx: Ctx) -> Arc<Self> {
-        Arc::new(Self { ctx, registry: OnceLock::new(), running: Mutex::new(HashSet::new()), cancel: Mutex::new(HashMap::new()) })
+        Arc::new(Self {
+            ctx,
+            registry: OnceLock::new(),
+            running: Mutex::new(HashSet::new()),
+            cancel: Mutex::new(HashMap::new()),
+        })
     }
 
     /// Give the hub the registry once it exists (the registry holds the
@@ -345,7 +424,9 @@ impl Hub {
     }
 
     fn registry(&self) -> Result<&Arc<Registry>> {
-        self.registry.get().ok_or_else(|| DevdError::internal("the agent is not attached to the capability registry"))
+        self.registry.get().ok_or_else(|| {
+            DevdError::internal("the agent is not attached to the capability registry")
+        })
     }
 
     /// Conversations that were running when devd last stopped are not. Only the
@@ -369,13 +450,20 @@ impl Hub {
 
     fn log(&self, tid: &str, kind: &str, data: Value) -> Result<i64> {
         let id = self.ctx.store.append_event(tid, kind, &data)?;
-        self.ctx.events.emit_with("chat.event", format!("{kind} in {tid}"), json!({ "thread": tid, "kind": kind, "id": id }));
+        self.ctx.events.emit_with(
+            "chat.event",
+            format!("{kind} in {tid}"),
+            json!({ "thread": tid, "kind": kind, "id": id }),
+        );
         Ok(id)
     }
 
     /// Whether a conversation has a live loop.
     pub fn is_running(&self, tid: &str) -> bool {
-        self.running.lock().map(|r| r.contains(tid)).unwrap_or(false)
+        self.running
+            .lock()
+            .map(|r| r.contains(tid))
+            .unwrap_or(false)
     }
 
     fn provider_for(&self, t: &ChatThread) -> Result<(Provider, Option<String>)> {
@@ -387,7 +475,10 @@ impl Hub {
             })?,
         };
         if !p.enabled {
-            return Err(DevdError::conflict(format!("provider `{}` is disabled", p.id)));
+            return Err(DevdError::conflict(format!(
+                "provider `{}` is disabled",
+                p.id
+            )));
         }
         let key = secrets::read_key(&self.ctx.paths, &p);
         Ok((p, key))
@@ -407,7 +498,10 @@ impl Hub {
             Some(p) if !p.trim().is_empty() => {
                 let dir = devd_stacks::authz::authorize_dir(caller, std::path::Path::new(p))?;
                 if !dir.is_dir() {
-                    return Err(DevdError::not_found(format!("{} is not a directory", dir.display())));
+                    return Err(DevdError::not_found(format!(
+                        "{} is not a directory",
+                        dir.display()
+                    )));
                 }
                 Some(dir.display().to_string())
             }
@@ -420,32 +514,61 @@ impl Hub {
         }
         let thread = match &req.thread_id {
             Some(id) => {
-                let t = self.ctx.store.get_thread(id)?.ok_or_else(|| DevdError::not_found(format!("no conversation `{id}`")))?;
+                let t = self
+                    .ctx
+                    .store
+                    .get_thread(id)?
+                    .ok_or_else(|| DevdError::not_found(format!("no conversation `{id}`")))?;
                 // A conversation that is working (or waiting on a person) accepts a message and
                 // keeps it for the next step. It is not appended to the log yet: a user message
                 // between a tool call and its result would break the sequence the model requires.
-                if self.is_running(id) || matches!(t.state.as_str(), "running" | "waiting_approval") {
+                if self.is_running(id) || matches!(t.state.as_str(), "running" | "waiting_approval")
+                {
                     if self.ctx.store.queued_count(id)? >= 20 {
                         return Err(DevdError::conflict("20 messages are already queued for this conversation; wait for one to be delivered"));
                     }
-                    self.ctx.store.queue_message(id, &text, &caller.actor.label())?;
+                    self.ctx
+                        .store
+                        .queue_message(id, &text, &caller.actor.label())?;
                     return Ok(t);
                 }
                 if req.provider.is_some() || req.model.is_some() {
-                    self.ctx.store.update_thread(id, None, req.provider.as_deref(), req.model.as_deref())?;
+                    self.ctx.store.update_thread(
+                        id,
+                        None,
+                        req.provider.as_deref(),
+                        req.model.as_deref(),
+                    )?;
                 }
                 self.ctx.store.get_thread(id)?.expect("exists")
             }
             None => {
-                let title: String = text.lines().next().unwrap_or("New conversation").chars().take(60).collect();
-                self.ctx.store.create_thread(&title, project.as_deref(), req.provider.as_deref(), req.model.as_deref())?
+                let title: String = text
+                    .lines()
+                    .next()
+                    .unwrap_or("New conversation")
+                    .chars()
+                    .take(60)
+                    .collect();
+                self.ctx.store.create_thread(
+                    &title,
+                    project.as_deref(),
+                    req.provider.as_deref(),
+                    req.model.as_deref(),
+                )?
             }
         };
         // A previous process may have left messages queued; they were written first, so they are
         // delivered first.
         self.deliver_queued(&thread.id)?;
-        self.log(&thread.id, "user", json!({ "text": text, "from": caller.actor.label() }))?;
-        self.ctx.store.set_thread_state(&thread.id, "running", None)?;
+        self.log(
+            &thread.id,
+            "user",
+            json!({ "text": text, "from": caller.actor.label() }),
+        )?;
+        self.ctx
+            .store
+            .set_thread_state(&thread.id, "running", None)?;
         self.spawn(&thread.id);
         Ok(self.ctx.store.get_thread(&thread.id)?.expect("exists"))
     }
@@ -454,7 +577,11 @@ impl Hub {
     fn deliver_queued(&self, tid: &str) -> Result<usize> {
         let queued = self.ctx.store.take_queued(tid)?;
         for m in &queued {
-            self.log(tid, "user", json!({ "text": m.text, "from": m.from_actor, "queued": true }))?;
+            self.log(
+                tid,
+                "user",
+                json!({ "text": m.text, "from": m.from_actor, "queued": true }),
+            )?;
         }
         Ok(queued.len())
     }
@@ -480,7 +607,9 @@ impl Hub {
             let failure = match outcome {
                 Ok(Ok(())) => None,
                 Ok(Err(e)) => Some(e.to_string()),
-                Err(_) => Some("the agent loop crashed unexpectedly; the conversation is intact".to_string()),
+                Err(_) => Some(
+                    "the agent loop crashed unexpectedly; the conversation is intact".to_string(),
+                ),
             };
             if let Some(msg) = failure {
                 let _ = hub.log(&tid, "error", json!({ "message": msg }));
@@ -505,11 +634,21 @@ impl Hub {
         // Stopping means stopping: text written for the next step is not delivered after a stop.
         let dropped = self.ctx.store.clear_queued(tid).unwrap_or(0);
         if dropped > 0 {
-            let _ = self.log(tid, "notice", json!({ "text": format!("{dropped} queued message(s) discarded.") }));
+            let _ = self.log(
+                tid,
+                "notice",
+                json!({ "text": format!("{dropped} queued message(s) discarded.") }),
+            );
         }
         if !self.is_running(tid) {
             for r in self.ctx.store.list_requests(true, Some(tid), 50)? {
-                let _ = self.ctx.store.decide_request(&r.id, "declined", &ctx.actor.label(), None, Some("the conversation was stopped"));
+                let _ = self.ctx.store.decide_request(
+                    &r.id,
+                    "declined",
+                    &ctx.actor.label(),
+                    None,
+                    Some("the conversation was stopped"),
+                );
                 let _ = self.log(tid, "tool_result", json!({ "tool_use_id": r.tool_use_id, "content": "The person stopped the conversation; this operation was not run.", "is_error": true }));
             }
             self.log(tid, "notice", json!({ "text": "Stopped." }))?;
@@ -518,12 +657,105 @@ impl Hub {
         Ok(())
     }
 
+    /// Continue a stopped run at a person's explicit request.
+    ///
+    /// This is the deliberate act the lifecycle requires before a finished run
+    /// may execute again. It does not replay the previous tool calls: the agent
+    /// resumes from the durable log, so a call it already made is not repeated
+    /// just because the run was retried. A cancelled run is never reopened;
+    /// because the person stopped it, retrying starts a new run for the same
+    /// conversation.
+    pub fn retry(self: &Arc<Self>, caller: &Ctx, run_id: &str) -> Result<Run> {
+        caller.require_human("retrying a run")?;
+        let run = self
+            .ctx
+            .store
+            .run_by_id(run_id)?
+            .ok_or_else(|| DevdError::not_found(format!("no run `{run_id}`")))?;
+        if run.team_run_id.is_some() {
+            return Err(DevdError::conflict(
+                "this run belongs to the agent team: resume a paused run there, or retry the failed task in the team view",
+            ));
+        }
+        let state = run.typed_state();
+        if matches!(state, RunState::Executing | RunState::Verifying) {
+            return Err(DevdError::conflict("that run is still executing"));
+        }
+        let thread_id = run
+            .thread_id
+            .clone()
+            .ok_or_else(|| DevdError::conflict("this run has no conversation to continue"))?;
+        let thread = self
+            .ctx
+            .store
+            .get_thread(&thread_id)?
+            .ok_or_else(|| DevdError::not_found("the conversation was deleted"))?;
+        if self.is_running(&thread_id)
+            || matches!(thread.state.as_str(), "running" | "waiting_approval")
+        {
+            return Err(DevdError::conflict(
+                "the agent is still working on that conversation",
+            ));
+        }
+        // An approval is a person's decision, not a speed bump to retry past.
+        let pending: Vec<_> = self
+            .ctx
+            .store
+            .list_approvals_for_run(run_id, 50)?
+            .into_iter()
+            .filter(|a| a.state == "pending")
+            .collect();
+        if state == RunState::AwaitingApproval || !pending.is_empty() {
+            let what = pending
+                .first()
+                .map(|a| a.capability.as_str())
+                .unwrap_or("an operation");
+            return Err(DevdError::conflict(format!(
+                "{what} is still waiting for your decision; approve or decline it first"
+            )));
+        }
+        if run.cancellation.is_some() && state == RunState::Cancelled {
+            // ensure_run_for starts a fresh run, because this one was stopped on purpose.
+            let fresh = self.ensure_run_for(&thread)?;
+            self.log(&thread_id, "notice", json!({ "text": format!("Retrying in a new run ({}) at your request.", &fresh.id[..8.min(fresh.id.len())]) }))?;
+            self.ctx
+                .store
+                .set_thread_state(&thread_id, "running", None)?;
+            self.spawn(&thread_id);
+            return Ok(fresh);
+        }
+        let reopened = self.ensure_run_for(&thread)?;
+        self.log(&thread_id, "notice", json!({ "text": format!("Continuing run {} at your request.", &reopened.id[..8.min(reopened.id.len())]) }))?;
+        self.ctx
+            .store
+            .set_thread_state(&thread_id, "running", None)?;
+        self.spawn(&thread_id);
+        self.ctx
+            .store
+            .run_by_id(&reopened.id)?
+            .ok_or_else(|| DevdError::internal("the run disappeared"))
+    }
+
     /// Start a conversation for the agent team. The directory was authorised when
     /// the run started; the thread is not a person's chat, and says so.
-    pub fn open_thread(self: &Arc<Self>, project: &str, title: &str, message: &str) -> Result<ChatThread> {
-        let thread = self.ctx.store.create_thread(title, Some(project), None, None)?;
-        self.log(&thread.id, "user", json!({ "text": message, "from": "devd-team" }))?;
-        self.ctx.store.set_thread_state(&thread.id, "running", None)?;
+    pub fn open_thread(
+        self: &Arc<Self>,
+        project: &str,
+        title: &str,
+        message: &str,
+    ) -> Result<ChatThread> {
+        let thread = self
+            .ctx
+            .store
+            .create_thread(title, Some(project), None, None)?;
+        self.log(
+            &thread.id,
+            "user",
+            json!({ "text": message, "from": "devd-team" }),
+        )?;
+        self.ctx
+            .store
+            .set_thread_state(&thread.id, "running", None)?;
         self.spawn(&thread.id);
         Ok(self.ctx.store.get_thread(&thread.id)?.expect("exists"))
     }
@@ -551,7 +783,11 @@ impl Hub {
             return Ok(out);
         }
         let assignments = self.ctx.store.list_role_models()?;
-        let project_scope = t.project.as_ref().map(|p| format!("project:{p}")).unwrap_or_default();
+        let project_scope = t
+            .project
+            .as_ref()
+            .map(|p| format!("project:{p}"))
+            .unwrap_or_default();
         let mut chains: Vec<(String, &str)> = Vec::new();
         if let Some(r) = role {
             chains.push((project_scope.clone(), r));
@@ -561,16 +797,38 @@ impl Hub {
             chains.push((String::new(), "default"));
         }
         for (scope, r) in chains {
-            let mut rows: Vec<_> = assignments.iter().filter(|a| a.role == r && a.scope == scope).collect();
+            let mut rows: Vec<_> = assignments
+                .iter()
+                .filter(|a| a.role == r && a.scope == scope)
+                .collect();
             rows.sort_by_key(|a| a.position);
             for a in rows {
-                if let Some(p) = self.ctx.store.get_provider(&a.provider_id)?.filter(|p| p.enabled) {
+                if let Some(p) = self
+                    .ctx
+                    .store
+                    .get_provider(&a.provider_id)?
+                    .filter(|p| p.enabled)
+                {
                     let key = secrets::read_key(&self.ctx.paths, &p);
                     if key.is_none() && p.kind != "openai-compatible" {
                         continue;
                     }
                     if !out.iter().any(|(q, _, m, _)| q.id == p.id && *m == a.model) {
-                        out.push((p, key, a.model.clone(), format!("{} model for {}{}", if scope.is_empty() { "your" } else { "this project's" }, r, if out.is_empty() { "" } else { " (fallback)" })));
+                        out.push((
+                            p,
+                            key,
+                            a.model.clone(),
+                            format!(
+                                "{} model for {}{}",
+                                if scope.is_empty() {
+                                    "your"
+                                } else {
+                                    "this project's"
+                                },
+                                r,
+                                if out.is_empty() { "" } else { " (fallback)" }
+                            ),
+                        ));
                     }
                 }
             }
@@ -580,7 +838,12 @@ impl Hub {
         }
         if out.is_empty() {
             let (p, key) = self.provider_for(t)?;
-            let model = p.default_model.clone().ok_or_else(|| DevdError::conflict(format!("no model is chosen for {}. Pick one in Models.", p.label)))?;
+            let model = p.default_model.clone().ok_or_else(|| {
+                DevdError::conflict(format!(
+                    "no model is chosen for {}. Pick one in Models.",
+                    p.label
+                ))
+            })?;
             out.push((p, key, model, "the default provider's default model".into()));
         }
         Ok(out)
@@ -608,12 +871,22 @@ impl Hub {
         }
         if let Ok(Some(p)) = self.ctx.store.get_stack_project(project) {
             if let Ok(c) = serde_json::from_str::<Value>(&p.context) {
-                s.push_str(&format!("Known stack: {} (package manager: {})\n", p.stack_id.as_deref().unwrap_or("unknown"), p.package_manager.as_deref().unwrap_or("none")));
+                s.push_str(&format!(
+                    "Known stack: {} (package manager: {})\n",
+                    p.stack_id.as_deref().unwrap_or("unknown"),
+                    p.package_manager.as_deref().unwrap_or("none")
+                ));
                 if let Some(tasks) = c["tasks"].as_array() {
-                    let ids: Vec<&str> = tasks.iter().filter_map(|t| t["id"].as_str()).take(20).collect();
+                    let ids: Vec<&str> = tasks
+                        .iter()
+                        .filter_map(|t| t["id"].as_str())
+                        .take(20)
+                        .collect();
                     s.push_str(&format!("Tasks: {}\n", ids.join(", ")));
                 }
-                s.push_str("(This is a cached summary; call project.detect for the current state.)\n");
+                s.push_str(
+                    "(This is a cached summary; call project.detect for the current state.)\n",
+                );
             }
         } else {
             s.push_str("This project is not registered yet; call project.detect, then project.import if it should be remembered.\n");
@@ -626,19 +899,51 @@ impl Hub {
     }
 
     fn system_prompt(&self, t: &ChatThread) -> String {
-        format!("{PROMPT}\n{COMMON_CALLS}\n\n{}\n\n## Skills\n{}\n## Context\nToday is {}.\n{}", crate::skills::CORE, crate::skills::index_for(&self.ctx.paths, None), &util::now()[..10], self.brief(t))
+        format!(
+            "{PROMPT}\n{COMMON_CALLS}\n\n{}\n\n## Skills\n{}\n## Context\nToday is {}.\n{}\n{}",
+            crate::skills::CORE,
+            crate::skills::index_for(&self.ctx.paths, None),
+            &util::now()[..10],
+            self.brief(t),
+            // AGENTS.md, CLAUDE.md, .devd/instructions.md and .cursorrules, including
+            // nested package-level files. They are marked as data by the builder.
+            context::instructions_text(t.project.as_deref()),
+        )
     }
 
-    fn run(&self, tid: &str, cancel: &AtomicBool) -> Result<()> {
+    fn run(&self, tid: &str, cancel: &Arc<AtomicBool>) -> Result<()> {
         let registry = self.registry()?.clone();
-        let thread_project = self.ctx.store.get_thread(tid)?.and_then(|t| t.project);
-        let mcp = McpServer::new(registry.clone(), self.ctx.clone(), "devd-agent").with_project(thread_project);
+        let thread = self
+            .ctx
+            .store
+            .get_thread(tid)?
+            .ok_or_else(|| DevdError::not_found("the conversation was deleted"))?;
+        let thread_project = thread.project.clone();
+        let run = self.ensure_run_for(&thread)?;
+        let run_id = run.id.clone();
         let (tools, external, direct, failures) = tool_specs(&self.ctx, &registry);
         for failure in failures {
-            self.log(tid, "notice", json!({ "text": format!("MCP server not offered: {failure}") }))?;
+            self.log(
+                tid,
+                "notice",
+                json!({ "text": format!("MCP server not offered: {failure}") }),
+            )?;
         }
-        for _turn in 0..MAX_TURNS {
-            if cancel.load(Ordering::SeqCst) {
+        for turn in 0..MAX_TURNS {
+            let durable_stop = self
+                .ctx
+                .store
+                .run_by_id(&run_id)
+                .ok()
+                .flatten()
+                .map(|r| r.cancellation.is_some())
+                .unwrap_or(false);
+            if cancel.load(Ordering::SeqCst) || durable_stop {
+                let _ = self.ctx.store.transition_run(
+                    &run_id,
+                    RunState::Cancelled,
+                    Some("the person stopped the conversation"),
+                );
                 self.log(tid, "notice", json!({ "text": "Stopped." }))?;
                 self.ctx.store.set_thread_state(tid, "idle", None)?;
                 return Ok(());
@@ -646,34 +951,100 @@ impl Hub {
             // A message written while the last step ran joins here, at a step boundary where no tool
             // call is waiting for its result.
             self.deliver_queued(tid)?;
-            let thread = self.ctx.store.get_thread(tid)?.ok_or_else(|| DevdError::not_found("the conversation was deleted"))?;
+            let thread = self
+                .ctx
+                .store
+                .get_thread(tid)?
+                .ok_or_else(|| DevdError::not_found("the conversation was deleted"))?;
             let binding = self.ctx.store.task_of_thread(tid)?;
             let role = binding.as_ref().map(|b| b.role.clone());
             let candidates = match self.candidates(&thread, role.as_deref()) {
                 Ok(c) => c,
                 Err(e) => return self.fail(tid, &e.to_string()),
             };
+            // One step per model turn. Tool calls made because of this turn
+            // carry its id, so the timeline can show what the model tried and
+            // what came back without guessing from timestamps.
+            let step = match self.ctx.store.add_step(
+                &run_id,
+                "turn",
+                &format!("turn {}", turn + 1),
+                &json!({ "turn": turn + 1, "role": binding.as_ref().map(|b| b.role.clone()) }),
+            ) {
+                Ok(s) => s,
+                Err(_) => return self.fail(tid, "the run timeline could not be written"),
+            };
+            let mut run_ctx = RunContext::step(run_id.clone(), step.id.clone());
+            // The same flag the window's Stop button sets. A handler that checks
+            // `ctx.run` stops, rather than only the loop noticing between turns.
+            run_ctx.cancel = cancel.clone();
+            run_ctx.deadline = Some(Instant::now() + Duration::from_secs(30 * 60));
+            run_ctx = run_ctx.with_store(self.ctx.store.clone());
+            let mut mcp_ctx = self.ctx.clone();
+            mcp_ctx.run = Some(run_ctx.clone());
+            let mcp = McpServer::new(registry.clone(), mcp_ctx, "devd-agent")
+                .with_project(thread_project.clone());
             let events = self.ctx.store.list_events(tid, 0, 100_000)?;
-            let messages = build_messages(&events);
             let system = match &binding {
-                Some(b) => format!("{}\n\n{COMMON_CALLS}\n\n{}\n\n## Skills for your role\nLoad one with devd_invoke skills.get before you start the work it covers.\n{}", crate::team::system_prompt(&self.ctx, b), crate::skills::CORE, crate::skills::index_for(&self.ctx.paths, Some(&b.role))),
+                Some(b) => format!("{}\n\n{COMMON_CALLS}\n\n{}\n\n## Skills for your role\nLoad one with devd_invoke skills.get before you start the work it covers.\n{}{}", crate::team::system_prompt(&self.ctx, b), crate::skills::CORE, crate::skills::index_for(&self.ctx.paths, Some(&b.role)), context::instructions_text(thread_project.as_deref())),
                 None => self.system_prompt(&thread),
             };
+            let model_hint = candidates
+                .first()
+                .map(|c| c.2.clone())
+                .unwrap_or_else(|| thread.model.clone().unwrap_or_default());
+            let budget = ContextBudget::for_model(&model_hint, None);
+            let working = context::build_working_set(&events, &budget, &system);
+            let messages = working.messages;
+            let _ = self.ctx.store.append_run_event(
+                &run_id,
+                Some(&step.id),
+                "context.budget",
+                working.manifest.summary(),
+                json!({
+                    "model": working.manifest.model,
+                    "context_window": working.manifest.context_window,
+                    "available": working.manifest.available,
+                    "estimated_tokens": working.manifest.estimated_tokens,
+                    "messages": working.manifest.messages,
+                    "results_cleared": working.manifest.results_cleared,
+                    "summarized": working.manifest.summarized,
+                    "dropped": working.manifest.dropped,
+                }),
+            );
             let mut chosen = None;
             let mut last_err = String::new();
             for (i, (provider, key, model, why)) in candidates.iter().enumerate() {
                 if key.is_none() && provider.kind != "openai-compatible" {
-                    last_err = format!("{} has no API key. Add one in Models (or set {}).", provider.label, provider.key_env.clone().unwrap_or_else(|| "its key variable".into()));
+                    last_err = format!(
+                        "{} has no API key. Add one in Models (or set {}).",
+                        provider.label,
+                        provider
+                            .key_env
+                            .clone()
+                            .unwrap_or_else(|| "its key variable".into())
+                    );
                     continue;
                 }
-                let request = ChatRequest { model: model.clone(), system: system.clone(), messages: messages.clone(), tools: tools.clone(), tool_choice: None, max_tokens: 16_000 };
+                let request = ChatRequest {
+                    model: model.clone(),
+                    system: system.clone(),
+                    messages: messages.clone(),
+                    tools: tools.clone(),
+                    tool_choice: None,
+                    max_tokens: 16_000,
+                };
                 // The reply is shown as it is written, not after it is finished.
                 // Each model call begins with a `start` so the window drops the
                 // tail of a previous call or a failed provider instead of
                 // stacking two answers on top of each other. The whole answer is
                 // still logged once, below, which is what the conversation keeps
                 // and what the model is sent next turn.
-                self.ctx.events.emit_with("chat.delta", format!("{tid} is writing"), json!({ "thread": tid, "start": true }));
+                self.ctx.events.emit_with(
+                    "chat.delta",
+                    format!("{tid} is writing"),
+                    json!({ "thread": tid, "start": true }),
+                );
                 let mut pending = String::new();
                 let mut last_emit = Instant::now();
                 let result = {
@@ -684,14 +1055,22 @@ impl Hub {
                         pending.push_str(piece);
                         if last_emit.elapsed() >= Duration::from_millis(40) {
                             let text = std::mem::take(&mut pending);
-                            self.ctx.events.emit_with("chat.delta", format!("{tid} is writing"), json!({ "thread": tid, "text": text }));
+                            self.ctx.events.emit_with(
+                                "chat.delta",
+                                format!("{tid} is writing"),
+                                json!({ "thread": tid, "text": text }),
+                            );
                             last_emit = Instant::now();
                         }
                     };
                     providers::chat_stream(provider, key.as_deref(), &request, &mut on_piece)
                 };
                 if !pending.is_empty() {
-                    self.ctx.events.emit_with("chat.delta", format!("{tid} is writing"), json!({ "thread": tid, "text": pending }));
+                    self.ctx.events.emit_with(
+                        "chat.delta",
+                        format!("{tid} is writing"),
+                        json!({ "thread": tid, "text": pending }),
+                    );
                 }
                 match result {
                     Ok(r) => {
@@ -703,15 +1082,37 @@ impl Hub {
                     }
                     Err(e) => {
                         last_err = e.to_string();
-                        let _ = self.ctx.store.set_provider_check(&provider.id, false, &last_err, None);
+                        let _ =
+                            self.ctx
+                                .store
+                                .set_provider_check(&provider.id, false, &last_err, None);
                     }
                 }
             }
-            let Some((response, model, _, why)) = chosen else { return self.fail(tid, &last_err) };
-            self.ctx.store.add_thread_usage(tid, response.input_tokens, response.output_tokens)?;
+            let Some((response, model, _, why)) = chosen else {
+                let _ = self.ctx.store.finish_step(
+                    &step.id,
+                    "failed",
+                    Some(&json!({ "error": last_err })),
+                );
+                return self.fail(tid, &last_err);
+            };
+            self.ctx
+                .store
+                .add_thread_usage(tid, response.input_tokens, response.output_tokens)?;
+            let _ = self.ctx.store.add_run_usage(
+                &run_id,
+                response.input_tokens,
+                response.output_tokens,
+                0,
+            );
             self.log(tid, "assistant", json!({ "content": response.content, "stop_reason": response.stop_reason, "model": model, "routing": why, "usage": { "input": response.input_tokens, "output": response.output_tokens } }))?;
 
-            let calls: Vec<&Value> = response.content.iter().filter(|b| b["type"] == "tool_use").collect();
+            let calls: Vec<&Value> = response
+                .content
+                .iter()
+                .filter(|b| b["type"] == "tool_use")
+                .collect();
             if calls.is_empty() {
                 if response.stop_reason == "max_tokens" {
                     self.log(tid, "notice", json!({ "text": "The reply was cut off at the output limit. Say \"continue\" to go on." }))?;
@@ -719,7 +1120,18 @@ impl Hub {
                 // The model finished, but something arrived while it was writing: the turn is not
                 // over until that is answered.
                 if self.deliver_queued(tid)? > 0 {
+                    let _ = self.ctx.store.finish_step(&step.id, "completed", None);
                     continue;
+                }
+                let _ = self.ctx.store.finish_step(&step.id, "completed", None);
+                // The model saying it is done is not evidence. The run ends
+                // `completed` only when its own tool results satisfy the policy;
+                // otherwise it ends `unverified` and says why.
+                let verdict = self.settle_run(&run_id);
+                if let Some(v) = &verdict {
+                    if v.state == RunState::Unverified {
+                        self.log(tid, "notice", json!({ "text": format!("Finished, but not verified: {}.", v.missing.join("; ")) }))?;
+                    }
                 }
                 self.ctx.store.set_thread_state(tid, "idle", None)?;
                 return Ok(());
@@ -738,14 +1150,42 @@ impl Hub {
                         self.log(tid, "tool_result", json!({ "tool_use_id": id, "content": json!({ "ok": false, "error": { "code": "not_allowed_for_this_task", "message": msg } }).to_string(), "is_error": true, "tool": tool_name }))?;
                         continue;
                     }
+                    // The provider's tool-use id keeps the record linkable to the
+                    // conversation. Only a capability that declares itself
+                    // idempotent gets a replay key: deduplicating a deploy or a
+                    // delete because a model repeated a call would hide work the
+                    // person asked for.
+                    invoke["call_id"] = json!(id);
+                    if self
+                        .registry()?
+                        .get(invoke["id"].as_str().unwrap_or(""))
+                        .map(|c| c.idempotent)
+                        .unwrap_or(false)
+                    {
+                        invoke["idempotency_key"] = json!(format!("{run_id}:{id}"));
+                    }
                 }
                 let (mut is_err, text) = mcp.call(&surface, &invoke);
                 if is_err && surface == "devd_invoke" {
-                    if let Some(body) = serde_json::from_str::<Value>(&text).ok().filter(|b| b["error"]["code"] == "approval_required") {
+                    if let Some(body) = serde_json::from_str::<Value>(&text)
+                        .ok()
+                        .filter(|b| b["error"]["code"] == "approval_required")
+                    {
                         let cap = invoke["id"].as_str().unwrap_or("").to_string();
-                        let queueable = self.registry()?.get(&cap).map(|c| c.agent_safe && !c.human_only).unwrap_or(false);
+                        let queueable = self
+                            .registry()?
+                            .get(&cap)
+                            .map(|c| c.agent_safe && !c.human_only)
+                            .unwrap_or(false);
                         if queueable {
-                            let req = self.ctx.store.create_request("agent:devd-agent", &cap, &invoke["args"], body.get("plan"), Some(tid), Some(&id))?;
+                            let req = self.ctx.store.create_request(
+                                "agent:devd-agent",
+                                &cap,
+                                &invoke["args"],
+                                body.get("plan"),
+                                Some(tid),
+                                Some(&id),
+                            )?;
                             self.log(tid, "approval", json!({ "request_id": req.id, "tool_use_id": id, "capability": cap, "args": invoke["args"], "plan": body.get("plan") }))?;
                             pending = true;
                             continue;
@@ -764,10 +1204,26 @@ impl Hub {
                 self.log(tid, "tool_result", json!({ "tool_use_id": id, "content": cap_text(&text, MAX_RESULT_CHARS), "is_error": is_err, "tool": tool_name }))?;
             }
             if pending {
-                self.ctx.store.set_thread_state(tid, "waiting_approval", None)?;
+                let _ = self
+                    .ctx
+                    .store
+                    .transition_run(&run_id, RunState::AwaitingApproval, None);
+                let _ = self.ctx.store.finish_step(
+                    &step.id,
+                    "waiting",
+                    Some(&json!({ "waiting_for": "a person's decision" })),
+                );
+                self.ctx
+                    .store
+                    .set_thread_state(tid, "waiting_approval", None)?;
                 return Ok(());
             }
+            let _ = self.ctx.store.finish_step(&step.id, "completed", None);
         }
+        let _ = self
+            .ctx
+            .store
+            .transition_run(&run_id, RunState::Paused, None);
         self.log(tid, "notice", json!({ "text": format!("Paused after {MAX_TURNS} steps. Say \"continue\" to keep going.") }))?;
         self.ctx.store.set_thread_state(tid, "idle", None)?;
         Ok(())
@@ -776,12 +1232,21 @@ impl Hub {
     /// Team members work inside their task: a role ceiling on what they may
     /// invoke, a directory they cannot leave, and the task id is supplied by
     /// the harness (a model never names its own task).
-    fn gate(&self, binding: Option<&devd_core::TeamTask>, input: &mut Value) -> std::result::Result<(), String> {
+    fn gate(
+        &self,
+        binding: Option<&devd_core::TeamTask>,
+        input: &mut Value,
+    ) -> std::result::Result<(), String> {
         let Some(task) = binding else { return Ok(()) };
         let cap_id = input["id"].as_str().unwrap_or("").to_string();
         let role = crate::roles::get(&task.role).ok_or_else(|| "unknown role".to_string())?;
-        let registry = self.registry.get().ok_or_else(|| "registry not attached".to_string())?;
-        let Some(cap) = registry.get(&cap_id) else { return Ok(()) };
+        let registry = self
+            .registry
+            .get()
+            .ok_or_else(|| "registry not attached".to_string())?;
+        let Some(cap) = registry.get(&cap_id) else {
+            return Ok(());
+        };
         // An implementer may clear files inside its own task worktree. That is
         // ordinary work, not a destructive escalation; every path outside the
         // worktree still goes through the role ceiling, and a read-only role
@@ -806,7 +1271,10 @@ impl Hub {
             });
         if scoped_delete {
             if !role.writes {
-                return Err(format!("the {} role does not change files; clearing them is out of scope", role.title));
+                return Err(format!(
+                    "the {} role does not change files; clearing them is out of scope",
+                    role.title
+                ));
             }
         } else {
             crate::roles::allows(role, &cap)?;
@@ -820,16 +1288,31 @@ impl Hub {
         if role.id != "planner" {
             if let Some(work) = &task.workdir {
                 let root = devd_stacks::authz::normalise(std::path::Path::new(work));
-                let project = self.ctx.store.get_run(&task.run_id).ok().flatten().and_then(|r| r.project);
+                let project = self
+                    .ctx
+                    .store
+                    .get_run(&task.run_id)
+                    .ok()
+                    .flatten()
+                    .and_then(|r| r.project);
                 if let Some(args) = input["args"].as_object() {
                     for key in ["path", "from", "to", "cwd", "destination"] {
                         if let Some(v) = args.get(key).and_then(|v| v.as_str()) {
                             let p = std::path::Path::new(v);
                             if p.is_absolute() {
                                 let n = devd_stacks::authz::normalise(p);
-                                let bootstrap_ok = project.as_deref().map(|pr| n == devd_stacks::authz::normalise(std::path::Path::new(pr)) && !n.exists()).unwrap_or(false);
+                                let bootstrap_ok = project
+                                    .as_deref()
+                                    .map(|pr| {
+                                        n == devd_stacks::authz::normalise(std::path::Path::new(pr))
+                                            && !n.exists()
+                                    })
+                                    .unwrap_or(false);
                                 if !n.starts_with(&root) && !bootstrap_ok {
-                                    return Err(format!("this task is confined to {}; `{v}` is outside it", root.display()));
+                                    return Err(format!(
+                                        "this task is confined to {}; `{v}` is outside it",
+                                        root.display()
+                                    ));
                                 }
                             }
                         }
@@ -840,46 +1323,184 @@ impl Hub {
         Ok(())
     }
 
+    /// The conversation's run, reopened for a new message.
+    ///
+    /// One conversation has one current run. A finished run is reopened by a
+    /// deliberate continuation (the person sent another message), which is a
+    /// legal lifecycle transition; a cancelled run is not reopened, because the
+    /// person stopped it and a new request starts a new run.
+    fn ensure_run_for(&self, thread: &ChatThread) -> Result<Run> {
+        if let Some(run) = self.ctx.store.run_for_thread(&thread.id)? {
+            if run.typed_state() != RunState::Cancelled {
+                if run.typed_state() != RunState::Executing {
+                    self.ctx
+                        .store
+                        .transition_run(&run.id, RunState::Executing, None)?;
+                }
+                return Ok(run);
+            }
+        }
+        let goal = self
+            .ctx
+            .store
+            .list_events(&thread.id, 0, 100_000)
+            .ok()
+            .and_then(|events| events.into_iter().rev().find(|e| e.kind == "user"))
+            .and_then(|e| e.data["text"].as_str().map(str::to_string))
+            .unwrap_or_else(|| thread.title.clone());
+        let run = self.ctx.store.start_run(RunSpec {
+            goal: &goal,
+            mode: RunMode::Assistant,
+            project: thread.project.as_deref(),
+            actor: &self.ctx.actor.label(),
+            thread_id: Some(&thread.id),
+            team_run_id: None,
+            acceptance: &[],
+        })?;
+        self.ctx
+            .store
+            .transition_run(&run.id, RunState::Executing, None)?;
+        Ok(run)
+    }
+
+    /// Close a run from its own evidence.
+    ///
+    /// Returns the verdict so the caller can tell the person why an apparently
+    /// finished answer is `unverified` rather than `completed`.
+    fn settle_run(&self, run_id: &str) -> Option<devd_core::CompletionVerdict> {
+        let run = self.ctx.store.run_by_id(run_id).ok().flatten()?;
+        let evidence = self.ctx.store.list_evidence(run_id, 10_000).ok()?;
+        let verdict = evaluate(&run.completion_policy, &evidence);
+        let _ = self.ctx.store.transition_run(run_id, verdict.state, None);
+        Some(verdict)
+    }
+
     fn fail(&self, tid: &str, msg: &str) -> Result<()> {
         self.log(tid, "error", json!({ "message": msg }))?;
+        if let Ok(Some(run)) = self.ctx.store.run_for_thread(tid) {
+            let _ = self
+                .ctx
+                .store
+                .transition_run(&run.id, RunState::Failed, Some(msg));
+        }
         self.ctx.store.set_thread_state(tid, "error", Some(msg))?;
         Ok(())
     }
 
     /// Approve or decline an operation an agent asked for. Only a person can.
-    pub fn decide(self: &Arc<Self>, caller: &Ctx, request_id: &str, approve: bool) -> Result<AgentRequest> {
+    pub fn decide(
+        self: &Arc<Self>,
+        caller: &Ctx,
+        request_id: &str,
+        approve: bool,
+    ) -> Result<AgentRequest> {
         caller.require_human("deciding an agent's request")?;
-        let req = self.ctx.store.get_request(request_id)?.ok_or_else(|| DevdError::not_found(format!("no request `{request_id}`")))?;
+        let req = self
+            .ctx
+            .store
+            .get_request(request_id)?
+            .ok_or_else(|| DevdError::not_found(format!("no request `{request_id}`")))?;
         if req.state != "pending" {
-            return Err(DevdError::conflict(format!("that request was already {}", req.state)));
+            return Err(DevdError::conflict(format!(
+                "that request was already {}",
+                req.state
+            )));
         }
         let registry = self.registry()?.clone();
-        let invoke = InvokeRequest { id: req.capability.clone(), args: req.args.clone(), dry_run: false };
+        let invoke = InvokeRequest {
+            id: req.capability.clone(),
+            args: req.args.clone(),
+            dry_run: false,
+        };
         let decider = caller.actor.label();
+        // Every request is a projection of one durable approval. Consuming it is
+        // what makes the decision single-use across surfaces: a second window,
+        // the HTTP token flow and this path all race on the same row update.
+        let approval_id = req.approval_id.clone().unwrap_or_else(|| req.id.clone());
         if approve {
+            let approval = match self.ctx.store.consume_approval_by_id(&approval_id) {
+                Ok(a) => a,
+                Err(e) => {
+                    // Another surface may have consumed it a moment ago. Its
+                    // recorded result is still the truth, so adopt it rather than
+                    // failing an approval the person did make.
+                    match self.ctx.store.get_approval(&approval_id)? {
+                        Some(a) if a.state == "consumed" || a.state == "approved" => a,
+                        _ => return Err(e),
+                    }
+                }
+            };
+            let mut ctx = caller.clone();
+            if let Some(rid) = &approval.run_id {
+                let _ = self
+                    .ctx
+                    .store
+                    .transition_run(rid, RunState::Executing, None);
+                ctx.run = Some(RunContext::new(rid.clone()).with_store(self.ctx.store.clone()));
+            }
             // A person approved this. Run it with the person's authority, not the agent's:
             // the agent's fence is what asked in the first place, and re-applying it would
             // make an approval of an outside path impossible to carry out.
-            match registry.dispatch(caller, &invoke, Approval::Granted) {
+            let opts = devd_core::DispatchOptions {
+                approval_id: Some(&approval_id),
+                ..Default::default()
+            };
+            match registry.dispatch_with(&ctx, &invoke, Approval::Granted, &opts) {
                 Ok(res) => {
                     let out = serde_json::to_value(res.outcome).unwrap_or(Value::Null);
-                    self.ctx.store.decide_request(request_id, "approved", &decider, Some(&out), None)?;
+                    self.ctx.store.decide_request(
+                        request_id,
+                        "approved",
+                        &decider,
+                        Some(&out),
+                        None,
+                    )?;
+                    self.ctx
+                        .store
+                        .finish_approval(&approval_id, Some(&out), None)?;
                 }
-                Err(e) => self.ctx.store.decide_request(request_id, "failed", &decider, None, Some(&e.to_string()))?,
+                Err(e) => {
+                    self.ctx.store.decide_request(
+                        request_id,
+                        "failed",
+                        &decider,
+                        None,
+                        Some(&e.to_string()),
+                    )?;
+                    self.ctx
+                        .store
+                        .finish_approval(&approval_id, None, Some(&e.to_string()))?;
+                }
             }
         } else {
+            let _ = self.ctx.store.decline_approval(
+                &approval_id,
+                &decider,
+                Some("declined in the conversation"),
+            );
             let _ = registry.dispatch(caller, &invoke, Approval::Denied);
-            self.ctx.store.decide_request(request_id, "declined", &decider, None, None)?;
+            self.ctx
+                .store
+                .decide_request(request_id, "declined", &decider, None, None)?;
         }
         let done = self.ctx.store.get_request(request_id)?.expect("exists");
         if let (Some(tid), Some(tuid)) = (done.thread_id.clone(), done.tool_use_id.clone()) {
             // An external tool that answered with `isError` failed, even though the approved operation
             // itself ran. The model must not read that as success.
             let tool_failed = done.capability.starts_with("mcp.")
-                && done.result.as_ref().and_then(|r| r.get("data")).and_then(|d| d.get("is_error")).and_then(Value::as_bool).unwrap_or(false);
+                && done
+                    .result
+                    .as_ref()
+                    .and_then(|r| r.get("data"))
+                    .and_then(|d| d.get("is_error"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
             let tool_name = if done.capability.starts_with("mcp.") {
                 devd_mcp::client::exposed_name(
-                    done.args.get("server").and_then(Value::as_str).unwrap_or(""),
+                    done.args
+                        .get("server")
+                        .and_then(Value::as_str)
+                        .unwrap_or(""),
                     done.args.get("tool").and_then(Value::as_str).unwrap_or(""),
                 )
             } else {
@@ -891,7 +1512,12 @@ impl Hub {
                 _ => (json!({ "ok": false, "declined": true, "message": "The person declined this operation. Do not retry it. Explain what you were trying to achieve and ask how they would like to proceed." }).to_string(), true),
             };
             self.log(&tid, "tool_result", json!({ "tool_use_id": tuid, "content": content, "is_error": is_error, "tool": tool_name }))?;
-            if self.ctx.store.list_requests(true, Some(&tid), 50)?.is_empty() {
+            if self
+                .ctx
+                .store
+                .list_requests(true, Some(&tid), 50)?
+                .is_empty()
+            {
                 self.ctx.store.set_thread_state(&tid, "running", None)?;
                 self.spawn(&tid);
             }
@@ -905,29 +1531,59 @@ mod tests {
     use super::*;
 
     fn ev(id: i64, kind: &str, data: Value) -> ChatEvent {
-        ChatEvent { id, thread_id: "t".into(), kind: kind.into(), data, created_at: "".into() }
+        ChatEvent {
+            id,
+            thread_id: "t".into(),
+            kind: kind.into(),
+            data,
+            created_at: "".into(),
+        }
     }
 
     #[test]
     fn the_log_becomes_a_valid_conversation() {
         let events = vec![
             ev(1, "user", json!({"text": "hi"})),
-            ev(2, "assistant", json!({"content": [{"type":"tool_use","id":"a","name":"devd_groups","input":{}},{"type":"tool_use","id":"b","name":"devd_doctor","input":{}}]})),
-            ev(3, "tool_result", json!({"tool_use_id":"a","content":"x","is_error":false})),
+            ev(
+                2,
+                "assistant",
+                json!({"content": [{"type":"tool_use","id":"a","name":"devd_groups","input":{}},{"type":"tool_use","id":"b","name":"devd_doctor","input":{}}]}),
+            ),
+            ev(
+                3,
+                "tool_result",
+                json!({"tool_use_id":"a","content":"x","is_error":false}),
+            ),
             ev(4, "notice", json!({"text":"ignored"})),
-            ev(5, "tool_result", json!({"tool_use_id":"b","content":"y","is_error":false})),
-            ev(6, "assistant", json!({"content": [{"type":"text","text":"done"}]})),
+            ev(
+                5,
+                "tool_result",
+                json!({"tool_use_id":"b","content":"y","is_error":false}),
+            ),
+            ev(
+                6,
+                "assistant",
+                json!({"content": [{"type":"text","text":"done"}]}),
+            ),
         ];
         let m = build_messages(&events);
         assert_eq!(m.len(), 4);
-        assert_eq!(m[2]["content"].as_array().unwrap().len(), 2, "both results share one user message");
+        assert_eq!(
+            m[2]["content"].as_array().unwrap().len(),
+            2,
+            "both results share one user message"
+        );
     }
 
     #[test]
     fn a_missing_result_is_filled_not_sent_broken() {
         let events = vec![
             ev(1, "user", json!({"text": "hi"})),
-            ev(2, "assistant", json!({"content": [{"type":"tool_use","id":"a","name":"devd_groups","input":{}}]})),
+            ev(
+                2,
+                "assistant",
+                json!({"content": [{"type":"tool_use","id":"a","name":"devd_groups","input":{}}]}),
+            ),
             ev(3, "user", json!({"text": "continue"})),
         ];
         let m = build_messages(&events);
@@ -943,7 +1599,11 @@ mod tests {
             events.push(ev(11 + i * 2, "tool_result", json!({"tool_use_id": format!("t{i}"), "content": "x".repeat(1000), "is_error": false})));
         }
         let m = build_messages(&events);
-        let results: Vec<&Value> = m.iter().flat_map(|m| m["content"].as_array().unwrap().iter()).filter(|b| b["type"] == "tool_result").collect();
+        let results: Vec<&Value> = m
+            .iter()
+            .flat_map(|m| m["content"].as_array().unwrap().iter())
+            .filter(|b| b["type"] == "tool_result")
+            .collect();
         assert_eq!(results.len(), 14);
         assert!(results[0]["content"].as_str().unwrap().contains("cleared"));
         assert_eq!(results[13]["content"].as_str().unwrap().len(), 1000);
@@ -978,6 +1638,7 @@ mod tests {
             settings: Arc::new(Settings::default()),
             events: EventBus::new(),
             actor: Actor::human(Surface::Cli),
+            run: None,
             dry_run: false,
         }
     }
@@ -986,19 +1647,37 @@ mod tests {
     fn a_message_written_while_it_works_is_queued_and_delivered_at_the_next_step() {
         let ctx = test_ctx("queue");
         let hub = Hub::new(ctx.clone());
-        let thread = hub.ctx.store.create_thread("queue", None, None, None).unwrap();
-        hub.ctx.store.set_thread_state(&thread.id, "running", None).unwrap();
+        let thread = hub
+            .ctx
+            .store
+            .create_thread("queue", None, None, None)
+            .unwrap();
+        hub.ctx
+            .store
+            .set_thread_state(&thread.id, "running", None)
+            .unwrap();
 
         let sent = hub
             .send(
                 &ctx,
-                SendRequest { thread_id: Some(thread.id.clone()), message: "also check the logs".into(), ..Default::default() },
+                SendRequest {
+                    thread_id: Some(thread.id.clone()),
+                    message: "also check the logs".into(),
+                    ..Default::default()
+                },
             )
             .unwrap();
-        assert_eq!(sent.state, "running", "the conversation is still the running one");
+        assert_eq!(
+            sent.state, "running",
+            "the conversation is still the running one"
+        );
         assert_eq!(hub.ctx.store.queued_count(&thread.id).unwrap(), 1);
         assert!(
-            hub.ctx.store.list_events(&thread.id, 0, 10).unwrap().is_empty(),
+            hub.ctx
+                .store
+                .list_events(&thread.id, 0, 10)
+                .unwrap()
+                .is_empty(),
             "nothing is appended between a tool call and its result"
         );
 
@@ -1029,12 +1708,26 @@ mod tests {
             .unwrap();
 
         let (specs, _, direct, _) = tool_specs(&ctx, &reg);
-        let tool = specs.iter().find(|s| s.name == "read_file").expect("read_file is offered");
-        assert_eq!(tool.schema["properties"]["path"]["type"], "string", "the capability's own schema");
-        assert!(tool.schema.get("$schema").is_none(), "provider-facing schemas drop the meta keys");
+        let tool = specs
+            .iter()
+            .find(|s| s.name == "read_file")
+            .expect("read_file is offered");
+        assert_eq!(
+            tool.schema["properties"]["path"]["type"], "string",
+            "the capability's own schema"
+        );
+        assert!(
+            tool.schema.get("$schema").is_none(),
+            "provider-facing schemas drop the meta keys"
+        );
         assert_eq!(direct.get("read_file").copied(), Some("fs.read"));
 
-        let (surface, invoke, logged) = route_call("read_file", json!({ "path": "C:/x" }), &direct, &HashMap::new());
+        let (surface, invoke, logged) = route_call(
+            "read_file",
+            json!({ "path": "C:/x" }),
+            &direct,
+            &HashMap::new(),
+        );
         assert_eq!(surface, "devd_invoke");
         assert_eq!(invoke["id"], "fs.read");
         assert_eq!(invoke["args"]["path"], "C:/x");

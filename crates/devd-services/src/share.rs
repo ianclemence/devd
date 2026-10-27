@@ -78,23 +78,39 @@ fn asset_name() -> Option<&'static str> {
 
 /// The newest release that has a build for this machine and a recorded digest.
 pub fn latest_build() -> Result<Build> {
-    let name = asset_name().ok_or_else(|| DevdError::unsupported("Cloudflare publishes no cloudflared build for this platform"))?;
+    let name = asset_name().ok_or_else(|| {
+        DevdError::unsupported("Cloudflare publishes no cloudflared build for this platform")
+    })?;
     build_from(&download::fetch_text(RELEASES, TIMEOUT)?, name)
 }
 
 pub(crate) fn build_from(json_text: &str, name: &str) -> Result<Build> {
-    let release: serde_json::Value = serde_json::from_str(json_text).map_err(|e| DevdError::internal(format!("the cloudflared release is not JSON: {e}")))?;
-    let version = release["tag_name"].as_str().unwrap_or("").trim_start_matches('v').to_string();
+    let release: serde_json::Value = serde_json::from_str(json_text)
+        .map_err(|e| DevdError::internal(format!("the cloudflared release is not JSON: {e}")))?;
+    let version = release["tag_name"]
+        .as_str()
+        .unwrap_or("")
+        .trim_start_matches('v')
+        .to_string();
     for file in release["assets"].as_array().into_iter().flatten() {
         if file["name"].as_str() != Some(name) {
             continue;
         }
-        let digest = file["digest"].as_str().and_then(|d| d.strip_prefix("sha256:")).map(|d| d.to_ascii_lowercase());
+        let digest = file["digest"]
+            .as_str()
+            .and_then(|d| d.strip_prefix("sha256:"))
+            .map(|d| d.to_ascii_lowercase());
         if let (Some(url), Some(sha256)) = (file["browser_download_url"].as_str(), digest) {
             if version.is_empty() {
                 break;
             }
-            return Ok(Build { version, url: url.to_string(), sha256, bytes: file["size"].as_u64(), archive: name.ends_with(".tgz") });
+            return Ok(Build {
+                version,
+                url: url.to_string(),
+                sha256,
+                bytes: file["size"].as_u64(),
+                archive: name.ends_with(".tgz"),
+            });
         }
     }
     Err(DevdError::not_found("the newest cloudflared release has no build for this platform with a recorded checksum, so devd will not install it"))
@@ -114,8 +130,19 @@ fn exe_name() -> &'static str {
 
 /// The installed `cloudflared`, newest version first.
 pub fn installed(ctx: &Ctx) -> Option<PathBuf> {
-    let mut dirs: Vec<PathBuf> = std::fs::read_dir(tools_dir(ctx)).ok()?.flatten().map(|e| e.path()).filter(|p| p.join(exe_name()).is_file()).collect();
-    dirs.sort_by_key(|d| devd_runtime::catalogue::version_key(&d.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()));
+    let mut dirs: Vec<PathBuf> = std::fs::read_dir(tools_dir(ctx))
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.join(exe_name()).is_file())
+        .collect();
+    dirs.sort_by_key(|d| {
+        devd_runtime::catalogue::version_key(
+            &d.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        )
+    });
     dirs.pop().map(|d| d.join(exe_name()))
 }
 
@@ -143,7 +170,9 @@ pub fn install(ctx: &Ctx, build: &Build) -> Result<PathBuf> {
         std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755))?;
     }
     if !exe.is_file() {
-        return Err(DevdError::internal("cloudflared was unpacked but its program is not where expected"));
+        return Err(DevdError::internal(
+            "cloudflared was unpacked but its program is not where expected",
+        ));
     }
     Ok(exe)
 }
@@ -157,7 +186,8 @@ fn state_file(ctx: &Ctx, site: &str) -> PathBuf {
 }
 
 fn is_tunnel(pid: u32) -> bool {
-    process::process_image(pid).is_some_and(|image| image.to_ascii_lowercase().contains("cloudflared"))
+    process::process_image(pid)
+        .is_some_and(|image| image.to_ascii_lowercase().contains("cloudflared"))
 }
 
 fn close(ctx: &Ctx, share: &Share) {
@@ -171,10 +201,20 @@ fn close(ctx: &Ctx, share: &Share) {
 pub fn list(ctx: &Ctx) -> Result<Vec<Share>> {
     let now = Utc::now();
     let mut open = Vec::new();
-    for entry in std::fs::read_dir(state_dir(ctx)).into_iter().flatten().flatten() {
-        let Ok(text) = std::fs::read_to_string(entry.path()) else { continue };
-        let Ok(share) = serde_json::from_str::<Share>(&text) else { continue };
-        let expired = DateTime::parse_from_rfc3339(&share.expires_at).map(|t| t.with_timezone(&Utc) <= now).unwrap_or(true);
+    for entry in std::fs::read_dir(state_dir(ctx))
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        let Ok(text) = std::fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        let Ok(share) = serde_json::from_str::<Share>(&text) else {
+            continue;
+        };
+        let expired = DateTime::parse_from_rfc3339(&share.expires_at)
+            .map(|t| t.with_timezone(&Utc) <= now)
+            .unwrap_or(true);
         if expired || !is_tunnel(share.pid) {
             close(ctx, &share);
         } else {
@@ -194,8 +234,11 @@ pub fn sweep(ctx: &Ctx) {
 pub fn stop(ctx: &Ctx, site: &str) -> Result<bool> {
     let _ = list(ctx)?;
     let file = state_file(ctx, site);
-    let Ok(text) = std::fs::read_to_string(&file) else { return Ok(false) };
-    let share: Share = serde_json::from_str(&text).map_err(|e| DevdError::internal(format!("unreadable share record: {e}")))?;
+    let Ok(text) = std::fs::read_to_string(&file) else {
+        return Ok(false);
+    };
+    let share: Share = serde_json::from_str(&text)
+        .map_err(|e| DevdError::internal(format!("unreadable share record: {e}")))?;
     close(ctx, &share);
     Ok(true)
 }
@@ -204,7 +247,11 @@ pub fn stop(ctx: &Ctx, site: &str) -> Result<bool> {
 /// answer as the site.
 pub(crate) fn tunnel_args(ctx: &Ctx, site: &Site) -> Vec<String> {
     let tls = site.tls_mode != "off";
-    let mut args = vec!["tunnel".to_string(), "--no-autoupdate".into(), "--url".into()];
+    let mut args = vec![
+        "tunnel".to_string(),
+        "--no-autoupdate".into(),
+        "--url".into(),
+    ];
     if tls {
         args.push(format!("https://127.0.0.1:{}", ctx.settings.https_port));
         args.push("--no-tls-verify".into());
@@ -221,10 +268,15 @@ pub(crate) fn tunnel_args(ctx: &Ctx, site: &Site) -> Vec<String> {
 /// The first quick-tunnel address in the tunnel's log.
 pub(crate) fn find_url(log: &str) -> Option<String> {
     for word in log.split(|c: char| c.is_whitespace() || c == '|') {
-        let Some(rest) = word.strip_prefix("https://") else { continue };
+        let Some(rest) = word.strip_prefix("https://") else {
+            continue;
+        };
         let host = rest.split('/').next().unwrap_or("");
         if let Some(label) = host.strip_suffix(".trycloudflare.com") {
-            if !label.is_empty() && label != "api" && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            if !label.is_empty()
+                && label != "api"
+                && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+            {
                 return Some(format!("https://{host}"));
             }
         }
@@ -235,7 +287,17 @@ pub(crate) fn find_url(log: &str) -> Option<String> {
 /// What a visitor could download from the site's folder that should not be public.
 pub fn exposures(root: &Path) -> Vec<String> {
     let mut out = Vec::new();
-    for name in [".env", ".env.local", ".env.production", ".git", ".htpasswd", "wp-config.php.bak", "database.sqlite", "dump.sql", "backup.sql"] {
+    for name in [
+        ".env",
+        ".env.local",
+        ".env.production",
+        ".git",
+        ".htpasswd",
+        "wp-config.php.bak",
+        "database.sqlite",
+        "dump.sql",
+        "backup.sql",
+    ] {
         if root.join(name).exists() {
             out.push(name.to_string());
         }
@@ -247,10 +309,15 @@ pub fn exposures(root: &Path) -> Vec<String> {
 pub fn start(ctx: &Ctx, site: &Site, minutes: u64) -> Result<Share> {
     let exe = installed(ctx).ok_or_else(|| DevdError::not_found("cloudflared is not installed"))?;
     if minutes == 0 || minutes > MAX_MINUTES {
-        return Err(DevdError::invalid(format!("a link stays open for 1 to {MAX_MINUTES} minutes")));
+        return Err(DevdError::invalid(format!(
+            "a link stays open for 1 to {MAX_MINUTES} minutes"
+        )));
     }
     if list(ctx)?.iter().any(|s| s.site == site.name) {
-        return Err(DevdError::conflict(format!("{} already has an open link; stop it first", site.name)));
+        return Err(DevdError::conflict(format!(
+            "{} already has an open link; stop it first",
+            site.name
+        )));
     }
     let log = ctx.paths.logs().join(format!("share-{}.log", site.name));
     let _ = std::fs::remove_file(&log);
@@ -263,7 +330,7 @@ pub fn start(ctx: &Ctx, site: &Site, minutes: u64) -> Result<Share> {
             args: tunnel_args(ctx, site),
             cwd: None,
             envs: vec![],
-            clear_env: false,
+            clear_env: true,
             log_path: log.clone(),
             restarts: 0,
         },
@@ -272,24 +339,46 @@ pub fn start(ctx: &Ctx, site: &Site, minutes: u64) -> Result<Share> {
 
     let began = Instant::now();
     let url = loop {
-        if let Some(url) = std::fs::read_to_string(&log).ok().and_then(|t| find_url(&t)) {
+        if let Some(url) = std::fs::read_to_string(&log)
+            .ok()
+            .and_then(|t| find_url(&t))
+        {
             break url;
         }
         if !process::pid_alive(pid) {
-            let tail = std::fs::read_to_string(&log).unwrap_or_default().lines().rev().take(3).collect::<Vec<_>>().join(" / ");
-            return Err(DevdError::internal(format!("the tunnel stopped before it had an address: {tail}")));
+            let tail = std::fs::read_to_string(&log)
+                .unwrap_or_default()
+                .lines()
+                .rev()
+                .take(3)
+                .collect::<Vec<_>>()
+                .join(" / ");
+            return Err(DevdError::internal(format!(
+                "the tunnel stopped before it had an address: {tail}"
+            )));
         }
         if began.elapsed() > Duration::from_secs(45) {
             process::kill_tree(pid);
-            return Err(DevdError::internal("the tunnel gave no address within 45 seconds; check the internet connection"));
+            return Err(DevdError::internal(
+                "the tunnel gave no address within 45 seconds; check the internet connection",
+            ));
         }
         std::thread::sleep(Duration::from_millis(300));
     };
 
     let now = Utc::now();
-    let share = Share { site: site.name.clone(), url, pid, started_at: now.to_rfc3339(), expires_at: (now + chrono::Duration::minutes(minutes as i64)).to_rfc3339() };
+    let share = Share {
+        site: site.name.clone(),
+        url,
+        pid,
+        started_at: now.to_rfc3339(),
+        expires_at: (now + chrono::Duration::minutes(minutes as i64)).to_rfc3339(),
+    };
     std::fs::create_dir_all(state_dir(ctx))?;
-    std::fs::write(state_file(ctx, &site.name), serde_json::to_string_pretty(&share).unwrap_or_default())?;
+    std::fs::write(
+        state_file(ctx, &site.name),
+        serde_json::to_string_pretty(&share).unwrap_or_default(),
+    )?;
     ctx.events.emit_with(
         "share.started",
         format!("{} is public at {}", site.name, share.url),
@@ -309,9 +398,15 @@ mod tests {
             {"name":"cloudflared-linux-amd64","size":1,"browser_download_url":"https://x/y","digest":null}]}"#;
         let b = build_from(json, "cloudflared-windows-amd64.exe").unwrap();
         assert_eq!(b.version, "2026.10.3");
-        assert_eq!(b.sha256, "76b2805253d0d6ffacb092a7acfbee99e7af6917835c0c5410e23f3ef5052da2");
+        assert_eq!(
+            b.sha256,
+            "76b2805253d0d6ffacb092a7acfbee99e7af6917835c0c5410e23f3ef5052da2"
+        );
         assert!(!b.archive);
-        assert!(build_from(json, "cloudflared-linux-amd64").is_err(), "no digest, no install");
+        assert!(
+            build_from(json, "cloudflared-linux-amd64").is_err(),
+            "no digest, no install"
+        );
         assert!(build_from(json, "cloudflared-darwin-arm64.tgz").is_err());
     }
 
@@ -320,8 +415,14 @@ mod tests {
         let log = "2026-10-22T10:00:00Z INF Requesting new quick Tunnel on trycloudflare.com...\n\
                    2026-10-22T10:00:02Z INF +--------------------------------------------------------------+\n\
                    2026-10-22T10:00:02Z INF |  https://calm-river-wolf-test.trycloudflare.com                |\n";
-        assert_eq!(find_url(log).as_deref(), Some("https://calm-river-wolf-test.trycloudflare.com"));
-        assert_eq!(find_url("INF see https://api.trycloudflare.com/tunnel for details"), None);
+        assert_eq!(
+            find_url(log).as_deref(),
+            Some("https://calm-river-wolf-test.trycloudflare.com")
+        );
+        assert_eq!(
+            find_url("INF see https://api.trycloudflare.com/tunnel for details"),
+            None
+        );
         assert_eq!(find_url("nothing yet"), None);
     }
 
@@ -332,7 +433,10 @@ mod tests {
         std::fs::create_dir_all(dir.join(".git")).unwrap();
         std::fs::write(dir.join(".env"), "A=1").unwrap();
         std::fs::write(dir.join("index.php"), "").unwrap();
-        assert_eq!(exposures(&dir), vec![".env".to_string(), ".git".to_string()]);
+        assert_eq!(
+            exposures(&dir),
+            vec![".env".to_string(), ".git".to_string()]
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -57,25 +57,74 @@ fn a_site_is_deployed_switched_pruned_and_rolled_back() {
 
     let paths = Paths::rooted(base.join("devd"));
     paths.ensure().unwrap();
-    let ctx = Ctx { store: Arc::new(Store::open_in_memory().unwrap()), paths: Arc::new(paths), settings: Arc::new(Settings::default()), events: EventBus::new(), actor: Actor::human(Surface::Cli), dry_run: false };
+    let ctx = Ctx {
+        store: Arc::new(Store::open_in_memory().unwrap()),
+        paths: Arc::new(paths),
+        settings: Arc::new(Settings::default()),
+        events: EventBus::new(),
+        actor: Actor::human(Surface::Cli),
+        run: None,
+        dry_run: false,
+    };
 
     let project = base.join("www").join("shop");
-    write(&project.join("public").join("index.php"), "<?php echo 'v1';");
+    write(
+        &project.join("public").join("index.php"),
+        "<?php echo 'v1';",
+    );
     write(&project.join("composer.json"), "{}");
-    write(&project.join(".env"), "APP_NAME=Shop\nAPP_ENV=local\nAPP_DEBUG=true\nDB_PASSWORD=secret\n");
+    write(
+        &project.join(".env"),
+        "APP_NAME=Shop\nAPP_ENV=local\nAPP_DEBUG=true\nDB_PASSWORD=secret\n",
+    );
     write(&project.join("vendor").join("autoload.php"), "x");
     ctx.store
-        .upsert_site(&Site { id: "1".into(), name: "shop".into(), host: "shop.test".into(), root: project.display().to_string(), web_server: "nginx".into(), php: None, tls_mode: "off".into(), db_name: None, upstream: None, created_at: "2026-10-23T00:00:00Z".into() })
+        .upsert_site(&Site {
+            id: "1".into(),
+            name: "shop".into(),
+            host: "shop.test".into(),
+            root: project.display().to_string(),
+            web_server: "nginx".into(),
+            php: None,
+            tls_mode: "off".into(),
+            db_name: None,
+            upstream: None,
+            serving: None,
+            created_at: "2026-10-23T00:00:00Z".into(),
+        })
         .unwrap();
 
-    servers::add(&ctx, "box", "203.0.113.7", "deploy", None, "testkey", Some("hetzner")).unwrap();
+    servers::add(
+        &ctx,
+        "box",
+        "203.0.113.7",
+        "deploy",
+        None,
+        "testkey",
+        Some("hetzner"),
+    )
+    .unwrap();
     let connected = servers::connect(&ctx, "box").unwrap();
-    assert_eq!(connected["login_user"].as_str().is_some(), true, "{connected}");
+    assert_eq!(
+        connected["login_user"].as_str().is_some(),
+        true,
+        "{connected}"
+    );
 
     let remote_dir = base.join("srv").join("shop");
     let l = remote::make_link(
         &ctx,
-        &LinkSpec { site: "shop".into(), server: "box".into(), path: remote_dir.display().to_string(), domain: Some("shop.example.com".into()), keep: Some(2), steps: Some(vec!["echo built > BUILT.txt".into()]), build: Some(vec![]), include: Some(vec![]), ..Default::default() },
+        &LinkSpec {
+            site: "shop".into(),
+            server: "box".into(),
+            path: remote_dir.display().to_string(),
+            domain: Some("shop.example.com".into()),
+            keep: Some(2),
+            steps: Some(vec!["echo built > BUILT.txt".into()]),
+            build: Some(vec![]),
+            include: Some(vec![]),
+            ..Default::default()
+        },
     )
     .unwrap();
     assert_eq!(l.id, "shop@box");
@@ -83,46 +132,114 @@ fn a_site_is_deployed_switched_pruned_and_rolled_back() {
     // The first deploy has no shared .env yet: it stops before anything is switched.
     let d = remote::deploy(&ctx, "shop@box", "manual").unwrap();
     let d = wait(&ctx, &d.id);
-    assert_eq!(d.state, "failed", "{:?}", devd_ops::deploy::log(&ctx, &d.id, 40));
-    assert!(!remote_dir.join("current").exists(), "a failed deploy must not switch");
+    assert_eq!(
+        d.state,
+        "failed",
+        "{:?}",
+        devd_ops::deploy::log(&ctx, &d.id, 40)
+    );
+    assert!(
+        !remote_dir.join("current").exists(),
+        "a failed deploy must not switch"
+    );
 
     // Send the .env, then deploy.
     let pushed = remote::env_push(&ctx, "shop@box", false).unwrap();
-    assert!(pushed["set_for_production"].as_array().unwrap().iter().any(|v| v == "APP_DEBUG"));
-    assert!(remote::env_push(&ctx, "shop@box", false).is_err(), "it does not replace an existing .env");
+    assert!(pushed["set_for_production"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v == "APP_DEBUG"));
+    assert!(
+        remote::env_push(&ctx, "shop@box", false).is_err(),
+        "it does not replace an existing .env"
+    );
     let shared_env = std::fs::read_to_string(remote_dir.join("shared").join(".env")).unwrap();
-    assert!(shared_env.contains("APP_ENV=production") && shared_env.contains("APP_DEBUG=false") && shared_env.contains("APP_URL=https://shop.example.com"), "{shared_env}");
+    assert!(
+        shared_env.contains("APP_ENV=production")
+            && shared_env.contains("APP_DEBUG=false")
+            && shared_env.contains("APP_URL=https://shop.example.com"),
+        "{shared_env}"
+    );
 
     let mut seen = Vec::new();
     for i in 0..3 {
-        write(&project.join("public").join("index.php"), &format!("<?php echo 'v{}';", i + 2));
+        write(
+            &project.join("public").join("index.php"),
+            &format!("<?php echo 'v{}';", i + 2),
+        );
         std::thread::sleep(Duration::from_millis(1100)); // release names are to the second
         let d = remote::deploy(&ctx, "shop@box", "manual").unwrap();
         let done = wait(&ctx, &d.id);
-        assert_eq!(done.state, "success", "{:?}", devd_ops::deploy::log(&ctx, &done.id, 60));
+        assert_eq!(
+            done.state,
+            "success",
+            "{:?}",
+            devd_ops::deploy::log(&ctx, &done.id, 60)
+        );
         seen.push(std::fs::read_link(remote_dir.join("current")).unwrap());
     }
     let current = remote_dir.join("current");
-    assert!(std::fs::read_to_string(current.join("public").join("index.php")).unwrap().contains("v4"), "the newest release is live");
-    assert!(current.join("BUILT.txt").is_file(), "the steps ran inside the release");
+    assert!(
+        std::fs::read_to_string(current.join("public").join("index.php"))
+            .unwrap()
+            .contains("v4"),
+        "the newest release is live"
+    );
+    assert!(
+        current.join("BUILT.txt").is_file(),
+        "the steps ran inside the release"
+    );
     assert!(current.join(".devd-commit").is_file());
-    assert!(std::fs::read_link(current.join("storage")).unwrap().ends_with("shared/storage"));
-    assert_eq!(std::fs::read_to_string(current.join(".env")).unwrap(), shared_env, ".env is the shared one, not a shipped copy");
-    assert!(!current.join("vendor").join("autoload.php").exists(), "local dependencies are not shipped");
-    let kept = std::fs::read_dir(remote_dir.join("releases")).unwrap().count();
+    assert!(std::fs::read_link(current.join("storage"))
+        .unwrap()
+        .ends_with("shared/storage"));
+    assert_eq!(
+        std::fs::read_to_string(current.join(".env")).unwrap(),
+        shared_env,
+        ".env is the shared one, not a shipped copy"
+    );
+    assert!(
+        !current.join("vendor").join("autoload.php").exists(),
+        "local dependencies are not shipped"
+    );
+    let kept = std::fs::read_dir(remote_dir.join("releases"))
+        .unwrap()
+        .count();
     assert_eq!(kept, 2, "keep = 2");
 
     let listing = remote::releases(&ctx, "shop@box").unwrap();
     assert_eq!(listing["releases"].as_array().unwrap().len(), 2);
-    assert_eq!(listing["releases"].as_array().unwrap().iter().filter(|r| r["current"] == true).count(), 1);
+    assert_eq!(
+        listing["releases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|r| r["current"] == true)
+            .count(),
+        1
+    );
 
     // Roll back to the release before.
     let done = remote::rollback(&ctx, "shop@box", None).unwrap();
-    assert!(done.output.contains("current -> releases/"), "{}", done.output);
-    assert!(std::fs::read_to_string(remote_dir.join("current").join("public").join("index.php")).unwrap().contains("v3"));
-    assert!(remote::rollback(&ctx, "shop@box", None).is_err(), "there is nothing before the oldest release");
+    assert!(
+        done.output.contains("current -> releases/"),
+        "{}",
+        done.output
+    );
+    assert!(
+        std::fs::read_to_string(remote_dir.join("current").join("public").join("index.php"))
+            .unwrap()
+            .contains("v3")
+    );
+    assert!(
+        remote::rollback(&ctx, "shop@box", None).is_err(),
+        "there is nothing before the oldest release"
+    );
 
     let history = devd_ops::deploy::history(&ctx, "shop", 10).unwrap();
     assert_eq!(history.iter().filter(|h| h.state == "success").count(), 3);
-    assert!(history.iter().all(|h| h.target.as_deref() == Some(&format!("box:{}", remote_dir.display()))));
+    assert!(history
+        .iter()
+        .all(|h| h.target.as_deref() == Some(&format!("box:{}", remote_dir.display()))));
 }

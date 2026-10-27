@@ -132,9 +132,18 @@ pub fn list(ctx: &Ctx) -> Result<Value> {
             continue;
         }
         let (why, required) = match s.name.as_str() {
-            "nginx" => ("The web server that serves your sites over HTTP and HTTPS.".to_string(), true),
-            "mariadb" => ("The local database devd offers for projects that need one.".to_string(), false),
-            "php-cgi" => ("The listener that runs PHP for your sites.".to_string(), true),
+            "nginx" => (
+                "The web server that serves your sites over HTTP and HTTPS.".to_string(),
+                true,
+            ),
+            "mariadb" => (
+                "The local database devd offers for projects that need one.".to_string(),
+                false,
+            ),
+            "php-cgi" => (
+                "The listener that runs PHP for your sites.".to_string(),
+                true,
+            ),
             _ => (format!("The {} service devd manages.", s.name), false),
         };
         reqs.push(Requirement {
@@ -185,7 +194,11 @@ pub fn list(ctx: &Ctx) -> Result<Value> {
                 kind: "provider",
                 why: format!(
                     "{} has no API key, so the assistant cannot reach it.",
-                    without_key.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ")
+                    without_key
+                        .iter()
+                        .map(|p| p.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ),
                 state: "missing",
                 required: false,
@@ -221,7 +234,10 @@ pub fn list(ctx: &Ctx) -> Result<Value> {
         _ => 2,
     });
     let missing = reqs.iter().filter(|r| r.state != "ready").count();
-    let required_missing = reqs.iter().filter(|r| r.state != "ready" && r.required).count();
+    let required_missing = reqs
+        .iter()
+        .filter(|r| r.state != "ready" && r.required)
+        .count();
     Ok(json!({
         "requirements": reqs.iter().map(|r| r.to_json()).collect::<Vec<_>>(),
         "missing": missing,
@@ -245,8 +261,13 @@ fn webview2_missing() -> Option<String> {
         if root.is_empty() {
             continue;
         }
-        let dir = std::path::Path::new(&root).join("Microsoft").join("EdgeWebView").join("Application");
-        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        let dir = std::path::Path::new(&root)
+            .join("Microsoft")
+            .join("EdgeWebView")
+            .join("Application");
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         for entry in entries.flatten() {
             if entry.path().join("msedgewebview2.exe").is_file() {
                 return None;
@@ -254,7 +275,12 @@ fn webview2_missing() -> Option<String> {
         }
     }
     // Older installs put the runtime in the system directory itself.
-    if !system.is_empty() && std::path::Path::new(&system).join("System32").join("msedgewebview2.exe").is_file() {
+    if !system.is_empty()
+        && std::path::Path::new(&system)
+            .join("System32")
+            .join("msedgewebview2.exe")
+            .is_file()
+    {
         return None;
     }
     Some("the WebView2 runtime is not installed on this machine".to_string())
@@ -297,12 +323,28 @@ mod tests {
         paths.ensure().unwrap();
         let store = Store::open_in_memory().unwrap();
         store.migrate().unwrap();
-        let ctx = Ctx { store: Arc::new(store), paths: Arc::new(paths), settings: Arc::new(Settings::default()), events: EventBus::new(), actor: Actor::agent("t"), dry_run: false };
+        let ctx = Ctx {
+            store: Arc::new(store),
+            paths: Arc::new(paths),
+            settings: Arc::new(Settings::default()),
+            events: EventBus::new(),
+            actor: Actor::agent("t"),
+            run: None,
+            dry_run: false,
+        };
         let all = list(&ctx).unwrap();
-        let php = all["requirements"].as_array().unwrap().iter().find(|r| r["id"] == "runtime:php").expect("a machine with no managed PHP is asked to install it");
+        let php = all["requirements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == "runtime:php")
+            .expect("a machine with no managed PHP is asked to install it");
         assert_eq!(php["fix"]["capability"], "runtime.install");
         assert_eq!(php["fix"]["args"]["kind"], "php");
-        assert!(php["fix"]["args"]["version"].is_string(), "the install capability rejects a call without a version: {php}");
+        assert!(
+            php["fix"]["args"]["version"].is_string(),
+            "the install capability rejects a call without a version: {php}"
+        );
     }
 
     #[cfg(windows)]

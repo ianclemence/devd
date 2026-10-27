@@ -1,37 +1,35 @@
-//! `GET /api/events` - what is happening, as it happens.
+//! `GET /api/events` - what is happening, as it happens, and what happened
+//! while the window was away.
 //!
-//! The window used to learn about a working agent by polling `chat.get` on a
-//! timer, so a reply appeared in a burst once the turn ended. This is a
-//! server-sent event stream from the same bus every capability already
-//! publishes to: a step starting, an approval waiting, a reply being written.
+//! The live bus is convenient but it is not a record: a broadcast channel drops
+//! the oldest messages when a slow reader falls behind, and a window that closes
+//! loses everything it did not see. The authoritative stream is therefore the
+//! durable `run_events` table, which has stable ids and a sequence per run. On
+//! connect the stream replays from `Last-Event-ID` (or `?after=`), then tails
+//! that table while also forwarding the one thing that is not durable by design:
+//! the text of a reply as it is being written.
 //!
 //! This is the one `/api/*` route that does not require the bearer token: an
 //! `EventSource` cannot send an `Authorization` header. It is still fenced by
 //! the loopback `Host` and `Origin` checks every other route uses, so a page on
 //! another site cannot read this conversation through the person's browser.
-//!
-//! Every frame carries only facts the app already shows; a streamed reply is
-//! the same text `chat.get` later returns in full.
 
 use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use futures_util::stream;
+use serde::Deserialize;
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::AppState;
 
-/// The event kinds the window subscribes to.
-///
-/// Deliberately not every kind on the bus: `stack.output` carries a process's
-/// raw output, and forwarding it would both flood the connection and wake the
-/// conversation on every line. The screens that show stack progress already
-/// poll it while they are open.
+/// Non-durable kinds forwarded from the live bus. Durable run events are read
+/// from the database instead, so nothing here can be silently lost.
 const KINDS: &[&str] = &[
     "chat.delta",
     "chat.event",
@@ -47,41 +45,136 @@ fn allowed(kind: &str) -> bool {
     })
 }
 
+/// Optional filters and cursor for the event stream.
+#[derive(Debug, Default, Deserialize)]
+pub struct EventQuery {
+    /// Global run-event id to start after. `Last-Event-ID` wins when both are set.
+    #[serde(default)]
+    pub after: Option<i64>,
+    /// Only events for this run.
+    #[serde(default)]
+    pub run: Option<String>,
+}
+
 /// `GET /api/events` - a server-sent event stream of agent activity.
-pub async fn events(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+pub async fn events(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<EventQuery>,
+    headers: HeaderMap,
+) -> Response {
     if let Err(reason) = same_origin(&headers) {
         return (StatusCode::FORBIDDEN, reason).into_response();
     }
-    let rx = state.ctx.events.subscribe();
+    // The cursor is the durable event id, not a byte offset. A reconnecting
+    // EventSource sends it automatically; a manual client can use `?after=`.
+    let cursor = headers
+        .get("last-event-id")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<i64>().ok())
+        .or(q.after)
+        .unwrap_or(0)
+        .max(0);
     let thread = headers
         .get("x-devd-thread")
         .and_then(|v| v.to_str().ok())
         .map(str::to_string);
-    let stream = stream::unfold(rx, move |mut rx| {
+    let run = match q.run.clone() {
+        Some(id) => Some(id),
+        None => thread
+            .as_deref()
+            .and_then(|t| state.ctx.store.run_for_thread(t).ok().flatten())
+            .map(|r| r.id),
+    };
+
+    let store = state.ctx.store.clone();
+    let rx = state.ctx.events.subscribe();
+    let stream = stream::unfold((cursor, rx), move |(mut cursor, mut rx)| {
+        let store = store.clone();
+        let run = run.clone();
         let thread = thread.clone();
         async move {
+            // 1. Durable history first, from the cursor. This is what makes a
+            //    reconnect able to reconstruct the timeline exactly.
             loop {
-                match rx.recv().await {
-                    Ok(event) => {
-                        if !allowed(&event.kind) {
-                            continue;
-                        }
-                        if let Some(want) = &thread {
-                            if event.data["thread"]
-                                .as_str()
-                                .map(|t| t != want)
-                                .unwrap_or(false)
-                            {
-                                continue;
-                            }
-                        }
-                        let payload = serde_json::json!({ "kind": event.kind, "at": event.at, "data": event.data });
-                        let frame = Event::default().event("devd").data(payload.to_string());
-                        return Some((Ok::<Event, Infallible>(frame), rx));
-                    }
-                    Err(RecvError::Lagged(_)) => continue,
-                    Err(RecvError::Closed) => return None,
+                let rows = store.events_after(cursor, 200).unwrap_or_default();
+                if rows.is_empty() {
+                    break;
                 }
+                let mut picked = None;
+                for e in rows {
+                    cursor = cursor.max(e.id);
+                    if run.as_deref().map(|id| id != e.run_id).unwrap_or(false) {
+                        continue;
+                    }
+                    picked = Some(e);
+                    break;
+                }
+                if let Some(e) = picked {
+                    let payload = serde_json::json!({
+                        "kind": e.kind,
+                        "at": e.created_at,
+                        "message": e.message,
+                        "data": e.data,
+                        "run": e.run_id,
+                        "seq": e.seq,
+                        "step": e.step_id,
+                    });
+                    let frame = Event::default()
+                        .id(e.id.to_string())
+                        .event("run")
+                        .data(payload.to_string());
+                    return Some((Ok::<Event, Infallible>(frame), (cursor, rx)));
+                }
+                // Every row in this page belonged to another run; keep going
+                // without spinning forever on the same cursor.
+                if cursor == 0 {
+                    break;
+                }
+            }
+
+            // 2. Non-durable live activity. A lag is not swallowed: the next
+            //    iteration replays the durable rows the client missed, and the
+            //    client is told that the live text may have a gap.
+            match tokio::time::timeout(Duration::from_millis(300), rx.recv()).await {
+                Ok(Ok(event)) => {
+                    if !allowed(&event.kind) {
+                        return Some((
+                            Ok::<Event, Infallible>(Event::default().comment("skip")),
+                            (cursor, rx),
+                        ));
+                    }
+                    if let Some(want) = &thread {
+                        if event.data["thread"]
+                            .as_str()
+                            .map(|t| t != want)
+                            .unwrap_or(false)
+                        {
+                            return Some((
+                                Ok::<Event, Infallible>(Event::default().comment("skip")),
+                                (cursor, rx),
+                            ));
+                        }
+                    }
+                    let payload = serde_json::json!({ "kind": event.kind, "at": event.at, "data": event.data });
+                    let frame = Event::default().event("live").data(payload.to_string());
+                    Some((Ok::<Event, Infallible>(frame), (cursor, rx)))
+                }
+                Ok(Err(RecvError::Lagged(missed))) => {
+                    let payload = serde_json::json!({
+                        "kind": "stream.lag",
+                        "at": devd_core::util::now(),
+                        "data": { "missed": missed, "resume_after": cursor },
+                    });
+                    let frame = Event::default().event("live").data(payload.to_string());
+                    Some((Ok::<Event, Infallible>(frame), (cursor, rx)))
+                }
+                Ok(Err(RecvError::Closed)) => None,
+                // A quiet moment is how the durable poll gets a turn even when
+                // no live event arrives.
+                Err(_) => Some((
+                    Ok::<Event, Infallible>(Event::default().comment("poll")),
+                    (cursor, rx),
+                )),
             }
         }
     });

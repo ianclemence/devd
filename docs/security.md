@@ -57,6 +57,24 @@ target, and the affected files. For a hard reset, the plan names the mode and
 says the working tree is discarded. For a force push, it names the remote and
 the branch. For a conflict resolution, it says the other side is discarded.
 
+There is one durable approval service (`crates/devd-core/src/store_runs.rs`,
+used by `crates/devd-server/src/approval.rs`, `Hub::decide` and every other
+surface). A row records the run, task and tool call, the capability, the exact
+arguments, their hash, the plan hash when the decision is plan-bound, the scope,
+tier, risk, requester, expiry, state, decider, decision time and reason. The
+issued token is 256 random bits; only its SHA-256 hash is stored as the row id,
+so a database read cannot replay a decision. Consumption is one atomic
+`state='pending'` update: two windows presenting the same token cannot both
+succeed. A declined or expired row cannot be consumed, expiry is checked when
+the decision is made, and a changed argument or plan no longer matches the stored
+hash. Pending legacy `agent_requests` migrate as pending approvals; nothing is
+granted by the migration.
+
+An approval is bound to one operation. It cannot authorize an unrelated
+capability, and it cannot be reused after the operation consumes it. An agent
+cannot approve its own operation: the decider must be a human actor, and
+`human_only` is checked before approval is considered at all.
+
 ## The local HTTP surface
 
 The application window speaks to a loopback HTTP API, which adds a threat this
@@ -89,10 +107,12 @@ Approvals over HTTP are two-step, and this is a security property rather than a
 convenience: `POST /api/invoke` returns a plan and a token and changes nothing;
 `POST /api/approve { token }` replays **the server's own stored arguments**. A
 client cannot assert `approve: true`, and what was displayed cannot differ from
-what executes. A token is single-use, expires after 120 seconds, is bounded to a
-fixed number of pending decisions, and is bound to the capability, the arguments
-and the actor. A declined operation is dispatched with `Approval::Denied`, so it
-reaches the audit trail rather than vanishing.
+what executes. A token is single-use, expires after ten minutes, is bounded to
+64 pending decisions, and is bound to the capability, the arguments and the
+actor. A declined operation is dispatched with `Approval::Denied`, so it reaches
+the audit trail rather than vanishing. The token row is the same durable row the
+window, the TUI and the assistant use; there is no second queue whose expiry or
+identity could disagree.
 
 A test suite drives the real router for each defence, and the same checks were
 run against the release binary on a socket; the observed results are recorded in
@@ -328,8 +348,22 @@ own authority. The protections are about what `devd` writes and who can reach it
 
 Differences are stated rather than hidden:
 
-* Process trees are killed with `taskkill /T /F` on Windows and a process group
-  on Linux. A Windows Job Object would be stronger and is not implemented.
+* Process trees are killed with a Windows Job Object (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`)
+  where the job can be assigned, with `taskkill /T /F` as the fallback; on Linux
+  and macOS a process group is signalled. Assignment is best effort when devd
+  itself runs inside a restrictive job (some CI runners); the limitations
+  document states that honestly.
+* Child processes get an explicit allowlist of system and runtime variables
+  (`devd_core::process::CHILD_ENV_ALLOWLIST`), not the daemon's environment.
+  Project commands, services, background tasks and shares clear the environment
+  first and then apply that list plus the caller's explicit `env` values, so a
+  token or API key in the daemon's environment does not leak into a project.
+* **Isolation and approval are separate.** A Job Object, a process group, a
+  working-directory check and an environment allowlist bound where a process can
+  run and what it inherits. They are not a filesystem sandbox: a project process
+  runs as the same user and can read the same files. The approval tier decides
+  when a person must say yes; it is not a substitute for isolation, and this
+  document does not claim one.
 * Certificates are trusted with `certutil -addstore` on Windows and `trust
   anchor` on Linux; on Linux without p11-kit the command prints the manual
   `update-ca-certificates` recipe instead of pretending it worked.

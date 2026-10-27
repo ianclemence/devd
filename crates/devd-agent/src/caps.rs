@@ -19,11 +19,14 @@ use serde_json::{json, Value};
 use devd_core::capability::{Ctx, Effect, Outcome, Plan, Tier};
 use devd_core::{browse, util, DevdError, Provider, Registry, Result};
 
-use crate::chat::{Hub, SendRequest};
 use crate::charter;
-use crate::team::{PlanTask, StartRequest, Team};
+use crate::chat::{Hub, SendRequest};
 use crate::providers;
-use crate::{dictation, docs, fs, health, judge, requirements, roles, schedule, search, secrets, skills, templates};
+use crate::team::{PlanTask, StartRequest, Team};
+use crate::{
+    dictation, docs, fs, health, judge, requirements, roles, schedule, search, secrets, skills,
+    templates,
+};
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct NoArgs {}
@@ -230,10 +233,15 @@ struct SkillImport {
 fn resolve_source_dir(from: &str) -> Result<std::path::PathBuf> {
     let from = from.trim();
     if from.is_empty() {
-        return Err(DevdError::invalid("name the agent to import from, or give the folder to read"));
+        return Err(DevdError::invalid(
+            "name the agent to import from, or give the folder to read",
+        ));
     }
     let home = home_dir();
-    if let Some((_, dir, _)) = skills::agent_sources(&home).into_iter().find(|(name, _, _)| name.eq_ignore_ascii_case(from)) {
+    if let Some((_, dir, _)) = skills::agent_sources(&home)
+        .into_iter()
+        .find(|(name, _, _)| name.eq_ignore_ascii_case(from))
+    {
         return Ok(dir);
     }
     // A path the person gave. It must be inside their own home: a skill is
@@ -525,6 +533,12 @@ struct DecideArgs {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct RunIdArg {
+    /// Run id.
+    run_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct PostArgs {
     /// Short subject.
     subject: String,
@@ -652,7 +666,9 @@ struct FsDelete {
 fn provider_view(ctx: &Ctx, p: &Provider) -> Value {
     let key = secrets::read_key(&ctx.paths, p);
     let pre = providers::preset(&p.id);
-    let loopback = p.base_url.contains("localhost") || p.base_url.contains("127.0.0.1") || p.base_url.contains("[::1]");
+    let loopback = p.base_url.contains("localhost")
+        || p.base_url.contains("127.0.0.1")
+        || p.base_url.contains("[::1]");
     json!({
         "id": p.id, "kind": p.kind, "label": p.label, "base_url": p.base_url,
         "key_env": p.key_env, "default_model": p.default_model,
@@ -674,7 +690,9 @@ fn provider_view(ctx: &Ctx, p: &Provider) -> Value {
 }
 
 fn find_provider(ctx: &Ctx, id: &str) -> Result<Provider> {
-    ctx.store.get_provider(id)?.ok_or_else(|| DevdError::not_found(format!("no provider `{id}`; see provider.list")))
+    ctx.store
+        .get_provider(id)?
+        .ok_or_else(|| DevdError::not_found(format!("no provider `{id}`; see provider.list")))
 }
 
 /// What a health check means and what to do about it.
@@ -697,6 +715,7 @@ struct DictateArgs {
 }
 
 pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()> {
+    crate::environment::register(reg)?;
     reg.define::<SearchArgs>("search.query", "Search projects, files, text, conversations, models, tasks and activity")
     .description("Searches what devd can see: project names, file paths (walked live, not indexed), literal text inside a project, conversations, the model catalogue, background tasks and the audit trail. Each response lists which sources were searched, how, and whether the search was cut short, so an empty result is never mistaken for a complete search.")
     .tier(Tier::Read)
@@ -909,28 +928,41 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
     )?;
     }
     reg.define::<NoArgs>("team.list", "List team runs")
-    .description("Recent runs of the agent team with their state.")
-    .tier(Tier::Read)
-    .effect(Effect::Read)
-    .agent_safe()
-    .dry_run()
-    .idempotent()
-    .handlers(
-        |_, _| simple("team.list", "list runs"),
-        |ctx, _| {
-            let runs = ctx.store.list_runs(50)?;
-            let rows: Vec<Value> = runs.iter().map(|r| {
-                let tasks = ctx.store.list_tasks_of_run(&r.id).unwrap_or_default();
-                let done = tasks.iter().filter(|t| matches!(t.state.as_str(), "done" | "skipped")).count();
-                let mut v = serde_json::to_value(r).unwrap_or(Value::Null);
-                v["tasks_total"] = json!(tasks.iter().filter(|t| t.role != "planner").count());
-                v["tasks_done"] = json!(done);
-                v["tasks_active"] = json!(tasks.iter().filter(|t| matches!(t.state.as_str(), "running" | "waiting_approval")).count());
-                v
-            }).collect();
-            Ok(Outcome::with_data(format!("{} run(s)", rows.len()), json!(rows)))
-        },
-    )?;
+        .description("Recent runs of the agent team with their state.")
+        .tier(Tier::Read)
+        .effect(Effect::Read)
+        .agent_safe()
+        .dry_run()
+        .idempotent()
+        .handlers(
+            |_, _| simple("team.list", "list runs"),
+            |ctx, _| {
+                let runs = ctx.store.list_runs(50)?;
+                let rows: Vec<Value> = runs
+                    .iter()
+                    .map(|r| {
+                        let tasks = ctx.store.list_tasks_of_run(&r.id).unwrap_or_default();
+                        let done = tasks
+                            .iter()
+                            .filter(|t| matches!(t.state.as_str(), "done" | "skipped"))
+                            .count();
+                        let mut v = serde_json::to_value(r).unwrap_or(Value::Null);
+                        v["tasks_total"] =
+                            json!(tasks.iter().filter(|t| t.role != "planner").count());
+                        v["tasks_done"] = json!(done);
+                        v["tasks_active"] = json!(tasks
+                            .iter()
+                            .filter(|t| matches!(t.state.as_str(), "running" | "waiting_approval"))
+                            .count());
+                        v
+                    })
+                    .collect();
+                Ok(Outcome::with_data(
+                    format!("{} run(s)", rows.len()),
+                    json!(rows),
+                ))
+            },
+        )?;
     reg.define::<RunRef>("team.get", "Read a team run")
     .description("The run, every task with its state, role, dependencies, evidence and result, and the event log after a sequence number (poll with the last id you saw).")
     .tier(Tier::Read)
@@ -945,7 +977,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             let tasks = ctx.store.list_tasks_of_run(&a.run)?;
             let events = ctx.store.list_team_events(&a.run, a.after.unwrap_or(0), 500)?;
             let pending: Vec<Value> = ctx.store.list_requests(true, None, 200)?.into_iter().filter(|r| r.thread_id.as_deref().map(|t| tasks.iter().any(|x| x.thread_id.as_deref() == Some(t))).unwrap_or(false)).map(|r| serde_json::to_value(r).unwrap_or(Value::Null)).collect();
-            Ok(Outcome::with_data(format!("{} · {} task(s)", run.state, tasks.len()), json!({ "run": run, "tasks": tasks, "events": events, "approvals": pending })))
+            Ok(Outcome::with_data(format!("{} · {} task(s)", run.state, tasks.len()), json!({ "run": run, "run_id": ctx.store.run_for_team_run(&a.run)?.map(|r| r.id), "tasks": tasks, "events": events, "approvals": pending })))
         },
     )?;
     reg.define::<NoArgs>("team.roles", "The team's specialists")
@@ -976,15 +1008,27 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
     {
         let t = team.clone();
         reg.define::<RunRef>("team.approve_plan", "Approve a run's plan")
-    .description("A person approves the plan the planner submitted; the work starts. Human only.")
-    .tier(Tier::Write)
-    .effect(Effect::Process)
-    .human_only()
-    .dry_run()
-    .handlers(
-        |_, a| simple("team.approve_plan", format!("approve the plan of run {}", a.run)),
-        move |ctx, a| Ok(Outcome::with_data("approved; the team starts", serde_json::to_value(t.approve(ctx, &a.run)?)?)),
-    )?;
+            .description(
+                "A person approves the plan the planner submitted; the work starts. Human only.",
+            )
+            .tier(Tier::Write)
+            .effect(Effect::Process)
+            .human_only()
+            .dry_run()
+            .handlers(
+                |_, a| {
+                    simple(
+                        "team.approve_plan",
+                        format!("approve the plan of run {}", a.run),
+                    )
+                },
+                move |ctx, a| {
+                    Ok(Outcome::with_data(
+                        "approved; the team starts",
+                        serde_json::to_value(t.approve(ctx, &a.run)?)?,
+                    ))
+                },
+            )?;
     }
     {
         let t = team.clone();
@@ -1040,26 +1084,36 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
     {
         let t = team.clone();
         reg.define::<RunRef>("team.pause", "Pause a run")
-    .description("Running tasks finish their step; nothing new starts.")
-    .tier(Tier::Exec)
-    .effect(Effect::Process)
-    .dry_run()
-    .handlers(
-        |_, a| simple("team.pause", format!("pause run {}", a.run)),
-        move |ctx, a| Ok(Outcome::with_data("paused", serde_json::to_value(t.pause(ctx, &a.run)?)?)),
-    )?;
+            .description("Running tasks finish their step; nothing new starts.")
+            .tier(Tier::Exec)
+            .effect(Effect::Process)
+            .dry_run()
+            .handlers(
+                |_, a| simple("team.pause", format!("pause run {}", a.run)),
+                move |ctx, a| {
+                    Ok(Outcome::with_data(
+                        "paused",
+                        serde_json::to_value(t.pause(ctx, &a.run)?)?,
+                    ))
+                },
+            )?;
     }
     {
         let t = team.clone();
         reg.define::<RunRef>("team.resume", "Resume a run")
-    .description("Continue a paused run.")
-    .tier(Tier::Exec)
-    .effect(Effect::Process)
-    .dry_run()
-    .handlers(
-        |_, a| simple("team.resume", format!("resume run {}", a.run)),
-        move |ctx, a| Ok(Outcome::with_data("resumed", serde_json::to_value(t.resume(ctx, &a.run)?)?)),
-    )?;
+            .description("Continue a paused run.")
+            .tier(Tier::Exec)
+            .effect(Effect::Process)
+            .dry_run()
+            .handlers(
+                |_, a| simple("team.resume", format!("resume run {}", a.run)),
+                move |ctx, a| {
+                    Ok(Outcome::with_data(
+                        "resumed",
+                        serde_json::to_value(t.resume(ctx, &a.run)?)?,
+                    ))
+                },
+            )?;
     }
     {
         let t = team.clone();
@@ -1164,15 +1218,18 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
         |ctx, a| { skills::save(&ctx.paths, &a.name, &a.description, &a.kind, &a.roles, &a.body)?; Ok(Outcome::ok(format!("saved skill {}", a.name))) },
     )?;
     reg.define::<SkillName>("skills.delete", "Delete your own skill")
-    .description("Removes a skill you added. Built-in skills cannot be deleted. Human only.")
-    .tier(Tier::Write)
-    .effect(Effect::Write)
-    .human_only()
-    .dry_run()
-    .handlers(
-        |_, a| simple("skills.delete", format!("delete skill {}", a.name)),
-        |ctx, a| { skills::delete(&ctx.paths, &a.name)?; Ok(Outcome::ok(format!("deleted skill {}", a.name))) },
-    )?;
+        .description("Removes a skill you added. Built-in skills cannot be deleted. Human only.")
+        .tier(Tier::Write)
+        .effect(Effect::Write)
+        .human_only()
+        .dry_run()
+        .handlers(
+            |_, a| simple("skills.delete", format!("delete skill {}", a.name)),
+            |ctx, a| {
+                skills::delete(&ctx.paths, &a.name)?;
+                Ok(Outcome::ok(format!("deleted skill {}", a.name)))
+            },
+        )?;
     reg.define::<SkillInstall>("skills.install", "Install a skill from a GitHub repository")
     .description("Fetches skills from a GitHub repository - the place the skills published on skills.sh live - and saves them in devd's own folder. Give the repository as owner/name, or owner/name/path for one skill. Nothing is executed: a skill is a Markdown file and is read as text. Human only, because a skill changes how every agent works.")
     .tier(Tier::Write)
@@ -1400,19 +1457,24 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
     )?;
 
     reg.define::<IdArgs>("provider.default", "Choose the default provider")
-    .description("New conversations use this provider unless they name another. Human only.")
-    .tier(Tier::Write)
-    .effect(Effect::Write)
-    .human_only()
-    .dry_run()
-    .handlers(
-        |_, a| simple("provider.default", format!("make `{}` the default provider", a.id)),
-        |ctx, a| {
-            find_provider(ctx, &a.id)?;
-            ctx.store.set_default_provider(&a.id)?;
-            Ok(Outcome::ok(format!("{} is now the default provider", a.id)))
-        },
-    )?;
+        .description("New conversations use this provider unless they name another. Human only.")
+        .tier(Tier::Write)
+        .effect(Effect::Write)
+        .human_only()
+        .dry_run()
+        .handlers(
+            |_, a| {
+                simple(
+                    "provider.default",
+                    format!("make `{}` the default provider", a.id),
+                )
+            },
+            |ctx, a| {
+                find_provider(ctx, &a.id)?;
+                ctx.store.set_default_provider(&a.id)?;
+                Ok(Outcome::ok(format!("{} is now the default provider", a.id)))
+            },
+        )?;
 
     reg.define::<IdArgs>("provider.remove", "Remove a provider")
     .description("Deletes the provider, its stored API key and its cached model list. Conversations that used it keep their history. Human only; asks for approval.")
@@ -1609,7 +1671,8 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                 let pending = ctx.store.list_requests(true, Some(&a.thread), 50)?;
                 let chapters = ctx.store.list_chapters(&a.thread)?;
                 let queued = ctx.store.queued_count(&a.thread)?;
-                Ok(Outcome::with_data(t.state.clone(), json!({ "thread": t, "events": ev, "pending": pending, "running": hub.is_running(&a.thread), "chapters": chapters, "queued": queued })))
+                let run = ctx.store.run_for_thread(&a.thread)?;
+                Ok(Outcome::with_data(t.state.clone(), json!({ "thread": t, "events": ev, "pending": pending, "running": hub.is_running(&a.thread), "chapters": chapters, "queued": queued, "run": run })))
             },
     )?;
     }
@@ -1628,19 +1691,44 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             },
     )?;
     }
-    reg.define::<UpdateThread>("chat.update", "Rename a conversation or change its model")
-    .description("Renames a conversation or switches its provider or model for the next message.")
-    .tier(Tier::Write)
-    .effect(Effect::Write)
+    {
+        let hub = hub.clone();
+        reg.define::<RunIdArg>("run.retry", "Continue a stopped run")
+    .description("Continues a failed, unverified, paused, blocked, reviewed or completed run after a person asks for it. Work already recorded in the run is not replayed; the agent resumes from the durable timeline. A cancelled run is not reopened - retrying starts a new run for the same conversation. Human only.")
+    .tier(Tier::Exec)
+    .effect(Effect::Process)
+    .human_only()
     .dry_run()
     .handlers(
-        |_, a| simple("chat.update", format!("update conversation {}", a.thread)),
-        |ctx, a| {
-            ctx.store.get_thread(&a.thread)?.ok_or_else(|| DevdError::not_found("no such conversation"))?;
-            ctx.store.update_thread(&a.thread, a.title.as_deref(), a.provider.as_deref(), a.model.as_deref())?;
-            Ok(Outcome::ok("updated"))
-        },
+        |_, a| simple("run.retry", format!("continue run {}", a.run_id)),
+        move |ctx, a| {
+                let run = hub.retry(ctx, &a.run_id)?;
+                Ok(Outcome::with_data(format!("continuing the {} run", run.state), serde_json::to_value(&run)?))
+            },
     )?;
+    }
+    reg.define::<UpdateThread>("chat.update", "Rename a conversation or change its model")
+        .description(
+            "Renames a conversation or switches its provider or model for the next message.",
+        )
+        .tier(Tier::Write)
+        .effect(Effect::Write)
+        .dry_run()
+        .handlers(
+            |_, a| simple("chat.update", format!("update conversation {}", a.thread)),
+            |ctx, a| {
+                ctx.store
+                    .get_thread(&a.thread)?
+                    .ok_or_else(|| DevdError::not_found("no such conversation"))?;
+                ctx.store.update_thread(
+                    &a.thread,
+                    a.title.as_deref(),
+                    a.provider.as_deref(),
+                    a.model.as_deref(),
+                )?;
+                Ok(Outcome::ok("updated"))
+            },
+        )?;
     {
         let hub = hub.clone();
         reg.define::<ForkArgs>("chat.fork", "Start a new conversation from a message")
@@ -1661,7 +1749,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             Ok(Outcome::with_data("forked", json!({ "thread": forked })))
         },
     )?;
-    reg.define::<PinArgs>("chat.pin", "Pin a message as a chapter")
+        reg.define::<PinArgs>("chat.pin", "Pin a message as a chapter")
     .description("Marks a message in a conversation as a chapter with a title, so the conversation has an outline to jump around in. Pinning the same message again renames the chapter.")
     .tier(Tier::Write)
     .effect(Effect::Write)
@@ -1679,22 +1767,22 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             Ok(Outcome::with_data("pinned", json!({ "chapter": chapter })))
         },
     )?;
-    reg.define::<UnpinArgs>("chat.unpin", "Remove a chapter pin")
-    .description("Removes a chapter from a conversation's outline. The message stays.")
-    .tier(Tier::Write)
-    .effect(Effect::Write)
-    .human_only()
-    .dry_run()
-    .handlers(
-        |_, a| Ok(Plan::new("chat.unpin", format!("remove chapter {}", a.id))),
-        |ctx, a| {
-            if !ctx.store.unpin_chapter(&a.id)? {
-                return Err(DevdError::not_found("no such chapter"));
-            }
-            Ok(Outcome::ok("unpinned"))
-        },
-    )?;
-    reg.define::<ThreadArgs>("chat.chapters", "List a conversation's chapters")
+        reg.define::<UnpinArgs>("chat.unpin", "Remove a chapter pin")
+            .description("Removes a chapter from a conversation's outline. The message stays.")
+            .tier(Tier::Write)
+            .effect(Effect::Write)
+            .human_only()
+            .dry_run()
+            .handlers(
+                |_, a| Ok(Plan::new("chat.unpin", format!("remove chapter {}", a.id))),
+                |ctx, a| {
+                    if !ctx.store.unpin_chapter(&a.id)? {
+                        return Err(DevdError::not_found("no such chapter"));
+                    }
+                    Ok(Outcome::ok("unpinned"))
+                },
+            )?;
+        reg.define::<ThreadArgs>("chat.chapters", "List a conversation's chapters")
     .description("Lists the replies a person pinned as chapters in one conversation, with their titles and the event each points at. Chapters belong to the conversation they were pinned in; a fork starts without them.")
     .tier(Tier::Read)
     .effect(Effect::Read)
@@ -1708,7 +1796,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             Ok(Outcome::with_data(format!("{} chapter(s)", chapters.len()), json!({ "chapters": chapters })))
         },
     )?;
-    reg.define::<ThreadArgs>("chat.delete", "Delete a conversation")
+        reg.define::<ThreadArgs>("chat.delete", "Delete a conversation")
         .description("Stops the conversation if it is working, then deletes it with its log and the approval requests it made. Cannot be undone.")
         .tier(Tier::Destructive)
         .effect(Effect::Data)
@@ -1751,20 +1839,22 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
         )?;
     }
     reg.define::<InboxDelete>("inbox.delete", "Delete an inbox message")
-    .description("Removes a message from the inbox. Human only.")
-    .tier(Tier::Destructive)
-    .effect(Effect::Data)
-    .human_only()
-    .dry_run()
-    .handlers(
-        |_, a| Ok(Plan::new("inbox.delete", format!("delete message {}", a.id)).destructive(true)),
-        |ctx, a| {
-            if !ctx.store.delete_inbox(&a.id)? {
-                return Err(DevdError::not_found("no such message"));
-            }
-            Ok(Outcome::with_data("deleted", json!({ "deleted": 1 })))
-        },
-    )?;
+        .description("Removes a message from the inbox. Human only.")
+        .tier(Tier::Destructive)
+        .effect(Effect::Data)
+        .human_only()
+        .dry_run()
+        .handlers(
+            |_, a| {
+                Ok(Plan::new("inbox.delete", format!("delete message {}", a.id)).destructive(true))
+            },
+            |ctx, a| {
+                if !ctx.store.delete_inbox(&a.id)? {
+                    return Err(DevdError::not_found("no such message"));
+                }
+                Ok(Outcome::with_data("deleted", json!({ "deleted": 1 })))
+            },
+        )?;
     reg.define::<NoArgs>("inbox.clear", "Clear answered inbox messages")
     .description("Deletes every message that has been answered or dismissed. Open questions are kept. Human only.")
     .tier(Tier::Destructive)
@@ -1860,19 +1950,22 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
         },
     )?;
     reg.define::<InboxList>("inbox.list", "Read the inbox")
-    .description("Messages agents left for the person, with the person's replies.")
-    .tier(Tier::Read)
-    .effect(Effect::Read)
-    .agent_safe()
-    .dry_run()
-    .idempotent()
-    .handlers(
-        |_, _| simple("inbox.list", "read the inbox"),
-        |ctx, a| {
-            let m = ctx.store.list_inbox(a.open_only.unwrap_or(true), 100)?;
-            Ok(Outcome::with_data(format!("{} message(s)", m.len()), serde_json::to_value(&m)?))
-        },
-    )?;
+        .description("Messages agents left for the person, with the person's replies.")
+        .tier(Tier::Read)
+        .effect(Effect::Read)
+        .agent_safe()
+        .dry_run()
+        .idempotent()
+        .handlers(
+            |_, _| simple("inbox.list", "read the inbox"),
+            |ctx, a| {
+                let m = ctx.store.list_inbox(a.open_only.unwrap_or(true), 100)?;
+                Ok(Outcome::with_data(
+                    format!("{} message(s)", m.len()),
+                    serde_json::to_value(&m)?,
+                ))
+            },
+        )?;
     reg.define::<ReplyArgs>("inbox.reply", "Reply to an inbox message")
     .description("Answers a message from an agent (it reads the reply with inbox.list) and marks it resolved. Human only.")
     .tier(Tier::Write)
@@ -1975,15 +2068,15 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
         |ctx, a| Ok(Outcome::with_data("edited", fs::edit(ctx, &a.path, &a.old, &a.new, a.replace_all.unwrap_or(false))?)),
     )?;
     reg.define::<FsMove>("fs.move", "Move or rename")
-    .description("Moves a file or directory. Never overwrites an existing path.")
-    .tier(Tier::Write)
-    .effect(Effect::Write)
-    .agent_safe()
-    .dry_run()
-    .handlers(
-        |_, a| simple("fs.move", format!("move {} to {}", a.from, a.to)),
-        |ctx, a| Ok(Outcome::with_data("moved", fs::mv(ctx, &a.from, &a.to)?)),
-    )?;
+        .description("Moves a file or directory. Never overwrites an existing path.")
+        .tier(Tier::Write)
+        .effect(Effect::Write)
+        .agent_safe()
+        .dry_run()
+        .handlers(
+            |_, a| simple("fs.move", format!("move {} to {}", a.from, a.to)),
+            |ctx, a| Ok(Outcome::with_data("moved", fs::mv(ctx, &a.from, &a.to)?)),
+        )?;
     reg.define::<FsDelete>("fs.delete", "Delete a file or directory")
     .description("Deletes a file, or a directory (recursive for a non-empty one). A person's approval is required, except when an agent deletes inside the conversation's project: there it is ordinary work. The project root, `.git` and secrets files are refused.")
     .tier(Tier::Destructive)
@@ -2185,22 +2278,25 @@ fn register_automation(reg: &mut Registry, team: Arc<Team>) -> Result<()> {
     )?;
 
     reg.define::<ScheduleRef>("schedule.delete", "Delete a schedule")
-    .description("Removes the schedule. Runs it already started are not touched. Human only.")
-    .group("schedule")
-    .tier(Tier::Write)
-    .effect(Effect::Config)
-    .human_only()
-    .dry_run()
-    .handlers(
-        |_, a| simple("schedule.delete", format!("delete the schedule {}", a.name)),
-        |ctx, a| {
-            let removed = ctx.store.delete_schedule(&a.name)?;
-            if !removed {
-                return Err(DevdError::not_found(format!("no schedule named {}", a.name)));
-            }
-            Ok(Outcome::ok("the schedule is deleted"))
-        },
-    )?;
+        .description("Removes the schedule. Runs it already started are not touched. Human only.")
+        .group("schedule")
+        .tier(Tier::Write)
+        .effect(Effect::Config)
+        .human_only()
+        .dry_run()
+        .handlers(
+            |_, a| simple("schedule.delete", format!("delete the schedule {}", a.name)),
+            |ctx, a| {
+                let removed = ctx.store.delete_schedule(&a.name)?;
+                if !removed {
+                    return Err(DevdError::not_found(format!(
+                        "no schedule named {}",
+                        a.name
+                    )));
+                }
+                Ok(Outcome::ok("the schedule is deleted"))
+            },
+        )?;
 
     {
         let t = team.clone();

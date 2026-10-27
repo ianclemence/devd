@@ -50,7 +50,12 @@ pub struct RunResult {
 const TAIL_LINES: usize = 200;
 
 /// Environment variables that must never be inherited by project commands.
-const STRIPPED_ENV: &[&str] = &["DEVD_TOKEN", "DEVD_HTTP_TOKEN"];
+///
+/// Kept for documentation and for callers that want to name the old denylist;
+/// the runner clears the environment and applies
+/// [`devd_core::process::CHILD_ENV_ALLOWLIST`] instead, which is the stronger
+/// rule.
+pub const STRIPPED_ENV: &[&str] = &["DEVD_TOKEN", "DEVD_HTTP_TOKEN"];
 
 /// Remove secrets from a line of output before it is stored, logged or shown.
 pub fn redact_line(line: &str) -> String {
@@ -85,7 +90,12 @@ pub fn redact_argv(argv: &[String]) -> Vec<String> {
             continue;
         }
         let lower = a.to_ascii_lowercase();
-        if lower.starts_with("--") && ["password", "token", "secret", "key"].iter().any(|m| lower.contains(m)) && !a.contains('=') {
+        if lower.starts_with("--")
+            && ["password", "token", "secret", "key"]
+                .iter()
+                .any(|m| lower.contains(m))
+            && !a.contains('=')
+        {
             hide_next = true;
         }
         out.push(redact_line(a));
@@ -98,17 +108,26 @@ pub fn redact_argv(argv: &[String]) -> Vec<String> {
 /// Returns the executable and any leading arguments. Relative programs such as
 /// `./mvnw` and `vendor/bin/pint` are resolved against the working directory,
 /// and Windows batch shims go through `cmd.exe` with the argv still separate.
-pub fn resolve_program(program: &str, cwd: &Path, extra: &[PathBuf]) -> Result<(PathBuf, Vec<String>)> {
+pub fn resolve_program(
+    program: &str,
+    cwd: &Path,
+    extra: &[PathBuf],
+) -> Result<(PathBuf, Vec<String>)> {
     let path = if program.contains('/') || program.contains('\\') {
         let p = cwd.join(program.trim_start_matches("./"));
         let found = if p.is_file() {
             Some(p)
         } else if cfg!(windows) {
-            ["cmd", "bat", "exe"].iter().map(|e| p.with_extension(e)).find(|c| c.is_file())
+            ["cmd", "bat", "exe"]
+                .iter()
+                .map(|e| p.with_extension(e))
+                .find(|c| c.is_file())
         } else {
             None
         };
-        found.ok_or_else(|| DevdError::not_found(format!("`{program}` does not exist in {}", cwd.display())))?
+        found.ok_or_else(|| {
+            DevdError::not_found(format!("`{program}` does not exist in {}", cwd.display()))
+        })?
     } else {
         which_in(program, extra)
             .map(|(p, _)| p)
@@ -120,7 +139,10 @@ pub fn resolve_program(program: &str, cwd: &Path, extra: &[PathBuf]) -> Result<(
         .map(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat"))
         .unwrap_or(false);
     if is_batch {
-        Ok((PathBuf::from("cmd.exe"), vec!["/C".into(), path.display().to_string()]))
+        Ok((
+            PathBuf::from("cmd.exe"),
+            vec!["/C".into(), path.display().to_string()],
+        ))
     } else {
         Ok((path, Vec::new()))
     }
@@ -145,7 +167,10 @@ fn push_args(cmd: &mut Command, through_cmd: bool, args: &[String]) {
     {
         use std::os::windows::process::CommandExt;
         for a in args {
-            if through_cmd && a.chars().any(|c| "^&|<>()".contains(c)) && !a.contains(['"', '%', '!']) {
+            if through_cmd
+                && a.chars().any(|c| "^&|<>()".contains(c))
+                && !a.contains(['"', '%', '!'])
+            {
                 cmd.raw_arg(format!("\"{a}\""));
             } else {
                 cmd.arg(a);
@@ -174,17 +199,22 @@ pub fn run_streaming(
     cmd.args(&lead);
     push_args(&mut cmd, !lead.is_empty(), &spec.argv[1..]);
     cmd.current_dir(&spec.cwd);
-    for k in STRIPPED_ENV {
-        cmd.env_remove(k);
-    }
-    cmd.env("CI", "1").env("NO_COLOR", "1").env("FORCE_COLOR", "0");
+    // An allowlist, not a denylist: the daemon's credentials are not in the
+    // child unless the caller passed them explicitly in `spec.env`.
+    cmd.env_clear();
+    devd_core::process::apply_child_environment(&mut cmd);
+    cmd.env("CI", "1")
+        .env("NO_COLOR", "1")
+        .env("FORCE_COLOR", "0");
     if let Some(p) = child_path(&spec.extra_path) {
         cmd.env("PATH", p);
     }
     for (k, v) in &spec.env {
         cmd.env(k, v);
     }
-    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -198,7 +228,10 @@ pub fn run_streaming(
 
     let start = Instant::now();
     let mut child = cmd.spawn().map_err(|e| {
-        DevdError::Io(std::io::Error::new(e.kind(), format!("failed to start `{program}`: {e}")))
+        DevdError::Io(std::io::Error::new(
+            e.kind(),
+            format!("failed to start `{program}`: {e}"),
+        ))
     })?;
     let (tx, rx) = mpsc::channel::<String>();
     let mut readers = Vec::new();
@@ -225,12 +258,19 @@ pub fn run_streaming(
             if let Some(dir) = p.parent() {
                 std::fs::create_dir_all(dir)?;
             }
-            Some(std::fs::OpenOptions::new().create(true).append(true).open(p)?)
+            Some(
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(p)?,
+            )
         }
         None => None,
     };
     let mut tail: std::collections::VecDeque<String> = std::collections::VecDeque::new();
-    let mut handle = |line: String, tail: &mut std::collections::VecDeque<String>, on_line: &mut dyn FnMut(&str)| {
+    let mut handle = |line: String,
+                      tail: &mut std::collections::VecDeque<String>,
+                      on_line: &mut dyn FnMut(&str)| {
         let clean = redact_line(&line);
         if let Some(f) = logfile.as_mut() {
             let _ = writeln!(f, "{clean}");
@@ -269,7 +309,11 @@ pub fn run_streaming(
     while let Ok(line) = rx.try_recv() {
         handle(line, &mut tail, on_line);
     }
-    let code = if cancelled || timed_out { None } else { status.code() };
+    let code = if cancelled || timed_out {
+        None
+    } else {
+        status.code()
+    };
     Ok(RunResult {
         code,
         ok: !cancelled && !timed_out && status.success(),
@@ -286,19 +330,32 @@ mod tests {
 
     #[test]
     fn secrets_are_removed_from_output() {
-        assert_eq!(redact_line("DB_PASSWORD=hunter2 ok"), "DB_PASSWORD=[redacted] ok");
-        assert_eq!(redact_line("export API_KEY: abc123"), "export API_KEY=[redacted]");
+        assert_eq!(
+            redact_line("DB_PASSWORD=hunter2 ok"),
+            "DB_PASSWORD=[redacted] ok"
+        );
+        assert_eq!(
+            redact_line("export API_KEY: abc123"),
+            "export API_KEY=[redacted]"
+        );
         assert_eq!(
             redact_line("postgres://app:s3cret@localhost/db"),
             "postgres://app:[redacted]@localhost/db"
         );
-        assert!(redact_line("token ghp_abcdefghijklmnopqrstuvwxyz0123").contains("[redacted-token]"));
+        assert!(
+            redact_line("token ghp_abcdefghijklmnopqrstuvwxyz0123").contains("[redacted-token]")
+        );
         assert_eq!(redact_line("nothing to hide"), "nothing to hide");
     }
 
     #[test]
     fn argv_secrets_are_hidden() {
-        let a = redact_argv(&["tool".into(), "--password".into(), "x".into(), "--name=y".into()]);
+        let a = redact_argv(&[
+            "tool".into(),
+            "--password".into(),
+            "x".into(),
+            "--name=y".into(),
+        ]);
         assert_eq!(a, vec!["tool", "--password", "[redacted]", "--name=y"]);
     }
 
@@ -309,7 +366,11 @@ mod tests {
         let mut seen = Vec::new();
         let r = run_streaming(
             &RunSpec {
-                argv: vec!["sh".into(), "-c".into(), "echo one; echo two >&2; exit 3".into()],
+                argv: vec![
+                    "sh".into(),
+                    "-c".into(),
+                    "echo one; echo two >&2; exit 3".into(),
+                ],
                 cwd: std::env::temp_dir(),
                 env: vec![],
                 extra_path: vec![],
@@ -354,7 +415,8 @@ mod tests {
 
     #[test]
     fn missing_programs_are_reported_not_spawned() {
-        let e = resolve_program("definitely-not-a-real-program-xyz", Path::new("."), &[]).unwrap_err();
+        let e =
+            resolve_program("definitely-not-a-real-program-xyz", Path::new("."), &[]).unwrap_err();
         assert_eq!(e.code(), "not_found");
     }
 }
@@ -399,6 +461,9 @@ pub mod runs {
 
     /// Ids of runs in progress.
     pub fn active() -> Vec<String> {
-        table().lock().map(|t| t.keys().cloned().collect()).unwrap_or_default()
+        table()
+            .lock()
+            .map(|t| t.keys().cloned().collect())
+            .unwrap_or_default()
     }
 }

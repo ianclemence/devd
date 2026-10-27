@@ -10,6 +10,98 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.14.0] - 2026-10-27 - One run behind every piece of work
+
+A conversation, a team run, a scheduled job, an HTTP call and an MCP tool were
+five ways to start work and five ways to describe what happened. They are now
+one record: a run with steps, capability calls, evidence, artifacts, approvals
+and a sequenced event log. This release adds that spine and moves the existing
+surfaces onto it. History is kept: `chat_*` and `team_*` rows are linked to
+their run, not rewritten, and the migration is additive.
+
+### Added
+
+- **Runs, with evidence rather than claims.** `runs`, `run_steps`, `tool_calls`,
+  `evidence`, `artifacts`, `approvals` and `run_events` (migration
+  `017_runs.sql`). `Registry::dispatch_with` records a normalized call at the
+  boundary, so a direct alias, `devd_invoke`, an MCP tool and an internal call
+  leave the same trail. Arguments are redacted by key name and hashed for
+  comparison.
+- **Completion is decided, not announced.** `CompletionPolicy::for_goal` reads
+  the goal and acceptance criteria and requires the matching evidence: a change
+  for a code goal, a passing check for a fix, readiness for a service, runtime,
+  database or site. A change that was never checked ends `unverified`, with the
+  missing evidence named. The model's sentence that it finished is not
+  evidence.
+- **One durable approval service.** A decision is a row, not a message in one
+  window: 256-bit token, only its SHA-256 hash stored, single use, scope,
+  expiry, decider and reason. The conversation, the token flow, the by-id
+  endpoints, the desktop window and `Hub::decide` all consume the same row; an
+  agent cannot approve its own operation. Changed arguments or a changed plan do
+  not match the stored hashes.
+- **A context budget the model can live in.** Model-aware windows, project
+  instruction discovery, preserved notices, errors and decisions, older tool
+  results summarized and their raw output kept as artifacts, and a
+  `ContextManifest` that records what was included, summarized or dropped.
+- **Replayable events.** `run_events` is append-only with a global cursor and a
+  per-run sequence. `GET /api/events` replays after `Last-Event-ID` and then
+  tails; a lagging subscriber gets `stream.lag` instead of silently losing
+  frames. `GET /api/runs/:id/events` pages both ways.
+- **Environment manifests and setup.** `environment.manifest` describes a
+  project's stack, runtimes, services, sites, tasks, variable *names*, ports and
+  isolation, with a fingerprint that ignores `generated_at`. `workflow.setup`
+  applies what is missing in a fixed order, dry-run first, and reports each step
+  as done, skipped or failed.
+- **An evaluation suite for the hard paths.** `crates/devd-core/tests/evaluation.rs`
+  covers a full workflow, recovery, approval scope and single use, timeouts,
+  malformed arguments, cancellation mid-run, duplicate idempotent calls, event
+  replay and multi-criteria acceptance.
+- **A Run sheet, not a new page.** The durable record opens from the
+  conversation header and from the team run it belongs to. There is no
+  destination of its own, because a run is not a second kind of process; it is
+  the record behind work that already has a place.
+
+### Changed
+
+- **Assistant turns report their run.** The conversation header shows one state
+  for the turn, with Continue offered only when the server would accept it.
+  Messages reopen a finished conversation deliberately; a cancelled run stays
+  cancelled and a continuation is a new run.
+- **Retry is a person's decision.** `run.retry` refuses a team run, an active
+  run and a run with a pending approval, and a cancelled run starts fresh rather
+  than pretending to resume.
+- **Supervised processes on Windows are job objects.** A child cannot outlive
+  devd, and its environment is built from an allowlist rather than inherited
+  whole.
+- **HTTP effectful calls are runs.** An API write creates an `api` run; a read
+  or dry run does not. `deploy_hook` now dispatches `deploy.run` through the
+  capability registry instead of starting a second execution path.
+- **`team.get` returns the unified run id,** so the team surface links to the
+  record rather than reconstructing it.
+
+### Fixed
+
+- **A live stream gap is not a lost history.** Reconnecting rebuilds the
+  conversation from durable rows, and the durable timeline is read from the
+  server rather than inferred from the frames that arrived.
+- **A pending request survives a restart.** Decisions made in another window or
+  after a restart read the same approval row.
+- **An unknown model window no longer overflows first.** The budget is chosen
+  from the catalogue or the model name, with output and tool-call reserve
+  subtracted, before the provider has to reject the request.
+
+### Not claimed
+
+- Evidence records what devd observed; it does not prove that an external
+  service behaved correctly afterwards.
+- A replay reconstructs state from durable rows; it does not reverse an external
+  side effect such as a deployment or a payment.
+- Cancellation reaches handlers that check `RunContext` and processes devd
+  supervises. A third-party program that ignores termination is reported as
+  still running.
+
+---
+
 ## [0.13.8] - 2026-10-26 - One reply, written as it happens
 
 ### Fixed

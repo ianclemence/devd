@@ -367,14 +367,20 @@ pub fn create_database(ctx: &Ctx, port: u16, name: &str) -> Result<Value> {
 /// an identifier first, so it cannot carry a second statement.
 pub fn create_database_unchecked(ctx: &Ctx, port: u16, name: &str) -> Result<Value> {
     crate::dump::valid_source_name(name)?;
-    let sql = format!("CREATE DATABASE IF NOT EXISTS `{name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+    let sql = format!(
+        "CREATE DATABASE IF NOT EXISTS `{name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+    );
     let result = query(ctx, port, &sql)?;
     let code = result.get("code").and_then(Value::as_i64).unwrap_or(-1);
     if code != 0 {
         return Err(DevdError::Command {
             program: "mysql".to_string(),
             code: code as i32,
-            stderr: result.get("stderr").and_then(Value::as_str).unwrap_or_default().to_string(),
+            stderr: result
+                .get("stderr")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
         });
     }
     Ok(json!({ "database": name, "created": true }))
@@ -392,10 +398,20 @@ pub fn table_count(ctx: &Ctx, port: u16, name: &str) -> Result<u64> {
         return Err(DevdError::Command {
             program: "mysql".to_string(),
             code: -1,
-            stderr: result.get("stderr").and_then(Value::as_str).unwrap_or_default().to_string(),
+            stderr: result
+                .get("stderr")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
         });
     }
-    Ok(result.get("stdout").and_then(Value::as_str).unwrap_or("0").trim().parse().unwrap_or(0))
+    Ok(result
+        .get("stdout")
+        .and_then(Value::as_str)
+        .unwrap_or("0")
+        .trim()
+        .parse()
+        .unwrap_or(0))
 }
 
 /// Remove a database.
@@ -488,6 +504,7 @@ mod tests {
             settings: Arc::new(devd_core::config::Settings::default()),
             events: devd_core::events::EventBus::new(),
             actor: devd_core::capability::Actor::human(devd_core::capability::Surface::Cli),
+            run: None,
             dry_run: false,
         }
     }

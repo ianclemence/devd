@@ -36,6 +36,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (14, include_str!("../sql/014_site_serving.sql")),
     (15, include_str!("../sql/015_mcp.sql")),
     (16, include_str!("../sql/016_chat_queue.sql")),
+    (17, include_str!("../sql/017_runs.sql")),
 ];
 
 /// The newest schema this build knows. A database below it is migrated the first time devd
@@ -135,7 +136,11 @@ impl Site {
     pub fn document_root(&self) -> String {
         let root = std::path::Path::new(&self.root);
         let web = crate::serving::web_root(root);
-        if web == root { self.root.clone() } else { web.to_string_lossy().to_string() }
+        if web == root {
+            self.root.clone()
+        } else {
+            web.to_string_lossy().to_string()
+        }
     }
 
     /// What this site is served as, and where that answer came from.
@@ -148,10 +153,12 @@ impl Site {
     /// is exposed, so one project can have no site, or several, and this is the key between them.
     pub fn project_dir(&self) -> std::path::PathBuf {
         let root = std::path::PathBuf::from(&self.root);
-        let web = root
-            .file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| matches!(n.to_ascii_lowercase().as_str(), "public" | "public_html" | "web" | "www" | "htdocs" | "dist"));
+        let web = root.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+            matches!(
+                n.to_ascii_lowercase().as_str(),
+                "public" | "public_html" | "web" | "www" | "htdocs" | "dist"
+            )
+        });
         match (web, root.parent()) {
             (true, Some(parent)) => parent.to_path_buf(),
             _ => root,
@@ -334,11 +341,16 @@ impl Store {
     /// [`LATEST_SCHEMA`] before reading tables a migration added.
     pub fn open_read_only(path: &Path) -> Result<Self> {
         if !path.is_file() {
-            return Err(crate::error::DevdError::not_found(format!("there is no state database at {}", path.display())));
+            return Err(crate::error::DevdError::not_found(format!(
+                "there is no state database at {}",
+                path.display()
+            )));
         }
         let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         conn.busy_timeout(std::time::Duration::from_secs(10))?;
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     /// Open a private in-memory database, for tests.
@@ -402,11 +414,18 @@ impl Store {
     // ---------------------------------------------------------------- audit
 
     /// Append an audit row.
-    pub fn record_audit(
-        &self,
-        entry: AuditRecord,
-    ) -> Result<i64> {
-        let AuditRecord { actor, surface, capability, tier, effect, dry_run, ok, args, message } = entry;
+    pub fn record_audit(&self, entry: AuditRecord) -> Result<i64> {
+        let AuditRecord {
+            actor,
+            surface,
+            capability,
+            tier,
+            effect,
+            dry_run,
+            ok,
+            args,
+            message,
+        } = entry;
         self.with(|conn| {
             conn.execute(
                 "INSERT INTO audit_log
@@ -1113,7 +1132,10 @@ fn map_site(row: &rusqlite::Row<'_>) -> rusqlite::Result<Site> {
         db_name: row.get(7)?,
         upstream: row.get(8)?,
         created_at: row.get(9)?,
-        serving: row.get::<_, Option<String>>(10)?.as_deref().and_then(crate::serving::Content::parse),
+        serving: row
+            .get::<_, Option<String>>(10)?
+            .as_deref()
+            .and_then(crate::serving::Content::parse),
     })
 }
 
@@ -1166,14 +1188,29 @@ mod tests {
     fn deleting_a_conversation_takes_its_log_and_requests_with_it() {
         let s = store();
         let t = s.create_thread("old chat", None, None, None).unwrap();
-        s.append_event(&t.id, "user", &serde_json::json!({ "text": "hi" })).unwrap();
-        s.create_request("agent:x", "site.remove", &serde_json::json!({}), None, Some(&t.id), None).unwrap();
+        s.append_event(&t.id, "user", &serde_json::json!({ "text": "hi" }))
+            .unwrap();
+        s.create_request(
+            "agent:x",
+            "site.remove",
+            &serde_json::json!({}),
+            None,
+            Some(&t.id),
+            None,
+        )
+        .unwrap();
         let keep = s.create_thread("keep", None, None, None).unwrap();
         assert!(s.delete_thread(&t.id).unwrap());
         assert!(s.get_thread(&t.id).unwrap().is_none());
         assert!(s.list_requests(false, Some(&t.id), 10).unwrap().is_empty());
-        assert!(s.get_thread(&keep.id).unwrap().is_some(), "other conversations are untouched");
-        assert!(!s.delete_thread(&t.id).unwrap(), "deleting twice is not an error, it just finds nothing");
+        assert!(
+            s.get_thread(&keep.id).unwrap().is_some(),
+            "other conversations are untouched"
+        );
+        assert!(
+            !s.delete_thread(&t.id).unwrap(),
+            "deleting twice is not an error, it just finds nothing"
+        );
     }
 
     #[test]
@@ -1183,22 +1220,52 @@ mod tests {
         let busy = s.create_thread("busy", None, None, None).unwrap();
         s.set_thread_state(&busy.id, "running", None).unwrap();
         let waiting = s.create_thread("waiting", None, None, None).unwrap();
-        s.set_thread_state(&waiting.id, "waiting_approval", None).unwrap();
+        s.set_thread_state(&waiting.id, "waiting_approval", None)
+            .unwrap();
         let future = (chrono::Utc::now() + chrono::Duration::days(1)).to_rfc3339();
-        let ids: Vec<String> = s.finished_threads_before(&future).unwrap().into_iter().map(|t| t.id).collect();
+        let ids: Vec<String> = s
+            .finished_threads_before(&future)
+            .unwrap()
+            .into_iter()
+            .map(|t| t.id)
+            .collect();
         assert_eq!(ids, vec![idle.id.clone()]);
         let past = (chrono::Utc::now() - chrono::Duration::days(1)).to_rfc3339();
-        assert!(s.finished_threads_before(&past).unwrap().is_empty(), "a recent conversation is not old");
+        assert!(
+            s.finished_threads_before(&past).unwrap().is_empty(),
+            "a recent conversation is not old"
+        );
     }
 
     #[test]
     fn deleting_a_run_takes_its_tasks_and_their_conversations() {
         use crate::store_team::NewTask;
         let s = store();
-        let run = s.create_run("build it", "goal", None, 2, "human:x").unwrap();
+        let run = s
+            .create_run("build it", "goal", None, 2, "human:x")
+            .unwrap();
         let thread = s.create_thread("task chat", None, None, None).unwrap();
-        let task = s.add_task(&run.id, NewTask { key: "a", role: "implementer", title: "t", instructions: "i", ..Default::default() }).unwrap();
-        s.update_team_task(&task.id, crate::store_team::TaskUpdate { state: "done", thread_id: Some(&thread.id), ..Default::default() }).unwrap();
+        let task = s
+            .add_task(
+                &run.id,
+                NewTask {
+                    key: "a",
+                    role: "implementer",
+                    title: "t",
+                    instructions: "i",
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        s.update_team_task(
+            &task.id,
+            crate::store_team::TaskUpdate {
+                state: "done",
+                thread_id: Some(&thread.id),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(s.delete_run(&run.id).unwrap(), 1);
         assert!(s.get_run(&run.id).unwrap().is_none());
         assert!(s.list_tasks_of_run(&run.id).unwrap().is_empty());
@@ -1222,18 +1289,42 @@ mod tests {
     fn a_fork_copies_up_to_a_message_and_leaves_the_original_alone() {
         let s = store();
         let t = s.create_thread("plan", Some("C:/p"), None, None).unwrap();
-        let e1 = s.append_event(&t.id, "user", &serde_json::json!({ "text": "one" })).unwrap();
+        let e1 = s
+            .append_event(&t.id, "user", &serde_json::json!({ "text": "one" }))
+            .unwrap();
         let e2 = s.append_event(&t.id, "assistant", &serde_json::json!({ "content": [{ "type": "text", "text": "A" }, { "type": "tool_use", "id": "tu1", "name": "x", "input": {} }] })).unwrap();
-        s.append_event(&t.id, "approval", &serde_json::json!({ "request_id": "r" })).unwrap();
-        s.append_event(&t.id, "tool_result", &serde_json::json!({ "tool_use_id": "tu1", "content": "ok" })).unwrap();
-        let e5 = s.append_event(&t.id, "assistant", &serde_json::json!({ "content": [{ "type": "text", "text": "B" }] })).unwrap();
-        s.append_event(&t.id, "user", &serde_json::json!({ "text": "two" })).unwrap();
+        s.append_event(&t.id, "approval", &serde_json::json!({ "request_id": "r" }))
+            .unwrap();
+        s.append_event(
+            &t.id,
+            "tool_result",
+            &serde_json::json!({ "tool_use_id": "tu1", "content": "ok" }),
+        )
+        .unwrap();
+        let e5 = s
+            .append_event(
+                &t.id,
+                "assistant",
+                &serde_json::json!({ "content": [{ "type": "text", "text": "B" }] }),
+            )
+            .unwrap();
+        s.append_event(&t.id, "user", &serde_json::json!({ "text": "two" }))
+            .unwrap();
         let fork = s.fork_thread(&t.id, e2, "Fork of plan").unwrap();
         assert_ne!(fork.id, t.id);
         assert_eq!(fork.project.as_deref(), Some("C:/p"));
-        let kinds: Vec<String> = s.list_events(&fork.id, 0, 100).unwrap().into_iter().map(|e| e.kind).collect();
+        let kinds: Vec<String> = s
+            .list_events(&fork.id, 0, 100)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.kind)
+            .collect();
         assert_eq!(kinds, vec!["user", "assistant", "tool_result"], "the open tool call is answered, the pending approval is left out, later messages are not copied");
-        assert_eq!(s.list_events(&t.id, 0, 100).unwrap().len(), 6, "the original keeps everything");
+        assert_eq!(
+            s.list_events(&t.id, 0, 100).unwrap().len(),
+            6,
+            "the original keeps everything"
+        );
         assert!(s.fork_thread(&t.id, 9999, "x").is_err());
         let later = s.fork_thread(&t.id, e5, "later").unwrap();
         assert_eq!(s.list_events(&later.id, 0, 100).unwrap().len(), 4);
@@ -1244,13 +1335,25 @@ mod tests {
     fn chapters_are_pinned_renamed_listed_in_order_and_removed_with_the_conversation() {
         let s = store();
         let t = s.create_thread("c", None, None, None).unwrap();
-        let a = s.append_event(&t.id, "assistant", &serde_json::json!({})).unwrap();
-        let b = s.append_event(&t.id, "assistant", &serde_json::json!({})).unwrap();
+        let a = s
+            .append_event(&t.id, "assistant", &serde_json::json!({}))
+            .unwrap();
+        let b = s
+            .append_event(&t.id, "assistant", &serde_json::json!({}))
+            .unwrap();
         s.pin_chapter(&t.id, b, "Second").unwrap();
         let first = s.pin_chapter(&t.id, a, "First").unwrap();
         let renamed = s.pin_chapter(&t.id, a, "Opening").unwrap();
-        assert_eq!(first.id, renamed.id, "pinning the same message again renames it");
-        let titles: Vec<String> = s.list_chapters(&t.id).unwrap().into_iter().map(|c| c.title).collect();
+        assert_eq!(
+            first.id, renamed.id,
+            "pinning the same message again renames it"
+        );
+        let titles: Vec<String> = s
+            .list_chapters(&t.id)
+            .unwrap()
+            .into_iter()
+            .map(|c| c.title)
+            .collect();
         assert_eq!(titles, vec!["Opening", "Second"]);
         assert!(s.unpin_chapter(&first.id).unwrap());
         s.delete_thread(&t.id).unwrap();
@@ -1306,7 +1409,10 @@ mod tests {
         // No database: an error, and nothing made.
         let missing = dir.path().join("home").join("state.db");
         assert!(Store::open_read_only(&missing).is_err());
-        assert!(!dir.path().join("home").exists(), "looking must not create the folder");
+        assert!(
+            !dir.path().join("home").exists(),
+            "looking must not create the folder"
+        );
 
         // A database from before the newest migration stays exactly as it is.
         let old = dir.path().join("old.db");
@@ -1315,18 +1421,40 @@ mod tests {
             for (_, sql) in &MIGRATIONS[..LATEST_SCHEMA as usize - 1] {
                 conn.execute_batch(sql).unwrap();
             }
-            conn.execute_batch(&format!("PRAGMA user_version = {};", LATEST_SCHEMA - 1)).unwrap();
+            conn.execute_batch(&format!("PRAGMA user_version = {};", LATEST_SCHEMA - 1))
+                .unwrap();
         }
         let seen = Store::open_read_only(&old).unwrap();
-        assert_eq!(seen.schema_version().unwrap(), LATEST_SCHEMA - 1, "doctor must report the file's own version");
+        assert_eq!(
+            seen.schema_version().unwrap(),
+            LATEST_SCHEMA - 1,
+            "doctor must report the file's own version"
+        );
         assert_eq!(seen.integrity_check().unwrap(), "ok");
-        assert!(seen.upsert_site(&Site {
-            id: "x".into(), name: "x".into(), host: "x.test".into(), root: "x".into(), web_server: "nginx".into(),
-            php: None, serving: None, tls_mode: "off".into(), db_name: None, upstream: None, created_at: String::new(),
-        }).is_err(), "a read-only handle cannot write");
+        assert!(
+            seen.upsert_site(&Site {
+                id: "x".into(),
+                name: "x".into(),
+                host: "x.test".into(),
+                root: "x".into(),
+                web_server: "nginx".into(),
+                php: None,
+                serving: None,
+                tls_mode: "off".into(),
+                db_name: None,
+                upstream: None,
+                created_at: String::new(),
+            })
+            .is_err(),
+            "a read-only handle cannot write"
+        );
         drop(seen);
         let again = Store::open_read_only(&old).unwrap();
-        assert_eq!(again.schema_version().unwrap(), LATEST_SCHEMA - 1, "still not migrated after being read twice");
+        assert_eq!(
+            again.schema_version().unwrap(),
+            LATEST_SCHEMA - 1,
+            "still not migrated after being read twice"
+        );
 
         // Starting devd is what migrates it.
         let started = Store::open(&old).unwrap();
@@ -1374,7 +1502,17 @@ mod tests {
     #[test]
     fn audit_secrets_are_redacted_by_the_caller_not_the_store() {
         let s = store();
-        s.record_audit(AuditRecord { actor: "human:cli", surface: "cli", capability: "demo", tier: "read", effect: "read", dry_run: false, ok: true, args: "{}", message: "ok" })
+        s.record_audit(AuditRecord {
+            actor: "human:cli",
+            surface: "cli",
+            capability: "demo",
+            tier: "read",
+            effect: "read",
+            dry_run: false,
+            ok: true,
+            args: "{}",
+            message: "ok",
+        })
         .unwrap();
         let rows = s.list_audit(10).unwrap();
         assert_eq!(rows.len(), 1);
@@ -1416,15 +1554,35 @@ mod tests {
     #[test]
     fn a_site_belongs_to_the_project_above_its_web_root() {
         let site = |root: &str| Site {
-            id: "1".into(), name: "s".into(), host: "s.test".into(), root: root.into(), web_server: "nginx".into(),
-            php: None, serving: None, tls_mode: "off".into(), db_name: None, upstream: None, created_at: String::new(),
+            id: "1".into(),
+            name: "s".into(),
+            host: "s.test".into(),
+            root: root.into(),
+            web_server: "nginx".into(),
+            php: None,
+            serving: None,
+            tls_mode: "off".into(),
+            db_name: None,
+            upstream: None,
+            created_at: String::new(),
         };
         let sep = std::path::MAIN_SEPARATOR;
         let shop = format!("{sep}work{sep}shop");
-        assert_eq!(site(&format!("{shop}{sep}public")).project_dir(), std::path::PathBuf::from(&shop), "a web root belongs to the project above it");
-        assert_eq!(site(&shop).project_dir(), std::path::PathBuf::from(&shop), "a project folder is its own project");
+        assert_eq!(
+            site(&format!("{shop}{sep}public")).project_dir(),
+            std::path::PathBuf::from(&shop),
+            "a web root belongs to the project above it"
+        );
+        assert_eq!(
+            site(&shop).project_dir(),
+            std::path::PathBuf::from(&shop),
+            "a project folder is its own project"
+        );
         // Two sites over one project (the app and its docs, say) share the project.
-        assert_eq!(site(&format!("{shop}{sep}public")).project_dir(), site(&shop).project_dir());
+        assert_eq!(
+            site(&format!("{shop}{sep}public")).project_dir(),
+            site(&shop).project_dir()
+        );
     }
 
     #[test]

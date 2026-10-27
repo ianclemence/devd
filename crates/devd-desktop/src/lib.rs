@@ -102,6 +102,7 @@ fn run_with(boot: Bootstrap) -> tauri::Result<()> {
         settings: boot.settings.clone(),
         events: boot.events.clone(),
         actor: Actor::human(Surface::Gui),
+        run: None,
         dry_run: false,
     };
 

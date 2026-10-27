@@ -243,6 +243,12 @@ pub struct Ctx {
     pub events: EventBus,
     /// Who is calling.
     pub actor: Actor,
+    /// The durable run and step this call belongs to, when it has one.
+    ///
+    /// The registry uses it to attribute every invocation and its evidence to a
+    /// run, to refuse work after cancellation, and to enforce a deadline. A
+    /// plain CLI call has none, and records no run-scoped evidence.
+    pub run: Option<crate::runs::RunContext>,
     /// When true, handlers must compute a plan and change nothing.
     pub dry_run: bool,
 }
@@ -282,7 +288,7 @@ impl Ctx {
 }
 
 /// A description of what an operation would do, produced without side effects.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Plan {
     /// Capability that produced the plan.
     pub capability: String,
@@ -355,7 +361,7 @@ impl Plan {
 }
 
 /// The result of applying a capability.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Outcome {
     /// Whether the operation succeeded. Failures are normally returned as
     /// `Err`, so this is `true` except for partial successes, which must be
@@ -624,7 +630,7 @@ pub struct InvokeRequest {
 }
 
 /// The result of an invocation.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InvokeResult {
     /// Capability that ran.
     pub capability: String,

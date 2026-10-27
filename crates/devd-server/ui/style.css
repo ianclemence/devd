@@ -3736,3 +3736,26 @@ button.chip.chip-on { border-color: var(--accent); color: var(--fg); }
   .ui-ask input[type="text"], .ui-ask .select-field { flex: 1 1 150px; max-width: none; min-width: 0; }
   .ui-ask .btn { flex: none; }
 }
+
+/* ------------------------------------------------------------------ runs */
+/* A run is read as a record: the timeline is dense, the evidence is a list,
+ * and nothing here draws a progress bar because the server does not report a
+ * percentage it cannot measure. Runs have no page of their own; this is the
+ * sheet opened from a conversation or a team run. */
+.run-detail { max-width: 920px; }
+.run-detail > .panel { margin-top: var(--s4); }
+.run-detail .chat-head { border-radius: var(--radius-lg); border: 1px solid var(--line); margin-bottom: var(--s4); }
+.run-acceptance { margin: 0; padding-left: 1.2em; }
+.run-acceptance li { margin: 4px 0; font-size: var(--text-sm); color: var(--fg-mute); }
+.run-step { display: flex; align-items: center; gap: var(--s2); padding: 6px 0; font-size: var(--text-sm); }
+.run-event { display: grid; grid-template-columns: 64px 170px minmax(0, 1fr); gap: var(--s2); padding: 7px var(--s3); border-bottom: 1px solid var(--line); font-size: var(--text-sm); align-items: baseline; }
+.run-event:last-child { border-bottom: 0; }
+.run-event-at { color: var(--fg-dim); }
+.run-event-kind { font-family: var(--mono); font-size: var(--text-xs); color: var(--fg-mute); overflow: hidden; text-overflow: ellipsis; }
+.run-event-msg { color: var(--fg); min-width: 0; overflow-wrap: anywhere; }
+.run-event-data { grid-column: 2 / -1; margin-top: 4px; }
+.run-event-data summary { cursor: pointer; color: var(--fg-dim); font-size: var(--text-xs); }
+.run-event-data pre, .run-approval pre { max-height: 260px; overflow: auto; margin: 6px 0 0; padding: var(--s2); background: var(--bg-rail); border-radius: var(--radius-sm); font-size: var(--text-xs); white-space: pre-wrap; overflow-wrap: anywhere; }
+.run-approval { display: flex; align-items: flex-start; gap: var(--s2); padding: var(--s2) 0; border-bottom: 1px solid var(--line); }
+.run-approval:last-child { border-bottom: 0; }
+.run-approval .grow { min-width: 0; }

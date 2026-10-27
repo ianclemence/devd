@@ -83,6 +83,7 @@ fn controller(root: &std::path::Path) -> (Controller, Arc<Registry>, Ctx) {
         // The real surface, so `can_prompt` and the tier rules see what they
         // would see in a terminal.
         actor: Actor::human(Surface::Tui),
+        run: None,
         dry_run: false,
     };
 

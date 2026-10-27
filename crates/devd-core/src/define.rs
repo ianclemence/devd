@@ -117,8 +117,9 @@ impl<A> Define<'_, A> {
         P: Fn(&Ctx, &A) -> Result<Plan> + Send + Sync + 'static,
         Q: Fn(&Ctx, &A) -> Result<Outcome> + Send + Sync + 'static,
     {
-        let schema = serde_json::to_value(schemars::schema_for!(A))
-            .map_err(|e| DevdError::internal(format!("cannot build the schema for {}: {e}", self.id)))?;
+        let schema = serde_json::to_value(schemars::schema_for!(A)).map_err(|e| {
+            DevdError::internal(format!("cannot build the schema for {}: {e}", self.id))
+        })?;
         let capability = self
             .builder
             .args_schema(schema)
@@ -170,6 +171,7 @@ mod tests {
             settings: Arc::new(Settings::default()),
             events: EventBus::new(),
             actor: Actor::human(Surface::Cli),
+            run: None,
             dry_run: false,
         }
     }
@@ -213,7 +215,10 @@ mod tests {
             .group("demo")
             .tier(Tier::Write)
             .effect(Effect::Write)
-            .handlers(|_, _| Ok(Plan::new("demo.quiet", "x")), |_, _| Ok(Outcome::ok("x")))
+            .handlers(
+                |_, _| Ok(Plan::new("demo.quiet", "x")),
+                |_, _| Ok(Outcome::ok("x")),
+            )
             .unwrap();
         let cap = registry.get("demo.quiet").unwrap();
         assert!(!cap.agent_safe && !cap.human_only && !cap.idempotent && !cap.supports_dry_run);

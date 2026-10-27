@@ -7,13 +7,15 @@
 //! FastCGI socket, which is exactly the class of bug a batch-file launcher
 //! cannot fix.
 //!
-//! **Windows note (honest limitation):** tree termination is performed with
-//! `taskkill /T /F` rather than a Windows Job Object with
-//! `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`. A job object would additionally
-//! guarantee that children die if `devd` itself is killed without running its
-//! shutdown path. That is a known gap, not a solved problem; the current
-//! approach covers every ordinary start/stop/restart path and daemon shutdown,
-//! but not `TerminateProcess` on the daemon. See `docs/limitations.md`.
+//! **Windows isolation:** each service is placed in its own Job Object with
+//! `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, and stopping a service terminates that
+//! job. When `devd` itself is killed without running its shutdown path, the
+//! operating system closes the job handles as the process dies, which kills
+//! every process in the job. Assignment happens immediately after spawn; if the
+//! host already runs devd inside a restrictive job (some CI runners) the
+//! assignment can fail, and `kill_tree` remains the fallback for that case. The
+//! child environment is allowlisted rather than inherited, so the daemon's
+//! credentials do not leak into a project's processes.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -50,10 +52,191 @@ mod win {
             size: *mut u32,
         ) -> i32;
         pub fn CloseHandle(handle: *mut c_void) -> i32;
+
+        // Job objects. A job is a kernel container for a process and every
+        // descendant it creates; with KILL_ON_JOB_CLOSE the kernel terminates
+        // the whole container when the last handle closes, including when devd
+        // is killed without running its shutdown path.
+        pub fn CreateJobObjectW(attributes: *mut c_void, name: *const u16) -> *mut c_void;
+        pub fn SetInformationJobObject(
+            job: *mut c_void,
+            class: u32,
+            info: *mut c_void,
+            len: u32,
+        ) -> i32;
+        pub fn AssignProcessToJobObject(job: *mut c_void, process: *mut c_void) -> i32;
+        pub fn TerminateJobObject(job: *mut c_void, code: u32) -> i32;
     }
 
     pub const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
     pub const STILL_ACTIVE: u32 = 259;
+
+    #[repr(C)]
+    #[derive(Default)]
+    struct IoCounters {
+        read_operation_count: u64,
+        write_operation_count: u64,
+        other_operation_count: u64,
+        read_transfer_count: u64,
+        write_transfer_count: u64,
+        other_transfer_count: u64,
+    }
+
+    #[repr(C)]
+    #[derive(Default)]
+    struct BasicLimitInformation {
+        per_process_user_time_limit: i64,
+        per_job_user_time_limit: i64,
+        limit_flags: u32,
+        minimum_working_set_size: usize,
+        maximum_working_set_size: usize,
+        active_process_limit: u32,
+        affinity: usize,
+        priority_class: u32,
+        scheduling_class: u32,
+    }
+
+    #[repr(C)]
+    #[derive(Default)]
+    struct ExtendedLimitInformation {
+        basic: BasicLimitInformation,
+        io: IoCounters,
+        process_memory_limit: usize,
+        job_memory_limit: usize,
+        peak_process_memory_used: usize,
+        peak_job_memory_used: usize,
+    }
+
+    const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION: u32 = 9;
+    const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x0000_2000;
+
+    /// A job that kills everything in it when its last handle closes.
+    pub fn create_kill_on_close_job() -> Option<usize> {
+        // SAFETY: the calls take a null name/attributes, a pointer to a local
+        // struct of the documented layout and that struct's size. The struct is
+        // alive for the duration of the call.
+        unsafe {
+            let job = CreateJobObjectW(std::ptr::null_mut(), std::ptr::null());
+            if job.is_null() {
+                return None;
+            }
+            let mut info = ExtendedLimitInformation::default();
+            info.basic.limit_flags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let ok = SetInformationJobObject(
+                job,
+                JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+                &mut info as *mut _ as *mut c_void,
+                std::mem::size_of::<ExtendedLimitInformation>() as u32,
+            );
+            if ok == 0 {
+                CloseHandle(job);
+                return None;
+            }
+            Some(job as usize)
+        }
+    }
+
+    pub fn assign(job: usize, process: *mut c_void) -> bool {
+        // SAFETY: both values are handles to kernel objects owned by this
+        // process. Assignment does not take ownership of either.
+        unsafe { AssignProcessToJobObject(job as *mut c_void, process) != 0 }
+    }
+
+    pub fn terminate_job(job: usize) {
+        // SAFETY: the handle came from CreateJobObjectW and is still open.
+        unsafe {
+            TerminateJobObject(job as *mut c_void, 1);
+        }
+    }
+
+    pub fn close_job(job: usize) {
+        // SAFETY: the handle came from CreateJobObjectW and is closed once.
+        unsafe {
+            CloseHandle(job as *mut c_void);
+        }
+    }
+}
+
+/// Names a project process may inherit when devd clears its environment.
+///
+/// The allowlist is deliberately about *names*, not values: a PATH, a home
+/// directory, a locale and an installed runtime's own home are configuration,
+/// while a token, password or API key is a credential. Credentials a project
+/// needs belong in the project's own environment file, passed as `envs`, not in
+/// the daemon's environment.
+pub const CHILD_ENV_ALLOWLIST: &[&str] = &[
+    "PATH",
+    "PATHEXT",
+    "SystemRoot",
+    "SYSTEMROOT",
+    "SystemDrive",
+    "WINDIR",
+    "COMSPEC",
+    "TEMP",
+    "TMP",
+    "HOME",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "USERNAME",
+    "USER",
+    "SHELL",
+    "LANG",
+    "LC_ALL",
+    "TERM",
+    "TZ",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMDATA",
+    "PROGRAMFILES",
+    "PROGRAMFILES(X86)",
+    "PROGRAMW6432",
+    "NUMBER_OF_PROCESSORS",
+    "PROCESSOR_ARCHITECTURE",
+    "OS",
+    "XDG_CONFIG_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_DATA_HOME",
+    "DEVD_HOME",
+    "CI",
+    "NO_COLOR",
+    "FORCE_COLOR",
+    "JAVA_HOME",
+    "GOROOT",
+    "GOPATH",
+    "GOMODCACHE",
+    "CARGO_HOME",
+    "RUSTUP_HOME",
+    "RUST_BACKTRACE",
+    "RUST_LOG",
+    "NODE_PATH",
+    "NVM_HOME",
+    "NVM_SYMLINK",
+    "VOLTA_HOME",
+    "PNPM_HOME",
+    "DENO_DIR",
+    "BUN_INSTALL",
+    "PYENV_ROOT",
+    "PIPX_HOME",
+    "POETRY_HOME",
+    "VIRTUAL_ENV",
+    "CONDA_PREFIX",
+    "COMPOSER_HOME",
+    "DOTNET_ROOT",
+    "ANDROID_HOME",
+    "ANDROID_SDK_ROOT",
+    "FLUTTER_ROOT",
+    "HOMEBREW_PREFIX",
+    "SSH_AUTH_SOCK",
+];
+
+/// Copy the allowlisted variables that are set into a cleared environment.
+pub fn apply_child_environment(cmd: &mut Command) {
+    for name in CHILD_ENV_ALLOWLIST {
+        if let Some(value) = std::env::var_os(name) {
+            cmd.env(name, value);
+        }
+    }
 }
 
 /// A running managed process.
@@ -66,6 +249,19 @@ struct ManagedProcess {
     run_id: String,
     log_path: PathBuf,
     restarts: i64,
+    /// Windows Job Object handle, stored as an integer so the process stays
+    /// `Send`. The job is killed when the handle closes.
+    #[cfg(windows)]
+    job: Option<usize>,
+}
+
+#[cfg(windows)]
+impl Drop for ManagedProcess {
+    fn drop(&mut self) {
+        if let Some(job) = self.job.take() {
+            win::close_job(job);
+        }
+    }
 }
 
 /// Public view of a supervised process.
@@ -103,9 +299,10 @@ pub struct SpawnSpec {
     pub cwd: Option<PathBuf>,
     /// Extra environment variables.
     pub envs: Vec<(String, String)>,
-    /// When true, the process starts with an empty environment and sees only
-    /// `envs`. Used by project manifests so the daemon's own credentials are
-    /// not inherited.
+    /// When true, the process starts with a cleared environment and sees only
+    /// the allowlisted system/runtime variables ([`CHILD_ENV_ALLOWLIST`]) plus
+    /// `envs`. Used by project manifests and services so the daemon's own
+    /// credentials are not inherited.
     pub clear_env: bool,
     /// File to append stdout and stderr to.
     pub log_path: PathBuf,
@@ -202,6 +399,7 @@ impl Supervisor {
         }
         if spec.clear_env {
             cmd.env_clear();
+            apply_child_environment(&mut cmd);
         }
         for (k, v) in &spec.envs {
             cmd.env(k, v);
@@ -242,6 +440,22 @@ impl Supervisor {
         let pid = child.id();
         let name = spec.name.clone();
 
+        // Put the child in its own job before anything it starts can escape it.
+        // Assignment after spawn is a small window; the alternative is
+        // CREATE_SUSPENDED, which `std::process` does not expose. In the window
+        // the child has not run any of its own code yet on a normal start, and
+        // the tree kill below still covers the ordinary stop path.
+        #[cfg(windows)]
+        let job = win::create_kill_on_close_job().and_then(|job| {
+            use std::os::windows::io::AsRawHandle;
+            if win::assign(job, child.as_raw_handle()) {
+                Some(job)
+            } else {
+                win::close_job(job);
+                None
+            }
+        });
+
         let managed = ManagedProcess {
             name: name.clone(),
             kind: spec.kind,
@@ -251,6 +465,8 @@ impl Supervisor {
             run_id,
             log_path: spec.log_path,
             restarts: spec.restarts,
+            #[cfg(windows)]
+            job,
         };
 
         let mut guard = self
@@ -272,12 +488,21 @@ impl Supervisor {
             return Ok(None);
         };
 
+        // The job is the reliable tree kill: terminate it first so nothing the
+        // service forked can survive its parent. `kill_tree` remains the
+        // fallback for the case where no job could be assigned.
+        #[cfg(windows)]
+        if let Some(job) = managed.job.take() {
+            win::terminate_job(job);
+            win::close_job(job);
+            managed.job = None;
+        }
         kill_tree(managed.pid);
         let code = match managed.child.wait() {
             Ok(status) => status.code().unwrap_or(-1),
             Err(_) => -1,
         };
-        Ok(Some((code, managed.run_id)))
+        Ok(Some((code, managed.run_id.clone())))
     }
 
     /// Stop everything. Used on daemon shutdown.
@@ -478,7 +703,12 @@ pub fn process_image(pid: u32) -> Option<String> {
         let ps = util::which("ps")?;
         let out = util::run(
             &ps,
-            &["-p".to_string(), pid.to_string(), "-o".to_string(), "comm=".to_string()],
+            &[
+                "-p".to_string(),
+                pid.to_string(),
+                "-o".to_string(),
+                "comm=".to_string(),
+            ],
             None,
             &[],
             Some(std::time::Duration::from_secs(5)),
@@ -527,8 +757,14 @@ pub fn pid_alive(pid: u32) -> bool {
 /// and is a devd program. A claim whose process has gone, or whose id was reused by something else,
 /// is stale and held by nobody.
 pub fn live_devd_holder(file: &std::path::Path) -> Option<u32> {
-    let pid = std::fs::read_to_string(file).ok()?.trim().parse::<u32>().ok()?;
-    (pid_alive(pid) && process_image(pid).is_some_and(|image| image.to_ascii_lowercase().contains("devd"))).then_some(pid)
+    let pid = std::fs::read_to_string(file)
+        .ok()?
+        .trim()
+        .parse::<u32>()
+        .ok()?;
+    (pid_alive(pid)
+        && process_image(pid).is_some_and(|image| image.to_ascii_lowercase().contains("devd")))
+    .then_some(pid)
 }
 
 #[cfg(test)]

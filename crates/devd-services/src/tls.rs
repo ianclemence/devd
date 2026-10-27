@@ -103,7 +103,9 @@ pub fn ca_exists(ctx: &Ctx) -> bool {
 fn ca_serial_hex(ctx: &Ctx) -> Option<String> {
     let pem = std::fs::read_to_string(ca_cert_path(ctx)).ok()?;
     let params = CertificateParams::from_ca_cert_pem(&pem).ok()?;
-    params.serial_number.map(|serial| hex::encode(serial.as_ref()))
+    params
+        .serial_number
+        .map(|serial| hex::encode(serial.as_ref()))
 }
 
 fn stamp(days: i64) -> (time::OffsetDateTime, time::OffsetDateTime) {
@@ -367,9 +369,8 @@ pub fn trust(ctx: &Ctx, machine: bool) -> Result<devd_core::capability::Outcome>
 
     #[cfg(target_os = "macos")]
     {
-        let security = util::which("security").ok_or_else(|| {
-            DevdError::not_found("`security` was not found; it ships with macOS")
-        })?;
+        let security = util::which("security")
+            .ok_or_else(|| DevdError::not_found("`security` was not found; it ships with macOS"))?;
         let args = macos::trust_args(&cert, machine);
         let out = util::run(
             &security,
@@ -390,7 +391,7 @@ pub fn trust(ctx: &Ctx, machine: bool) -> Result<devd_core::capability::Outcome>
                 stderr: format!("{}{hint}", util::truncate(out.stderr.trim(), 800)),
             });
         }
-        return Ok(devd_core::capability::Outcome::with_data(
+        Ok(devd_core::capability::Outcome::with_data(
             if machine {
                 "the devd certificate authority is trusted machine-wide".to_string()
             } else {
@@ -401,7 +402,7 @@ pub fn trust(ctx: &Ctx, machine: bool) -> Result<devd_core::capability::Outcome>
                 "scope": if machine { "machine" } else { "user" },
                 "keychain": macos::keychain(machine),
             }),
-        ));
+        ))
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]
@@ -565,8 +566,9 @@ pub fn untrust(ctx: &Ctx, machine: bool) -> Result<devd_core::capability::Outcom
         })?;
         // Delete this installation's certificate, not every devd certificate in
         // the store. The common name is shared by every devd installation.
-        let serial = ca_serial_hex(ctx)
-            .ok_or_else(|| DevdError::not_found("the devd certificate authority could not be read"))?;
+        let serial = ca_serial_hex(ctx).ok_or_else(|| {
+            DevdError::not_found("the devd certificate authority could not be read")
+        })?;
         let mut args = vec!["-delstore".to_string()];
         if !machine {
             args.push("-user".to_string());
@@ -603,9 +605,8 @@ pub fn untrust(ctx: &Ctx, machine: bool) -> Result<devd_core::capability::Outcom
 
     #[cfg(target_os = "macos")]
     {
-        let security = util::which("security").ok_or_else(|| {
-            DevdError::not_found("`security` was not found; it ships with macOS")
-        })?;
+        let security = util::which("security")
+            .ok_or_else(|| DevdError::not_found("`security` was not found; it ships with macOS"))?;
         // Two steps: withdraw the trust setting, then delete the certificate.
         // Deleting alone leaves a trust setting that points at nothing.
         let untrust = util::run(
@@ -636,13 +637,13 @@ pub fn untrust(ctx: &Ctx, machine: bool) -> Result<devd_core::capability::Outcom
                 stderr: util::truncate(delete.stderr.trim(), 800),
             });
         }
-        return Ok(devd_core::capability::Outcome::with_data(
+        Ok(devd_core::capability::Outcome::with_data(
             "the devd certificate authority is no longer trusted".to_string(),
             serde_json::json!({
                 "scope": if machine { "machine" } else { "user" },
                 "keychain": macos::keychain(machine),
             }),
-        ));
+        ))
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]
@@ -667,7 +668,8 @@ pub fn untrust(ctx: &Ctx, machine: bool) -> Result<devd_core::capability::Outcom
                 });
             }
             return Ok(devd_core::capability::Outcome::with_data(
-                "the devd certificate authority is no longer trusted in the system store".to_string(),
+                "the devd certificate authority is no longer trusted in the system store"
+                    .to_string(),
                 serde_json::json!({
                     "scope": "system",
                     "requested_scope": if machine { "machine" } else { "user" },
@@ -760,7 +762,10 @@ mod tests {
         assert!(!args.contains(&"-d".to_string()));
         assert!(args.windows(2).any(|w| w == ["-r", "trustRoot"]));
         let keychain = &args[args.len() - 2];
-        assert!(keychain.ends_with("/Library/Keychains/login.keychain-db"), "{keychain}");
+        assert!(
+            keychain.ends_with("/Library/Keychains/login.keychain-db"),
+            "{keychain}"
+        );
         assert_eq!(args.last().unwrap(), "/tmp/devd-ca.pem");
     }
 
@@ -798,6 +803,7 @@ mod tests {
             settings: Arc::new(devd_core::config::Settings::default()),
             events: devd_core::events::EventBus::new(),
             actor: devd_core::capability::Actor::human(devd_core::capability::Surface::Cli),
+            run: None,
             dry_run: false,
         }
     }
@@ -830,7 +836,9 @@ mod tests {
         let serial = ca_serial_hex(&c).expect("the CA serial is readable");
         assert_eq!(serial.len(), 32, "a P-256 CA serial is 16 bytes: {serial}");
         assert!(
-            serial.chars().all(|ch| ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase()),
+            serial
+                .chars()
+                .all(|ch| ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase()),
             "certutil and the operating system stores use lowercase hex: {serial}"
         );
         let _ = std::fs::remove_dir_all(c.paths.root());

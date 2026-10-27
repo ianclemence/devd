@@ -22,6 +22,7 @@ fn setup(tag: &str) -> (Ctx, Paths) {
         settings: Arc::new(Settings::default()),
         events: EventBus::new(),
         actor: Actor::human(Surface::Cli),
+        run: None,
         dry_run: false,
     };
     (ctx, paths)
@@ -53,15 +54,25 @@ fn a_real_server_is_discovered_and_its_tools_are_called() {
     ctx.store.mcp_put(&server).unwrap();
 
     let tools = devd_mcp::client::pool().test(&paths, &server).unwrap();
-    assert_eq!(tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), vec!["echo", "fail"]);
+    assert_eq!(
+        tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
+        vec!["echo", "fail"]
+    );
 
     let out = devd_mcp::client::pool()
-        .call(&paths, &server, "echo", &json!({ "text": "hello from the server" }))
+        .call(
+            &paths,
+            &server,
+            "echo",
+            &json!({ "text": "hello from the server" }),
+        )
         .unwrap();
     assert!(!out.is_error);
     assert_eq!(out.content, "hello from the server");
 
-    let failed = devd_mcp::client::pool().call(&paths, &server, "fail", &json!({})).unwrap();
+    let failed = devd_mcp::client::pool()
+        .call(&paths, &server, "fail", &json!({}))
+        .unwrap();
     assert!(failed.is_error, "the server's isError is preserved");
     assert!(failed.content.contains("it did not work"));
 
@@ -76,25 +87,42 @@ fn an_agent_waits_for_a_person_and_a_trusted_server_does_not() {
 
     // `ask` (the default): an agent's call never reaches the handler.
     ctx.store.mcp_put(&fake("ask", McpTrust::Ask)).unwrap();
-    let agent = Ctx { actor: Actor::agent("assistant"), ..ctx.clone() };
-    let call = InvokeRequest { id: "mcp.call".into(), args: json!({ "server": "ask", "tool": "echo", "args": { "text": "x" } }), dry_run: false };
+    let agent = Ctx {
+        actor: Actor::agent("assistant"),
+        ..ctx.clone()
+    };
+    let call = InvokeRequest {
+        id: "mcp.call".into(),
+        args: json!({ "server": "ask", "tool": "echo", "args": { "text": "x" } }),
+        dry_run: false,
+    };
     let err = reg.dispatch(&agent, &call, Approval::None).unwrap_err();
     assert!(matches!(err, DevdError::ApprovalRequired { .. }), "{err:?}");
     assert!(err.to_string().contains("approval"), "{err}");
 
     // The trusted path refuses an agent for a server that is not `allow`.
-    let trusted = InvokeRequest { id: "mcp.call_trusted".into(), args: call.args.clone(), dry_run: false };
+    let trusted = InvokeRequest {
+        id: "mcp.call_trusted".into(),
+        args: call.args.clone(),
+        dry_run: false,
+    };
     let err = reg.dispatch(&agent, &trusted, Approval::None).unwrap_err();
     assert!(matches!(err, DevdError::Denied(_)), "{err:?}");
 
     // A person is not asked; they chose the server.
-    let human = InvokeRequest { id: "mcp.call".into(), args: call.args.clone(), dry_run: false };
+    let human = InvokeRequest {
+        id: "mcp.call".into(),
+        args: call.args.clone(),
+        dry_run: false,
+    };
     let result = reg.dispatch(&ctx, &human, Approval::None).unwrap();
     let outcome = result.outcome.unwrap();
     assert_eq!(outcome.data["content"], "x");
 
     // A server a person marked `allow` is reachable without asking...
-    ctx.store.mcp_put(&fake("allowed", McpTrust::Allow)).unwrap();
+    ctx.store
+        .mcp_put(&fake("allowed", McpTrust::Allow))
+        .unwrap();
     let allowed = InvokeRequest {
         id: "mcp.call_trusted".into(),
         args: json!({ "server": "allowed", "tool": "echo", "args": { "text": "no question" } }),
@@ -105,14 +133,27 @@ fn an_agent_waits_for_a_person_and_a_trusted_server_does_not() {
 
     // ...and `deny` keeps an agent away from it entirely.
     ctx.store.mcp_put(&fake("denied", McpTrust::Deny)).unwrap();
-    let denied = InvokeRequest { id: "mcp.call_trusted".into(), args: json!({ "server": "denied", "tool": "echo", "args": { "text": "x" } }), dry_run: false };
+    let denied = InvokeRequest {
+        id: "mcp.call_trusted".into(),
+        args: json!({ "server": "denied", "tool": "echo", "args": { "text": "x" } }),
+        dry_run: false,
+    };
     let err = reg.dispatch(&agent, &denied, Approval::None).unwrap_err();
     assert!(matches!(err, DevdError::Denied(_)), "{err:?}");
 
     // A person's approval is not a way around `deny`: the approved call is still the agent's.
-    let approved = InvokeRequest { id: "mcp.call".into(), args: denied.args.clone(), dry_run: false };
-    let err = reg.dispatch(&agent, &approved, Approval::Granted).unwrap_err();
-    assert!(matches!(err, DevdError::Denied(_)), "approval must not bypass deny: {err:?}");
+    let approved = InvokeRequest {
+        id: "mcp.call".into(),
+        args: denied.args.clone(),
+        dry_run: false,
+    };
+    let err = reg
+        .dispatch(&agent, &approved, Approval::Granted)
+        .unwrap_err();
+    assert!(
+        matches!(err, DevdError::Denied(_)),
+        "approval must not bypass deny: {err:?}"
+    );
 
     let _ = std::fs::remove_dir_all(ctx.paths.root());
 }
@@ -144,8 +185,16 @@ fn updating_a_server_keeps_the_fields_it_was_not_given() {
     assert_eq!(got.trust, McpTrust::Allow, "omitted trust is kept");
     assert!(!got.enabled, "omitted enabled is kept");
     assert_eq!(got.timeout_secs, 45, "a given timeout is used");
-    assert_eq!(got.args, vec!["--flag".to_string()], "omitted arguments are kept");
-    assert_eq!(devd_mcp::client::read_env(&paths, &server.id).unwrap()["TOKEN"], "kept", "omitted environment is kept");
+    assert_eq!(
+        got.args,
+        vec!["--flag".to_string()],
+        "omitted arguments are kept"
+    );
+    assert_eq!(
+        devd_mcp::client::read_env(&paths, &server.id).unwrap()["TOKEN"],
+        "kept",
+        "omitted environment is kept"
+    );
 
     let _ = std::fs::remove_dir_all(ctx.paths.root());
 }

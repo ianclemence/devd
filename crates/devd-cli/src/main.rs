@@ -1738,6 +1738,7 @@ fn shim_context() -> Result<devd_core::capability::Ctx> {
         settings: Arc::new(settings),
         events: devd_core::events::EventBus::new(),
         actor: devd_core::capability::Actor::human(devd_core::capability::Surface::Cli),
+        run: None,
         dry_run: false,
     })
 }
@@ -1956,7 +1957,9 @@ fn run(cli: Cli) -> Result<i32> {
         }
         Command::Composer { cmd } => {
             match cmd {
-                ComposerCommand::Install { force } => app.invoke("composer.install", serde_json::json!({ "force": force }))?,
+                ComposerCommand::Install { force } => {
+                    app.invoke("composer.install", serde_json::json!({ "force": force }))?
+                }
             }
             Ok(0)
         }
@@ -2000,7 +2003,20 @@ fn run(cli: Cli) -> Result<i32> {
             server.serve_stdio()?;
             Ok(0)
         }
-        Command::Setup { services, php, profile } => setup::run(cli.json, cli.plan, cli.yes, setup::Choices { services, php, profile }),
+        Command::Setup {
+            services,
+            php,
+            profile,
+        } => setup::run(
+            cli.json,
+            cli.plan,
+            cli.yes,
+            setup::Choices {
+                services,
+                php,
+                profile,
+            },
+        ),
         Command::Ui { port, no_open } => {
             app.resume_agents();
             web::serve(app, port, !no_open)?;
@@ -2077,11 +2093,18 @@ fn repair_state(json: bool) -> Result<i32> {
     let paths = Paths::discover()?;
     let report = devd_core::repair::repair_state(&paths)?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&report).map_err(|e| DevdError::internal(e.to_string()))?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report)
+                .map_err(|e| DevdError::internal(e.to_string()))?
+        );
     } else {
         println!("rebuilt {}", paths.state_db().display());
         for t in report.tables.iter().filter(|t| t.kept > 0 || t.lost > 0) {
-            println!("  {:<20} kept {:>6}   could not be read {:>5}", t.name, t.kept, t.lost);
+            println!(
+                "  {:<20} kept {:>6}   could not be read {:>5}",
+                t.name, t.kept, t.lost
+            );
         }
         println!("the damaged files are kept in {}", report.backup.display());
     }

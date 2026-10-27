@@ -17,7 +17,6 @@
 //! development environment can report.
 
 pub mod apache;
-pub mod share;
 pub mod autostart;
 pub mod caps;
 pub mod catalogue;
@@ -25,10 +24,11 @@ pub mod dump;
 pub mod engines;
 pub mod extras;
 pub mod mariadb;
+pub mod nginx;
 pub mod phpcaps;
 pub mod redirects;
+pub mod share;
 pub mod siteconf;
-pub mod nginx;
 pub mod system;
 pub mod tls;
 pub mod web;
@@ -253,7 +253,11 @@ pub fn php_worker_name(series: &str, k: u8) -> String {
 pub fn php_pool_of(name: &str) -> Option<(String, bool)> {
     let rest = name.strip_prefix(&format!("{PHP_SERVICE}-"))?;
     let (series, alt, _) = split_pool(rest);
-    series.chars().next().filter(char::is_ascii_digit).map(|_| (series, alt))
+    series
+        .chars()
+        .next()
+        .filter(char::is_ascii_digit)
+        .map(|_| (series, alt))
 }
 
 /// The port of worker `k` in the pool that runs the *other* PHP profile: 50 above the main pool.
@@ -288,7 +292,9 @@ fn split_pool(rest: &str) -> (String, bool, u8) {
 
 /// The limits profile the machine runs, from the settings file as it is now.
 fn global_profile(ctx: &Ctx) -> String {
-    devd_core::config::Settings::load(&ctx.paths.settings_file()).map(|s| s.php_profile).unwrap_or_else(|_| ctx.settings.php_profile.clone())
+    devd_core::config::Settings::load(&ctx.paths.settings_file())
+        .map(|s| s.php_profile)
+        .unwrap_or_else(|_| ctx.settings.php_profile.clone())
 }
 
 /// The profile that is not the machine's: what the second pool runs.
@@ -302,7 +308,11 @@ pub fn alt_profile(ctx: &Ctx) -> &'static str {
 
 /// The limits profile a site was given with `php.site_profile`, when it was given one.
 pub fn site_profile(ctx: &Ctx, site: &str) -> Option<String> {
-    ctx.store.ops_get("site_profile", site).ok().flatten().and_then(|i| i.data["profile"].as_str().map(str::to_string))
+    ctx.store
+        .ops_get("site_profile", site)
+        .ok()
+        .flatten()
+        .and_then(|i| i.data["profile"].as_str().map(str::to_string))
 }
 
 /// The sites that are served by the other-profile pool: those whose own profile is not the machine's.
@@ -325,7 +335,9 @@ fn alt_ini_name(ctx: &Ctx) -> String {
 /// Write the other-profile ini for a series: the current `php.ini` with the other profile's limits on top.
 fn write_alt_ini(ctx: &Ctx, series: &str) -> Result<()> {
     let php = php_executable_for_series(ctx, series)?;
-    let dir = php.parent().ok_or_else(|| DevdError::internal("a PHP with no folder"))?;
+    let dir = php
+        .parent()
+        .ok_or_else(|| DevdError::internal("a PHP with no folder"))?;
     let main = dir.join("php.ini");
     if !main.is_file() {
         return Ok(());
@@ -420,7 +432,10 @@ fn pid_file(ctx: &Ctx, name: &str) -> PathBuf {
 pub(crate) fn manifest_root(ctx: &Ctx, name: &str) -> Option<PathBuf> {
     let text = std::fs::read_to_string(manifest(ctx, name)).ok()?;
     let value: serde_json::Value = serde_json::from_str(&text).ok()?;
-    value.get("root").and_then(|v| v.as_str()).map(PathBuf::from)
+    value
+        .get("root")
+        .and_then(|v| v.as_str())
+        .map(PathBuf::from)
 }
 
 /// The install manifest written by `service.install`.
@@ -641,7 +656,11 @@ pub fn set_startup(ctx: &Ctx, name: &str, enabled: bool) -> Result<Status> {
         ctx.store.upsert_service(&service)?;
         ctx.events.emit_with(
             "service.startup",
-            format!("{} {}", name, if enabled { "added to" } else { "removed from" }),
+            format!(
+                "{} {}",
+                name,
+                if enabled { "added to" } else { "removed from" }
+            ),
             json!({ "name": name, "enabled": enabled, "by": ctx.actor.label() }),
         );
     }
@@ -933,22 +952,44 @@ fn finish_install(
             let port = port.unwrap_or(def.default_port);
             extras::redis_write_config(ctx, port)?;
             extra.insert("port".to_string(), json!(port));
-            extra.insert("config".to_string(), json!(extras::redis_config_path(ctx).display().to_string()));
-            warnings.push("Redis listens on 127.0.0.1 only and keeps a snapshot under the devd data folder".to_string());
+            extra.insert(
+                "config".to_string(),
+                json!(extras::redis_config_path(ctx).display().to_string()),
+            );
+            warnings.push(
+                "Redis listens on 127.0.0.1 only and keeps a snapshot under the devd data folder"
+                    .to_string(),
+            );
         }
         other if engines::get(other).is_some() => {
             let engine = engines::get(other).expect("checked");
-            let root = record.get("root").and_then(|v| v.as_str()).map(PathBuf::from).ok_or_else(|| DevdError::internal("an engine was recorded without its folder"))?;
+            let root = record
+                .get("root")
+                .and_then(|v| v.as_str())
+                .map(PathBuf::from)
+                .ok_or_else(|| DevdError::internal("an engine was recorded without its folder"))?;
             warnings.extend(engines::prepare(ctx, engine, &root)?);
             extra.insert("port".to_string(), json!(port.unwrap_or(def.default_port)));
-            extra.insert("data_dir".to_string(), json!(engines::data_dir(ctx, other).display().to_string()));
-            warnings.push(format!("{other} listens on 127.0.0.1 only; its data lives in {}", engines::data_dir(ctx, other).display()));
+            extra.insert(
+                "data_dir".to_string(),
+                json!(engines::data_dir(ctx, other).display().to_string()),
+            );
+            warnings.push(format!(
+                "{other} listens on 127.0.0.1 only; its data lives in {}",
+                engines::data_dir(ctx, other).display()
+            ));
         }
         "mailpit" => {
             std::fs::create_dir_all(ctx.paths.etc().join("mailpit"))?;
             let port = port.unwrap_or(def.default_port);
-            extra.insert("inbox".to_string(), json!(format!("http://127.0.0.1:{port}")));
-            extra.insert("smtp".to_string(), json!(format!("127.0.0.1:{}", extras::SMTP_PORT)));
+            extra.insert(
+                "inbox".to_string(),
+                json!(format!("http://127.0.0.1:{port}")),
+            );
+            extra.insert(
+                "smtp".to_string(),
+                json!(format!("127.0.0.1:{}", extras::SMTP_PORT)),
+            );
             let pointed = extras::point_php_at_mailpit(ctx)?;
             if !pointed.is_empty() {
                 warnings.push(format!(
@@ -983,8 +1024,7 @@ fn finish_install(
     }
     util::atomic_write(
         &manifest(ctx, def.name),
-        &serde_json::to_string_pretty(&serde_json::Value::Object(manifest_doc))
-            .unwrap_or_default(),
+        &serde_json::to_string_pretty(&serde_json::Value::Object(manifest_doc)).unwrap_or_default(),
     )?;
 
     let service = ctx.store.get_service(def.name)?.unwrap_or(Service {
@@ -1014,9 +1054,10 @@ fn finish_install(
     // Installing nginx is the moment a PHP listener becomes meaningful, so it is
     // created (stopped) if a PHP runtime exists.
     if (def.name == "nginx" || def.name == "apache")
-        && devd_runtime::executable(ctx, "php", None).is_ok() {
-            ensure_php_service(ctx)?;
-        }
+        && devd_runtime::executable(ctx, "php", None).is_ok()
+    {
+        ensure_php_service(ctx)?;
+    }
 
     ctx.events.emit_with(
         format!("service.{}.installed", def.name),
@@ -1098,7 +1139,9 @@ fn portable_candidates(tool: &str, fixed: &[&str]) -> Vec<PathBuf> {
             continue;
         }
         out.extend(fixed.iter().map(|f| root.join(f)));
-        let Ok(tops) = std::fs::read_dir(&root) else { continue };
+        let Ok(tops) = std::fs::read_dir(&root) else {
+            continue;
+        };
         for top in tops.flatten().filter(|e| e.path().is_dir()) {
             let bin = top.path().join("bin").join(tool);
             if let Ok(kids) = std::fs::read_dir(&bin) {
@@ -1114,7 +1157,9 @@ fn portable_candidates(tool: &str, fixed: &[&str]) -> Vec<PathBuf> {
 pub fn find_local_redis() -> Vec<(PathBuf, String)> {
     let mut out: Vec<(PathBuf, String)> = Vec::new();
     for candidate in portable_candidates("redis", &["Redis", "Program Files\\Redis"]) {
-        let Some(root) = extras::redis_root_of(&candidate) else { continue };
+        let Some(root) = extras::redis_root_of(&candidate) else {
+            continue;
+        };
         if out.iter().any(|(p, _)| p == &root) {
             continue;
         }
@@ -1133,14 +1178,30 @@ pub fn find_local_apache() -> Vec<(PathBuf, String)> {
     if cfg!(windows) {
         for drive in 'A'..='Z' {
             for parent in ["Program Files", "Program Files\\Apache Software Foundation"] {
-                let Ok(entries) = std::fs::read_dir(PathBuf::from(format!("{drive}:\\")).join(parent)) else { continue };
-                candidates.extend(entries.flatten().filter(|e| e.file_name().to_string_lossy().to_ascii_lowercase().starts_with("apache")).map(|e| e.path()));
+                let Ok(entries) =
+                    std::fs::read_dir(PathBuf::from(format!("{drive}:\\")).join(parent))
+                else {
+                    continue;
+                };
+                candidates.extend(
+                    entries
+                        .flatten()
+                        .filter(|e| {
+                            e.file_name()
+                                .to_string_lossy()
+                                .to_ascii_lowercase()
+                                .starts_with("apache")
+                        })
+                        .map(|e| e.path()),
+                );
             }
         }
     }
     let mut out: Vec<(PathBuf, String)> = Vec::new();
     for candidate in candidates {
-        let Some(root) = apache_root_of(&candidate) else { continue };
+        let Some(root) = apache_root_of(&candidate) else {
+            continue;
+        };
         if out.iter().any(|(p, _)| p == &root) {
             continue;
         }
@@ -1170,7 +1231,10 @@ pub fn adopt(ctx: &Ctx, name: &str, path: &Path, port: Option<u16>) -> Result<In
         .ok_or_else(|| DevdError::unsupported("only Apache, Redis, PostgreSQL, MongoDB and Memcached can be adopted from a folder"))?;
     let engine = engines::get(def.name);
     if !path.is_absolute() {
-        return Err(DevdError::invalid(format!("give the absolute path of the {} folder", def.name)));
+        return Err(DevdError::invalid(format!(
+            "give the absolute path of the {} folder",
+            def.name
+        )));
     }
     let found_root = match (engine, def.name) {
         (Some(e), _) => engines::root_of(e, path),
@@ -1191,9 +1255,10 @@ pub fn adopt(ctx: &Ctx, name: &str, path: &Path, port: Option<u16>) -> Result<In
     })?;
     if let Ok(Some(existing)) = ctx.store.get_service(def.name) {
         if running_pid(ctx, &existing).is_some() {
-            return Err(DevdError::conflict(
-                format!("{} is running; stop it first with `devd service stop {}`", def.name, def.name),
-            ));
+            return Err(DevdError::conflict(format!(
+                "{} is running; stop it first with `devd service stop {}`",
+                def.name, def.name
+            )));
         }
     }
     let read_version = match (engine, def.name) {
@@ -1202,7 +1267,11 @@ pub fn adopt(ctx: &Ctx, name: &str, path: &Path, port: Option<u16>) -> Result<In
         _ => apache::version(&root),
     };
     let version = read_version.ok_or_else(|| {
-        DevdError::invalid(format!("could not read a {} version from {}", def.name, root.display()))
+        DevdError::invalid(format!(
+            "could not read a {} version from {}",
+            def.name,
+            root.display()
+        ))
     })?;
     let config = match (engine, def.name) {
         (Some(_), _) => engines::data_dir(ctx, def.name),
@@ -1237,7 +1306,10 @@ pub fn adopt(ctx: &Ctx, name: &str, path: &Path, port: Option<u16>) -> Result<In
 /// release API when a build is chosen) are all candidates.
 pub(crate) fn verifiable(name: &str, list: &[Available]) -> Vec<Available> {
     if name == "nginx" {
-        list.iter().filter(|a| a.sha256.is_some()).cloned().collect()
+        list.iter()
+            .filter(|a| a.sha256.is_some())
+            .cloned()
+            .collect()
     } else {
         list.to_vec()
     }
@@ -1264,22 +1336,35 @@ pub fn service_argv(ctx: &Ctx, name: &str, port: Option<u16>) -> Result<Vec<Stri
         }
         other if engines::get(other).is_some() => {
             let engine = engines::get(other).expect("checked");
-            let root = manifest_root(ctx, other).ok_or_else(|| DevdError::not_found(format!("{other} has no recorded folder; adopt it again")))?;
+            let root = manifest_root(ctx, other).ok_or_else(|| {
+                DevdError::not_found(format!("{other} has no recorded folder; adopt it again"))
+            })?;
             // The port being installed with, else the one already recorded, else the engine's own.
             let port = match port {
                 Some(p) => p,
-                None => ctx.store.get_service(other)?.and_then(|s| s.port).unwrap_or(engine.default_port),
+                None => ctx
+                    .store
+                    .get_service(other)?
+                    .and_then(|s| s.port)
+                    .unwrap_or(engine.default_port),
             };
             engines::argv(ctx, engine, &root, port)
         }
         "redis" => {
             let root = extras::redis_directory(ctx);
             let exe = root.join(extras::redis_exe_name());
-            Ok(vec![native(&exe), extras::redis_config_arg(&root, &extras::redis_config_path(ctx))])
+            Ok(vec![
+                native(&exe),
+                extras::redis_config_arg(&root, &extras::redis_config_path(ctx)),
+            ])
         }
         "mailpit" => {
             let exe = dir.join(extras::mailpit_exe_name());
-            let port = ctx.store.get_service("mailpit")?.and_then(|s| s.port).unwrap_or(extras::MAILPIT_UI_PORT);
+            let port = ctx
+                .store
+                .get_service("mailpit")?
+                .and_then(|s| s.port)
+                .unwrap_or(extras::MAILPIT_UI_PORT);
             let mut argv = vec![native(&exe)];
             argv.extend(extras::mailpit_args(ctx, port));
             Ok(argv)
@@ -1333,13 +1418,13 @@ fn php_cgi_argv(_ctx: &Ctx, php_exe: &Path, port: u16, ini_name: Option<String>)
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| php_exe.to_path_buf());
-    let cgi = dir.join(if cfg!(windows) { "php-cgi.exe" } else { "php-cgi" });
+    let cgi = dir.join(if cfg!(windows) {
+        "php-cgi.exe"
+    } else {
+        "php-cgi"
+    });
     let ini = dir.join(ini_name.unwrap_or_else(|| "php.ini".to_string()));
-    let mut argv = vec![
-        native(&cgi),
-        "-b".to_string(),
-        format!("127.0.0.1:{port}"),
-    ];
+    let mut argv = vec![native(&cgi), "-b".to_string(), format!("127.0.0.1:{port}")];
     // A downloaded PHP carries the php.ini devd generated beside it. A system
     // PHP keeps its configuration under /etc, so there is no file here to point
     // at, and a `-c` that names nothing is worse than none.
@@ -1402,7 +1487,10 @@ pub fn planned_argv(ctx: &Ctx, name: &str) -> Result<Vec<String>> {
 /// except for Redis: the way its configuration path must be written depends on
 /// the build and was once wrong, so it is worked out again and a record written
 /// by an earlier devd starts too.
-fn current_argv(ctx: &Ctx, service: &Service) -> std::result::Result<Vec<String>, serde_json::Error> {
+fn current_argv(
+    ctx: &Ctx,
+    service: &Service,
+) -> std::result::Result<Vec<String>, serde_json::Error> {
     if service.kind == "redis" {
         if let Ok(argv) = service_argv(ctx, "redis", service.port) {
             return Ok(argv);
@@ -1467,9 +1555,19 @@ pub fn ensure_php_services(ctx: &Ctx) -> Result<Vec<Service>> {
     let mut pool: Vec<(String, u8, u16, String)> = Vec::new();
     for (series, _) in php_listeners(ctx)? {
         for k in 1..=workers {
-            pool.push((series.clone(), k, php_worker_port(&series, k), php_worker_name(&series, k)));
+            pool.push((
+                series.clone(),
+                k,
+                php_worker_port(&series, k),
+                php_worker_name(&series, k),
+            ));
             if alt_needed {
-                pool.push((series.clone(), k, php_alt_port(&series, k), php_alt_name(&series, k)));
+                pool.push((
+                    series.clone(),
+                    k,
+                    php_alt_port(&series, k),
+                    php_alt_name(&series, k),
+                ));
             }
         }
         if alt_needed {
@@ -1568,7 +1666,7 @@ fn spawn_spec(ctx: &Ctx, service: &Service) -> Result<SpawnSpec> {
         args: args.to_vec(),
         cwd,
         envs: Vec::new(),
-        clear_env: false,
+        clear_env: true,
         log_path: log_path(ctx, &service.name),
         restarts: 0,
     })
@@ -1639,7 +1737,9 @@ pub fn refresh_web_config(ctx: &Ctx, name: &str) -> Result<()> {
 pub fn reconcile_web(ctx: &Ctx) -> Result<Vec<String>> {
     let mut reloaded = Vec::new();
     for name in ["nginx", "apache"] {
-        let Ok(status) = status(ctx, name) else { continue };
+        let Ok(status) = status(ctx, name) else {
+            continue;
+        };
         if !status.installed {
             continue;
         }
@@ -1712,7 +1812,12 @@ pub fn start(ctx: &Ctx, name: &str) -> Result<Status> {
     }
 
     if let Some(engine) = engines::get(&service.name) {
-        let root = manifest_root(ctx, &service.name).ok_or_else(|| DevdError::not_found(format!("{} has no recorded folder; adopt it again", service.name)))?;
+        let root = manifest_root(ctx, &service.name).ok_or_else(|| {
+            DevdError::not_found(format!(
+                "{} has no recorded folder; adopt it again",
+                service.name
+            ))
+        })?;
         engines::prepare(ctx, engine, &root)?;
     }
 
@@ -1887,10 +1992,9 @@ pub fn stack_up(ctx: &Ctx) -> Result<Vec<Status>> {
     if !installed_php_series(ctx)?.is_empty() {
         prune_php_services(ctx)?;
         ensure_php_services(ctx)?;
-    } else if ctx.store.get_service(PHP_SERVICE)?.is_none()
-        && php_executable(ctx).is_ok() {
-            ensure_php_service(ctx)?;
-        }
+    } else if ctx.store.get_service(PHP_SERVICE)?.is_none() && php_executable(ctx).is_ok() {
+        ensure_php_service(ctx)?;
+    }
 
     // The listeners come first: nginx needs a FastCGI upstream to answer with.
     let services: Vec<Service> = ctx
@@ -2043,7 +2147,10 @@ pub fn mariadb_service(ctx: &Ctx) -> Option<(u16, bool)> {
 pub fn doctor_check(paths: &Paths) -> Vec<Check> {
     // No database yet is an empty install, not a broken one; looking does not create it.
     if !paths.state_db().is_file() {
-        return vec![Check::info("services", "none installed; `devd service install nginx` installs the web server")];
+        return vec![Check::info(
+            "services",
+            "none installed; `devd service install nginx` installs the web server",
+        )];
     }
     let Ok(store) = Store::open_read_only(&paths.state_db()) else {
         return vec![Check::fail("services", "the state store could not be read")];
@@ -2219,9 +2326,19 @@ mod tests {
         assert_eq!(php_alt_name("8.4", 1), "php-cgi-8.4-alt");
         assert_eq!(php_alt_name("8.4", 2), "php-cgi-8.4-alt-2");
         assert_eq!(php_pool_of("php-cgi-8.4"), Some(("8.4".to_string(), false)));
-        assert_eq!(php_pool_of("php-cgi-8.4-3"), Some(("8.4".to_string(), false)));
-        assert_eq!(php_pool_of("php-cgi-8.5-alt-2"), Some(("8.5".to_string(), true)));
-        assert_eq!(php_pool_of("php-cgi"), None, "the legacy single listener is not part of a pool");
+        assert_eq!(
+            php_pool_of("php-cgi-8.4-3"),
+            Some(("8.4".to_string(), false))
+        );
+        assert_eq!(
+            php_pool_of("php-cgi-8.5-alt-2"),
+            Some(("8.5".to_string(), true))
+        );
+        assert_eq!(
+            php_pool_of("php-cgi"),
+            None,
+            "the legacy single listener is not part of a pool"
+        );
         assert_eq!(php_pool_of("nginx"), None);
     }
 
@@ -2287,6 +2404,7 @@ mod tests {
             settings: Arc::new(devd_core::config::Settings::default()),
             events: devd_core::events::EventBus::new(),
             actor: devd_core::capability::Actor::human(devd_core::capability::Surface::Cli),
+            run: None,
             dry_run: false,
         }
     }
@@ -2337,20 +2455,25 @@ mod tests {
         let done = install_system(&c, def, None, &host).expect("install");
 
         assert_eq!(done.version, "1.24.0");
-        assert!(done.digest.is_none(), "a system install has no download digest");
+        assert!(
+            done.digest.is_none(),
+            "a system install has no download digest"
+        );
         // The layout the rest of devd expects: the program is where it is
         // looked for, as a link, and the files nginx needs beside it exist.
         let dir = install_dir(&c, "nginx");
         let linked = dir.join("sbin/nginx");
-        assert!(std::fs::symlink_metadata(&linked).unwrap().file_type().is_symlink());
+        assert!(std::fs::symlink_metadata(&linked)
+            .unwrap()
+            .file_type()
+            .is_symlink());
         assert_eq!(std::fs::read_link(&linked).unwrap(), real);
         assert!(dir.join("conf/fastcgi_params").is_file());
         assert!(dir.join("conf/mime.types").is_file());
         assert!(dir.join("temp/client_body").is_dir());
         // The manifest says the program was adopted, and from where.
         let manifest: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(manifest(&c, "nginx")).unwrap())
-                .unwrap();
+            serde_json::from_str(&std::fs::read_to_string(manifest(&c, "nginx")).unwrap()).unwrap();
         assert_eq!(manifest["source"], "system");
         assert_eq!(manifest["version"], "1.24.0");
         // The service is recorded and its command line starts the linked program.
@@ -2414,7 +2537,8 @@ mod tests {
         assert_eq!(verifiable("mariadb", &list).len(), 3);
         // Asking for the unverifiable version by name still finds it, so the
         // install can refuse it with a message that names it.
-        let exact = resolve(&installable, "1.31.8", None).or_else(|_| resolve(&list, "1.31.8", None));
+        let exact =
+            resolve(&installable, "1.31.8", None).or_else(|_| resolve(&list, "1.31.8", None));
         assert_eq!(exact.unwrap().version, "1.31.8");
     }
 

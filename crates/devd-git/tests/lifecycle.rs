@@ -65,6 +65,22 @@ impl Fixture {
         self.repo.join(rel)
     }
 
+    /// Pin identity and line endings on a repository the fixture did not create,
+    /// such as a clone. Local config is not carried by a clone, so without this
+    /// a commit in a clone depends on the machine's global Git settings.
+    fn configure(&self, repo: &Path) {
+        for (key, value) in [
+            ("user.name", "devd test"),
+            ("user.email", "devd@example.test"),
+            ("commit.gpgsign", "false"),
+            ("core.autocrlf", "false"),
+        ] {
+            self.git
+                .config_set(Some(repo), key, value, ConfigScope::Local)
+                .unwrap_or_else(|e| panic!("{key}: {e}"));
+        }
+    }
+
     fn write(&self, rel: &str, body: &str) {
         let path = self.path(rel);
         if let Some(parent) = path.parent() {
@@ -687,7 +703,9 @@ fn the_reflog_makes_a_hard_reset_recoverable() {
         "reflog should record the reset: {entries:?}"
     );
     assert!(
-        entries.iter().all(|e| !e.hash.is_empty() && !e.timestamp.is_empty()),
+        entries
+            .iter()
+            .all(|e| !e.hash.is_empty() && !e.timestamp.is_empty()),
         "every reflog entry should say which commit it is and when: {entries:?}"
     );
 
@@ -919,6 +937,7 @@ fn clone_fetch_pull_and_push_against_a_local_remote() {
         .git
         .clone(&url, &clone_path, None, None, false)
         .unwrap();
+    origin.configure(&clone_path);
     assert!(clone_path.join("a.txt").exists());
     let clone_head = origin.git.rev_parse(&clone_path, "HEAD").unwrap();
     assert_eq!(clone_head, first);
@@ -1013,6 +1032,7 @@ fn a_diverged_branch_refuses_a_fast_forward_only_pull() {
         .git
         .clone(&url, &clone_path, None, None, false)
         .unwrap();
+    origin.configure(&clone_path);
 
     // Both sides commit, so the histories diverge.
     std::fs::write(clone_path.join("b.txt"), "b\n").unwrap();
@@ -1248,6 +1268,7 @@ fn outgoing_and_incoming_are_reported_separately() {
         .git
         .clone(&url, &clone_path, None, None, false)
         .unwrap();
+    origin.configure(&clone_path);
 
     // The clone is ahead: one local commit that the remote does not have.
     std::fs::write(clone_path.join("b.txt"), "b\n").unwrap();

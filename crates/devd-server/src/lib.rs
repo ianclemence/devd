@@ -187,12 +187,13 @@ impl AppState {
         ctx.dry_run = false;
 
         let (shutdown, receiver) = watch::channel(false);
+        let approvals = ApprovalStore::new(ctx.store.clone());
         let state = Arc::new(Self {
             registry,
             ctx,
             token: approval::new_token(),
             port,
-            approvals: ApprovalStore::new(),
+            approvals,
             extra_checks,
             started: Instant::now(),
             workspace,
@@ -209,7 +210,8 @@ impl AppState {
 
     /// Every check the environment can produce, core first.
     pub fn checks(&self) -> Vec<Check> {
-        let mut checks = doctor::core_checks_for(&self.ctx.paths, &self.ctx.settings, Some(&self.ctx.store));
+        let mut checks =
+            doctor::core_checks_for(&self.ctx.paths, &self.ctx.settings, Some(&self.ctx.store));
         for extra in &self.extra_checks {
             checks.extend(extra());
         }
@@ -229,6 +231,14 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/events", get(events::events))
         .route("/api/approve", post(api::approve))
         .route("/api/deny", post(api::deny))
+        .route("/api/runs", get(api::runs))
+        .route("/api/runs/:id", get(api::run))
+        .route("/api/runs/:id/events", get(api::run_events))
+        .route("/api/runs/:id/cancel", post(api::run_cancel))
+        .route("/api/runs/:id/retry", post(api::run_retry))
+        .route("/api/approvals", get(api::approvals))
+        .route("/api/approvals/:id/approve", post(api::approval_approve))
+        .route("/api/approvals/:id/deny", post(api::approval_deny))
         .route("/api/audit", get(api::audit))
         .route("/api/doctor", get(api::doctor))
         .route("/api/shutdown", post(api::shutdown))
@@ -385,7 +395,11 @@ async fn guard(State(state): State<Arc<AppState>>, req: Request<Body>, next: Nex
         return if req.method() == Method::POST {
             next.run(req).await
         } else {
-            refuse(StatusCode::METHOD_NOT_ALLOWED, "post_only", "a deploy hook accepts POST only")
+            refuse(
+                StatusCode::METHOD_NOT_ALLOWED,
+                "post_only",
+                "a deploy hook accepts POST only",
+            )
         };
     }
 

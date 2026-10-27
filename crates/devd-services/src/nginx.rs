@@ -206,12 +206,19 @@ fn render_text(render: Render, sites: &[Site]) -> String {
     out.push_str("    server_tokens      off;\n");
     out.push_str("    client_max_body_size 2g;\n");
     out.push_str("    fastcgi_read_timeout 36000s;\n\n");
-    out.push_str("    # One PHP FastCGI listener per installed version. A site that is \
-         pinned to a version is sent to that one; the rest go to the primary.\n");
+    out.push_str(
+        "    # One PHP FastCGI listener per installed version. A site that is \
+         pinned to a version is sent to that one; the rest go to the primary.\n",
+    );
     for (series, port) in &render.php {
         // A pool: worker 1 is on the series' port, the others 100 apart (see `php_worker_port`).
         let servers: String = (0..render.workers)
-            .map(|i| format!("        server 127.0.0.1:{};\n", port.saturating_add(100 * u16::from(i))))
+            .map(|i| {
+                format!(
+                    "        server 127.0.0.1:{};\n",
+                    port.saturating_add(100 * u16::from(i))
+                )
+            })
             .collect();
         out.push_str(&format!(
             "    upstream devd_php_{} {{\n{servers}    }}\n\n",
@@ -220,9 +227,17 @@ fn render_text(render: Render, sites: &[Site]) -> String {
         if !render.alt_sites.is_empty() {
             // The pool that runs the other limits profile, 50 ports above.
             let alt: String = (0..render.workers)
-                .map(|i| format!("        server 127.0.0.1:{};\n", port.saturating_add(50 + 100 * u16::from(i))))
+                .map(|i| {
+                    format!(
+                        "        server 127.0.0.1:{};\n",
+                        port.saturating_add(50 + 100 * u16::from(i))
+                    )
+                })
                 .collect();
-            out.push_str(&format!("    upstream devd_php_{}_alt {{\n{alt}    }}\n\n", upstream_name(series)));
+            out.push_str(&format!(
+                "    upstream devd_php_{}_alt {{\n{alt}    }}\n\n",
+                upstream_name(series)
+            ));
         }
     }
     if sites.iter().any(|s| s.upstream.is_some()) {
@@ -266,7 +281,11 @@ fn site_upstream(render: &Render, site: &Site) -> String {
 }
 
 fn site_upstream_base(render: &Render, site: &Site) -> String {
-    let pinned = site.php.as_deref().map(crate::php_series).filter(|s| !s.is_empty());
+    let pinned = site
+        .php
+        .as_deref()
+        .map(crate::php_series)
+        .filter(|s| !s.is_empty());
     if let Some(series) = pinned {
         if render.php.iter().any(|(s, _)| s == &series) {
             return format!("devd_php_{}", upstream_name(&series));
@@ -425,7 +444,9 @@ fn site_servers(render: &Render, site: &Site) -> String {
             "            include       \"{}conf/fastcgi_params\";\n",
             render.prefix
         ));
-        out.push_str("            fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;\n");
+        out.push_str(
+            "            fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;\n",
+        );
         out.push_str("        }\n\n");
     }
     out.push_str("        # Certificate challenges and well-known files stay reachable;\n");
@@ -566,20 +587,42 @@ mod tests {
 
     #[test]
     fn a_proxy_site_forwards_everything_and_serves_no_files() {
-        let text = render_for(&[proxy("app", "internal", "http://127.0.0.1:5173")], 8080, 8443);
-        assert!(text.contains("proxy_pass          http://127.0.0.1:5173;"), "{text}");
+        let text = render_for(
+            &[proxy("app", "internal", "http://127.0.0.1:5173")],
+            8080,
+            8443,
+        );
+        assert!(
+            text.contains("proxy_pass          http://127.0.0.1:5173;"),
+            "{text}"
+        );
         // The browser's host reaches the program, and a hot-reload socket can upgrade.
-        assert!(text.contains("proxy_set_header    Host               $host;"), "{text}");
-        assert!(text.contains("proxy_set_header    Upgrade            $http_upgrade;"), "{text}");
-        assert!(text.contains("map $http_upgrade $devd_connection_upgrade"), "{text}");
+        assert!(
+            text.contains("proxy_set_header    Host               $host;"),
+            "{text}"
+        );
+        assert!(
+            text.contains("proxy_set_header    Upgrade            $http_upgrade;"),
+            "{text}"
+        );
+        assert!(
+            text.contains("map $http_upgrade $devd_connection_upgrade"),
+            "{text}"
+        );
         // Still HTTPS, with the certificate devd issued.
         assert!(text.contains("listen       8443 ssl;"), "{text}");
-        assert!(text.contains("ssl_certificate      \"D:/devd-home/certs/app.test.crt\";"), "{text}");
+        assert!(
+            text.contains("ssl_certificate      \"D:/devd-home/certs/app.test.crt\";"),
+            "{text}"
+        );
         // None of the directory-site machinery is emitted for it.
         let block = &text[text.find("server_name  app.test;").unwrap()..];
         assert!(!block.contains("fastcgi_pass"), "{text}");
         assert!(!block.contains("try_files"), "{text}");
-        assert!(!block.contains("root         \"C:/devd-home/www/app\""), "{text}");
+        assert!(
+            !block.contains("root         \"C:/devd-home/www/app\""),
+            "{text}"
+        );
     }
 
     #[test]
@@ -587,7 +630,10 @@ mod tests {
         let plain = render_for(&[site("blog", "off")], 8080, 8443);
         assert!(!plain.contains("devd_connection_upgrade"), "{plain}");
         let mixed = render_for(
-            &[site("blog", "off"), proxy("app", "off", "http://localhost:3000")],
+            &[
+                site("blog", "off"),
+                proxy("app", "off", "http://localhost:3000"),
+            ],
             8080,
             8443,
         );
@@ -659,7 +705,10 @@ mod tests {
         let upstream = &text[text.find("upstream devd_php_8_4 {").unwrap()..];
         let upstream = &upstream[..upstream.find('}').unwrap()];
         for port in [9084, 9184, 9284] {
-            assert!(upstream.contains(&format!("server 127.0.0.1:{port};")), "{upstream}");
+            assert!(
+                upstream.contains(&format!("server 127.0.0.1:{port};")),
+                "{upstream}"
+            );
         }
     }
 
@@ -683,11 +732,22 @@ mod tests {
             },
             &[shop, site("blog", "internal")],
         );
-        let alt = &text[text.find("upstream devd_php_8_4_alt {").expect("the other pool is declared")..];
+        let alt = &text[text
+            .find("upstream devd_php_8_4_alt {")
+            .expect("the other pool is declared")..];
         let alt = &alt[..alt.find('}').unwrap()];
-        assert!(alt.contains("server 127.0.0.1:9134;") && alt.contains("server 127.0.0.1:9234;"), "{alt}");
-        assert!(text.contains("fastcgi_pass  devd_php_8_4_alt;"), "shop uses it: {text}");
-        assert!(text.contains("fastcgi_pass  devd_php_8_4;"), "blog stays on the main pool: {text}");
+        assert!(
+            alt.contains("server 127.0.0.1:9134;") && alt.contains("server 127.0.0.1:9234;"),
+            "{alt}"
+        );
+        assert!(
+            text.contains("fastcgi_pass  devd_php_8_4_alt;"),
+            "shop uses it: {text}"
+        );
+        assert!(
+            text.contains("fastcgi_pass  devd_php_8_4;"),
+            "blog stays on the main pool: {text}"
+        );
     }
 
     #[test]
@@ -777,7 +837,9 @@ mod tests {
 
     /// A site whose directory is really on disk, so what it serves is read from its files.
     fn on_disk(tag: &str, name: &str, files: &[&str]) -> Site {
-        let dir = std::env::temp_dir().join(format!("devd-nginx-{tag}-{}", std::process::id())).join(name);
+        let dir = std::env::temp_dir()
+            .join(format!("devd-nginx-{tag}-{}", std::process::id()))
+            .join(name);
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         for f in files {
@@ -791,7 +853,11 @@ mod tests {
     }
 
     fn block_of<'a>(text: &'a str, name: &str) -> &'a str {
-        let start = text.find(&format!("listen       8443 ssl;\n        server_name  {name}.test;")).expect("the site's TLS block");
+        let start = text
+            .find(&format!(
+                "listen       8443 ssl;\n        server_name  {name}.test;"
+            ))
+            .expect("the site's TLS block");
         &text[start..]
     }
 
@@ -803,9 +869,18 @@ mod tests {
         assert!(block_of(&text, "blog").contains("fastcgi_pass"), "{text}");
         let brochure = block_of(&text, "brochure");
         let brochure = &brochure[..brochure.find("    }\n\n").unwrap_or(brochure.len())];
-        assert!(!brochure.contains("fastcgi_pass"), "a static site has no PHP in its configuration:\n{brochure}");
-        assert!(brochure.contains("try_files $uri $uri/ =404;"), "{brochure}");
-        assert!(brochure.contains("index        index.html index.htm;"), "{brochure}");
+        assert!(
+            !brochure.contains("fastcgi_pass"),
+            "a static site has no PHP in its configuration:\n{brochure}"
+        );
+        assert!(
+            brochure.contains("try_files $uri $uri/ =404;"),
+            "{brochure}"
+        );
+        assert!(
+            brochure.contains("index        index.html index.htm;"),
+            "{brochure}"
+        );
     }
 
     #[test]
@@ -814,10 +889,22 @@ mod tests {
         let text = render_for(&[ghost], 8080, 8443);
         let block = block_of(&text, "ghost");
         let block = &block[..block.find("    }\n\n").unwrap_or(block.len())];
-        assert!(!block.contains("root "), "the folder must not be handed to the web server:\n{block}");
-        assert!(!block.contains("fastcgi_pass") && !block.contains("try_files"), "{block}");
-        assert!(block.contains("return 404 \"devd: ghost has no web entry point (go)"), "{block}");
-        assert!(block.contains("devd site upstream ghost <port>"), "it says what to do: {block}");
+        assert!(
+            !block.contains("root "),
+            "the folder must not be handed to the web server:\n{block}"
+        );
+        assert!(
+            !block.contains("fastcgi_pass") && !block.contains("try_files"),
+            "{block}"
+        );
+        assert!(
+            block.contains("return 404 \"devd: ghost has no web entry point (go)"),
+            "{block}"
+        );
+        assert!(
+            block.contains("devd site upstream ghost <port>"),
+            "it says what to do: {block}"
+        );
     }
 
     #[test]
@@ -826,7 +913,10 @@ mod tests {
         brochure.php = Some("8.5".to_string());
         let text = render_for(&[brochure], 8080, 8443);
         let block = block_of(&text, "brochure");
-        assert!(!block.contains("devd_php_8_5") && !block.contains("fastcgi_pass"), "{block}");
+        assert!(
+            !block.contains("devd_php_8_5") && !block.contains("fastcgi_pass"),
+            "{block}"
+        );
     }
 
     #[test]
@@ -834,7 +924,10 @@ mod tests {
         let mut ghost = on_disk("chosen", "ghost", &["go.mod"]);
         ghost.serving = Some(devd_core::serving::Content::Static);
         let text = render_for(&[ghost], 8080, 8443);
-        assert!(block_of(&text, "ghost").contains("try_files $uri $uri/ =404;"), "{text}");
+        assert!(
+            block_of(&text, "ghost").contains("try_files $uri $uri/ =404;"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -850,7 +943,15 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let paths = Paths::rooted(&dir);
         paths.ensure().unwrap();
-        let ctx = Ctx { store: Arc::new(Store::open_in_memory().unwrap()), paths: Arc::new(paths), settings: Arc::new(Settings::default()), events: EventBus::new(), actor: Actor::system(), dry_run: false };
+        let ctx = Ctx {
+            store: Arc::new(Store::open_in_memory().unwrap()),
+            paths: Arc::new(paths),
+            settings: Arc::new(Settings::default()),
+            events: EventBus::new(),
+            actor: Actor::system(),
+            run: None,
+            dry_run: false,
+        };
         // nginx "installed": the renderer only needs the program to exist.
         std::fs::create_dir_all(directory(&ctx)).unwrap();
         std::fs::write(directory(&ctx).join(exe_name()), b"").unwrap();
@@ -864,14 +965,21 @@ mod tests {
         s.root = go.display().to_string();
         ctx.store.upsert_site(&s).unwrap();
         std::fs::create_dir_all(config_path(&ctx).parent().unwrap()).unwrap();
-        std::fs::write(config_path(&ctx), "# written by 0.11: ghost { fastcgi_pass devd_php_8_5; root ghost; }\n").unwrap();
+        std::fs::write(
+            config_path(&ctx),
+            "# written by 0.11: ghost { fastcgi_pass devd_php_8_5; root ghost; }\n",
+        )
+        .unwrap();
 
         crate::refresh_web_config(&ctx, "nginx").unwrap();
 
         let text = std::fs::read_to_string(config_path(&ctx)).unwrap();
         assert!(!text.contains("written by 0.11"), "the stale file is gone");
         assert!(text.contains("ghost has no web entry point"), "{text}");
-        assert!(crate::refresh_web_config(&ctx, "mariadb").is_ok(), "a service that has no configuration of this kind is left alone");
+        assert!(
+            crate::refresh_web_config(&ctx, "mariadb").is_ok(),
+            "a service that has no configuration of this kind is left alone"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

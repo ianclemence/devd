@@ -26,18 +26,34 @@ fn reading_a_status_does_not_index_the_repository_but_tracking_does() {
         settings: Arc::new(Settings::default()),
         events: EventBus::new(),
         actor: Actor::human(Surface::Cli),
+        run: None,
         dry_run: false,
     };
     let mut reg = Registry::new();
     devd_git::caps::register(&mut reg, git).unwrap();
 
-    let status = InvokeRequest { id: "git.status".into(), args: json!({ "repo": repo.display().to_string() }), dry_run: false };
+    let status = InvokeRequest {
+        id: "git.status".into(),
+        args: json!({ "repo": repo.display().to_string() }),
+        dry_run: false,
+    };
     reg.dispatch(&ctx, &status, Approval::None).unwrap();
-    assert!(ctx.store.list_repos().unwrap().is_empty(), "a read must not write an index row");
+    assert!(
+        ctx.store.list_repos().unwrap().is_empty(),
+        "a read must not write an index row"
+    );
 
-    let track = InvokeRequest { id: "git.repo.track".into(), args: json!({ "repo": repo.display().to_string() }), dry_run: false };
+    let track = InvokeRequest {
+        id: "git.repo.track".into(),
+        args: json!({ "repo": repo.display().to_string() }),
+        dry_run: false,
+    };
     reg.dispatch(&ctx, &track, Approval::None).unwrap();
-    assert_eq!(ctx.store.list_repos().unwrap().len(), 1, "tracking is the explicit way to index");
+    assert_eq!(
+        ctx.store.list_repos().unwrap().len(),
+        1,
+        "tracking is the explicit way to index"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -16,8 +16,11 @@ use axum::Json;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use devd_core::capability::{Approval, InvokeRequest};
-use devd_core::DevdError;
+use devd_core::capability::{Approval, Ctx, InvokeRequest};
+use devd_core::{
+    evaluate, DevdError, DispatchOptions, InvokeResult, RunContext, RunMode, RunSpec, RunState,
+    Store, Tier,
+};
 
 use crate::{error_response, refuse, AppState};
 
@@ -165,17 +168,53 @@ pub struct InvokeBody {
 /// `POST /hooks/deploy/:site/:token` - start a deploy of a site whose push-to-deploy hook is on.
 ///
 /// Every refusal is the same `404`, so a wrong site, a wrong secret and a hook that is off cannot be told apart.
-pub async fn deploy_hook(State(state): State<Arc<AppState>>, axum::extract::Path((site, token)): axum::extract::Path<(String, String)>) -> Response {
-    let ctx = state.ctx.clone();
+pub async fn deploy_hook(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path((site, token)): axum::extract::Path<(String, String)>,
+) -> Response {
+    let st = state.clone();
     let result = tokio::task::spawn_blocking(move || {
-        if !devd_ops::deploy::hook_ok(&ctx, &site, &token) {
+        if !devd_ops::deploy::hook_ok(&st.ctx, &site, &token) {
             return None;
         }
-        Some(devd_ops::deploy::start(&ctx, &site, "hook", None))
+        // A hook is a caller with no human behind it, but it is still a caller:
+        // it goes through the same `deploy.run` capability, run and evidence as
+        // a person pressing Deploy, so the history reads the same either way.
+        let mut ctx = st.ctx.clone();
+        let mut run_id = None;
+        if let Some((run_ctx, id)) = begin_run(&st, &format!("deploy {site} from its push hook")) {
+            ctx = run_ctx;
+            run_id = Some(id);
+        }
+        let req = InvokeRequest {
+            id: "deploy.run".into(),
+            args: json!({ "site": site, "wait": false }),
+            dry_run: false,
+        };
+        let dispatch =
+            st.registry
+                .dispatch_with(&ctx, &req, Approval::None, &DispatchOptions::default());
+        settle(&ctx.store, run_id.as_deref(), &dispatch);
+        Some(dispatch)
     })
     .await;
     match result {
-        Ok(Some(Ok(d))) => (StatusCode::ACCEPTED, axum::Json(json!({ "ok": true, "deployment": d.id, "state": d.state }))).into_response(),
+        Ok(Some(Ok(result))) => {
+            let deployment = result
+                .outcome
+                .as_ref()
+                .map(|o| o.data["deployment"].clone())
+                .unwrap_or(Value::Null);
+            (
+                StatusCode::ACCEPTED,
+                axum::Json(json!({
+                    "ok": true,
+                    "deployment": deployment.get("id").cloned().unwrap_or(Value::Null),
+                    "state": deployment.get("state").cloned().unwrap_or(Value::Null),
+                })),
+            )
+                .into_response()
+        }
         Ok(Some(Err(e))) => error_response(&e),
         _ => refuse(StatusCode::NOT_FOUND, "not_found", "there is no such hook"),
     }
@@ -219,10 +258,31 @@ pub async fn invoke(State(state): State<Arc<AppState>>, body: String) -> Respons
         // Stack operations run for minutes; dispatch off the async workers so a
         // long initialisation never starves the requests that poll its progress.
         let st = state.clone();
-        let dispatched = tokio::task::spawn_blocking(move || st.registry.dispatch(&st.ctx, &req, Approval::None)).await;
+        let mut ctx = st.ctx.clone();
+        let mut run_id = None;
+        // A plan is not an invocation, and a read leaves nothing to prove. Every
+        // other call gets a durable run so it appears on the same timeline as an
+        // agent's work and leaves the same evidence.
+        if !body.dry_run && cap.tier != Tier::Read {
+            if let Some((run_ctx, id)) = begin_run(&st, &format!("{} via the HTTP API", body.id)) {
+                ctx = run_ctx;
+                run_id = Some(id);
+            }
+        }
+        let run_for_settle = run_id.clone();
+        let dispatched = tokio::task::spawn_blocking(move || {
+            let result =
+                st.registry
+                    .dispatch_with(&ctx, &req, Approval::None, &DispatchOptions::default());
+            settle(&ctx.store, run_for_settle.as_deref(), &result);
+            result
+        })
+        .await;
         let dispatched = match dispatched {
             Ok(r) => r,
-            Err(e) => return error_response(&DevdError::internal(format!("the operation panicked: {e}"))),
+            Err(e) => {
+                return error_response(&DevdError::internal(format!("the operation panicked: {e}")))
+            }
         };
         return match dispatched {
             Ok(result) => Json(json!({
@@ -231,6 +291,7 @@ pub async fn invoke(State(state): State<Arc<AppState>>, body: String) -> Respons
                 "plan": result.plan,
                 "outcome": result.outcome,
                 "approval_required": false,
+                "run_id": run_id,
             }))
             .into_response(),
             Err(e) => error_response(&e),
@@ -242,9 +303,21 @@ pub async fn invoke(State(state): State<Arc<AppState>>, body: String) -> Respons
     // UI. A capability that cannot plan simply has none to show.
     let plan = plan_for(&state, &body.id, &body.args);
 
+    // The pending approval and the eventual execution share one run, so the
+    // decision and the work it authorised are one timeline entry rather than
+    // two unrelated records.
+    let mut ctx = state.ctx.clone();
+    if let Some((run_ctx, id)) = begin_run(&state, &format!("{} via the HTTP API", body.id)) {
+        let _ = state
+            .ctx
+            .store
+            .transition_run(&id, RunState::AwaitingApproval, None);
+        ctx = run_ctx;
+    }
+
     match state
         .approvals
-        .issue(&state.ctx, &body.id, &body.args, cap.tier.as_str())
+        .issue(&ctx, &body.id, &body.args, cap.tier.as_str())
     {
         Ok(record) => Json(json!({
             "capability": record.capability,
@@ -294,21 +367,57 @@ pub async fn approve(State(state): State<Arc<AppState>>, body: String) -> Respon
         args: record.args.clone(),
         dry_run: false,
     };
+    let mut ctx = state.ctx.clone();
+    let run_id = record.run_id.clone();
+    if let Some(id) = &run_id {
+        let _ = state
+            .ctx
+            .store
+            .transition_run(id, RunState::Executing, None);
+        ctx.run = Some(RunContext::new(id.clone()).with_store(state.ctx.store.clone()));
+    }
+    let approval_id = record.id.clone();
+    let actor = record.actor.clone();
+    let args_hash = record.args_hash.clone();
 
     let st = state.clone();
-    let dispatched = match tokio::task::spawn_blocking(move || st.registry.dispatch(&st.ctx, &req, Approval::Granted)).await {
+    let dispatched = match tokio::task::spawn_blocking(move || {
+        let opts = DispatchOptions {
+            approval_id: Some(&approval_id),
+            ..DispatchOptions::default()
+        };
+        let result = st
+            .registry
+            .dispatch_with(&ctx, &req, Approval::Granted, &opts);
+        settle(&ctx.store, run_id.as_deref(), &result);
+        result
+    })
+    .await
+    {
         Ok(r) => r,
-        Err(e) => return error_response(&DevdError::internal(format!("the operation panicked: {e}"))),
+        Err(e) => {
+            return error_response(&DevdError::internal(format!("the operation panicked: {e}")))
+        }
     };
+
     match dispatched {
-        Ok(result) => Json(json!({
-            "capability": result.capability,
-            "approved_by": record.actor,
-            "args_hash": record.args_hash,
-            "outcome": result.outcome,
-        }))
-        .into_response(),
-        Err(e) => error_response(&e),
+        Ok(result) => {
+            let stored = serde_json::to_value(&result).ok();
+            state.approvals.finish(&record.id, stored.as_ref(), None);
+            Json(json!({
+                "capability": result.capability,
+                "approved_by": actor,
+                "args_hash": args_hash,
+                "outcome": result.outcome,
+            }))
+            .into_response()
+        }
+        Err(e) => {
+            state
+                .approvals
+                .finish(&record.id, None, Some(&e.to_string()));
+            error_response(&e)
+        }
     }
 }
 
@@ -327,16 +436,30 @@ pub async fn deny(State(state): State<Arc<AppState>>, body: String) -> Response 
         );
     };
 
-    let record = match state.approvals.take(&body.token) {
+    let record = match state.approvals.decline(
+        &body.token,
+        &state.ctx.actor.label(),
+        Some("declined in the window"),
+    ) {
         Ok(record) => record,
         Err(e) => return error_response(&e),
     };
 
+    // A decline is a decision, not a failed call: the approval row already
+    // records it durably. The dispatch below only writes the audit entry, so the
+    // refusal is visible on every surface that reads the audit trail.
     let req = InvokeRequest {
         id: record.capability.clone(),
         args: record.args.clone(),
         dry_run: false,
     };
+    if let Some(id) = &record.run_id {
+        let _ =
+            state
+                .ctx
+                .store
+                .transition_run(id, RunState::Cancelled, Some("declined by a person"));
+    }
     let _ = state.registry.dispatch(&state.ctx, &req, Approval::Denied);
 
     Json(json!({
@@ -345,6 +468,272 @@ pub async fn deny(State(state): State<Arc<AppState>>, body: String) -> Response 
         "args_hash": record.args_hash,
     }))
     .into_response()
+}
+
+/// Query for the run list.
+#[derive(Debug, Deserialize)]
+pub struct RunsQuery {
+    /// Maximum rows to return.
+    #[serde(default)]
+    limit: Option<i64>,
+    /// Rows to skip.
+    #[serde(default)]
+    offset: Option<i64>,
+}
+
+/// `GET /api/runs` - the durable work list, newest first.
+pub async fn runs(State(state): State<Arc<AppState>>, Query(q): Query<RunsQuery>) -> Response {
+    let limit = q.limit.unwrap_or(25).clamp(1, 100);
+    let offset = q.offset.unwrap_or(0).max(0);
+    match state.ctx.store.page_runs(limit, offset) {
+        Ok(items) => {
+            Json(json!({ "items": items, "limit": limit, "offset": offset })).into_response()
+        }
+        Err(e) => error_response(&e),
+    }
+}
+
+/// `GET /api/runs/:id` - one run and everything that proves it.
+pub async fn run(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    match state.ctx.store.run_timeline(&id) {
+        Ok(timeline) => Json(timeline).into_response(),
+        Err(e) => error_response(&e),
+    }
+}
+
+/// Query for one run's event page.
+#[derive(Debug, Deserialize)]
+pub struct RunEventsQuery {
+    /// Last sequence number already seen.
+    #[serde(default)]
+    after: Option<i64>,
+    /// Oldest sequence number already held; returns the page before it.
+    #[serde(default)]
+    before: Option<i64>,
+    /// Maximum rows.
+    #[serde(default)]
+    limit: Option<i64>,
+}
+
+/// `GET /api/runs/:id/events` - a page of the durable timeline.
+///
+/// With no cursor the newest page is returned, because that is what a person
+/// opening a run wants to see. `before` walks backwards through a long history
+/// and `after` follows it live.
+pub async fn run_events(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Query(q): Query<RunEventsQuery>,
+) -> Response {
+    let limit = q.limit.unwrap_or(200).clamp(1, 1000);
+    let events = if let Some(before) = q.before {
+        state.ctx.store.list_run_events_before(&id, before, limit)
+    } else if let Some(after) = q.after {
+        state.ctx.store.list_run_events(&id, after, limit)
+    } else {
+        state.ctx.store.tail_run_events(&id, limit)
+    };
+    match events {
+        Ok(items) => {
+            let first = items.first().map(|e| e.seq).unwrap_or(0);
+            let last = items.last().map(|e| e.seq).unwrap_or(0);
+            Json(json!({ "items": items, "first": first, "last": last, "limit": limit }))
+                .into_response()
+        }
+        Err(e) => error_response(&e),
+    }
+}
+
+/// Body of a cancellation.
+#[derive(Debug, Default, Deserialize)]
+pub struct CancelBody {
+    /// Why work should stop.
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+/// `POST /api/runs/:id/cancel` - ask the executor to stop.
+///
+/// A run that is actually executing is only *asked* to stop: the state changes
+/// when the executor observes the request and unwinds, because claiming it
+/// stopped while a process is still running would be a lie. A run waiting on a
+/// person has no executor, so it can be closed immediately.
+pub async fn run_cancel(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    body: String,
+) -> Response {
+    let body = parse::<CancelBody>(&body).unwrap_or_default();
+    let by = state.ctx.actor.label();
+    let reason = body.reason.as_deref().unwrap_or("cancelled in the window");
+    let run = match state.ctx.store.request_run_cancel(&id, &by, Some(reason)) {
+        Ok(run) => run,
+        Err(e) => return error_response(&e),
+    };
+    let idle = !matches!(run.typed_state(), RunState::Executing | RunState::Verifying);
+    if idle {
+        let _ = state
+            .ctx
+            .store
+            .transition_run(&id, RunState::Cancelled, Some(reason));
+        for a in state
+            .ctx
+            .store
+            .list_approvals_for_run(&id, 200)
+            .unwrap_or_default()
+        {
+            if a.state == "pending" {
+                let _ = state
+                    .ctx
+                    .store
+                    .decline_approval(&a.id, &by, Some("the run was cancelled"));
+            }
+        }
+        if let Some(thread) = &run.thread_id {
+            let _ = state.ctx.store.set_thread_state(thread, "idle", None);
+        }
+    }
+    match state.ctx.store.run_by_id(&id) {
+        Ok(Some(run)) => Json(json!({ "run": run, "requested": true })).into_response(),
+        _ => error_response(&DevdError::internal("the run disappeared")),
+    }
+}
+
+/// `POST /api/runs/:id/retry` - continue a stopped run through the agent hub.
+pub async fn run_retry(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    // The hub owns the conversation loop, so the retry is a capability like any
+    // other, not a second implementation in the HTTP layer.
+    let invoke = InvokeRequest {
+        id: "run.retry".into(),
+        args: json!({ "run_id": id }),
+        dry_run: false,
+    };
+    let st = state.clone();
+    let out =
+        tokio::task::spawn_blocking(move || st.registry.dispatch(&st.ctx, &invoke, Approval::None))
+            .await;
+    match out {
+        Ok(Ok(result)) => Json(json!({ "outcome": result.outcome })).into_response(),
+        Ok(Err(e)) => error_response(&e),
+        Err(e) => error_response(&DevdError::internal(format!("the retry panicked: {e}"))),
+    }
+}
+
+/// `GET /api/approvals` - every decision waiting for a person.
+pub async fn approvals(State(state): State<Arc<AppState>>) -> Response {
+    match state.approvals.pending() {
+        Ok(items) => Json(json!({ "items": items })).into_response(),
+        Err(e) => error_response(&e),
+    }
+}
+
+/// `POST /api/approvals/:id/approve` - decide by durable approval id.
+///
+/// The token endpoint remains for a caller that was handed a token. This one is
+/// for a request the assistant queued, which never exposed one: the id names the
+/// same row, and the row's single-use update is the authority either way.
+pub async fn approval_approve(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Response {
+    decide_approval(state, &id, true).await
+}
+
+/// `POST /api/approvals/:id/deny` - decline by durable approval id.
+pub async fn approval_deny(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    decide_approval(state, &id, false).await
+}
+
+async fn decide_approval(state: Arc<AppState>, id: &str, approve: bool) -> Response {
+    // A conversation request is resumed by the hub, which knows how to put the
+    // result back into the model's turn. Reuse its capability rather than
+    // duplicating that logic here.
+    if let Ok(Some(req)) = state.ctx.store.request_by_approval(id) {
+        let invoke = InvokeRequest {
+            id: "approval.decide".into(),
+            args: json!({ "id": req.id, "approve": approve }),
+            dry_run: false,
+        };
+        let st = state.clone();
+        let out = tokio::task::spawn_blocking(move || {
+            st.registry.dispatch(&st.ctx, &invoke, Approval::None)
+        })
+        .await;
+        return match out {
+            Ok(Ok(result)) => Json(json!({ "outcome": result.outcome })).into_response(),
+            Ok(Err(e)) => error_response(&e),
+            Err(e) => error_response(&DevdError::internal(format!("the decision panicked: {e}"))),
+        };
+    }
+
+    let record = if approve {
+        match state.ctx.store.consume_approval_by_id(id) {
+            Ok(r) => r,
+            Err(e) => return error_response(&e),
+        }
+    } else {
+        match state.ctx.store.decline_approval(
+            id,
+            &state.ctx.actor.label(),
+            Some("declined in the window"),
+        ) {
+            Ok(r) => r,
+            Err(e) => return error_response(&e),
+        }
+    };
+    let mut ctx = state.ctx.clone();
+    if let Some(run_id) = &record.run_id {
+        if approve {
+            let _ = state
+                .ctx
+                .store
+                .transition_run(run_id, RunState::Executing, None);
+            ctx.run = Some(RunContext::new(run_id.clone()).with_store(state.ctx.store.clone()));
+        } else {
+            let _ = state.ctx.store.transition_run(
+                run_id,
+                RunState::Cancelled,
+                Some("declined by a person"),
+            );
+        }
+    }
+    let req = InvokeRequest {
+        id: record.capability.clone(),
+        args: record.args.clone(),
+        dry_run: false,
+    };
+    let approval = if approve {
+        Approval::Granted
+    } else {
+        Approval::Denied
+    };
+    let st = state.clone();
+    let approval_id = record.id.clone();
+    let out = tokio::task::spawn_blocking(move || {
+        let opts = DispatchOptions {
+            approval_id: Some(&approval_id),
+            ..DispatchOptions::default()
+        };
+        let result = st.registry.dispatch_with(&ctx, &req, approval, &opts);
+        if approve {
+            let stored = result
+                .as_ref()
+                .ok()
+                .and_then(|r| serde_json::to_value(r).ok());
+            let error = result.as_ref().err().map(|e| e.to_string());
+            let _ = st
+                .ctx
+                .store
+                .finish_approval(&approval_id, stored.as_ref(), error.as_deref());
+        }
+        result
+    })
+    .await;
+    match out {
+        Ok(Ok(result)) => Json(json!({ "outcome": result.outcome })).into_response(),
+        Ok(Err(e)) => error_response(&e),
+        Err(e) => error_response(&DevdError::internal(format!("the decision panicked: {e}"))),
+    }
 }
 
 /// Query for the audit list.
@@ -379,6 +768,56 @@ pub async fn doctor(State(state): State<Arc<AppState>>) -> Response {
 pub async fn shutdown(State(state): State<Arc<AppState>>) -> Response {
     state.request_shutdown();
     Json(json!({ "stopping": true })).into_response()
+}
+
+/// Start the durable run for one HTTP invocation.
+///
+/// The run starts executing immediately; the caller may move it to
+/// `awaiting_approval` if the capability needs a person first. Failure to
+/// persist a run must not stop the invocation: the audit trail still records the
+/// call, and a missing timeline entry is better than a broken deployment hook.
+fn begin_run(state: &Arc<AppState>, goal: &str) -> Option<(Ctx, String)> {
+    let actor = state.ctx.actor.label();
+    let run = state
+        .ctx
+        .store
+        .start_run(RunSpec {
+            goal,
+            mode: RunMode::Api,
+            project: None,
+            actor: &actor,
+            thread_id: None,
+            team_run_id: None,
+            acceptance: &[],
+        })
+        .ok()?;
+    let _ = state
+        .ctx
+        .store
+        .transition_run(&run.id, RunState::Executing, None);
+    let mut ctx = state.ctx.clone();
+    ctx.run = Some(RunContext::new(run.id.clone()).with_store(state.ctx.store.clone()));
+    Some((ctx, run.id))
+}
+
+/// Decide how a run ended, from the evidence the registry recorded.
+///
+/// A failed invocation is a failed run. A successful one is only `completed`
+/// when its completion policy is satisfied; otherwise it is `unverified`, which
+/// is the honest word for "the call returned but nothing proved the goal".
+fn settle(store: &Store, run_id: Option<&str>, result: &devd_core::Result<InvokeResult>) {
+    let Some(run_id) = run_id else { return };
+    let Some(run) = store.run_by_id(run_id).ok().flatten() else {
+        return;
+    };
+    let (next, error) = match result {
+        Ok(_) => {
+            let evidence = store.list_evidence(run_id, 10_000).unwrap_or_default();
+            (evaluate(&run.completion_policy, &evidence).state, None)
+        }
+        Err(e) => (RunState::Failed, Some(e.to_string())),
+    };
+    let _ = store.transition_run(run_id, next, error.as_deref());
 }
 
 /// Compute a plan for a capability, tolerating one that cannot plan.

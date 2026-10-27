@@ -22,6 +22,7 @@ fn setup(tag: &str) -> (Ctx, Paths) {
         settings: Arc::new(Settings::default()),
         events: EventBus::new(),
         actor: Actor::human(Surface::Cli),
+        run: None,
         dry_run: false,
     };
     (ctx, paths)
@@ -57,13 +58,24 @@ fn a_folder_a_site_serves_is_a_project_in_the_one_list() {
     let mut reg = Registry::new();
     devd_stacks::caps::register(&mut reg).unwrap();
     let result = reg
-        .dispatch(&ctx, &InvokeRequest { id: "project.list".into(), args: json!({}), dry_run: false }, Approval::None)
+        .dispatch(
+            &ctx,
+            &InvokeRequest {
+                id: "project.list".into(),
+                args: json!({}),
+                dry_run: false,
+            },
+            Approval::None,
+        )
         .unwrap();
     let rows = result.outcome.unwrap().data;
     let rows = rows.as_array().unwrap();
 
     for (name, folder) in [("shop", &shop), ("notes", &notes)] {
-        let row = rows.iter().find(|r| r["name"] == name).unwrap_or_else(|| panic!("{name} is in the list: {rows:?}"));
+        let row = rows
+            .iter()
+            .find(|r| r["name"] == name)
+            .unwrap_or_else(|| panic!("{name} is in the list: {rows:?}"));
         assert_eq!(row["source"], "site");
         assert_eq!(row["registered"], false);
         assert_eq!(row["sites"], json!([name]));
@@ -96,12 +108,22 @@ fn forgetting_a_project_removes_every_spelling_of_its_index_row() {
     let result = reg
         .dispatch(
             &ctx,
-            &InvokeRequest { id: "project.forget".into(), args: json!({ "path": folder.display().to_string() }), dry_run: false },
+            &InvokeRequest {
+                id: "project.forget".into(),
+                args: json!({ "path": folder.display().to_string() }),
+                dry_run: false,
+            },
             Approval::None,
         )
         .unwrap();
-    assert!(result.outcome.unwrap().message.contains("forgot"), "it says what it did");
-    assert!(ctx.store.list_repos().unwrap().is_empty(), "the differently spelled row is gone too");
+    assert!(
+        result.outcome.unwrap().message.contains("forgot"),
+        "it says what it did"
+    );
+    assert!(
+        ctx.store.list_repos().unwrap().is_empty(),
+        "the differently spelled row is gone too"
+    );
 
     let _ = std::fs::remove_dir_all(ctx.paths.root());
 }

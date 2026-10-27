@@ -23,7 +23,16 @@ pub struct Registry {
 
 /// What an agent may still do on its own in production mode: write notes,
 /// report to its team, and read documentation.
-const PRODUCTION_FREE: &[&str] = &["team.report", "team.plan_submit", "inbox.post", "scratch.", "todo.", "docs.fetch", "search.", "approval.get"];
+const PRODUCTION_FREE: &[&str] = &[
+    "team.report",
+    "team.plan_submit",
+    "inbox.post",
+    "scratch.",
+    "todo.",
+    "docs.fetch",
+    "search.",
+    "approval.get",
+];
 
 impl Registry {
     /// An empty registry.
@@ -160,12 +169,52 @@ impl Registry {
         req: &InvokeRequest,
         approval: Approval,
     ) -> Result<InvokeResult> {
+        self.dispatch_with(ctx, req, approval, &DispatchOptions::default())
+    }
+
+    /// Dispatch with the run-scoped metadata a durable caller carries.
+    ///
+    /// `idempotency_key` makes a retried call return the original result instead
+    /// of repeating a side effect. `approval_id` links the record to the durable
+    /// approval that authorised it, and `call_id` keeps the provider's tool-use
+    /// id so a conversation can be reconstructed exactly.
+    pub fn dispatch_with(
+        &self,
+        ctx: &Ctx,
+        req: &InvokeRequest,
+        approval: Approval,
+        opts: &DispatchOptions<'_>,
+    ) -> Result<InvokeResult> {
         let cap = self
             .get(&req.id)
             .ok_or_else(|| DevdError::not_found(format!("no capability `{}`", req.id)))?;
 
+        // A completed call for this exact key is the answer, not a second side
+        // effect. Only successful calls are reused: a failure may be retried.
+        if let Some(key) = opts.idempotency_key {
+            if let Some(previous) = ctx.store.completed_call_by_key(key)? {
+                if let Some(result) = previous
+                    .result
+                    .as_ref()
+                    .and_then(|v| serde_json::from_value::<InvokeResult>(v.clone()).ok())
+                {
+                    return Ok(result);
+                }
+            }
+        }
+
+        let started = std::time::Instant::now();
+        let started_at = crate::util::now();
         let result = self.dispatch_inner(ctx, req, approval, &cap);
-        self.record(ctx, req, &cap, &result);
+        self.record(
+            ctx,
+            req,
+            &cap,
+            &result,
+            opts,
+            started.elapsed().as_millis() as i64,
+            &started_at,
+        );
         result
     }
 
@@ -206,7 +255,9 @@ impl Registry {
             && !req.dry_run
             && approval != Approval::Granted
             && cap.tier != crate::capability::Tier::Read
-            && !PRODUCTION_FREE.iter().any(|p| cap.id == *p || (p.ends_with('.') && cap.id.starts_with(p)))
+            && !PRODUCTION_FREE
+                .iter()
+                .any(|p| cap.id == *p || (p.ends_with('.') && cap.id.starts_with(p)))
             && ctx.store.environment_mode() == "production"
         {
             return Err(DevdError::ApprovalRequired {
@@ -252,12 +303,27 @@ impl Registry {
             )));
         }
 
+        // 5. The run may have been cancelled or run out of time while this call
+        //    waited. Check once, centrally, so no handler can start work on a
+        //    run a person already stopped.
+        if let Some(run) = &ctx.run {
+            run.check()?;
+        }
+
+        // 6. Arguments are checked against the declared schema at the one
+        //    boundary every caller crosses - direct alias, MCP, HTTP, team or
+        //    schedule - rather than by each handler as a matter of habit.
+        if !cap.args_schema.is_null() {
+            crate::schema::validate(&cap.args_schema, &req.args)?;
+        }
+
         let run_ctx = Ctx {
             store: ctx.store.clone(),
             paths: ctx.paths.clone(),
             settings: ctx.settings.clone(),
             events: ctx.events.clone(),
             actor: ctx.actor.clone(),
+            run: ctx.run.clone(),
             dry_run: req.dry_run,
         };
 
@@ -280,17 +346,25 @@ impl Registry {
         }
     }
 
+    // The arguments are the pieces of one normalized record; grouping them into
+    // a struct only moves the same fields one level down.
+    #[allow(clippy::too_many_arguments)]
     fn record(
         &self,
         ctx: &Ctx,
         req: &InvokeRequest,
         cap: &Arc<Capability>,
         result: &Result<InvokeResult>,
+        opts: &DispatchOptions<'_>,
+        duration_ms: i64,
+        started_at: &str,
     ) {
         let (ok, message) = match result {
             Ok(_) => (true, "ok".to_string()),
             Err(e) => (false, e.to_string()),
         };
+        let redacted = redact(&req.args);
+        let redacted_value = redact_value(&req.args);
         let _ = ctx.store.record_audit(AuditRecord {
             actor: &ctx.actor.label(),
             surface: ctx.actor.surface.as_str(),
@@ -299,17 +373,82 @@ impl Registry {
             effect: cap.effect.as_str(),
             dry_run: req.dry_run,
             ok,
-            args: &redact(&req.args),
+            args: &redacted,
             message: &message,
         });
+
+        // The unified record. A dry run is a plan, not an invocation, so it is
+        // audited but does not claim a side effect or produce evidence.
+        if let Some(run) = &ctx.run {
+            if !req.dry_run {
+                let args_hash = crate::util::sha256_hex(req.args.to_string().as_bytes());
+                let outcome = result.as_ref().ok().and_then(|r| r.outcome.as_ref());
+                let evidence = crate::runs::evidence_for(&cap.id, &req.args, outcome);
+                let error_code = result.as_ref().err().map(|e| e.code());
+                let error = result.as_ref().err().map(|e| e.to_string());
+                let serialized = result
+                    .as_ref()
+                    .ok()
+                    .and_then(|r| serde_json::to_value(r).ok());
+                let call = ctx.store.record_tool_call(crate::store_runs::NewToolCall {
+                    run_id: Some(&run.run_id),
+                    step_id: run.step_id.as_deref(),
+                    call_id: opts.call_id,
+                    actor: &ctx.actor.label(),
+                    surface: ctx.actor.surface.as_str(),
+                    capability: &cap.id,
+                    args: &redacted_value,
+                    args_hash: &args_hash,
+                    approval_id: opts.approval_id,
+                    idempotency_key: opts.idempotency_key,
+                    ok,
+                    error_code,
+                    error: error.as_deref(),
+                    exit_code: evidence.exit_code,
+                    duration_ms,
+                    result: serialized.as_ref(),
+                    started_at,
+                });
+                if let Ok(call) = call {
+                    let _ = ctx.store.add_evidence(crate::store_runs::NewEvidence {
+                        run_id: &run.run_id,
+                        step_id: run.step_id.as_deref(),
+                        tool_call_id: Some(&call.id),
+                        artifact_id: None,
+                        kind: evidence.kind.as_str(),
+                        capability: &cap.id,
+                        passed: evidence.passed,
+                        claim: None,
+                        summary: &evidence.summary,
+                        detail: evidence.detail.as_deref(),
+                    });
+                }
+            }
+        }
+
         if ok {
             ctx.events.emit_with(
                 "capability.applied",
                 format!("{} ({})", cap.id, ctx.actor.label()),
-                serde_json::json!({ "capability": cap.id, "dry_run": req.dry_run }),
+                serde_json::json!({ "capability": cap.id, "dry_run": req.dry_run, "run_id": ctx.run.as_ref().map(|r| r.run_id.clone()) }),
             );
         }
     }
+}
+
+/// Run-scoped metadata for one dispatch.
+///
+/// A plain CLI call uses the default: no approval record, no idempotency key and
+/// no provider tool-use id. A durable run fills these in so its timeline can be
+/// replayed and a retried call cannot repeat a side effect.
+#[derive(Debug, Clone, Default)]
+pub struct DispatchOptions<'a> {
+    /// Durable approval that authorised the call.
+    pub approval_id: Option<&'a str>,
+    /// Key that makes a retry return the first success.
+    pub idempotency_key: Option<&'a str>,
+    /// Provider tool-use id.
+    pub call_id: Option<&'a str>,
 }
 
 /// Keys whose values are never written to logs, audit rows, or agent context.
@@ -373,6 +512,7 @@ mod tests {
         let store = Store::open_in_memory().unwrap();
         store.migrate().unwrap();
         Ctx {
+            run: None,
             store: Arc::new(store),
             paths: Arc::new(Paths::rooted("C:/tmp/devd-test")),
             settings: Arc::new(Settings::default()),

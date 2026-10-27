@@ -196,18 +196,43 @@ const TASK_COLS: &str = "id,run_id,key,role,title,instructions,depends_on,scope,
 
 fn row_run(r: &rusqlite::Row) -> rusqlite::Result<TeamRun> {
     Ok(TeamRun {
-        id: r.get(0)?, title: r.get(1)?, goal: r.get(2)?, project: r.get(3)?, state: r.get(4)?, plan_approved: r.get::<_, i64>(5)? != 0,
-        summary: r.get(6)?, error: r.get(7)?, parallel: r.get(8)?, created_by: r.get(9)?, created_at: r.get(10)?, updated_at: r.get(11)?,
+        id: r.get(0)?,
+        title: r.get(1)?,
+        goal: r.get(2)?,
+        project: r.get(3)?,
+        state: r.get(4)?,
+        plan_approved: r.get::<_, i64>(5)? != 0,
+        summary: r.get(6)?,
+        error: r.get(7)?,
+        parallel: r.get(8)?,
+        created_by: r.get(9)?,
+        created_at: r.get(10)?,
+        updated_at: r.get(11)?,
     })
 }
 
 fn row_task(r: &rusqlite::Row) -> rusqlite::Result<TeamTask> {
     let list = |s: String| serde_json::from_str::<Vec<String>>(&s).unwrap_or_default();
     Ok(TeamTask {
-        id: r.get(0)?, run_id: r.get(1)?, key: r.get(2)?, role: r.get(3)?, title: r.get(4)?, instructions: r.get(5)?,
-        depends_on: list(r.get(6)?), scope: list(r.get(7)?), state: r.get(8)?, attempts: r.get(9)?, workdir: r.get(10)?, branch: r.get(11)?,
-        thread_id: r.get(12)?, result: r.get(13)?, evidence: serde_json::from_str(&r.get::<_, String>(14)?).unwrap_or(serde_json::json!([])),
-        error: r.get(15)?, created_at: r.get(16)?, started_at: r.get(17)?, finished_at: r.get(18)?,
+        id: r.get(0)?,
+        run_id: r.get(1)?,
+        key: r.get(2)?,
+        role: r.get(3)?,
+        title: r.get(4)?,
+        instructions: r.get(5)?,
+        depends_on: list(r.get(6)?),
+        scope: list(r.get(7)?),
+        state: r.get(8)?,
+        attempts: r.get(9)?,
+        workdir: r.get(10)?,
+        branch: r.get(11)?,
+        thread_id: r.get(12)?,
+        result: r.get(13)?,
+        evidence: serde_json::from_str(&r.get::<_, String>(14)?).unwrap_or(serde_json::json!([])),
+        error: r.get(15)?,
+        created_at: r.get(16)?,
+        started_at: r.get(17)?,
+        finished_at: r.get(18)?,
     })
 }
 
@@ -216,11 +241,18 @@ impl Store {
 
     /// `local` (the default) or `production`.
     pub fn environment_mode(&self) -> String {
-        self.with(|c| Ok(c.query_row("SELECT value FROM kv WHERE key='environment.mode'", [], |r| r.get::<_, String>(0)).optional()?))
-            .ok()
-            .flatten()
-            .filter(|m| m == "production")
-            .unwrap_or_else(|| "local".to_string())
+        self.with(|c| {
+            Ok(c.query_row(
+                "SELECT value FROM kv WHERE key='environment.mode'",
+                [],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?)
+        })
+        .ok()
+        .flatten()
+        .filter(|m| m == "production")
+        .unwrap_or_else(|| "local".to_string())
     }
 
     /// Switch between `local` and `production`.
@@ -234,7 +266,13 @@ impl Store {
     // ------------------------------------------------------- provider checks
 
     /// Record the outcome of testing a provider.
-    pub fn set_provider_check(&self, provider_id: &str, ok: bool, message: &str, models: Option<i64>) -> Result<()> {
+    pub fn set_provider_check(
+        &self,
+        provider_id: &str,
+        ok: bool,
+        message: &str,
+        models: Option<i64>,
+    ) -> Result<()> {
         self.with(|c| {
             c.execute(
                 "INSERT INTO provider_checks (provider_id,checked_at,ok,message,models) VALUES (?1,?2,?3,?4,?5)
@@ -260,7 +298,12 @@ impl Store {
     // ------------------------------------------------------------ model roles
 
     /// Replace the model choices for one role in one scope (first = preferred).
-    pub fn set_role_models(&self, role: &str, scope: &str, models: &[(String, String)]) -> Result<()> {
+    pub fn set_role_models(
+        &self,
+        role: &str,
+        scope: &str,
+        models: &[(String, String)],
+    ) -> Result<()> {
         self.with(|c| {
             c.execute("DELETE FROM model_roles WHERE role=?1 AND scope=?2", params![role, scope])?;
             for (i, (provider, model)) in models.iter().enumerate() {
@@ -282,7 +325,10 @@ impl Store {
     /// Drop a provider from every role.
     pub fn purge_role_provider(&self, provider_id: &str) -> Result<()> {
         self.with(|c| {
-            c.execute("DELETE FROM model_roles WHERE provider_id=?1", params![provider_id])?;
+            c.execute(
+                "DELETE FROM model_roles WHERE provider_id=?1",
+                params![provider_id],
+            )?;
             Ok(())
         })
     }
@@ -290,7 +336,14 @@ impl Store {
     // -------------------------------------------------------- service decisions
 
     /// Record a decision about a tool or service.
-    pub fn set_service_decision(&self, tool: &str, mode: &str, port: Option<i64>, note: Option<&str>, by: &str) -> Result<()> {
+    pub fn set_service_decision(
+        &self,
+        tool: &str,
+        mode: &str,
+        port: Option<i64>,
+        note: Option<&str>,
+        by: &str,
+    ) -> Result<()> {
         self.with(|c| {
             c.execute(
                 "INSERT INTO service_decisions (tool,mode,port,note,decided_by,decided_at) VALUES (?1,?2,?3,?4,?5,?6)
@@ -303,7 +356,9 @@ impl Store {
 
     /// Forget a decision.
     pub fn clear_service_decision(&self, tool: &str) -> Result<bool> {
-        self.with(|c| Ok(c.execute("DELETE FROM service_decisions WHERE tool=?1", params![tool])? > 0))
+        self.with(|c| {
+            Ok(c.execute("DELETE FROM service_decisions WHERE tool=?1", params![tool])? > 0)
+        })
     }
 
     /// Every decision.
@@ -318,11 +373,28 @@ impl Store {
     // --------------------------------------------------------------- team runs
 
     /// Start a run.
-    pub fn create_run(&self, title: &str, goal: &str, project: Option<&str>, parallel: i64, by: &str) -> Result<TeamRun> {
+    pub fn create_run(
+        &self,
+        title: &str,
+        goal: &str,
+        project: Option<&str>,
+        parallel: i64,
+        by: &str,
+    ) -> Result<TeamRun> {
         let now = util::now();
         let run = TeamRun {
-            id: util::new_id(), title: title.into(), goal: goal.into(), project: project.map(str::to_string), state: "planning".into(), plan_approved: false,
-            summary: None, error: None, parallel: parallel.clamp(1, 6), created_by: by.into(), created_at: now.clone(), updated_at: now,
+            id: util::new_id(),
+            title: title.into(),
+            goal: goal.into(),
+            project: project.map(str::to_string),
+            state: "planning".into(),
+            plan_approved: false,
+            summary: None,
+            error: None,
+            parallel: parallel.clamp(1, 6),
+            created_by: by.into(),
+            created_at: now.clone(),
+            updated_at: now,
         };
         self.with(|c| {
             c.execute(
@@ -331,7 +403,29 @@ impl Store {
             )?;
             Ok(())
         })?;
+        // Every team run has its unified run from the moment it exists, so the
+        // planner, the specialists, the approvals and the timeline all point at
+        // one record.
+        let _ = self.ensure_run_for_team(&run.id, &run.goal, run.project.as_deref(), by, &[]);
+        let _ = self.sync_team_state(&run.id, &run.state, None);
         Ok(run)
+    }
+
+    /// Mirror a team-run state onto its unified run.
+    ///
+    /// The team table is still the scheduler's own record; this keeps the run
+    /// every interface reads in step with it. A transition the unified lifecycle
+    /// would reject (it is stricter about leaving a cancelled run, for example)
+    /// is left alone rather than forced, and the next explicit action decides.
+    fn sync_team_state(&self, team_run_id: &str, state: &str, error: Option<&str>) -> Result<()> {
+        let Some(run) = self.run_for_team_run(team_run_id)? else {
+            return Ok(());
+        };
+        let next = crate::runs::RunState::parse(state);
+        if run.typed_state() != next {
+            let _ = self.transition_run(&run.id, next, error);
+        }
+        Ok(())
     }
 
     /// Record the definition of done a run must meet and how many extra passes it may take.
@@ -339,7 +433,11 @@ impl Store {
         self.with(|c| {
             c.execute(
                 "UPDATE team_runs SET done_when=?2, max_rounds=?3 WHERE id=?1",
-                params![run_id, serde_json::to_string(done_when)?, max_rounds.clamp(0, 5)],
+                params![
+                    run_id,
+                    serde_json::to_string(done_when)?,
+                    max_rounds.clamp(0, 5)
+                ],
             )?;
             Ok(())
         })
@@ -348,62 +446,117 @@ impl Store {
     /// A run's definition of done and how far through its extra passes it is.
     pub fn goal_loop(&self, run_id: &str) -> Result<GoalLoop> {
         self.with(|c| {
-            Ok(c.query_row("SELECT done_when,rounds,max_rounds FROM team_runs WHERE id=?1", params![run_id], |r| {
-                Ok(GoalLoop { done_when: serde_json::from_str(&r.get::<_, String>(0)?).unwrap_or_default(), rounds: r.get(1)?, max_rounds: r.get(2)? })
-            })?)
+            Ok(c.query_row(
+                "SELECT done_when,rounds,max_rounds FROM team_runs WHERE id=?1",
+                params![run_id],
+                |r| {
+                    Ok(GoalLoop {
+                        done_when: serde_json::from_str(&r.get::<_, String>(0)?)
+                            .unwrap_or_default(),
+                        rounds: r.get(1)?,
+                        max_rounds: r.get(2)?,
+                    })
+                },
+            )?)
         })
     }
 
     /// Count one more pass.
     pub fn bump_round(&self, run_id: &str) -> Result<()> {
         self.with(|c| {
-            c.execute("UPDATE team_runs SET rounds=rounds+1, updated_at=?2 WHERE id=?1", params![run_id, util::now()])?;
+            c.execute(
+                "UPDATE team_runs SET rounds=rounds+1, updated_at=?2 WHERE id=?1",
+                params![run_id, util::now()],
+            )?;
             Ok(())
         })
     }
 
     /// One run.
     pub fn get_run(&self, id: &str) -> Result<Option<TeamRun>> {
-        self.with(|c| Ok(c.query_row(&format!("SELECT {RUN_COLS} FROM team_runs WHERE id=?1"), params![id], row_run).optional()?))
+        self.with(|c| {
+            Ok(c.query_row(
+                &format!("SELECT {RUN_COLS} FROM team_runs WHERE id=?1"),
+                params![id],
+                row_run,
+            )
+            .optional()?)
+        })
     }
 
     /// Recent runs.
     pub fn list_runs(&self, limit: i64) -> Result<Vec<TeamRun>> {
         self.with(|c| {
-            let mut st = c.prepare(&format!("SELECT {RUN_COLS} FROM team_runs ORDER BY updated_at DESC LIMIT ?1"))?;
+            let mut st = c.prepare(&format!(
+                "SELECT {RUN_COLS} FROM team_runs ORDER BY updated_at DESC LIMIT ?1"
+            ))?;
             let rows = st.query_map(params![limit], row_run)?;
             Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
         })
     }
 
     /// Move a run to a state.
-    pub fn set_run_state(&self, id: &str, state: &str, summary: Option<&str>, error: Option<&str>) -> Result<()> {
+    pub fn set_run_state(
+        &self,
+        id: &str,
+        state: &str,
+        summary: Option<&str>,
+        error: Option<&str>,
+    ) -> Result<()> {
         self.with(|c| {
             c.execute(
                 "UPDATE team_runs SET state=?2, summary=COALESCE(?3,summary), error=?4, updated_at=?5 WHERE id=?1",
                 params![id, state, summary, error, util::now()],
             )?;
             Ok(())
-        })
+        })?;
+        self.sync_team_state(id, state, error)
     }
 
     /// Record that a person approved the plan.
     pub fn approve_run_plan(&self, id: &str) -> Result<()> {
         self.with(|c| {
-            c.execute("UPDATE team_runs SET plan_approved=1, state='running', updated_at=?2 WHERE id=?1", params![id, util::now()])?;
+            c.execute(
+                "UPDATE team_runs SET plan_approved=1, state='running', updated_at=?2 WHERE id=?1",
+                params![id, util::now()],
+            )?;
             Ok(())
-        })
+        })?;
+        self.sync_team_state(id, "running", None)
     }
 
     // -------------------------------------------------------------- team tasks
 
     /// Add a task to a run.
     pub fn add_task(&self, run_id: &str, new: NewTask) -> Result<TeamTask> {
-        let NewTask { key, role, title, instructions, depends_on, scope } = new;
+        let NewTask {
+            key,
+            role,
+            title,
+            instructions,
+            depends_on,
+            scope,
+        } = new;
         let t = TeamTask {
-            id: util::new_id(), run_id: run_id.into(), key: key.into(), role: role.into(), title: title.into(), instructions: instructions.into(),
-            depends_on: depends_on.to_vec(), scope: scope.to_vec(), state: "pending".into(), attempts: 0, workdir: None, branch: None, thread_id: None,
-            result: None, evidence: serde_json::json!([]), error: None, created_at: util::now(), started_at: None, finished_at: None,
+            id: util::new_id(),
+            run_id: run_id.into(),
+            key: key.into(),
+            role: role.into(),
+            title: title.into(),
+            instructions: instructions.into(),
+            depends_on: depends_on.to_vec(),
+            scope: scope.to_vec(),
+            state: "pending".into(),
+            attempts: 0,
+            workdir: None,
+            branch: None,
+            thread_id: None,
+            result: None,
+            evidence: serde_json::json!([]),
+            error: None,
+            created_at: util::now(),
+            started_at: None,
+            finished_at: None,
         };
         self.with(|c| {
             c.execute(
@@ -420,7 +573,11 @@ impl Store {
     /// Delete a run with its tasks, its log and the conversations its tasks had. Returns the
     /// conversations that were removed. The caller has checked that nothing is still working.
     pub fn delete_run(&self, id: &str) -> Result<usize> {
-        let threads: Vec<String> = self.list_tasks_of_run(id)?.into_iter().filter_map(|t| t.thread_id).collect();
+        let threads: Vec<String> = self
+            .list_tasks_of_run(id)?
+            .into_iter()
+            .filter_map(|t| t.thread_id)
+            .collect();
         for t in &threads {
             self.delete_thread(t)?;
         }
@@ -435,12 +592,21 @@ impl Store {
 
     /// The runs that are over (done, failed or cancelled) and were last touched before `before`.
     pub fn finished_runs_before(&self, before: &str) -> Result<Vec<TeamRun>> {
-        Ok(self.list_runs(10_000)?.into_iter().filter(|r| matches!(r.state.as_str(), "done" | "failed" | "cancelled") && r.updated_at.as_str() < before).collect())
+        Ok(self
+            .list_runs(10_000)?
+            .into_iter()
+            .filter(|r| {
+                matches!(r.state.as_str(), "done" | "failed" | "cancelled")
+                    && r.updated_at.as_str() < before
+            })
+            .collect())
     }
 
     pub fn list_tasks_of_run(&self, run_id: &str) -> Result<Vec<TeamTask>> {
         self.with(|c| {
-            let mut st = c.prepare(&format!("SELECT {TASK_COLS} FROM team_tasks WHERE run_id=?1 ORDER BY rowid"))?;
+            let mut st = c.prepare(&format!(
+                "SELECT {TASK_COLS} FROM team_tasks WHERE run_id=?1 ORDER BY rowid"
+            ))?;
             let rows = st.query_map(params![run_id], row_task)?;
             Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
         })
@@ -448,17 +614,39 @@ impl Store {
 
     /// One task.
     pub fn get_team_task(&self, id: &str) -> Result<Option<TeamTask>> {
-        self.with(|c| Ok(c.query_row(&format!("SELECT {TASK_COLS} FROM team_tasks WHERE id=?1"), params![id], row_task).optional()?))
+        self.with(|c| {
+            Ok(c.query_row(
+                &format!("SELECT {TASK_COLS} FROM team_tasks WHERE id=?1"),
+                params![id],
+                row_task,
+            )
+            .optional()?)
+        })
     }
 
     /// The task a conversation is working on.
     pub fn task_of_thread(&self, thread_id: &str) -> Result<Option<TeamTask>> {
-        self.with(|c| Ok(c.query_row(&format!("SELECT {TASK_COLS} FROM team_tasks WHERE thread_id=?1"), params![thread_id], row_task).optional()?))
+        self.with(|c| {
+            Ok(c.query_row(
+                &format!("SELECT {TASK_COLS} FROM team_tasks WHERE thread_id=?1"),
+                params![thread_id],
+                row_task,
+            )
+            .optional()?)
+        })
     }
 
     /// Change a task's state and bookkeeping.
     pub fn update_team_task(&self, id: &str, update: TaskUpdate) -> Result<()> {
-        let TaskUpdate { state, result, error, evidence, workdir, branch, thread_id } = update;
+        let TaskUpdate {
+            state,
+            result,
+            error,
+            evidence,
+            workdir,
+            branch,
+            thread_id,
+        } = update;
         let now = util::now();
         self.with(|c| {
             c.execute(
@@ -477,9 +665,18 @@ impl Store {
     // ---------------------------------------------------------------- team log
 
     /// Append to a run's log.
-    pub fn add_team_event(&self, run_id: &str, task_id: Option<&str>, kind: &str, data: &serde_json::Value) -> Result<i64> {
+    pub fn add_team_event(
+        &self,
+        run_id: &str,
+        task_id: Option<&str>,
+        kind: &str,
+        data: &serde_json::Value,
+    ) -> Result<i64> {
         self.with(|c| {
-            c.execute("INSERT INTO team_events (run_id,task_id,kind,data,at) VALUES (?1,?2,?3,?4,?5)", params![run_id, task_id, kind, data.to_string(), util::now()])?;
+            c.execute(
+                "INSERT INTO team_events (run_id,task_id,kind,data,at) VALUES (?1,?2,?3,?4,?5)",
+                params![run_id, task_id, kind, data.to_string(), util::now()],
+            )?;
             Ok(c.last_insert_rowid())
         })
     }

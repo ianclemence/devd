@@ -11,6 +11,7 @@ pub mod archive;
 pub mod browse;
 pub mod capability;
 pub mod config;
+pub mod context;
 pub mod define;
 pub mod doctor;
 pub mod download;
@@ -22,7 +23,9 @@ pub mod ports;
 pub mod process;
 pub mod registry;
 pub mod repair;
+pub mod runs;
 pub mod schedule;
+pub mod schema;
 pub mod serving;
 pub mod shims;
 pub mod state;
@@ -30,9 +33,10 @@ pub mod store_ai;
 pub mod store_mcp;
 pub mod store_ops;
 pub mod store_pins;
+pub mod store_runs;
 pub mod store_schedule;
-pub mod store_team;
 pub mod store_stacks;
+pub mod store_team;
 pub mod store_work;
 pub mod util;
 
@@ -48,13 +52,26 @@ pub use download::{Artifact, Fetched, Progress};
 pub use error::{DevdError, Result};
 pub use events::{Event, EventBus};
 pub use paths::Paths;
-pub use registry::Registry;
+pub use registry::{DispatchOptions, Registry};
+pub use runs::{
+    evaluate, evidence_for, ApprovalRecord, ArtifactRecord, CompletionPolicy, CompletionVerdict,
+    Evidence, EvidenceDraft, EvidenceKind, Run, RunContext, RunEvent, RunMode, RunState, RunStep,
+    ToolCall,
+};
 pub use state::Store;
-pub use store_ai::{AgentRequest, CatalogueModel, Chapter, ChatEvent, ChatThread, InboxMessage, Provider, QueuedMessage};
+pub use store_ai::{
+    AgentRequest, CatalogueModel, Chapter, ChatEvent, ChatThread, InboxMessage, Provider,
+    QueuedMessage,
+};
 pub use store_mcp::{McpServer, McpTool, McpTrust};
+pub use store_runs::{
+    NewApproval, NewArtifact, NewEvidence, NewToolCall, RunSpec, APPROVAL_LIFETIME_MINUTES,
+};
 pub use store_schedule::Schedule;
-pub use store_team::{GoalLoop, ProviderCheck, RoleModel, ServiceDecision, TeamEvent, TeamRun, TeamTask};
 pub use store_stacks::{StackProject, StackRun};
+pub use store_team::{
+    GoalLoop, ProviderCheck, RoleModel, ServiceDecision, TeamEvent, TeamRun, TeamTask,
+};
 pub use store_work::{ProjectProcess, Scratchpad, Todo, TodoEvent};
 
 /// Error type shared across the workspace.

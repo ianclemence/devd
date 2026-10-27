@@ -83,32 +83,54 @@ fn with_ext(stem: &str) -> String {
 /// Where a program is inside a root: `bin/<name>` or beside the root.
 fn locate(root: &Path, stem: &str) -> Option<PathBuf> {
     let name = with_ext(stem);
-    [root.join("bin").join(&name), root.join(&name)].into_iter().find(|p| p.is_file())
+    [root.join("bin").join(&name), root.join(&name)]
+        .into_iter()
+        .find(|p| p.is_file())
 }
 
 /// The engine's root inside `folder`: the folder itself, or one level down (a
 /// version folder, or the `pgsql` folder the PostgreSQL zip unpacks to).
 pub fn root_of(engine: &Engine, folder: &Path) -> Option<PathBuf> {
-    let complete = |root: &Path| locate(root, engine.program).is_some() && engine.needs.iter().all(|n| locate(root, n).is_some());
+    let complete = |root: &Path| {
+        locate(root, engine.program).is_some()
+            && engine.needs.iter().all(|n| locate(root, n).is_some())
+    };
     if complete(folder) {
         return Some(folder.to_path_buf());
     }
-    let mut kids: Vec<PathBuf> = std::fs::read_dir(folder).ok()?.flatten().map(|e| e.path()).filter(|p| p.is_dir() && complete(p)).collect();
+    let mut kids: Vec<PathBuf> = std::fs::read_dir(folder)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir() && complete(p))
+        .collect();
     kids.sort();
     kids.pop()
 }
 
 /// The server program.
 pub fn exe(engine: &Engine, root: &Path) -> Result<PathBuf> {
-    locate(root, engine.program).ok_or_else(|| DevdError::not_found(format!("{} is not in {}", engine.program, root.display())))
+    locate(root, engine.program).ok_or_else(|| {
+        DevdError::not_found(format!("{} is not in {}", engine.program, root.display()))
+    })
 }
 
 /// The version the program prints.
 pub fn version(engine: &Engine, root: &Path) -> Option<String> {
     let program = locate(root, engine.program)?;
     let args: Vec<String> = engine.version_args.iter().map(|a| a.to_string()).collect();
-    let out = util::run(&program, &args, program.parent(), &[], Some(Duration::from_secs(15))).ok()?;
-    util::extract_version(&format!("{}\n{}", out.stdout, out.stderr), Some(engine.version_regex))
+    let out = util::run(
+        &program,
+        &args,
+        program.parent(),
+        &[],
+        Some(Duration::from_secs(15)),
+    )
+    .ok()?;
+    util::extract_version(
+        &format!("{}\n{}", out.stdout, out.stderr),
+        Some(engine.version_regex),
+    )
 }
 
 /// Folders on this machine that hold the engine, with their versions.
@@ -129,13 +151,22 @@ pub fn find_local(engine: &Engine) -> Vec<(PathBuf, String)> {
             candidates.push(root.join("Program Files").join(engine.tool));
             candidates.push(root.join("Program Files").join("PostgreSQL"));
             candidates.push(root.join("Program Files").join("MongoDB").join("Server"));
-            let Ok(tops) = std::fs::read_dir(&root) else { continue };
+            let Ok(tops) = std::fs::read_dir(&root) else {
+                continue;
+            };
             for top in tops.flatten().filter(|e| e.path().is_dir()) {
                 candidates.push(top.path().join("bin").join(engine.tool));
             }
         }
     } else {
-        for base in ["/usr/lib/postgresql", "/opt/homebrew/opt", "/usr/local/opt", "/usr/local/bin", "/usr/bin", "/opt/homebrew/bin"] {
+        for base in [
+            "/usr/lib/postgresql",
+            "/opt/homebrew/opt",
+            "/usr/local/opt",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/opt/homebrew/bin",
+        ] {
             candidates.push(PathBuf::from(base));
             if let Ok(kids) = std::fs::read_dir(base) {
                 candidates.extend(kids.flatten().map(|k| k.path()).filter(|p| p.is_dir()));
@@ -147,7 +178,9 @@ pub fn find_local(engine: &Engine) -> Vec<(PathBuf, String)> {
     }
     let mut out: Vec<(PathBuf, String)> = Vec::new();
     for candidate in candidates {
-        let Some(root) = root_of(engine, &candidate) else { continue };
+        let Some(root) = root_of(engine, &candidate) else {
+            continue;
+        };
         if out.iter().any(|(p, _)| p == &root) {
             continue;
         }
@@ -182,14 +215,41 @@ pub fn argv(ctx: &Ctx, engine: &Engine, root: &Path, port: u16) -> Result<Vec<St
     let mut args = vec![program];
     match engine.name {
         "postgres" => {
-            args.extend(["-D".into(), data.display().to_string(), "-p".into(), port.to_string(), "-c".into(), "listen_addresses=127.0.0.1".into()]);
+            args.extend([
+                "-D".into(),
+                data.display().to_string(),
+                "-p".into(),
+                port.to_string(),
+                "-c".into(),
+                "listen_addresses=127.0.0.1".into(),
+            ]);
             if !cfg!(windows) {
                 // A package's default socket directory is not writable by an ordinary user.
-                args.extend(["-c".into(), format!("unix_socket_directories={}", slashy(&ctx.paths.etc().join("postgres").join("run")))]);
+                args.extend([
+                    "-c".into(),
+                    format!(
+                        "unix_socket_directories={}",
+                        slashy(&ctx.paths.etc().join("postgres").join("run"))
+                    ),
+                ]);
             }
         }
-        "mongodb" => args.extend(["--dbpath".into(), data.display().to_string(), "--bind_ip".into(), "127.0.0.1".into(), "--port".into(), port.to_string()]),
-        "memcached" => args.extend(["-l".into(), "127.0.0.1".into(), "-p".into(), port.to_string(), "-m".into(), "64".into()]),
+        "mongodb" => args.extend([
+            "--dbpath".into(),
+            data.display().to_string(),
+            "--bind_ip".into(),
+            "127.0.0.1".into(),
+            "--port".into(),
+            port.to_string(),
+        ]),
+        "memcached" => args.extend([
+            "-l".into(),
+            "127.0.0.1".into(),
+            "-p".into(),
+            port.to_string(),
+            "-m".into(),
+            "64".into(),
+        ]),
         other => return Err(DevdError::unsupported(format!("no engine named {other}"))),
     }
     Ok(args)
@@ -207,7 +267,8 @@ pub fn prepare(ctx: &Ctx, engine: &Engine, root: &Path) -> Result<Vec<String>> {
             std::fs::create_dir_all(ctx.paths.etc().join("postgres").join("run"))?;
         }
         if !data.join("PG_VERSION").is_file() {
-            let initdb = locate(root, "initdb").ok_or_else(|| DevdError::not_found("initdb is not beside postgres"))?;
+            let initdb = locate(root, "initdb")
+                .ok_or_else(|| DevdError::not_found("initdb is not beside postgres"))?;
             let args = [
                 "-D".to_string(),
                 data.display().to_string(),
@@ -218,7 +279,13 @@ pub fn prepare(ctx: &Ctx, engine: &Engine, root: &Path) -> Result<Vec<String>> {
                 "UTF8".to_string(),
                 "--no-locale".to_string(),
             ];
-            let out = util::run(&initdb, &args, initdb.parent(), &[], Some(Duration::from_secs(300)))?;
+            let out = util::run(
+                &initdb,
+                &args,
+                initdb.parent(),
+                &[],
+                Some(Duration::from_secs(300)),
+            )?;
             if !data.join("PG_VERSION").is_file() {
                 return Err(DevdError::Command {
                     program: "initdb".to_string(),
@@ -239,8 +306,23 @@ pub fn graceful_stop(ctx: &Ctx, name: &str, root: &Path) {
         return;
     }
     if let Some(pg_ctl) = locate(root, "pg_ctl") {
-        let args = ["-D".to_string(), data_dir(ctx, "postgres").display().to_string(), "stop".to_string(), "-m".to_string(), "fast".to_string(), "-w".to_string(), "-t".to_string(), "20".to_string()];
-        let _ = util::run(&pg_ctl, &args, pg_ctl.parent(), &[], Some(Duration::from_secs(40)));
+        let args = [
+            "-D".to_string(),
+            data_dir(ctx, "postgres").display().to_string(),
+            "stop".to_string(),
+            "-m".to_string(),
+            "fast".to_string(),
+            "-w".to_string(),
+            "-t".to_string(),
+            "20".to_string(),
+        ];
+        let _ = util::run(
+            &pg_ctl,
+            &args,
+            pg_ctl.parent(),
+            &[],
+            Some(Duration::from_secs(40)),
+        );
     }
 }
 
@@ -249,7 +331,8 @@ pub fn graceful_stop(ctx: &Ctx, name: &str, root: &Path) {
 /// Run one statement through `psql` against devd's PostgreSQL.
 fn psql(ctx: &Ctx, root: &Path, port: u16, sql: &str) -> Result<String> {
     let _ = ctx;
-    let program = locate(root, "psql").ok_or_else(|| DevdError::not_found("psql is not installed beside postgres"))?;
+    let program = locate(root, "psql")
+        .ok_or_else(|| DevdError::not_found("psql is not installed beside postgres"))?;
     let args = [
         "-h".to_string(),
         "127.0.0.1".to_string(),
@@ -267,9 +350,19 @@ fn psql(ctx: &Ctx, root: &Path, port: u16, sql: &str) -> Result<String> {
         "-c".to_string(),
         sql.to_string(),
     ];
-    let out = util::run(&program, &args, program.parent(), &[], Some(Duration::from_secs(60)))?;
+    let out = util::run(
+        &program,
+        &args,
+        program.parent(),
+        &[],
+        Some(Duration::from_secs(60)),
+    )?;
     if out.code != 0 {
-        return Err(DevdError::Command { program: "psql".to_string(), code: out.code, stderr: util::truncate(out.stderr.trim(), 1500) });
+        return Err(DevdError::Command {
+            program: "psql".to_string(),
+            code: out.code,
+            stderr: util::truncate(out.stderr.trim(), 1500),
+        });
     }
     Ok(out.stdout)
 }
@@ -290,7 +383,12 @@ pub fn valid_pg_name(name: &str) -> Result<()> {
 /// The databases on devd's PostgreSQL, excluding the templates and `postgres`.
 pub fn pg_databases(ctx: &Ctx, root: &Path, port: u16) -> Result<Vec<String>> {
     let out = psql(ctx, root, port, "SELECT datname FROM pg_database WHERE NOT datistemplate AND datname <> 'postgres' ORDER BY 1")?;
-    Ok(out.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect())
+    Ok(out
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect())
 }
 
 /// Create a database (UTF-8, from template0) if it is not there.
@@ -299,28 +397,59 @@ pub fn pg_create(ctx: &Ctx, root: &Path, port: u16, name: &str) -> Result<()> {
     if pg_databases(ctx, root, port)?.iter().any(|d| d == name) {
         return Ok(());
     }
-    psql(ctx, root, port, &format!("CREATE DATABASE \"{name}\" ENCODING 'UTF8' TEMPLATE template0")).map(|_| ())
+    psql(
+        ctx,
+        root,
+        port,
+        &format!("CREATE DATABASE \"{name}\" ENCODING 'UTF8' TEMPLATE template0"),
+    )
+    .map(|_| ())
 }
 
 /// Drop a database.
 pub fn pg_drop(ctx: &Ctx, root: &Path, port: u16, name: &str) -> Result<()> {
     valid_pg_name(name)?;
-    psql(ctx, root, port, &format!("DROP DATABASE IF EXISTS \"{name}\"")).map(|_| ())
+    psql(
+        ctx,
+        root,
+        port,
+        &format!("DROP DATABASE IF EXISTS \"{name}\""),
+    )
+    .map(|_| ())
 }
 
 /// How many tables a database has.
 pub fn pg_table_count(root: &Path, port: u16, name: &str) -> Result<u64> {
     valid_pg_name(name)?;
-    let program = locate(root, "psql").ok_or_else(|| DevdError::not_found("psql is not installed beside postgres"))?;
+    let program = locate(root, "psql")
+        .ok_or_else(|| DevdError::not_found("psql is not installed beside postgres"))?;
     let args = ["-h".to_string(), "127.0.0.1".to_string(), "-p".to_string(), port.to_string(), "-U".to_string(), "postgres".to_string(), "-d".to_string(), name.to_string(), "-X".to_string(), "-A".to_string(), "-t".to_string(), "-c".to_string(), "SELECT count(*) FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog','information_schema')".to_string()];
-    let out = util::run(&program, &args, program.parent(), &[], Some(Duration::from_secs(60)))?;
-    Ok(if out.code == 0 { out.stdout.trim().parse().unwrap_or(0) } else { 0 })
+    let out = util::run(
+        &program,
+        &args,
+        program.parent(),
+        &[],
+        Some(Duration::from_secs(60)),
+    )?;
+    Ok(if out.code == 0 {
+        out.stdout.trim().parse().unwrap_or(0)
+    } else {
+        0
+    })
 }
 
 /// Write a database to a plain SQL file with `pg_dump`.
-pub fn pg_dump(root: &Path, host_port: u16, user: &str, password: Option<&str>, database: &str, out: &Path) -> Result<()> {
+pub fn pg_dump(
+    root: &Path,
+    host_port: u16,
+    user: &str,
+    password: Option<&str>,
+    database: &str,
+    out: &Path,
+) -> Result<()> {
     valid_pg_name(database)?;
-    let program = locate(root, "pg_dump").ok_or_else(|| DevdError::not_found("pg_dump is not installed beside postgres"))?;
+    let program = locate(root, "pg_dump")
+        .ok_or_else(|| DevdError::not_found("pg_dump is not installed beside postgres"))?;
     if let Some(parent) = out.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -337,10 +466,22 @@ pub fn pg_dump(root: &Path, host_port: u16, user: &str, password: Option<&str>, 
         out.display().to_string(),
         database.to_string(),
     ];
-    let envs: Vec<(String, String)> = password.map(|p| vec![("PGPASSWORD".to_string(), p.to_string())]).unwrap_or_default();
-    let res = util::run(&program, &args, program.parent(), &envs, Some(Duration::from_secs(3600)))?;
+    let envs: Vec<(String, String)> = password
+        .map(|p| vec![("PGPASSWORD".to_string(), p.to_string())])
+        .unwrap_or_default();
+    let res = util::run(
+        &program,
+        &args,
+        program.parent(),
+        &envs,
+        Some(Duration::from_secs(3600)),
+    )?;
     if res.code != 0 {
-        return Err(DevdError::Command { program: "pg_dump".to_string(), code: res.code, stderr: util::truncate(res.stderr.trim(), 1500) });
+        return Err(DevdError::Command {
+            program: "pg_dump".to_string(),
+            code: res.code,
+            stderr: util::truncate(res.stderr.trim(), 1500),
+        });
     }
     Ok(())
 }
@@ -348,7 +489,8 @@ pub fn pg_dump(root: &Path, host_port: u16, user: &str, password: Option<&str>, 
 /// Run a SQL file against a database on devd's PostgreSQL.
 pub fn pg_restore(ctx: &Ctx, root: &Path, port: u16, database: &str, file: &Path) -> Result<()> {
     pg_create(ctx, root, port, database)?;
-    let program = locate(root, "psql").ok_or_else(|| DevdError::not_found("psql is not installed beside postgres"))?;
+    let program = locate(root, "psql")
+        .ok_or_else(|| DevdError::not_found("psql is not installed beside postgres"))?;
     let args = [
         "-h".to_string(),
         "127.0.0.1".to_string(),
@@ -365,9 +507,19 @@ pub fn pg_restore(ctx: &Ctx, root: &Path, port: u16, database: &str, file: &Path
         "-f".to_string(),
         file.display().to_string(),
     ];
-    let res = util::run(&program, &args, program.parent(), &[], Some(Duration::from_secs(3600)))?;
+    let res = util::run(
+        &program,
+        &args,
+        program.parent(),
+        &[],
+        Some(Duration::from_secs(3600)),
+    )?;
     if res.code != 0 {
-        return Err(DevdError::Command { program: "psql".to_string(), code: res.code, stderr: util::truncate(res.stderr.trim(), 1500) });
+        return Err(DevdError::Command {
+            program: "psql".to_string(),
+            code: res.code,
+            stderr: util::truncate(res.stderr.trim(), 1500),
+        });
     }
     Ok(())
 }
@@ -388,12 +540,26 @@ mod tests {
         let base = std::env::temp_dir().join(format!("devd-engines-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let pg = get("postgres").unwrap();
-        fake_root(&base.join("full"), &["postgres", "initdb", "pg_ctl", "psql", "pg_dump"]);
+        fake_root(
+            &base.join("full"),
+            &["postgres", "initdb", "pg_ctl", "psql", "pg_dump"],
+        );
         fake_root(&base.join("partial"), &["postgres"]);
-        fake_root(&base.join("zip").join("pgsql"), &["postgres", "initdb", "pg_ctl", "psql", "pg_dump"]);
+        fake_root(
+            &base.join("zip").join("pgsql"),
+            &["postgres", "initdb", "pg_ctl", "psql", "pg_dump"],
+        );
         assert_eq!(root_of(pg, &base.join("full")), Some(base.join("full")));
-        assert_eq!(root_of(pg, &base.join("partial")), None, "a server without initdb cannot make a cluster");
-        assert_eq!(root_of(pg, &base.join("zip")), Some(base.join("zip").join("pgsql")), "the zip's own folder is found one level down");
+        assert_eq!(
+            root_of(pg, &base.join("partial")),
+            None,
+            "a server without initdb cannot make a cluster"
+        );
+        assert_eq!(
+            root_of(pg, &base.join("zip")),
+            Some(base.join("zip").join("pgsql")),
+            "the zip's own folder is found one level down"
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -402,7 +568,18 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("devd-engine-argv-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let root = dir.join("prog");
-        fake_root(&root, &["postgres", "initdb", "pg_ctl", "psql", "pg_dump", "mongod", "memcached"]);
+        fake_root(
+            &root,
+            &[
+                "postgres",
+                "initdb",
+                "pg_ctl",
+                "psql",
+                "pg_dump",
+                "mongod",
+                "memcached",
+            ],
+        );
         let paths = devd_core::Paths::rooted(dir.join("home"));
         let ctx = Ctx {
             store: std::sync::Arc::new(devd_core::state::Store::open_in_memory().unwrap()),
@@ -410,15 +587,28 @@ mod tests {
             settings: std::sync::Arc::new(devd_core::config::Settings::default()),
             events: devd_core::events::EventBus::new(),
             actor: devd_core::capability::Actor::human(devd_core::capability::Surface::Cli),
+            run: None,
             dry_run: false,
         };
         let pg = argv(&ctx, get("postgres").unwrap(), &root, 5433).unwrap();
-        assert!(pg.contains(&"listen_addresses=127.0.0.1".to_string()) && pg.contains(&"5433".to_string()));
-        assert!(pg.iter().any(|a| a.contains("postgres") && a.contains("data")), "{pg:?}");
+        assert!(
+            pg.contains(&"listen_addresses=127.0.0.1".to_string())
+                && pg.contains(&"5433".to_string())
+        );
+        assert!(
+            pg.iter()
+                .any(|a| a.contains("postgres") && a.contains("data")),
+            "{pg:?}"
+        );
         let mongo = argv(&ctx, get("mongodb").unwrap(), &root, 27018).unwrap();
-        assert!(mongo.windows(2).any(|w| w[0] == "--bind_ip" && w[1] == "127.0.0.1"));
+        assert!(mongo
+            .windows(2)
+            .any(|w| w[0] == "--bind_ip" && w[1] == "127.0.0.1"));
         let mem = argv(&ctx, get("memcached").unwrap(), &root, 11212).unwrap();
-        assert!(mem.windows(2).any(|w| w[0] == "-l" && w[1] == "127.0.0.1") && mem.contains(&"11212".to_string()));
+        assert!(
+            mem.windows(2).any(|w| w[0] == "-l" && w[1] == "127.0.0.1")
+                && mem.contains(&"11212".to_string())
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

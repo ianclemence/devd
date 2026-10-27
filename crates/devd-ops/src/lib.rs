@@ -47,7 +47,11 @@ pub fn site_named(ctx: &Ctx, name: &str) -> Result<Site> {
         .list_sites()?
         .into_iter()
         .find(|s| s.name == name)
-        .ok_or_else(|| DevdError::not_found(format!("no site named `{name}`; `devd site list` shows them")))
+        .ok_or_else(|| {
+            DevdError::not_found(format!(
+                "no site named `{name}`; `devd site list` shows them"
+            ))
+        })
 }
 
 /// The project folder of a site, which must exist.
@@ -55,7 +59,10 @@ pub fn site_root(ctx: &Ctx, name: &str) -> Result<(Site, PathBuf)> {
     let site = site_named(ctx, name)?;
     let root = PathBuf::from(&site.root);
     if !root.is_dir() {
-        return Err(DevdError::not_found(format!("the project folder of `{name}` ({}) does not exist", root.display())));
+        return Err(DevdError::not_found(format!(
+            "the project folder of `{name}` ({}) does not exist",
+            root.display()
+        )));
     }
     Ok((site, root))
 }
@@ -65,7 +72,11 @@ pub fn php_for_site(ctx: &Ctx, site: &Site) -> Result<PathBuf> {
     let wanted = site
         .php
         .clone()
-        .or_else(|| devd_core::config::Settings::load(&ctx.paths.settings_file()).ok().and_then(|s| s.primary_php))
+        .or_else(|| {
+            devd_core::config::Settings::load(&ctx.paths.settings_file())
+                .ok()
+                .and_then(|s| s.primary_php)
+        })
         .map(|v| devd_services::php_series(&v));
     let mut best: Option<String> = None;
     for r in ctx.store.list_runtimes()? {
@@ -76,11 +87,18 @@ pub fn php_for_site(ctx: &Ctx, site: &Site) -> Result<PathBuf> {
         if wanted.as_ref().is_some_and(|w| *w != series) {
             continue;
         }
-        if best.as_ref().is_none_or(|v| r.version.as_str() > v.as_str()) {
+        if best
+            .as_ref()
+            .is_none_or(|v| r.version.as_str() > v.as_str())
+        {
             best = Some(r.version.clone());
         }
     }
-    let version = best.ok_or_else(|| DevdError::not_found("no PHP runtime is installed for this site; `devd runtime install php@8.4` adds one"))?;
+    let version = best.ok_or_else(|| {
+        DevdError::not_found(
+            "no PHP runtime is installed for this site; `devd runtime install php@8.4` adds one",
+        )
+    })?;
     devd_runtime::executable(ctx, "php", Some(&version))
 }
 
@@ -103,7 +121,9 @@ pub fn command_path(ctx: &Ctx, site: &Site) -> String {
     if let Some(existing) = std::env::var_os("PATH") {
         parts.extend(std::env::split_paths(&existing));
     }
-    std::env::join_paths(parts).map(|p| p.to_string_lossy().to_string()).unwrap_or_default()
+    std::env::join_paths(parts)
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default()
 }
 
 /// devd's own small tools (a `composer` shim) live here.
@@ -125,7 +145,10 @@ pub fn ensure_composer_shim(ctx: &Ctx) -> Result<()> {
     } else {
         let shim = dir.join("composer");
         if !shim.is_file() {
-            std::fs::write(&shim, "#!/bin/sh\nexec php \"$(dirname \"$0\")/composer.phar\" \"$@\"\n")?;
+            std::fs::write(
+                &shim,
+                "#!/bin/sh\nexec php \"$(dirname \"$0\")/composer.phar\" \"$@\"\n",
+            )?;
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
@@ -139,7 +162,9 @@ pub fn ensure_composer_shim(ctx: &Ctx) -> Result<()> {
 /// The shell invocation for one command line: `cmd /C` on Windows, `sh -c` elsewhere.
 pub fn shell_command(line: &str) -> std::process::Command {
     if cfg!(windows) {
-        let mut c = std::process::Command::new(std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string()));
+        let mut c = std::process::Command::new(
+            std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string()),
+        );
         c.arg("/C").arg(line);
         c
     } else {
@@ -164,26 +189,43 @@ pub fn run_line(ctx: &Ctx, site: &Site, root: &Path, line: &str, log: &Path) -> 
 }
 
 /// [`run_line`] with extra environment variables (a site's deploy variables).
-pub fn run_line_with(ctx: &Ctx, site: &Site, root: &Path, line: &str, log: &Path, envs: &[(String, String)]) -> Ran {
+pub fn run_line_with(
+    ctx: &Ctx,
+    site: &Site,
+    root: &Path,
+    line: &str,
+    log: &Path,
+    envs: &[(String, String)],
+) -> Ran {
     use std::io::Write;
     let started = std::time::Instant::now();
     let _ = ensure_composer_shim(ctx);
-    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(log).ok();
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log)
+        .ok();
     if let Some(f) = file.as_mut() {
         let _ = writeln!(f, "$ {line}");
     }
     let mut cmd = shell_command(line);
-    cmd.current_dir(root).env("PATH", command_path(ctx, site)).env("DEVD_SITE", &site.name);
+    cmd.current_dir(root)
+        .env("PATH", command_path(ctx, site))
+        .env("DEVD_SITE", &site.name);
     for (k, v) in envs {
         cmd.env(k, v);
     }
     cmd.stdin(std::process::Stdio::null());
-    match (file.as_ref().and_then(|f| f.try_clone().ok()), file.as_ref().and_then(|f| f.try_clone().ok())) {
+    match (
+        file.as_ref().and_then(|f| f.try_clone().ok()),
+        file.as_ref().and_then(|f| f.try_clone().ok()),
+    ) {
         (Some(out), Some(err)) => {
             cmd.stdout(out).stderr(err);
         }
         _ => {
-            cmd.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+            cmd.stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
         }
     }
     let exit = match cmd.status() {
@@ -198,13 +240,18 @@ pub fn run_line_with(ctx: &Ctx, site: &Site, root: &Path, line: &str, log: &Path
     if let Some(f) = file.as_mut() {
         let _ = writeln!(f, "[exit {exit}]");
     }
-    Ran { exit, seconds: started.elapsed().as_secs_f64() }
+    Ran {
+        exit,
+        seconds: started.elapsed().as_secs_f64(),
+    }
 }
 
 /// The last `max` bytes of a text file, from a line boundary.
 pub fn tail_bytes(path: &Path, max: usize) -> String {
     use std::io::{Read, Seek, SeekFrom};
-    let Ok(mut f) = std::fs::File::open(path) else { return String::new() };
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return String::new();
+    };
     let len = f.metadata().map(|m| m.len()).unwrap_or(0);
     let start = len.saturating_sub(max as u64);
     let _ = f.seek(SeekFrom::Start(start));
@@ -212,7 +259,9 @@ pub fn tail_bytes(path: &Path, max: usize) -> String {
     let _ = f.read_to_end(&mut buf);
     let text = String::from_utf8_lossy(&buf).to_string();
     if start > 0 {
-        text.split_once('\n').map(|(_, rest)| rest.to_string()).unwrap_or(text)
+        text.split_once('\n')
+            .map(|(_, rest)| rest.to_string())
+            .unwrap_or(text)
     } else {
         text
     }
@@ -232,6 +281,14 @@ pub(crate) mod tests_support {
     pub fn ctx(dir: &std::path::Path) -> Ctx {
         let paths = Paths::rooted(dir);
         paths.ensure().unwrap();
-        Ctx { store: Arc::new(Store::open_in_memory().unwrap()), paths: Arc::new(paths), settings: Arc::new(Settings::default()), events: EventBus::new(), actor: Actor::human(Surface::Cli), dry_run: false }
+        Ctx {
+            store: Arc::new(Store::open_in_memory().unwrap()),
+            paths: Arc::new(paths),
+            settings: Arc::new(Settings::default()),
+            events: EventBus::new(),
+            actor: Actor::human(Surface::Cli),
+            run: None,
+            dry_run: false,
+        }
     }
 }

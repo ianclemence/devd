@@ -59,37 +59,44 @@ args! {
 /// Register every runtime capability.
 pub fn register(reg: &mut Registry) -> Result<()> {
     reg.define::<NoArgs>("runtime.list", "List installed runtimes")
-    .description("Every runtime devd has installed, with a live check that the install directory \
-         and executable are still there.")
-    .group("runtime")
-    .tier(Tier::Read)
-    .effect(Effect::Read)
-    .agent_safe()
-    .idempotent()
-    .handlers(
-        |_, _| Ok(Plan::new("runtime.list", "list the installed runtimes")),
-        |ctx, _| {
-            let rows = runtimes::list(ctx)?;
-            let missing: Vec<String> = rows
-                .iter()
-                .filter(|r| !r.present)
-                .map(|r| format!("{} {}", r.runtime.kind, r.runtime.version))
-                .collect();
-            let mut outcome = Outcome::with_data(
-                format!("{} runtime(s) installed", rows.len()),
-                serde_json::to_value(&rows).unwrap_or(Value::Null),
-            );
-            for name in missing {
-                outcome = outcome.warn(format!("{name} is recorded but its directory is gone"));
-            }
-            Ok(outcome)
-        },
-    )?;
+        .description(
+            "Every runtime devd has installed, with a live check that the install directory \
+         and executable are still there.",
+        )
+        .group("runtime")
+        .tier(Tier::Read)
+        .effect(Effect::Read)
+        .agent_safe()
+        .idempotent()
+        .handlers(
+            |_, _| Ok(Plan::new("runtime.list", "list the installed runtimes")),
+            |ctx, _| {
+                let rows = runtimes::list(ctx)?;
+                let missing: Vec<String> = rows
+                    .iter()
+                    .filter(|r| !r.present)
+                    .map(|r| format!("{} {}", r.runtime.kind, r.runtime.version))
+                    .collect();
+                let mut outcome = Outcome::with_data(
+                    format!("{} runtime(s) installed", rows.len()),
+                    serde_json::to_value(&rows).unwrap_or(Value::Null),
+                );
+                for name in missing {
+                    outcome = outcome.warn(format!("{name} is recorded but its directory is gone"));
+                }
+                Ok(outcome)
+            },
+        )?;
 
-    reg.define::<AvailableArgs>("runtime.available", "List runtime versions published upstream")
-    .description("Reads the vendor's own version catalogue (windows.php.net for PHP, nodejs.org \
+    reg.define::<AvailableArgs>(
+        "runtime.available",
+        "List runtime versions published upstream",
+    )
+    .description(
+        "Reads the vendor's own version catalogue (windows.php.net for PHP, nodejs.org \
          for Node, go.dev for Go) and returns the builds that can be installed, with the \
-         digest each one will be verified against.")
+         digest each one will be verified against.",
+    )
     .group("runtime")
     .tier(Tier::Read)
     .effect(Effect::Read)
@@ -117,18 +124,18 @@ pub fn register(reg: &mut Registry) -> Result<()> {
     )?;
 
     reg.define::<InstallArgs>("runtime.install", "Install a runtime")
-    .description("Resolves the request against the vendor's catalogue, downloads the official \
+        .description(
+            "Resolves the request against the vendor's catalogue, downloads the official \
          build over HTTPS, verifies the vendor's published SHA-256, unpacks it under \
          runtimes/<kind>/<version>/, runs the post-install steps the build needs (PHP \
-         gets a generated php.ini) and proves it starts before recording it.")
-    .group("runtime")
-    .tier(Tier::Write)
-    .effect(Effect::Write)
-    .agent_safe()
-    .dry_run()
-    .handlers(
-        install_plan,
-        |ctx, args| {
+         gets a generated php.ini) and proves it starts before recording it.",
+        )
+        .group("runtime")
+        .tier(Tier::Write)
+        .effect(Effect::Write)
+        .agent_safe()
+        .dry_run()
+        .handlers(install_plan, |ctx, args| {
             let thread_safe = args.thread_safe.unwrap_or(false);
             let force = args.force.unwrap_or(false);
             let progress = |p: &Progress| {
@@ -182,13 +189,17 @@ pub fn register(reg: &mut Registry) -> Result<()> {
                 }
             }
             Ok(outcome)
-        },
-    )?;
+        })?;
 
-    reg.define::<VersionArgs>("runtime.verify", "Run an installed runtime and report its version")
-    .description("Starts the installed interpreter with its version flag and reports what it says, \
+    reg.define::<VersionArgs>(
+        "runtime.verify",
+        "Run an installed runtime and report its version",
+    )
+    .description(
+        "Starts the installed interpreter with its version flag and reports what it says, \
          so a runtime that is present but cannot start is visible rather than assumed \
-         healthy. For PHP it also reports the loaded modules.")
+         healthy. For PHP it also reports the loaded modules.",
+    )
     .group("runtime")
     .tier(Tier::Read)
     .effect(Effect::Read)
@@ -216,83 +227,85 @@ pub fn register(reg: &mut Registry) -> Result<()> {
     )?;
 
     reg.define::<VersionArgs>("runtime.remove", "Remove an installed runtime")
-    .description("Deletes the runtime's directory and its record. Refused while a service is \
-         configured to use it, so a running web server cannot lose its interpreter.")
-    .group("runtime")
-    .tier(Tier::Destructive)
-    .effect(Effect::Write)
-    .dry_run()
-    .handlers(
-        |ctx, args| {
-            let root = ctx.paths.runtime_version(&args.kind, &args.version);
-            let mut plan = Plan::new(
-                "runtime.remove",
-                format!("remove {} {}", args.kind, args.version),
-            )
-            .destructive(true)
-            .effect("delete the runtime directory")
-            .effect("remove the runtime from the state store")
-            .data(json!({
-                "kind": args.kind,
-                "version": args.version,
-                "path": root.display().to_string(),
-                "bytes": devd_core::util::directory_size(&root),
-            }));
-            if !root.is_dir() {
-                plan = plan.step("nothing is installed at that version");
-            } else {
-                plan = plan.step(format!("delete {}", root.display()));
-            }
-            if args.kind == "php"
-                && ctx.settings.primary_php.as_deref() == Some(args.version.as_str())
-            {
-                plan = plan.step(
-                    "another installed PHP version becomes the default; if none is left, new \
+        .description(
+            "Deletes the runtime's directory and its record. Refused while a service is \
+         configured to use it, so a running web server cannot lose its interpreter.",
+        )
+        .group("runtime")
+        .tier(Tier::Destructive)
+        .effect(Effect::Write)
+        .dry_run()
+        .handlers(
+            |ctx, args| {
+                let root = ctx.paths.runtime_version(&args.kind, &args.version);
+                let mut plan = Plan::new(
+                    "runtime.remove",
+                    format!("remove {} {}", args.kind, args.version),
+                )
+                .destructive(true)
+                .effect("delete the runtime directory")
+                .effect("remove the runtime from the state store")
+                .data(json!({
+                    "kind": args.kind,
+                    "version": args.version,
+                    "path": root.display().to_string(),
+                    "bytes": devd_core::util::directory_size(&root),
+                }));
+                if !root.is_dir() {
+                    plan = plan.step("nothing is installed at that version");
+                } else {
+                    plan = plan.step(format!("delete {}", root.display()));
+                }
+                if args.kind == "php"
+                    && ctx.settings.primary_php.as_deref() == Some(args.version.as_str())
+                {
+                    plan = plan.step(
+                        "another installed PHP version becomes the default; if none is left, new \
                      sites have no interpreter until one is installed",
-                );
-            }
-            Ok(plan)
-        },
-        |ctx, args| {
-            let data = runtimes::remove(ctx, &args.kind, &args.version)?;
-            if args.kind == "php" {
-                refresh_launchers(ctx);
-            }
-            Ok(Outcome::with_data(
-                format!("removed {} {}", args.kind, args.version),
-                data,
-            ))
-        },
-    )?;
+                    );
+                }
+                Ok(plan)
+            },
+            |ctx, args| {
+                let data = runtimes::remove(ctx, &args.kind, &args.version)?;
+                if args.kind == "php" {
+                    refresh_launchers(ctx);
+                }
+                Ok(Outcome::with_data(
+                    format!("removed {} {}", args.kind, args.version),
+                    data,
+                ))
+            },
+        )?;
 
     reg.define::<UseArgs>("runtime.use", "Choose the PHP version new sites use")
-    .description("Sets the default PHP version for sites that do not pin one of their own.")
-    .group("runtime")
-    .tier(Tier::Write)
-    .effect(Effect::Config)
-    .agent_safe()
-    .idempotent()
-    .handlers(
-        |ctx, args| {
-            Ok(Plan::new(
-                "runtime.use",
-                format!("make PHP {} the default for new sites", args.version),
-            )
-            .step(format!(
-                "write primary_php = \"{}\" to {}",
-                args.version,
-                ctx.paths.settings_file().display()
-            ))
-            .data(json!({ "version": args.version })))
-        },
-        |ctx, args| {
-            runtimes::set_primary_php(ctx, &args.version)?;
-            Ok(Outcome::with_data(
-                format!("PHP {} is now the default for new sites", args.version),
-                json!({ "primary_php": args.version }),
-            ))
-        },
-    )?;
+        .description("Sets the default PHP version for sites that do not pin one of their own.")
+        .group("runtime")
+        .tier(Tier::Write)
+        .effect(Effect::Config)
+        .agent_safe()
+        .idempotent()
+        .handlers(
+            |ctx, args| {
+                Ok(Plan::new(
+                    "runtime.use",
+                    format!("make PHP {} the default for new sites", args.version),
+                )
+                .step(format!(
+                    "write primary_php = \"{}\" to {}",
+                    args.version,
+                    ctx.paths.settings_file().display()
+                ))
+                .data(json!({ "version": args.version })))
+            },
+            |ctx, args| {
+                runtimes::set_primary_php(ctx, &args.version)?;
+                Ok(Outcome::with_data(
+                    format!("PHP {} is now the default for new sites", args.version),
+                    json!({ "primary_php": args.version }),
+                ))
+            },
+        )?;
 
     reg.define::<PinArgs>("runtime.pin", "Pin a project to a runtime version, or clear the pin")
     .description("The project's commands, tasks and processes run with this installed version of PHP,          Node, Go, Python or Ruby instead of the machine default. The version may be a series          such as 3.12. Omit the version to clear the pin.")
@@ -348,15 +361,30 @@ pub fn register(reg: &mut Registry) -> Result<()> {
 /// (or a series of one).
 fn check_pin(ctx: &Ctx, args: &PinArgs) -> Result<()> {
     if !std::path::Path::new(&args.project).is_dir() {
-        return Err(devd_core::DevdError::not_found(format!("{} is not a folder", args.project)));
+        return Err(devd_core::DevdError::not_found(format!(
+            "{} is not a folder",
+            args.project
+        )));
     }
     if !runtimes::KINDS.contains(&args.kind.as_str()) {
-        return Err(devd_core::DevdError::unsupported(format!("unknown runtime kind {}; use one of {}", args.kind, runtimes::KINDS.join(", "))));
+        return Err(devd_core::DevdError::unsupported(format!(
+            "unknown runtime kind {}; use one of {}",
+            args.kind,
+            runtimes::KINDS.join(", ")
+        )));
     }
     if let Some(v) = &args.version {
-        let ok = ctx.store.runtimes_of_kind(&args.kind)?.iter().any(|r| r.version == *v || r.version.strip_prefix(v.as_str()).is_some_and(|rest| rest.starts_with('.')));
+        let ok = ctx.store.runtimes_of_kind(&args.kind)?.iter().any(|r| {
+            r.version == *v
+                || r.version
+                    .strip_prefix(v.as_str())
+                    .is_some_and(|rest| rest.starts_with('.'))
+        });
         if !ok {
-            return Err(devd_core::DevdError::not_found(format!("{} {v} is not installed; run `devd runtime install {}@{v}`", args.kind, args.kind)));
+            return Err(devd_core::DevdError::not_found(format!(
+                "{} {v} is not installed; run `devd runtime install {}@{v}`",
+                args.kind, args.kind
+            )));
         }
     }
     Ok(())
@@ -377,7 +405,10 @@ fn command_line_note(ctx: &Ctx) -> Option<String> {
     if state.on_path || !state.commands.iter().any(|c| c == "php") {
         return None;
     }
-    Some("`php` is not on your PATH yet: run `devd path enable` once to use it from any terminal".to_string())
+    Some(
+        "`php` is not on your PATH yet: run `devd path enable` once to use it from any terminal"
+            .to_string(),
+    )
 }
 
 /// The plan for an install: resolve first, so the URL and digest are visible
@@ -501,6 +532,7 @@ mod tests {
             settings: Arc::new(devd_core::config::Settings::default()),
             events: devd_core::events::EventBus::new(),
             actor: devd_core::capability::Actor::human(devd_core::capability::Surface::Cli),
+            run: None,
             dry_run: true,
         };
         // A wrong type is a validation error, not a crash.

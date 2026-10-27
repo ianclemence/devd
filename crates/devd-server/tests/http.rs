@@ -139,11 +139,11 @@ impl Fixture {
             settings: Arc::new(Settings::default()),
             events: EventBus::new(),
             actor: devd_core::capability::Actor::human(devd_core::capability::Surface::Cli),
+            run: None,
             dry_run: false,
         };
         AppState::new(self.registry(), ctx, port, Vec::new()).unwrap()
     }
-
 }
 
 /// Build a request with a well-formed loopback `Host` header.
@@ -234,9 +234,15 @@ async fn the_event_stream_needs_no_token_but_refuses_another_site() {
         .oneshot(request("GET", "/api/events", port, None, None))
         .await
         .unwrap();
-    assert_eq!(ok.status(), StatusCode::OK, "the window's own origin may subscribe");
     assert_eq!(
-        ok.headers().get("content-type").and_then(|v| v.to_str().ok()),
+        ok.status(),
+        StatusCode::OK,
+        "the window's own origin may subscribe"
+    );
+    assert_eq!(
+        ok.headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok()),
         Some("text/event-stream"),
         "the answer is an event stream"
     );
@@ -249,7 +255,11 @@ async fn the_event_stream_needs_no_token_but_refuses_another_site() {
         .oneshot(foreign.body(Body::empty()).unwrap())
         .await
         .unwrap();
-    assert_eq!(refused.status(), StatusCode::FORBIDDEN, "another site may not subscribe");
+    assert_eq!(
+        refused.status(),
+        StatusCode::FORBIDDEN,
+        "another site may not subscribe"
+    );
 }
 
 #[tokio::test]
@@ -861,6 +871,7 @@ async fn a_real_socket_serves_the_application_and_stops_when_asked() {
         settings: Arc::new(Settings::default()),
         events: EventBus::new(),
         actor: devd_core::capability::Actor::human(devd_core::capability::Surface::Http),
+        run: None,
         dry_run: false,
     };
 

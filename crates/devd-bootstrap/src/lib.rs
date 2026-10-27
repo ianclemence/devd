@@ -60,13 +60,19 @@ impl Agents {
 /// Start the loop that runs cron jobs, in this process, if no other devd process already runs it.
 /// Only a long-lived command calls this (the application window, `devd ui`, `devd serve`): a
 /// one-shot command must not start every due job. Returns whether this process runs them.
-pub fn start_ops(paths: &Paths, store: &Arc<Store>, settings: &Arc<Settings>, events: &EventBus) -> bool {
+pub fn start_ops(
+    paths: &Paths,
+    store: &Arc<Store>,
+    settings: &Arc<Settings>,
+    events: &EventBus,
+) -> bool {
     devd_ops::runner::start(devd_core::capability::Ctx {
         store: store.clone(),
         paths: Arc::new(paths.clone()),
         settings: settings.clone(),
         events: events.clone(),
         actor: devd_core::capability::Actor::system(),
+        run: None,
         dry_run: false,
     })
 }
@@ -81,13 +87,19 @@ pub fn start_ops(paths: &Paths, store: &Arc<Store>, settings: &Arc<Settings>, ev
 ///
 /// A failure is reported as an event and retried, never as a success, and the running server keeps
 /// the configuration it already had until the replacement passes its check.
-pub fn start_reconcile(paths: &Paths, store: &Arc<Store>, settings: &Arc<Settings>, events: &EventBus) {
+pub fn start_reconcile(
+    paths: &Paths,
+    store: &Arc<Store>,
+    settings: &Arc<Settings>,
+    events: &EventBus,
+) {
     let ctx = devd_core::capability::Ctx {
         store: store.clone(),
         paths: Arc::new(paths.clone()),
         settings: settings.clone(),
         events: events.clone(),
         actor: devd_core::capability::Actor::system(),
+        run: None,
         dry_run: false,
     };
     let events = events.clone();
@@ -144,7 +156,9 @@ fn web_fingerprint(ctx: &devd_core::capability::Ctx) -> Result<String> {
             })
         })
         .collect();
-    Ok(devd_core::util::sha256_hex(serde_json::to_string(&rows)?.as_bytes()))
+    Ok(devd_core::util::sha256_hex(
+        serde_json::to_string(&rows)?.as_bytes(),
+    ))
 }
 
 impl Bootstrap {
@@ -193,16 +207,21 @@ impl Bootstrap {
             settings: settings.clone(),
             events: events.clone(),
             actor: devd_core::capability::Actor::system(),
+            run: None,
             dry_run: false,
         });
-        let team = devd_agent::team::Team::new(hub.clone(), devd_core::capability::Ctx {
-            store: workspace.store().clone(),
-            paths: Arc::new(paths.clone()),
-            settings: settings.clone(),
-            events: events.clone(),
-            actor: devd_core::capability::Actor::system(),
-            dry_run: false,
-        });
+        let team = devd_agent::team::Team::new(
+            hub.clone(),
+            devd_core::capability::Ctx {
+                store: workspace.store().clone(),
+                paths: Arc::new(paths.clone()),
+                settings: settings.clone(),
+                events: events.clone(),
+                actor: devd_core::capability::Actor::system(),
+                run: None,
+                dry_run: false,
+            },
+        );
         devd_agent::caps::register(&mut registry, hub.clone(), team.clone())?;
         let registry = Arc::new(registry);
         hub.attach(registry.clone());
@@ -238,6 +257,7 @@ mod tests {
             settings: Arc::new(Settings::default()),
             events: EventBus::new(),
             actor: Actor::system(),
+            run: None,
             dry_run: false,
         };
         (ctx, paths)
@@ -268,7 +288,10 @@ mod tests {
         // An editor or a scaffold writes a static entry: the site now serves files.
         std::fs::write(root.join("index.html"), "<!doctype html>").unwrap();
         let static_site = web_fingerprint(&ctx).unwrap();
-        assert_ne!(empty, static_site, "a new index.html changes what is served");
+        assert_ne!(
+            empty, static_site,
+            "a new index.html changes what is served"
+        );
 
         // A tool adds a PHP entry point: the same folder must switch to PHP.
         std::fs::write(root.join("index.php"), "<?php").unwrap();

@@ -111,6 +111,7 @@ impl App {
             settings: self.settings.clone(),
             events: self.events.clone(),
             actor: self.actor.clone(),
+            run: None,
             dry_run: self.plan_only,
         }
     }

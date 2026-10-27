@@ -91,6 +91,34 @@ The separation matters because the product's central promise is that a refusal
 is not local to a surface: `devd` denies at the registry, so the same request
 from a different shell is the same request.
 
+## Runs and evidence
+
+A **run** is the unit of work the whole product shares. It has a goal,
+acceptance criteria, a mode (assistant, team, scheduled, API, headless), a
+project, a lifecycle state, a plan, steps, tool calls, evidence, artifacts,
+approvals and a sequenced event log. Conversations and team runs keep their own
+tables and link to a run; they do not get a second execution model.
+
+`Registry::dispatch_with` is the normalized entry point. Before a handler runs
+it validates the arguments against the capability's JSON Schema, checks the
+run's cancellation flag and deadline, and returns a previously successful result
+for an idempotent call with the same key. After it runs, it writes the audit
+row, the `tool_calls` row and the evidence derived from the real outcome, carrying
+the provider's call id and the approval that authorized it. A direct alias, an
+MCP call and an internal call therefore produce the same record. A dry run is a
+plan and produces no evidence.
+
+Completion is evidence-aware. `CompletionPolicy::for_goal` decides whether the
+goal requires a change, a verification, both, or neither; `evaluate` compares
+that to typed evidence. A model's statement that it finished is not evidence, so
+a code change with no passing check ends `unverified` with the missing evidence
+named. The full lifecycle, policy table, context budgets, replay cursor and
+recovery rules are in [`runs.md`](runs.md).
+
+`run_events` is the durable record. The live stream (`event: live`) is only an
+overlay; a disconnected client reconnects with `Last-Event-ID` and replays from
+the log.
+
 ## Permission tiers
 
 | Tier | Meaning | Approval |

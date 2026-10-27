@@ -1,0 +1,182 @@
+# Runs, evidence and recovery
+
+A **run** is one unit of work: what a person asked for, what the agent and the
+environment did about it, what was observed, and whether the result is real. The
+conversation, the team scheduler, the HTTP API, MCP and the desktop window are
+views of the same run, not separate execution models.
+
+The tables are `runs`, `run_steps`, `tool_calls`, `evidence`, `artifacts`,
+`approvals` and `run_events` (migration `017_runs.sql`). `chat_*` and `team_*`
+rows keep their history and are linked to a run; they are not replaced or
+rewritten.
+
+## Lifecycle
+
+```text
+intake -> planning -> awaiting_approval -> executing -> verifying -> review -> completed
+                                  ^            |            |          |
+                                  |            v            v          v
+                                  +--------- paused / blocked / failed / unverified / cancelled
+```
+
+`RunState` validates every transition in `crates/devd-core/src/runs.rs`. A
+terminal state is not reopened by accident:
+
+* `completed`, `failed`, `unverified`, `blocked` and `paused` can be continued
+  only by a deliberate retry or continuation. That call is a person's; an agent
+  cannot retry its own run.
+* `cancelled` is final. Retrying a cancelled conversation creates a new run for
+  the same thread rather than reopening the old one.
+* `executing` may go straight to `completed` when evidence already satisfies the
+  policy (a read-only answer, for example), and `verifying` may complete without
+  a separate review state when nothing needs a human decision.
+
+Modes are `assistant`, `team`, `scheduled`, `api` and `headless`. They share the
+same lifecycle and evidence rules; only the driver differs.
+
+## What is recorded
+
+| Record | What it says |
+| --- | --- |
+| `runs` | Goal, acceptance criteria, mode, project, state, plan, fingerprint, cancellation, usage, timestamps, parent run, thread and team-run link. |
+| `run_steps` | One stage of work: kind, title, state, detail, plan data, start and finish. |
+| `tool_calls` | One normalized capability call: run and step, provider call id, actor, surface, capability, redacted arguments, argument hash, approval, idempotency key, outcome, error code, exit code, duration, result and timestamps. |
+| `evidence` | What was observed: kind, capability, pass/fail, claim, summary, bounded detail, and the tool call or artifact it came from. |
+| `artifacts` | Bounded raw output and produced files, referenced from evidence instead of being copied into every database row. |
+| `approvals` | The durable decision: hashed id, run/task/tool-call links, capability, arguments, argument and plan hashes, scope, tier, risk, actor, expiry, state, decider and reason. |
+| `run_events` | Sequenced durable events with a global id and a per-run sequence. They are the replayable record, not the live stream. |
+
+`Registry::dispatch_with` writes the tool call and derived evidence at the
+boundary, so a direct alias, `devd_invoke`, an MCP tool or an internal call has
+the same trail. A dry run is audited but is a plan, not a side effect, and does
+not produce evidence.
+
+Arguments are redacted by key name before they are stored; an argument hash is
+kept so two calls can be compared without retaining secret values.
+
+## Evidence and completion
+
+`evidence_for` normalizes a capability result into one of these kinds:
+
+`change`, `read`, `verify`, `command`, `service`, `http`, `runtime`, `database`,
+`probe`, `structured`.
+
+A file edit, commit, site or stack change is `change`. A project task named
+`test`, `check`, `lint` or `build` and a process that exits 0 is `verify`. A
+command that is not a check is `command`. Service readiness, HTTP/TLS probes,
+runtime usability and database connectivity have their own kinds. Anything else
+is `structured` and cannot satisfy a verification requirement by itself.
+
+`CompletionPolicy::for_goal` reads the goal and acceptance criteria:
+
+* research, explanation and review require no change or verification;
+* a failing-test goal requires a change and a passing verification;
+* setup, runtime, service and site goals require the matching readiness
+  evidence;
+* a code change requires both an inspectable change and a passing check;
+* any explicit acceptance criterion requires verification.
+
+The model's sentence that it finished is not evidence. A run whose change was
+made but not checked ends `unverified`, with the missing evidence named. A run
+whose check ran and failed ends `unverified` or `failed`; it never reports
+success because a process stopped consuming resources.
+
+## Approvals
+
+There is one approval service (`Store::create_approval`, `consume_approval`,
+`decline_approval`, `reschedule_approval`) and one table. Every surface uses it:
+
+* the conversation queues an `agent_requests` row that is a projection of a
+  durable approval (`approval_id`);
+* the HTTP token flow consumes the same durable row;
+* the by-id endpoints and the desktop window decide by id;
+* `Hub::decide` consumes it before dispatching the approved operation.
+
+The returned token is 256 random bits. Only its SHA-256 hash is stored as
+`approvals.id`, so a database read cannot replay a decision. The row records the
+capability, the exact arguments, their hash, and the plan hash when the approval
+is plan-bound. Consumption is a compare-and-set on `state='pending'`:
+
+* a second use fails rather than repeating the operation;
+* a declined or expired row cannot be consumed;
+* expiry is checked when the decision is made, not only by a sweeper;
+* changed arguments or a changed plan do not match the stored hashes;
+* restart and recovery read the same row, so a decision made in another window
+  or after a restart is not lost.
+
+Pending legacy `agent_requests` are migrated as pending approvals with
+`approval_id = id`; nothing is auto-granted. An agent cannot approve its own
+operation: the decider must be a human actor, and the registry's `human_only`
+check runs before approval is considered.
+
+## Context
+
+`crates/devd-core/src/context.rs` assembles the model's working set:
+
+* a model-aware window, from the catalogue when available and from the model
+  name otherwise, with output and tool-call reserve subtracted;
+* system and project instructions, discovered from repository and nested
+  guidance files, marked as project data rather than policy;
+* the goal, acceptance criteria, current plan, run state and pending approvals;
+* notices, errors and approval decisions, which are never silently dropped;
+* recent messages and tool results, with older results summarized and their raw
+  output kept as an artifact;
+* a `ContextManifest` recording what was included, what was summarized, why, and
+  the estimated budget.
+
+The estimate is deliberately conservative (`chars / 4`) when an exact tokenizer
+is not available. Compaction is deterministic and testable. A long conversation
+does not wait for a provider context-overflow error to be shortened.
+
+## Events and replay
+
+`run_events` is append-only. Each row has a global `id` (the SSE cursor) and a
+per-run `seq`. `GET /api/events`:
+
+* replays durable events after `Last-Event-ID` (or `after`), then tails live
+  events;
+* sends `stream.lag` when a subscriber falls behind instead of silently losing
+  events;
+* keeps `chat.delta` live for token streaming, but a disconnected client can
+  reconstruct the conversation from the durable rows.
+
+`GET /api/runs/:id/events` pages backwards with `before` and forwards with
+`after`; the default is newest first. Runs have no page of their own: the Run
+sheet opens from the conversation or from the team run it belongs to, and reads
+the same endpoints, so a long timeline is paged rather than truncated.
+
+## Environment and setup
+
+`environment.manifest` (read, idempotent) describes a project's detected stack,
+declared runtimes, needed services, sites, tasks, environment-variable **names**,
+ports, and isolation. Its fingerprint ignores `generated_at`, so two inspections
+of the same environment compare equal.
+
+`workflow.setup` (write, approval-gated, dry-run) applies what is missing in a
+fixed order: inspect, install runtimes, start services, optionally run one
+project task, optionally create a site, then re-inspect and verify. Every step
+records `done`, `skipped` or `failed` with the real result. `verified` is true
+only when no step failed and the re-inspection finds nothing missing.
+
+## Retry and recovery
+
+`run.retry` is human-only. It refuses a team run, an active run, or a run with a
+pending approval. It resumes a failed, unverified, paused, blocked, review or
+completed run; a cancelled run starts a fresh one for the same conversation.
+The assistant checks the durable cancellation flag between steps and hands the
+same flag to handlers through `RunContext`, so a stop is visible to in-flight
+work. An idempotent capability with a key replays its first successful result
+instead of repeating the side effect; a non-idempotent call requires a new
+decision rather than an automatic retry.
+
+## What is not claimed
+
+* Evidence is a record of what devd observed. It does not prove that an external
+  service behaved correctly after the observation.
+* A replay reconstructs state from durable rows; it does not reverse an external
+  side effect such as a deployment or a payment.
+* Cancellation reaches handlers that check `RunContext` and processes that devd
+  supervises. A third-party program that ignores termination is reported as
+  still running rather than as stopped.
+* Process isolation is described in `docs/limitations.md`: an allowlisted
+  environment and, on Windows, a Job Object are not a filesystem sandbox.

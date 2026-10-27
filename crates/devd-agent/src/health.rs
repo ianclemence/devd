@@ -37,8 +37,22 @@ struct Component {
 }
 
 impl Component {
-    fn new(id: &str, label: &str, group: &'static str, state: &'static str, required: bool, detail: impl Into<String>) -> Self {
-        Self { id: id.into(), label: label.into(), group, state, required, detail: detail.into() }
+    fn new(
+        id: &str,
+        label: &str,
+        group: &'static str,
+        state: &'static str,
+        required: bool,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            group,
+            state,
+            required,
+            detail: detail.into(),
+        }
     }
 }
 
@@ -89,7 +103,12 @@ fn explain(id: &str, state: &str, detail: &str) -> (String, Value) {
 /// Cron jobs, database backups, scheduled deploys and health checks are run by a loop inside a
 /// long-lived devd process. With none open the jobs simply do not happen, and nothing else says so.
 fn background_jobs(ctx: &Ctx) -> Component {
-    let count = |kind: &str| ctx.store.ops_list(kind, None).map(|rows| rows.len()).unwrap_or(0);
+    let count = |kind: &str| {
+        ctx.store
+            .ops_list(kind, None)
+            .map(|rows| rows.len())
+            .unwrap_or(0)
+    };
     let jobs = count("cron") + count("db_backup") + count("deploy_schedule") + count("health");
     let holder = devd_core::process::live_devd_holder(&ctx.paths.root().join("ops-host.pid"));
     let label = "Scheduled jobs";
@@ -113,7 +132,9 @@ pub fn status(ctx: &Ctx) -> Result<Value> {
 
     // ---- devd itself and the tools it needs
     let mut checks = doctor::core_checks_for(&ctx.paths, &ctx.settings, Some(&ctx.store));
-    checks.push(devd_git::doctor_check(ctx.settings.git_executable.as_deref()));
+    checks.push(devd_git::doctor_check(
+        ctx.settings.git_executable.as_deref(),
+    ));
     for c in &checks {
         let (state, required, group) = match (c.name.as_str(), c.level) {
             ("git", Level::Fail) => ("unavailable", true, "tools"),
@@ -130,7 +151,14 @@ pub fn status(ctx: &Ctx) -> Result<Value> {
         if c.name == "home" {
             continue;
         }
-        comps.push(Component::new(&c.name, label_of(&c.name), group, state, required, c.detail.clone()));
+        comps.push(Component::new(
+            &c.name,
+            label_of(&c.name),
+            group,
+            state,
+            required,
+            c.detail.clone(),
+        ));
     }
 
     // ---- services devd manages
@@ -140,15 +168,39 @@ pub fn status(ctx: &Ctx) -> Result<Value> {
         }
         let wanted = s.desired_state == "running";
         let (state, detail) = if s.running && s.listening {
-            ("healthy", format!("running (pid {}), answering on port {}", s.pid.unwrap_or(0), s.port.unwrap_or(0)))
+            (
+                "healthy",
+                format!(
+                    "running (pid {}), answering on port {}",
+                    s.pid.unwrap_or(0),
+                    s.port.unwrap_or(0)
+                ),
+            )
         } else if s.running {
-            ("starting", format!("process is up (pid {}) but port {} is not answering yet", s.pid.unwrap_or(0), s.port.unwrap_or(0)))
+            (
+                "starting",
+                format!(
+                    "process is up (pid {}) but port {} is not answering yet",
+                    s.pid.unwrap_or(0),
+                    s.port.unwrap_or(0)
+                ),
+            )
         } else if wanted {
-            ("degraded", "should be running but no process was found".to_string())
+            (
+                "degraded",
+                "should be running but no process was found".to_string(),
+            )
         } else {
             ("healthy", "stopped, as you left it".to_string())
         };
-        comps.push(Component::new(&format!("service.{}", s.name), &s.name, "server", state, wanted, detail));
+        comps.push(Component::new(
+            &format!("service.{}", s.name),
+            &s.name,
+            "server",
+            state,
+            wanted,
+            detail,
+        ));
     }
 
     // ---- the loop that runs scheduled work
@@ -156,26 +208,81 @@ pub fn status(ctx: &Ctx) -> Result<Value> {
 
     // ---- AI provider
     let providers = ctx.store.list_providers()?;
-    let busy = ctx.store.list_threads(50)?.iter().any(|t| t.state == "running" || t.state == "waiting_approval")
-        || ctx.store.list_runs(20)?.iter().any(|r| matches!(r.state.as_str(), "running" | "planning"));
-    match providers.iter().find(|p| p.is_default && p.enabled).or_else(|| providers.iter().find(|p| p.enabled)) {
-        None => comps.push(Component::new("ai.provider", "AI provider", "ai", "setup_incomplete", false, "none configured")),
+    let busy = ctx
+        .store
+        .list_threads(50)?
+        .iter()
+        .any(|t| t.state == "running" || t.state == "waiting_approval")
+        || ctx
+            .store
+            .list_runs(20)?
+            .iter()
+            .any(|r| matches!(r.state.as_str(), "running" | "planning"));
+    match providers
+        .iter()
+        .find(|p| p.is_default && p.enabled)
+        .or_else(|| providers.iter().find(|p| p.enabled))
+    {
+        None => comps.push(Component::new(
+            "ai.provider",
+            "AI provider",
+            "ai",
+            "setup_incomplete",
+            false,
+            "none configured",
+        )),
         Some(p) => {
-            let has_key = secrets::read_key(&ctx.paths, p).is_some() || p.kind == "openai-compatible";
+            let has_key =
+                secrets::read_key(&ctx.paths, p).is_some() || p.kind == "openai-compatible";
             if !has_key {
-                comps.push(Component::new("ai.provider", "AI provider", "ai", "setup_incomplete", false, format!("{} has no API key", p.label)));
+                comps.push(Component::new(
+                    "ai.provider",
+                    "AI provider",
+                    "ai",
+                    "setup_incomplete",
+                    false,
+                    format!("{} has no API key", p.label),
+                ));
             } else {
                 match ctx.store.get_provider_check(&p.id)? {
-                    None => comps.push(Component::new("ai.provider", "AI provider", "ai", "unknown", false, format!("{} has a key but was never tested", p.label))),
-                    Some(c) if c.ok => comps.push(Component::new("ai.provider", "AI provider", "ai", "healthy", false, format!("{} answered ({})", p.label, util::truncate(&c.message, 80)))),
-                    Some(c) => comps.push(Component::new("ai.provider", "AI provider", "ai", "unavailable", busy, format!("{}: {}", p.label, util::truncate(&c.message, 160)))),
+                    None => comps.push(Component::new(
+                        "ai.provider",
+                        "AI provider",
+                        "ai",
+                        "unknown",
+                        false,
+                        format!("{} has a key but was never tested", p.label),
+                    )),
+                    Some(c) if c.ok => comps.push(Component::new(
+                        "ai.provider",
+                        "AI provider",
+                        "ai",
+                        "healthy",
+                        false,
+                        format!("{} answered ({})", p.label, util::truncate(&c.message, 80)),
+                    )),
+                    Some(c) => comps.push(Component::new(
+                        "ai.provider",
+                        "AI provider",
+                        "ai",
+                        "unavailable",
+                        busy,
+                        format!("{}: {}", p.label, util::truncate(&c.message, 160)),
+                    )),
                 }
             }
         }
     }
 
     if ctx.store.environment_mode() == "production" {
-        comps.push(Component::new("environment", "Environment", "core", "healthy", false, "production mode: agents need approval for every change"));
+        comps.push(Component::new(
+            "environment",
+            "Environment",
+            "core",
+            "healthy",
+            false,
+            "production mode: agents need approval for every change",
+        ));
     }
 
     // ---- roll up
@@ -194,25 +301,56 @@ pub fn status(ctx: &Ctx) -> Result<Value> {
     } else {
         "healthy"
     };
-    let notes = comps.iter().filter(|c| !c.required && c.state != "healthy").count();
+    let notes = comps
+        .iter()
+        .filter(|c| !c.required && c.state != "healthy")
+        .count();
     let setup: Vec<Value> = comps.iter().filter(|c| c.state == "setup_incomplete").map(|c| {
         let (meaning, fix) = explain(&c.id, c.state, &c.detail);
         json!({ "id": c.id, "label": c.label, "detail": c.detail, "meaning": meaning, "fix": fix })
     }).collect();
-    let bad: Vec<&&Component> = required.iter().filter(|c| !matches!(c.state, "healthy" | "starting")).collect();
+    let bad: Vec<&&Component> = required
+        .iter()
+        .filter(|c| !matches!(c.state, "healthy" | "starting"))
+        .collect();
     let headline = match state {
-        "critical" => format!("{} broken: {}", if bad.len() == 1 { "1 thing is".to_string() } else { format!("{} things are", bad.len()) }, bad.first().map(|c| c.label.clone()).unwrap_or_default()),
-        "degraded" => format!("Working, with {} to fix: {}", if bad.len() == 1 { "1 problem".to_string() } else { format!("{} problems", bad.len()) }, bad.first().map(|c| c.label.clone()).unwrap_or_default()),
+        "critical" => format!(
+            "{} broken: {}",
+            if bad.len() == 1 {
+                "1 thing is".to_string()
+            } else {
+                format!("{} things are", bad.len())
+            },
+            bad.first().map(|c| c.label.clone()).unwrap_or_default()
+        ),
+        "degraded" => format!(
+            "Working, with {} to fix: {}",
+            if bad.len() == 1 {
+                "1 problem".to_string()
+            } else {
+                format!("{} problems", bad.len())
+            },
+            bad.first().map(|c| c.label.clone()).unwrap_or_default()
+        ),
         "starting" => "Starting up".to_string(),
         "unknown" => "Could not check everything".to_string(),
         "setup_incomplete" => "Setup is not finished".to_string(),
-        _ if notes > 0 => format!("Healthy, {} optional note{}", notes, if notes == 1 { "" } else { "s" }),
+        _ if notes > 0 => format!(
+            "Healthy, {} optional note{}",
+            notes,
+            if notes == 1 { "" } else { "s" }
+        ),
         _ => "Healthy".to_string(),
     };
 
     // ---- what is waiting for a person (attention, not health)
     let approvals = ctx.store.list_requests(true, None, 200)?.len();
-    let questions = ctx.store.list_inbox(true, 200)?.iter().filter(|m| m.needs_reply).count();
+    let questions = ctx
+        .store
+        .list_inbox(true, 200)?
+        .iter()
+        .filter(|m| m.needs_reply)
+        .count();
     let mut attention = Vec::new();
     if approvals > 0 {
         attention.push(json!({ "id": "approvals", "count": approvals, "label": format!("{approvals} operation(s) waiting for your approval"), "view": "inbox" }));
@@ -229,7 +367,11 @@ pub fn status(ctx: &Ctx) -> Result<Value> {
             json!({ "name": c.id, "label": c.label, "group": c.group, "state": c.state, "required": c.required, "level": level, "detail": c.detail, "meaning": meaning, "fix": fix })
         })
         .collect();
-    let level = match state { "healthy" => "ok", "critical" | "degraded" => "problem", _ => "attention" };
+    let level = match state {
+        "healthy" => "ok",
+        "critical" | "degraded" => "problem",
+        _ => "attention",
+    };
     Ok(json!({
         "state": state, "level": level, "headline": headline, "notes": notes,
         "setup": setup, "attention": attention, "checks": rows,
@@ -248,11 +390,26 @@ mod tests {
         use devd_core::paths::Paths;
         use devd_core::state::Store;
         use std::sync::Arc;
-        let dir = std::env::temp_dir().join(format!("devd-jobs-{}-{}", std::process::id(), util::new_id()));
+        let dir = std::env::temp_dir().join(format!(
+            "devd-jobs-{}-{}",
+            std::process::id(),
+            util::new_id()
+        ));
         let paths = Paths::rooted(&dir);
         paths.ensure().unwrap();
         let store = Store::open_in_memory().unwrap();
-        (Ctx { store: Arc::new(store), paths: Arc::new(paths), settings: Arc::new(Settings::default()), events: EventBus::new(), actor: Actor::system(), dry_run: false }, dir)
+        (
+            Ctx {
+                store: Arc::new(store),
+                paths: Arc::new(paths),
+                settings: Arc::new(Settings::default()),
+                events: EventBus::new(),
+                actor: Actor::system(),
+                run: None,
+                dry_run: false,
+            },
+            dir,
+        )
     }
 
     #[test]
@@ -261,11 +418,26 @@ mod tests {
         let none = background_jobs(&c);
         assert_eq!(none.state, "healthy", "no jobs, nothing to run: {none:?}");
 
-        c.store.ops_put("cron", "j1", "shop", &json!({ "schedule": "* * * * *", "command": "echo hi" })).unwrap();
+        c.store
+            .ops_put(
+                "cron",
+                "j1",
+                "shop",
+                &json!({ "schedule": "* * * * *", "command": "echo hi" }),
+            )
+            .unwrap();
         let waiting = background_jobs(&c);
         assert_eq!(waiting.state, "degraded", "{waiting:?}");
-        assert!(waiting.detail.contains("nothing is running them") && waiting.detail.contains("devd serve"), "{}", waiting.detail);
-        assert!(!waiting.required, "a stopped scheduler does not make devd itself unhealthy");
+        assert!(
+            waiting.detail.contains("nothing is running them")
+                && waiting.detail.contains("devd serve"),
+            "{}",
+            waiting.detail
+        );
+        assert!(
+            !waiting.required,
+            "a stopped scheduler does not make devd itself unhealthy"
+        );
 
         // This test process is a devd program holding the claim, so the jobs are being run.
         std::fs::write(dir.join("ops-host.pid"), std::process::id().to_string()).unwrap();
@@ -286,7 +458,10 @@ mod tests {
             "degraded",
             "80 is held by nginx.exe (pid 1) on 0.0.0.0:80",
         );
-        assert!(!meaning.contains("80 is held"), "the detail is shown beside the note, not repeated in it: {meaning}");
+        assert!(
+            !meaning.contains("80 is held"),
+            "the detail is shown beside the note, not repeated in it: {meaning}"
+        );
         assert!(meaning.contains("expected"), "{meaning}");
         assert!(!meaning.contains("Another program"), "{meaning}");
         assert_eq!(fix["view"], "overview");

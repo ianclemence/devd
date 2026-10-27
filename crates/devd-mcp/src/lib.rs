@@ -398,7 +398,22 @@ impl McpServer {
             Approval::None
         };
 
-        match self.registry.dispatch(&self.ctx, &request, approval) {
+        // The built-in agent passes the provider's tool-use id and, for a
+        // capability that declares itself idempotent, a replay key. An external
+        // MCP client supplies neither, and gets the same policy without a claim
+        // it did not make.
+        let call_id = args.get("call_id").and_then(Value::as_str);
+        let idempotency_key = args.get("idempotency_key").and_then(Value::as_str);
+        let opts = devd_core::DispatchOptions {
+            call_id,
+            idempotency_key,
+            approval_id: None,
+        };
+
+        match self
+            .registry
+            .dispatch_with(&self.ctx, &request, approval, &opts)
+        {
             Ok(result) => {
                 let value = serde_json::to_value(&result).unwrap_or(Value::Null);
                 ToolOutcome::Content(pretty(&json!({
@@ -446,7 +461,10 @@ impl McpServer {
     fn outside_scope(&self, id: &str, args: &Value) -> Option<String> {
         let root = self.project.as_deref()?;
         self.registry.get(id)?;
-        if !["fs.", "project.", "git.", "shell."].iter().any(|p| id.starts_with(p)) {
+        if !["fs.", "project.", "git.", "shell."]
+            .iter()
+            .any(|p| id.starts_with(p))
+        {
             return None;
         }
         let root = canonicalish(root);
@@ -471,7 +489,9 @@ impl McpServer {
         if id != "fs.delete" {
             return false;
         }
-        let Some(root) = self.project.as_deref() else { return false };
+        let Some(root) = self.project.as_deref() else {
+            return false;
+        };
         let root = canonicalish(root);
         let paths: Vec<&str> = path_values(args);
         !paths.is_empty()
@@ -496,7 +516,8 @@ impl McpServer {
     }
 
     fn tool_doctor(&self) -> ToolOutcome {
-        let mut checks = doctor::core_checks_for(&self.ctx.paths, &self.ctx.settings, Some(&self.ctx.store));
+        let mut checks =
+            doctor::core_checks_for(&self.ctx.paths, &self.ctx.settings, Some(&self.ctx.store));
         for extra in &self.extra_checks {
             checks.extend(extra());
         }
@@ -643,8 +664,20 @@ fn summarise(cap: &Arc<devd_core::capability::Capability>) -> Value {
 /// file, project, Git and shell capabilities use.
 fn path_values(args: &Value) -> Vec<&str> {
     let mut out = Vec::new();
-    let Some(obj) = args.as_object() else { return out };
-    for key in ["path", "from", "to", "cwd", "repo", "project", "root", "directory", "workdir"] {
+    let Some(obj) = args.as_object() else {
+        return out;
+    };
+    for key in [
+        "path",
+        "from",
+        "to",
+        "cwd",
+        "repo",
+        "project",
+        "root",
+        "directory",
+        "workdir",
+    ] {
         if let Some(value) = obj.get(key).and_then(Value::as_str) {
             out.push(value);
         }
@@ -815,6 +848,7 @@ mod tests {
             settings: Arc::new(Settings::default()),
             events: EventBus::new(),
             actor: Actor::human(Surface::Cli),
+            run: None,
             dry_run: false,
         };
 
@@ -949,6 +983,7 @@ mod tests {
                 settings: Arc::new(Settings::default()),
                 events: EventBus::new(),
                 actor: Actor::agent("x"),
+                run: None,
                 dry_run: false,
             },
             "test-client",
@@ -967,6 +1002,7 @@ mod tests {
             settings: Arc::new(Settings::default()),
             events: EventBus::new(),
             actor: Actor::human(Surface::Gui),
+            run: None,
             dry_run: false,
         };
         let server = McpServer::new(Arc::new(Registry::new()), ctx, "claude-code");
@@ -1240,7 +1276,8 @@ mod tests {
                     .dry_run(true)
                     .handler(
                         |_ctx, _a: &Value| {
-                            Ok(devd_core::capability::Plan::new("fs.delete", "delete").destructive(true))
+                            Ok(devd_core::capability::Plan::new("fs.delete", "delete")
+                                .destructive(true))
                         },
                         move |_ctx, _a: &Value| {
                             apply.fetch_add(1, Ordering::SeqCst);
@@ -1259,22 +1296,37 @@ mod tests {
             settings: Arc::new(Settings::default()),
             events: EventBus::new(),
             actor: Actor::human(Surface::Cli),
+            run: None,
             dry_run: false,
         };
         let server = McpServer::new(Arc::new(registry), ctx, "test")
             .with_project(Some(project.display().to_string()));
 
         let inside = project.join("old.txt").display().to_string();
-        let (err, text) = server.call("devd_invoke", &json!({ "id": "fs.delete", "args": { "path": inside } }));
+        let (err, text) = server.call(
+            "devd_invoke",
+            &json!({ "id": "fs.delete", "args": { "path": inside } }),
+        );
         assert!(!err, "{text}");
-        assert_eq!(counter.load(Ordering::SeqCst), 1, "an in-project delete runs");
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            1,
+            "an in-project delete runs"
+        );
 
         let outside = outside.join("elsewhere.txt").display().to_string();
-        let (err, text) = server.call("devd_invoke", &json!({ "id": "fs.delete", "args": { "path": outside } }));
+        let (err, text) = server.call(
+            "devd_invoke",
+            &json!({ "id": "fs.delete", "args": { "path": outside } }),
+        );
         assert!(err, "{text}");
         let body: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(body["error"]["code"], "approval_required");
-        assert_eq!(counter.load(Ordering::SeqCst), 1, "an outside delete must not run");
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            1,
+            "an outside delete must not run"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 

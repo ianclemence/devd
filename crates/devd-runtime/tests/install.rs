@@ -32,6 +32,7 @@ fn ctx(paths: &Paths) -> Ctx {
         settings: Arc::new(Settings::default()),
         events: EventBus::new(),
         actor: Actor::human(Surface::Cli),
+        run: None,
         dry_run: false,
     }
 }
