@@ -5,7 +5,7 @@ partially, and the platform-specific behaviour worth knowing before relying on
 it. Each entry states the consequence and, where one exists, the change that
 would close it.
 
-This document describes the current release, v0.13.8. See
+This document describes the current release, v0.14.0. See
 [`CHANGELOG.md`](../CHANGELOG.md) for what it contains.
 
 ## The command line
