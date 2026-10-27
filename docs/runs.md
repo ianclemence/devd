@@ -75,6 +75,19 @@ command that is not a check is `command`. Service readiness, HTTP/TLS probes,
 runtime usability and database connectivity have their own kinds. Anything else
 is `structured` and cannot satisfy a verification requirement by itself.
 
+A read is `read`, never `change`: `fs.read`, `fs.list`, `fs.search`, `git diff`,
+`git status`, `git log`, `project.detect`, `project.tasks` and
+`environment.manifest` describe state, so they can support a review but cannot
+satisfy a change requirement. Reading a file is not editing it, and inspecting a
+service is not starting it.
+
+A call that returns `ok` is not automatically evidence of success. Readiness is
+read from the payload: a service passes only when it reports `running` and
+`listening`, a stop only when it reports not running, `site.verify` only when its
+own `ok` is true, and `workflow.setup` only when `verified` is true. A capability
+that returns `ok` with a negative payload is recorded as evidence that did not
+pass.
+
 `CompletionPolicy::for_goal` reads the goal and acceptance criteria:
 
 * research, explanation and review require no change or verification;
@@ -88,6 +101,15 @@ The model's sentence that it finished is not evidence. A run whose change was
 made but not checked ends `unverified`, with the missing evidence named. A run
 whose check ran and failed ends `unverified` or `failed`; it never reports
 success because a process stopped consuming resources.
+
+## Artifacts
+
+A result up to 24 KB is stored inline on the tool call. A larger result is
+written to `<root>/artifacts/<run>/<capability>-<id>.json` (8 MiB cap) and the
+row keeps a bounded preview plus the artifact id, byte count and SHA-256. The
+tool call and every evidence row derived from it reference the same artifact, so
+a timeline can show what was observed without loading it into the model's
+context, and a replay returns the stored result rather than the preview.
 
 ## Approvals
 
@@ -166,6 +188,17 @@ project task, optionally create a site, then re-inspect and verify. Every step
 records `done`, `skipped` or `failed` with the real result. `verified` is true
 only when no step failed and the re-inspection finds nothing missing.
 
+## Site verification
+
+`site.verify` (read, idempotent, dry-run) answers the question a site goal
+actually asks: the hostname is in the hosts file, it resolves to loopback, the
+listener accepts a connection, TLS validates against devd's own
+`certs/devd-ca.crt`, and the site answers with a status below 500. The call
+returns `ok=false` with the failing checks in its payload rather than failing
+outright, so the run records what was observed instead of only that a probe ran.
+It reads no environment proxy and follows no redirect: a site that redirects is
+judged by the status it returned, not by where it points.
+
 ## Retry and recovery
 
 `run.retry` is human-only. It refuses a team run, an active run, or a run with a
@@ -176,6 +209,13 @@ same flag to handlers through `RunContext`, so a stop is visible to in-flight
 work. An idempotent capability with a key replays its first successful result
 instead of repeating the side effect; a non-idempotent call requires a new
 decision rather than an automatic retry.
+
+A key is scoped to the capability that used it and compared against the stored
+argument hash. The same key under a different capability, or with different
+arguments, is a `conflict`, not a replay: returning another call's result would
+be worse than refusing. A recorded result that cannot be read is a conflict too,
+because running the operation again is exactly the double effect the key exists
+to prevent.
 
 ## What is not claimed
 

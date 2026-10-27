@@ -10,6 +10,65 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.15.0] - 2026-10-27 - A read is not a change, and a claim is not a check
+
+0.14 said completion was decided from evidence. Reading the implementation
+against that claim found places where the record could say more than it knew: a
+file read counted as a change, a successful call counted as readiness, a large
+result was stored truncated with nothing behind it, and an idempotency key was
+looked up without the capability that produced it. This release makes the
+evidence match the observation, and adds the check that a site goal was missing.
+
+### Added
+
+- **`site.verify`.** One capability answers the question a site goal actually
+  asks: is the hostname in the hosts file, does it resolve to loopback, is the
+  listener accepting connections, does TLS validate against devd's own CA, and
+  does the site answer with a status below 500? It returns `ok=false` with the
+  failing checks in the payload rather than failing the call, so a run records
+  what was observed instead of only that the probe returned. It reads no
+  environment proxy, follows no redirect and trusts only `certs/devd-ca.crt`.
+- **Artifacts for output that does not fit.** A result larger than 24 KB is
+  written under `<root>/artifacts/<run>/` (8 MiB cap) with its SHA-256, byte
+  count and a preview; the tool call and every derived evidence row point at the
+  artifact. Replaying the call returns the stored result, including the
+  artifact reference, instead of a truncated preview.
+
+### Fixed
+
+- **A read is not a change.** `fs.read`, `fs.list`, `fs.search`, `git diff`,
+  `git status`, `git log`, `project.detect`, `project.tasks` and
+  `environment.manifest` now record `read` evidence. They can give a review its
+  basis, but they cannot satisfy a change requirement or turn an unverified run
+  into a completed one. Change evidence comes from a write, a commit, a site or
+  stack change, or a setup that reported a change.
+- **Readiness comes from the payload, not from the call returning.** A service
+  is ready only when it reports `running` and `listening`; a stop is complete
+  only when it reports not running; `site.verify` passes only when its own `ok`
+  is true; `workflow.setup` verifies only when `verified` is true. A capability
+  that returns `ok` with a negative payload is recorded as evidence that did not
+  pass.
+- **`code` and `test` policies require a real change.** A passing test with no
+  recorded change no longer completes a code goal, and a failed change is never
+  treated as a completed one.
+- **An idempotency key is scoped to its capability and arguments.** The lookup
+  matches key and capability, compares the stored argument hash, and returns a
+  `conflict` for a different call under the same key. A recorded result that
+  cannot be read is also a conflict: the operation is not run again.
+- **An approval that was already consumed is not dispatched twice.** `Hub::decide`
+  adopting a `consumed` or `failed` approval returns the result the operation
+  actually produced instead of re-running it, and only the surface that
+  dispatched the call finishes the approval.
+- **The context budget uses the catalogue's window.** The model's real context
+  window is read from the catalogue by exact model id (the largest positive
+  value when a model has several entries) before falling back to the name
+  heuristic, so compaction happens at the right size.
+- **The event stream applies the same Host check as the API.** `GET /api/events`
+  now requires a loopback `Host` in addition to a local `Origin`. The middleware
+  already refused a foreign host; the route now refuses one itself, so a future
+  mount cannot reopen the hole. The origin comparison is an exact match against
+  the local prefixes rather than a prefix test.
+
 ## [0.14.2] - 2026-10-27 - The stack outlives the command that started it
 
 Installing 0.14.1 over a real machine and then running `devd stack up` showed the

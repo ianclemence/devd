@@ -5,7 +5,7 @@ partially, and the platform-specific behaviour worth knowing before relying on
 it. Each entry states the consequence and, where one exists, the change that
 would close it.
 
-This document describes the current release, v0.14.2. See
+This document describes the current release, v0.15.0. See
 [`CHANGELOG.md`](../CHANGELOG.md) for what it contains.
 
 ## The command line
@@ -284,8 +284,11 @@ Stated plainly, so nothing is assumed:
   shared across worktrees: an implementer installs what it needs in its own copy.
 * **Merges are plain `git merge --no-ff`.** A conflict blocks the task for a person;
   devd does not resolve conflicts or rebase.
-* **Evidence is read from `project.run` and file capabilities.** Work an agent does
-  by other means is not counted.
+* **Evidence is derived at the capability boundary.** A result recorded through
+  the registry is classified by capability: writes and commits are changes, reads
+  are reads, checks are verifications, and readiness is read from the payload.
+  Work an agent does by other means - a program it ran that changed a file, a
+  deployment in another window - is not observed and is not counted.
 * **Team tasks use the providers you configured.** Gemini and local runtimes go
   through their OpenAI-compatible endpoints; there is no native Gemini adapter, and
   model capabilities beyond what a provider lists (tool support, modalities) are not

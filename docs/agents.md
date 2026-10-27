@@ -128,7 +128,10 @@ goal -> planner -> [you approve the plan] -> scheduler -> specialists -> final v
   *and* had a verification (a `project.run` of test, build, lint, check... exit 0)
   pass; a reviewer must have read the change; QA must have run checks; infra must
   have run something that succeeded. `project.exec` and a command that is not a
-  check are `command` evidence, not verification. Otherwise the report is rejected
+  check are `command` evidence, not verification; a file read or a `git diff` is
+  `read` evidence and cannot satisfy a change requirement. Readiness is read from
+  the payload (a service reports `running` and `listening`), not from the call
+  returning. Otherwise the report is rejected
   twice with the reason, then the task is `unverified`, its dependants do not
   start, and the run pauses with what is needed (retry with a note, or accept by
   hand - recorded as such).

@@ -103,6 +103,13 @@ network. The server also **forces the actor** of every request to `human:http`,
 so a caller cannot claim to be an agent or a daemon to escape a restriction, and
 cannot claim to be a human to unlock an agent-only path.
 
+`GET /api/events` applies the same `Host` and `Origin` checks itself, in addition
+to the middleware. `EventSource` cannot set an `Authorization` header, so this
+route is the one place where the token can arrive in a query string; requiring a
+loopback `Host` and an exact local `Origin` keeps a page from another origin from
+opening the stream even if the token leaks into a URL. The check lives in the
+route rather than only in the middleware so a future mount cannot reopen it.
+
 Approvals over HTTP are two-step, and this is a security property rather than a
 convenience: `POST /api/invoke` returns a plan and a token and changes nothing;
 `POST /api/approve { token }` replays **the server's own stored arguments**. A
