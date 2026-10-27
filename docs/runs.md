@@ -54,9 +54,10 @@ not produce evidence.
 An outside agent that drives devd through `devd mcp` brings no run of its own:
 its session belongs to another program. Each call it makes is one headless run,
 settled when the call returns, or left `blocked` with the queued request named
-when a person must decide first. A caller that already has a run - the built-in
-assistant, a team member - keeps it, so one tool call never opens a second,
-competing timeline.
+when a person must decide first. Approving the request records the operation in
+that run and settles it; declining it cancels the run, because it can never
+proceed. A caller that already has a run - the built-in assistant, a team
+member - keeps it, so one tool call never opens a second, competing timeline.
 
 Arguments are redacted by key name before they are stored; an argument hash is
 kept so two calls can be compared without retaining secret values.

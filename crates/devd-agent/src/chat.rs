@@ -1498,6 +1498,24 @@ impl Hub {
                 Some("declined in the conversation"),
             );
             let _ = registry.dispatch(caller, &invoke, Approval::Denied);
+            // A headless run asked for this and can never proceed without it.
+            // Leaving it blocked would say work is still possible.
+            if let Some(a) = self.ctx.store.get_approval(&approval_id)? {
+                if let Some(rid) = a.run_id {
+                    if self
+                        .ctx
+                        .store
+                        .run_by_id(&rid)?
+                        .is_some_and(|r| r.typed_mode() == RunMode::Headless)
+                    {
+                        let _ = self.ctx.store.transition_run(
+                            &rid,
+                            RunState::Cancelled,
+                            Some("declined by a person"),
+                        );
+                    }
+                }
+            }
             self.ctx
                 .store
                 .decide_request(request_id, "declined", &decider, None, None)?;

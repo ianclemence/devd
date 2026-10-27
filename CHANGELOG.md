@@ -27,8 +27,9 @@ This release makes the claim true.
   competing timeline.
 - **A queued approval belongs to that run.** The request an outside agent queues
   now carries the run id, so approving it records the operation in the run that
-  asked and settles that run when the operation returns, instead of leaving it
-  executing after the decision.
+  asked and settles that run when the operation returns. Declining it cancels
+  the run, which is the truth: the work can never proceed. Neither case leaves a
+  run executing after the decision.
 
 ## [0.14.0] - 2026-10-27 - One run behind every piece of work
 

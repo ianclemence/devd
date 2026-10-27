@@ -888,6 +888,33 @@ fn mcp_agents_get_their_approvals_queued() {
     )
     .unwrap();
     assert_eq!(polled["state"], "approved");
+
+    // A decline cancels the run that asked: the operation never ran, so the
+    // record must not keep saying work is still possible.
+    std::fs::write(&victim, "x").unwrap();
+    let (is_err, text) = server.call(
+        "devd_invoke",
+        &json!({ "id": "fs.delete", "args": { "path": victim.display().to_string() } }),
+    );
+    assert!(is_err);
+    let body: Value = serde_json::from_str(&text).unwrap();
+    let declined = body["request_id"].as_str().expect("queued").to_string();
+    call(
+        &e,
+        &e.human,
+        "approval.decide",
+        json!({ "id": declined, "approve": false }),
+        Approval::None,
+    )
+    .unwrap();
+    assert!(victim.exists(), "a declined operation never runs");
+    let runs = e.agent.store.recent_runs(10).unwrap();
+    assert_eq!(
+        runs[0].typed_state(),
+        devd_core::RunState::Cancelled,
+        "{:?}",
+        runs[0].typed_state()
+    );
 }
 
 #[test]
