@@ -144,9 +144,11 @@ invalidates the approval.
   arguments remain separate argv entries; no shell string is constructed.
 * On Linux, process-group termination uses `kill(-pid)`. A service that daemonises
   and leaves the process group cannot be tracked by this model.
-* If the devd process is killed with `TerminateProcess` on Windows, children may
-  outlive it. The next start reports them as unsupervised; Windows Job Objects
-  with kill-on-close are the known fix and are not implemented.
+* If the devd process is killed with `TerminateProcess` on Windows, a supervised
+  project process is terminated with its kill-on-close Job Object where the job
+  could be assigned; otherwise it may outlive devd. The next start reports such a
+  process as unsupervised rather than adopting it. A service is deliberately
+  outside that job and keeps running.
 
 ## API
 

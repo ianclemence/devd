@@ -348,11 +348,14 @@ own authority. The protections are about what `devd` writes and who can reach it
 
 Differences are stated rather than hidden:
 
-* Process trees are killed with a Windows Job Object (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`)
-  where the job can be assigned, with `taskkill /T /F` as the fallback; on Linux
-  and macOS a process group is signalled. Assignment is best effort when devd
-  itself runs inside a restrictive job (some CI runners); the limitations
-  document states that honestly.
+* Supervised project processes and stack tasks are killed with a Windows Job Object
+  (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) where the job can be assigned, with
+  `taskkill /T /F` as the fallback; on Linux and macOS a process group is
+  signalled. A service or a public link is detached by contract, so it is
+  stopped with the tree kill rather than job-bound: it must survive the one-shot
+  command that started it. Assignment is best effort when devd itself runs
+  inside a restrictive job (some CI runners); the limitations document states
+  that honestly.
 * Child processes get an explicit allowlist of system and runtime variables
   (`devd_core::process::CHILD_ENV_ALLOWLIST`), not the daemon's environment.
   Project commands, services, background tasks and shares clear the environment

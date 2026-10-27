@@ -7,15 +7,24 @@
 //! FastCGI socket, which is exactly the class of bug a batch-file launcher
 //! cannot fix.
 //!
-//! **Windows isolation:** each service is placed in its own Job Object with
-//! `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, and stopping a service terminates that
-//! job. When `devd` itself is killed without running its shutdown path, the
-//! operating system closes the job handles as the process dies, which kills
-//! every process in the job. Assignment happens immediately after spawn; if the
-//! host already runs devd inside a restrictive job (some CI runners) the
-//! assignment can fail, and `kill_tree` remains the fallback for that case. The
-//! child environment is allowlisted rather than inherited, so the daemon's
-//! credentials do not leak into a project's processes.
+//! **Windows isolation:** supervised work (a project task, a check, a one-shot
+//! command) is placed in its own Job Object with
+//! `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, and stopping it terminates that job.
+//! When the supervising process is killed without running its shutdown path,
+//! the operating system closes the job handles and kills every process in the
+//! job. Assignment happens immediately after spawn; if devd itself already runs
+//! inside a restrictive job (some CI runners) the assignment can fail, and
+//! `kill_tree` remains the fallback for that case.
+//!
+//! A service or a public link is different: [`SpawnSpec::persist`] is true
+//! because it is meant to outlive the command that started it. Such a process
+//! is **not** put in a kill-on-close job, since closing the job as a one-shot
+//! `devd service start` exits would kill the service it had just started. Its
+//! tree is stopped with `kill_tree` when the service is stopped, and it keeps
+//! running if devd crashes, which is what makes the stack usable without a
+//! background daemon. The child environment is allowlisted rather than
+//! inherited, so the daemon's credentials do not leak into a project's
+//! processes.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -308,6 +317,13 @@ pub struct SpawnSpec {
     pub log_path: PathBuf,
     /// How many times this service has already been restarted.
     pub restarts: i64,
+    /// When true, the process is meant to outlive the command that started it:
+    /// a service or a public link. On Windows it is not placed in a
+    /// kill-on-close Job Object, because closing that job as a one-shot
+    /// `devd service start` exits would kill the service it just started.
+    /// Stopping it still terminates the whole tree. Supervised work - a
+    /// project task or a check - is false and keeps the job.
+    pub persist: bool,
 }
 
 /// Owns every process `devd` started.
@@ -446,15 +462,23 @@ impl Supervisor {
         // the child has not run any of its own code yet on a normal start, and
         // the tree kill below still covers the ordinary stop path.
         #[cfg(windows)]
-        let job = win::create_kill_on_close_job().and_then(|job| {
-            use std::os::windows::io::AsRawHandle;
-            if win::assign(job, child.as_raw_handle()) {
-                Some(job)
-            } else {
-                win::close_job(job);
-                None
-            }
-        });
+        let job = if spec.persist {
+            // A service outlives the command that started it. A
+            // kill-on-close job would terminate it the moment a one-shot
+            // `devd service start` or `devd stack up` exits, which is the
+            // opposite of what those commands promise.
+            None
+        } else {
+            win::create_kill_on_close_job().and_then(|job| {
+                use std::os::windows::io::AsRawHandle;
+                if win::assign(job, child.as_raw_handle()) {
+                    Some(job)
+                } else {
+                    win::close_job(job);
+                    None
+                }
+            })
+        };
 
         let managed = ManagedProcess {
             name: name.clone(),
@@ -803,6 +827,7 @@ mod tests {
                     clear_env: false,
                     log_path: dir.join("sleeper.log"),
                     restarts: 0,
+                    persist: false,
                 },
                 "run-1".into(),
             )
@@ -837,6 +862,7 @@ mod tests {
             clear_env: false,
             log_path: dir.join("sleeper.log"),
             restarts: 0,
+            persist: false,
         };
         let _ = (program, args);
         let pid1 = sup.start(spec(), "r1".into()).unwrap();
@@ -851,5 +877,41 @@ mod tests {
     fn kill_tree_tolerates_unknown_pid() {
         kill_tree(0);
         kill_tree(999_999);
+    }
+
+    #[test]
+    fn a_persistent_process_outlives_the_supervisor_that_started_it() {
+        let dir = std::env::temp_dir().join(format!("devd-sup3-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pid = {
+            let sup = Supervisor::new();
+            let (program, args) = sleeper_program();
+            sup.start(
+                SpawnSpec {
+                    name: "daemon".into(),
+                    kind: "service".into(),
+                    program,
+                    args,
+                    cwd: None,
+                    envs: vec![],
+                    clear_env: false,
+                    log_path: dir.join("daemon.log"),
+                    restarts: 0,
+                    persist: true,
+                },
+                "run-1".into(),
+            )
+            .unwrap()
+        };
+        // The command that started it has gone. A service must still be there:
+        // `devd stack up` starts the stack and exits, and the stack is useless
+        // if the web server dies with the command that started it.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(
+            pid_alive(pid),
+            "a persistent process must survive the supervisor being dropped"
+        );
+        kill_tree(pid);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

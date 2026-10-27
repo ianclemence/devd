@@ -333,6 +333,9 @@ pub fn start(ctx: &Ctx, site: &Site, minutes: u64) -> Result<Share> {
             clear_env: true,
             log_path: log.clone(),
             restarts: 0,
+            // The tunnel stays open until the person closes it with
+            // `devd site unshare`, not until the command that opened it exits.
+            persist: true,
         },
         devd_core::util::new_id(),
     )?;

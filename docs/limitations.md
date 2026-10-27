@@ -5,7 +5,7 @@ partially, and the platform-specific behaviour worth knowing before relying on
 it. Each entry states the consequence and, where one exists, the change that
 would close it.
 
-This document describes the current release, v0.14.1. See
+This document describes the current release, v0.14.2. See
 [`CHANGELOG.md`](../CHANGELOG.md) for what it contains.
 
 ## The command line
@@ -113,7 +113,7 @@ A portable stack (the other stack, XAMPP, WampServer) serves sites with Apache, 
 | nginx's download | nginx.org publishes a PGP signature and no checksum file. `devd` checks the length and says, in the install result and here, that it could not check a digest. | Verify the detached PGP signature against nginx's key, which requires a PGP implementation in-process. This is the one honest gap in the digest story; PHP, Node, Go and MariaDB are all verified against a digest the vendor publishes. |
 | Service versions | One version per service name. Installing another replaces the directory after the running service is stopped, and `--force` is required to replace an existing install. | Side-by-side service versions, selected per site — which is what the PHP record on a site implies but does not yet deliver. |
 | Startup detection | The port opening is the health check, with a per-service window (nginx 10s, MariaDB 60s, php-cgi 10s). A service that opens its port and then fails is not detected. | A real health endpoint per service, and restart-on-failure driven by the supervisor rather than only by the next command. |
-| Supervision | Each service is spawned detached and tracked by a pid file, verified against the process image so a recycled pid is not mistaken for the service. A Windows Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` is created per supervised process and terminates the tree when the service is stopped or the last handle closes. Assignment is best effort: if devd itself already runs inside another job (some CI runners) the assignment can fail and `taskkill /T /F` is the fallback. | A background supervisor that also restarts a service after an unexpected exit, and a Linux/macOS equivalent that reaps orphans. |
+| Supervision | Each service is spawned detached so it outlives the command that started it (`devd stack up` starts the stack and exits), and is tracked by a pid file, verified against the process image so a recycled pid is not mistaken for the service. Stopping it terminates the whole process tree. Supervised project processes and stack tasks are placed in a Windows Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, which terminates their tree when the supervisor stops them or the last handle closes. Assignment is best effort: if devd itself already runs inside another job (some CI runners) the assignment can fail and `taskkill /T /F` is the fallback. | A background supervisor that also restarts a service after an unexpected exit, and a Linux/macOS equivalent that reaps orphans. |
 | Environment inheritance | Project commands, services, background tasks and shares clear the environment and receive only `CHILD_ENV_ALLOWLIST` plus explicit `env` values, so daemon credentials do not leak. | A per-project environment file that devd parses and passes deliberately, with the same allowlist reporting. |
 | Orphan recovery | If the pid file is lost, `devd` no longer knows the pid of a running service and `service stop` cannot find it. The port check still reports the service as running. | Rediscovery by listening port and image name. |
 | Filesystem isolation | There is none. A project process runs as the same user and can read the same files; the registry's path checks and approval tiers are policy, not a sandbox. | Platform sandbox profiles (Windows AppContainer/job restrictions, macOS sandbox-exec, Linux namespaces) behind a tested profile. |
@@ -158,7 +158,7 @@ A portable stack (the other stack, XAMPP, WampServer) serves sites with Apache, 
 
 | Item | What it is | What it would be |
 | --- | --- | --- |
-| Windows process-tree termination | A Job Object with kill-on-close where it can be assigned, then `taskkill /PID <pid> /T /F` as the fallback, with a 15-second timeout. If the host restricts job assignment the stronger guarantee is not available and the fallback is what runs. | A suspended spawn assigned to the job before its first instruction. |
+| Windows process-tree termination | Supervised project processes and stack tasks use a Job Object with kill-on-close where it can be assigned, then `taskkill /PID <pid> /T /F` as the fallback, with a 15-second timeout. A service or a public link is detached by contract and is stopped with the tree kill; it is deliberately not job-bound, because closing the job as a one-shot command exits would kill it. If the host restricts job assignment the stronger guarantee is not available and the fallback is what runs. | A suspended spawn assigned to the job before its first instruction. |
 | Interactive rebase | Driven by a no-op sequence editor (`GIT_SEQUENCE_EDITOR=true`), so `--autosquash` works but a user cannot reorder, drop or edit commits interactively | A real sequence-editor UI in the TUI and the GUI, which is where interactive rebase belongs. |
 | Hunk-level staging | `git.stage.patch` with a unified diff, used by the application's per-hunk controls | A graphical hunk selector in the desktop shell. The capability and the tests exist today. |
 | Repository index labels | A repository is labelled by its directory name | A user-settable display name. |
@@ -267,7 +267,7 @@ and are recorded so they are not rediscovered:
 
 | Item | What it is | What it would be |
 | --- | --- | --- |
-| Quitting the desktop app | Stops project processes, as a normal exit should. Each supervised process is in a kill-on-close Job Object, so an abrupt `TerminateProcess` also terminates its job when the handle closes; assignment can fail when the host already restricts jobs, in which case children may outlive a crash. | A detached supervisor and a reaper on Linux and macOS. |
+| Quitting the desktop app | Stops project processes, as a normal exit should. Each supervised project process is in a kill-on-close Job Object, so an abrupt `TerminateProcess` also terminates its job when the handle closes; assignment can fail when the host already restricts jobs, in which case children may outlive a crash. Services are different: they are detached and keep running, so the stack is still there when the window is closed. | A detached supervisor and a reaper on Linux and macOS. |
 | Project process adoption | A project process belongs to the devd process that started it. A second process reports it as supervised elsewhere rather than adopting it. | A small detached supervisor with pid-file ownership discovery. |
 | Windows `.cmd` shims | Started through `cmd.exe /c <shim> <args>`. Arguments remain separate, but a shim can itself interpret them. | Vendor-native `.exe` wrappers where available. |
 | Manifest secrets | Declared values are redacted from log reads on a best-effort key match. A program can print a secret in another form. | Structured secret references (OS credential store) rather than literal values in `devd.yml`. |
@@ -334,4 +334,5 @@ Stated plainly, so nothing is assumed:
   integration tests and were exercised against the release binary, but they have
   not been used by a team over weeks, which is where most of the rough edges in a
   review workflow would show up.
+
 

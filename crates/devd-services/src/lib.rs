@@ -1669,6 +1669,9 @@ fn spawn_spec(ctx: &Ctx, service: &Service) -> Result<SpawnSpec> {
         clear_env: true,
         log_path: log_path(ctx, &service.name),
         restarts: 0,
+        // A service outlives the command that started it: `devd stack up`
+        // starts the stack and exits.
+        persist: true,
     })
 }
 

@@ -478,6 +478,8 @@ pub fn run(
             clear_env: true,
             log_path: log.clone(),
             restarts: 0,
+            // A task is supervised work: it ends with the run that started it.
+            persist: false,
         };
         let sup = process::shared();
         let pid = sup.start(spec, run_id.clone())?;

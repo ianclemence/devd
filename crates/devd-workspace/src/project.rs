@@ -442,6 +442,9 @@ impl ProjectManager {
             clear_env: true,
             log_path: log.clone(),
             restarts,
+            // A project process belongs to the devd process supervising it;
+            // stopping that process stops its tree.
+            persist: false,
         };
         match self.supervisor.start(spawn, util::new_id()) {
             Ok(pid) => {

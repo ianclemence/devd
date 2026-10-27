@@ -10,6 +10,25 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.14.2] - 2026-10-27 - The stack outlives the command that started it
+
+Installing 0.14.1 over a real machine and then running `devd stack up` showed the
+web server starting and dying within a second. Each service was put in a Windows
+Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`; a one-shot command exits
+immediately after starting the stack, so closing the job killed the service it
+had just started. `devd service start nginx` and the sign-in entry that runs
+`devd stack up` were therefore unable to leave anything running on Windows.
+
+### Fixed
+
+- **A service and a public link outlive the command that starts them.** Both are
+  detached by contract and are no longer placed in a kill-on-close Job Object.
+  Stopping them still terminates the whole process tree, and they are still
+  tracked by pid file. Supervised project processes and stack tasks keep the Job
+  Object, because their lifetime is the devd process that supervises them.
+- A test now starts a persistent process, drops the supervisor, and asserts the
+  process is still alive before killing its tree.
+
 ## [0.14.1] - 2026-10-27 - Every agent call is a run
 
 0.14.0 said an MCP tool call left the same trail as a direct call. It did not:

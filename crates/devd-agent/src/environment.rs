@@ -321,9 +321,11 @@ fn isolation() -> Isolation {
         job_object: cfg!(windows),
         note: if cfg!(windows) {
             "Project processes get an allowlisted environment, a new process group, and a Job Object \
-             with kill-on-close where the job could be assigned; stopping a service terminates the \
-             job, and if devd exits its handles close, which kills the job's processes. Assignment \
-             is best effort when devd itself already runs inside another job (some CI runners)."
+             with kill-on-close where the job could be assigned; stopping one terminates the job, and \
+             if devd exits its handles close, which kills it. A service is detached by contract: it \
+             keeps running when the command that started it exits, and stopping it kills its process \
+             tree. Assignment is best effort when devd itself already runs inside another job (some \
+             CI runners)."
                 .to_string()
         } else {
             "Project processes get an allowlisted environment and their own process group; \
