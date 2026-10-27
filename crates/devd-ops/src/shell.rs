@@ -264,12 +264,16 @@ mod tests {
 
     #[test]
     fn a_launcher_is_attributed_to_its_version_folder_on_every_platform() {
-        // Windows puts the executable in the version folder; Unix puts it in
-        // `bin` below it. Reading the immediate parent gave "bin" on Unix, so a
-        // site's PHP was reported as the wrong version there.
+        // Unix puts the executable in `bin` below the version folder; reading
+        // the immediate parent gave "bin", so a site's PHP was reported as the
+        // wrong version there.
         assert_eq!(version_of(Path::new("/devd/runtimes/php/8.3.1/bin/php")), "8.3.1");
-        assert_eq!(version_of(Path::new("D:\\devd\\runtimes\\php\\8.3.1\\php.exe")), "8.3.1");
         assert_eq!(version_of(Path::new("/opt/php/bin/php")), "");
+        // A Windows path is one opaque file name on Unix, so this case is only
+        // meaningful where it is a path.
+        if cfg!(windows) {
+            assert_eq!(version_of(Path::new("D:\\devd\\runtimes\\php\\8.3.1\\php.exe")), "8.3.1");
+        }
     }
 
     #[test]
