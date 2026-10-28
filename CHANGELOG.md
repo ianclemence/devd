@@ -10,6 +10,23 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.15.1] - 2026-10-28 - A mutation the lists do not name is still a change
+
+The evidence classifier recognised changes and reads by name. 102 of 415
+registered capabilities were in neither list - `git.push`, `git.clone`,
+`composer.install`, `deploy.run` and others - so a successful call left only
+generic "completed" evidence and could not satisfy a change gate.
+
+### Fixed
+
+- A capability the name lists do not know is classified by the effect it
+  declared when it was registered: a read is read evidence, any other effect is
+  a change. `evidence_for_effect` carries the effect from the dispatcher.
+- A mutation whose name ends in a read-looking suffix (`git.conflicts.resolve`)
+  is a change; the exact change list is checked before the read suffixes.
+
+---
+
 ## [0.15.0] - 2026-10-27 - A read is not a change, and a claim is not a check
 
 0.14 said completion was decided from evidence. Reading the implementation
