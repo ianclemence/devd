@@ -1159,6 +1159,21 @@ pub fn evidence_for(
     args: &Value,
     outcome: Option<&Outcome>,
 ) -> Vec<EvidenceDraft> {
+    evidence_for_effect(capability, None, args, outcome)
+}
+
+/// [`evidence_for`] with the capability's declared effect.
+///
+/// The name lists cannot know every capability. For one they do not name, the
+/// effect the capability declared at registration decides: a read observes, any
+/// other effect changed something. Without this, `git.push` or `composer.install`
+/// succeeded and left no change on the record.
+pub fn evidence_for_effect(
+    capability: &str,
+    effect: Option<crate::capability::Effect>,
+    args: &Value,
+    outcome: Option<&Outcome>,
+) -> Vec<EvidenceDraft> {
     let ok = outcome.map(|o| o.ok).unwrap_or(false);
     let data = outcome.map(|o| &o.data).unwrap_or(&Value::Null);
     let exit_code = data.get("exit_code").and_then(Value::as_i64);
@@ -1381,18 +1396,6 @@ pub fn evidence_for(
         return vec![draft(kind, passed, label("database"))];
     }
 
-    if is_read_capability(capability) {
-        let what = args
-            .get("path")
-            .and_then(Value::as_str)
-            .unwrap_or_else(|| args.get("pattern").and_then(Value::as_str).unwrap_or(""));
-        return vec![draft(
-            EvidenceKind::Read,
-            ok,
-            label(if what.is_empty() { "read state" } else { what }),
-        )];
-    }
-
     if is_change_capability(capability) {
         let path = args.get("path").and_then(Value::as_str).unwrap_or("");
         return vec![draft(
@@ -1406,8 +1409,39 @@ pub fn evidence_for(
         )];
     }
 
+    if is_read_capability(capability) {
+        let what = args
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| args.get("pattern").and_then(Value::as_str).unwrap_or(""));
+        return vec![draft(
+            EvidenceKind::Read,
+            ok,
+            label(if what.is_empty() { "read state" } else { what }),
+        )];
+    }
+
     if capability.starts_with("toolchain.") || capability.starts_with("runtime.") {
         return vec![draft(EvidenceKind::Runtime, ok, label("runtime"))];
+    }
+
+    match effect {
+        Some(crate::capability::Effect::Read) => {
+            return vec![draft(EvidenceKind::Read, ok, label("read state"))];
+        }
+        Some(_) => {
+            let path = args.get("path").and_then(Value::as_str).unwrap_or("");
+            return vec![draft(
+                EvidenceKind::Change,
+                ok,
+                if path.is_empty() {
+                    label("changed state")
+                } else {
+                    label(&format!("changed {path}"))
+                },
+            )];
+        }
+        None => {}
     }
 
     vec![draft(EvidenceKind::Structured, ok, label("completed"))]
@@ -1555,6 +1589,23 @@ impl RunContext {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_mutation_the_name_lists_do_not_know_is_a_change_by_its_declared_effect() {
+        use crate::capability::Effect;
+        let ok = Outcome::ok("done");
+        // Unnamed capabilities are classified by what they declared.
+        let pushed = evidence_for_effect("git.push", Some(Effect::Remote), &json!({}), Some(&ok));
+        assert_eq!(pushed[0].kind, EvidenceKind::Change);
+        let peeked = evidence_for_effect("web.ports", Some(Effect::Read), &json!({}), Some(&ok));
+        assert_eq!(peeked[0].kind, EvidenceKind::Read);
+        // With no declared effect an unknown name stays unclassified, never a change.
+        let unknown = evidence_for("some.new_thing", &json!({}), Some(&ok));
+        assert_eq!(unknown[0].kind, EvidenceKind::Structured);
+        // A mutation whose name ends in a read-looking suffix is still a change.
+        let resolved = evidence_for("git.conflicts.resolve", &json!({}), Some(&ok));
+        assert_eq!(resolved[0].kind, EvidenceKind::Change);
+    }
 
     #[test]
     fn lifecycle_moves_forward_and_cannot_leave_a_cancelled_run() {

@@ -392,7 +392,7 @@ impl Registry {
             if !req.dry_run {
                 let args_hash = crate::util::sha256_hex(req.args.to_string().as_bytes());
                 let outcome = result.as_ref().ok().and_then(|r| r.outcome.as_ref());
-                let evidence = crate::runs::evidence_for(&cap.id, &req.args, outcome);
+                let evidence = crate::runs::evidence_for_effect(&cap.id, Some(cap.effect), &req.args, outcome);
                 let exit_code = evidence.iter().find_map(|e| e.exit_code);
                 let error_code = result.as_ref().err().map(|e| e.code());
                 let error = result.as_ref().err().map(|e| e.to_string());
