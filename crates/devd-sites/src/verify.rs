@@ -252,14 +252,36 @@ mod tests {
     fn serve_once(listener: TcpListener, status: &'static str) -> thread::JoinHandle<()> {
         thread::spawn(move || {
             if let Ok((mut stream, _)) = listener.accept() {
+                drain_request(&mut stream);
                 let _ = stream.write_all(
                     format!(
                         "HTTP/1.1 {status}\r\ncontent-length: 2\r\nconnection: close\r\n\r\nok"
                     )
                     .as_bytes(),
                 );
+                let _ = stream.flush();
+                // Close both directions politely. Dropping a socket that still
+                // has unread request bytes makes Windows send RST, which can
+                // discard the response before the client has read it.
+                let _ = stream.shutdown(std::net::Shutdown::Both);
             }
         })
+    }
+
+    /// Read the request head, so the response is not racing an unread buffer.
+    fn drain_request(stream: &mut TcpStream) {
+        use std::io::Read;
+
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+        let mut seen = Vec::new();
+        let mut buf = [0u8; 1024];
+        while !seen.windows(4).any(|w| w == b"\r\n\r\n") {
+            match stream.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => seen.extend_from_slice(&buf[..n]),
+                Err(_) => break,
+            }
+        }
     }
 
     #[test]
@@ -278,9 +300,12 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let handle = thread::spawn(move || {
             if let Ok((mut stream, _)) = listener.accept() {
+                drain_request(&mut stream);
                 let _ = stream.write_all(
                     b"HTTP/1.1 302 Found\r\nlocation: /elsewhere\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
                 );
+                let _ = stream.flush();
+                let _ = stream.shutdown(std::net::Shutdown::Both);
             }
         });
         let status = probe(&format!("http://127.0.0.1:{port}/"), None).unwrap();
