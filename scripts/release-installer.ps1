@@ -64,6 +64,17 @@ if (Test-Path $sums) {
 $lines += "$sha  $name"
 $lines | Out-File -Encoding ascii $sums
 
+# `devd update` installs a release only if SHA256SUMS.txt carries a signature
+# made with the release key. The key is a file only the maintainer holds, named
+# by DEVD_RELEASE_KEY_FILE; without it the release is published unsigned, and
+# `devd update check` says so.
+if ($env:DEVD_RELEASE_KEY_FILE -and (Test-Path $env:DEVD_RELEASE_KEY_FILE)) {
+    & (Join-Path $repo "targetelease\devd.exe") update sign $sums
+    if ($LASTEXITCODE -ne 0) { throw "signing the checksums failed" }
+} else {
+    Write-Host "DEVD_RELEASE_KEY_FILE is not set: SHA256SUMS.txt was NOT signed" -ForegroundColor Yellow
+}
+
 Write-Host ""
 Write-Host "wrote dist\$name" -ForegroundColor Green
 Get-Content $sums

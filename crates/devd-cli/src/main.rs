@@ -257,6 +257,12 @@ pub(crate) enum Command {
         #[command(subcommand)]
         cmd: DaemonCommand,
     },
+    /// Update devd from its signed releases: `check`, `apply`; `keygen` and `sign` are for
+    /// whoever publishes releases.
+    Update {
+        #[command(subcommand)]
+        cmd: UpdateCommand,
+    },
     /// Start the stack when you sign in: `status`, `enable` or `disable`.
     Autostart {
         #[command(subcommand)]
@@ -1322,6 +1328,29 @@ pub(crate) enum ComposerCommand {
 }
 
 #[derive(Subcommand, Debug)]
+pub(crate) enum UpdateCommand {
+    /// Is there a newer release, and is it signed?
+    Check,
+    /// Download, verify and install the latest signed release.
+    Apply,
+    /// Make a release signing key. Writes the private seed to a file (keep it secret) and
+    /// prints the public key to put in `RELEASE_PUBLIC_KEY`.
+    Keygen {
+        /// Where to write the private seed. Refuses to overwrite.
+        #[arg(long)]
+        out: std::path::PathBuf,
+    },
+    /// Sign a file (normally SHA256SUMS.txt), writing `<file>.sig`.
+    Sign {
+        /// The file to sign.
+        file: std::path::PathBuf,
+        /// The private seed file. Defaults to $DEVD_RELEASE_KEY_FILE.
+        #[arg(long)]
+        key: Option<std::path::PathBuf>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 pub(crate) enum DaemonCommand {
     /// Run the resident process in this terminal.
     Run {
@@ -1960,6 +1989,41 @@ fn run(cli: Cli) -> Result<i32> {
             }
             Ok(0)
         }
+        Command::Update { cmd } => match cmd {
+            UpdateCommand::Check => {
+                app.invoke("update.check", serde_json::json!({}))?;
+                Ok(0)
+            }
+            UpdateCommand::Apply => {
+                app.invoke("update.apply", serde_json::json!({}))?;
+                Ok(0)
+            }
+            UpdateCommand::Keygen { out } => {
+                if out.exists() {
+                    return Err(DevdError::conflict(format!("{} exists; it will not be overwritten", out.display())));
+                }
+                let seed = devd_core::update::generate_seed()?;
+                let public = devd_core::update::public_key_of(&seed)?;
+                devd_core::util::atomic_write(&out, &seed)?;
+                println!("private seed written to {} (keep it secret and backed up)", out.display());
+                println!("public key (put this in RELEASE_PUBLIC_KEY): {public}");
+                Ok(0)
+            }
+            UpdateCommand::Sign { file, key } => {
+                let key = key
+                    .or_else(|| std::env::var_os("DEVD_RELEASE_KEY_FILE").map(std::path::PathBuf::from))
+                    .ok_or_else(|| DevdError::invalid("name the key with --key or DEVD_RELEASE_KEY_FILE"))?;
+                let seed = std::fs::read_to_string(&key)
+                    .map_err(|e| DevdError::not_found(format!("cannot read the key {}: {e}", key.display())))?;
+                let message = std::fs::read(&file)
+                    .map_err(|e| DevdError::not_found(format!("cannot read {}: {e}", file.display())))?;
+                let signature = devd_core::update::sign_hex(&seed, &message)?;
+                let out = std::path::PathBuf::from(format!("{}.sig", file.display()));
+                devd_core::util::atomic_write(&out, &signature)?;
+                println!("signed {} -> {}", file.display(), out.display());
+                Ok(0)
+            }
+        },
         Command::Autostart { cmd } => {
             let id = match cmd {
                 AutostartCommand::Status => "autostart.status",

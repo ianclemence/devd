@@ -164,7 +164,7 @@ pub fn fetch(
     fetch_with(artifact, cache_dir, progress, false)
 }
 
-fn fetch_with(
+pub(crate) fn fetch_with(
     artifact: &Artifact,
     cache_dir: &Path,
     progress: Option<&ProgressFn<'_>>,

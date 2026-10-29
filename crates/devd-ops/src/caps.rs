@@ -344,6 +344,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
     register_ploi(reg)?;
     crate::caps_more::register(reg)?;
     crate::caps_shell::register(reg)?;
+    crate::caps_update::register(reg)?;
     Ok(())
 }
 

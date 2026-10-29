@@ -18,6 +18,7 @@ pub mod caps;
 pub mod caps_more;
 pub mod caps_remote;
 pub mod caps_shell;
+pub mod caps_update;
 pub mod cron;
 pub mod daemons;
 pub mod dbadmin;
