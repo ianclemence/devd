@@ -329,7 +329,7 @@ pub fn enable_commands(suffix: &str, port: u16) -> std::result::Result<Vec<Vec<S
     if port != 53 {
         return Err(format!(
             "Windows can only send a name suffix to a DNS server on port 53, and devd's runs on {port}. \
-             Run `devd call dns.enable --args {\"port\":53}` if nothing holds port 53 (Windows' Internet Connection Sharing and Hyper-V do), \
+             Run `devd call dns.enable` with the port set to 53 if nothing holds port 53 (Windows' Internet Connection Sharing and Hyper-V do), \
              otherwise keep using the hosts file"
         ));
     }
