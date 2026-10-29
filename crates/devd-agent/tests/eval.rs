@@ -712,6 +712,14 @@ fn a_spending_limit_stops_a_run_before_its_next_model_call() {
 /// model would behave this way again.
 #[test]
 fn a_recorded_session_replays_through_the_real_loop() {
+    // The session was recorded on Windows, so the paths the model used inside the
+    // project have Windows separators. Only the project's own folder is rewritten
+    // for replay, so on another system those paths name nothing and the agent
+    // rightly asks before touching them. Record a cassette there to replay there.
+    if !cfg!(windows) {
+        println!("this cassette was recorded on Windows; skipped on this platform");
+        return;
+    }
     if !cassette_path("inspect_recorded").exists() {
         println!("no cassette recorded yet; run record_inspect to make one");
         return;
