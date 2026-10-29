@@ -1033,9 +1033,38 @@ impl Hub {
                     "dropped": working.manifest.dropped,
                 }),
             );
+            let policy = crate::policy::Policy::load(&self.ctx.store);
+            let spent = self
+                .ctx
+                .store
+                .run_by_id(&run_id)
+                .ok()
+                .flatten()
+                .and_then(|r| r.usage.get("cost_usd").and_then(Value::as_f64))
+                .unwrap_or(0.0);
+            if let Err(e) = policy.within_budget(spent) {
+                return self.fail(tid, &e.to_string());
+            }
             let mut chosen = None;
             let mut last_err = String::new();
             for (i, (provider, key, model, why)) in candidates.iter().enumerate() {
+                // Privacy first: a provider the person excluded never sees the
+                // project, whatever the fallback order says.
+                if let Err(e) = policy.permits(provider) {
+                    last_err = e.to_string();
+                    continue;
+                }
+                // A model known not to call tools cannot do agent work. One
+                // nobody has information about is given the chance to try.
+                if !tools.is_empty()
+                    && crate::policy::model_caps(&self.ctx.store, provider, model).tools
+                        == Some(false)
+                {
+                    last_err = format!(
+                        "{model} does not support tools, so it cannot work as an agent; choose another model"
+                    );
+                    continue;
+                }
                 if key.is_none() && provider.kind != "openai-compatible" {
                     last_err = format!(
                         "{} has no API key. Add one in Models (or set {}).",
@@ -1110,7 +1139,7 @@ impl Hub {
                     }
                 }
             }
-            let Some((response, model, _, why)) = chosen else {
+            let Some((response, model, chosen_provider, why)) = chosen else {
                 let _ = self.ctx.store.finish_step(
                     &step.id,
                     "failed",
@@ -1127,6 +1156,14 @@ impl Hub {
                 response.output_tokens,
                 0,
             );
+            if let Some(provider) = candidates.iter().map(|c| &c.0).find(|p| p.id == chosen_provider) {
+                let caps = crate::policy::model_caps(&self.ctx.store, provider, &model);
+                if let Some(usd) =
+                    crate::policy::cost_usd(&caps, response.input_tokens, response.output_tokens)
+                {
+                    let _ = self.ctx.store.add_run_cost(&run_id, usd);
+                }
+            }
             self.log(tid, "assistant", json!({ "content": response.content, "stop_reason": response.stop_reason, "model": model, "routing": why, "usage": { "input": response.input_tokens, "output": response.output_tokens } }))?;
 
             let calls: Vec<&Value> = response

@@ -576,6 +576,28 @@ impl Store {
     }
 
     /// Add token usage to a run.
+    /// Add to the dollars a run has spent, as far as the model prices are known.
+    pub fn add_run_cost(&self, id: &str, usd: f64) -> Result<()> {
+        self.with(|c| {
+            let current: Option<String> = c
+                .query_row("SELECT usage FROM runs WHERE id=?1", params![id], |r| {
+                    r.get(0)
+                })
+                .optional()?;
+            let mut usage = current
+                .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+                .unwrap_or_else(|| serde_json::json!({}));
+            let total = usage.get("cost_usd").and_then(Value::as_f64).unwrap_or(0.0) + usd;
+            usage["cost_usd"] = serde_json::json!(total);
+            c.execute(
+                "UPDATE runs SET usage=?2, updated_at=?3 WHERE id=?1",
+                params![id, usage.to_string(), util::now()],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Add to a run's token counts.
     pub fn add_run_usage(&self, id: &str, input: i64, output: i64, tool_calls: i64) -> Result<()> {
         self.with(|c| {
             let current: Option<String> = c

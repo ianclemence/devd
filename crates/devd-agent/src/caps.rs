@@ -31,6 +31,26 @@ use crate::{
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct NoArgs {}
 
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct PolicyArgs {
+    /// Use only models running on this machine.
+    local_only: Option<bool>,
+    /// Provider ids that may be used. An empty list removes the restriction.
+    allow_providers: Option<Vec<String>>,
+    /// Provider ids that may never be used.
+    block_providers: Option<Vec<String>>,
+    /// Most one run may spend, in US dollars. Zero removes the limit.
+    max_cost_usd: Option<f64>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct ModelCapsArgs {
+    /// Provider id.
+    provider: String,
+    /// Model id.
+    model: String,
+}
+
 fn simple(id: &str, text: impl Into<String>) -> Result<Plan> {
     Ok(Plan::new(id, text))
 }
@@ -1473,6 +1493,76 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                 find_provider(ctx, &a.id)?;
                 ctx.store.set_default_provider(&a.id)?;
                 Ok(Outcome::ok(format!("{} is now the default provider", a.id)))
+            },
+        )?;
+
+    reg.define::<NoArgs>("policy.get", "Show the privacy and cost policy")
+        .description("The rules every model call is checked against: whether only local models may be used, which providers are allowed or blocked, and the most one run may spend.")
+        .tier(Tier::Read)
+        .effect(Effect::Read)
+        .agent_safe()
+        .idempotent()
+        .dry_run()
+        .handlers(
+            |_, _| simple("policy.get", "read the policy"),
+            |ctx, _| {
+                let policy = crate::policy::Policy::load(&ctx.store);
+                Ok(Outcome::with_data(
+                    "the policy in force",
+                    serde_json::to_value(&policy).unwrap_or(Value::Null),
+                ))
+            },
+        )?;
+
+    reg.define::<PolicyArgs>("policy.set", "Change the privacy and cost policy")
+        .description("Sets any of: local_only, allow_providers, block_providers, max_cost_usd. A provider the policy excludes is skipped, with the reason, before it sees the project. Human only: an agent cannot loosen the rules it runs under.")
+        .tier(Tier::Write)
+        .effect(Effect::Write)
+        .human_only()
+        .dry_run()
+        .handlers(
+            |_, _| simple("policy.set", "change the privacy and cost policy"),
+            |ctx, a| {
+                let join = |v: &[String]| v.join(",");
+                if let Some(v) = a.local_only {
+                    ctx.store.set_setting(crate::policy::LOCAL_ONLY, &v.to_string())?;
+                }
+                if let Some(v) = &a.allow_providers {
+                    ctx.store.set_setting(crate::policy::ALLOW, &join(v))?;
+                }
+                if let Some(v) = &a.block_providers {
+                    ctx.store.set_setting(crate::policy::BLOCK, &join(v))?;
+                }
+                if let Some(v) = a.max_cost_usd {
+                    if v < 0.0 || !v.is_finite() {
+                        return Err(DevdError::invalid("max_cost_usd must be zero or more"));
+                    }
+                    ctx.store.set_setting(crate::policy::MAX_COST, &v.to_string())?;
+                }
+                let policy = crate::policy::Policy::load(&ctx.store);
+                Ok(Outcome::with_data(
+                    "policy updated",
+                    serde_json::to_value(&policy).unwrap_or(Value::Null),
+                ))
+            },
+        )?;
+
+    reg.define::<ModelCapsArgs>("model.capabilities", "What is known about a model")
+        .description("Whether the model takes tools or images, its window and output limit, and its price per million tokens, with where each fact came from (the provider's own listing, a known model family, or unknown). Unknown is reported as unknown, never assumed.")
+        .tier(Tier::Read)
+        .effect(Effect::Read)
+        .agent_safe()
+        .idempotent()
+        .dry_run()
+        .handlers(
+            |_, a| simple("model.capabilities", format!("read what is known about {}", a.model)),
+            |ctx, a| {
+                let provider = find_provider(ctx, &a.provider)?;
+                let caps = crate::policy::model_caps(&ctx.store, &provider, &a.model);
+                Ok(Outcome::with_data(
+                    format!("{}: {}", a.model, caps.source),
+                    serde_json::to_value(&caps).unwrap_or(Value::Null),
+                ))
             },
         )?;
 
