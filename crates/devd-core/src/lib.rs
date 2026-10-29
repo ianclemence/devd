@@ -33,6 +33,7 @@ pub mod schema;
 pub mod searchindex;
 pub mod serving;
 pub mod shims;
+pub mod snapshot;
 pub mod state;
 pub mod store_ai;
 pub mod store_mcp;

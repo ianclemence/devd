@@ -66,7 +66,11 @@ args! {
     /// A database to create.
     DbCreateArgs { name: String, engine: Option<String> }
     /// A database to drop.
-    DbDropArgs { name: String, engine: Option<String> }
+    DbDropArgs { name: String, engine: Option<String>, no_snapshot: Option<bool> }
+    /// A snapshot to put back.
+    SnapshotRef { id: String }
+    /// How many snapshots to list.
+    SnapshotQuery { limit: Option<usize> }
     /// A database to write to a file.
     DbDumpArgs { database: String, path: Option<String>, from_port: Option<u16>, from_user: Option<String>, from_password: Option<String>, engine: Option<String> }
     /// A file to read into a database.
@@ -1082,6 +1086,29 @@ fn db_target(ctx: &Ctx, engine: &Option<String>) -> Result<Db> {
     }
 }
 
+/// Dump a database into the snapshot area before it is dropped.
+fn snapshot_database(ctx: &Ctx, target: &Db, name: &str) -> Result<devd_core::snapshot::Snapshot> {
+    let (id, payload) = devd_core::snapshot::allocate(ctx)?;
+    let (engine, port) = match target {
+        Db::Maria { port } => {
+            services::dump::dump(ctx, &services::dump::Endpoint::devd(*port), name, &payload)?;
+            ("mariadb", *port)
+        }
+        Db::Postgres { root, port } => {
+            services::engines::pg_dump(root, *port, "postgres", None, name, &payload)?;
+            ("postgres", *port)
+        }
+    };
+    devd_core::snapshot::record_payload(
+        ctx,
+        devd_core::snapshot::Kind::Database,
+        &format!("{engine}:{name}"),
+        "db.drop",
+        &id,
+        json!({ "engine": engine, "database": name, "port": port }),
+    )
+}
+
 fn register_db(reg: &mut Registry) -> Result<()> {
     reg.define::<DbListArgs>("db.list", "List databases")
     .description("The databases on devd's MariaDB (or, with engine postgres, PostgreSQL), excluding the system databases.")
@@ -1249,7 +1276,7 @@ fn register_db(reg: &mut Registry) -> Result<()> {
     )?;
 
     reg.define::<DbDropArgs>("db.drop", "Drop a database")
-    .description("Drops a database and everything in it. This cannot be undone and always requires approval.")
+    .description("Drops a database and everything in it. A dump is saved first, and its id is in the result: `snapshot.restore` brings the database back. If the dump cannot be made the drop is refused, unless `no_snapshot` says to go ahead without one. Always requires approval.")
     .group("db")
     .tier(Tier::Destructive)
     .effect(Effect::Data)
@@ -1258,19 +1285,101 @@ fn register_db(reg: &mut Registry) -> Result<()> {
         |ctx, a| {
             db_target(ctx, &a.engine)?;
             Ok(Plan::new("db.drop", format!("drop the database `{}`", a.name))
+                .step(if a.no_snapshot.unwrap_or(false) {
+                    "NO dump is saved first: this cannot be undone"
+                } else {
+                    "a dump is saved first, so `snapshot.restore` can bring it back"
+                })
                 .step("every table and every row in it is deleted")
                 .effect("deletes stored data")
                 .destructive(true)
                 .data(json!({ "database": a.name })))
         },
-        |ctx, a| match db_target(ctx, &a.engine)? {
-            Db::Maria { port } => {
-                let result = services::mariadb::drop_database(ctx, port, &a.name)?;
-                Ok(Outcome::with_data(format!("dropped the database `{}`", a.name), result))
+        |ctx, a| {
+            let target = db_target(ctx, &a.engine)?;
+            // Save what is about to be destroyed. A dump that cannot be made stops
+            // the drop: an approval that said "I can get it back" must be true.
+            let snapshot = if a.no_snapshot.unwrap_or(false) {
+                None
+            } else {
+                Some(snapshot_database(ctx, &target, &a.name)?)
+            };
+            let mut data = match &target {
+                Db::Maria { port } => services::mariadb::drop_database(ctx, *port, &a.name)?,
+                Db::Postgres { root, port } => {
+                    services::engines::pg_drop(ctx, root, *port, &a.name)?;
+                    json!({ "database": a.name })
+                }
+            };
+            if let (Some(snap), Some(object)) = (&snapshot, data.as_object_mut()) {
+                object.insert("undo".into(), json!(snap.id));
             }
-            Db::Postgres { root, port } => {
-                services::engines::pg_drop(ctx, &root, port, &a.name)?;
-                Ok(Outcome::with_data(format!("dropped the database `{}`", a.name), json!({ "database": a.name })))
+            let message = match &snapshot {
+                Some(snap) => format!("dropped the database `{}`; `snapshot.restore {}` brings it back", a.name, snap.id),
+                None => format!("dropped the database `{}`; no dump was saved", a.name),
+            };
+            Ok(Outcome::with_data(message, data))
+        },
+    )?;
+
+    reg.define::<SnapshotQuery>("snapshot.list", "List saved states that can be restored")
+    .description("What devd saved before it overwrote or deleted a file or directory, or dropped a database: what it was, which capability did it and who asked, newest first. Restore one with `snapshot.restore`. Snapshots are kept for a limited time and size, and a very large file or tree is not saved at all (the result of the operation says so).")
+    .group("snapshot")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .dry_run()
+    .handlers(
+        |_, _| Ok(Plan::new("snapshot.list", "list saved states")),
+        |ctx, a| {
+            let all = devd_core::snapshot::list(&ctx.paths, a.limit.unwrap_or(30).clamp(1, 500));
+            Ok(Outcome::with_data(format!("{} snapshot(s)", all.len()), serde_json::to_value(&all)?))
+        },
+    )?;
+
+    reg.define::<SnapshotRef>("snapshot.restore", "Put a saved state back")
+    .description("Restores a file or directory to what it was before an operation changed it, or recreates a database from the dump taken before it was dropped. What is there now is saved first, so the restore can itself be undone (databases excepted: a database is restored over a fresh one, and refused if one of that name exists). Human only, because it overwrites current content.")
+    .group("snapshot")
+    .tier(Tier::Write)
+    .effect(Effect::Data)
+    .human_only()
+    .dry_run()
+    .handlers(
+        |ctx, a| {
+            let snap = devd_core::snapshot::get(&ctx.paths, &a.id)?;
+            Ok(Plan::new("snapshot.restore", format!("restore {} ({:?}, from {})", snap.subject, snap.kind, snap.created_at))
+                .step("what is there now is saved first")
+                .effect("overwrites current content with what was saved"))
+        },
+        |ctx, a| {
+            let snap = devd_core::snapshot::get(&ctx.paths, &a.id)?;
+            match snap.kind {
+                devd_core::snapshot::Kind::Database => {
+                    let engine = snap.meta["engine"].as_str().unwrap_or("mariadb").to_string();
+                    let database = snap.meta["database"].as_str().ok_or_else(|| DevdError::invalid("the snapshot does not name its database"))?.to_string();
+                    let target = db_target(ctx, &Some(engine.clone()))?;
+                    let payload = devd_core::snapshot::payload_path(&ctx.paths, &a.id);
+                    match target {
+                        Db::Maria { port } => {
+                            if services::mariadb::databases(ctx, port)?.iter().any(|d| d == &database) {
+                                return Err(DevdError::conflict(format!("a database named `{database}` exists; drop or rename it before restoring over it")));
+                            }
+                            services::dump::restore(ctx, &services::dump::Endpoint::devd(port), &database, &payload)?;
+                        }
+                        Db::Postgres { root, port } => {
+                            services::engines::pg_restore(ctx, &root, port, &database, &payload)?;
+                        }
+                    }
+                    Ok(Outcome::with_data(format!("recreated the database `{database}`"), json!({ "database": database, "engine": engine })))
+                }
+                _ => {
+                    let restored = devd_core::snapshot::restore_path(ctx, &a.id)?;
+                    Ok(Outcome::with_data(
+                        format!("restored {}", restored.path.display()),
+                        json!({ "path": restored.path.display().to_string(), "replaced_snapshot": restored.replaced }),
+                    ))
+                }
             }
         },
     )?;

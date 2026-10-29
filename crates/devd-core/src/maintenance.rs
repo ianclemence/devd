@@ -127,6 +127,16 @@ pub fn run(ctx: &Ctx) -> Vec<String> {
             ));
         }
     }
+    let snap_days = setting_u64(ctx, "snapshots.max_age_days", 30);
+    let snap_bytes = setting_u64(ctx, "snapshots.max_bytes", 1024 * 1024 * 1024);
+    let pruned = crate::snapshot::prune(
+        &ctx.paths,
+        std::time::Duration::from_secs(snap_days * 86_400),
+        snap_bytes,
+    );
+    if pruned > 0 {
+        did.push(format!("removed {pruned} expired undo snapshot(s)"));
+    }
     let days = setting_u64(ctx, "audit.retention_days", DEFAULT_AUDIT_DAYS as u64) as i64;
     if days > 0 {
         let cutoff = (chrono::Utc::now() - chrono::Duration::days(days)).to_rfc3339();

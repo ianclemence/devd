@@ -364,6 +364,19 @@ pub fn search(
     Ok(json!({ "matches": hits, "files_scanned": scanned, "truncated": hits.len() >= limit }))
 }
 
+/// Save what is about to be overwritten or removed, unless it is a secrets file:
+/// copying a `.env` into the snapshot area would put its contents somewhere that
+/// was never meant to hold them.
+fn save_before(ctx: &Ctx, path: &Path, capability: &str) -> devd_core::snapshot::Undo {
+    if is_secret_file(path) {
+        return devd_core::snapshot::Undo {
+            snapshot: None,
+            note: Some("no undo is kept for a file that holds secrets".to_string()),
+        };
+    }
+    devd_core::snapshot::before_change(ctx, path, capability)
+}
+
 /// Create or replace a file.
 pub fn write(ctx: &Ctx, path: &str, content: &str, create_dirs: bool) -> Result<Value> {
     let p = authorize(ctx, path, true)?;
@@ -388,10 +401,11 @@ pub fn write(ctx: &Ctx, path: &str, content: &str, create_dirs: bool) -> Result<
         }
     }
     let existed = p.exists();
+    let undo = save_before(ctx, &p, "fs.write");
     devd_core::util::atomic_write(&p, content)?;
-    Ok(
+    Ok(undo.attach(
         json!({ "path": p.display().to_string(), "created": !existed, "bytes": content.len(), "lines": content.lines().count() }),
-    )
+    ))
 }
 
 /// Replace text in a file. The old text must match exactly once unless
@@ -424,10 +438,11 @@ pub fn edit(ctx: &Ctx, path: &str, old: &str, new: &str, replace_all: bool) -> R
     if updated.len() > MAX_WRITE_BYTES {
         return Err(DevdError::invalid("the result would be larger than 2 MB"));
     }
+    let undo = save_before(ctx, &p, "fs.edit");
     devd_core::util::atomic_write(&p, &updated)?;
-    Ok(
+    Ok(undo.attach(
         json!({ "path": p.display().to_string(), "replacements": if replace_all { count } else { 1 } }),
-    )
+    ))
 }
 
 /// Move or rename a file or directory. Never overwrites.
@@ -469,8 +484,9 @@ pub fn delete(ctx: &Ctx, path: &str, recursive: bool) -> Result<Value> {
     if p.is_dir() {
         if recursive {
             let n = WalkDir::new(&p).into_iter().filter_map(|e| e.ok()).count();
+            let undo = save_before(ctx, &p, "fs.delete");
             std::fs::remove_dir_all(&p)?;
-            return Ok(json!({ "deleted": p.display().to_string(), "entries": n }));
+            return Ok(undo.attach(json!({ "deleted": p.display().to_string(), "entries": n })));
         }
         std::fs::remove_dir(&p).map_err(|_| {
             DevdError::conflict(format!(
@@ -479,7 +495,9 @@ pub fn delete(ctx: &Ctx, path: &str, recursive: bool) -> Result<Value> {
             ))
         })?;
     } else {
+        let undo = save_before(ctx, &p, "fs.delete");
         std::fs::remove_file(&p)?;
+        return Ok(undo.attach(json!({ "deleted": p.display().to_string() })));
     }
     Ok(json!({ "deleted": p.display().to_string() }))
 }
@@ -715,5 +733,41 @@ mod tests {
                 .code(),
             "permission_denied"
         );
+    }
+
+    #[test]
+    fn an_overwrite_a_delete_and_a_secret_each_say_what_can_be_undone() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let c = ctx(&root, Actor::human(Surface::Cli));
+        let proj = root.join("www").join("proj");
+        std::fs::create_dir_all(&proj).unwrap();
+        let file = proj.join("a.txt").display().to_string();
+
+        // Creating a file has nothing to save.
+        let created = write(&c, &file, "one", false).unwrap();
+        assert!(created.get("undo").is_none(), "{created}");
+
+        // Overwriting it saves the old text, and the id restores it.
+        let overwritten = write(&c, &file, "two", false).unwrap();
+        let id = overwritten["undo"].as_str().expect("an undo id").to_string();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "two");
+        devd_core::snapshot::restore_path(&c, &id).unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "one");
+
+        // Deleting a directory with its contents saves the tree.
+        std::fs::create_dir_all(proj.join("sub")).unwrap();
+        std::fs::write(proj.join("sub/b.txt"), "kept").unwrap();
+        let removed = delete(&c, &proj.join("sub").display().to_string(), true).unwrap();
+        let tree = removed["undo"].as_str().expect("the tree was saved").to_string();
+        assert!(!proj.join("sub").exists());
+        devd_core::snapshot::restore_path(&c, &tree).unwrap();
+        assert_eq!(std::fs::read_to_string(proj.join("sub/b.txt")).unwrap(), "kept");
+
+        // A secrets file cannot be written through the file tools at all, so
+        // there is nothing of it to save; the guard in `save_before` is a second
+        // line behind that refusal.
+        let secret = proj.join(".env").display().to_string();
+        assert_eq!(write(&c, &secret, "API_KEY=2", false).unwrap_err().code(), "permission_denied");
     }
 }
