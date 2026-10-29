@@ -781,7 +781,7 @@ fn record_inspect() {
                 .set("authorization", &format!("Bearer {upstream_key}"))
                 .set("content-type", "application/json")
                 .send_string(&body.to_string())
-                .and_then(|r| Ok(r.into_string().unwrap_or_default()))
+                .map(|r| r.into_string().unwrap_or_default())
                 .unwrap_or_else(|e| json!({ "error": e.to_string() }).to_string());
             keep.lock().unwrap().push(templatize(&answer, &project_text));
             let resp = format!(

@@ -26,6 +26,7 @@ pub mod extras;
 pub mod mariadb;
 pub mod nginx;
 pub mod phpcaps;
+pub mod probe;
 pub mod reconcile;
 pub mod redirects;
 pub mod share;
@@ -516,6 +517,15 @@ pub struct Status {
     pub port: Option<u16>,
     /// Whether the port accepts a connection.
     pub listening: bool,
+    /// Whether the service answers in its own protocol. `None` when nothing is
+    /// listening to ask. A service can listen and not be ready: a database
+    /// accepts connections before it can serve a query.
+    pub ready: Option<bool>,
+    /// How readiness was checked (`http`, `mysql`, `fastcgi`, `redis`, ..., or
+    /// `tcp` when no protocol check exists for the service).
+    pub ready_via: Option<String>,
+    /// What the check saw, in a sentence.
+    pub ready_detail: Option<String>,
     /// What the user asked for: `running` or `stopped`.
     pub desired_state: String,
     /// Whether the service takes part in `stack.up`.
@@ -580,9 +590,25 @@ pub fn status(ctx: &Ctx, name: &str) -> Result<Status> {
     let pid = running_pid(ctx, &service);
     let listening = service.port.map(local_tcp_open).unwrap_or(false);
     let running = pid.is_some();
+    let readiness = match (service.port, listening) {
+        (Some(port), true) if port != 0 => Some(probe::probe(
+            &service.kind,
+            &service.name,
+            port,
+            Duration::from_millis(1500),
+        )),
+        _ => None,
+    };
 
     let message = if !installed {
         format!("{} is not installed at {}", service.name, dir.display())
+    } else if running && listening && readiness.as_ref().is_some_and(|r| !r.ready) {
+        format!(
+            "{name} is running (pid {}) and holds port {}, but is not ready: {}",
+            pid.unwrap_or(0),
+            service.port.unwrap_or(0),
+            readiness.as_ref().map(|r| r.detail.as_str()).unwrap_or("")
+        )
     } else if running && listening {
         format!(
             "{name} is running (pid {}) on port {}",
@@ -612,6 +638,9 @@ pub fn status(ctx: &Ctx, name: &str) -> Result<Status> {
         pid,
         port: service.port,
         listening,
+        ready: readiness.as_ref().map(|r| r.ready),
+        ready_via: readiness.as_ref().map(|r| r.via.to_string()),
+        ready_detail: readiness.as_ref().map(|r| r.detail.clone()),
         desired_state: service.desired_state.clone(),
         enabled: service.enabled,
         install_dir: dir.display().to_string(),
@@ -676,6 +705,9 @@ pub fn list(ctx: &Ctx) -> Result<Vec<Status>> {
                 pid: None,
                 port: service.port,
                 listening: false,
+                ready: None,
+                ready_via: None,
+                ready_detail: None,
                 desired_state: service.desired_state.clone(),
                 enabled: service.enabled,
                 install_dir: install_dir(ctx, &service.name).display().to_string(),
@@ -1858,6 +1890,28 @@ pub fn start(ctx: &Ctx, name: &str) -> Result<Status> {
         listening = local_tcp_open(port);
     }
 
+    // Holding the port is the first sign of life, not the last. The service must
+    // also answer in its own protocol before the start is called a success, within
+    // the same window it was given to open the port.
+    let mut readiness = None;
+    if listening && port != 0 {
+        // A port that opens in the last moment of its window still gets time to
+        // answer.
+        let ready_deadline = deadline.max(Instant::now() + Duration::from_secs(5));
+        loop {
+            let result = probe::probe(&service.kind, &service.name, port, Duration::from_millis(1500));
+            let ready = result.ready;
+            readiness = Some(result);
+            if ready || Instant::now() >= ready_deadline || !process::pid_alive(pid) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        if readiness.as_ref().is_some_and(|r| !r.ready) {
+            listening = false;
+        }
+    }
+
     service.desired_state = "running".to_string();
     ctx.store.upsert_service(&service)?;
 
@@ -1872,9 +1926,11 @@ pub fn start(ctx: &Ctx, name: &str) -> Result<Status> {
             program: format!("{} start", service.name),
             code: -1,
             stderr: format!(
-                "{} did not begin answering on port {port} within {} seconds. Its log ({}) says:\n{}",
+                "{} did not begin {} on port {port} within {} seconds{}. Its log ({}) says:\n{}",
                 service.name,
+                if readiness.is_some() { "answering correctly" } else { "answering" },
                 startup.as_secs(),
+                readiness.as_ref().map(|r| format!(" ({})", r.detail)).unwrap_or_default(),
                 log.display(),
                 if tail.is_empty() {
                     "  (the log is empty)".to_string()

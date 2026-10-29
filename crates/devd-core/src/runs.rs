@@ -1303,7 +1303,9 @@ pub fn evidence_for_effect(
             .get("name")
             .and_then(Value::as_str)
             .unwrap_or("service");
-        let ready = ok && all_true(data, &["running", "listening"]) == Some(true);
+        // `ready` is present when the service was asked in its own protocol; a
+        // payload from before that existed has only running and listening.
+        let ready = ok && all_true(data, &["running", "listening", "ready"]) == Some(true);
         let summary = if ready {
             format!("{name} is running and answering")
         } else if ok && data.get("running").and_then(Value::as_bool) == Some(true) {

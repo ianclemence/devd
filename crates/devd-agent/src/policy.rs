@@ -142,9 +142,12 @@ pub struct ModelCaps {
 /// Matched on the model id, longest pattern first. It is deliberately short:
 /// anything a provider's own listing says takes precedence, and an unknown
 /// model is reported as unknown rather than assumed to work.
-fn family(model: &str) -> (Option<bool>, Option<bool>, Option<bool>) {
+type Traits = (Option<bool>, Option<bool>, Option<bool>);
+
+fn family(model: &str) -> Traits {
     let id = model.to_lowercase();
     // (pattern, tools, vision, reasoning)
+    #[allow(clippy::type_complexity)]
     const FAMILIES: &[(&str, Option<bool>, Option<bool>, Option<bool>)] = &[
         ("deepseek-reasoner", Some(false), Some(false), Some(true)),
         ("deepseek", Some(true), Some(false), None),

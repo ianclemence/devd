@@ -588,8 +588,8 @@ mod tests {
                 }
                 header.push_str("\r\n");
                 let _ = conn.write_all(header.as_bytes());
-                if served == 0 && cut_first.is_some() {
-                    let _ = conn.write_all(&slice[..cut_first.unwrap().min(slice.len())]);
+                if let (0, Some(cut)) = (served, cut_first) {
+                    let _ = conn.write_all(&slice[..cut.min(slice.len())]);
                     // Close early: a connection that dies mid-body.
                 } else {
                     let _ = conn.write_all(slice);
