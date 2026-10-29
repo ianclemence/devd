@@ -119,6 +119,8 @@ args! {
     OpArgs { repo: String, op: String }
     /// A repository and how to resolve a conflict.
     ResolveArgs { repo: String, path: String, side: ConflictSide }
+    /// A conflicted file and the text that resolves it.
+    ResolveWithArgs { repo: String, path: String, content: String }
     /// Options for adding a remote.
     RemoteAddArgs { repo: String, name: String, url: String }
     /// A repository and a remote name.
@@ -2125,6 +2127,46 @@ fn register_destructive(reg: &mut Registry, git: &Arc<GitService>) -> Result<()>
             let repo = repo_of(git, &a.repo)?;
             git.resolve_conflict(&repo, &a.path, a.side)?;
             Ok(Outcome::ok(format!("resolved {} by taking {:?}", a.path, a.side)))
+        },
+    )?;
+
+    reg.define::<ResolveWithArgs>("git.conflicts.resolve_with", "Resolve a conflict with merged text")
+    .description("Writes the given text as the resolution of a conflicted file and stages it. Refused while the text still has conflict markers. The result says how the text relates to the two sides: `ours`, `theirs`, `merge` (exactly what a three-way merge of the common ancestor and both sides produces) or `custom`. A `custom` resolution is a change nobody has checked: build and test before calling it done.")
+    .group("git.merge")
+    .tier(Tier::Destructive)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers_with(
+        git,
+        |_ctx, a: &ResolveWithArgs, git: &GitService| {
+            let repo = repo_of(git, &a.repo)?;
+            let conflicted = git.conflicts(&repo)?;
+            let mut plan = Plan::new(
+                "git.conflicts.resolve_with",
+                format!("resolve {} with {} bytes of merged text", a.path, a.content.len()),
+            )
+            .step("the file is overwritten with the given text, discarding both sides' versions as they are")
+            .step("the file is then staged");
+            if !conflicted.iter().any(|c| c == &a.path) {
+                plan = plan.step("note: this path is not currently conflicted");
+            }
+            if crate::has_conflict_markers(&a.content) {
+                plan = plan.step("note: the text still has conflict markers and will be refused");
+            }
+            Ok(plan.destructive(true))
+        },
+        |_ctx, a: &ResolveWithArgs, git: &GitService| {
+            let repo = repo_of(git, &a.repo)?;
+            let resolution = git.resolve_conflict_with(&repo, &a.path, &a.content)?;
+            let mut outcome = Outcome::with_data(
+                format!("resolved {} ({} resolution)", a.path, resolution.kind),
+                serde_json::to_value(&resolution).unwrap_or_default(),
+            );
+            if resolution.kind == "custom" {
+                outcome = outcome.warn("this resolution is neither side nor a clean three-way merge; build and test before treating it as done");
+            }
+            Ok(outcome)
         },
     )?;
 

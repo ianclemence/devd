@@ -563,6 +563,82 @@ fn a_merge_conflict_is_detected_resolved_and_committed() {
     assert_eq!(fx.read("z.txt"), "main\n");
 }
 
+/// Two branches that each change a different part of the same file, and the
+/// same line differently in a third place: a merge conflict with a real merged
+/// answer that is neither side.
+fn conflicted_fixture(label: &str) -> Fixture {
+    let fx = Fixture::new(label);
+    fx.write("app.txt", "head\nmiddle\ntail\n");
+    fx.commit_all("base");
+    fx.git
+        .create_branch(&fx.repo, "feature", None, true)
+        .unwrap();
+    fx.write("app.txt", "head\nmiddle\ntail from feature\n");
+    fx.commit_all("feature change");
+    fx.git
+        .switch_branch(&fx.repo, "main", false, false)
+        .unwrap();
+    fx.write("app.txt", "head from main\nmiddle\ntail from main\n");
+    fx.commit_all("main change");
+    fx.git
+        .merge(&fx.repo, "feature", false, false, None)
+        .unwrap();
+    assert_eq!(
+        fx.git.conflicts(&fx.repo).unwrap(),
+        vec!["app.txt".to_string()]
+    );
+    fx
+}
+
+#[test]
+fn a_resolution_that_keeps_both_sides_changes_is_classified_against_the_real_stages() {
+    let fx = conflicted_fixture("resolve-with");
+
+    // Text that still has markers is refused, and the conflict stays open.
+    let marked = fx.git.conflicted_file(&fx.repo, "app.txt").unwrap();
+    let err = fx
+        .git
+        .resolve_conflict_with(&fx.repo, "app.txt", &marked)
+        .unwrap_err();
+    assert!(err.to_string().contains("conflict markers"), "{err}");
+    assert_eq!(fx.git.conflicts(&fx.repo).unwrap().len(), 1);
+
+    // Keeping main's first line and feature's last is neither side whole, and
+    // it is not what a mechanical merge would give (the last line collided).
+    let resolution = fx
+        .git
+        .resolve_conflict_with(&fx.repo, "app.txt", "head from main\nmiddle\ntail from feature\n")
+        .unwrap();
+    assert_eq!(resolution.kind, "custom");
+    assert!(fx.git.conflicts(&fx.repo).unwrap().is_empty());
+    fx.git.continue_op(&fx.repo, "merge").unwrap();
+    assert!(fx.git.status(&fx.repo).unwrap().clean);
+    assert_eq!(fx.read("app.txt"), "head from main\nmiddle\ntail from feature\n");
+}
+
+#[test]
+fn choosing_exactly_one_side_through_the_text_path_is_recognised_as_that_side() {
+    let fx = conflicted_fixture("resolve-ours");
+    let resolution = fx
+        .git
+        .resolve_conflict_with(&fx.repo, "app.txt", "head from main\nmiddle\ntail from main\n")
+        .unwrap();
+    assert_eq!(resolution.kind, "ours");
+}
+
+#[test]
+fn a_file_that_is_not_conflicted_cannot_be_overwritten_as_a_resolution() {
+    let fx = Fixture::new("resolve-clean");
+    fx.write("a.txt", "a\n");
+    fx.commit_all("base");
+    let err = fx
+        .git
+        .resolve_conflict_with(&fx.repo, "a.txt", "something else\n")
+        .unwrap_err();
+    assert!(err.to_string().contains("not conflicted"), "{err}");
+    assert_eq!(fx.read("a.txt"), "a\n");
+}
+
 #[test]
 fn aborting_a_conflicted_merge_never_removes_unrelated_user_work() {
     let fx = Fixture::new("merge-abort");

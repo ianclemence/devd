@@ -1118,6 +1118,61 @@ impl GitService {
         self.stage(repo, &[path.to_string()])
     }
 
+    /// Resolve a conflicted file with text someone wrote, and say how that text
+    /// relates to the two sides.
+    ///
+    /// Choosing a side is the only resolution `resolve_conflict` offers; an agent
+    /// that has read both sides usually wants to keep parts of each. The text is
+    /// refused if it still contains conflict markers. It is then compared with
+    /// what a three-way merge of the common ancestor and the two sides gives:
+    /// when it is exactly that merge, or exactly one side, it says so; when it is
+    /// neither it is reported as `custom`, which is the case that has to be proved
+    /// by building and testing rather than by inspection.
+    pub fn resolve_conflict_with(
+        &self,
+        repo: &Path,
+        path: &str,
+        content: &str,
+    ) -> Result<Resolution> {
+        validate_relpath(path)?;
+        if has_conflict_markers(content) {
+            return Err(DevdError::invalid(
+                "the resolution still contains conflict markers (<<<<<<<, ======= or >>>>>>>)",
+            ));
+        }
+        let stage = |n: u8| -> String {
+            self.exec(Some(repo), &["show".into(), format!(":{n}:{path}")])
+                .ok()
+                .filter(|o| o.ok())
+                .map(|o| o.stdout)
+                .unwrap_or_default()
+        };
+        let (base, ours, theirs) = (stage(1), stage(2), stage(3));
+        if ours.is_empty() && theirs.is_empty() {
+            return Err(DevdError::invalid(format!(
+                "{path} is not conflicted, so there is nothing to resolve"
+            )));
+        }
+        let kind = if content == ours {
+            "ours"
+        } else if content == theirs {
+            "theirs"
+        } else {
+            match devd_core::merge3::merge(&base, &ours, &theirs, devd_core::merge3::Inserts::Conflict) {
+                Ok(devd_core::merge3::Merged::Clean(merged)) if merged == content => "merge",
+                _ => "custom",
+            }
+        };
+        let full = repo.join(path);
+        std::fs::write(&full, content)
+            .map_err(|e| DevdError::invalid(format!("could not write {}: {e}", full.display())))?;
+        self.stage(repo, &[path.to_string()])?;
+        Ok(Resolution {
+            kind: kind.to_string(),
+            bytes: content.len(),
+        })
+    }
+
     // ----------------------------------------------------------------- remotes
 
     /// Configured remotes.
@@ -2228,6 +2283,26 @@ pub fn validate_rev(rev: &str) -> Result<()> {
 ///
 /// Rejects absolute paths, drive letters, `..` traversal and leading dashes so a
 /// path can never escape the work tree or become an option.
+/// How a written resolution relates to the sides of the conflict.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Resolution {
+    /// `ours`, `theirs`, `merge` (exactly what a three-way merge gives) or `custom`.
+    pub kind: String,
+    /// Size of the written file.
+    pub bytes: usize,
+}
+
+/// Whether text still has a conflict marker at the start of a line.
+pub fn has_conflict_markers(text: &str) -> bool {
+    text.lines().any(|l| {
+        l.starts_with("<<<<<<< ")
+            || l == "======="
+            || l.starts_with(">>>>>>> ")
+            || l == "<<<<<<<"
+            || l == ">>>>>>>"
+    })
+}
+
 pub fn validate_relpath(path: &str) -> Result<()> {
     if path.trim().is_empty() {
         return Err(DevdError::invalid("path may not be empty"));

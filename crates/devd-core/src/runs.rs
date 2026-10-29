@@ -568,6 +568,18 @@ impl CompletionPolicy {
                 "a failing test must be fixed and the test must pass",
             )
         } else if has(&[
+            "merge conflict",
+            "resolve the conflict",
+            "resolve conflict",
+            "conflicting",
+        ]) {
+            (
+                "code",
+                true,
+                true,
+                "a resolved conflict is a code change that must build and pass the project's checks",
+            )
+        } else if has(&[
             "set up",
             "setup",
             "install",
@@ -972,6 +984,7 @@ fn is_change_capability(capability: &str) -> bool {
         "git.worktree.remove",
         "git.worktree.prune",
         "git.conflicts.resolve",
+        "git.conflicts.resolve_with",
         "git.op.abort",
         "git.op.continue",
         "project.init",
@@ -1129,6 +1142,8 @@ pub fn is_code_change(evidence: &Evidence) -> bool {
             || evidence.capability == "git.stage"
             || evidence.capability == "git.merge"
             || evidence.capability == "git.revert"
+            || evidence.capability == "git.conflicts.resolve"
+            || evidence.capability == "git.conflicts.resolve_with"
             || evidence.capability == crate::runs::OBSERVED_CAPABILITY
             || evidence.capability == "project.init")
 }
