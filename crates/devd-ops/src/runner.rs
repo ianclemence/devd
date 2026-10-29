@@ -46,6 +46,13 @@ pub fn start(ctx: Ctx) -> bool {
         STARTED.store(false, Ordering::SeqCst);
         return false;
     }
+    // Local names resolve without a hosts entry when the system asks this server.
+    // A port that is taken is reported, not fatal: the hosts file still works.
+    match devd_sites::dns::ensure_running(&ctx) {
+        Ok(Some(addr)) => ctx.events.emit("dns", format!("answering for local names on {addr}")),
+        Ok(None) => {}
+        Err(e) => ctx.events.emit("dns", format!("the DNS server did not start: {e}")),
+    }
     std::thread::spawn(move || {
         let mut last_maintenance: Option<std::time::Instant> = None;
         let mut first = true;

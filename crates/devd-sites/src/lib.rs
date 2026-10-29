@@ -20,6 +20,7 @@
 //! and a plain `index.php` all work without a per-framework setting.
 
 pub mod caps;
+pub mod dns;
 pub mod hosts;
 pub mod htaccess;
 pub mod park;

@@ -38,6 +38,10 @@ macro_rules! args {
 args! {
     /// No arguments.
     NoArgs {}
+    /// No arguments to the DNS status or disable steps.
+    DnsArgs {}
+    /// Which port the DNS server is on, when it is not the saved one.
+    DnsEnableArgs { port: Option<u16> }
     /// A site to create.
     CreateArgs { name: String, host: Option<String>, root: Option<String>, tls: Option<bool>, db: Option<bool>, upstream: Option<String>, serving: Option<String> }
     /// Which discovered projects to make sites of; omit for every eligible one.
@@ -79,6 +83,32 @@ fn exposed(site: &devd_core::state::Site) -> Vec<String> {
 }
 
 /// Register every site capability.
+/// Run commands that need rights devd does not take on its own. On Unix they are
+/// run through `sudo` when devd is not already root; a refusal is reported with the
+/// platform's own words and nothing is claimed.
+fn run_privileged(commands: &[Vec<String>]) -> Result<()> {
+    for command in commands {
+        let (program, args) = command.split_first().ok_or_else(|| DevdError::internal("an empty command"))?;
+        let (program, args): (String, Vec<String>) = if cfg!(unix) && std::env::var("USER").map(|u| u != "root").unwrap_or(true) {
+            ("sudo".into(), std::iter::once(program.clone()).chain(args.iter().cloned()).collect())
+        } else {
+            (program.clone(), args.to_vec())
+        };
+        let out = devd_core::util::run(std::path::Path::new(&program), &args, None, &[], Some(std::time::Duration::from_secs(60)))?;
+        if out.code != 0 {
+            return Err(DevdError::Command {
+                program: command.join(" "),
+                code: out.code,
+                stderr: format!(
+                    "{}\nThis needs administrator rights; run devd as an administrator, or run the command above yourself. The hosts file is unchanged and still resolves your sites.",
+                    out.stderr.trim()
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
 pub fn register(reg: &mut Registry) -> Result<()> {
     reg.define::<ShareArgs>("share.start", "Open a public link to a site")
     .description("Makes the site reachable from the internet through a Cloudflare quick tunnel at a random https address, for a limited time (default 2 hours, at most 24). Anyone with the address can open the site; it is closed when the time is up or with share.stop. The first use downloads cloudflared from Cloudflare's GitHub release and checks the SHA-256 GitHub records for it. Warns when the project folder holds a .env, .git or database dump. Human only: it publishes a site.")
@@ -407,6 +437,93 @@ pub fn register(reg: &mut Registry) -> Result<()> {
                 ));
             }
             Ok(outcome)
+        },
+    )?;
+
+    reg.define::<DnsArgs>("dns.status", "Do local names resolve without the hosts file?")
+    .description("Checks two things that are not the same: whether devd's own DNS server answers for the configured suffix (default .test), and whether this machine's resolver actually asks it. Says which, and what to do about the gap. The server answers only for the configured suffixes and never forwards a query.")
+    .group("dns")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .dry_run()
+    .handlers(
+        |_, _| Ok(Plan::new("dns.status", "query devd's DNS server and the system resolver")),
+        |ctx, _| {
+            let suffix = sites::dns::suffixes_of(ctx).remove(0);
+            // The server lives in the daemon, not in this process, so ask where it is
+            // configured to be.
+            let server = sites::dns::running_addr()
+                .unwrap_or_else(|| std::net::SocketAddr::from(([127, 0, 0, 1], sites::dns::port_of(ctx))));
+            let st = sites::dns::status(Some(server), &suffix);
+            Ok(Outcome {
+                ok: st.server_answers || st.system_resolves,
+                message: st.summary.clone(),
+                data: serde_json::to_value(&st).unwrap_or(Value::Null),
+                warnings: Vec::new(),
+            })
+        },
+    )?;
+
+    reg.define::<DnsEnableArgs>("dns.enable", "Point this machine's resolver at devd's DNS server")
+    .description("Makes every name under the suffix resolve to this machine for every program, with no hosts-file entry per site. This changes how the whole machine resolves names and needs administrator rights: the exact commands are shown in the plan and are the only thing run. If a command is refused, nothing is claimed and the hosts file remains how names resolve. macOS uses /etc/resolver, Linux uses systemd-resolved, Windows uses a name-resolution policy rule and needs the server on port 53.")
+    .group("dns")
+    .tier(Tier::Admin)
+    .effect(Effect::System)
+    .human_only()
+    .dry_run()
+    .handlers(
+        |ctx, a| {
+            let suffix = sites::dns::suffixes_of(ctx).remove(0);
+            let port = a.port.unwrap_or_else(|| sites::dns::port_of(ctx));
+            let mut plan = Plan::new("dns.enable", format!("send .{suffix} names to devd's DNS server on port {port}"));
+            match sites::dns::enable_commands(&suffix, port) {
+                Ok(commands) => {
+                    for c in commands {
+                        plan = plan.step(c.join(" "));
+                    }
+                }
+                Err(why) => plan = plan.step(format!("cannot be done: {why}")),
+            }
+            Ok(plan.effect("changes how this machine resolves names"))
+        },
+        |ctx, a| {
+            let suffix = sites::dns::suffixes_of(ctx).remove(0);
+            let port = a.port.unwrap_or_else(|| sites::dns::port_of(ctx));
+            let commands = sites::dns::enable_commands(&suffix, port).map_err(DevdError::unsupported)?;
+            if port != sites::dns::port_of(ctx) {
+                ctx.store.set_setting("dns.port", &port.to_string())?;
+                // The server restarts on the new port the next time the daemon starts it.
+            }
+            run_privileged(&commands)?;
+            let server = sites::dns::running_addr()
+                .unwrap_or_else(|| std::net::SocketAddr::from(([127, 0, 0, 1], sites::dns::port_of(ctx))));
+            let st = sites::dns::status(Some(server), &suffix);
+            Ok(Outcome::with_data(st.summary.clone(), serde_json::to_value(&st).unwrap_or(Value::Null)))
+        },
+    )?;
+
+    reg.define::<DnsArgs>("dns.disable", "Stop sending local names to devd's DNS server")
+    .description("Undoes `dns.enable`. Names then resolve through the hosts file again. Administrator rights are needed.")
+    .group("dns")
+    .tier(Tier::Admin)
+    .effect(Effect::System)
+    .human_only()
+    .dry_run()
+    .handlers(
+        |ctx, _| {
+            let suffix = sites::dns::suffixes_of(ctx).remove(0);
+            let mut plan = Plan::new("dns.disable", format!("stop sending .{suffix} names to devd"));
+            for c in sites::dns::disable_commands(&suffix) {
+                plan = plan.step(c.join(" "));
+            }
+            Ok(plan.effect("changes how this machine resolves names"))
+        },
+        |ctx, _| {
+            let suffix = sites::dns::suffixes_of(ctx).remove(0);
+            run_privileged(&sites::dns::disable_commands(&suffix))?;
+            Ok(Outcome::ok(format!(".{suffix} names resolve through the hosts file again")))
         },
     )?;
 
