@@ -498,6 +498,83 @@ fn detect_check(project: &Path) -> Option<Check> {
     None
 }
 
+/// Run one review to completion and store it under `id`.
+fn run_review(ctx: &Ctx, a: &ReviewRun, id: &str) -> Result<Value> {
+    let project = absolute_project(&a.project)?;
+    let base = a.base.clone().unwrap_or_else(|| "working".into());
+    let diff = match a.diff.as_ref().filter(|d| !d.trim().is_empty()) {
+        Some(d) => d.clone(),
+        None => collect_diff(&project, &base)?,
+    };
+    let truncated = diff.chars().count() > DIFF_LIMIT;
+    let shown: String = diff.chars().take(DIFF_LIMIT).collect();
+    let focus = a.instructions.as_deref().map(|i| format!("\nThe person asked you to focus on: {i}\n")).unwrap_or_default();
+    let system = "You are a careful senior reviewer. You review a diff for correctness, security, data loss, missing tests and unclear design. You do not praise. You report only problems you can point to in the diff. If the change is fine, say so and return an empty findings list. Answer with one JSON object and nothing else: {\"summary\":\"...\",\"findings\":[{\"severity\":\"high|medium|low\",\"file\":\"path\",\"line\":123,\"title\":\"...\",\"detail\":\"...\",\"suggestion\":\"...\"}]}";
+    let prompt = format!(
+        "Review this diff from the project at {}.\n{focus}\nThe diff{}\n\n```diff\n{}\n```",
+        project.display(),
+        if truncated { " was shortened; review what is shown and say so in the summary" } else { "" },
+        shown
+    );
+    let (raw, provider_label, model) = one_shot(ctx, "reviewer", system, &prompt, 4000)?;
+    let parsed = extract_json(&raw);
+    let parsed_ok = parsed.is_some();
+    let (summary, findings) = match parsed {
+        Some(v) => (
+            v["summary"].as_str().unwrap_or("").to_string(),
+            v["findings"].as_array().cloned().unwrap_or_default(),
+        ),
+        None => (raw.clone(), Vec::new()),
+    };
+    let record = json!({
+        "id": id,
+        "state": "done",
+        "project": project.display().to_string(),
+        "base": base,
+        "provider": provider_label,
+        "model": model,
+        "created_at": util::now(),
+        "summary": summary,
+        "findings": findings,
+        "raw": raw,
+        "parsed": parsed_ok,
+        "diff": shown,
+        "diff_truncated": truncated,
+        "focus": a.instructions,
+    });
+    save_record(ctx, "review", &record)?;
+    Ok(record)
+}
+
+/// The worker of `review.start`: run, store, and tell the person.
+fn finish_background_review(ctx: &Ctx, a: &ReviewRun, id: &str, project: &str) {
+    let (subject, body) = match run_review(ctx, a, id) {
+        Ok(record) => {
+            let n = record["findings"].as_array().map(|f| f.len()).unwrap_or(0);
+            (
+                format!("Review finished: {n} finding(s)"),
+                format!("{}\n\nRead it with review.get {id}.", record["summary"].as_str().unwrap_or("")),
+            )
+        }
+        Err(e) => {
+            let _ = save_record(ctx, "review", &json!({
+                "id": id,
+                "state": "failed",
+                "project": project,
+                "created_at": util::now(),
+                "summary": format!("the review failed: {e}"),
+                "error": e.to_string(),
+                "findings": [],
+            }));
+            ("Review failed".to_string(), format!("{e}\n\nThe review is stored as failed: review.get {id}."))
+        }
+    };
+    if let Ok(m) = ctx.store.post_inbox("devd:review", Some(project), &subject, &util::truncate(&body, 8000), false) {
+        ctx.events.emit_with("inbox.message", m.subject.clone(), json!({ "id": m.id }));
+    }
+    ctx.events.emit_with("review.done", subject, json!({ "id": id }));
+}
+
 fn simple(id: &str, text: impl Into<String>) -> Result<Plan> {
     Ok(Plan::new(id, text))
 }
@@ -516,49 +593,8 @@ pub fn register(reg: &mut Registry) -> Result<()> {
     .handlers(
         |_, a| simple("review.run", format!("review the changes in {}", a.project)),
         |ctx, a| {
-            let project = absolute_project(&a.project)?;
-            let base = a.base.clone().unwrap_or_else(|| "working".into());
-            let diff = match a.diff.as_ref().filter(|d| !d.trim().is_empty()) {
-                Some(d) => d.clone(),
-                None => collect_diff(&project, &base)?,
-            };
-            let truncated = diff.chars().count() > DIFF_LIMIT;
-            let shown: String = diff.chars().take(DIFF_LIMIT).collect();
-            let focus = a.instructions.as_deref().map(|i| format!("\nThe person asked you to focus on: {i}\n")).unwrap_or_default();
-            let system = "You are a careful senior reviewer. You review a diff for correctness, security, data loss, missing tests and unclear design. You do not praise. You report only problems you can point to in the diff. If the change is fine, say so and return an empty findings list. Answer with one JSON object and nothing else: {\"summary\":\"...\",\"findings\":[{\"severity\":\"high|medium|low\",\"file\":\"path\",\"line\":123,\"title\":\"...\",\"detail\":\"...\",\"suggestion\":\"...\"}]}";
-            let prompt = format!(
-                "Review this diff from the project at {}.\n{focus}\nThe diff{}\n\n```diff\n{}\n```",
-                project.display(),
-                if truncated { " was shortened; review what is shown and say so in the summary" } else { "" },
-                shown
-            );
-            let (raw, provider_label, model) = one_shot(ctx, "reviewer", system, &prompt, 4000)?;
-            let parsed = extract_json(&raw);
-            let parsed_ok = parsed.is_some();
-            let (summary, findings) = match parsed {
-                Some(v) => (
-                    v["summary"].as_str().unwrap_or("").to_string(),
-                    v["findings"].as_array().cloned().unwrap_or_default(),
-                ),
-                None => (raw.clone(), Vec::new()),
-            };
-            let id = util::new_id();
-            let record = json!({
-                "id": id,
-                "project": project.display().to_string(),
-                "base": base,
-                "provider": provider_label,
-                "model": model,
-                "created_at": util::now(),
-                "summary": summary,
-                "findings": findings,
-                "raw": raw,
-                "parsed": parsed_ok,
-                "diff": shown,
-                "diff_truncated": truncated,
-                "focus": a.instructions,
-            });
-            save_record(ctx, "review", &record)?;
+            let record = run_review(ctx, a, &util::new_id())?;
+            let parsed_ok = record["parsed"].as_bool().unwrap_or(false);
             let count = record["findings"].as_array().map(|f| f.len()).unwrap_or(0);
             let message = if count == 0 {
                 format!("reviewed; the reviewer reported no findings{}", if parsed_ok { "" } else { " (the answer was not valid JSON, so the raw text is kept)" })
@@ -570,6 +606,41 @@ pub fn register(reg: &mut Registry) -> Result<()> {
                 outcome = outcome.warn("the reviewer's answer was not the requested JSON; the raw text is stored and shown as the summary");
             }
             Ok(outcome)
+        },
+    )?;
+
+    reg.define::<ReviewRun>("review.start", "Review a change in the background")
+    .description("Starts a review and returns at once with its id. The review runs in this process while you do other work; when it finishes the result is stored (read it with review.get, which shows state running, done or failed) and a message is left in the inbox. Closing the window does not cancel it, but quitting devd does: it is not restarted.")
+    .group("review")
+    .tier(Tier::Exec)
+    .effect(Effect::Remote)
+    .agent_safe()
+    .dry_run()
+    .handlers(
+        |_, a| simple("review.start", format!("start a background review of the changes in {}", a.project)),
+        |ctx, a| {
+            let project = absolute_project(&a.project)?;
+            // Fail now, in front of the person, for what can be known now.
+            if a.diff.as_ref().is_none_or(|d| d.trim().is_empty()) {
+                collect_diff(&project, a.base.as_deref().unwrap_or("working"))?;
+            }
+            let id = util::new_id();
+            save_record(ctx, "review", &json!({
+                "id": id,
+                "state": "running",
+                "project": project.display().to_string(),
+                "base": a.base.clone().unwrap_or_else(|| "working".into()),
+                "created_at": util::now(),
+                "summary": "review running",
+                "findings": [],
+                "focus": a.instructions,
+            }))?;
+            let (worker_ctx, args, review_id, project_text) = (ctx.clone(), a.clone(), id.clone(), project.display().to_string());
+            std::thread::spawn(move || finish_background_review(&worker_ctx, &args, &review_id, &project_text));
+            Ok(Outcome::with_data(
+                "review started; the result will be in the inbox",
+                json!({ "id": id, "state": "running" }),
+            ))
         },
     )?;
 
@@ -848,6 +919,52 @@ mod tests {
             merge(base, rewritten, proposed, Inserts::Union).unwrap(),
             Merged::Conflicts(_)
         ));
+    }
+
+    #[test]
+    fn a_background_review_that_cannot_run_is_stored_as_failed_and_the_person_is_told() {
+        use devd_core::capability::{Actor, Ctx, Surface};
+        use devd_core::{Paths, Settings};
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::rooted(dir.path().join("devd"));
+        paths.ensure().unwrap();
+        let store = Arc::new(devd_core::state::Store::open_in_memory().unwrap());
+        store.migrate().unwrap();
+        let ctx = Ctx {
+            store: store.clone(),
+            paths: Arc::new(paths),
+            settings: Arc::new(Settings::default()),
+            events: devd_core::events::EventBus::new(),
+            actor: Actor::human(Surface::Cli),
+            run: None,
+            dry_run: false,
+        };
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let args = ReviewRun {
+            project: project.display().to_string(),
+            base: None,
+            instructions: None,
+            diff: Some("--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n".into()),
+        };
+        let mut seen = ctx.events.subscribe();
+
+        // No provider is configured, so the model call cannot be made.
+        finish_background_review(&ctx, &args, "rev1", &project.display().to_string());
+
+        let record = get_record(&ctx, "review", "rev1").unwrap();
+        assert_eq!(record["state"], "failed");
+        assert!(record["error"].as_str().is_some_and(|e| !e.is_empty()));
+        let inbox = store.list_inbox(true, 10).unwrap();
+        assert_eq!(inbox.len(), 1);
+        assert_eq!(inbox[0].subject, "Review failed");
+        let mut kinds = Vec::new();
+        while let Ok(event) = seen.try_recv() {
+            kinds.push(event.kind);
+        }
+        assert!(kinds.contains(&"review.done".to_string()), "{kinds:?}");
     }
 
     #[test]
