@@ -61,6 +61,13 @@ mod win {
             size: *mut u32,
         ) -> i32;
         pub fn CloseHandle(handle: *mut c_void) -> i32;
+        pub fn GetProcessTimes(
+            handle: *mut c_void,
+            creation: *mut u64,
+            exit: *mut u64,
+            kernel: *mut u64,
+            user: *mut u64,
+        ) -> i32;
 
         // Job objects. A job is a kernel container for a process and every
         // descendant it creates; with KILL_ON_JOB_CLOSE the kernel terminates
@@ -748,6 +755,63 @@ pub fn process_image(pid: u32) -> Option<String> {
     }
 }
 
+/// An opaque token for when a process started.
+///
+/// A process id is reused; the pair of an id and the moment that process began is
+/// not. Comparing the token read now with the one recorded when devd launched or
+/// claimed the process is how ownership is established without trusting a port,
+/// an image name or a pid file alone. The token is only ever compared for
+/// equality, so its unit differs by platform: Windows creation time, Linux
+/// clock ticks since boot, macOS the `ps` start string.
+pub fn process_start_token(pid: u32) -> Option<String> {
+    if pid == 0 {
+        return None;
+    }
+    #[cfg(windows)]
+    {
+        unsafe {
+            let handle = win::OpenProcess(win::PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle.is_null() {
+                return None;
+            }
+            let (mut created, mut exited, mut kernel, mut user) = (0u64, 0u64, 0u64, 0u64);
+            let ok = win::GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user);
+            win::CloseHandle(handle);
+            (ok != 0 && created != 0).then(|| created.to_string())
+        }
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        start_ticks_from_stat(&stat)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let ps = util::which("ps")?;
+        let out = util::run(
+            &ps,
+            &["-p".to_string(), pid.to_string(), "-o".to_string(), "lstart=".to_string()],
+            None,
+            &[],
+            Some(std::time::Duration::from_secs(5)),
+        )
+        .ok()?;
+        let text = out.stdout.trim().to_string();
+        (!text.is_empty()).then_some(text)
+    }
+}
+
+/// The start time field of a `/proc/<pid>/stat` line.
+///
+/// The command name is in parentheses and may itself contain spaces and
+/// parentheses, so the fields are counted from the last `)`.
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
+fn start_ticks_from_stat(stat: &str) -> Option<String> {
+    let rest = stat.rsplit_once(')')?.1;
+    // After the command: state is field 3, start time is field 22.
+    rest.split_whitespace().nth(19).map(str::to_string)
+}
+
 /// Whether a process id is alive. Used to detect orphans after a crash.
 pub fn pid_alive(pid: u32) -> bool {
     if pid == 0 {
@@ -794,6 +858,21 @@ pub fn live_devd_holder(file: &std::path::Path) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_process_has_a_stable_start_token_and_a_dead_one_has_none() {
+        let me = std::process::id();
+        let first = process_start_token(me).expect("this process has a start time");
+        assert_eq!(process_start_token(me), Some(first));
+        assert_eq!(process_start_token(0), None);
+        assert_eq!(process_start_token(u32::MAX - 7), None);
+    }
+
+    #[test]
+    fn the_start_field_is_counted_from_the_last_parenthesis() {
+        let stat = "42 (my (odd) name) S 1 42 42 0 -1 4194560 100 0 0 0 1 2 0 0 20 0 1 0 987654 1000 200";
+        assert_eq!(start_ticks_from_stat(stat).as_deref(), Some("987654"));
+    }
 
     fn sleeper_program() -> (PathBuf, Vec<String>) {
         #[cfg(windows)]

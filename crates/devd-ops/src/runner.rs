@@ -13,6 +13,9 @@ use devd_core::Paths;
 
 static STARTED: AtomicBool = AtomicBool::new(false);
 
+/// How often logs are rotated and old audit rows removed.
+const MAINTENANCE_EVERY: Duration = Duration::from_secs(3600);
+
 fn claim_file(paths: &Paths) -> PathBuf {
     paths.root().join("ops-host.pid")
 }
@@ -43,17 +46,27 @@ pub fn start(ctx: Ctx) -> bool {
         STARTED.store(false, Ordering::SeqCst);
         return false;
     }
-    std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_secs(15));
-        // Keep the claim fresh in case the file was removed, and give it up if another process took it.
-        if !claim(&ctx.paths) {
-            STARTED.store(false, Ordering::SeqCst);
-            return;
+    std::thread::spawn(move || {
+        let mut last_maintenance: Option<std::time::Instant> = None;
+        loop {
+            std::thread::sleep(Duration::from_secs(15));
+            // Keep the claim fresh in case the file was removed, and give it up if another process took it.
+            if !claim(&ctx.paths) {
+                STARTED.store(false, Ordering::SeqCst);
+                return;
+            }
+            crate::cron::tick(&ctx);
+            crate::dbadmin::tick(&ctx);
+            crate::deploy::tick_scheduled(&ctx);
+            crate::health::tick(&ctx);
+            // Rotation and retention are slow to matter, so once an hour is plenty.
+            if last_maintenance.is_none_or(|t| t.elapsed() >= MAINTENANCE_EVERY) {
+                last_maintenance = Some(std::time::Instant::now());
+                for line in devd_core::maintenance::run(&ctx) {
+                    ctx.events.emit("maintenance", line);
+                }
+            }
         }
-        crate::cron::tick(&ctx);
-        crate::dbadmin::tick(&ctx);
-        crate::deploy::tick_scheduled(&ctx);
-        crate::health::tick(&ctx);
     });
     true
 }

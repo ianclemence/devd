@@ -448,6 +448,16 @@ impl Store {
         })
     }
 
+    /// Remove audit rows recorded before `cutoff` (RFC 3339). Returns how many.
+    ///
+    /// The cutoff compares as text, which orders correctly because every row is
+    /// written by [`util::now`] in one fixed format.
+    pub fn prune_audit_before(&self, cutoff: &str) -> Result<usize> {
+        self.with(|conn| {
+            Ok(conn.execute("DELETE FROM audit_log WHERE at < ?1", params![cutoff])?)
+        })
+    }
+
     /// Most recent audit rows, newest first.
     pub fn list_audit(&self, limit: u32) -> Result<Vec<AuditEntry>> {
         self.with(|conn| {
@@ -1518,6 +1528,30 @@ mod tests {
         let rows = s.list_audit(10).unwrap();
         assert_eq!(rows.len(), 1);
         assert!(rows[0].ok);
+    }
+
+    #[test]
+    fn old_audit_rows_are_pruned_and_recent_ones_stay() {
+        let s = store();
+        for message in ["first", "second"] {
+            s.record_audit(AuditRecord {
+                actor: "human:cli",
+                surface: "cli",
+                capability: "demo",
+                tier: "read",
+                effect: "read",
+                dry_run: false,
+                ok: true,
+                args: "{}",
+                message,
+            })
+            .unwrap();
+        }
+        // A cutoff in the past removes nothing; one in the future removes all.
+        assert_eq!(s.prune_audit_before("2000-01-01T00:00:00Z").unwrap(), 0);
+        assert_eq!(s.list_audit(10).unwrap().len(), 2);
+        assert_eq!(s.prune_audit_before("2999-01-01T00:00:00Z").unwrap(), 2);
+        assert!(s.list_audit(10).unwrap().is_empty());
     }
 
     #[test]

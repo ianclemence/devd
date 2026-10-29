@@ -54,9 +54,24 @@ pub fn run() {
             return;
         }
     };
-    boot.agents.resume(&boot.paths);
-    devd_bootstrap::start_ops(&boot.paths, &boot.store, &boot.settings, &boot.events);
-    if let Err(e) = run_with(boot) {
+    // When the resident process is already running this window is its client:
+    // it loads the interface that process serves and owns no background work.
+    let (claim, client) = match devd_server::attach_or_claim(&boot.paths, "ui") {
+        Ok(devd_server::Attach::Client { port, .. }) => (None, Some(port)),
+        Ok(devd_server::Attach::Own(claim)) => {
+            boot.agents.resume(&boot.paths);
+            devd_bootstrap::start_ops(&boot.paths, &boot.store, &boot.settings, &boot.events);
+            (Some(claim), None)
+        }
+        Err(e) => {
+            startup_log(&format!("cannot attach or claim the instance: {e}"));
+            show_error(format!("devd could not start.
+
+{e}"));
+            return;
+        }
+    };
+    if let Err(e) = run_with(boot, claim, client) {
         startup_log(&format!("window/backend failed: {e}"));
         show_error(format!("devd could not open its window.\n\n{e}"));
     }
@@ -89,7 +104,12 @@ fn startup_log(message: &str) {
     }
 }
 
-fn run_with(boot: Bootstrap) -> tauri::Result<()> {
+fn run_with(
+    boot: Bootstrap,
+    claim: Option<devd_core::daemon::Claim>,
+    client: Option<u16>,
+) -> tauri::Result<()> {
+    let claim = Arc::new(Mutex::new(claim));
     let (ready_tx, ready_rx) = mpsc::channel::<Result<Bound, String>>();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let shutdown: Shutdown = Arc::new(Mutex::new(Some(shutdown_tx)));
@@ -107,6 +127,14 @@ fn run_with(boot: Bootstrap) -> tauri::Result<()> {
     };
 
     let backend_workspace = workspace.clone();
+    let recorded = claim.clone();
+    if let Some(port) = client {
+        let _ = ready_tx.send(Ok(Bound {
+            addr: std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+            token: String::new(),
+            port,
+        }));
+    } else {
     std::thread::spawn(move || {
         let runtime = match tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -130,6 +158,11 @@ fn run_with(boot: Bootstrap) -> tauri::Result<()> {
                 picker: Some(Arc::new(picker::NativePicker)),
             },
             move |bound| {
+                if let Ok(mut held) = recorded.lock() {
+                    if let Some(claim) = held.as_mut() {
+                        let _ = claim.set_port(bound.port);
+                    }
+                }
                 let _ = tx.send(Ok(bound.clone()));
             },
         ));
@@ -137,6 +170,7 @@ fn run_with(boot: Bootstrap) -> tauri::Result<()> {
             let _ = ready_tx.send(Err(format!("the devd backend stopped: {e}")));
         }
     });
+    }
 
     let startup = ready_rx
         .recv_timeout(Duration::from_secs(30))
@@ -215,7 +249,12 @@ fn run_with(boot: Bootstrap) -> tauri::Result<()> {
     });
 
     send_shutdown(&shutdown);
-    workspace.shutdown();
+    if client.is_none() {
+        workspace.shutdown();
+    }
+    if let Ok(mut held) = claim.lock() {
+        held.take();
+    }
     // Give the server thread a moment to drop the AppState, which stops PTYs and
     // removes its process trees before the process image disappears.
     std::thread::sleep(Duration::from_millis(250));

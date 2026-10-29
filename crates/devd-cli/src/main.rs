@@ -16,6 +16,7 @@ use devd_core::{DevdError, Result};
 
 mod aicat;
 mod app;
+mod daemon;
 mod devcat;
 mod gitcat;
 mod runtimecat;
@@ -249,6 +250,12 @@ pub(crate) enum Command {
         /// Print the tool list and exit, instead of serving.
         #[arg(long)]
         list: bool,
+    },
+    /// The resident process that runs scheduled work and serves the window, the dashboard and
+    /// the command line: `run`, `start`, `stop` or `status`.
+    Daemon {
+        #[command(subcommand)]
+        cmd: DaemonCommand,
     },
     /// Start the stack when you sign in: `status`, `enable` or `disable`.
     Autostart {
@@ -1315,6 +1322,22 @@ pub(crate) enum ComposerCommand {
 }
 
 #[derive(Subcommand, Debug)]
+pub(crate) enum DaemonCommand {
+    /// Run the resident process in this terminal.
+    Run {
+        /// Port to listen on. Defaults to the last used port, then 8787 upward.
+        #[arg(long)]
+        port: Option<u16>,
+    },
+    /// Start it detached, with no window, and wait until it answers.
+    Start,
+    /// Stop it. Services it started keep running.
+    Stop,
+    /// Whether it is running, and where.
+    Status,
+}
+
+#[derive(Subcommand, Debug)]
 pub(crate) enum AutostartCommand {
     /// Whether the stack starts when you sign in.
     Status,
@@ -2017,14 +2040,18 @@ fn run(cli: Cli) -> Result<i32> {
                 profile,
             },
         ),
+        Command::Daemon { cmd } => match cmd {
+            DaemonCommand::Run { port } => daemon::run(app, port),
+            DaemonCommand::Start => daemon::start(&app),
+            DaemonCommand::Stop => daemon::stop(&app),
+            DaemonCommand::Status => daemon::status(&app),
+        },
         Command::Ui { port, no_open } => {
-            app.resume_agents();
-            web::serve(app, port, !no_open)?;
+            web::serve(app, port, !no_open, "ui")?;
             Ok(0)
         }
         Command::Serve { port } => {
-            app.resume_agents();
-            let started = web::serve(app, port, false)?;
+            let started = web::serve(app, port, false, "ui")?;
             if started.reused {
                 println!("attached to the instance already on port {}", started.port);
             }

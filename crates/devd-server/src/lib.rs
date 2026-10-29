@@ -387,6 +387,59 @@ pub fn probe_instance(port: u16) -> Option<String> {
     None
 }
 
+/// What a process that wants a local interface should do.
+pub enum Attach {
+    /// A resident or earlier devd already serves the interface; use it.
+    Client {
+        /// Its loopback port.
+        port: u16,
+        /// Its version.
+        version: String,
+    },
+    /// Nobody does. This process is now the instance and must serve.
+    Own(devd_core::daemon::Claim),
+}
+
+/// Find the running instance, or become it.
+///
+/// The instance record, not a scan of ports, says where the interface is. A
+/// record whose process is alive but whose port does not answer as devd is a
+/// conflict that is reported, never silently replaced: starting a second server
+/// beside a hung one would split the background work between two processes.
+pub fn attach_or_claim(paths: &devd_core::Paths, role: &str) -> Result<Attach> {
+    use std::time::{Duration, Instant};
+
+    let version = env!("CARGO_PKG_VERSION");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(held) = devd_core::daemon::current(paths) {
+            // The holder has claimed the record but not yet bound its listener.
+            if held.port == 0 && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(100));
+                continue;
+            }
+            return match probe_instance(held.port) {
+                Some(found) => Ok(Attach::Client {
+                    port: held.port,
+                    version: found,
+                }),
+                None => Err(DevdError::conflict(format!(
+                    "devd (pid {}) holds the instance record but is not answering on port {}; stop it with `devd daemon stop` and try again",
+                    held.pid, held.port
+                ))),
+            };
+        }
+        match devd_core::daemon::claim(paths, 0, version, role) {
+            Ok(claim) => return Ok(Attach::Own(claim)),
+            // Lost a race to another process that claimed between our two reads.
+            Err(DevdError::Conflict(_)) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 /// The guard that runs before every handler.
 async fn guard(State(state): State<Arc<AppState>>, req: Request<Body>, next: Next) -> Response {
     // A deploy hook is called from outside, through a public link, so its Host is not a loopback

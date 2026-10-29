@@ -2,10 +2,11 @@
 //!
 //! "Start with Windows". devd does it with what each platform already
 //! offers a user without administrator rights: a `Run` registry value on Windows,
-//! an XDG autostart entry on Linux, a LaunchAgent on macOS. What runs is
-//! `devd stack up`: it starts the enabled services detached and exits, so nothing
-//! of devd stays resident, and the services are the same ones `devd stack up`
-//! starts by hand.
+//! a `systemd --user` unit (an XDG autostart entry where there is no user
+//! manager) on Linux, a LaunchAgent on macOS. What runs is the resident process,
+//! `devd daemon`: it brings the enabled services up, then stays to run scheduled
+//! work and to serve the window, the dashboard and the command line. The services
+//! it starts outlive it, as they do under `devd stack up`.
 
 use std::path::{Path, PathBuf};
 
@@ -17,7 +18,7 @@ const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
 
 /// The command that runs at sign-in.
 pub fn command_line(exe: &Path) -> String {
-    format!("\"{}\" stack up", exe.display())
+    format!("\"{}\" daemon start", exe.display())
 }
 
 /// Whether sign-in starts the stack, and the command it runs.
@@ -34,6 +35,9 @@ pub fn status() -> Result<Option<String>> {
             return Ok(None);
         }
         return Ok(parse_reg_value(&out.stdout));
+    }
+    if let Some(unit) = systemd_unit_path().filter(|p| p.is_file()) {
+        return Ok(Some(unit.display().to_string()));
     }
     let file = entry_path()?;
     Ok(std::fs::read_to_string(&file).ok().map(|_| file.display().to_string()))
@@ -53,6 +57,28 @@ pub fn enable(exe: &Path) -> Result<String> {
         if out.code != 0 {
             return Err(DevdError::Command { program: "reg add".into(), code: out.code, stderr: out.stderr.trim().to_string() });
         }
+        return Ok(command);
+    }
+    if let Some(unit) = systemd_unit_path().filter(|_| systemd_user_available()) {
+        if let Some(dir) = unit.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        util::atomic_write(&unit, &unit_text(exe))?;
+        for args in [["--user", "daemon-reload"], ["--user", "enable"]] {
+            let mut argv: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+            if args[1] == "enable" {
+                argv.push("devd.service".into());
+            }
+            let _ = util::run(
+                Path::new("systemctl"),
+                &argv,
+                None,
+                &[],
+                Some(std::time::Duration::from_secs(15)),
+            );
+        }
+        // One way of starting at sign-in, not two.
+        let _ = std::fs::remove_file(entry_path()?);
         return Ok(command);
     }
     let file = entry_path()?;
@@ -80,9 +106,20 @@ pub fn disable() -> Result<bool> {
         return Ok(was);
     }
     let file = entry_path()?;
-    let existed = file.is_file();
+    let mut existed = file.is_file();
     if existed {
         std::fs::remove_file(&file)?;
+    }
+    if let Some(unit) = systemd_unit_path().filter(|p| p.is_file()) {
+        let _ = util::run(
+            Path::new("systemctl"),
+            &["--user".into(), "disable".into(), "devd.service".into()],
+            None,
+            &[],
+            Some(std::time::Duration::from_secs(15)),
+        );
+        std::fs::remove_file(&unit)?;
+        existed = true;
     }
     Ok(existed)
 }
@@ -108,6 +145,51 @@ fn entry_path() -> Result<PathBuf> {
     })
 }
 
+/// Where the `systemd --user` unit lives. `None` off Linux.
+fn systemd_unit_path() -> Option<PathBuf> {
+    if !cfg!(all(unix, not(target_os = "macos"))) {
+        return None;
+    }
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+    Some(base.join("systemd/user/devd.service"))
+}
+
+/// Whether there is a user service manager to hand the daemon to.
+fn systemd_user_available() -> bool {
+    util::run(
+        Path::new("systemctl"),
+        &["--user".into(), "show-environment".into()],
+        None,
+        &[],
+        Some(std::time::Duration::from_secs(10)),
+    )
+    .map(|out| out.code == 0)
+    .unwrap_or(false)
+}
+
+/// The unit that runs the resident process. `run` stays in the foreground so
+/// systemd supervises it.
+fn unit_text(exe: &Path) -> String {
+    format!(
+        "[Unit]
+Description=devd resident process
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=\"{}\" daemon run
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+",
+        exe.display()
+    )
+}
+
 fn entry_text(exe: &Path) -> String {
     if cfg!(target_os = "macos") {
         format!(
@@ -115,14 +197,14 @@ fn entry_text(exe: &Path) -> String {
              <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
              <plist version=\"1.0\"><dict>\n\
              <key>Label</key><string>dev.devd.stack</string>\n\
-             <key>ProgramArguments</key><array><string>{}</string><string>stack</string><string>up</string></array>\n\
+             <key>ProgramArguments</key><array><string>{}</string><string>daemon</string><string>run</string></array>\n\
              <key>RunAtLoad</key><true/>\n\
              </dict></plist>\n",
             exe.display()
         )
     } else {
         format!(
-            "[Desktop Entry]\nType=Application\nName=devd stack\nComment=Start devd's services\nExec=\"{}\" stack up\nTerminal=false\nX-GNOME-Autostart-enabled=true\n",
+            "[Desktop Entry]\nType=Application\nName=devd stack\nComment=Start devd's services\nExec=\"{}\" daemon start\nTerminal=false\nX-GNOME-Autostart-enabled=true\n",
             exe.display()
         )
     }
@@ -133,20 +215,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_command_is_the_stack_up_the_person_would_type() {
-        assert_eq!(command_line(Path::new(r"C:\Users\Me\AppData\Local\Programs\devd\devd.exe")), "\"C:\\Users\\Me\\AppData\\Local\\Programs\\devd\\devd.exe\" stack up");
+    fn sign_in_starts_the_resident_process() {
+        assert_eq!(command_line(Path::new(r"C:\Users\Me\AppData\Local\Programs\devd\devd.exe")), "\"C:\\Users\\Me\\AppData\\Local\\Programs\\devd\\devd.exe\" daemon start");
     }
 
     #[test]
     fn the_registry_value_is_read_from_reg_query_output() {
-        let out = "\nHKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\n    devd    REG_SZ    \"C:\\devd\\devd.exe\" stack up\n\n";
-        assert_eq!(parse_reg_value(out).as_deref(), Some("\"C:\\devd\\devd.exe\" stack up"));
+        let out = "\nHKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\n    devd    REG_SZ    \"C:\\devd\\devd.exe\" daemon start\n\n";
+        assert_eq!(parse_reg_value(out).as_deref(), Some("\"C:\\devd\\devd.exe\" daemon start"));
         assert_eq!(parse_reg_value("    other    REG_SZ    x\n"), None);
     }
 
     #[test]
     fn the_unix_entries_run_the_same_command() {
         let text = entry_text(Path::new("/usr/local/bin/devd"));
-        assert!(text.contains("stack up") || text.contains("<string>stack</string><string>up</string>"));
+        assert!(text.contains("daemon start") || text.contains("<string>daemon</string><string>run</string>"));
+        let unit = unit_text(Path::new("/usr/local/bin/devd"));
+        assert!(unit.contains("ExecStart=\"/usr/local/bin/devd\" daemon run"));
+        assert!(unit.contains("WantedBy=default.target"));
     }
 }

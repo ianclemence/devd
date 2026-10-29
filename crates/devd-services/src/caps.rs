@@ -202,7 +202,7 @@ fn register_service(reg: &mut Registry) -> Result<()> {
     )?;
 
     reg.define::<NoArgs>("autostart.status", "Whether the stack starts when you sign in")
-    .description("Reports the sign-in entry that runs `devd stack up`, if there is one.")
+    .description("Reports the sign-in entry that starts the resident `devd daemon`, if there is one.")
     .group("autostart")
     .tier(Tier::Read)
     .effect(Effect::Read)
@@ -231,7 +231,7 @@ fn register_service(reg: &mut Registry) -> Result<()> {
     .dry_run()
     .idempotent()
     .handlers(
-        |_, _| Ok(Plan::new("autostart.enable", "run `devd stack up` when you sign in").effect("adds a sign-in entry for this user")),
+        |_, _| Ok(Plan::new("autostart.enable", "start the devd daemon when you sign in").effect("adds a sign-in entry for this user")),
         |_, _| {
             let command = services::autostart::enable(&devd_core::util::cli_exe()?)?;
             Ok(Outcome::with_data("the stack will start when you sign in", json!({ "command": command })))

@@ -21,34 +21,38 @@ pub struct Started {
     pub reused: bool,
 }
 
-/// Start the application, or attach to one that is already running.
+/// Start the application, or attach to the instance that already runs it.
 ///
-/// Attaching matters more than it sounds. Closing a browser window closes a
-/// window, not a process, so a second `devd ui` after an accidental close would
-/// otherwise fail with "address in use" - which reads as a bug even though
-/// nothing is wrong. Instead the port is probed for a `devd` instance, and one
-/// that answers is simply reopened.
+/// The instance record says where the resident process is, so a second
+/// `devd ui` after a closed window reopens it instead of failing with "address
+/// in use". Nothing scans ports to find it: a process that holds a port but not
+/// the record is never mistaken for devd, and a devd that holds the record is
+/// never mistaken for something else.
 ///
-/// The probe is not a blind port check: it requires a `devd`-specific response
-/// header, so an unrelated program on the port is never mistaken for ours and
-/// never opened in a window.
-pub fn serve(app: App, requested: Option<u16>, open: bool) -> Result<Started, DevdError> {
-    let candidates = port_candidates(&app, requested);
-
-    for port in &candidates {
-        if let Some(version) = devd_server::probe_instance(*port) {
+/// `role` is `daemon` for the resident process and `ui` for a window's own
+/// server. Either way this process becomes the owner of the background work
+/// only after it has claimed the record.
+pub fn serve(
+    app: App,
+    requested: Option<u16>,
+    open: bool,
+    role: &str,
+) -> Result<Started, DevdError> {
+    let claim = match devd_server::attach_or_claim(&app.paths, role)? {
+        devd_server::Attach::Client { port, version } => {
             let url = format!("http://127.0.0.1:{port}/");
             println!("devd {version} is already serving at {url}");
             if open {
                 window::open_window(&url);
             }
-            return Ok(Started {
-                port: *port,
-                reused: true,
-            });
+            return Ok(Started { port, reused: true });
         }
-    }
+        devd_server::Attach::Own(claim) => claim,
+    };
+    let claim = Arc::new(std::sync::Mutex::new(claim));
 
+    app.resume_agents();
+    let candidates = port_candidates(&app, requested);
     let port = candidates
         .iter()
         .copied()
@@ -78,6 +82,7 @@ pub fn serve(app: App, requested: Option<u16>, open: bool) -> Result<Started, De
         .build()
         .map_err(|e| DevdError::internal(format!("cannot start the runtime: {e}")))?;
 
+    let recorded = claim.clone();
     runtime.block_on(devd_server::serve_with(
         registry,
         ctx,
@@ -92,6 +97,9 @@ pub fn serve(app: App, requested: Option<u16>, open: bool) -> Result<Started, De
             picker: None,
         },
         move |bound| {
+            if let Ok(mut guard) = recorded.lock() {
+                let _ = guard.set_port(bound.port);
+            }
             let url = format!("http://127.0.0.1:{}/", bound.port);
             println!("devd interface at {url}");
             println!("loopback only; the session token is in the page, never on disk");
@@ -107,6 +115,7 @@ pub fn serve(app: App, requested: Option<u16>, open: bool) -> Result<Started, De
         },
     ))?;
 
+    drop(claim);
     Ok(Started {
         port,
         reused: false,
