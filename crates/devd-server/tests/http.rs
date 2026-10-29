@@ -993,3 +993,90 @@ fn urlencode(value: &str) -> String {
     }
     out
 }
+
+// ------------------------------------------------------------- run changes
+
+#[tokio::test]
+async fn a_runs_changes_say_what_is_missing_instead_of_failing_the_sheet() {
+    let fixture = Fixture::new();
+    let (state, _rx) = fixture.state(8787);
+    let token = state.token.clone();
+    let project = fixture.root.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    // A run with no project has nothing to compare.
+    let loose = state
+        .ctx
+        .store
+        .start_run(devd_core::store_runs::RunSpec {
+            goal: "explain something",
+            mode: devd_core::runs::RunMode::Api,
+            project: None,
+            actor: "human:test",
+            thread_id: None,
+            team_run_id: None,
+            acceptance: &[],
+        })
+        .unwrap();
+    let (status, body) = call(
+        state.clone(),
+        "GET",
+        &format!("/api/runs/{}/changes", loose.id),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["project"].is_null());
+    assert!(body["note"].as_str().unwrap().contains("not tied to a project"));
+
+    // A run with a project, in a build that has no git capability, reports that
+    // as a fact about the diff, and still returns the observed changes.
+    let tied = state
+        .ctx
+        .store
+        .start_run(devd_core::store_runs::RunSpec {
+            goal: "fix the parser",
+            mode: devd_core::runs::RunMode::Api,
+            project: Some(&project.to_string_lossy()),
+            actor: "human:test",
+            thread_id: None,
+            team_run_id: None,
+            acceptance: &[],
+        })
+        .unwrap();
+    state
+        .ctx
+        .store
+        .add_evidence(devd_core::store_runs::NewEvidence {
+            run_id: &tied.id,
+            step_id: None,
+            tool_call_id: None,
+            artifact_id: None,
+            kind: "change",
+            capability: devd_core::runs::OBSERVED_CAPABILITY,
+            passed: true,
+            claim: None,
+            summary: "observed in the project while the run worked: 1 added",
+            detail: Some("{\"files\":[\"added new.rs\"]}"),
+        })
+        .unwrap();
+    let (status, body) = call(
+        state.clone(),
+        "GET",
+        &format!("/api/runs/{}/changes", tied.id),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["project"], project.to_string_lossy().as_ref());
+    assert!(body["diff_error"].as_str().unwrap().contains("not available"));
+    assert_eq!(body["observed"].as_array().unwrap().len(), 1);
+
+    // An unknown run is a not-found, and the endpoint needs the token like the rest.
+    let (status, _) = call(state.clone(), "GET", "/api/runs/nope/changes", Some(&token), None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = call(state, "GET", &format!("/api/runs/{}/changes", tied.id), None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}

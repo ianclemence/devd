@@ -452,9 +452,22 @@
 
   // ------------------------------------------------------------------- toasts
 
+  /* Tell a screen reader what the eye gets from a toast. The toast itself is hidden from
+     assistive technology so nothing is read twice; two live regions that exist before
+     anything is put in them carry the words: polite for news, assertive for a failure. */
+  function announce(kind, text) {
+    var region = el(kind === "error" ? "live-assertive" : "live-polite");
+    if (!region) return;
+    region.textContent = "";
+    // A change after a tick is announced even when the same words come twice in a row.
+    setTimeout(function () { region.textContent = text; }, 30);
+  }
+
   function toast(kind, message, detail) {
+    announce(kind, message + (detail ? ". " + detail : ""));
     var node = document.createElement("div");
     node.className = "toast toast-" + kind;
+    node.setAttribute("aria-hidden", "true");
     node.innerHTML =
       '<div class="toast-msg">' + esc(message) +
       (detail ? '<div class="toast-detail">' + esc(detail) + "</div>" : "") +
@@ -500,16 +513,31 @@
 
   // ------------------------------------------------------------------- drawer
 
+  /* Where focus was when the drawer opened, so closing it returns the person to the
+     control they used. Opening a drawer over another one keeps the first origin. */
+  var drawerOrigin = null;
+
   function openDrawer(title, html) {
+    var wasOpen = !el("drawer").hidden;
+    if (!wasOpen) drawerOrigin = document.activeElement;
     el("drawer-title").textContent = title;
     el("drawer-body").innerHTML = html;
     el("drawer").hidden = false;
     el("drawer-scrim").hidden = false;
+    // Focus moves into the drawer: the close button is the first thing a keyboard
+    // user can act on, and a screen reader announces the dialog's name from it.
+    var close = document.querySelector("#drawer .drawer-close");
+    if (close && !wasOpen) close.focus();
   }
 
   function closeDrawer() {
+    var wasOpen = !el("drawer").hidden;
     el("drawer").hidden = true;
     el("drawer-scrim").hidden = true;
+    if (wasOpen && drawerOrigin && document.body.contains(drawerOrigin) && typeof drawerOrigin.focus === "function") {
+      drawerOrigin.focus();
+    }
+    drawerOrigin = null;
   }
 
   // ------------------------------------------------------------------- dialog
@@ -4468,6 +4496,147 @@
       });
   }
 
+  // ----------------------------------------------------------- argument forms
+  //
+  // A capability's schema says what it takes. The form below is that schema made
+  // fillable: one labelled control per property, the type deciding the control, the
+  // description under it. What the form cannot express (a nested object, a list of
+  // objects) falls back to a JSON box for that one field, so nothing is unreachable.
+  // The JSON view of the whole argument object stays one click away.
+
+  function schemaType(prop) {
+    if (!prop) return "string";
+    var t = prop.type;
+    if (Array.isArray(t)) {
+      t = t.filter(function (x) { return x !== "null"; })[0] || "string";
+    }
+    if (!t && prop.anyOf) {
+      var first = prop.anyOf.filter(function (x) { return x && x.type !== "null"; })[0];
+      return schemaType(first);
+    }
+    if (!t && prop.enum) return "string";
+    return t || "json";
+  }
+
+  function schemaEnum(prop) {
+    if (!prop) return null;
+    if (prop.enum && prop.enum.length) return prop.enum;
+    if (prop.anyOf) {
+      for (var i = 0; i < prop.anyOf.length; i++) {
+        var e = schemaEnum(prop.anyOf[i]);
+        if (e) return e;
+      }
+    }
+    return null;
+  }
+
+  function hasForm(schema) {
+    return !!(schema && schema.properties && Object.keys(schema.properties).length);
+  }
+
+  function argMode(schema) {
+    if (!hasForm(schema)) return "json";
+    return state.capMode === "json" ? "json" : "form";
+  }
+
+  function argModeTabs(schema) {
+    if (!hasForm(schema)) return "";
+    var mode = argMode(schema);
+    return '<span class="inline right" role="tablist" aria-label="How to edit the arguments">' +
+      '<button type="button" role="tab" class="ui-sort' + (mode === "form" ? " active" : "") + '" aria-selected="' + (mode === "form") + '" data-action="cap-mode" data-mode="form">Form</button>' +
+      '<button type="button" role="tab" class="ui-sort' + (mode === "json" ? " active" : "") + '" aria-selected="' + (mode === "json") + '" data-action="cap-mode" data-mode="json">JSON</button></span>';
+  }
+
+  var LONG_TEXT = /^(content|script|body|diff|patch|message|prompt|instructions|text|description|sql|query|command)$/;
+
+  function argField(key, prop, value, required) {
+    var id = "cap-f-" + key;
+    var t = schemaType(prop);
+    var choices = schemaEnum(prop);
+    var help = prop && prop.description ? '<div class="faint arg-help" id="' + attr(id) + '-help">' + esc(prop.description) + "</div>" : "";
+    var described = help ? ' aria-describedby="' + attr(id) + '-help"' : "";
+    var req = required ? ' required aria-required="true"' : "";
+    var control;
+    if (t === "boolean") {
+      return '<div class="arg-field arg-bool"><label class="arg-check"><input type="checkbox" id="' + attr(id) + '" data-arg="' + attr(key) + '" data-type="boolean"' +
+        (value === true ? " checked" : "") + described + "> <span>" + esc(key) + "</span></label>" + help + "</div>";
+    }
+    if (choices) {
+      control = '<select class="input" id="' + attr(id) + '" data-arg="' + attr(key) + '" data-type="string"' + req + described + ">" +
+        (required ? "" : '<option value=""></option>') +
+        choices.map(function (c) {
+          return '<option value="' + attr(String(c)) + '"' + (value === c ? " selected" : "") + ">" + esc(String(c)) + "</option>";
+        }).join("") + "</select>";
+    } else if (t === "integer" || t === "number") {
+      control = '<input class="input mono" type="number" ' + (t === "integer" ? 'step="1"' : 'step="any"') + ' id="' + attr(id) + '" data-arg="' + attr(key) + '" data-type="' + t + '"' +
+        (value === undefined || value === null ? "" : ' value="' + attr(String(value)) + '"') + req + described + ">";
+    } else if (t === "array" && schemaType(prop.items) === "string") {
+      control = '<textarea class="textarea mono arg-list" rows="3" id="' + attr(id) + '" data-arg="' + attr(key) + '" data-type="strings" spellcheck="false" placeholder="One per line"' + req + described + ">" +
+        esc(Array.isArray(value) ? value.join("\n") : "") + "</textarea>";
+    } else if (t === "string") {
+      control = LONG_TEXT.test(key)
+        ? '<textarea class="textarea mono" rows="4" id="' + attr(id) + '" data-arg="' + attr(key) + '" data-type="string" spellcheck="false"' + req + described + ">" + esc(value === undefined || value === null ? "" : String(value)) + "</textarea>"
+        : '<input class="input mono" type="text" id="' + attr(id) + '" data-arg="' + attr(key) + '" data-type="string" spellcheck="false"' +
+          (value === undefined || value === null ? "" : ' value="' + attr(String(value)) + '"') + req + described + ">";
+    } else {
+      control = '<textarea class="textarea mono" rows="3" id="' + attr(id) + '" data-arg="' + attr(key) + '" data-type="json" spellcheck="false" placeholder="JSON"' + req + described + ">" +
+        esc(value === undefined || value === null ? "" : JSON.stringify(value, null, 2)) + "</textarea>";
+    }
+    return '<div class="arg-field"><label for="' + attr(id) + '">' + esc(key) +
+      (required ? ' <span class="faint">required</span>' : "") + "</label>" + control + help + "</div>";
+  }
+
+  function argForm(schema, args) {
+    var required = schema.required || [];
+    return '<div class="arg-form" id="cap-form">' +
+      Object.keys(schema.properties).map(function (key) {
+        return argField(key, schema.properties[key], (args || {})[key], required.indexOf(key) !== -1);
+      }).join("") + "</div>";
+  }
+
+  /* The argument object the form describes. With `quiet` a mistake yields what could be
+     read instead of a message, which is how typing is mirrored into state. */
+  function readArgForm(quiet) {
+    var form = el("cap-form");
+    if (!form) return {};
+    var out = {};
+    var bad = null;
+    Array.prototype.forEach.call(form.querySelectorAll("[data-arg]"), function (node) {
+      var key = node.dataset.arg, type = node.dataset.type, raw;
+      node.removeAttribute("aria-invalid");
+      if (type === "boolean") { out[key] = node.checked; return; }
+      raw = node.value;
+      if (raw.trim() === "") {
+        if (node.required && !quiet) {
+          node.setAttribute("aria-invalid", "true");
+          if (!bad) bad = [node, key + " is required"];
+        }
+        return;
+      }
+      if (type === "integer" || type === "number") {
+        var n = Number(raw);
+        if (!isFinite(n) || (type === "integer" && Math.floor(n) !== n)) {
+          if (!quiet && !bad) { bad = [node, key + " must be " + (type === "integer" ? "a whole number" : "a number")]; node.setAttribute("aria-invalid", "true"); }
+          return;
+        }
+        out[key] = n;
+      } else if (type === "strings") {
+        out[key] = raw.split("\n").map(function (l) { return l.trim(); }).filter(Boolean);
+      } else if (type === "json") {
+        try { out[key] = JSON.parse(raw); }
+        catch (e) { if (!quiet && !bad) { bad = [node, key + " is not valid JSON"]; node.setAttribute("aria-invalid", "true"); } }
+      } else {
+        out[key] = raw;
+      }
+    });
+    if (bad) {
+      toast("error", bad[1]);
+      bad[0].focus();
+      return null;
+    }
+    return out;
+  }
+
   /* Build a starting argument object from a JSON Schema.
      Only fills in fields with an obvious trivial value; everything else is left
      out so the user sees exactly what they must supply. */
@@ -4524,15 +4693,17 @@
         (detail.description ? '<div class="dim">' + esc(detail.description) + "</div>" : "") +
         '<div class="inline">' + flags.join("") + "</div>" +
         "</div></div>" +
-        '<div class="panel"><div class="panel-head"><span>Arguments</span></div>' +
+        '<div class="panel"><div class="panel-head"><span>Arguments</span>' + argModeTabs(detail.args_schema) + "</div>" +
         '<div class="panel-body stack">' +
-        '<textarea class="textarea mono" id="cap-args" spellcheck="false">' +
-        esc(JSON.stringify(state.capArgs, null, 2)) + "</textarea>" +
+        (argMode(detail.args_schema) === "form"
+          ? argForm(detail.args_schema, state.capArgs)
+          : '<textarea class="textarea mono" id="cap-args" spellcheck="false" aria-label="Arguments as JSON">' +
+            esc(JSON.stringify(state.capArgs, null, 2)) + "</textarea>") +
         '<div class="inline">' +
         '<button type="button" class="btn" data-action="cap-dry-run">Dry run</button>' +
         '<button type="button" class="btn ' + (detail.requires_approval ? "btn-danger" : "btn-primary") +
         '" data-action="cap-run">Run</button>' +
-        '<span class="faint">Arguments are validated by the capability, not by this form.</span>' +
+        '<span class="faint">The form is built from the capability’s schema. The registry checks the arguments again before anything runs.</span>' +
         "</div></div></div>" +
         '<div class="panel"><div class="panel-head"><span>Schema</span></div>' +
         '<div class="panel-body"><pre class="patch-block">' +
@@ -5309,7 +5480,7 @@
    * conversation or a team run, and it is opened from that work, in place, as a
    * sheet. The sheet is a snapshot: it says what was recorded, not what the
    * live stream happened to deliver. */
-  var RUN = { id: null, data: null, events: [], hasOlder: false, error: null };
+  var RUN = { id: null, data: null, events: [], hasOlder: false, error: null, changes: null };
 
   var RUN_STATE_WORD = {
     intake: "intake", planning: "planning", awaiting_approval: "needs your decision",
@@ -5341,10 +5512,50 @@
     RUN.events = [];
     RUN.hasOlder = false;
     RUN.error = null;
+    RUN.changes = null;
     uiSheet("Run", '<div class="loading">Loading the run...</div>');
     loadRun(id).then(function () {
       if (RUN.id === id) paintRunSheet();
+      // The diff and the environment are read after the sheet is up: they come
+      // from git and the project, and the run's own record must not wait for them.
+      request("/api/runs/" + encodeURIComponent(id) + "/changes").then(function (res) {
+        if (RUN.id !== id) return;
+        RUN.changes = res.ok ? res.body : { error: errorOf(res.body, "the project's changes could not be read") };
+        paintRunSheet();
+      });
     });
+  }
+
+  function runChangesHtml() {
+    var c = RUN.changes;
+    if (!c) return '<div class="panel"><div class="panel-head"><span>Changes in the project</span></div><div class="panel-body"><div class="loading" role="status">Reading the project...</div></div></div>';
+    if (c.error) return '<div class="panel"><div class="panel-head"><span>Changes in the project</span></div><div class="panel-body"><div class="notice notice-warn">' + esc(c.error) + "</div></div></div>";
+    if (!c.project) return '<div class="panel"><div class="panel-head"><span>Changes in the project</span></div><div class="panel-body"><div class="empty-inline">' + esc(c.note || "This run is not tied to a project.") + "</div></div></div>";
+    var diff = c.diff && c.diff.patch
+      ? renderPatch(c.diff.patch) + (c.diff.truncated ? '<div class="dim">The diff is longer than this sheet shows (' + c.diff.bytes + " bytes). The rest is in the repository.</div>" : "")
+      : c.diff_error ? '<div class="empty-inline">' + esc(c.diff_error) + "</div>"
+      : '<div class="empty-inline">The working tree has no uncommitted changes.</div>';
+    var observed = (c.observed || []).map(function (o) {
+      var files = "";
+      try { files = (JSON.parse(o.detail || "{}").files || []).slice(0, 40).map(function (f) { return "<li class=\"mono\">" + esc(f) + "</li>"; }).join(""); } catch (e) { files = ""; }
+      return '<div class="run-observed"><div>' + esc(o.summary) + "</div>" + (files ? '<ul class="run-acceptance">' + files + "</ul>" : "") +
+        '<div class="faint">Seen by comparing the project before and after. This does not say who made the change.</div></div>';
+    }).join("");
+    var env = c.environment, envHtml = "";
+    if (env) {
+      var list = function (items, f) { return (items || []).length ? (items || []).map(f).join(", ") : "none"; };
+      envHtml = '<div class="panel"><div class="panel-head"><span>Environment</span><span class="panel-note mono">' + esc(String(env.fingerprint || "").slice(0, 12)) + "</span></div>" +
+        '<div class="panel-body stack">' +
+        "<div><b>Runtimes</b> " + esc(list(env.runtimes, function (r) { return (r.kind || r.name || "") + (r.version ? " " + r.version : ""); })) + "</div>" +
+        "<div><b>Services</b> " + esc(list(env.services, function (s) { return (s.name || "") + (s.running === false ? " (stopped)" : ""); })) + "</div>" +
+        "<div><b>Sites</b> " + esc(list(env.sites, function (s) { return s.host || s.name || ""; })) + "</div>" +
+        ((env.missing || []).length ? '<div class="notice notice-warn"><b>Missing</b> ' + esc((env.missing || []).join("; ")) + "</div>" : "") +
+        "</div></div>";
+    } else if (c.environment_error) {
+      envHtml = '<div class="panel"><div class="panel-head"><span>Environment</span></div><div class="panel-body"><div class="empty-inline">' + esc(c.environment_error) + "</div></div></div>";
+    }
+    return '<div class="panel"><div class="panel-head"><span>Changes in the project</span><span class="panel-note mono">' + esc(c.project) + "</span></div>" +
+      '<div class="panel-body">' + observed + diff + "</div></div>" + envHtml;
   }
 
   function loadRun(id) {
@@ -5425,6 +5636,7 @@
       '<div class="summary-item"><div class="summary-label">Steps</div><div class="summary-value">' + (d.steps || []).length + '</div><div class="summary-detail">' + (d.events || []).length + " recorded events</div></div>" +
       '<div class="summary-item"><div class="summary-label">Capability calls</div><div class="summary-value">' + (d.tool_calls || []).length + '</div><div class="summary-detail">' + (d.artifacts || []).length + " artifacts</div></div>" +
       "</div>" +
+      runChangesHtml() +
       '<div class="panel"><div class="panel-head"><span>Timeline</span><span class="panel-note">newest 200</span></div><div class="panel-body flush">' +
       (RUN.hasOlder ? '<div class="inline" style="padding:8px 12px"><button type="button" class="btn btn-mini" data-action="run-older" data-id="' + attr(run.id) + '">Show earlier events</button></div>' : "") +
       (RUN.events.length ? RUN.events.map(runEventRow).join("") : '<div class="empty-inline">No events yet.</div>') + "</div></div>" +
@@ -9187,6 +9399,22 @@
 
     "pick-cap": function (node) { openCapability(node.dataset.id); },
 
+    "cap-mode": function (node) {
+      var schema = state.selectedCapDetail && state.selectedCapDetail.args_schema;
+      var next = node.dataset.mode === "json" ? "json" : "form";
+      // Carry what has been typed across: form to JSON reads the controls, JSON to
+      // form parses the box. Nothing is lost by changing view.
+      if (el("cap-form")) {
+        var fromForm = readArgForm(true);
+        if (fromForm) state.capArgs = fromForm;
+      } else if (el("cap-args")) {
+        try { state.capArgs = JSON.parse(readInput("cap-args") || "{}"); }
+        catch (e) { toast("error", "The arguments are not valid JSON", e.message); return; }
+      }
+      state.capMode = next;
+      if (schema) renderCapabilities();
+    },
+
     "cap-dry-run": function () {
       var args = parseArgs();
       if (!args) return;
@@ -9237,6 +9465,7 @@
   };
 
   function parseArgs() {
+    if (el("cap-form")) return readArgForm(false);
     var text = readInput("cap-args");
     if (!text) return {};
     try {
@@ -9324,6 +9553,11 @@
   });
 
   document.addEventListener("input", function (event) {
+    if (event.target.closest && event.target.closest("#cap-form")) {
+      var typed = readArgForm(true);
+      if (typed) state.capArgs = typed;
+      return;
+    }
     if (event.target.id === "palette-input") return paletteSearch(event.target.value);
     if (event.target.id === "picker-path-input") {
       // Typing a path is the advanced way in; it still has to work, but it is

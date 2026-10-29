@@ -234,6 +234,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/runs", get(api::runs))
         .route("/api/runs/:id", get(api::run))
         .route("/api/runs/:id/events", get(api::run_events))
+        .route("/api/runs/:id/changes", get(api::run_changes))
         .route("/api/runs/:id/cancel", post(api::run_cancel))
         .route("/api/runs/:id/retry", post(api::run_retry))
         .route("/api/approvals", get(api::approvals))

@@ -501,6 +501,88 @@ pub async fn run(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> 
     }
 }
 
+/// Most of a diff the run sheet is sent. The rest stays in the repository.
+const CHANGES_LIMIT: usize = 120_000;
+
+/// `GET /api/runs/:id/changes` - what the run left in its project, and the
+/// environment it was working in.
+///
+/// Both come from read capabilities, through the registry like everything else:
+/// the working-tree diff of the project's repository, and the project's
+/// environment manifest (runtimes, services, ports, sites, with a fingerprint).
+/// Neither is a claim the run made; they are the project as it is now, which is
+/// what a person deciding whether to trust the run needs next to its evidence.
+/// Every part can be absent - a project that is not a git repository has no
+/// diff - and says why instead of failing the sheet.
+pub async fn run_changes(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    let st = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let run = st
+            .ctx
+            .store
+            .run_by_id(&id)?
+            .ok_or_else(|| devd_core::DevdError::not_found(format!("no run `{id}`")))?;
+        let Some(project) = run.project.clone() else {
+            return Ok(json!({ "project": null, "note": "this run is not tied to a project" }));
+        };
+        let call = |capability: &str, args: Value| -> Option<devd_core::Result<Value>> {
+            let req = InvokeRequest {
+                id: capability.into(),
+                args,
+                dry_run: false,
+            };
+            st.registry.get(capability)?;
+            Some(
+                st.registry
+                    .dispatch(&st.ctx, &req, Approval::None)
+                    .map(|r| r.outcome.map(|o| o.data).unwrap_or(Value::Null)),
+            )
+        };
+
+        let mut out = json!({ "project": project });
+        match call("git.diff", json!({ "repo": project, "context": 3 })) {
+            Some(Ok(data)) => {
+                let patch = data["patch"].as_str().unwrap_or("");
+                let truncated = patch.len() > CHANGES_LIMIT;
+                let mut end = patch.len().min(CHANGES_LIMIT);
+                while !patch.is_char_boundary(end) {
+                    end -= 1;
+                }
+                out["diff"] = json!({ "patch": &patch[..end], "bytes": patch.len(), "truncated": truncated });
+            }
+            Some(Err(e)) => out["diff_error"] = json!(e.to_string()),
+            None => out["diff_error"] = json!("git is not available in this build"),
+        }
+        match call("environment.manifest", json!({ "path": project })) {
+            Some(Ok(data)) => out["environment"] = data,
+            Some(Err(e)) => out["environment_error"] = json!(e.to_string()),
+            None => {}
+        }
+        // The observed changes are evidence; surface them beside the diff so the
+        // two can be read together.
+        let observed: Vec<Value> = st
+            .ctx
+            .store
+            .list_evidence(&id, 1000)?
+            .into_iter()
+            .filter(|e| e.capability == devd_core::runs::OBSERVED_CAPABILITY)
+            .map(|e| json!({ "summary": e.summary, "detail": e.detail, "at": e.created_at }))
+            .collect();
+        out["observed"] = json!(observed);
+        Ok::<Value, devd_core::DevdError>(out)
+    })
+    .await;
+    match result {
+        Ok(Ok(body)) => Json(body).into_response(),
+        Ok(Err(e)) => error_response(&e),
+        Err(_) => refuse(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "reading the run's changes failed",
+        ),
+    }
+}
+
 /// Query for one run's event page.
 #[derive(Debug, Deserialize)]
 pub struct RunEventsQuery {

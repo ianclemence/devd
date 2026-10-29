@@ -222,6 +222,15 @@ code, kbd, pre, samp { font-family: var(--mono); }
 
 /* --------------------------------------------------------- helpers, a11y */
 
+/* Argument forms, built from a capability's schema. */
+.arg-form { display: grid; gap: 14px; }
+.arg-field { display: grid; gap: 4px; }
+.arg-field label { font-weight: 600; }
+.arg-help { font-size: 12px; line-height: 1.4; }
+.arg-check { display: inline-flex; gap: 8px; align-items: center; font-weight: 600; }
+.arg-field [aria-invalid="true"] { border-color: var(--bad, #d14343); outline: 1px solid var(--bad, #d14343); }
+.arg-list { min-height: 4.5em; }
+
 .sr-only {
   position: absolute;
   width: 1px;
