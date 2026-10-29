@@ -34,6 +34,7 @@ pub mod docs;
 pub mod environment;
 pub mod fs;
 pub mod health;
+pub mod gemini;
 pub mod host;
 pub mod judge;
 pub mod providers;

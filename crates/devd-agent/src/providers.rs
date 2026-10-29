@@ -179,7 +179,7 @@ pub fn presets() -> Vec<Preset> {
                 model("glm-4-flash", "GLM-4 Flash", Some(128_000), Some(4_096), "Cheap, fast"),
             ])
             .suggested("glm-4.6"),
-        base_preset("gemini", "openai-compatible", "Google Gemini", "https://generativelanguage.googleapis.com/v1beta/openai", Key { env: Some("GEMINI_API_KEY"), required: true, url: Some("https://aistudio.google.com/apikey") }, Docs { page: "https://ai.google.dev/gemini-api/docs/openai", models_from: "GET /models with the key", notes: "Google's documented OpenAI-compatibility layer, including function calling. The native Gemini API uses a different schema; devd uses this layer so one adapter covers it." })
+        base_preset("gemini", "gemini", "Google Gemini", "https://generativelanguage.googleapis.com/v1beta", Key { env: Some("GEMINI_API_KEY"), required: true, url: Some("https://aistudio.google.com/apikey") }, Docs { page: "https://ai.google.dev/gemini-api/docs/openai", models_from: "GET /models with the key", notes: "The native Gemini API (generateContent): real token limits from the model list, thought signatures kept with function calls, and function schemas reduced to what Gemini accepts. An older provider saved against the OpenAI-compatibility URL keeps working unchanged." })
             .order(6).tools("documented").suggested("gemini-2.5-flash"),
         base_preset("xai", "openai-compatible", "xAI (Grok)", "https://api.x.ai/v1", Key { env: Some("XAI_API_KEY"), required: true, url: Some("https://console.x.ai/team/default/api-keys") }, Docs { page: "https://docs.x.ai/docs/api-reference", models_from: "GET /models with the key", notes: "Grok models over an OpenAI-compatible API with function calling." })
             .order(7).tools("documented"),
@@ -490,6 +490,11 @@ fn auth_headers(p: &Provider, key: Option<&str>) -> Vec<(String, String)> {
                 h.push(("x-api-key".to_string(), k.to_string()));
             }
         }
+        "gemini" => {
+            if let Some(k) = key {
+                h.push(("x-goog-api-key".to_string(), k.to_string()));
+            }
+        }
         _ => {
             if let Some(k) = key {
                 h.push(("authorization".to_string(), format!("Bearer {k}")));
@@ -502,6 +507,8 @@ fn auth_headers(p: &Provider, key: Option<&str>) -> Vec<(String, String)> {
 fn models_url(p: &Provider) -> String {
     if p.kind == "anthropic" {
         format!("{}/v1/models?limit=1000", p.base_url.trim_end_matches('/'))
+    } else if p.kind == "gemini" {
+        format!("{}/models?pageSize=1000", p.base_url.trim_end_matches('/'))
     } else {
         format!("{}/models", p.base_url.trim_end_matches('/'))
     }
@@ -750,6 +757,9 @@ fn list_models_openai(p: &Provider, key: Option<&str>, now: &str) -> Result<Vec<
     }
     let v: Value = serde_json::from_str(&r.body)
         .map_err(|e| DevdError::internal(format!("{} returned something that is not JSON: {e}", p.label)))?;
+    if p.kind == "gemini" {
+        return Ok(crate::gemini::models(&v, &format!("provider:{}", p.id), now));
+    }
     Ok(normalise(p, &v, now))
 }
 
@@ -857,16 +867,16 @@ pub struct TestReport {
 }
 
 fn wire_of(p: &Provider) -> &'static str {
-    if p.kind == "anthropic" {
-        "anthropic-messages"
-    } else {
-        "openai-chat"
+    match p.kind.as_str() {
+        "anthropic" => "anthropic-messages",
+        "gemini" => "gemini-generate-content",
+        _ => "openai-chat",
     }
 }
 
 fn key_required(p: &Provider) -> bool {
     match p.kind.as_str() {
-        "anthropic" | "openai" => true,
+        "anthropic" | "openai" | "gemini" => true,
         _ => preset(&p.id).map(|pre| pre.requires_key).unwrap_or(false),
     }
 }
@@ -1273,7 +1283,16 @@ fn chat_with(
     req: &ChatRequest,
     on: &mut dyn FnMut(&str),
 ) -> Result<ChatResponse> {
-    let (url, body) = if p.kind == "anthropic" {
+    let (url, body) = if p.kind == "gemini" {
+        (
+            format!(
+                "{}/models/{}:streamGenerateContent?alt=sse",
+                p.base_url.trim_end_matches('/'),
+                req.model
+            ),
+            crate::gemini::body(req),
+        )
+    } else if p.kind == "anthropic" {
         (
             format!("{}/v1/messages", p.base_url.trim_end_matches('/')),
             anthropic_body(req),
@@ -1287,8 +1306,11 @@ fn chat_with(
     let headers = auth_headers(p, key);
     let mut text = body;
     // Ask for the streamed form. The adapters parse whichever form comes back,
-    // so a provider that ignores `stream` still answers correctly.
-    text["stream"] = json!(true);
+    // so a provider that ignores `stream` still answers correctly. Gemini
+    // streams by endpoint, not by a flag in the body.
+    if p.kind != "gemini" {
+        text["stream"] = json!(true);
+    }
     let text = text.to_string();
     let mut last: Option<DevdError> = None;
     for attempt in 0..3u32 {
@@ -1296,7 +1318,9 @@ fn chat_with(
         if r.status == 200 {
             let answer = match r.answer {
                 Answer::Events(reader) => {
-                    return if p.kind == "anthropic" {
+                    return if p.kind == "gemini" {
+                        crate::gemini::parse_stream(reader, on)
+                    } else if p.kind == "anthropic" {
                         parse_anthropic_stream(reader, on)
                     } else {
                         parse_openai_stream(reader, on)
@@ -1309,7 +1333,9 @@ fn chat_with(
                         .lines()
                         .any(|line| line.trim_start().starts_with("data:"))
                     {
-                        return if p.kind == "anthropic" {
+                        return if p.kind == "gemini" {
+                            crate::gemini::parse_stream(std::io::Cursor::new(body), on)
+                        } else if p.kind == "anthropic" {
                             parse_anthropic_stream(std::io::Cursor::new(body), on)
                         } else {
                             parse_openai_stream(std::io::Cursor::new(body), on)
@@ -1324,7 +1350,9 @@ fn chat_with(
                     p.label
                 ))
             })?;
-            let answer = if p.kind == "anthropic" {
+            let answer = if p.kind == "gemini" {
+                crate::gemini::parse(&v)?
+            } else if p.kind == "anthropic" {
                 parse_anthropic(&v)?
             } else {
                 parse_openai(&v)?
@@ -1366,7 +1394,7 @@ fn chat_with(
 /// several `data:` lines. Reading line by line is what makes the answer appear
 /// while the provider is still writing it; waiting for the whole body would
 /// only replay it after the fact.
-fn for_each_event(
+pub(crate) fn for_each_event(
     mut reader: impl BufRead,
     mut on_data: impl FnMut(&str) -> Result<()>,
 ) -> Result<()> {

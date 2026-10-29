@@ -1391,8 +1391,8 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             }
             let pick = |given: &Option<String>, from_existing: Option<String>, from_preset: Option<String>| given.clone().or(from_existing).or(from_preset);
             let kind = pick(&a.kind, existing.as_ref().map(|p| p.kind.clone()), preset.as_ref().map(|p| p.kind.clone())).ok_or_else(|| DevdError::invalid("name a kind or a preset"))?;
-            if !["anthropic", "openai", "openai-compatible"].contains(&kind.as_str()) {
-                return Err(DevdError::invalid("kind must be anthropic, openai or openai-compatible"));
+            if !["anthropic", "openai", "openai-compatible", "gemini"].contains(&kind.as_str()) {
+                return Err(DevdError::invalid("kind must be anthropic, openai, gemini or openai-compatible"));
             }
             let base = pick(&a.base_url, existing.as_ref().map(|p| p.base_url.clone()), preset.as_ref().map(|p| p.base_url.clone())).ok_or_else(|| DevdError::invalid("a base URL is required"))?;
             let base_url = providers::validate_base_url(&base)?;
