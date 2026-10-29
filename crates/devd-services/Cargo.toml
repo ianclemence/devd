@@ -14,6 +14,7 @@ schemars.workspace = true
 rcgen = { workspace = true, features = ["x509-parser"] }
 uuid.workspace = true
 hex.workspace = true
+zip.workspace = true
 chrono.workspace = true
 time = { workspace = true, features = ["formatting"] }
 

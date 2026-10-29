@@ -26,6 +26,7 @@ pub mod extras;
 pub mod mariadb;
 pub mod nginx;
 pub mod phpcaps;
+pub mod postgres_install;
 pub mod probe;
 pub mod reconcile;
 pub mod redirects;
@@ -465,7 +466,7 @@ pub fn executable_path(_ctx: &Ctx, service: &Service) -> Result<PathBuf> {
 }
 
 /// The program from a service's argv, which is always an argument array.
-fn program_of(service: &Service) -> Result<PathBuf> {
+pub(crate) fn program_of(service: &Service) -> Result<PathBuf> {
     let argv: Vec<String> = serde_json::from_str(&service.argv).map_err(|e| {
         DevdError::internal(format!(
             "the stored command for `{}` is unreadable: {e}",
@@ -782,8 +783,14 @@ pub fn install(
         ));
     }
 
+    // PostgreSQL's Windows build publishes no checksum, so devd pins the digest of the build it ships
+    // knowledge of (see `postgres_install`) and installs exactly that.
+    if def.name == "postgres" && cfg!(windows) {
+        return postgres_install::install(ctx, spec, port, force, progress);
+    }
+
     // Redis and memcached have Windows builds whose digests GitHub records, so they are downloaded and
-    // checked like Mailpit. PostgreSQL and MongoDB still have none devd can verify and are adopted.
+    // checked like Mailpit. MongoDB still has none devd can verify and is adopted.
     let downloadable = matches!(def.name, "redis" | "memcached") && cfg!(windows);
     if let Some(engine) = engines::get(def.name).filter(|_| !downloadable) {
         return Err(engines::download_refusal(engine));

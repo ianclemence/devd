@@ -1,4 +1,4 @@
-//! PostgreSQL, MongoDB and Memcached: services devd runs but does not download.
+//! PostgreSQL, MongoDB and Memcached: services devd runs from a folder it records.
 //!
 //! None of the three publishes a checksum for its Windows build that devd could
 //! check (EnterpriseDB's PostgreSQL zips and the community Memcached builds publish
