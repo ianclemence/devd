@@ -44,6 +44,8 @@ const MODULES: &[&str] = &[
     "proxy_fcgi",
     "proxy_http",
     "proxy_wstunnel",
+    // HTTP/2 on the TLS listener, when this Apache ships the module.
+    "http2",
     // Spreading PHP requests over the worker pool needs all three; without them one process serves a version.
     "slotmem_shm",
     "proxy_balancer",
@@ -192,7 +194,10 @@ fn render_text(render: &Render, sites: &[Site]) -> String {
     if render.modules.iter().any(|m| m == "ssl") && sites.iter().any(|s| s.tls_mode != "off") {
         out.push_str("SSLProtocol -all +TLSv1.2 +TLSv1.3\n");
         out.push_str("SSLSessionCache \"shmcb:logs/ssl_scache(512000)\"\n");
-        out.push_str("SSLSessionCacheTimeout 300\n\n");
+        out.push_str("SSLSessionCacheTimeout 300\n");
+        // Browsers ask for h2 during the TLS handshake. Without the module the
+        // block is skipped, and the sites stay on HTTP/1.1.
+        out.push_str("<IfModule http2_module>\n    Protocols h2 http/1.1\n</IfModule>\n\n");
     }
     if render.balanced() {
         for (series, port) in &render.php {

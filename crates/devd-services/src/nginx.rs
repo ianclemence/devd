@@ -28,8 +28,46 @@ use devd_core::state::Site;
 use devd_core::util;
 use devd_core::{DevdError, Result};
 
+/// How the TLS listener is told to speak HTTP/2.
+///
+/// nginx changed the spelling in 1.25.1: before it, `http2` is a parameter of
+/// `listen`; from it, `http2 on;` is a directive and the parameter is
+/// deprecated. Writing the wrong one makes `nginx -t` fail or warn, so the
+/// spelling follows the version that will read the file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Http2 {
+    /// The version is not known, or HTTP/2 is not wanted: plain HTTP/1.1.
+    Off,
+    /// `listen 443 ssl http2;`, for nginx before 1.25.1.
+    Listen,
+    /// `http2 on;`, for nginx 1.25.1 and later.
+    Directive,
+}
+
+/// The HTTP/2 spelling for an nginx version string such as `1.28.3`.
+fn http2_for(version: Option<&str>) -> Http2 {
+    let Some(version) = version else {
+        return Http2::Off;
+    };
+    let mut parts = version.split('.').map(|p| p.parse::<u32>().ok());
+    let (Some(Some(major)), Some(Some(minor))) = (parts.next(), parts.next()) else {
+        return Http2::Off;
+    };
+    let patch = parts.next().flatten().unwrap_or(0);
+    if (major, minor, patch) >= (1, 25, 1) {
+        Http2::Directive
+    } else if (major, minor, patch) >= (1, 9, 5) {
+        // `http2` replaced `spdy` in 1.9.5.
+        Http2::Listen
+    } else {
+        Http2::Off
+    }
+}
+
 /// Everything the renderer needs that is not a site.
 struct Render {
+    /// HTTP/2 on the TLS listener, spelled for the installed nginx.
+    h2: Http2,
     /// nginx's prefix, with the trailing separator nginx requires.
     prefix: String,
     /// devd's log directory, in slash form.
@@ -123,6 +161,7 @@ fn slashy(path: &Path) -> String {
 
 fn render_context(ctx: &Ctx) -> Render {
     Render {
+        h2: http2_for(version(&directory(ctx)).as_deref()),
         prefix: prefix(&directory(ctx)),
         logs: slashy(&ctx.paths.logs()),
         certs: slashy(&ctx.paths.certs()),
@@ -379,7 +418,14 @@ fn site_servers(render: &Render, site: &Site) -> String {
 
     out.push_str("    server {\n");
     if tls {
-        out.push_str(&format!("        listen       {} ssl;\n", render.https));
+        let parameter = if render.h2 == Http2::Listen { " http2" } else { "" };
+        out.push_str(&format!(
+            "        listen       {} ssl{parameter};\n",
+            render.https
+        ));
+        if render.h2 == Http2::Directive {
+            out.push_str("        http2        on;\n");
+        }
     } else {
         out.push_str(&format!("        listen       {};\n", render.http));
     }
@@ -560,8 +606,13 @@ mod tests {
     }
 
     fn render_for(sites: &[Site], http: u16, https: u16) -> String {
+        render_for_h2(sites, http, https, Http2::Off)
+    }
+
+    fn render_for_h2(sites: &[Site], http: u16, https: u16, h2: Http2) -> String {
         render_text(
             Render {
+                h2,
                 prefix: "D:/devd-home/services/nginx/".to_string(),
                 logs: "D:/devd-home/logs".to_string(),
                 certs: "D:/devd-home/certs".to_string(),
@@ -688,6 +739,7 @@ mod tests {
     fn php_is_served_by_a_pool_of_workers() {
         let text = render_text(
             Render {
+                h2: Http2::Off,
                 prefix: "D:/devd-home/services/nginx/".to_string(),
                 logs: "D:/devd-home/logs".to_string(),
                 certs: "D:/devd-home/certs".to_string(),
@@ -718,6 +770,7 @@ mod tests {
         shop.php = Some("8.4".to_string());
         let text = render_text(
             Render {
+                h2: Http2::Off,
                 prefix: "D:/devd-home/services/nginx/".to_string(),
                 logs: "D:/devd-home/logs".to_string(),
                 certs: "D:/devd-home/certs".to_string(),
@@ -905,6 +958,36 @@ mod tests {
             block.contains("devd site upstream ghost <port>"),
             "it says what to do: {block}"
         );
+    }
+
+    #[test]
+    fn a_tls_site_speaks_http2_in_the_spelling_of_the_installed_nginx() {
+        let sites = [site("blog", "internal")];
+        let modern = render_for_h2(&sites, 8080, 8443, Http2::Directive);
+        assert!(modern.contains("listen       8443 ssl;"), "{modern}");
+        assert!(modern.contains("http2        on;"), "{modern}");
+        assert!(!modern.contains("ssl http2"), "{modern}");
+
+        let older = render_for_h2(&sites, 8080, 8443, Http2::Listen);
+        assert!(older.contains("listen       8443 ssl http2;"), "{older}");
+        assert!(!older.contains("http2        on;"), "{older}");
+
+        let plain = render_for_h2(&sites, 8080, 8443, Http2::Off);
+        assert!(!plain.contains("http2"), "{plain}");
+        // The plain-HTTP redirect listener never carries it.
+        assert!(modern.contains("listen       8080;"), "{modern}");
+    }
+
+    #[test]
+    fn http2_is_spelled_for_the_nginx_that_will_read_it() {
+        assert_eq!(http2_for(Some("1.28.3")), Http2::Directive);
+        assert_eq!(http2_for(Some("1.25.1")), Http2::Directive);
+        assert_eq!(http2_for(Some("1.25.0")), Http2::Listen);
+        assert_eq!(http2_for(Some("1.18.0")), Http2::Listen);
+        assert_eq!(http2_for(Some("1.9.4")), Http2::Off);
+        assert_eq!(http2_for(Some("2.0.0")), Http2::Directive);
+        assert_eq!(http2_for(Some("unknown")), Http2::Off);
+        assert_eq!(http2_for(None), Http2::Off);
     }
 
     #[test]
