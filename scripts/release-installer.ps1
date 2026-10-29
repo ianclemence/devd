@@ -69,7 +69,7 @@ $lines | Out-File -Encoding ascii $sums
 # by DEVD_RELEASE_KEY_FILE; without it the release is published unsigned, and
 # `devd update check` says so.
 if ($env:DEVD_RELEASE_KEY_FILE -and (Test-Path $env:DEVD_RELEASE_KEY_FILE)) {
-    & (Join-Path $repo "targetelease\devd.exe") update sign $sums
+    & (Join-Path $repo "target\release\devd.exe") update sign $sums
     if ($LASTEXITCODE -ne 0) { throw "signing the checksums failed" }
 } else {
     Write-Host "DEVD_RELEASE_KEY_FILE is not set: SHA256SUMS.txt was NOT signed" -ForegroundColor Yellow
