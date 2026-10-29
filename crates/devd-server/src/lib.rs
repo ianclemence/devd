@@ -570,6 +570,8 @@ pub fn error_response(err: &DevdError) -> Response {
         DevdError::Conflict(_) => StatusCode::CONFLICT,
         DevdError::Denied(_) | DevdError::ApprovalRequired { .. } => StatusCode::FORBIDDEN,
         DevdError::Timeout(_) => StatusCode::GATEWAY_TIMEOUT,
+        // The client closed the request; nginx's name for it is 499.
+        DevdError::Cancelled(_) => StatusCode::from_u16(499).unwrap_or(StatusCode::CONFLICT),
         DevdError::Command { .. } | DevdError::Mcp(_) => StatusCode::BAD_GATEWAY,
         DevdError::Io(_) | DevdError::Db(_) | DevdError::Internal(_) => {
             StatusCode::INTERNAL_SERVER_ERROR

@@ -48,6 +48,33 @@ impl CommandOutput {
     }
 }
 
+thread_local! {
+    /// The cancellation check of the call this thread is executing, if any.
+    static CANCEL: std::cell::RefCell<Option<std::sync::Arc<dyn Fn() -> bool + Send + Sync>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Run `body` with `check` as the answer to [`cancelled`].
+///
+/// The registry wraps every handler in this, so a program a handler starts can
+/// notice that the run was stopped while it is still running, instead of only
+/// before the next step. The check is per thread: a handler that moves work to
+/// another thread must pass the answer along itself.
+pub fn with_cancellation<T>(
+    check: std::sync::Arc<dyn Fn() -> bool + Send + Sync>,
+    body: impl FnOnce() -> T,
+) -> T {
+    let previous = CANCEL.with(|c| c.borrow_mut().replace(check));
+    let result = body();
+    CANCEL.with(|c| *c.borrow_mut() = previous);
+    result
+}
+
+/// Whether the call this thread is executing has been cancelled.
+pub fn cancelled() -> bool {
+    CANCEL.with(|c| c.borrow().as_ref().is_some_and(|check| check()))
+}
+
 /// Run a program with an argument array and no shell.
 ///
 /// `envs` are applied on top of the inherited environment. A `timeout` of
@@ -103,10 +130,26 @@ pub fn run(
     let out_handle = std::thread::spawn(move || read_all(&mut out_pipe));
     let err_handle = std::thread::spawn(move || read_all(&mut err_pipe));
 
+    let mut cancelled_at = Instant::now();
+    let mut was_cancelled = false;
     let code = loop {
         match child.try_wait()? {
             Some(status) => break status.code().unwrap_or(-1),
             None => {
+                // The check may read the run from the database, so it is asked a
+                // few times a second rather than on every poll.
+                if cancelled_at.elapsed() >= Duration::from_millis(200) {
+                    cancelled_at = Instant::now();
+                    if cancelled() {
+                        // The whole tree: a build tool's children must not be
+                        // left running after the run was stopped.
+                        crate::process::kill_tree(child.id());
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        was_cancelled = true;
+                        break -1;
+                    }
+                }
                 if let Some(limit) = timeout {
                     if start.elapsed() > limit {
                         let _ = child.kill();
@@ -123,6 +166,12 @@ pub fn run(
     let stderr = err_handle.join().unwrap_or_default();
     let duration_ms = start.elapsed().as_millis();
 
+    if was_cancelled {
+        return Err(DevdError::Cancelled(format!(
+            "`{}` was stopped because the run was cancelled",
+            program.display()
+        )));
+    }
     if code == -1 {
         if let Some(limit) = timeout {
             return Err(DevdError::Timeout(format!(

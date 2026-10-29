@@ -345,7 +345,15 @@ impl Registry {
                 outcome: None,
             })
         } else {
-            let outcome = cap.handler.apply(&run_ctx, &req.args)?;
+            // A program the handler starts can see that the run was stopped
+            // while it is running, not only before the next step.
+            let check: std::sync::Arc<dyn Fn() -> bool + Send + Sync> = match run_ctx.run.clone() {
+                Some(run) => std::sync::Arc::new(move || run.cancelled()),
+                None => std::sync::Arc::new(|| false),
+            };
+            let outcome = crate::util::with_cancellation(check, || {
+                cap.handler.apply(&run_ctx, &req.args)
+            })?;
             Ok(InvokeResult {
                 capability: cap.id.clone(),
                 dry_run: false,
@@ -912,6 +920,57 @@ mod tests {
         )
         .unwrap();
         reg
+    }
+
+    #[test]
+    fn stopping_a_run_kills_the_program_a_handler_is_waiting_on() {
+        let (ctx, _run_id, _dir) = run_ctx();
+        let mut reg = Registry::new();
+        reg.register(
+            Capability::builder("demo.wait", "wait for a slow program")
+                .tier(Tier::Write)
+                .effect(crate::capability::Effect::Process)
+                .handler(
+                    |_, _| Ok(Plan::new("demo.wait", "would wait")),
+                    |_, _| {
+                        let (program, args) = if cfg!(windows) {
+                            ("ping", vec!["-n".to_string(), "60".into(), "127.0.0.1".into()])
+                        } else {
+                            ("sleep", vec!["60".to_string()])
+                        };
+                        crate::util::run(std::path::Path::new(program), &args, None, &[], None)?;
+                        Ok(Outcome::ok("finished"))
+                    },
+                )
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
+
+        let cancel = ctx.run.as_ref().unwrap().cancel.clone();
+        let stopper = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        let started = std::time::Instant::now();
+        let err = reg
+            .dispatch_with(
+                &ctx,
+                &InvokeRequest {
+                    id: "demo.wait".into(),
+                    args: serde_json::json!({}),
+                    dry_run: false,
+                },
+                Approval::Granted,
+                &DispatchOptions::default(),
+            )
+            .unwrap_err();
+        stopper.join().unwrap();
+        assert!(matches!(err, DevdError::Cancelled(_)), "got {err:?}");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(15),
+            "the wait ended with the cancel, not with the program"
+        );
     }
 
     #[test]

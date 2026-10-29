@@ -121,6 +121,8 @@ pub mod error {
         },
         #[error("timed out: {0}")]
         Timeout(String),
+        #[error("cancelled: {0}")]
+        Cancelled(String),
         #[error("mcp error: {0}")]
         Mcp(String),
         #[error("internal error: {0}")]
@@ -176,6 +178,7 @@ pub mod error {
                 Self::ApprovalRequired { .. } => "approval_required",
                 Self::Command { .. } => "command_failed",
                 Self::Timeout(_) => "timeout",
+                Self::Cancelled(_) => "cancelled",
                 Self::Mcp(_) => "mcp_error",
                 Self::Internal(_) => "internal_error",
             }
