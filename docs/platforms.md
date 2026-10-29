@@ -101,7 +101,7 @@ This is a record of what was actually executed, not of what is expected to work.
 | Sign-in start of the daemon | Run value: written; sign-in itself **not exercised** | systemd unit text unit-tested; **not run** | LaunchAgent text unit-tested; **not run** |
 | Local DNS server answers over a real UDP socket | yes | the same code; **not run** there | the same code; **not run** there |
 | Pointing the operating system at it (`dns.enable`) | commands generated and unit-tested; **never run** (needs administrator rights and port 53) | **not run** | **not run** |
-| HTTP/2 spelling in the generated nginx and Apache configuration | unit-tested against the version rules; **not run** against a live nginx | same | same |
+| HTTP/2 in the generated nginx and Apache configuration | the `http2 on;` form (nginx 1.25.1 and later) accepted by a real nginx 1.30.6 and negotiated `h2` over TLS; the older `listen ... http2` form and Apache are unit-tested only | same code; **not run** | same code; **not run** |
 | Self-update: signature, checksum and replacement against a local server | yes | yes (unit tests, CI) | yes (unit tests, CI) |
 | The window: argument forms, focus and announcements checked in a real browser | yes | n/a | n/a |
 
