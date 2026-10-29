@@ -32,6 +32,23 @@ use crate::{
 struct NoArgs {}
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct IndexArgs {
+    /// Absolute project directory.
+    project: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct IndexedSearchArgs {
+    /// Absolute project directory.
+    project: String,
+    /// What to look for. Every word must appear; the last may be a prefix.
+    query: String,
+    /// Most files to return (default 20).
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct PolicyArgs {
     /// Use only models running on this machine.
     local_only: Option<bool>,
@@ -748,6 +765,52 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
         |ctx, a| {
             let v = search::query(ctx, &a.query, a.scopes.as_deref().unwrap_or(&[]), a.project.as_deref(), a.limit.unwrap_or(20).clamp(1, 100))?;
             Ok(Outcome::with_data(format!("{} result(s)", v["results"].as_array().map(|r| r.len()).unwrap_or(0)), v))
+        },
+    )?;
+
+    reg.define::<IndexArgs>("search.index", "Build or refresh the full-text index of a project")
+    .description("Indexes the text files of a project so search.indexed can rank them by relevance. Only files that changed since the last time are read again. Secrets files, binaries and files over 1 MB are not indexed, and the result counts them. The index is a cache under the devd home: deleting it loses nothing.")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, a| simple("search.index", format!("index the files of {}", a.project)),
+        |ctx, a| {
+            let root = fs::authorize(ctx, &a.project, false)?;
+            let mut index = devd_core::searchindex::Index::open(&ctx.paths)?;
+            let report = index.refresh(&root, &|p| fs::is_secret_file(p))?;
+            Ok(Outcome::with_data(
+                format!("{} file(s) indexed, {} unchanged, {} removed, {} skipped", report.indexed, report.unchanged, report.removed, report.skipped),
+                serde_json::to_value(&report)?,
+            ))
+        },
+    )?;
+
+    reg.define::<IndexedSearchArgs>("search.indexed", "Search a project's files by relevance")
+    .description("Full-text search over the project's indexed files, best match first, with a fragment around each match. The index is brought up to date first, so the answer reflects the files as they are. The response says how many files are indexed and how many were skipped, so an empty result is never mistaken for a complete search.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, a| simple("search.indexed", format!("search the index of {} for `{}`", a.project, a.query)),
+        |ctx, a| {
+            let root = fs::authorize(ctx, &a.project, false)?;
+            let mut index = devd_core::searchindex::Index::open(&ctx.paths)?;
+            let report = index.refresh(&root, &|p| fs::is_secret_file(p))?;
+            let hits = index.query(&root, &a.query, a.limit.unwrap_or(20).clamp(1, 100))?;
+            Ok(Outcome::with_data(
+                format!("{} match(es)", hits.len()),
+                json!({
+                    "hits": hits,
+                    "indexed_files": index.count(&root)?,
+                    "skipped": report.skipped,
+                    "truncated": report.truncated,
+                }),
+            ))
         },
     )?;
 

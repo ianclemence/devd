@@ -1,6 +1,7 @@
 //! Developer search: one query across what a developer actually looks for.
 //!
-//! Nothing here is an index. Each source is read at query time and every
+//! Nothing here is an index (the full-text index is `search.index` and
+//! `search.indexed`, a separate capability). Each source is read at query time and every
 //! response says which sources were searched, how, and what was cut off, so a
 //! caller never mistakes "no result" for "searched everything and found
 //! nothing".

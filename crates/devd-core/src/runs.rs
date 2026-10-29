@@ -812,6 +812,7 @@ fn is_read_capability(capability: &str) -> bool {
         "fs.list",
         "fs.search",
         "fs.browse",
+        "search.index",
         "git.diff",
         "git.blame",
         "git.search",

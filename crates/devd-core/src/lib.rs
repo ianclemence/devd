@@ -30,6 +30,7 @@ pub mod repair;
 pub mod runs;
 pub mod schedule;
 pub mod schema;
+pub mod searchindex;
 pub mod serving;
 pub mod shims;
 pub mod state;
