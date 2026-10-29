@@ -159,10 +159,11 @@ That is the difference between "the human approved this" and "the client typed
 Closing a browser window closes a window, not a process. Two consequences are
 handled rather than ignored:
 
-* the served HTML carries an `X-Devd-App` header, and `devd ui` probes the port
-  for it before starting anything. A port held by an existing `devd` is
-  *reopened*; a port held by an unrelated program is not touched, and the next
-  free port is tried instead;
+* `devd ui` reads the instance record (`instance.json`: process id, start time,
+  port) rather than scanning ports. A live instance is *reopened*; the served HTML
+  still carries an `X-Devd-App` header, which confirms that the port in the record
+  answers as devd. A port held by an unrelated program is never touched, and a
+  record whose process is gone is replaced. See [`daemon.md`](daemon.md);
 * the interface has a **Quit devd** button, which calls `POST /api/shutdown` and
   stops the server gracefully.
 

@@ -901,7 +901,7 @@ pub fn install(
     if artifact.sha256.is_none() {
         warnings.push(format!(
             "{} publishes no checksum file, so this download could only be checked for length \
-             ({} bytes); it came over HTTPS from {}. See docs/limitations.md.",
+             ({} bytes); it came over HTTPS from {}. See docs/security.md.",
             def.name, fetched.bytes, chosen.url
         ));
     }

@@ -77,6 +77,36 @@ that answered and why. Fallbacks are tried only when the first choice fails, onl
 among providers you listed, and never for a conversation where you picked the
 model yourself.
 
+### Google Gemini, natively
+
+The Gemini preset speaks the native `generateContent` API, not the
+OpenAI-compatibility layer: the model list returns the real input and output token
+limits, the thought signature a newer model issues with a function call is kept
+and sent back with it (the call is refused otherwise), and function schemas are
+reduced to the subset Gemini accepts (`$schema`, `additionalProperties`, `oneOf`
+and the like are removed; `["string","null"]` becomes a nullable string). A
+provider saved against the old compatibility URL keeps working unchanged.
+
+### What a model can do, what it may see, what a run may spend
+
+`model.capabilities` says what is known about a model - whether it takes tools or
+images, its window and output limit, its price per million tokens - and where each
+fact came from: the provider's own listing, a short table of well-known model
+families, or *unknown*, which is reported as unknown and never assumed capable. A
+model known not to take tools is skipped for agent work, with the reason.
+
+`policy.get` and `policy.set` (human only; an agent cannot loosen the rules it
+runs under) hold three rules, checked before every model call:
+
+* `local_only` - only providers on this machine (loopback) are used;
+* `allow_providers` / `block_providers` - by provider id, block winning;
+* `max_cost_usd` - the most one run may spend. Cost is tokens times the catalogue
+  price, so it is enforced only for models whose price is known; a model with no
+  price is not counted, and the run's usage says so by having no `cost_usd`.
+
+A provider the policy excludes never sees the project: it is skipped, with the
+rule that excluded it named, before any request is built.
+
 ## The team
 
 ```

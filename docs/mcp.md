@@ -193,8 +193,13 @@ add a server for devd to run or widen its own access.
 * **http** - the Streamable HTTP transport: one POST per message, a JSON or `text/event-stream`
   response, and the `mcp-session-id` the server returns is carried on later requests. Redirects are
   refused so a credential cannot be forwarded to a third host.
-* The older two-endpoint HTTP+SSE transport is **not** implemented. A server that needs it is not
-  half-supported; it is recorded in `limitations.md`.
+* **sse** - the older two-endpoint HTTP+SSE transport: a long-lived `GET` event stream announces a `POST`
+  endpoint (which must be on the stream's own origin, or the server is refused) and carries the responses.
+  Add it with `url` and `transport: "sse"`.
+* **Headers.** An http or sse server can need request headers, usually `Authorization`. Name one in `env`
+  as `header:Authorization`; like every `env` value it lives in an owner-only file, never in the database,
+  and is sent only to the server's own origin. A header devd sets itself (`Host`, `Content-Type`,
+  `mcp-session-id`, ...) or one containing a line break is refused.
 
 ### Secrets and the environment
 

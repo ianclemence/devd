@@ -327,8 +327,8 @@ Services add three rules on top:
   service's own log — a command that says "started" and leaves a dead service
   behind is worse than one that fails.
 * **They do not inherit the caller's handles.** See
-  [`limitations.md`](limitations.md#environment-specific-notes) — without this,
-  a piped `devd stack up` waited for nginx to exit.
+  `process::isolate_standard_handles` — without this, a piped `devd stack up`
+  waited for nginx to exit.
 
 ## Services, sites and generated configuration
 

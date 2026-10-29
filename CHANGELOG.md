@@ -10,6 +10,68 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.16.0] - 2026-10-29 - A resident process, and the gaps closed
+
+The limitations page is gone: each entry on it is either built, or stated where it
+belongs (`docs/platforms.md` says what has been run on which platform).
+
+### Added
+
+- **A resident daemon** (`devd daemon run|start|stop|status`). One process per user
+  owns scheduled work and the local API. It is found through an instance record
+  that includes the process's start time, not by scanning ports; the window, `devd
+  ui` and `devd serve` attach to it. `devd autostart enable` starts it at sign-in
+  (a `Run` value, a `systemd --user` unit, or a LaunchAgent).
+- **Service ownership by pid and start time.** A pid file now records when the
+  process started; a recycled pid is never taken for a service. A reconciliation
+  pass reports adopted, stale, ambiguous (a stranger on the port, left alone), down
+  and unexpectedly running services.
+- **Maintenance**: log rotation, audit retention, download-cache eviction and
+  undo-snapshot pruning, hourly, each with a setting.
+- **Stopping reaches the program in flight.** Cancelling a run kills the process
+  tree a handler is waiting on, and the call returns `cancelled`.
+- **Changes the registry did not see** are evidence: a before/after comparison of
+  the project becomes `observed.diff` and counts as an inspectable change.
+- **Native Gemini adapter**; a **per-model capability table**; **privacy and cost
+  policy** (`policy.get`, `policy.set`: local-only, allow/block providers, a
+  per-run spending limit).
+- **MCP over the older SSE transport**, and request headers kept in the private
+  environment file.
+- **Background reviews** (`review.start`) that leave an inbox message; **three-way
+  merge** of memory proposals; **full-text search** (`search.index`,
+  `search.indexed`); **merge-conflict resolution with merged text**
+  (`git.conflicts.resolve_with`), classified against the real stages.
+- **An evaluation suite** (`crates/devd-agent/tests/eval.rs`): scripted scenarios in
+  CI, a cassette recorded from a real provider replayed through the real loop, and
+  an opt-in live-provider mode (`DEVD_EVAL_LIVE=1`).
+- **A local DNS server** for `.test` and the commands that point the system at it
+  (`dns.status`, `dns.enable`, `dns.disable`).
+- **HTTP/2** on the TLS listener, spelled for the installed nginx or Apache.
+- **Resumable downloads** and a bounded cache.
+- **Services are asked in their own protocol** whether they are ready (HTTP, MySQL
+  handshake, FastCGI, Redis, memcached, PostgreSQL); `listening` and `ready` are
+  separate facts.
+- **Undo snapshots** for `fs.write`, `fs.edit`, `fs.delete` and `db.drop`
+  (`snapshot.list`, `snapshot.restore`).
+- **PostgreSQL installs on Windows** from a build whose digest devd pins.
+- **Signed self-update** (`devd update check|apply`, `keygen`, `sign`).
+- **The window**: argument forms generated from each capability's schema; the
+  drawer takes and returns focus; failures are announced to screen readers; a
+  run's sheet shows the project's diff and environment.
+
+### Changed
+
+- `autostart enable` now starts the daemon, which brings the stack up, instead of
+  running `devd stack up` once.
+- `docs/limitations.md` and `docs/branding.md` were removed.
+
+### Not done
+
+- Managed Oracle MySQL; pointing Windows at the DNS server without port 53; the
+  Linux and macOS code paths that need a real machine (see `docs/platforms.md`).
+
+---
+
 ## [0.15.1] - 2026-10-28 - A mutation the lists do not name is still a change
 
 The evidence classifier recognised changes and reads by name. 102 of 415

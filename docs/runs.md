@@ -10,6 +10,23 @@ The tables are `runs`, `run_steps`, `tool_calls`, `evidence`, `artifacts`,
 rows keep their history and are linked to a run; they are not replaced or
 rewritten.
 
+## What the registry cannot see
+
+Evidence is recorded where a capability returns. A program an agent started, an
+editor, a formatter a test run triggered: none of those pass through the registry
+as a write, yet they changed the project. At the start of a conversation run the
+project's tracked and untracked (not ignored) files are recorded - path, size,
+modification time and the checked-out commit - and when the run is judged the
+project is compared with that. A difference becomes one `change` evidence record
+under the capability `observed.diff`, listing what was added, modified and
+removed. It says *what* differs, never *who* did it, and it counts as an
+inspectable code change for a `code` or `test` goal. It is not recorded for team
+runs, which have their own worktrees and merge checks.
+
+The run's sheet shows the project's working-tree diff and its environment
+manifest (runtimes, services, ports, sites, fingerprint) next to the evidence, from
+`GET /api/runs/:id/changes`.
+
 ## Lifecycle
 
 ```text
@@ -226,5 +243,5 @@ to prevent.
 * Cancellation reaches handlers that check `RunContext` and processes that devd
   supervises. A third-party program that ignores termination is reported as
   still running rather than as stopped.
-* Process isolation is described in `docs/limitations.md`: an allowlisted
+* Process isolation is described in `docs/security.md`: an allowlisted
   environment and, on Windows, a Job Object are not a filesystem sandbox.

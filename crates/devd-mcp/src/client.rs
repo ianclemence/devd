@@ -1008,7 +1008,7 @@ mod tests {
                 } else if text.starts_with("POST /messages") {
                     let body = text.split("\r\n\r\n").nth(1).unwrap_or("");
                     let v: Value = serde_json::from_str(body).unwrap_or(Value::Null);
-                    conn.write_all(b"HTTP/1.1 202 Accepted\r\ncontent-length: 0\r\n\r\n").unwrap();
+                    conn.write_all(b"HTTP/1.1 202 Accepted\r\ncontent-length: 0\r\nconnection: close\r\n\r\n").unwrap();
                     if let Some(id) = v.get("id").cloned() {
                         let result = match v["method"].as_str() {
                             Some("tools/list") => {

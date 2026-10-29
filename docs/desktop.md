@@ -86,12 +86,14 @@ the uninstaller under `%LOCALAPPDATA%\Programs\devd`. The portable zip carries
 the desktop executable and the loader DLL together; the executable will not start
 without the DLL beside it.
 
-## Known limitations
+## Beside a running daemon, and what to know
 
-* The desktop shell does not adopt a server started by `devd ui`; it starts its
-  own backend and therefore its own session/process owner. Running both at once is
-  supported in the sense that they do not corrupt each other: sessions and project
-  processes owned by one are reported as unavailable/unsupervised by the other.
+* **The window is a client of the resident process when there is one.** If
+  `devd daemon` is running the window loads the interface that process serves and
+  starts no backend of its own, so there is one owner of scheduled work and of
+  project processes. With no daemon the window starts its own backend and becomes
+  the instance until it closes. See [`daemon.md`](daemon.md).
+
 * WebView2 availability is a Windows prerequisite. On Linux, Tauri uses
   WebKitGTK and must be built on that platform; the release artifacts here are
   Windows.

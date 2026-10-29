@@ -17,6 +17,8 @@ devd is the local development server you would otherwise assemble by hand: a web
 - **It sees what you already have.** MySQL, Redis, PostgreSQL and Docker are detected, never assumed healthy and never replaced. You decide whether devd uses them, watches them or leaves them alone.
 - **It works while you do something else.** Start the team from a template, or on a schedule: every weekday at nine, run the security review on this project.
 - **It has its own agents.** An assistant, and a team of fifteen specialists (planner, product, designer, architect, engineers, QA, security, infrastructure, docs). Give the team a goal and a definition of done: a planner proposes the work, you approve it, and specialists do it in isolated copies of the project until the evidence shows it is done.
+- **It keeps running.** One small resident process (`devd daemon`, started at sign-in) runs scheduled work, rotates logs, keeps the audit trail and download cache within bounds, answers for `.test` names without a hosts entry, and is what the window and the command line attach to. [How it works](docs/daemon.md).
+- **It can take it back.** Before a file is overwritten or deleted, or a database dropped, devd saves what would be lost and gives you the id that restores it. It updates itself only from releases signed with its own key.
 - **It keeps the record.** What was asked, what ran, what it changed and who approved it.
 
 You say what you want. devd does the rest, and it asks before it does anything consequential.
@@ -81,8 +83,8 @@ On Linux and macOS devd does not download a second copy of nginx or MariaDB. It 
 Download and run the installer from the [latest release](https://github.com/ianclemence/devd/releases/latest):
 
 ```powershell
-curl.exe -LO https://github.com/ianclemence/devd/releases/download/v0.15.1/devd-setup-0.15.1.exe
-.\devd-setup-0.15.1.exe
+curl.exe -LO https://github.com/ianclemence/devd/releases/download/v0.16.0/devd-setup-0.16.0.exe
+.\devd-setup-0.16.0.exe
 ```
 
 It installs for the current user only, adds `devd` to `PATH` and creates Start Menu entries. Uninstalling keeps your sites and data in `%LOCALAPPDATA%\devd`. The installer is not code-signed, so SmartScreen warns once; `SHA256SUMS.txt` on the release lets you check what you downloaded. A portable `devd.exe` and a portable window are attached to each release as well.
@@ -161,7 +163,7 @@ logs/             service and session logs
 | [`docs/workflows.md`](docs/workflows.md) | Reviews, agent memory and the project workspace. |
 | [`docs/stacks.md`](docs/stacks.md), [`docs/stacks-engine.md`](docs/stacks-engine.md) | Supported stacks and how they are defined. |
 | [`docs/devd-yml.md`](docs/devd-yml.md) | Declaring a project's processes. |
-| [`docs/limitations.md`](docs/limitations.md) | What is not implemented, and what is weaker than intended. |
+| [`docs/daemon.md`](docs/daemon.md) | The resident process, service ownership, maintenance, local DNS, signed updates and undo. |
 | [`CHANGELOG.md`](CHANGELOG.md) | Release history. |
 
 ---

@@ -170,6 +170,11 @@ devd serve         # the loopback API only, for scripts and tests
 devd tui           # the terminal dashboard
 devd mcp           # MCP on stdin/stdout, for agents
 
+devd daemon start  # the resident process: scheduled work, the local API, DNS
+devd daemon status
+devd update check  # is there a newer, signed release
+devd update apply
+
 devd capabilities  # the whole registry
 devd describe git.reset
 devd doctor

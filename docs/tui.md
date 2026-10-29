@@ -195,7 +195,7 @@ tests are the reason to believe the claims above.
   drawing to a real console, because this project has no way to attach a pty in
   its test environment. It was run by hand in a real terminal; that is a weaker
   claim than the rest of this document and is stated as such in
-  [`limitations.md`](limitations.md).
+  [`platforms.md`](platforms.md).
 * **No mouse.** Keyboard only, deliberately: the palette and the digits are
   faster, and a mouse adds a code path with no safety value.
 * **No horizontal scrolling.** A very long path is truncated with an ellipsis

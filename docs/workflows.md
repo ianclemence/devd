@@ -7,9 +7,39 @@ HTTP API and MCP reach the same capabilities.
 
 | Group | Capabilities |
 |---|---|
-| Review | `review.run`, `review.list`, `review.get`, `review.delete` |
+| Review | `review.run`, `review.start`, `review.list`, `review.get`, `review.delete` |
 | Memory | `memory.propose`, `memory.apply`, `memory.list` |
 | Instruction files | `compat.audit`, `compat.write` |
+| Search | `search.query`, `search.index`, `search.indexed` |
+| Conflicts | `git.conflicts.list`, `git.conflicts.show`, `git.conflicts.resolve`, `git.conflicts.resolve_with` |
+
+**Background reviews.** `review.run` waits for the reviewer model. `review.start`
+returns at once with an id and runs the same review in the devd process; the
+record shows `state: running`, then `done` or `failed`, and a message is left in
+the inbox (and a `review.done` event is emitted) when it finishes. Closing the
+window does not cancel it; quitting devd does, and it is not restarted.
+
+**Memory proposals merge.** A proposal is made against the text of `AGENTS.md` as
+it was. When the file has since changed, `memory.apply` merges three ways - the
+text the proposal was made against, the file now, and the proposed text. Changes
+to different lines combine, two proposals that each add a list item both survive,
+and a collision on the same lines is refused with both versions shown. Nothing is
+guessed.
+
+**Searching by relevance.** `search.query` reads files at query time. `search.index`
+builds a full-text index of a project's text files (SQLite FTS5, a cache under
+`cache/search.db` that can be deleted at any time) and `search.indexed` queries it,
+best match first with a fragment around each. Only files that changed are read
+again. Binaries, files over 1 MB and secrets files are never indexed, and the
+result counts what was skipped.
+
+**Resolving a merge conflict.** `git.conflicts.resolve` takes one side whole.
+`git.conflicts.resolve_with` writes text an agent merged from both. It is refused
+while conflict markers remain, and its result says how the text relates to the
+real stages of the conflict: `ours`, `theirs`, `merge` (exactly what a three-way
+merge of the common ancestor and both sides produces) or `custom`. A `custom`
+resolution is a change nobody has checked: a goal that mentions a conflict needs
+a passing build or test as evidence before the run counts as completed.
 
 Records are JSON files under `<devd home>/workflows/<kind>/<id>.json`. They are
 readable and deletable by a person and never live inside a project.

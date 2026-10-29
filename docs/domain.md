@@ -118,11 +118,12 @@ rather than by spelling.
 | Cron jobs, scheduled database backups, scheduled deploys, health checks | a loop inside the first long-lived devd process: the window, `devd ui`, or `devd serve` (`ops-host.pid` claims it) | **No** |
 | Agent conversations and team runs | the same kind of process (`agent-host.pid`) | No |
 
-So services outlive the window and scheduled work does not. This is deliberate (no resident privileged
-service) and used to be invisible. Diagnostics now has a **Scheduled jobs** component: healthy when a devd
-process holds the claim or nothing is scheduled; degraded, and saying so, when jobs are scheduled and nothing
-is running them. To keep scheduled work running without a window, leave `devd serve` running. A hidden
-`devd serve` started at sign-in is the missing piece and is recorded in `limitations.md`.
+Scheduled work belongs to one process: the **resident daemon** (`devd daemon`), which `devd autostart enable`
+starts at sign-in without administrator rights. A window or `devd ui` started while it runs is a client of
+it and runs no jobs of its own; started with no daemon, it becomes the owner for as long as it is open.
+Diagnostics has a **Scheduled jobs** component: healthy when a devd process holds the claim or nothing is
+scheduled; degraded, and saying so, when jobs are scheduled and nothing is running them. See
+[`daemon.md`](daemon.md).
 
 ## External tools (MCP servers)
 
@@ -173,4 +174,5 @@ proves an agent cannot hand an interpreter code through `project.exec`'s allow-l
 **Open decision.** `project.exec` and `project.run` stay open to agents: they run the stack's allow-listed
 programs and the project's own tasks, with no shell, and they are the core of an agent's work loop. The
 allow-list includes interpreters (`php`, `node`, `python`), which can execute code given on the command line.
-Gating them is a product decision about the agent loop, not a defect fix, and is recorded in `limitations.md`.
+Gating them would change the agent loop itself, so it is a product decision rather than a defect fix; today the
+allow-list and the interpreter refusals below are the control.

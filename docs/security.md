@@ -315,8 +315,11 @@ own authority. The protections are about what `devd` writes and who can reach it
   services are downloaded from the vendor when installed, checked against the
   digest the vendor publishes, extracted in-process, and moved into place only
   after the digest matches. nginx publishes only a PGP signature, so its install
-  reports that it could verify length and not content — the gap is in
-  [`limitations.md`](limitations.md) and in the install output itself.
+  reports that it could verify length and not content — the gap is stated in
+  the install output itself. PostgreSQL's Windows build publishes no checksum at
+  all, so devd pins the digest of the build it ships knowledge of and installs
+  only that one (`postgres_install.rs`); the install result says the guarantee
+  is weaker than a vendor-signed digest.
 * **Hostnames are validated before they reach a file.** `util::validate_hostname`
   rejects anything that is not a lowercase DNS label sequence, so a site name
   cannot inject a directive into `nginx.conf` or a path into `certs/`.
@@ -361,8 +364,8 @@ Differences are stated rather than hidden:
   signalled. A service or a public link is detached by contract, so it is
   stopped with the tree kill rather than job-bound: it must survive the one-shot
   command that started it. Assignment is best effort when devd itself runs
-  inside a restrictive job (some CI runners); the limitations document states
-  that honestly.
+  inside a restrictive job (some CI runners); the supervisor then falls back to
+  the tree kill, and says so.
 * Child processes get an explicit allowlist of system and runtime variables
   (`devd_core::process::CHILD_ENV_ALLOWLIST`), not the daemon's environment.
   Project commands, services, background tasks and shares clear the environment
@@ -380,7 +383,7 @@ Differences are stated rather than hidden:
 * **Only Windows has a service provider in this release.** nginx publishes a
   Windows zip and no Linux binary; MariaDB publishes `winx64` archives. On Linux
   the service catalogues are therefore empty rather than guessing at a
-  distribution's package manager. See [`limitations.md`](limitations.md).
+  distribution's package manager; see [`platforms.md`](platforms.md).
 * Locations differ (`%LOCALAPPDATA%` versus `~/.local/share`), resolved through
   one `Paths` type rather than scattered string building.
 * Line endings are the repository's business, not `devd`'s. `devd` never changes

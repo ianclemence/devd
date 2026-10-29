@@ -17,7 +17,7 @@
 //! bytes against anything the vendor states in machine-readable form. The
 //! download still goes over HTTPS and the install reports, in its own output,
 //! that no digest was available - rather than implying a verification that did
-//! not happen. See `docs/limitations.md`.
+//! not happen. See `docs/security.md`.
 
 use std::time::Duration;
 

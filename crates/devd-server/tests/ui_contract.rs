@@ -8,7 +8,6 @@ const APP: &str = include_str!("../ui/app.js");
 const HTML: &str = include_str!("../ui/index.html");
 const CSS: &str = include_str!("../ui/style.css");
 const README: &str = include_str!("../../../README.md");
-const LIMITATIONS: &str = include_str!("../../../docs/limitations.md");
 
 fn quoted_after(src: &str, marker: &str) -> Vec<String> {
     // every "word" inside the first [...] or {...} block following `marker`
@@ -41,10 +40,10 @@ fn the_interface_text_is_not_double_encoded() {
 }
 
 #[test]
-fn the_readme_and_limitations_are_not_double_encoded() {
+fn the_readme_is_not_double_encoded() {
     // The same ANSI round-trip that hit the interface files had reached the
-    // README and the limitations page. The user reads those first.
-    for (name, src) in [("README.md", README), ("docs/limitations.md", LIMITATIONS)] {
+    // README. The user reads it first.
+    for (name, src) in [("README.md", README)] {
         for bad in ["Ã", "Â", "â€", "ï»¿", "\u{FFFD}"] {
             assert!(!src.contains(bad), "{name} contains double-encoded text ({bad:?})");
         }

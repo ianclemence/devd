@@ -87,26 +87,39 @@ releases the dynamic reservations until the next boot. It asks for administrator
 rights itself. The reservations return after a reboot, often in different
 ranges, so the script is something to run again rather than a fix applied once.
 
-## What has been verified, and what has not
+## What has been run, and where
 
-| | State |
-|---|---|
-| Windows | `cargo test --workspace` passes |
-| Linux, macOS build and test | CI builds the workspace and runs its tests on Ubuntu and macOS. It does not build the desktop shell, start nginx/MariaDB/PHP, or install anything |
-| Package-manager parsing, verification decisions, argument lists for `security`, the generated nginx files | unit-tested on canned output, on every platform |
-| Linking into the layout, `install_system` end to end | tests exist (`cfg(unix)`) and compile for Linux and macOS; **they have not been run** |
-| Starting nginx / MariaDB / php-cgi as an ordinary user, `mariadb-install-db` against a real package, `security` against a real keychain | **never executed** |
+This is a record of what was actually executed, not of what is expected to work.
 
-Treat Linux and macOS support as written, compiled and unit-tested in CI, not as
-proven. The first run on a real machine is expected to find things; `cargo test
---workspace` there is the first thing to do.
+| | Windows | Linux | macOS |
+|---|---|---|---|
+| Workspace builds and its tests pass | yes, locally and in CI | yes, in CI | yes, in CI |
+| Package-manager parsing, verification decisions, generated nginx and Apache files, unit-tested on canned output | yes | yes | yes |
+| Install nginx / MariaDB / PHP and start them | yes (downloaded, digest-checked) | **not run**: written, compiled, unit-tested | **not run** |
+| PostgreSQL installed, started, asked in its own protocol, a database dropped and restored from its undo snapshot | yes (real server, local) | adopts the system package; **not run** | adopts Homebrew; **not run** |
+| The resident daemon: instance record, attach, stop, service ownership by start time | yes (real processes) | the start-time check reads `/proc`; unit-tested, **not run** as a daemon | the check reads `ps`; **not run** |
+| Sign-in start of the daemon | Run value: written; sign-in itself **not exercised** | systemd unit text unit-tested; **not run** | LaunchAgent text unit-tested; **not run** |
+| Local DNS server answers over a real UDP socket | yes | the same code; **not run** there | the same code; **not run** there |
+| Pointing the operating system at it (`dns.enable`) | commands generated and unit-tested; **never run** (needs administrator rights and port 53) | **not run** | **not run** |
+| HTTP/2 spelling in the generated nginx and Apache configuration | unit-tested against the version rules; **not run** against a live nginx | same | same |
+| Self-update: signature, checksum and replacement against a local server | yes | yes (unit tests, CI) | yes (unit tests, CI) |
+| The window: argument forms, focus and announcements checked in a real browser | yes | n/a | n/a |
 
-## Not done yet
+Linux and macOS support is written, compiled and unit-tested in CI, and the code
+paths that need a real machine (a package manager, a user service manager, a
+keychain, the system resolver) have not been run on one. The first run on a real
+machine is expected to find things: `cargo test --workspace` there is the first
+thing to do, then `devd doctor`.
 
-* **Resolving `*.test`.** On Linux and macOS the hosts file is the only mechanism;
-  there is no wildcard and no resolver. A loopback resolver (dnsmasq,
-  `/etc/resolver`) is milestone M3 in the roadmap.
+## Not done
+
 * **Linux and macOS installers.** There is a per-user Linux install script that
   has never been run on Linux, and no macOS package. The Windows installer is
   separate and is exercised on every release.
 * **Several PHP versions at once** from one package manager.
+* **MySQL as a managed service.** MariaDB is the managed MySQL-compatible server;
+  Oracle MySQL is not installed by devd.
+* **Code signing.** Neither the installer nor the programs carry an Authenticode
+  or Apple signature, so Windows SmartScreen and macOS Gatekeeper warn once. The
+  published checksums are signed with devd's own release key, and `devd update`
+  verifies them; that protects updates, not the first download.
