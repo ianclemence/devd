@@ -48,8 +48,13 @@ pub fn start(ctx: Ctx) -> bool {
     }
     std::thread::spawn(move || {
         let mut last_maintenance: Option<std::time::Instant> = None;
+        let mut first = true;
         loop {
-            std::thread::sleep(Duration::from_secs(15));
+            // The first pass is immediate: a restarted daemon should reconcile
+            // what it finds before the first quarter minute has passed.
+            if !std::mem::take(&mut first) {
+                std::thread::sleep(Duration::from_secs(15));
+            }
             // Keep the claim fresh in case the file was removed, and give it up if another process took it.
             if !claim(&ctx.paths) {
                 STARTED.store(false, Ordering::SeqCst);
@@ -64,6 +69,9 @@ pub fn start(ctx: Ctx) -> bool {
                 last_maintenance = Some(std::time::Instant::now());
                 for line in devd_core::maintenance::run(&ctx) {
                     ctx.events.emit("maintenance", line);
+                }
+                for report in devd_services::reconcile::reconcile(&ctx) {
+                    ctx.events.emit("reconcile", report.detail);
                 }
             }
         }

@@ -841,6 +841,57 @@ pub fn pid_alive(pid: u32) -> bool {
     }
 }
 
+/// A process id together with when that process started.
+///
+/// A bare pid in a file proves nothing after the operating system reuses the
+/// number. The start time recorded beside it is what makes the file mean "the
+/// process devd launched", and a record from before this was written (a bare
+/// pid) is still read, with the weaker image check alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PidRecord {
+    /// Process id.
+    pub pid: u32,
+    /// Start token recorded when devd launched the process, when it was.
+    pub start: Option<String>,
+}
+
+/// Write the pid file for a process devd has just launched.
+pub fn write_pid_record(file: &std::path::Path, pid: u32) -> Result<()> {
+    let text = match process_start_token(pid) {
+        Some(start) => format!("{pid}
+{start}
+"),
+        None => pid.to_string(),
+    };
+    util::atomic_write(file, &text)
+}
+
+/// Read a pid file, in either format.
+pub fn read_pid_record(file: &std::path::Path) -> Option<PidRecord> {
+    let text = std::fs::read_to_string(file).ok()?;
+    let mut lines = text.lines();
+    let pid = lines.next()?.trim().parse().ok()?;
+    let start = lines
+        .next()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string);
+    Some(PidRecord { pid, start })
+}
+
+impl PidRecord {
+    /// Whether this is still the process devd launched: alive, running the
+    /// expected program, and (when recorded) started at the recorded time.
+    pub fn is_owned(&self, expected_image: &str) -> bool {
+        pid_alive(self.pid)
+            && process_image(self.pid).is_some_and(|i| i.eq_ignore_ascii_case(expected_image))
+            && self
+                .start
+                .as_deref()
+                .is_none_or(|recorded| process_start_token(self.pid).as_deref() == Some(recorded))
+    }
+}
+
 /// The process that holds a claim file: the id written in it, when that process is still running
 /// and is a devd program. A claim whose process has gone, or whose id was reused by something else,
 /// is stale and held by nobody.
@@ -866,6 +917,33 @@ mod tests {
         assert_eq!(process_start_token(me), Some(first));
         assert_eq!(process_start_token(0), None);
         assert_eq!(process_start_token(u32::MAX - 7), None);
+    }
+
+    #[test]
+    fn a_pid_record_needs_the_same_start_time_to_be_owned() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("devd.pid");
+        let me = std::process::id();
+        let image = process_image(me).unwrap();
+        write_pid_record(&file, me).unwrap();
+        let record = read_pid_record(&file).unwrap();
+        assert_eq!(record.pid, me);
+        assert!(record.is_owned(&image));
+        assert!(!record.is_owned("some-other-program"));
+
+        // The same pid number with a different start time is a recycled pid.
+        let recycled = PidRecord {
+            pid: me,
+            start: Some("0".into()),
+        };
+        assert!(!recycled.is_owned(&image));
+
+        // A pid file written by an older devd is a bare number and still reads.
+        std::fs::write(&file, me.to_string()).unwrap();
+        let legacy = read_pid_record(&file).unwrap();
+        assert_eq!(legacy.start, None);
+        assert!(legacy.is_owned(&image));
+        assert!(read_pid_record(&dir.path().join("missing")).is_none());
     }
 
     #[test]

@@ -26,6 +26,7 @@ pub mod extras;
 pub mod mariadb;
 pub mod nginx;
 pub mod phpcaps;
+pub mod reconcile;
 pub mod redirects;
 pub mod share;
 pub mod siteconf;
@@ -424,7 +425,7 @@ pub fn install_dir(ctx: &Ctx, name: &str) -> PathBuf {
 }
 
 /// The pid file for a service.
-fn pid_file(ctx: &Ctx, name: &str) -> PathBuf {
+pub(crate) fn pid_file(ctx: &Ctx, name: &str) -> PathBuf {
     install_dir(ctx, name).join("devd.pid")
 }
 
@@ -544,16 +545,9 @@ pub fn running_pid(ctx: &Ctx, service: &Service) -> Option<u32> {
         return supervised;
     }
 
-    let text = std::fs::read_to_string(pid_file(ctx, &service.name)).ok()?;
-    let pid: u32 = text.trim().parse().ok()?;
-    if !process::pid_alive(pid) {
-        return None;
-    }
+    let record = process::read_pid_record(&pid_file(ctx, &service.name))?;
     let expected = program_stem(service).ok()?;
-    match process::process_image(pid) {
-        Some(image) if image.eq_ignore_ascii_case(&expected) => Some(pid),
-        _ => None,
-    }
+    record.is_owned(&expected).then_some(record.pid)
 }
 
 /// The image name a service's program runs under, e.g. `nginx` or `mysqld`.
@@ -1850,7 +1844,7 @@ pub fn start(ctx: &Ctx, name: &str) -> Result<Status> {
 
     let supervisor: std::sync::Arc<Supervisor> = process::shared();
     let pid = supervisor.start(spec, util::new_id())?;
-    util::atomic_write(&pid_file(ctx, &service.name), &pid.to_string())?;
+    process::write_pid_record(&pid_file(ctx, &service.name), pid)?;
     let run_id = ctx.store.start_service_run(&service.id, Some(pid), 0)?;
 
     let port = service.port.unwrap_or(0);
@@ -2256,20 +2250,13 @@ pub fn doctor_check(paths: &Paths) -> Vec<Check> {
 
 /// A pid check that needs only the layout, for the doctor, which has no `Ctx`.
 fn running_pid_for_check(paths: &Paths, service: &Service) -> Option<u32> {
-    let text =
-        std::fs::read_to_string(paths.services().join(&service.name).join("devd.pid")).ok()?;
-    let pid: u32 = text.trim().parse().ok()?;
-    if !process::pid_alive(pid) {
-        return None;
-    }
+    let record =
+        process::read_pid_record(&paths.services().join(&service.name).join("devd.pid"))?;
     let expected = serde_json::from_str::<Vec<String>>(&service.argv)
         .ok()
         .and_then(|argv| argv.first().map(PathBuf::from))
         .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()))?;
-    match process::process_image(pid) {
-        Some(image) if image.eq_ignore_ascii_case(&expected) => Some(pid),
-        _ => None,
-    }
+    record.is_owned(&expected).then_some(record.pid)
 }
 
 #[cfg(test)]
