@@ -1108,6 +1108,11 @@ fn is_change_capability(capability: &str) -> bool {
         || capability.starts_with("fs.create")
 }
 
+/// The pseudo-capability under which a change seen in the project directory is
+/// recorded. It was not made by a recorded call, so it is observation, not an
+/// attributed action.
+pub const OBSERVED_CAPABILITY: &str = "observed.diff";
+
 /// Whether evidence proves an inspectable code or repository change.
 ///
 /// A site record or an installed service is a change, but it is not the diff a
@@ -1124,6 +1129,7 @@ pub fn is_code_change(evidence: &Evidence) -> bool {
             || evidence.capability == "git.stage"
             || evidence.capability == "git.merge"
             || evidence.capability == "git.revert"
+            || evidence.capability == crate::runs::OBSERVED_CAPABILITY
             || evidence.capability == "project.init")
 }
 

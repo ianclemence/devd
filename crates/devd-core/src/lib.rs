@@ -18,6 +18,7 @@ pub mod doctor;
 pub mod download;
 pub mod events;
 pub mod health;
+pub mod observe;
 pub mod paths;
 pub mod platform;
 pub mod maintenance;

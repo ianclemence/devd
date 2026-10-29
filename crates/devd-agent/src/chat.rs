@@ -1382,7 +1382,62 @@ impl Hub {
         self.ctx
             .store
             .transition_run(&run.id, RunState::Executing, None)?;
+        self.baseline_project(&run);
         Ok(run)
+    }
+
+    /// Record what the project looks like before the run touches it, so changes
+    /// made by means the registry does not see can still be shown as evidence.
+    fn baseline_project(&self, run: &devd_core::Run) {
+        let Some(root) = run.project.as_deref().map(std::path::Path::new) else {
+            return;
+        };
+        if !root.is_dir() {
+            return;
+        }
+        let path = devd_core::observe::baseline_path(self.ctx.paths.root(), &run.id);
+        let _ = devd_core::observe::save(&path, &devd_core::observe::take(root));
+    }
+
+    /// Compare the project with its baseline and record any change as evidence.
+    /// The comparison becomes the next baseline, so a change is counted once.
+    fn record_observed(&self, run: &devd_core::Run) {
+        let Some(root) = run.project.as_deref().map(std::path::Path::new) else {
+            return;
+        };
+        let path = devd_core::observe::baseline_path(self.ctx.paths.root(), &run.id);
+        let Some(before) = devd_core::observe::load(&path) else {
+            return;
+        };
+        let after = devd_core::observe::take(root);
+        let delta = devd_core::observe::diff(&before, &after);
+        let _ = devd_core::observe::save(&path, &after);
+        if delta.is_empty() {
+            return;
+        }
+        let mut listed = Vec::new();
+        for (label, names) in [
+            ("added", &delta.added),
+            ("modified", &delta.modified),
+            ("removed", &delta.removed),
+        ] {
+            for name in names.iter().take(100) {
+                listed.push(format!("{label} {name}"));
+            }
+        }
+        let detail = json!({ "files": listed, "head_moved": delta.head_moved, "truncated": after.truncated });
+        let _ = self.ctx.store.add_evidence(devd_core::store_runs::NewEvidence {
+            run_id: &run.id,
+            step_id: None,
+            tool_call_id: None,
+            artifact_id: None,
+            kind: devd_core::EvidenceKind::Change.as_str(),
+            capability: devd_core::runs::OBSERVED_CAPABILITY,
+            passed: true,
+            claim: None,
+            summary: &delta.summary(),
+            detail: Some(&detail.to_string()),
+        });
     }
 
     /// Close a run from its own evidence.
@@ -1391,6 +1446,7 @@ impl Hub {
     /// finished answer is `unverified` rather than `completed`.
     fn settle_run(&self, run_id: &str) -> Option<devd_core::CompletionVerdict> {
         let run = self.ctx.store.run_by_id(run_id).ok().flatten()?;
+        self.record_observed(&run);
         let evidence = self.ctx.store.list_evidence(run_id, 10_000).ok()?;
         let verdict = evaluate(&run.completion_policy, &evidence);
         let _ = self.ctx.store.transition_run(run_id, verdict.state, None);
@@ -1825,6 +1881,46 @@ mod tests {
         let (surface, invoke, _) = route_call("devd_groups", json!({}), &direct, &HashMap::new());
         assert_eq!(surface, "devd_groups");
         assert_eq!(invoke, json!({}));
+    }
+
+    #[test]
+    fn a_change_made_outside_any_recorded_call_becomes_evidence() {
+        let ctx = test_ctx("observed");
+        let project = tempfile::tempdir().unwrap();
+        std::fs::write(project.path().join("lib.rs"), "fn a() {}").unwrap();
+        let run = ctx
+            .store
+            .start_run(RunSpec {
+                goal: "fix the parser",
+                mode: RunMode::Assistant,
+                project: Some(&project.path().to_string_lossy()),
+                actor: "human:test",
+                thread_id: None,
+                team_run_id: None,
+                acceptance: &[],
+            })
+            .unwrap();
+        let hub = Hub::new(ctx.clone());
+        hub.baseline_project(&run);
+
+        // Nothing has happened yet, so nothing is recorded.
+        hub.record_observed(&run);
+        assert!(ctx.store.list_evidence(&run.id, 10).unwrap().is_empty());
+
+        // A program the agent ran, not a recorded write, edits the project.
+        std::fs::write(project.path().join("lib.rs"), "fn a() { fixed(); }").unwrap();
+        std::fs::write(project.path().join("new.rs"), "fn b() {}").unwrap();
+        hub.record_observed(&run);
+
+        let evidence = ctx.store.list_evidence(&run.id, 10).unwrap();
+        assert_eq!(evidence.len(), 1);
+        assert_eq!(evidence[0].capability, devd_core::runs::OBSERVED_CAPABILITY);
+        assert!(devd_core::runs::is_code_change(&evidence[0]));
+        assert!(evidence[0].summary.contains("1 added, 1 modified"));
+
+        // The same change is not counted a second time.
+        hub.record_observed(&run);
+        assert_eq!(ctx.store.list_evidence(&run.id, 10).unwrap().len(), 1);
     }
 
     #[test]
