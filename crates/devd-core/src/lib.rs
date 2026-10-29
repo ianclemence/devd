@@ -22,6 +22,7 @@ pub mod observe;
 pub mod paths;
 pub mod platform;
 pub mod maintenance;
+pub mod merge3;
 pub mod ports;
 pub mod process;
 pub mod registry;

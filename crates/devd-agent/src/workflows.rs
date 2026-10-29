@@ -674,7 +674,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
     )?;
 
     reg.define::<MemoryApply>("memory.apply", "Apply a memory proposal")
-    .description("Writes the proposed line into AGENTS.md after checking that the file has not changed since the proposal was made. Keeps a timestamped backup under .devd/backups. Human only, because AGENTS.md changes how every agent behaves in this project.")
+    .description("Writes the proposed line into AGENTS.md. If the file changed since the proposal was made, the proposal is merged three ways (the text it was made against, the file as it is now, and the proposed text): changes to other lines combine, and a collision on the same lines is refused with the conflicting text. Keeps a timestamped backup under .devd/backups. Human only, because AGENTS.md changes how every agent behaves in this project.")
     .group("memory")
     .tier(Tier::Write)
     .effect(Effect::Write)
@@ -683,7 +683,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
     .handlers(
         |ctx, a| {
             let p = get_record(ctx, "memory", &a.id)?;
-            Ok(Plan::new("memory.apply", format!("write one line into {}", p["target"].as_str().unwrap_or("AGENTS.md"))).step("check the file has not changed since the proposal").step("keep a timestamped backup under .devd/backups").effect("AGENTS.md gains a line in the managed Project memory section"))
+            Ok(Plan::new("memory.apply", format!("write one line into {}", p["target"].as_str().unwrap_or("AGENTS.md"))).step("merge the proposal with any change made to the file since").step("keep a timestamped backup under .devd/backups").effect("AGENTS.md gains a line in the managed Project memory section"))
         },
         |ctx, a| {
             let proposal = get_record(ctx, "memory", &a.id)?;
@@ -691,14 +691,31 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             let target = proposal["target"].as_str().unwrap_or("AGENTS.md");
             let path = project.join(target);
             let current = fs::read_to_string(&path).unwrap_or_default();
-            if current != proposal["base"].as_str().unwrap_or("") {
-                return Err(DevdError::conflict(format!("{target} changed since the proposal was made; propose again so the new text is reviewed")));
-            }
-            let backup = backup_file(&project, target)?;
+            let base_text = proposal["base"].as_str().unwrap_or("");
             let proposed = proposal["proposed"].as_str().ok_or_else(|| DevdError::invalid("the proposal has no text"))?;
-            fs::write(&path, proposed).map_err(|e| DevdError::invalid(format!("could not write {}: {e}", path.display())))?;
+            // The file moved on after the proposal was made. Combine the two sets of changes
+            // rather than throwing the proposal away: independent memory lines are independent.
+            let (text, merged) = if current == base_text {
+                (proposed.to_string(), false)
+            } else {
+                match devd_core::merge3::merge(base_text, &current, proposed, devd_core::merge3::Inserts::Union)? {
+                    devd_core::merge3::Merged::Clean(t) => (t, true),
+                    devd_core::merge3::Merged::Conflicts(c) => {
+                        let shown: Vec<String> = c
+                            .iter()
+                            .map(|x| format!("lines {}-{}: the file has {:?}, the proposal has {:?}", x.start + 1, x.end, x.ours.concat().trim_end(), x.theirs.concat().trim_end()))
+                            .collect();
+                        return Err(DevdError::conflict(format!("{target} changed where the proposal also changes it ({}); propose again so the new text is reviewed", shown.join("; "))));
+                    }
+                }
+            };
+            let backup = backup_file(&project, target)?;
+            fs::write(&path, &text).map_err(|e| DevdError::invalid(format!("could not write {}: {e}", path.display())))?;
             let _ = delete_record(ctx, "memory", &a.id);
-            let mut outcome = Outcome::with_data("AGENTS.md updated", json!({ "path": path.display().to_string(), "backup": backup }));
+            let mut outcome = Outcome::with_data("AGENTS.md updated", json!({ "path": path.display().to_string(), "backup": backup, "merged": merged }));
+            if merged {
+                outcome = outcome.warn("AGENTS.md had changed since the proposal; the two sets of changes were merged");
+            }
             if backup.is_none() {
                 outcome = outcome.warn("AGENTS.md did not exist; it was created");
             }
@@ -803,6 +820,34 @@ mod tests {
         assert_eq!(second.matches(MEMORY_MARKER).count(), 1);
         assert!(second.contains("cargo test"));
         assert!(second.contains("crates/api"));
+    }
+
+    #[test]
+    fn two_proposals_made_against_the_same_file_both_survive_a_three_way_merge() {
+        use devd_core::merge3::{merge, Inserts, Merged};
+        let base = "# Notes\n\nBe kind.\n";
+        let first = with_memory(base, "Tests run with cargo test.");
+        let second = with_memory(base, "The API lives in crates/api.");
+        // The first proposal was applied; the second was made against the old text.
+        let Merged::Clean(text) = merge(base, &first, &second, Inserts::Union).unwrap() else {
+            panic!("independent memory lines must merge");
+        };
+        assert_eq!(text.matches(MEMORY_MARKER).count(), 1, "{text}");
+        assert!(text.contains("- Tests run with cargo test."), "{text}");
+        assert!(text.contains("- The API lives in crates/api."), "{text}");
+        assert!(text.contains("Be kind."));
+    }
+
+    #[test]
+    fn a_proposal_that_collides_with_a_rewrite_of_the_same_lines_is_refused() {
+        use devd_core::merge3::{merge, Inserts, Merged};
+        let base = "# Notes\n\nBe kind.\n";
+        let proposed = "# Notes\n\nBe kind and brief.\n";
+        let rewritten = "# Notes\n\nBe formal.\n";
+        assert!(matches!(
+            merge(base, rewritten, proposed, Inserts::Union).unwrap(),
+            Merged::Conflicts(_)
+        ));
     }
 
     #[test]
