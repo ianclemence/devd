@@ -47,10 +47,15 @@ pub struct AddArgs {
     /// For a stdio server: its arguments.
     #[serde(default)]
     pub args: Option<Vec<String>>,
-    /// For an http server: the Streamable HTTP endpoint.
+    /// For an http server: the Streamable HTTP endpoint (or, with `transport: "sse"`, the event
+    /// stream of an older two-endpoint server).
     #[serde(default)]
     pub url: Option<String>,
-    /// Environment values for a stdio server. Stored in an owner-only file, never in the database.
+    /// `http` (the default for a url) or `sse` for the older HTTP+SSE transport.
+    #[serde(default)]
+    pub transport: Option<String>,
+    /// Environment values for a stdio server, and request headers for an http or sse server (name a
+    /// header `header:Authorization`). Stored in an owner-only file, never in the database.
     #[serde(default)]
     pub env: Option<BTreeMap<String, String>>,
     /// For a stdio server: the directory to start it in.
@@ -111,7 +116,7 @@ fn server_named(ctx: &Ctx, name: &str) -> Result<McpServer> {
 
 fn describe(s: &McpServer) -> String {
     match s.transport.as_str() {
-        "http" => s.url.as_deref().map(redacted_url).unwrap_or_else(|| "(no address)".into()),
+        "http" | "sse" => s.url.as_deref().map(redacted_url).unwrap_or_else(|| "(no address)".into()),
         _ => {
             let mut line = s.command.clone().unwrap_or_else(|| "(no command)".into());
             for a in redacted_args(&s.args) {
@@ -190,6 +195,11 @@ fn env_from(input: Option<BTreeMap<String, String>>) -> Result<BTreeMap<String, 
         return Err(DevdError::invalid("a server may be given at most 64 environment values"));
     }
     for (k, v) in &env {
+        // `header:Name` is a request header for an http or sse server, kept private like the rest.
+        if let Some(name) = k.strip_prefix(client::HEADER_PREFIX) {
+            client::check_header(name, v)?;
+            continue;
+        }
         if !valid_env_key(k) {
             return Err(DevdError::invalid(format!("`{k}` is not a valid environment variable name")));
         }
@@ -250,7 +260,16 @@ fn definition(a: &AddArgs, id: String, created_at: String) -> Result<McpServer> 
             if !args.is_empty() {
                 return Err(DevdError::invalid("an http server takes no command arguments"));
             }
-            ("http".to_string(), None, Some(u))
+            let transport = match a.transport.as_deref().map(str::trim) {
+                None | Some("") | Some("http") => "http",
+                Some("sse") => "sse",
+                Some(other) => {
+                    return Err(DevdError::invalid(format!(
+                        "transport must be `http` or `sse`, not `{other}`"
+                    )))
+                }
+            };
+            (transport.to_string(), None, Some(u))
         }
         (Some(_), Some(_)) => return Err(DevdError::invalid("give either a command (stdio) or a url (http), not both")),
         (None, None) => return Err(DevdError::invalid("give a command for a stdio server, or a url for an http server")),
@@ -648,6 +667,7 @@ impl Found {
             command: self.command,
             args: Some(self.args),
             url: self.url,
+            transport: None,
             env: None,
             cwd: None,
             timeout_secs: None,
@@ -767,6 +787,7 @@ mod tests {
             command: None,
             args: Some(vec![]),
             url: None,
+            transport: None,
             env: None,
             cwd: None,
             timeout_secs: None,

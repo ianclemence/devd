@@ -20,12 +20,18 @@
 //! attacker controls (a file the server read, a page it fetched). Nothing here turns that text into an
 //! instruction or into a capability call.
 //!
-//! # Two transports
+//! # Three transports
 //!
 //! `stdio` starts the server and speaks newline-delimited JSON-RPC over its pipes. `http` speaks the
 //! Streamable HTTP transport: one POST per message, JSON or an SSE response, with the session id the
-//! server returned. The older two-endpoint HTTP+SSE transport is not implemented; a server that needs
-//! it says so when it is added, rather than being half-supported.
+//! server returned. `sse` speaks the older two-endpoint transport: a long-lived `GET` event stream
+//! that announces a `POST` endpoint and carries the responses.
+//!
+//! # Headers
+//!
+//! An http or sse server may need request headers, usually `Authorization`. They are stored with the
+//! server's private environment (owner-only file), under names that start with `header:`, never in the
+//! database, and they are sent only to the server's own origin.
 
 use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, BufReader, Write};
@@ -199,13 +205,185 @@ enum Transport {
         agent: ureq::Agent,
         url: String,
         session: Option<String>,
+        headers: Vec<(String, String)>,
     },
+    /// The older HTTP+SSE transport: responses arrive on a stream opened with `GET`, requests go
+    /// to the endpoint that stream announced.
+    Sse {
+        agent: ureq::Agent,
+        post_url: String,
+        messages: Receiver<std::result::Result<String, String>>,
+        headers: Vec<(String, String)>,
+    },
+}
+
+/// The prefix that marks an environment entry as a request header.
+pub const HEADER_PREFIX: &str = "header:";
+
+/// The headers a server was configured with, from its private environment.
+pub fn headers_from_env(env: &BTreeMap<String, String>) -> Vec<(String, String)> {
+    env.iter()
+        .filter_map(|(k, v)| {
+            let name = k.strip_prefix(HEADER_PREFIX)?;
+            Some((name.to_string(), v.clone()))
+        })
+        .collect()
+}
+
+/// Whether a header may be configured. A header the transport sets itself, or one that could change
+/// where or how the request is framed, is refused rather than silently overridden.
+pub fn check_header(name: &str, value: &str) -> Result<()> {
+    const OWNED: &[&str] = &[
+        "host",
+        "content-length",
+        "content-type",
+        "transfer-encoding",
+        "connection",
+        "upgrade",
+        "accept",
+        "mcp-session-id",
+        "mcp-protocol-version",
+    ];
+    let valid_name = !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b));
+    if !valid_name {
+        return Err(DevdError::invalid(format!("`{name}` is not a valid header name")));
+    }
+    if OWNED.contains(&name.to_ascii_lowercase().as_str()) {
+        return Err(DevdError::invalid(format!("devd sets the `{name}` header itself")));
+    }
+    if value.bytes().any(|b| b == b'\r' || b == b'\n' || b == 0) {
+        return Err(DevdError::invalid(format!("the value of header `{name}` contains a line break")));
+    }
+    Ok(())
+}
+
+/// Resolve the endpoint an SSE server announced against the stream's own address, and require that it
+/// stays on the same origin: headers (an API token among them) are only ever sent where they were
+/// configured to go.
+pub fn resolve_endpoint(stream_url: &str, announced: &str) -> Result<String> {
+    let (scheme, rest) = stream_url
+        .split_once("://")
+        .ok_or_else(|| DevdError::mcp("the server's address has no scheme"))?;
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let origin = format!("{scheme}://{authority}");
+    let announced = announced.trim();
+    let resolved = if announced.starts_with("http://") || announced.starts_with("https://") {
+        announced.to_string()
+    } else if announced.starts_with('/') {
+        format!("{origin}{announced}")
+    } else {
+        let base = stream_url.split(['?', '#']).next().unwrap_or(stream_url);
+        let dir = base.rsplit_once('/').map(|(d, _)| d).unwrap_or(&origin);
+        format!("{dir}/{announced}")
+    };
+    let resolved_authority = resolved
+        .split_once("://")
+        .map(|(_, r)| r.split(['/', '?', '#']).next().unwrap_or(""))
+        .unwrap_or("");
+    if resolved_authority != authority {
+        return Err(DevdError::mcp(format!(
+            "the server announced an endpoint on another origin ({resolved_authority}); devd will not send it your headers"
+        )));
+    }
+    Ok(resolved)
+}
+
+/// Open the event stream of an SSE server and wait for the endpoint it announces.
+fn open_sse(
+    agent: &ureq::Agent,
+    url: &str,
+    headers: &[(String, String)],
+    timeout: Duration,
+) -> Result<(String, Receiver<std::result::Result<String, String>>)> {
+    let mut req = agent.get(url).set("accept", "text/event-stream");
+    for (k, v) in headers {
+        req = req.set(k, v);
+    }
+    let resp = req.call().map_err(|e| match e {
+        ureq::Error::Status(code, _) => DevdError::mcp(format!("the server answered HTTP {code} to the event stream")),
+        ureq::Error::Transport(t) => DevdError::mcp(format!("could not reach the server: {t}")),
+    })?;
+    let (endpoint_tx, endpoint_rx) = mpsc::channel::<std::result::Result<String, String>>();
+    let (tx, messages) = mpsc::channel::<std::result::Result<String, String>>();
+    std::thread::spawn(move || {
+        let reader = BufReader::new(resp.into_reader());
+        let (mut event, mut data) = (String::new(), String::new());
+        let mut announced = false;
+        for line in reader.lines() {
+            let Ok(line) = line else {
+                let _ = tx.send(Err("the event stream broke".into()));
+                return;
+            };
+            if line.is_empty() {
+                let name = if event.is_empty() { "message" } else { event.as_str() };
+                let payload = data.trim_end_matches('\n').to_string();
+                if name == "endpoint" && !announced {
+                    announced = true;
+                    let _ = endpoint_tx.send(Ok(payload));
+                } else if name == "message" && !payload.is_empty() && tx.send(Ok(payload)).is_err() {
+                    return;
+                }
+                event.clear();
+                data.clear();
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix("event:") {
+                event = rest.trim().to_string();
+            } else if let Some(rest) = line.strip_prefix("data:") {
+                data.push_str(rest.strip_prefix(' ').unwrap_or(rest));
+                data.push('\n');
+            }
+        }
+        let _ = tx.send(Err("the event stream ended".into()));
+    });
+    let announced = endpoint_rx
+        .recv_timeout(timeout)
+        .map_err(|_| DevdError::Timeout("the server did not announce an endpoint on its event stream".into()))?
+        .map_err(DevdError::mcp)?;
+    Ok((resolve_endpoint(url, &announced)?, messages))
+}
+
+fn post_plain(agent: &ureq::Agent, url: &str, headers: &[(String, String)], body: &Value, timeout: Duration) -> Result<()> {
+    let mut req = agent
+        .post(url)
+        .timeout(timeout)
+        .set("content-type", "application/json");
+    for (k, v) in headers {
+        req = req.set(k, v);
+    }
+    match req.send_string(&body.to_string()) {
+        Ok(_) => Ok(()),
+        Err(ureq::Error::Status(code, resp)) => Err(DevdError::mcp(format!(
+            "the server answered HTTP {code}: {}",
+            resp.into_string().unwrap_or_default().trim()
+        ))),
+        Err(ureq::Error::Transport(t)) => Err(DevdError::mcp(format!("could not reach the server: {t}"))),
+    }
 }
 
 impl Connection {
     fn open(server: &McpServer, env: &BTreeMap<String, String>) -> Result<Self> {
         let timeout = Duration::from_secs(server.timeout_secs.clamp(5, 600));
+        let headers = headers_from_env(env);
         let transport = match server.transport.as_str() {
+            "sse" => {
+                let url = server.url.clone().ok_or_else(|| DevdError::invalid(format!("`{}` has no url", server.name)))?;
+                if !(url.starts_with("http://") || url.starts_with("https://")) {
+                    return Err(DevdError::invalid(format!("`{url}` is not an http(s) address")));
+                }
+                let agent = ureq::AgentBuilder::new()
+                    .timeout_connect(timeout)
+                    // The stream idles between messages; the per-request deadline is kept by the reader.
+                    .timeout_read(Duration::from_secs(3600))
+                    .timeout_write(timeout)
+                    .redirects(0)
+                    .build();
+                let (post_url, messages) = open_sse(&agent, &url, &headers, timeout)?;
+                Transport::Sse { agent, post_url, messages, headers }
+            }
             "http" => {
                 let url = server.url.clone().ok_or_else(|| DevdError::invalid(format!("`{}` has no url", server.name)))?;
                 if !(url.starts_with("http://") || url.starts_with("https://")) {
@@ -217,7 +395,7 @@ impl Connection {
                     .timeout_write(timeout)
                     .redirects(0)
                     .build();
-                Transport::Http { agent, url, session: None }
+                Transport::Http { agent, url, session: None, headers }
             }
             _ => {
                 let program = server.command.clone().ok_or_else(|| DevdError::invalid(format!("`{}` has no command", server.name)))?;
@@ -306,7 +484,7 @@ impl Connection {
     fn alive(&mut self) -> bool {
         match &mut self.transport {
             Transport::Stdio { child, .. } => matches!(child.try_wait(), Ok(None)),
-            Transport::Http { .. } => true,
+            Transport::Http { .. } | Transport::Sse { .. } => true,
         }
     }
 
@@ -318,12 +496,13 @@ impl Connection {
                 stdin.flush()?;
                 Ok(())
             }
-            Transport::Http { agent, url, session } => {
-                let text = post_http(agent, url, session.as_deref(), &body, self.timeout)?;
+            Transport::Http { agent, url, session, headers } => {
+                let text = post_http(agent, url, session.as_deref(), headers, &body, self.timeout)?;
                 // A notification's response body is ignored; some servers answer 202 with none.
                 let _ = text;
                 Ok(())
             }
+            Transport::Sse { agent, post_url, headers, .. } => post_plain(agent, post_url, headers, &body, self.timeout),
         }
     }
 
@@ -395,8 +574,38 @@ impl Connection {
                     // Anything else is a notification; ignore it.
                 }
             }
-            Transport::Http { agent, url, session } => {
-                let text = post_http(agent, url, session.as_deref(), &body, timeout)?;
+            Transport::Sse { agent, post_url, messages, headers } => {
+                post_plain(agent, post_url, headers, &body, timeout)?;
+                let deadline = Instant::now() + timeout;
+                loop {
+                    let left = deadline.saturating_duration_since(Instant::now());
+                    let line = match messages.recv_timeout(left) {
+                        Ok(Ok(line)) => line,
+                        Ok(Err(e)) => return Err(DevdError::mcp(format!("`{name}` stopped answering: {e}"))),
+                        Err(_) => {
+                            return Err(DevdError::Timeout(format!(
+                                "`{name}` did not answer `{method}` within {} seconds",
+                                timeout.as_secs()
+                            )))
+                        }
+                    };
+                    let Ok(value) = serde_json::from_str::<Value>(&line) else { continue };
+                    if value.get("id").and_then(Value::as_u64) == Some(id) {
+                        return response_result(&name, method, value);
+                    }
+                    // A request from the server: devd implements none of the client methods.
+                    if value.get("method").is_some() && value.get("id").is_some() {
+                        let reply = json!({
+                            "jsonrpc": "2.0",
+                            "id": value["id"],
+                            "error": { "code": -32601, "message": "devd does not implement this client method" }
+                        });
+                        let _ = post_plain(agent, post_url, headers, &reply, timeout);
+                    }
+                }
+            }
+            Transport::Http { agent, url, session, headers } => {
+                let text = post_http(agent, url, session.as_deref(), headers, &body, timeout)?;
                 if let Some(sid) = text.1 {
                     *session = Some(sid);
                 }
@@ -548,6 +757,7 @@ fn post_http(
     agent: &ureq::Agent,
     url: &str,
     session: Option<&str>,
+    headers: &[(String, String)],
     body: &Value,
     timeout: Duration,
 ) -> Result<(String, Option<String>)> {
@@ -559,6 +769,9 @@ fn post_http(
         .set("mcp-protocol-version", PROTOCOL_VERSION);
     if let Some(s) = session {
         req = req.set("mcp-session-id", s);
+    }
+    for (k, v) in headers {
+        req = req.set(k, v);
     }
     match req.send_string(&body.to_string()) {
         Ok(resp) => {
@@ -703,6 +916,155 @@ fn fingerprint(server: &McpServer) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn headers_come_from_the_private_environment_and_are_checked() {
+        let mut env = BTreeMap::new();
+        env.insert("header:Authorization".to_string(), "Bearer t".to_string());
+        env.insert("PLAIN".to_string(), "x".to_string());
+        assert_eq!(
+            headers_from_env(&env),
+            vec![("Authorization".to_string(), "Bearer t".to_string())]
+        );
+        assert!(check_header("Authorization", "Bearer t").is_ok());
+        assert!(check_header("X-Api-Key", "k").is_ok());
+        assert!(check_header("Host", "evil").is_err());
+        assert!(check_header("Content-Length", "1").is_err());
+        assert!(check_header("Bad Name", "x").is_err());
+        assert!(check_header("X-Ok", "a\r\nX-Injected: 1").is_err());
+        assert!(check_header("", "x").is_err());
+    }
+
+    #[test]
+    fn an_announced_endpoint_must_stay_on_the_servers_origin() {
+        let stream = "http://127.0.0.1:9000/sse";
+        assert_eq!(
+            resolve_endpoint(stream, "/messages?sessionId=1").unwrap(),
+            "http://127.0.0.1:9000/messages?sessionId=1"
+        );
+        assert_eq!(
+            resolve_endpoint(stream, "messages").unwrap(),
+            "http://127.0.0.1:9000/messages"
+        );
+        assert_eq!(
+            resolve_endpoint(stream, "http://127.0.0.1:9000/m").unwrap(),
+            "http://127.0.0.1:9000/m"
+        );
+        // Another host would receive the configured headers, a token among them.
+        assert!(resolve_endpoint(stream, "http://evil.example/m").is_err());
+        assert!(resolve_endpoint(stream, "http://127.0.0.1:9001/m").is_err());
+    }
+
+    /// A tiny two-endpoint MCP server: `GET /sse` opens the stream and announces
+    /// `/messages`; a `POST` there is answered on the stream.
+    fn fake_sse_server(
+        seen_auth: Arc<Mutex<Vec<String>>>,
+    ) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::Read;
+        use std::net::TcpListener;
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stream_slot: Arc<Mutex<Option<std::net::TcpStream>>> = Arc::new(Mutex::new(None));
+        let handle = std::thread::spawn(move || {
+            listener.set_nonblocking(false).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(20);
+            let mut handled_tools_list = false;
+            while Instant::now() < deadline && !handled_tools_list {
+                let (mut conn, _) = match listener.accept() {
+                    Ok(c) => c,
+                    Err(_) => break,
+                };
+                conn.set_read_timeout(Some(Duration::from_secs(5))).ok();
+                let mut raw = Vec::new();
+                let mut buf = [0u8; 4096];
+                // Read the head, then the body by Content-Length.
+                loop {
+                    let n = conn.read(&mut buf).unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    raw.extend_from_slice(&buf[..n]);
+                    let text = String::from_utf8_lossy(&raw).to_string();
+                    if let Some(head_end) = text.find("\r\n\r\n") {
+                        let len = text[..head_end]
+                            .lines()
+                            .find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0)))
+                            .unwrap_or(0);
+                        if raw.len() >= head_end + 4 + len {
+                            break;
+                        }
+                    }
+                }
+                let text = String::from_utf8_lossy(&raw).to_string();
+                if let Some(auth) = text.lines().find_map(|l| l.strip_prefix("authorization: ").or_else(|| l.strip_prefix("Authorization: "))) {
+                    seen_auth.lock().unwrap().push(auth.trim().to_string());
+                }
+                if text.starts_with("GET /sse") {
+                    let head = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\n\r\n";
+                    conn.write_all(head.as_bytes()).unwrap();
+                    conn.write_all(b"event: endpoint\ndata: /messages?session=7\n\n").unwrap();
+                    conn.flush().unwrap();
+                    *stream_slot.lock().unwrap() = Some(conn);
+                } else if text.starts_with("POST /messages") {
+                    let body = text.split("\r\n\r\n").nth(1).unwrap_or("");
+                    let v: Value = serde_json::from_str(body).unwrap_or(Value::Null);
+                    conn.write_all(b"HTTP/1.1 202 Accepted\r\ncontent-length: 0\r\n\r\n").unwrap();
+                    if let Some(id) = v.get("id").cloned() {
+                        let result = match v["method"].as_str() {
+                            Some("tools/list") => {
+                                handled_tools_list = true;
+                                json!({ "tools": [{ "name": "echo", "description": "echo", "inputSchema": { "type": "object" } }] })
+                            }
+                            _ => json!({ "protocolVersion": PROTOCOL_VERSION, "capabilities": {}, "serverInfo": { "name": "fake", "version": "1" } }),
+                        };
+                        let message = json!({ "jsonrpc": "2.0", "id": id, "result": result });
+                        if let Some(stream) = stream_slot.lock().unwrap().as_mut() {
+                            let _ = stream.write_all(format!("event: message\ndata: {message}\n\n").as_bytes());
+                            let _ = stream.flush();
+                        }
+                    }
+                }
+            }
+        });
+        (format!("http://127.0.0.1:{}/sse", addr.port()), handle)
+    }
+
+    #[test]
+    fn an_sse_server_is_spoken_to_and_gets_the_configured_headers() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let (url, server) = fake_sse_server(seen.clone());
+        let dir = std::env::temp_dir().join(format!("devd-mcp-sse-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let paths = Paths::rooted(&dir);
+        paths.ensure().unwrap();
+        let record = McpServer {
+            id: "sse1".into(),
+            name: "legacy".into(),
+            transport: "sse".into(),
+            command: None,
+            args: vec![],
+            url: Some(url),
+            cwd: None,
+            enabled: true,
+            trust: McpTrust::Ask,
+            timeout_secs: 10,
+            tools: vec![],
+            last_error: None,
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        let mut env = BTreeMap::new();
+        env.insert("header:Authorization".to_string(), "Bearer secret".to_string());
+        save_env(&paths, &record.id, &env).unwrap();
+
+        let tools = Pool::default().test(&paths, &record).unwrap();
+        server.join().unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].name, "echo");
+        let seen = seen.lock().unwrap();
+        assert!(!seen.is_empty() && seen.iter().all(|a| a == "Bearer secret"), "{seen:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn tool_names_are_sanitised_and_bounded() {
