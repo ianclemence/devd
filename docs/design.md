@@ -1,8 +1,6 @@
 # The devd interface: a project workspace, with the environment in view
 
-This is the design record for the application window: what was audited, the three
-directions considered, the direction chosen, and the rules the interface now
-follows. The capabilities and their authority are described in
+This is the design reference for the application window: the direction it takes and the rules the interface follows. The capabilities and their authority are described in
 [`domain.md`](domain.md) and [`security.md`](security.md); this document is about
 how a person sees and uses them.
 
@@ -25,65 +23,6 @@ knowing whether the site served PHP. It also found practical defects: projects
 could paint "No projects yet" before their list arrived, the health chip could
 sit on "Checking" for the full probe, and double-encoded punctuation was visible
 in the window.
-
-## The audit, in brief
-
-Every route was opened against real local state: 13 projects, 12 sites, 2 PHP
-runtimes, 4 installed services (all stopped), a configured model provider, and
-one hostname file with a pending entry. The same routes were checked at 1440,
-1040, 760 and 390 pixels wide.
-
-| Screen | What it is for | What needed to change |
-| --- | --- | --- |
-| Home | Return to work and see what needs a person | Projects only. No site reachability, service state or runtime summary. |
-| Projects | Find a codebase, open it, inspect its Git state | No loading/empty distinction; no site or runtime context in a row; a Git error disappeared into the console. |
-| Sites | Understand access addresses and serving | Buried under Server; no summary of sites that cannot serve; repeated status text. |
-| Site detail | Configure one site | The project relation was readable but not actionable. |
-| Environment | Operate the stack | Sites and services in one column; "Server" is the wrong name for the whole environment. |
-| Services | Start, stop and diagnose processes | Stopped was painted as a warning, and the stack was not separated from optional tools. |
-| Runtimes | See versions, defaults and pins | Installed versions did not say which sites use them. |
-| Assistant / Team / Activity / Diagnostics / API | Delegate, inspect, repair | Structurally sound; retained and brought into the same navigation model. |
-| Create / Develop / Models / MCP / Scheduling | Setup and configuration | Structurally sound; retained. |
-
-The audit covered loading, empty, error, degraded and long-running states. The
-folders `ghost` and `nairobiunwind-app` are Git repositories owned by another
-Windows account, so `git.status` refuses them. The redesign names that
-condition on the row instead of hiding it or pretending the folder has no
-changes. The database screen now explains a stopped MariaDB rather than showing
-a raw `mysql` connection error.
-
-## Three directions
-
-### A. The calm desktop workspace
-
-**Thesis.** devd should disappear into a quiet desktop routine: a rail, search,
-lists, and detail only when asked for.
-
-**Strengths.** Fast to learn, low visual noise, excellent for daily use.
-**Weaknesses.** It hides the project-to-address relationship and makes an
-unhealthy service look like just another row.
-**Fit.** Right for the shell and routine lists; insufficient as the whole model.
-
-### B. The local operations console
-
-**Thesis.** devd is an instrument. Show configured versus observed state,
-service dependencies, ports, certificates and diagnostics at all times.
-
-**Strengths.** Truthful, precise, excellent when something fails.
-**Weaknesses.** A local development tool is not a cloud control plane. A wall of
-metrics makes "open a project, copy its URL" slower and invents monitoring
-theatre around four processes.
-**Fit.** Right about state honesty; wrong about default density.
-
-### C. The project-centred development hub
-
-**Thesis.** Developers think in projects. Sites, runtimes and services are
-context around the work, not separate destinations.
-
-**Strengths.** Matches the mental model and shortens the common workflow.
-**Weaknesses.** If taken literally, global state disappears. A stopped
-database, a bad certificate or a pending hostname is not owned by one project.
-**Fit.** Right about the primary axis; needs a visible environment layer.
 
 ## The decision: the workbench
 
@@ -227,28 +166,3 @@ At 390px the rail becomes a top strip, the environment ledger becomes one
 column, and the project and buttons move below the prompt.
 
 ![Home at 390px](screens/home-phone.png)
-
-## Evidence
-
-The redesigned routes were exercised through the real server, not a static mock.
-The audit harness opens every route with a real session token, records failed
-capabilities, writes screenshots, checks the 390/760/1040/1440 widths for
-horizontal overflow, and runs axe-core against WCAG 2.0/2.1 A and AA on Home,
-Sites, Projects, Environment, Services and Site detail. `cargo test -p
-devd-server` covers the UI contract: every destination has a page, every action
-has a handler, app.js parses, the logo is the same asset, and the embedded text
-is UTF-8 rather than double-encoded.
-
-## Known limits
-
-This record covers the application window, which is the product's primary
-graphical surface. The terminal dashboard and the CLI were audited at the level
-of their shared capabilities and copy, but were not visually redesigned here.
-
-The folder picker's native path depends on the desktop shell and cannot be
-exercised in a plain browser. Long operations still report their real stage text
-from the capability result rather than a byte-perfect progress feed; the
-interface never invents a percent. Remote servers, Ploi and a running MariaDB
-can only be verified to their empty or stopped states on this machine. The Git
-repositories owned by another Windows account expose an operating-system
-permission problem that the UI can explain but cannot repair.

@@ -26,7 +26,7 @@ pub mod extras;
 pub mod mariadb;
 pub mod nginx;
 pub mod phpcaps;
-pub mod postgres_install;
+pub mod pinned_install;
 pub mod probe;
 pub mod reconcile;
 pub mod redirects;
@@ -108,6 +108,15 @@ pub const DEFINITIONS: &[Definition] = &[
         unix_exe: "bin/postgres",
         default_port: 5432,
         startup: Duration::from_secs(40),
+    },
+    Definition {
+        name: "mysql",
+        kind: "mysql",
+        summary: "MySQL, the Oracle server (MariaDB is the default)",
+        windows_exe: "bin/mysqld.exe",
+        unix_exe: "bin/mysqld",
+        default_port: 3307,
+        startup: Duration::from_secs(90),
     },
     Definition {
         name: "mongodb",
@@ -783,10 +792,10 @@ pub fn install(
         ));
     }
 
-    // PostgreSQL's Windows build publishes no checksum, so devd pins the digest of the build it ships
-    // knowledge of (see `postgres_install`) and installs exactly that.
-    if def.name == "postgres" && cfg!(windows) {
-        return postgres_install::install(ctx, spec, port, force, progress);
+    // PostgreSQL and MySQL publish no strong checksum for their Windows builds, so devd pins the digest of the
+    // build it ships knowledge of (see `pinned_install`) and installs exactly that.
+    if let Some(pin) = pinned_install::pin_for(def.name).filter(|_| cfg!(windows)) {
+        return pinned_install::install(ctx, pin, spec, port, force, progress);
     }
 
     // Redis and memcached have Windows builds whose digests GitHub records, so they are downloaded and

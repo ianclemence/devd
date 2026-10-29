@@ -317,8 +317,8 @@ own authority. The protections are about what `devd` writes and who can reach it
   after the digest matches. nginx publishes only a PGP signature, so its install
   reports that it could verify length and not content — the gap is stated in
   the install output itself. PostgreSQL's Windows build publishes no checksum at
-  all, so devd pins the digest of the build it ships knowledge of and installs
-  only that one (`postgres_install.rs`); the install result says the guarantee
+  all and MySQL's only an MD5, so devd pins the digest of the build it ships knowledge of and installs
+  only that one (`pinned_install.rs`); the install result says the guarantee
   is weaker than a vendor-signed digest.
 * **Hostnames are validated before they reach a file.** `util::validate_hostname`
   rejects anything that is not a lowercase DNS label sequence, so a site name

@@ -96,7 +96,7 @@ This is a record of what was actually executed, not of what is expected to work.
 | Workspace builds and its tests pass | yes, locally and in CI | yes, in CI | yes, in CI |
 | Package-manager parsing, verification decisions, generated nginx and Apache files, unit-tested on canned output | yes | yes | yes |
 | Install nginx / MariaDB / PHP and start them | yes (downloaded, digest-checked) | **not run**: written, compiled, unit-tested | **not run** |
-| PostgreSQL installed, started, asked in its own protocol, a database dropped and restored from its undo snapshot | yes (real server, local) | adopts the system package; **not run** | adopts Homebrew; **not run** |
+| PostgreSQL and MySQL installed, started, asked in their own protocol, a database created, dropped and restored from its undo snapshot, stopped cleanly | yes (real servers, local) | adopts the system package; **not run** | adopts Homebrew; **not run** |
 | The resident daemon: instance record, attach, stop, service ownership by start time | yes (real processes) | the start-time check reads `/proc`; unit-tested, **not run** as a daemon | the check reads `ps`; **not run** |
 | Sign-in start of the daemon | Run value: written; sign-in itself **not exercised** | systemd unit text unit-tested; **not run** | LaunchAgent text unit-tested; **not run** |
 | Local DNS server answers over a real UDP socket | yes | the same code; **not run** there | the same code; **not run** there |
@@ -117,8 +117,6 @@ thing to do, then `devd doctor`.
   has never been run on Linux, and no macOS package. The Windows installer is
   separate and is exercised on every release.
 * **Several PHP versions at once** from one package manager.
-* **MySQL as a managed service.** MariaDB is the managed MySQL-compatible server;
-  Oracle MySQL is not installed by devd.
 * **Code signing.** Neither the installer nor the programs carry an Authenticode
   or Apple signature, so Windows SmartScreen and macOS Gatekeeper warn once. The
   published checksums are signed with devd's own release key, and `devd update`

@@ -53,7 +53,11 @@ belongs (`docs/platforms.md` says what has been run on which platform).
   separate facts.
 - **Undo snapshots** for `fs.write`, `fs.edit`, `fs.delete` and `db.drop`
   (`snapshot.list`, `snapshot.restore`).
-- **PostgreSQL installs on Windows** from a build whose digest devd pins.
+- **PostgreSQL and MySQL install on Windows** from builds whose SHA-256 devd pins
+  (neither vendor publishes a strong checksum; the install result says so). MySQL
+  8.4 gets a `root@127.0.0.1` account, a graceful stop, and the same database
+  tools, dump/restore and undo as the others; `engine: mysql` means it when it is
+  installed and MariaDB otherwise.
 - **Signed self-update** (`devd update check|apply`, `keygen`, `sign`).
 - **The window**: argument forms generated from each capability's schema; the
   drawer takes and returns focus; failures are announced to screen readers; a
@@ -67,7 +71,7 @@ belongs (`docs/platforms.md` says what has been run on which platform).
 
 ### Not done
 
-- Managed Oracle MySQL; pointing Windows at the DNS server without port 53; the
+- Pointing Windows at the DNS server without port 53; the
   Linux and macOS code paths that need a real machine (see `docs/platforms.md`).
 
 ---

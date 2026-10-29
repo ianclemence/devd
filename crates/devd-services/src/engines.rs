@@ -48,6 +48,15 @@ pub const ENGINES: &[Engine] = &[
         default_port: 5432,
     },
     Engine {
+        name: "mysql",
+        program: "mysqld",
+        needs: &["mysql", "mysqldump", "mysqladmin"],
+        tool: "mysql",
+        version_args: &["--version"],
+        version_regex: r"Ver (\d+\.\d+\.\d+)",
+        default_port: 3307,
+    },
+    Engine {
         name: "mongodb",
         program: "mongod",
         needs: &[],
@@ -234,6 +243,22 @@ pub fn argv(ctx: &Ctx, engine: &Engine, root: &Path, port: u16) -> Result<Vec<St
                 ]);
             }
         }
+        "mysql" => {
+            // `--no-defaults` keeps a my.ini in the user's profile or Windows folder from
+            // changing a server devd runs. The X protocol is off: nothing here uses it. Names are not
+            // resolved, so an account is matched by the address it connects from: `prepare` creates
+            // `root@127.0.0.1`, because the stock `root@localhost` does not match that address.
+            args.extend([
+                "--no-defaults".into(),
+                format!("--basedir={}", slashy(root)),
+                format!("--datadir={}", slashy(&data)),
+                format!("--port={port}"),
+                "--bind-address=127.0.0.1".into(),
+                "--mysqlx=OFF".into(),
+                "--skip-name-resolve".into(),
+                "--console".into(),
+            ]);
+        }
         "mongodb" => args.extend([
             "--dbpath".into(),
             data.display().to_string(),
@@ -296,12 +321,64 @@ pub fn prepare(ctx: &Ctx, engine: &Engine, root: &Path) -> Result<Vec<String>> {
             notes.push("PostgreSQL was initialised with trust authentication for connections from this machine and listens on 127.0.0.1 only".to_string());
         }
     }
+    if engine.name == "mysql" && !data.join("mysql.ibd").is_file() {
+        let server = exe(engine, root)?;
+        // The stock `root@localhost` account does not match a TCP connection from 127.0.0.1
+        // when names are not resolved, so the same account is made for that address.
+        let init = ctx.paths.etc().join("mysql").join("init.sql");
+        util::atomic_write(
+            &init,
+            "CREATE USER IF NOT EXISTS 'root'@'127.0.0.1' IDENTIFIED BY '';
+GRANT ALL PRIVILEGES ON *.* TO 'root'@'127.0.0.1' WITH GRANT OPTION;
+",
+        )?;
+        let args = [
+            "--no-defaults".to_string(),
+            format!("--init-file={}", slashy(&init)),
+            "--initialize-insecure".to_string(),
+            format!("--basedir={}", slashy(root)),
+            format!("--datadir={}", slashy(&data)),
+            "--console".to_string(),
+        ];
+        let out = util::run(&server, &args, server.parent(), &[], Some(Duration::from_secs(600)))?;
+        if !data.join("mysql.ibd").is_file() {
+            return Err(DevdError::Command {
+                program: "mysqld --initialize-insecure".to_string(),
+                code: out.code,
+                stderr: util::truncate(format!("{}{}", out.stdout, out.stderr).trim(), 1500),
+            });
+        }
+        notes.push("MySQL was initialised with an empty root password for connections from this machine and listens on 127.0.0.1 only".to_string());
+    }
     Ok(notes)
 }
 
 /// Ask the engine to stop cleanly before its process is ended. Best effort: a
 /// failure here falls through to the ordinary stop.
 pub fn graceful_stop(ctx: &Ctx, name: &str, root: &Path) {
+    if name == "mysql" {
+        let port = ctx
+            .store
+            .get_service("mysql")
+            .ok()
+            .flatten()
+            .and_then(|s| s.port)
+            .unwrap_or(3307);
+        if let Some(admin) = locate(root, "mysqladmin") {
+            let args = [
+                "--no-defaults".to_string(),
+                "-h".to_string(),
+                "127.0.0.1".to_string(),
+                "-P".to_string(),
+                port.to_string(),
+                "-u".to_string(),
+                "root".to_string(),
+                "shutdown".to_string(),
+            ];
+            let _ = util::run(&admin, &args, admin.parent(), &[], Some(Duration::from_secs(60)));
+        }
+        return;
+    }
     if name != "postgres" {
         return;
     }
@@ -519,6 +596,135 @@ pub fn pg_restore(ctx: &Ctx, root: &Path, port: u16, database: &str, file: &Path
             program: "psql".to_string(),
             code: res.code,
             stderr: util::truncate(res.stderr.trim(), 1500),
+        });
+    }
+    Ok(())
+}
+
+// -------------------------------------------------------------- MySQL databases
+
+/// A MySQL database name, held to the same conservative rule as the others.
+pub fn valid_my_name(name: &str) -> Result<()> {
+    let ok = !name.is_empty()
+        && name.len() <= 64
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if ok {
+        Ok(())
+    } else {
+        Err(DevdError::invalid(format!(
+            "`{name}` is not a MySQL database name: letters, digits and _ only"
+        )))
+    }
+}
+
+fn mysql_args(port: u16, user: &str) -> Vec<String> {
+    vec![
+        "--no-defaults".to_string(),
+        "-h".to_string(),
+        "127.0.0.1".to_string(),
+        "-P".to_string(),
+        port.to_string(),
+        "-u".to_string(),
+        user.to_string(),
+    ]
+}
+
+fn mysql_run(root: &Path, program: &str, mut args: Vec<String>, timeout: u64, stdin: Option<&Path>) -> Result<String> {
+    let exe = locate(root, program)
+        .ok_or_else(|| DevdError::not_found(format!("{program} is not installed beside mysqld")))?;
+    let _ = stdin;
+    let out = util::run(&exe, &std::mem::take(&mut args), exe.parent(), &[], Some(Duration::from_secs(timeout)))?;
+    if out.code != 0 {
+        return Err(DevdError::Command {
+            program: program.to_string(),
+            code: out.code,
+            stderr: util::truncate(out.stderr.trim(), 1500),
+        });
+    }
+    Ok(out.stdout)
+}
+
+fn mysql_sql(root: &Path, port: u16, sql: &str) -> Result<String> {
+    let mut args = mysql_args(port, "root");
+    args.extend(["--batch".into(), "--skip-column-names".into(), "-e".into(), sql.to_string()]);
+    mysql_run(root, "mysql", args, 60, None)
+}
+
+/// The databases on devd's MySQL, excluding the system schemas.
+pub fn my_databases(root: &Path, port: u16) -> Result<Vec<String>> {
+    let out = mysql_sql(root, port, "SHOW DATABASES")?;
+    Ok(out
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !matches!(*l, "information_schema" | "mysql" | "performance_schema" | "sys"))
+        .map(str::to_string)
+        .collect())
+}
+
+/// Create a database (utf8mb4) if it is not there.
+pub fn my_create(root: &Path, port: u16, name: &str) -> Result<()> {
+    valid_my_name(name)?;
+    mysql_sql(root, port, &format!("CREATE DATABASE IF NOT EXISTS `{name}` CHARACTER SET utf8mb4")).map(|_| ())
+}
+
+/// Drop a database.
+pub fn my_drop(root: &Path, port: u16, name: &str) -> Result<()> {
+    valid_my_name(name)?;
+    mysql_sql(root, port, &format!("DROP DATABASE IF EXISTS `{name}`")).map(|_| ())
+}
+
+/// How many tables a database has.
+pub fn my_table_count(root: &Path, port: u16, name: &str) -> Result<u64> {
+    valid_my_name(name)?;
+    let out = mysql_sql(
+        root,
+        port,
+        &format!("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '{name}'"),
+    )?;
+    Ok(out.trim().parse().unwrap_or(0))
+}
+
+/// Write a database to a SQL file with `mysqldump`.
+pub fn my_dump(root: &Path, port: u16, database: &str, out: &Path) -> Result<()> {
+    valid_my_name(database)?;
+    if let Some(parent) = out.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut args = mysql_args(port, "root");
+    args.extend([
+        "--single-transaction".to_string(),
+        "--routines".to_string(),
+        "--triggers".to_string(),
+        "--events".to_string(),
+        "--default-character-set=utf8mb4".to_string(),
+        format!("--result-file={}", out.display()),
+        database.to_string(),
+    ]);
+    mysql_run(root, "mysqldump", args, 3600, None).map(|_| ())
+}
+
+/// Read a SQL file into a database on devd's MySQL, creating it when it is not there.
+pub fn my_restore(root: &Path, port: u16, database: &str, file: &Path) -> Result<()> {
+    my_create(root, port, database)?;
+    let exe = locate(root, "mysql").ok_or_else(|| DevdError::not_found("mysql is not installed beside mysqld"))?;
+    let mut args = mysql_args(port, "root");
+    args.extend(["--default-character-set=utf8mb4".to_string(), database.to_string()]);
+    let mut cmd = std::process::Command::new(&exe);
+    cmd.args(&args)
+        .stdin(std::process::Stdio::from(std::fs::File::open(file)?))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let output = cmd.output()?;
+    if !output.status.success() {
+        return Err(DevdError::Command {
+            program: "mysql".to_string(),
+            code: output.status.code().unwrap_or(-1),
+            stderr: util::truncate(String::from_utf8_lossy(&output.stderr).trim(), 1500),
         });
     }
     Ok(())

@@ -1071,18 +1071,29 @@ enum Db {
     Maria { port: u16 },
     /// devd's PostgreSQL, run from this folder.
     Postgres { root: std::path::PathBuf, port: u16 },
+    /// devd's MySQL (the Oracle server), run from this folder.
+    Mysql { root: std::path::PathBuf, port: u16 },
 }
 
-/// Pick the server: MariaDB unless the call says `engine: postgres`.
+/// Pick the server: MariaDB unless the call says `engine: postgres` or `engine: mysql`.
+///
+/// `mysql` means the Oracle server when devd has one installed, and otherwise
+/// MariaDB, which speaks the same protocol: a call written for "a MySQL" keeps
+/// working on a machine that only has MariaDB.
 fn db_target(ctx: &Ctx, engine: &Option<String>) -> Result<Db> {
     match engine.as_deref() {
+        Some("mysql") if ctx.store.get_service("mysql")?.is_some() => {
+            let service = ctx.store.get_service("mysql")?.expect("checked");
+            let root = services::manifest_root(ctx, "mysql").ok_or_else(|| DevdError::not_found("MySQL has no recorded folder; install it again"))?;
+            Ok(Db::Mysql { root, port: service.port.unwrap_or(3307) })
+        }
         None | Some("mariadb") | Some("mysql") => Ok(Db::Maria { port: db_port(ctx)? }),
         Some("postgres") | Some("postgresql") => {
             let service = ctx.store.get_service("postgres")?.ok_or_else(|| DevdError::not_found("PostgreSQL is not set up; `devd service adopt postgres <folder>` uses one you already have"))?;
             let root = services::manifest_root(ctx, "postgres").ok_or_else(|| DevdError::not_found("PostgreSQL has no recorded folder; adopt it again"))?;
             Ok(Db::Postgres { root, port: service.port.unwrap_or(5432) })
         }
-        Some(other) => Err(DevdError::invalid(format!("engine must be mariadb or postgres, not {other}"))),
+        Some(other) => Err(DevdError::invalid(format!("engine must be mariadb, mysql or postgres, not {other}"))),
     }
 }
 
@@ -1097,6 +1108,10 @@ fn snapshot_database(ctx: &Ctx, target: &Db, name: &str) -> Result<devd_core::sn
         Db::Postgres { root, port } => {
             services::engines::pg_dump(root, *port, "postgres", None, name, &payload)?;
             ("postgres", *port)
+        }
+        Db::Mysql { root, port } => {
+            services::engines::my_dump(root, *port, name, &payload)?;
+            ("mysql", *port)
         }
     };
     devd_core::snapshot::record_payload(
@@ -1131,6 +1146,10 @@ fn register_db(reg: &mut Registry) -> Result<()> {
                 let names = services::engines::pg_databases(ctx, &root, port)?;
                 Ok(Outcome::with_data(format!("{} database(s)", names.len()), json!({ "databases": names, "port": port })))
             }
+            Db::Mysql { root, port } => {
+                let names = services::engines::my_databases(&root, port)?;
+                Ok(Outcome::with_data(format!("{} database(s)", names.len()), json!({ "databases": names, "port": port })))
+            }
         },
     )?;
 
@@ -1147,6 +1166,7 @@ fn register_db(reg: &mut Registry) -> Result<()> {
             match db_target(ctx, &a.engine)? {
                 Db::Maria { .. } => devd_core::util::validate_name(&a.name)?,
                 Db::Postgres { .. } => services::engines::valid_pg_name(&a.name)?,
+                Db::Mysql { .. } => services::engines::valid_my_name(&a.name)?,
             }
             Ok(Plan::new("db.create", format!("create the database `{}`", a.name)).effect("creates stored data"))
         },
@@ -1157,6 +1177,10 @@ fn register_db(reg: &mut Registry) -> Result<()> {
             }
             Db::Postgres { root, port } => {
                 services::engines::pg_create(ctx, &root, port, &a.name)?;
+                Ok(Outcome::with_data(format!("database `{}` exists", a.name), json!({ "database": a.name, "port": port })))
+            }
+            Db::Mysql { root, port } => {
+                services::engines::my_create(&root, port, &a.name)?;
                 Ok(Outcome::with_data(format!("database `{}` exists", a.name), json!({ "database": a.name, "port": port })))
             }
         },
@@ -1196,6 +1220,11 @@ fn register_db(reg: &mut Registry) -> Result<()> {
                     services::engines::pg_dump(&root, port, &user, a.from_password.as_deref(), &a.database, &file)?;
                     Ok(Outcome::with_data(format!("wrote {} to {}", a.database, file.display()), json!({ "database": a.database, "file": file.display().to_string() })))
                 }
+                Db::Mysql { root, port } => {
+                    let port = a.from_port.unwrap_or(port);
+                    services::engines::my_dump(&root, port, &a.database, &file)?;
+                    Ok(Outcome::with_data(format!("wrote {} to {}", a.database, file.display()), json!({ "database": a.database, "file": file.display().to_string() })))
+                }
             }
         },
     )?;
@@ -1221,6 +1250,13 @@ fn register_db(reg: &mut Registry) -> Result<()> {
                     return Err(DevdError::conflict(format!("the database `{}` already has tables; pass replace to run the file over them", a.database)));
                 }
                 services::engines::pg_restore(ctx, &root, port, &a.database, std::path::Path::new(&a.path))?;
+                Ok(Outcome::with_data(format!("restored {}", a.database), json!({ "database": a.database, "file": a.path })))
+            }
+            Db::Mysql { root, port } => {
+                if !a.replace.unwrap_or(false) && services::engines::my_table_count(&root, port, &a.database)? > 0 {
+                    return Err(DevdError::conflict(format!("the database `{}` already has tables; pass replace to run the file over them", a.database)));
+                }
+                services::engines::my_restore(&root, port, &a.database, std::path::Path::new(&a.path))?;
                 Ok(Outcome::with_data(format!("restored {}", a.database), json!({ "database": a.database, "file": a.path })))
             }
         },
@@ -1271,6 +1307,18 @@ fn register_db(reg: &mut Registry) -> Result<()> {
                         json!({ "file": file.display().to_string(), "tables": services::engines::pg_table_count(&root, port, &target)? }),
                     ))
                 }
+                Db::Mysql { root, port } => {
+                    services::engines::valid_my_name(&target)?;
+                    if !a.replace.unwrap_or(false) && services::engines::my_table_count(&root, port, &target)? > 0 {
+                        return Err(DevdError::conflict(format!("the database `{target}` already has tables; pass replace to copy over them")));
+                    }
+                    services::engines::my_dump(&root, a.from_port, &a.database, &file)?;
+                    services::engines::my_restore(&root, port, &target, &file)?;
+                    Ok(Outcome::with_data(
+                        format!("copied {} into devd as {}", a.database, target),
+                        json!({ "file": file.display().to_string(), "tables": services::engines::my_table_count(&root, port, &target)? }),
+                    ))
+                }
             }
         },
     )?;
@@ -1308,6 +1356,10 @@ fn register_db(reg: &mut Registry) -> Result<()> {
                 Db::Maria { port } => services::mariadb::drop_database(ctx, *port, &a.name)?,
                 Db::Postgres { root, port } => {
                     services::engines::pg_drop(ctx, root, *port, &a.name)?;
+                    json!({ "database": a.name })
+                }
+                Db::Mysql { root, port } => {
+                    services::engines::my_drop(root, *port, &a.name)?;
                     json!({ "database": a.name })
                 }
             };
@@ -1369,6 +1421,9 @@ fn register_db(reg: &mut Registry) -> Result<()> {
                         }
                         Db::Postgres { root, port } => {
                             services::engines::pg_restore(ctx, &root, port, &database, &payload)?;
+                        }
+                        Db::Mysql { root, port } => {
+                            services::engines::my_restore(&root, port, &database, &payload)?;
                         }
                     }
                     Ok(Outcome::with_data(format!("recreated the database `{database}`"), json!({ "database": database, "engine": engine })))
