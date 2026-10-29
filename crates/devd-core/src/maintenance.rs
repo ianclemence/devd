@@ -15,6 +15,10 @@ pub const DEFAULT_MAX_LOG_BYTES: u64 = 10 * 1024 * 1024;
 pub const DEFAULT_KEEP: usize = 5;
 /// Audit rows older than this many days are removed. `0` keeps everything.
 pub const DEFAULT_AUDIT_DAYS: i64 = 365;
+/// The download cache is trimmed to this size.
+pub const DEFAULT_CACHE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// A cached download unused for this many days is removed.
+pub const DEFAULT_CACHE_DAYS: u64 = 90;
 
 /// What one rotation did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,6 +110,20 @@ pub fn run(ctx: &Ctx) -> Vec<String> {
                 r.file.display(),
                 r.bytes,
                 if r.truncated { "" } else { ", still open" }
+            ));
+        }
+    }
+    let cache_bytes = setting_u64(ctx, "cache.max_bytes", DEFAULT_CACHE_BYTES);
+    let cache_days = setting_u64(ctx, "cache.max_age_days", DEFAULT_CACHE_DAYS);
+    if let Ok(gone) = crate::download::evict(
+        &ctx.paths.cache(),
+        cache_bytes,
+        std::time::Duration::from_secs(cache_days * 86_400),
+    ) {
+        if gone.files > 0 {
+            did.push(format!(
+                "removed {} cached download(s), {} bytes",
+                gone.files, gone.bytes
             ));
         }
     }
