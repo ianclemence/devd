@@ -5012,3 +5012,10 @@ select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .top-live { flex: none; max-width: 230px; }
 .top-live-title { max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .top-nav { overflow: hidden; }
+@media (max-width: 1000px) { .threads .thread-row { flex: none; max-width: 260px; margin-right: var(--s3); } .threads .thread { min-width: 0; } .threads .thread .grow { overflow: hidden; text-overflow: ellipsis; } }
+.table-ops .cell-warn { color: var(--warn); }
+.table-ops td.cell-actions { white-space: normal; min-width: 240px; }
+.table-ops td.cell-actions .btn { margin: 2px 0 2px 4px; }
+@media (max-width: 1560px) { .top-live-title { display: none; } }
+.table-wrap:has(> .table-ops) { overflow-x: visible; }
+.table-ops th:last-child, .table-ops td:last-child { white-space: normal; }

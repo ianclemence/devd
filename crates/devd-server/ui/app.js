@@ -2769,34 +2769,36 @@
   function opsServers(d) {
     var list = (d[0] && d[0].servers) || [], links = (d[1] && d[1].links) || [];
     var rows = list.map(function (s) {
-      return uiRow({
-        dot: s.host_key_pinned ? "ok" : "warn", title: esc(s.name) + ' <span class="pill">' + esc(s.provider) + "</span>",
-        sub: esc(s.user + "@" + s.host + (s.port !== 22 ? ":" + s.port : "")) + " · key " + esc(s.key) + (s.host_key_pinned ? " · host key pinned" : " · not connected yet") + (s.last_ok_at ? " · answered " + esc(shortTime(s.last_ok_at)) : ""), wrap: true, hover: true,
-        actions: '<button type="button" class="btn btn-mini' + (s.host_key_pinned ? "" : " btn-primary") + '" data-action="ops-srv-connect" data-name="' + attr(s.name) + '">' + (s.host_key_pinned ? "Test" : "Connect") + "</button>" +
-          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-srv-info" data-name="' + attr(s.name) + '">Look</button>' +
-          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-srv-provision" data-name="' + attr(s.name) + '">Set up for PHP</button>' +
-          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-srv-run" data-name="' + attr(s.name) + '">Run…</button>' +
-          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-srv-remove" data-name="' + attr(s.name) + '">Forget</button>'
-      });
+      var n = attr(s.name);
+      return "<tr><td>" + opsDot(s.host_key_pinned ? "ok" : "warn") + "<b>" + esc(s.name) + '</b> <span class="pill">' + esc(s.provider) + "</span></td>" +
+        '<td class="cell-mono">' + esc(s.user + "@" + s.host + (s.port !== 22 ? ":" + s.port : "")) + "</td>" +
+        '<td class="cell-mono">' + esc(s.key) + "</td>" +
+        "<td>" + (s.host_key_pinned ? "Pinned" : '<span class="cell-warn">Not connected yet</span>') + "</td>" +
+        "<td>" + (s.last_ok_at ? esc(shortTime(s.last_ok_at)) : '<span class="dim">never</span>') + "</td>" +
+        '<td class="cell-actions"><button type="button" class="btn btn-mini' + (s.host_key_pinned ? "" : " btn-primary") + '" data-action="ops-srv-connect" data-name="' + n + '">' + (s.host_key_pinned ? "Test" : "Connect") + "</button>" +
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-srv-info" data-name="' + n + '">Look</button>' +
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-srv-provision" data-name="' + n + '">Set up for PHP</button>' +
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-srv-run" data-name="' + n + '">Run…</button>' +
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-srv-remove" data-name="' + n + '">Forget</button></td></tr>';
     });
     var linkRows = links.map(function (l) {
-      return uiRow({ title: esc(l.site) + " → " + esc(l.server) + ' <span class="pill">' + esc(l.mode) + "</span>", sub: '<span class="mono">' + esc(l.path) + "</span>" + (l.domain ? " · " + esc(l.domain) : ""), wrap: true, hover: true,
-        actions: '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-link-remove" data-id="' + attr(l.id) + '">Unlink</button>' });
+      return "<tr><td><b>" + esc(l.site) + "</b></td><td>" + esc(l.server) + "</td><td>" + esc(l.mode) + '</td><td class="cell-mono">' + esc(l.path) + (l.domain ? " · " + esc(l.domain) : "") + "</td>" +
+        '<td class="cell-actions"><button type="button" class="btn btn-mini btn-ghost" data-action="ops-link-remove" data-id="' + attr(l.id) + '">Unlink</button></td></tr>';
     });
     return uiHead("Servers", list.length, '<button type="button" class="btn btn-mini btn-primary" data-action="ops-srv-add">Add a server</button>') +
-      (rows.length ? uiList(rows) : uiEmpty("No servers yet", "Any machine you can SSH into: DigitalOcean, Hetzner, Vultr, a Ploi or Forge server, a Raspberry Pi. Add it, connect once to pin its host key, and deploy to it from the Deploy tab.")) +
-      uiHead("Where sites deploy", links.length, "") + (linkRows.length ? uiList(linkRows) : uiEmpty("No site is linked to a server", "Open a site's Deploy tab and choose Link to a server.")) +
+      (rows.length ? opsTable([{ name: "Server" }, { name: "Address" }, { name: "Key" }, { name: "Host key" }, { name: "Last answered" }], rows, "Servers") : uiEmpty("No servers yet", "Any machine you can SSH into: DigitalOcean, Hetzner, Vultr, a Ploi or Forge server, a Raspberry Pi. Add it, connect once to pin its host key, and deploy to it from the Deploy tab.")) +
+      uiHead("Where sites deploy", links.length, "") + (linkRows.length ? opsTable([{ name: "Site" }, { name: "Server" }, { name: "Mode" }, { name: "Path" }], linkRows, "Where sites deploy") : uiEmpty("No site is linked to a server", "Open a site's Deploy tab and choose Link to a server.")) +
       '<p class="dim ops-note">devd reaches servers with the key you name and pins each server\'s host key in its own file, never your known_hosts. Setting a server up and deploying are approved by you each time.</p>';
   }
 
   function opsKeys(d) {
     var keys = (d[0] && d[0].keys) || [];
     var rows = keys.map(function (k) {
-      return uiRow({ title: '<span class="mono">' + esc(k.name) + "</span> " + (k.has_private_key ? "" : '<span class="pill pill-warn">no private key here</span>'), sub: esc((k.type || "") + (k.comment ? " · " + k.comment : "")) + (k.fingerprint ? " · " + esc(k.fingerprint) : ""), wrap: true, hover: true,
-        actions: '<button type="button" class="btn btn-mini" data-action="ops-key-public" data-name="' + attr(k.name) + '">Show public key</button>' });
+      return '<tr><td class="cell-mono"><b>' + esc(k.name) + "</b></td><td>" + esc(k.type || "") + "</td><td>" + (k.has_private_key ? "Private key here" : '<span class="cell-warn">No private key here</span>') + '</td><td class="cell-note">' + esc(k.comment || "") + "</td>" +
+        '<td class="cell-actions"><button type="button" class="btn btn-mini" data-action="ops-key-public" data-name="' + attr(k.name) + '">Show public key</button></td></tr>';
     });
     return uiHead("SSH keys", keys.length, '<button type="button" class="btn btn-mini btn-primary" data-action="ops-key-new">Make a key</button><button type="button" class="btn btn-mini" data-action="ops-key-adopt">Take in a key</button>') +
-      (rows.length ? uiList(rows) : uiEmpty("No keys in ~/.ssh", "Make one, or take in a private key you already have. The public half is what a server's authorized_keys and GitHub want.")) +
+      (rows.length ? opsTable([{ name: "Key" }, { name: "Type" }, { name: "Private half" }, { name: "Comment" }], rows, "SSH keys") : uiEmpty("No keys in ~/.ssh", "Make one, or take in a private key you already have. The public half is what a server's authorized_keys and GitHub want.")) +
       '<p class="dim ops-note">Private keys are never shown. A new key has no passphrase; add one with <code>ssh-keygen -p</code> if you want one.</p>';
   }
 
@@ -7549,7 +7551,7 @@
     return Promise.all([read("team.list"), state.projects.length ? Promise.resolve() : loadProjects(), loadProvidersIfNeeded(), read("template.list").catch(function () { return []; })]).then(function (r) {
       TEAM.runs = r[0] || [];
       TEAM.templates = Array.isArray(r[3]) ? r[3] : [];
-      if (!TEAM.sel && TEAM.runs.length) TEAM.sel = TEAM.runs[0].id;
+      if (!TEAM.sel && TEAM.runs.length && !String(TEAM.form.goal || "").trim()) TEAM.sel = TEAM.runs[0].id;
       return TEAM.sel ? read("team.get", { run: TEAM.sel }).then(function (d) { TEAM.data = d; }).catch(function () { TEAM.data = null; }) : null;
     });
   }
