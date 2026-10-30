@@ -5019,3 +5019,20 @@ select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 @media (max-width: 1560px) { .top-live-title { display: none; } }
 .table-wrap:has(> .table-ops) { overflow-x: visible; }
 .table-ops th:last-child, .table-ops td:last-child { white-space: normal; }
+
+/* ---- nothing scrolls sideways: tables, code and tab rows wrap instead ------- */
+.table-wrap, .table-wrap:has(> .table-ops), .md .md-table { overflow-x: visible; }
+.table, .table-ops, .mu, .drift-table, .md-table table { width: 100%; max-width: 100%; }
+.table th, .table td, .mu th, .mu td, .drift-table th, .drift-table td { white-space: normal; overflow-wrap: anywhere; min-width: 0; }
+.table td.cell-actions, .table th:last-child, .table-ops td.cell-actions { white-space: normal; }
+.table td.cell-actions { display: table-cell; width: auto; text-align: right; }
+.table th.cell-actions { width: 1%; }
+.log-block, .log-pre, pre.code, .patch-block, .diff, .decision-args pre { overflow-x: hidden; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+.subnav, .tabs, .picker-crumbs { overflow-x: visible; flex-wrap: wrap; }
+.tabs { row-gap: 2px; }
+@media (max-width: 1000px) {
+  #thread-list { display: block; overflow-x: hidden; }
+  .threads .thread-row { max-width: none; margin-right: 0; }
+}
+.table-ops thead th, .table thead th.cell-actions { border-bottom: 1px solid var(--line-strong); }
+.table-ops thead th.cell-actions { padding: 0; }
