@@ -407,7 +407,7 @@ fn the_logo_has_no_transparent_padding_and_is_square() {
     assert!(w >= 80, "crisp at 40 CSS px on a 2x display");
     // PNG colour type 2 is RGB: no alpha channel, so no transparent frame can exist.
     assert_eq!(png[25], 2, "the logo asset has no alpha channel");
-    let rule = &CSS[CSS.find(".brand-mark {").unwrap()..];
+    let rule = &CSS[CSS.find(".top-mark {").unwrap()..];
     let rule = &rule[..rule.find('}').unwrap()];
     assert!(rule.contains("object-fit: cover") && !rule.contains("padding") && !rule.contains("margin") && !rule.contains("box-shadow"), "{rule}");
 }

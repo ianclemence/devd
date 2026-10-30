@@ -32,6 +32,10 @@ const SCRIPT: &str = include_str!("../ui/app.js");
 const STYLE: &str = include_str!("../ui/style.css");
 /// Window icon.
 const FAVICON: &str = include_str!("../ui/favicon.svg");
+/// The interface typeface (Inter Tight, a variable font, SIL Open Font License).
+/// It ships inside the binary so the interface looks the same on every machine
+/// and never asks a font service for anything.
+const FONT_INTER_TIGHT: &[u8] = include_bytes!("../ui/fonts/inter-tight-latin.woff2");
 
 /// Placeholder substituted with the bearer token at serve time.
 ///
@@ -49,7 +53,7 @@ const TOKEN_PLACEHOLDER: &str = "__DEVD_TOKEN__";
 /// `style-src` permits inline *styles* because the application uses a few for spacing. Inline
 /// style is not script: it cannot execute, and script remains limited to
 /// same-origin files.
-const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; frame-src http: https:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self'; img-src 'self' data:; frame-src http: https:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 /// The application shell with the session token injected.
 pub async fn index(State(state): State<Arc<AppState>>) -> Response {
@@ -74,6 +78,14 @@ pub async fn style() -> Response {
 /// The window icon.
 pub async fn favicon() -> Response {
     build("image/svg+xml", Body::from(FAVICON), None)
+}
+
+/// The interface typeface.
+pub async fn font(Path(file): Path<String>) -> Response {
+    if file != "inter-tight-latin.woff2" {
+        return missing();
+    }
+    build("font/woff2", Body::from(FONT_INTER_TIGHT), None)
 }
 
 /// The brand marks of the services and providers devd supports.

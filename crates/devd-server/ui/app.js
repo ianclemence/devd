@@ -25,7 +25,14 @@
       method: init.method || "GET",
       headers: headers,
       body: init.body
+    }).catch(function (e) {
+      // No response at all: the server is gone, not refusing. Say so once, plainly.
+      connection(false);
+      throw new Error("Can't reach devd right now. Nothing was sent or changed.");
     }).then(function (res) {
+      // A 401 here means devd restarted and issued a new session: this window's is gone.
+      if (res.status === 401) sessionEnded();
+      else connection(true);
       return res.text().then(function (text) {
         var body = null;
         try {
@@ -36,6 +43,46 @@
         return { ok: res.ok, status: res.status, body: body };
       });
     });
+  }
+
+  /* While the server does not answer, everything on screen is the last thing it
+     said. The banner says that, and the page is marked so it does not read as live. */
+  var OFFLINE = false;
+  function ensureBanner() {
+    var bar = document.getElementById("offline-banner");
+    if (!bar) {
+      bar = document.createElement("div");
+      bar.id = "offline-banner";
+      bar.className = "offline-banner";
+      bar.setAttribute("role", "alert");
+      bar.hidden = true;
+      document.body.appendChild(bar);
+    }
+    return bar;
+  }
+  function connection(up, quiet) {
+    if (up === !OFFLINE) { if (!document.getElementById("offline-banner")) ensureBanner(); return; }
+    OFFLINE = !up;
+    document.documentElement.classList.toggle("is-offline", OFFLINE);
+    var bar = ensureBanner();
+    bar.hidden = !OFFLINE;
+    bar.innerHTML = OFFLINE
+      ? "<b>Can't reach devd right now.</b> What you see is the last thing it told us, so it may be out of date. Nothing you do here is sent until it's back, and this page will reconnect on its own. " +
+        '<button type="button" class="btn btn-mini" data-action="reconnect">Try now</button>'
+      : "";
+    if (el("health-chip")) healthChip();
+    if (!OFFLINE && !quiet) toast("ok", "Back in touch with devd");
+  }
+
+  function sessionEnded() {
+    connection(true, true);
+    var bar = document.getElementById("offline-banner");
+    if (!bar || bar.dataset.ended) return;
+    bar.dataset.ended = "1";
+    bar.hidden = false;
+    document.documentElement.classList.add("is-offline");
+    bar.innerHTML = "<b>devd restarted.</b> This window's session ended with it, so nothing here will go through until you reload. Nothing was changed. " +
+      '<button type="button" class="btn btn-mini btn-primary" data-action="reload-page">Reload</button>';
   }
 
   function errorOf(body, fallback) {
@@ -463,13 +510,16 @@
     setTimeout(function () { region.textContent = text; }, 30);
   }
 
+  // The kind is said in a word as well as the edge colour.
+  var TOAST_WORD = { error: "Didn't work", warn: "Heads up", ok: "Done" };
+
   function toast(kind, message, detail) {
     announce(kind, message + (detail ? ". " + detail : ""));
     var node = document.createElement("div");
     node.className = "toast toast-" + kind;
     node.setAttribute("aria-hidden", "true");
     node.innerHTML =
-      '<div class="toast-msg">' + esc(message) +
+      '<div class="toast-msg">' + (TOAST_WORD[kind] ? '<b class="toast-kind">' + TOAST_WORD[kind] + "</b>" : "") + esc(message) +
       (detail ? '<div class="toast-detail">' + esc(detail) + "</div>" : "") +
       '</div><button type="button" data-action="dismiss-toast" aria-label="Dismiss">x</button>';
     el("toasts").appendChild(node);
@@ -971,9 +1021,10 @@
   }
 
   var GO_TO = [
-    ["home", "Home", "what needs you, what is running"], ["inbox", "Inbox", "approvals and questions from agents"],
+    ["home", "Home", "what needs you, what is running"], ["inbox", "Needs you", "approvals and questions from agents"],
     ["projects", "Projects", "repositories, folders and stacks"], ["sites", "Sites", "addresses, serving and certificates"],
-    ["assistant", "Assistant", "talk to the built-in agent"], ["agents", "Team", "your team and what each member does"],
+    ["assistant", "Assistant", "talk to the built-in agent"], ["team", "Agent runs", "goals planned, approved and run by the team"],
+    ["agents", "Team", "your team and what each member does"],
     ["create", "New project", "start from a stack"], ["develop", "Stacks and tasks", "detect and run project tasks"],
     ["schedules", "Schedules", "team runs on a clock"], ["shared", "Shared notes", "notes agents share"],
     ["mcp", "MCP servers", "tools from other programs"],
@@ -1165,10 +1216,10 @@
   var TABS = {
     projects: [["projects", "Projects"], ["create", "New project"], ["develop", "Stacks and tasks"]],
     sites: [["sites", "All sites"], ["hosts", "Hosts"], ["certificates", "Certificates"]],
-    agents: [["agents", "Team"], ["team", "Runs"], ["schedules", "Schedules"], ["skills", "Skills"], ["shared", "Notes"], ["mcp", "MCP"]],
+    agents: [["team", "Runs"], ["agents", "Team"], ["schedules", "Schedules"], ["skills", "Skills"], ["shared", "Notes"], ["mcp", "MCP"]],
     server: [["overview", "Overview"], ["services", "Services"], ["runtimes", "Runtimes"], ["databases", "Databases"], ["toolchain", "Tools"], ["remote", "Remote"]]
   };
-  var AREA_HOME = { assistant: "assistant", projects: "projects", sites: "sites", agents: "agents", server: "overview" };
+  var AREA_HOME = { assistant: "assistant", projects: "projects", sites: "sites", agents: "team", server: "overview" };
 
   function areaOf(view) { return AREA[view] || view; }
 
@@ -1186,7 +1237,7 @@
 
   var RAIL_ICON = {
     home: "i-home", inbox: "i-inbox", assistant: "i-spark", projects: "i-folder",
-    sites: "i-globe", agents: "i-team", processes: "i-pulse", overview: "i-server",
+    sites: "i-globe", agents: "i-team", team: "i-team", processes: "i-pulse", overview: "i-server",
     providers: "i-sliders", activity: "i-clock", system: "i-check-circle", capabilities: "i-code"
   };
 
@@ -1228,16 +1279,79 @@
       '<input type="checkbox" data-change="service-startup" data-name="' + attr(svc.name) + '"' + (svc.enabled ? " checked" : "") + "> Startup</label>";
   }
 
+  /* What leans on a service, read from the site list and nothing else. A web server
+     serves the sites that have something to serve; a PHP pool serves the sites that
+     resolve to its version. A database has no recorded dependents, so it says none. */
+  function serviceDependents(svc, php) {
+    var sites = state.server.sites || [];
+    var serving = sites.filter(function (r) { return r.serving !== "no_entry"; });
+    if (php) {
+      var mine = serving.filter(function (r) { return String(r.php_effective || "").indexOf(php) === 0; });
+      return mine.length ? "serves " + mine.length + (mine.length === 1 ? " site" : " sites") + ": " + mine.slice(0, 3).map(function (r) { return r.site.host || r.site.name; }).join(", ") + (mine.length > 3 ? ", and " + (mine.length - 3) + " more" : "") : "no site resolves to this version";
+    }
+    if (svc.name === "nginx" || svc.name === "apache") {
+      var web = (state.session && state.session.settings && state.session.settings.web_server) || "nginx";
+      if (svc.name !== web) return "not the web server chosen for sites";
+      var needsPhp = {};
+      serving.forEach(function (r) { if (r.serving === "php") needsPhp[r.php_effective || "?"] = 1; });
+      var keys = Object.keys(needsPhp);
+      return "serves " + serving.length + (serving.length === 1 ? " site" : " sites") + (keys.length ? "; needs PHP " + keys.join(", ") : "");
+    }
+    if (svc.kind === "mariadb" || svc.kind === "mysql" || svc.kind === "postgres") return "no site is recorded as depending on it";
+    return "";
+  }
+
+  /* Where a service is on the way from files on disk to doing its job. Each rung
+     is a separate fact: installed is not running, and a process holding its port
+     is not a service that answers. The words carry the meaning; the dot repeats it. */
+  function serviceLadder(svc) {
+    if (!svc.installed) return { dot: "bad", facts: ['<span class="fact fact-bad">files missing</span>'], word: "files missing" };
+    if (!svc.running && svc.listening) {
+      // devd did not start what is on this port. It may be another copy of devd, a
+      // system service or something left over; it is reported, never adopted.
+      return { dot: "warn", external: true,
+        facts: ['<span class="fact">installed</span>', '<span class="fact fact-warn">not started by devd</span>',
+          '<span class="fact" title="' + attr(svc.ready_detail || "") + '">port ' + esc(svc.port) + (svc.ready ? " answers" : " in use") + "</span>"],
+        word: "another program holds its port",
+        detail: "held by a process devd did not start" + (svc.ready_detail ? " (it " + svc.ready_detail + ")" : "") + "; starting this one would collide with it" };
+    }
+    if (!svc.running) {
+      var want = svc.desired_state === "running";
+      return { dot: want ? "warn" : "off", facts: ['<span class="fact">installed</span>', want ? '<span class="fact fact-warn">should be running</span>' : '<span class="fact">stopped</span>'], word: want ? "should be running" : "stopped" };
+    }
+    var facts = ['<span class="fact">installed</span>', '<span class="fact fact-ok">running</span>'];
+    if (svc.ready === true) {
+      facts.push('<span class="fact fact-ok" title="' + attr(svc.ready_detail || "") + '">answers' + (svc.ready_via && svc.ready_via !== "tcp" ? " (" + esc(svc.ready_via) + ")" : "") + "</span>");
+      return { dot: "ok", facts: facts, word: svc.ready_via === "tcp" ? "accepts connections" : "answers" };
+    }
+    if (svc.ready === false) {
+      facts.push('<span class="fact fact-warn" title="' + attr(svc.ready_detail || "") + '">not answering</span>');
+      return { dot: "warn", facts: facts, word: "running but not answering", detail: svc.ready_detail };
+    }
+    return { dot: "ok", facts: facts, word: "running" };
+  }
+
   function phpUnitRow(u, compact) {
     var n = u.rows.length;
     var up = u.rows.filter(function (r) { return r.running; }).length;
     var ports = u.rows.map(function (r) { return r.port; }).filter(Boolean).join(", ");
     var tag = (u.php.alt ? "other limits profile · " : "") + n + (n === 1 ? " worker" : " workers");
+    var answering = u.rows.filter(function (r) { return r.ready === true; }).length;
+    var silent = u.rows.filter(function (r) { return r.running && r.ready === false; }).length;
+    var held = u.rows.filter(function (r) { return !r.running && r.listening; }).length;
     var series = attr(u.php.series);
+    var facts = [up === n ? '<span class="fact fact-ok">running</span>' : up ? '<span class="fact fact-warn">' + up + " of " + n + " running</span>" : '<span class="fact">stopped</span>'];
+    if (up && silent) facts.push('<span class="fact fact-warn">' + silent + " not answering</span>");
+    else if (up && answering >= up) facts.push('<span class="fact fact-ok">answers (fastcgi)</span>');
+    if (held) facts.push('<span class="fact fact-warn" title="Something devd did not start is listening on these ports">' + held + (held === 1 ? " port" : " ports") + " held elsewhere</span>");
     return uiRow({
-      dot: up === n ? "ok" : up ? "warn" : "off",
-      title: brandImg("php-cgi", "brand-dot") + "PHP " + esc(u.php.series) + ' <span class="ui-quiet" style="display:inline;padding:0">' + esc(tag) + "</span>",
-      sub: esc((up === n ? "running" : up ? up + " of " + n + " running" : "stopped") + (compact || !ports ? "" : " · ports " + ports)),
+      dot: up === n && !silent ? "ok" : up || held ? "warn" : "off",
+      title: brandImg("php-cgi", "brand-dot") + '<span class="row-name">PHP ' + esc(u.php.series) + '</span> <span class="fact mono">' + esc(tag) + "</span>" +
+        ' <span class="facts">' + facts.join("") + "</span>",
+      sub: (compact ? "" : (serviceDependents(null, u.php.series) ? '<div class="ui-row-dep">' + esc(serviceDependents(null, u.php.series)) + "</div>" : "")) +
+        (compact || !ports ? "" : '<span class="mono">ports ' + esc(ports) + "</span>") +
+        (held && !up ? (compact || !ports ? "" : " · ") + esc("devd did not start what is on " + (held === n ? "these ports" : "some of these ports") + "; starting the pool would collide with it") : ""),
+      wrap: !!held,
       actions: (up
         ? '<button type="button" class="btn btn-mini" data-action="php-pool" data-do="stop" data-series="' + series + '">Stop</button>' +
           '<button type="button" class="btn btn-mini btn-ghost" data-action="php-pool" data-do="restart" data-series="' + series + '">Restart</button>'
@@ -1247,45 +1361,76 @@
     });
   }
 
+  /* The command bar.
+   *
+   * Twelve destinations are not twelve equals. Six are where work happens every
+   * day and are always in view, in the order a change travels: look at the
+   * project, its address, what runs, then ask for something, then watch it run.
+   * Five are the machine and its records. They are one step away, under two
+   * names, and reachable from the keyboard with Ctrl K. What needs a person is
+   * not a destination among the others: it sits apart, at the end, and speaks
+   * only when there is something to decide. */
   function rail() {
     var server = state.server;
     var counts = serviceCounts(server.services);
-    var running = counts.up;
     var attention = (AI.counts.approvals + AI.counts.questions) || null;
     var working = AI.threads ? (AI.threads.filter(function (t) { return t.state === "running"; }).length || null) : null;
+    var runs = (state.view === "team" && TEAM.runs && TEAM.runs.length) ? TEAM.runs : (AI.liveRuns || (AI.home && AI.home.teamRuns) || []);
+    var live = runs.filter(function (t) { return ["planning", "running"].indexOf(t.state) >= 0; });
     var groups = [
-      { label: null, items: [
-        { view: "home", label: "Home" },
-        { view: "inbox", label: "Inbox", count: attention, hot: !!attention }
-      ] },
       { label: "Work", items: [
+        { view: "home", label: "Home" },
         { view: "projects", label: "Projects", count: state.projects.length || state.projectCount || null },
         { view: "sites", label: "Sites", count: (server.sites || []).length || null },
-        { view: "assistant", label: "Assistant", count: working },
-        { view: "agents", label: "Team" },
         { view: "processes", label: "Processes" }
       ] },
-      { label: "Run", items: [
-        { view: "overview", label: "Environment", count: counts.total ? running + "/" + counts.total : null }
+      { label: "Agents", items: [
+        { view: "assistant", label: "Assistant", count: working },
+        // Named for one screen, so it always opens that screen, not the last tab used.
+        { view: "team", label: "Agent runs", count: live.length || null, exact: true }
       ] },
-      { label: "System", items: [
-        { view: "providers", label: "Models" },
-        { view: "activity", label: "Activity" },
-        { view: "system", label: "Diagnostics" },
-        { view: "capabilities", label: "API and tools" }
+      { label: "Machine", menu: true, items: [
+        { view: "overview", label: "Environment", hint: "services, runtimes, databases, hostnames", count: counts.total ? counts.up + "/" + counts.total + " running" : null },
+        { view: "providers", label: "Models", hint: "providers, defaults and fallbacks" },
+        { view: "capabilities", label: "API and tools", hint: "what agents are able to call" }
+      ] },
+      { label: "Records", menu: true, items: [
+        { view: "activity", label: "Activity", hint: "everything devd did, and who asked" },
+        { view: "system", label: "Diagnostics", hint: "health checks and what to do about them" }
       ] }
     ];
-    el("rail").innerHTML = groups.map(function (group) {
-      return (group.label ? '<div class="rail-section">' + esc(group.label) + "</div>" : "") +
-        group.items.map(function (i) {
-          var active = areaOf(state.view) === areaOf(i.view);
-          var icon = RAIL_ICON[i.view] || "i-code";
-          return '<button type="button" class="rail-item' + (active ? " active" : "") + '" data-action="nav" data-view="' + i.view + '" data-label="' + attr(i.label) + '" title="' + attr(i.label) + '"' + (active ? ' aria-current="page"' : "") + ">" +
-            '<svg class="icon" aria-hidden="true"><use href="#' + icon + '"></use></svg>' +
-            '<span class="rail-label">' + esc(i.label) + "</span>" +
-            (i.count !== null && i.count !== undefined ? '<span class="rail-count' + (i.hot ? " rail-count-hot" : "") + '">' + esc(i.count) + "</span>" : "") + "</button>";
-        }).join("");
+    function tab(i) {
+      var active = areaOf(state.view) === areaOf(i.view);
+      return '<button type="button" class="top-tab' + (active ? " active" : "") + '" data-action="nav" data-view="' + i.view + '"' + (i.exact ? ' data-exact="1"' : "") + (active ? ' aria-current="page"' : "") + ">" +
+        esc(i.label) + (i.count !== null && i.count !== undefined ? '<span class="top-count">' + esc(i.count) + "</span>" : "") + "</button>";
+    }
+    var html = groups.map(function (group, gi) {
+      if (!group.menu) return '<div class="top-group" role="group" aria-label="' + attr(group.label) + '">' + group.items.map(tab).join("") + "</div>";
+      var open = state.topMenu === group.label;
+      var here = group.items.some(function (i) { return areaOf(state.view) === areaOf(i.view); });
+      return '<div class="top-menu"><button type="button" class="top-tab top-tab-menu' + (here ? " active" : "") + '" data-action="top-menu" data-menu="' + attr(group.label) + '" aria-haspopup="true" aria-expanded="' + open + '">' +
+        esc(group.label) + '<svg class="icon" aria-hidden="true"><use href="#i-chevron-down"></use></svg></button>' +
+        '<div class="top-pop" role="group" aria-label="' + attr(group.label) + '"' + (open ? "" : " hidden") + ">" + group.items.map(function (i) {
+          var on = areaOf(state.view) === areaOf(i.view);
+          return '<button type="button" class="top-item' + (on ? " active" : "") + '" data-action="nav" data-view="' + i.view + '"' + (on ? ' aria-current="page"' : "") + ">" +
+            '<span class="top-item-name">' + esc(i.label) + "</span>" +
+            '<span class="top-item-hint">' + esc(i.hint) + (i.count ? " · " + esc(i.count) : "") + "</span></button>";
+        }).join("") + "</div></div>";
     }).join("");
+
+    // Work in flight, named as it is: the run's own title and its real state.
+    var chip = "";
+    if (live.length) {
+      var first = live[0];
+      var title = String(first.title || "").length > 34 ? String(first.title).slice(0, 33) + "…" : String(first.title || "Agent run");
+      chip = '<button type="button" class="top-live" data-action="team-open-from" data-id="' + attr(first.id) + '" title="' + attr(first.title || "") + '">' +
+        '<span class="top-live-state">' + esc(first.state === "planning" ? "Planning" : "Running") + "</span>" +
+        '<span class="top-live-title">' + esc(title) + "</span>" +
+        (live.length > 1 ? '<span class="top-count">+' + (live.length - 1) + "</span>" : "") + "</button>";
+    }
+    var needs = '<button type="button" class="top-needs' + (attention ? " has" : "") + (areaOf(state.view) === "inbox" ? " active" : "") + '" data-action="nav" data-view="inbox"' + (areaOf(state.view) === "inbox" ? ' aria-current="page"' : "") + ">" +
+      (attention ? '<span class="top-needs-n">' + esc(attention) + "</span>" : "") + "Needs you</button>";
+    el("rail").innerHTML = html + '<div class="top-attn">' + chip + needs + "</div>";
   }
 
   /* The path above the page, only when it says something the title and the tabs do not: a project is
@@ -1327,7 +1472,7 @@
     var prod = AI.env && AI.env.mode === "production";
     right.push(prod ? '<span class="sb-bad" title="Production mode: agents need your approval for every change">production</span>' : '<span title="devd only changes this machine. Switch to production mode in Diagnostics to require approval for every agent change.">local</span>');
     if (state.session) right.push('<span title="The address agents and scripts use">api :' + esc(state.session.port) + "</span>");
-    el("statusbar").innerHTML = '<div class="sb-left">' + (left.join('<span class="sb-sep">·</span>') || "Ready") + '</div><div class="sb-right">' + right.join('<span class="sb-sep">·</span>') + "</div>";
+    el("statusbar").innerHTML = '<div class="sb-left">' + (left.join('<span class="sb-sep" aria-hidden="true">·</span>') || "Ready") + '</div><div class="sb-right">' + right.join('<span class="sb-sep" aria-hidden="true">·</span>') + "</div>";
   }
 
   // -------------------------------------------------------------------- server
@@ -1526,6 +1671,11 @@
     return "not trusted yet";
   }
 
+  /* The reason a server read failed, or "" when it did not. */
+  function serverFailed(id) {
+    return (state.server.failures && state.server.failures[id]) || "";
+  }
+
   function loadServer() {
     // The inventory probes every installed service and port, which takes
     // seconds. The screen does not wait for it: services, sites and runtimes
@@ -1536,22 +1686,29 @@
     // one boot. They share one request instead of each asking the machine
     // again; a second caller joins the answer that is already on its way.
     if (state.server.pending) return state.server.pending;
+    // A read that fails is not an empty answer. Its last value is kept and the
+    // failure recorded, so no screen says "no sites" because a request was refused.
+    var FAILED = {};
+    var failures = {};
+    function attempt(id) {
+      return read(id).catch(function (e) { failures[id] = e && e.message ? e.message : "could not be read"; return FAILED; });
+    }
     var request = Promise.all([
-      read("service.list").catch(function () { return []; }),
-      read("site.list").catch(function () { return []; }),
-      read("runtime.list").catch(function () { return []; }),
-      read("tls.list").catch(function () { return []; }),
-      read("tls.ca.show").catch(function () { return null; }),
-      read("hosts.show").catch(function () { return null; }),
-      read("tls.ca.status").catch(function () { return null; })
+      attempt("service.list"), attempt("site.list"), attempt("runtime.list"), attempt("tls.list"),
+      attempt("tls.ca.show"), attempt("hosts.show"), attempt("tls.ca.status")
     ]).then(function (r) {
-      state.server.services = Array.isArray(r[0]) ? r[0] : [];
-      state.server.sites = Array.isArray(r[1]) ? r[1] : [];
-      state.server.runtimes = Array.isArray(r[2]) ? r[2] : [];
-      state.server.certs = Array.isArray(r[3]) ? r[3] : [];
-      state.server.ca = r[4];
-      state.server.hosts = r[5];
-      state.server.trust = r[6];
+      function take(i, key, list) {
+        if (r[i] === FAILED) { if (state.server[key] === undefined) state.server[key] = list ? [] : null; return; }
+        state.server[key] = list ? (Array.isArray(r[i]) ? r[i] : []) : r[i];
+      }
+      take(0, "services", true);
+      take(1, "sites", true);
+      take(2, "runtimes", true);
+      take(3, "certs", true);
+      take(4, "ca", false);
+      take(5, "hosts", false);
+      take(6, "trust", false);
+      state.server.failures = failures;
       state.server.loaded = true;
       read("services.inventory")
         .then(function (inv) {
@@ -1597,6 +1754,44 @@
     ].filter(Boolean));
   }
 
+  /* The path a request travels to reach a site on this machine, as five links:
+     the name resolves, the certificate is trusted, the web server answers, PHP is
+     there to run the code, and the database is there to hold it. Each link states
+     what devd measured and leads to where it is changed. A link devd has no
+     reading for says so; none is assumed to be fine. */
+  function machineChain() {
+    var s = state.server;
+    var hosts = s.hosts || {};
+    var pending = ((hosts.adding || []).length + (hosts.removing || []).length);
+    var sites = s.sites || [];
+    var published = sites.filter(function (r) { return r.in_hosts; }).length;
+    var web = (state.session && state.session.settings && state.session.settings.web_server) || "nginx";
+    var webSvc = (s.services || []).filter(function (r) { return r.name === web; })[0];
+    var pools = (s.services || []).filter(function (r) { return /^php-cgi/.test(r.name) && r.name !== "php-cgi"; });
+    var poolsUp = pools.filter(function (r) { return r.running; }).length;
+    var db = (s.services || []).filter(function (r) { return r.kind === "mariadb" || r.kind === "mysql"; })[0];
+    var runtimes = s.runtimes || [];
+
+    function link(view, title, tone, word, detail) {
+      return '<button type="button" class="chain-link chain-' + tone + '" data-action="nav" data-view="' + view + '">' +
+        '<span class="chain-title">' + esc(title) + '</span><span class="chain-word">' + esc(word) + '</span><span class="chain-detail">' + esc(detail) + "</span></button>";
+    }
+    var webL = webSvc ? serviceLadder(webSvc) : null;
+    var dbL = db ? serviceLadder(db) : null;
+    var tone = function (dot) { return dot === "ok" ? "ok" : dot === "bad" ? "bad" : dot === "warn" ? "warn" : "off"; };
+    var links = [
+      link("hosts", "Names", !sites.length ? "off" : pending || published < sites.length ? "warn" : "ok",
+        !sites.length ? "No sites" : published + " of " + sites.length + " resolve", pending ? pending + " change" + (pending === 1 ? "" : "s") + " waiting to be written" : "devd's block in the hosts file"),
+      link("certificates", "HTTPS", !s.ca ? "off" : caTrusted() ? "ok" : "warn",
+        !s.ca ? "No authority yet" : caTrusted() ? "Trusted" : "Not trusted", (s.certs || []).length + " certificate" + ((s.certs || []).length === 1 ? "" : "s") + " issued"),
+      link("services", "Web server", webL ? tone(webL.dot) : "off", webL ? webL.word : "Not installed", web + (webSvc && webSvc.port ? " on port " + webSvc.port : "")),
+      link("runtimes", "PHP", !runtimes.length ? "off" : pools.length && poolsUp === pools.length ? "ok" : "warn",
+        !runtimes.length ? "No runtime" : pools.length ? poolsUp + " of " + pools.length + " pools running" : runtimes.length + " installed", phpRuntime() ? "default " + phpPrimary() : "no default chosen"),
+      link("databases", "Database", dbL ? tone(dbL.dot) : "off", dbL ? dbL.word : "Not installed", db ? db.name + (db.port ? " on port " + db.port : "") : "install one when a project needs it")
+    ];
+    return '<div class="chain" aria-label="The path a request takes on this machine">' + links.join('<span class="chain-sep" aria-hidden="true"></span>') + "</div>";
+  }
+
   function renderOverview() {
     if (state.view !== "overview") return;
     var s = state.server;
@@ -1632,13 +1827,19 @@
         : s.sites.length ? "Every site has a defined entry point. Open Sites to inspect an address, serving mode or certificate." : "A site is a folder, a hostname and a certificate.",
       actions: '<button type="button" class="btn btn-mini btn-primary" data-action="nav" data-view="sites">Sites</button>'
     });
+    var answeredCount = (s.services || []).filter(function (x) { return x.running && x.ready === true; }).length;
+    var silentCount = (s.services || []).filter(function (x) { return x.running && x.ready === false; }).length;
+    var runningRows = (s.services || []).filter(function (x) { return x.running; }).length;
+    var heldCount = (s.services || []).filter(function (x) { return !x.running && x.listening; }).length;
     var services = serviceUnits(s.services).map(function (unit) {
       if (unit.rows) return phpUnitRow(unit, true);
       var svc = unit.row;
+      var ladder = serviceLadder(svc);
       return uiRow({
-        dot: svc.running ? "ok" : "off",
-        title: brandImg(svc.kind || svc.name, "brand-dot") + esc(svc.name),
-        sub: esc(servicePorts(svc) || (svc.running ? "running" : "stopped")),
+        dot: ladder.dot,
+        title: brandImg(svc.kind || svc.name, "brand-dot") + '<span class="row-name">' + esc(svc.name) + "</span>" +
+          ' <span class="facts">' + ladder.facts.join("") + "</span>",
+        sub: '<span class="mono">' + esc(servicePorts(svc) || "") + "</span>" + (ladder.detail ? " · " + esc(ladder.detail) : ""),
         actions: svc.running
           ? '<button type="button" class="btn btn-mini" data-action="stop-service" data-name="' + attr(svc.name) + '">Stop</button>'
           : '<button type="button" class="btn btn-mini btn-primary" data-action="start-service" data-name="' + attr(svc.name) + '">Start</button>'
@@ -1647,15 +1848,10 @@
 
     el("main").innerHTML = page("Environment", "", actions,
       (notices.length ? uiList(notices) : "") +
-      summaryBand([
-        { label: "Services", value: total ? up + " of " + total + " running" : "Not installed", detail: total && up === total ? "the stack answered" : total ? "start it when a site needs it" : "install the stack to begin", tone: total && up === total ? "ok" : up ? "warn" : "", dot: total && up === total ? "ok" : up ? "warn" : "off" },
-        { label: "Sites", value: s.sites.length + " configured", detail: noEntry.length ? noEntry.length + " with no entry point" : "all can serve", tone: noEntry.length ? "warn" : "", dot: noEntry.length ? "warn" : "ok" },
-        { label: "Hostnames", value: pending ? pending + " pending" : "In sync", detail: pending ? "publish them in Hosts" : "every site address resolves locally", tone: pending ? "warn" : "", dot: pending ? "warn" : "ok" },
-        { label: "Runtimes", value: (s.runtimes || []).length ? (s.runtimes || []).length + " installed" : "None", detail: phpRuntime() ? "default PHP " + phpPrimary() : "install one in Runtimes", dot: (s.runtimes || []).length ? "ok" : "off" }
-      ]) +
+      machineChain() +
       siteLine + machine +
       uiHead("Services", total ? up + " of " + total : null) +
-      (services.length ? uiList(services) : uiEmpty("No services installed", "devd installs PHP, a web server and MariaDB from their makers.", '<button type="button" class="btn btn-primary" data-action="setup-open">Set up devd</button>')) +
+      (services.length ? uiList(services) : serverFailed("service.list") ? uiEmpty("Couldn't read your services", serverFailed("service.list") + ".", '<button type="button" class="btn" data-action="refresh">Try again</button>') : uiEmpty("No services installed", "devd installs PHP, a web server and MariaDB from their makers.", '<button type="button" class="btn btn-primary" data-action="setup-open">Set up devd</button>')) +
       '<div class="ui-more">Also: <button type="button" data-action="nav" data-view="toolchain">Tools</button> \u00b7 <button type="button" data-action="nav" data-view="runtimes">Runtimes</button> \u00b7 <button type="button" data-action="nav" data-view="databases">Databases</button> \u00b7 <button type="button" data-action="nav" data-view="remote">Remote</button> \u00b7 <button type="button" data-action="nav" data-view="system">Diagnostics</button></div>');
   }
 
@@ -1686,6 +1882,23 @@
     return "";
   }
 
+  /* What the last site.verify said about a site, kept for this window only. A
+     record, a certificate and a running web server are facts about configuration;
+     this is the one fact about what a browser would get. */
+  var SITE_VERIFY = {};
+
+  function siteVerifyFact(name) {
+    var v = SITE_VERIFY[name];
+    if (!v) return "";
+    if (v.pending) return '<span class="fact">' + uiDot("live") + "checking…</span>";
+    var r = v.report || {};
+    var when = v.at ? " at " + new Date(v.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+    // A 4xx is an answer from the right server, not the page a person wanted: say it plainly, without the green.
+    if (r.ok) return '<span class="fact ' + (r.status >= 400 ? "fact-warn" : "fact-ok") + '" title="' + attr((r.detail || "") + when) + '">answers' + (r.status ? " HTTP " + r.status : "") + "</span>";
+    return '<span class="fact fact-bad" title="' + attr((r.detail || v.error || "") + when) + '">' +
+      esc(r.status ? "HTTP " + r.status : !r.resolves && r.host ? "does not resolve" : r.resolves && !r.listening ? "nothing listening" : "did not answer") + "</span>";
+  }
+
   function renderSites() {
     if (state.view !== "sites") return;
     var all = (state.server.sites || []).slice().sort(function (a, b) {
@@ -1704,26 +1917,49 @@
       if (mode === "attention" && !siteNeedsAttention(row)) return false;
       return keeps(q, row.site && row.site.name, row.url, row.document_root, row.php_effective, row.site && row.site.upstream, row.detected);
     });
+    // One row per site, in columns that answer the questions in the order they are
+    // asked: which address, what answers it, is it secure, did it actually respond.
     var rows = matching.map(function (row) {
       var site = row.site;
       var proxied = !!site.upstream;
       var reason = siteAttentionReason(row);
-      var dot = row.present === false ? "bad" : row.serving === "no_entry" || reason ? "warn" : row.server_running ? "ok" : "off";
-      var metaBits = [];
-      if (!row.in_hosts) metaBits.push("not in hosts");
-      if (site.tls_mode !== "off" && !row.certificate) metaBits.push("no certificate");
-      var sub = esc(row.url) + (proxied ? " → " + esc(site.upstream) + (row.upstream_listening ? "" : " (not running)") : row.serving === "no_entry" ? " · " + esc(reason || "not served") : " · " + esc(row.document_root)) +
-        (row.shared ? ' · <a href="' + attr(row.shared) + '" target="_blank" rel="noreferrer">public link</a>' : "");
-      return uiRow({
-        dot: dot,
-        title: esc(site.name) + ' <span class="pill ' + (row.serving === "no_entry" ? "pill-warn" : site.tls_mode !== "off" && !row.certificate ? "pill-warn" : "pill-ok") + '">' + esc(servingLabel(row) || "not serving") + "</span>",
-        sub: sub, meta: esc(metaBits.join(" · ")),
-        open: 'data-action="open-url" data-url="' + attr(row.url) + '"',
-        actions: '<button type="button" class="btn btn-mini btn-primary" data-action="open-site" data-name="' + attr(site.name) + '">Manage</button>' +
-          '<button type="button" class="btn btn-mini" data-action="open-url" data-url="' + attr(row.url) + '">Open</button>',
-        hover: true
-      });
+      var checked = SITE_VERIFY[site.name] && SITE_VERIFY[site.name].report;
+      var pending = SITE_VERIFY[site.name] && SITE_VERIFY[site.name].pending;
+      var dot = row.present === false ? "bad" : checked && !checked.ok ? "bad" : row.serving === "no_entry" || reason ? "warn" : row.server_running ? "ok" : "off";
+
+      var target = proxied ? "to " + site.upstream : row.serving === "no_entry" ? "" : row.document_root || "";
+      var serves = '<div class="st-main">' + esc(servingLabel(row) || "not serving") + "</div>" +
+        (target ? '<div class="st-sub mono" title="' + attr(target) + '">' + esc(target) + "</div>" : "") +
+        (proxied ? '<div class="st-sub ' + (row.upstream_listening ? "" : "st-bad") + '">' + (row.upstream_listening ? "upstream listening" : "upstream not running") + "</div>" : "") +
+        (row.serving === "no_entry" ? '<div class="st-sub st-warn">' + esc(reason || "nothing to serve") + "</div>" : "");
+
+      var tlsWord = site.tls_mode === "off" ? '<div class="st-main">HTTP only</div>'
+        : row.certificate ? '<div class="st-main st-ok">Certificate</div>' : '<div class="st-main st-warn">No certificate</div>';
+      var cert = tlsWord + '<div class="st-sub">' + (row.in_hosts ? "in hosts" : '<span class="st-warn">not in hosts</span>') + "</div>";
+
+      var reach;
+      if (pending) reach = '<div class="st-main">Checking…</div>';
+      else if (checked) {
+        var st = checked.status;
+        reach = checked.ok
+          ? '<div class="st-main ' + (st >= 400 ? "st-warn" : "st-ok") + '">Answered' + (st ? " " + st : "") + '</div><div class="st-sub">' + (st >= 400 ? "an answer, not the page" : "request succeeded") + "</div>"
+          : '<div class="st-main st-bad">' + esc(st ? "HTTP " + st : !checked.resolves ? "Does not resolve" : checked.resolves && !checked.listening ? "Nothing listening" : "No answer") + '</div><div class="st-sub st-bad" title="' + attr(checked.detail || "") + '">' + esc(checked.detail || "") + "</div>";
+      } else reach = '<div class="st-main st-dim">Not checked</div><div class="st-sub">a listening port is not a healthy site</div>';
+
+      return '<div class="st-row" data-open="1" data-action="open-site" data-name="' + attr(site.name) + '">' +
+        '<div class="st-host">' + uiDot(dot) + '<div class="st-hostbody"><div class="st-name mono">' + esc(site.host || site.name) + '</div><div class="st-sub mono" title="' + attr(row.url) + '">' + esc(row.url) +
+          (row.shared ? '</div><div class="st-sub"><a href="' + attr(row.shared) + '" target="_blank" rel="noreferrer">public link</a>' : "") + "</div></div></div>" +
+        '<div class="st-col" data-label="Serves">' + serves + "</div>" +
+        '<div class="st-col" data-label="Security">' + cert + "</div>" +
+        '<div class="st-col" data-label="Reachability">' + reach + "</div>" +
+        '<div class="st-actions">' +
+          '<button type="button" class="btn btn-mini" data-action="verify-site" data-name="' + attr(site.name) + '"' + (pending ? " disabled" : "") + ' title="Request the address and report what answered">Check</button>' +
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="open-url" data-url="' + attr(row.url) + '" aria-label="Open ' + attr(row.url) + ' in the browser">Open</button>' +
+          '<button type="button" class="btn btn-mini" data-action="open-site" data-name="' + attr(site.name) + '" aria-label="Manage ' + attr(site.name) + '">Manage</button>' +
+        "</div></div>";
     });
+    var table = '<div class="st-table" role="table" aria-label="Sites">' +
+      '<div class="st-headrow" role="row"><span>Address</span><span>Serves</span><span>Security</span><span>Reachability</span><span></span></div>' + rows.join("") + "</div>";
     var filters = '<div class="segmented site-filter" role="group" aria-label="Filter sites">' +
       '<button type="button" class="seg' + (mode === "all" ? " active" : "") + '" data-action="site-filter" data-filter="all">All <span class="seg-count">' + all.length + "</span></button>" +
       '<button type="button" class="seg' + (mode === "serving" ? " active" : "") + '" data-action="site-filter" data-filter="serving">Serving <span class="seg-count">' + serving + "</span></button>" +
@@ -1739,11 +1975,16 @@
       body += '<div class="ui-controls site-controls">' +
         '<input type="search" class="ui-search" data-filter="sites" placeholder="Search by name, address, folder or runtime" value="' + attr(q) + '" aria-label="Search sites">' +
         '<span class="grow"></span>' + filters + "</div>";
-      body += matching.length ? uiList(rows) : uiEmpty('No site matches "' + q + '"', "Clear the search or choose another filter.", '<button type="button" class="btn" data-action="site-filter" data-filter="all">Show all sites</button>');
+      body += matching.length ? table : uiEmpty('No site matches "' + q + '"', "Clear the search or choose another filter.", '<button type="button" class="btn" data-action="site-filter" data-filter="all">Show all sites</button>');
+    } else if (serverFailed("site.list")) {
+      body += uiEmpty("Couldn't read your sites", serverFailed("site.list") + ". The list is not empty; devd did not answer the request.", '<button type="button" class="btn" data-action="refresh">Try again</button>');
     } else if (!state.siteFormOpen) {
-      body += uiEmpty("No sites yet", "A site is a project folder, a hostname, a certificate and a URL.", '<button type="button" class="btn btn-primary" data-action="new-site">Create a site</button>');
+      body += uiEmpty("No sites yet", "Give a project folder an address and devd handles the hostname, the certificate and the HTTPS.", '<button type="button" class="btn btn-primary" data-action="new-site">Create a site</button>');
     }
-    el("main").innerHTML = page("Sites", "", '<button type="button" class="btn btn-primary" data-action="new-site">New site</button>', body);
+    if (all.length) body += '<div class="ui-more"><b>Verify</b> requests each address the way a browser would: the hostname, the listener, the TLS handshake and the HTTP status. A certificate on disk or a running web server is not proof that a site answers.</div>';
+    el("main").innerHTML = page("Sites", "",
+      (all.length ? '<button type="button" class="btn" data-action="verify-sites">Check all</button>' : "") +
+      '<button type="button" class="btn btn-primary" data-action="new-site">New site</button>', body);
   }
 
   // --------------------------------------------------------------- operations
@@ -1774,6 +2015,16 @@
 
   function siteRowByName(name) {
     return (state.server.sites || []).filter(function (r) { return r.site && r.site.name === name; })[0] || null;
+  }
+
+  function verifySite(name, quiet) {
+    SITE_VERIFY[name] = { pending: true };
+    render();
+    return run("site.verify", { name: name }, { quiet: true }).then(function (o) {
+      SITE_VERIFY[name] = o && o.data ? { report: o.data, at: Date.now() } : { report: { ok: false, detail: (o && o.message) || "the check could not run" }, at: Date.now() };
+      if (!quiet) toast(SITE_VERIFY[name].report.ok ? "ok" : "warn", SITE_VERIFY[name].report.detail || name);
+      render();
+    });
   }
 
   function openSite(name) {
@@ -1908,6 +2159,36 @@
     }).join("") + "</div>";
   }
 
+  /* The checks site.verify makes, in the order they can fail. Nothing is shown as
+     passed until a check has run; each step names what was observed. */
+  function siteReachability(site) {
+    var v = SITE_VERIFY[site.name];
+    var r = v && v.report;
+    var button = '<button type="button" class="btn btn-mini' + (r ? "" : " btn-primary") + '" data-action="verify-site" data-name="' + attr(site.name) + '"' + (v && v.pending ? " disabled" : "") + ">" +
+      (v && v.pending ? "Checking…" : r ? "Check again" : "Check now") + "</button>";
+    if (!r) {
+      return uiHead("Reachability", null, button) +
+        uiEmpty(v && v.pending ? "Requesting the address…" : "Not checked in this window",
+          "Checks the hostname, that it resolves, that something listens on the port, the TLS handshake and the HTTP status - the way a browser would reach it. One request; it changes nothing.");
+    }
+    var tls = /^https:/.test(r.url || "");
+    function step(label, ok, yes, no, skipped) {
+      var kind = skipped ? "off" : ok ? "ok" : "bad";
+      return uiRow({ dot: kind, title: esc(label) + ' <span class="facts">' +
+        (skipped ? '<span class="fact">not reached</span>' : ok ? '<span class="fact fact-ok">' + esc(yes) + "</span>" : '<span class="fact fact-bad">' + esc(no) + "</span>") + "</span>" });
+    }
+    var steps = [
+      step("Hostname", r.in_hosts || r.resolves, r.in_hosts ? "in devd's hosts block" : "resolves without it", "not in hosts", false),
+      step("Resolves", r.resolves, "resolves", "does not resolve", false),
+      step("Listener", r.listening, "something listens", "nothing listening", !r.resolves),
+      tls ? step("TLS", r.tls, "handshake chains to devd's authority", "handshake failed", !r.listening) : "",
+      step("HTTP", r.ok, "answered " + (r.status || "") + (r.status >= 400 ? " - an answer, but not the page" : ""), r.status ? "answered " + r.status : "no answer", !r.listening || (tls && !r.tls))
+    ].filter(Boolean);
+    return uiHead("Reachability", null, '<span class="ui-quiet" style="padding:0">checked ' + esc(new Date(v.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })) + "</span>" + button) +
+      (r.ok ? "" : '<div class="notice notice-bad" role="alert"><b>' + esc(r.host || site.name) + " is not reachable.</b> " + esc(r.detail || "") + "</div>") +
+      uiList(steps);
+  }
+
   function siteOverview(row) {
     var site = row.site;
     var runtime = row.serving === "proxy" ? "proxy to " + site.upstream
@@ -1960,7 +2241,7 @@
     var settings = uiList(rowsSettings);
     if (!OPS.data.overview && !(OPS.error && OPS.errorTab === "overview")) opsLoad("overview");
     var loadError = OPS.error && OPS.errorTab === "overview" ? '<div class="notice notice-bad">' + esc(OPS.error) + "</div>" : "";
-    return uiHead("Site", null, "") + uiList(details) +
+    return siteReachability(site) + uiHead("Site", null, "") + uiList(details) +
       uiHead("Serving", null, "") + settings + loadError +
       '<div class="ui-more">Environment, deploys, cron, workers, logs, Laravel, redirects and the web server are on the tabs above.</div>';
   }
@@ -2038,7 +2319,12 @@
     if (!OPS.data.db && !failed && !stopped) opsLoad("db");
     var body;
     if (stopped) {
-      body = uiEmpty("MariaDB is not running", "Users, grants and scheduled backups live inside MariaDB. Start it to inspect them; nothing is changed by looking.", '<button type="button" class="btn btn-primary" data-action="databases-start">Start MariaDB</button>');
+      var mdb = (state.server.services || []).filter(function (x) { return x.name === "mariadb"; })[0];
+      body = mdb && mdb.listening
+        ? '<div class="notice notice-warn" role="status"><b>Port ' + esc(mdb.port) + " is held by a database devd did not start.</b> " +
+          esc(mdb.ready_detail ? "It " + mdb.ready_detail + ". " : "") + "devd's own MariaDB is stopped, and starting it here would collide with that process. Stop the other one first, or give devd's MariaDB another port.</div>" +
+          uiEmpty("devd's MariaDB is not running", "Users, grants and scheduled backups live inside the MariaDB devd runs. Nothing is changed by looking.", '<button type="button" class="btn" data-action="databases-start">Start MariaDB anyway</button>')
+        : uiEmpty("MariaDB is not running", "Users, grants and scheduled backups live inside MariaDB. Start it to inspect them; nothing is changed by looking.", '<button type="button" class="btn btn-primary" data-action="databases-start">Start MariaDB</button>');
     } else if (failed) {
       body = '<div class="notice notice-bad">' + esc(OPS.error) + "</div>" +
         '<div class="inline"><button type="button" class="btn btn-primary" data-action="databases-start">Start MariaDB</button><button type="button" class="btn" data-action="nav" data-view="services">Open Services</button></div>';
@@ -2114,8 +2400,8 @@
     var actions = '<button type="button" class="btn btn-mini btn-primary" data-action="ops-cron-add">Add job</button>' +
       '<button type="button" class="btn btn-mini" data-action="ops-cron-laravel">Run the Laravel scheduler</button>';
     return uiHead("Cron jobs", jobs.length, actions) +
-      (jobs.length ? uiList(rows) : uiEmpty("No cron jobs", "A job runs a command on a schedule in this site's folder, with its PHP. Laravel needs one job: its scheduler, every minute.")) +
-      '<p class="dim ops-note">Jobs run while devd is open. One that was due while it was closed is skipped, not run late.</p>';
+      (jobs.length ? uiList(rows) : uiEmpty("Nothing scheduled yet", "A cron job runs a command on a schedule, in this site's folder, with this site's PHP. A Laravel site needs just one: its scheduler, every minute.")) +
+      '<p class="dim ops-note">Jobs only run while devd is open. If one comes due while devd is closed, it is skipped, not run late.</p>';
   }
 
   // ----------------------------------------------------------------- workers
@@ -2136,8 +2422,8 @@
     var actions = '<button type="button" class="btn btn-mini btn-primary" data-action="ops-queue-add">Add queue worker</button>' +
       '<button type="button" class="btn btn-mini" data-action="ops-queue-add-command">Add a program</button>';
     return uiHead("Workers", list.length, actions) +
-      (list.length ? uiList(rows) : uiEmpty("No workers", "A queue worker runs `php artisan queue:work` with this site's PHP and is restarted if it stops.")) +
-      '<p class="dim ops-note">Restart a worker after a deploy so it runs the new code.</p>';
+      (list.length ? uiList(rows) : uiEmpty("No workers running", "A worker keeps your queue moving: it runs `php artisan queue:work` with this site's PHP, and devd starts it again if it stops.")) +
+      '<p class="dim ops-note">After a deploy, restart the worker so it picks up the new code.</p>';
   }
 
   // --------------------------------------------------------------- redirects
@@ -2152,7 +2438,7 @@
       });
     });
     return uiHead("Redirects", list.length, '<button type="button" class="btn btn-mini btn-primary" data-action="ops-redirect-add">Add redirect</button>') +
-      (list.length ? uiList(rows) : uiEmpty("No redirects", "Send a path to another path or an https address. `/blog/*` covers everything under /blog/.")) +
+      (list.length ? uiList(rows) : uiEmpty("No redirects yet", "Point a path at another path or an https address. `/blog/*` covers everything under /blog/.")) +
       '<p class="dim ops-note">Redirects are written into the web server\'s configuration, which is reloaded.</p>';
   }
 
@@ -2172,7 +2458,7 @@
     var kinds = [["nginx_error", "Web server errors"], ["nginx_access", "Web server access"], ["php", "PHP"]];
     var picker = '<select class="select compact" data-change="ops-logkind">' + kinds.map(function (k) { return '<option value="' + k[0] + '"' + ((OPS.logKind || "nginx_error") === k[0] ? " selected" : "") + ">" + k[1] + "</option>"; }).join("") + "</select>";
     return uiHead("Laravel log", lv.matching, chips + '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-log-clear">Empty</button>') +
-      (lv.file ? (entries.length ? uiList(entries) : uiEmpty("No entries", "Nothing matches.")) : uiEmpty("No Laravel log", lv.note || "")) +
+      (lv.file ? (entries.length ? uiList(entries) : uiEmpty("Nothing matches", "No log entry fits that filter.")) : uiEmpty("No Laravel log yet", lv.note || "Once the app writes something, it shows up here.")) +
       uiHead("Server logs", null, picker) +
       '<pre class="log-block">' + esc((site.lines || []).join("\n") || (site.exists ? "The log is empty." : "No log yet: the site has not been requested.")) + "</pre>";
   }
@@ -2181,8 +2467,26 @@
 
   function opsDeploy(d) {
     var hist = (d[0] && d[0].deployments) || [], script = d[1] || {}, repo = d[2] || {}, check = d[3] || {};
-    var warn = (check.warnings || []).map(function (w) { return '<div class="notice notice-warn">' + esc(w) + "</div>"; }).join("");
-    if (warn) warn += '<div class="inline" style="margin:0 0 12px"><button type="button" class="btn btn-mini" data-action="ops-limits">' + (check.server_assumed ? "Tell devd what your server allows" : "Change the server limits") + '</button><button type="button" class="btn btn-mini btn-ghost" data-action="ops-site-profile-go" data-profile="production">Try this site with the server\'s limits</button></div>';
+    // Four near-identical warnings are one finding: this machine is more generous than the
+    // server. Each limit is a row (what it is, here, there, what that would do to a request),
+    // and the way to settle it is stated once.
+    var drift = (check.warnings || []).map(function (w) {
+      var m = String(w).match(/^(\w+) is (.+?) here but (.+?) on (.+?)(?: \([^)]*\))?: (.+)$/);
+      return m ? { name: m[1], here: m[2], there: m[3], where: m[4], effect: m[5] } : { raw: String(w) };
+    });
+    var warn = "";
+    if (drift.length) {
+      var where = (drift.filter(function (d) { return d.where; })[0] || {}).where || "your server";
+      warn = '<section class="drift" aria-label="Differences from your server">' +
+        "<h3>This machine allows more than " + esc(where) + " probably does</h3>" +
+        '<p class="drift-lead">A site that works here can fail once it is deployed. ' + (check.server_assumed ? "The server's values below are assumed, not read from it." : "These are the limits you gave devd for the server.") + "</p>" +
+        '<table class="drift-table"><thead><tr><th>Limit</th><th>Here</th><th>Server</th><th>What it would do</th></tr></thead><tbody>' +
+        drift.map(function (d) {
+          return d.raw ? '<tr><td colspan="4">' + esc(d.raw) + "</td></tr>"
+            : '<tr><td class="mono">' + esc(d.name) + '</td><td class="mono">' + esc(d.here) + '</td><td class="mono">' + esc(d.there) + "</td><td>" + esc(d.effect.charAt(0).toUpperCase() + d.effect.slice(1)) + ".</td></tr>";
+        }).join("") + "</tbody></table>" +
+        '<div class="inline"><button type="button" class="btn btn-mini" data-action="ops-limits">' + (check.server_assumed ? "Tell devd what your server allows" : "Change the server limits") + '</button><button type="button" class="btn btn-mini btn-ghost" data-action="ops-site-profile-go" data-profile="production">Try this site with the server\'s limits</button></div></section>';
+    }
     var rows = hist.map(function (x) {
       var ok = x.state === "success" ? "ok" : x.state === "failed" ? "bad" : "warn";
       return uiRow({
@@ -2201,7 +2505,7 @@
         (repo.linked ? '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-hook" data-on="' + (repo.link && repo.link.deploy_on_push ? "0" : "1") + '">' + (repo.link && repo.link.deploy_on_push ? "Turn push-to-deploy off" : "Turn push-to-deploy on") + "</button>" : "")
     });
     var head = uiHead("Deployments", hist.length, '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-script">' + (script.saved ? "Edit script" : "Deploy script") + '</button><button type="button" class="btn btn-mini btn-primary" data-action="ops-deploy">Deploy now</button>');
-    return warn + uiList([repoRow]) + opsDeployExtras(d) + head + (hist.length ? uiList(rows) : uiEmpty("No deployments yet", "Deploy runs the script: " + (script.saved ? "yours." : "the default one for this project. Open it to see or change it.")));
+    return warn + uiList([repoRow]) + opsDeployExtras(d) + head + (hist.length ? uiList(rows) : uiEmpty("Nothing deployed yet", "A deploy runs this script: " + (script.saved ? "yours." : "the default one for this project. Open it to see or change it.")));
   }
 
   // ------------------------------------------------------------------ alerts
@@ -2371,7 +2675,7 @@
 
   function opsLaravel(d) {
     var s = d[0] || {};
-    if (!s.is_laravel) return uiEmpty("Not a Laravel project", "This folder has no artisan file, so there is nothing to run here.");
+    if (!s.is_laravel) return uiEmpty("This isn't a Laravel project", "There is no artisan file in this folder, so there is nothing to run here.");
     var debugWarn = s.app_debug === "true" && s.app_env === "production";
     var rows = [
       uiRow({
@@ -2569,7 +2873,14 @@
     rows.forEach(function (r) { byName[r.name] = r; });
     var counts = serviceCounts(rows);
     var up = counts.up;
+    var extern = [];
     var installed = serviceUnits(rows).map(function (unit) {
+      var isExt = unit.rows ? unit.rows.some(function (r) { return !r.running && r.listening; }) : (!unit.row.running && unit.row.listening);
+      var html = serviceRowHtml(unit);
+      if (isExt) extern.push(html);
+      return isExt ? "" : html;
+    }).filter(Boolean);
+    function serviceRowHtml(unit) {
       if (unit.rows) return phpUnitRow(unit, false);
       var svc = unit.row;
       var activeWeb = (state.session && state.session.settings && state.session.settings.web_server) || "nginx";
@@ -2579,10 +2890,17 @@
           ? '<span class="pill pill-accent">serving sites</span>'
           : (svc.installed ? '<button type="button" class="btn btn-mini" data-action="web-use" data-name="' + attr(svc.name) + '">Use for sites</button>' : "");
       }
+      var ladder = serviceLadder(svc);
+      var where = [servicePorts(svc), svc.running && svc.pid ? "pid " + svc.pid : ""].filter(Boolean).join(" · ");
       return uiRow({
-        dot: svc.running ? "ok" : "off",
-        title: brandImg(svc.kind || svc.name, "brand-dot") + esc(svc.name) + (svc.version ? ' <span class="ui-quiet" style="display:inline;padding:0">' + esc(svc.version) + "</span>" : ""),
-        sub: esc([servicePorts(svc), svc.running && svc.pid ? "pid " + svc.pid : svc.installed ? "stopped" : "files missing"].filter(Boolean).join(" · ")),
+        dot: ladder.dot,
+        title: brandImg(svc.kind || svc.name, "brand-dot") + '<span class="row-name">' + esc(svc.name) + "</span>" + (svc.version ? ' <span class="fact mono">' + esc(svc.version) + "</span>" : "") +
+          ' <span class="facts">' + ladder.facts.join("") + "</span>",
+        sub: (where ? '<span class="mono">' + esc(where) + "</span>" : "") +
+          (ladder.detail ? (where ? " · " : "") + esc(ladder.detail) : "") +
+          (!where && !ladder.detail ? esc(svc.installed ? "managed by devd" : "recorded, but its files are not where devd installed them") : "") +
+          (serviceDependents(svc) ? '<div class="ui-row-dep">' + esc(serviceDependents(svc)) + "</div>" : ""),
+        wrap: !!ladder.detail || !!serviceDependents(svc),
         actions: webControl + startupToggle(svc) + (svc.running
           ? '<button type="button" class="btn btn-mini" data-action="stop-service" data-name="' + attr(svc.name) + '">Stop</button>'
           : svc.installed
@@ -2593,7 +2911,7 @@
           '<button type="button" class="btn btn-mini btn-ghost" data-action="remove-service" data-name="' + attr(svc.name) + '">Remove</button>',
         hover: !svc.running && svc.installed ? true : true
       });
-    });
+    }
     var found = inventoryRows();
     var missing = KNOWN_SERVICES.filter(function (k) { return !byName[k.name] && !(k.name === "php-cgi" && rows.some(function (r) { return /^php-cgi/.test(r.name); })); })
       .filter(function (k) {
@@ -2609,13 +2927,30 @@
         });
       });
     var body = summaryBand([
-      { label: "Stack", value: counts.total ? up + " of " + counts.total + " running" : "Not installed", detail: counts.total && up === counts.total ? "every managed service answered" : counts.total ? "start services when a site needs them" : "install a web server, database and PHP", tone: counts.total && up === counts.total ? "ok" : up ? "warn" : "", dot: counts.total && up === counts.total ? "ok" : up ? "warn" : "off" },
+      (function () {
+        var rows = state.server.services || [];
+        var run = rows.filter(function (x) { return x.running; });
+        var silent = run.filter(function (x) { return x.ready === false; }).length;
+        var answered = run.filter(function (x) { return x.ready === true; }).length;
+        var held = rows.filter(function (x) { return !x.running && x.listening; }).length;
+        var bad = silent || held;
+        return { label: "Stack", value: counts.total ? up + " of " + counts.total + " running" : "Not installed",
+          detail: silent ? silent + " running but not answering" : held ? held + (held === 1 ? " port is" : " ports are") + " held by programs devd did not start" :
+            counts.total && up === counts.total ? (answered === run.length ? "every process answered its protocol" : answered + " of " + run.length + " processes confirmed answering") :
+            counts.total ? "start services when a site needs them" : "install a web server, database and PHP",
+          tone: bad ? "warn" : counts.total && up === counts.total ? "ok" : up ? "warn" : "", dot: bad ? "warn" : counts.total && up === counts.total ? "ok" : up ? "warn" : "off" };
+      })(),
       { label: "Managed here", value: String(counts.total), detail: counts.total === 1 ? "service devd supervises" : "services devd supervises" },
       { label: "Available", value: String(missing.length), detail: missing.length ? "ready to install or adopt" : "nothing else to install" }
     ]);
-    body += uiHead("Installed", counts.total ? up + " of " + counts.total + " running" : null) +
-      (installed.length ? uiList(installed) : uiEmpty("Nothing installed yet", "Install a web server, MariaDB and a PHP runtime to serve sites.")) +
-      (installed.length ? '<div class="ui-more">Startup means the service is included when you press Start all, or when devd starts with your account. It does not start the service now. The web server is chosen with web.use; PHP listeners follow the installed runtimes.</div>' : "");
+    body += (extern.length
+      ? uiHead("Port held by another program", extern.length) +
+        '<div class="ui-more" style="margin-top:0">devd did not start whatever is listening on these ports, so it does not control it and will not start its own copy on top. Stop the other program, or give devd\u2019s service another port.</div>' + uiList(extern)
+      : "") +
+      (installed.length || !extern.length ? uiHead("Managed by devd", counts.total ? up + " of " + counts.total + " running" : null) : "") +
+      (installed.length ? uiList(installed) : extern.length ? "" : serverFailed("service.list") ? uiEmpty("Couldn't read your services", serverFailed("service.list") + ".", '<button type="button" class="btn" data-action="refresh">Try again</button>') : uiEmpty("Nothing installed yet", "Install a web server, MariaDB and a PHP runtime to serve sites.")) +
+      (installed.length || extern.length ? '<div class="ui-more"><b>Running</b> means devd found the process it started. <b>Answers</b> means the service replied in its own protocol (an HTTP request, a database handshake, a FastCGI record) - a port that is merely open is not counted as healthy.</div>' : "") +
+      (installed.length || extern.length ? '<div class="ui-more">Startup means the service is included when you press Start all, or when devd starts with your account. It does not start the service now. The web server is chosen with web.use; PHP listeners follow the installed runtimes.</div>' : "");
     if (found.length) body += uiHead("Already on this computer", found.length) + uiList(found) +
       '<div class="ui-more">devd never replaces what you have. Using or watching a service only records your choice.</div>';
     if (missing.length) body += uiHead("Available", missing.length) + uiList(missing);
@@ -2731,7 +3066,7 @@
         return uiRow({
           dot: "ok",
           title: esc(rt.version) + (r.primary ? ' <span class="pill pill-accent">default</span>' : "") + (own ? "" : ' <span class="pill">found on this computer</span>'),
-          sub: '<span title="' + attr(rt.path) + '">' + esc(rt.path) + "</span>",
+          sub: '<span class="mono" title="' + attr(rt.path) + '">' + esc(rt.path) + "</span>",
           meta: usage ? esc(usage) : "",
           actions: (kind.kind === "php" && !r.primary && own ? '<button type="button" class="btn btn-mini" data-action="use-runtime" data-version="' + attr(rt.version) + '">Use for new sites</button>' : "") +
             (own ? '<button type="button" class="btn btn-mini btn-ghost" data-action="remove-runtime" data-kind="' + attr(kind.kind) + '" data-version="' + attr(rt.version) + '">Remove</button>' : ""),
@@ -2761,48 +3096,53 @@
         "</div></div></div>"
       : "";
 
-    var caPanel =
-      '<div class="panel"><div class="panel-head"><span>Local certificate authority</span>' +
-      '<span class="panel-note">' + caTrustLabel() + "</span></div>" +
-      '<div class="panel-body">' +
-      (ca
-        ? '<div class="kv"><dt>Certificate</dt><dd>' + esc(ca.path) + "</dd></div>" +
-          '<div class="inline" style="margin-top:12px">' +
-          '<button type="button" class="btn btn-primary" data-action="ca-trust" data-machine="false">Trust for this user</button>' +
-          '<button type="button" class="btn" data-action="ca-trust" data-machine="true">Trust for all users</button>' +
-          '<button type="button" class="btn btn-ghost" data-action="ca-untrust">Remove trust</button>' +
-          "</div>" +
-          '<div class="row-sub" style="margin-top:8px">Trusting adds the certificate to the Windows certificate store. ' +
-          "The machine-wide option needs an administrator; the per-user option does not.</div>"
-        : '<div class="notice notice-warn">No certificate authority yet. Creating an HTTPS site makes one.</div>') +
-      "</div></div>";
+    var siteHosts = {};
+    (s.sites || []).forEach(function (r) { if (r.site) siteHosts[r.site.host || r.site.name] = r.site.name; });
+    var missingKeys = s.certs.filter(function (c) { return !c.key_present; }).length;
+    var unused = s.certs.filter(function (c) { return !siteHosts[c.host]; }).length;
 
-    var rows = s.certs
-      .map(function (c) {
-        return (
-          "<tr><td class=\"cell-strong\">" + esc(c.host) + "</td>" +
-          '<td class="cell-mono nowrap">' + esc(c.cert) + "</td>" +
-          "<td>" + (c.key_present
-            ? '<span class="pill pill-ok">key present</span>'
-            : '<span class="pill pill-bad">key missing</span>') + "</td></tr>"
-        );
-      })
-      .join("");
+    var band = summaryBand([
+      { label: "Authority", value: !ca ? "None yet" : caTrusted() ? "Trusted" : "Not trusted", detail: !ca ? "an HTTPS site creates it" : caTrusted() ? "browsers accept devd's certificates" : "browsers will warn until you trust it",
+        tone: ca && caTrusted() ? "ok" : "warn", dot: ca && caTrusted() ? "ok" : ca ? "warn" : "off" },
+      { label: "Issued", value: s.certs.length + (s.certs.length === 1 ? " certificate" : " certificates"), detail: unused ? unused + " not used by any site" : "each one belongs to a site", dot: s.certs.length ? "ok" : "off" },
+      { label: "Keys", value: missingKeys ? missingKeys + " missing" : "All present", detail: missingKeys ? "reissue those hostnames" : "every certificate has its private key", tone: missingKeys ? "bad" : "", dot: missingKeys ? "bad" : "ok" }
+    ]);
 
-    var issued =
-      '<div class="panel"><div class="panel-head"><span>Issued certificates</span>' +
-      '<span class="panel-note">' + s.certs.length + "</span></div>" +
-      (rows
-        ? '<div class="panel-body flush"><table class="table"><thead><tr>' +
-          "<th>Host</th><th>Chain</th><th>Key</th></tr></thead><tbody>" + rows + "</tbody></table></div>"
-        : '<div class="panel-body empty-inline">No certificates yet. An HTTPS site issues one.</div>') +
-      "</div>";
+    // Trust is a change to the operating system's certificate store, so its controls
+    // stay explicit and say whose store they change.
+    var caBlock = uiHead("Local certificate authority", null) + (ca
+      ? uiList([uiRow({
+          dot: caTrusted() ? "ok" : "warn",
+          title: '<span class="row-name">devd authority</span> <span class="facts">' +
+            (caTrusted() ? '<span class="fact fact-ok">trusted</span>' : '<span class="fact fact-warn">not trusted</span>') + "</span>",
+          sub: '<span class="mono">' + esc(ca.path) + "</span><div>" + esc(caTrustLabel().charAt(0).toUpperCase() + caTrustLabel().slice(1)) + "</div>",
+          wrap: true,
+          actions: '<button type="button" class="btn btn-mini' + (caTrusted() ? "" : " btn-primary") + '" data-action="ca-trust" data-machine="false">Trust for this user</button>' +
+            '<button type="button" class="btn btn-mini" data-action="ca-trust" data-machine="true" title="Needs an administrator">Trust for all users</button>' +
+            '<button type="button" class="btn btn-mini btn-ghost" data-action="ca-untrust">Remove trust</button>'
+        })]) +
+        '<div class="ui-more">Trusting adds the authority to the Windows certificate store. "For this user" needs no administrator; "for all users" does.</div>'
+      : uiEmpty("No certificate authority yet", "Creating an HTTPS site makes one. It never leaves this machine."));
+
+    var rows = s.certs.map(function (c) {
+      var site = siteHosts[c.host];
+      return uiRow({
+        dot: !c.key_present ? "bad" : site ? "ok" : "off",
+        title: '<span class="row-name mono">' + esc(c.host) + '</span> <span class="facts">' +
+          (c.key_present ? '<span class="fact fact-ok">key present</span>' : '<span class="fact fact-bad">key missing</span>') +
+          (site ? '<span class="fact">site ' + esc(site) + "</span>" : '<span class="fact" title="No site uses this hostname">unused</span>') + "</span>",
+        sub: '<span class="mono" title="' + attr(c.cert) + '">' + esc(c.cert) + "</span>",
+        actions: site ? '<button type="button" class="btn btn-mini btn-ghost" data-action="open-site" data-name="' + attr(site) + '">Site</button>' : ""
+      });
+    });
+    var issued = uiHead("Issued certificates", s.certs.length) +
+      (rows.length ? uiList(rows) : uiEmpty("No certificates yet", "An HTTPS site issues one, or issue one for a hostname above."));
 
     el("main").innerHTML = page(
       "Certificates",
       "devd runs its own authority. Every HTTPS site gets a certificate signed by it.",
       '<button type="button" class="btn" data-action="cert-form">Issue for a hostname</button>',
-      form + caPanel + issued
+      form + band + caBlock + issued
     );
   }
 
@@ -2816,54 +3156,30 @@
     var entries = data.entries || [];
     var pending = adding.length + removing.length;
 
-    var head =
-      '<div class="panel"><div class="panel-head"><span>Hosts file</span>' +
-      '<span class="panel-note">' + pending + " change(s) pending</span></div>" +
-      '<div class="panel-body"><div class="kv">' +
-      "<dt>Path</dt><dd>" + esc(data.file) + "</dd>" +
-      "<dt>Published</dt><dd>" + entries.length + " name(s)</dd>" +
-      "</div>" +
-      '<div class="row-sub" style="margin-top:8px">Writing the hosts file needs an elevated shell on Windows. ' +
-      "devd snapshots it first and preserves every line it did not write.</div></div></div>";
+    var siteOf = {};
+    (state.server.sites || []).forEach(function (r) { if (r.site) siteOf[r.site.host || r.site.name] = r.site.name; });
 
-    var changes = "";
-    if (pending) {
-      changes =
-        '<div class="panel"><div class="panel-head"><span>Pending changes</span>' +
-        '<span class="panel-note">' + pending + "</span></div>" +
-        '<div class="panel-body flush"><table class="table"><thead><tr>' +
-        "<th></th><th>Address</th><th>Host</th></tr></thead><tbody>" +
-        adding
-          .map(function (e) {
-            return '<tr><td><span class="tag tag-add">add</span></td>' +
-              '<td class="cell-mono">' + esc(e.address) + "</td>" +
-              '<td class="cell-mono">' + esc(e.host) + "</td></tr>";
-          })
-          .join("") +
-        removing
-          .map(function (e) {
-            return '<tr><td><span class="tag tag-del">remove</span></td>' +
-              '<td class="cell-mono">' + esc(e.address) + "</td>" +
-              '<td class="cell-mono">' + esc(e.host) + "</td></tr>";
-          })
-          .join("") +
-        "</tbody></table></div></div>";
+    var band = summaryBand([
+      { label: "Published", value: entries.length + (entries.length === 1 ? " name" : " names"), detail: "in devd's managed block", dot: entries.length ? "ok" : "off" },
+      { label: "Pending", value: pending ? adding.length + " to add, " + removing.length + " to remove" : "Nothing", detail: pending ? "sync to write them" : "the file matches your sites", tone: pending ? "warn" : "", dot: pending ? "warn" : "ok" },
+      { label: "Hosts file", value: data.file ? "Readable" : "Not found", detail: data.file ? "devd edits only its own block" : "devd could not locate it", tone: data.file ? "" : "bad", dot: data.file ? "ok" : "bad" }
+    ]);
+    var head = band + '<div class="ui-more" style="margin-top:0">Writing the hosts file needs an elevated shell on Windows. devd snapshots it first and keeps every line it did not write. File: <span class="mono">' + esc(data.file) + "</span></div>";
+
+    function entryRow(e, change) {
+      var site = siteOf[e.host];
+      return uiRow({
+        dot: change === "add" ? "warn" : change === "remove" ? "bad" : site ? "ok" : "off",
+        title: '<span class="row-name mono">' + esc(e.host) + '</span> <span class="facts">' +
+          (change === "add" ? '<span class="fact fact-warn">will be added</span>' : change === "remove" ? '<span class="fact fact-bad">will be removed</span>' : '<span class="fact fact-ok">published</span>') +
+          (site ? '<span class="fact">site ' + esc(site) + "</span>" : change === "remove" ? "" : '<span class="fact">no site</span>') + "</span>",
+        sub: '<span class="mono">' + esc(e.address) + "</span>"
+      });
     }
-
-    var published = entries.length
-      ? '<div class="panel"><div class="panel-head"><span>Published names</span>' +
-        '<span class="panel-note">' + entries.length + "</span></div>" +
-        '<div class="panel-body flush"><table class="table"><thead><tr>' +
-        "<th>Address</th><th>Host</th></tr></thead><tbody>" +
-        entries
-          .map(function (e) {
-            return '<tr><td class="cell-mono">' + esc(e.address) + "</td>" +
-              '<td class="cell-mono">' + esc(e.host) + "</td></tr>";
-          })
-          .join("") +
-        "</tbody></table></div></div>"
-      : '<div class="panel"><div class="panel-body empty-inline">No names published. ' +
-        "Sites on localhost resolve without one.</div></div>";
+    var changes = pending ? uiHead("Pending changes", pending) + uiList(adding.map(function (e) { return entryRow(e, "add"); }).concat(removing.map(function (e) { return entryRow(e, "remove"); }))) : "";
+    var published = uiHead("Published names", entries.length) + (entries.length
+      ? uiList(entries.map(function (e) { return entryRow(e, ""); }))
+      : uiEmpty("No names published", "Sites on localhost resolve without one."));
 
     el("main").innerHTML = page(
       "Hosts",
@@ -3149,19 +3465,21 @@
       p.loading = true;
       loadProcesses().then(renderProcesses);
     }
+    var select = '<div class="ui-controls"><label class="field-label" for="process-project" style="margin:0">Project</label>' +
+      '<select class="select mono" id="process-project" style="max-width:420px">' + (projectOptions(project) || '<option value="">No projects</option>') + "</select></div>";
+
     if (p.loading && !p.plan) {
-      el("main").innerHTML = page("Processes", "", "", '<div class="loading">Loading…</div>');
+      el("main").innerHTML = page("Processes", "", "", select + '<div class="loading" role="status">Reading devd.yml…</div>');
       return;
     }
 
-    var select = '<div class="panel"><div class="panel-head"><span>Project manifest</span></div><div class="panel-body">' +
-      '<select class="select mono" id="process-project">' + (projectOptions(project) || '<option value="">No projects</option>') + "</select>" +
-      '</div></div>';
-
     if (!project || (p.error && !p.plan)) {
+      // A file that is there but invalid is not the same as no file: say which.
+      var missing = !p.error || /no devd\.yml|not found|cannot find|does not exist/i.test(p.error);
       el("main").innerHTML = page("Processes", "", "", select +
-        '<div class="panel"><div class="empty"><div class="empty-title">No devd.yml here</div>' +
-        "<div>" + esc(p.error || "Choose a project that contains one.") + "</div></div></div>");
+        (!missing ? '<div class="notice notice-bad" role="alert"><b>devd.yml could not be used.</b> ' + esc(p.error) + ". Fix the file; nothing in it runs until it is valid and approved.</div>" : "") +
+        uiEmpty(missing ? "No devd.yml in this project" : "No processes to show", (missing && p.error ? p.error + ". " : "") +
+          "A project declares the long-running commands it needs (a dev server, a queue worker, a watcher) in devd.yml at its root. devd shows the exact commands and runs nothing until you approve them."));
       return;
     }
 
@@ -3170,43 +3488,54 @@
     var byName = {};
     status.forEach(function (row) { byName[row.name] = row; });
 
+    // The manifest's commands run only once a person has approved them, exactly as written.
     var approval = plan.approved
-      ? '<span class="pill pill-ok">approved</span><span class="panel-note mono">' + esc(String(plan.hash || "").slice(0, 12)) + "</span>"
-      : '<span class="pill pill-warn">approval required</span>' +
-        '<button type="button" class="btn btn-primary btn-mini" data-action="approve-project">Approve these commands</button>';
+      ? '<div class="ui-more" style="margin-top:0"><span class="fact fact-ok">commands approved</span> <span class="mono">' + esc(String(plan.hash || "").slice(0, 12)) +
+        "</span> - editing any command in devd.yml withdraws the approval.</div>"
+      : '<div class="notice notice-warn" role="status"><b>Not approved.</b> Nothing in this devd.yml runs until you have read the commands below and approved them exactly as written. ' +
+        '<button type="button" class="btn btn-primary btn-mini" data-action="approve-project">Approve these commands</button></div>';
 
+    var counts = { running: 0, failed: 0 };
     var rows = (plan.processes || []).map(function (spec) {
       var row = byName[spec.name] || {};
       var stateName = row.status || "stopped";
+      if (stateName === "running") counts.running++;
+      if (stateName === "failed") counts.failed++;
       var health = row.health || (spec.health_declared ? "unknown" : "none");
-      var actions = "";
-      if (stateName === "running" || stateName === "starting") {
-        actions += '<button type="button" class="btn btn-mini" data-action="process-stop" data-name="' + attr(spec.name) + '">Stop</button>' +
-          '<button type="button" class="btn btn-mini" data-action="process-restart" data-name="' + attr(spec.name) + '">Restart</button>';
-      } else {
-        actions += '<button type="button" class="btn btn-mini btn-primary" data-action="process-start" data-name="' + attr(spec.name) + '"' +
-          (plan.approved ? "" : " disabled") + ">Start</button>";
-      }
-      actions += '<button type="button" class="btn btn-mini" data-action="process-logs" data-name="' + attr(spec.name) + '">Logs</button>';
-      return '<tr><td><div class="cell-strong">' + esc(spec.name) + "</div>" +
-        '<div class="cell-mono">' + esc((spec.command || []).join(" ")) + "</div></td>" +
-        '<td><span class="pill ' + (stateName === "running" ? "pill-ok" : stateName === "failed" ? "pill-bad" : "") + '">' + esc(stateName) + "</span>" +
-        '<div class="cell-mono">' + esc(health) + (row.pid ? " · pid " + esc(row.pid) : "") + "</div></td>" +
-        '<td class="cell-mono">' + esc((spec.depends_on || []).join(", ") || "—") + "</td>" +
-        '<td>' + actions + "</td></tr>";
-    }).join("");
-
-    var errorRow = status.filter(function (r) { return r.last_error; }).map(function (r) {
-      return '<div class="task-error"><span class="mono">' + esc(r.name) + "</span> " + esc(r.last_error) + "</div>";
-    }).join("");
+      var live = stateName === "running" || stateName === "starting";
+      var facts = [
+        stateName === "running" ? '<span class="fact fact-ok">running</span>' : stateName === "starting" ? '<span class="fact">' + uiDot("live") + "starting</span>" :
+          stateName === "failed" ? '<span class="fact fact-bad">failed</span>' : '<span class="fact">' + esc(stateName) + "</span>"
+      ];
+      // Health is its own fact: a running process is not a healthy one until its check passes.
+      if (live) facts.push(health === "healthy" ? '<span class="fact fact-ok">healthy</span>' : health === "none" ? '<span class="fact" title="devd.yml declares no health check for it">no health check</span>' :
+        health === "unhealthy" ? '<span class="fact fact-bad">unhealthy</span>' : '<span class="fact fact-warn">health ' + esc(health) + "</span>");
+      if (row.pid) facts.push('<span class="fact mono">pid ' + esc(row.pid) + "</span>");
+      if ((spec.depends_on || []).length) facts.push('<span class="fact">after ' + esc(spec.depends_on.join(", ")) + "</span>");
+      var actions = live
+        ? '<button type="button" class="btn btn-mini" data-action="process-stop" data-name="' + attr(spec.name) + '">Stop</button>' +
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="process-restart" data-name="' + attr(spec.name) + '">Restart</button>'
+        : '<button type="button" class="btn btn-mini btn-primary" data-action="process-start" data-name="' + attr(spec.name) + '"' +
+          (plan.approved ? "" : ' disabled title="Approve the commands first"') + ">Start</button>";
+      actions += '<button type="button" class="btn btn-mini btn-ghost" data-action="process-logs" data-name="' + attr(spec.name) + '">Logs</button>';
+      return uiRow({
+        dot: stateName === "failed" || health === "unhealthy" ? "bad" : live ? (health === "healthy" || health === "none" ? "ok" : "warn") : "off",
+        title: '<span class="row-name">' + esc(spec.name) + '</span> <span class="facts">' + facts.join("") + "</span>",
+        sub: '<span class="mono">' + esc((spec.command || []).join(" ")) + "</span>" +
+          (row.last_error ? '<div class="ui-row-err">' + esc(row.last_error) + "</div>" : ""),
+        wrap: true,
+        actions: actions
+      });
+    });
+    var errorRow = "";
 
     var log = "";
     if (p.selected) {
       var lines = (p.log && p.log.lines) || [];
       var q = (p.logQuery || "").toLowerCase();
       if (q) lines = lines.filter(function (l) { return l.toLowerCase().indexOf(q) !== -1; });
-      log = '<div class="panel process-log"><div class="panel-head"><span>Logs — ' + esc(p.selected) + "</span>" +
-        '<input class="input mono process-log-filter" id="process-log-query" value="' + attr(p.logQuery || "") + '" placeholder="Filter lines">' +
+      log = '<div class="panel process-log"><div class="panel-head"><span>Logs - <span class="mono">' + esc(p.selected) + "</span></span>" +
+        '<input class="input mono process-log-filter" id="process-log-query" value="' + attr(p.logQuery || "") + '" placeholder="Filter lines" aria-label="Filter log lines">' +
         '<button type="button" class="btn btn-mini" data-action="close-process-logs">Close</button></div>' +
         '<div class="panel-body flush"><pre class="log-pre" id="process-log">' +
         (lines.length ? esc(lines.join("\n")) : "No output yet.") + "</pre></div></div>";
@@ -3218,13 +3547,12 @@
       '<button type="button" class="btn" data-action="process-start-all"' + (plan.approved ? "" : " disabled") + ">Start all</button>" +
         '<button type="button" class="btn" data-action="process-stop-all">Stop all</button>' +
         '<button type="button" class="btn btn-ghost" data-action="process-refresh">Refresh</button>',
-      select +
-        '<div class="panel"><div class="panel-head"><span>' + esc(plan.project || "project") + "</span>" +
-        '<span class="mono panel-note">' + esc(plan.root || "") + "</span>" + approval + "</div>" +
-        '<div class="panel-body flush"><table class="table process-table"><thead><tr>' +
-        "<th>Process</th><th>State</th><th>Depends on</th><th></th></tr></thead><tbody>" +
-        (rows || '<tr><td colspan="4" class="empty-inline">No processes declared.</td></tr>') +
-        "</tbody></table></div></div>" + errorRow + log
+      select + approval +
+        uiHead(plan.project || "Processes", (plan.processes || []).length,
+          '<span class="ui-quiet mono" style="padding:0">' + esc(plan.root || "") + "</span>") +
+        (rows.length ? uiList(rows) : uiEmpty("No processes declared", "devd.yml lists none.")) +
+        (counts.failed ? '<div class="ui-more">' + counts.failed + (counts.failed === 1 ? " process has" : " processes have") + " stopped with an error; its last output is in Logs.</div>" : "") +
+        errorRow + log
     );
   }
 
@@ -3799,7 +4127,7 @@
     if (!state.projectsLoaded) {
       body = '<div class="loading" role="status" aria-live="polite">Reading your projects…</div>';
     } else if (state.projectsError && !all.length) {
-      body = uiEmpty("Projects could not be read", state.projectsError, '<button type="button" class="btn btn-primary" data-action="projects-reload">Try again</button>');
+      body = uiEmpty("Couldn't read your projects", state.projectsError, '<button type="button" class="btn btn-primary" data-action="projects-reload">Try again</button>');
     } else if (!all.length) {
       body = uiEmpty("No projects yet", "devd works with projects on your disk. Add a folder that has one, or start a new one from a stack.",
         '<div class="inline"><button type="button" class="btn btn-primary" data-action="nav" data-view="create">Create a project</button><button type="button" class="btn" data-action="add-project">Add a folder</button></div>');
@@ -3810,29 +4138,42 @@
         return '<button type="button" class="ui-sort' + (state.projectSort === s.id ? " active" : "") + '" data-action="project-sort" data-sort="' + attr(s.id) + '">' + esc(s.label) + "</button>";
       }).join("");
       var controls = '<div class="ui-controls"><input type="search" id="project-search" class="ui-search" placeholder="Search projects, stacks or site names" value="' + attr(state.projectQuery) + '" aria-label="Search projects"><span class="grow"></span><span class="sort-label">Sort</span>' + sorts + "</div>";
+      // Agent work belongs to a project, so a project says when agents are on it.
+      var agentWork = {};
+      ((AI.home && AI.home.teamRuns) || []).forEach(function (t) {
+        if (t.project && ["planning", "running", "awaiting_plan", "paused"].indexOf(t.state) >= 0) agentWork[t.project] = (agentWork[t.project] || 0) + 1;
+      });
+      ((AI.home && AI.home.threads) || []).forEach(function (t) {
+        if (t.project && (t.state === "running" || t.state === "waiting_approval")) agentWork[t.project] = (agentWork[t.project] || 0) + 1;
+      });
       var rows = visible.map(function (p) {
         var st = p.status;
+        var facts = [];
         var bits = [];
-        if (p.stack) bits.push(p.stack);
+        if (p.stack) facts.push('<span class="fact">' + esc(p.stack) + "</span>");
         var dotKind = "off";
         if (st) {
           var changes = projectChanges(st);
-          bits.push(st.branch || "detached");
-          bits.push(changes ? changes + " change" + (changes === 1 ? "" : "s") : "clean");
+          facts.push('<span class="fact mono" title="Git branch">' + esc(st.branch || "detached") + "</span>");
+          facts.push(changes ? '<span class="fact fact-warn">' + changes + " change" + (changes === 1 ? "" : "s") + "</span>" : '<span class="fact fact-ok">clean</span>');
           if (st.ahead) bits.push(st.ahead + " ahead");
           if (st.behind) bits.push(st.behind + " behind");
           dotKind = changes ? "warn" : "ok";
         } else if (p.is_repository) bits.push("repository");
-        if (p.exists === false) { bits.push("folder is gone"); dotKind = "bad"; }
+        if (p.exists === false) { facts.push('<span class="fact fact-bad">folder is gone</span>'); dotKind = "bad"; }
         if (p.error) dotKind = "warn";
         if (!p.registered) bits.push(p.source === "site" ? "known from its site" : "not imported");
         var site = siteFor[p.path];
+        if (site) facts.push('<span class="fact mono" title="The address that serves it">' + esc(site.site.host || site.site.name) + "</span>");
+        if (agentWork[p.path]) facts.push('<span class="fact fact-ok">' + uiDot("live") + agentWork[p.path] + " agent" + (agentWork[p.path] === 1 ? "" : "s") + " working</span>");
         var isPinned = pinned.indexOf(p.path) !== -1;
+        if (isPinned) facts.push('<span class="fact">pinned</span>');
         return uiRow({
-          dot: dotKind, title: (isPinned ? "★ " : "") + esc(p.name) +
-            (p.error ? ' <span class="pill pill-warn" title="' + attr(p.is_repository ? "Git cannot open this repository. " + p.error : gitErrorShort(p.error) || p.error) + '">Git unavailable</span>' : ""),
-          sub: esc(bits.join(" · ")) + '<span class="ui-path" title="' + attr(p.path) + '"> · ' + esc(p.path) + "</span>",
-          meta: site ? esc(servingLabel(site)) : "",
+          dot: dotKind, title: '<span class="row-name">' + esc(p.name) + "</span>" +
+            (p.error ? ' <span class="fact fact-warn" title="' + attr(p.is_repository ? "Git cannot open this repository. " + p.error : gitErrorShort(p.error) || p.error) + '">Git unavailable</span>' : "") +
+            (facts.length ? ' <span class="facts">' + facts.join("") + "</span>" : ""),
+          sub: '<span class="mono" title="' + attr(p.path) + '">' + esc(p.path) + "</span>" + (bits.length ? " · " + esc(bits.join(" · ")) : ""),
+          meta: site ? esc(servingLabel(site)) : "no address",
           open: 'data-action="open-project" data-path="' + attr(p.path) + '"',
           actions: '<button type="button" class="btn btn-mini btn-primary" data-action="open-project" data-path="' + attr(p.path) + '">Open</button>' +
             (site ? '<button type="button" class="btn btn-mini" data-action="open-site" data-name="' + attr(site.site.name) + '">Site</button>' : "") +
@@ -4408,20 +4749,57 @@
     return parts.join("");
   }
 
+  /* What this repository is connected to, from what devd really knows: its code
+     (stack, branch, state), the site that serves it, what runs it, and the agent
+     runs that name it. Each reading leads to where it can be acted on, and a
+     reading devd has no record of says so instead of being left out. */
+  function projectContext(path) {
+    var known = (state.projects || []).filter(function (x) { return x.path === path && x.stack; })[0] ||
+      ((AI.home && AI.home.projects) || []).filter(function (x) { return x.path === path; })[0] || {};
+    var st = state.project && state.project.status;
+    var site = (state.server.sites || []).filter(function (r) { return r.project === path; })[0];
+    var runs = ((AI.home && AI.home.teamRuns) || []).filter(function (t) { return t.project === path; });
+    var active = runs.filter(function (t) { return ["planning", "running", "awaiting_plan", "paused"].indexOf(t.state) >= 0; });
+    var cells = [];
+
+    var codeBits = [];
+    if (st) {
+      var changed = st.staged.length + st.unstaged.length + st.untracked.length;
+      codeBits.push(esc(st.branch || "detached"));
+      codeBits.push(changed ? '<span class="ov-warn">' + changed + (changed === 1 ? " change" : " changes") + "</span>" : "clean");
+      if (st.ahead || st.behind) codeBits.push(st.ahead + " ahead, " + st.behind + " behind");
+      if (st.conflicted.length) codeBits.push('<span class="ov-bad">' + st.conflicted.length + " conflicted</span>");
+      if (st.in_progress) codeBits.push('<span class="ov-warn">' + esc(st.in_progress) + "</span>");
+    }
+    cells.push('<div class="ov-cell"><div class="ov-k">Code</div><div class="ov-v">' + esc(known.stack || "Stack not detected") + '</div><div class="ov-d">' + (codeBits.join(" · ") || "reading git status") + "</div></div>");
+
+    if (!state.server.loaded) {
+      cells.push('<div class="ov-cell"><div class="ov-k">Serves at</div><div class="ov-v ov-wait">Reading sites…</div></div>');
+      cells.push('<div class="ov-cell"><div class="ov-k">Runs on</div><div class="ov-v ov-wait">Reading sites…</div></div>');
+    } else if (site) {
+      var attn = siteNeedsAttention(site) ? '<span class="ov-warn">' + esc(siteAttentionReason(site)) + "</span>" : esc(servingLabel(site) || "not serving");
+      cells.push('<button type="button" class="ov-cell ov-link" data-action="open-site" data-name="' + attr(site.site.name) + '"><div class="ov-k">Serves at</div><div class="ov-v mono">' + esc(site.site.host || site.site.name) + '</div><div class="ov-d">' + attn + (site.certificate ? " · HTTPS certificate" : site.site.tls_mode !== "off" ? ' · <span class="ov-warn">no certificate</span>' : " · HTTP only") + "</div></button>");
+      var run;
+      if (site.serving === "php") run = ['PHP ' + esc(site.php_effective || ""), site.php_source === "pinned" ? "pinned for this site" : "follows the machine default"];
+      else if (site.serving === "proxy") run = ["Proxy", esc(site.site.upstream || "") + (site.upstream_listening ? " · listening" : ' · <span class="ov-warn">not running</span>')];
+      else if (site.serving === "static") run = ["Static files", "no runtime needed"];
+      else run = ["Nothing to run", esc(site.detected || "no web entry point")];
+      cells.push('<div class="ov-cell"><div class="ov-k">Runs on</div><div class="ov-v">' + run[0] + '</div><div class="ov-d">' + run[1] + "</div></div>");
+    } else {
+      cells.push('<div class="ov-cell"><div class="ov-k">Serves at</div><div class="ov-v">No address yet</div><div class="ov-d">no site is recorded for this folder</div></div>');
+      cells.push('<div class="ov-cell"><div class="ov-k">Runs on</div><div class="ov-v">Not served</div><div class="ov-d">give it a site to see its runtime</div></div>');
+    }
+
+    cells.push('<button type="button" class="ov-cell ov-link" data-action="nav" data-view="team" data-exact="1"><div class="ov-k">Agent work</div><div class="ov-v">' +
+      (runs.length ? runs.length + (runs.length === 1 ? " run" : " runs") : "No runs") + '</div><div class="ov-d">' +
+      (active.length ? active.length + " in progress or waiting for you" : runs.length ? "none in progress" : "none have named this project") + "</div></button>");
+    return '<div class="ov" aria-label="What this project is connected to">' + cells.join("") + "</div>";
+  }
+
   function renderProject() {
     if (state.view !== "project") return;
     var st = state.project.status;
     var tab = state.tab;
-    var badge = "";
-    if (st) {
-      badge =
-        '<span class="pill">' + esc(st.branch || "(detached)") + "</span>" +
-        (st.clean ? '<span class="pill pill-ok">clean</span>' : '<span class="pill pill-warn">' +
-          (st.staged.length + st.unstaged.length + st.untracked.length) + " changes</span>") +
-        (st.ahead || st.behind ? '<span class="pill">' + st.ahead + " up / " + st.behind + " down</span>" : "") +
-        (st.in_progress ? '<span class="pill pill-warn">' + esc(st.in_progress) + "</span>" : "");
-    }
-
     var tabs = Object.keys(TAB_LABELS)
       .map(function (name) {
         return (
@@ -4464,7 +4842,6 @@
       pageTitle(state.project.name, "project") +
       '<div class="page-sub mono nowrap" title="' + attr(state.project.path) + '">' +
       esc(state.project.path) + "</div>" +
-      '<div class="inline" style="margin-top:8px">' + badge + "</div>" +
       (state.project.error ? '<div class="notice notice-bad" style="margin-top:8px">' +
         esc(state.project.error) + "</div>" : "") +
       "</div>" +
@@ -4474,6 +4851,7 @@
       '<button type="button" class="btn btn-ghost" data-action="untrack">Remove from devd</button>' +
       '<button type="button" class="btn btn-ghost btn-danger" data-action="delete-folder">Delete from disk</button>' +
       "</div></div>" +
+      projectContext(state.project.path) +
       '<div class="tabs">' + tabs + "</div>" +
       body +
       "</div>";
@@ -4747,7 +5125,7 @@
 
   // -------------------------------------------------------------------- activity
 
-  var AUDIT_FILTERS = [["changes", "Changes"], ["mine", "Mine"], ["agents", "Agents"], ["refused", "Refused"], ["all", "Everything"]];
+  var AUDIT_FILTERS = [["changes", "Changes"], ["mine", "What I did"], ["agents", "What agents did"], ["refused", "Turned down"], ["all", "Everything, including reads"]];
 
   function auditVisible() {
     var f = state.auditFilter || "changes";
@@ -4760,29 +5138,87 @@
     });
   }
 
+  /* Where an operation's effects can be seen. The mapping is by capability family;
+     an operation with no family here simply has no link, rather than a wrong one. */
+  function activityDest(cap) {
+    var c = String(cap || "");
+    var map = [
+      [/^(service|stack|web)\./, "services", "Services"], [/^(site|tls|hosts|dns|share)\./, "sites", "Sites"],
+      [/^(team|run|schedule)\./, "team", "Agent runs"], [/^(project|git|fs|review|memory)\./, "projects", "Projects"],
+      [/^(provider|models)\./, "providers", "Models"], [/^(runtime|php|toolchain)\./, "runtimes", "Runtimes"],
+      [/^(approval|inbox)\./, "inbox", "Needs you"], [/^(mcp|capability|tools)\./, "capabilities", "API and tools"]
+    ];
+    for (var i = 0; i < map.length; i++) if (map[i][0].test(c)) return { view: map[i][1], label: map[i][2] };
+    return null;
+  }
+
+  /* An operation in plain words: "service.start" reads "Started a service". The
+     capability stays beside it, exact, for anyone who needs to search for it. A
+     name devd has no sentence for is shown as it is, never guessed at. */
+  var ACT_VERB = { start: "Started", stop: "Stopped", restart: "Restarted", install: "Installed", remove: "Removed", delete: "Deleted", import: "Imported", create: "Created", save: "Saved", write: "Wrote", edit: "Edited", read: "Read", run: "Ran", verify: "Checked", approve: "Approved", deny: "Declined", sync: "Updated", issue: "Issued", trust: "Trusted", untrust: "Stopped trusting", retry: "Retried", resume: "Resumed", pause: "Paused", cancel: "Cancelled", say: "Told", plan_submit: "Submitted a plan for", report: "Reported on", set_startup: "Changed startup for", test: "Tested", discover: "Looked for", use: "Switched to", list: "Listed", status: "Checked the status of", get: "Read", show: "Looked at" };
+  var ACT_NOUN = { service: "a service", stack: "the whole stack", site: "a site", tls: "a certificate", hosts: "the hostnames", dns: "local DNS", project: "a project", fs: "a file", git: "a repository", team: "an agent run", run: "an agent run", provider: "a model provider", models: "the model setup", runtime: "a runtime", php: "PHP", approval: "an approval request", inbox: "a message", mcp: "an MCP tool", web: "the web server", share: "a shared link", schedule: "a schedule", environment: "the environment", health: "devd's health", template: "the run templates" };
+  function activityWords(cap) {
+    var m = String(cap || "").split(".");
+    var verb = ACT_VERB[m.slice(1).join("_")] || ACT_VERB[m[1]];
+    var noun = ACT_NOUN[m[0]];
+    if (verb === "Listed" && noun && /^an? /.test(noun)) noun = noun.replace(/^an? /, "") + "s";
+    return verb && noun ? verb + " " + noun : "";
+  }
+  function activityWho(actor) {
+    var a = String(actor || "");
+    if (a.indexOf("agent:") === 0) return "Agent " + a.replace("agent:", "").replace("devd-", "");
+    if (a.indexOf("human:") === 0) { var via = a.replace("human:", ""); return via === "cli" ? "You, from the terminal" : via === "http" || via === "ui" ? "You, in the app" : "You (" + via + ")"; }
+    return a;
+  }
+
   function renderActivity() {
     if (state.view !== "activity") return;
     var pageNo = state.auditPage || 0;
     var visible = auditVisible();
     var start = pageNo * PAGE_SIZE;
-    var rows = visible.slice(start, start + PAGE_SIZE).map(function (a) {
-      var who = a.actor.replace("human:", "").replace("agent:", "agent ");
-      var verb = a.dry_run ? " previewed " : a.ok ? " ran " : " was refused ";
-      return uiRow({
+    // The record reads as a day-by-day timeline: who did what, and whether it held.
+    var lastDay = "";
+    var rows = [];
+    visible.slice(start, start + PAGE_SIZE).forEach(function (a) {
+      var day = auditDay(a.at);
+      if (day !== lastDay) { rows.push('<div class="ui-day" role="heading" aria-level="3">' + esc(day) + "</div>"); lastDay = day; }
+      var words = activityWords(a.capability);
+      var outcome = a.dry_run ? '<span class="fact">only previewed</span>' : a.ok ? '<span class="fact fact-ok">went through</span>' : '<span class="fact fact-bad">was refused</span>';
+      rows.push(uiRow({
         dot: a.dry_run ? "off" : a.ok ? "ok" : "bad",
-        title: esc(who) + verb + '<span class="mono">' + esc(a.capability) + "</span>",
+        title: '<span class="row-name">' + esc(words || a.capability) + "</span>" +
+          ' <span class="facts">' + outcome + '<span class="fact">' + esc(activityWho(a.actor)) + "</span>" +
+          (words ? '<span class="fact mono">' + esc(a.capability) + "</span>" : "") + "</span>",
         sub: a.message && a.message !== "ok" ? esc(uiSummary(a.message, 160)) : "",
-        meta: '<span title="' + attr(a.at) + '">' + esc(stamp(a.at)) + "</span>",
-        open: 'data-action="open-audit" data-at="' + attr(a.at) + '" data-cap="' + attr(a.capability) + '"'
-      });
+        meta: '<time datetime="' + attr(a.at) + '" title="' + attr(stamp(a.at)) + '">' + esc(auditTime(a.at)) + "</time>",
+        open: 'data-action="open-audit" data-at="' + attr(a.at) + '" data-cap="' + attr(a.capability) + '"',
+        actions: (function () { var d = activityDest(a.capability); return d ? '<button type="button" class="btn btn-mini btn-ghost" data-action="nav" data-view="' + d.view + '"' + (d.view === "team" ? ' data-exact="1"' : "") + ' aria-label="Open ' + attr(d.label) + ' for ' + attr(a.capability) + '">' + esc(d.label) + "</button>" : ""; })(),
+        hover: true
+      }));
     });
     var tabs = '<div class="ui-controls">' + AUDIT_FILTERS.map(function (f) {
       return '<button type="button" class="ui-sort' + ((state.auditFilter || "changes") === f[0] ? " active" : "") + '" data-action="audit-filter" data-filter="' + f[0] + '">' + f[1] + "</button>";
     }).join("") + '<span class="grow"></span><button type="button" class="btn btn-mini btn-ghost" data-action="refresh">Refresh</button></div>';
     var body = tabs + (rows.length ? uiList(rows) + pager(visible.length, pageNo, "audit-page")
       : state.auditError ? uiEmpty("The activity log could not be read", state.auditError)
-      : uiEmpty("Nothing here yet", "Rows appear as soon as a capability is called from any surface."));
-    el("main").innerHTML = '<div class="page"><div class="page-head"><div>' + pageTitle("Activity", "activity") + "</div></div>" + body + "</div>";
+      : uiEmpty("Nothing to look back on yet", "Every change devd makes, whether you, an agent or a script asked for it, is written down here the moment it happens."));
+    el("main").innerHTML = page("Activity", "A written record of what changed on this machine, who asked, and whether it went through.", "", body);
+  }
+
+  function auditDay(at) {
+    var d = new Date(at);
+    if (isNaN(d)) return "Unknown date";
+    var today = new Date(); today.setHours(0, 0, 0, 0);
+    var that = new Date(d); that.setHours(0, 0, 0, 0);
+    var diff = Math.round((today - that) / 86400000);
+    if (diff === 0) return "Today";
+    if (diff === 1) return "Yesterday";
+    return d.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric", year: d.getFullYear() === today.getFullYear() ? undefined : "numeric" });
+  }
+
+  function auditTime(at) {
+    var d = new Date(at);
+    return isNaN(d) ? String(at) : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   }
 
   function openAuditSheet(at, cap) {
@@ -5137,8 +5573,8 @@
       '<button type="button" class="btn" data-action="dev-pick">Choose folder…</button>' +
       '<button type="button" class="btn" data-action="dev-detect">Detect</button><button type="button" class="btn btn-primary" data-action="dev-import">Import</button></div>' +
       '<div class="row-sub">Nothing is changed in the project. Clone a repository first with <span class="mono">git clone</span> or the Projects view.</div></div></div>';
-    el("main").innerHTML = page("Develop", "Detect any project's stack, run its tasks, and make it available to agents.", "",
-      '<div class="two-col"><div><div class="panel"><div class="panel-head"><span>Projects</span><span class="panel-note">' + DEV.projects.length + "</span></div>" + list + "</div>" + imp + procPanel() + "</div><div>" + devDetail() + "</div></div>");
+    el("main").innerHTML = page("Stacks and tasks", "Detect any project's stack, run its tasks, and make it available to agents.", "",
+      '<div class="two-col dev-split"><div>' + uiHead("Projects", DEV.projects.length) + '<div class="dev-list">' + list + "</div>" + imp + procPanel() + "</div><div>" + devDetail() + "</div></div>");
   }
 
   function procPanel() {
@@ -5183,7 +5619,7 @@
     if (DEV.busy) return '<div class="panel"><div class="panel-body dim">Inspecting…</div></div>';
     if (DEV.error) return '<div class="panel"><div class="panel-body notice notice-bad">' + esc(DEV.error) + "</div></div>";
     var c = DEV.detect || DEV.ctx;
-    if (!c) return '<div class="panel"><div class="panel-body empty-inline">Select a project.</div></div>';
+    if (!c) return uiEmpty("Choose a project", "devd detects its stack, package manager and runtimes, lists the tasks it can run, and shows what an agent may run there. Detecting reads files; it changes nothing.");
     var h = '<div class="panel"><div class="panel-head"><span>' + esc(c.name) + '</span><span class="panel-note mono">' + esc(c.path) + '</span></div><div class="panel-body">';
     if (c.ambiguous) h += '<div class="notice notice-warn">' + esc(c.ambiguity) + "</div>";
     h += '<div class="kv"><dt>Stack</dt><dd>' + (c.stacks.length ? c.stacks.map(function (s, i) { return (i === 0 ? "<b>" : "") + esc(s.name) + " " + pill(s.confidence === "high" ? "ok" : "warn", s.confidence) + (i === 0 ? "</b>" : ""); }).join(" · ") : "unknown") + "</dd></div>";
@@ -5674,9 +6110,10 @@
   function healthChip() {
     var h = AI.health, chip = el("health-chip");
     var st = AI.healthError && !h ? "unknown" : h ? h.state : "checking";
-    if (healthStale() || (AI.healthError && h)) st = "stale";
+    if (healthStale() || (AI.healthError && h) || OFFLINE) st = "stale";
     var title, sub;
     if (st === "checking") { title = "Checking…"; sub = ""; }
+    else if (st === "stale" && OFFLINE) { title = "Not answering"; sub = "showing the last known state"; }
     else if (st === "stale") { title = "Status is old"; sub = AI.healthError ? "last check failed" : "checked " + Math.round((Date.now() - AI.healthAt) / 60000) + " min ago"; }
     else if (!h) { title = "Cannot check"; sub = AI.healthError; }
     else { title = HEALTH_WORD[h.state] || h.state; sub = h.state === "healthy" ? (h.notes ? h.notes + " optional note" + (h.notes === 1 ? "" : "s") : "") : h.headline; }
@@ -5698,11 +6135,19 @@
     var h = AI.health;
     if (!h) return '<div class="notice notice-warn">' + esc(AI.healthError || "Not checked yet") + '</div><div class="inline"><button type="button" class="btn" data-action="health-recheck">Try again</button></div>';
     var order = { critical: 0, unavailable: 1, degraded: 2, starting: 3, unknown: 4, setup_incomplete: 5, healthy: 6 };
-    var rows = h.checks.slice().sort(function (a, b) { return order[a.state] - order[b.state]; }).map(healthRow).join("");
+    var sorted = h.checks.slice().sort(function (a, b) { return order[a.state] - order[b.state]; });
+    // Three different answers, kept apart: a check that failed, a check devd could not
+    // run or finish, and a check that passed. Unknown is not the same as fine.
+    var fails = sorted.filter(function (c) { return ["critical", "unavailable", "degraded"].indexOf(c.state) >= 0; });
+    var unsure = sorted.filter(function (c) { return ["starting", "unknown", "setup_incomplete"].indexOf(c.state) >= 0; });
+    var passing = sorted.filter(function (c) { return c.state === "healthy"; });
+    var rows = (fails.length ? '<div class="section-title">Needs a look <span class="count">' + fails.length + "</span></div>" + fails.map(healthRow).join("") : "") +
+      (unsure.length ? '<div class="section-title">Not confirmed <span class="count">' + unsure.length + '</span></div><div class="row-sub" style="margin-bottom:6px">devd could not finish these checks. That is not the same as passing.</div>' + unsure.map(healthRow).join("") : "") +
+      (passing.length ? '<details class="ui-fold"><summary>All good <span class="count">' + passing.length + "</span></summary>" + passing.map(healthRow).join("") + "</details>" : "");
     var tone = h.state === "healthy" ? "notice-ok" : h.state === "critical" || h.state === "degraded" ? "notice-bad" : "notice-warn";
     return '<div class="notice ' + tone + '"><b>' + esc(h.headline) + ".</b> Checked " + esc(ago(h.checked_at) || "just now") + " in " + h.took_ms + " ms." + (healthStale() ? " This is out of date." : "") + (AI.healthError ? " The last re-check failed: " + esc(AI.healthError) : "") + "</div>" +
       (h.attention.length ? '<div class="section-title">Waiting for you</div>' + h.attention.map(function (a) { return '<div class="hrow"><span class="health-dot" style="background:var(--warn)"></span><div class="grow">' + esc(a.label) + '</div><button type="button" class="btn btn-mini" data-action="health-go" data-view="' + attr(a.view) + '">Open</button></div>'; }).join("") : "") +
-      '<div class="section-title">Components</div>' + rows +
+      rows +
       '<div class="inline" style="margin-top:14px"><button type="button" class="btn" data-action="health-recheck"' + (AI.healthLoading ? " disabled" : "") + ">" + (AI.healthLoading ? "Checking…" : "Check again") + "</button>" + (withClose ? '<button type="button" class="btn btn-ghost" data-action="health-go" data-view="system">Open diagnostics</button>' : "") + "</div>";
   }
 
@@ -5721,7 +6166,7 @@
       read("chat.list").catch(function () { return []; }),
       read("provider.list").catch(function () { return []; }),
       read("team.list").catch(function () { return []; }),
-      request("/api/audit?limit=40").then(function (r) { return r.ok ? r.body.items || [] : []; })
+      request("/api/audit?limit=300").then(function (r) { return r.ok ? r.body.items || [] : []; })
     ]);
     var slowDone = fast.then(function () {
       return Promise.all([
@@ -5753,7 +6198,7 @@
 
   function greeting() {
     var h = new Date().getHours();
-    return h < 5 ? "Working late" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
+    return h < 5 ? "Still up" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
   }
 
   function approvalCard(r, compact) {
@@ -5790,7 +6235,7 @@
     var dot = r.state === "broken" ? "health-problem" : r.state === "missing" ? "health-attention" : "health-ok";
     return '<div class="req-row"><span class="health-dot ' + dot + '" aria-hidden="true"></span>' +
       '<div class="req-main"><div class="req-title">' + esc(r.title) +
-      (r.required ? ' <span class="pill pill-warn">required</span>' : ' <span class="pill">optional</span>') +
+      (r.required ? ' <span class="pill pill-warn">needed</span>' : ' <span class="pill">whenever you like</span>') +
       '</div><div class="row-sub">' + esc(r.why) + "</div>" +
       (r.detail ? '<div class="row-sub mono">' + esc(r.detail) + "</div>" : "") + "</div>" +
       '<div class="req-action">' + action + "</div></div>";
@@ -5843,12 +6288,33 @@
     var ready = d.providers.some(function (p) { return p.enabled && p.has_key; }) || d.providers.some(function (p) { return p.enabled && !p.needs_key; });
     var projOptions = '<option value="">No project</option>' + d.projects.map(function (p) { return '<option value="' + attr(p.path) + '"' + (AI.askProject === p.path ? " selected" : "") + ">" + esc(p.name) + "</option>"; }).join("");
 
+    // The composer is one object: what to do, who does it, and where. The mode
+    // decides who acts - the assistant for one request, the team for a goal with
+    // a plan, approval and proof - and the button says which will happen.
+    var mode = AI.homeMode === "team" ? "team" : "ask";
+    // The composer. One surface for one act: say what you want, choose who does it
+    // and where, send. The mode decides who acts - the assistant answers one
+    // request; the team plans a goal and waits for approval - and the button
+    // names which will happen.
+    var team = mode === "team";
     var ask = ready
-      ? '<div class="ui-ask"><textarea id="home-ask" rows="1" placeholder="Ask devd to do something…" style="flex:1;background:none;border:0;outline:0;resize:none;color:var(--fg);font:inherit;font-size:var(--text-lg);padding:12px 0">' + esc(AI.askText) + "</textarea>" +
-        '<select class="input select-field" id="home-project" aria-label="Project for this request">' + projOptions + "</select>" +
-        '<button type="button" class="btn btn-ghost" data-action="home-team" title="A planner, specialists working in parallel, and proof before anything counts as done">Team</button>' +
-        '<button type="button" class="btn btn-primary" data-action="home-ask">Ask</button></div>'
-      : '<div class="ui-ask"><span class="grow" style="flex:1;color:var(--fg-mute);padding:12px 0">Connect a model to ask devd for things.</span><button type="button" class="btn btn-primary" data-action="nav" data-view="providers">Connect a model</button></div>';
+      ? '<div class="composer" role="group" aria-label="Tell devd what you are working on">' +
+          '<label class="sr-only" for="home-ask">' + (team ? "The outcome you want from the team" : "What would you like to ask devd?") + "</label>" +
+          '<textarea id="home-ask" class="composer-input" rows="2" placeholder="' + (team ? "Describe the outcome you want. The team will draft a plan and wait for your go-ahead." : "What are we working on?") + '">' + esc(AI.askText || "") + "</textarea>" +
+          '<div class="composer-bar">' +
+            '<div class="composer-left">' +
+              '<div class="composer-who seg-group" role="group" aria-label="Who should take this">' +
+                '<button type="button" data-action="home-mode" data-mode="ask" aria-pressed="' + !team + '" title="Ask the assistant a single question or request">Assistant</button>' +
+                '<button type="button" data-action="home-mode" data-mode="team" aria-pressed="' + team + '" title="Hand a goal to the team; nothing runs until you approve the plan">Agent team</button>' +
+              "</div>" +
+              '<label class="composer-where"><svg class="icon" aria-hidden="true"><use href="#i-folder"></use></svg><span class="sr-only">Project</span>' +
+                '<select id="home-project">' + projOptions + "</select></label>" +
+            "</div>" +
+            '<div class="composer-right"><button type="button" class="composer-send" id="home-send" data-action="' + (team ? "home-team" : "home-ask") + '"' + (String(AI.askText || "").trim() ? "" : " disabled") + ' aria-label="' + (team ? "Ask the team to plan this" : "Ask devd") + '" title="' + (team ? "Ask the team to plan this (Ctrl+Enter)" : "Ask devd (Ctrl+Enter)") + '"><svg class="icon" aria-hidden="true"><use href="#i-arrow-up"></use></svg></button></div>' +
+          "</div>" +
+        "</div>"
+      : '<div class="composer composer-off"><div class="composer-offline"><b>No model is connected.</b> Connect one to give devd goals. Everything else on this page works without it.</div>' +
+          '<button type="button" class="btn btn-primary" data-action="nav" data-view="providers">Connect a model</button></div>';
 
     var needs = [];
     (d.teamRuns || []).filter(function (t) { return t.state === "awaiting_plan"; }).forEach(function (t) {
@@ -5879,8 +6345,10 @@
     }
 
     var reqs = ((AI.requirements && AI.requirements.requirements) || []).filter(function (r) { return r.state !== "ready"; });
+    // Only what devd needs is "setup". Something optional is offered, not nagged about.
+    var required = reqs.filter(function (r) { return r.required; });
     var setup = reqs.length
-      ? uiList([uiRow({ dot: "warn", title: "Finish setting up devd", sub: reqs.length + " thing" + (reqs.length === 1 ? "" : "s") + " to install: " + esc(reqs.slice(0, 3).map(function (r) { return r.title; }).join(", ")) + (reqs.length > 3 ? "…" : ""),
+      ? uiList([uiRow({ dot: required.length ? "warn" : "off", title: required.length ? "Let's finish setting up" : "When you're ready", sub: (required.length ? required.length + " needed" + (reqs.length > required.length ? ", " + (reqs.length - required.length) + " optional" : "") : "Whenever you like") + ": " + esc(reqs.slice(0, 3).map(function (r) { return r.title; }).join(", ")) + (reqs.length > 3 ? "…" : ""),
           actions: '<button type="button" class="btn btn-mini" data-action="open-setup">Review</button>' })])
       : "";
 
@@ -5900,9 +6368,11 @@
         var site = siteFor[p.path];
         return uiRow({
           dot: site ? (site.serving === "no_entry" ? "warn" : "ok") : "off",
-          title: esc(p.name),
-          sub: esc((p.stack ? p.stack + " · " : "") + p.path),
-          meta: site ? esc(servingLabel(site)) : "",
+          title: '<span class="row-name">' + esc(p.name) + "</span>" + ((p.stack || site) ? ' <span class="facts">' +
+            (p.stack ? '<span class="fact">' + esc(p.stack) + "</span>" : "") +
+            (site ? '<span class="fact mono">' + esc(site.site.host || site.site.name) + "</span>" : "") + "</span>" : ""),
+          sub: '<span class="mono">' + esc(p.path) + "</span>",
+          meta: site ? esc(servingLabel(site)) : "no address",
           open: 'data-action="home-open" data-path="' + attr(p.path) + '"',
           actions: '<button type="button" class="btn btn-mini btn-primary" data-action="home-open" data-path="' + attr(p.path) + '">Open</button>' +
             (site ? '<button type="button" class="btn btn-mini" data-action="open-site" data-name="' + attr(site.site.name) + '">Site</button>' : "") +
@@ -5910,7 +6380,7 @@
           hover: true
         });
       }))
-      : uiEmpty("No projects yet", "Create one from a stack, or point devd at a folder that already exists.",
+      : uiEmpty("Your workspace is empty", "Start from a stack, or point devd at a folder you already have.",
         '<div class="inline"><button type="button" class="btn btn-primary" data-action="nav" data-view="create">Create a project</button><button type="button" class="btn" data-action="nav" data-view="develop">Import a folder</button></div>');
 
     var counts = serviceCounts(state.server.services);
@@ -5919,77 +6389,153 @@
     var pendingHosts = ((state.server.hosts && (state.server.hosts.adding || []).concat(state.server.hosts.removing || [])) || []).length;
     var phps = (state.server.runtimes || []).filter(function (r) { return r.runtime && r.runtime.kind === "php"; });
     var defaultPhp = phpPrimary();
+
+    // Running is not the same as answering. A service counts as ready only when
+    // it answered a question in its own protocol; one that holds its port and
+    // says nothing is reported as such.
+    var svcRows = (state.server.services || []).filter(function (r) { return r.installed; });
+    var svcRunning = svcRows.filter(function (r) { return r.running; });
+    var svcReady = svcRunning.filter(function (r) { return r.ready === true; });
+    var svcSilent = svcRunning.filter(function (r) { return r.ready === false; });
+    var svcHeld = (state.server.services || []).filter(function (r) { return !r.running && r.listening; });
+    var working = d.threads.filter(function (t) { return t.state === "running"; }).length +
+      (d.teamRuns || []).filter(function (t) { return ["planning", "running"].indexOf(t.state) >= 0; }).length;
+    var waiting = d.approvals.length + (d.teamRuns || []).filter(function (t) { return t.state === "awaiting_plan"; }).length;
+
+    function cell(view, label, dot, value, detail) {
+      return '<button type="button" class="env-cell" data-action="nav" data-view="' + view + '">' +
+        '<span class="env-cell-label">' + uiDot(dot) + esc(label) + "</span>" +
+        '<span class="env-cell-value">' + esc(value) + "</span>" +
+        '<span class="env-cell-detail">' + esc(detail) + "</span></button>";
+    }
     var env = state.server.loaded
-      ? summaryBand([
-        { label: "Services", value: counts.up + " of " + counts.total + " running", detail: counts.up === counts.total && counts.total ? "the stack is ready" : counts.total ? "start the stack when you need it" : "nothing installed yet", tone: counts.up === counts.total && counts.total ? "ok" : counts.up ? "warn" : "", dot: counts.up === counts.total && counts.total ? "ok" : counts.up ? "warn" : "off" },
-        { label: "Sites", value: (allSites.length - noEntry.length) + " can serve", detail: noEntry.length ? noEntry.length + " with no entry point" : "every site has something to serve", tone: noEntry.length ? "warn" : "ok", dot: noEntry.length ? "warn" : "ok" },
-        { label: "Runtimes", value: (state.server.runtimes || []).length ? (state.server.runtimes || []).length + " installed" : "None installed", detail: phps.length ? phps.length + " PHP · default " + (defaultPhp || "not selected") : "install one from Runtimes", tone: "", dot: (state.server.runtimes || []).length ? "ok" : "off" }
-      ])
-      : '<div class="loading">Reading the environment…</div>';
-    var envLinks = '<div class="env-links">' +
-      (counts.up < counts.total ? '<button type="button" class="btn btn-mini btn-primary" data-action="stack-up">Start all services</button>' : "") +
-      '<button type="button" class="btn btn-mini" data-action="nav" data-view="overview">Environment</button>' +
-      (noEntry.length ? '<button type="button" class="btn btn-mini btn-ghost" data-action="nav" data-view="sites">Review ' + noEntry.length + " site" + (noEntry.length === 1 ? "" : "s") + "</button>" : "") +
-      (pendingHosts ? '<button type="button" class="btn btn-mini btn-ghost" data-action="nav" data-view="hosts">Publish ' + pendingHosts + " hostname" + (pendingHosts === 1 ? "" : "s") + "</button>" : "") +
-      "</div>";
+      ? '<div class="env-strip" role="group" aria-label="This machine">' +
+        cell("services", "Services", !counts.total ? "off" : svcSilent.length || svcHeld.length ? "warn" : counts.up === counts.total ? "ok" : counts.up ? "warn" : "off",
+          counts.total ? counts.up + " of " + counts.total + " running" : "None installed",
+          svcSilent.length ? svcSilent.length + " running but not answering" :
+          svcHeld.length ? svcHeld.length + (svcHeld.length === 1 ? " port" : " ports") + " held by other programs" : svcRunning.length ? svcReady.length + " answered in their own protocol" : counts.total ? "start them when you need them" : "install a web server and a database") +
+        cell("sites", "Sites", noEntry.length || siteAttention.length ? "warn" : allSites.length ? "ok" : "off",
+          allSites.length ? (allSites.length - noEntry.length) + " of " + allSites.length + " can serve" : "No sites",
+          noEntry.length ? noEntry.length + " with nothing to serve" : pendingHosts ? pendingHosts + " hostname" + (pendingHosts === 1 ? "" : "s") + " not published" : allSites.length ? "HTTPS from devd's own authority" : "give a project an address") +
+        cell("runtimes", "Runtimes", (state.server.runtimes || []).length ? "ok" : "off",
+          (state.server.runtimes || []).length ? (state.server.runtimes || []).length + " installed" : "None installed",
+          phps.length ? "PHP default " + (defaultPhp || "not selected") : "PHP, Node.js, Go, Python, Ruby") +
+        cell("team", "Agents", waiting ? "warn" : working ? "live" : "off",
+          working ? working + " working" : waiting ? waiting + " waiting for you" : "Idle",
+          waiting && working ? waiting + " waiting for you" : ready ? "plans need your approval before they run" : "connect a model to use agents") +
+        "</div>"
+      : '<div class="loading" role="status">Reading the environment…</div>';
+    var envLinks = (counts.up < counts.total || noEntry.length || pendingHosts)
+      ? '<div class="env-links">' +
+        (counts.up < counts.total ? '<button type="button" class="btn btn-mini" data-action="stack-up">Start all services</button>' : "") +
+        (noEntry.length ? '<button type="button" class="btn btn-mini" data-action="nav" data-view="sites">Review ' + noEntry.length + " site" + (noEntry.length === 1 ? "" : "s") + "</button>" : "") +
+        (pendingHosts ? '<button type="button" class="btn btn-mini" data-action="nav" data-view="hosts">Publish ' + pendingHosts + " hostname" + (pendingHosts === 1 ? "" : "s") + "</button>" : "") +
+        "</div>"
+      : "";
 
     var sites = allSites.length
-      ? uiList(allSites.slice(0, 6).map(function (row) {
+      ? uiList(allSites.slice(0, 5).map(function (row) {
         return uiRow({
           dot: row.serving === "no_entry" ? "warn" : row.server_running ? "ok" : "off",
-          title: esc(row.site.name),
-          sub: esc(row.url),
-          meta: esc(servingLabel(row) || "not serving"),
-          open: 'data-action="open-url" data-url="' + attr(row.url) + '"',
+          title: '<span class="mono">' + esc(row.site.host || row.site.name) + "</span>",
+          sub: esc(servingLabel(row) || "not serving"),
+          open: 'data-action="open-site" data-name="' + attr(row.site.name) + '"',
           actions: '<button type="button" class="btn btn-mini" data-action="open-site" data-name="' + attr(row.site.name) + '">Manage</button>' +
-            '<button type="button" class="btn btn-mini btn-ghost" data-action="open-url" data-url="' + attr(row.url) + '">Open</button>',
+            '<button type="button" class="btn btn-mini btn-ghost" data-action="open-url" data-url="' + attr(row.url) + '" aria-label="Open ' + attr(row.url) + ' in the browser">Open</button>',
           hover: true
         });
       }))
-      : uiEmpty("No sites yet", "Create a site to give a project an address.", '<button type="button" class="btn btn-primary btn-mini" data-action="new-site">Create a site</button>');
+      : uiEmpty("No sites yet", "A site gives a project an HTTPS address on this machine.", '<button type="button" class="btn btn-primary btn-mini" data-action="new-site">Create a site</button>');
 
     var live = [];
     d.threads.filter(function (t) { return t.state === "running" || t.state === "waiting_approval"; }).forEach(function (t) {
-      live.push(uiRow({ dot: t.state === "running" ? "live" : "warn", title: esc(t.title), meta: t.state === "running" ? "assistant working" : "waiting for you",
+      live.push(uiRow({ dot: t.state === "running" ? "live" : "warn", title: esc(t.title), sub: t.state === "running" ? "Assistant · working" : "Assistant · waiting for your decision",
         actions: '<button type="button" class="btn btn-mini" data-action="open-thread" data-id="' + attr(t.id) + '">Open</button>' }));
     });
     (d.teamRuns || []).filter(function (t) { return ["planning", "running"].indexOf(t.state) >= 0; }).forEach(function (t) {
-      live.push(uiRow({ dot: "live", title: esc(t.title), meta: "team · " + esc(t.state),
+      live.push(uiRow({ dot: "live", title: esc(t.title), sub: "Team · " + esc(t.state === "planning" ? "planning" : (t.tasks_done || 0) + " of " + (t.tasks_total || 0) + " tasks done"),
         actions: '<button type="button" class="btn btn-mini" data-action="team-open-from" data-id="' + attr(t.id) + '">Open</button>' }));
     });
-    var svcUp = serviceUnits(state.server.services).filter(function (u) { return u.running; }).map(function (u) { return u.rows ? "PHP " + u.php.series : u.row.name; });
-    if (svcUp.length) live.push(uiRow({ dot: "ok", title: svcUp.length + " service" + (svcUp.length === 1 ? "" : "s") + " running", sub: esc(svcUp.join(", ")),
-      actions: '<button type="button" class="btn btn-mini" data-action="nav" data-view="services">Open</button>' }));
 
-    var feed = d.audit.filter(function (a) { return !a.dry_run && a.tier !== "read"; }).slice(0, 5).map(function (a) {
-      var who = a.actor.replace("human:", "").replace("agent:", "");
-      return uiRow({ dot: a.ok ? "off" : "bad", title: esc(who + (a.ok ? " ran " : " was refused ") + a.capability), meta: esc(ago(a.at)) });
-    });
+    // What happened, newest first, as a timeline. A refusal is shown as one.
+    var events = d.audit.filter(function (a) { return !a.dry_run && a.tier !== "read"; }).slice(0, 8);
+    var feed = events.length
+      ? '<div class="timeline">' + events.map(function (a) {
+        var who = a.actor.replace("human:", "you via ").replace("agent:", "agent ");
+        return '<div class="tl-item">' + uiDot(a.ok ? (a.actor.indexOf("agent:") === 0 ? "live" : "ok") : "bad") +
+          '<span class="tl-text" title="' + attr(a.capability + " · " + (a.message || "")) + '">' + esc(who) + (a.ok ? " ran " : " was refused ") + '<span class="mono">' + esc(a.capability) + "</span></span>" +
+          '<span class="tl-when">' + esc(ago(a.at)) + "</span></div>";
+      }).join("") + "</div>" +
+        '<div class="ui-more"><button type="button" data-action="nav" data-view="activity">All activity</button></div>'
+      : '<div class="ui-quiet">Quiet lately. Whenever something changes, from a window, an agent or a script, it lands here and in Activity.</div>';
 
     el("main").innerHTML =
       '<div class="page home">' +
-      '<div class="ui-greet"><div class="ui-kicker">Home</div>' + pageTitle(greeting(), "home") +
-      '<div class="sub">' + new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" }) +
-      ' <span class="greet-sep" aria-hidden="true">·</span> <button type="button" class="greet-link" data-action="nav" data-view="overview">' + (state.server.loaded ? "Local environment" : "Reading the environment") + "</button></div></div>" +
-      ask + needsHtml + setup +
-      '<section class="home-env" aria-label="Environment">' + env + envLinks + "</section>" +
+      '<header class="home-head">' +
+        '<div class="home-head-text">' +
+          '<h1 class="home-status" id="home-status">' + esc(greeting()) + ".</h1>" +
+          '<p class="home-lead">' + esc(homeLead(needs.length, d, required.length)) + "</p>" +
+          '<p class="home-sub">' + esc(homeSentence(d, counts, allSites, noEntry, svcHeld)) + "</p>" +
+        "</div>" +
+      "</header>" +
+      ask +
       '<div class="home-grid">' +
         '<div class="home-col home-main-col">' +
-          uiHead("Projects", allProjects.length || null, '<button type="button" class="btn btn-mini btn-ghost" data-action="nav" data-view="projects">All projects</button>') + projects +
+          (needsHtml ? '<section class="home-attention" aria-label="Needs you">' + needsHtml + "</section>" : "") + setup +
           (live.length ? uiHead("Working now", live.length) + uiList(live) : "") +
+          uiHead("Projects", allProjects.length || null, '<button type="button" class="btn btn-mini btn-ghost" data-action="nav" data-view="develop">Import one</button><button type="button" class="btn btn-mini" data-action="nav" data-view="create">Start a new one</button><button type="button" class="btn btn-mini btn-ghost" data-action="nav" data-view="projects">See all</button>') + projects +
         "</div>" +
-        '<aside class="home-col home-side-col" aria-label="Sites and recent work">' +
-          uiHead("Sites", allSites.length || null, '<button type="button" class="btn btn-mini btn-ghost" data-action="nav" data-view="sites">All sites</button>') + sites +
-          (siteAttention.length ? '<div class="home-note">' + esc(siteAttention.length + (siteAttention.length === 1 ? " site needs" : " sites need") + " attention") + ' <button type="button" data-action="nav" data-view="sites">Review</button></div>' : "") +
-          (feed.length ? uiHead("Recently", null) + uiList(feed) : "") +
+        '<aside class="home-col home-side-col" aria-label="This machine and recent activity">' +
+          uiHead("This machine", null, '<button type="button" class="btn btn-mini btn-ghost" data-action="nav" data-view="overview">Environment</button>') +
+          '<section class="home-env" aria-label="This machine">' + env + envLinks + "</section>" +
+          uiHead("Recently", null) + feed +
         "</aside>" +
       "</div>" +
       "</div>";
   }
 
+  /* What to say first, in the voice of someone glad you are here. Every branch is
+     a real state; none is chosen at random, so the same situation always reads the
+     same way. */
+  function homeLead(needCount, d, setupCount) {
+    var working = (d.teamRuns || []).filter(function (t) { return ["planning", "running"].indexOf(t.state) >= 0; });
+    if (needCount) return needCount === 1 ? "One thing is waiting for your say-so." : needCount + " things are waiting for your say-so.";
+    if (setupCount) return "Let's finish setting devd up, then you're free to build.";
+    if (working.length) return working.length === 1 ? "The team is on it: " + String(working[0].title || "a goal") + "." : working.length + " goals are in motion. The team has it from here.";
+    var h = new Date().getHours();
+    if (h >= 22 || h < 5) return "All quiet. A good hour to get something done, or to call it a night.";
+    return "All quiet. Pick up where you left off, or start something new.";
+  }
+
+  /* The sentence under the headline: only things devd has measured, in the order
+     a person would ask about them. Nothing here is a total for its own sake. */
+  function homeSentence(d, counts, allSites, noEntry, held) {
+    var bits = [];
+    if (counts.total) bits.push(counts.up + " of " + counts.total + " services running");
+    if (held && held.length) bits.push(held.length + (held.length === 1 ? " port is" : " ports are") + " held by other programs");
+    if (allSites.length) bits.push((allSites.length - noEntry.length) + " of " + allSites.length + " sites can serve");
+    var working = d.threads.filter(function (t) { return t.state === "running"; }).length +
+      (d.teamRuns || []).filter(function (t) { return ["planning", "running"].indexOf(t.state) >= 0; }).length;
+    bits.push(working ? working + (working === 1 ? " agent is working" : " agents are working") : "no agents working");
+    return bits.join("  ·  ");
+  }
+
+  /* Home's headline says what state things are in, in words: what needs a person
+     first, then what is working, then quiet. It is never a question to the user. */
+  function homeHeadline(needCount, d, setupCount) {
+    if (needCount) return needCount === 1 ? "One thing needs you" : needCount + " things need you";
+    if (setupCount) return "devd is almost set up";
+    var working = d.threads.filter(function (t) { return t.state === "running"; }).length +
+      (d.teamRuns || []).filter(function (t) { return ["planning", "running"].indexOf(t.state) >= 0; }).length;
+    if (working) return working === 1 ? "An agent is working" : working + " agents are working";
+    var counts = serviceCounts(state.server.services || []);
+    if (counts.total && counts.up === counts.total) return "Everything is running";
+    return "Nothing needs you";
+  }
+
   function openSetupSheet() {
     var reqs = ((AI.requirements && AI.requirements.requirements) || []).filter(function (r) { return r.state !== "ready"; });
-    uiSheet("Finish setting up devd", reqs.length ? '<div class="panel">' + reqs.map(requirementRow).join("") + "</div>" : uiEmpty("Everything devd needs is here"));
+    uiSheet("Getting devd ready", reqs.length ? '<div class="panel">' + reqs.map(requirementRow).join("") + "</div>" : uiEmpty("Everything devd needs is here"));
   }
 
   // ------------------------------------------------------------- providers
@@ -6056,6 +6602,43 @@
     return '<div class="caps">' + out.join("") + "</div>";
   }
 
+  /* Which model does which work, and where that computation happens, stated from
+     the saved assignments. A kind of work with no assignment uses the default; it
+     is counted, not listed, so the table stays about decisions someone made. */
+  function modelsInUse() {
+    var provs = AI.providers || [];
+    var by = {};
+    provs.forEach(function (p) { by[p.id] = p; });
+    var def = provs.filter(function (p) { return p.is_default && p.enabled; })[0] || provs.filter(function (p) { return p.enabled; })[0];
+    var assignments = (AI.roleAssign && AI.roleAssign.assignments) || [];
+    var titles = {};
+    (AI.teamRoles || []).forEach(function (r) { titles[r.id] = r.title || r.id; });
+    function where(p) {
+      if (!p) return "";
+      if (p.category === "local") return "on this machine";
+      try { return "remote - " + new URL(p.base_url).host; } catch (e) { return "remote"; }
+    }
+    function who(provId, model) {
+      var p = by[provId];
+      return p ? esc(p.label) + (model || p.default_model ? ' <span class="mono">' + esc(model || p.default_model) + "</span>" : "") : '<span class="dim">provider removed</span>';
+    }
+    var roles = [];
+    assignments.filter(function (a) { return !a.scope; }).forEach(function (a) { if (roles.indexOf(a.role) < 0) roles.push(a.role); });
+    var rows = [];
+    rows.push('<tr><td><b>Everything else</b><div class="mu-sub">the assistant, and any work with no model of its own</div></td><td>' + (def ? who(def.id, def.default_model) : '<span class="dim">no provider enabled</span>') + "</td><td>" + esc(where(def)) + '</td><td><span class="dim">-</span></td></tr>');
+    roles.forEach(function (role) {
+      var mine = assignments.filter(function (a) { return a.role === role && !a.scope; }).sort(function (a, b) { return a.position - b.position; });
+      var first = mine[0], second = mine[1];
+      var fp = first && by[first.provider];
+      rows.push("<tr><td><b>" + esc(role === "default" ? "Default" : titles[role] || role) + "</b></td><td>" + (first ? who(first.provider, first.model) : "") + "</td><td>" + esc(where(fp)) + "</td><td>" +
+        (second ? who(second.provider, second.model) + ' <span class="dim">if the first fails</span>' : '<span class="dim">none - a failure stops the task</span>') + "</td></tr>");
+    });
+    var unassigned = (AI.teamRoles || []).filter(function (r) { return roles.indexOf(r.id) < 0; }).length;
+    return uiHead("In use", null) +
+      '<table class="mu"><thead><tr><th>Work</th><th>Model</th><th>Runs</th><th>Fallback</th></tr></thead><tbody>' + rows.join("") + "</tbody></table>" +
+      (unassigned ? '<div class="ui-more">' + unassigned + (unassigned === 1 ? " kind of agent work has" : " kinds of agent work have") + " no model of its own and use the default. Change this under <b>Which model does which work</b> below.</div>" : "");
+  }
+
   function providerCard(p) {
     var busy = AI.provBusy[p.id];
     var models = modelOptions(p.id);
@@ -6084,7 +6667,7 @@
       '<div class="provider-actions">' +
         '<button type="button" class="btn btn-mini" data-action="prov-test" data-id="' + attr(p.id) + '"' + (busy ? " disabled" : "") + ">Test</button>" +
         '<button type="button" class="btn btn-mini" data-action="prov-models" data-id="' + attr(p.id) + '"' + (busy ? " disabled" : "") + ">Fetch models</button>" +
-        '<button type="button" class="btn btn-mini btn-primary" data-action="prov-verify" data-id="' + attr(p.id) + '"' + (busy || !p.default_model ? " disabled" : "") + ' title="' + attr(p.default_model ? "Run one real request against " + p.default_model + " and force a tool call" : "Choose a model first") + '">Verify model</button>' +
+        '<button type="button" class="btn btn-mini" data-action="prov-verify" data-id="' + attr(p.id) + '"' + (busy || !p.default_model ? " disabled" : "") + ' title="' + attr(p.default_model ? "Run one real request against " + p.default_model + " and force a tool call" : "Choose a model first") + '">Verify model</button>' +
         '<button type="button" class="btn btn-mini" data-action="prov-edit" data-id="' + attr(p.id) + '">Edit</button>' +
         (p.is_default ? "" : '<button type="button" class="btn btn-mini" data-action="prov-default" data-id="' + attr(p.id) + '">Make default</button>') +
         '<button type="button" class="btn btn-mini btn-danger" data-action="prov-remove" data-id="' + attr(p.id) + '">Remove</button>' +
@@ -6210,7 +6793,8 @@
     var roles = AI.providers.length ? rolesPanel() : "";
     el("main").innerHTML = page("Models", "",
       '<button type="button" class="btn" data-action="prov-discover">Find local servers</button>',
-      (cards ? uiHead("Connected", AI.providers.length) + '<div class="provider-list">' + cards + "</div>" : empty) +
+      (AI.providers.length ? modelsInUse() : "") +
+      (cards ? uiHead("Providers", AI.providers.length) + '<div class="provider-list">' + cards + "</div>" : empty) +
       (AI.provForm ? providerForm(AI.provForm) : "") +
       localPanel() +
       (roles ? '<details class="ui-fold"><summary>Which model does which work</summary>' + roles + "</details>" : "") +
@@ -6716,18 +7300,33 @@
         "</div></div>";
     }).join("");
 
-    // A conversation with no turns yet: the empty state explains itself.
-    return html || '<div class="chat-empty">' +
-      '<div class="empty-icon" aria-hidden="true"><svg class="icon"><use href="#i-spark"></use></svg></div>' +
-      '<div class="chat-empty-title">What should devd do?</div>' +
-      '<div class="empty-hint">Describe a task. devd discovers what it can do, works in small steps, runs your checks, and asks before anything risky.</div>' +
-      '<div class="chat-suggests">' +
-      (AI.project || (state.project && state.project.path)
-        ? '<button type="button" class="chat-suggest" data-action="chat-suggest" data-prompt="Review the uncommitted changes in this project and tell me what needs attention.">Review my changes</button>' +
-          '<button type="button" class="chat-suggest" data-action="chat-suggest" data-prompt="Run the project\'s tests and checks, then fix what actually fails.">Run the tests and fix what fails</button>' +
-          '<button type="button" class="chat-suggest" data-action="chat-suggest" data-prompt="Explain how this project is structured: the entry points, the main modules and how they connect.">Explain this project</button>'
-        : '<button type="button" class="chat-suggest" data-action="chat-suggest" data-prompt="What needs my attention right now?">What needs attention?</button>' +
-          '<button type="button" class="chat-suggest" data-action="chat-suggest" data-prompt="Help me create a new project. Ask me what I am building first.">Start a new project</button>') +
+    // A conversation with no turns yet. It is not a greeting: it says what the
+    // assistant is working with, from what devd knows, and offers real starting points.
+    if (html) return html;
+    var provs = (AI.providers || []).filter(function (p) { return p.enabled; });
+    var prov = provs.filter(function (p) { return p.id === (AI.thread && AI.thread.provider_id) || p.id === AI.pickProvider; })[0] ||
+      provs.filter(function (p) { return p.is_default; })[0] || provs[0];
+    var projPath = AI.project || "";
+    var projName = projPath ? ((state.projects || []).filter(function (x) { return x.path === projPath; })[0] || {}).name || dirName(projPath) : "";
+    var host = ""; try { host = prov && prov.base_url ? new URL(prov.base_url).host : ""; } catch (e) { host = ""; }
+    var where = !prov ? "" : prov.category === "local" ? "runs on this machine" : "remote" + (host ? ": " + host : "");
+    var auto = state.session && state.session.settings && state.session.settings.agent_auto_approve_write;
+    var starts = projPath
+      ? [["Review my changes", "Review the uncommitted changes in this project and tell me what needs attention."],
+         ["Run the tests and fix what fails", "Run the project's tests and checks, then fix what actually fails."],
+         ["Explain how this project is built", "Explain how this project is structured: the entry points, the main modules and how they connect."]]
+      : [["What needs my attention", "What needs my attention right now?"],
+         ["Why can't one of my sites serve", "Which of my sites cannot serve, and why?"],
+         ["Start a new project", "Help me create a new project. Ask me what I am building first."]];
+    return '<div class="assist-empty">' +
+      '<h2 class="assist-title">What are we working on?</h2>' +
+      '<dl class="assist-ctx">' +
+        '<div><dt>Project</dt><dd>' + (projName ? esc(projName) : '<span class="dim">none selected - choose one below to give it a codebase</span>') + "</dd></div>" +
+        '<div><dt>Model</dt><dd>' + (prov ? esc(prov.label) + (prov.default_model ? ' <span class="mono">' + esc(prov.default_model) + "</span>" : "") + ' <span class="dim">' + esc(where) + "</span>" : '<span class="dim">none connected</span>') + "</dd></div>" +
+        '<div><dt>Changes</dt><dd>' + (auto ? "Writes files without asking" : "Checks with you before it writes files or does anything hard to undo") + ' <span class="dim">- every call is recorded in Activity</span></dd></div>' +
+      "</dl>" +
+      '<div class="assist-starts" role="group" aria-label="Ways to start"><div class="assist-label">Start with</div>' +
+        starts.map(function (x) { return '<button type="button" class="assist-start" data-action="chat-suggest" data-prompt="' + attr(x[1]) + '"><span>' + esc(x[0]) + '</span><svg class="icon" aria-hidden="true"><use href="#i-chevron"></use></svg></button>'; }).join("") +
       "</div></div>";
   }
 
@@ -6879,7 +7478,7 @@
       '<div class="composer">' +
       '<div class="mention-menu" id="chat-mentions" hidden role="listbox" aria-label="Reference"></div>' +
       '<div class="composer-attachments" id="chat-attachments" hidden></div>' +
-      '<textarea class="composer-input" id="chat-input" rows="2" placeholder="Ask anything... / @ for a capability, skill or project" aria-label="Message" aria-autocomplete="list" aria-controls="chat-mentions">' + esc(AI.composer) + "</textarea>" +
+      '<textarea class="composer-input" id="chat-input" rows="2" placeholder="What are we working on? Type / or @ to bring in a skill, a tool or a project" aria-label="Message" aria-autocomplete="list" aria-controls="chat-mentions">' + esc(AI.composer) + "</textarea>" +
       '<div class="composer-bar">' +
       '<div class="composer-left">' +
       '<button type="button" class="composer-tool" data-action="chat-attach" title="Attach a file" aria-label="Attach a file"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg></button>' +
@@ -6911,7 +7510,7 @@
     el("main").innerHTML =
       '<div class="workspace">' +
       '<div class="workspace-head">' + pageTitle("Assistant") + '<span class="grow"></span><button type="button" class="btn btn-mini" data-action="nav" data-view="agents">Team room</button></div>' +
-      '<div class="assistant"><aside class="threads"><div class="threads-head"><b>Conversations</b><span class="grow"></span><button type="button" class="btn btn-mini btn-ghost" data-action="chats-prune" title="Delete every conversation that is not working">Clear finished</button><button type="button" class="btn btn-mini btn-primary" data-action="chat-new">New</button></div><div id="thread-list"></div></aside>' +
+      '<div class="assistant"><aside class="threads"><div class="threads-head"><b>Conversations</b><span class="grow"></span><button type="button" class="btn btn-mini btn-ghost" data-action="chats-prune" title="Delete every conversation that is not working">Clear finished</button><button type="button" class="btn btn-mini" data-action="chat-new">New</button></div><div id="thread-list"></div></aside>' +
       '<section class="chat">' +
       (AI.thread ? '<div class="chat-head" id="chat-head"></div>' : "") +
       (!ready ? '<div class="notice notice-warn chat-notice">No usable AI provider yet. <button type="button" class="btn btn-mini btn-primary" data-action="nav" data-view="providers">Set one up</button></div>' : "") +
@@ -6954,6 +7553,7 @@
       if (state.view !== "team") return clearInterval(TEAM.timer);
       read("team.list").then(function (runs) {
         TEAM.runs = runs;
+        rail();
         return TEAM.sel ? read("team.get", { run: TEAM.sel }) : null;
       }).then(function (d) { if (d) TEAM.data = d; paintTeam(); }).catch(function () {});
     }, 1200);
@@ -6966,8 +7566,8 @@
     var projOpts = '<option value="">Choose a project…</option>' + state.projects.map(function (p) { return '<option value="' + attr(p.path) + '"' + (TEAM.form.project === p.path ? " selected" : "") + ">" + esc(p.name || dirName(p.path)) + "</option>"; }).join("") + '<option value="__new"' + (TEAM.form.project === "__new" ? " selected" : "") + ">A new project…</option>";
     el("main").innerHTML =
       '<div class="workspace">' +
-      '<div class="workspace-head">' + pageTitle("Team") + '<span class="grow"></span><button type="button" class="btn btn-mini" data-action="nav" data-view="agents">Team room</button></div>' +
-      '<div class="assistant"><aside class="threads"><div class="threads-head"><b>Runs</b><span class="grow"></span><button type="button" class="btn btn-mini btn-ghost" data-action="team-prune" title="Delete every run that is over">Clear finished</button><button type="button" class="btn btn-mini btn-primary" data-action="team-new">New</button></div><div id="team-list"></div></aside>' +
+      '<div class="workspace-head">' + pageTitle("Agent runs") + '<span class="grow"></span><button type="button" class="btn btn-mini" data-action="nav" data-view="agents">Team room</button></div>' +
+      '<div class="assistant"><aside class="threads"><div class="threads-head"><b>Runs</b><span class="grow"></span><button type="button" class="btn btn-mini btn-ghost" data-action="team-prune" title="Delete every run that is over">Clear finished</button><button type="button" class="btn btn-mini" data-action="team-new">New</button></div><div id="team-list"></div></aside>' +
       '<section class="chat"><div id="team-detail" class="team-detail"></div></section></div></div>';
     TEAM.ready = ready; TEAM.projOpts = projOpts;
     paintTeam();
@@ -6980,27 +7580,27 @@
     list.innerHTML = (TEAM.runs || []).map(function (r) {
       var over = ["done", "failed", "cancelled"].indexOf(r.state) >= 0;
       return '<div class="thread-row"><button type="button" class="thread' + (TEAM.sel === r.id ? " active" : "") + '" data-action="team-open" data-id="' + attr(r.id) + '"><span class="dot ' + (r.state === "running" || r.state === "planning" ? "dot-ok" : r.state === "awaiting_plan" || r.state === "paused" ? "dot-warn" : r.state === "failed" ? "dot-bad" : "dot-off") + '"></span><span class="grow nowrap">' + esc(r.title) + '</span><span class="dim">' + r.tasks_done + "/" + r.tasks_total + '</span></button>' + (over ? '<button type="button" class="thread-del" data-action="team-delete" data-id="' + attr(r.id) + '" title="Delete this run" aria-label="Delete this run">\u00d7</button>' : "") + "</div>";
-    }).join("") || '<div class="empty-inline">No runs yet.</div>';
+    }).join("") || '<div class="empty-inline">No runs yet. Give the team a goal and it will show up here.</div>';
     if (!TEAM.sel || !TEAM.data) { box.innerHTML = teamForm(); return; }
     var focus = document.activeElement && document.activeElement.id;
     var val = focus === "team-say" ? document.activeElement.value : null;
     box.innerHTML = teamDetail(TEAM.data);
-    if (val !== null) { var i = el("team-say"); if (i) { i.value = val; i.focus(); } }
+    if (val !== null) { var i = el("team-say"); if (i) { i.value = val; i.focus(); var ts = el("team-say-send"); if (ts) ts.disabled = !val.trim(); } }
   }
 
   function teamForm() {
     var f = TEAM.form;
-    return '<div class="team-new"><div class="chat-title">Describe what you want built</div>' +
+    return '<div class="team-new"><div class="chat-title">What should the team build?</div>' +
       '<div class="team-north-line">The team works from the project\'s north star, owner and shared context. <button type="button" data-action="nav" data-view="agents">Team room</button></div>' +
       '<div class="row-sub">A planner turns this into tasks. You review the plan and approve it before anything runs. Specialists then work in parallel where it is safe, and a task only counts as done when devd can see the proof.</div>' +
       (TEAM.ready ? "" : '<div class="notice notice-warn" style="margin-top:12px">No usable AI provider yet. <button type="button" class="btn btn-mini btn-primary" data-action="nav" data-view="providers">Set one up</button></div>') +
-      (TEAM.templates && TEAM.templates.length ? '<div class="field" style="margin-top:14px"><label class="field-label">Start from a template <span class="dim">(optional)</span></label><select class="input" id="team-template"><option value="">Write the goal myself</option>' + TEAM.templates.map(function (t) { return '<option value="' + attr(t.id) + '"' + (TEAM.form.template === t.id ? " selected" : "") + ">" + esc(t.title) + " — " + esc(t.summary) + "</option>"; }).join("") + "</select></div>" : "") +
-      '<div class="field" style="margin-top:14px"><label class="field-label">Goal</label><textarea class="input" id="team-goal" rows="5" placeholder="e.g. Add password reset by email to the app, with tests. Or: Build a small Laravel blog with posts and comments.">' + esc(f.goal) + "</textarea></div>" +
-      '<div class="field" style="margin-top:10px"><label class="field-label">Definition of done <span class="dim">(optional, one per line)</span></label><textarea class="input" id="team-done" rows="4" placeholder="e.g. The tests pass&#10;The README documents every command">' + esc(f.done) + "</textarea><div class=\"row-sub\">When the work is finished devd checks each line against what the team recorded and starts another pass for any that are not met. Needs the Jev key (judge.configure); without it the lines are listed for you to confirm.</div></div>" +
-      '<div class="inline" style="margin-top:10px"><select class="input" id="team-project" style="max-width:280px">' + TEAM.projOpts + "</select>" +
+      (TEAM.templates && TEAM.templates.length ? '<div class="field" style="margin-top:14px"><label class="field-label" for="team-template">Start from a template <span class="dim">(optional)</span></label><select class="input" id="team-template"><option value="">Write the goal myself</option>' + TEAM.templates.map(function (t) { return '<option value="' + attr(t.id) + '"' + (TEAM.form.template === t.id ? " selected" : "") + ">" + esc(t.title) + " — " + esc(t.summary) + "</option>"; }).join("") + "</select></div>" : "") +
+      '<div class="field" style="margin-top:14px"><label class="field-label" for="team-goal">Goal</label><textarea class="input" id="team-goal" rows="5" placeholder="e.g. Add password reset by email to the app, with tests. Or: Build a small Laravel blog with posts and comments.">' + esc(f.goal) + "</textarea></div>" +
+      '<div class="field" style="margin-top:10px"><label class="field-label" for="team-done">Definition of done <span class="dim">(optional, one per line)</span></label><textarea class="input" id="team-done" rows="4" placeholder="e.g. The tests pass&#10;The README documents every command">' + esc(f.done) + "</textarea><div class=\"row-sub\">When the work is finished devd checks each line against what the team recorded and starts another pass for any that are not met. Needs the Jev key (judge.configure); without it the lines are listed for you to confirm.</div></div>" +
+      '<div class="inline" style="margin-top:10px"><select class="input" id="team-project" aria-label="Project" style="max-width:280px">' + TEAM.projOpts + "</select>" +
       (f.project === "__new" ? '<input class="input mono" id="team-name" placeholder="new-project-name" value="' + attr(f.name) + '" style="max-width:220px" spellcheck="false">' : "") +
-      '<label class="field-label">At most</label><select class="input" id="team-parallel" style="max-width:110px">' + [1, 2, 3, 4].map(function (n) { return '<option value="' + n + '"' + (f.parallel === n ? " selected" : "") + ">" + n + " at once</option>"; }).join("") + "</select>" +
-      '<span class="grow"></span><button type="button" class="btn btn-primary" data-action="team-start"' + (TEAM.ready ? "" : " disabled") + ">Start the team</button></div></div>";
+      '<label class="field-label" for="team-parallel">At most</label><select class="input" id="team-parallel" style="max-width:110px">' + [1, 2, 3, 4].map(function (n) { return '<option value="' + n + '"' + (f.parallel === n ? " selected" : "") + ">" + n + " at once</option>"; }).join("") + "</select>" +
+      '<span class="grow"></span><button type="button" class="btn btn-primary" data-action="team-start"' + (TEAM.ready ? "" : " disabled") + ">Hand it to the team</button></div></div>";
   }
 
   function evidenceLine(t) {
@@ -7010,6 +7610,54 @@
     var vp = ev.filter(function (f) { return f.kind === "verify" && f.ok; }).length, vf = ev.filter(function (f) { return f.kind === "verify" && !f.ok; }).length;
     var rd = ev.filter(function (f) { return f.kind === "read" && f.ok; }).length, cm = ev.filter(function (f) { return f.kind === "command"; }).length;
     return [ch ? ch + " change" + (ch === 1 ? "" : "s") : "", vp ? vp + " check" + (vp === 1 ? "" : "s") + " passed" : "", vf ? vf + " failed" : "", rd ? rd + " read" : "", cm ? cm + " command" + (cm === 1 ? "" : "s") : ""].filter(Boolean).join(" · ");
+  }
+
+  /* The run's lifecycle, read from what devd recorded: the run's state, its tasks
+     and their evidence. A stage is only "done" when the record says so; a finished
+     run with no passing check says that, rather than showing a green last step. */
+  function runStages(r, work, events) {
+    var st = r.state, over = ["done", "failed", "cancelled"].indexOf(st) >= 0;
+    var approved = events.some(function (e) { return e.kind === "plan_approved"; }) || ["running", "paused", "done"].indexOf(st) >= 0;
+    var ev = [];
+    work.forEach(function (t) { ev = ev.concat(t.evidence || []); });
+    var changes = ev.filter(function (f) { return f.kind === "change" && f.ok; }).length;
+    var passed = ev.filter(function (f) { return f.kind === "verify" && f.ok; }).length;
+    var failedChecks = ev.filter(function (f) { return f.kind === "verify" && !f.ok; }).length;
+    var doneTasks = work.filter(function (t) { return t.state === "done" || t.state === "skipped"; }).length;
+    var stopped = st === "failed" || st === "cancelled";
+    function at(kind, note) { return { kind: kind, note: note }; }
+    var plan = st === "planning" ? at("now", "planner is writing it") : work.length ? at("done", work.length + " task" + (work.length === 1 ? "" : "s")) : stopped ? at("stop", st) : at("todo", "");
+    var approval = st === "awaiting_plan" ? at("wait", "needs you") : approved ? at("done", "approved") : stopped && !approved ? at(work.length ? "stop" : "todo", work.length ? "not approved" : "") : at("todo", "");
+    var exec = st === "running" ? at("now", doneTasks + " of " + work.length + " done") : st === "paused" ? at("wait", "paused") :
+      approved && over ? at(stopped ? "stop" : "done", doneTasks + " of " + work.length + " done") : at("todo", "");
+    var evidence = changes || ev.length ? at(over || doneTasks === work.length ? "done" : "now", changes + " change" + (changes === 1 ? "" : "s") + " recorded") :
+      approved && over ? at(stopped ? "stop" : "wait", "nothing recorded") : at("todo", "");
+    var verify = failedChecks && !passed ? at("stop", failedChecks + " failed") :
+      st === "done" ? (passed ? at("done", passed + " passed" + (failedChecks ? ", " + failedChecks + " failed" : "")) : at("wait", "no check ran")) :
+      passed ? at(stopped ? "stop" : "now", passed + " passed so far") : stopped && approved ? at("stop", st) : at("todo", "");
+    var list = [["Goal", at("done", "")], ["Plan", plan], ["Approval", approval], ["Execution", exec], ["Evidence", evidence], ["Verification", verify]];
+    var words = { done: "done", now: "in progress", wait: "waiting", stop: "stopped", todo: "not started" };
+    return '<ol class="stages" aria-label="Run progress">' + list.map(function (x, i) {
+      var k = x[1].kind;
+      var mark = k === "done" ? "\u2713" : k === "stop" ? "\u00d7" : k === "wait" ? "!" : String(i + 1);
+      return '<li class="stage stage-' + k + '"' + (k === "now" || k === "wait" ? ' aria-current="step"' : "") + ' title="' + attr(x[0] + ": " + words[k] + (x[1].note ? " - " + x[1].note : "")) + '">' +
+        '<span class="stage-mark" aria-hidden="true">' + mark + '</span><span class="stage-text"><span class="stage-label">' + x[0] + "</span>" +
+        '<span class="sr-only">: ' + words[k] + "</span>" +
+        (x[1].note ? '<span class="stage-note">' + esc(x[1].note) + "</span>" : "") + "</span></li>";
+    }).join("") + "</ol>";
+  }
+
+  /* The goal as it was given, and whether anyone has approved a plan for it. The
+     title is a short form of the goal; when the goal says more, it is shown whole. */
+  function runGoal(r) {
+    var goal = String(r.goal || "").trim();
+    var more = goal && goal !== String(r.title || "").trim();
+    return '<section class="run-goal" aria-label="Goal">' +
+      (more ? '<div class="run-label">Goal in full</div><div class="run-goal-text">' + esc(goal) + "</div>" : "") +
+      '<dl class="run-facts">' +
+        '<div><dt>Plan</dt><dd>' + (r.plan_approved ? "Approved by a person" : '<span class="dim">Not approved. Nothing has run on this goal.</span>') + "</dd></div>" +
+        '<div><dt>Up to</dt><dd>' + esc(r.parallel || 1) + (r.parallel === 1 ? " task at a time" : " tasks at once") + "</dd></div>" +
+      "</dl></section>";
   }
 
   function teamDetail(d) {
@@ -7053,8 +7701,13 @@
       return '<div class="feed"><span class="dim mono">' + esc(ago(e.at)) + '</span><span class="grow">' + esc(text) + "</span></div>";
     }).join("");
     var summary = r.summary ? '<div class="team-result"><div class="ui-row-title">Result</div><div class="ui-row-sub wrap">' + esc(uiSummary(r.summary, 260)) + '</div><button type="button" class="btn btn-mini" data-action="team-report" data-id="' + attr(r.id) + '">Read the full report</button></div>' : "";
-    var say = ["done", "failed", "cancelled"].indexOf(r.state) < 0 ? '<div class="composer"><div class="inline"><input class="input grow" id="team-say" placeholder="Tell the team something new (new requirement, a correction)…"><button type="button" class="btn btn-primary" data-action="team-say" data-id="' + attr(r.id) + '">Send</button></div></div>' : "";
-    return head + '<div class="team-scroll">' + note + approvals + (summary) + '<div class="section-title" style="margin:16px 16px 8px">Tasks <span class="count">' + work.length + "</span></div>" + '<div class="tlist">' + cards + "</div>" + '<div class="section-title" style="margin:16px 16px 8px">Log</div><div class="panel" style="margin:0 16px 16px">' + (log || '<div class="empty-inline">Nothing yet.</div>') + "</div></div>" + say;
+    var say = ["done", "failed", "cancelled"].indexOf(r.state) < 0
+      ? '<div class="composer composer-row">' +
+          '<textarea class="composer-input" id="team-say" rows="1" aria-label="Tell the team something new" placeholder="Add a requirement or a correction. The team picks it up on its next step."></textarea>' +
+          '<button type="button" class="composer-send" data-action="team-say" data-id="' + attr(r.id) + '" id="team-say-send" disabled aria-label="Send to the team" title="Send to the team (Enter)"><svg class="icon" aria-hidden="true"><use href="#i-arrow-up"></use></svg></button>' +
+        "</div>"
+      : "";
+    return head + '<div class="team-scroll">' + runGoal(r) + '<div class="run-track">' + runStages(r, work, events) + "</div>" + note + approvals + (summary) + '<div class="section-title" style="margin:16px 16px 8px">Tasks <span class="count">' + work.length + "</span></div>" + '<div class="tlist">' + cards + "</div>" + '<div class="section-title" style="margin:16px 16px 8px">Log</div><div class="run-log">' + (log || '<div class="empty-inline">Nothing yet.</div>') + "</div></div>" + say;
   }
 
   // ------------------------------------------------------------------- inbox
@@ -7070,30 +7723,39 @@
   function renderInbox() {
     if (state.view !== "inbox") return;
     if (!AI.requests) return renderLoading();
+    // Each kind of intervention is a different decision, so each has its own shape.
     var needs = [];
     AI.requests.forEach(function (r) {
       var title = (r.plan && r.plan.summary) || ("Run " + r.capability);
-      needs.push(uiRow({
-        accent: true, dot: "warn",
-        title: esc(title),
-        sub: esc(r.actor.replace("agent:", "") + " asks to use " + r.capability),
-        meta: esc(ago(r.created_at)),
-        open: 'data-action="open-approval" data-id="' + attr(r.id) + '"',
-        actions: '<button type="button" class="btn btn-go btn-mini" data-action="req-decide" data-id="' + attr(r.id) + '" data-approve="1">Approve</button>' +
-          '<button type="button" class="btn btn-mini btn-ghost" data-action="req-decide" data-id="' + attr(r.id) + '" data-approve="0">Decline</button>'
-      }));
+      var steps = (r.plan && r.plan.steps || []).map(function (x) { return "<li>" + esc(x) + "</li>"; }).join("");
+      var effects = (r.plan && r.plan.effects || []).map(function (x) { return '<li class="decision-effect">' + esc(x) + "</li>"; }).join("");
+      needs.push('<article class="decision" data-kind="approval">' +
+        '<div class="decision-kind">Approval</div>' +
+        '<div class="decision-main">' +
+          '<h3 class="decision-title">' + esc(title) + "</h3>" +
+          '<div class="decision-meta"><span>' + esc(r.actor.replace("agent:", "agent ")) + ' asks to run</span> <span class="mono">' + esc(r.capability) + "</span> <span>" + esc(ago(r.created_at)) + "</span></div>" +
+          (steps || effects ? '<div class="decision-label">If you approve, devd will</div><ul class="decision-steps">' + steps + effects + "</ul>" : '<div class="decision-note">The request carries no description of its steps. Open the details before deciding.</div>') +
+          '<details class="decision-args"><summary>Exact arguments</summary><pre class="log-block">' + esc(JSON.stringify(r.args, null, 2)) + "</pre></details>" +
+          '<div class="decision-actions">' +
+            '<button type="button" class="btn btn-primary" data-action="req-decide" data-id="' + attr(r.id) + '" data-approve="1">Approve and run</button>' +
+            '<button type="button" class="btn" data-action="req-decide" data-id="' + attr(r.id) + '" data-approve="0">Decline</button>' +
+            '<span class="decision-hint">Nothing runs until you approve. Declining tells the agent no.</span>' +
+          "</div>" +
+        "</div></article>");
     });
     var updates = [];
     AI.inbox.forEach(function (m) {
       var who = m.from_actor.replace("agent:", "").replace("devd-", "");
       if (m.needs_reply) {
-        needs.push(uiRow({
-          accent: true, dot: "warn",
-          title: esc(m.subject), sub: esc(uiSummary(m.body, 170)), wrap: true,
-          meta: esc(who + " · " + ago(m.created_at)),
-          open: 'data-action="open-message" data-id="' + attr(m.id) + '"',
-          actions: '<button type="button" class="btn btn-primary btn-mini" data-action="open-message" data-id="' + attr(m.id) + '">Answer</button>'
-        }));
+        needs.push('<article class="decision" data-kind="question">' +
+          '<div class="decision-kind">Question</div>' +
+          '<div class="decision-main">' +
+            '<h3 class="decision-title">' + esc(m.subject) + "</h3>" +
+            '<div class="decision-meta"><span>' + esc(who) + "</span> <span>" + esc(ago(m.created_at)) + "</span></div>" +
+            '<div class="decision-body">' + uiBody(m.body) + "</div>" +
+            '<div class="decision-actions"><input class="input grow" id="reply-' + attr(m.id) + '" aria-label="Your answer to: ' + attr(m.subject) + '" placeholder="Your answer">' +
+            '<button type="button" class="btn btn-primary" data-action="inbox-reply" data-id="' + attr(m.id) + '">Send answer</button></div>' +
+          "</div></article>");
       } else {
         updates.push(uiRow({
           dot: "ok", title: esc(m.subject), sub: esc(uiSummary(m.body)),
@@ -7110,11 +7772,11 @@
       return uiRow({ dot: "off", title: esc(x.subject), sub: esc(x.reply ? "You answered: " + x.reply : "Read") });
     }));
     var body = "";
-    if (needs.length) body += uiHead("Needs you", needs.length) + uiList(needs);
+    if (needs.length) body += uiHead("Waiting for you", needs.length) + '<div class="decisions">' + needs.join("") + "</div>";
     if (updates.length) body += uiHead("Updates", updates.length) + uiList(updates);
-    if (!needs.length && !updates.length) body += uiEmpty("You're caught up", "Questions and approvals from agents show up here.");
+    if (!needs.length && !updates.length) body += uiEmpty("You're all caught up", "When an agent has a question, or needs your okay before it changes something, it'll wait for you here. Nothing it asks for runs until you say so.");
     if (earlier.length) body += uiHead("Earlier", null, '<button type="button" class="btn btn-mini btn-ghost" data-action="inbox-clear" title="Delete every answered or dismissed message">Clear</button>') + uiList(earlier.slice(0, 8));
-    el("main").innerHTML = page("Inbox", "", "", body);
+    el("main").innerHTML = page("Needs you", "", "", body);
   }
 
   function openMessageSheet(id) {
@@ -7223,6 +7885,10 @@
     if (state.view === "projects") return loadProjects().then(render);
     if (state.view === "project") {
       state.tabs = {};
+      // What serves a project and which runs name it come from the server inventory and the
+      // agent roster; they fill in when they arrive, they do not hold the repository back.
+      if (!state.server.loaded) loadServer().then(function () { if (state.view === "project") render(); });
+      if (!state.projectsLoaded) loadProjects(true).then(function () { if (state.view === "project") render(); });
       return loadProject()
         .then(function () { return loadTab(state.tab); })
         .then(render);
@@ -7237,7 +7903,8 @@
     if (state.view === "agents") return loadRoster().then(render);
     if (state.view === "skills") return loadSkills().then(render);
     if (state.view === "mcp") return loadMcp().then(render);
-    if (state.view === "processes") return loadProcesses().then(render);
+    // The project picker lists every known project, so they are read first when this is the first screen.
+    if (state.view === "processes") return (state.projectsLoaded ? Promise.resolve() : loadProjects(true)).then(loadProcesses).then(render);
     if (state.view === "schedules") return loadSchedules().then(render);
     if (state.view === "shared") return loadShared().then(render);
     if (state.view === "capabilities") return loadCapabilities().then(render);
@@ -7358,10 +8025,21 @@
   }
 
   function navigate(view, fromRoute) {
+    if (state.topMenu) { state.topMenu = ""; }
     if (AREA[view]) { state.areaTab = state.areaTab || {}; state.areaTab[AREA[view]] = view; }
+    var moved = state.view !== view;
+    // A sheet belongs to the screen it was opened on; going elsewhere closes it.
+    if (moved && !el("drawer").hidden) { drawerOrigin = null; closeDrawer(); }
+    var ae = document.activeElement;
+    var fromNav = !!(ae && ae.closest && ae.closest(".rail, #subnav"));
     state.view = view;
     if (!fromRoute) writeRoute(view, false);
     render();
+    // A new screen starts at its top; re-rendering the same one keeps its place.
+    var scroller = moved && document.querySelector(".content");
+    if (scroller) scroller.scrollTop = 0;
+    // Keyboard and screen-reader users land on the new screen, not on the page's body.
+    if (moved && fromNav && el("main")) el("main").focus({ preventScroll: true });
     return refresh();
   }
 
@@ -8030,7 +8708,7 @@
 
     nav: function (node) {
       var v = node.dataset.view, area = AREA[v];
-      if (node.classList.contains("rail-item") && area && AREA[state.view] !== area && state.areaTab && state.areaTab[area]) v = state.areaTab[area];
+      if (node.classList.contains("rail-item") && !node.dataset.exact && area && AREA[state.view] !== area && state.areaTab && state.areaTab[area]) v = state.areaTab[area];
       navigate(v);
     },
 
@@ -8075,7 +8753,7 @@
     "team-toggle": function (n) { TEAM.open[n.dataset.id] = !TEAM.open[n.dataset.id]; paintTeam(); },
     "team-start": function () {
       var f = TEAM.form;
-      if (!f.goal.trim()) return toast("warn", "Describe what you want first");
+      if (!f.goal.trim()) return toast("warn", "Tell the team what you'd like first");
       if (!f.project) return toast("warn", "Choose a project, or a new one");
       var args = { goal: f.goal.trim(), parallel: f.parallel };
       var done = f.done.split("\n").map(function (l) { return l.trim(); }).filter(Boolean);
@@ -8093,7 +8771,7 @@
     "team-cancel": function (n) { run("team.cancel", { run: n.dataset.id }); },
     "team-retry": function (n) { uiPrompt({ title: "Try this task again", text: "What should it do differently? You can leave this empty.", input: { placeholder: "Optional note for the agent" }, confirm: "Retry" }).then(function (note) { if (note === null) return; run("team.retry", { task: n.dataset.id, note: note || undefined }); }); },
     "team-accept": function (n) { uiConfirm({ title: "Accept without the proof?", text: "devd asked for proof that this task worked and did not get it. The final report will say you accepted it by hand.", confirm: "Accept anyway", danger: true }).then(function (yes) { if (yes) run("team.accept", { task: n.dataset.id }); }); },
-    "team-say": function (n) { var i = el("team-say"); if (!i.value.trim()) return; var t = i.value.trim(); i.value = ""; run("team.say", { run: n.dataset.id, text: t }); },
+    "team-say": function (n) { var i = el("team-say"); if (!i.value.trim()) return; var t = i.value.trim(); i.value = ""; var ts = el("team-say-send"); if (ts) ts.disabled = true; run("team.say", { run: n.dataset.id, text: t }); },
     "team-open-from": function (n) { TEAM.sel = n.dataset.id; TEAM.data = null; navigate("team"); },
     "home-team": function () {
       var text = (el("home-ask").value || "").trim(), p = el("home-project").value;
@@ -8175,6 +8853,32 @@
         var input = el("chat-input");
         if (input) input.focus();
       });
+    },
+    "top-menu": function (n) {
+      var name = n.dataset.menu;
+      state.topMenu = state.topMenu === name ? "" : name;
+      rail();
+      if (state.topMenu) {
+        var first = document.querySelector('.top-menu .top-pop:not([hidden]) .top-item');
+        if (first && n.matches(":focus-visible")) first.focus();
+      }
+    },
+    "reconnect": function () { refresh(); },
+    "reload-page": function () { window.location.reload(); },
+    "home-prompt": function (n) {
+      var box = el("home-ask");
+      if (!box) return;
+      box.value = n.dataset.text;
+      box.focus();
+      box.setSelectionRange(box.value.length, box.value.length);
+    },
+    "home-mode": function (n) {
+      var box = el("home-ask");
+      if (box) AI.askText = box.value;
+      AI.homeMode = n.dataset.mode === "team" ? "team" : "ask";
+      renderHome();
+      var again = el("home-ask");
+      if (again) again.focus();
     },
     "home-ask": function () {
       var text = (el("home-ask").value || "").trim();
@@ -9479,6 +10183,7 @@
   // --------------------------------------------------------------------- events
 
   document.addEventListener("click", function (event) {
+    if (state.topMenu && !event.target.closest(".top-menu")) { state.topMenu = ""; rail(); }
     var node = event.target.closest("[data-action]");
     if (!node) return;
     var action = node.dataset.action;
@@ -9498,6 +10203,13 @@
       return;
     }
     if (event.key === "Escape") {
+      if (state.topMenu) {
+        var owner = document.querySelector('.top-tab-menu[aria-expanded="true"]');
+        state.topMenu = ""; rail();
+        var back = document.querySelector('.top-tab-menu[data-menu]'); if (owner && owner.dataset.menu) { back = document.querySelector('.top-tab-menu[data-menu="' + owner.dataset.menu + '"]'); }
+        if (back) back.focus();
+        return;
+      }
       if (state.palette.open) return closePalette();
       if (picker.open) return closePicker(null);
       if (!el("modal").hidden) return decideModal(false);
@@ -9726,7 +10438,8 @@
 
   document.addEventListener("input", function (e) {
     var t = e.target;
-    if (t.id === "home-ask") AI.askText = t.value;
+    if (t.id === "team-say") { var tsb = el("team-say-send"); if (tsb) tsb.disabled = !t.value.trim(); }
+    if (t.id === "home-ask") { AI.askText = t.value; var hs = el("home-send"); if (hs) hs.disabled = !t.value.trim(); }
     else if (t.id === "chat-input") {
       AI.composer = t.value;
       syncComposerAction();
@@ -9784,6 +10497,12 @@
     if (t.dataset && t.dataset.provModel !== undefined && t.dataset.provModel !== "") setProviderModel(t.dataset.provModel, t.value.trim());
   });
   document.addEventListener("keydown", function (e) {
+    if (e.target.id === "team-say" && e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      var tb = el("team-say-send");
+      if (tb && !tb.disabled) tb.click();
+      return;
+    }
     if (e.target.id === "chat-input") {
       // While the list is open the keyboard belongs to the list.
       if (MENTIONS.open) {
@@ -9797,7 +10516,7 @@
         var b = el("chat-send"); if (b) b.click();
       }
     }
-    if (e.target.id === "home-ask" && e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); ACTIONS["home-ask"](); }
+    if (e.target.id === "home-ask" && e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); ACTIONS[AI.homeMode === "team" ? "home-team" : "home-ask"](); }
   });
 
   document.addEventListener("input", function (e) {
@@ -9946,6 +10665,20 @@
     loadHealth().then(function () { healthChip(); rail(); statusbar(); });
   }, 30000);
 
+  // Work in flight is shown in the command bar on every screen, so the runs are re-read on a
+  // calm cadence from anywhere (every read is also written to Activity, so not faster than needed); the team screen also keeps its own faster timer for its detail.
+  // Approvals and questions are counted in the same breath, so "Needs you" never lags behind
+  // a decision that was just made.
+  setInterval(function () {
+    if (document.hidden) return;
+    Promise.all([read("team.list").catch(function () { return null; }), read("approval.list", { pending_only: true }).catch(function () { return null; })]).then(function (r) {
+      var changed = false;
+      if (Array.isArray(r[0])) { var sig = r[0].map(function (t) { return t.id + t.state; }).join("|"); if (sig !== AI.liveSig) { AI.liveSig = sig; AI.liveRuns = r[0]; changed = true; } }
+      if (Array.isArray(r[1]) && r[1].length !== AI.counts.approvals) { AI.counts.approvals = r[1].length; changed = true; }
+      if (changed) { rail(); statusbar(); }
+    });
+  }, 10000);
+
   // ------------------------------------------------------------------ live sync
   //
   // The projects, folders and files on this machine are changed by other programs too: an editor
@@ -10049,6 +10782,16 @@
       render();
     },
     "open-site": function (n) { openSite(n.dataset.name); },
+    "verify-site": function (n) { verifySite(n.dataset.name); },
+    "verify-sites": function () {
+      var names = opsSiteNames();
+      // One at a time: each check opens one connection, and the list fills in as it goes.
+      names.reduce(function (p, name) { return p.then(function () { return verifySite(name, true); }); }, Promise.resolve())
+        .then(function () {
+          var bad = names.filter(function (x) { return SITE_VERIFY[x] && SITE_VERIFY[x].report && !SITE_VERIFY[x].report.ok; }).length;
+          toast(bad ? "warn" : "ok", bad ? bad + " of " + names.length + " sites did not answer" : "All " + names.length + " sites answered");
+        });
+    },
     "ops-site": function (n) { OPS.site = n.value; OPS.data = {}; OPS.error = ""; OPS.errorTab = ""; render(); opsLoad(OPS.tab); },
     "ops-level": function (n) {
       var l = n.dataset.level, a = OPS.levels || [];
