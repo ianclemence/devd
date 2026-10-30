@@ -57,19 +57,19 @@
   /* A control's edge is a UI boundary, not decoration: 3:1 against the page. */
   --line-control: #55638a;
   --overlay: rgba(2, 5, 12, 0.66);
-  --selection: rgba(97, 85, 245, 0.32);
+  --selection: rgba(10, 132, 255, 0.32);
 
   /* Text. Each step clears 4.5:1 on a surface; `--fg-dim` is the quietest text. */
   --fg: #eef1f8;
   --fg-mute: #aab3c7;
   --fg-dim: #808ba3;
 
-  /* The accent: a violet that marks the one action that matters and the place you are. */
-  --accent: #6155f5;
-  --accent-strong: #7468ff;
-  --accent-quiet: rgba(97, 85, 245, 0.16);
-  --accent-line: #3e3a9c;
-  --accent-text: #a8a1ff;
+  /* The accent: one blue, for the one action that matters and the place you are. */
+  --accent: #0071e3;
+  --accent-strong: #0a84ff;
+  --accent-quiet: rgba(10, 132, 255, 0.15);
+  --accent-line: #1d4f86;
+  --accent-text: #6cb4ff;
   --on-accent: #ffffff;
 
   /* Status. Always paired with a word or an icon, never colour alone. Text tones
@@ -585,7 +585,7 @@ code, kbd, pre, samp { font-family: var(--mono); }
   transition: border-color var(--fast) ease, box-shadow var(--fast) ease;
   position: relative;
 }
-.composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(97, 85, 245, 0.2); }
+.composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.28); }
 .composer-input {
   width: 100%;
   min-height: 48px;
@@ -3875,7 +3875,7 @@ body { letter-spacing: 0; font-feature-settings: normal; }
 
 /* ------------------------------------------------------------ controls */
 
-/* Buttons. Four kinds, one height scale, one rule: the filled violet button is the
+/* Buttons. Four kinds, one height scale, one rule: the filled blue button is the
    single thing a screen most wants you to do. Everything else steps back. */
 .btn {
   display: inline-flex;
@@ -4729,7 +4729,7 @@ td .pill-bad, .kv .pill-bad { color: var(--danger); }
 .composer-row .composer-input { min-height: 28px; max-height: 180px; padding: 4px 0; field-sizing: content; overflow-y: auto; }
 .team-new .input, .team-new textarea { background: var(--bg-surface); border: 1px solid var(--line-strong); border-radius: 10px; padding: 11px 14px; font-size: var(--text-md); line-height: 1.5; color: var(--fg); resize: vertical; transition: border-color var(--fast) ease, box-shadow var(--fast) ease; }
 .team-new select.input { padding: 0 12px; height: 34px; border-radius: 8px; }
-.team-new textarea:focus, .team-new .input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(97, 85, 245, 0.2); outline: none; }
+.team-new textarea:focus, .team-new .input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.28); outline: none; }
 .team-new textarea::placeholder { color: var(--fg-dim); }
 .team-new .field-label { margin-bottom: 6px; color: var(--fg); font-size: var(--text-sm); font-weight: 600; }
 .team-new .row-sub { color: var(--fg-dim); font-size: var(--text-xs); line-height: 1.55; max-width: 72ch; }
@@ -4972,3 +4972,47 @@ select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .top-end .top-attn { margin-left: 0; }
 @media (max-width: 1560px) { .top-end .search-trigger kbd { display: none; } .top-end .search-trigger { width: 34px; padding: 0; justify-content: center; } .top-end .search-trigger .search-label { display: none; } }
 @media (max-width: 980px) { .top { display: flex; } .top-nav { justify-content: flex-start; } }
+
+/* ---- the bar as it was: the mark, the places, then Needs you and search ----- */
+.top { display: flex; gap: var(--s5); }
+.top-brand, .top-nav, .top-end { justify-self: auto; }
+.top-nav { flex: 1; justify-content: flex-start; }
+.top-end { flex: none; gap: var(--s3); }
+.top-end .top-attn { order: -1; }
+.top-end .search-trigger { width: auto; max-width: none; padding: 0 8px 0 10px; border-radius: 9px; }
+.top-end .search-trigger kbd { display: inline-flex; }
+@media (max-width: 1560px) { .top-end .search-trigger { width: auto; justify-content: flex-start; } .top-end .search-trigger .search-label { display: inline; } }
+@media (max-width: 1160px) { .top-end .search-trigger .search-label, .top-end .search-trigger kbd { display: none; } .top-end .search-trigger { width: 32px; padding: 0; justify-content: center; } }
+@media (max-width: 980px) { .top-nav { justify-content: flex-start; } }
+
+/* ---- where you are: a soft pill, never a bar under the word ---------------- */
+.top-tab.active::after, .top-needs.active::after, .top-needs.has.active::after, .subtab.active::after { content: none; display: none; }
+.top-tab { margin: 7px 0; padding: 0 12px; border-radius: 9px; align-items: center; transition: background var(--fast) var(--ease-out), color var(--fast) var(--ease-out); }
+.top-tab.active { background: var(--bg-hover); }
+@media (hover: hover) and (pointer: fine) { .top-tab:not(.active):hover { background: var(--bg-hover); } }
+.top-needs { margin: 7px 0; border-radius: 9px; }
+.top-needs.active { background: var(--bg-hover); }
+
+/* ---- tabs inside pages sit in the middle ------------------------------------ */
+.subnav { justify-content: flex-start; }
+.tabs { justify-content: flex-start; }
+.page > .segmented { align-self: flex-start; }
+.segmented.site-tabs, .segmented.ops-tabs, .segmented.remote-tabs { display: flex; width: fit-content; margin-left: 0; margin-right: 0; }
+
+/* ---- a word behind everything: the name, large and almost not there ---------- */
+.shell { position: relative; background: var(--bg); }
+.content { background: transparent; }
+.backdrop { position: absolute; inset: var(--top-h) 0 var(--status-h) 0; z-index: 0; display: grid; place-items: end center; overflow: hidden; pointer-events: none; user-select: none; }
+.backdrop span { font-size: clamp(160px, 26vw, 460px); font-weight: 700; letter-spacing: -0.06em; line-height: 0.74; color: rgba(255, 255, 255, 0.028); transform: translateY(8%); }
+.top, .content, .statusbar { position: relative; z-index: 1; }
+
+/* ---- every row of tabs in a page is the same pill row ----------------------- */
+.segmented.site-tabs, .segmented.ops-tabs, .segmented.remote-tabs { width: fit-content; max-width: 100%; padding: 0; gap: 2px; background: none; border-radius: 0; border: 0; box-shadow: none; flex-wrap: wrap; justify-content: flex-start; margin-bottom: var(--s4); }
+.segmented.site-tabs .seg, .segmented.ops-tabs .seg, .segmented.remote-tabs .seg { position: relative; height: 32px; padding: 0 12px; border-radius: 9px; background: none; box-shadow: none; color: var(--fg-mute); font-size: var(--text-sm); font-weight: 500; }
+.segmented.site-tabs .seg.active, .segmented.ops-tabs .seg.active, .segmented.remote-tabs .seg.active { background: var(--bg-raised); color: var(--fg); font-weight: 600; box-shadow: 0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 1px 2px rgba(0, 0, 0, 0.25); }
+.segmented.site-tabs .seg.active::after, .segmented.ops-tabs .seg.active::after, .segmented.remote-tabs .seg.active::after { content: none; }
+@media (hover: hover) and (pointer: fine) { .segmented.site-tabs .seg:not(.active):hover, .segmented.ops-tabs .seg:not(.active):hover, .segmented.remote-tabs .seg:not(.active):hover { background: var(--bg-hover); color: var(--fg); } }
+.tab.active { border-bottom-color: transparent; background: var(--bg-raised); border-radius: 9px; }
+.tabs { border-bottom: 0; }
+.tab { padding: 6px 12px; border-radius: 9px; font-size: var(--text-sm); }
+.backdrop span { color: rgba(255, 255, 255, 0.02); }
