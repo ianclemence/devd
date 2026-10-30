@@ -955,7 +955,7 @@ dependencies = [
 
 [[package]]
 name = "devd-agent"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -978,7 +978,7 @@ dependencies = [
 
 [[package]]
 name = "devd-bootstrap"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "devd-agent",
  "devd-core",
@@ -996,7 +996,7 @@ dependencies = [
 
 [[package]]
 name = "devd-cli"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "clap",
  "devd-bootstrap",
@@ -1020,7 +1020,7 @@ dependencies = [
 
 [[package]]
 name = "devd-core"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "chrono",
  "flate2",
@@ -1048,7 +1048,7 @@ dependencies = [
 
 [[package]]
 name = "devd-desktop"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "chrono",
  "devd-bootstrap",
@@ -1065,7 +1065,7 @@ dependencies = [
 
 [[package]]
 name = "devd-git"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "devd-core",
  "schemars 0.8.22",
@@ -1076,7 +1076,7 @@ dependencies = [
 
 [[package]]
 name = "devd-mcp"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "devd-core",
  "schemars 0.8.22",
@@ -1087,7 +1087,7 @@ dependencies = [
 
 [[package]]
 name = "devd-ops"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "chrono",
  "devd-core",
@@ -1103,7 +1103,7 @@ dependencies = [
 
 [[package]]
 name = "devd-runtime"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "devd-core",
  "schemars 0.8.22",
@@ -1114,7 +1114,7 @@ dependencies = [
 
 [[package]]
 name = "devd-server"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -1136,7 +1136,7 @@ dependencies = [
 
 [[package]]
 name = "devd-services"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "chrono",
  "devd-core",
@@ -1154,7 +1154,7 @@ dependencies = [
 
 [[package]]
 name = "devd-sites"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "base64 0.22.1",
  "devd-core",
@@ -1169,7 +1169,7 @@ dependencies = [
 
 [[package]]
 name = "devd-stacks"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "devd-core",
  "devd-runtime",
@@ -1183,7 +1183,7 @@ dependencies = [
 
 [[package]]
 name = "devd-tui"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "crossterm",
  "devd-core",
@@ -1194,7 +1194,7 @@ dependencies = [
 
 [[package]]
 name = "devd-workspace"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",

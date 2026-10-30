@@ -106,7 +106,7 @@ fn every_action_in_the_markup_has_a_handler() {
 #[test]
 fn the_sidebar_is_short_and_search_is_not_about_capabilities() {
     assert!(!HTML.contains("Search capabilities"));
-    assert!(HTML.contains("id=\"health-chip\"") && !HTML.contains("health-pill"));
+    assert!(APP.contains("id=\"health-chip\"") && !HTML.contains("health-pill") && !HTML.contains("health-chip"), "the health chip lives in the footer");
     assert!(HTML.contains("id=\"subnav\""));
     let rail = &APP[APP.find("var groups = [").unwrap()..];
     let rail = &rail[..rail.find("el(\"rail\")").unwrap()];

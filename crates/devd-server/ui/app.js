@@ -1472,7 +1472,8 @@
     var prod = AI.env && AI.env.mode === "production";
     right.push(prod ? '<span class="sb-bad" title="Production mode: agents need your approval for every change">production</span>' : '<span title="devd only changes this machine. Switch to production mode in Diagnostics to require approval for every agent change.">local</span>');
     if (state.session) right.push('<span title="The address agents and scripts use">api :' + esc(state.session.port) + "</span>");
-    el("statusbar").innerHTML = '<div class="sb-left">' + (left.join('<span class="sb-sep" aria-hidden="true">·</span>') || "Ready") + '</div><div class="sb-right">' + right.join('<span class="sb-sep" aria-hidden="true">·</span>') + "</div>";
+    el("statusbar").innerHTML = '<div class="sb-left"><button type="button" class="health health-checking" id="health-chip" data-action="health-open" title="System health"></button><span class="sb-sep" aria-hidden="true">·</span>' + (left.join('<span class="sb-sep" aria-hidden="true">·</span>') || "Ready") + '</div><div class="sb-right">' + right.join('<span class="sb-sep" aria-hidden="true">·</span>') + "</div>";
+    healthChip();
   }
 
   // -------------------------------------------------------------------- server
@@ -2382,25 +2383,33 @@
 
   // --------------------------------------------------------------- scheduler
 
+  /* A table that keeps its columns: the head names them, every row answers the
+     same questions, and the actions sit in their own column at the end. */
+  function opsTable(cols, rows, label) {
+    return '<div class="table-wrap"><table class="table table-ops" aria-label="' + attr(label) + '"><thead><tr>' +
+      cols.map(function (c) { return "<th" + (c.cls ? ' class="' + c.cls + '"' : "") + ">" + esc(c.name) + "</th>"; }).join("") +
+      '<th class="cell-actions"><span class="sr-only">Actions</span></th></tr></thead><tbody>' + rows.join("") + "</tbody></table></div>";
+  }
+  function opsDot(kind) { return '<span class="ui-dot ui-dot-' + kind + '" aria-hidden="true"></span>'; }
+
   function opsCron(d) {
     var jobs = (d[0] && d[0].jobs) || [];
     var rows = jobs.map(function (j) {
       var ok = j.last_exit === null || j.last_exit === undefined ? "off" : j.last_exit === 0 ? "ok" : "bad";
-      return uiRow({
-        dot: j.enabled ? ok : "off",
-        title: '<span class="mono">' + esc(j.schedule) + "</span> &nbsp;" + esc(j.command),
-        sub: (j.enabled ? "next " + esc(j.next_run_at ? shortTime(j.next_run_at) : "never") : "off") + (j.last_run_at ? " · last ran " + esc(shortTime(j.last_run_at)) + " (exit " + j.last_exit + ")" : " · has not run"),
-        hover: true,
-        actions: '<button type="button" class="btn btn-mini" data-action="ops-cron-run" data-id="' + attr(j.id) + '">Run now</button>' +
+      var last = j.last_run_at ? esc(shortTime(j.last_run_at)) + ' <span class="' + (j.last_exit === 0 ? "dim" : "cell-bad") + '">' + (j.last_exit === 0 ? "worked" : "exit " + esc(String(j.last_exit))) + "</span>" : '<span class="dim">hasn\'t run</span>';
+      return "<tr" + (j.enabled ? "" : ' class="is-off"') + "><td>" + opsDot(j.enabled ? ok : "off") + '<span class="mono">' + esc(j.schedule) + "</span></td>" +
+        '<td class="cell-mono">' + esc(j.command) + "</td>" +
+        "<td>" + (j.enabled ? esc(j.next_run_at ? shortTime(j.next_run_at) : "never") : '<span class="dim">turned off</span>') + "</td>" +
+        "<td>" + last + "</td>" +
+        '<td class="cell-actions"><button type="button" class="btn btn-mini" data-action="ops-cron-run" data-id="' + attr(j.id) + '">Run now</button>' +
           '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-cron-log" data-id="' + attr(j.id) + '" data-log="' + attr(j.log) + '">Log</button>' +
           '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-cron-toggle" data-id="' + attr(j.id) + '" data-on="' + (j.enabled ? "0" : "1") + '">' + (j.enabled ? "Turn off" : "Turn on") + "</button>" +
-          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-cron-remove" data-id="' + attr(j.id) + '">Remove</button>'
-      });
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-cron-remove" data-id="' + attr(j.id) + '">Remove</button></td></tr>';
     });
     var actions = '<button type="button" class="btn btn-mini btn-primary" data-action="ops-cron-add">Add job</button>' +
       '<button type="button" class="btn btn-mini" data-action="ops-cron-laravel">Run the Laravel scheduler</button>';
     return uiHead("Cron jobs", jobs.length, actions) +
-      (jobs.length ? uiList(rows) : uiEmpty("Nothing scheduled yet", "A cron job runs a command on a schedule, in this site's folder, with this site's PHP. A Laravel site needs just one: its scheduler, every minute.")) +
+      (jobs.length ? opsTable([{ name: "Schedule" }, { name: "Command" }, { name: "Next run" }, { name: "Last run" }], rows, "Cron jobs") : uiEmpty("Nothing scheduled yet", "A cron job runs a command on a schedule, in this site's folder, with this site's PHP. A Laravel site needs just one: its scheduler, every minute.")) +
       '<p class="dim ops-note">Jobs only run while devd is open. If one comes due while devd is closed, it is skipped, not run late.</p>';
   }
 
@@ -2409,20 +2418,19 @@
   function opsQueue(d) {
     var list = (d[0] && d[0].workers) || [];
     var rows = list.map(function (w) {
-      return uiRow({
-        dot: w.running === w.processes ? "ok" : w.running ? "warn" : "off",
-        title: esc(w.name) + ' <span class="pill">' + w.running + "/" + w.processes + " running</span>",
-        sub: '<span class="mono">' + esc(w.command) + "</span>", wrap: true, hover: true,
-        actions: '<button type="button" class="btn btn-mini" data-action="ops-queue" data-do="' + (w.running ? "restart" : "start") + '" data-id="' + attr(w.id) + '">' + (w.running ? "Restart" : "Start") + "</button>" +
+      var dot = w.running === w.processes ? "ok" : w.running ? "warn" : "off";
+      return "<tr><td>" + opsDot(dot) + "<b>" + esc(w.name) + "</b></td>" +
+        '<td class="cell-mono">' + esc(w.command) + "</td>" +
+        "<td>" + (w.running === w.processes ? "all " : "") + w.running + " of " + w.processes + " running</td>" +
+        '<td class="cell-actions"><button type="button" class="btn btn-mini" data-action="ops-queue" data-do="' + (w.running ? "restart" : "start") + '" data-id="' + attr(w.id) + '">' + (w.running ? "Restart" : "Start") + "</button>" +
           (w.running ? '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-queue" data-do="stop" data-id="' + attr(w.id) + '">Stop</button>' : "") +
           '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-queue-log" data-id="' + attr(w.id) + '">Log</button>' +
-          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-queue-remove" data-id="' + attr(w.id) + '">Remove</button>'
-      });
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-queue-remove" data-id="' + attr(w.id) + '">Remove</button></td></tr>';
     });
     var actions = '<button type="button" class="btn btn-mini btn-primary" data-action="ops-queue-add">Add queue worker</button>' +
       '<button type="button" class="btn btn-mini" data-action="ops-queue-add-command">Add a program</button>';
     return uiHead("Workers", list.length, actions) +
-      (list.length ? uiList(rows) : uiEmpty("No workers running", "A worker keeps your queue moving: it runs `php artisan queue:work` with this site's PHP, and devd starts it again if it stops.")) +
+      (list.length ? opsTable([{ name: "Worker" }, { name: "Command" }, { name: "State" }], rows, "Queue workers") : uiEmpty("No workers running", "A worker keeps your queue moving: it runs `php artisan queue:work` with this site's PHP, and devd starts it again if it stops.")) +
       '<p class="dim ops-note">After a deploy, restart the worker so it picks up the new code.</p>';
   }
 
@@ -2431,14 +2439,13 @@
   function opsRedirects(d) {
     var list = (d[0] && d[0].redirects) || [];
     var rows = list.map(function (r) {
-      return uiRow({
-        title: '<span class="mono">' + esc(r.from) + "</span> → <span class=\"mono\">" + esc(r.to) + "</span>",
-        sub: r.status === 301 || r.status === 308 ? "permanent (" + r.status + ")" : "temporary (" + r.status + ")", hover: true,
-        actions: '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-redirect-remove" data-id="' + attr(r.id) + '">Remove</button>'
-      });
+      var perm = r.status === 301 || r.status === 308;
+      return '<tr><td class="cell-mono">' + esc(r.from) + '</td><td class="cell-mono">' + esc(r.to) + "</td>" +
+        "<td>" + (perm ? "Permanent" : "Temporary") + ' <span class="dim">' + esc(String(r.status)) + "</span></td>" +
+        '<td class="cell-actions"><button type="button" class="btn btn-mini btn-ghost" data-action="ops-redirect-remove" data-id="' + attr(r.id) + '">Remove</button></td></tr>';
     });
     return uiHead("Redirects", list.length, '<button type="button" class="btn btn-mini btn-primary" data-action="ops-redirect-add">Add redirect</button>') +
-      (list.length ? uiList(rows) : uiEmpty("No redirects yet", "Point a path at another path or an https address. `/blog/*` covers everything under /blog/.")) +
+      (list.length ? opsTable([{ name: "From" }, { name: "To" }, { name: "Type" }], rows, "Redirects") : uiEmpty("No redirects yet", "Point a path at another path or an https address. `/blog/*` covers everything under /blog/.")) +
       '<p class="dim ops-note">Redirects are written into the web server\'s configuration, which is reloaded.</p>';
   }
 
@@ -2677,29 +2684,24 @@
     var s = d[0] || {};
     if (!s.is_laravel) return uiEmpty("This isn't a Laravel project", "There is no artisan file in this folder, so there is nothing to run here.");
     var debugWarn = s.app_debug === "true" && s.app_env === "production";
+    function lrow(dot, name, state, detail, action) {
+      return "<tr><td>" + opsDot(dot) + "<b>" + esc(name) + "</b></td><td>" + esc(state) + '</td><td class="cell-note">' + detail + '</td><td class="cell-actions">' + (action || "") + "</td></tr>";
+    }
     var rows = [
-      uiRow({
-        dot: s.maintenance ? "warn" : "ok", title: s.maintenance ? "In maintenance mode" : "Up",
-        sub: s.maintenance ? (s.maintenance_bypass_path ? "bypass path " + esc(s.maintenance_bypass_path) : "visitors see the maintenance page") : "visitors see the site",
-        actions: s.maintenance ? '<button type="button" class="btn btn-mini btn-primary" data-action="ops-lv-up">Bring it back</button>' : '<button type="button" class="btn btn-mini" data-action="ops-lv-down">Maintenance mode</button>'
-      }),
-      uiRow({
-        dot: s.storage_linked ? "ok" : "warn", title: "Storage link",
-        sub: s.storage_linked ? "public/storage points at storage/app/public" : "uploaded files are not served until it is linked",
-        actions: s.storage_linked ? "" : '<button type="button" class="btn btn-mini btn-primary" data-action="ops-lv-storage">Link storage</button>'
-      }),
-      uiRow({
-        dot: debugWarn ? "bad" : "off", title: "Environment",
-        sub: "APP_ENV " + esc(s.app_env || "not set") + " · APP_DEBUG " + esc(s.app_debug || "not set") + (debugWarn ? " · debug is on in production" : ""),
-        actions: '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-tab" data-tab="env">Open .env</button>'
-      }),
-      uiRow({
-        dot: "off", title: "Caches",
-        sub: (s.config_cached ? "configuration cached" : "configuration not cached") + " · " + (s.routes_cached ? "routes cached" : "routes not cached"),
-        actions: '<button type="button" class="btn btn-mini" data-action="ops-lv-clear">Clear…</button>'
-      })
+      lrow(s.maintenance ? "warn" : "ok", "The site", s.maintenance ? "In maintenance mode" : "Up",
+        s.maintenance ? (s.maintenance_bypass_path ? "bypass path " + esc(s.maintenance_bypass_path) : "visitors see the maintenance page") : "visitors see the site",
+        s.maintenance ? '<button type="button" class="btn btn-mini btn-primary" data-action="ops-lv-up">Bring it back</button>' : '<button type="button" class="btn btn-mini" data-action="ops-lv-down">Maintenance mode</button>'),
+      lrow(s.storage_linked ? "ok" : "warn", "Storage link", s.storage_linked ? "Linked" : "Not linked",
+        s.storage_linked ? "public/storage points at storage/app/public" : "uploaded files are not served until it is linked",
+        s.storage_linked ? "" : '<button type="button" class="btn btn-mini btn-primary" data-action="ops-lv-storage">Link storage</button>'),
+      lrow(debugWarn ? "bad" : "off", "Environment", esc(s.app_env || "not set"),
+        "APP_DEBUG " + esc(s.app_debug || "not set") + (debugWarn ? ' · <span class="cell-bad">debug is on in production</span>' : ""),
+        '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-tab" data-tab="env">Open .env</button>'),
+      lrow("off", "Caches", s.config_cached || s.routes_cached ? "Some cached" : "Not cached",
+        (s.config_cached ? "configuration cached" : "configuration not cached") + " · " + (s.routes_cached ? "routes cached" : "routes not cached"),
+        '<button type="button" class="btn btn-mini" data-action="ops-lv-clear">Clear…</button>')
     ];
-    return uiHead("Laravel", null, '<button type="button" class="btn btn-mini btn-primary" data-action="ops-lv-artisan">Run an artisan command…</button>') + uiList(rows) +
+    return uiHead("Laravel", null, '<button type="button" class="btn btn-mini btn-primary" data-action="ops-lv-artisan">Run an artisan command…</button>') + opsTable([{ name: "Check" }, { name: "State" }, { name: "Detail" }], rows, "Laravel status") +
       '<p class="dim ops-note">Commands run with this site\'s PHP in its folder, as an argument list and never through a shell. Clearing the application cache empties whatever the cache driver holds, so it is only done when you name it.</p>';
   }
 
@@ -3479,7 +3481,8 @@
       el("main").innerHTML = page("Processes", "", "", select +
         (!missing ? '<div class="notice notice-bad" role="alert"><b>devd.yml could not be used.</b> ' + esc(p.error) + ". Fix the file; nothing in it runs until it is valid and approved.</div>" : "") +
         uiEmpty(missing ? "No devd.yml in this project" : "No processes to show", (missing && p.error ? p.error + ". " : "") +
-          "A project declares the long-running commands it needs (a dev server, a queue worker, a watcher) in devd.yml at its root. devd shows the exact commands and runs nothing until you approve them."));
+          "A project lists the long-running commands it needs (a dev server, a queue worker, a watcher) in a devd.yml at its root. devd shows you the exact commands and runs nothing until you approve them.") +
+          (missing ? '<div class="uiHead-spacer"></div>' + uiHead("What it looks like", null, "") + '<pre class="log-block">version: 1\nprocesses:\n  web:\n    command: ["npm", "run", "dev"]\n    health:\n      url: "http://127.0.0.1:3000/"\n  worker:\n    command: ["npm", "run", "worker"]\n    depends_on: ["web"]</pre>' : ""));
       return;
     }
 
@@ -6109,6 +6112,7 @@
 
   function healthChip() {
     var h = AI.health, chip = el("health-chip");
+    if (!chip) return;
     var st = AI.healthError && !h ? "unknown" : h ? h.state : "checking";
     if (healthStale() || (AI.healthError && h) || OFFLINE) st = "stale";
     var title, sub;
@@ -6299,6 +6303,7 @@
     var team = mode === "team";
     var ask = ready
       ? '<div class="composer" role="group" aria-label="Tell devd what you are working on">' +
+          composerTop("home") +
           '<label class="sr-only" for="home-ask">' + (team ? "The outcome you want from the team" : "What would you like to ask devd?") + "</label>" +
           '<textarea id="home-ask" class="composer-input" rows="2" placeholder="' + (team ? "Describe the outcome you want. The team will draft a plan and wait for your go-ahead." : "What are we working on?") + '">' + esc(AI.askText || "") + "</textarea>" +
           '<div class="composer-bar">' +
@@ -6310,7 +6315,7 @@
               '<label class="composer-where"><svg class="icon" aria-hidden="true"><use href="#i-folder"></use></svg><span class="sr-only">Project</span>' +
                 '<select id="home-project">' + projOptions + "</select></label>" +
             "</div>" +
-            '<div class="composer-right"><button type="button" class="composer-send" id="home-send" data-action="' + (team ? "home-team" : "home-ask") + '"' + (String(AI.askText || "").trim() ? "" : " disabled") + ' aria-label="' + (team ? "Ask the team to plan this" : "Ask devd") + '" title="' + (team ? "Ask the team to plan this (Ctrl+Enter)" : "Ask devd (Ctrl+Enter)") + '"><svg class="icon" aria-hidden="true"><use href="#i-arrow-up"></use></svg></button></div>' +
+            '<div class="composer-right"><button type="button" class="composer-send" id="home-send" data-action="' + (team ? "home-team" : "home-ask") + '"' + (String(AI.askText || "").trim() ? "" : " disabled") + ' aria-label="' + (team ? "Ask the team to plan this" : "Ask devd") + '" title="' + (team ? "Ask the team to plan this" : "Ask devd") + '"><svg class="icon" aria-hidden="true"><use href="#i-arrow-up"></use></svg></button></div>' +
           "</div>" +
         "</div>"
       : '<div class="composer composer-off"><div class="composer-offline"><b>No model is connected.</b> Connect one to give devd goals. Everything else on this page works without it.</div>' +
@@ -7477,11 +7482,10 @@
     var composer =
       '<div class="composer">' +
       '<div class="mention-menu" id="chat-mentions" hidden role="listbox" aria-label="Reference"></div>' +
-      '<div class="composer-attachments" id="chat-attachments" hidden></div>' +
+      composerTop("chat") +
       '<textarea class="composer-input" id="chat-input" rows="2" placeholder="What are we working on? Type / or @ to bring in a skill, a tool or a project" aria-label="Message" aria-autocomplete="list" aria-controls="chat-mentions">' + esc(AI.composer) + "</textarea>" +
       '<div class="composer-bar">' +
       '<div class="composer-left">' +
-      '<button type="button" class="composer-tool" data-action="chat-attach" title="Attach a file" aria-label="Attach a file"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg></button>' +
       '<select class="composer-picker select-field" data-chat="provider" aria-label="Provider">' +
       (provs.length ? provs.map(function (p) { return '<option value="' + attr(p.id) + '"' + (p.id === cur ? " selected" : "") + ">" + esc(p.label) + "</option>"; }).join("") : '<option value="">no provider</option>') +
       "</select>" +
@@ -7521,7 +7525,6 @@
       '<div class="chat-stream" id="chat-stream" role="log" aria-live="off" aria-label="Conversation"></div>' +
       composer +
       "</div>" +
-      '<input type="file" id="chat-file" multiple hidden>' +
       "</section></div></div>";
     paintThreads(); paintChat(true);
     paintChatPlan();
@@ -8256,21 +8259,61 @@
   var ATTACHMENTS = [];
   var RECORDER = null;
 
-  function paintAttachments() {
-    var box = el("chat-attachments");
-    if (!box) return;
-    box.hidden = !ATTACHMENTS.length;
-    box.innerHTML = ATTACHMENTS.map(function (a, i) {
-      return '<span class="composer-attachment"><b title="' + attr(a.path) + '">' + esc(a.name) + "</b>" +
+  /* The strip along the top of a composer: the paperclip, and beside it the
+     files that will go with the message. It lives inside the composer, above
+     the words, so what is attached is read together with what is asked. */
+  function composerTop(prefix) {
+    return '<div class="composer-top">' +
+      '<button type="button" class="composer-attach" data-action="chat-attach" data-input="' + prefix + '-file" title="Attach files or photos" aria-label="Attach files or photos"><svg class="icon" aria-hidden="true"><use href="#i-paperclip"></use></svg><span>Attach</span></button>' +
+      '<div class="composer-attachments" id="' + prefix + '-attachments"' + (ATTACHMENTS.length ? "" : " hidden") + ">" + attachmentChips() + "</div>" +
+      '<input type="file" id="' + prefix + '-file" multiple hidden>' +
+      "</div>";
+  }
+
+  function attachmentChips() {
+    return ATTACHMENTS.map(function (a, i) {
+      var thumb = a.preview ? '<img src="' + attr(a.preview) + '" alt="">' : '<svg class="icon" aria-hidden="true"><use href="#i-file"></use></svg>';
+      return '<span class="composer-attachment' + (a.preview ? " is-image" : "") + '">' + thumb + '<b title="' + attr(a.path) + '">' + esc(a.name) + "</b>" +
         '<button type="button" data-action="chat-remove-file" data-index="' + i + '" aria-label="Remove ' + attr(a.name) + '">×</button></span>';
     }).join("");
+  }
+
+  /* Fold the attached files into what is sent, and clear them. */
+  function takeAttachments(text) {
+    if (ATTACHMENTS.length) {
+      text += (text ? "\n\n" : "") + "Attached files:\n" + ATTACHMENTS.map(function (a) { return "- " + a.path; }).join("\n");
+    }
+    ATTACHMENTS = [];
+    paintAttachments();
+    return text;
+  }
+
+  function addFiles(files) {
+    return Promise.all(files.map(function (f) {
+      return uploadFile(f).then(function (stored) {
+        if (/^image\//.test(f.type || "") && window.URL) stored.preview = URL.createObjectURL(f);
+        return stored;
+      });
+    })).then(function (stored) {
+      ATTACHMENTS = ATTACHMENTS.concat(stored);
+      paintAttachments();
+    }).catch(function (err) { toast("error", err.message); });
+  }
+
+  function paintAttachments() {
+    ["chat-attachments", "home-attachments"].forEach(function (id) {
+      var box = el(id);
+      if (!box) return;
+      box.hidden = !ATTACHMENTS.length;
+      box.innerHTML = attachmentChips();
+    });
     syncComposerAction();
   }
 
   function uploadFile(file) {
     return fetch("/api/upload", {
       method: "POST",
-      headers: { "X-File-Name": file.name || "file" },
+      headers: { Authorization: "Bearer " + TOKEN, "X-File-Name": file.name || "file" },
       body: file
     }).then(function (res) {
       if (!res.ok) {
@@ -8563,8 +8606,8 @@
 
 
   var ACTIONS = {
-    "chat-attach": function () {
-      var input = el("chat-file");
+    "chat-attach": function (node) {
+      var input = el((node && node.dataset.input) || "chat-file");
       if (input) input.click();
     },
 
@@ -8775,7 +8818,7 @@
     "team-open-from": function (n) { TEAM.sel = n.dataset.id; TEAM.data = null; navigate("team"); },
     "home-team": function () {
       var text = (el("home-ask").value || "").trim(), p = el("home-project").value;
-      TEAM.form.goal = text; if (p) TEAM.form.project = p;
+      TEAM.form.goal = takeAttachments(text); if (p) TEAM.form.project = p;
       TEAM.sel = null; TEAM.data = null; navigate("team");
     },
     "copy-output": function (n) {
@@ -8883,7 +8926,7 @@
     "home-ask": function () {
       var text = (el("home-ask").value || "").trim();
       if (!text) return toast("warn", "Write what you want done first");
-      startChat(text, el("home-project").value);
+      startChat(takeAttachments(text), el("home-project").value);
     },
     "open-thread": function (n) {
       AI.thread = { id: n.dataset.id, title: "", state: "idle", input_tokens: 0, output_tokens: 0 }; AI.lastId = 0; AI.events = []; AI.pending = []; AI.todos = []; AI.todosAt = 0; AI.queued = 0;
@@ -8906,13 +8949,8 @@
       var inp = el("chat-input"); var text = (inp.value || "").trim();
       if (!text && !ATTACHMENTS.length) return;
       // The files travel with the message, so the agent can read them.
-      if (ATTACHMENTS.length) {
-        text += (text ? "\n\n" : "") + "Attached files:\n" +
-          ATTACHMENTS.map(function (a) { return "- " + a.path; }).join("\n");
-      }
+      text = takeAttachments(text);
       inp.value = ""; AI.composer = "";
-      ATTACHMENTS = [];
-      paintAttachments();
       fitComposer();
       if (AI.thread && AI.thread.id) return sendChat({ message: text, thread: AI.thread.id });
       var sel = el("chat-project"); startChat(text, sel ? sel.value : "");
@@ -10532,17 +10570,10 @@
   });
   document.addEventListener("change", function (e) {
     var t = e.target;
-    if (t.id === "chat-file") {
+    if (t.id === "chat-file" || t.id === "home-file") {
       var files = Array.prototype.slice.call(t.files || []);
       if (!files.length) return;
-      Promise.all(files.map(uploadFile)).then(function (stored) {
-        ATTACHMENTS = ATTACHMENTS.concat(stored);
-        paintAttachments();
-      }).catch(function (err) {
-        toast("error", err.message);
-      }).then(function () {
-        t.value = "";
-      });
+      addFiles(files).then(function () { t.value = ""; });
       return;
     }
     if (t.id === "team-template") {
@@ -10633,10 +10664,7 @@
     event.preventDefault();
     var files = Array.prototype.slice.call((event.dataTransfer && event.dataTransfer.files) || []);
     if (!files.length) return;
-    Promise.all(files.map(uploadFile)).then(function (stored) {
-      ATTACHMENTS = ATTACHMENTS.concat(stored);
-      paintAttachments();
-    }).catch(function (e) { toast("error", e.message); });
+    addFiles(files);
   });
 
 
@@ -10669,15 +10697,21 @@
   // calm cadence from anywhere (every read is also written to Activity, so not faster than needed); the team screen also keeps its own faster timer for its detail.
   // Approvals and questions are counted in the same breath, so "Needs you" never lags behind
   // a decision that was just made.
-  setInterval(function () {
-    if (document.hidden) return;
+  // A run in flight is read every 4 seconds, since that is when a change is worth seeing
+  // quickly; with nothing running it is every 10.
+  function pollLive() {
+    if (document.hidden) return setTimeout(pollLive, 10000);
     Promise.all([read("team.list").catch(function () { return null; }), read("approval.list", { pending_only: true }).catch(function () { return null; })]).then(function (r) {
       var changed = false;
       if (Array.isArray(r[0])) { var sig = r[0].map(function (t) { return t.id + t.state; }).join("|"); if (sig !== AI.liveSig) { AI.liveSig = sig; AI.liveRuns = r[0]; changed = true; } }
       if (Array.isArray(r[1]) && r[1].length !== AI.counts.approvals) { AI.counts.approvals = r[1].length; changed = true; }
       if (changed) { rail(); statusbar(); }
+    }).then(function () {
+      var busy = (AI.liveRuns || []).some(function (t) { return t.state === "planning" || t.state === "running"; });
+      setTimeout(pollLive, busy ? 4000 : 10000);
     });
-  }, 10000);
+  }
+  setTimeout(pollLive, 10000);
 
   // ------------------------------------------------------------------ live sync
   //

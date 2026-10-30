@@ -10,6 +10,36 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.17.0] - 2026-10-30 - The environment, not the chat
+
+The app is redesigned around the machine it manages. Everything below is the
+interface; no capability, approval or recovery rule changed.
+
+### Changed
+
+- **A command bar and one centred column.** Work (Home, Projects, Sites,
+  Processes), Agents (Assistant before Agent runs), Machine and Records. Needs you
+  is always in the bar, with a live chip for a run in flight. The bar, tabs, page
+  and footer share one centred column.
+- **Dark only**, with Inter Tight bundled with the app. There is no theme switch.
+- **One composer** for Home, the Assistant and the team: a round send button, the
+  assistant or the team chosen inside it, and a strip along its top that holds the
+  paperclip and the files and photos attached.
+- **Health lives in the footer**; the search field is a pill.
+- **Plain language throughout**: a warm greeting, empty states that say what to do,
+  Activity written as sentences with the exact capability beside each.
+- **Tables keep their columns**: Cron, Workers, Redirects and Laravel are tables,
+  and the Models screen lines providers up on four shared columns.
+- Live runs and the Needs you count are re-read every 4 seconds while a run is in
+  flight, and every 10 otherwise.
+
+### Fixed
+
+- Attaching a file never worked from the browser UI: the upload request carried no
+  session token and was refused. It now carries it.
+
+---
+
 ## [0.16.0] - 2026-10-29 - A resident process, and the gaps closed
 
 The limitations page is gone: each entry on it is either built, or stated where it
