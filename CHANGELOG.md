@@ -10,6 +10,22 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.17.1] - 2026-10-30 - Setup says what it needs
+
+### Changed
+
+- **Setup** groups its steps into "Needed" and "Whenever you like", with an icon
+  and a state word on each (Not installed, Not working, Ready), and a plain
+  sentence at the top saying how many are still needed.
+
+### Known
+
+- Starting a service whose port a program devd did not start is already
+  answering can still start a second copy beside it on Windows. It is not changed
+  here; it needs a decision in the service layer.
+
+---
+
 ## [0.17.0] - 2026-10-30 - The environment, not the chat
 
 The app is redesigned around the machine it manages. Everything below is the
