@@ -2714,22 +2714,21 @@
   function opsDb(d) {
     var users = (d[0] && d[0].users) || [], backups = (d[1] && d[1].schedules) || [];
     var userRows = users.map(function (u) {
-      return uiRow({ title: '<span class="mono">' + esc(u.user) + "</span>", sub: "from " + esc(u.host), hover: true,
-        actions: '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-db-user-drop" data-user="' + attr(u.user) + '" data-host="' + attr(u.host) + '">Drop</button>' });
+      return '<tr><td class="cell-mono"><b>' + esc(u.user) + "</b></td><td>" + esc(u.host) + '</td><td class="cell-actions">' +
+        '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-db-user-drop" data-user="' + attr(u.user) + '" data-host="' + attr(u.host) + '">Drop</button></td></tr>';
     });
     var backupRows = backups.map(function (b) {
-      return uiRow({
-        dot: b.enabled === false ? "off" : b.last_ok === false ? "bad" : "ok", title: esc(b.database) + ' <span class="pill">' + esc(b.schedule) + "</span>",
-        sub: (b.last_run_at ? "last " + esc(shortTime(b.last_run_at)) + (b.last_ok === false ? " · failed: " + esc(b.last_error || "") : "") : "has not run") + " · keeps " + esc(String(b.keep)) + (b.next_run_at ? " · next " + esc(shortTime(b.next_run_at)) : ""), wrap: true, hover: true,
-        actions: '<button type="button" class="btn btn-mini" data-action="ops-backup-run" data-id="' + attr(b.id) + '">Back up now</button>' +
-          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-backup-files" data-db="' + attr(b.database) + '">Files</button>' +
-          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-backup-remove" data-id="' + attr(b.id) + '">Stop</button>'
-      });
+      var dot = b.enabled === false ? "off" : b.last_ok === false ? "bad" : "ok";
+      var last = b.last_run_at ? esc(shortTime(b.last_run_at)) + (b.last_ok === false ? ' <span class="cell-bad">failed: ' + esc(b.last_error || "") + "</span>" : "") : '<span class="dim">has not run</span>';
+      return "<tr><td>" + opsDot(dot) + "<b>" + esc(b.database) + "</b></td><td>" + esc(b.schedule) + "</td><td>" + last + "</td><td>" + (b.next_run_at ? esc(shortTime(b.next_run_at)) : '<span class="dim">none</span>') + "</td><td>" + esc(String(b.keep)) + " newest</td>" +
+        '<td class="cell-actions"><button type="button" class="btn btn-mini" data-action="ops-backup-run" data-id="' + attr(b.id) + '">Back up now</button>' +
+        '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-backup-files" data-db="' + attr(b.database) + '">Files</button>' +
+        '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-backup-remove" data-id="' + attr(b.id) + '">Stop</button></td></tr>';
     });
     return uiHead("Database users", users.length, '<button type="button" class="btn btn-mini btn-primary" data-action="ops-db-user-add">Add user</button>') +
-      (userRows.length ? uiList(userRows) : uiEmpty("No users yet", "Apps connect as root now. A user with its own password and one database is what a server has.")) +
+      (userRows.length ? opsTable([{ name: "User" }, { name: "From" }], userRows, "Database users") : uiEmpty("No users yet", "Apps connect as root now. A user with its own password and one database is what a server has.")) +
       uiHead("Backups", backups.length, '<button type="button" class="btn btn-mini btn-primary" data-action="ops-backup-add">Back up a database</button>') +
-      (backupRows.length ? uiList(backupRows) : uiEmpty("No backups scheduled", "devd dumps a database on a schedule while it is open, keeps the newest few, and tells you when one fails.")) +
+      (backupRows.length ? opsTable([{ name: "Database" }, { name: "Schedule" }, { name: "Last run" }, { name: "Next run" }, { name: "Keeps" }], backupRows, "Backups") : uiEmpty("No backups scheduled", "devd dumps a database on a schedule while it is open, keeps the newest few, and tells you when one fails.")) +
       '<p class="dim ops-note">A backup is a plain SQL file under the devd backups folder. Restore one by giving its path to <code>db.restore</code>.</p>';
   }
 
@@ -6546,7 +6545,7 @@
 
   function openSetupSheet() {
     var reqs = ((AI.requirements && AI.requirements.requirements) || []).filter(function (r) { return r.state !== "ready"; });
-    uiSheet("Getting devd ready", reqs.length ? '<div class="panel">' + reqs.map(requirementRow).join("") + "</div>" : uiEmpty("Everything devd needs is here"));
+    uiSheet("Getting devd ready", reqs.length ? '<p class="sheet-lead">' + (reqs.filter(function (r) { return r.required; }).length ? reqs.filter(function (r) { return r.required; }).length + " of " + reqs.length + " still needed. The rest can wait." : "Nothing here is needed to work. " + (reqs.length === 1 ? "One optional step is" : reqs.length + " optional steps are") + " left.") + "</p>" + '<div class="panel">' + reqs.map(requirementRow).join("") + "</div>" : uiEmpty("Everything devd needs is here"));
   }
 
   // ------------------------------------------------------------- providers

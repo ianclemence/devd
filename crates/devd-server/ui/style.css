@@ -5036,3 +5036,8 @@ select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 }
 .table-ops thead th, .table thead th.cell-actions { border-bottom: 1px solid var(--line-strong); }
 .table-ops thead th.cell-actions { padding: 0; }
+
+/* ---- the accent as text is the lighter tone, so it reads on the dark page ----- */
+a, .link, .pill-accent, .tag-unt, .feed-agent, .chat-plan-count, .cap-accent, .msg-act-on, .seg.active .seg-count, .md a.link, .steps li::before, .card-pin[aria-pressed="true"] { color: var(--accent-text); }
+.d-hunk { color: var(--accent-text); }
+.sheet-lead { margin: 0 0 var(--s4); color: var(--fg-mute); font-size: var(--text-md); letter-spacing: -0.01em; }
