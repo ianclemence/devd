@@ -4882,25 +4882,8 @@ select.input:hover:not(:disabled), select.select:hover:not(:disabled), select.co
 select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .composer-bar select.composer-picker { background-color: transparent; box-shadow: none; }
 
-/* Where the engine allows it, the open list is ours too: rounded, blurred,
-   a check beside what is chosen. Elsewhere it is the system's own. */
-@supports (appearance: base-select) {
-  select, ::picker(select) { appearance: base-select; }
-  select { background-image: none !important; padding-right: 10px !important; display: inline-flex; align-items: center; gap: 8px; color: var(--fg); }
-  select::picker-icon { content: ""; display: block; flex: none; width: 13px; height: 13px; margin-left: auto; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a5a5ad' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 9.5l4-4 4 4M8 14.5l4 4 4-4'/%3E%3C/svg%3E") center / contain no-repeat; transition: none; rotate: 0deg; }
-  select:open::picker-icon { rotate: 0deg; }
-  ::picker(select) {
-    margin-block: 6px; padding: 5px; min-width: anchor-size(width);
-    background: color-mix(in srgb, var(--bg-raised) 88%, transparent); backdrop-filter: blur(24px) saturate(160%);
-    border: 0; border-radius: 12px; box-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.12), 0 14px 40px rgba(0, 0, 0, 0.55);
-    opacity: 1; transform: none; transition: opacity var(--fast) var(--ease-out), transform var(--fast) var(--ease-out), display var(--fast) allow-discrete, overlay var(--fast) allow-discrete;
-  }
-  @starting-style { ::picker(select) { opacity: 0; transform: scale(0.97); } }
-  select option { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 0 10px; border-radius: 7px; color: var(--fg); font-size: 12.5px; }
-  select option::checkmark { order: 2; margin-left: auto; color: var(--accent-text); }
-  select option:hover, select option:focus { background: var(--accent); color: var(--on-accent); }
-  select option:checked { font-weight: 600; }
-}
+/* The open list is the system's own: it is dark, rounded and accessible on every platform,
+   and it is what a person already knows how to use. */
 
 /* ---- dialogs: a centred sheet, a round badge, buttons side by side ----- */
 .overlay { align-items: center; padding: var(--s4); background: rgba(3, 6, 12, 0.5); backdrop-filter: blur(10px) saturate(120%); }
@@ -5016,3 +4999,16 @@ select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .tabs { border-bottom: 0; }
 .tab { padding: 6px 12px; border-radius: 9px; font-size: var(--text-sm); }
 .backdrop span { color: rgba(255, 255, 255, 0.02); }
+
+/* ---- the composer: the words, then who, where and what goes with them ------- */
+.composer > .composer-attachments { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 14px 0; }
+.composer > .composer-attachments[hidden] { display: none; }
+.composer .composer-attach { display: inline-grid; place-items: center; flex: none; width: 32px; height: 32px; padding: 0; border-radius: 9px; background: none; color: var(--fg-mute); }
+.composer .composer-attach .icon { width: 16px; height: 16px; }
+.composer-left { gap: 6px; flex-wrap: wrap; }
+.composer-mode { font-weight: 600; }
+.composer-where select, .composer-bar select { height: 32px; }
+@media (hover: hover) and (pointer: fine) { .composer .composer-attach:hover { background: var(--bg-hover); color: var(--fg); } }
+.top-live { flex: none; max-width: 230px; }
+.top-live-title { max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.top-nav { overflow: hidden; }

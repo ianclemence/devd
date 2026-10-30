@@ -6314,12 +6314,10 @@
           '<textarea id="home-ask" class="composer-input" rows="2" placeholder="' + (team ? "Describe the outcome you want. The team will draft a plan and wait for your go-ahead." : "What are we working on?") + '">' + esc(AI.askText || "") + "</textarea>" +
           '<div class="composer-bar">' +
             '<div class="composer-left">' +
-              '<div class="composer-who seg-group" role="group" aria-label="Who should take this">' +
-                '<button type="button" data-action="home-mode" data-mode="ask" aria-pressed="' + !team + '" title="Ask the assistant a single question or request">Assistant</button>' +
-                '<button type="button" data-action="home-mode" data-mode="team" aria-pressed="' + team + '" title="Hand a goal to the team; nothing runs until you approve the plan">Agent team</button>' +
-              "</div>" +
+              modeSelect() +
               '<label class="composer-where"><svg class="icon" aria-hidden="true"><use href="#i-folder"></use></svg><span class="sr-only">Project</span>' +
                 '<select id="home-project">' + projOptions + "</select></label>" +
+              attachButton("home") +
             "</div>" +
             '<div class="composer-right"><button type="button" class="composer-send" id="home-send" data-action="' + (team ? "home-team" : "home-ask") + '"' + (String(AI.askText || "").trim() ? "" : " disabled") + ' aria-label="' + (team ? "Ask the team to plan this" : "Ask devd") + '" title="' + (team ? "Ask the team to plan this" : "Ask devd") + '"><svg class="icon" aria-hidden="true"><use href="#i-arrow-up"></use></svg></button></div>' +
           "</div>" +
@@ -7492,6 +7490,8 @@
       '<textarea class="composer-input" id="chat-input" rows="2" placeholder="What are we working on? Type / or @ to bring in a skill, a tool or a project" aria-label="Message" aria-autocomplete="list" aria-controls="chat-mentions">' + esc(AI.composer) + "</textarea>" +
       '<div class="composer-bar">' +
       '<div class="composer-left">' +
+      (AI.thread ? "" : modeSelect() + '<label class="composer-where"><svg class="icon" aria-hidden="true"><use href="#i-folder"></use></svg><span class="sr-only">Project</span><select class="select-field" id="chat-project" aria-label="Project">' + projOpts + "</select></label>") +
+      attachButton("chat") +
       '<select class="composer-picker select-field" data-chat="provider" aria-label="Provider">' +
       (provs.length ? provs.map(function (p) { return '<option value="' + attr(p.id) + '"' + (p.id === cur ? " selected" : "") + ">" + esc(p.label) + "</option>"; }).join("") : '<option value="">no provider</option>') +
       "</select>" +
@@ -7512,9 +7512,7 @@
       '<span class="status-sep" aria-hidden="true">/</span>' +
       '<span class="status-chip">Local</span>' +
       '<span class="status-sep" aria-hidden="true">/</span>' +
-      (AI.thread
-        ? '<span class="status-chip">' + esc(dirName(AI.thread.project || "no project")) + "</span>"
-        : '<select class="select-field" id="chat-project" aria-label="Project">' + projOpts + "</select>") +
+      (AI.thread ? '<span class="status-chip">' + esc(dirName(AI.thread.project || "no project")) + "</span>" : '<span class="status-chip">New conversation</span>') +
       "</div>";
 
     el("main").innerHTML =
@@ -8269,11 +8267,21 @@
      files that will go with the message. It lives inside the composer, above
      the words, so what is attached is read together with what is asked. */
   function composerTop(prefix) {
-    return '<div class="composer-top">' +
-      '<button type="button" class="composer-attach" data-action="chat-attach" data-input="' + prefix + '-file" title="Attach files or photos" aria-label="Attach files or photos"><svg class="icon" aria-hidden="true"><use href="#i-paperclip"></use></svg><span>Attach</span></button>' +
-      '<div class="composer-attachments" id="' + prefix + '-attachments"' + (ATTACHMENTS.length ? "" : " hidden") + ">" + attachmentChips() + "</div>" +
-      '<input type="file" id="' + prefix + '-file" multiple hidden>' +
-      "</div>";
+    return '<div class="composer-attachments" id="' + prefix + '-attachments"' + (ATTACHMENTS.length ? "" : " hidden") + ">" + attachmentChips() + "</div>" +
+      '<input type="file" id="' + prefix + '-file" multiple hidden>';
+  }
+
+  /* The paperclip sits in the bar, beside the project it works in. */
+  function attachButton(prefix) {
+    return '<button type="button" class="composer-attach" data-action="chat-attach" data-input="' + prefix + '-file" title="Attach files or photos" aria-label="Attach files or photos"><svg class="icon" aria-hidden="true"><use href="#i-paperclip"></use></svg></button>';
+  }
+
+  /* Who takes this: one selector, in every composer. */
+  function modeSelect() {
+    var team = AI.homeMode === "team";
+    return '<select class="composer-picker composer-mode" id="composer-mode" aria-label="Who takes this" title="The assistant answers one request. Agent runs plan a goal and wait for your approval before anything runs.">' +
+      '<option value="ask"' + (team ? "" : " selected") + ">Assistant</option>" +
+      '<option value="team"' + (team ? " selected" : "") + ">Agent runs</option></select>";
   }
 
   function attachmentChips() {
@@ -8921,14 +8929,6 @@
       box.focus();
       box.setSelectionRange(box.value.length, box.value.length);
     },
-    "home-mode": function (n) {
-      var box = el("home-ask");
-      if (box) AI.askText = box.value;
-      AI.homeMode = n.dataset.mode === "team" ? "team" : "ask";
-      renderHome();
-      var again = el("home-ask");
-      if (again) again.focus();
-    },
     "home-ask": function () {
       var text = (el("home-ask").value || "").trim();
       if (!text) return toast("warn", "Write what you want done first");
@@ -8959,7 +8959,9 @@
       inp.value = ""; AI.composer = "";
       fitComposer();
       if (AI.thread && AI.thread.id) return sendChat({ message: text, thread: AI.thread.id });
-      var sel = el("chat-project"); startChat(text, sel ? sel.value : "");
+      var sel = el("chat-project");
+      if (AI.homeMode === "team") { TEAM.form.goal = text; if (sel && sel.value) TEAM.form.project = sel.value; TEAM.sel = null; TEAM.data = null; return navigate("team"); }
+      startChat(text, sel ? sel.value : "");
     },
     "chat-stop": function () { if (AI.thread) run("chat.stop", { thread: AI.thread.id }).then(function () { pollThread(false).then(paintChat); }); },
     "open-run": function (n) { openRun(n.dataset.id); },
@@ -10576,6 +10578,14 @@
   });
   document.addEventListener("change", function (e) {
     var t = e.target;
+    if (t.id === "composer-mode") {
+      var hb = el("home-ask"); if (hb) AI.askText = hb.value;
+      var cb = el("chat-input"); if (cb) AI.composer = cb.value;
+      AI.homeMode = t.value === "team" ? "team" : "ask";
+      if (state.view === "home") { renderHome(); var again = el("home-ask"); if (again) again.focus(); }
+      else { renderAssistant(); var ci = el("chat-input"); if (ci) ci.focus(); }
+      return;
+    }
     if (t.id === "chat-file" || t.id === "home-file") {
       var files = Array.prototype.slice.call(t.files || []);
       if (!files.length) return;
