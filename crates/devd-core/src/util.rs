@@ -162,16 +162,23 @@ pub fn run(
         }
     };
 
-    let stdout = out_handle.join().unwrap_or_default();
-    let stderr = err_handle.join().unwrap_or_default();
-    let duration_ms = start.elapsed().as_millis();
-
+    // A cancelled run has no use for the output, and waiting for the pipes to
+    // close is waiting on every process that inherited them: on Windows a
+    // program started at the same moment can hold a copy of the write end, so
+    // the pipe stays open long after this program was killed. The readers are
+    // left to finish by themselves.
     if was_cancelled {
+        drop(out_handle);
+        drop(err_handle);
         return Err(DevdError::Cancelled(format!(
             "`{}` was stopped because the run was cancelled",
             program.display()
         )));
     }
+
+    let stdout = out_handle.join().unwrap_or_default();
+    let stderr = err_handle.join().unwrap_or_default();
+    let duration_ms = start.elapsed().as_millis();
     if code == -1 {
         if let Some(limit) = timeout {
             return Err(DevdError::Timeout(format!(
