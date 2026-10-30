@@ -6243,10 +6243,10 @@
     } else if (fix.command || fix.url) {
       action = '<button type="button" class="btn btn-mini" data-action="req-how" data-id="' + attr(r.id) + '">How</button>';
     }
-    var dot = r.state === "broken" ? "health-problem" : r.state === "missing" ? "health-attention" : "health-ok";
-    return '<div class="req-row"><span class="health-dot ' + dot + '" aria-hidden="true"></span>' +
-      '<div class="req-main"><div class="req-title">' + esc(r.title) +
-      (r.required ? ' <span class="pill pill-warn">needed</span>' : ' <span class="pill">whenever you like</span>') +
+    var icon = r.state === "broken" ? "i-warn" : r.state === "missing" ? "i-plus" : "i-check";
+    var word = r.state === "broken" ? "Not working" : r.state === "missing" ? "Not installed" : "Ready";
+    return '<div class="req-row req-' + attr(r.state || "missing") + '"><span class="req-icon" aria-hidden="true"><svg class="icon"><use href="#' + icon + '"></use></svg></span>' +
+      '<div class="req-main"><div class="req-title">' + esc(r.title) + ' <span class="req-state">' + word + "</span>" +
       '</div><div class="row-sub">' + esc(r.why) + "</div>" +
       (r.detail ? '<div class="row-sub mono">' + esc(r.detail) + "</div>" : "") + "</div>" +
       '<div class="req-action">' + action + "</div></div>";
@@ -6545,7 +6545,7 @@
 
   function openSetupSheet() {
     var reqs = ((AI.requirements && AI.requirements.requirements) || []).filter(function (r) { return r.state !== "ready"; });
-    uiSheet("Getting devd ready", reqs.length ? '<p class="sheet-lead">' + (reqs.filter(function (r) { return r.required; }).length ? reqs.filter(function (r) { return r.required; }).length + " of " + reqs.length + " still needed. The rest can wait." : "Nothing here is needed to work. " + (reqs.length === 1 ? "One optional step is" : reqs.length + " optional steps are") + " left.") + "</p>" + '<div class="panel">' + reqs.map(requirementRow).join("") + "</div>" : uiEmpty("Everything devd needs is here"));
+    uiSheet("Getting devd ready", reqs.length ? '<p class="sheet-lead">' + (reqs.filter(function (r) { return r.required; }).length ? reqs.filter(function (r) { return r.required; }).length + " of " + reqs.length + " still needed. The rest can wait." : "Nothing here is needed to work. " + (reqs.length === 1 ? "One optional step is" : reqs.length + " optional steps are") + " left.") + "</p>" + [[true, "Needed"], [false, "Whenever you like"]].map(function (g) { var rows = reqs.filter(function (r) { return !!r.required === g[0]; }); return rows.length ? uiHead(g[1], rows.length) + '<div class="panel">' + rows.map(requirementRow).join("") + "</div>" : ""; }).join("") : uiEmpty("Everything devd needs is here"));
   }
 
   // ------------------------------------------------------------- providers

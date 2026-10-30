@@ -5041,3 +5041,13 @@ select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 a, .link, .pill-accent, .tag-unt, .feed-agent, .chat-plan-count, .cap-accent, .msg-act-on, .seg.active .seg-count, .md a.link, .steps li::before, .card-pin[aria-pressed="true"] { color: var(--accent-text); }
 .d-hunk { color: var(--accent-text); }
 .sheet-lead { margin: 0 0 var(--s4); color: var(--fg-mute); font-size: var(--text-md); letter-spacing: -0.01em; }
+
+/* ---- setup: each step says what it is in words and an icon, then offers the fix ---- */
+.req-row { align-items: flex-start; gap: 12px; }
+.req-icon { flex: none; display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--bg-hover); color: var(--fg-mute); }
+.req-icon .icon { width: 14px; height: 14px; }
+.req-broken .req-icon { background: var(--danger-quiet); color: var(--danger); }
+.req-missing .req-icon { background: var(--warn-quiet); color: var(--warn); }
+.req-state { margin-left: 6px; color: var(--fg-dim); font-size: var(--text-xs); font-weight: 500; }
+.req-broken .req-state { color: var(--danger); }
+.req-missing .req-state { color: var(--warn); }
