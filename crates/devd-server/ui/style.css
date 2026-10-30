@@ -4833,3 +4833,142 @@ td .pill-bad, .kv .pill-bad { color: var(--danger); }
 .workspace-head { padding-left: var(--edge); padding-right: var(--edge); }
 @media (max-width: 980px) { .top, .crumbs, .subnav, .statusbar, .workspace-head { padding-left: var(--gutter); padding-right: var(--gutter); } }
 .workspace > :not(.workspace-head) { width: 100%; max-width: 1240px; margin-left: auto; margin-right: auto; box-sizing: border-box; }
+
+/* =====================================================================
+   Components, the Apple way: soft shapes, one idea each, an icon where an
+   icon says it faster, motion that starts from where you are.
+   ===================================================================== */
+
+/* ---- tabs: a quiet pill under the finger, never an underline --------- */
+.subnav { gap: 2px; padding-top: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.subtab {
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 32px; padding: 0 12px; margin: 0;
+  border: 0; border-radius: 9px;
+  color: var(--fg-mute); font-size: var(--text-sm); font-weight: 500; letter-spacing: -0.003em;
+  transition: background var(--fast) var(--ease-out), color var(--fast) var(--ease-out), transform 90ms var(--ease-out);
+}
+.subtab .icon { width: 15px; height: 15px; flex: none; color: var(--fg-dim); transition: color var(--fast) var(--ease-out); }
+.subtab:active { transform: scale(0.97); }
+.subtab.active { background: var(--bg-raised); color: var(--fg); border: 0; font-weight: 600; box-shadow: 0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 1px 2px rgba(0, 0, 0, 0.25); }
+.subtab.active .icon { color: var(--accent-text); }
+.subtab:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+@media (hover: hover) and (pointer: fine) {
+  .subtab:not(.active):hover { background: var(--bg-hover); color: var(--fg); }
+  .subtab:not(.active):hover .icon { color: var(--fg-mute); }
+}
+
+/* ---- segmented controls: a sunken track, a raised thumb ---------------- */
+.segmented { gap: 0; padding: 2px; background: var(--bg-deep); border: 0; border-radius: 10px; box-shadow: inset 0 0 0 1px var(--line); }
+.seg {
+  height: 28px; padding: 0 14px; border-radius: 8px; font-weight: 500; letter-spacing: -0.003em;
+  transition: background var(--fast) var(--ease-out), color var(--fast) var(--ease-out), box-shadow var(--fast) var(--ease-out);
+}
+.seg.active { background: var(--bg-raised); color: var(--fg); font-weight: 600; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 0 0 0.5px rgba(255, 255, 255, 0.08); }
+.seg:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.composer-who.seg-group { border-radius: 10px; }
+.composer-who button { border-radius: 8px; }
+
+/* ---- pop-up buttons: a soft control, a chevron pair --------------------- */
+.select-field, select.input, select.select, select.select.compact, select.composer-picker, select.role-provider, select:not([class]), .toolbar select {
+  height: 32px; min-height: 32px; padding: 0 30px 0 12px;
+  background-color: var(--bg-hover);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a5a5ad' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 9.5l4-4 4 4M8 14.5l4 4 4-4'/%3E%3C/svg%3E");
+  background-size: 13px 13px; background-position: right 9px center;
+  border: 0; border-radius: 9px; box-shadow: inset 0 0 0 1px var(--line);
+  font-weight: 500;
+}
+select.input:hover:not(:disabled), select.select:hover:not(:disabled), select.composer-picker:hover:not(:disabled), select:not([class]):hover:not(:disabled), .select-field:hover:not(:disabled) { background-color: var(--bg-raised); }
+select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.composer-bar select.composer-picker { background-color: transparent; box-shadow: none; }
+
+/* Where the engine allows it, the open list is ours too: rounded, blurred,
+   a check beside what is chosen. Elsewhere it is the system's own. */
+@supports (appearance: base-select) {
+  select, ::picker(select) { appearance: base-select; }
+  select { background-image: none !important; padding-right: 10px !important; display: inline-flex; align-items: center; gap: 8px; color: var(--fg); }
+  select::picker-icon { content: ""; display: block; flex: none; width: 13px; height: 13px; margin-left: auto; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a5a5ad' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 9.5l4-4 4 4M8 14.5l4 4 4-4'/%3E%3C/svg%3E") center / contain no-repeat; transition: none; rotate: 0deg; }
+  select:open::picker-icon { rotate: 0deg; }
+  ::picker(select) {
+    margin-block: 6px; padding: 5px; min-width: anchor-size(width);
+    background: color-mix(in srgb, var(--bg-raised) 88%, transparent); backdrop-filter: blur(24px) saturate(160%);
+    border: 0; border-radius: 12px; box-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.12), 0 14px 40px rgba(0, 0, 0, 0.55);
+    opacity: 1; transform: none; transition: opacity var(--fast) var(--ease-out), transform var(--fast) var(--ease-out), display var(--fast) allow-discrete, overlay var(--fast) allow-discrete;
+  }
+  @starting-style { ::picker(select) { opacity: 0; transform: scale(0.97); } }
+  select option { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 0 10px; border-radius: 7px; color: var(--fg); font-size: 12.5px; }
+  select option::checkmark { order: 2; margin-left: auto; color: var(--accent-text); }
+  select option:hover, select option:focus { background: var(--accent); color: var(--on-accent); }
+  select option:checked { font-weight: 600; }
+}
+
+/* ---- dialogs: a centred sheet, a round badge, buttons side by side ----- */
+.overlay { align-items: center; padding: var(--s4); background: rgba(3, 6, 12, 0.5); backdrop-filter: blur(10px) saturate(120%); }
+#palette.overlay { align-items: flex-start; padding-top: 12vh; }
+.modal, .palette {
+  background: color-mix(in srgb, var(--bg-surface) 92%, transparent); backdrop-filter: blur(30px) saturate(160%);
+  border: 0; border-radius: 20px; box-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.12), 0 24px 70px rgba(0, 0, 0, 0.6);
+}
+.modal { transition: opacity 260ms var(--ease-out), transform 360ms cubic-bezier(0.2, 0.9, 0.25, 1.05); }
+@starting-style { .modal { opacity: 0; transform: scale(0.94); } }
+.modal-head { align-items: center; gap: 12px; padding: 20px 22px 4px; border: 0; }
+.modal-head h2 { margin: 0; font-size: 17px; font-weight: 650; letter-spacing: -0.015em; }
+.modal-icon { flex: none; display: inline-grid; place-items: center; width: 38px; height: 38px; border-radius: 50%; background: var(--accent-quiet); color: var(--accent-text); }
+.modal-icon .icon { width: 19px; height: 19px; }
+.modal-icon-danger { background: var(--danger-quiet); color: var(--danger); }
+.modal-close { display: inline-grid; place-items: center; width: 28px; height: 28px; margin-left: auto; border-radius: 50%; background: var(--bg-hover); color: var(--fg-mute); font-size: 17px; line-height: 1; }
+.modal-close .icon { width: 14px; height: 14px; }
+.modal-body { padding: 8px 22px 6px; color: var(--fg-mute); line-height: 1.5; }
+.modal-sm .modal-body { padding-left: 72px; }
+.modal-foot { padding: 14px 22px 20px; border: 0; background: none; }
+.modal-sm .modal-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: 100%; margin: 0; }
+.modal-sm .modal-buttons .btn { height: 36px; justify-content: center; border-radius: 10px; font-weight: 600; }
+.modal .input, .palette .input { height: 36px; border-radius: 10px; }
+
+/* ---- the drawer floats; it is a sheet, not a wall ---------------------- */
+.drawer { top: 10px; right: 10px; bottom: calc(var(--status-h) + 10px); border: 0; border-radius: 18px; background: color-mix(in srgb, var(--bg-surface) 92%, transparent); backdrop-filter: blur(30px) saturate(160%); box-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.12), 0 24px 70px rgba(0, 0, 0, 0.55); overflow: hidden; transition: opacity 260ms var(--ease-out), transform 420ms cubic-bezier(0.2, 0.9, 0.25, 1); }
+@starting-style { .drawer { opacity: 0; transform: translateX(28px); } }
+.drawer-scrim { background: rgba(3, 6, 12, 0.4); backdrop-filter: blur(6px); }
+
+/* ---- toasts: small, rounded, out of the way ---------------------------- */
+.toast { border: 0; border-radius: 14px; background: color-mix(in srgb, var(--bg-raised) 90%, transparent); backdrop-filter: blur(24px) saturate(160%); box-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.12), 0 12px 36px rgba(0, 0, 0, 0.5); }
+
+/* ---- progress: a rail that fills, marks that are icons ------------------ */
+.stages { gap: 8px; }
+.stage { position: relative; padding: 14px 0 0; border-top: 0; }
+.stage::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 4px; border-radius: 999px; background: var(--bg-hover); }
+.stage::after { content: ""; position: absolute; top: 0; left: 0; height: 4px; width: 0; border-radius: 999px; background: var(--ok); transition: width 500ms cubic-bezier(0.2, 0.9, 0.25, 1); }
+.stage-done::after { width: 100%; }
+.stage-now::after { width: 55%; background: var(--accent); }
+.stage-wait::after { width: 55%; background: var(--warn); }
+.stage-stop::after { width: 100%; background: var(--danger); }
+.stage-mark { width: 18px; height: 18px; border: 0; background: var(--bg-hover); font-size: 10px; margin-top: 0; }
+.stage-mark .icon { width: 11px; height: 11px; stroke-width: 3; }
+.stage-done .stage-mark { background: var(--ok); color: var(--on-accent); }
+.stage-now .stage-mark { background: var(--accent); color: var(--on-accent); }
+.stage-wait .stage-mark { background: var(--warn); color: var(--on-accent); }
+.stage-stop .stage-mark { background: var(--danger); color: var(--on-accent); }
+.loading::before { width: 16px; height: 16px; border-width: 2px; border-color: var(--bg-hover); border-top-color: var(--fg-mute); }
+
+/* ---- small things round off together ------------------------------------ */
+.pill { border-radius: 999px; }
+.btn { border-radius: 9px; }
+.btn-mini { border-radius: 8px; }
+.chip { border-radius: 999px; }
+
+@media (prefers-reduced-transparency: reduce) {
+  .modal, .palette, .drawer, .toast { background: var(--bg-surface); backdrop-filter: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stage::after { transition: none; }
+}
+
+/* ---- the bar: the mark at the left edge, Needs you at the right, the places between ---- */
+.top { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: var(--s4); }
+.top-brand { justify-self: start; }
+.top-nav { flex: none; justify-content: center; justify-self: center; }
+.top-end { justify-self: end; flex: none; width: auto; }
+.top-end .search-trigger { width: 220px; }
+.top-end .top-attn { margin-left: 0; }
+@media (max-width: 1560px) { .top-end .search-trigger kbd { display: none; } .top-end .search-trigger { width: 34px; padding: 0; justify-content: center; } .top-end .search-trigger .search-label { display: none; } }
+@media (max-width: 980px) { .top { display: flex; } .top-nav { justify-content: flex-start; } }

@@ -603,6 +603,9 @@
       el("dialog-title").textContent = o.title || "";
       el("dialog-text").textContent = o.text || "";
       el("dialog-text").hidden = !o.text;
+      var ic = el("dialog-icon");
+      ic.className = "modal-icon" + (o.danger ? " modal-icon-danger" : "");
+      ic.firstChild.firstChild.setAttribute("href", "#" + (o.danger ? "i-warn" : o.input ? "i-pencil" : "i-info"));
       inp.hidden = !o.input;
       if (o.input) { inp.value = o.input.value || ""; inp.placeholder = o.input.placeholder || ""; }
       ok.textContent = o.confirm || "OK";
@@ -1223,6 +1226,8 @@
 
   function areaOf(view) { return AREA[view] || view; }
 
+  var TAB_ICON = { projects: "i-folder", create: "i-plus", develop: "i-wrench", sites: "i-globe", hosts: "i-server", certificates: "i-lock", team: "i-team", agents: "i-layers", schedules: "i-calendar", skills: "i-book", shared: "i-file", mcp: "i-code", overview: "i-home", services: "i-layers", runtimes: "i-bolt", databases: "i-db", toolchain: "i-wrench", remote: "i-cloud" };
+
   function subnav() {
     var area = AREA[state.view];
     var tabs = area && TABS[area];
@@ -1231,7 +1236,7 @@
     box.hidden = false;
     box.innerHTML = tabs.map(function (t) {
       var active = state.view === t[0] || (t[0] === "sites" && state.view === "site");
-      return '<button type="button" class="subtab' + (active ? " active" : "") + '" data-action="nav" data-view="' + t[0] + '">' + esc(t[1]) + "</button>";
+      return '<button type="button" class="subtab' + (active ? " active" : "") + '" data-action="nav" data-view="' + t[0] + '">' + (TAB_ICON[t[0]] ? '<svg class="icon" aria-hidden="true"><use href="#' + TAB_ICON[t[0]] + '"></use></svg>' : "") + esc(t[1]) + "</button>";
     }).join("");
   }
 
@@ -1430,7 +1435,8 @@
     }
     var needs = '<button type="button" class="top-needs' + (attention ? " has" : "") + (areaOf(state.view) === "inbox" ? " active" : "") + '" data-action="nav" data-view="inbox"' + (areaOf(state.view) === "inbox" ? ' aria-current="page"' : "") + ">" +
       (attention ? '<span class="top-needs-n">' + esc(attention) + "</span>" : "") + "Needs you</button>";
-    el("rail").innerHTML = html + '<div class="top-attn">' + chip + needs + "</div>";
+    el("rail").innerHTML = html;
+    el("top-attn").innerHTML = chip + needs;
   }
 
   /* The path above the page, only when it says something the title and the tabs do not: a project is
@@ -7642,7 +7648,7 @@
     var words = { done: "done", now: "in progress", wait: "waiting", stop: "stopped", todo: "not started" };
     return '<ol class="stages" aria-label="Run progress">' + list.map(function (x, i) {
       var k = x[1].kind;
-      var mark = k === "done" ? "\u2713" : k === "stop" ? "\u00d7" : k === "wait" ? "!" : String(i + 1);
+      var mark = k === "done" ? '<svg class="icon"><use href="#i-check"></use></svg>' : k === "stop" ? '<svg class="icon"><use href="#i-x"></use></svg>' : k === "wait" ? '<svg class="icon"><use href="#i-warn"></use></svg>' : String(i + 1);
       return '<li class="stage stage-' + k + '"' + (k === "now" || k === "wait" ? ' aria-current="step"' : "") + ' title="' + attr(x[0] + ": " + words[k] + (x[1].note ? " - " + x[1].note : "")) + '">' +
         '<span class="stage-mark" aria-hidden="true">' + mark + '</span><span class="stage-text"><span class="stage-label">' + x[0] + "</span>" +
         '<span class="sr-only">: ' + words[k] + "</span>" +
