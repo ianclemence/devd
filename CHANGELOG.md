@@ -35,6 +35,7 @@ interface; no capability, approval or recovery rule changed.
 
 ### Fixed
 
+- Stopping a run no longer waits on pipes that a second program was holding open.
 - Attaching a file never worked from the browser UI: the upload request carried no
   session token and was refused. It now carries it.
 
