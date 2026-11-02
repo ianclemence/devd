@@ -1377,7 +1377,6 @@
    * only when there is something to decide. */
   function rail() {
     var server = state.server;
-    var counts = serviceCounts(server.services);
     var attention = (AI.counts.approvals + AI.counts.questions) || null;
     var working = AI.threads ? (AI.threads.filter(function (t) { return t.state === "running"; }).length || null) : null;
     var runs = (state.view === "team" && TEAM.runs && TEAM.runs.length) ? TEAM.runs : (AI.liveRuns || (AI.home && AI.home.teamRuns) || []);
@@ -1395,7 +1394,7 @@
         { view: "team", label: "Agent runs", count: live.length || null, exact: true }
       ] },
       { label: "Machine", menu: true, items: [
-        { view: "overview", label: "Environment", hint: "services, runtimes, databases, hostnames", count: counts.total ? counts.up + "/" + counts.total + " running" : null },
+        { view: "overview", label: "Environment", hint: "services, runtimes, databases, hostnames" },
         { view: "providers", label: "Models", hint: "providers, defaults and fallbacks" },
         { view: "capabilities", label: "API and tools", hint: "what agents are able to call" }
       ] },
