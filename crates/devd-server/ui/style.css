@@ -3681,7 +3681,10 @@ body { letter-spacing: 0; font-feature-settings: normal; }
 .top-pop {
   position: absolute;
   top: 100%;
-  left: 0;
+  /* The menus sit near the right end of the bar, so open them leftwards from
+     the trigger; a left-aligned 320px popover runs off the window. */
+  right: 0;
+  left: auto;
   min-width: 320px;
   display: flex;
   flex-direction: column;
@@ -3690,7 +3693,7 @@ body { letter-spacing: 0; font-feature-settings: normal; }
   border: 1px solid var(--line);
   border-radius: 10px;
   box-shadow: var(--shadow-float);
-  transform-origin: top left;
+  transform-origin: top right;
   transition: opacity 140ms var(--ease-out), transform 140ms var(--ease-out);
 }
 @starting-style { .top-pop { opacity: 0; transform: scale(0.97); } }
@@ -4987,7 +4990,10 @@ select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .content { background: transparent; }
 .backdrop { position: absolute; inset: var(--top-h) 0 var(--status-h) 0; z-index: 0; display: grid; place-items: end center; overflow: hidden; pointer-events: none; user-select: none; }
 .backdrop span { font-size: clamp(160px, 26vw, 460px); font-weight: 700; letter-spacing: -0.06em; line-height: 0.74; color: rgba(255, 255, 255, 0.028); transform: translateY(8%); }
-.top, .content, .statusbar { position: relative; z-index: 1; }
+/* The bar keeps its own layer above the page so its grouped menus can open
+   over the content. `.content` is the next positioned sibling and would paint
+   over them if both shared `z-index: 1`. */
+.content, .statusbar { position: relative; z-index: 1; }
 
 /* ---- every row of tabs in a page is the same pill row ----------------------- */
 .segmented.site-tabs, .segmented.ops-tabs, .segmented.remote-tabs { width: fit-content; max-width: 100%; padding: 0; gap: 2px; background: none; border-radius: 0; border: 0; box-shadow: none; flex-wrap: wrap; justify-content: flex-start; margin-bottom: var(--s4); }
@@ -5012,6 +5018,10 @@ select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .top-live { flex: none; max-width: 230px; }
 .top-live-title { max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .top-nav { overflow: hidden; }
+/* An open menu is a popover inside the nav; clipping it to the bar's height
+   would hide it completely. The nav still clips while no menu is open, which
+   keeps a long bar out of the search field and the live chip. */
+.top-nav:has(.top-pop:not([hidden])) { overflow: visible; }
 @media (max-width: 1000px) { .threads .thread-row { flex: none; max-width: 260px; margin-right: var(--s3); } .threads .thread { min-width: 0; } .threads .thread .grow { overflow: hidden; text-overflow: ellipsis; } }
 .table-ops .cell-warn { color: var(--warn); }
 .table-ops td.cell-actions { white-space: normal; min-width: 240px; }
