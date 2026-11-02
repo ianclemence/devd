@@ -30,6 +30,20 @@ pub fn managed_dirs(ctx: &Ctx) -> Vec<PathBuf> {
             }
         }
     }
+    // devd-managed services live under <devd>/services/<name>, usually with
+    // their binaries in bin/ (Apache uses Apache24/bin). Toolchain probes must
+    // see the server devd itself installed, or a project is told MariaDB is
+    // missing while devd is serving it.
+    if let Ok(entries) = std::fs::read_dir(ctx.paths.services()) {
+        for entry in entries.flatten().filter(|e| e.path().is_dir()) {
+            let root = entry.path();
+            for dir in [root.clone(), root.join("bin"), root.join("Apache24").join("bin")] {
+                if dir.is_dir() && !out.contains(&dir) {
+                    out.push(dir);
+                }
+            }
+        }
+    }
     out
 }
 
@@ -328,4 +342,38 @@ pub fn service_logs(ctx: &Ctx, reg: &StackRegistry, id: &str) -> Result<Vec<Stri
         &mut |_| {},
     )?;
     Ok(r.tail)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn ctx(tag: &str) -> Ctx {
+        let dir = std::env::temp_dir().join(format!("devd-toolchain-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let paths = devd_core::paths::Paths::rooted(&dir);
+        paths.ensure().unwrap();
+        Ctx {
+            store: Arc::new(devd_core::state::Store::open_in_memory().unwrap()),
+            paths: Arc::new(paths),
+            settings: Arc::new(devd_core::config::Settings::default()),
+            events: devd_core::events::EventBus::new(),
+            actor: devd_core::capability::Actor::human(devd_core::capability::Surface::Cli),
+            run: None,
+            dry_run: false,
+        }
+    }
+
+    #[test]
+    fn probes_see_the_services_devd_installed() {
+        let c = ctx("managed-dirs");
+        let bin = c.paths.services().join("mariadb").join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        assert!(managed_dirs(&c).contains(&bin), "the managed service bin folder is on the probe path");
+        let apache = c.paths.services().join("apache").join("Apache24").join("bin");
+        std::fs::create_dir_all(&apache).unwrap();
+        assert!(managed_dirs(&c).contains(&apache), "the Apache layout is on the probe path");
+        let _ = std::fs::remove_dir_all(c.paths.root());
+    }
 }

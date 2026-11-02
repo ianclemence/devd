@@ -228,13 +228,23 @@ pub fn install(
             total: chosen.bytes,
         });
     }
+    // A download with neither a digest nor a published size has nothing to
+    // check but the TLS connection. Refuse it rather than describe HTTPS as
+    // verification. Node normally supplies a per-release SHASUMS256.txt; if
+    // that could not be read, this is a failed install, not a weak one.
+    if artifact.sha256.is_none() && artifact.bytes.is_none() {
+        return Err(DevdError::unsupported(format!(
+            "no digest or published size is available for {}; devd will not install an unverified build",
+            artifact.filename
+        )));
+    }
     let fetched = download::fetch(&artifact, &ctx.paths.cache(), progress)?;
 
     let mut warnings = Vec::new();
     if artifact.sha256.is_none() {
         warnings.push(format!(
-            "upstream publishes no digest for {}, so the download could only be checked for \
-             length ({} bytes); it came over HTTPS from {}",
+            "upstream publishes no digest for {}, so the download was checked against its published \
+             size ({} bytes); it came over HTTPS from {}",
             artifact.filename, fetched.bytes, chosen.url
         ));
     }

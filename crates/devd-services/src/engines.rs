@@ -1,13 +1,17 @@
-//! PostgreSQL, MongoDB and Memcached: services devd runs from a folder it records.
+//! PostgreSQL, MySQL, MongoDB and Memcached: services devd runs from a folder
+//! it records, or adopts from one a person already has.
 //!
-//! None of the three publishes a checksum for its Windows build that devd could
-//! check (EnterpriseDB's PostgreSQL zips and the community Memcached builds publish
-//! none; MongoDB's digests are on a download page that is not machine readable), so
-//! devd does not fetch them. It adopts a folder a person already has, records it,
-//! writes its own configuration and data directory under the devd home, and runs
-//! the program from there. Nothing in the adopted folder is changed.
+//! These four can be adopted. Windows also has verified install paths outside
+//! this module: PostgreSQL and MySQL use pinned publisher builds
+//! (`pinned_install`), and Memcached uses a GitHub release whose digest the
+//! service catalogue checks. MongoDB is the one that is adopt-only, because its
+//! Windows builds publish no machine-readable checksum devd can verify.
 //!
-//! All three bind to 127.0.0.1 only. PostgreSQL is initialised with trust
+//! When an engine is adopted, nothing in the folder is changed: devd writes its
+//! own configuration and data directory under the devd home and runs the
+//! program from there.
+//!
+//! All four bind to 127.0.0.1 only. PostgreSQL is initialised with trust
 //! authentication for local connections, the same stated default as MariaDB's
 //! passwordless root: a development server that cannot be reached from the network.
 

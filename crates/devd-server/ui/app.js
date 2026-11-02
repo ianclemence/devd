@@ -213,6 +213,7 @@
     busy: false,
     server: {
       services: [],
+      catalogue: [],
       sites: [],
       runtimes: [],
       certs: [],
@@ -1550,18 +1551,6 @@
 
   var SERVER_VIEWS = ["overview", "sites", "site", "services", "toolchain", "runtimes", "databases", "remote", "operations", "preview", "certificates", "hosts"];
 
-  var KNOWN_SERVICES = [
-    { name: "nginx", label: "nginx", note: "web server" },
-    { name: "apache", label: "Apache", note: "reads .htaccess; use the one you already have", find: true, download: true },
-    { name: "mariadb", label: "MariaDB", note: "database" },
-    { name: "redis", label: "Redis", note: "cache, queues and sessions; downloaded and checked, or the one you already have", find: true, download: true },
-    { name: "postgres", label: "PostgreSQL", note: "uses the one you already have", find: true, download: false },
-    { name: "mongodb", label: "MongoDB", note: "uses the one you already have", find: true, download: false },
-    { name: "memcached", label: "Memcached", note: "object cache; downloaded and checked, or the one you already have", find: true, download: true },
-    { name: "mailpit", label: "Mailpit", note: "catches the mail your applications send" },
-    { name: "php-cgi", label: "php-cgi", note: "PHP FastCGI listener, built from the installed runtime" }
-  ];
-
   var RUNTIME_KINDS = [
     { kind: "php", label: "PHP", note: "8.x, downloaded from windows.php.net" },
     { kind: "node", label: "Node.js", note: "LTS and current releases" },
@@ -1766,7 +1755,7 @@
     }
     var request = Promise.all([
       attempt("service.list"), attempt("site.list"), attempt("runtime.list"), attempt("tls.list"),
-      attempt("tls.ca.show"), attempt("hosts.show"), attempt("tls.ca.status")
+      attempt("tls.ca.show"), attempt("hosts.show"), attempt("tls.ca.status"), attempt("service.catalogue")
     ]).then(function (r) {
       function take(i, key, list) {
         if (r[i] === FAILED) { if (state.server[key] === undefined) state.server[key] = list ? [] : null; return; }
@@ -1779,6 +1768,7 @@
       take(4, "ca", false);
       take(5, "hosts", false);
       take(6, "trust", false);
+      take(7, "catalogue", true);
       state.server.failures = failures;
       state.server.loaded = true;
       read("services.inventory")
@@ -2903,9 +2893,8 @@
     return (state.server.services || []).some(function (x) { return x.pid === pid; });
   }
 
-  function inventoryRows() {
-    var inv = state.server.inventory || [];
-    return inv.filter(function (v) {
+  function visibleInventory() {
+    return (state.server.inventory || []).filter(function (v) {
       // devd's MariaDB runs as mysqld.exe on Windows. The inventory sees the
       // port owner but does not know devd started it, so without this it shows
       // a second MariaDB/MySQL under "Already on this computer".
@@ -2913,28 +2902,43 @@
       // Programs that are not on this machine belong under Available, not in
       // the list of things already here.
       return !(v.status === "missing" && !v.path && !v.port_owner);
-    }).map(function (v) {
-      var rec = v.recommendation || {};
-      var stateLabel = INV_LABEL[v.status] || v.status;
-      if (v.status === "missing" && v.port_owner) stateLabel = "Not found on PATH";
-      var opts = v.options.filter(function (o) { return o.available && o.action !== "ignore"; });
-      function label(o) { return o.action === "adopt" ? "Use it" : o.action === "watch" ? "Only watch" : o.action === "install" ? "Install" : o.action === "remove" ? "Remove" : o.action; }
-      var btns = opts.map(function (o) {
-        var recd = o.action === rec.action;
-        var cls = "btn btn-mini" + (recd ? " btn-primary" : o.risk === "destructive" ? " btn-danger" : " btn-ghost");
-        return '<button type="button" class="' + cls + '" data-action="svc-option" data-tool="' + attr(v.tool) + '" data-opt="' + attr(o.action) + '" title="' + attr((o.why_not || "") + (o.risk === "approval" ? " Asks you first." : "")) + '">' + esc(label(o)) + "</button>";
-      }).join("");
-      var own = { redis: "redis", postgresql: "postgres", mongodb: "mongodb", memcached: "memcached" }[v.tool];
-      if (own && v.path && !managedService(own)) {
-        btns = '<button type="button" class="btn btn-mini btn-primary" data-action="adopt-found" data-name="' + attr(own) + '" data-path="' + attr(v.path.replace(/[\\/][^\\/]*$/, "")) + '">Run it with devd</button>';
-      }
-      if (v.decision) btns += '<button type="button" class="btn btn-mini btn-ghost" data-action="svc-option" data-tool="' + attr(v.tool) + '" data-opt="clear">Reset</button>';
+    });
+  }
+
+  function inventoryActionButtons(v, skipInstall) {
+    var rec = v.recommendation || {};
+    var opts = (v.options || []).filter(function (o) {
+      return o.available && o.action !== "ignore" && !(skipInstall && o.action === "install");
+    });
+    function label(o) { return o.action === "adopt" ? "Use it" : o.action === "watch" ? "Only watch" : o.action === "install" ? "Install" : o.action === "remove" ? "Remove" : o.action; }
+    var btns = opts.map(function (o) {
+      var recd = o.action === rec.action;
+      var cls = "btn btn-mini" + (recd ? " btn-primary" : o.risk === "destructive" ? " btn-danger" : " btn-ghost");
+      return '<button type="button" class="' + cls + '" data-action="svc-option" data-tool="' + attr(v.tool) + '" data-opt="' + attr(o.action) + '" title="' + attr((o.why_not || "") + (o.risk === "approval" ? " Asks you first." : "")) + '">' + esc(label(o)) + "</button>";
+    }).join("");
+    var own = { redis: "redis", postgresql: "postgres", mysql: "mysql", mongodb: "mongodb", memcached: "memcached" }[v.tool];
+    if (own && v.path && !managedService(own)) {
+      btns = '<button type="button" class="btn btn-mini btn-primary" data-action="adopt-found" data-name="' + attr(own) + '" data-path="' + attr(v.path.replace(/[\\/][^\\/]*$/, "")) + '">Run it with devd</button>' + btns;
+    }
+    if (v.decision) btns += '<button type="button" class="btn btn-mini btn-ghost" data-action="svc-option" data-tool="' + attr(v.tool) + '" data-opt="clear">Reset</button>';
+    return btns;
+  }
+
+  function inventorySub(v) {
+    var stateLabel = INV_LABEL[v.status] || v.status;
+    if (v.status === "missing" && v.port_owner) stateLabel = "Not found on PATH";
+    return stateLabel + (v.path ? " · " + v.path : "") + (v.port_owner && v.port_owner.program ? " · port held by " + v.port_owner.program : "");
+  }
+
+  function inventoryRows(skip) {
+    skip = skip || {};
+    return visibleInventory().filter(function (v) { return !skip[v.tool]; }).map(function (v) {
       return uiRow({
         dot: v.status === "ready" ? "ok" : v.status === "installed_stopped" ? "warn" : v.status === "missing" ? "off" : "bad",
         title: brandImg(v.tool, "brand-dot") + esc(v.name) + (v.decision ? ' <span class="pill pill-accent">' + esc(v.decision.mode) + "</span>" : "") +
           (v.required ? ' <span class="pill pill-warn">needed by ' + v.required_by.length + "</span>" : ""),
-        sub: esc(stateLabel + (v.path ? " · " + v.path : "") + (v.port_owner && v.port_owner.program ? " · port held by " + v.port_owner.program : "")),
-        actions: btns
+        sub: esc(inventorySub(v)),
+        actions: inventoryActionButtons(v, false)
       });
     });
   }
@@ -2985,20 +2989,41 @@
         hover: !svc.running && svc.installed ? true : true
       });
     }
-    var found = inventoryRows();
-    var missing = KNOWN_SERVICES.filter(function (k) { return !byName[k.name] && !(k.name === "php-cgi" && rows.some(function (r) { return /^php-cgi/.test(r.name); })); })
-      .filter(function (k) {
-        var tool = k.name === "postgres" ? "postgresql" : k.name;
-        return !k.find || k.name === "apache" || !(state.server.inventory || []).some(function (v) { return v.tool === tool && v.path; });
-      })
-      .map(function (k) {
-        return uiRow({
-          dot: "off", title: esc(k.label), sub: esc(k.note),
-          actions: k.name === "php-cgi"
-            ? '<button type="button" class="btn btn-mini" data-action="nav" data-view="runtimes">Install a PHP runtime</button>'
-            : (k.download === false ? "" : '<button type="button" class="btn btn-mini btn-primary" data-action="install-service" data-name="' + attr(k.name) + '">Install</button>')
-        });
+    var catalogue = state.server.catalogue || [];
+    var invByTool = {};
+    visibleInventory().forEach(function (v) { invByTool[v.tool] = v; });
+    var catalogueTools = {};
+    catalogue.forEach(function (k) { catalogueTools[k.name === "postgres" ? "postgresql" : k.name] = true; });
+    // Tools devd has no service model for (Docker, SQLite, ...) stay in their
+    // own list. Everything in the catalogue gets exactly one row, with the
+    // inventory state attached when it was detected.
+    var found = inventoryRows(catalogueTools);
+    var missing = catalogue.filter(function (k) {
+      if (byName[k.name]) return false;
+      if (k.name === "php-cgi" && rows.some(function (r) { return /^php-cgi/.test(r.name); })) return false;
+      return true;
+    }).map(function (k) {
+      var tool = k.name === "postgres" ? "postgresql" : k.name;
+      var v = invByTool[tool];
+      var actions = "";
+      var hasExisting = v && (v.path || v.status === "ready" || v.status === "installed_stopped" || v.status === "not_operational");
+      if (k.name === "php-cgi") {
+        actions = '<button type="button" class="btn btn-mini" data-action="nav" data-view="runtimes">Install a PHP runtime</button>';
+      } else {
+        if (k.installable && !hasExisting) actions += '<button type="button" class="btn btn-mini btn-primary" data-action="install-service" data-name="' + attr(k.name) + '">' + esc(k.install_label || "Install") + "</button>";
+        if (k.findable) actions += '<button type="button" class="btn btn-mini' + (k.installable && !hasExisting ? " btn-ghost" : " btn-primary") + '" data-action="service-find" data-name="' + attr(k.name) + '" data-install="' + (k.installable && !hasExisting ? "1" : "0") + '">Find existing</button>';
+        if (v) actions = inventoryActionButtons(v, true) + actions;
+      }
+      var dot = v ? (v.status === "ready" ? "ok" : v.status === "installed_stopped" ? "warn" : v.status === "missing" ? "off" : "bad") : "off";
+      return uiRow({
+        dot: dot,
+        title: brandImg(tool, "brand-dot") + esc(k.label || k.name) +
+          (v && v.decision ? ' <span class="pill pill-accent">' + esc(v.decision.mode) + "</span>" : "") +
+          (v && v.required ? ' <span class="pill pill-warn">needed by ' + v.required_by.length + "</span>" : ""),
+        sub: esc(v ? inventorySub(v) : (k.note || k.summary)),
+        actions: actions
       });
+    });
     var body = summaryBand([
       (function () {
         var rows = state.server.services || [];
@@ -3136,7 +3161,7 @@
           ? (kind.kind === "php" ? "not used by a site" : "")
           : serving.length + (serving.length === 1 ? " site" : " sites") + (pinned ? " · " + pinned + " pinned" : "");
         return uiRow({
-          dot: "ok",
+          dot: r.present ? "ok" : "bad",
           title: esc(rt.version) + (r.primary ? ' <span class="pill pill-accent">default</span>' : "") + (own ? "" : ' <span class="pill">found on this computer</span>'),
           sub: '<span class="mono" title="' + attr(rt.path) + '">' + esc(rt.path) + "</span>",
           meta: usage ? esc(usage) : "",
@@ -10065,6 +10090,40 @@
 
     "stack-down": function () { act("stack.down", {}); },
 
+    "service-find": function (node) {
+      var name = node.dataset.name;
+      run("service.find_local", { name: name }, { quiet: true }).then(function (outcome) {
+        var found = outcome && Array.isArray(outcome.data) ? outcome.data : [];
+        if (!found.length) {
+          var canInstall = node.dataset.install === "1";
+          uiSheet("Find " + name, uiEmpty("No " + name + " folder found",
+            canInstall
+              ? "devd looked in portable stacks, XAMPP, WampServer, Program Files and PATH. Install it first, or adopt a folder from a portable stack."
+              : "devd looked in portable stacks, XAMPP, WampServer, Program Files and PATH. Install it yourself, then use Find again to adopt the folder.",
+            canInstall ? '<button type="button" class="btn" data-action="install-service" data-name="' + attr(name) + '">Install instead</button>' : ""));
+          return;
+        }
+        var rows = found.map(function (f) {
+          return uiRow({
+            dot: "ok", title: esc(f.version || "unknown version"),
+            sub: '<span class="mono">' + esc(f.path) + "</span>",
+            actions: '<button type="button" class="btn btn-mini btn-primary" data-action="service-adopt" data-name="' + attr(name) + '" data-path="' + attr(f.path) + '">Use this folder</button>'
+          });
+        }).join("");
+        uiSheet("Find " + name, '<div class="ui-more">' + found.length + " folder(s) found. Nothing in the folder is changed; devd writes its own configuration and data under its home.</div>" + rows);
+      });
+    },
+
+    "service-adopt": function (node) {
+      uiConfirm({
+        title: "Use this " + node.dataset.name + " with devd?",
+        text: "Found in " + node.dataset.path + ". The folder is not changed; devd keeps its own data and configuration.",
+        confirm: "Use it"
+      }).then(function (yes) {
+        if (yes) act("service.adopt", { name: node.dataset.name, path: node.dataset.path });
+      });
+    },
+
     "install-service": function (node) {
       toast("info", "installing " + node.dataset.name + " — the vendor download can take a minute");
       act("service.install", { name: node.dataset.name, version: null });
@@ -10312,7 +10371,7 @@
       run("composer.install", {}).then(function () { return loadShell(); });
     },
     "install-runtime": function (node) {
-      toast("info", "installing " + node.dataset.kind + " — the vendor download can take a minute");
+      toast("info", "installing " + node.dataset.kind + " - the vendor download can take a minute");
       act("runtime.install", { kind: node.dataset.kind, version: "latest" }).then(function () {
         SHELL.data = null;
         if (state.view === "runtimes") renderRuntimes();

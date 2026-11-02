@@ -15,10 +15,14 @@ use crate::capability::{Approval, Capability, Ctx, InvokeRequest, InvokeResult};
 use crate::error::{DevdError, Result};
 use crate::state::AuditRecord;
 
+/// A side effect that runs after a capability applied successfully.
+type Hook = Arc<dyn Fn(&Ctx, &Value) -> Result<()> + Send + Sync>;
+
 /// Every capability `devd` knows about.
 #[derive(Default)]
 pub struct Registry {
     caps: BTreeMap<String, Arc<Capability>>,
+    hooks: BTreeMap<String, Vec<Hook>>,
 }
 
 /// What an agent may still do on its own in production mode: write notes,
@@ -39,7 +43,21 @@ impl Registry {
     pub fn new() -> Self {
         Self {
             caps: BTreeMap::new(),
+            hooks: BTreeMap::new(),
         }
+    }
+
+    /// Run `hook` after a capability applies without error.
+    ///
+    /// This is composition, not policy: the hook cannot grant a permission or
+    /// change the outcome. It is how a runtime install reaches the service
+    /// reconciler without making `devd-runtime` depend on `devd-services`.
+    pub fn after(
+        &mut self,
+        id: &str,
+        hook: impl Fn(&Ctx, &Value) -> Result<()> + Send + Sync + 'static,
+    ) {
+        self.hooks.entry(id.to_string()).or_default().push(Arc::new(hook));
     }
 
     /// Add a capability. Duplicate identifiers are rejected, which keeps the
@@ -354,6 +372,15 @@ impl Registry {
             let outcome = crate::util::with_cancellation(check, || {
                 cap.handler.apply(&run_ctx, &req.args)
             })?;
+            if outcome.ok {
+                if let Some(hooks) = self.hooks.get(&cap.id) {
+                    for hook in hooks {
+                        // A reconciliation failure must not turn a completed
+                        // install into a failed one. The next reconcile reports it.
+                        let _ = hook(&run_ctx, &req.args);
+                    }
+                }
+            }
             Ok(InvokeResult {
                 capability: cap.id.clone(),
                 dry_run: false,
@@ -734,6 +761,32 @@ mod tests {
         };
         let res = reg.dispatch(&ctx, &req, Approval::None).unwrap();
         assert!(res.outcome.unwrap().ok);
+    }
+
+    #[test]
+    fn a_hook_runs_after_a_successful_apply_not_a_plan() {
+        let mut reg = registry_with_read_cap();
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = count.clone();
+        reg.after("demo.read", move |_, _| {
+            seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        });
+        let ctx = test_ctx();
+        let plan = InvokeRequest {
+            id: "demo.read".into(),
+            args: serde_json::json!({}),
+            dry_run: true,
+        };
+        reg.dispatch(&ctx, &plan, Approval::None).unwrap();
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 0, "a plan has no side effects");
+        let apply = InvokeRequest {
+            id: "demo.read".into(),
+            args: serde_json::json!({}),
+            dry_run: false,
+        };
+        reg.dispatch(&ctx, &apply, Approval::None).unwrap();
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1, "the hook ran once");
     }
 
     #[test]

@@ -1,11 +1,10 @@
 //! Redis and Mailpit: the two services a PHP developer expects beside the web
 //! server and the database.
 //!
-//! * **Redis** is supervised like the others. On Windows the only builds are
-//!   third-party and publish no checksum, so devd does not download one: it
-//!   adopts the folder a person already has. Elsewhere it
-//!   adopts what the system's package manager installed, after checking it
-//!   against the package.
+//! * **Redis** is supervised like the others. On Windows it is downloaded from
+//!   a GitHub release whose asset digest GitHub records, or adopted from a
+//!   folder a person already has. Elsewhere it adopts what the system's package
+//!   manager installed, after checking it against the package.
 //! * **Mailpit** catches the mail an application sends. It is downloaded from its
 //!   GitHub release and checked against the SHA-256 GitHub records for the asset.
 //!   PHP on Windows is pointed at it (`SMTP=127.0.0.1`, port 1025), so `mail()`

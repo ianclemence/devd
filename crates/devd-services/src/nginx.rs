@@ -479,21 +479,30 @@ fn site_servers(render: &Render, site: &Site) -> String {
         out.push_str("        location / {\n            try_files $uri $uri/ =404;\n        }\n\n");
     } else {
         out.push_str("        location / {\n            try_files $uri $uri/ /index.php?$query_string;\n        }\n\n");
-        out.push_str("        location ~ \\.php$ {\n");
-        out.push_str("            try_files $uri =404;\n");
-        out.push_str(&format!(
-            "            fastcgi_pass  {};\n",
-            site_upstream(render, site)
-        ));
-        out.push_str("            fastcgi_index index.php;\n");
-        out.push_str(&format!(
-            "            include       \"{}conf/fastcgi_params\";\n",
-            render.prefix
-        ));
-        out.push_str(
-            "            fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;\n",
-        );
-        out.push_str("        }\n\n");
+        if render.php.is_empty() {
+            // No PHP listener exists. `fastcgi_pass devd_php_default` would make
+            // nginx reject the whole configuration; a site that needs PHP says
+            // so instead, and the rest of the server keeps working.
+            out.push_str("        location ~ \\.php$ {\n");
+            out.push_str("            return 503 \"devd: no PHP runtime is installed for this site. Install PHP on Runtimes, then start the stack.\\n\";\n");
+            out.push_str("        }\n\n");
+        } else {
+            out.push_str("        location ~ \\.php$ {\n");
+            out.push_str("            try_files $uri =404;\n");
+            out.push_str(&format!(
+                "            fastcgi_pass  {};\n",
+                site_upstream(render, site)
+            ));
+            out.push_str("            fastcgi_index index.php;\n");
+            out.push_str(&format!(
+                "            include       \"{}conf/fastcgi_params\";\n",
+                render.prefix
+            ));
+            out.push_str(
+                "            fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;\n",
+            );
+            out.push_str("        }\n\n");
+        }
     }
     out.push_str("        # Certificate challenges and well-known files stay reachable;\n");
     out.push_str("        # every other dotfile is not served.\n");
@@ -854,6 +863,30 @@ mod tests {
         let text = render_for(&[site_on("gone", "off", Some("7.4"))], 80, 443);
         assert!(text.contains("fastcgi_pass  devd_php_8_3;"), "{text}");
         assert!(!text.contains("devd_php_7_4"), "{text}");
+    }
+
+    #[test]
+    fn a_php_site_without_a_listener_says_so_instead_of_naming_an_undefined_upstream() {
+        let text = render_text(
+            Render {
+                h2: Http2::Off,
+                prefix: "D:/devd-home/services/nginx/".to_string(),
+                logs: "D:/devd-home/logs".to_string(),
+                certs: "D:/devd-home/certs".to_string(),
+                http: 80,
+                https: 443,
+                php: Vec::new(),
+                workers: 1,
+                redirects: Default::default(),
+                alt_sites: Default::default(),
+                extras: Default::default(),
+                primary: None,
+            },
+            &[site("blog", "off")],
+        );
+        assert!(!text.contains("fastcgi_pass"), "{text}");
+        assert!(!text.contains("devd_php_default"), "{text}");
+        assert!(text.contains("return 503"), "{text}");
     }
 
     #[test]

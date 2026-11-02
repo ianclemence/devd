@@ -42,7 +42,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use serde_json::json;
 
-use devd_core::capability::Ctx;
+use devd_core::capability::{Ctx, Plan};
 use devd_core::doctor::Check;
 use devd_core::download::{Artifact, ProgressFn};
 use devd_core::paths::Paths;
@@ -172,6 +172,135 @@ pub fn definition(name: &str) -> Option<&'static Definition> {
     DEFINITIONS
         .iter()
         .find(|d| d.name == name || d.kind == name)
+}
+
+/// One logical service as every surface should see it.
+///
+/// This is the single catalogue behind the Services screen. It describes what
+/// devd can do with a service on this platform; it does not probe the machine.
+/// The state comes from `service.list` and `services.inventory`, so the action a
+/// person sees and the capability that runs are always decided from the same
+/// record.
+#[derive(Debug, Clone, Serialize)]
+pub struct CatalogEntry {
+    /// Stable service name.
+    pub name: &'static str,
+    /// Display label.
+    pub label: &'static str,
+    /// One sentence about what it is.
+    pub summary: &'static str,
+    /// What devd can do: download, pinned, system, adopt, find.
+    pub providers: Vec<&'static str>,
+    /// Whether devd can install it here.
+    pub installable: bool,
+    /// The button label when installable: `Install` or `Use system copy`.
+    pub install_label: &'static str,
+    /// Whether an existing folder can become devd's service.
+    pub adoptable: bool,
+    /// Whether the folder can be found on disk.
+    pub findable: bool,
+    /// A PHP listener rather than a package.
+    pub runtime: bool,
+    /// Default port, when it listens.
+    pub default_port: u16,
+    /// The sentence shown beside it.
+    pub note: String,
+}
+
+/// The canonical service catalogue for this platform.
+pub fn catalog() -> Vec<CatalogEntry> {
+    let windows = cfg!(windows);
+    let system = Os::current().uses_system_packages();
+
+    fn entry(
+        name: &'static str,
+        label: &'static str,
+        summary: &'static str,
+        default_port: u16,
+        installable: bool,
+        adoptable: bool,
+        providers: &[&'static str],
+        note: &str,
+    ) -> CatalogEntry {
+        let system_only = providers.iter().any(|p| *p == "system")
+            && !providers.iter().any(|p| *p == "download" || *p == "pinned");
+        CatalogEntry {
+            name,
+            label,
+            summary,
+            providers: providers.to_vec(),
+            installable,
+            install_label: if installable && system_only { "Use system copy" } else { "Install" },
+            adoptable,
+            findable: adoptable,
+            runtime: name == PHP_SERVICE,
+            default_port,
+            note: note.to_string(),
+        }
+    }
+
+    let mut out = vec![
+        entry(
+            "nginx", "nginx", "The web server that fronts every site", 0,
+            windows || system, false, if windows { &["download"] } else { &["system"] },
+            if windows { "Web server; downloaded and checked." } else { "Adopts the system's installed nginx." },
+        ),
+        entry(
+            "apache", "Apache", "Web server for sites that depend on .htaccess", 0,
+            windows, true, if windows { &["download", "adopt", "find"] } else { &["adopt", "find"] },
+            if windows { "Verified Windows build, or an existing Apache folder." } else { "devd serves sites with nginx here; an existing Apache folder can still be adopted." },
+        ),
+        entry(
+            "mariadb", "MariaDB", "The database for new projects", 3306,
+            windows || system, false, if windows { &["download"] } else { &["system"] },
+            if windows { "Verified Windows build; downloaded and checked." } else { "Adopts the system's installed MariaDB." },
+        ),
+        entry(
+            "mysql", "MySQL", "Oracle's MySQL server (MariaDB is the default)", 3307,
+            windows, true, if windows { &["pinned", "adopt", "find"] } else { &["adopt", "find"] },
+            if windows { "Pinned Windows build with a verified digest, or an existing MySQL folder." } else { "Adopt an existing MySQL folder; devd does not install it here." },
+        ),
+        entry(
+            "postgres", "PostgreSQL", "PostgreSQL for projects that need it", 5432,
+            windows, true, if windows { &["pinned", "adopt", "find"] } else { &["adopt", "find"] },
+            if windows { "Pinned Windows build with a verified digest, or an existing PostgreSQL folder." } else { "Adopt an existing PostgreSQL folder; devd does not install it here." },
+        ),
+        entry(
+            "mongodb", "MongoDB", "A document database", 27017,
+            false, true, &["adopt", "find"],
+            "devd does not verify a MongoDB build; find and adopt an existing folder.",
+        ),
+        entry(
+            "redis", "Redis", "Cache, queues and sessions", 6379,
+            windows || system, true, if windows { &["download", "adopt", "find"] } else { &["system", "adopt", "find"] },
+            if windows { "Verified Windows build, or an existing Redis folder." } else { "Adopts the system's installed Redis, or an existing folder." },
+        ),
+        entry(
+            "memcached", "Memcached", "An in-memory object cache", 11211,
+            windows, true, if windows { &["download", "adopt", "find"] } else { &["adopt", "find"] },
+            if windows { "Verified Windows build, or an existing Memcached folder." } else { "Adopt an existing Memcached folder; devd does not install it here." },
+        ),
+        entry(
+            "mailpit", "Mailpit", "Catches the mail your applications send", extras::MAILPIT_UI_PORT,
+            true, false, &["download"],
+            "Downloaded and checked on every platform.",
+        ),
+        entry(
+            "php-cgi", "php-cgi", "PHP FastCGI listeners built from installed runtimes", 9000,
+            false, false, &["runtime"],
+            "Install PHP on Runtimes; the listener follows.",
+        ),
+    ];
+    // A service with a definition but no entry above would silently disappear
+    // from the screen. Keep the list honest instead.
+    for def in DEFINITIONS {
+        if !out.iter().any(|e| e.name == def.name) {
+            out.push(entry(
+                def.name, def.name, def.summary, def.default_port, true, false, &["download"], def.summary,
+            ));
+        }
+    }
+    out
 }
 
 /// Whether a newly installed service joins `stack.up` without being asked.
@@ -835,6 +964,127 @@ pub struct InstalledService {
 }
 
 /// Download, unpack and record a service.
+/// Plan an install with the same provider resolution the installer uses.
+///
+/// The old plan path asked the upstream catalogue for every service, so a
+/// pinned PostgreSQL or MySQL build could be installed but never planned. This
+/// function follows `install`: pin, then engine refusal, then system package,
+/// then the verified download catalogue.
+pub fn install_plan(name: &str, spec: &str, port: Option<u16>, force: bool) -> Result<Plan> {
+    let def = definition(name).ok_or_else(|| {
+        DevdError::unsupported(format!(
+            "`{name}` is not a service devd can install; installable services are {}",
+            DEFINITIONS.iter().map(|d| d.name).collect::<Vec<_>>().join(", ")
+        ))
+    })?;
+    let spec = if spec.trim().is_empty() { "latest" } else { spec };
+
+    if def.name == "apache" && Os::current().uses_system_packages() {
+        return Err(DevdError::unsupported(
+            "devd drives Apache on Windows. On Linux and macOS it serves sites with nginx; \
+             set web_server back to \"nginx\"",
+        ));
+    }
+
+    if let Some(pin) = pinned_install::pin_for(def.name).filter(|_| cfg!(windows)) {
+        if !pin.accepts(spec) {
+            return Err(DevdError::unsupported(format!(
+                "{} is pinned to {} ({}); this build cannot install another version",
+                pin.label, pin.version, pin.short
+            )));
+        }
+        return Ok(Plan::new(
+            "service.install",
+            format!("download and install {} {} from {}", pin.label, pin.version, pin.publisher),
+        )
+        .step(format!("download {}", pin.url))
+        .step(format!("verify sha256: {}", pin.sha256))
+        .step(format!("unpack into <devd>/services/{}", def.name))
+        .step(format!(
+            "prepare its data directory and record port {}",
+            port.unwrap_or(def.default_port)
+        ))
+        .effect(format!("adds files under <devd>/services/{}", def.name))
+        .approval(false)
+        .data(json!({
+            "name": def.name,
+            "version": pin.version,
+            "url": pin.url,
+            "sha256": pin.sha256,
+            "bytes": pin.bytes,
+            "destination": format!("<devd>/services/{}", def.name),
+            "provider": "pinned",
+        })));
+    }
+
+    let downloadable = matches!(def.name, "redis" | "memcached") && cfg!(windows);
+    if let Some(engine) = engines::get(def.name).filter(|_| !downloadable) {
+        return Err(engines::download_refusal(engine));
+    }
+
+    if def.name != "mailpit" && Os::current().uses_system_packages() {
+        return Ok(Plan::new(
+            "service.install",
+            format!("adopt the system's installed {}", def.name),
+        )
+        .step(format!("find {} from the system package manager", def.name))
+        .step("verify it is owned by a package, then record it")
+        .effect("records an existing system program; devd does not replace it")
+        .approval(false)
+        .data(json!({
+            "name": def.name,
+            "version": spec,
+            "provider": "system",
+            "destination": "the system package manager's location",
+        })));
+    }
+
+    let (list, _) = available(def.kind)?;
+    if list.is_empty() {
+        return Err(DevdError::unsupported(format!(
+            "no {} builds are published for this platform",
+            def.name
+        )));
+    }
+    let installable = verifiable(def.name, &list);
+    let chosen = resolve(&installable, spec, None).or_else(|_| resolve(&list, spec, None))?;
+    let digest = match &chosen.sha256 {
+        Some(d) => format!("{d} (published by the vendor)"),
+        None if def.name == "nginx" => {
+            "REFUSED: nginx publishes no checksum and devd has no digest recorded for this build".to_string()
+        }
+        None if def.name == "mariadb" => "published in the release's sha256sums.txt".to_string(),
+        None => "NOT PUBLISHED by the vendor; only the HTTPS transport is checked".to_string(),
+    };
+    Ok(Plan::new(
+        "service.install",
+        format!("download and install {} {} from {}", def.name, chosen.version, chosen.url),
+    )
+    .step(format!("download {}", chosen.url))
+    .step(format!("verify sha256: {digest}"))
+    .step(format!(
+        "unpack into <devd>/services/{}{}",
+        def.name,
+        if force { " (replacing the existing installation)" } else { "" }
+    ))
+    .step(if def.name == "mariadb" {
+        format!("write my.ini and create the system tables on port {}", port.unwrap_or(def.default_port))
+    } else {
+        format!("render the {} configuration from the state store", def.name)
+    })
+    .effect(format!("adds files under <devd>/services/{}", def.name))
+    .approval(false)
+    .data(json!({
+        "name": def.name,
+        "version": chosen.version,
+        "url": chosen.url,
+        "sha256": chosen.sha256,
+        "destination": format!("<devd>/services/{}", def.name),
+        "bytes": chosen.bytes,
+        "provider": "download",
+    })))
+}
+
 pub fn install(
     ctx: &Ctx,
     name: &str,
@@ -1621,12 +1871,13 @@ pub fn ensure_php_service(ctx: &Ctx) -> Result<Service> {
         .store
         .list_runtimes()?
         .into_iter()
-        .find(|r| {
+        .filter(|r| {
             r.kind == "php"
                 && devd_runtime::executable_relative("php")
                     .map(|rel| Path::new(&r.path).join(rel).is_file())
                     .unwrap_or(false)
         })
+        .max_by(|a, b| version_parts(&a.version).cmp(&version_parts(&b.version)))
         .map(|r| r.id);
 
     let existing = ctx.store.get_service(PHP_SERVICE)?;
@@ -1693,7 +1944,8 @@ pub fn ensure_php_services(ctx: &Ctx) -> Result<Vec<Service>> {
             .store
             .list_runtimes()?
             .into_iter()
-            .find(|r| r.kind == "php" && php_series(&r.version) == series)
+            .filter(|r| r.kind == "php" && php_series(&r.version) == series)
+            .max_by(|a, b| version_parts(&a.version).cmp(&version_parts(&b.version)))
             .map(|r| r.id);
         let existing = ctx.store.get_service(&name)?;
         let mut service = existing.unwrap_or(Service {
@@ -2424,6 +2676,36 @@ mod tests {
         assert!(!startup_default("apache"));
         assert!(!startup_default("redis"));
         assert!(!startup_default("mailpit"));
+    }
+
+    #[test]
+    fn the_service_catalogue_has_no_dead_end_rows() {
+        let catalogue = catalog();
+        let names: Vec<&str> = catalogue.iter().map(|e| e.name).collect();
+        for name in ["nginx", "apache", "mariadb", "mysql", "postgres", "mongodb", "redis", "memcached", "mailpit", "php-cgi"] {
+            assert!(names.contains(&name), "{name} is missing from the catalogue");
+        }
+        for entry in &catalogue {
+            assert!(!entry.label.is_empty() && !entry.note.is_empty(), "{} has no copy", entry.name);
+            assert!(
+                entry.installable || entry.adoptable || entry.runtime,
+                "{} is listed but has no action",
+                entry.name
+            );
+        }
+    }
+
+    #[test]
+    fn the_plan_knows_the_pinned_install_the_executor_uses() {
+        if cfg!(windows) {
+            let plan = install_plan("postgres", "latest", None, false).unwrap();
+            assert_eq!(plan.data["provider"], "pinned");
+            assert!(plan.summary.contains("PostgreSQL"));
+        }
+        // MongoDB has no verified build: the plan must say adopt, not pretend to
+        // download something.
+        let err = install_plan("mongodb", "latest", None, false).unwrap_err();
+        assert!(err.to_string().contains("adopt"), "{err}");
     }
 
     #[test]

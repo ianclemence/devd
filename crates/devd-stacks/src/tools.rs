@@ -634,7 +634,40 @@ fn tcp_open(port: u16) -> bool {
     TcpStream::connect_timeout(&addr, Duration::from_millis(400)).is_ok()
 }
 
-fn unit_exists(unit: &str, host: &Host) -> bool {
+fn windows_service_names() -> &'static [String] {
+    static NAMES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    NAMES.get_or_init(|| {
+        let Ok(out) = util::run(
+            Path::new("sc.exe"),
+            &["query".into(), "state=".into(), "all".into()],
+            None,
+            &[],
+            Some(Duration::from_secs(15)),
+        ) else {
+            return Vec::new();
+        };
+        out.stdout
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("SERVICE_NAME:").map(|s| s.trim().to_string()))
+            .filter(|s| !s.is_empty())
+            .collect()
+    })
+}
+
+/// The platform's name for a unit, when the host has one.
+///
+/// Windows services do not share systemd's unit names: the catalogue says
+/// `mysql`, the installed service is `MySQL80`. Resolve once against the SCM's
+/// own list so the control commands name something that exists.
+fn resolved_unit(unit: &str, host: &Host) -> Option<String> {
+    if cfg!(windows) {
+        let names = windows_service_names();
+        if let Some(exact) = names.iter().find(|n| n.eq_ignore_ascii_case(unit)) {
+            return Some(exact.clone());
+        }
+        let wanted = unit.to_ascii_lowercase();
+        return names.iter().find(|n| n.to_ascii_lowercase().contains(&wanted)).cloned();
+    }
     if host.systemd {
         if let Some(sc) = util::which("systemctl") {
             let o = util::run(
@@ -645,28 +678,41 @@ fn unit_exists(unit: &str, host: &Host) -> bool {
                 Some(Duration::from_secs(10)),
             );
             if let Ok(o) = o {
-                return o.stdout.contains(unit);
+                if o.stdout.contains(unit) {
+                    return Some(unit.to_string());
+                }
             }
         }
     }
-    Path::new(&format!("/etc/init.d/{unit}")).exists()
+    Path::new(&format!("/etc/init.d/{unit}"))
+        .exists()
+        .then(|| unit.to_string())
 }
 
 impl ToolDef {
     /// Report the state of a service tool.
     pub fn service_state(&self, host: &Host, status: &ToolStatus) -> Option<ServiceState> {
         let svc = self.service.as_ref()?;
-        let unit = svc.units.iter().find(|u| unit_exists(u, host)).cloned();
+        let unit = svc.units.iter().find_map(|u| resolved_unit(u, host));
         let listening = tcp_open(svc.port);
-        let mut healthy = listening;
+        let mut healthy = status.installed && listening;
+        let mut health_missing = false;
         if listening && !svc.health.is_empty() {
             if let Some((exe, _)) = which_in(&svc.health[0], &[]) {
                 healthy = util::run(&exe, &svc.health[1..], None, &[], Some(Duration::from_secs(10)))
                     .map(|o| o.ok())
                     .unwrap_or(false);
+            } else {
+                // A port that is open is not a service that answered. If the
+                // protocol check cannot run, say so instead of promoting the
+                // port to health.
+                healthy = false;
+                health_missing = true;
             }
         }
-        let control = if unit.is_some() && host.systemd {
+        let control = if unit.is_some() && cfg!(windows) {
+            "scm"
+        } else if unit.is_some() && host.systemd {
             "systemd"
         } else if unit.is_some() {
             "service"
@@ -689,7 +735,15 @@ impl ToolDef {
         } else if healthy {
             format!("running; accepting connections on 127.0.0.1:{}", svc.port)
         } else if listening {
-            format!("port {} is open but the health check failed", svc.port)
+            if health_missing {
+                format!(
+                    "port {} is open but the health command `{}` is not on PATH; not called healthy",
+                    svc.port,
+                    svc.health.first().map(String::as_str).unwrap_or("")
+                )
+            } else {
+                format!("port {} is open but the health check failed", svc.port)
+            }
         } else {
             format!("installed but not running (nothing listens on port {})", svc.port)
         };
@@ -735,6 +789,30 @@ impl ToolDef {
                 } else {
                     Ok((sudo(argv), true))
                 }
+            }
+            "scm" => {
+                if action == "logs" {
+                    return Err(DevdError::unsupported(format!(
+                        "Windows service logs are in Event Viewer; devd cannot read them here ({})",
+                        svc.logs
+                    )));
+                }
+                if action == "restart" {
+                    return Err(DevdError::unsupported(
+                        "stop and start the Windows service separately; sc.exe has no atomic restart",
+                    ));
+                }
+                if !matches!(action, "start" | "stop") {
+                    return Err(DevdError::unsupported(format!("`{action}` is not a Windows service action")));
+                }
+                Ok((
+                    vec![
+                        "sc.exe".into(),
+                        action.into(),
+                        state.unit.clone().unwrap_or_default(),
+                    ],
+                    false,
+                ))
             }
             "service" => {
                 if action == "logs" {

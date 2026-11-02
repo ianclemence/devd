@@ -197,6 +197,21 @@ impl Bootstrap {
         devd_ops::caps::register(&mut registry)?;
         devd_mcp::caps::register(&mut registry)?;
 
+        // Installing, removing or defaulting a runtime changes which PHP
+        // listeners should exist and which upstream a site uses. Reconcile both
+        // here, once, so a CLI or agent install behaves like the Runtimes screen.
+        for id in ["runtime.install", "runtime.remove", "runtime.use"] {
+            registry.after(id, |ctx, _| {
+                let _ = devd_services::stack_start(ctx);
+                let _ = devd_services::reconcile_web(ctx);
+                Ok(())
+            });
+        }
+        registry.after("service.remove", |ctx, _| {
+            let _ = devd_services::reconcile_web(ctx);
+            Ok(())
+        });
+
         // The built-in agent needs the shared store, settings and event bus, and
         // - once it exists - the registry it acts through.
         let events = EventBus::new();

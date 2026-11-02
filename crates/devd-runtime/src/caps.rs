@@ -134,6 +134,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         .tier(Tier::Write)
         .effect(Effect::Write)
         .agent_safe()
+        .agent_needs_approval()
         .dry_run()
         .handlers(install_plan, |ctx, args| {
             let thread_safe = args.thread_safe.unwrap_or(false);

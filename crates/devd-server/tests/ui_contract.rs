@@ -183,7 +183,7 @@ fn inventory_does_not_show_services_devd_manages_or_programs_that_are_not_there(
     // holding port 3306 and would list MariaDB and MySQL as "Not installed"
     // next to the managed MariaDB row. Missing programs also belong under
     // Available, not under "Already on this computer".
-    let start = APP.find("  function inventoryRows()").expect("inventoryRows");
+    let start = APP.find("  function visibleInventory()").expect("visibleInventory");
     let end = start + APP[start..].find("  function renderServices()").expect("renderServices");
     let body = &APP[start..end];
     assert!(APP.contains("function managedServicePid(pid)"), "inventory needs to match a port owner against managed services");
@@ -192,6 +192,17 @@ fn inventory_does_not_show_services_devd_manages_or_programs_that_are_not_there(
         body.contains("!(v.status === \"missing\" && !v.path && !v.port_owner)"),
         "missing programs must not be counted as already on this computer"
     );
+    assert!(APP.contains("  function inventoryRows("), "inventory rows are built from the visible list");
+}
+
+#[test]
+fn services_come_from_one_registry_catalogue() {
+    // The Services screen used a third static list with download flags. The
+    // catalogue capability is now the only source of install/adopt/find.
+    assert!(!APP.contains("var KNOWN_SERVICES"), "no static service catalogue");
+    assert!(APP.contains("attempt(\"service.catalogue\")"), "the screen reads the catalogue capability");
+    assert!(APP.contains("data-action=\"service-find\""), "an existing folder can be found");
+    assert!(APP.contains("data-action=\"service-adopt\""), "a found folder can be adopted");
 }
 
 #[test]

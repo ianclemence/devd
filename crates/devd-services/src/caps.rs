@@ -123,6 +123,25 @@ fn register_service(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
+    reg.define::<NoArgs>("service.catalogue", "List the services devd knows how to manage")
+    .description("The single list behind the Services screen: every logical service, what devd can do with it on this platform (install a verified build, use the system package, adopt an existing folder, or find one), its default port and a plain sentence. This is static capability, not a probe; service.list and services.inventory report state.")
+    .group("service")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .idempotent()
+    .handlers(
+        |_, _| Ok(Plan::new("service.catalogue", "list the services devd can manage")),
+        |ctx, _| {
+            let rows = services::catalog();
+            let managed = services::list(ctx).map(|v| v.len()).unwrap_or(0);
+            Ok(Outcome::with_data(
+                format!("{} service(s); {managed} managed", rows.len()),
+                serde_json::to_value(&rows).unwrap_or(Value::Null),
+            ))
+        },
+    )?;
+
     reg.define::<NameArgs>("service.available", "List service versions published upstream")
     .description("Reads the vendor's own listing (nginx.org, archive.mariadb.org) and returns the \
          versions that can be installed.")
@@ -160,6 +179,7 @@ fn register_service(reg: &mut Registry) -> Result<()> {
     .tier(Tier::Write)
     .effect(Effect::Write)
     .agent_safe()
+    .agent_needs_approval()
     .dry_run()
     .handlers(
         |_, args| install_plan(args),
@@ -482,64 +502,12 @@ fn register_service(reg: &mut Registry) -> Result<()> {
 }
 
 fn install_plan(args: &InstallArgs) -> Result<Plan> {
-    let def = services::definition(&args.name).ok_or_else(|| {
-        DevdError::unsupported(format!(
-            "`{}` is not a service devd can install; installable services are nginx, apache, mariadb, redis, memcached and mailpit",
-            args.name
-        ))
-    })?;
-    let (list, _) = services::available(def.kind)?;
-    let spec = args.version.clone().unwrap_or_else(|| "latest".to_string());
-    // `install` will not use an nginx build whose digest devd has not recorded.
-    // Resolve against the same set here, or the plan names a build the install
-    // then refuses.
-    let installable = services::verifiable(def.name, &list);
-    let chosen = devd_runtime::catalogue::resolve(&installable, &spec, None)
-        .or_else(|_| devd_runtime::catalogue::resolve(&list, &spec, None))?;
-    let dest = def.name.to_string();
-    let digest = match &chosen.sha256 {
-        Some(d) => format!("{d} (published by the vendor)"),
-        None if def.name == "nginx" => {
-            "REFUSED: nginx publishes no checksum and devd has no digest recorded for this build".to_string()
-        }
-        None if def.name == "mariadb" => "published in the release's sha256sums.txt".to_string(),
-        None => "NOT PUBLISHED by the vendor; only the HTTPS transport is checked".to_string(),
-    };
-    Ok(Plan::new(
-        "service.install",
-        format!(
-            "download and install {} {} from {}",
-            def.name, chosen.version, chosen.url
-        ),
+    services::install_plan(
+        &args.name,
+        args.version.as_deref().unwrap_or("latest"),
+        args.port,
+        args.force.unwrap_or(false),
     )
-    .step(format!("download {}", chosen.url))
-    .step(format!("verify sha256: {digest}"))
-    .step(format!(
-        "unpack into <devd>/services/{dest}/{}",
-        if args.force.unwrap_or(false) {
-            " (replacing the existing installation)"
-        } else {
-            ""
-        }
-    ))
-    .step(if def.name == "mariadb" {
-        format!(
-            "write my.ini and create the system tables on port {}",
-            args.port.unwrap_or(def.default_port)
-        )
-    } else {
-        format!("render the {} configuration from the state store", def.name)
-    })
-    .effect(format!("adds files under <devd>/services/{dest}"))
-    .approval(false)
-    .data(json!({
-        "name": def.name,
-        "version": chosen.version,
-        "url": chosen.url,
-        "sha256": chosen.sha256,
-        "destination": format!("<devd>/services/{dest}"),
-        "bytes": chosen.bytes,
-    })))
 }
 
 fn start_plan(ctx: &Ctx, args: &NameArgs) -> Result<Plan> {
@@ -783,10 +751,37 @@ fn register_web(reg: &mut Registry) -> Result<()> {
             ))
         },
     )?;
+    reg.define::<NoArgs>("web.reconcile", "Re-render and reload the web server")
+    .description("Rebuilds the generated web-server configuration from the current state and, if the server is running, checks and reloads it. Use this after installing, removing or changing a runtime so new PHP listeners and their upstreams appear without restarting the stack. A configuration that does not pass the check is never loaded.")
+    .group("web")
+    .tier(Tier::Exec)
+    .effect(Effect::Process)
+    .agent_safe()
+    .dry_run()
+    .handlers(
+        |_, _| {
+            Ok(Plan::new(
+                "web.reconcile",
+                "re-render the web server configuration and reload it when running",
+            )
+            .step("rebuild the generated configuration from the state store")
+            .step("check it with the web server")
+            .effect("reloads a running process when the configuration is valid"))
+        },
+        |ctx, _| {
+            let reloaded = services::reconcile_web(ctx)?;
+            Ok(Outcome::with_data(
+                if reloaded.is_empty() {
+                    format!("{} configuration rendered; the server is not running", services::web::service_name(ctx))
+                } else {
+                    format!("{} configuration reconciled", services::web::service_name(ctx))
+                },
+                json!({ "server": services::web::service_name(ctx), "reloaded": reloaded }),
+            ))
+        },
+    )?;
     Ok(())
 }
-
-// -------------------------------------------------------------------- stack
 
 fn register_stack(reg: &mut Registry) -> Result<()> {
     reg.define::<NoArgs>("stack.start", "Start what the stack needs")

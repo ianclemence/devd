@@ -884,6 +884,9 @@ pub fn register(reg: &mut Registry) -> Result<()> {
                 let mut plan = Plan::new(if action == "install" { "toolchain.install" } else { "toolchain.remove" }, format!("{action} {}", a.tool));
                 for d in &p.display { plan = plan.step(d.clone()); }
                 if p.privileged { plan = plan.effect("needs administrator rights"); }
+                if cfg!(windows) && p.manager.as_deref() == Some("winget") {
+                    plan = plan.effect("Windows may ask for administrator approval (UAC)");
+                }
                 if let Some(v) = &p.already_installed { plan = plan.effect(format!("already installed ({v}); nothing will change")); }
                 for b in &p.blockers { plan = plan.effect(format!("BLOCKED: {b}")); }
                 plan = plan.effect(format!("source: {}", p.trust)).approval(true);
@@ -935,6 +938,8 @@ pub fn register(reg: &mut Registry) -> Result<()> {
     .description("Records whether devd should adopt an existing service (use and control it as it is), only observe it, treat an instance you run yourself as the project's service, or ignore it. Records a decision only: nothing is installed, stopped, replaced or reconfigured, and data is never touched. Use clear=true to forget the decision.")
     .tier(Tier::Write)
     .effect(Effect::Write)
+    .agent_safe()
+    .agent_needs_approval()
     .dry_run()
     .idempotent()
     .handlers(
