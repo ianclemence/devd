@@ -1453,19 +1453,37 @@
       return '<button type="button" class="top-tab' + (active ? " active" : "") + '" data-action="nav" data-view="' + i.view + '"' + (i.exact ? ' data-exact="1"' : "") + (active ? ' aria-current="page"' : "") + ">" +
         esc(i.label) + (i.count !== null && i.count !== undefined ? '<span class="top-count">' + esc(i.count) + "</span>" : "") + "</button>";
     }
+    // One renderer for a destination inside any menu, so the compact menu and
+    // the two grouped menus cannot drift apart.
+    function menuItem(i, showHint) {
+      var on = areaOf(state.view) === areaOf(i.view);
+      return '<button type="button" class="top-item' + (on ? " active" : "") + '" data-action="nav" data-view="' + i.view + '"' + (on ? ' aria-current="page"' : "") + ">" +
+        '<span class="top-item-name">' + esc(i.label) + (i.count !== null && i.count !== undefined ? '<span class="top-count">' + esc(i.count) + "</span>" : "") + "</span>" +
+        (showHint && i.hint ? '<span class="top-item-hint">' + esc(i.hint) + "</span>" : "") + "</button>";
+    }
     var html = groups.map(function (group, gi) {
-      if (!group.menu) return '<div class="top-group" role="group" aria-label="' + attr(group.label) + '">' + group.items.map(tab).join("") + "</div>";
+      var sep = gi ? '<span class="top-sep" aria-hidden="true"></span>' : "";
+      if (!group.menu) return sep + '<div class="top-group" role="group" aria-label="' + attr(group.label) + '">' + group.items.map(tab).join("") + "</div>";
       var open = state.topMenu === group.label;
       var here = group.items.some(function (i) { return areaOf(state.view) === areaOf(i.view); });
-      return '<div class="top-menu"><button type="button" class="top-tab top-tab-menu' + (here ? " active" : "") + '" data-action="top-menu" data-menu="' + attr(group.label) + '" aria-haspopup="true" aria-expanded="' + open + '">' +
+      return sep + '<div class="top-menu"><button type="button" class="top-tab top-tab-menu' + (here ? " active" : "") + '" data-action="top-menu" data-menu="' + attr(group.label) + '" aria-haspopup="true" aria-expanded="' + open + '">' +
         esc(group.label) + '<svg class="icon" aria-hidden="true"><use href="#i-chevron-down"></use></svg></button>' +
-        '<div class="top-pop" role="group" aria-label="' + attr(group.label) + '"' + (open ? "" : " hidden") + ">" + group.items.map(function (i) {
-          var on = areaOf(state.view) === areaOf(i.view);
-          return '<button type="button" class="top-item' + (on ? " active" : "") + '" data-action="nav" data-view="' + i.view + '"' + (on ? ' aria-current="page"' : "") + ">" +
-            '<span class="top-item-name">' + esc(i.label) + "</span>" +
-            '<span class="top-item-hint">' + esc(i.hint) + (i.count ? " · " + esc(i.count) : "") + "</span></button>";
-        }).join("") + "</div></div>";
+        '<div class="top-pop" role="group" aria-label="' + attr(group.label) + '"' + (open ? "" : " hidden") + ">" +
+        group.items.map(function (i) { return menuItem(i, true); }).join("") + "</div></div>";
     }).join("");
+
+    // Below the compact breakpoint the groups above are hidden and this menu
+    // takes their place, so the bar never reflows into a second row.
+    var allOpen = state.navMenu === "all";
+    html += '<div class="top-all">' +
+      '<button type="button" class="top-tab top-all-trigger' + (allOpen ? " active" : "") + '" data-action="nav-menu" aria-haspopup="true" aria-expanded="' + allOpen + '">' +
+      '<svg class="icon" aria-hidden="true"><use href="#i-menu"></use></svg>Menu</button>' +
+      '<div class="top-pop top-all-pop"' + (allOpen ? "" : " hidden") + ' role="group" aria-label="All destinations">' +
+      groups.map(function (group, gi) {
+        return (gi ? '<div class="top-pop-sep"></div>' : "") +
+          '<div class="top-pop-label">' + esc(group.label) + "</div>" +
+          group.items.map(function (i) { return menuItem(i, !!group.menu); }).join("");
+      }).join("") + "</div></div>";
 
     // Work in flight, named as it is: the run's own title and its real state.
     var chip = "";
@@ -1478,7 +1496,9 @@
         (live.length > 1 ? '<span class="top-count">+' + (live.length - 1) + "</span>" : "") + "</button>";
     }
     var needs = '<button type="button" class="top-needs' + (attention ? " has" : "") + (areaOf(state.view) === "inbox" ? " active" : "") + '" data-action="nav" data-view="inbox"' + (areaOf(state.view) === "inbox" ? ' aria-current="page"' : "") + ">" +
-      (attention ? '<span class="top-needs-n">' + esc(attention) + "</span>" : "") + "Inbox</button>";
+      '<svg class="icon" aria-hidden="true"><use href="#i-inbox"></use></svg>' +
+      '<span class="top-needs-label">Inbox</span>' +
+      (attention ? '<span class="top-needs-n">' + esc(attention) + "</span>" : "") + "</button>";
     el("rail").innerHTML = html;
     el("top-attn").innerHTML = chip + needs;
   }
@@ -7901,6 +7921,7 @@
 
   function navigate(view, fromRoute) {
     if (state.topMenu) { state.topMenu = ""; }
+    if (state.navMenu) { state.navMenu = ""; }
     if (AREA[view]) { state.areaTab = state.areaTab || {}; state.areaTab[AREA[view]] = view; }
     var moved = state.view !== view;
     // A sheet belongs to the screen it was opened on; going elsewhere closes it.
@@ -9490,10 +9511,20 @@
     },
     "top-menu": function (n) {
       var name = n.dataset.menu;
+      state.navMenu = "";
       state.topMenu = state.topMenu === name ? "" : name;
       rail();
       if (state.topMenu) {
         var first = document.querySelector('.top-menu .top-pop:not([hidden]) .top-item');
+        if (first && n.matches(":focus-visible")) first.focus();
+      }
+    },
+    "nav-menu": function (n) {
+      state.topMenu = "";
+      state.navMenu = state.navMenu === "all" ? "" : "all";
+      rail();
+      if (state.navMenu) {
+        var first = document.querySelector('.top-all-pop:not([hidden]) .top-item');
         if (first && n.matches(":focus-visible")) first.focus();
       }
     },
@@ -10849,6 +10880,7 @@
 
   document.addEventListener("click", function (event) {
     if (state.topMenu && !event.target.closest(".top-menu")) { state.topMenu = ""; rail(); }
+    if (state.navMenu && !event.target.closest(".top-all")) { state.navMenu = ""; rail(); }
     if (AI.popover && !event.target.closest("#composer-popover") && !event.target.closest("select") && !event.target.closest('[data-action^="composer-"]')) closeComposerPopover();
     var node = event.target.closest("[data-action]");
     if (!node) return;
@@ -10873,6 +10905,12 @@
         var popAnchor = AI.popover.anchor;
         closeComposerPopover();
         if (popAnchor && popAnchor.focus) popAnchor.focus();
+        return;
+      }
+      if (state.navMenu) {
+        state.navMenu = ""; rail();
+        var allBtn = document.querySelector(".top-all-trigger");
+        if (allBtn) allBtn.focus();
         return;
       }
       if (state.topMenu) {
