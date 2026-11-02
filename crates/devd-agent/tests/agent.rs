@@ -352,6 +352,58 @@ fn models_are_fetched_from_the_provider_and_cached() {
 }
 
 #[test]
+fn the_inventory_merges_provider_and_hand_added_models() {
+    let e = env();
+    let m = mock(|_, _| {
+        (200, json!({ "data": [{ "id": "claude-x", "display_name": "X", "max_input_tokens": 200000 }] }).to_string())
+    });
+    add_provider(&e, "anthropic", &m.base);
+    call(&e, &e.human, "provider.models", json!({ "id": "test" }), Approval::None).unwrap();
+    call(
+        &e,
+        &e.human,
+        "provider.model_add",
+        json!({ "id": "test", "model": "private-deploy" }),
+        Approval::None,
+    )
+    .unwrap();
+    // A hand-added id that the provider also lists must not replace the
+    // provider's own entry; the API list wins.
+    call(
+        &e,
+        &e.human,
+        "provider.model_add",
+        json!({ "id": "test", "model": "claude-x" }),
+        Approval::None,
+    )
+    .unwrap();
+
+    let inv = call(&e, &e.human, "models.inventory", json!({}), Approval::None).unwrap();
+    let p = inv["providers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "test")
+        .expect("the provider is in the inventory");
+    assert_eq!(p["configured"], true);
+    assert_eq!(p["enabled"], true);
+    assert!(!p["last_fetched_at"].as_str().unwrap_or("").is_empty());
+
+    let models = p["models"].as_array().unwrap();
+    let ids: Vec<&str> = models.iter().filter_map(|m| m["model_id"].as_str()).collect();
+    assert!(ids.contains(&"claude-x"), "the provider's list is included: {ids:?}");
+    assert!(ids.contains(&"private-deploy"), "the hand-added id is included: {ids:?}");
+    assert!(ids.contains(&"model-1"), "the saved default is included: {ids:?}");
+
+    let custom = models.iter().find(|m| m["model_id"] == "private-deploy").unwrap();
+    assert_eq!(custom["source"], "custom");
+    let listed = models.iter().find(|m| m["model_id"] == "claude-x").unwrap();
+    assert_eq!(listed["source"], "provider");
+    assert_eq!(listed["context_window"], 200000);
+    assert_eq!(listed["tools"], true);
+}
+
+#[test]
 fn the_agent_loop_calls_tools_and_finishes() {
     let e = env();
     let target = e.root.join("www/proj/hello.txt").display().to_string();

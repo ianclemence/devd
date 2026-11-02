@@ -5912,7 +5912,7 @@
     health: null, healthOpen: false,
     counts: { approvals: 0, questions: 0 },
     home: null, askText: "", askProject: "",
-    providers: null, presets: null, catalogue: null, provForm: null, provBusy: {}, localFound: null,
+    providers: null, presets: null, catalogue: null, inventory: null, provForm: null, provBusy: {}, localFound: null,
     live: null, streamTail: "", streamPainted: "", streamFrame: 0, streamThread: "",
     threads: null, thread: null, events: [], pending: [], running: false, lastId: 0, queued: 0,
     run: null,
@@ -6180,7 +6180,8 @@
       read("provider.list").catch(function () { return []; }),
       read("team.list").catch(function () { return []; }),
       request("/api/audit?limit=300").then(function (r) { return r.ok ? r.body.items || [] : []; }),
-      read("models.catalogue").catch(function () { return []; })
+      read("models.catalogue").catch(function () { return []; }),
+      read("models.inventory").catch(function () { return null; })
     ]);
     var slowDone = fast.then(function () {
       return Promise.all([
@@ -6207,6 +6208,7 @@
       };
       AI.providers = r[4] || [];
       AI.catalogue = r[7] || [];
+      AI.inventory = r[8] || null;
       state.projectCount = AI.home.projects.length;
     });
   }
@@ -6548,9 +6550,13 @@
   // ------------------------------------------------------------- providers
 
   function loadProviders() {
-    return Promise.all([read("provider.list"), read("provider.presets"), read("models.catalogue"), read("models.roles"), read("team.roles")]).then(function (r) {
-      AI.providers = r[0]; AI.presets = r[1]; AI.catalogue = r[2]; AI.roleAssign = r[3]; AI.teamRoles = r[4];
+    return Promise.all([read("provider.list"), read("provider.presets"), read("models.catalogue"), read("models.roles"), read("team.roles"), read("models.inventory").catch(function () { return null; })]).then(function (r) {
+      AI.providers = r[0]; AI.presets = r[1]; AI.catalogue = r[2]; AI.roleAssign = r[3]; AI.teamRoles = r[4]; AI.inventory = r[5];
     });
+  }
+
+  function loadInventory() {
+    return read("models.inventory").then(function (v) { AI.inventory = v; return v; }).catch(function () { return AI.inventory; });
   }
 
   function money(v) { return v === null || v === undefined ? "–" : "$" + (v < 1 ? v.toFixed(2) : String(v)); }
@@ -6561,26 +6567,57 @@
     return 'curl ' + base + '/chat/completions \\\n  -H "Authorization: Bearer $' + (env || "API_KEY") + '" \\\n  -H "content-type: application/json" \\\n  -d \'{"model":"MODEL","messages":[{"role":"user","content":"Hello"}]}\'';
   }
 
+  function inventoryProviders() {
+    var out = [], seen = {};
+    ((AI.inventory && AI.inventory.providers) || []).forEach(function (p) {
+      if (!p || seen[p.id]) return;
+      seen[p.id] = 1;
+      out.push(p);
+    });
+    (AI.providers || []).forEach(function (p) {
+      if (!p || seen[p.id]) return;
+      seen[p.id] = 1;
+      out.push(Object.assign({}, p, {
+        configured: !!(p.has_key || !p.needs_key),
+        models: null,
+        last_fetched_at: p.checked_at || "",
+        fetch_error: p.check_ok === false ? (p.check_message || "") : "",
+      }));
+    });
+    return out;
+  }
+
+  function inventoryProvider(id) {
+    return inventoryProviders().filter(function (p) { return p.id === id; })[0] || null;
+  }
+
+  /* Every model the person can choose for this provider. The inventory has
+     already merged the provider's API list, hand-added ids and the saved
+     default. The catalogue fallback keeps the picker working on an older
+     server that does not have models.inventory yet. */
   function modelOptions(providerId) {
+    var ip = inventoryProvider(providerId);
+    if (ip && Array.isArray(ip.models)) return ip.models.slice();
     var seen = {}, out = [];
     var api = "provider:" + providerId;
     var manual = "manual:" + providerId;
-    // The provider's own list is the authority. Hand-added ids come next, so a
-    // private deployment can still be chosen. Documentation-only models are a
-    // reference and are never offered as if this account could use them.
     (AI.catalogue || []).filter(function (m) { return m.source === api; }).forEach(function (m) {
       if (!m.model_id || seen[m.model_id]) return;
       seen[m.model_id] = 1;
-      out.push(Object.assign({}, m, { origin: "provider" }));
+      out.push(Object.assign({}, m, { source: "provider" }));
     });
     (AI.catalogue || []).filter(function (m) { return m.source === manual; }).forEach(function (m) {
       if (!m.model_id || seen[m.model_id]) return;
       seen[m.model_id] = 1;
-      out.push(Object.assign({}, m, { origin: "custom" }));
+      out.push(Object.assign({}, m, { source: "custom" }));
     });
+    var p = providerById(providerId);
+    if (p && p.default_model && !seen[p.default_model]) {
+      out.push({ model_id: p.default_model, display: p.default_model, source: "saved" });
+    }
     return out;
   }
-  function providerKind(id) { var p = (AI.providers || []).filter(function (x) { return x.id === id; })[0]; return p ? p.kind : ""; }
+  function providerKind(id) { var p = providerById(id); return p ? p.kind : ""; }
 
 
   function rolesPanel() {
@@ -6593,17 +6630,16 @@
       var cell = function (i) {
         var a = mine[i] || {};
         var opts = '<option value="">' + (i ? "no fallback" : "use the default provider") + "</option>" + provs.map(function (p) { return '<option value="' + attr(p.id) + '"' + (a.provider === p.id ? " selected" : "") + ">" + esc(p.label) + "</option>"; }).join("");
-        return '<div class="inline"><select class="input role-provider" id="rm-' + role + "-p" + i + '" aria-label="Provider for ' + attr(role) + '">' + opts + '</select><input class="input mono role-model" list="rm-models" id="rm-' + role + "-m" + i + '" value="' + attr(a.model || "") + '" placeholder="model" spellcheck="false" aria-label="Model for ' + attr(role) + '">' +
+        return '<div class="inline"><select class="input role-provider" id="rm-' + role + "-p" + i + '" aria-label="Provider for ' + attr(role) + '">' + opts + '</select>' +
+          '<input type="hidden" id="rm-' + role + "-m" + i + '" value="' + attr(a.model || "") + '">' +
+          '<button type="button" class="model-field role-model-field" data-action="role-model-picker" data-role="' + attr(role) + '" data-index="' + i + '" aria-haspopup="dialog" aria-expanded="false" aria-label="Model for ' + attr(role) + '">' +
+          '<span class="mono role-model-name">' + esc(a.model || "Choose a model") + '</span><svg class="icon" aria-hidden="true"><use href="#i-chevron-down"></use></svg></button>' +
           (a.model ? '<span class="pill ' + (a.status === "available" ? "pill-ok" : a.status === "missing" ? "pill-bad" : "") + '" title="' + (a.status === "available" ? "This provider's own list includes it" : a.status === "missing" ? "Not in the list this key can see. Fetch the provider's models to refresh it." : "Fetch the provider's models to check this account can use it") + '">' + esc(a.status) + "</span>" : "") + "</div>";
       };
       var i = info[role] || { title: "Everything else", summary: "Used when a kind of work has no model of its own, and for the assistant." };
       return '<tr><td><div class="cell-strong">' + esc(i.title || role) + '</div><div class="cell-dim">' + esc(i.summary) + "</div></td><td>" + cell(0) + "</td><td>" + cell(1) + '</td><td><button type="button" class="btn btn-mini btn-primary" data-action="role-save" data-role="' + attr(role) + '">Save</button></td></tr>';
     }).join("");
-    var all = {};
-    (AI.providers || []).forEach(function (p) { if (p.default_model) all[p.default_model] = 1; });
-    (AI.catalogue || []).filter(function (m) { return String(m.source || "").indexOf("provider:") === 0 || String(m.source || "").indexOf("manual:") === 0; })
-      .forEach(function (m) { all[m.model_id] = 1; });
-    return '<div class="section-title">Which model does which work</div><div class="panel"><div class="table-wrap"><table class="table roles-table"><thead><tr><th>Work</th><th>First choice</th><th>Fallback if it fails</th><th></th></tr></thead><tbody>' + rows + "</tbody></table><datalist id=\"rm-models\">" + Object.keys(all).map(function (m) { return '<option value="' + attr(m) + '"></option>'; }).join("") + "</datalist></div>" +
+    return '<div class="section-title">Which model does which work</div><div class="panel"><div class="table-wrap"><table class="table roles-table"><thead><tr><th>Work</th><th>First choice</th><th>Fallback if it fails</th><th></th></tr></thead><tbody>' + rows + "</tbody></table></div>" +
       '<div class="panel-body panel-foot row-sub">The fallback is used only when the first choice fails, and only the providers you list here are ever used. A conversation where you pick a model yourself never falls back. Each reply records which model answered and why.</div></div>';
   }
 
@@ -6616,7 +6652,7 @@
     else out.push('<span class="cap">tools: model-dependent</span>');
     if (p.discovery === "catalog") out.push('<span class="cap">maintained list</span>');
     if (p.discovery === "ollama") out.push('<span class="cap">native discovery</span>');
-    var st = providerState(p);
+    var st = providerState(p.id);
     if (st.key === "unconfigured") out.push('<span class="cap cap-warn">no key</span>');
     else if (st.key === "verified") out.push('<span class="cap cap-ok" title="' + attr(st.detail) + '">verified</span>');
     else if (st.key === "stale") out.push('<span class="cap" title="' + attr(st.detail) + '">cached models</span>');
@@ -6670,7 +6706,6 @@
     var keyState = p.has_key
       ? '<span class="pill pill-ok" title="' + attr(source) + '">key ' + esc(p.key_hint || "") + "</span>"
       : p.needs_key ? '<span class="pill pill-warn">no key</span>' : '<span class="pill">none needed</span>';
-    var opts = models.map(function (m) { return '<option value="' + attr(m.model_id) + '"></option>'; }).join("");
     var result = AI.provBusy[p.id + ":msg"];
     return '<article class="provider' + (p.is_default ? " is-default" : "") + '">' +
       "<div>" +
@@ -6681,7 +6716,7 @@
         '<div class="provider-meta">' + esc(p.base_url) + "</div>" +
         providerChips(p) +
         '<dl class="provider-facts">' +
-          '<div class="provider-fact"><dt>Model</dt><dd><input class="input mono" list="models-' + attr(p.id) + '" data-prov-model="' + attr(p.id) + '" value="' + attr(p.default_model || "") + '" placeholder="choose a model" spellcheck="false" aria-label="Default model for ' + attr(p.label) + '"><datalist id="models-' + attr(p.id) + '">' + opts + "</datalist></dd></div>" +
+          '<div class="provider-fact"><dt>Model</dt><dd><button type="button" class="model-field" data-action="prov-model-picker" data-id="' + attr(p.id) + '" aria-haspopup="dialog" aria-expanded="false"><span class="mono">' + esc(p.default_model || "Choose a model") + '</span><svg class="icon" aria-hidden="true"><use href="#i-chevron-down"></use></svg></button></dd></div>' +
           '<div class="provider-fact"><dt>API key</dt><dd>' + keyState + "</dd></div>" +
           '<div class="provider-fact"><dt>Model list</dt><dd>' + (models.length ? models.length + " known" : "not fetched") + "</dd></div>" +
           '<div class="provider-fact"><dt>Discovery</dt><dd>' + esc(p.models_from || p.discovery) + "</dd></div>" +
@@ -6738,22 +6773,22 @@
      reference, and only when Anthropic is one of the configured providers. */
   function configuredModels() {
     var rows = [];
-    (AI.providers || []).forEach(function (p) {
+    inventoryProviders().forEach(function (p) {
+      var models = modelOptions(p.id);
       var seen = {};
-      var api = "provider:" + p.id;
-      var manual = "manual:" + p.id;
-      var listed = (AI.catalogue || []).filter(function (m) { return m.source === api || m.source === manual; });
-      if (p.default_model) {
-        seen[p.default_model] = 1;
-        rows.push({ provider: p, model: { model_id: p.default_model, context_window: null }, isDefault: true, origin: "default", source: "configured default" });
-      }
-      listed.forEach(function (m) {
+      models.forEach(function (m) {
         if (!m.model_id || seen[m.model_id]) return;
         seen[m.model_id] = 1;
-        var custom = m.source === manual;
-        rows.push({ provider: p, model: m, isDefault: false, origin: custom ? "custom" : "provider", source: custom ? "custom model" : "provider list" });
+        var isDefault = m.model_id === p.default_model;
+        rows.push({
+          provider: p,
+          model: m,
+          isDefault: isDefault,
+          origin: isDefault ? "default" : (m.source === "custom" ? "custom" : m.source === "saved" ? "saved" : "provider"),
+          source: isDefault ? "configured default" : m.source === "custom" ? "custom model" : m.source === "saved" ? "saved default" : "provider list"
+        });
       });
-      if (!p.default_model && !listed.length) rows.push({ provider: p, model: null });
+      if (!p.default_model && !models.length) rows.push({ provider: p, model: null });
     });
     return rows;
   }
@@ -8294,7 +8329,7 @@
   }
 
   function composerProvider() {
-    var provs = (AI.providers || []).filter(function (p) { return p.enabled; });
+    var provs = inventoryProviders().filter(function (p) { return p.enabled !== false; });
     var cur = (AI.thread && AI.thread.provider_id) || AI.pickProvider ||
       (provs.filter(function (p) { return p.is_default; })[0] || provs[0] || {}).id;
     return { list: provs, id: cur, provider: provs.filter(function (p) { return p.id === cur; })[0] };
@@ -8304,7 +8339,7 @@
     var current = (AI.thread && AI.thread.provider_id === providerId && AI.thread.model) ||
       (AI.pickProvider === providerId && AI.pickModel) || "";
     if (current) return current;
-    var p = (AI.providers || []).filter(function (x) { return x.id === providerId; })[0];
+    var p = providerById(providerId);
     var list = modelOptions(providerId);
     return (p && p.default_model) || (list[0] || {}).model_id || "";
   }
@@ -8314,21 +8349,15 @@
     return (hit && (hit.display || hit.model_id)) || model || "provider default";
   }
 
-  /* A provider can have a default model before its catalogue has been fetched.
-     The picker still shows that model, clearly marked as saved rather than
-     confirmed, so a fresh provider is usable at once. */
+  /* The inventory already includes the saved default and hand-added ids. Sort
+     the conversation's current model first, then the default, then by name. */
   function composerModels(providerId) {
     var list = modelOptions(providerId).slice();
-    var known = {};
-    list.forEach(function (m) { known[m.model_id] = 1; });
     var p = providerById(providerId);
     var current = composerModel(providerId);
-    [current, p && p.default_model].forEach(function (id) {
-      if (id && !known[id]) {
-        list.push({ model_id: id, display: id, origin: "saved" });
-        known[id] = 1;
-      }
-    });
+    if (current && !list.some(function (m) { return m.model_id === current; })) {
+      list.push({ model_id: current, display: current, source: "saved" });
+    }
     var first = [current, p && p.default_model];
     list.sort(function (a, b) {
       var ai = first.indexOf(a.model_id), bi = first.indexOf(b.model_id);
@@ -8347,17 +8376,16 @@
   /* When the provider's list was last fetched. Only the provider's own rows
      count: a hand-added id must not make the account's list look current. */
   function modelCacheTime(providerId) {
-    var at = 0;
+    var ip = providerById(providerId);
+    var at = Date.parse((ip && ip.last_fetched_at) || "");
+    if (at) return at;
+    var fallback = 0;
     (AI.catalogue || []).forEach(function (m) {
       if (m.source !== "provider:" + providerId) return;
       var t = Date.parse(m.fetched_at || "");
-      if (t > at) at = t;
+      if (t > fallback) fallback = t;
     });
-    var p = providerById(providerId);
-    // Only a check that actually listed models says the list is current.
-    var checked = p && p.model_count != null ? Date.parse(p.checked_at || "") : 0;
-    if (checked > at) at = checked;
-    return at;
+    return fallback;
   }
 
   /* Configured, verified, stale, or failing. A key is not proof that the
@@ -8365,11 +8393,14 @@
   function providerState(id) {
     var p = typeof id === "string" ? providerById(id) : id;
     if (!p) return { key: "missing", tone: "off", label: "missing", detail: "This provider no longer exists." };
+    if (p.enabled === false) {
+      return { key: "disabled", tone: "off", label: "disabled", detail: "Enable it on its card in Models." };
+    }
     if (!providerConfigured(p)) {
       return { key: "unconfigured", tone: "warn", label: "needs a key", detail: "Add a key on its card in Models." };
     }
     if (p.check_ok === false) {
-      return { key: "error", tone: "bad", label: "not answering", detail: p.check_message || "The last check failed." };
+      return { key: "error", tone: "bad", label: "not answering", detail: p.fetch_error || p.check_message || "The last check failed." };
     }
     var at = modelCacheTime(p.id);
     if (p.check_ok === true && p.model_count != null && at && Date.now() - at < MODEL_TTL_MS) {
@@ -8393,7 +8424,7 @@
   }
 
   function providerById(id) {
-    return (AI.providers || []).filter(function (p) { return p.id === id; })[0] || null;
+    return inventoryProvider(id);
   }
 
   /* A provider is configured when it can be called: it needs no key, or its
@@ -8401,7 +8432,9 @@
      not look like a choice. */
   function providerConfigured(id) {
     var p = typeof id === "string" ? providerById(id) : id;
-    return !!(p && p.enabled && (p.has_key || !p.needs_key));
+    if (!p) return false;
+    if (typeof p.configured === "boolean") return p.enabled !== false && p.configured;
+    return !!(p.enabled !== false && (p.has_key || !p.needs_key));
   }
 
   /* Fetch the provider's own model list once per session, the same call the
@@ -8432,26 +8465,22 @@
       }
     }
     AI.modelBusy[id] = true;
+    AI.provBusy[id] = true;
     delete AI.modelError[id];
-    read("provider.models", { id: id }).then(function (models) {
+    read("provider.models", { id: id }).then(function () {
       AI.modelFetched[id] = true;
-      if (Array.isArray(models)) {
-        var source = "provider:" + id;
-        AI.catalogue = (AI.catalogue || []).filter(function (m) { return m.source !== source; })
-          .concat(models.map(function (m) { return Object.assign({}, m, { source: source }); }));
-      }
     }).catch(function (e) {
       AI.modelFetched[id] = "error";
       AI.modelError[id] = e.message;
     }).then(function () {
       AI.modelBusy[id] = false;
-      // Refresh the provider row so its verified/error state follows the fetch.
-      read("provider.list").then(function (list) {
-        if (Array.isArray(list)) AI.providers = list;
-        if (AI.popover && AI.popover.kind === "model") paintComposerPopover();
-      }).catch(function () {
-        if (AI.popover && AI.popover.kind === "model") paintComposerPopover();
-      });
+      AI.provBusy[id] = false;
+      // Reload once, through the same path the Models screen uses, so the
+      // inventory, catalogue and provider state all move together.
+      return loadProviders();
+    }).then(function () {
+      if (AI.popover && AI.popover.kind === "model") paintComposerPopover();
+      if (state.view === "providers") renderProviders();
     });
   }
 
@@ -8595,10 +8624,11 @@
     node.style.top = Math.round(top) + "px";
   }
 
-  function openComposerPopover(kind, anchor, prefix) {
+  function openComposerPopover(kind, anchor, prefix, extra) {
     closeComposerPopover();
-    if (kind === "model") { AI.modelRail = composerProvider().id || ""; AI.modelQuery = ""; }
-    AI.popover = { kind: kind, anchor: anchor, prefix: prefix };
+    extra = extra || {};
+    if (kind === "model") { AI.modelRail = extra.provider || composerProvider().id || ""; AI.modelQuery = ""; }
+    AI.popover = Object.assign({ kind: kind, anchor: anchor, prefix: prefix }, extra);
     if (anchor && anchor.setAttribute) anchor.setAttribute("aria-expanded", "true");
     paintComposerPopover();
     if (kind === "add" && !AI.composerSkills) loadComposerSkills();
@@ -8654,8 +8684,10 @@
         "</div>";
     }
     if (p.kind === "model") {
-      var provs = (AI.providers || []).filter(function (x) { return x.enabled; });
+      var provs = inventoryProviders();
+      if (p.onlyProvider) provs = provs.filter(function (x) { return x.id === p.onlyProvider; });
       var rail = AI.modelRail || (provs[0] || {}).id || "";
+      if (p.onlyProvider) rail = p.onlyProvider;
       ensureProviderModels(rail, false);
       var railHtml = provs.map(function (x) {
         var st = providerState(x);
@@ -8679,7 +8711,9 @@
     var q = (AI.modelQuery || "").trim();
     var lower = q.toLowerCase();
     var cur = composerProvider();
-    var activeModel = cur.id === rail ? composerModel(rail) : "";
+    var activeModel = AI.popover && AI.popover.selectedModel !== undefined
+      ? AI.popover.selectedModel
+      : (cur.id === rail ? composerModel(rail) : "");
     var all = composerModels(rail);
     var models = all.filter(function (m) {
       if (!lower) return true;
@@ -8689,7 +8723,10 @@
     var notes = [];
     var provider = providerById(rail);
     var state = provider ? providerState(provider) : null;
-    if (state && state.key === "unconfigured") {
+    var disabled = !!(provider && provider.enabled === false);
+    if (disabled) {
+      notes.push('<div class="popover-note is-warn">This provider is disabled. Enable it on its card in Models.</div>');
+    } else if (state && state.key === "unconfigured") {
       notes.push('<div class="popover-note is-warn">No key for ' + esc(provider.label) + ". Add one in Models.</div>");
     }
     if (AI.modelBusy[rail]) {
@@ -8701,23 +8738,30 @@
       var label = m.display || m.model_id;
       var active = !!activeModel && m.model_id === activeModel;
       var tags = "";
-      if (m.origin === "custom") tags += '<span class="model-tag" title="Added by hand">custom</span>';
-      if (m.origin === "saved") tags += '<span class="model-tag is-warn" title="Not in the provider’s fetched list">saved</span>';
-      if (modelHasTools(m.model_id) === false) tags += '<span class="model-tag is-warn" title="This model is known not to call tools; agent work may fail">no tools</span>';
-      var title = (m.origin === "provider" ? "From the provider's list" : m.origin === "custom" ? "Added by hand" : "Saved on the provider card");
-      return '<div class="model-row' + (active ? " is-active" : "") + '" data-action="composer-model-set" data-provider="' + attr(rail) + '" data-value="' + attr(m.model_id) + '" role="option" aria-selected="' + (active ? "true" : "false") + '" title="' + attr(title) + '">' +
+      if (m.source === "custom") tags += '<span class="model-tag" title="Added by hand">custom</span>';
+      if (m.source === "saved") tags += '<span class="model-tag is-warn" title="Not in the provider’s fetched list">saved</span>';
+      var noTools = m.tools === false || (m.tools == null && modelHasTools(m.model_id) === false);
+      if (noTools) tags += '<span class="model-tag is-warn" title="This model is known not to call tools; agent work may fail">no tools</span>';
+      var title = (m.source === "provider" ? "From the provider's list" : m.source === "custom" ? "Added by hand" : "Saved on the provider card");
+      var row = '<div class="model-row' + (active ? " is-active" : "") + (disabled ? " is-disabled" : "") + '"' +
+        (disabled ? ' aria-disabled="true"' : ' data-action="composer-model-set" data-provider="' + attr(rail) + '" data-value="' + attr(m.model_id) + '"') +
+        ' role="option" aria-selected="' + (active ? "true" : "false") + '" title="' + attr(disabled ? "Enable this provider in Models first" : title) + '">' +
         brandImg(rail, "model-brand") +
         '<span class="model-row-name">' + esc(label) + "</span>" +
         tags +
         '<span class="model-radio" aria-hidden="true"></span></div>';
+      return row;
     }).join("") || '<div class="popover-note">' + (q ? "No model matches." : "No models listed. Refresh, or add one in Models.") + "</div>";
     var exact = models.some(function (m) { return m.model_id === q; });
-    var custom = q && !models.length && !exact
+    var custom = q && !models.length && !exact && !disabled
       ? '<button type="button" class="model-row model-row-custom" data-action="composer-custom-model" data-value="' + attr(q) + '">' +
         '<svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg>' +
         '<span class="model-row-name">Use “' + esc(q) + '”</span><span class="model-tag">custom id</span></button>'
       : "";
-    return notes.join("") + rows + custom;
+    var foot = provider
+      ? '<div class="model-foot">' + (provider.last_fetched_at ? "Updated " + esc(ago(provider.last_fetched_at)) : "No fetched list yet") + "</div>"
+      : "";
+    return notes.join("") + rows + custom + foot;
   }
 
   function loadComposerSkills() {
@@ -9126,6 +9170,18 @@
     "composer-model-set": function (node) {
       var provider = node.dataset.provider || "";
       var model = node.dataset.value || "";
+      var target = AI.popover && AI.popover.target;
+      if (target === "provider") {
+        closeComposerPopover();
+        setProviderModel(provider, model);
+        return;
+      }
+      if (target === "role") {
+        var pick = AI.popover && AI.popover.pick;
+        closeComposerPopover();
+        if (pick) pick(provider, model);
+        return;
+      }
       AI.pickProvider = provider;
       AI.pickModel = model;
       closeComposerPopover();
@@ -9154,15 +9210,25 @@
     "composer-custom-model": function (node) {
       var rail = AI.modelRail;
       var model = (node.dataset.value || "").trim();
+      var target = AI.popover && AI.popover.target;
+      var pick = AI.popover && AI.popover.pick;
       if (!rail || !model) return;
       run("provider.model_add", { id: rail, model: model }).then(function (o) {
         if (!o) return null;
+        return loadProviders();
+      }).then(function () {
+        if (target === "provider") {
+          closeComposerPopover();
+          setProviderModel(rail, model);
+          return;
+        }
+        if (target === "role") {
+          closeComposerPopover();
+          if (pick) pick(rail, model);
+          return;
+        }
         AI.pickProvider = rail;
         AI.pickModel = model;
-        return read("models.catalogue").then(function (list) {
-          if (Array.isArray(list)) AI.catalogue = list;
-        });
-      }).then(function () {
         closeComposerPopover();
         if (AI.thread) {
           AI.thread.provider_id = rail;
@@ -9662,6 +9728,28 @@
     "prov-default": function (n) { run("provider.default", { id: n.dataset.id }).then(function () { return loadProviders(); }).then(renderProviders); },
     "prov-remove": function (n) { run("provider.remove", { id: n.dataset.id }).then(function (o) { if (o) return loadProviders().then(function () { renderProviders(); loadHealth().then(healthChip); }); }); },
     "prov-pick": function (n) { setProviderModel(n.dataset.id, n.dataset.model); },
+    "prov-model-picker": function (n) {
+      var p = inventoryProvider(n.dataset.id) || {};
+      openComposerPopover("model", n, "chat", { target: "provider", provider: n.dataset.id, onlyProvider: n.dataset.id, selectedModel: p.default_model || "" });
+    },
+    "role-model-picker": function (n) {
+      var role = n.dataset.role, i = n.dataset.index;
+      var sel = el("rm-" + role + "-p" + i);
+      var input = el("rm-" + role + "-m" + i);
+      var provider = (sel && sel.value) || composerProvider().id || "";
+      openComposerPopover("model", n, "chat", {
+        target: "role",
+        provider: provider,
+        onlyProvider: provider || null,
+        selectedModel: input ? input.value : "",
+        pick: function (prov, model) {
+          if (sel) sel.value = prov;
+          if (input) input.value = model;
+          var label = n.querySelector(".role-model-name");
+          if (label) label.textContent = model;
+        }
+      });
+    },
     "prov-model-add": function (n) {
       var id = n.dataset.id;
       var input = document.querySelector('[data-model-add="' + id + '"]');
@@ -11080,13 +11168,14 @@
     var args = { id: id };
     Object.keys(extra || {}).forEach(function (k) { args[k] = extra[k]; });
     AI.provBusy[id] = true; delete AI.provBusy[id + ":msg"]; renderProviders();
+    if (cap === "provider.models") AI.modelBusy[id] = true;
     read(cap, args).then(function (d) {
       AI.provBusy[id + ":ok"] = true;
       if (cap === "provider.models") { AI.modelFetched[id] = true; delete AI.modelError[id]; }
       AI.provBusy[id + ":msg"] = d && d.message ? d.message : (cap === "provider.test" ? "Connection works" : cap === "provider.verify" ? "The model answered" : "Models updated");
     }).catch(function (e) {
       AI.provBusy[id + ":ok"] = false; AI.provBusy[id + ":msg"] = e.message;
-    }).then(function () { AI.provBusy[id] = false; return loadProviders(); }).then(function () { renderProviders(); loadHealth().then(healthChip); });
+    }).then(function () { AI.provBusy[id] = false; AI.modelBusy[id] = false; return loadProviders(); }).then(function () { renderProviders(); loadHealth().then(healthChip); });
   }
 
   function setProviderModel(id, model) {

@@ -890,6 +890,30 @@ button.composer-tab:hover { color: var(--fg); }
 .model-radio { display: grid; place-items: center; width: 15px; height: 15px; flex: none; border: 1.5px solid var(--line-strong); border-radius: 50%; }
 .model-row.is-active .model-radio { border-color: var(--accent-strong); }
 .model-row.is-active .model-radio::after { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--accent-strong); }
+.model-row.is-disabled { opacity: 0.55; cursor: default; }
+.model-foot { padding: 8px 10px 4px; color: var(--fg-dim); font-size: var(--text-2xs); }
+.model-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-height: 30px;
+  padding: 0 9px;
+  background: var(--bg-surface);
+  border: var(--hairline) solid var(--line-strong);
+  border-radius: 8px;
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.model-field > .mono { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-field > .icon { width: 13px; height: 13px; flex: none; color: var(--fg-dim); }
+.model-field:hover { border-color: var(--accent); }
+.model-field:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.role-model-field { min-width: 150px; }
 
 /* What devd is, where it is working, and which branch: the state of the
    session, in one line under the box. */

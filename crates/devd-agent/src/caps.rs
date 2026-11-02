@@ -751,6 +751,122 @@ fn find_provider(ctx: &Ctx, id: &str) -> Result<Provider> {
         .ok_or_else(|| DevdError::not_found(format!("no provider `{id}`; see provider.list")))
 }
 
+/// The one inventory every picker reads: each provider, whether it is
+/// configured and reachable, when its models were last fetched, and every
+/// model it offers. Provider lists and hand-added ids are merged here so the
+/// composer, the Models screen and role assignments cannot disagree.
+fn model_inventory(ctx: &Ctx) -> Result<Value> {
+    let catalogue = ctx.store.list_catalogue(None)?;
+    let mut out = Vec::new();
+    for p in ctx.store.list_providers()? {
+        let key = secrets::read_key(&ctx.paths, &p);
+        let pre = providers::preset(&p.id);
+        let loopback = p.base_url.contains("localhost")
+            || p.base_url.contains("127.0.0.1")
+            || p.base_url.contains("[::1]");
+        let needs_key = pre.as_ref().map(|x| x.requires_key).unwrap_or(!loopback);
+        let configured = key.is_some() || !needs_key;
+        let check = ctx.store.get_provider_check(&p.id).ok().flatten();
+        let api_source = format!("provider:{}", p.id);
+        let manual_source = format!("manual:{}", p.id);
+
+        let mut seen: Vec<String> = Vec::new();
+        let mut models = Vec::new();
+        let mut api_count = 0i64;
+        let mut ordered: Vec<(&CatalogueModel, bool)> = Vec::new();
+        ordered.extend(catalogue.iter().filter(|m| m.source == api_source).map(|m| (m, false)));
+        ordered.extend(catalogue.iter().filter(|m| m.source == manual_source).map(|m| (m, true)));
+        for (m, custom) in ordered {
+            if seen.iter().any(|id| id == &m.model_id) {
+                continue;
+            }
+            seen.push(m.model_id.clone());
+            let caps = crate::policy::model_caps(&ctx.store, &p, &m.model_id);
+            if !custom {
+                api_count += 1;
+            }
+            models.push(json!({
+                "provider_id": p.id,
+                "model_id": m.model_id,
+                "display": m.display,
+                "source": if custom { "custom" } else { "provider" },
+                "status": "available",
+                "context_window": caps.context_window.or(m.context_window),
+                "max_output": caps.max_output.or(m.max_output),
+                "input_price": caps.input_price.or(m.input_price),
+                "output_price": caps.output_price.or(m.output_price),
+                "tools": caps.tools,
+                "vision": caps.vision,
+                "reasoning": caps.reasoning,
+                "capability_source": caps.source,
+                "retirement": m.retirement,
+                "fetched_at": m.fetched_at,
+            }));
+        }
+
+        let mut last_fetched = catalogue
+            .iter()
+            .filter(|m| m.source == api_source)
+            .map(|m| m.fetched_at.clone())
+            .max()
+            .unwrap_or_default();
+        if let Some(c) = &check {
+            if c.models.is_some() && c.checked_at > last_fetched {
+                last_fetched = c.checked_at.clone();
+            }
+        }
+
+        if let Some(default) = &p.default_model {
+            if !seen.iter().any(|id| id == default) {
+                let caps = crate::policy::model_caps(&ctx.store, &p, default);
+                models.insert(
+                    0,
+                    json!({
+                        "provider_id": p.id,
+                        "model_id": default,
+                        "display": default,
+                        "source": "saved",
+                        "status": "saved",
+                        "context_window": caps.context_window,
+                        "max_output": caps.max_output,
+                        "input_price": caps.input_price,
+                        "output_price": caps.output_price,
+                        "tools": caps.tools,
+                        "vision": caps.vision,
+                        "reasoning": caps.reasoning,
+                        "capability_source": caps.source,
+                        "retirement": Value::Null,
+                        "fetched_at": Value::Null,
+                    }),
+                );
+            }
+        }
+
+        let count = models.len();
+        out.push(json!({
+            "id": p.id,
+            "label": p.label,
+            "kind": p.kind,
+            "enabled": p.enabled,
+            "configured": configured,
+            "has_key": key.is_some(),
+            "needs_key": needs_key,
+            "is_default": p.is_default,
+            "default_model": p.default_model,
+            "preset": pre.as_ref().map(|x| x.id.clone()),
+            "check_ok": check.as_ref().map(|c| c.ok),
+            "check_message": check.as_ref().map(|c| c.message.clone()),
+            "checked_at": check.as_ref().map(|c| c.checked_at.clone()),
+            "last_fetched_at": last_fetched,
+            "fetch_error": check.as_ref().filter(|c| !c.ok).map(|c| c.message.clone()),
+            "models": models,
+            "model_count": api_count,
+            "choice_count": count,
+        }));
+    }
+    Ok(json!({ "providers": out }))
+}
+
 /// What a health check means and what to do about it.
 /// Register everything.
 /// The model to install for speech-to-text.
@@ -1836,6 +1952,22 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             let models = providers::fetch_anthropic_docs()?;
             ctx.store.replace_catalogue("anthropic-docs", &models)?;
             Ok(Outcome::with_data(format!("{} official Claude model(s)", models.len()), serde_json::to_value(&models)?))
+        },
+    )?;
+
+    reg.define::<NoArgs>("models.inventory", "Every provider's models and state")
+    .description("One inventory for every model picker: each provider with whether it is configured and reachable, when its list was last fetched, any fetch error, and every model it offers from its own API or added by hand. Each model carries its context window, output limit, prices and known tool, vision and reasoning support.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, _| simple("models.inventory", "read the provider model inventory"),
+        |ctx, _| {
+            let v = model_inventory(ctx)?;
+            let count = v["providers"].as_array().map(|p| p.len()).unwrap_or(0);
+            Ok(Outcome::with_data(format!("{count} provider(s)"), v))
         },
     )?;
 
