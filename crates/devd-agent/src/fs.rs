@@ -236,6 +236,73 @@ pub fn list(ctx: &Ctx, path: &str, depth: usize, limit: usize) -> Result<Value> 
     )
 }
 
+/// One directory's entries, shaped for a tree.
+///
+/// `fs.list` walks several levels and reports paths relative to the walk. A tree
+/// asks one folder at a time and wants the names, the kinds and the sizes, so it
+/// gets its own function rather than a second reading of `list`'s output.
+///
+/// The fence is `list`'s fence: `authorize` decides whether the folder may be
+/// opened at all, and each entry is marked `secret` rather than hidden, so a
+/// person sees that `.env` is there and refused instead of wondering why a
+/// project has no `.env`.
+pub fn tree(ctx: &Ctx, path: &str, limit: usize) -> Result<Value> {
+    let root = authorize(ctx, path, false)?;
+    if !root.is_dir() {
+        return Err(DevdError::invalid(format!("{} is not a directory", root.display())));
+    }
+    let limit = limit.clamp(1, 2000);
+    let mut entries: Vec<Value> = Vec::new();
+    let mut truncated = false;
+    let read = std::fs::read_dir(&root).map_err(|e| DevdError::internal(format!("could not read {}: {e}", root.display())))?;
+    for e in read.flatten() {
+        if entries.len() >= limit {
+            truncated = true;
+            break;
+        }
+        let p = e.path();
+        let name = e.file_name().to_string_lossy().to_string();
+        let meta = e.metadata().ok();
+        let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
+        // A directory the walk tools skip is reported as skipped rather than
+        // silently absent: `node_modules` is in the project, and a tree that
+        // pretends it is not there is lying about the folder.
+        let skipped = is_dir && SKIP_DIRS.contains(&name.as_str());
+        let secret = !is_dir && is_secret_file(&p);
+        let modified = meta
+            .as_ref()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        entries.push(json!({
+            "name": name,
+            "kind": if is_dir { "dir" } else { "file" },
+            "bytes": if is_dir { Value::Null } else { meta.as_ref().map(|m| m.len()).into() },
+            "modified": modified,
+            "secret": secret,
+            "skipped": skipped,
+        }));
+    }
+    // Directories first, then files, each by name without regard to case: the
+    // order a person expects in a file browser, and stable between calls.
+    entries.sort_by(|a, b| {
+        let ad = a["kind"] == "dir";
+        let bd = b["kind"] == "dir";
+        bd.cmp(&ad).then_with(|| {
+            let an = a["name"].as_str().unwrap_or("").to_lowercase();
+            let bn = b["name"].as_str().unwrap_or("").to_lowercase();
+            an.cmp(&bn)
+        })
+    });
+    Ok(json!({
+        "path": root.display().to_string(),
+        "entries": entries,
+        "truncated": truncated,
+        "skipped_directories": SKIP_DIRS,
+    }))
+}
+
 /// Read a text file with line numbers.
 pub fn read(ctx: &Ctx, path: &str, offset: usize, limit: usize) -> Result<Value> {
     let p = authorize(ctx, path, false)?;
@@ -528,6 +595,68 @@ mod tests {
             run: None,
             dry_run: false,
         }
+    }
+
+    #[test]
+    fn a_tree_lists_one_folder_and_marks_what_it_will_not_open() {
+        let d = tempfile::tempdir().unwrap();
+        let proj = d.path().join("www/proj");
+        std::fs::create_dir_all(proj.join("src")).unwrap();
+        std::fs::write(proj.join("src/main.rs"), "fn main() {}").unwrap();
+        std::fs::write(proj.join("README.md"), "# hi").unwrap();
+        std::fs::write(proj.join(".env"), "SECRET=1").unwrap();
+        std::fs::create_dir_all(proj.join("node_modules")).unwrap();
+        let c = ctx(d.path(), Actor::human(Surface::Cli));
+
+        let t = tree(&c, proj.to_str().unwrap(), 500).unwrap();
+        let entries = t["entries"].as_array().unwrap();
+        let names: Vec<&str> = entries.iter().map(|e| e["name"].as_str().unwrap()).collect();
+
+        // Directories first, then files, each by name.
+        assert_eq!(names, vec!["node_modules", "src", ".env", "README.md"]);
+
+        let by = |n: &str| entries.iter().find(|e| e["name"] == n).unwrap().clone();
+        // A secrets file is listed and marked, not hidden: a person should see
+        // that it exists and is refused rather than wonder why it is missing.
+        assert_eq!(by(".env")["secret"], true);
+        assert_eq!(by(".env")["kind"], "file");
+        // A dependency folder is listed and marked as skipped.
+        assert_eq!(by("node_modules")["skipped"], true);
+        assert_eq!(by("src")["kind"], "dir");
+        assert_eq!(by("README.md")["bytes"], 4);
+        assert_eq!(by("README.md")["secret"], false);
+    }
+
+    #[test]
+    fn a_tree_refuses_what_the_fence_refuses() {
+        let d = tempfile::tempdir().unwrap();
+        let proj = d.path().join("www/proj");
+        std::fs::create_dir_all(proj.join(".git")).unwrap();
+        let c = ctx(d.path(), Actor::human(Surface::Cli));
+
+        // `.git` is managed through the git capabilities, not browsed.
+        assert!(tree(&c, proj.join(".git").to_str().unwrap(), 100).is_err());
+        // A relative path is not a path a tool takes.
+        assert!(tree(&c, "www/proj", 100).is_err());
+        // `..` never escapes.
+        assert!(tree(&c, proj.join("../..").to_str().unwrap(), 100).is_err());
+        // A file is not a directory.
+        std::fs::write(proj.join("f.txt"), "x").unwrap();
+        assert!(tree(&c, proj.join("f.txt").to_str().unwrap(), 100).is_err());
+    }
+
+    #[test]
+    fn a_tree_stops_at_its_limit_and_says_so() {
+        let d = tempfile::tempdir().unwrap();
+        let proj = d.path().join("www/proj");
+        std::fs::create_dir_all(&proj).unwrap();
+        for i in 0..20 {
+            std::fs::write(proj.join(format!("f{i:02}.txt")), "x").unwrap();
+        }
+        let c = ctx(d.path(), Actor::human(Surface::Cli));
+        let t = tree(&c, proj.to_str().unwrap(), 5).unwrap();
+        assert_eq!(t["entries"].as_array().unwrap().len(), 5);
+        assert_eq!(t["truncated"], true);
     }
 
     #[test]

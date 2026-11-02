@@ -306,6 +306,24 @@ people and agents use the same capability API.
   approval.
 * See [`shared-state.md`](shared-state.md).
 
+## Files
+
+A project's **Files** tab lists its folders and opens its files in the window.
+
+The tree asks devd for **one folder at a time** (`fs.tree`), so a large project costs one request per folder you open rather than one per row you can see. A file is opened with `fs.read`, so a person sees exactly what an agent would see: the same line-numbered text, the same size limit, the same refusals.
+
+What the fence does in the tree, and why:
+
+* a **secrets file** (`.env`, a key, `.npmrc`) is **listed and marked**, not hidden. A person should be able to see that their project has a `.env` and that devd will not open it, rather than wonder why it is missing. Choosing it gives the same refusal `fs.read` gives;
+* a **dependency or build folder** (`node_modules`, `vendor`, `target`, `dist`) is listed and marked as skipped, so a folder's real contents are accounted for;
+* `.git` is refused: it is managed through the Git capabilities, not browsed.
+
+Folders sort before files, each by name without regard to case. `fs.tree` is `Read`, `agent_safe` and idempotent: it changes nothing.
+
+Open files are syntax-highlighted for the languages devd's own stacks use (PHP, JavaScript and TypeScript, JSON, YAML, TOML, Rust, Python, Ruby, Go, SQL, HTML, CSS, shell and Markdown). Anything else is shown as plain text rather than guessed at. **Copy** puts the file's text on the clipboard without the line numbers, which are a reading aid and would break the file if pasted back.
+
+There is no editing here: an edit is a `Write` capability with an undo snapshot, and a person editing a file is better served by their own editor.
+
 ## Preview
 
 **Preview** embeds the running site in the window: on a site's page choose the **Preview** tab, see it render, reload it, or open it in the system browser. The certificate authority has to be trusted for an HTTPS site to render without a warning, and the page says so when it is not.

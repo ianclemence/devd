@@ -636,6 +636,16 @@ struct FsList {
     limit: Option<usize>,
 }
 
+/// One directory's entries, for a file tree.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct FsTree {
+    /// Absolute directory to list.
+    path: String,
+    /// Maximum entries (default 500, at most 2000).
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
 /// A directory to list, for the folder picker.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct FsBrowse {
@@ -2407,6 +2417,21 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                     ))
                 }
             }
+        },
+    )?;
+    reg.define::<FsTree>("fs.tree", "List one folder for a file tree")
+    .description("Lists a single directory's entries - name, kind, size, modified time - sorted folders first, for browsing a project one folder at a time. A secrets file is listed and marked rather than hidden, so a person can see it is there and refused; dependency and build folders are marked as skipped rather than silently left out. Use fs.list to walk several levels at once.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, a| simple("fs.tree", format!("list {}", a.path)),
+        |ctx, a| {
+            let v = fs::tree(ctx, &a.path, a.limit.unwrap_or(500))?;
+            let n = v["entries"].as_array().map(|e| e.len()).unwrap_or(0);
+            Ok(Outcome::with_data(format!("{n} entries"), v))
         },
     )?;
     reg.define::<FsList>("fs.list", "List files")
