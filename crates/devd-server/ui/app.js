@@ -1012,7 +1012,7 @@
   }
 
   var GO_TO = [
-    ["home", "Home", "what needs you, what is running"], ["inbox", "Needs you", "approvals and questions from agents"],
+    ["home", "Home", "what needs you, what is running"], ["inbox", "Inbox", "approvals and questions from agents"],
     ["projects", "Projects", "repositories, folders and stacks"], ["sites", "Sites", "addresses, serving and certificates"],
     ["assistant", "Assistant", "talk to the built-in agent"], ["team", "Agents", "goals planned, approved and run by the team"],
     ["agents", "Team", "your team and what each member does"],
@@ -1478,7 +1478,7 @@
         (live.length > 1 ? '<span class="top-count">+' + (live.length - 1) + "</span>" : "") + "</button>";
     }
     var needs = '<button type="button" class="top-needs' + (attention ? " has" : "") + (areaOf(state.view) === "inbox" ? " active" : "") + '" data-action="nav" data-view="inbox"' + (areaOf(state.view) === "inbox" ? ' aria-current="page"' : "") + ">" +
-      (attention ? '<span class="top-needs-n">' + esc(attention) + "</span>" : "") + "Needs you</button>";
+      (attention ? '<span class="top-needs-n">' + esc(attention) + "</span>" : "") + "Inbox</button>";
     el("rail").innerHTML = html;
     el("top-attn").innerHTML = chip + needs;
   }
@@ -4998,7 +4998,7 @@
       [/^(service|stack|web)\./, "services", "Services"], [/^(site|tls|hosts|dns|share)\./, "sites", "Sites"],
       [/^(team|run|schedule)\./, "team", "Agents"], [/^(project|git|fs|review|memory)\./, "projects", "Projects"],
       [/^(provider|models)\./, "providers", "Models"], [/^(runtime|php|toolchain)\./, "runtimes", "Runtimes"],
-      [/^(approval|inbox)\./, "inbox", "Needs you"], [/^(mcp|capability|tools)\./, "capabilities", "API and tools"]
+      [/^(approval|inbox)\./, "inbox", "Inbox"], [/^(mcp|capability|tools)\./, "capabilities", "API and tools"]
     ];
     for (var i = 0; i < map.length; i++) if (map[i][0].test(c)) return { view: map[i][1], label: map[i][2] };
     return null;
@@ -6190,7 +6190,6 @@
     var attentionTotal = decisions.length + work.length + machine.length;
     var needsHtml = "";
     if (attentionTotal) {
-      needsHtml += uiHead("Needs you", attentionTotal);
       [
         { title: "Decisions", items: decisions, view: "inbox", link: "Open Inbox", more: "in the Inbox" },
         { title: "Agent work", items: work, view: "team", link: "Open Agents", more: "in Agents" },
@@ -6345,7 +6344,7 @@
       ask +
       '<div class="home-grid">' +
         '<div class="home-col home-main-col">' +
-          (needsHtml ? '<section class="home-attention" aria-label="Needs you">' + needsHtml + "</section>" : "") + setup +
+          (needsHtml ? '<section class="home-attention" aria-label="Attention">' + needsHtml + "</section>" : "") + setup +
           (live.length ? uiHead("Working now", live.length) + uiList(live) : "") +
           uiHead("Projects", allProjects.length || null, '<button type="button" class="btn btn-mini btn-ghost" data-action="nav" data-view="develop">Import one</button><button type="button" class="btn btn-mini" data-action="nav" data-view="create">Start a new one</button><button type="button" class="btn btn-mini btn-ghost" data-action="nav" data-view="projects">See all</button>') + projects +
         "</div>" +
@@ -7654,7 +7653,7 @@
     if (updates.length) body += uiHead("Updates", updates.length) + uiList(updates);
     if (!needs.length && !updates.length) body += uiEmpty("You're all caught up", "When an agent has a question, or needs your okay before it changes something, it'll wait for you here. Nothing it asks for runs until you say so.");
     if (earlier.length) body += uiHead("Earlier", null, '<button type="button" class="btn btn-mini btn-ghost" data-action="inbox-clear" title="Delete every answered or dismissed message">Clear</button>') + uiList(earlier.slice(0, 8));
-    el("main").innerHTML = page("Needs you", "", "", body);
+    el("main").innerHTML = page("Inbox", "", "", body);
   }
 
   function openMessageSheet(id) {
