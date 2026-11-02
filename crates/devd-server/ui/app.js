@@ -67,7 +67,8 @@
     var bar = ensureBanner();
     bar.hidden = !OFFLINE;
     bar.innerHTML = OFFLINE
-      ? "<b>Can't reach devd right now.</b> What you see is the last thing it told us, so it may be out of date. Nothing you do here is sent until it's back, and this page will reconnect on its own. " +
+      ? '<div class="offline-main"><div class="offline-title">Can\'t reach devd right now.</div>' +
+        '<div class="offline-text">What you see is the last thing it told us, so it may be out of date. Nothing you do here is sent until it\'s back, and this page will reconnect on its own.</div></div>' +
         '<button type="button" class="btn btn-mini" data-action="reconnect">Try now</button>'
       : "";
     if (el("health-chip")) healthChip();
@@ -81,7 +82,8 @@
     bar.dataset.ended = "1";
     bar.hidden = false;
     document.documentElement.classList.add("is-offline");
-    bar.innerHTML = "<b>devd restarted.</b> This window's session ended with it, so nothing here will go through until you reload. Nothing was changed. " +
+    bar.innerHTML = '<div class="offline-main"><div class="offline-title">devd restarted.</div>' +
+      '<div class="offline-text">This window\'s session ended with it, so nothing here will go through until you reload. Nothing was changed.</div></div>' +
       '<button type="button" class="btn btn-mini btn-primary" data-action="reload-page">Reload</button>';
   }
 

@@ -664,3 +664,17 @@ fn text_areas_for_line_lists_have_room() {
     }
 }
 
+#[test]
+fn alert_copy_flows_as_one_paragraph() {
+    // The base notice is a paragraph. Under `display: flex`, every text node and
+    // <b> becomes its own column, which is what broke the restart banner and the
+    // notices with an emphasised lead.
+    let rule = &CSS[CSS.find(".notice {").unwrap()..];
+    let rule = &rule[..rule.find('}').unwrap()];
+    assert!(rule.contains("display: block"), "{rule}");
+    // A notice that carries its own action keeps the row: text grows, action stays.
+    assert!(CSS.contains(".notice:has(> .grow, > .btn, > button)"));
+    // The top banner has a title and a body, never a bare <b> beside the text.
+    assert!(APP.contains("offline-title") && APP.contains("offline-text"));
+}
+

@@ -1521,10 +1521,11 @@ kbd {
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* A notice is a paragraph first: inline emphasis and the sentence after it flow
+   together. Only a notice with its own action (a `.grow` block or a button) is a
+   flex row; otherwise flex would turn each text node into a separate column. */
 .notice {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--s2);
+  display: block;
   padding: var(--s2) var(--s3);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
@@ -1533,6 +1534,11 @@ kbd {
   font-size: var(--text-sm);
   line-height: 1.55;
   overflow-wrap: anywhere;
+}
+.notice:has(> .grow, > .btn, > button) {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s2);
 }
 .notice > .grow { min-width: 0; }
 .notice-warn { border-color: var(--warn-line); background: var(--warn-quiet); color: var(--fg); }
@@ -4603,10 +4609,16 @@ ol.stages { list-style: none; padding: 0; }
 .main:focus { outline: none; }
 
 /* Offline: one banner, and the workspace stops looking live. */
-.offline-banner { position: fixed; left: 50%; top: var(--s3); z-index: 60; transform: translateX(-50%); display: flex; align-items: center; gap: var(--s3); max-width: min(720px, calc(100vw - 32px)); padding: var(--s2) var(--s3); background: var(--bg-surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow-float); color: var(--fg); font-size: var(--text-sm); }
+.offline-banner { position: fixed; left: 50%; top: calc(var(--top-h) + var(--s3)); z-index: 60; transform: translateX(-50%); display: flex; align-items: flex-start; gap: var(--s4); max-width: min(720px, calc(100vw - 32px)); padding: 12px 14px; background: var(--bg-surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow-float); color: var(--fg); font-size: var(--text-sm); }
 .offline-banner[hidden] { display: none; }
+.offline-main { flex: 1; min-width: 0; }
+.offline-title { color: var(--danger); font-weight: 650; font-size: var(--text-sm); line-height: 1.4; }
+.offline-text { margin-top: 2px; color: var(--fg-mute); font-size: var(--text-xs); line-height: 1.5; }
 .offline-banner .btn { flex: none; }
-.offline-banner > b { white-space: nowrap; color: var(--danger); }
+@media (max-width: 560px) {
+  .offline-banner { flex-direction: column; align-items: stretch; gap: var(--s2); }
+  .offline-banner .btn { align-self: flex-end; }
+}
 .is-offline .main { filter: saturate(0.4); opacity: 0.72; }
 .is-offline .statusbar { opacity: 0.6; }
 
