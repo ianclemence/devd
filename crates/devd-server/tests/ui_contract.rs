@@ -206,6 +206,17 @@ fn services_come_from_one_registry_catalogue() {
 }
 
 #[test]
+fn remote_servers_use_the_universal_ssh_feature() {
+    // There is one remote-server model: a registered SSH machine. No separate
+    // control-panel integration and no product names from other local stacks.
+    for gone in ["ploi", "Ploi", "XAMPP", "WampServer"] {
+        assert!(!APP.contains(gone), "{gone} must not appear in the interface");
+    }
+    assert!(APP.contains("data-action=\"ops-srv-add\""), "servers are added from the Servers tab");
+    assert!(APP.contains("server.limits_set"), "server PHP limits belong to the Servers tab");
+}
+
+#[test]
 fn server_and_site_tabs_match_the_agreed_information_architecture() {
     // The server strip is the whole machine. A site's own controls belong on
     // its page, reached by Manage from the Sites list, not on this strip.

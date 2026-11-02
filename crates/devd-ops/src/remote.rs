@@ -6,7 +6,7 @@
 //!   `releases/<time>`, links the shared `.env` and `storage`, runs the steps on the server, and only then points
 //!   `current` at the new release with one atomic rename. A failure before that leaves the running site untouched.
 //!   Rollback is pointing `current` back. The web server's root is `current/<web dir>`.
-//! * `git`: for servers a panel such as Ploi or Forge manages. The server pulls the branch and runs the site's deploy
+//! * `git`: for servers that pull the branch themselves. The server pulls the branch and runs the site's deploy
 //!   script exactly as written, `cd`, `sudo` and PHP-FPM reloads included.
 //!
 //! Nothing here is clever with secrets: the `.env` is never in the archive, and `remote.env_push` is a separate act.
@@ -700,7 +700,7 @@ mod tests {
 
     #[test]
     fn a_remote_path_is_a_safe_place_to_own() {
-        for ok in ["/var/www/shop", "/home/ploi/shop.com", "/srv/apps/a-b_c"] {
+        for ok in ["/var/www/shop", "/home/deploy/shop.com", "/srv/apps/a-b_c"] {
             assert!(valid_remote_path(ok), "{ok}");
         }
         for bad in ["var/www/shop", "/", "/var", "/etc/nginx", "/usr/local/x", "/var/www/..", "/var//www", "/var/www/shop/", "/var/www/a b", "/var/www/a;b", "/root/x", "/var/www/$HOME"] {

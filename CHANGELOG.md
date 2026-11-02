@@ -10,6 +10,21 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- **Servers are the only remote-server path.** The separate third-party control-panel
+  integration and its API capabilities were removed. Use **Server → Remote → Servers**
+  with SSH for every provider.
+- **Server PHP limits live with servers.** `server.limits` and `server.limits_set`
+  read and record the limits `deploy.check` compares against; they are shown on the
+  Servers tab instead of a separate integration.
+- **Service discovery no longer names third-party local stacks.** Find and adopt scan
+  plain install folders and `PATH`.
+
+---
+
 ## [0.17.1] - 2026-10-30 - Setup says what it needs
 
 ### Changed
@@ -735,7 +750,7 @@ their run, not rewritten, and the migration is additive.
 
 - **An agent can no longer have devd run code it wrote without a person's approval.** The Exec tier needs no
   approval by design (it starts what devd already manages), but `cron.add`, `queue.add`,
-  `deploy.script_set`, `deploy.vars_set`, `laravel.artisan` and `ploi.pull_script` take a command line or
+  `deploy.script_set`, `deploy.vars_set` and `laravel.artisan` take a command line or
   script from the caller and were Exec and agent-callable: an agent could add a cron job running any command
   every minute. They now carry `agent_needs_approval` and support dry runs, so the approver reads the code in
   the plan. A person calling them is not asked. A test walks the shipped registry and fails when a new
@@ -850,7 +865,7 @@ their run, not rewritten, and the migration is additive.
   server Overview now offer **Manage**; share, remove, PHP version, PHP limits and every site-scoped
   operation live on that page instead of a site picker.
 - **Server -> Databases** holds database users and scheduled backups for the whole machine.
-- **Server -> Remote** holds remote servers, SSH keys and Ploi. Deploy links and remote servers are
+- **Server -> Remote** holds remote servers and SSH keys. Deploy links and remote servers are
   still linked from a site's Deploy tab.
 - **Diagnostics** has a Notifications section for alerts, so Alerts is no longer a server tab.
 - **Runtimes** now carries the PHP limits profile, worker count and extension list.
@@ -884,26 +899,25 @@ their run, not rewritten, and the migration is additive.
 
 ### Added
 
-- **Operations**, what a server panel such as Ploi shows for a site, as capabilities and a **Server → Operations** screen: the
+- **Operations**, what a server panel shows for a site, as capabilities and a **Server → Operations** screen: the
   `.env` file with secrets hidden and a diff against another environment (`env.*`), cron jobs and the Laravel scheduler
   (`cron.*`), queue workers (`queue.*`), redirects written into nginx and Apache (`redirects.*`), the Laravel log as entries
   (`logs.*`), a deploy script per site with history, rollback, a repository link and a push-to-deploy hook (`deploy.*`,
-  `repo.*`), alerts to the inbox, Slack, Discord or a webhook (`notify.*`), and Ploi's own API (`ploi.*`: servers, sites,
-  environment, deploy). See [`docs/operations.md`](docs/operations.md).
+  `repo.*`), and alerts to the inbox, Slack, Discord or a webhook (`notify.*`). See [`docs/operations.md`](docs/operations.md).
 - **PHP workers**: a pool of PHP processes per version (`php_workers`, default 4) behind an nginx upstream, so a page that makes
   many requests no longer queues behind itself.
 - **PHP settings** (`php.settings`, `php.configure`, `php.extensions`, `php.extension_set`): a `local` or `production` limits
-  profile (128M / 5M / 30 s, like a Ploi server), single values, and an extension manager.
+  profile (128M / 5M / 30 s, like a typical server), single values, and an extension manager.
 - **Redis and memcached are downloaded** on Windows and checked against the SHA-256 GitHub records, like Mailpit.
 - **`devd setup --services`, `--php`, `--profile`** choose what a first run installs.
 - `php` command group; `devd call` reaches every new capability.
 - **A PHP limits profile per site** (`php.site_profile`): a site can run with the other profile, served by a second pool of PHP
   processes started with that profile's ini.
-- **Deploy warnings** (`deploy.check`, `ploi.limits_set`): every PHP limit that is looser here than on your server, in the
-  deploy plan and the deployment's log. Ploi's API does not expose a server's limits, so devd is told them.
+- **Deploy warnings** (`deploy.check`, `server.limits_set`): every PHP limit that is looser here than on your server, in the
+  deploy plan and the deployment's log. devd is told the server's limits and assumes a typical production server until then.
 - **Apache balances PHP workers** through `mod_proxy_balancer` when the build has its modules.
 - **Set up devd** on the Overview screen: a first run shows what it will install, with sizes, and lets you choose.
-- **Deploy to any server over SSH** (`server.*`, `remote.*`): register DigitalOcean, Hetzner, Vultr, Ploi or Forge machines; devd pins
+- **Deploy to any server over SSH** (`server.*`, `remote.*`): register DigitalOcean, Hetzner, Vultr or any other SSH machine; devd pins
   each host key in its own file, provisions a fresh Ubuntu or Debian server for PHP sites, and deploys either as atomic releases
   (local build, upload, switch `current`, instant rollback) or by having the server pull and run the deploy script. See
   [`docs/operations.md`](docs/operations.md).

@@ -1,4 +1,4 @@
-//! Servers you can reach over SSH: DigitalOcean, Hetzner, Vultr, a Ploi-managed machine, a Raspberry Pi.
+//! Servers you can reach over SSH: DigitalOcean, Hetzner, Vultr, a Raspberry Pi.
 //!
 //! A server is a name, an address, a user, a port and a key from `~/.ssh`. devd talks to it with the system's OpenSSH
 //! client, one non-interactive command at a time, and pins the server's host key in its own known-hosts file (never
@@ -21,7 +21,7 @@ use devd_core::{util, DevdError, Result};
 pub const KIND: &str = "server";
 
 /// Names a provider label may take. It is only a label, for the person looking at the list.
-pub const PROVIDERS: &[&str] = &["digitalocean", "hetzner", "vultr", "linode", "aws", "ploi", "forge", "other"];
+pub const PROVIDERS: &[&str] = &["digitalocean", "hetzner", "vultr", "linode", "aws", "other"];
 
 /// A server, as the capabilities show it.
 #[derive(Debug, Clone, Serialize)]
@@ -69,13 +69,15 @@ pub fn shq(s: &str) -> String {
 fn of(item: &OpsItem) -> Server {
     let d = &item.data;
     let s = |k: &str| d[k].as_str().unwrap_or("").to_string();
+    let stored = s("provider");
+    let provider = if PROVIDERS.contains(&stored.as_str()) { stored } else { "other".to_string() };
     Server {
         name: item.id.clone(),
         host: s("host"),
         user: s("user"),
         port: d["port"].as_u64().unwrap_or(22) as u16,
         key: s("key"),
-        provider: s("provider"),
+        provider,
         host_key_pinned: d["fingerprint"].as_str().is_some(),
         fingerprint: d["fingerprint"].as_str().map(str::to_string),
         last_ok_at: d["last_ok_at"].as_str().map(str::to_string),
@@ -334,7 +336,7 @@ mod tests {
     fn names_hosts_and_users_cannot_carry_options_or_shell_syntax() {
         assert!(valid_name("hetzner-prod") && valid_name("do.1") && !valid_name("-x") && !valid_name("a b") && !valid_name(""));
         assert!(valid_host("203.0.113.7") && valid_host("web1.example.com") && valid_host("2001:db8::1") && !valid_host("-oProxyCommand=x") && !valid_host("a;b") && !valid_host("a b"));
-        assert!(valid_user("deploy") && valid_user("ploi") && !valid_user("-x") && !valid_user("a b") && !valid_user("root;id"));
+        assert!(valid_user("deploy") && valid_user("web") && !valid_user("-x") && !valid_user("a b") && !valid_user("root;id"));
     }
 
     #[test]

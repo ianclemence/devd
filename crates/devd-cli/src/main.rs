@@ -157,7 +157,7 @@ pub(crate) enum Command {
         /// The PHP series to install, e.g. `8.4`. The default is the latest stable.
         #[arg(long)]
         php: Option<String>,
-        /// The PHP limits profile: `local` (generous) or `production` (a typical Ploi server).
+        /// The PHP limits profile: `local` (generous) or `production` (a typical production server).
         #[arg(long)]
         profile: Option<String>,
     },
@@ -1080,7 +1080,7 @@ pub(crate) enum PhpCommand {
     },
     /// Change the profile (`local` or `production`), the worker count, or single values.
     Configure {
-        /// `local` (generous limits) or `production` (a typical Ploi server).
+        /// `local` (generous limits) or `production` (a typical production server).
         #[arg(long)]
         profile: Option<String>,
         /// PHP worker processes per version, 1 to 16.

@@ -3,7 +3,7 @@
 //! Reads are `read`. Changing a project's own files or devd's records is `write`. Anything that runs a
 //! command (a cron job, a worker, a deploy script) is `exec`, so an agent can propose it and only a
 //! person approves it. Restoring an earlier commit and emptying logs are `destructive`. Anything that
-//! touches the Ploi server is `remote`.
+//! touches another machine is `remote`.
 
 use std::collections::BTreeMap;
 
@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use devd_core::capability::{Effect, Outcome, Plan, Tier};
 use devd_core::{DevdError, Registry, Result};
 
-use crate::{cron, daemons, deploy, env, limits, logs, notify, ploi};
+use crate::{cron, daemons, deploy, env, limits, logs, notify};
 
 /// No arguments.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -59,8 +59,6 @@ pub struct EnvDiffArgs {
     pub site: String,
     /// Another env file on this machine, e.g. a copy of the production file.
     pub against_file: Option<String>,
-    /// Compare with the .env of the linked Ploi site (needs `ploi.connect` and `ploi.link`).
-    pub against_ploi: Option<bool>,
 }
 
 /// A cron job.
@@ -239,64 +237,6 @@ pub struct TargetArg {
     pub id: String,
 }
 
-/// Connect Ploi.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-pub struct PloiConnectArgs {
-    /// A Ploi API token from https://ploi.io/profile/api-keys. Stored privately, never shown again.
-    pub api_token: String,
-}
-
-/// A Ploi server.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-pub struct PloiServerArg {
-    /// The Ploi server id, from `ploi.servers`.
-    pub server: u64,
-}
-
-/// A Ploi site.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-pub struct PloiSiteArgs {
-    /// The Ploi server id.
-    pub server: u64,
-    /// The Ploi site id, from `ploi.sites`.
-    pub site: u64,
-}
-
-/// Link a local site to a Ploi site.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-pub struct PloiLinkArgs {
-    /// The local site.
-    pub local: String,
-    /// The Ploi server id.
-    pub server: u64,
-    /// The Ploi site id.
-    pub site: u64,
-}
-
-/// Deploy on Ploi.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-pub struct PloiDeployArgs {
-    /// The local site that is linked to the Ploi site. Give this, or server and site.
-    pub local: Option<String>,
-    /// The Ploi server id.
-    pub server: Option<u64>,
-    /// The Ploi site id.
-    pub site: Option<u64>,
-    /// The branch to deploy. The site's own when omitted.
-    pub branch: Option<String>,
-}
-
-/// Replace a Ploi deploy script.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-pub struct PloiScriptArgs {
-    /// The Ploi server id.
-    pub server: u64,
-    /// The Ploi site id.
-    pub site: u64,
-    /// The new script.
-    pub script: String,
-}
-
 /// What the server's PHP allows.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct LimitsArgs {
@@ -310,27 +250,12 @@ pub struct LimitsArgs {
     pub max_execution_time: Option<String>,
 }
 
-/// Copy a Ploi site's deploy script to a local site.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-pub struct PloiPullScriptArgs {
-    /// The local site, which must be linked to the Ploi site.
-    pub local: String,
-}
-
 fn masked_map(vars: &BTreeMap<String, String>) -> Value {
     json!(vars.iter().map(|(k, v)| (k.clone(), env::masked(k, v))).collect::<BTreeMap<_, _>>())
 }
 
 fn env_text(root: &std::path::Path) -> String {
     std::fs::read_to_string(env::path_of(root)).unwrap_or_default()
-}
-
-fn resolve_ploi(ctx: &devd_core::capability::Ctx, local: &Option<String>, server: Option<u64>, site: Option<u64>) -> Result<(u64, u64)> {
-    match (local, server, site) {
-        (Some(l), _, _) => ploi::linked(ctx, l),
-        (None, Some(s), Some(i)) => Ok((s, i)),
-        _ => Err(DevdError::invalid("name the local site (linked with `ploi.link`) or give both the Ploi server and site ids")),
-    }
 }
 
 /// Register every operations capability.
@@ -341,7 +266,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
     register_logs(reg)?;
     register_deploy(reg)?;
     register_notify(reg)?;
-    register_ploi(reg)?;
+    register_server_limits(reg)?;
     crate::caps_more::register(reg)?;
     crate::caps_shell::register(reg)?;
     crate::caps_update::register(reg)?;
@@ -425,7 +350,7 @@ fn register_env(reg: &mut Registry) -> Result<()> {
         )?;
 
     reg.define::<EnvDiffArgs>("env.diff", "Compare a site's .env with another environment")
-        .description("Which variables are only here, only there, or set differently. Secrets are never shown: they are reported as differing. Warns about APP_DEBUG on in production, a local APP_URL there and a missing APP_KEY. Compare with a file (a copy of the production .env) or with the .env of the linked Ploi site.")
+        .description("Which variables are only here, only there, or set differently. Secrets are never shown: they are reported as differing. Warns about APP_DEBUG on in production, a local APP_URL there and a missing APP_KEY. Compare with a file, for example a copy of the production .env.")
         .group("env")
         .tier(Tier::Read)
         .effect(Effect::Read)
@@ -436,14 +361,11 @@ fn register_env(reg: &mut Registry) -> Result<()> {
             |ctx, a| {
                 let (_, root) = crate::site_root(ctx, &a.site)?;
                 let here = env::variables(&env_text(&root));
-                let (there, label) = if a.against_ploi.unwrap_or(false) {
-                    let (server, site) = ploi::linked(ctx, &a.site)?;
-                    (ploi::env(ctx, server, site)?, format!("Ploi site {site}"))
-                } else if let Some(f) = &a.against_file {
+                let (there, label) = if let Some(f) = &a.against_file {
                     let text = std::fs::read_to_string(f).map_err(|e| DevdError::not_found(format!("cannot read {f}: {e}")))?;
                     (env::variables(&text), f.clone())
                 } else {
-                    return Err(DevdError::invalid("name what to compare with: `against_file`, or `against_ploi` true"));
+                    return Err(DevdError::invalid("name a file to compare with: `against_file`"));
                 };
                 let d = env::diff(&here, &there);
                 Ok(Outcome::with_data(
@@ -755,7 +677,7 @@ fn register_deploy(reg: &mut Registry) -> Result<()> {
         )?;
 
     reg.define::<ScriptArgs>("deploy.script_set", "Save a site's deploy script")
-        .description("One command per line, run in the site's folder with its PHP first on PATH; the first failure stops the deploy. {BRANCH} and {SITE_DIRECTORY} are filled in. Lines for a server (`cd`, `sudo`, reloading PHP-FPM) are skipped, so a script copied from Ploi runs here. It runs commands, so saving it is an exec action.")
+        .description("One command per line, run in the site's folder with its PHP first on PATH; the first failure stops the deploy. {BRANCH} and {SITE_DIRECTORY} are filled in. Lines for a server (`cd`, `sudo`, reloading PHP-FPM) are skipped, so a script copied from another server runs here. It runs commands, so saving it is an exec action.")
         .group("deploy")
         .tier(Tier::Exec)
         .effect(Effect::Write)
@@ -826,7 +748,7 @@ fn register_deploy(reg: &mut Registry) -> Result<()> {
         )?;
 
     reg.define::<SiteArg>("deploy.check", "Compare a site's PHP limits with your server's")
-        .description("Lists every PHP limit (memory, upload size, post size, execution time) that is looser here than on your server, which is where a deploy-time surprise comes from. Ploi's API does not expose a server's limits, so devd uses the ones you gave `ploi.limits_set`, and assumes a default Ploi server until then (and says so).")
+        .description("Lists every PHP limit (memory, upload size, post size, execution time) that is looser here than on your server, which is where a deploy-time surprise comes from. devd uses the limits you recorded with `server.limits_set`, and assumes a typical production server until then (and says so).")
         .group("deploy")
         .tier(Tier::Read)
         .effect(Effect::Read)
@@ -992,179 +914,36 @@ fn register_notify(reg: &mut Registry) -> Result<()> {
     Ok(())
 }
 
-// --------------------------------------------------------------------------------------- ploi
+// ------------------------------------------------------------------------------- server limits
 
-fn register_ploi(reg: &mut Registry) -> Result<()> {
-    reg.define::<PloiConnectArgs>("ploi.connect", "Connect devd to Ploi with an API token")
-        .description("Stores the token in a private file (never in the database, settings or audit trail) and checks it by asking Ploi who it belongs to. Create the token at https://ploi.io/profile/api-keys and give it only the scopes you want agents to be able to use. A person only.")
-        .group("ploi")
-        .tier(Tier::Write)
-        .effect(Effect::Remote)
-        .handlers(
-            |_, _| Ok(Plan::new("ploi.connect", "store the Ploi API token and check it").effect("contacts ploi.io")),
-            |ctx, a| {
-                ctx.require_human("connecting Ploi")?;
-                ploi::save_token(ctx, &a.api_token)?;
-                match ploi::user(ctx) {
-                    Ok(u) => Ok(Outcome::with_data(format!("connected to Ploi as {}", u["name"].as_str().or(u["email"].as_str()).unwrap_or("this account")), json!({ "user": { "name": u["name"], "email": u["email"] } }))),
-                    Err(e) => {
-                        ploi::forget_token(ctx);
-                        Err(e)
-                    }
-                }
-            },
-        )?;
-
-    reg.define::<NoArgs>("ploi.disconnect", "Forget the Ploi API token")
-        .description("Deletes the stored token. The token still exists in Ploi until you delete it there.")
-        .group("ploi")
-        .tier(Tier::Write)
-        .effect(Effect::Config)
-        .handlers(
-            |_, _| Ok(Plan::new("ploi.disconnect", "delete the stored Ploi API token")),
-            |ctx, _| {
-                ctx.require_human("disconnecting Ploi")?;
-                ploi::forget_token(ctx);
-                Ok(Outcome::with_data("Ploi disconnected".to_string(), json!({})))
-            },
-        )?;
-
-    reg.define::<NoArgs>("ploi.status", "Is Ploi connected, and as whom")
-        .description("Whether a token is stored (never the token), and the account it belongs to when Ploi answers.")
-        .group("ploi")
+fn register_server_limits(reg: &mut Registry) -> Result<()> {
+    reg.define::<NoArgs>("server.limits", "Read the server PHP limits devd compares with")
+        .description("The PHP limits recorded for your server, and whether devd is assuming them.")
+        .group("server")
         .tier(Tier::Read)
-        .effect(Effect::Remote)
+        .effect(Effect::Read)
         .agent_safe()
         .idempotent()
         .handlers(
-            |_, _| Ok(Plan::new("ploi.status", "check the Ploi connection").effect("contacts ploi.io")),
+            |_, _| Ok(Plan::new("server.limits", "read the server's PHP limits")),
             |ctx, _| {
-                let source = ploi::source(ctx);
-                if source == "none" {
-                    return Ok(Outcome::with_data("not connected".to_string(), json!({ "connected": false, "how": "`ploi.connect` with an API token from https://ploi.io/profile/api-keys" })));
-                }
-                match ploi::user(ctx) {
-                    Ok(u) => Ok(Outcome::with_data("connected".to_string(), json!({ "connected": true, "token_from": source, "user": { "name": u["name"], "email": u["email"] } }))),
-                    Err(e) => Ok(Outcome::with_data(format!("a token is stored but Ploi refused it: {e}"), json!({ "connected": false, "token_from": source, "error": e.to_string() }))),
-                }
+                let (values, assumed) = limits::server(ctx)?;
+                Ok(Outcome::with_data(
+                    if assumed { "the server limits are assumed" } else { "the server limits are recorded" },
+                    json!({ "values": values, "assumed": assumed }),
+                ))
             },
         )?;
 
-    reg.define::<NoArgs>("ploi.servers", "List your Ploi servers")
-        .description("Id, name, address, PHP and MySQL versions, number of sites and status.")
-        .group("ploi")
-        .tier(Tier::Read)
-        .effect(Effect::Remote)
-        .agent_safe()
-        .idempotent()
-        .handlers(
-            |_, _| Ok(Plan::new("ploi.servers", "list the Ploi servers").effect("contacts ploi.io")),
-            |ctx, _| {
-                let v = ploi::servers(ctx)?;
-                Ok(Outcome::with_data(format!("{} server(s)", v.as_array().map(Vec::len).unwrap_or(0)), json!({ "servers": v })))
-            },
-        )?;
-
-    reg.define::<PloiServerArg>("ploi.sites", "List the sites on a Ploi server")
-        .description("Id, domain, status, PHP version, project type, last deploy and whether quick deploy is on.")
-        .group("ploi")
-        .tier(Tier::Read)
-        .effect(Effect::Remote)
-        .agent_safe()
-        .idempotent()
-        .handlers(
-            |_, a| Ok(Plan::new("ploi.sites", format!("list the sites on Ploi server {}", a.server)).effect("contacts ploi.io")),
-            |ctx, a| {
-                let v = ploi::sites(ctx, a.server)?;
-                Ok(Outcome::with_data(format!("{} site(s)", v.as_array().map(Vec::len).unwrap_or(0)), json!({ "sites": v })))
-            },
-        )?;
-
-    reg.define::<PloiLinkArgs>("ploi.link", "Link a local site to its Ploi site")
-        .description("Remembers which Ploi site a local site is, so `ploi.deploy`, `env.diff` against Ploi and `ploi.pull_script` need only the local name.")
-        .group("ploi")
+    reg.define::<LimitsArgs>("server.limits_set", "Record what your server's PHP allows")
+        .description("Records the PHP limits your server runs with, so `deploy.check` can name every limit that is looser here. Read them from the server's PHP configuration. Only the limits you name change.")
+        .group("server")
         .tier(Tier::Write)
         .effect(Effect::Config)
         .agent_safe()
         .idempotent()
         .handlers(
-            |_, a| Ok(Plan::new("ploi.link", format!("link {} to Ploi site {} on server {}", a.local, a.site, a.server)).effect("contacts ploi.io")),
-            |ctx, a| {
-                let v = ploi::link(ctx, &a.local, a.server, a.site)?;
-                Ok(Outcome::with_data(format!("{} is linked to {}", a.local, v["domain"].as_str().unwrap_or("the Ploi site")), v))
-            },
-        )?;
-
-    reg.define::<PloiDeployArgs>("ploi.deploy", "Deploy a site on your Ploi server")
-        .description("Asks Ploi to start a deployment of the site on the server, exactly as the Deploy button does. Name the linked local site, or the Ploi server and site ids. Optionally a branch. This changes a live server, so it needs a person's approval.")
-        .group("ploi")
-        .tier(Tier::Remote)
-        .effect(Effect::Remote)
-        .agent_safe()
-        .handlers(
-            |ctx, a| {
-                let (server, site) = resolve_ploi(ctx, &a.local, a.server, a.site)?;
-                Ok(Plan::new("ploi.deploy", format!("deploy Ploi site {site} on server {server}{}", a.branch.as_ref().map(|b| format!(" from {b}")).unwrap_or_default())).effect("starts a deployment on a live server"))
-            },
-            |ctx, a| {
-                let (server, site) = resolve_ploi(ctx, &a.local, a.server, a.site)?;
-                let v = ploi::deploy(ctx, server, site, a.branch.as_deref())?;
-                crate::notify::send(ctx, "deploy.finished", a.local.as_deref().unwrap_or("ploi"), &format!("Deployment started on Ploi for site {site}"), json!({}));
-                Ok(Outcome::with_data(v["message"].as_str().unwrap_or("deployment started").to_string(), json!({ "server": server, "site": site, "response": v })))
-            },
-        )?;
-
-    reg.define::<PloiSiteArgs>("ploi.env", "Read a Ploi site's .env, secrets hidden")
-        .description("The variables of the site's .env on the server, with secrets hidden. To compare it with a local site use `env.diff` with `against_ploi`.")
-        .group("ploi")
-        .tier(Tier::Read)
-        .effect(Effect::Remote)
-        .agent_safe()
-        .idempotent()
-        .handlers(
-            |_, a| Ok(Plan::new("ploi.env", format!("read the .env of Ploi site {}", a.site)).effect("contacts ploi.io")),
-            |ctx, a| {
-                let vars = ploi::env(ctx, a.server, a.site)?;
-                Ok(Outcome::with_data(format!("{} variable(s)", vars.len()), json!({ "vars": masked_map(&vars) })))
-            },
-        )?;
-
-    reg.define::<PloiSiteArgs>("ploi.script", "Read a Ploi site's deploy script")
-        .description("The deploy script on the server.")
-        .group("ploi")
-        .tier(Tier::Read)
-        .effect(Effect::Remote)
-        .agent_safe()
-        .idempotent()
-        .handlers(
-            |_, a| Ok(Plan::new("ploi.script", format!("read the deploy script of Ploi site {}", a.site)).effect("contacts ploi.io")),
-            |ctx, a| Ok(Outcome::with_data("deploy script".to_string(), json!({ "script": ploi::deploy_script(ctx, a.server, a.site)? }))),
-        )?;
-
-    reg.define::<PloiScriptArgs>("ploi.script_set", "Replace a Ploi site's deploy script")
-        .description("Overwrites the deploy script on the server. It changes what the next deploy on a live server runs, so it needs a person's approval.")
-        .group("ploi")
-        .tier(Tier::Remote)
-        .effect(Effect::Remote)
-        .agent_safe()
-        .handlers(
-            |_, a| Ok(Plan::new("ploi.script_set", format!("replace the deploy script of Ploi site {}", a.site)).effect("changes what deploys run on a live server")),
-            |ctx, a| {
-                let v = ploi::set_deploy_script(ctx, a.server, a.site, &a.script)?;
-                Ok(Outcome::with_data(v["message"].as_str().unwrap_or("deploy script updated").to_string(), json!({ "server": a.server, "site": a.site })))
-            },
-        )?;
-
-    reg.define::<LimitsArgs>("ploi.limits_set", "Tell devd what your server's PHP allows")
-        .description("Ploi's API does not expose a server's PHP limits, so read them from the PHP tab of your server in Ploi and give them here. \
-             devd then warns, in `deploy.check` and before `deploy.run`, about every limit that is looser on this machine. Only the limits you name change.")
-        .group("ploi")
-        .tier(Tier::Write)
-        .effect(Effect::Config)
-        .agent_safe()
-        .idempotent()
-        .handlers(
-            |_, _| Ok(Plan::new("ploi.limits_set", "remember the PHP limits of your server")),
+            |_, _| Ok(Plan::new("server.limits_set", "remember the PHP limits of your server")),
             |ctx, a| {
                 let mut set = BTreeMap::new();
                 for (k, v) in [("memory_limit", &a.memory_limit), ("upload_max_filesize", &a.upload_max_filesize), ("post_max_size", &a.post_max_size), ("max_execution_time", &a.max_execution_time)] {
@@ -1177,24 +956,6 @@ fn register_ploi(reg: &mut Registry) -> Result<()> {
                 }
                 let now = limits::set_server(ctx, &set)?;
                 Ok(Outcome::with_data("server limits saved".to_string(), json!({ "server": now })))
-            },
-        )?;
-
-    reg.define::<PloiPullScriptArgs>("ploi.pull_script", "Copy a Ploi site's deploy script to the local site")
-        .description("Reads the deploy script from the linked Ploi site and saves it as the local site's deploy script, so a local deploy does what the server does (server-only lines such as sudo and PHP-FPM reloads are skipped when run here).")
-        .group("ploi")
-        .tier(Tier::Exec)
-        .effect(Effect::Write)
-        .agent_safe()
-        .agent_needs_approval()
-        .dry_run()
-        .handlers(
-            |_, a| Ok(Plan::new("ploi.pull_script", format!("copy the Ploi deploy script to {}", a.local)).effect("contacts ploi.io; future local deploys run the script")),
-            |ctx, a| {
-                let (server, site) = ploi::linked(ctx, &a.local)?;
-                let script = ploi::deploy_script(ctx, server, site)?;
-                deploy::set_script(ctx, &a.local, &script)?;
-                Ok(Outcome::with_data(format!("deploy script of {} copied from Ploi", a.local), json!({ "script": script })))
             },
         )?;
     Ok(())

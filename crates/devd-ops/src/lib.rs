@@ -1,4 +1,4 @@
-//! Site operations: what a server panel such as Ploi offers per site, for a machine you develop on.
+//! Site operations: the per-site and per-server work a development machine needs.
 //!
 //! * [`env`] - the `.env` file: read masked, set, unset, and diff against another environment.
 //! * [`cron`] - cron jobs, with the Laravel scheduler as a one-line job, run by devd while it is open.
@@ -6,7 +6,6 @@
 //! * [`logs`] - the Laravel log as entries, and the web server and PHP logs as tails.
 //! * [`deploy`] - a deploy script per site, the run, its history, rollback, and the push-to-deploy hook.
 //! * [`notify`] - where to tell people when a deploy or a cron job finishes or fails.
-//! * [`ploi`] - the same operations on a real Ploi server, through its API.
 //!
 //! Redirects live in `devd-services`, because the web server configuration renders them.
 //!
@@ -29,7 +28,6 @@ pub mod laravel;
 pub mod limits;
 pub mod logs;
 pub mod notify;
-pub mod ploi;
 pub mod remote;
 pub mod runner;
 pub mod servers;

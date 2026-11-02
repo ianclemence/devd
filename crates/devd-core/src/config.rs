@@ -66,7 +66,7 @@ pub struct Settings {
     /// How many PHP FastCGI processes serve each PHP version. `php-cgi` handles one request at a
     /// time, so a page that makes many requests at once needs several; nginx spreads requests across them.
     pub php_workers: u8,
-    /// The PHP limits profile: `local` is generous, `production` matches a typical Ploi server.
+    /// The PHP limits profile: `local` is generous, `production` matches a typical production server.
     pub php_profile: String,
     /// Override for the `git` executable. Discovered from `PATH` when unset.
     pub git_executable: Option<String>,

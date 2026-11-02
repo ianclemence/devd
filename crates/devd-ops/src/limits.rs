@@ -1,9 +1,9 @@
 //! PHP limits here against the limits of your server.
 //!
 //! A limit that is looser here than on the server is a bug that only shows after the deploy: an upload
-//! that works locally and fails in production. Ploi's API does not expose a server's PHP limits, so devd
-//! is told what the server has (read them from the PHP tab in Ploi) with `ploi.limits_set`; until then it
-//! assumes the `production` profile, which is what a default Ploi server runs, and says so.
+//! that works locally and fails in production. devd is told what the server has with
+//! `server.limits_set`; until then it assumes the `production` profile, which is what a typical
+//! production server runs, and says so.
 
 use std::collections::BTreeMap;
 
@@ -63,7 +63,7 @@ pub fn local(ctx: &Ctx, site: &str) -> Result<BTreeMap<String, String>> {
 
 /// The server's limits and whether devd only assumes them.
 pub fn server(ctx: &Ctx) -> Result<(BTreeMap<String, String>, bool)> {
-    match ctx.store.ops_get(KIND, "ploi")? {
+    match ctx.store.ops_get(KIND, "server")? {
         Some(i) => {
             let mut out = phpconf::profile_values("production")?;
             for k in KEYS {
@@ -91,7 +91,7 @@ pub fn set_server(ctx: &Ctx, set: &BTreeMap<String, String>) -> Result<BTreeMap<
         current.insert(k.clone(), v.trim().to_string());
     }
     let doc: serde_json::Map<String, serde_json::Value> = current.iter().map(|(k, v)| (k.clone(), serde_json::json!(v))).collect();
-    ctx.store.ops_put(KIND, "ploi", "", &serde_json::Value::Object(doc))?;
+    ctx.store.ops_put(KIND, "server", "", &serde_json::Value::Object(doc))?;
     Ok(current)
 }
 
@@ -105,7 +105,7 @@ pub fn compare(local: &BTreeMap<String, String>, server: &BTreeMap<String, Strin
             if lv > sv {
                 out.push(format!(
                     "{k} is {l} here but {s} on {}: {}",
-                    if assumed { "a default Ploi server (assumed; tell devd yours with ploi.limits_set)" } else { "your server" },
+                    if assumed { "a typical production server (assumed; tell devd yours with server.limits_set)" } else { "your server" },
                     match *k {
                         "memory_limit" => "a request that fits here can run out of memory there",
                         "upload_max_filesize" | "post_max_size" => "an upload that works here will be refused there",

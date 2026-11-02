@@ -280,7 +280,7 @@ fn register_service(reg: &mut Registry) -> Result<()> {
     )?;
 
     reg.define::<NameArgs>("service.find_local", "Find a service's program already on this machine")
-    .description("Looks for an Apache, Redis, PostgreSQL, MongoDB or Memcached folder from a portable stack, XAMPP, WampServer or a plain install on \
+    .description("Looks for an Apache, Redis, PostgreSQL, MongoDB or Memcached folder from a portable stack or a plain install on \
          every drive and reports each with its version. Nothing is changed; `service.adopt` uses one.")
     .group("service")
     .tier(Tier::Read)
@@ -308,7 +308,7 @@ fn register_service(reg: &mut Registry) -> Result<()> {
     )?;
 
     reg.define::<AdoptArgs>("service.adopt", "Use a program that is already on disk")
-    .description("Records an existing Apache, Redis, PostgreSQL, MongoDB or Memcached folder (a portable stack's, XAMPP's, a plain install) as devd's. \
+    .description("Records an existing Apache, Redis, PostgreSQL, MongoDB or Memcached folder (a portable stack's or a plain install) as devd's. \
          The folder is not copied or modified: devd writes its own httpd.conf and starts the program with \
          it. Human only, because the program in that folder is what devd will then run.")
     .group("service")
@@ -672,7 +672,7 @@ fn register_web(reg: &mut Registry) -> Result<()> {
     )?;
 
     reg.define::<UseWebArgs>("web.use", "Choose the web server: nginx or apache")
-    .description("Sets which web server fronts the sites. Apache reads .htaccess files, so a site written for shared hosting or XAMPP works unchanged; nginx is lighter. The chosen server joins the startup set and the other leaves it. The setting applies the next time devd starts: stop the running server, restart devd, then bring the stack up. The server has to be installed first. Human only.")
+    .description("Sets which web server fronts the sites. Apache reads .htaccess files, so a site written for shared hosting works unchanged; nginx is lighter. The chosen server joins the startup set and the other leaves it. The setting applies the next time devd starts: stop the running server, restart devd, then bring the stack up. The server has to be installed first. Human only.")
     .group("web")
     .tier(Tier::Write)
     .effect(Effect::Config)

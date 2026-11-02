@@ -1,7 +1,7 @@
 //! SSH keys in `~/.ssh`: list them, make one, show a public key, take in a private key you already have.
 //!
 //! A private key is never returned by anything here. `ssh.public` shows the half that is meant to be shared
-//! (what you paste into GitHub or Ploi), and a new key has no passphrase unless you add one afterwards.
+//! (what you paste into GitHub or another server), and a new key has no passphrase unless you add one afterwards.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -138,7 +138,7 @@ mod tests {
 
     #[test]
     fn key_names_cannot_climb_out_of_the_ssh_folder() {
-        assert!(valid_name("id_ed25519") && valid_name("ploi-prod.key") && valid_name("github"));
+        assert!(valid_name("id_ed25519") && valid_name("prod.key") && valid_name("github"));
         for bad in ["", ".hidden", "../x", "a/b", "a\\b", "x.pub", "with space", &"k".repeat(65)] {
             assert!(!valid_name(bad), "{bad}");
         }

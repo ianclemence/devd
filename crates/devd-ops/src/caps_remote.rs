@@ -32,10 +32,10 @@ args! {
     ServerAddArgs {
         /** A short name, e.g. `hetzner-prod`. */ name: String,
         /** The address or hostname. */ host: String,
-        /** The SSH user, e.g. `deploy`, `ploi` or `root`. */ user: String,
+        /** The SSH user, e.g. `deploy` or `root`. */ user: String,
         /** The SSH port. Default 22. */ port: Option<u16>,
         /** The key in ~/.ssh it is reached with (see `ssh.keys`, `ssh.keygen`, `ssh.adopt`). */ key: String,
-        /** A label: digitalocean, hetzner, vultr, linode, aws, ploi, forge, other. */ provider: Option<String>,
+        /** A label: digitalocean, hetzner, vultr, linode, aws, other. */ provider: Option<String>,
     }
     /// A server by name.
     ServerName { /** The server's name, from `server.list`. */ server: String }
@@ -58,7 +58,7 @@ args! {
         /** The local site. */ site: String,
         /** The server. */ server: String,
         /** The folder on the server, e.g. `/var/www/shop`. */ path: String,
-        /** `releases` (default: atomic releases with instant rollback) or `git` (the server pulls and runs the deploy script, for Ploi/Forge machines). */ mode: Option<String>,
+        /** `releases` (default: atomic releases with instant rollback) or `git` (the server pulls and runs the deploy script). */ mode: Option<String>,
         /** The branch. Default: the current one. */ branch: Option<String>,
         /** The web root inside a release. Default `public`. */ web_dir: Option<String>,
         /** The PHP version on the server. Default 8.4. */ php: Option<String>,
@@ -108,7 +108,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
 
 fn register_servers(reg: &mut Registry) -> Result<()> {
     reg.define::<ServerAddArgs>("server.add", "Register a server you can reach over SSH")
-        .description("Remembers a machine (DigitalOcean, Hetzner, Vultr, a Ploi or Forge server, a Raspberry Pi: anything with SSH) by name, address, user, port and the key in ~/.ssh that reaches it. Nothing is contacted: run `server.connect` next, which pins the machine's host key.")
+        .description("Remembers a machine (DigitalOcean, Hetzner, Vultr, a Raspberry Pi: anything with SSH) by name, address, user, port and the key in ~/.ssh that reaches it. Nothing is contacted: run `server.connect` next, which pins the machine's host key.")
         .group("server")
         .tier(Tier::Write)
         .effect(Effect::Config)

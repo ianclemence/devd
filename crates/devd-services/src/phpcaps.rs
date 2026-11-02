@@ -1,7 +1,7 @@
 //! PHP settings, the worker pool and the extension manager, as capabilities.
 //!
-//! What Ploi shows under a server's PHP tab - upload size, memory, execution time, the extension
-//! list, the PHP-FPM workers - is here, so a person in the window and an agent over MCP change
+//! The PHP settings people actually need - upload size, memory, execution time, the extension
+//! list, the PHP-FPM workers - are here, so a person in the window and an agent over MCP change
 //! the same things through the same approval and audit path.
 
 use std::collections::BTreeMap;
@@ -27,7 +27,7 @@ pub struct SeriesArgs {
 /// What to change.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct ConfigureArgs {
-    /// `local` (generous limits) or `production` (a typical Ploi server: 128M memory, 5M uploads, 30 s).
+    /// `local` (generous limits) or `production` (a typical production server: 128M memory, 5M uploads, 30 s).
     pub profile: Option<String>,
     /// How many PHP processes serve each version, 1 to 16.
     pub workers: Option<u8>,
@@ -197,7 +197,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         )?;
 
     reg.define::<ConfigureArgs>("php.configure", "Change the PHP profile, limits or worker count")
-        .description("Applies a limits profile (`local` is generous; `production` matches a typical Ploi \
+        .description("Applies a limits profile (`local` is generous; `production` matches a typical production \
              server: 128M memory, 5M uploads, 30 s) and/or individual values to every installed PHP's \
              php.ini, and/or sets how many PHP worker processes serve each version. The managed values live in \
              one marked block at the end of php.ini, so they win over the rest and are replaced, not stacked. \

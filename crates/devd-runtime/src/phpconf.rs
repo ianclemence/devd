@@ -16,7 +16,7 @@ const BEGIN: &str = "; >>> devd managed values (edit with `devd php configure`)"
 const END: &str = "; <<< devd managed values";
 
 /// The limits a profile sets. `local` is generous so a big import or a slow debugger session
-/// is not cut off; `production` is what a typical Ploi server runs, so a limit that would bite
+/// is not cut off; `production` is what a typical production server runs, so a limit that would bite
 /// there bites here first.
 pub fn profile_values(profile: &str) -> Result<BTreeMap<String, String>> {
     let pairs: &[(&str, &str)] = match profile {

@@ -23,20 +23,19 @@ devd runtime remove php@8.2       # destructive: asks for approval
 
 ```bash
 devd php settings                         # limits, profile, workers
-devd php configure --profile production   # 128M / 5M / 30 s, like a Ploi server
+devd php configure --profile production   # 128M / 5M / 30 s, like a typical server
 devd php configure --workers 8 --set memory_limit=512M
 devd php extensions
 devd php ext gd on
 devd setup --services mariadb,redis --php 8.4 --profile production
-devd call env.diff --arg site=shop --arg against_ploi=true
+devd call env.diff --arg site=shop --arg against_file=production.env
 devd call cron.laravel --arg site=shop
 devd call queue.add --arg site=shop --arg processes=2
 devd call redirects.add --arg site=shop --arg from=/old --arg to=/new
 devd call deploy.run --arg site=shop
-devd call ploi.deploy --arg local=shop
 ```
 
-Environment files, cron jobs, workers, redirects, logs, deploys, alerts and Ploi are in [`operations.md`](operations.md).
+Environment files, cron jobs, workers, redirects, logs, deploys and alerts are in [`operations.md`](operations.md).
 
 ## Services
 
@@ -45,7 +44,7 @@ devd service available nginx
 devd service install nginx
 devd service install mariadb --port 3306
 devd service install apache       # Apache Lounge, checked against its published SHA-256 (Windows)
-devd service find apache          # Apache or Redis folders already on this machine (XAMPP, WampServer...)
+devd service find apache          # Apache or Redis folders already on this machine
 devd service adopt apache 'C:\Apache24'   # use one as it is
 devd service adopt redis 'C:\Redis' --port 6379
 devd service install mailpit      # mail catcher; checked against the digest GitHub records

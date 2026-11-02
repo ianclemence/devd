@@ -589,7 +589,7 @@ fn register_ssh(reg: &mut Registry) -> Result<()> {
         )?;
 
     reg.define::<KeyName>("ssh.public", "Show an SSH public key")
-        .description("The public half of a key, the part you paste into GitHub or Ploi.")
+        .description("The public half of a key, the part you paste into GitHub or another server.")
         .group("ssh")
         .tier(Tier::Read)
         .effect(Effect::Read)

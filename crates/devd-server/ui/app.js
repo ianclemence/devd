@@ -1025,7 +1025,7 @@
     ["overview", "Environment", "services, runtimes and sites"],
     ["services", "Services", "nginx, PHP, MariaDB and others"],
     ["toolchain", "Tools", "CLI tools and package managers"], ["runtimes", "Runtimes", "language versions and PHP settings"],
-    ["databases", "Databases", "database users and backups"], ["remote", "Remote", "servers, SSH keys and Ploi"],
+    ["databases", "Databases", "database users and backups"], ["remote", "Remote", "servers and SSH keys"],
     ["certificates", "Certificates", "local HTTPS"], ["hosts", "Hosts", "hostname entries"],
     ["providers", "Models", "AI providers, keys and models"], ["activity", "Activity", "what was done, by whom"],
     ["system", "Diagnostics", "health checks and fixes"], ["capabilities", "API and tools", "every capability, for scripts and agents"]
@@ -2051,17 +2051,17 @@
   // --------------------------------------------------------------- operations
   //
   // What a server panel shows for a site, for the machine you develop on: the .env, the
-  // scheduler, queue workers, redirects, logs, deploys, alerts, PHP and Ploi. Every control
+  // scheduler, queue workers, redirects, logs, deploys, alerts and PHP. Every control
   // calls a capability, so an agent can do the same thing and the same approvals apply.
 
   var OPS = { site: "", tab: "env", data: {}, loading: false, error: "", errorTab: "" };
   var OPS_LOADING = {};
-  var OPS_TABS = [["env", "Environment"], ["cron", "Scheduler"], ["queue", "Workers"], ["redirects", "Redirects"], ["logs", "Logs"], ["laravel", "Laravel"], ["nginx", "Nginx"], ["deploy", "Deploy"], ["db", "Databases"], ["health", "Health"], ["servers", "Servers"], ["keys", "SSH keys"], ["notify", "Alerts"], ["php", "PHP"], ["ploi", "Ploi"]];
-  var OPS_SITELESS = { overview: 1, notify: 1, php: 1, ploi: 1, db: 1, health: 1, servers: 1, keys: 1 };
+  var OPS_TABS = [["env", "Environment"], ["cron", "Scheduler"], ["queue", "Workers"], ["redirects", "Redirects"], ["logs", "Logs"], ["laravel", "Laravel"], ["nginx", "Nginx"], ["deploy", "Deploy"], ["db", "Databases"], ["health", "Health"], ["servers", "Servers"], ["keys", "SSH keys"], ["notify", "Alerts"], ["php", "PHP"]];
+  var OPS_SITELESS = { overview: 1, notify: 1, php: 1, db: 1, health: 1, servers: 1, keys: 1 };
   var SITE = { name: "", tab: "overview" };
   var SITE_TABS = [["overview", "Overview"], ["env", "Environment"], ["deploy", "Deploy"], ["cron", "Cron"], ["queue", "Queue"], ["logs", "Logs"], ["laravel", "Laravel"], ["redirects", "Redirects"], ["nginx", "Web server"], ["db", "Database"], ["preview", "Preview"]];
   var REMOTE = { tab: "servers" };
-  var REMOTE_TABS = [["servers", "Servers"], ["keys", "SSH keys"], ["ploi", "Ploi"]];
+  var REMOTE_TABS = [["servers", "Servers"], ["keys", "SSH keys"]];
   var NOTIFY = { data: null, loading: false, error: "" };
   var MACHINE = { data: null, loading: false, error: "" };
 
@@ -2135,17 +2135,14 @@
     else if (tab === "nginx") jobs = [read("nginx.site_show", s), read("nginx.presets", {})];
     else if (tab === "db") jobs = [read("db.users", {}), read("backup.list", {})];
     else if (tab === "health") jobs = [read("health.list", {}), read("monitor.stats", {})];
-    else if (tab === "servers") jobs = [read("server.list", {}), read("remote.links", {})];
+    else if (tab === "servers") jobs = [read("server.list", {}), read("remote.links", {}), read("server.limits", {})];
     else if (tab === "keys") jobs = [read("ssh.keys", {})];
     else if (tab === "notify") jobs = [read("notify.list", {})];
     else if (tab === "php") jobs = [read("php.settings", {}), read("php.extensions", {})];
-    else jobs = [read("ploi.status", {})];
+    else jobs = [];
     return Promise.all(jobs).then(function (res) {
       if (!OPS_SITELESS[tab] && OPS.site !== s.site) return null;
       OPS.data[tab] = res;
-      if (tab === "ploi" && res[0] && res[0].connected) {
-        return read("ploi.servers", {}).then(function (srv) { OPS.data.ploiServers = srv && srv.servers || []; });
-      }
       return null;
     }).catch(function (e) {
       if (!OPS_SITELESS[tab] && OPS.site !== s.site) return;
@@ -2193,7 +2190,7 @@
     if (OPS.error && OPS.errorTab === tab) return '<div class="notice notice-bad">' + esc(OPS.error) + "</div>";
     var d = OPS.data[tab];
     if (!d) return '<div class="loading"></div>';
-    var fn = { env: opsEnv, cron: opsCron, queue: opsQueue, redirects: opsRedirects, logs: opsLogs, laravel: opsLaravel, nginx: opsNginx, deploy: opsDeploy, db: opsDb, health: opsHealth, servers: opsServers, keys: opsKeys, notify: opsNotify, php: opsPhp, ploi: opsPloi }[tab];
+    var fn = { env: opsEnv, cron: opsCron, queue: opsQueue, redirects: opsRedirects, logs: opsLogs, laravel: opsLaravel, nginx: opsNginx, deploy: opsDeploy, db: opsDb, health: opsHealth, servers: opsServers, keys: opsKeys, notify: opsNotify, php: opsPhp }[tab];
     return fn ? fn(d) : "";
   }
 
@@ -2413,7 +2410,7 @@
       ? '<div class="notice notice-bad">' + esc(OPS.error) + "</div>"
       : OPS.data[tab] ? opsBody(tab) : '<div class="loading"></div>';
     el("main").innerHTML = page("Remote", "", "", remoteTabs() +
-      '<div class="ui-quiet">Servers you deploy to, the keys that reach them, and Ploi.</div>' + body);
+      '<div class="ui-quiet">Servers you deploy to and the keys that reach them.</div>' + body);
   }
 
   // ------------------------------------------------------------- environment
@@ -2604,7 +2601,7 @@
         actions: '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-php-value" data-series="' + attr(v.series) + '">Set a value</button>'
       });
     });
-    var profile = '<select class="select compact" data-change="ops-php-profile"><option value="local"' + (s.profile === "local" ? " selected" : "") + '>Local (generous)</option><option value="production"' + (s.profile === "production" ? " selected" : "") + ">Production (like a Ploi server)</option></select>";
+    var profile = '<select class="select compact" data-change="ops-php-profile"><option value="local"' + (s.profile === "local" ? " selected" : "") + '>Local (generous)</option><option value="production"' + (s.profile === "production" ? " selected" : "") + ">Production (like a typical server)</option></select>";
     var workers = '<select class="select compact" data-change="ops-php-workers">' + [1, 2, 4, 6, 8, 12, 16].map(function (n) { return '<option value="' + n + '"' + (s.workers === n ? " selected" : "") + ">" + n + (n === 1 ? " worker" : " workers") + "</option>"; }).join("") + "</select>";
     var exts = (x.extensions || []).filter(function (e) { return e.shipped; }).map(function (e) {
       return '<button type="button" class="chip' + (e.enabled ? " chip-on" : "") + '" data-action="ops-ext" data-name="' + attr(e.name) + '" data-on="' + (e.enabled ? "0" : "1") + '" aria-pressed="' + (e.enabled ? "true" : "false") + '">' + esc(e.name) + "</button>";
@@ -2624,37 +2621,6 @@
       '<div class="chips">' + (exts || '<span class="dim">No PHP is installed.</span>') + "</div>" +
       '<p class="dim ops-note">Changing a setting restarts PHP; requests in flight are dropped.</p>';
   }
-
-  // -------------------------------------------------------------------- ploi
-
-  function opsPloi(d) {
-    var st = d[0] || {};
-    if (!st.connected) {
-      return uiHead("Ploi", null, "") +
-        uiEmpty(st.error ? "Ploi refused the token" : "Not connected", st.error || "Give devd an API token from ploi.io/profile/api-keys and it can show your servers, compare environments and deploy. Give the token only the scopes you want agents to use.",
-          '<button type="button" class="btn btn-primary" data-action="ops-ploi-connect">Connect Ploi</button>');
-    }
-    var servers = OPS.data.ploiServers || [];
-    var rows = servers.map(function (s) {
-      return uiRow({
-        dot: /active/i.test(s.status || "") ? "ok" : "warn", title: esc(s.name), sub: esc(s.ip) + " · PHP " + esc(s.php) + " · " + esc(s.sites) + " sites", hover: true,
-        actions: '<button type="button" class="btn btn-mini" data-action="ops-ploi-sites" data-server="' + attr(s.id) + '">Sites</button>'
-      });
-    });
-    var sites = (OPS.ploiSites || []).map(function (x) {
-      return uiRow({
-        dot: x.status === "active" ? "ok" : "warn", title: esc(x.domain), sub: "PHP " + esc(x.php) + " · " + esc(x.project_type || "") + (x.last_deploy_at ? " · deployed " + esc(x.last_deploy_at) : ""), hover: true,
-        actions: '<button type="button" class="btn btn-mini" data-action="ops-ploi-link" data-server="' + attr(OPS.ploiServer) + '" data-site="' + attr(x.id) + '">Link to a local site</button>' +
-          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-ploi-deploy" data-server="' + attr(OPS.ploiServer) + '" data-site="' + attr(x.id) + '" data-domain="' + attr(x.domain) + '">Deploy</button>'
-      });
-    });
-    var who = st.user ? esc(st.user.name || st.user.email || "") : "";
-    return uiHead("Ploi", who, '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-ploi-disconnect">Disconnect</button>') +
-      (rows.length ? uiList(rows) : uiEmpty("No servers", "")) +
-      (OPS.ploiSites ? uiHead("Sites on the server", OPS.ploiSites.length, "") + (sites.length ? uiList(sites) : uiEmpty("No sites", "")) : "") +
-      '<p class="dim ops-note">Deploying changes a live server, so devd asks you first. Link a site and `Compare…` in Environment shows how its .env differs from production.</p>';
-  }
-
 
   // ------------------------------------------------------------ first-run setup
   //
@@ -2820,7 +2786,7 @@
   }
 
   function opsServers(d) {
-    var list = (d[0] && d[0].servers) || [], links = (d[1] && d[1].links) || [];
+    var list = (d[0] && d[0].servers) || [], links = (d[1] && d[1].links) || [], lim = d[2] || {};
     var rows = list.map(function (s) {
       var n = attr(s.name);
       return "<tr><td>" + opsDot(s.host_key_pinned ? "ok" : "warn") + "<b>" + esc(s.name) + '</b> <span class="pill">' + esc(s.provider) + "</span></td>" +
@@ -2838,9 +2804,15 @@
       return "<tr><td><b>" + esc(l.site) + "</b></td><td>" + esc(l.server) + "</td><td>" + esc(l.mode) + '</td><td class="cell-mono">' + esc(l.path) + (l.domain ? " · " + esc(l.domain) : "") + "</td>" +
         '<td class="cell-actions"><button type="button" class="btn btn-mini btn-ghost" data-action="ops-link-remove" data-id="' + attr(l.id) + '">Unlink</button></td></tr>';
     });
+    var values = lim.values || {};
+    var limitText = lim.assumed
+      ? "not recorded; devd assumes the production profile"
+      : ["memory_limit", "upload_max_filesize", "post_max_size", "max_execution_time"].map(function (k) { return k + " " + (values[k] || "default"); }).join(" · ");
     return uiHead("Servers", list.length, '<button type="button" class="btn btn-mini btn-primary" data-action="ops-srv-add">Add a server</button>') +
-      (rows.length ? opsTable([{ name: "Server" }, { name: "Address" }, { name: "Key" }, { name: "Host key" }, { name: "Last answered" }], rows, "Servers") : uiEmpty("No servers yet", "Any machine you can SSH into: DigitalOcean, Hetzner, Vultr, a Ploi or Forge server, a Raspberry Pi. Add it, connect once to pin its host key, and deploy to it from the Deploy tab.")) +
+      (rows.length ? opsTable([{ name: "Server" }, { name: "Address" }, { name: "Key" }, { name: "Host key" }, { name: "Last answered" }], rows, "Servers") : uiEmpty("No servers yet", "Any machine you can SSH into: DigitalOcean, Hetzner, Vultr, a Raspberry Pi. Add it, connect once to pin its host key, and deploy to it from the Deploy tab.")) +
       uiHead("Where sites deploy", links.length, "") + (linkRows.length ? opsTable([{ name: "Site" }, { name: "Server" }, { name: "Mode" }, { name: "Path" }], linkRows, "Where sites deploy") : uiEmpty("No site is linked to a server", "Open a site's Deploy tab and choose Link to a server.")) +
+      uiHead("Server PHP limits", null, '<button type="button" class="btn btn-mini" data-action="ops-limits">Set limits…</button>') +
+      uiRow({ dot: lim.assumed ? "warn" : "ok", title: lim.assumed ? "Assumed production limits" : "Recorded limits", sub: esc(limitText), wrap: true }) +
       '<p class="dim ops-note">devd reaches servers with the key you name and pins each server\'s host key in its own file, never your known_hosts. Setting a server up and deploying are approved by you each time.</p>';
   }
 
@@ -10098,8 +10070,8 @@
           var canInstall = node.dataset.install === "1";
           uiSheet("Find " + name, uiEmpty("No " + name + " folder found",
             canInstall
-              ? "devd looked in portable stacks, XAMPP, WampServer, Program Files and PATH. Install it first, or adopt a folder from a portable stack."
-              : "devd looked in portable stacks, XAMPP, WampServer, Program Files and PATH. Install it yourself, then use Find again to adopt the folder.",
+              ? "devd looked in common install folders and PATH. Install it first, or adopt a folder you already have."
+              : "devd looked in common install folders and PATH. Install it yourself, then use Find again to adopt the folder.",
             canInstall ? '<button type="button" class="btn" data-action="install-service" data-name="' + attr(name) + '">Install instead</button>' : ""));
           return;
         }
@@ -11606,9 +11578,10 @@
       }).catch(function (e) { toast("error", e.message); });
     },
     "ops-env-diff": function () {
-      uiPrompt({ title: "Compare the .env", text: "Type a file to compare with (a copy of the production .env), or leave empty to compare with the linked Ploi site.", confirm: "Compare", input: { placeholder: "C:\\path\\to\\production.env" } }).then(function (f) {
+      uiPrompt({ title: "Compare the .env", text: "Type a file to compare with, for example a copy of the production .env.", confirm: "Compare", input: { placeholder: "C:\\path\\to\\production.env" } }).then(function (f) {
         if (f === null) return;
-        read("env.diff", f ? { site: OPS.site, against_file: f } : { site: OPS.site, against_ploi: true }).then(function (r) {
+        if (!f) return toast("warn", "Choose a file to compare with");
+        read("env.diff", { site: OPS.site, against_file: f }).then(function (r) {
           var d = r.diff || {};
           var html = "";
           (d.warnings || []).forEach(function (w) { html += '<div class="notice notice-warn">' + esc(w) + "</div>"; });
@@ -11723,12 +11696,12 @@
     "ops-site-profile": function (n) { opsAct("php.site_profile", { site: n.dataset.site, profile: n.value || null }); },
     "ops-site-profile-go": function (n) { opsAct("php.site_profile", { site: OPS.site, profile: n.dataset.profile }); },
     "ops-limits": function () {
-      uiPrompt({ title: "What does your server allow?", text: "Read them from the PHP tab of your server in Ploi. Write them as name=value, separated by commas: memory_limit=128M, upload_max_filesize=5M, post_max_size=8M, max_execution_time=30.", confirm: "Save", input: { placeholder: "memory_limit=128M, upload_max_filesize=5M" } }).then(function (v) {
+      uiPrompt({ title: "What does your server allow?", text: "Read them from your server's PHP configuration. Write them as name=value, separated by commas: memory_limit=128M, upload_max_filesize=5M, post_max_size=8M, max_execution_time=30.", confirm: "Save", input: { placeholder: "memory_limit=128M, upload_max_filesize=5M" } }).then(function (v) {
         if (!v) return;
         var args = {};
         v.split(",").forEach(function (part) { var i = part.indexOf("="); if (i > 0) args[part.slice(0, i).trim()] = part.slice(i + 1).trim(); });
         if (!Object.keys(args).length) return toast("error", "write them as name=value");
-        opsAct("ploi.limits_set", args);
+        opsAct("server.limits_set", args);
       });
     },
     "ops-php-value": function (n) {
@@ -11740,29 +11713,7 @@
         opsAct("php.configure", { values: vals, series: n.dataset.series });
       });
     },
-    "ops-ext": function (n) { opsAct("php.extension_set", { name: n.dataset.name, enabled: n.dataset.on === "1" }); },
-    "ops-ploi-connect": function () {
-      uiPrompt({ title: "Connect Ploi", text: "Paste an API token from ploi.io/profile/api-keys. It is stored privately on this computer and never shown again.", confirm: "Connect", input: { placeholder: "API token" } }).then(function (t) {
-        if (t) opsAct("ploi.connect", { api_token: t });
-      });
-    },
-    "ops-ploi-disconnect": function () {
-      uiConfirm({ title: "Disconnect Ploi?", text: "The stored token is deleted. It still exists in Ploi until you delete it there.", confirm: "Disconnect", danger: true }).then(function (ok) { if (ok) { OPS.ploiSites = null; opsAct("ploi.disconnect", {}); } });
-    },
-    "ops-ploi-sites": function (n) {
-      OPS.ploiServer = n.dataset.server;
-      read("ploi.sites", { server: parseInt(n.dataset.server, 10) }).then(function (r) { OPS.ploiSites = r.sites || []; render(); }).catch(function (e) { toast("error", e.message); });
-    },
-    "ops-ploi-link": function (n) {
-      uiPrompt({ title: "Link to a local site", text: "Which local site is this? One of: " + opsSiteNames().join(", "), confirm: "Link", input: { value: OPS.site } }).then(function (local) {
-        if (local) opsAct("ploi.link", { local: local, server: parseInt(n.dataset.server, 10), site: parseInt(n.dataset.site, 10) });
-      });
-    },
-    "ops-ploi-deploy": function (n) {
-      uiConfirm({ title: "Deploy " + n.dataset.domain + " on Ploi?", text: "This starts a deployment on your live server.", confirm: "Deploy", danger: true }).then(function (ok) {
-        if (ok) run("ploi.deploy", { server: parseInt(n.dataset.server, 10), site: parseInt(n.dataset.site, 10) });
-      });
-    }
+    "ops-ext": function (n) { opsAct("php.extension_set", { name: n.dataset.name, enabled: n.dataset.on === "1" }); }
   });
 
 
@@ -11862,7 +11813,7 @@
     "ops-health-remove": function (n) { opsAct("health.remove", { site: n.dataset.site }); },
     // servers
     "ops-srv-add": function () {
-      uiPrompt({ title: "Add a server", text: "name host user key [provider] [port], e.g. hetzner-prod 203.0.113.7 deploy id_ed25519 hetzner. The key is a name from the SSH keys tab; provider is a label (digitalocean, hetzner, vultr, linode, aws, ploi, forge, other).", confirm: "Add", input: { placeholder: "name host user key" } }).then(function (v) {
+      uiPrompt({ title: "Add a server", text: "name host user key [provider] [port], e.g. hetzner-prod 203.0.113.7 deploy id_ed25519 hetzner. The key is a name from the SSH keys tab; provider is a label (digitalocean, hetzner, vultr, linode, aws, other).", confirm: "Add", input: { placeholder: "name host user key" } }).then(function (v) {
         var w = opsWords(v);
         if (w.length < 4) return toast("error", "write at least: name host user key");
         var port = w.length > 5 ? parseInt(w[5], 10) : null;
@@ -11922,7 +11873,7 @@
     },
     // deploy: remote, variables, schedule, staging
     "ops-link-add": function () {
-      uiPrompt({ title: "Deploy " + OPS.site + " to a server", text: "server /folder/on/the/server [releases|git] [domain]. releases ships a build and switches atomically (default); git has the server pull and run your deploy script (for Ploi or Forge machines).", confirm: "Link", input: { placeholder: "hetzner-prod /var/www/shop releases shop.example.com" } }).then(function (v) {
+      uiPrompt({ title: "Deploy " + OPS.site + " to a server", text: "server /folder/on/the/server [releases|git] [domain]. releases ships a build and switches atomically (default); git has the server pull and run your deploy script.", confirm: "Link", input: { placeholder: "hetzner-prod /var/www/shop releases shop.example.com" } }).then(function (v) {
         var w = opsWords(v);
         if (w.length < 2) return toast("error", "write the server and the folder on it");
         opsAct("remote.link", { site: OPS.site, server: w[0], path: w[1], mode: w[2] || null, domain: w[3] || null });

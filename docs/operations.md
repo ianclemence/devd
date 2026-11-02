@@ -1,8 +1,8 @@
-# Operations: what a server panel shows, for the machine you develop on
+# Operations: per-site and per-server work
 
-A server panel such as Ploi gives each site an environment editor, cron jobs, queue workers, redirects, logs, deploys and alerts, and gives the server its PHP settings and services. devd has the same things for a local site, so a project behaves here the way it does on the server, and an agent can look after all of it through the same capabilities.
+A project needs an environment editor, cron jobs, queue workers, redirects, logs, deploys and alerts, and a server needs its PHP settings and services. devd has the same things for a local site, so a project behaves here the way it does on the server, and an agent can look after all of it through the same capabilities.
 
-Open **Server > Sites**, choose **Manage** on a site, and use its tabs. The whole-machine screens are **Server > Databases** (users and backups), **Server > Remote** (servers, SSH keys and Ploi) and **Server > Runtimes** (PHP settings). Everything on these screens is a capability, so it is also `devd call <id>` and an MCP tool, with the same approvals. The old **Server > Operations** screen is still reachable by its route for one release but is no longer in the strip.
+Open **Server > Sites**, choose **Manage** on a site, and use its tabs. The whole-machine screens are **Server > Databases** (users and backups), **Server > Remote** (servers and SSH keys) and **Server > Runtimes** (PHP settings). Everything on these screens is a capability, so it is also `devd call <id>` and an MCP tool, with the same approvals. The old **Server > Operations** screen is still reachable by its route for one release but is no longer in the strip.
 
 | Where | What it does | Capabilities |
 | --- | --- | --- |
@@ -17,7 +17,7 @@ Open **Server > Sites**, choose **Manage** on a site, and use its tabs. The whol
 | Site: Database | The database this site uses and whether a backup is scheduled; read-only | `backup.list` (the full users and backup screens are under Server > Databases) |
 | Site: Preview | Embed the running site, reload it, or open it in the system browser | none (the site's own URL) |
 | Server > Databases | Database users, scheduled dumps and files for the whole machine | `db.users`, `db.user_create`, `db.user_drop`, `backup.add`, `backup.run`, `backup.list`, `backup.files`, `backup.remove`, `db.restore` |
-| Server > Remote | Remote servers, SSH keys and Ploi | `server.*`, `ssh.*`, `ploi.*` |
+| Server > Remote | Remote servers and SSH keys | `server.*`, `ssh.*` |
 | Server > Runtimes | PHP limits profile, worker pool and extensions; site defaults and runtime versions | `php.settings`, `php.configure`, `php.extensions`, `php.extension_set`, `php.pool`, `runtime.*` |
 | Server > Overview | Machine CPU, memory and disks; services, sites and pending hostnames or certificates | `monitor.stats`, `service.list`, `site.list`, `hosts.show`, `tls.list` |
 | Server > Diagnostics | Alerts, health checks and the machine's state | `notify.add`, `notify.list`, `notify.test`, `notify.remove`, `health.*`, `monitor.stats` |
@@ -25,21 +25,20 @@ Open **Server > Sites**, choose **Manage** on a site, and use its tabs. The whol
 
 ## Who may do what
 
-Reads are free. Changing a project's own files or devd's records is `write`. Anything that runs a command is `exec`. Restoring an earlier commit and emptying logs are `destructive`. Anything that changes the Ploi server is `remote`.
+Reads are free. Changing a project's own files or devd's records is `write`. Anything that runs a command is `exec`. Restoring an earlier commit and emptying logs are `destructive`. Anything that changes another machine is `remote`.
 
-`exec` alone does not make an agent wait: it covers starting and stopping what devd already manages. What makes an agent wait for you is that **it wrote the code**: `cron.add`, `queue.add`, `deploy.script_set`, `deploy.vars_set`, `laravel.artisan` and `ploi.pull_script` take a command line or script from the caller, so when an agent calls them the request is queued with its plan (which shows the code) and nothing runs until you approve it. When you call them yourself you are not asked. (`deploy.run`, `cron.run` and the like run what was already saved and approved.)
+`exec` alone does not make an agent wait: it covers starting and stopping what devd already manages. What makes an agent wait for you is that **it wrote the code**: `cron.add`, `queue.add`, `deploy.script_set`, `deploy.vars_set` and `laravel.artisan` take a command line or script from the caller, so when an agent calls them the request is queued with its plan (which shows the code) and nothing runs until you approve it. When you call them yourself you are not asked. (`deploy.run`, `cron.run` and the like run what was already saved and approved.)
 
 Secrets get extra care:
 
 * `env.get` never shows a secret: any name containing `PASSWORD`, `SECRET`, `TOKEN`, `KEY` and similar is shown as hidden with its length. `env.reveal` shows them and is for a person only; an agent never reads secrets.
 * The audit trail records the names of the variables `env.set` changes, and hides the values of secret-looking ones.
-* The Ploi API token is kept in a file only you can read, never in the database, settings or audit trail. `ploi.connect` is for a person only. Give the token only the scopes you want agents to be able to use; Ploi enforces them.
 
 ## The `.env` file
 
 Changes keep every comment, the order, and every line they do not touch. The previous file stays beside it as `.env.devd-backup-<time>`; the last five are kept. A running app may cache its configuration (`php artisan config:clear`).
 
-`env.diff` compares with a file (a copy of the production `.env`) or with the `.env` of the linked Ploi site. It lists what is only here, only there, and different; secrets are reported as differing without their values. It warns about `APP_DEBUG` on in production, a local `APP_URL` there, and a missing `APP_KEY`.
+`env.diff` compares with a file, for example a copy of the production `.env`. It lists what is only here, only there, and different; secrets are reported as differing without their values. It warns about `APP_DEBUG` on in production, a local `APP_URL` there, and a missing `APP_KEY`.
 
 ## Cron jobs
 
@@ -57,7 +56,7 @@ A worker is a devd service named `worker-<site>-<name>`: started with the rest, 
 
 ## Deploys
 
-The script is one command per line, run in the site's folder, stopping at the first failure. `{BRANCH}` and `{SITE_DIRECTORY}` are filled in. Lines that only make sense on a server (`cd` into the site folder, `sudo`, reloading PHP-FPM) are skipped and the log says so, so a script copied from Ploi runs here unchanged. With no saved script devd uses one chosen from the project: pull, `composer install`, `migrate --force`, `npm ci` and `npm run build`, `optimize`.
+The script is one command per line, run in the site's folder, stopping at the first failure. `{BRANCH}` and `{SITE_DIRECTORY}` are filled in. Lines that only make sense on a server (`cd` into the site folder, `sudo`, reloading PHP-FPM) are skipped and the log says so, so a script copied from another server runs here unchanged. With no saved script devd uses one chosen from the project: pull, `composer install`, `migrate --force`, `npm ci` and `npm run build`, `optimize`.
 
 `deploy.run` returns at once with a deployment; `deploy.status` and `deploy.log` follow it. It records the commit before and after and tells the alert targets when it ends. `deploy.rollback` checks out the commit a deployment ended on (or the commit before the newest deployment) and runs the script without pulling; it refuses while there are uncommitted changes and leaves a detached `HEAD` (`git switch <branch>` goes back).
 
@@ -76,7 +75,7 @@ The script is one command per line, run in the site's folder, stopping at the fi
 | `post_max_size` | 2G | 8M |
 | `max_execution_time` | 36000 | 30 |
 
-`production` is what a typical Ploi server runs, so a limit that would bite there bites here first. Single values (`memory_limit`, `upload_max_filesize`, `post_max_size`, `max_execution_time`, `max_input_time`, `date.timezone`, `display_errors`, `opcache.enable`) can be set on top. The values live in one marked block at the end of `php.ini`, which wins over the rest and is replaced, not stacked.
+`production` is what a typical production server runs, so a limit that would bite there bites here first. Single values (`memory_limit`, `upload_max_filesize`, `post_max_size`, `max_execution_time`, `max_input_time`, `date.timezone`, `display_errors`, `opcache.enable`) can be set on top. The values live in one marked block at the end of `php.ini`, which wins over the rest and is replaced, not stacked.
 
 **Workers.** `php-cgi` answers one request at a time, so a page that makes many requests at once would queue behind itself. devd runs a pool of PHP processes per version (4 by default, 1 to 16 with `php_workers` or `php.configure --workers`) and nginx spreads requests across them. Worker 1 is on the version's own port (9084 for 8.4) and the others are 100 apart. Apache uses a single process per version.
 
@@ -84,7 +83,7 @@ With the Apache driver the workers are balanced through `mod_proxy_balancer` whe
 
 **A profile for one site.** `php.site_profile` serves a site with the other profile whatever the machine's is, so you can try a site against your server's limits while everything else stays generous. It is set on the site's **Overview** tab; the machine-wide profile and extension list are under **Server > Runtimes**. A site whose profile differs from the machine's is served by a second pool of PHP processes started with the other profile's ini (`php.<profile>.ini` beside `php.ini`), 50 ports above the main pool; the pool exists only while some site needs it.
 
-**Your server's limits.** Ploi's API does not expose a server's PHP limits, so tell devd what yours has (read them from the PHP tab of your server in Ploi) with `ploi.limits_set`. `deploy.check` then lists every limit that is looser here than there, and `deploy.run` shows the same notes in its plan and in the deployment's log. Until you do, devd assumes a default Ploi server (the `production` profile) and says it is assuming.
+**Your server's limits.** Read them from your server's PHP configuration and record them with `server.limits_set`. `deploy.check` then lists every limit that is looser here than there, and `deploy.run` shows the same notes in its plan and in the deployment's log. Until you do, devd assumes a typical production server (the `production` profile) and says it is assuming. The same limits are shown and editable under **Server > Remote > Servers**.
 
 **Extensions.** `php.extensions` lists what the build ships and which are on; `php.extension_set` switches one.
 
@@ -147,7 +146,7 @@ Variables (`deploy.vars_set`, `deploy.vars`) are `{NAME}` in the deploy script a
 
 ## Servers: deploy to any machine you can SSH into
 
-A server is a name, an address, a user, a port and a key from `~/.ssh`; the provider (`digitalocean`, `hetzner`, `vultr`, `linode`, `aws`, `ploi`, `forge`, `other`) is only a label. devd reaches it with the system's OpenSSH client, one non-interactive command at a time, and **pins the host key in its own known-hosts file** (`<devd home>/secrets/ssh/known_hosts`), never yours: the first `server.connect` records it and returns the fingerprint to compare with your provider's console, and a later connection to a server whose key changed is refused.
+A server is a name, an address, a user, a port and a key from `~/.ssh`; the provider (`digitalocean`, `hetzner`, `vultr`, `linode`, `aws`, `other`) is only a label. devd reaches it with the system's OpenSSH client, one non-interactive command at a time, and **pins the host key in its own known-hosts file** (`<devd home>/secrets/ssh/known_hosts`), never yours: the first `server.connect` records it and returns the fingerprint to compare with your provider's console, and a later connection to a server whose key changed is refused.
 
 | Capability | What it does |
 | --- | --- |
@@ -161,7 +160,7 @@ A server is a name, an address, a user, a port and a key from `~/.ssh`; the prov
 Two modes, chosen per link:
 
 * **`releases`** (the default). devd runs the local build (`npm ci`, `npm run build` for a project that builds), packages the project, uploads it over SSH, unpacks it as `releases/<time>`, links the shared `.env` and `storage`, runs the steps on the server (`composer install --no-dev`, `migrate --force` and the caches for a Laravel project), and only then points `current` at the new release with **one atomic rename** and reloads PHP-FPM. A failure before that leaves the running site untouched. Rollback points `current` back at an earlier release (they stay on disk; the newest `keep` are kept), so it is instant; migrations are not undone. The archive never contains `.env`, `.git`, `vendor`, `node_modules` or logs. The web root on the server is `current/<web dir>`.
-* **`git`**, for machines a panel such as Ploi or Forge manages. The server pulls the branch and runs the site's deploy script exactly as written, `cd`, `sudo` and PHP-FPM reloads included.
+* **`git`**, for machines that pull the branch themselves. The server pulls the branch and runs the site's deploy script exactly as written, `cd`, `sudo` and PHP-FPM reloads included.
 
 A deploy to a server is recorded in the same history as a local one (`deploy.history`, `deploy.status`, `deploy.log`), carries the same limits warnings, and tells the same alert targets. Every capability that touches a server is `remote` tier, so an agent can ask and only you approve.
 

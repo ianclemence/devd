@@ -161,7 +161,7 @@ side effects, which is intended.
 
 The Exec tier means "starts something devd already manages" (start a service, restart a pool) and needs no
 approval for anyone. It does **not** cover a caller who writes the code, and before this change several capabilities
-that do (`cron.add`, `queue.add`, `deploy.script_set`, `deploy.vars_set`, `laravel.artisan`, `ploi.pull_script`)
+that do (`cron.add`, `queue.add`, `deploy.script_set`, `deploy.vars_set`, `laravel.artisan`)
 were Exec and agent-callable, so an agent could have devd run a command line it wrote, on a schedule, with no
 approval. They now carry `agent_needs_approval`, and support dry runs so the approver sees the code in the plan.
 A person at the command line or in the window is not asked: they wrote it.

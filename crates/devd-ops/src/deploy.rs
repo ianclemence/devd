@@ -4,7 +4,7 @@
 //! The script is a list of command lines, run one after another in the site's folder with the
 //! site's PHP first on PATH, stopping at the first one that fails (what `set -e` does on a server).
 //! Lines that only make sense on a server - `cd` into the site folder, `sudo`, reloading PHP-FPM -
-//! are skipped and the log says so, so a script copied from Ploi runs here unchanged.
+//! are skipped and the log says so, so a script copied from another server runs here unchanged.
 
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -713,7 +713,7 @@ mod tests {
 
     #[test]
     fn server_only_lines_are_skipped_and_variables_filled() {
-        let script = "# deploy\ncd /home/ploi/shop.com\ngit pull origin {BRANCH}\ncomposer install\necho \"\" | sudo -S service php8.4-fpm reload\nphp artisan migrate --force\n";
+        let script = "# deploy\ncd /home/deploy/shop.com\ngit pull origin {BRANCH}\ncomposer install\necho \"\" | sudo -S service php8.4-fpm reload\nphp artisan migrate --force\n";
         let l = lines(script, std::path::Path::new("D:/www/shop"), "main", false);
         assert_eq!(l.len(), 5);
         assert!(l[0].1.is_some(), "cd is skipped");

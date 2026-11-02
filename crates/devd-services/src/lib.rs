@@ -1533,10 +1533,10 @@ pub fn find_local_redis() -> Vec<(PathBuf, String)> {
 }
 
 /// Apache folders already on this machine, as (path, version): portable stacks,
-/// XAMPP, a plain `C:\Apache24`, the Apache Software Foundation's own folder.
+/// a plain `C:\Apache24`, the Apache Software Foundation's own folder.
 /// Nothing is read beyond `httpd -v`.
 pub fn find_local_apache() -> Vec<(PathBuf, String)> {
-    let mut candidates = portable_candidates("apache", &["Apache24", "Apache", "xampp\\apache"]);
+    let mut candidates = portable_candidates("apache", &["Apache24", "Apache"]);
     if cfg!(windows) {
         for drive in 'A'..='Z' {
             for parent in ["Program Files", "Program Files\\Apache Software Foundation"] {
