@@ -8662,10 +8662,10 @@
         return '<button type="button" class="model-rail-item' + (x.id === rail ? " is-active" : "") + '" data-action="composer-rail" data-value="' + attr(x.id) + '" title="' + attr(x.label + " · " + st.label + (st.detail ? " — " + st.detail : "")) + '" aria-label="' + attr(x.label + ", " + st.label) + '">' +
           brandImg(x.id, "model-brand") + '<span class="provider-state is-' + attr(st.tone) + '" aria-hidden="true"></span></button>';
       }).join("") || '<div class="popover-note">No provider.</div>';
-      return '<div class="model-picker-head"><div class="model-picker-heading"><span class="model-picker-title">Models</span></div>' +
-        '<label class="model-search"><input id="model-search" type="search" placeholder="Quick Search" aria-label="Quick search models" autocomplete="off" spellcheck="false" value="' + attr(AI.modelQuery || "") + '">' +
-        '<svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg></label>' +
+      return '<div class="model-picker-head"><div class="model-picker-heading"><span class="model-picker-title">Models</span>' +
         '<button type="button" class="model-refresh" data-action="composer-refresh-models" title="Refresh this provider\'s models" aria-label="Refresh this provider\'s models"><svg class="icon" aria-hidden="true"><use href="#i-refresh"></use></svg></button></div>' +
+        '<label class="model-search"><input id="model-search" type="search" placeholder="Quick Search" aria-label="Quick search models" autocomplete="off" spellcheck="false" value="' + attr(AI.modelQuery || "") + '">' +
+        '<svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg></label></div>' +
         '<div class="model-picker-body"><div class="model-rail" role="tablist" aria-label="Providers">' + railHtml +
         '</div><div class="model-list" id="model-list" role="listbox" aria-label="Models">' + modelRowsHtml(rail) + "</div></div>";
     }
