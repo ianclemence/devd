@@ -89,7 +89,7 @@ fn explain(id: &str, state: &str, detail: &str) -> (String, Value) {
             _ => ("Whether the provider works has not been checked yet.".into(), json!({ "label": "Test the provider", "view": "providers" })),
         },
         i if i.starts_with("service.") => (
-            if state == "starting" { "The process is up but its port is not answering yet. Give it a moment; if it stays like this, read its log.".to_string() } else { "You asked for this service to be running but it is not. It may have crashed or been stopped from outside devd.".to_string() },
+            if state == "starting" { "The process is up but its port is not answering yet. Give it a moment; if it stays like this, read its log.".to_string() } else { "This service is needed but is not running. It may have stopped unexpectedly; start it from Services, or change its startup policy.".to_string() },
             json!({ "label": "Open services", "view": "services" }),
         ),
         _ => (if state == "healthy" { "Working.".into() } else { "See the detail.".into() }, json!({ "label": "Open diagnostics", "view": "system" })),
@@ -162,11 +162,53 @@ pub fn status(ctx: &Ctx) -> Result<Value> {
     }
 
     // ---- services devd manages
-    for s in devd_services::list(ctx).unwrap_or_default() {
+    let statuses = devd_services::list(ctx).unwrap_or_default();
+    let mut php_seen: Vec<String> = Vec::new();
+    for s in &statuses {
+        if let Some((series, _)) = devd_services::php_pool_of(&s.name) {
+            if php_seen.contains(&series) {
+                continue;
+            }
+            php_seen.push(series.clone());
+            let rows: Vec<&devd_services::Status> = statuses
+                .iter()
+                .filter(|r| devd_services::php_pool_of(&r.name).is_some_and(|(v, _)| v == series))
+                .collect();
+            if !rows.iter().any(|r| r.installed) {
+                continue;
+            }
+            let required = rows.iter().any(|r| r.required);
+            let needed = rows.iter().any(|r| r.needed);
+            let required_rows: Vec<&&devd_services::Status> = rows.iter().filter(|r| r.required).collect();
+            let running = if required {
+                required_rows.iter().all(|r| r.running)
+            } else {
+                rows.iter().any(|r| r.running)
+            };
+            let up = required_rows.iter().filter(|r| r.running).count();
+            let (state, detail) = if required && !running {
+                ("degraded", format!("{up} of {} needed PHP workers are running", required_rows.len()))
+            } else if running {
+                ("healthy", format!("{up} PHP worker(s) running for {series}"))
+            } else if needed {
+                ("healthy", format!("PHP {series} is on demand; nothing needs it right now"))
+            } else {
+                ("healthy", format!("PHP {series} is {}", if s.startup_mode == "off" { "off" } else { "on demand" }))
+            };
+            comps.push(Component::new(
+                &format!("service.php@{series}"),
+                &format!("PHP {series}"),
+                "server",
+                state,
+                required,
+                detail,
+            ));
+            continue;
+        }
         if !s.installed {
             continue;
         }
-        let wanted = s.desired_state == "running";
+        let required = s.required;
         let (state, detail) = if s.running && s.listening {
             (
                 "healthy",
@@ -185,20 +227,25 @@ pub fn status(ctx: &Ctx) -> Result<Value> {
                     s.port.unwrap_or(0)
                 ),
             )
-        } else if wanted {
+        } else if required {
             (
                 "degraded",
-                "should be running but no process was found".to_string(),
+                "is needed but no process was found".to_string(),
             )
+        } else if s.startup_mode == "off" {
+            ("healthy", "installed, off".to_string())
         } else {
-            ("healthy", "stopped, as you left it".to_string())
+            (
+                "healthy",
+                "on demand; nothing needs it right now".to_string(),
+            )
         };
         comps.push(Component::new(
             &format!("service.{}", s.name),
             &s.name,
             "server",
             state,
-            wanted,
+            required,
             detail,
         ));
     }

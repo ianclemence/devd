@@ -24,10 +24,10 @@ pub fn run(app: App, port: Option<u16>) -> Result<i32> {
         );
         return Ok(0);
     }
-    // What `devd stack up` did at sign-in before there was a daemon. It is
-    // idempotent, and a failure here must not stop the daemon from serving.
-    if let Err(e) = app.invoke("stack.up", json!({})) {
-        eprintln!("the stack did not start cleanly: {e}");
+    // Start only what the service policy and current demand ask for. A person
+    // who does not use local services can keep all of them off.
+    if let Err(e) = app.invoke("stack.start", json!({})) {
+        eprintln!("the needed services did not start cleanly: {e}");
     }
     web::serve(app, port, false, "daemon")?;
     Ok(0)

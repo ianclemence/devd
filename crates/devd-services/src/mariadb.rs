@@ -608,6 +608,7 @@ mod tests {
             desired_state: "stopped".into(),
             restart_policy: "on-failure".into(),
             enabled: true,
+            startup_mode: "on-demand".into(),
             created_at: util::now(),
         };
         assert_eq!(port_of(&service), 3306);

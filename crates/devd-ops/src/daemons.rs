@@ -186,6 +186,7 @@ pub fn add(ctx: &Ctx, spec: &Spec) -> Result<Daemon> {
             desired_state: "stopped".to_string(),
             restart_policy: "always".to_string(),
             enabled: true,
+            startup_mode: "always".to_string(),
             created_at: util::now(),
         })?;
     }

@@ -563,6 +563,14 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             for warning in created.warnings {
                 outcome = outcome.warn(warning);
             }
+            // A site is demand. Start the needed services now if their policy
+            // allows it, but do not make creating a site fail because a service
+            // could not start.
+            if let Err(e) = devd_services::stack_start(ctx) {
+                outcome = outcome.warn(format!(
+                    "the site was created, but the services it needs did not all start: {e}"
+                ));
+            }
             Ok(outcome)
         },
     )?;

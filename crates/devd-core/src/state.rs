@@ -37,6 +37,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (15, include_str!("../sql/015_mcp.sql")),
     (16, include_str!("../sql/016_chat_queue.sql")),
     (17, include_str!("../sql/017_runs.sql")),
+    (18, include_str!("../sql/018_service_policy.sql")),
 ];
 
 /// The newest schema this build knows. A database below it is migrated the first time devd
@@ -208,6 +209,9 @@ pub struct Service {
     pub restart_policy: String,
     /// Whether the service participates in `devd up`.
     pub enabled: bool,
+    /// `off`, `on-demand` or `always`. Unlike `enabled`, this is the user's
+    /// intent for every logical service, including PHP and the web server.
+    pub startup_mode: String,
     /// Creation timestamp.
     pub created_at: String,
 }
@@ -669,8 +673,8 @@ impl Store {
         self.with(|conn| {
             conn.execute(
                 "INSERT INTO services
-                   (id, name, kind, runtime_id, argv, port, health, desired_state, restart_policy, enabled, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                   (id, name, kind, runtime_id, argv, port, health, desired_state, restart_policy, enabled, startup_mode, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
                  ON CONFLICT(name) DO UPDATE SET
                    kind = excluded.kind,
                    runtime_id = excluded.runtime_id,
@@ -679,7 +683,8 @@ impl Store {
                    health = excluded.health,
                    desired_state = excluded.desired_state,
                    restart_policy = excluded.restart_policy,
-                   enabled = excluded.enabled",
+                   enabled = excluded.enabled,
+                   startup_mode = excluded.startup_mode",
                 params![
                     svc.id,
                     svc.name,
@@ -691,6 +696,7 @@ impl Store {
                     svc.desired_state,
                     svc.restart_policy,
                     svc.enabled as i32,
+                    svc.startup_mode,
                     svc.created_at
                 ],
             )?;
@@ -703,7 +709,7 @@ impl Store {
         self.with(|conn| {
             let s = conn
                 .query_row(
-                    "SELECT id, name, kind, runtime_id, argv, port, health, desired_state, restart_policy, enabled, created_at
+                    "SELECT id, name, kind, runtime_id, argv, port, health, desired_state, restart_policy, enabled, startup_mode, created_at
                      FROM services WHERE name = ?1",
                     params![name],
                     map_service,
@@ -717,7 +723,7 @@ impl Store {
     pub fn list_services(&self) -> Result<Vec<Service>> {
         self.with(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, kind, runtime_id, argv, port, health, desired_state, restart_policy, enabled, created_at
+                "SELECT id, name, kind, runtime_id, argv, port, health, desired_state, restart_policy, enabled, startup_mode, created_at
                  FROM services ORDER BY name",
             )?;
             let rows = stmt.query_map([], map_service)?;
@@ -1161,7 +1167,8 @@ fn map_service(row: &rusqlite::Row<'_>) -> rusqlite::Result<Service> {
         desired_state: row.get(7)?,
         restart_policy: row.get(8)?,
         enabled: row.get::<_, i32>(9)? != 0,
-        created_at: row.get(10)?,
+        startup_mode: row.get(10)?,
+        created_at: row.get(11)?,
     })
 }
 

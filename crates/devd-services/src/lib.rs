@@ -540,6 +540,12 @@ pub struct Status {
     pub desired_state: String,
     /// Whether the service takes part in `stack.up`.
     pub enabled: bool,
+    /// `off`, `on-demand` or `always`.
+    pub startup_mode: String,
+    /// Whether a site or project currently needs this service.
+    pub needed: bool,
+    /// Whether the policy says it should be running now.
+    pub required: bool,
     /// Install directory.
     pub install_dir: String,
     /// Log file.
@@ -653,48 +659,108 @@ pub fn status(ctx: &Ctx, name: &str) -> Result<Status> {
         ready_detail: readiness.as_ref().map(|r| r.detail.clone()),
         desired_state: service.desired_state.clone(),
         enabled: service.enabled,
+        startup_mode: service.startup_mode.clone(),
+        needed: needed(ctx, &service.name).unwrap_or(false),
+        required: required(ctx, &service),
         install_dir: dir.display().to_string(),
         log: log_path(ctx, &service.name).display().to_string(),
         message,
     })
 }
 
-/// Add a service to, or remove it from, the set `stack.up` starts.
+/// The startup mode a service gets when it is first created.
+pub fn default_startup_mode(name: &str) -> &'static str {
+    if matches!(name, "nginx" | "apache" | "mariadb") || name.starts_with(PHP_SERVICE) {
+        "on-demand"
+    } else {
+        "off"
+    }
+}
+
+/// Whether a service is needed by something that exists: a site that uses PHP,
+/// the chosen web server for a site, or a database attached to a site.
+pub fn needed(ctx: &Ctx, name: &str) -> Result<bool> {
+    let sites = ctx.store.list_sites()?;
+    if let Some((series, is_alt)) = php_pool_of(name) {
+        let primary = primary_php_series(ctx);
+        let alt = alt_sites(ctx);
+        return Ok(sites.iter().any(|site| {
+            let effective = devd_core::serving::effective(site);
+            if !effective.serving.uses_php() {
+                return false;
+            }
+            let site_series = site.php.as_deref().map(php_series).or_else(|| primary.clone());
+            site_series.as_deref() == Some(series.as_str()) && alt.contains(&site.name) == is_alt
+        }));
+    }
+    if name == PHP_SERVICE || name.starts_with(&format!("{PHP_SERVICE}-")) {
+        return Ok(sites.iter().any(|site| devd_core::serving::effective(site).serving.uses_php()));
+    }
+    if name == web::service_name(ctx) {
+        return Ok(sites.iter().any(|site| devd_core::serving::effective(site).serving != devd_core::serving::Serving::NoEntry));
+    }
+    if name == "mariadb" {
+        return Ok(sites.iter().any(|site| site.db_name.is_some()));
+    }
+    Ok(false)
+}
+
+/// Whether a service should be running right now: always, or on demand and
+/// actually needed by a site. An off service is never required.
+pub fn required(ctx: &Ctx, service: &Service) -> bool {
+    // The alternate-profile PHP pool is an implementation detail: even when the
+    // logical PHP version is set to Always, it only starts when a site uses the
+    // other profile.
+    if php_pool_of(&service.name).is_some_and(|(_, alt)| alt) {
+        return needed(ctx, &service.name).unwrap_or(false);
+    }
+    match service.startup_mode.as_str() {
+        "always" => true,
+        "on-demand" => needed(ctx, &service.name).unwrap_or(false),
+        _ => false,
+    }
+}
+
+/// Add a service to, or remove it from, the set `stack.start` keeps running.
 ///
 /// This changes the next startup, not the currently running process: a person
 /// who removes a running service from the startup set still has to stop it.
-pub fn set_startup(ctx: &Ctx, name: &str, enabled: bool) -> Result<Status> {
-    if name.starts_with(PHP_SERVICE) {
-        return Err(DevdError::denied(
-            "PHP listeners follow the installed PHP runtimes; install or remove a runtime on Runtimes instead",
-        ));
+pub fn set_startup(ctx: &Ctx, name: &str, mode: &str) -> Result<Status> {
+    if !matches!(mode, "off" | "on-demand" | "always") {
+        return Err(DevdError::invalid("startup mode must be off, on-demand or always"));
     }
-    if matches!(name, "nginx" | "apache") {
-        return Err(DevdError::denied(
-            "the web server in the stack is chosen with `web.use`; it keeps exactly one web server enabled",
-        ));
+    let mut services: Vec<Service> = if let Some((series, _)) = php_pool_of(name) {
+        ctx.store
+            .list_services()?
+            .into_iter()
+            .filter(|s| php_pool_of(&s.name).is_some_and(|(v, _)| v == series))
+            .collect()
+    } else {
+        vec![ctx.store.get_service(name)?.ok_or_else(|| {
+            DevdError::not_found(format!(
+                "`{name}` is not a devd service; run `devd service install {name}`"
+            ))
+        })?]
+    };
+    if services.is_empty() {
+        return Err(DevdError::not_found(format!("`{name}` is not a devd service")));
     }
-    let mut service = ctx.store.get_service(name)?.ok_or_else(|| {
-        DevdError::not_found(format!(
-            "`{name}` is not a devd service; run `devd service install {name}`"
-        ))
-    })?;
-    if !program_of(&service).map(|p| p.is_file()).unwrap_or(false) {
-        return Err(DevdError::invalid(format!(
-            "{name} is recorded but its files are not installed; install it before adding it to startup"
-        )));
+    for service in &mut services {
+        if !program_of(service).map(|p| p.is_file()).unwrap_or(false) {
+            return Err(DevdError::invalid(format!(
+                "{} is recorded but its files are not installed; install it before changing startup",
+                service.name
+            )));
+        }
+        service.startup_mode = mode.to_string();
+        service.enabled = mode == "always";
+        ctx.store.upsert_service(service)?;
     }
-    if service.enabled != enabled {
-        service.enabled = enabled;
-        ctx.store.upsert_service(&service)?;
+    if mode != "off" {
         ctx.events.emit_with(
             "service.startup",
-            format!(
-                "{} {}",
-                name,
-                if enabled { "added to" } else { "removed from" }
-            ),
-            json!({ "name": name, "enabled": enabled, "by": ctx.actor.label() }),
+            format!("{name} is {mode}"),
+            json!({ "name": name, "startup_mode": mode, "by": ctx.actor.label() }),
         );
     }
     status(ctx, name)
@@ -720,6 +786,9 @@ pub fn list(ctx: &Ctx) -> Result<Vec<Status>> {
                 ready_detail: None,
                 desired_state: service.desired_state.clone(),
                 enabled: service.enabled,
+                startup_mode: service.startup_mode.clone(),
+                needed: needed(ctx, &service.name).unwrap_or(false),
+                required: required(ctx, &service),
                 install_dir: install_dir(ctx, &service.name).display().to_string(),
                 log: log_path(ctx, &service.name).display().to_string(),
                 message: format!("could not be inspected: {e}"),
@@ -1080,6 +1149,7 @@ fn finish_install(
         desired_state: "stopped".to_string(),
         restart_policy: "on-failure".to_string(),
         enabled: startup_default(def.name),
+        startup_mode: default_startup_mode(def.name).to_string(),
         created_at: util::now(),
     });
 
@@ -1571,6 +1641,7 @@ pub fn ensure_php_service(ctx: &Ctx) -> Result<Service> {
         desired_state: "stopped".to_string(),
         restart_policy: "on-failure".to_string(),
         enabled: true,
+        startup_mode: default_startup_mode(PHP_SERVICE).to_string(),
         created_at: util::now(),
     });
     service.kind = "php-cgi".to_string();
@@ -1636,6 +1707,7 @@ pub fn ensure_php_services(ctx: &Ctx) -> Result<Vec<Service>> {
             desired_state: "stopped".to_string(),
             restart_policy: "on-failure".to_string(),
             enabled: true,
+            startup_mode: default_startup_mode(&name).to_string(),
             created_at: util::now(),
         });
         service.kind = "php-cgi".to_string();
@@ -2050,29 +2122,37 @@ fn tail(path: &Path, lines: usize) -> Result<Vec<String>> {
 /// "php-cgi did not start, so nginx was not attempted" tells the user less than
 /// both results at once.
 pub fn stack_up(ctx: &Ctx) -> Result<Vec<Status>> {
+    ensure_php_rows(ctx)?;
+    start_ordered(ctx, ctx.store.list_services()?, "devd up")
+}
+
+/// Start only what the policy and current demand say should run. This is what
+/// the daemon does at sign-in; the explicit `stack.up` still starts everything.
+pub fn stack_start(ctx: &Ctx) -> Result<Vec<Status>> {
+    ensure_php_rows(ctx)?;
+    let services: Vec<Service> = ctx
+        .store
+        .list_services()?
+        .into_iter()
+        .filter(|s| required(ctx, s))
+        .collect();
+    start_ordered(ctx, services, "devd start")
+}
+
+fn ensure_php_rows(ctx: &Ctx) -> Result<()> {
     // The PHP listeners have no archive of their own: they come from the
     // installed PHP runtimes. A stack that refused to start because nobody had
-    // created those rows would be a worse answer than one that creates them, so
-    // the rows are made here when a runtime is present and simply skipped when
-    // none is.
-    //
-    // One listener per installed PHP version, so that a site pinned to a
-    // version is served by that version.
+    // created those rows would be a worse answer than one that creates them.
     if !installed_php_series(ctx)?.is_empty() {
         prune_php_services(ctx)?;
         ensure_php_services(ctx)?;
     } else if ctx.store.get_service(PHP_SERVICE)?.is_none() && php_executable(ctx).is_ok() {
         ensure_php_service(ctx)?;
     }
+    Ok(())
+}
 
-    // The listeners come first: nginx needs a FastCGI upstream to answer with.
-    let services: Vec<Service> = ctx
-        .store
-        .list_services()?
-        .into_iter()
-        .filter(|s| s.enabled)
-        .collect();
-
+fn start_ordered(ctx: &Ctx, services: Vec<Service>, program: &str) -> Result<Vec<Status>> {
     let mut started = Vec::new();
     let mut failures = Vec::new();
 
@@ -2111,7 +2191,7 @@ pub fn stack_up(ctx: &Ctx) -> Result<Vec<Status>> {
 
     if !failures.is_empty() {
         return Err(DevdError::Command {
-            program: "devd up".to_string(),
+            program: program.to_string(),
             code: 1,
             stderr: format!(
                 "{} service(s) started; these did not:\n  {}",
@@ -2347,7 +2427,7 @@ mod tests {
     }
 
     #[test]
-    fn a_startup_choice_persists_and_the_web_server_is_not_toggled_here() {
+    fn a_startup_choice_persists_for_every_logical_service() {
         let c = ctx("startup-choice");
         let exe = c.paths.root().join("redis-server.exe");
         std::fs::write(&exe, b"binary").unwrap();
@@ -2363,13 +2443,15 @@ mod tests {
                 desired_state: "stopped".into(),
                 restart_policy: "on-failure".into(),
                 enabled: false,
+                startup_mode: "off".into(),
                 created_at: util::now(),
             })
             .unwrap();
-        let after = set_startup(&c, "redis", true).unwrap();
+        let after = set_startup(&c, "redis", "always").unwrap();
         assert!(after.enabled);
-        assert!(c.store.get_service("redis").unwrap().unwrap().enabled);
-        assert!(set_startup(&c, "nginx", true).is_err());
+        assert_eq!(after.startup_mode, "always");
+        assert_eq!(c.store.get_service("redis").unwrap().unwrap().startup_mode, "always");
+        assert!(set_startup(&c, "nginx", "always").is_err());
         let _ = std::fs::remove_dir_all(c.paths.root());
     }
 
@@ -2434,6 +2516,7 @@ mod tests {
             desired_state: "stopped".to_string(),
             restart_policy: "on-failure".to_string(),
             enabled: true,
+            startup_mode: "on-demand".to_string(),
             created_at: util::now(),
         };
         ctx.store.upsert_service(&row).unwrap();
@@ -2632,6 +2715,7 @@ mod tests {
                 desired_state: "stopped".into(),
                 restart_policy: "on-failure".into(),
                 enabled: true,
+                startup_mode: "on-demand".into(),
                 created_at: util::now(),
             })
             .unwrap();
@@ -2660,6 +2744,7 @@ mod tests {
                 desired_state: "stopped".into(),
                 restart_policy: "never".into(),
                 enabled: false,
+                startup_mode: "off".into(),
                 created_at: util::now(),
             })
             .unwrap();
@@ -2698,6 +2783,7 @@ mod tests {
             desired_state: "stopped".into(),
             restart_policy: "never".into(),
             enabled: true,
+            startup_mode: "on-demand".into(),
             created_at: util::now(),
         };
         assert_eq!(running_pid(&c, &service), None, "the image name must match");
@@ -2739,6 +2825,7 @@ mod tests {
                 desired_state: "running".into(),
                 restart_policy: "on-failure".into(),
                 enabled: true,
+                startup_mode: "always".into(),
                 created_at: util::now(),
             })
             .unwrap();

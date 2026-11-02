@@ -140,6 +140,7 @@ mod tests {
             desired_state: desired.into(),
             restart_policy: "never".into(),
             enabled: true,
+            startup_mode: "on-demand".into(),
             created_at: util::now(),
         }
     }

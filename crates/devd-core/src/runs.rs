@@ -1027,6 +1027,7 @@ fn is_change_capability(capability: &str) -> bool {
         "environment.set",
         "env.set",
         "env.unset",
+        "stack.start",
         "stack.up",
         "stack.down",
         "cron.add",

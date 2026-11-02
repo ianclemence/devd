@@ -45,8 +45,8 @@ args! {
     NoArgs {}
     /// A service by name.
     NameArgs { name: String }
-    /// A service and whether it belongs to the startup set.
-    StartupArgs { name: String, enabled: bool }
+    /// A service and its startup policy: off, on-demand or always.
+    StartupArgs { name: String, mode: Option<String>, enabled: Option<bool> }
     /// A service and how many log lines to read.
     LogsArgs { name: String, lines: Option<u32> }
     /// A service to install.
@@ -218,15 +218,16 @@ fn register_service(reg: &mut Registry) -> Result<()> {
         |_, _| {
             let entry = services::autostart::status()?;
             Ok(Outcome::with_data(
-                if entry.is_some() { "the stack starts when you sign in" } else { "the stack does not start when you sign in" },
+                if entry.is_some() { "devd starts when you sign in" } else { "devd does not start when you sign in" },
                 json!({ "enabled": entry.is_some(), "command": entry }),
             ))
         },
     )?;
 
-    reg.define::<NoArgs>("autostart.enable", "Start the stack when you sign in")
+    reg.define::<NoArgs>("autostart.enable", "Start devd when you sign in")
     .description("Adds a sign-in entry (a Run value in your registry hive on Windows, an autostart entry on Linux, \
-         a LaunchAgent on macOS) that runs `devd stack up`: the enabled services start, detached, and devd exits. \
+         a LaunchAgent on macOS) that runs `devd daemon start`. The daemon starts only services marked Always, \
+         or On demand services that a site needs; it does not start every installed service. \
          No administrator rights. Human only, because it changes what runs at every sign-in.")
     .group("autostart")
     .tier(Tier::Admin)
@@ -238,7 +239,7 @@ fn register_service(reg: &mut Registry) -> Result<()> {
         |_, _| Ok(Plan::new("autostart.enable", "start the devd daemon when you sign in").effect("adds a sign-in entry for this user")),
         |_, _| {
             let command = services::autostart::enable(&devd_core::util::cli_exe()?)?;
-            Ok(Outcome::with_data("the stack will start when you sign in", json!({ "command": command })))
+            Ok(Outcome::with_data("devd will start when you sign in", json!({ "command": command })))
         },
     )?;
 
@@ -395,7 +396,7 @@ fn register_service(reg: &mut Registry) -> Result<()> {
     )?;
 
     reg.define::<StartupArgs>("service.set_startup", "Choose whether a service starts with the stack")
-    .description("Adds an installed service to, or removes it from, the set that `devd stack up` and the sign-in entry start. It changes the next startup, not whether the service is running now. The web server is chosen with web.use, and PHP listeners follow the installed runtimes. Human only: this decides what runs every time the stack starts.")
+    .description("Sets a service's startup policy: off (installed, never started by devd), on-demand (started when a site or project needs it), or always (started with the daemon and at sign-in). This changes the next startup, not whether the service is running now. Human only: this decides what runs every time the stack starts.")
     .group("service")
     .tier(Tier::Write)
     .effect(Effect::Config)
@@ -405,16 +406,18 @@ fn register_service(reg: &mut Registry) -> Result<()> {
     .handlers(
         |ctx, a| {
             ctx.store.get_service(&a.name)?.ok_or_else(|| DevdError::not_found(format!("`{}` is not a devd service", a.name)))?;
+            let mode = a.mode.clone().or_else(|| a.enabled.map(|e| if e { "always".into() } else { "off".into() })).unwrap_or_else(|| "on-demand".into());
             Ok(Plan::new(
                 "service.set_startup",
-                format!("{} {} in the startup set", if a.enabled { "add" } else { "remove" }, a.name),
+                format!("set {} to {mode}", a.name),
             )
-            .effect("changes which services the next stack up starts"))
+            .effect("changes which services the next stack start runs"))
         },
         |ctx, a| {
-            let status = services::set_startup(ctx, &a.name, a.enabled)?;
+            let mode = a.mode.clone().or_else(|| a.enabled.map(|e| if e { "always".into() } else { "off".into() })).unwrap_or_else(|| "on-demand".into());
+            let status = services::set_startup(ctx, &a.name, &mode)?;
             Ok(Outcome::with_data(
-                format!("{} is {} in the startup set", a.name, if a.enabled { "now" } else { "no longer" }),
+                format!("{} is {mode}", a.name),
                 serde_json::to_value(&status).unwrap_or(Value::Null),
             ))
         },
@@ -729,14 +732,20 @@ fn register_web(reg: &mut Registry) -> Result<()> {
             settings.web_server = chosen;
             settings.validate()?;
             settings.save(&file)?;
-            // Exactly one web server belongs to the stack. Choosing one also
-            // makes that choice true for the next `stack up`; otherwise the
-            // setting and the startup set would disagree.
+            // Exactly one web server belongs to the stack. The chosen server is
+            // at least on demand; the other is off. Choosing a server must not
+            // silently make it start at every login.
             for server in ["nginx", "apache"] {
                 if let Some(mut row) = ctx.store.get_service(server)? {
                     let want = server == a.server;
-                    if row.enabled != want {
-                        row.enabled = want;
+                    let mode = if want {
+                        if row.startup_mode == "off" { "on-demand".to_string() } else { row.startup_mode.clone() }
+                    } else {
+                        "off".to_string()
+                    };
+                    if row.startup_mode != mode || row.enabled != (mode == "always") {
+                        row.startup_mode = mode.clone();
+                        row.enabled = mode == "always";
                         ctx.store.upsert_service(&row)?;
                     }
                 }
@@ -780,17 +789,33 @@ fn register_web(reg: &mut Registry) -> Result<()> {
 // -------------------------------------------------------------------- stack
 
 fn register_stack(reg: &mut Registry) -> Result<()> {
-    reg.define::<NoArgs>("stack.up", "Start the development stack")
-    .description("Starts every enabled service in dependency order - the PHP FastCGI listener, then \
-         MariaDB, then nginx. Every service is attempted, so one failure does not hide the \
-         state of the others, and the result reports exactly what started.")
+    reg.define::<NoArgs>("stack.start", "Start what the stack needs")
+    .description("Starts only the services whose policy is always, or on-demand services that a site currently needs. This is what the daemon runs at sign-in. It does not start installed services that nobody needs.")
     .group("stack")
     .tier(Tier::Exec)
     .effect(Effect::Process)
     .agent_safe()
     .dry_run()
     .handlers(
-        |ctx, _| stack_plan(ctx, true),
+        |ctx, _| stack_plan(ctx, true, false),
+        |ctx, _| {
+            let started = services::stack_start(ctx)?;
+            Ok(Outcome::with_data(
+                format!("{} needed service(s) running", started.len()),
+                serde_json::to_value(&started).unwrap_or(Value::Null),
+            ))
+        },
+    )?;
+
+    reg.define::<NoArgs>("stack.up", "Start the development stack")
+    .description("Starts every installed service, in dependency order. This is the explicit Start all action; it overrides per-service policy for this run. The daemon starts only what is needed with stack.start.")
+    .group("stack")
+    .tier(Tier::Exec)
+    .effect(Effect::Process)
+    .agent_safe()
+    .dry_run()
+    .handlers(
+        |ctx, _| stack_plan(ctx, true, true),
         |ctx, _| {
             let started = services::stack_up(ctx)?;
             Ok(Outcome::with_data(
@@ -808,7 +833,7 @@ fn register_stack(reg: &mut Registry) -> Result<()> {
     .agent_safe()
     .dry_run()
     .handlers(
-        |ctx, _| stack_plan(ctx, false),
+        |ctx, _| stack_plan(ctx, false, true),
         |ctx, _| {
             let stopped = services::stack_down(ctx)?;
             Ok(Outcome::with_data(
@@ -820,29 +845,30 @@ fn register_stack(reg: &mut Registry) -> Result<()> {
     Ok(())
 }
 
-fn stack_plan(ctx: &Ctx, up: bool) -> Result<Plan> {
+fn stack_plan(ctx: &Ctx, up: bool, all: bool) -> Result<Plan> {
     let services = ctx.store.list_services()?;
-    let enabled: Vec<&str> = services
+    let chosen: Vec<&str> = services
         .iter()
-        .filter(|s| s.enabled)
+        .filter(|s| !up || all || services::required(ctx, s))
         .map(|s| s.name.as_str())
         .collect();
-    let (id, verb) = if up {
-        ("stack.up", "start")
-    } else {
-        ("stack.down", "stop")
+    let id = match (up, all) {
+        (true, true) => "stack.up",
+        (true, false) => "stack.start",
+        (false, _) => "stack.down",
     };
+    let verb = if up { "start" } else { "stop" };
     Ok(Plan::new(
         id,
         format!(
             "{verb} {} service(s): {}",
-            enabled.len(),
-            enabled.join(", ")
+            chosen.len(),
+            chosen.join(", ")
         ),
     )
-    .step(format!("{verb} {}", enabled.join(", ")))
+    .step(format!("{verb} {}", chosen.join(", ")))
     .effect("changes which processes are running")
-    .data(json!({ "services": enabled })))
+    .data(json!({ "services": chosen })))
 }
 
 // ---------------------------------------------------------------------- TLS

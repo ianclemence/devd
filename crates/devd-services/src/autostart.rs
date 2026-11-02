@@ -4,7 +4,7 @@
 //! offers a user without administrator rights: a `Run` registry value on Windows,
 //! a `systemd --user` unit (an XDG autostart entry where there is no user
 //! manager) on Linux, a LaunchAgent on macOS. What runs is the resident process,
-//! `devd daemon`: it brings the enabled services up, then stays to run scheduled
+//! `devd daemon`: it brings the services the policy and sites need up, then stays to run scheduled
 //! work and to serve the window, the dashboard and the command line. The services
 //! it starts outlive it, as they do under `devd stack up`.
 
