@@ -34,6 +34,10 @@ foreach ($doc in Get-ChildItem (Join-Path $root "docs\*.md")) {
         $n++
         foreach ($m in [regex]::Matches($line, '`([a-z][a-z0-9_]*\.[a-z][a-z0-9_.]+)`')) {
             $id = $m.Groups[1].Value
+            # A design note may name a capability it proposes. It is marked
+            # `(planned)` on the line so a reader is never told it exists, and
+            # so this check can tell a proposal from a claim.
+            if ($line -match '\(planned\)') { continue }
             if ($id -match '\.(md|rs|js|toml|json|yml|yaml|txt|log|pid|db|sql|css|html|png|sh|ps1|bak|orig|rc|conf|ini|exe|com|test|app|dev|local)$') { continue }
             if (Looks-Like-Capability $id) { continue }
             # A dotted path inside a project, an env var, or a hostname is not an id.

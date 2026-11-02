@@ -308,7 +308,28 @@ people and agents use the same capability API.
 
 ## Preview
 
-**Preview** embeds the running site in the window: on a site's page choose the **Preview** tab, see it render, reload it, or open it in the system browser. The certificate authority has to be trusted for an HTTPS site to render without a warning, and the page says so when it is not.
+**Preview** embeds a page in the window. On a site's page choose the **Preview** tab; the site devd serves is loaded, and you can reload it or open it in the system browser. The certificate authority has to be trusted for an HTTPS site to render without a warning, and the page says so when it is not.
+
+**Any address on this machine**, not only a site devd serves: type it in the address bar above the frame. A `php artisan serve` on 8000, a `next dev` on 3000 or a static file server all preview the same way. The address is checked by the server (`POST /api/preview`) before it reaches the frame, because a frame is a place a page can run script:
+
+* http and https only;
+* a host on this machine: `127.0.0.1`, `::1`, `localhost` or a `*.localhost` name. Another machine on the network and a public address are both refused, because a preview shows work happening here;
+* no credentials in the address, and the fragment is dropped, since it never reaches the server.
+
+The rule lives in `devd_core::preview` so the window does not carry a second copy of it.
+
+## Reading the web
+
+`docs.fetch` reads a public https page and returns its text. `web.open` reads the same page and returns its **structure**: the title, the headings, the links with their text, and the form controls with their name, type and label, alongside the readable text.
+
+```bash
+devd call web.open  --arg url=https://example.com
+devd call docs.fetch --arg url=https://example.com
+```
+
+Both refuse private, loopback and metadata addresses, and re-check every redirect, so a public host that redirects to `169.254.169.254` is refused at the redirect rather than at the first request. Neither sends credentials, and both say that a page's content is data rather than an instruction.
+
+There is **no browser automation**: nothing clicks, types or renders a page. An agent that needs to know what a form contains reads it with `web.open`; one that needs to know a page renders is asking a question a fetcher cannot answer.
 
 ## Configuration
 
