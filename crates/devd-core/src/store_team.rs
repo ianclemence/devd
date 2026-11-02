@@ -23,6 +23,9 @@ pub struct NewTask<'a> {
     pub depends_on: &'a [String],
     /// Paths it may change.
     pub scope: &'a [String],
+    /// Why it may run. Absent means the caller did not say, and the task records
+    /// an empty mandate rather than an invented one.
+    pub mandate: Option<&'a serde_json::Value>,
 }
 
 /// A change to a task. Fields left out keep their value, except `state` and `error`, which are always written.
@@ -42,6 +45,8 @@ pub struct TaskUpdate<'a> {
     pub branch: Option<&'a str>,
     /// Its conversation.
     pub thread_id: Option<&'a str>,
+    /// Why it may run, when the caller is changing it.
+    pub mandate: Option<&'a serde_json::Value>,
 }
 
 /// The last check of a provider.
@@ -172,6 +177,18 @@ pub struct TeamTask {
     pub started_at: Option<String>,
     /// Finished.
     pub finished_at: Option<String>,
+    /// Why this work may run, and how far it may go. See
+    /// [`crate::store_autonomy::Mandate`].
+    #[serde(default)]
+    pub mandate: serde_json::Value,
+    /// The last time it did anything. `None` means it has not started. The stall
+    /// watchdog compares it with now, so a worker that is alive but asleep is
+    /// still found.
+    #[serde(default)]
+    pub last_step_at: Option<String>,
+    /// How many times the stall watchdog intervened.
+    #[serde(default)]
+    pub stalls: i64,
 }
 
 /// A line in a run's log.
@@ -192,7 +209,10 @@ pub struct TeamEvent {
 }
 
 const RUN_COLS: &str = "id,title,goal,project,state,plan_approved,summary,error,parallel,created_by,created_at,updated_at";
-const TASK_COLS: &str = "id,run_id,key,role,title,instructions,depends_on,scope,state,attempts,workdir,branch,thread_id,result,evidence,error,created_at,started_at,finished_at";
+/// The columns of one task row, for queries that live in other modules.
+pub(crate) const TASK_COLUMNS: &str =
+    "id,run_id,key,role,title,instructions,depends_on,scope,state,attempts,workdir,branch,thread_id,result,evidence,error,created_at,started_at,finished_at,mandate,last_step_at,stalls";
+const TASK_COLS: &str = TASK_COLUMNS;
 
 fn row_run(r: &rusqlite::Row) -> rusqlite::Result<TeamRun> {
     Ok(TeamRun {
@@ -213,6 +233,7 @@ fn row_run(r: &rusqlite::Row) -> rusqlite::Result<TeamRun> {
 
 fn row_task(r: &rusqlite::Row) -> rusqlite::Result<TeamTask> {
     let list = |s: String| serde_json::from_str::<Vec<String>>(&s).unwrap_or_default();
+    let mandate: String = r.get(19)?;
     Ok(TeamTask {
         id: r.get(0)?,
         run_id: r.get(1)?,
@@ -233,7 +254,15 @@ fn row_task(r: &rusqlite::Row) -> rusqlite::Result<TeamTask> {
         created_at: r.get(16)?,
         started_at: r.get(17)?,
         finished_at: r.get(18)?,
+        mandate: serde_json::from_str(&mandate).unwrap_or(serde_json::Value::Null),
+        last_step_at: r.get(20)?,
+        stalls: r.get(21)?,
     })
+}
+
+/// The task reader, for queries in other modules that select [`TASK_COLUMNS`].
+pub(crate) fn task_row(r: &rusqlite::Row) -> rusqlite::Result<TeamTask> {
+    row_task(r)
 }
 
 impl Store {
@@ -536,6 +565,7 @@ impl Store {
             instructions,
             depends_on,
             scope,
+            mandate,
         } = new;
         let t = TeamTask {
             id: util::new_id(),
@@ -557,12 +587,16 @@ impl Store {
             created_at: util::now(),
             started_at: None,
             finished_at: None,
+            mandate: mandate.cloned().unwrap_or(serde_json::Value::Null),
+            last_step_at: None,
+            stalls: 0,
         };
         self.with(|c| {
             c.execute(
-                &format!("INSERT INTO team_tasks ({TASK_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)"),
+                &format!("INSERT INTO team_tasks ({TASK_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)"),
                 params![t.id, t.run_id, t.key, t.role, t.title, t.instructions, serde_json::to_string(&t.depends_on).unwrap_or_default(), serde_json::to_string(&t.scope).unwrap_or_default(),
-                    t.state, t.attempts, t.workdir, t.branch, t.thread_id, t.result, t.evidence.to_string(), t.error, t.created_at, t.started_at, t.finished_at],
+                    t.state, t.attempts, t.workdir, t.branch, t.thread_id, t.result, t.evidence.to_string(), t.error, t.created_at, t.started_at, t.finished_at,
+                    t.mandate.to_string(), t.last_step_at, t.stalls],
             )?;
             Ok(())
         })?;
@@ -646,17 +680,20 @@ impl Store {
             workdir,
             branch,
             thread_id,
+            mandate,
         } = update;
         let now = util::now();
         self.with(|c| {
             c.execute(
                 "UPDATE team_tasks SET state=?2, result=COALESCE(?3,result), error=?4, evidence=COALESCE(?5,evidence), workdir=COALESCE(?6,workdir),
                    branch=COALESCE(?7,branch), thread_id=COALESCE(?8,thread_id),
+                   mandate=COALESCE(?10,mandate),
                    started_at=CASE WHEN ?2='running' AND started_at IS NULL THEN ?9 ELSE started_at END,
+                   last_step_at=CASE WHEN ?2='running' THEN ?9 ELSE last_step_at END,
                    attempts=CASE WHEN ?2='running' THEN attempts+1 ELSE attempts END,
                    finished_at=CASE WHEN ?2 IN ('done','unverified','failed','cancelled','skipped') THEN ?9 ELSE NULL END
                  WHERE id=?1",
-                params![id, state, result, error, evidence.map(|e| e.to_string()), workdir, branch, thread_id, now],
+                params![id, state, result, error, evidence.map(|e| e.to_string()), workdir, branch, thread_id, now, mandate.map(|m| m.to_string())],
             )?;
             Ok(())
         })

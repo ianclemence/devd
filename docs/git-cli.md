@@ -69,13 +69,12 @@ a plan.
 | `devd git clone <url> [dest]` | `git.clone` | `--depth`, `--branch`, `--recurse-submodules`. |
 
 ```bash
-devd call git.sync.preview --arg repo=.
-devd call git.outgoing --arg repo=. --arg remote=origin --arg branch=main
-devd call git.incoming --arg repo=. --arg remote=origin --arg branch=main
+devd call git.sync.preview --arg repo=. --arg remote=origin --arg branch=main
 ```
 
-`sync.preview` reports incoming and outgoing commits separately and says whether
-the branch has diverged, so a pull can be decided with the facts in hand.
+`git.sync.preview` reports incoming and outgoing commits separately and says
+whether the branch has diverged, so a pull can be decided with the facts in hand.
+It reads and changes nothing; `git.pull` and `git.push` are the operations.
 
 ## History rewriting
 

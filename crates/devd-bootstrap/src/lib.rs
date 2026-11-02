@@ -53,6 +53,10 @@ impl Agents {
         if devd_agent::host::claim(paths) {
             self.hub.reconcile();
             self.team.recover();
+            // What devd promised itself, and the rules a project wrote for what
+            // it would like to be told about. Both only run here, because both
+            // can start work.
+            devd_agent::guardian::spawn(self.team.clone());
         }
     }
 }

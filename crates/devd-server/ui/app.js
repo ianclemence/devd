@@ -3359,12 +3359,28 @@
         return '<div class="trust-line"><span class="mono">' + esc(t.role) + '</span><span class="pill ' + (t.level === "proven" ? "pill-ok" : t.level === "building" ? "pill-accent" : "") + '">' + esc(t.level) + "</span><span class=\"dim\">" + t.done + " done" + (t.unverified || t.blocked_or_failed ? " · " + (t.unverified + t.blocked_or_failed) + " not accepted" : "") + "</span></div>";
       }).join("")
       : '<div class="dim">No completed task yet. Trust begins with the first verified run.</div>';
+    // What devd watches for, and what it would do about it. A rule in observe
+    // mode has done nothing but record; saying so is the point of showing it.
+    var rules = ctx.intake_rules || [];
+    var ruleHtml = rules.length
+      ? rules.map(function (r) {
+        return '<div class="trust-line"><span class="mono">' + esc(r.name) + '</span><span class="pill ' + (r.mode === "auto" ? "pill-accent" : "") + '">' + esc(r.mode) + '</span><span class="dim">when ' + esc(r.trigger_text) + ', ' + esc(r.condition_text) + ' → ' + esc(r.goal) + "</span></div>";
+      }).join("")
+      : '<div class="dim">No rule written. devd will not start a run by itself.</div>';
+    // Proposals devd made and nobody answered: work it would do, recorded without doing it.
+    var proposals = ctx.suggestions || [];
+    var proposalHtml = proposals.length
+      ? '<ul class="team-lessons">' + proposals.slice(0, 5).map(function (s) { return "<li><b>" + esc(s.title) + "</b> <span class=\"dim\">" + esc(s.why || "") + "</span></li>"; }).join("") + "</ul>"
+      : '<div class="dim">Nothing proposed. A proposal is recorded, never started.</div>';
     return '<div class="team-context">' +
       '<div class="context-section"><div class="field-label">Sites</div>' + siteHtml + "</div>" +
       '<div class="context-section"><div class="field-label">Services</div>' + serviceHtml + "</div>" +
       '<div class="context-section"><div class="field-label">Runtimes</div>' + runtimeHtml + "</div>" +
       '<div class="context-section"><div class="field-label">Project knowledge</div>' + memoryHtml + "</div>" +
       '<div class="context-section"><div class="field-label">Trust record</div>' + trustHtml + "</div>" +
+      '<div class="context-section"><div class="field-label">Rules for starting work <span class="dim">(it records what it would do; a run still needs your plan approval)</span></div>' + ruleHtml +
+        '<div style="margin-top:6px"><button type="button" class="btn btn-mini" data-action="team-intake-edit">Write a rule</button></div></div>' +
+      '<div class="context-section"><div class="field-label">Proposed, not done</div>' + proposalHtml + "</div>" +
       '<div class="context-section"><div class="field-label">Lessons and missteps</div>' + lessonHtml + "</div>" +
       "</div>";
   }
@@ -3410,6 +3426,25 @@
       '<div class="field"><div class="field-label">Invite to propose next work</div><div class="check-grid">' + roleBoxes + "</div>" +
       '<div class="row-sub">These roles may suggest a next workstream that moves toward the north star. A person still approves the plan before anything runs.</div></div>' +
       '<div class="inline"><span class="grow"></span><button type="button" class="btn" data-action="team-charter-cancel">Cancel</button><button type="button" class="btn btn-primary" data-action="team-charter-save">Save charter</button></div>' +
+      "</div>");
+  }
+
+  function openIntakeDrawer() {
+    if (!state.rosterProject) return toast("warn", "Choose a project for the team room first");
+    var triggers = [["health.down", "a watched site is down"], ["check.failed", "a project check failed"], ["schedule.missed", "a schedule was due while devd was off"]];
+    var triggerOpts = triggers.map(function (t) { return '<option value="' + attr(t[0]) + '">' + esc(t[1]) + "</option>"; }).join("");
+    var roleOpts = (state.roster || []).filter(function (r) { return r.writes_files; }).map(function (r) { return '<option value="' + attr(r.id) + '"' + (r.id === "implementer" ? " selected" : "") + ">" + esc(r.title) + "</option>"; }).join("");
+    openDrawer("A rule for starting work", '<div class="stack team-charter-form">' +
+      '<div class="ui-quiet">' + esc(state.rosterProject) + "</div>" +
+      '<div class="field"><label class="field-label" for="intake-name">Name</label><input class="input" id="intake-name" placeholder="nightly-check" spellcheck="false"></div>' +
+      '<div class="field"><label class="field-label" for="intake-trigger">When</label><select class="input" id="intake-trigger">' + triggerOpts + "</select></div>" +
+      '<div class="inline"><div class="field grow"><label class="field-label" for="intake-count">Times in a row</label><input class="input" id="intake-count" value="3" inputmode="numeric"></div>' +
+      '<div class="field grow"><label class="field-label" for="intake-cooldown">At most once every (minutes)</label><input class="input" id="intake-cooldown" value="60" inputmode="numeric"></div></div>' +
+      '<div class="field"><label class="field-label" for="intake-goal">What the run should do</label><textarea class="input" id="intake-goal" rows="3" placeholder="Make the nightly check pass again, and add a regression test for it."></textarea></div>' +
+      '<div class="field"><label class="field-label" for="intake-role">Who would do it</label><select class="input" id="intake-role">' + roleOpts + "</select></div>" +
+      '<div class="field"><label class="field-label" for="intake-mode">Mode</label><select class="input" id="intake-mode"><option value="observe">Record what it would do (nothing runs)</option><option value="auto">Start a run, which still waits for my plan approval</option></select></div>' +
+      '<div class="row-sub">In observe mode the rule only records a proposal, which appears in the Inbox and in the team room. Start with that, read a few, and only then let it start runs. A started run plans first and waits for you, and never starts itself in production.</div>' +
+      '<div class="inline"><span class="grow"></span><button type="button" class="btn" data-action="team-charter-cancel">Cancel</button><button type="button" class="btn btn-primary" data-action="team-intake-save">Save the rule</button></div>' +
       "</div>");
   }
 
@@ -3606,11 +3641,13 @@
     var sources = SKILLS.sources || [];
     var q = state.filters.skills || "";
 
-    var kinds = { playbook: "Playbooks", technique: "Techniques", principle: "Principles" };
+    // The groups are the stages of work, in the order an agent meets them. A
+    // skill a person wrote keeps its own kind, whatever word they chose.
+    var kinds = { discover: "Discover", design: "Design", build: "Build", check: "Check", review: "Review", ship: "Ship", words: "Words", house: "House rules" };
     var groups = {};
     list
       .filter(function (s) { return keeps(q, s.name, s.description, s.kind, (s.roles || []).join(" ")); })
-      .forEach(function (s) { (groups[s.kind || "technique"] = groups[s.kind || "technique"] || []).push(s); });
+      .forEach(function (s) { (groups[s.kind || "build"] = groups[s.kind || "build"] || []).push(s); });
 
     var body = '<div class="filter-row">' + filterBox("skills", "Search skills") + "</div>";
 
@@ -3663,7 +3700,7 @@
 
     el("main").innerHTML = page(
       "Skills",
-      "Playbooks, techniques and principles the team loads when the work calls for them.",
+      "Short instructions the team loads when the work calls for them, grouped by the stage of work.",
       "",
       body
     );
@@ -7569,6 +7606,10 @@
     if (d.run_id) actions += '<button type="button" class="btn btn-ghost" data-action="open-run" data-id="' + attr(d.run_id) + '" title="What devd recorded for this run: steps, capability calls, evidence and the durable timeline">Evidence</button>';
     var head = '<div class="chat-head"><div class="grow"><div class="chat-title">' + esc(r.title) + '</div><div class="dim mono nowrap">' + esc(r.project || "") + ' · started by ' + esc((r.created_by || "").replace("human:", "")) + " " + esc(ago(r.created_at)) + '</div></div><span class="pill ' + (r.state === "failed" ? "pill-bad" : r.state === "done" ? "pill-ok" : r.state === "awaiting_plan" || r.state === "paused" ? "pill-warn" : "pill-accent") + '">' + esc(RUN_WORD[r.state] || r.state) + "</span>" + actions + "</div>";
     var note = r.error ? '<div class="notice notice-warn" style="margin:12px 16px"><b>Needs you.</b> ' + esc(r.error) + "</div>" : "";
+    // The same structured answer the Inbox shows, so the two screens agree about
+    // what is wrong and what to do about it. The run's own error line above is
+    // the record; this is the question.
+    if (d.needs) note += needsCard(d.needs);
     if (r.state === "planning") note += '<div class="notice" style="margin:12px 16px">The planner is reading the project and writing the plan' + (planner && planner.state === "waiting_approval" ? ", and is waiting for you to approve something" : "") + ".</div>";
     var cards = work.map(function (t) {
       var open = TEAM.open[t.id], dep = t.depends_on.length ? "after " + t.depends_on.join(", ") : "starts first";
@@ -7609,23 +7650,74 @@
   // ------------------------------------------------------------------- inbox
 
   function loadInbox() {
-    return Promise.all([read("approval.list", { pending_only: true }), read("inbox.list", { open_only: true }), read("approval.list", { pending_only: false }), read("inbox.list", { open_only: false })]).then(function (r) {
+    return Promise.all([read("approval.list", { pending_only: true }), read("inbox.list", { open_only: true }), read("approval.list", { pending_only: false }), read("inbox.list", { open_only: false }), read("team.list").catch(function () { return []; }), read("team.suggestions", { state: "open" }).catch(function () { return []; })]).then(function (r) {
       AI.requests = r[0]; AI.inbox = r[1];
       AI.history = { requests: (r[2] || []).filter(function (x) { return x.state !== "pending"; }).slice(0, 15), messages: (r[3] || []).filter(function (x) { return x.state === "resolved"; }).slice(0, 15) };
+      // The one question each paused run is holding on, asked in the words the
+      // run view uses, so the two screens cannot disagree.
+      var paused = (r[4] || []).filter(function (x) { return x.state === "paused" || x.state === "awaiting_plan"; });
+      AI.needs = [];
+      return Promise.all(paused.slice(0, 12).map(function (run) {
+        return read("team.get", { run: run.id }).then(function (d) {
+          if (d && d.needs) AI.needs.push(d.needs);
+        }).catch(function () {});
+      })).then(function () { return r[5] || []; });
+    }).then(function (suggestions) {
+      AI.suggestions = suggestions || [];
       return loadHealth();
     });
+  }
+
+  /* One question, one answer. The Inbox leads with what a run cannot continue
+   * without, in the run's own words: what is missing and the action that fixes
+   * it. Everything else on the page is below it. */
+  function needsCard(n) {
+    var primary = n.primary;
+    var actions = (n.actions || []).map(function (a) {
+      var cls = a.id === n.primary.id ? "btn btn-primary btn-mini" : a.dangerous ? "btn btn-mini btn-danger" : "btn btn-mini";
+      return '<button type="button" class="' + cls + '" data-action="needs-act" data-run="' + attr(n.run_id) + '" data-task="' + attr(n.task_id || "") + '" data-act="' + attr(a.id) + '" data-cap="' + attr(a.capability || "") + '" data-args="' + attr(JSON.stringify(a.args)) + '">' + esc(a.label) + "</button>";
+    }).join("");
+    return '<article class="decision decision-needs" data-kind="needs">' +
+      '<div class="decision-kind">Needs you</div>' +
+      '<div class="decision-main">' +
+        '<h3 class="decision-title">' + esc(n.question) + "</h3>" +
+        '<div class="decision-meta"><span class="mono">' + esc(n.line) + "</span>" + (n.role ? ' <span class="pill">' + esc(n.role) + "</span>" : "") + "</div>" +
+        (n.detail ? '<div class="decision-body">' + esc(n.detail) + "</div>" : "") +
+        (n.open && n.open.length ? '<ul class="decision-steps">' + n.open.map(function (o) { return "<li>" + esc(o) + "</li>"; }).join("") + "</ul>" : "") +
+        '<div class="decision-actions">' + actions +
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="team-open-from" data-id="' + attr(n.run_id) + '">Open the run</button>' +
+        "</div>" +
+      "</div></article>";
+  }
+
+  function suggestionCard(s) {
+    var steps = (s.plan || []).map(function (p) { return "<li>" + esc(p) + "</li>"; }).join("");
+    return '<article class="decision" data-kind="suggestion">' +
+      '<div class="decision-kind">Proposal</div>' +
+      '<div class="decision-main">' +
+        '<h3 class="decision-title">' + esc(s.title) + "</h3>" +
+        '<div class="decision-meta"><span>' + esc(s.role_title || s.role) + " would do this</span> <span>" + esc(s.source === "intake" ? "the rule " + (s.source_ref || "") : "devd noticed") + "</span> <span>" + esc(ago(s.created_at)) + "</span></div>" +
+        (s.why ? '<div class="decision-body">' + esc(s.why) + "</div>" : "") +
+        (steps ? '<div class="decision-label">What it would do</div><ul class="decision-steps">' + steps + "</ul>" : "") +
+        ((s.accepts || []).length ? '<div class="decision-label">Done when</div><ul class="decision-steps">' + s.accepts.map(function (a) { return "<li>" + esc(a) + "</li>"; }).join("") + "</ul>" : "") +
+        '<div class="decision-actions">' +
+          '<button type="button" class="btn btn-primary btn-mini" data-action="suggestion-accept" data-id="' + attr(s.id) + '">Start a run from this</button>' +
+          '<button type="button" class="btn btn-mini" data-action="suggestion-dismiss" data-id="' + attr(s.id) + '">Not wanted</button>' +
+          '<span class="decision-hint">Nothing has run. A started run still plans first, and you approve the plan.</span>' +
+        "</div>" +
+      "</div></article>";
   }
 
   function renderInbox() {
     if (state.view !== "inbox") return;
     if (!AI.requests) return renderLoading();
     // Each kind of intervention is a different decision, so each has its own shape.
-    var needs = [];
+    var waiting = [];
     AI.requests.forEach(function (r) {
       var title = (r.plan && r.plan.summary) || ("Run " + r.capability);
       var steps = (r.plan && r.plan.steps || []).map(function (x) { return "<li>" + esc(x) + "</li>"; }).join("");
       var effects = (r.plan && r.plan.effects || []).map(function (x) { return '<li class="decision-effect">' + esc(x) + "</li>"; }).join("");
-      needs.push('<article class="decision" data-kind="approval">' +
+      waiting.push('<article class="decision" data-kind="approval">' +
         '<div class="decision-kind">Approval</div>' +
         '<div class="decision-main">' +
           '<h3 class="decision-title">' + esc(title) + "</h3>" +
@@ -7643,7 +7735,7 @@
     AI.inbox.forEach(function (m) {
       var who = m.from_actor.replace("agent:", "").replace("devd-", "");
       if (m.needs_reply) {
-        needs.push('<article class="decision" data-kind="question">' +
+        waiting.push('<article class="decision" data-kind="question">' +
           '<div class="decision-kind">Question</div>' +
           '<div class="decision-main">' +
             '<h3 class="decision-title">' + esc(m.subject) + "</h3>" +
@@ -7668,9 +7760,16 @@
       return uiRow({ dot: "off", title: esc(x.subject), sub: esc(x.reply ? "You answered: " + x.reply : "Read") });
     }));
     var body = "";
-    if (needs.length) body += uiHead("Waiting for you", needs.length) + '<div class="decisions">' + needs.join("") + "</div>";
+    // The order is the answer to "does anything need me now?": a run that is
+    // stuck, then a proposal waiting for a yes or a no, then an approval, then
+    // an ordinary question, then what simply happened.
+    var stuck = (AI.needs || []).map(needsCard).join("");
+    var proposals = (AI.suggestions || []).map(suggestionCard).join("");
+    if (stuck) body += uiHead("Needs you", (AI.needs || []).length) + '<div class="decisions">' + stuck + "</div>";
+    if (proposals) body += uiHead("Proposed, not done", (AI.suggestions || []).length) + '<div class="decisions">' + proposals + "</div>";
+    if (waiting.length) body += uiHead("Waiting for you", waiting.length) + '<div class="decisions">' + waiting.join("") + "</div>";
     if (updates.length) body += uiHead("Updates", updates.length) + uiList(updates);
-    if (!needs.length && !updates.length) body += uiEmpty("You're all caught up", "When an agent has a question, or needs your okay before it changes something, it'll wait for you here. Nothing it asks for runs until you say so.");
+    if (!stuck.length && !proposals.length && !waiting.length && !updates.length) body += uiEmpty("You're all caught up", "When an agent has a question, or needs your okay before it changes something, it'll wait for you here. Nothing it asks for runs until you say so.");
     if (earlier.length) body += uiHead("Earlier", null, '<button type="button" class="btn btn-mini btn-ghost" data-action="inbox-clear" title="Delete every answered or dismissed message">Clear</button>') + uiList(earlier.slice(0, 8));
     el("main").innerHTML = page("Inbox", "", "", body);
   }
@@ -9383,7 +9482,28 @@
       if (opt === "logs") return read("toolchain.logs", { tool: tool }).then(function (d) { openDrawer(tool + " logs", '<pre class="log-block">' + esc((d.lines || []).join("\n") || "(no log lines)") + "</pre>"); }).catch(function (e) { toast("error", e.message); });
     },
     "team-charter-edit": function () { openCharterDrawer(); },
-    "team-charter-cancel": function () { closeDrawer(); },
+    "team-intake-edit": function () { openIntakeDrawer(); },
+    "team-intake-save": function () {
+      if (!state.rosterProject) return toast("warn", "Choose a project for the team room first");
+      var name = el("intake-name").value.trim();
+      if (!/^[a-z0-9_-]{1,40}$/.test(name)) return toast("warn", "A rule name is 1-40 letters, digits, - or _");
+      var goal = el("intake-goal").value.trim();
+      if (goal.length < 10) return toast("warn", "Say what the run should do");
+      var args = {
+        project: state.rosterProject,
+        name: name,
+        trigger: el("intake-trigger").value,
+        goal: goal,
+        role: el("intake-role").value,
+        mode: el("intake-mode").value,
+        condition: { min_failures: parseInt(el("intake-count").value, 10) || 1, cooldown_minutes: parseInt(el("intake-cooldown").value, 10) || 60 }
+      };
+      run("intake.set", args).then(function (outcome) {
+        if (!outcome) return null;
+        closeDrawer();
+        return loadRoster();
+      }).then(function () { if (state.view === "agents") renderRoster(); });
+    },    "team-charter-cancel": function () { closeDrawer(); },
     "team-charter-save": function () {
       if (!state.rosterProject) return toast("warn", "Choose a project for the team room first");
       var roles = Array.prototype.map.call(document.querySelectorAll('input[name="charter-role"]:checked'), function (n) { return n.value; });
@@ -9636,6 +9756,45 @@
       var args = { id: n.dataset.id };
       if (inp) { if (!inp.value.trim()) return toast("warn", "Write an answer first"); args.reply = inp.value.trim(); }
       run("inbox.reply", args).then(function () { return loadHealth(); }).then(function () { return state.view === "home" ? loadHome().then(render) : loadInbox().then(render); });
+    },
+    /* One button, one answer. A "Needs you" card carries the action the run said
+     * would resolve it, so the person does not have to open the run to find out
+     * what to do. */
+    "needs-act": function (n) {
+      var act = n.dataset.act;
+      if (act === "look") {
+        var look = {};
+        try { look = JSON.parse(n.dataset.args || "{}"); } catch (e) { look = {}; }
+        if (look.view === "inbox") return navigate("inbox");
+        if (look.thread) return ACTIONS["open-thread"]({ dataset: { id: look.thread } });
+        return ACTIONS["team-open-from"]({ dataset: { id: n.dataset.run } });
+      }
+      var cap = n.dataset.cap, call = {};
+      try { call = JSON.parse(n.dataset.args || "{}"); } catch (e) { call = {}; }
+      if (!cap) return;
+      // Accepting without proof is the one action that needs a person to say yes twice.
+      if (act === "accept") {
+        return uiConfirm({ title: "Accept without the proof?", text: "devd asked for proof that this task worked and did not get it. The final report will say you accepted it by hand.", confirm: "Accept anyway", danger: true }).then(function (yes) {
+          if (yes) run(cap, call).then(function () { return loadInbox().then(render); });
+        });
+      }
+      if (act === "retry") {
+        return uiPrompt({ title: "Try this task again", text: "What should it do differently?", input: { placeholder: "Optional note for the agent" }, confirm: "Retry" }).then(function (note) {
+          if (note === null) return;
+          call.note = call.note || note || undefined;
+          run(cap, call).then(function () { return loadInbox().then(render); });
+        });
+      }
+      run(cap, call).then(function () { return loadHealth(); }).then(function () { return loadInbox().then(render); });
+    },
+    "suggestion-accept": function (n) {
+      run("team.accept_suggestion", { id: n.dataset.id }).then(function (o) {
+        if (!o) return null;
+        return loadInbox().then(render).then(function () { if (o.data && o.data.run) toast("ok", "A run was started. Approve its plan when it is ready."); });
+      });
+    },
+    "suggestion-dismiss": function (n) {
+      run("team.dismiss_suggestion", { id: n.dataset.id }).then(function () { return loadInbox().then(render); });
     },
     "prov-new": function (n) {
       var pr = (AI.presets || []).filter(function (x) { return x.id === n.dataset.preset; })[0] || {};

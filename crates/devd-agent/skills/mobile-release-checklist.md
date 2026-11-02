@@ -1,7 +1,7 @@
 ---
 name: mobile-release-checklist
-description: What to check before a mobile build goes to a device: permissions, offline, versions, and what was not tested.
-kind: playbook
+description: What to check before a mobile build goes to a device: permissions, offline, versions, and what was not tested
+kind: ship
 roles: mobile
 ---
 

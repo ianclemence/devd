@@ -1,6 +1,6 @@
 [package]
 name = "devd-server"
-description = "The local HTTP API and application UI that devd serves."
+description = "The loopback HTTP API and the application UI that devd serves."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

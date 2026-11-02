@@ -1,7 +1,7 @@
 ---
 name: catch-up
-description: Tell the person what changed and what waits on them, briefly.
-kind: technique
+description: Tell the person what changed and what waits on them, briefly
+kind: discover
 roles: planner,reviewer
 ---
 

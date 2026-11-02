@@ -3,7 +3,7 @@ name = "devd-services"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Managed services for devd: nginx, the PHP FastCGI listener, MariaDB, the local certificate authority and generated web server configuration."
+description = "Managed services for devd: nginx, the PHP FastCGI listener, MariaDB, the certificate authority and generated web server configuration."
 
 [dependencies]
 devd-core = { path = "../devd-core" }

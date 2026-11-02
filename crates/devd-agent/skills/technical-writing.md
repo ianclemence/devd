@@ -1,7 +1,7 @@
 ---
 name: technical-writing
-description: Write documentation people can use.
-kind: technique
+description: Write documentation people can use
+kind: words
 roles: docs
 ---
 

@@ -9,7 +9,7 @@ rust-version = "1.77"
 license = "MIT"
 repository = "https://github.com/ianclemence/devd"
 authors = ["Ian Clemence <batricupid@gmail.com>"]
-description = "Agent-native local development environment manager: managed runtimes, sites, local HTTPS, Git, and one capability API for humans and agents."
+description = "Agent-native development environment manager: runtimes, sites, HTTPS, Git and a coding-agent team, each action approved and recorded."
 keywords = ["development-environment", "php", "mcp", "agents", "runtime-manager"]
 categories = ["development-tools", "command-line-utilities"]
 

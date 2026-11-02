@@ -38,6 +38,7 @@ use devd_core::{util, ChatEvent, DevdError, Registry, Result, TeamRun, TeamTask}
 use crate::charter;
 use crate::chat::Hub;
 use crate::judge;
+use crate::providers;
 use crate::roles::{self, Role};
 
 /// Most tasks a plan may contain.
@@ -45,6 +46,17 @@ pub const MAX_TASKS: usize = 14;
 
 /// Most times a task is started before a person has to look at it.
 pub const MAX_ATTEMPTS: i64 = 3;
+
+/// How long a running task may do nothing before the watchdog intervenes.
+///
+/// It is a multiple of the longest a model call is allowed to take, so a task
+/// waiting on its own provider is not called stuck: the point is to find a worker
+/// that is alive but asleep, not one that is thinking slowly.
+pub const STALL_FACTOR: i64 = 2;
+
+/// The floor for the watchdog in tests and on a machine with no provider timeout
+/// configured.
+pub const STALL_FLOOR: Duration = Duration::from_secs(180);
 
 /// How likely a criterion must be judged to hold to count as met.
 const MET: f64 = 0.6;
@@ -359,6 +371,25 @@ fn is_final(state: &str) -> bool {
     )
 }
 
+/// Whether a running task has done nothing for longer than it may.
+///
+/// Split out from the pass that acts on it so the arithmetic can be tested: the
+/// question is only "has its heartbeat stopped moving", never "is it taking a long
+/// time", which is a different and legitimate thing.
+pub fn stalled(t: &TeamTask, now: chrono::DateTime<chrono::Utc>, window: Duration) -> bool {
+    if !is_active(&t.state) {
+        return false;
+    }
+    let Some(last) = t.last_step_at.as_deref() else {
+        return false;
+    };
+    let Ok(last) = chrono::DateTime::parse_from_rfc3339(last) else {
+        return false;
+    };
+    now.signed_duration_since(last.with_timezone(&chrono::Utc))
+        >= chrono::Duration::from_std(window).unwrap_or_default()
+}
+
 impl Team {
     /// Build the team over a base context and the assistant's engine.
     pub fn new(hub: Arc<Hub>, ctx: Ctx) -> Arc<Self> {
@@ -426,6 +457,139 @@ impl Team {
                 format!("{kind} in run {run_id}"),
                 json!({ "run": run_id, "kind": kind, "id": id }),
             );
+        }
+    }
+
+    // ------------------------------------------------------------- the mandate
+
+    /// The rules a task accepted under. Everything that changes what an approval
+    /// still means is part of it, so a resumed task can be checked against them.
+    fn policy_version(&self, run_id: &str) -> String {
+        let agreement = self
+            .ctx
+            .store
+            .get_run(run_id)
+            .ok()
+            .flatten()
+            .and_then(|r| r.project)
+            .and_then(|p| charter::load(&self.ctx, &p).ok().flatten())
+            .map(|c| c.working_agreement)
+            .unwrap_or_default();
+        devd_core::store_autonomy::policy_version(&self.ctx.store, run_id, &agreement)
+    }
+
+    /// Grant `role` the right to do `key` on this run.
+    fn mandate(&self, run: &TeamRun, key: &str, role: &str, scope: &[String], basis: &str, origin: &str) -> Value {
+        let _ = key;
+        serde_json::to_value(devd_core::Mandate::new(
+            basis,
+            origin,
+            &run.id,
+            role,
+            scope,
+            &self.policy_version(&run.id),
+        ))
+        .unwrap_or(Value::Null)
+    }
+
+    /// Whether a task's mandate still holds under the current rules.
+    ///
+    /// Three things can withdraw it without anybody stopping the run: the machine
+    /// was switched to production, the definition of done changed, or the task's
+    /// own role no longer exists. The mandate records which rules the work was
+    /// accepted under, so this is a comparison rather than a guess.
+    fn mandate_holds(&self, t: &TeamTask) -> std::result::Result<(), String> {
+        let Some(m) = self.ctx.store.task_mandate(&t.id).ok().flatten() else {
+            // Work created before mandates existed still runs: the plan approval
+            // is the authority it has.
+            return Ok(());
+        };
+        let now = self.policy_version(&t.run_id);
+        if m.policy_version != now && self.ctx.store.environment_mode() == "production" {
+            return Err(format!(
+                "the authority this task was given was recorded under different rules ({}) and this machine is now in production mode; resume it to grant it again",
+                m.policy_version
+            ));
+        }
+        if roles::get(&t.role).is_none() {
+            return Err(format!("the {} role no longer exists, so nothing can do this work", t.role));
+        }
+        if t.scope.iter().any(|s| s.is_empty() || s.starts_with("..")) && !t.scope.is_empty() {
+            return Err("this task's scope names a path outside the project".into());
+        }
+        Ok(())
+    }
+
+    // ---------------------------------------------------------- the watchdog
+
+    /// How long a task may do nothing before the watchdog treats it as stuck.
+    fn stall_after(&self) -> Duration {
+        Duration::from_secs((providers::READ_TIMEOUT_SECS * STALL_FACTOR as u64).max(STALL_FLOOR.as_secs()))
+    }
+
+    /// Find running tasks that have stopped moving, and do something about them.
+    ///
+    /// The first time, the specialist is asked where it is: a model that has
+    /// finished thinking but never called a tool very often answers. The second
+    /// time the task is `unverified` with the reason, which is the same terminal
+    /// state a failed report gets, so nothing new has to understand it. This runs
+    /// in the scheduler, not as a separate agent: it has to be cheap, and it has
+    /// to work when no model is answering at all.
+    fn watch(self: &Arc<Self>, run_id: &str, tasks: &[TeamTask]) {
+        let now = chrono::Utc::now();
+        for t in tasks.iter().filter(|t| is_active(&t.state)) {
+            let Some(last) = t.last_step_at.as_deref() else {
+                continue;
+            };
+            let Ok(last) = chrono::DateTime::parse_from_rfc3339(last) else {
+                continue;
+            };
+            let quiet = now.signed_duration_since(last.with_timezone(&chrono::Utc));
+            if quiet < chrono::Duration::from_std(self.stall_after()).unwrap_or_default() {
+                continue;
+            }
+            let Some(tid) = t.thread_id.clone() else {
+                continue;
+            };
+            // A task whose conversation is not running at all is not stalled; it
+            // is waiting for its next step, and `monitor` owns that.
+            if !self.hub.is_running(&tid) {
+                continue;
+            }
+            let minutes = quiet.num_minutes().max(1);
+            let stalls = self.ctx.store.bump_stall(&t.id).unwrap_or(1);
+            if stalls == 1 {
+                self.event(
+                    run_id,
+                    Some(&t.id),
+                    "stalled",
+                    json!({ "task": t.key, "minutes": minutes, "nudge": true }),
+                );
+                let _ = self.hub.follow_up(
+                    &tid,
+                    &format!(
+                        "The team has seen no progress from you for {minutes} minutes. If you are still working, continue. If you are stuck, call team.report now with status \"blocked\" and one sentence saying exactly what you need."
+                    ),
+                );
+            } else {
+                // Second strike: stop pretending it is working.
+                let _ = self.hub.stop(&self.ctx, &tid);
+                let why = format!("it showed no progress for {minutes} minutes after being asked to report; the task was stopped so the run can move on");
+                let _ = self.ctx.store.update_team_task(
+                    &t.id,
+                    TaskUpdate {
+                        state: "unverified",
+                        error: Some(&why),
+                        ..Default::default()
+                    },
+                );
+                self.event(
+                    run_id,
+                    Some(&t.id),
+                    "unverified",
+                    json!({ "task": t.key, "why": why, "stalled": true }),
+                );
+            }
         }
     }
 
@@ -660,6 +824,16 @@ impl Team {
         }
         validate_plan(tasks)?;
         for t in tasks {
+            // The planner's tasks inherit the authority of whoever started the
+            // run: a person typed the goal, a clock started it, or an agent
+            // proposed it. The mandate says which, so a later reader does not
+            // have to infer it from the log.
+            let basis = if run.created_by.starts_with("agent:") {
+                "inferred"
+            } else {
+                "explicit"
+            };
+            let mandate = self.mandate(&run, &t.key, &t.role, &t.scope, basis, &run.created_by);
             self.ctx.store.add_task(
                 &run.id,
                 NewTask {
@@ -669,6 +843,7 @@ impl Team {
                     instructions: &t.instructions,
                     depends_on: &t.depends_on,
                     scope: &t.scope,
+                    mandate: Some(&mandate),
                 },
             )?;
         }
@@ -814,6 +989,10 @@ impl Team {
             &caller.actor.label(),
         )?;
         let key = format!("work-{}", &run.id[..6.min(run.id.len())]);
+        // A person wrote this work item, so its authority is explicit; an agent
+        // that handed the work over carries the inferred basis.
+        let basis = if caller.actor.is_agent() { "inferred" } else { "explicit" };
+        let mandate = self.mandate(&run, &key, r.id, &[], basis, &caller.actor.label());
         self.ctx.store.add_task(
             &run.id,
             NewTask {
@@ -821,6 +1000,7 @@ impl Team {
                 role: r.id,
                 title: &title,
                 instructions,
+                mandate: Some(&mandate),
                 ..Default::default()
             },
         )?;
@@ -939,6 +1119,11 @@ impl Team {
             )));
         }
         // Before the plan was approved there is nothing to schedule; the planner still has to finish.
+        for t in self.ctx.store.list_tasks_of_run(run_id)? {
+            // A person resuming the run is a deliberate new decision; the
+            // watchdog starts counting again from the resume.
+            let _ = self.ctx.store.reset_stalls(&t.id);
+        }
         self.ctx.store.set_run_state(
             run_id,
             if run.plan_approved {
@@ -992,6 +1177,7 @@ impl Team {
                 ..Default::default()
             },
         )?;
+        let _ = self.ctx.store.reset_stalls(&t.id);
         self.event(
             &run.id,
             Some(&t.id),
@@ -1146,16 +1332,22 @@ impl Team {
         let tasks = self.ctx.store.list_tasks_of_run(&run.id)?;
         let planner = match tasks.iter().find(|t| t.role == "planner") {
             Some(p) => p.clone(),
-            None => self.ctx.store.add_task(
-                &run.id,
-                NewTask {
-                    key: "plan",
-                    role: "planner",
-                    title: "Plan the work",
-                    instructions: &format!("Plan this goal for the team:\n\n{}", run.goal),
-                    ..Default::default()
-                },
-            )?,
+            None => {
+                // The planner has the authority of the run itself.
+                let basis = if run.created_by.starts_with("agent:") { "inferred" } else { "explicit" };
+                let mandate = self.mandate(run, "plan", "planner", &[], basis, &run.created_by);
+                self.ctx.store.add_task(
+                    &run.id,
+                    NewTask {
+                        key: "plan",
+                        role: "planner",
+                        title: "Plan the work",
+                        instructions: &format!("Plan this goal for the team:\n\n{}", run.goal),
+                        mandate: Some(&mandate),
+                        ..Default::default()
+                    },
+                )?
+            }
         };
         match planner.state.as_str() {
             "pending" => self.start_task(run, &planner, &tasks)?,
@@ -1188,6 +1380,9 @@ impl Team {
 
     fn tick(self: &Arc<Self>, run: &TeamRun) -> Result<bool> {
         let tasks = self.ctx.store.list_tasks_of_run(&run.id)?;
+        // What is alive but not progressing is found before the scheduler decides
+        // what to start, so a stalled worker does not hold its slot forever.
+        self.watch(&run.id, &tasks);
         for t in tasks.iter().filter(|t| is_active(&t.state)) {
             self.monitor(run, t)?;
         }
@@ -1244,7 +1439,26 @@ impl Team {
             }) {
                 continue;
             }
+            // A task whose authority no longer holds does not start. The run
+            // pauses with the reason instead, so a change of mode or policy
+            // stops work deliberately rather than silently.
+            if let Err(why) = self.mandate_holds(t) {
+                let msg = format!("{} ({}): its authority no longer holds: {why}", t.key, t.role);
+                self.ctx.store.set_run_state(&run.id, "paused", None, Some(&msg))?;
+                self.event(&run.id, Some(&t.id), "mandate_revoked", json!({ "task": t.key, "why": why }));
+                let _ = self.ctx.store.post_inbox(
+                    "agent:devd-team",
+                    run.project.as_deref(),
+                    &format!("Run paused: {}", run.title),
+                    &format!("{msg}\n\nResume the run to accept the new rules and continue, or cancel it."),
+                    true,
+                );
+                return Ok(true);
+            }
             self.start_task(run, t, &tasks)?;
+            // The heartbeat starts with the work, so a launch that never reports
+            // is found by the watchdog rather than being invisible.
+            let _ = self.ctx.store.touch_task(&t.id);
             started += 1;
             if role.writes && !isolated {
                 break;
@@ -1269,13 +1483,18 @@ impl Team {
                     .any(|t| matches!(t.role.as_str(), "implementer" | "docs" | "infra"))
             {
                 let deps: Vec<String> = real.iter().map(|t| t.key.clone()).collect();
-                self.ctx.store.add_task(&run.id, NewTask { key: "final-verify", role: "qa", title: "Verify the finished result", instructions: "Everything has been implemented and merged. Independently verify the result in the project directory: run the project's own test, lint and build tasks (project.detect shows which exist) and report exactly what passed and what failed. If the project has no checks, say so and exercise the main behaviour by running it. Do not change application code.", depends_on: &deps, ..Default::default() })?;
+                // The harness adds this step itself: no person asked for it, so
+                // its mandate says so rather than borrowing the plan's.
+                let mandate = self.mandate(run, "final-verify", "qa", &[], "system", "devd:harness");
+                self.ctx.store.add_task(&run.id, NewTask { key: "final-verify", role: "qa", title: "Verify the finished result", instructions: "Everything has been implemented and merged. Independently verify the result in the project directory: run the project's own test, lint and build tasks (project.detect shows which exist) and report exactly what passed and what failed. If the project has no checks, say so and exercise the main behaviour by running it. Do not change application code.", depends_on: &deps, mandate: Some(&mandate), ..Default::default() })?;
                 self.event(&run.id, None, "note", json!({ "text": "devd added a final verification task: completion needs an independent check, not only the implementers' reports." }));
                 return Ok(true);
             }
             return self.finish(run, &tasks);
         }
-        // Stuck: something needs a person.
+        // Stuck: something needs a person. The run says one thing - the single
+        // question that would unblock it - rather than listing every task that
+        // went wrong. The whole list is still in `needs` for the view that wants it.
         let blocked: Vec<String> = real
             .iter()
             .filter(|t| matches!(t.state.as_str(), "unverified" | "blocked" | "failed"))
@@ -1289,18 +1508,33 @@ impl Team {
             })
             .collect();
         if !blocked.is_empty() {
-            let msg = format!("Needs you: {}", blocked.join("; "));
+            let needs = crate::needs::of(run, &tasks);
+            let msg = match &needs {
+                Some(n) => n.one_line(),
+                None => format!("Needs you: {}", blocked.join("; ")),
+            };
             self.ctx
                 .store
                 .set_run_state(&run.id, "paused", None, Some(&msg))?;
-            self.event(&run.id, None, "needs_person", json!({ "tasks": blocked }));
+            self.event(&run.id, None, "needs_person", json!({ "tasks": blocked, "needs": needs }));
+            let body = match &needs {
+                Some(n) => format!(
+                    "{}\n\n{}\n\n{}",
+                    n.question(),
+                    n.detail(),
+                    n.actions
+                        .iter()
+                        .map(|a| format!("- {}: {}", a.label, a.detail))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                ),
+                None => format!("{msg}\n\nRetry the task with a note, accept it by hand, or cancel the run."),
+            };
             let _ = self.ctx.store.post_inbox(
                 "agent:devd-team",
                 run.project.as_deref(),
                 &format!("Run paused: {}", run.title),
-                &format!(
-                    "{msg}\n\nRetry the task with a note, accept it by hand, or cancel the run."
-                ),
+                &body,
                 true,
             );
         }
@@ -1949,6 +2183,7 @@ impl Team {
         for (i, (criterion, _)) in unmet.iter().enumerate() {
             let key = format!("pass{round}-{}", i + 1);
             let instructions = format!("The run is not finished: this requirement of the definition of done is not yet met, judged from the recorded evidence.\n\nRequirement: {criterion}\n\nLook at the project as it is now, make the change that meets it, and prove it with the project's own checks. Do not redo work that is already accepted.");
+            let mandate = self.mandate(run, &key, "implementer", &[], "system", "devd:harness");
             self.ctx.store.add_task(
                 &run.id,
                 NewTask {
@@ -1957,13 +2192,14 @@ impl Team {
                     title: &format!("Meet: {}", util::truncate(criterion, 60)),
                     instructions: &instructions,
                     depends_on: &before,
+                    mandate: Some(&mandate),
                     ..Default::default()
                 },
             )?;
             keys.push(key);
         }
         let verify = format!("pass{round}-verify");
-        self.ctx.store.add_task(&run.id, NewTask { key: &verify, role: "qa", title: "Verify the additional work", instructions: "Independently verify the project again: run its own test, lint and build tasks and report exactly what passed and what failed. Do not change application code.", depends_on: &keys, ..Default::default() })?;
+        self.ctx.store.add_task(&run.id, NewTask { key: &verify, role: "qa", title: "Verify the additional work", instructions: "Independently verify the project again: run its own test, lint and build tasks and report exactly what passed and what failed. Do not change application code.", depends_on: &keys, mandate: Some(&self.mandate(run, &verify, "qa", &[], "system", "devd:harness")), ..Default::default() })?;
         self.ctx.store.bump_round(&run.id)?;
         self.event(&run.id, None, "note", json!({ "text": format!("{} requirement(s) of the definition of done are not met; devd started pass {round} of {} to meet them.", unmet.len(), self.ctx.store.goal_loop(&run.id).map(|g| g.max_rounds).unwrap_or(round)) }));
         Ok(true)

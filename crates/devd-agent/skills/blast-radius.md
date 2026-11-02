@@ -1,7 +1,7 @@
 ---
 name: blast-radius
-description: Find what a change could break beyond its callers, and prove the one fact that makes it safe.
-kind: technique
+description: Find what a change could break beyond its callers, and prove the one fact that makes it safe
+kind: review
 roles: reviewer,architect,qa
 ---
 

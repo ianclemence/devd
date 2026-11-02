@@ -43,7 +43,7 @@ sentence in a system prompt**. A prompt is a request. The registry is a gate.
 An agent's request for a destructive operation outside its project is therefore a
 well-formed request that fails. That failure is the feature. The narrow exception
 is deleting inside the project the conversation was attached to: that is ordinary
-work, and the harness - not the model - is what decides the path is inside.
+work, and the harness — not the model — is what decides the path is inside.
 
 ## Approvals
 
@@ -431,7 +431,7 @@ commands.
 Commands are argv arrays and never pass through a shell string. Working
 directories must resolve inside the project. Health checks may only address
 loopback. The process environment is explicit: the daemon's own environment -
-which may contain provider keys - is not inherited. Secret-looking declared values
+which may contain provider keys — is not inherited. Secret-looking declared values
 are redacted from log reads, best-effort.
 
 The remaining boundary is real: a human who approves a manifest is trusting the

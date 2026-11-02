@@ -1,7 +1,7 @@
 ---
 name: sharpen
-description: Make a task deeper, not bigger, then restate it.
-kind: technique
+description: Make a task deeper, not bigger, then restate it
+kind: discover
 roles: planner
 ---
 

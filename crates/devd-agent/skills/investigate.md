@@ -1,7 +1,7 @@
 ---
 name: investigate
-description: Answer a question about code or behaviour from evidence, changing nothing.
-kind: playbook
+description: Answer a question about code or behaviour from evidence, changing nothing
+kind: discover
 roles: architect,researcher,reviewer,planner
 ---
 

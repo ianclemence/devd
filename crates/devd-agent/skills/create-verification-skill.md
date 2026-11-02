@@ -1,7 +1,7 @@
 ---
 name: create-verification-skill
-description: Write a project-specific, repeatable way to prove the project works.
-kind: technique
+description: Write a project-specific, repeatable way to prove the project works
+kind: build
 roles: planner,implementer,qa
 ---
 

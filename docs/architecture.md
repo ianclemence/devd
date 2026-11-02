@@ -368,7 +368,7 @@ devd-core  ←  devd-runtime  ←  devd-services  ←  devd-sites
 ## Skill crates
 
 A skill crate registers capabilities and nothing else. `devd-git` is the
-reference: `caps::register(&mut registry, service)` declares 64 capabilities
+reference: `caps::register(&mut registry, service)` declares 65 capabilities
 whose handlers call a typed `GitService`. The service is where Git knowledge
 lives — how to parse `for-each-ref`, that `git stash list` needs `%x1f` while
 `for-each-ref` needs `%1f`, which reset mode means what.
@@ -413,7 +413,7 @@ merge base instead of the two commits, and `%1f` is literal in `git stash list`.
 The registry, the tier model and the audit trail were built first so that the
 remaining work is additive: a new skill registers capabilities, and a new surface
 renders them. Apache, Redis, Mailpit, a DNS server and SSH/deploy are still to
-come - and when they land, their capabilities will appear in the CLI, the
+come — and when they land, their capabilities will appear in the CLI, the
 dashboard, the application window and the agent surface without a new safety
 decision being made, because all four read the same declarations.
 

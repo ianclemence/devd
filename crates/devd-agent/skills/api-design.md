@@ -1,7 +1,7 @@
 ---
 name: api-design
-description: Design an interface other code will depend on: resources, errors, validation, idempotency and compatibility.
-kind: technique
+description: Design an interface other code will depend on: resources, errors, validation, idempotency and compatibility
+kind: design
 roles: backend,architect
 ---
 

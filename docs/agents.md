@@ -19,6 +19,12 @@ The structure follows Anthropic's published guidance on building agents
 | Verify with evidence, not claims | Every capability call is recorded against a run, and completion is decided from typed evidence rows, never from the model's sentence that it finished (see [`runs.md`](runs.md)). |
 | Human approval for consequential actions | One durable approval service with scope, expiry and single-use decisions. Agents queue; only a person decides. |
 | Keep the context lean | A model-aware budget keeps the goal, plan, approvals, errors and recent work; older content is compacted and raw output stays as a bounded artifact. |
+| Take as little of a person's attention as possible | A run that cannot continue asks one structured question, not a report; work devd would do is proposed through `team.suggest`, not done; the assistant is told to confirm once and work quietly. |
+| The kind of work is decided in code | `RunKind` (answer, plan, assign, schedule) is chosen from the words or the composer before any model is asked, and picks the model chain. |
+| Authority is a record | Every team task carries a **mandate**: its basis, who asked, its scope and a hash of the rules it was accepted under. |
+| Proactivity is a ramp, not a switch | An intake rule starts in `observe` mode, which records what it would have done; `auto` starts a run that still waits for plan approval, and never in production. |
+| What leaves the process is a row | Notifications, background reviews and scheduled starts are effects in a durable queue, retried with backoff and reported on the health screen after three failures. |
+| A quiet system is the healthy one | A worker that stops moving is found by its heartbeat and stopped, rather than left holding a slot. |
 
 devd does not launch other coding agents. Its own agents, the assistant and the
 team, run through the providers you configure, and an outside agent that speaks
@@ -89,8 +95,8 @@ provider saved against the old compatibility URL keeps working unchanged.
 
 ### What a model can do, what it may see, what a run may spend
 
-`model.capabilities` says what is known about a model - whether it takes tools or
-images, its window and output limit, its price per million tokens - and where each
+`model.capabilities` says what is known about a model — whether it takes tools or
+images, its window and output limit, its price per million tokens — and where each
 fact came from: the provider's own listing, a short table of well-known model
 families, or *unknown*, which is reported as unknown and never assumed capable. A
 model known not to take tools is skipped for agent work, with the reason.
@@ -164,7 +170,7 @@ goal -> planner -> [you approve the plan] -> scheduler -> specialists -> final v
   returning. Otherwise the report is rejected
   twice with the reason, then the task is `unverified`, its dependants do not
   start, and the run pauses with what is needed (retry with a note, or accept by
-  hand - recorded as such).
+  hand — recorded as such).
 * **Final verification.** When every task is done devd adds a QA task that runs the
   project's own checks independently. The run's summary is built by devd from the
   recorded evidence, not from what agents wrote about themselves. The team run
@@ -287,6 +293,177 @@ not name extra capabilities, cannot take a built-in's name, and may only carry
 skills that exist. A file that does not load is reported by `team.roles` with the
 reason; the rest of the team is unaffected.
 
+### What a run needs from you
+
+A run that cannot continue says one thing, not a list of everything that went
+wrong. `team.get` returns a `needs` object:
+
+```json
+{
+  "scope": "task",
+  "task_key": "search",
+  "role": "implementer",
+  "title": "Add the search box",
+  "reason": "not-proved",
+  "missing": ["no check (test, lint, build, check) passed"],
+  "actions": [
+    { "id": "retry",  "label": "Try it again",          "capability": "team.retry",  "dangerous": false },
+    { "id": "accept", "label": "Accept it as it is",    "capability": "team.accept", "dangerous": true  },
+    { "id": "look",   "label": "Read what it did",      "capability": null }
+  ]
+}
+```
+
+`reason` is one of `no-report`, `not-proved`, `blocked`, `failed`, `merge`,
+`approval`, `plan` or `criteria`. `missing` names the evidence devd actually
+looked for and did not find, in the same words the scheduler rejected the report
+for. The first action is the one that unblocks the work; accepting without proof
+exists, is offered after it, and is marked dangerous because the run's report
+will say a person accepted it by hand.
+
+The Inbox, the run view and `team.get` all read this one object, so no two
+screens can phrase the same stuck run differently. A run with nothing waiting has
+`needs: null`. The sentence at the top of the run (`Needs you: ...`) stays as the
+record of the decision the scheduler made; `needs` is the question.
+
+### A mandate on every task
+
+Every team task is granted a **mandate** before it runs:
+
+| Field | Meaning |
+|---|---|
+| `basis` | `explicit` (a person asked), `schedule` (a standing instruction), `inferred` (devd or an agent proposed it and a person accepted), or `system` (the harness added the step, such as final verification). |
+| `origin` | Who asked, as an actor label. |
+| `role`, `scope` | What it may do and what it may touch. |
+| `policy_version` | A hash of the rules it was accepted under: environment mode, definition of done, parallel limit, working agreement. |
+| `granted_at` | When. |
+
+The mandate is why a resumed task can be re-checked rather than assumed. When a
+task is about to start and the machine has since become production while the
+rules it was accepted under have changed, when its role no longer exists, or when
+its scope names a path outside the project, the run pauses with
+`mandate_revoked` and the reason instead of continuing. A person resuming the run
+grants it again under the current rules, and resets the stall watchdog for its
+tasks.
+
+The mandate is a record, never a permission. Approvals, evidence and the role
+tier still decide what may run; a mandate explains why devd believed it could.
+
+### A worker that stops moving
+
+Every model turn and every tool call moves the task's `last_step_at`. If a
+running task moves no heartbeat for **twice the provider's own request timeout**
+(never less than three minutes, so a slow model is never mistaken for a stuck one),
+the scheduler:
+
+1. writes a `stalled` event and asks the specialist, in its own conversation,
+   where it is and to report `blocked` with one sentence if it is stuck;
+2. if that gets no answer and the heartbeat has still not moved, stops the
+   conversation and records the task as `unverified` with the reason, which is
+   the same terminal state a rejected report gets.
+
+Nothing is invented: the reason names the minutes of silence and the fact that
+it did not answer. A person's retry or resume starts the count again.
+
+### Proposals, not work
+
+`team.suggest` records work devd would do, in one row:
+
+```json
+{ "project": "...", "role": "implementer", "title": "Split the parser",
+  "why": "the parse function is 900 lines and changed in four of the last five commits",
+  "plan": ["extract the tokenizer", "keep the tests passing"],
+  "accepts": ["the parser test suite passes"] }
+```
+
+Nothing runs. The proposal appears in the Inbox under **Proposed, not done** and
+in the team room, and nobody is asked twice: proposing the same title while the
+first is still open returns the first. A person either starts a run from it
+(`team.accept_suggestion`, human only) or declines it (`team.dismiss_suggestion`).
+An accepted proposal starts an ordinary run that still waits for plan approval,
+and the run records who accepted it.
+
+Agents may propose; only a person decides. The assistant is told to use it for
+improvements it notices while doing something else, rather than doing them
+unasked or listing them in a report.
+
+### Rules for starting work on its own
+
+A project can write down what event should make devd *think about* starting a
+run. `intake.set` (human only) writes one rule:
+
+```bash
+devd call intake.set '{"project":"D:\\work\\shop","name":"nightly",
+  "trigger":"check.failed","goal":"Make the nightly check pass again and add a regression test",
+  "condition":{"min_failures":3,"cooldown_minutes":60}}'
+```
+
+The triggers are `health.down` (a watched site is down), `check.failed` (a
+project's own check failed) and `schedule.missed` (a schedule was due while devd
+was off). The condition is how many times in a row, and how often at most. The
+mode is the ramp:
+
+| Mode | What happens |
+|---|---|
+| `observe` (the default for a new rule) | The rule records a **proposal** ("devd would have started a run that does this") and stops there. No model is called. |
+| `auto` | The rule starts a run, which still waits for a person to approve its plan. It never starts one in production; there it records a proposal instead. |
+
+The rules are evaluated by the guardian in the process that owns the agents
+(`crates/devd-agent/src/guardian.rs`) against facts devd recorded itself: a health
+check's state, a run that ended `failed` or `unverified`, a schedule's own last
+error. A model never decides whether the event happened. A rule that sees its
+condition stop holding starts its count again, so "three times in a row" means
+three in a row.
+
+The team room shows each rule in words ("when a watched site is down, at most
+once every 60 minutes → Restart the site and say why it stopped"), and the
+project's prompt tells the agents what the rules are, so they do not propose the
+same thing again. `intake.list` and `intake.delete` manage them.
+
+### The queue for work that leaves the process
+
+A message to be delivered, a review nobody is waiting for, a scheduled start:
+each is a row in `effects`, with its payload, attempts, last error and the time
+it may be tried again. The daemon drains the queue every fifteen seconds, settles
+a row that worked, and backs a failing one off from two seconds, doubling to ten
+minutes, dropping it after about a week with the reason. Queuing the same kind
+and key again replaces the payload instead of stacking a second copy.
+
+`devd_ops::effects::health` reports a kind as `error` only after one of its rows
+has failed three times in a row, and `ok` again on the next success, so a
+one-off network blip is not an unhealthy devd. A partial run of the queue reports
+how many rows were attempted, not which succeeded: every row is its own decision.
+
+Background reviews (`review.start`) are queued rather than run on a thread, so a
+process that stops with a review pending tries it again and a review that keeps
+failing is visible on the health screen.
+
+### What kind of work is this
+
+Before any model is asked, `devd_core::classify` decides the `RunKind` from the
+words (or the caller says so outright: the composer's mode, `chat.send`'s `kind`,
+`devd chat --as team`):
+
+| Kind | Reached by | Model chain |
+|---|---|---|
+| `answer` | everything else | the `default` role |
+| `plan` | "have the team build X", "team: ...", "ask the team to ..." | the `planner` role |
+| `assign` | "@qa check the flow", "assign the reviewer to ..." | the `default` role until the specialist is known |
+| `schedule` | a schedule or a rule | the `default` role |
+
+The kind is stored on the conversation, so a retry or a resume reaches the same
+runner. `models.roles` lists what each kind reaches, so the answer to "what runs
+when I say this" is one table rather than something to infer.
+
+### Which prompts a turn ran under
+
+Every turn records a **manifest** on its `run_steps` row: the role, its loadout
+and every skill it read, by name and the first twelve hex digits of a hash of the
+text. The content is still compiled into devd and still cannot be edited — the
+manifest is a fingerprint, not a switch. It is what makes "the run that worked
+and the run that did not" comparable: `prompts::differs` names the parts that
+were added, removed or changed between two manifests.
+
 ### Who runs the agents
 
 Conversations and runs are driven by threads in one process and recorded in the
@@ -302,27 +479,40 @@ run in the terminal.
 ## Skills
 
 Skills are short Markdown instructions agents load with `skills.get` when the work
-calls for them. 64 ship with devd:
+calls for them. 63 ship with devd, and each belongs to one stage of the work, so
+an agent finds the right one without reading all of them:
 
-* **Playbooks** - `work` (choose one), `investigate`, `fix-bug`, `build-feature`,
-  `refactor`, `prototype`, `improve-performance`, `ship`, `handoff`.
-* **Techniques** - `how`, `why`, `blast-radius`, `architect`, `arena`, `swarm`,
-  `interrogate`, `tdd`, `sharpen`, `restate`, `catch-up`, `recall`,
-  `figure-it-out`, `decision-log`, `reflect`, `correct`, `unslop`, `no-comments`,
-  `plain-speech`, `technical-writing`, `benchmark-checklist`,
-  `create-verification-skill`.
-* **Principles** - 24, one rule each (`principle-prove-it-works`,
-  `principle-fix-root-causes`, `principle-subtract-before-you-add`, ...).
+| Stage | What it covers | Skills |
+|---|---|---|
+| **Discover** | understanding the request and the system before acting | `work` (start here), `how`, `why`, `investigate`, `check-the-request`, `sharpen`, `restate`, `choose-by-the-outcome`, `recall`, `catch-up`, `handoff` |
+| **Design** | deciding a shape | `architect`, `design-from-use`, `weigh-several-shapes`, `re-examine-the-design`, `model-the-domain`, `put-rules-in-the-compiler`, `validate-at-the-edge`, `arena`, `api-design`, `figure-it-out`, `threat-model`, `product-requirements`, `user-stories` |
+| **Build** | writing the change | `build-feature`, `fix-bug`, `refactor`, `prototype`, `improve-performance`, `tdd`, `land-one-unit-at-a-time`, `make-the-narrowest-change`, `build-the-tool-if-it-repeats`, `finish-the-migration`, `plant-the-fix-in-the-structure`, `no-comments`, `benchmark-checklist`, `create-verification-skill`, `database-migrations`, `swarm` |
+| **Check** | proving a result and keeping it honest | `prove-it-works`, `test-what-callers-see`, `fix-the-root-cause`, `report-numbers-honestly`, `keep-it-readable` |
+| **Review** | reading someone else's change | `interrogate`, `blast-radius`, `secure-coding-review`, `ui-design-review`, `accessibility-check`, `correct`, `reflect` |
+| **Ship** | landing it | `ship`, `decision-log`, `mobile-release-checklist` |
+| **Words** | prose, reports, documentation | `plain-speech`, `unslop`, `technical-writing` |
+| **House rules** | how work runs here: autonomy, ownership, staying restartable | `act-then-ask`, `decide-who-owns-the-state`, `make-it-safe-to-rerun`, `keep-your-context-lean` |
 
-An agent's prompt carries eight core rules and an index of names with one line
-each; the body is read on demand. Add your own in `<devd home>/skills/*.md`
-(`devd skills add`); they can add to the built-in set but never replace a
-built-in skill, and only a person can save or delete them.
+The order of the table is the order of the work, and the prompt index shows the
+stages in that order. A skill's file names its own stage in `kind:`, so a person
+who adds a skill picks the stage it belongs to; a stage of their own is shown
+under its own name rather than dropped.
+
+An agent's prompt carries eight core rules, each naming the skill that holds the
+full text, and the index with one line per skill. Only names and descriptions go
+into the prompt; the body is read on demand. Add your own in
+`<devd home>/skills/*.md` (`devd skills add`); they can add to the built-in set
+but never replace a built-in skill, and only a person can save or delete them.
+
+A test checks the wiring rather than trusting it: every file in `skills/` is
+embedded in the binary, is named after itself, belongs to a known stage, names
+only real roles, has a unique name and description without a type prefix, and
+refers only to skills and capability groups that exist.
 
 ## Tools agents have beyond the core set
 
 `search.query` (projects, files by path, literal text in a project, conversations,
-models, tasks, activity - each response says what was searched and whether it
+models, tasks, activity — each response says what was searched and whether it
 was cut short), `docs.fetch` (public https pages only; private, loopback and
 metadata addresses refused and re-checked across redirects), `skills.*`,
 `team.*`, `services.inventory`, `environment.get`, and the file, git, project,
@@ -398,7 +588,7 @@ answer arrives whole and is logged once.
 
 `environment.set` marks the machine `production` (a person's decision, with
 approval). In production an agent needs a person's approval for every operation
-above read - writing a file included - plan approval cannot be waived, and the
+above read — writing a file included — plan approval cannot be waived, and the
 status bar says so. Destructive, remote and admin operations need approval in
 both modes, with one scoped exception: removing files inside the conversation's
 project is ordinary work (the project root, `.git` and secrets files are still

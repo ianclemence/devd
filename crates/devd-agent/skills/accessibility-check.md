@@ -1,7 +1,7 @@
 ---
 name: accessibility-check
-description: Check keyboard use, focus, names, contrast and motion before an interface is called done.
-kind: technique
+description: Check keyboard use, focus, names, contrast and motion before an interface is called done
+kind: review
 roles: designer,frontend,qa
 ---
 

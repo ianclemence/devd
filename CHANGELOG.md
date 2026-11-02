@@ -14,6 +14,91 @@ may change capability identifiers where the design was wrong.
 
 ### Changed
 
+- **Skills are grouped by the stage of work, not by kind.** The old `playbook`,
+  `technique` and `principle` kinds said what shape a skill had, which helped
+  nobody choose one. The 63 built-in skills now name the stage they belong to:
+  `discover`, `design`, `build`, `check`, `review`, `ship`, `words` and `house`.
+  The prompt index and the **Skills** page show the stages in the order of the
+  work, so an agent finds the right skill without reading all of them.
+- **No skill name carries a type prefix.** The 24 `principle-*` skills are named
+  for what they say (`prove-it-works`, `fix-the-root-cause`,
+  `make-the-narrowest-change`, `validate-at-the-edge`, ...), and every
+  cross-reference between skills was updated to match. `skills.save` now accepts
+  the new stages; a person's own skill may still use a word of its own, and it is
+  shown under that word rather than dropped from the index.
+- **The eight core rules name the skill that holds the full text**, so an agent
+  that knows the rule can read the reasoning behind it.
+- **The README and the repository description no longer call devd "local".** It
+  is a development environment, not a local-only one: the module descriptions in
+  `Cargo.toml` and the desktop metadata say the same.
+- **Documentation.** `docs/limitations.md` now exists (the README linked to it and
+  it was never written); the reference covers the new capabilities and the queue,
+  and the daemon documents the retention settings; the facts that had drifted -
+  capability counts, the MCP transcript and two Git commands that do not exist -
+  are corrected. `scripts/check-docs.ps1` checks every capability and link a doc
+  names, so the next drift is caught rather than read.
+
+### Added
+
+- **One question, not a status report.** A run that cannot continue now answers
+  with a structured `needs` object - the one task to look at, what evidence is
+  missing, and the actions that resolve it (retry with a note, accept by hand
+  after a confirmation, read what it did). The Inbox leads with it, the run view
+  shows the same object, and `team.get` returns it, so no two screens can word it
+  differently. A run with nothing waiting has `needs: null`.
+- **A stall watchdog.** Every run turn and tool call moves the task's
+  `last_step_at`. A task that moves no heartbeat for twice the provider's own
+  request timeout (never less than three minutes) is asked where it is; if that
+  gets no answer it is stopped as `unverified` with the reason. A worker waiting
+  on a slow model is slow, not stuck, and the window is set so it cannot be
+  mistaken for one.
+- **Proposals instead of work.** `team.suggest` records work devd would do -
+  what it noticed, what it would change, how that would be proved - and starts
+  nothing. One row per idea; a person turns one into a run with
+  `team.accept_suggestion`, which starts an ordinary run that still waits for
+  plan approval. `team.dismiss_suggestion` keeps the record that this was not
+  wanted.
+- **A rule for when to think about starting work.** `intake.set` writes a
+  project rule - "when the nightly check has failed three times in a row, at most
+  once an hour, consider a run that fixes it" - and `intake.list`/`intake.delete`
+  manage them. A new rule starts in **observe** mode, which records a proposal
+  and nothing else; `auto` starts the run, and never in production. The daemon
+  evaluates the rules against facts devd itself recorded, never a model's
+  opinion. The team room shows them and the project's prompt describes them, so
+  an agent does not propose the same thing again.
+- **A mandate on every team task.** Each task records why it may run
+  (`explicit`, `schedule`, `inferred` or `system`), who asked, its scope, its
+  role and a hash of the rules it was accepted under (environment mode,
+  definition of done, parallel limit, working agreement). A resumed task whose
+  authority no longer holds pauses the run with the reason instead of continuing
+  blindly, and a person resuming a run resets the watchdog for its tasks.
+- **A durable queue for work that leaves the process.** Notifications (a site
+  going down or coming back), background reviews and scheduled starts are rows
+  with attempts, a last error and a retry time, drained by the daemon, retried
+  with backoff, and reported on the health screen only after a run of three
+  failures. `notify.test` still delivers synchronously, where the person is
+  waiting for the answer.
+- **The kind of work is decided in code.** `RunKind` - `answer`, `plan`,
+  `assign` or `schedule` - is chosen from the words (or by the composer, or
+  `chat.send`'s `kind`) before any model is asked, stored on the conversation,
+  and chooses the model chain: a plan uses the planner's models, an answer the
+  default ones. `models.roles` now lists what each kind of work reaches.
+- **Prompt provenance.** Every turn records a manifest of the role, loadout and
+  skill text it ran under, by name and hash, on its `run_steps` row. The content
+  is still compiled in and still cannot be edited; the fingerprint is what makes
+  "the run that worked and the one that did not" comparable.
+
+- **A health check that flips is queued, not sent from the check.** The same
+  message is delivered by the queue, so a dead webhook no longer loses the
+  warning.
+- **`review.start` is a queued row**, not a thread, so a process that stops with
+  a review pending tries it again and a review that keeps failing is visible.
+- **The assistant is told to spend less of a person's attention**: confirm once
+  and work quietly, ask one concrete question rather than a list, and record an
+  unrequested improvement as a proposal with `team.suggest` instead of doing it.
+- **Retention covers the new records**: finished queue rows after 14 days and
+  decided proposals after 90 (`effects.retention_days`,
+  `suggestions.retention_days`).
 - **Servers are the only remote-server path.** The separate third-party control-panel
   integration and its API capabilities were removed. Use **Server → Remote → Servers**
   with SSH for every provider.
@@ -1591,8 +1676,7 @@ capability dispatcher that has been underneath every surface since M0.
 
 ### Tests
 
-See the line below; the numbers are from the run recorded in
-[`docs/releases/v0.5.0.md`](docs/releases/v0.5.0.md). The suite covers the
+See the line below. The suite covers the
 generated vhost and its certificate paths, the hosts block's preservation and
 idempotence, hostname validation before a write, the refusal to delete outside
 the `www` root, the chain verifying against the CA, and re-issuance replacing the

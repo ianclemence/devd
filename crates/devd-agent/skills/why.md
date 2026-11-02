@@ -1,7 +1,7 @@
 ---
 name: why
-description: Find out why code is shaped the way it is before you change it.
-kind: technique
+description: Find out why code is shaped the way it is before you change it
+kind: discover
 roles: architect,researcher,reviewer
 ---
 

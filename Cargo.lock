@@ -962,6 +962,7 @@ dependencies = [
  "devd-core",
  "devd-git",
  "devd-mcp",
+ "devd-ops",
  "devd-runtime",
  "devd-services",
  "devd-sites",

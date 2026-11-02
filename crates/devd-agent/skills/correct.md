@@ -1,7 +1,7 @@
 ---
 name: correct
-description: Make a repeated mistake impossible instead of documented.
-kind: technique
+description: Make a repeated mistake impossible instead of documented
+kind: review
 roles: reviewer,architect,implementer
 ---
 

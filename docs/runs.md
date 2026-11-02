@@ -15,8 +15,8 @@ rewritten.
 Evidence is recorded where a capability returns. A program an agent started, an
 editor, a formatter a test run triggered: none of those pass through the registry
 as a write, yet they changed the project. At the start of a conversation run the
-project's tracked and untracked (not ignored) files are recorded - path, size,
-modification time and the checked-out commit - and when the run is judged the
+project's tracked and untracked (not ignored) files are recorded — path, size,
+modification time and the checked-out commit — and when the run is judged the
 project is compared with that. A difference becomes one `change` evidence record
 under the capability `observed.diff`, listing what was added, modified and
 removed. It says *what* differs, never *who* did it, and it counts as an
@@ -73,8 +73,8 @@ its session belongs to another program. Each call it makes is one headless run,
 settled when the call returns, or left `blocked` with the queued request named
 when a person must decide first. Approving the request records the operation in
 that run and settles it; declining it cancels the run, because it can never
-proceed. A caller that already has a run - the built-in assistant, a team
-member - keeps it, so one tool call never opens a second, competing timeline.
+proceed. A caller that already has a run — the built-in assistant, a team
+member — keeps it, so one tool call never opens a second, competing timeline.
 
 Arguments are redacted by key name before they are stored; an argument hash is
 kept so two calls can be compared without retaining secret values.

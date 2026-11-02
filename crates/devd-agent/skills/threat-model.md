@@ -1,7 +1,7 @@
 ---
 name: threat-model
-description: Find how a system can be abused: assets, entry points, trust boundaries, abuse cases and the smallest mitigations.
-kind: technique
+description: Find how a system can be abused: assets, entry points, trust boundaries, abuse cases and the smallest mitigations
+kind: design
 roles: security,architect
 ---
 

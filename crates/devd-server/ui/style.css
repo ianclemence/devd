@@ -4774,6 +4774,11 @@ td .pill-bad, .kv .pill-bad { color: var(--danger); }
 .decision-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s4); }
 .decision-actions .input { max-width: 420px; }
 .decision-hint { margin-left: var(--s2); color: var(--fg-dim); font-size: var(--text-xs); }
+/* A run that cannot continue leads the page and says so in one line. The card is
+   otherwise the shape of every other decision, because that is what it is. */
+.decision-needs { border-left: 2px solid var(--warn); padding-left: var(--s4); }
+.decision-needs .decision-kind { color: var(--warn); font-weight: 700; }
+.decision-needs .decision-title { max-width: 72ch; }
 @media (max-width: 760px) { .decision { grid-template-columns: minmax(0, 1fr); gap: 4px; } }
 
 /* ----------------------------------------------------------- agent runs

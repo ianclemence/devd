@@ -156,10 +156,10 @@ devd git bisect start HEAD v1.0.0
 devd git undo                     # recover a bad reset through the reflog
 ```
 
-Every Git command is one of 64 capabilities grouped under `git.repo`,
+Every Git command is one of 65 capabilities grouped under `git.repo`,
 `git.changes`, `git.commits`, `git.history`, `git.branches`, `git.tags`,
 `git.remotes`, `git.merge`, `git.stashes`, `git.worktrees`, `git.config` and
-`git.recovery`. See [`docs/git-cli.md`](docs/git-cli.md) for the full mapping.
+`git.recovery`. See [`git-cli.md`](git-cli.md) for the full mapping.
 
 ## Interfaces
 
@@ -186,17 +186,82 @@ same HTML, CSS and JavaScript. `devd ui` opens the same interface through an
 installed browser for development and for systems without WebView2; `devd serve`
 exposes the API without a window for scripts and tests. The server binds
 `127.0.0.1` only and requires a per-process bearer token. There is no second
-graphical toolkit to keep in step. See [`docs/desktop.md`](docs/desktop.md).
+graphical toolkit to keep in step. See [`desktop.md`](desktop.md).
 
 ## Agents
 
 devd has its own agents: an assistant for one-off questions and a team for whole
 goals, both running through the providers you configure. See
-[`docs/agents.md`](docs/agents.md).
+[`agents.md`](agents.md).
+
+```bash
+devd chat                                      # the assistant, in the terminal
+devd team start "add password reset" --project .
+devd team list
+devd team resume <run>                         # after a pause
+```
 
 Reviews, agent memory and instruction-file audits (`review.*`, `memory.*`, `compat.*`) are
 capabilities too, reachable from `devd call`, the HTTP API, MCP and a project's **Reviews** and **Agent memory** tabs. See
-[`docs/workflows.md`](docs/workflows.md).
+[`workflows.md`](workflows.md).
+
+### When a run needs you
+
+A run that cannot continue says one thing. `team.get` returns `needs`: the task,
+the evidence devd looked for and did not find, and the actions that resolve it.
+The Inbox and the run view show the same object.
+
+```bash
+devd call team.get --arg run=<run>          # "needs": null when nothing is waiting
+```
+
+### Proposals
+
+An agent can propose work instead of doing it; nothing runs until a person accepts.
+
+```bash
+devd call team.suggest  --arg project=. --arg title="Split the parser" --arg why="it is 900 lines and changed four times this month"
+devd call team.suggestions                 # what devd would do, and what a person decided
+devd call team.accept_suggestion --arg id=<id>    # starts an ordinary run; the plan still waits for you
+devd call team.dismiss_suggestion --arg id=<id>
+```
+
+### Rules for starting work on its own
+
+A project writes down which event should make devd think about starting a run.
+A new rule starts in `observe`, which records a proposal and runs nothing.
+
+```bash
+devd call intake.set --arg project=. --arg name=nightly --arg trigger=check.failed \
+  --arg goal="Make the nightly check pass again and add a regression test" \
+  --arg 'condition={"min_failures":3,"cooldown_minutes":60}'
+devd call intake.list --arg project=.
+devd call intake.delete --arg project=. --arg name=nightly
+```
+
+The triggers are `health.down`, `check.failed` and `schedule.missed`. `mode` is
+`observe` (the default) or `auto`, which starts a run that still waits for plan
+approval and never starts one in production. Only a person writes a rule. See
+[`agents.md`](agents.md).
+
+### Runs
+
+A conversation, a team run, a scheduled job and an API call write the same record:
+steps, capability calls, evidence, approvals and a replayable timeline.
+
+A run has no capability of its own. It is read over the loopback HTTP API, which
+is what the window's Run sheet uses, and it can only be retried by a person:
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/api/runs
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/api/runs/<id>
+curl -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:8080/api/runs/<id>/events?after=0"
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/api/runs/<id>/changes
+devd call run.retry    --arg run_id=<run>        # human only; a team run is resumed with team.resume
+devd call approval.list --arg pending_only=true
+```
+
+See [`runs.md`](runs.md) for the lifecycle and the evidence rules.
 
 ## Project processes
 
@@ -225,7 +290,7 @@ processes:
   explicit and does not inherit the daemon's credentials.
 * Editing the manifest invalidates the approval. A process will not restart under
   commands nobody reviewed.
-* See [`docs/devd-yml.md`](docs/devd-yml.md).
+* See [`devd-yml.md`](devd-yml.md).
 
 ## Shared project state
 
@@ -239,7 +304,7 @@ people and agents use the same capability API.
 * An agent can append a finding, create a todo for another agent, spawn it, wait
   for the result and update the todo. Deleting a note or todo needs human
   approval.
-* See [`docs/shared-state.md`](docs/shared-state.md).
+* See [`shared-state.md`](shared-state.md).
 
 ## Preview
 
@@ -319,4 +384,4 @@ HTTP API returns `approval_required` with a token. In every case the refusal is
 recorded.
 
 For the threat model, the loopback API's defences, and the Git-specific
-protections, see [`docs/security.md`](docs/security.md).
+protections, see [`security.md`](security.md).

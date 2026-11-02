@@ -1,7 +1,7 @@
 ---
 name: figure-it-out
-description: Design an auditable workflow for work no playbook covers.
-kind: technique
+description: Design an auditable workflow for work no playbook covers
+kind: design
 roles: planner,architect
 ---
 

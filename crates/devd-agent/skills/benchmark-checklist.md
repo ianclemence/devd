@@ -1,7 +1,7 @@
 ---
 name: benchmark-checklist
-description: Make a measurement trustworthy before believing it.
-kind: technique
+description: Make a measurement trustworthy before believing it
+kind: build
 roles: implementer,qa
 ---
 

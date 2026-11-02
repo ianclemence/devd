@@ -27,8 +27,8 @@ const DIFF_LIMIT: usize = 60_000;
 
 // ---------------------------------------------------------------- arguments
 
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-struct ReviewRun {
+#[derive(Debug, Clone, Deserialize, serde::Serialize, JsonSchema)]
+pub struct ReviewRun {
     /// Absolute project directory.
     project: String,
     /// What to compare. `working` (default) reviews uncommitted changes;
@@ -548,7 +548,7 @@ fn run_review(ctx: &Ctx, a: &ReviewRun, id: &str) -> Result<Value> {
 }
 
 /// The worker of `review.start`: run, store, and tell the person.
-fn finish_background_review(ctx: &Ctx, a: &ReviewRun, id: &str, project: &str) {
+pub fn finish_background_review(ctx: &Ctx, a: &ReviewRun, id: &str, project: &str) {
     let (subject, body) = match run_review(ctx, a, id) {
         Ok(record) => {
             let n = record["findings"].as_array().map(|f| f.len()).unwrap_or(0);
@@ -637,7 +637,15 @@ pub fn register(reg: &mut Registry) -> Result<()> {
                 "focus": a.instructions,
             }))?;
             let (worker_ctx, args, review_id, project_text) = (ctx.clone(), a.clone(), id.clone(), project.display().to_string());
-            std::thread::spawn(move || finish_background_review(&worker_ctx, &args, &review_id, &project_text));
+            // The review is a row in the durable queue, not a thread: a process
+            // that stops with a review pending tries it again when it starts,
+            // and a review that keeps failing is visible on the health screen
+            // instead of vanishing with the process.
+            crate::effects_bridge::queue_review(&ctx, &review_id, &serde_json::to_value(&args)?, &project_text)?;
+            // Start one immediately when the owners of the queue are running, so
+            // an interactive review does not wait for the guardian's next pass.
+            let _ = &worker_ctx;
+            crate::guardian::nudge(worker_ctx);
             Ok(Outcome::with_data(
                 "review started; the result will be in the inbox",
                 json!({ "id": id, "state": "running" }),

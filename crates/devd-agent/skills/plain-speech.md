@@ -1,7 +1,7 @@
 ---
 name: plain-speech
-description: Write for the reader: short, concrete, honest about what is unknown.
-kind: technique
+description: Write for the reader: short, concrete, honest about what is unknown
+kind: words
 roles: planner,architect,researcher,implementer,qa,reviewer,infra,docs
 ---
 

@@ -100,6 +100,15 @@ pub struct ChatThread {
     pub created_at: String,
     /// Updated.
     pub updated_at: String,
+    /// The kind of work this conversation was opened for, decided in code before
+    /// a model is asked anything: `answer`, `plan`, `assign` or `schedule`.
+    /// See [`crate::runs::RunKind`].
+    #[serde(default = "default_kind")]
+    pub kind: String,
+}
+
+fn default_kind() -> String {
+    "answer".into()
 }
 
 /// A message pinned as a chapter of its conversation.
@@ -221,7 +230,7 @@ fn row_provider(r: &rusqlite::Row) -> rusqlite::Result<Provider> {
 
 const PROVIDER_COLS: &str =
     "id,kind,label,base_url,key_env,default_model,is_default,enabled,created_at,updated_at";
-const THREAD_COLS: &str = "id,title,project,provider_id,model,state,error,input_tokens,output_tokens,created_at,updated_at";
+const THREAD_COLS: &str = "id,title,project,provider_id,model,state,error,input_tokens,output_tokens,created_at,updated_at,kind";
 const REQ_COLS: &str = "id,actor,capability,args,plan,state,result,error,thread_id,tool_use_id,created_at,decided_at,decided_by,approval_id";
 
 fn row_thread(r: &rusqlite::Row) -> rusqlite::Result<ChatThread> {
@@ -237,6 +246,7 @@ fn row_thread(r: &rusqlite::Row) -> rusqlite::Result<ChatThread> {
         output_tokens: r.get(8)?,
         created_at: r.get(9)?,
         updated_at: r.get(10)?,
+        kind: r.get(11)?,
     })
 }
 
@@ -378,6 +388,19 @@ impl Store {
         provider_id: Option<&str>,
         model: Option<&str>,
     ) -> Result<ChatThread> {
+        self.create_thread_kind(title, project, provider_id, model, "answer")
+    }
+
+    /// Create a thread whose kind of work is already known, so it reaches the
+    /// same runner and the same model every time it is resumed.
+    pub fn create_thread_kind(
+        &self,
+        title: &str,
+        project: Option<&str>,
+        provider_id: Option<&str>,
+        model: Option<&str>,
+        kind: &str,
+    ) -> Result<ChatThread> {
         let now = util::now();
         let t = ChatThread {
             id: util::new_id(),
@@ -391,11 +414,12 @@ impl Store {
             output_tokens: 0,
             created_at: now.clone(),
             updated_at: now,
+            kind: kind.to_string(),
         };
         self.with(|c| {
             c.execute(
-                &format!("INSERT INTO chat_threads ({THREAD_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)"),
-                params![t.id, t.title, t.project, t.provider_id, t.model, t.state, t.error, t.input_tokens, t.output_tokens, t.created_at, t.updated_at],
+                &format!("INSERT INTO chat_threads ({THREAD_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)"),
+                params![t.id, t.title, t.project, t.provider_id, t.model, t.state, t.error, t.input_tokens, t.output_tokens, t.created_at, t.updated_at, t.kind],
             )?;
             Ok(())
         })?;

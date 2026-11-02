@@ -1,7 +1,7 @@
 ---
 name: how
-description: Explain how a system works well enough to change it safely.
-kind: technique
+description: Explain how a system works well enough to change it safely
+kind: discover
 roles: architect,researcher,reviewer,implementer
 ---
 

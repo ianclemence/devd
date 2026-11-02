@@ -278,8 +278,13 @@ pub(crate) fn agent_no_redirect(url: &str) -> ureq::Agent {
     build_agent(url, false)
 }
 
+/// How long one exhausted model request may take before it is abandoned. The
+/// stall watchdog is built on it: a worker that has done nothing for a multiple of
+/// this is asleep, not thinking.
+pub(crate) const READ_TIMEOUT_SECS: u64 = 300;
+
 fn build_agent(url: &str, follow: bool) -> ureq::Agent {
-    build_agent_with(url, follow, 15, if follow { 300 } else { 30 })
+    build_agent_with(url, follow, 15, if follow { READ_TIMEOUT_SECS } else { 30 })
 }
 
 /// A client for probing a local server. It must answer quickly or not at all:

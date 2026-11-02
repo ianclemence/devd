@@ -35,6 +35,9 @@ pub const MAX_RESULT_CHARS: usize = 12_000;
 /// How many recent tool results stay in the model's context in full.
 pub const KEEP_RESULTS: usize = 10;
 
+/// The assistant's own instructions. Named so the prompt provenance manifest can
+/// hash the text the turn actually ran under.
+pub const ASSISTANT_PROMPT: &str = PROMPT;
 const PROMPT: &str = "\
 You are devd's built-in engineer: a coding agent running inside the developer's own server. \
 You can create, inspect, change, run, test and ship software projects and manage the machine's \
@@ -120,7 +123,19 @@ is.
 
 ## Style
 Be direct and brief. Report what you did and what you saw, not what you intend. When you finish, \
-summarise the change, the verification you ran and anything left for the person.";
+summarise the change, the verification you ran and anything left for the person.
+
+## Attention
+Every word you write costs someone else's attention, so spend it where it changes what they do.
+- Confirm once, concretely, and then work quietly. Do not narrate each step, restate the request, or \
+report progress that nobody needs to act on. Write again when a result is ready to use, when you need \
+a decision, or when you cannot finish.
+- Ask one specific question, not a list. If several things are unclear, ask the one that unblocks the \
+most, and say what you will assume for the rest.
+- When you finish, say what changed and what you checked in a few lines; the detail is in the record.
+- If you notice work that would clearly move the project forward but nobody asked for it, record it \
+with team.suggest and move on. A proposal costs a person one decision; starting unasked-for work costs \
+them their trust.";
 
 /// The handful of calls an agent makes constantly, with their exact shapes.
 ///
@@ -160,6 +175,11 @@ pub struct SendRequest {
     pub permission: Option<String>,
     /// Reasoning effort for models that accept one: `low`, `medium` or `high`.
     pub effort: Option<String>,
+    /// What kind of work this is, when the caller already knows (the composer's
+    /// mode, `devd chat --as team`). Absent means devd decides from the words
+    /// with [`devd_core::classify`], and the decision is recorded on the
+    /// conversation so a resume reaches the same runner.
+    pub kind: Option<devd_core::RunKind>,
 }
 
 /// The built-in agent's engine. One per devd process.
@@ -593,11 +613,17 @@ impl Hub {
                     .chars()
                     .take(60)
                     .collect();
-                self.ctx.store.create_thread(
+                // The kind is decided before the conversation exists, in code,
+                // from the words and the composer's mode. It chooses the model
+                // chain and is recorded, so the same request reaches the same
+                // runner on a retry or a resume.
+                let kind = devd_core::classify(&text, req.kind);
+                self.ctx.store.create_thread_kind(
                     &title,
                     project.as_deref(),
                     req.provider.as_deref(),
                     req.model.as_deref(),
+                    kind.as_str(),
                 )?
             }
         };
@@ -858,6 +884,27 @@ impl Hub {
         Ok(())
     }
 
+    /// Say something more to a team member that has stopped, and let it continue.
+    ///
+    /// This is the one that is shaped for a *message*, not for a command: a
+    /// specialist that has reported may be gone, and what it is told has to
+    /// arrive at the conversation instead of failing because nothing is running.
+    /// If it is working, the message is queued at the next step boundary, exactly
+    /// as a person's message would be, so a correction does not break a tool call
+    /// in half.
+    pub fn tell(self: &Arc<Self>, tid: &str, message: &str) -> Result<()> {
+        if self.is_running(tid) {
+            self.ctx
+                .store
+                .queue_message(tid, message, "agent:devd-team")?;
+            return Ok(());
+        }
+        self.log(tid, "user", json!({ "text": message, "from": "devd-team" }))?;
+        self.ctx.store.set_thread_state(tid, "running", None)?;
+        self.spawn(tid);
+        Ok(())
+    }
+
     /// The models to try for a conversation, best first. An explicit choice on
     /// the conversation is never replaced by a fallback; a role's configured
     /// chain is.
@@ -879,7 +926,12 @@ impl Hub {
         if let Some(r) = role {
             chains.push((project_scope.clone(), r));
         }
-        chains.push((String::new(), role.unwrap_or("default")));
+        // The conversation's kind decides which role's chain it uses when no
+        // specialist is driving it: a plan asks for the planner's model, an
+        // answer for the default one. It is visible in `models.assign`.
+        let kind_role = devd_core::RunKind::parse(&t.kind).role();
+        chains.push((String::new(), role.unwrap_or(kind_role)));
+        chains.push((String::new(), "default"));
         if role.is_some() {
             chains.push((String::new(), "default"));
         }
@@ -1089,6 +1141,20 @@ impl Hub {
             );
             let working = context::build_working_set(&events, &budget, &system);
             let messages = working.messages;
+            // Which role and skill text this turn ran under. The content stays
+            // compiled in; the manifest is the record of what it was, so a run
+            // can be compared with another one later.
+            let manifests = crate::prompts::manifest(
+                &self.ctx.paths,
+                binding.as_ref().map(|b| b.role.as_str()),
+                &crate::prompts::loaded_skills(&events),
+            );
+            // A specialist that is working is not stalled, whatever its thread
+            // state says. The heartbeat moves on every model turn.
+            if let Some(b) = &binding {
+                let _ = self.ctx.store.touch_task(&b.id);
+            }
+            let _ = self.ctx.store.set_step_prompts(&step.id, &manifests.to_json());
             let _ = self.ctx.store.append_run_event(
                 &run_id,
                 Some(&step.id),

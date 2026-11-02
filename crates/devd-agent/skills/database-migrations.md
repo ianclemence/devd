@@ -1,7 +1,7 @@
 ---
 name: database-migrations
-description: Change a schema without losing data or locking the database: additive first, repeatable, tested on empty and populated copies.
-kind: playbook
+description: Change a schema without losing data or locking the database: additive first, repeatable, tested on empty and populated copies
+kind: build
 roles: data,backend
 ---
 

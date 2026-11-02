@@ -1,7 +1,7 @@
 ---
 name: interrogate
-description: Review a change adversarially: independent reviewers, then a verdict.
-kind: technique
+description: Review a change adversarially: independent reviewers, then a verdict
+kind: review
 roles: reviewer
 ---
 

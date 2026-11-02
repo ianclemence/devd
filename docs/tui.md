@@ -156,7 +156,7 @@ prompt and act on the view behind it. `Esc` cancels a prompt without acting, and
   control characters, and a test renders a branch named `evil\u{1b}[2Jbranch` and
   asserts that no escape reached the buffer.
 * **It never invents data.** A view with nothing to show says which nothing it
-  is: "No repository selected - press 2 to choose one, or t to add a path" is a
+  is: "No repository selected — press 2 to choose one, or t to add a path" is a
   different sentence from "The working tree is clean", because they are different
   facts.
 * **It never counts a plan as an action.** The Activity view labels a dry run

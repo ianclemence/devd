@@ -1,7 +1,7 @@
 ---
 name: secure-coding-review
-description: Read a change for the common ways code becomes exploitable: injection, authorisation, secrets, unsafe defaults.
-kind: technique
+description: Read a change for the common ways code becomes exploitable: injection, authorisation, secrets, unsafe defaults
+kind: review
 roles: security,reviewer
 ---
 

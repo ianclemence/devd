@@ -40,7 +40,7 @@ runs on `RunEvent::Exit`; shutdown is idempotent.
   permissions; there is no shell, filesystem or process plugin. A compromised
   page has no IPC function to call.
 * The capability file lists only the `main` window. It has no `remote` entry, so
-  the loopback origin - which is remote from Tauri's point of view - cannot reach
+  the loopback origin — which is remote from Tauri's point of view — cannot reach
   IPC, even if a command is added later without thought.
 * Top-level navigation is allowed only within `http://127.0.0.1:<port>`
   (`localhost` and `[::1]` are also accepted). Any other HTTP(S) URL is opened in

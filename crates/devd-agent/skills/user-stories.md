@@ -1,7 +1,7 @@
 ---
 name: user-stories
-description: Split work into small stories, each with acceptance criteria that read as checks.
-kind: technique
+description: Split work into small stories, each with acceptance criteria that read as checks
+kind: design
 roles: product,planner
 ---
 

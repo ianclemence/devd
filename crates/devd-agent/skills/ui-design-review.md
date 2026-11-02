@@ -1,7 +1,7 @@
 ---
 name: ui-design-review
-description: Check a screen for hierarchy, states, spacing, copy and consistency with the existing interface.
-kind: technique
+description: Check a screen for hierarchy, states, spacing, copy and consistency with the existing interface
+kind: review
 roles: designer,frontend,reviewer
 ---
 

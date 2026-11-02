@@ -19,6 +19,10 @@ pub const DEFAULT_AUDIT_DAYS: i64 = 365;
 pub const DEFAULT_CACHE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 /// A cached download unused for this many days is removed.
 pub const DEFAULT_CACHE_DAYS: u64 = 90;
+/// Finished and dropped queue rows are removed after this many days.
+pub const DEFAULT_EFFECT_DAYS: u64 = 14;
+/// Proposals a person already decided about are removed after this many days.
+pub const DEFAULT_SUGGESTION_DAYS: u64 = 90;
 
 /// What one rotation did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -145,6 +149,27 @@ pub fn run(ctx: &Ctx) -> Vec<String> {
                 did.push(format!(
                     "removed {removed} audit rows older than {days} days"
                 ));
+            }
+        }
+    }
+    // The newer records grow the same way the audit trail does. A queue keeps its
+    // finished rows so a person can see what went out; a proposal keeps the one
+    // somebody decided about; neither is worth keeping for a year.
+    let queue_days = setting_u64(ctx, "effects.retention_days", DEFAULT_EFFECT_DAYS) as i64;
+    if queue_days > 0 {
+        let cutoff = (chrono::Utc::now() - chrono::Duration::days(queue_days)).to_rfc3339();
+        if let Ok(removed) = ctx.store.prune_effects_before(&cutoff) {
+            if removed > 0 {
+                did.push(format!("removed {removed} finished queue row(s)"));
+            }
+        }
+    }
+    let suggestion_days = setting_u64(ctx, "suggestions.retention_days", DEFAULT_SUGGESTION_DAYS) as i64;
+    if suggestion_days > 0 {
+        let cutoff = (chrono::Utc::now() - chrono::Duration::days(suggestion_days)).to_rfc3339();
+        if let Ok(removed) = ctx.store.prune_suggestions_before(&cutoff) {
+            if removed > 0 {
+                did.push(format!("removed {removed} decided proposal(s)"));
             }
         }
     }

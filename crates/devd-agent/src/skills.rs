@@ -1,11 +1,19 @@
 //! Skills: short, focused instructions an agent loads when the work calls for
 //! them, instead of carrying every practice in its prompt all the time.
 //!
-//! Three kinds:
+//! Every skill carries a `kind`, which is the stage of work it belongs to, so an
+//! agent can find the right one without reading all of them:
 //!
-//! * `playbook` - a procedure for a type of work (fix a bug, build a feature);
-//! * `technique` - a method used inside one (architect, interrogate, tdd);
-//! * `principle` - one engineering rule, stated once.
+//! * `discover` - understanding the request and the system before acting;
+//! * `design` - deciding a shape;
+//! * `build` - writing the change, with the methods used while doing it;
+//! * `check` - proving a result and keeping it honest;
+//! * `review` - reading someone else's change;
+//! * `ship` - landing it;
+//! * `words` - writing prose, reports and documentation;
+//! * `house` - how work runs here: autonomy, ownership and staying restartable.
+//!
+//! A person can also write a skill of their own with any kind they like.
 //!
 //! The built-in set ships inside devd. A person can add their own as Markdown
 //! files in `<devd home>/skills/` (or through `skills.save`); those can add
@@ -25,6 +33,25 @@ use devd_core::{DevdError, Result};
 
 use crate::skills_data::BUILTIN;
 
+/// Every kind of skill, in the order an agent meets it, with the heading the
+/// prompt index uses. The order is the order of the work itself.
+pub const KINDS: &[(&str, &str)] = &[
+    ("discover", "Discover"),
+    ("design", "Design"),
+    ("build", "Build"),
+    ("check", "Check"),
+    ("review", "Review"),
+    ("ship", "Ship"),
+    ("words", "Words"),
+    ("house", "House rules"),
+];
+
+/// Whether `kind` is one devd names. A person's own skill may still use its own
+/// word for it; the built-in set does not.
+pub fn known_kind(kind: &str) -> bool {
+    KINDS.iter().any(|(k, _)| *k == kind)
+}
+
 /// The one-line description of a built-in skill.
 pub fn builtin_description(name: &str) -> Option<String> {
     BUILTIN
@@ -41,7 +68,7 @@ pub struct Skill {
     pub name: String,
     /// One line.
     pub description: String,
-    /// `playbook`, `technique` or `principle`.
+    /// The stage of work it belongs to; see [`KINDS`].
     pub kind: String,
     /// Roles the skill is meant for.
     pub roles: Vec<String>,
@@ -63,7 +90,7 @@ fn parse(raw: &str, source: &str) -> Option<Skill> {
     Some(Skill {
         name,
         description: field("description")?,
-        kind: field("kind").unwrap_or_else(|| "technique".into()),
+        kind: field("kind").unwrap_or_else(|| KINDS[2].0.to_string()),
         roles: field("roles").map(|r| r.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()).unwrap_or_default(),
         source: source.into(),
         body: body.trim().to_string(),
@@ -116,8 +143,11 @@ pub fn save(paths: &Paths, name: &str, description: &str, kind: &str, roles: &[S
     if BUILTIN.iter().any(|(n, _)| *n == name) {
         return Err(DevdError::conflict(format!("`{name}` is built in and cannot be replaced; choose another name")));
     }
-    if !matches!(kind, "playbook" | "technique" | "principle") {
-        return Err(DevdError::invalid("kind must be playbook, technique or principle"));
+    if !known_kind(kind) {
+        return Err(DevdError::invalid(format!(
+            "kind must be one of {}",
+            KINDS.iter().map(|(k, _)| *k).collect::<Vec<_>>().join(", ")
+        )));
     }
     if description.trim().is_empty() || description.contains('\n') {
         return Err(DevdError::invalid("give a one-line description"));
@@ -243,11 +273,7 @@ pub fn import_text(paths: &Paths, raw: &str, fallback_name: &str) -> Result<Skil
     if description.trim().is_empty() {
         return Err(DevdError::invalid("the skill has no description"));
     }
-    let kind = if matches!(kind.as_str(), "playbook" | "technique" | "principle") {
-        kind
-    } else {
-        "technique".into()
-    };
+    let kind = if known_kind(&kind) { kind } else { KINDS[2].0.to_string() };
     let body = raw
         .split_once("\n---")
         .map(|(_, rest)| rest.trim_start_matches('-').trim_start_matches('\n'))
@@ -347,11 +373,18 @@ pub fn import_from(paths: &Paths, dir: &Path) -> Result<Vec<String>> {
     Ok(names)
 }
 
-/// The index an agent sees: names and one line each, grouped by kind.
-pub fn index_for(paths: &Paths, role: Option<&str>) -> String {    let skills = all(paths);
+/// The index an agent sees: names and one line each, grouped by the stage of
+/// work they belong to.
+///
+/// A skill a person wrote may name a stage devd does not use. It is shown under
+/// its own word rather than dropped, because a skill that never appears in a
+/// prompt may as well not exist.
+pub fn index_for(paths: &Paths, role: Option<&str>) -> String {
+    let skills = all(paths);
+    let wanted = |s: &Skill| role.map(|r| s.roles.iter().any(|x| x == r)).unwrap_or(true);
     let mut out = String::new();
-    for (kind, title) in [("playbook", "Playbooks"), ("technique", "Techniques"), ("principle", "Principles")] {
-        let items: Vec<&Skill> = skills.iter().filter(|s| s.kind == kind && role.map(|r| s.roles.iter().any(|x| x == r) || s.roles.is_empty()).unwrap_or(true)).collect();
+    for (kind, title) in KINDS {
+        let items: Vec<&Skill> = skills.iter().filter(|s| s.kind == *kind && wanted(s)).collect();
         if items.is_empty() {
             continue;
         }
@@ -360,17 +393,255 @@ pub fn index_for(paths: &Paths, role: Option<&str>) -> String {    let skills = 
             out.push_str(&format!("- {}: {}\n", s.name, s.description));
         }
     }
+    // Stages of a person's own, in a stable order, after the built-in ones.
+    let mut others: Vec<&str> = skills
+        .iter()
+        .filter(|s| !known_kind(&s.kind) && wanted(s))
+        .map(|s| s.kind.as_str())
+        .collect();
+    others.sort_unstable();
+    others.dedup();
+    for kind in others {
+        let items: Vec<&Skill> = skills.iter().filter(|s| s.kind == kind && wanted(s)).collect();
+        out.push_str(&format!("{}:\n", title_of(kind)));
+        for s in items {
+            out.push_str(&format!("- {}: {}\n", s.name, s.description));
+        }
+    }
     out
 }
 
+/// The heading for a kind: devd's own word, or a person's word capitalized.
+fn title_of(kind: &str) -> String {
+    let mut chars = kind.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => "Other".to_string(),
+    }
+}
+
 /// The handful of rules every agent follows, always in the prompt.
+///
+/// Each one is the short form of a skill that holds the full text, and names it,
+/// so an agent that knows the rule can read the reasoning behind it.
 pub const CORE: &str = "\
-Working principles (load `skills.get` with the name of any skill below for the full text):\n\
-1. Understand before you change: read the real code and data first.\n\
-2. Make the narrowest change that solves the problem; delete before you add.\n\
-3. Work in small steps that each end in a checkable state.\n\
-4. Fix root causes, not symptoms; never hide a failure with a retry, a guard or a weakened test.\n\
-5. Prove it on the real thing before you say it is done, and say exactly what you ran and saw.\n\
-6. Proceed on reversible work without asking; stop for what cannot be undone or is the person's call.\n\
-7. Keep your context lean: search first, read the part you need, keep conclusions not logs.\n\
-8. Tell the truth about what was and was not verified.";
+Rules that hold whatever the work (`skills.get` with a skill's name reads the full text):\n\
+1. Understand before you change: read the real code and data first (`uncover-the-real-structure`).\n\
+2. Make the narrowest change that solves the problem; delete before you add (`make-the-narrowest-change`).\n\
+3. Work in small steps that each end in a checkable state (`land-one-unit-at-a-time`).\n\
+4. Fix root causes, not symptoms; never hide a failure with a retry, a guard or a weakened test (`fix-the-root-cause`).\n\
+5. Prove it on the real thing before you say it is done, and say exactly what you ran and saw (`prove-it-works`).\n\
+6. Do reversible work without asking; stop for what cannot be undone or is the person's call (`act-then-ask`).\n\
+7. Keep your context lean: search first, read the part you need, keep conclusions rather than logs (`keep-your-context-lean`).\n\
+8. Report the result for what it is: say what was verified and what was not (`choose-by-the-outcome`).";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every name a backticked `` `identifier` `` in `text` mentions, when it
+    /// looks like a skill name (lowercase words joined by hyphens).
+    fn referenced(text: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut chars = text.char_indices().peekable();
+        while let Some((i, c)) = chars.next() {
+            if c != '`' {
+                continue;
+            }
+            let start = i + 1;
+            let mut end = None;
+            while let Some((j, d)) = chars.next() {
+                if d == '`' {
+                    end = Some(j);
+                    break;
+                }
+            }
+            let Some(end) = end else { break };
+            let word = text[start..end].trim();
+            let looks_like_skill = !word.is_empty()
+                && word.len() <= 60
+                && word.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+                && word.contains('-')
+                && !word.contains('.');
+            if looks_like_skill {
+                out.push(word.to_string());
+            }
+        }
+        out
+    }
+
+    fn temp_paths() -> (tempfile::TempDir, Paths) {
+        let d = tempfile::tempdir().unwrap();
+        let p = Paths::rooted(d.path());
+        p.ensure().unwrap();
+        (d, p)
+    }
+
+    #[test]
+    fn every_built_in_skill_parses_and_is_named_after_its_file() {
+        let parsed: Vec<Skill> = BUILTIN.iter().filter_map(|(f, raw)| {
+            let s = parse(raw, "builtin");
+            assert!(s.is_some(), "skills/{f}.md does not parse");
+            let s = s.unwrap();
+            assert_eq!(s.name, *f, "skills/{f}.md declares name `{}`", s.name);
+            assert!(!s.body.is_empty(), "{f} has no instructions");
+            Some(s)
+        }).collect();
+        assert_eq!(parsed.len(), BUILTIN.len());
+    }
+
+    #[test]
+    fn names_and_descriptions_are_unique() {
+        let mut names: Vec<&str> = Vec::new();
+        let mut descriptions: Vec<&str> = Vec::new();
+        for (f, raw) in BUILTIN {
+            let s = parse(raw, "builtin").unwrap();
+            let _ = f;
+            assert!(!names.contains(&s.name.as_str()), "the name `{}` is used twice", s.name);
+            assert!(!descriptions.contains(&s.description.as_str()), "the description of `{}` is used twice: {}", s.name, s.description);
+            assert!(s.description.len() <= 200, "`{}` has a description over 200 characters", s.name);
+            assert!(!s.description.ends_with('.'), "`{}` has a description that ends like a sentence", s.name);
+            names.push(Box::leak(s.name.into_boxed_str()));
+            descriptions.push(Box::leak(s.description.into_boxed_str()));
+        }
+        assert!(names.len() > 50, "the built-in set is unexpectedly small");
+    }
+
+    #[test]
+    fn every_built_in_skill_names_a_known_stage_and_a_real_role() {
+        for (f, raw) in BUILTIN {
+            let s = parse(raw, "builtin").unwrap();
+            assert!(known_kind(&s.kind), "skills/{f}.md has kind `{}`, which is not one of the stages", s.kind);
+            assert!(!s.roles.is_empty(), "skills/{f}.md names no role, so it would reach everyone by accident");
+            for r in &s.roles {
+                assert!(crate::roles::get(r).is_some(), "skills/{f}.md names the role `{r}`, which does not exist");
+            }
+        }
+    }
+
+    #[test]
+    fn no_built_in_skill_carries_a_prefix_in_its_name() {
+        // A name is what a person types and what an agent reads; a group prefix
+        // repeats what `kind` already says.
+        for (f, _) in BUILTIN {
+            for prefix in ["principle-", "technique-", "playbook-", "skill-"] {
+                assert!(!f.starts_with(prefix), "skills/{f}.md still carries the `{prefix}` prefix");
+            }
+        }
+    }
+
+    #[test]
+    fn every_role_a_skill_names_still_exists() {
+        for (f, raw) in BUILTIN {
+            let s = parse(raw, "builtin").unwrap();
+            for r in &s.roles {
+                assert!(crate::roles::get(r).is_some(), "skills/{f}.md names the role `{r}`, which does not exist");
+            }
+        }
+    }
+
+    #[test]
+    fn every_skill_a_skill_refers_to_exists() {
+        let names: Vec<String> = BUILTIN.iter().map(|(f, _)| (*f).to_string()).collect();
+        for (f, raw) in BUILTIN {
+            let s = parse(raw, "builtin").unwrap();
+            for word in referenced(&s.body) {
+                // A backticked word with a hyphen is either a devd capability
+                // (`project.run`, `fs.read`) or a skill. Only the latter is
+                // checked, and a capability always has a group prefix.
+                let is_capability = word.split('-').next().map(|g| {
+                    ["fs", "git", "site", "service", "runtime", "toolchain", "project", "stack",
+                     "stack", "docker", "env", "db", "host", "tls", "health", "skills", "team",
+                     "chat", "inbox", "approval", "provider", "models", "schedule", "template",
+                     "todo", "scratch", "search", "docs", "compat", "memory", "review", "mcp",
+                     "policy", "judge", "workflow", "deploy", "server", "remote", "logs", "cron",
+                     "queue", "dbadmin", "update", "dictation", "autostart", "shell", "ssh",
+                     "php", "nginx", "apache", "redirects", "backup", "notify", "limits",
+                     "environment", "stacks", "toolchain", "intake", "observ"]
+                        .contains(&g)
+                }).unwrap_or(false);
+                if is_capability {
+                    continue;
+                }
+                assert!(
+                    names.contains(&word),
+                    "skills/{f}.md refers to `{word}`, which is not a skill and not a capability group"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_index_shows_each_skill_once_under_its_stage() {
+        let (_d, p) = temp_paths();
+        let index = index_for(&p, None);
+        let headings: Vec<&str> = index.lines().filter(|l| l.ends_with(':') && !l.starts_with('-')).collect();
+        assert!(headings.contains(&"Discover:") && headings.contains(&"Build:") && headings.contains(&"House rules:"), "{headings:?}");
+        for (f, _) in BUILTIN {
+            assert_eq!(index.matches(&format!("\n- {f}: ")).count() + usize::from(index.starts_with(&format!("- {f}: "))), 1, "`{f}` appears in the index more than once");
+        }
+        // The stages keep the order of the work itself.
+        let pos = |h: &str| index.find(h).unwrap_or(usize::MAX);
+        assert!(pos("Discover:") < pos("Design:") && pos("Design:") < pos("Build:") && pos("Build:") < pos("Check:") && pos("Check:") < pos("Ship:"));
+    }
+
+    #[test]
+    fn a_roles_index_leaves_out_what_the_role_does_not_carry() {
+        let (_d, p) = temp_paths();
+        let docs = index_for(&p, Some("docs"));
+        assert!(!docs.contains("- fix-bug: "), "docs does not write fixes");
+        assert!(docs.contains("- technical-writing: "));
+        let qa = index_for(&p, Some("qa"));
+        assert!(qa.contains("- prove-it-works: "));
+    }
+
+    #[test]
+    fn the_core_rules_name_skills_that_exist() {
+        let names: Vec<&str> = BUILTIN.iter().map(|(f, _)| *f).collect();
+        for word in referenced(CORE) {
+            assert!(names.contains(&word.as_str()), "a core rule names `{word}`, which is not a skill");
+        }
+        assert_eq!(CORE.lines().count(), 9, "a heading and eight rules");
+    }
+
+    #[test]
+    fn the_work_skill_points_only_at_skills_that_exist() {
+        let (_f, raw) = BUILTIN.iter().find(|(f, _)| *f == "work").unwrap();
+        let s = parse(raw, "builtin").unwrap();
+        let names: Vec<&str> = BUILTIN.iter().map(|(f, _)| *f).collect();
+        for word in referenced(&s.body) {
+            assert!(names.contains(&word.as_str()), "`work` points at `{word}`, which is no skill");
+        }
+    }
+
+    #[test]
+    fn a_stage_with_nothing_in_it_names_no_heading() {
+        // The heading list is derived from what exists, so a person who removes
+        // a stage does not leave an empty heading in every prompt.
+        let (_d, p) = temp_paths();
+        let index = index_for(&p, None);
+        for (_, title) in KINDS {
+            let has_members = BUILTIN.iter().any(|(_, raw)| {
+                parse(raw, "builtin").map(|s| KINDS.iter().any(|(k, t)| t == title && &s.kind == k)).unwrap_or(false)
+            });
+            if !has_members {
+                assert!(!index.contains(&format!("{title}:")), "{title} is empty but has a heading");
+            }
+        }
+    }
+
+    #[test]
+    fn a_persons_own_skill_may_use_a_word_of_its_own() {
+        let (_d, p) = temp_paths();
+        // Nothing devd ships uses an unknown kind, but a person's skill may.
+        let dir = user_dir(&p);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("mine.md"), "---\nname: mine\ndescription: my own habit\nkind: personal\nroles:\n---\n\nDo the thing the way this team likes it done.\n").unwrap();
+        let mine = all(&p).into_iter().find(|s| s.name == "mine").expect("the skill loads");
+        assert_eq!(mine.kind, "personal");
+        // It is not lost from the index: an unknown stage is shown last, under
+        // its own name, rather than dropped.
+        let index = index_for(&p, None);
+        assert!(index.contains("- mine: "), "{index}");
+    }
+}

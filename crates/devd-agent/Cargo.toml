@@ -25,6 +25,9 @@ webpki-roots = "0.26"
 
 [dev-dependencies]
 tempfile.workspace = true
+# The notification target and the queue that delivers it are tested from here,
+# where a suggestion and a queued message meet.
+devd-ops = { path = "../devd-ops" }
 
 [lints]
 workspace = true

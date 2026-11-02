@@ -1,7 +1,7 @@
 ---
 name: recall
-description: Rebuild context before resuming work.
-kind: technique
+description: Rebuild context before resuming work
+kind: discover
 roles: planner,implementer
 ---
 

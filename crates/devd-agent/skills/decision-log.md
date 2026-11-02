@@ -1,7 +1,7 @@
 ---
 name: decision-log
-description: Keep a reviewable trail of decisions for long or unattended work.
-kind: technique
+description: Keep a reviewable trail of decisions for long or unattended work
+kind: ship
 roles: planner,implementer,qa,reviewer
 ---
 

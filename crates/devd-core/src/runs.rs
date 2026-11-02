@@ -74,6 +74,125 @@ impl RunMode {
     }
 }
 
+/// The kind of work a request asked for, decided in code before a model is asked
+/// anything.
+///
+/// The router in the super-agent design is a small fast model, but it is preceded
+/// by a deterministic filter. This is that filter: the same words reach the same
+/// runner on every machine, every retry and every resume, and the model choice
+/// for each kind of work is visible and configurable rather than buried in a
+/// prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunKind {
+    /// Explaining, inspecting, answering. One conversation, no plan.
+    Answer,
+    /// A goal a team should plan and then work through.
+    Plan,
+    /// One piece of work handed to one named specialist.
+    Assign,
+    /// Work a clock or a rule started, with nobody typing.
+    Schedule,
+}
+
+impl RunKind {
+    /// Stable stored name.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Answer => "answer",
+            Self::Plan => "plan",
+            Self::Assign => "assign",
+            Self::Schedule => "schedule",
+        }
+    }
+
+    /// Parse a stored kind; anything unrecognised is an ordinary answer, which is
+    /// the least powerful of the four.
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "plan" => Self::Plan,
+            "assign" => Self::Assign,
+            "schedule" => Self::Schedule,
+            _ => Self::Answer,
+        }
+    }
+
+    /// The model role whose configured chain this kind of work uses
+    /// (`models.assign`). A conversation's own model choice always wins.
+    pub fn role(self) -> &'static str {
+        match self {
+            // A team run's members already choose by their role; the
+            // orchestrating model for planning is the planner's.
+            Self::Plan => "planner",
+            // Assignments are specialists; the default chain is the right one
+            // until the specialist is known.
+            Self::Assign => "default",
+            Self::Schedule => "default",
+            Self::Answer => "default",
+        }
+    }
+
+    /// Whether this kind of work starts a team run rather than a conversation.
+    pub fn is_run(self) -> bool {
+        matches!(self, Self::Plan | Self::Assign | Self::Schedule)
+    }
+
+    /// Every kind, for a listing.
+    pub fn all() -> [Self; 4] {
+        [Self::Answer, Self::Plan, Self::Assign, Self::Schedule]
+    }
+}
+
+/// What a person's words ask for: the filter in front of every model call.
+///
+/// This is deliberately small and boring. It recognises the two things a person
+/// says that change what runs - "give the team this goal" and "give this to the
+/// QA member" - and returns [`RunKind::Answer`] for everything else. An agent's
+/// suggestion does not change the answer: an agent that writes "build the whole
+/// app" into a conversation is still answered, because only a person may start
+/// a run without a plan they can read.
+///
+/// An explicit `kind` supplied by a caller skips the guess entirely; the GUI
+/// sets it from the composer, and `devd chat --as team` sets it on the command
+/// line.
+pub fn classify(message: &str, explicit: Option<RunKind>) -> RunKind {
+    if let Some(kind) = explicit {
+        return kind;
+    }
+    let t = message.trim();
+    if t.is_empty() {
+        return RunKind::Answer;
+    }
+    let lower = t.to_ascii_lowercase();
+    // "Give this to @qa", "assign the reviewer", "hand it to the implementer".
+    const ASSIGN: &[&str] = &["@qa", "assign ", "give this to", "hand it to", "give it to"];
+    if roles::any(t) && ASSIGN.iter().any(|p| lower.contains(p)) {
+        return RunKind::Assign;
+    }
+    // "Have the team build X", "the team should plan Y", "team: add Z".
+    const PLAN: &[&str] = &["have the team ", "the team should ", "ask the team ", "team: ", "let the team ", "plan and build", "plan and implement"];
+    if PLAN.iter().any(|p| lower.starts_with(p) || lower.contains(p)) {
+        return RunKind::Plan;
+    }
+    RunKind::Answer
+}
+
+/// Role ids, lower-case, for the assign filter. Kept apart from
+/// [`crate::roles`] so this file stays independent of the agent crate.
+mod roles {
+    /// The roster's ids, as the filter compares them.
+    const IDS: &[&str] = &[
+        "planner", "product", "designer", "architect", "implementer", "frontend", "backend", "mobile",
+        "data", "qa", "reviewer", "security", "infra", "researcher", "docs",
+    ];
+
+    /// Whether the text names a member of the team.
+    pub fn any(text: &str) -> bool {
+        let lower = text.to_ascii_lowercase();
+        IDS.iter().any(|id| lower.contains(&format!("@{id}")) || lower.contains(&format!("{id} ")))
+    }
+}
+
 /// The lifecycle state of a run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1473,8 +1592,7 @@ pub fn evidence_for_effect(
 }
 
 /// Check the evidence recorded for a run against its completion policy.
-pub fn evaluate(policy: &CompletionPolicy, evidence: &[Evidence]) -> CompletionVerdict {
-    let mut missing = Vec::new();
+pub fn evaluate(policy: &CompletionPolicy, evidence: &[Evidence]) -> CompletionVerdict {    let mut missing = Vec::new();
     let has_pass =
         |kind: EvidenceKind| evidence.iter().any(|e| e.kind == kind.as_str() && e.passed);
     let has_kind = |kind: EvidenceKind| evidence.iter().any(|e| e.kind == kind.as_str());
@@ -1614,6 +1732,50 @@ impl RunContext {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_plain_message_is_answered_by_one_conversation() {
+        for text in ["why is the build failing?", "add a README", "", "what does this function do"] {
+            assert_eq!(classify(text, None), RunKind::Answer, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn a_message_that_asks_for_the_team_is_planned_not_answered() {
+        for text in ["have the team build a blog", "team: add password reset", "Ask the team to ship it"] {
+            assert_eq!(classify(text, None), RunKind::Plan, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn a_message_that_names_a_member_and_hands_over_work_is_an_assignment() {
+        assert_eq!(classify("@qa check the checkout flow", None), RunKind::Assign);
+        assert_eq!(classify("assign the reviewer to PR 12", None), RunKind::Assign);
+        // Naming a member without handing work over is still a question.
+        assert_eq!(classify("who is the qa member?", None), RunKind::Answer);
+    }
+
+    #[test]
+    fn a_kind_given_by_the_caller_is_never_second_guessed() {
+        // The composer said "team", so it is a plan even though the words say nothing.
+        assert_eq!(classify("hello", Some(RunKind::Plan)), RunKind::Plan);
+        // A caller that says "answer" is not overruled by a goal-shaped sentence.
+        assert_eq!(classify("have the team build a blog", Some(RunKind::Answer)), RunKind::Answer);
+    }
+
+    #[test]
+    fn every_kind_has_a_model_role_and_only_runs_start_work() {
+        let kinds = RunKind::all();
+        assert_eq!(kinds.len(), 4);
+        for k in kinds {
+            assert!(matches!(k.role(), "default" | "planner"), "{}", k.as_str());
+            assert_eq!(RunKind::parse(k.as_str()), k);
+        }
+        assert!(!RunKind::Answer.is_run());
+        assert!(RunKind::Plan.is_run() && RunKind::Assign.is_run() && RunKind::Schedule.is_run());
+        // An unknown stored kind is the least powerful one, never a run.
+        assert_eq!(RunKind::parse("nonsense"), RunKind::Answer);
+    }
 
     #[test]
     fn a_mutation_the_name_lists_do_not_know_is_a_change_by_its_declared_effect() {

@@ -1,7 +1,7 @@
 ---
 name: prototype
-description: Build a throwaway sketch to settle a design question, then throw it away.
-kind: playbook
+description: Build a throwaway sketch to settle a design question, then throw it away
+kind: build
 roles: implementer,architect
 ---
 

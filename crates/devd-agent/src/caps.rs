@@ -439,7 +439,7 @@ struct SkillQuery {
     /// Only skills meant for this role.
     #[serde(default)]
     role: Option<String>,
-    /// playbook, technique or principle.
+    /// The stage of work: discover, design, build, check, review, ship, words or house.
     #[serde(default)]
     kind: Option<String>,
 }
@@ -456,7 +456,7 @@ struct SkillSave {
     name: String,
     /// One line.
     description: String,
-    /// playbook, technique or principle.
+    /// The stage of work: discover, design, build, check, review, ship, words or house.
     kind: String,
     /// Roles it is for (empty = everyone).
     #[serde(default)]
@@ -539,6 +539,11 @@ struct SendArgs {
     /// Reasoning effort for models that accept one: low, medium or high.
     #[serde(default)]
     effort: Option<String>,
+    /// What kind of work this is: answer, plan, assign or schedule. Absent means
+    /// devd decides from the words with a fixed rule, so the same request reaches
+    /// the same runner every time.
+    #[serde(default)]
+    kind: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -888,6 +893,9 @@ struct DictateArgs {
 
 pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()> {
     crate::environment::register(reg)?;
+    // What devd may propose, and the rules a project wrote for when it should
+    // think about starting some work.
+    crate::caps_autonomy::register(reg, team.clone())?;
     reg.define::<SearchArgs>("search.query", "Search projects, files, text, conversations, models, tasks and activity")
     .description("Searches what devd can see: project names, file paths (walked live, not indexed), literal text inside a project, conversations, the model catalogue, background tasks and the audit trail. Each response lists which sources were searched, how, and whether the search was cut short, so an empty result is never mistaken for a complete search.")
     .tier(Tier::Read)
@@ -1182,7 +1190,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             },
         )?;
     reg.define::<RunRef>("team.get", "Read a team run")
-    .description("The run, every task with its state, role, dependencies, evidence and result, and the event log after a sequence number (poll with the last id you saw).")
+    .description("The run, every task with its state, role, dependencies, evidence, result and the mandate that allowed it, the event log after a sequence number (poll with the last id you saw), and `needs`: the one question the run is waiting on, with the actions that resolve it. `needs` is null when nothing is waiting for a person.")
     .tier(Tier::Read)
     .effect(Effect::Read)
     .agent_safe()
@@ -1194,8 +1202,11 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             let run = ctx.store.get_run(&a.run)?.ok_or_else(|| DevdError::not_found(format!("no run `{}`", a.run)))?;
             let tasks = ctx.store.list_tasks_of_run(&a.run)?;
             let events = ctx.store.list_team_events(&a.run, a.after.unwrap_or(0), 500)?;
+            // One structured answer to "what does this run need from me?", shared
+            // with the Inbox and the window so they cannot word it differently.
+            let needs = crate::needs::of(&run, &tasks);
             let pending: Vec<Value> = ctx.store.list_requests(true, None, 200)?.into_iter().filter(|r| r.thread_id.as_deref().map(|t| tasks.iter().any(|x| x.thread_id.as_deref() == Some(t))).unwrap_or(false)).map(|r| serde_json::to_value(r).unwrap_or(Value::Null)).collect();
-            Ok(Outcome::with_data(format!("{} · {} task(s)", run.state, tasks.len()), json!({ "run": run, "run_id": ctx.store.run_for_team_run(&a.run)?.map(|r| r.id), "tasks": tasks, "events": events, "approvals": pending })))
+            Ok(Outcome::with_data(format!("{} · {} task(s)", run.state, tasks.len()), json!({ "run": run, "run_id": ctx.store.run_for_team_run(&a.run)?.map(|r| r.id), "tasks": tasks, "events": events, "approvals": pending, "needs": needs })))
         },
     )?;
     reg.define::<NoArgs>("team.roles", "The team's specialists")
@@ -1401,7 +1412,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
 
     // --------------------------------------------------------------- skills
     reg.define::<SkillQuery>("skills.list", "List skills")
-    .description("Playbooks, techniques and principles agents can load: name, one-line description, kind and the roles they are for. Read one with skills.get.")
+    .description("The skills agents can load, grouped by the stage of work they belong to: discover, design, build, check, review, ship, words and house rules. Each returns its name, one-line description, kind and the roles it is for. Read one with skills.get.")
     .tier(Tier::Read)
     .effect(Effect::Read)
     .agent_safe()
@@ -1534,7 +1545,21 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             }).collect();
             let mut names = vec!["default"];
             names.extend(roles::all().iter().map(|r| r.id));
-            Ok(Outcome::with_data(format!("{} assignment(s)", rows.len()), json!({ "roles": names, "assignments": rows })))
+            // Which model each kind of work reaches when nothing else was chosen.
+            // The kind is decided in code (devd_core::classify), so this table is
+            // the whole answer to "what runs when I say this".
+            let kinds: Vec<Value> = devd_core::RunKind::all().iter().map(|k| {
+                let role = k.role();
+                let first = rows.iter().find(|r| r["role"] == role && r["scope"] == "default");
+                json!({
+                    "kind": k.as_str(),
+                    "role": role,
+                    "model": first.map(|r| r["model"].clone()).unwrap_or(Value::Null),
+                    "provider": first.map(|r| r["provider"].clone()).unwrap_or(Value::Null),
+                    "answered_by": match k { devd_core::RunKind::Answer => "one conversation", devd_core::RunKind::Plan => "the team planner, then its specialists", devd_core::RunKind::Assign => "one named specialist", devd_core::RunKind::Schedule => "a run nobody is typing at" },
+                })
+            }).collect();
+            Ok(Outcome::with_data(format!("{} assignment(s)", rows.len()), json!({ "roles": names, "assignments": rows, "kinds": kinds })))
         },
     )?;
     reg.define::<AssignModels>("models.assign", "Choose models for a kind of work")
@@ -1997,7 +2022,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
     .handlers(
         |_, a| simple("chat.send", format!("send a message to the built-in agent{}", a.project.as_ref().map(|p| format!(" in {p}")).unwrap_or_default())),
         move |ctx, a| {
-                let t = hub.send(ctx, SendRequest { thread_id: a.thread.clone(), message: a.message.clone(), project: a.project.clone(), provider: a.provider.clone(), model: a.model.clone(), permission: a.permission.clone(), effort: a.effort.clone() })?;
+                let t = hub.send(ctx, SendRequest { thread_id: a.thread.clone(), message: a.message.clone(), project: a.project.clone(), provider: a.provider.clone(), model: a.model.clone(), permission: a.permission.clone(), effort: a.effort.clone(), kind: a.kind.as_deref().map(devd_core::RunKind::parse) })?;
                 let queued = ctx.store.queued_count(&t.id)?;
                 let mut data = serde_json::to_value(&t)?;
                 if let Some(obj) = data.as_object_mut() {

@@ -22,6 +22,7 @@ pub mod cron;
 pub mod daemons;
 pub mod dbadmin;
 pub mod deploy;
+pub mod effects;
 pub mod env;
 pub mod health;
 pub mod laravel;

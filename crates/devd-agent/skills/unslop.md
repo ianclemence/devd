@@ -1,7 +1,7 @@
 ---
 name: unslop
-description: Edit prose so it reads like a person wrote it.
-kind: technique
+description: Edit prose so it reads like a person wrote it
+kind: words
 roles: docs,planner,reviewer
 ---
 

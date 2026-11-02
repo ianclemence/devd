@@ -132,23 +132,24 @@ pub fn deliver(ctx: &Ctx, item: &devd_core::store_ops::OpsItem, event: &str, sit
     }
 }
 
-/// Tell every target that wants this event. Never fails; a delivery that does not work is logged.
+/// Tell every target that wants this event.
+///
+/// The message is queued rather than sent from the caller's thread: a health
+/// check that flipped to `down` records the fact and lets the daemon deliver it,
+/// so a dead webhook is a row that is retried and shown on the health screen
+/// instead of a line in a log file. [`deliver`] stays synchronous for
+/// `notify.test`, where the person is waiting for the result.
 pub fn send(ctx: &Ctx, event: &str, site: &str, message: &str, data: Value) {
-    let Ok(items) = ctx.store.ops_list(KIND, None) else { return };
-    for item in items {
-        let wants = item.data["events"].as_array().is_some_and(|a| a.iter().any(|e| e.as_str() == Some(event)));
-        let scoped = item.data["site"].as_str().is_none_or(|s| s == site);
-        if !wants || !scoped {
-            continue;
-        }
-        if let Err(e) = deliver(ctx, &item, event, site, message, &data) {
-            let line = format!("[{}] notify {} ({}) failed: {e}\n", util::now(), item.id, item.data["channel"].as_str().unwrap_or(""));
-            let _ = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(crate::log_dir(ctx).join("notify.log"))
-                .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
-        }
+    let payload = json!({ "event": event, "site": site, "message": message, "data": data });
+    if ctx.store.enqueue_effect("notify.send", &format!("{event}:{site}:{}", util::now()), &payload).is_err() {
+        // If the queue cannot be written, say it once in the log rather than
+        // losing the message in silence.
+        let line = format!("[{}] notify {event} for {site} could not be queued\n", util::now());
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(crate::log_dir(ctx).join("notify.log"))
+            .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
     }
 }
 

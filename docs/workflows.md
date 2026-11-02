@@ -20,7 +20,7 @@ the inbox (and a `review.done` event is emitted) when it finishes. Closing the
 window does not cancel it; quitting devd does, and it is not restarted.
 
 **Memory proposals merge.** A proposal is made against the text of `AGENTS.md` as
-it was. When the file has since changed, `memory.apply` merges three ways - the
+it was. When the file has since changed, `memory.apply` merges three ways — the
 text the proposal was made against, the file now, and the proposed text. Changes
 to different lines combine, two proposals that each add a list item both survive,
 and a collision on the same lines is refused with both versions shown. Nothing is

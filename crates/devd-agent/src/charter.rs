@@ -448,12 +448,30 @@ pub fn prompt_context(ctx: &Ctx, project: &str) -> String {
                     "Roles invited to propose the next work: {}\n",
                     c.proactive_roles.join(", ")
                 ));
-                s.push_str("If your role is listed, you may add one clearly-scoped next workstream to your report when it moves the north star. Do not start unrequested work; the person approves the next plan.\n");
+                s.push_str("If your role is listed, you may record one clearly-scoped proposal about work that moves the north star with team.suggest. A proposal is not work: a person accepts it or dismisses it, and an accepted one still waits for plan approval. Do not start unrequested work.\n");
             }
         }
         _ => {
             s.push_str("No north star has been written for this project yet. The person is the owner; ask what outcome matters if it changes the work.\n");
         }
+    }
+    // What devd already watches for. A member that does not know the rules might
+    // propose the same thing every turn, which is exactly the noise the rules
+    // exist to avoid.
+    let rules = crate::guardian::rules_for(ctx, project);
+    if !rules.is_empty() {
+        s.push_str("Rules this project wrote for starting work:\n");
+        for r in rules.iter().take(6) {
+            s.push_str(&format!(
+                "- {} ({}): when {}, {} — currently in {} mode\n",
+                r["name"].as_str().unwrap_or(""),
+                r["trigger_text"].as_str().unwrap_or(""),
+                r["condition_text"].as_str().unwrap_or("it happens"),
+                r["goal"].as_str().unwrap_or(""),
+                r["mode"].as_str().unwrap_or("observe")
+            ));
+        }
+        s.push_str("These are a person's rules, not yours. Do not change them, and do not duplicate one as a proposal.\n");
     }
     if !sites.is_empty() {
         s.push_str("Sites serving this project:\n");
@@ -553,6 +571,15 @@ pub fn context(ctx: &Ctx, project: &str) -> Result<Value> {
         "memory": project_memory(&project_path),
         "lessons": lessons(ctx, project, 8),
         "trust": trust(ctx, project),
+        "intake_rules": crate::guardian::rules_for(ctx, project),
+        "suggestions": ctx
+            .store
+            .list_suggestions(Some("open"), 20)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|s| s.project.as_deref() == Some(project))
+            .map(|s| serde_json::to_value(s).unwrap_or(Value::Null))
+            .collect::<Vec<_>>(),
     }))
 }
 

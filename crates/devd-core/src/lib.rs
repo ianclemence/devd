@@ -36,6 +36,7 @@ pub mod shims;
 pub mod snapshot;
 pub mod state;
 pub mod store_ai;
+pub mod store_autonomy;
 pub mod store_mcp;
 pub mod store_ops;
 pub mod store_pins;
@@ -61,14 +62,17 @@ pub use events::{Event, EventBus};
 pub use paths::Paths;
 pub use registry::{DispatchOptions, Registry};
 pub use runs::{
-    evaluate, evidence_for, ApprovalRecord, ArtifactRecord, CompletionPolicy, CompletionVerdict,
-    Evidence, EvidenceDraft, EvidenceKind, Run, RunContext, RunEvent, RunMode, RunState, RunStep,
-    ToolCall,
+    classify, evaluate, evidence_for, evidence_for_effect, ApprovalRecord, ArtifactRecord,
+    CompletionPolicy, CompletionVerdict, Evidence, EvidenceDraft, EvidenceKind, Run, RunContext,
+    RunEvent, RunKind, RunMode, RunState, RunStep, ToolCall, OBSERVED_CAPABILITY, VERIFY_TASKS,
 };
 pub use state::Store;
 pub use store_ai::{
     AgentRequest, CatalogueModel, Chapter, ChatEvent, ChatThread, InboxMessage, Provider,
     QueuedMessage,
+};
+pub use store_autonomy::{
+    policy_version, EffectHealth, IntakeRule, Mandate, PendingEffect, Suggestion,
 };
 pub use store_mcp::{McpServer, McpTool, McpTrust};
 pub use store_runs::{

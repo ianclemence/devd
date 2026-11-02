@@ -3,7 +3,7 @@ name = "devd-ops"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Per-site and per-server operations for a local machine: environment files, cron jobs, queue workers, redirects, logs, deploys and notifications."
+description = "Per-site and per-server operations: environment files, cron jobs, queue workers, redirects, logs, deploys and notifications."
 
 [dependencies]
 devd-core = { path = "../devd-core" }

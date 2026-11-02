@@ -1,7 +1,7 @@
 ---
 name: product-requirements
-description: Write a one-page requirements document an engineer can build from without asking what was meant.
-kind: playbook
+description: Write a one-page requirements document an engineer can build from without asking what was meant
+kind: design
 roles: product,planner
 ---
 

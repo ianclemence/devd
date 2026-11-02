@@ -8,7 +8,7 @@ use devd_core::config::Settings;
 use devd_core::events::EventBus;
 use devd_core::paths::Paths;
 use devd_core::state::{Site, Store};
-use devd_ops::{cron, daemons, deploy, env, notify};
+use devd_ops::{cron, daemons, deploy, effects, env, notify};
 
 fn ctx(tag: &str) -> (Ctx, std::path::PathBuf) {
     let dir = std::env::temp_dir().join(format!("devd-ops-{tag}-{}", std::process::id()));
@@ -119,6 +119,18 @@ fn a_deploy_script_is_saved_run_recorded_and_notified() {
     let log = deploy::log(&ctx, &started.id, 50).unwrap().join("\n");
     assert!(log.contains("skipped: cd /somewhere/on/a/server"), "{log}");
     assert_eq!(deploy::history(&ctx, "shop", 10).unwrap().len(), 1);
+    // The notification is queued, not sent from the deploy's own thread: a
+    // delivery that fails is a row that is retried and shown, not a log line.
+    // Draining the queue here is what the daemon does every fifteen seconds.
+    let never = |_: &devd_core::capability::Ctx, _: &devd_core::Schedule| {
+        Err::<(), String>("not used".into())
+    };
+    let now = (chrono::Utc::now() + chrono::Duration::seconds(2)).to_rfc3339();
+    assert!(
+        ctx.store.due_effects(&now, 10).unwrap().iter().any(|e| e.kind == "notify.send"),
+        "the deploy queued its notification"
+    );
+    effects::tick(&ctx, &never);
     assert!(
         ctx.store
             .list_inbox(false, 10)

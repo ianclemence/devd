@@ -7,13 +7,13 @@
 
 ## What devd does for you
 
-devd is the local development server you would otherwise assemble by hand: a web server, a database, a few runtimes, a hosts file and a pile of terminal tabs. It knows what is installed, what is running and what each project needs, and it shows all of it in one place.
+devd is the development server you would otherwise assemble by hand: a web server, a database, a few runtimes, a hosts file, and every piece wired to every other. It knows what is installed, what is running and what each project needs, and it shows all of it in one place.
 
 - **It finds your project.** Browse to the folder with your operating system's own dialog. devd reads what is inside — the stack, the package manager, the runtimes it asks for, the services it talks to — and sets it up from there.
-- **It gives every project a name.** `blog.test`, over HTTPS, with a certificate from devd's own local authority. A Laravel app, a Next.js site, a Django API and a Rails app all sit in the same list.
+- **It gives every project a name.** `blog.test`, over HTTPS, with a certificate from devd's own certificate authority. A Laravel app, a Next.js site, a Django API and a Rails app all sit in the same list.
 - **It serves your dev servers too.** Point a hostname at a program that is already running — `devd site create api --upstream 3000` — and a Node, Python or Rails dev server gets the same `.test` name and HTTPS.
 - **It runs the services.** PHP, nginx or Apache, MariaDB, Redis and a mail catcher are installed (or adopted from where they already are), started, health-checked and kept running. A service is "Ready" only after it has answered, not because its port is open.
-- **It moves you off other local stacks.** Park a folder and every project in it becomes a site; use the Apache and Redis you already have as they are; move a database off an existing MySQL with one command; start the stack when you sign in. [What carries over and what does not](docs/limitations.md).
+- **It fits around what you already run.** Park a folder and every project in it becomes a site; use the Apache and Redis you have as they are; move a database off an existing MySQL with one command; start the stack when you sign in.
 - **It sees what you already have.** MySQL, Redis, PostgreSQL and Docker are detected, never assumed healthy and never replaced. You decide whether devd uses them, watches them or leaves them alone.
 - **It works while you do something else.** Start the team from a template, or on a schedule: every weekday at nine, run the security review on this project.
 - **It has its own agents.** An assistant, and a team of fifteen specialists (planner, product, designer, architect, engineers, QA, security, infrastructure, docs). Give the team a goal and a definition of done: a planner proposes the work, you approve it, and specialists do it in isolated copies of the project until the evidence shows it is done.
@@ -149,21 +149,33 @@ logs/             service and session logs
 
 ## Documentation
 
+Start with the first two. The rest are there when a question about a specific
+part comes up.
+
 | Document | Contents |
 |---|---|
 | [`docs/reference.md`](docs/reference.md) | Every command, the settings table and how approval works. |
-| [`docs/platforms.md`](docs/platforms.md) | Windows, Linux and macOS: what differs and what is verified. |
-| [`docs/architecture.md`](docs/architecture.md) | The registry, the dispatcher, the state store, the crates. |
+| [`docs/architecture.md`](docs/architecture.md) | The registry, the dispatcher, the state store and the crates. |
 | [`docs/domain.md`](docs/domain.md) | What a project, site, runtime, service and external MCP server are, and who owns each. |
 | [`docs/security.md`](docs/security.md) | The threat model and the specific protections. |
-| [`docs/app.md`](docs/app.md), [`docs/design.md`](docs/design.md), [`docs/tui.md`](docs/tui.md), [`docs/mcp.md`](docs/mcp.md) | The window, its design system, its API, the terminal dashboard and the agent surface. |
-| [`docs/agents.md`](docs/agents.md) | The assistant, the team, skills and models. |
+| [`docs/platforms.md`](docs/platforms.md) | Windows, Linux and macOS: what differs and what is verified. |
+| [`docs/limitations.md`](docs/limitations.md) | What carries over from other stacks, what is replaced only with approval, and what devd will not do. |
+| [`docs/app.md`](docs/app.md), [`docs/design.md`](docs/design.md), [`docs/tui.md`](docs/tui.md) | The application window, its design system and API, and the terminal dashboard. |
+| [`docs/mcp.md`](docs/mcp.md) | The MCP surface: the five tools, the agent actor and approvals. |
+| [`docs/agents.md`](docs/agents.md) | The assistant, the team, skills, models and the runs they record. |
 | [`docs/runs.md`](docs/runs.md) | Runs, evidence, approvals, context, events and recovery. |
-| [`docs/operations.md`](docs/operations.md) | The server-panel operations: env, cron, workers, deploys, backups, servers. |
-| [`docs/workflows.md`](docs/workflows.md) | Reviews, agent memory and the project workspace. |
+| [`docs/autonomy.md`](docs/autonomy.md) | The rules a feature must keep if it lets devd act without being asked. |
+| [`docs/superagent-notes.md`](docs/superagent-notes.md) | What devd took from DeepSeek's super-agent design, and what it refused. |
+| [`docs/operations.md`](docs/operations.md) | The server operations: env, cron, workers, deploys, backups, servers. |
+| [`docs/workflows.md`](docs/workflows.md) | Reviews, agent memory and instruction files. |
+| [`docs/shared-state.md`](docs/shared-state.md) | Todos, scratchpads and handoff between agents. |
 | [`docs/stacks.md`](docs/stacks.md), [`docs/stacks-engine.md`](docs/stacks-engine.md) | Supported stacks and how they are defined. |
 | [`docs/devd-yml.md`](docs/devd-yml.md) | Declaring a project's processes. |
-| [`docs/daemon.md`](docs/daemon.md) | The resident process, service ownership, maintenance, local DNS, signed updates and undo. |
+| [`docs/git-cli.md`](docs/git-cli.md) | The Git commands and the capabilities behind them. |
+| [`docs/daemon.md`](docs/daemon.md) | The resident process, service ownership, maintenance, names and signed updates. |
+| [`docs/desktop.md`](docs/desktop.md) | The native window and what it adds to the server. |
+| [`docs/setup.md`](docs/setup.md) | What devd needs on a machine and how each requirement is met. |
+| [`docs/releasing.md`](docs/releasing.md) | How a release is built, signed and published. |
 | [`CHANGELOG.md`](CHANGELOG.md) | Release history. |
 
 ---

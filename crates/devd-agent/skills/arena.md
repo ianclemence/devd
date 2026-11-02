@@ -1,7 +1,7 @@
 ---
 name: arena
-description: Let several independent attempts compete, pick the best base, graft in the rest's strengths.
-kind: technique
+description: Let several independent attempts compete, pick the best base, graft in the rest's strengths
+kind: design
 roles: planner,architect
 ---
 

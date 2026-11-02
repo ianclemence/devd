@@ -27,17 +27,23 @@
 //!   the agent is told plainly that it must not claim they happened.
 
 pub mod caps;
+pub mod caps_autonomy;
 pub mod charter;
 pub mod chat;
 pub mod dictation;
 pub mod docs;
+pub mod effects_bridge;
 pub mod environment;
 pub mod fs;
+pub mod guardian;
 pub mod health;
 pub mod gemini;
+pub mod intake;
 pub mod policy;
 pub mod host;
 pub mod judge;
+pub mod needs;
+pub mod prompts;
 pub mod providers;
 pub mod requirements;
 pub mod roles;
@@ -52,3 +58,4 @@ pub mod templates;
 pub mod workflows;
 
 pub use chat::Hub;
+pub use needs::Needs;

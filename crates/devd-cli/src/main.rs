@@ -215,7 +215,7 @@ pub(crate) enum Command {
         #[command(subcommand)]
         cmd: ScheduleCommand,
     },
-    /// Skills agents load: playbooks, techniques and principles.
+    /// Skills agents load: how to start, design, build, check, review, ship and write.
     Skills {
         #[command(subcommand)]
         cmd: SkillsCommand,

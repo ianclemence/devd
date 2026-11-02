@@ -37,7 +37,9 @@ would split the background work between two processes.
 
 ## What it does
 
-Every 15 seconds: cron jobs, scheduled backups, scheduled deploys, health checks.
+Every 15 seconds: cron jobs, scheduled backups, scheduled deploys, health checks,
+and the queue of work that leaves the process.
+
 Every hour, and once at start:
 
 * **Log rotation.** A `.log` file under `logs/` or `etc/` over 10 MB is copied to
@@ -53,8 +55,30 @@ Every hour, and once at start:
   (`cache.max_age_days`, `cache.max_bytes`).
 * **Undo snapshots.** Snapshots older than 30 days, then the oldest beyond 1 GiB,
   are removed (`snapshots.max_age_days`, `snapshots.max_bytes`).
+* **Queue retention.** Rows in the effect queue that finished or were dropped are
+  removed after 14 days (`effects.retention_days`; `0` keeps everything). A
+  proposal a person decided about is kept for 90 days
+  (`suggestions.retention_days`). Open proposals and pending queue rows are never
+  touched.
 * **Service reconciliation.** See below.
 * **Local DNS** (started once, below).
+
+## The queue for work that leaves the process
+
+A notification, a background review and a scheduled start are rows in one table,
+not threads that call out and forget. Each row has its kind and key, its payload,
+how many times it has been tried, the last error and when it may run again. The
+pass above drains what is due; a row that worked is settled, and one that failed
+waits twice as long as it did before, up to ten minutes, before it is dropped.
+
+Two promises keep it from becoming a second scheduler:
+
+* **One row per kind and key.** Queuing the same thing again replaces the payload
+  instead of stacking a copy, so a health check that flips every minute does not
+  fill the table.
+* **A quiet system is not a broken one.** A kind of work is reported unhealthy
+  only after one of its rows has failed three times in a row, and it clears on the
+  next success. A one-off network error is not an error on the Diagnostics page.
 
 ## Owning services: process image and start time, not ports
 

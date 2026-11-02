@@ -647,6 +647,29 @@ impl Store {
         self.with(|c| Ok(c.query_row("SELECT id,run_id,ordinal,kind,title,state,data,started_at,finished_at FROM run_steps WHERE id=?1", params![id], step_row)?))
     }
 
+    /// Record which prompt text a step ran under. The content is compiled into
+    /// devd and cannot be edited; this is the fingerprint, so two runs can be
+    /// compared by role and skill without anyone being able to change a permission.
+    pub fn set_step_prompts(&self, id: &str, prompts: &Value) -> Result<()> {
+        self.with(|c| {
+            c.execute(
+                "UPDATE run_steps SET prompts=?2 WHERE id=?1",
+                params![id, prompts.to_string()],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Which prompt text a step ran under, when it was recorded.
+    pub fn step_prompts(&self, id: &str) -> Result<Option<Value>> {
+        self.with(|c| {
+            let text: Option<String> = c
+                .query_row("SELECT prompts FROM run_steps WHERE id=?1", params![id], |r| r.get(0))
+                .optional()?;
+            Ok(text.and_then(|t| serde_json::from_str::<Value>(&t).ok()))
+        })
+    }
+
     /// Finish a step.
     pub fn finish_step(&self, id: &str, state: &str, data: Option<&Value>) -> Result<()> {
         let now = util::now();

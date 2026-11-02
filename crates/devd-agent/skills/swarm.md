@@ -1,7 +1,7 @@
 ---
 name: swarm
-description: Fan work out to parallel workers and fold the results into one report.
-kind: technique
+description: Fan work out to parallel workers and fold the results into one report
+kind: build
 roles: planner
 ---
 

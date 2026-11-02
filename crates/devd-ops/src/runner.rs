@@ -71,6 +71,12 @@ pub fn start(ctx: Ctx) -> bool {
             crate::dbadmin::tick(&ctx);
             crate::deploy::tick_scheduled(&ctx);
             crate::health::tick(&ctx);
+            // Work that must reach outside this process - a notification, a
+            // scheduled start - is a row until it is delivered, so a failure is
+            // retried with backoff and shown on the health screen rather than
+            // written to a log nobody reads.
+            let never = |_: &devd_core::capability::Ctx, _: &devd_core::Schedule| Err::<(), String>("the agent host is not running".into());
+            let _ = crate::effects::tick(&ctx, &never);
             // Rotation and retention are slow to matter, so once an hour is plenty.
             if last_maintenance.is_none_or(|t| t.elapsed() >= MAINTENANCE_EVERY) {
                 last_maintenance = Some(std::time::Instant::now());

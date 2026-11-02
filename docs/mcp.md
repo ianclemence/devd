@@ -37,7 +37,7 @@ A client configuration looks like this:
 ## Five tools, and they do not grow
 
 The obvious design is one MCP tool per capability. That is the design that gets
-worse every time the product gets better: nearly 400 capabilities today, across
+worse every time the product gets better: more than 400 capabilities today, across
 Git, runtimes, services, sites, TLS, the database, agents, operations and remote
 servers, would be a tool list hundreds of entries long, loaded into every
 conversation whether or not it is relevant, and regenerated whenever the registry
@@ -132,9 +132,9 @@ file.
 Run against the release binary with a real repository, over a real pipe:
 
 ```
-initialize        → devd 0.2.0, protocol 2025-06-18, 5 tools
+initialize        → devd 0.17.1, protocol 2025-06-18, 5 tools
 tools/list        → devd_groups, devd_capabilities, devd_describe, devd_invoke, devd_doctor
-devd_groups       → 64 capabilities in 12 domains
+devd_groups       → 421 capabilities in 12 git groups and 53 others
 devd_describe     → git.reset: tier destructive, requires_approval true, arguments mode/repo/rev
 devd_invoke       → git.status: ok, branch main, clean true
 devd_invoke       → git.reset mode=hard: isError true, approval_required, plan handed over

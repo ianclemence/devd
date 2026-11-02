@@ -23,8 +23,8 @@
       "icons/icon.png",
       "icons/icon.ico"
     ],
-    "shortDescription": "Agent-native local development environment",
-    "longDescription": "devd runs managed services, sites, local HTTPS and coding-agent sessions in one native window. It does not proxy the agent: the terminal is the harness's own."
+    "shortDescription": "Agent-native development environment",
+    "longDescription": "devd runs services, sites, HTTPS and coding-agent sessions in one native window. It does not proxy the agent: the terminal is the harness's own."
   }
 }
 

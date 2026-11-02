@@ -1,7 +1,7 @@
 ---
 name: tdd
-description: Write the failing test first when a cheap, local test exists.
-kind: technique
+description: Write the failing test first when a cheap, local test exists
+kind: build
 roles: implementer,qa
 ---
 
