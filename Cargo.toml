@@ -43,6 +43,9 @@ tar = "0.4"
 flate2 = "1"
 rcgen = "0.13"
 base64 = "0.22"
+# A real PTY, so an interactive program sees a terminal rather than a pipe.
+# MIT, from the wezterm project; the one native dependency in the workspace.
+portable-pty = "0.9"
 time = "0.3"
 
 devd-core = { path = "crates/devd-core" }
