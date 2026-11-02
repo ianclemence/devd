@@ -5917,6 +5917,9 @@
     threads: null, thread: null, events: [], pending: [], running: false, lastId: 0, queued: 0,
     run: null,
     pickProvider: "", pickModel: "",
+    permission: "auto", effort: "medium", composerSkills: null, composerSkillsAt: 0,
+    popover: null, modelRail: "", modelQuery: "",
+    modelBusy: {}, modelFetched: {}, modelError: {},
     composer: "", project: "", timer: null, openSteps: {}, todos: [], todosAt: 0,
     inbox: null, requests: null, history: null
   };
@@ -6296,34 +6299,27 @@
     if (!d) return renderLoading("Reading projects, approvals and the services on this machine.");
     var h = AI.health || { level: "checking", checks: [], headline: "" };
     var ready = d.providers.some(function (p) { return p.enabled && p.has_key; }) || d.providers.some(function (p) { return p.enabled && !p.needs_key; });
-    var projOptions = '<option value="">No project</option>' + d.projects.map(function (p) { return '<option value="' + attr(p.path) + '"' + (AI.askProject === p.path ? " selected" : "") + ">" + esc(p.name) + "</option>"; }).join("");
 
-    // The composer is one object: what to do, who does it, and where. The mode
-    // decides who acts - the assistant for one request, the team for a goal with
-    // a plan, approval and proof - and the button says which will happen.
-    var mode = AI.homeMode === "team" ? "team" : "ask";
     // The composer. One surface for one act: say what you want, choose who does it
     // and where, send. The mode decides who acts - the assistant answers one
     // request; the team plans a goal and waits for approval - and the button
     // names which will happen.
-    var team = mode === "team";
+    var team = AI.homeMode === "team";
     var ask = ready
-      ? '<div class="composer" role="group" aria-label="Tell devd what you are working on">' +
-          composerTop("home") +
-          '<label class="sr-only" for="home-ask">' + (team ? "The outcome you want from the team" : "What would you like to ask devd?") + "</label>" +
-          '<textarea id="home-ask" class="composer-input" rows="2" placeholder="' + (team ? "Describe the outcome you want. The team will draft a plan and wait for your go-ahead." : "What are we working on?") + '">' + esc(AI.askText || "") + "</textarea>" +
-          '<div class="composer-bar">' +
-            '<div class="composer-left">' +
-              modeSelect() +
-              '<label class="composer-where"><svg class="icon" aria-hidden="true"><use href="#i-folder"></use></svg><span class="sr-only">Project</span>' +
-                '<select id="home-project">' + projOptions + "</select></label>" +
-              attachButton("home") +
-            "</div>" +
-            '<div class="composer-right"><button type="button" class="composer-send" id="home-send" data-action="' + (team ? "home-team" : "home-ask") + '"' + (String(AI.askText || "").trim() ? "" : " disabled") + ' aria-label="' + (team ? "Ask the team to plan this" : "Ask devd") + '" title="' + (team ? "Ask the team to plan this" : "Ask devd") + '"><svg class="icon" aria-hidden="true"><use href="#i-arrow-up"></use></svg></button></div>' +
-          "</div>" +
-        "</div>"
-      : '<div class="composer composer-off"><div class="composer-offline"><b>No model is connected.</b> Connect one to give devd goals. Everything else on this page works without it.</div>' +
-          '<button type="button" class="btn btn-primary" data-action="nav" data-view="providers">Connect a model</button></div>';
+      ? composerHtml("home", {
+          text: AI.askText || "",
+          label: team ? "The outcome you want from the team" : "What would you like to ask devd?",
+          aria: "Tell devd what you are working on",
+          placeholder: team ? "Describe the outcome you want. The team will draft a plan and wait for your go-ahead." : "What are we working on?",
+          projects: d.projects,
+          project: AI.askProject,
+          showProject: true,
+          disabled: !String(AI.askText || "").trim(),
+          sendAction: team ? "home-team" : "home-ask",
+          sendLabel: team ? "Ask the team to plan this" : "Ask devd"
+        })
+      : '<div class="composer-dock composer-dock-home"><div class="composer composer-off"><div class="composer-offline"><b>No model is connected.</b> Connect one to give devd goals. Everything else on this page works without it.</div>' +
+          '<button type="button" class="btn btn-primary" data-action="nav" data-view="providers">Connect a model</button></div></div>';
 
     var needs = [];
     (d.teamRuns || []).filter(function (t) { return t.state === "awaiting_plan"; }).forEach(function (t) {
@@ -7457,63 +7453,22 @@
     var projOpts = '<option value="">No project</option>' + state.projects.map(function (p) { return '<option value="' + attr(p.path) + '"' + (AI.project === p.path ? " selected" : "") + ">" + esc(p.name || dirName(p.path)) + "</option>"; }).join("") +
       (DEV.projects || []).map(function (p) { return '<option value="' + attr(p.path) + '"' + (AI.project === p.path ? " selected" : "") + ">" + esc(p.name) + "</option>"; }).join("");
 
-    // The model picker lives in the composer, where it is used, rather than in
-    // a header above the conversation.
-    var provs = (AI.providers || []).filter(function (p) { return p.enabled; });
-    var cur = (AI.thread && AI.thread.provider_id) || AI.pickProvider ||
-      (provs.filter(function (p) { return p.is_default; })[0] || provs[0] || {}).id;
-    var current = provs.filter(function (p) { return p.id === cur; })[0];
-    var currentModel = (AI.thread && AI.thread.model) || AI.pickModel || (current && current.default_model) || "";
-    var models = modelOptions(cur);
-    if (!currentModel && models.length) currentModel = models[0].model_id;
-    if (!AI.thread && !AI.pickModel && currentModel) AI.pickModel = currentModel;
-    var known = {};
-    var currentLabel = currentModel;
-    var modelRows = models.map(function (m) {
-      known[m.model_id] = true;
-      var label = m.display || m.model_id;
-      if (m.model_id === currentModel) currentLabel = label;
-      return '<option value="' + attr(m.model_id) + '" title="' + attr(label + (m.model_id !== label ? " (" + m.model_id + ")" : "")) + '"' + (m.model_id === currentModel ? " selected" : "") + ">" + esc(label) + "</option>";
-    }).join("");
-    if (currentModel && !known[currentModel]) {
-      modelRows = '<option value="' + attr(currentModel) + '" selected>' + esc(currentModel) + (models.length ? " (not in provider list)" : "") + "</option>" + modelRows;
-    }
-    if (!modelRows) {
-      modelRows = '<option value="' + attr(currentModel) + '" selected>' + (currentModel ? esc(currentModel) : "provider default") + "</option>";
-    }
-    var projectName = AI.project || (state.project && state.project.path) || "";
+    // The model, permission and effort choices live in the composer, where they
+    // are used. One card renders them for Home and the Assistant alike.
+    var projectList = (state.projects || []).concat((DEV.projects || []).filter(function (p) {
+      return !(state.projects || []).some(function (q) { return q.path === p.path; });
+    }));
+    var projectName = AI.project || (state.project && state.project.path) || (AI.thread && AI.thread.project) || "";
 
-    var composer =
-      '<div class="composer">' +
-      '<div class="mention-menu" id="chat-mentions" hidden role="listbox" aria-label="Reference"></div>' +
-      composerTop("chat") +
-      '<textarea class="composer-input" id="chat-input" rows="2" placeholder="What are we working on? Type / or @ to bring in a skill, a tool or a project" aria-label="Message" aria-autocomplete="list" aria-controls="chat-mentions">' + esc(AI.composer) + "</textarea>" +
-      '<div class="composer-bar">' +
-      '<div class="composer-left">' +
-      (AI.thread ? "" : modeSelect() + '<label class="composer-where"><svg class="icon" aria-hidden="true"><use href="#i-folder"></use></svg><span class="sr-only">Project</span><select class="select-field" id="chat-project" aria-label="Project">' + projOpts + "</select></label>") +
-      attachButton("chat") +
-      '<select class="composer-picker select-field" data-chat="provider" aria-label="Provider">' +
-      (provs.length ? provs.map(function (p) { return '<option value="' + attr(p.id) + '"' + (p.id === cur ? " selected" : "") + ">" + esc(p.label) + "</option>"; }).join("") : '<option value="">no provider</option>') +
-      "</select>" +
-      '<select class="composer-picker composer-model select-field" data-chat="model" aria-label="Model" title="' + attr(currentLabel + (currentModel && currentLabel !== currentModel ? " (" + currentModel + ")" : "")) + '">' + modelRows + "</select>" +
-      "</div>" +
-      '<div class="composer-right">' +
-      // The slot holds exactly one primary action. While it works and the box
-      // is empty that is Stop, in the send button's place; once there is text
-      // it is the arrow, which queues that text for the next step.
-      '<span class="composer-slot">' +
-      '<button type="button" class="composer-stop" id="chat-stop" data-action="chat-stop" title="Stop after this step" aria-label="Stop" hidden><svg class="icon" aria-hidden="true"><use href="#i-stop"></use></svg></button>' +
-      '<button type="button" class="composer-tool" id="chat-mic" data-action="chat-dictate" title="Dictate with Whisper" aria-label="Dictate with Whisper"><svg class="icon" aria-hidden="true"><use href="#i-mic"></use></svg></button>' +
-      '<button type="button" class="composer-send" id="chat-send" data-action="chat-send" title="Send" aria-label="Send"><svg class="icon" aria-hidden="true"><use href="#i-arrow-up"></use></svg></button>' +
-      "</span>" +
-      "</div></div></div>" +
-      '<div class="composer-status">' +
-      '<span class="status-chip">devd</span>' +
-      '<span class="status-sep" aria-hidden="true">/</span>' +
-      '<span class="status-chip">Local</span>' +
-      '<span class="status-sep" aria-hidden="true">/</span>' +
-      (AI.thread ? '<span class="status-chip">' + esc(dirName(AI.thread.project || "no project")) + "</span>" : '<span class="status-chip">New conversation</span>') +
-      "</div>";
+    var composer = composerHtml("chat", {
+      text: AI.composer,
+      label: "Message",
+      aria: "Message",
+      projects: projectList,
+      project: projectName,
+      showProject: !AI.thread,
+      placeholder: "What are we working on? Type / or @ to bring in a skill, a tool or a project"
+    });
 
     el("main").innerHTML =
       '<div class="workspace">' +
@@ -8284,6 +8239,393 @@
       '<option value="team"' + (team ? " selected" : "") + ">Agent runs</option></select>";
   }
 
+  // ------------------------------------------------------- the composer's shape
+  //
+  // One card, shared by Home and the Assistant: a tab that says what this
+  // conversation is doing, the words, and one row of choices. A choice that
+  // changes what the agent may do (permission, model, effort) is two clicks
+  // away, never buried in a settings page.
+
+  var PERMISSIONS = [
+    { value: "auto", label: "Auto", hint: "Ask only when an operation is beyond the ordinary rules." },
+    { value: "manual", label: "Manual", hint: "Ask before every change." },
+    { value: "plan", label: "Plan", hint: "Read and propose only. Nothing changes." },
+    { value: "bypass", label: "Bypass all", hint: "Approve ordinary changes for this conversation." }
+  ];
+
+  var EFFORTS = [
+    { value: "low", label: "Low", hint: "Quick answers. Less reasoning before acting." },
+    { value: "medium", label: "Medium", hint: "The balanced default." },
+    { value: "high", label: "High", hint: "Think longer before answering or acting." }
+  ];
+
+  function permissionInfo(value) {
+    return PERMISSIONS.filter(function (p) { return p.value === (value || AI.permission); })[0] || PERMISSIONS[0];
+  }
+
+  function effortInfo(value) {
+    return EFFORTS.filter(function (e) { return e.value === (value || AI.effort); })[0] || EFFORTS[1];
+  }
+
+  function composerProvider() {
+    var provs = (AI.providers || []).filter(function (p) { return p.enabled; });
+    var cur = (AI.thread && AI.thread.provider_id) || AI.pickProvider ||
+      (provs.filter(function (p) { return p.is_default; })[0] || provs[0] || {}).id;
+    return { list: provs, id: cur, provider: provs.filter(function (p) { return p.id === cur; })[0] };
+  }
+
+  function composerModel(providerId) {
+    var current = (AI.thread && AI.thread.provider_id === providerId && AI.thread.model) ||
+      (AI.pickProvider === providerId && AI.pickModel) || "";
+    if (current) return current;
+    var p = (AI.providers || []).filter(function (x) { return x.id === providerId; })[0];
+    var list = modelOptions(providerId);
+    return (p && p.default_model) || (list[0] || {}).model_id || "";
+  }
+
+  function modelLabel(providerId, model) {
+    var hit = modelOptions(providerId).filter(function (m) { return m.model_id === model; })[0];
+    return (hit && (hit.display || hit.model_id)) || model || "provider default";
+  }
+
+  /* A provider can have a default model before its catalogue has been fetched.
+     The picker still shows that model, so a fresh provider is usable at once. */
+  function composerModels(providerId) {
+    var list = modelOptions(providerId).slice();
+    var known = {};
+    list.forEach(function (m) { known[m.model_id] = 1; });
+    var p = (AI.providers || []).filter(function (x) { return x.id === providerId; })[0];
+    [composerModel(providerId), p && p.default_model].forEach(function (id) {
+      if (id && !known[id]) {
+        list.unshift({ model_id: id, display: id });
+        known[id] = 1;
+      }
+    });
+    return list;
+  }
+
+  function providerById(id) {
+    return (AI.providers || []).filter(function (p) { return p.id === id; })[0] || null;
+  }
+
+  /* A provider is configured when it can be called: it needs no key, or its
+     key is present. The rail says so, because a model that cannot answer should
+     not look like a choice. */
+  function providerConfigured(id) {
+    var p = typeof id === "string" ? providerById(id) : id;
+    return !!(p && p.enabled && (p.has_key || !p.needs_key));
+  }
+
+  /* Fetch the provider's own model list once per session, the same call the
+     Models screen makes. The composer then offers what the account can really
+     use, not only the default written on the provider card. */
+  function ensureProviderModels(id) {
+    var p = providerById(id);
+    if (!p || AI.modelBusy[id]) return;
+    // A key may have been added after the last look. A missing key is not a
+    // permanent answer, so it does not stop a later fetch.
+    if (AI.modelFetched[id] === "no-key" && providerConfigured(p)) delete AI.modelFetched[id];
+    if (AI.modelFetched[id]) return;
+    if (!providerConfigured(p)) {
+      AI.modelFetched[id] = "no-key";
+      return;
+    }
+    AI.modelBusy[id] = true;
+    delete AI.modelError[id];
+    read("provider.models", { id: id }).then(function (models) {
+      AI.modelFetched[id] = true;
+      if (Array.isArray(models)) {
+        var source = "provider:" + id;
+        AI.catalogue = (AI.catalogue || []).filter(function (m) { return m.source !== source; })
+          .concat(models.map(function (m) { return Object.assign({}, m, { source: source }); }));
+      }
+    }).catch(function (e) {
+      AI.modelFetched[id] = "error";
+      AI.modelError[id] = e.message;
+    }).then(function () {
+      AI.modelBusy[id] = false;
+      if (AI.popover && AI.popover.kind === "model") paintComposerPopover();
+    });
+  }
+
+  /* Reasoning effort is only offered where the model has a dial to turn. */
+  function effortSupported(providerId, model) {
+    var p = (AI.providers || []).filter(function (x) { return x.id === providerId; })[0];
+    if (!p || p.kind !== "openai") return false;
+    var m = String(model || "");
+    return /^(o1|o3|o4|gpt-5)/.test(m) || m.indexOf("reasoning") >= 0;
+  }
+
+  function composerStatus(prefix) {
+    if (prefix === "home") {
+      var team = AI.homeMode === "team";
+      return { tone: team ? "accent" : "ok", text: team ? "Agent runs" : "Assistant", hint: team ? "The team plans a goal and waits for your go-ahead." : "One request, answered by the assistant." };
+    }
+    var t = AI.thread;
+    if (!t) return { tone: "off", text: "New conversation", hint: "Nothing has been said yet." };
+    if (t.state === "running" || AI.running) return { tone: "live", text: "Working", hint: "The assistant is working. You can queue another message." };
+    if (t.state === "waiting_approval") return { tone: "warn", text: "Waiting for you", hint: "An operation needs your decision." };
+    if (t.state === "error") return { tone: "bad", text: "Stopped with an error", hint: "Read the last notice in the conversation." };
+    return { tone: "ok", text: "Ready", hint: "The assistant is not working." };
+  }
+
+  function statusTab(prefix) {
+    var s = composerStatus(prefix);
+    var dot = '<span class="composer-tab-dot dot-' + attr(s.tone) + '"></span>';
+    if (prefix === "home") {
+      return '<button type="button" class="composer-tab" data-action="composer-mode-toggle" title="' + attr(s.hint) + '">' +
+        dot + '<span>' + esc(s.text) + "</span></button>";
+    }
+    return '<span class="composer-tab" title="' + attr(s.hint) + '">' + dot + "<span>" + esc(s.text) + "</span></span>";
+  }
+
+  function composerModelButton(prefix) {
+    var cur = composerProvider();
+    var model = composerModel(cur.id);
+    var p = cur.provider;
+    return '<button type="button" class="composer-choice composer-model" data-action="composer-model" data-chat="model" aria-label="Model" aria-haspopup="dialog" aria-expanded="false" title="' +
+      attr((p ? p.label + " · " : "") + modelLabel(cur.id, model)) + '">' +
+      (p ? brandImg(p.id, "model-brand") : "") +
+      '<span class="composer-model-name">' + esc(modelLabel(cur.id, model)) + "</span>" +
+      '<svg class="icon composer-caret" aria-hidden="true"><use href="#i-chevron-down"></use></svg></button>';
+  }
+
+  function composerProjectButton(prefix, options, value) {
+    var label = value ? dirName(value) : "No project";
+    return '<button type="button" class="composer-choice composer-project" data-action="composer-project" aria-haspopup="dialog" aria-expanded="false" title="' + attr(value || "No project") + '">' +
+      '<svg class="icon" aria-hidden="true"><use href="#i-folder"></use></svg><span>' + esc(label) + "</span>" +
+      '<svg class="icon composer-caret" aria-hidden="true"><use href="#i-chevron-down"></use></svg></button>';
+  }
+
+  /* The whole card. Both destinations render this, so a person learns one box. */
+  function composerHtml(prefix, opts) {
+    var o = opts || {};
+    var team = AI.homeMode === "team";
+    var inputId = prefix === "home" ? "home-ask" : "chat-input";
+    var placeholder = o.placeholder || (team && prefix === "home" ? "Describe the outcome you want. The team will draft a plan and wait for your go-ahead." : "What are we working on?");
+    var sendAction = o.sendAction || (prefix === "home" ? (team ? "home-team" : "home-ask") : "chat-send");
+    var disabled = o.disabled ? " disabled" : "";
+    var showProject = !!o.showProject;
+    var project = o.project || "";
+    var model = composerModel(composerProvider().id);
+    var effort = effortSupported(composerProvider().id, model)
+      ? '<button type="button" class="composer-choice composer-effort" data-action="composer-effort" aria-haspopup="dialog" aria-expanded="false" title="Reasoning effort">' +
+        '<svg class="icon" aria-hidden="true"><use href="#i-gauge"></use></svg><span>' + esc(effortInfo().label) + "</span></button>"
+      : "";
+    var actions = prefix === "chat"
+      ? '<span class="composer-slot">' +
+          '<button type="button" class="composer-stop" id="chat-stop" data-action="chat-stop" title="Stop after this step" aria-label="Stop" hidden><svg class="icon" aria-hidden="true"><use href="#i-stop"></use></svg></button>' +
+          '<button type="button" class="composer-tool" id="chat-mic" data-action="chat-dictate" title="Dictate with Whisper" aria-label="Dictate with Whisper"><svg class="icon" aria-hidden="true"><use href="#i-mic"></use></svg></button>' +
+          '<button type="button" class="composer-send" id="chat-send" data-action="' + sendAction + '" title="Send" aria-label="Send"><svg class="icon" aria-hidden="true"><use href="#i-arrow-up"></use></svg></button>' +
+        "</span>"
+      : '<button type="button" class="composer-send" id="home-send" data-action="' + sendAction + '"' + disabled + ' aria-label="' + attr(o.sendLabel || (team ? "Ask the team to plan this" : "Ask devd")) + '" title="' + attr(o.sendLabel || (team ? "Ask the team to plan this" : "Ask devd")) + '"><svg class="icon" aria-hidden="true"><use href="#i-arrow-up"></use></svg></button>';
+    var textarea = prefix === "home"
+      ? '<textarea class="composer-input" id="home-ask" rows="2" placeholder="' + attr(placeholder) + '" aria-label="' + attr(o.label || "Message") + '">' + esc(o.text || "") + "</textarea>"
+      : '<textarea class="composer-input" id="chat-input" rows="2" placeholder="' + attr(placeholder) + '" aria-label="' + attr(o.label || "Message") + '" aria-autocomplete="list" aria-controls="chat-mentions">' + esc(o.text || "") + "</textarea>";
+
+    return '<div class="composer-dock' + (prefix === "home" ? " composer-dock-home" : "") + '">' +
+      statusTab(prefix) +
+      '<div class="composer" role="group" aria-label="' + attr(o.aria || "Tell devd what you are working on") + '">' +
+        composerTop(prefix) +
+        (prefix === "chat" ? '<div class="mention-menu" id="chat-mentions" hidden role="listbox" aria-label="Reference"></div>' : "") +
+        '<label class="sr-only" for="' + inputId + '">' + esc(o.label || "Message") + "</label>" +
+        textarea +
+        '<div class="composer-bar">' +
+          '<div class="composer-left">' +
+            '<button type="button" class="composer-add" data-action="composer-add" aria-haspopup="menu" aria-expanded="false" title="Add files, a skill or a project" aria-label="Add"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg></button>' +
+            '<button type="button" class="composer-choice composer-permission" data-action="composer-permission" aria-haspopup="dialog" aria-expanded="false" title="' + attr(permissionInfo().hint) + '">' +
+              '<svg class="icon" aria-hidden="true"><use href="#i-shield"></use></svg><span>' + esc(permissionInfo().label) + "</span>" +
+              '<svg class="icon composer-caret" aria-hidden="true"><use href="#i-chevron-down"></use></svg></button>' +
+            (showProject ? composerProjectButton(prefix, o.projects, project) : "") +
+          "</div>" +
+          '<div class="composer-right">' +
+            composerModelButton(prefix) + effort + actions +
+          "</div>" +
+        "</div>" +
+      "</div>" +
+    "</div>";
+  }
+
+  // ------------------------------------------------------- composer popovers
+  //
+  // They live at the end of the body, positioned against their trigger, so a
+  // scrolling column never clips them. They open upward when the space below is
+  // too small and flip back down when it is not.
+
+  function composerPopoverNode() {
+    var node = el("composer-popover");
+    if (!node) {
+      var holder = document.createElement("div");
+      holder.innerHTML = '<div id="composer-popover" class="composer-popover" role="dialog" hidden></div>';
+      node = holder.firstChild;
+      document.body.appendChild(node);
+    }
+    return node;
+  }
+
+  function closeComposerPopover() {
+    var node = el("composer-popover");
+    var anchor = AI.popover && AI.popover.anchor;
+    if (anchor && anchor.setAttribute) anchor.setAttribute("aria-expanded", "false");
+    if (node) { node.hidden = true; node.innerHTML = ""; }
+    AI.popover = null;
+  }
+
+  function positionComposerPopover() {
+    var p = AI.popover;
+    if (!p || !p.anchor) return;
+    var node = composerPopoverNode();
+    if (node.hidden) return;
+    var r = p.anchor.getBoundingClientRect();
+    var width = Math.min(node.offsetWidth || 300, window.innerWidth - 16);
+    node.style.width = width + "px";
+    var left = Math.min(Math.max(8, r.left), window.innerWidth - width - 8);
+    var height = node.offsetHeight || 200;
+    var top = r.bottom + 8;
+    if (window.innerHeight - r.bottom < height + 16 && r.top > height + 16) top = r.top - height - 8;
+    top = Math.max(8, Math.min(top, window.innerHeight - height - 8));
+    node.style.left = Math.round(left) + "px";
+    node.style.top = Math.round(top) + "px";
+  }
+
+  function openComposerPopover(kind, anchor, prefix) {
+    closeComposerPopover();
+    if (kind === "model") { AI.modelRail = composerProvider().id || ""; AI.modelQuery = ""; }
+    AI.popover = { kind: kind, anchor: anchor, prefix: prefix };
+    if (anchor && anchor.setAttribute) anchor.setAttribute("aria-expanded", "true");
+    paintComposerPopover();
+    if (kind === "add" && !AI.composerSkills) loadComposerSkills();
+  }
+
+  function paintComposerPopover() {
+    var p = AI.popover;
+    if (!p) return;
+    var node = composerPopoverNode();
+    node.hidden = false;
+    node.className = "composer-popover" + (p.kind === "model" ? " is-model" : "");
+    node.innerHTML = composerPopoverHtml(p);
+    positionComposerPopover();
+  }
+
+  function popoverChoice(action, value, label, hint, active) {
+    return '<button type="button" class="popover-choice' + (active ? " is-active" : "") + '" data-action="' + action + '" data-value="' + attr(value) + '" role="menuitemradio" aria-checked="' + (active ? "true" : "false") + '">' +
+      '<span class="popover-choice-main"><b>' + esc(label) + "</b>" + (hint ? '<span>' + esc(hint) + "</span>" : "") + "</span>" +
+      (active ? '<svg class="icon popover-check" aria-hidden="true"><use href="#i-check"></use></svg>' : "") + "</button>";
+  }
+
+  function composerPopoverHtml(p) {
+    if (p.kind === "permission") {
+      return '<div class="popover-head">What may the agent do?</div><div class="popover-body">' +
+        PERMISSIONS.map(function (x) { return popoverChoice("composer-permission-set", x.value, x.label, x.hint, AI.permission === x.value); }).join("") +
+        '<div class="popover-note">Bypass applies to this conversation only. Human-only operations still wait.</div></div>';
+    }
+    if (p.kind === "effort") {
+      return '<div class="popover-head">Reasoning effort</div><div class="popover-body">' +
+        EFFORTS.map(function (x) { return popoverChoice("composer-effort-set", x.value, x.label, x.hint, AI.effort === x.value); }).join("") +
+        "</div>";
+    }
+    if (p.kind === "project") {
+      var projects = p.projects || [];
+      var value = p.project || "";
+      return '<div class="popover-head">Work in</div><div class="popover-body">' +
+        popoverChoice("composer-project-set", "", "No project", "The assistant answers without a workspace.", !value) +
+        projects.map(function (pr) {
+          return '<button type="button" class="popover-choice' + (value === pr.path ? " is-active" : "") + '" data-action="composer-project-set" data-value="' + attr(pr.path) + '" role="menuitemradio" aria-checked="' + (value === pr.path ? "true" : "false") + '">' +
+            '<span class="popover-choice-main"><b>' + esc(pr.name || dirName(pr.path)) + '</b><span class="mono">' + esc(pr.path) + "</span></span>" +
+            (value === pr.path ? '<svg class="icon popover-check" aria-hidden="true"><use href="#i-check"></use></svg>' : "") + "</button>";
+        }).join("") + "</div>";
+    }
+    if (p.kind === "add") {
+      var prefix = p.prefix || "chat";
+      var skills = AI.composerSkills || [];
+      return '<div class="popover-head">Add to the message</div><div class="popover-body">' +
+        '<button type="button" class="popover-choice" data-action="composer-attach" data-value="' + attr(prefix + "-file") + '"><span class="popover-choice-main"><b>Files or photos</b><span>Attach what the assistant should read.</span></span><svg class="icon" aria-hidden="true"><use href="#i-paperclip"></use></svg></button>' +
+        '<div class="popover-label">Skills' + (skills.length ? "" : " · loading") + "</div>" +
+        (skills.length ? skills.slice(0, 10).map(function (s) {
+          return '<button type="button" class="popover-choice" data-action="composer-skill" data-value="' + attr(s.name) + '"><span class="popover-choice-main"><b>' + esc(s.name) + '</b><span>' + esc(s.description || s.kind || "") + "</span></span></button>";
+        }).join("") : '<div class="popover-note">No installed skills yet. Add one in Skills.</div>') +
+        "</div>";
+    }
+    if (p.kind === "model") {
+      var provs = (AI.providers || []).filter(function (x) { return x.enabled; });
+      var rail = AI.modelRail || (provs[0] || {}).id || "";
+      ensureProviderModels(rail);
+      var railHtml = provs.map(function (x) {
+        var ready = providerConfigured(x);
+        return '<button type="button" class="model-rail-item' + (x.id === rail ? " is-active" : "") + '" data-action="composer-rail" data-value="' + attr(x.id) + '" title="' + attr(x.label + (ready ? " · configured" : " · not configured")) + '" aria-label="' + attr(x.label + (ready ? ", configured" : ", not configured")) + '">' +
+          brandImg(x.id, "model-brand") + '<span class="provider-state ' + (ready ? "is-ok" : "is-off") + '" aria-hidden="true"></span></button>';
+      }).join("") || '<div class="popover-note">No provider.</div>';
+      var active = providerById(rail);
+      var activeReady = active && providerConfigured(active);
+      var badge = active
+        ? '<span class="provider-badge ' + (activeReady ? "is-ok" : "is-off") + '">' + esc(active.label) + " · " + (activeReady ? "configured" : "needs a key") + "</span>"
+        : "";
+      return '<div class="model-picker-head"><div class="model-picker-heading"><span class="model-picker-title">Models</span>' + badge + "</div>" +
+        '<label class="model-search"><input id="model-search" type="search" placeholder="Quick Search" aria-label="Quick search models" autocomplete="off" spellcheck="false" value="' + attr(AI.modelQuery || "") + '">' +
+        '<svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg></label></div>' +
+        '<div class="model-picker-body"><div class="model-rail" role="tablist" aria-label="Providers">' + railHtml +
+        '</div><div class="model-list" id="model-list" role="listbox" aria-label="Models">' + modelRowsHtml(rail) + "</div></div>";
+    }
+    return "";
+  }
+
+  /* Rows in the model picker. One layout for every provider: the model's mark,
+     its name, the effort control on the chosen row, and the radio that says
+     which model is in use. */
+  function modelRowsHtml(rail) {
+    var q = (AI.modelQuery || "").trim().toLowerCase();
+    var cur = composerProvider();
+    var activeModel = cur.id === rail ? composerModel(rail) : "";
+    var models = composerModels(rail).filter(function (m) {
+      if (!q) return true;
+      var label = m.display || m.model_id;
+      return label.toLowerCase().indexOf(q) >= 0 || m.model_id.toLowerCase().indexOf(q) >= 0;
+    });
+    var notes = [];
+    var provider = providerById(rail);
+    if (provider && !providerConfigured(provider)) {
+      notes.push('<div class="popover-note is-warn">No key for ' + esc(provider.label) + ". Add one in Models.</div>");
+    }
+    if (AI.modelBusy[rail]) {
+      notes.push('<div class="popover-note">Fetching the provider\'s models…</div>');
+    } else if (AI.modelError[rail]) {
+      notes.push('<div class="popover-note" title="' + attr(AI.modelError[rail]) + '">Could not fetch the official list. Showing saved models.</div>');
+    }
+    var rows = models.map(function (m) {
+      var label = m.display || m.model_id;
+      var active = !!activeModel && m.model_id === activeModel;
+      return '<div class="model-row' + (active ? " is-active" : "") + '" data-action="composer-model-set" data-provider="' + attr(rail) + '" data-value="' + attr(m.model_id) + '" role="option" aria-selected="' + (active ? "true" : "false") + '">' +
+        brandImg(rail, "model-brand") +
+        '<span class="model-row-name">' + esc(label) + "</span>" +
+        '<span class="model-radio" aria-hidden="true"></span></div>';
+    }).join("") || '<div class="popover-note">' + (q ? "No model matches." : "No models listed. Save one on the provider's card in Models.") + "</div>";
+    return notes.join("") + rows;
+  }
+
+  function loadComposerSkills() {
+    AI.composerSkillsAt = Date.now();
+    read("skills.list").then(function (list) {
+      AI.composerSkills = Array.isArray(list) ? list : [];
+      if (AI.popover && AI.popover.kind === "add") paintComposerPopover();
+    }).catch(function () { AI.composerSkills = []; });
+  }
+
+  function composerInput(prefix) {
+    return el(prefix === "home" ? "home-ask" : "chat-input");
+  }
+
+  function insertComposerText(prefix, text) {
+    var input = composerInput(prefix);
+    if (!input) return;
+    var at = input.selectionStart == null ? input.value.length : input.selectionStart;
+    var end = input.selectionEnd == null ? at : input.selectionEnd;
+    input.value = input.value.slice(0, at) + text + input.value.slice(end);
+    var caret = at + text.length;
+    input.focus();
+    try { input.setSelectionRange(caret, caret); } catch (e) { /* not a text field */ }
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
   function attachmentChips() {
     return ATTACHMENTS.map(function (a, i) {
       var thumb = a.preview ? '<img src="' + attr(a.preview) + '" alt="">' : '<svg class="icon" aria-hidden="true"><use href="#i-file"></use></svg>';
@@ -8492,20 +8834,7 @@
     closeMentions();
     syncComposerAction();
     fitComposer();
-    if (item.kind === "project" && item.path && !AI.thread) {
-      AI.project = item.path;
-      var sel = el("chat-project");
-      if (sel) {
-        var known = Array.prototype.some.call(sel.options, function (o) { return o.value === item.path; });
-        if (!known) {
-          var opt = document.createElement("option");
-          opt.value = item.path;
-          opt.textContent = item.title;
-          sel.appendChild(opt);
-        }
-        sel.value = item.path;
-      }
-    }
+    if (item.kind === "project" && item.path && !AI.thread) AI.project = item.path;
   }
 
   /* The microphone and the send arrow share one slot. The microphone holds it
@@ -8623,6 +8952,107 @@
     "chat-attach": function (node) {
       var input = el((node && node.dataset.input) || "chat-file");
       if (input) input.click();
+    },
+
+    // ------------------------------------------------------- composer choices
+    "composer-mode-toggle": function () {
+      var text = (el("home-ask") || {}).value || AI.askText || "";
+      AI.askText = text;
+      AI.homeMode = AI.homeMode === "team" ? "ask" : "team";
+      renderHome();
+      var input = el("home-ask");
+      if (input) { input.focus(); input.setSelectionRange(text.length, text.length); }
+    },
+
+    "composer-add": function (node) {
+      openComposerPopover("add", node, state.view === "home" ? "home" : "chat");
+    },
+
+    "composer-attach": function (node) {
+      var id = (node && node.dataset.value) || ((AI.popover && AI.popover.prefix === "home") ? "home-file" : "chat-file");
+      closeComposerPopover();
+      var input = el(id);
+      if (input) input.click();
+    },
+
+    "composer-permission": function (node) {
+      openComposerPopover("permission", node, state.view === "home" ? "home" : "chat");
+    },
+
+    "composer-permission-set": function (node) {
+      AI.permission = node.dataset.value || "auto";
+      closeComposerPopover();
+      if (state.view === "home") renderHome(); else renderAssistant();
+    },
+
+    "composer-effort": function (node) {
+      openComposerPopover("effort", node, state.view === "home" ? "home" : "chat");
+    },
+
+    "composer-effort-set": function (node) {
+      AI.effort = node.dataset.value || "medium";
+      closeComposerPopover();
+      if (state.view === "home") renderHome(); else renderAssistant();
+    },
+
+    "composer-model": function (node) {
+      openComposerPopover("model", node, state.view === "home" ? "home" : "chat");
+    },
+
+    "composer-rail": function (node) {
+      AI.modelRail = node.dataset.value || "";
+      AI.modelQuery = "";
+      paintComposerPopover();
+    },
+
+    "composer-model-set": function (node) {
+      var provider = node.dataset.provider || "";
+      var model = node.dataset.value || "";
+      AI.pickProvider = provider;
+      AI.pickModel = model;
+      closeComposerPopover();
+      if (AI.thread) {
+        AI.thread.provider_id = provider;
+        AI.thread.model = model;
+        run("chat.update", { thread: AI.thread.id, provider: provider, model: model }, { quiet: true })
+          .then(function () { return pollThread(false); })
+          .then(function () { renderAssistant(); });
+      } else if (state.view === "home") {
+        renderHome();
+      } else {
+        renderAssistant();
+      }
+    },
+
+    "composer-project": function (node) {
+      var choices = (state.projects || []).concat((DEV.projects || []).filter(function (p) {
+        return !(state.projects || []).some(function (q) { return q.path === p.path; });
+      }));
+      openComposerPopover("project", node, state.view === "home" ? "home" : "chat");
+      AI.popover.projects = choices;
+      AI.popover.project = state.view === "home" ? (AI.askProject || "") : (AI.project || (AI.thread && AI.thread.project) || "");
+      paintComposerPopover();
+    },
+
+    "composer-project-set": function (node) {
+      var path = node.dataset.value || "";
+      var prefix = AI.popover && AI.popover.prefix;
+      closeComposerPopover();
+      if (prefix === "home") {
+        AI.askProject = path;
+        renderHome();
+      } else {
+        AI.project = path;
+        rememberProject(path);
+        renderAssistant();
+      }
+    },
+
+    "composer-skill": function (node) {
+      var prefix = (AI.popover && AI.popover.prefix) || "chat";
+      var name = node.dataset.value || "";
+      closeComposerPopover();
+      insertComposerText(prefix, "@skill:" + name + " ");
     },
 
     /* A starting point is put in the box, not sent: the person can edit it,
@@ -8831,7 +9261,7 @@
     "team-say": function (n) { var i = el("team-say"); if (!i.value.trim()) return; var t = i.value.trim(); i.value = ""; var ts = el("team-say-send"); if (ts) ts.disabled = true; run("team.say", { run: n.dataset.id, text: t }); },
     "team-open-from": function (n) { TEAM.sel = n.dataset.id; TEAM.data = null; navigate("team"); },
     "home-team": function () {
-      var text = (el("home-ask").value || "").trim(), p = el("home-project").value;
+      var text = (el("home-ask").value || "").trim(), p = AI.askProject || "";
       TEAM.form.goal = takeAttachments(text); if (p) TEAM.form.project = p;
       TEAM.sel = null; TEAM.data = null; navigate("team");
     },
@@ -8894,6 +9324,7 @@
     "home-open": function (n) { DEV.path = n.dataset.path; DEV.ctx = null; DEV.detect = null; navigate("develop"); },
     "home-chat": function (n) {
       var path = (n && n.dataset.path) || "";
+      if (AI.permission === "bypass") AI.permission = "auto";
       AI.thread = null;
       AI.events = [];
       AI.pending = [];
@@ -8932,15 +9363,16 @@
     "home-ask": function () {
       var text = (el("home-ask").value || "").trim();
       if (!text) return toast("warn", "Write what you want done first");
-      startChat(takeAttachments(text), el("home-project").value);
+      startChat(takeAttachments(text), AI.askProject || "");
     },
     "open-thread": function (n) {
+      if (AI.permission === "bypass") AI.permission = "auto";
       AI.thread = { id: n.dataset.id, title: "", state: "idle", input_tokens: 0, output_tokens: 0 }; AI.lastId = 0; AI.events = []; AI.pending = []; AI.todos = []; AI.todosAt = 0; AI.queued = 0;
       if (state.view !== "assistant") { state.view = "assistant"; render(); }
       writeRoute("assistant", false);
       pollThread(true).then(function () { renderAssistant(); });
     },
-    "chat-new": function () { AI.thread = null; AI.events = []; AI.pending = []; AI.lastId = 0; AI.todos = []; AI.todosAt = 0; AI.queued = 0; writeRoute("assistant", false); renderAssistant(); },
+    "chat-new": function () { if (AI.permission === "bypass") AI.permission = "auto"; AI.thread = null; AI.events = []; AI.pending = []; AI.lastId = 0; AI.todos = []; AI.todosAt = 0; AI.queued = 0; writeRoute("assistant", false); renderAssistant(); },
     "chat-plan": function () {
       var rows = (AI.todos || []).map(function (t) {
         var st = t.status || "open";
@@ -8959,9 +9391,8 @@
       inp.value = ""; AI.composer = "";
       fitComposer();
       if (AI.thread && AI.thread.id) return sendChat({ message: text, thread: AI.thread.id });
-      var sel = el("chat-project");
-      if (AI.homeMode === "team") { TEAM.form.goal = text; if (sel && sel.value) TEAM.form.project = sel.value; TEAM.sel = null; TEAM.data = null; return navigate("team"); }
-      startChat(text, sel ? sel.value : "");
+      if (AI.homeMode === "team") { TEAM.form.goal = text; if (AI.project) TEAM.form.project = AI.project; TEAM.sel = null; TEAM.data = null; return navigate("team"); }
+      startChat(text, AI.project || "");
     },
     "chat-stop": function () { if (AI.thread) run("chat.stop", { thread: AI.thread.id }).then(function () { pollThread(false).then(paintChat); }); },
     "open-run": function (n) { openRun(n.dataset.id); },
@@ -10230,6 +10661,7 @@
 
   document.addEventListener("click", function (event) {
     if (state.topMenu && !event.target.closest(".top-menu")) { state.topMenu = ""; rail(); }
+    if (AI.popover && !event.target.closest("#composer-popover") && !event.target.closest('[data-action^="composer-"]')) closeComposerPopover();
     var node = event.target.closest("[data-action]");
     if (!node) return;
     var action = node.dataset.action;
@@ -10249,6 +10681,12 @@
       return;
     }
     if (event.key === "Escape") {
+      if (AI.popover) {
+        var popAnchor = AI.popover.anchor;
+        closeComposerPopover();
+        if (popAnchor && popAnchor.focus) popAnchor.focus();
+        return;
+      }
       if (state.topMenu) {
         var owner = document.querySelector('.top-tab-menu[aria-expanded="true"]');
         state.topMenu = ""; rail();
@@ -10437,6 +10875,10 @@
   }
 
   function sendChat(args) {
+    // The composer's choices travel with every message, so the agent loop reads
+    // the permission and effort that were on screen when the person pressed send.
+    args.permission = AI.permission;
+    args.effort = AI.effort;
     if (!args.thread) {
       if (AI.pickProvider) args.provider = AI.pickProvider;
       if (AI.pickModel) args.model = AI.pickModel;
@@ -10484,6 +10926,12 @@
 
   document.addEventListener("input", function (e) {
     var t = e.target;
+    if (t.id === "model-search") {
+      AI.modelQuery = t.value;
+      var list = el("model-list");
+      if (list) list.innerHTML = modelRowsHtml(AI.modelRail);
+      return;
+    }
     if (t.id === "team-say") { var tsb = el("team-say-send"); if (tsb) tsb.disabled = !t.value.trim(); }
     if (t.id === "home-ask") { AI.askText = t.value; var hs = el("home-send"); if (hs) hs.disabled = !t.value.trim(); }
     else if (t.id === "chat-input") {
@@ -10508,7 +10956,7 @@
     }
   });
   /* The drafting box's height depends on the window, so it is measured again when the window changes. */
-  window.addEventListener("resize", function () { fitComposer(); });
+  window.addEventListener("resize", function () { fitComposer(); positionComposerPopover(); });
 
   document.addEventListener("change", function (e) {
     var t = e.target;

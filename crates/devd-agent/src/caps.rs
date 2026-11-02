@@ -525,6 +525,12 @@ struct SendArgs {
     /// Model id to use.
     #[serde(default)]
     model: Option<String>,
+    /// How much the agent may do without asking: auto, manual, plan or bypass.
+    #[serde(default)]
+    permission: Option<String>,
+    /// Reasoning effort for models that accept one: low, medium or high.
+    #[serde(default)]
+    effort: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -1780,7 +1786,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
     .handlers(
         |_, a| simple("chat.send", format!("send a message to the built-in agent{}", a.project.as_ref().map(|p| format!(" in {p}")).unwrap_or_default())),
         move |ctx, a| {
-                let t = hub.send(ctx, SendRequest { thread_id: a.thread.clone(), message: a.message.clone(), project: a.project.clone(), provider: a.provider.clone(), model: a.model.clone() })?;
+                let t = hub.send(ctx, SendRequest { thread_id: a.thread.clone(), message: a.message.clone(), project: a.project.clone(), provider: a.provider.clone(), model: a.model.clone(), permission: a.permission.clone(), effort: a.effort.clone() })?;
                 let queued = ctx.store.queued_count(&t.id)?;
                 let mut data = serde_json::to_value(&t)?;
                 if let Some(obj) = data.as_object_mut() {

@@ -50,7 +50,7 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use devd_core::capability::{Actor, Approval, Ctx};
+use devd_core::capability::{Actor, Approval, Ctx, Tier};
 use devd_core::doctor::{self, Check, Level};
 use devd_core::{DevdError, InvokeRequest, Registry, Result, RunContext, RunMode, RunState};
 
@@ -103,6 +103,11 @@ pub struct McpServer {
     /// It is the boundary for autonomous file work; an external MCP client has
     /// no such scope and keeps the stricter approval rules.
     project: Option<PathBuf>,
+    /// How much this conversation's agent may do without asking. `auto` keeps
+    /// the ordinary rules; `manual` asks before every change; `plan` refuses to
+    /// change anything; `bypass` grants changes that a person could approve,
+    /// while human-only capabilities still refuse an agent.
+    permission: String,
 }
 
 /// The outcome of a tool call.
@@ -133,6 +138,7 @@ impl McpServer {
             extra_checks: Vec::new(),
             approval_queue: None,
             project: None,
+            permission: "auto".into(),
         }
     }
 
@@ -142,6 +148,13 @@ impl McpServer {
     /// client does not call this, so it never gets the exception.
     pub fn with_project(mut self, project: Option<String>) -> Self {
         self.project = project.map(PathBuf::from);
+        self
+    }
+
+    /// Set how much the agent may do without asking: `auto`, `manual`, `plan`
+    /// or `bypass`. The built-in assistant passes the composer's choice here.
+    pub fn with_permission(mut self, permission: impl Into<String>) -> Self {
+        self.permission = permission.into();
         self
     }
 
@@ -372,6 +385,33 @@ impl McpServer {
             dry_run,
         };
 
+        let tier = self
+            .registry
+            .get(id)
+            .map(|c| c.tier)
+            .unwrap_or(Tier::Read);
+
+        // Plan mode is a promise, not a speed bump: nothing that changes state
+        // is attempted. The model is told to keep reading and proposing.
+        if !dry_run && self.permission == "plan" && tier != Tier::Read {
+            let e = DevdError::denied(format!(
+                "the conversation is in Plan mode: `{id}` changes things, and Plan mode only reads. Describe the change and ask the person to switch to Auto or Manual before changing anything."
+            ));
+            return ToolOutcome::Failed(pretty(&error_body(&e, None, Some(id))));
+        }
+        // Manual mode asks before every change, including the reversible tiers
+        // that Auto would let through on their own.
+        if !dry_run && self.permission == "manual" && tier != Tier::Read {
+            let e = DevdError::ApprovalRequired {
+                capability: id.to_string(),
+                reason: format!(
+                    "Manual mode: `{id}` changes things, so it waits for your approval"
+                ),
+            };
+            let plan = self.plan_for(id, &cap_args);
+            return ToolOutcome::Failed(pretty(&error_body(&e, plan, Some(id))));
+        }
+
         // The conversation's project is the boundary. Reading or changing
         // anything outside it is not an error to work around: it is a decision
         // for the person, so it takes the ordinary approval path. A dry run is
@@ -392,6 +432,14 @@ impl McpServer {
         // capability still refuses the project root, `.git` and secrets; every
         // path outside the project took the approval branch above.
         let approval = if !dry_run
+            && self.permission == "bypass"
+            && self.ctx.store.environment_mode() != "production"
+        {
+            // Bypass is the person saying "I have already read what this
+            // conversation is doing". It still cannot touch a human-only
+            // capability or production mode.
+            Approval::Granted
+        } else if !dry_run
             && self.clears_inside_project(id, &cap_args)
             && self.ctx.store.environment_mode() != "production"
         {

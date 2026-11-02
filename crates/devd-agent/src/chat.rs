@@ -155,6 +155,11 @@ pub struct SendRequest {
     pub provider: Option<String>,
     /// Model id.
     pub model: Option<String>,
+    /// How much the agent may do without asking: `auto`, `manual`, `plan` or
+    /// `bypass`. `auto` keeps the ordinary approval rules.
+    pub permission: Option<String>,
+    /// Reasoning effort for models that accept one: `low`, `medium` or `high`.
+    pub effort: Option<String>,
 }
 
 /// The built-in agent's engine. One per devd process.
@@ -163,6 +168,13 @@ pub struct Hub {
     registry: OnceLock<Arc<Registry>>,
     running: Mutex<HashSet<String>>,
     cancel: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// The permission mode chosen in the composer, per conversation. It is
+    /// deliberately in memory: a bypass is for this conversation only, never a
+    /// setting that silently outlives it.
+    permission: Mutex<HashMap<String, String>>,
+    /// The reasoning effort chosen for this conversation, when the model accepts
+    /// one.
+    effort: Mutex<HashMap<String, String>>,
 }
 
 /// The advertised context window for a model, when the catalogue has one.
@@ -432,6 +444,8 @@ impl Hub {
             registry: OnceLock::new(),
             running: Mutex::new(HashSet::new()),
             cancel: Mutex::new(HashMap::new()),
+            permission: Mutex::new(HashMap::new()),
+            effort: Mutex::new(HashMap::new()),
         })
     }
 
@@ -512,6 +526,16 @@ impl Hub {
         if text.chars().count() > 20_000 {
             return Err(DevdError::invalid("that message is longer than 20,000 characters; put the long part in a file or a note and refer to it"));
         }
+        if let Some(p) = &req.permission {
+            if !matches!(p.as_str(), "auto" | "manual" | "plan" | "bypass") {
+                return Err(DevdError::invalid("permission must be auto, manual, plan or bypass"));
+            }
+        }
+        if let Some(e) = &req.effort {
+            if !matches!(e.as_str(), "low" | "medium" | "high") {
+                return Err(DevdError::invalid("effort must be low, medium or high"));
+            }
+        }
         let project = match &req.project {
             Some(p) if !p.trim().is_empty() => {
                 let dir = devd_stacks::authz::authorize_dir(caller, std::path::Path::new(p))?;
@@ -548,6 +572,7 @@ impl Hub {
                     self.ctx
                         .store
                         .queue_message(id, &text, &caller.actor.label())?;
+                    self.remember_options(id, &req);
                     return Ok(t);
                 }
                 if req.provider.is_some() || req.model.is_some() {
@@ -578,6 +603,7 @@ impl Hub {
         };
         // A previous process may have left messages queued; they were written first, so they are
         // delivered first.
+        self.remember_options(&thread.id, &req);
         self.deliver_queued(&thread.id)?;
         self.log(
             &thread.id,
@@ -589,6 +615,49 @@ impl Hub {
             .set_thread_state(&thread.id, "running", None)?;
         self.spawn(&thread.id);
         Ok(self.ctx.store.get_thread(&thread.id)?.expect("exists"))
+    }
+
+    /// Remember the composer's options for this conversation. Absent values
+    /// leave the current choices alone, so a message can change just the effort.
+    fn remember_options(&self, tid: &str, req: &SendRequest) {
+        if let Ok(mut map) = self.permission.lock() {
+            match &req.permission {
+                Some(p) => {
+                    map.insert(tid.to_string(), p.clone());
+                }
+                None => {
+                    map.entry(tid.to_string()).or_insert_with(|| "auto".into());
+                }
+            }
+        }
+        if let Ok(mut map) = self.effort.lock() {
+            match &req.effort {
+                Some(e) => {
+                    map.insert(tid.to_string(), e.clone());
+                }
+                None => {
+                    map.entry(tid.to_string()).or_insert_with(|| "medium".into());
+                }
+            }
+        }
+    }
+
+    fn permission_for(&self, tid: &str) -> String {
+        self.permission
+            .lock()
+            .ok()
+            .and_then(|m| m.get(tid).cloned())
+            .unwrap_or_else(|| "auto".into())
+    }
+
+    fn effort_for(&self, tid: &str) -> Option<String> {
+        Some(
+            self.effort
+                .lock()
+                .ok()
+                .and_then(|m| m.get(tid).cloned())
+                .unwrap_or_else(|| "medium".into()),
+        )
     }
 
     /// Append every queued message to the log as an ordinary user turn, and return how many.
@@ -976,6 +1045,8 @@ impl Hub {
                 .ok_or_else(|| DevdError::not_found("the conversation was deleted"))?;
             let binding = self.ctx.store.task_of_thread(tid)?;
             let role = binding.as_ref().map(|b| b.role.clone());
+            let permission = self.permission_for(tid);
+            let effort = self.effort_for(tid);
             let candidates = match self.candidates(&thread, role.as_deref()) {
                 Ok(c) => c,
                 Err(e) => return self.fail(tid, &e.to_string()),
@@ -1001,7 +1072,8 @@ impl Hub {
             let mut mcp_ctx = self.ctx.clone();
             mcp_ctx.run = Some(run_ctx.clone());
             let mcp = McpServer::new(registry.clone(), mcp_ctx, "devd-agent")
-                .with_project(thread_project.clone());
+                .with_project(thread_project.clone())
+                .with_permission(permission.clone());
             let events = self.ctx.store.list_events(tid, 0, 100_000)?;
             let system = match &binding {
                 Some(b) => format!("{}\n\n{COMMON_CALLS}\n\n{}\n\n## Skills for your role\nLoad one with devd_invoke skills.get before you start the work it covers.\n{}{}", crate::team::system_prompt(&self.ctx, b), crate::skills::CORE, crate::skills::index_for(&self.ctx.paths, Some(&b.role)), context::instructions_text(thread_project.as_deref())),
@@ -1083,6 +1155,7 @@ impl Hub {
                     tools: tools.clone(),
                     tool_choice: None,
                     max_tokens: 16_000,
+                    effort: effort.clone(),
                 };
                 // The reply is shown as it is written, not after it is finished.
                 // Each model call begins with a `start` so the window drops the

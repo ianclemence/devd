@@ -566,45 +566,128 @@ code, kbd, pre, samp { font-family: var(--mono); }
   margin: 0 auto;
 }
 
-/* The conversation box.
+/* ------------------------------------------------ the composer: one card
  *
- * It is one box: the message goes in it, the controls sit in its bottom row,
- * and the attachments sit above it. A separate row of controls above a
- * separate box would be two things to look at instead of one.
+ * A tab says what this conversation is doing, the words go in the card, and one
+ * row holds every choice that affects the answer. The card is deliberately
+ * quiet: 24px corners, one hairline, no nested boxes.
  */
+.composer-dock {
+  position: relative;
+  flex: none;
+  margin: 0 var(--s5) var(--s3);
+}
+.composer-dock-home { margin: 0 0 var(--s4); }
+.composer-tab {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  margin: 0 0 -1px 16px;
+  padding: 0 12px;
+  background: var(--bg-raised);
+  border: var(--hairline) solid var(--line-strong);
+  border-bottom-color: transparent;
+  border-radius: 10px 10px 0 0;
+  color: var(--fg-mute);
+  font: inherit;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  letter-spacing: 0;
+  cursor: default;
+}
+button.composer-tab { cursor: pointer; }
+button.composer-tab:hover { color: var(--fg); }
+.composer-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.composer-tab-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--dot-off); flex: none; }
+.composer-tab-dot.dot-ok { background: var(--dot-ok); }
+.composer-tab-dot.dot-accent { background: var(--accent-strong); }
+.composer-tab-dot.dot-live { background: var(--dot-ok); box-shadow: 0 0 0 3px rgba(62, 207, 142, 0.14); }
+.composer-tab-dot.dot-warn { background: var(--dot-warn); }
+.composer-tab-dot.dot-bad { background: var(--dot-bad); }
 .composer {
   display: flex;
   flex-direction: column;
-  gap: var(--s2);
+  gap: 8px;
   flex: none;
-  margin: 0 var(--s5) var(--s2);
-  padding: 14px 12px 10px 16px;
+  padding: 14px 14px 12px;
   background: var(--bg-surface);
   border: var(--hairline) solid var(--line-strong);
-  border-radius: 16px;
+  border-radius: 24px;
   transition: border-color var(--fast) ease, box-shadow var(--fast) ease;
   position: relative;
 }
-.composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.28); }
+.composer:focus-within { border-color: var(--line-strong); }
 .composer-input {
   width: 100%;
   min-height: 48px;
   max-height: none;
-  padding: 0;
+  padding: 2px 4px 0;
   background: none;
   border: 0;
   outline: none;
+  box-shadow: none;
   color: var(--fg);
   font-family: var(--sans);
-  font-size: 15px;
+  font-size: 15.5px;
   line-height: 1.5;
   resize: none;
   overflow-y: hidden;
 }
+.composer-input:focus, .composer-input:focus-visible { outline: none; box-shadow: none; }
 .composer-input::placeholder { color: var(--fg-dim); }
-.composer-bar { display: flex; align-items: center; gap: var(--s2); }
-.composer-left { display: flex; align-items: center; gap: var(--s1); min-width: 0; flex: 1; }
-.composer-right { display: flex; align-items: center; gap: var(--s1); flex: 0 0 auto; }
+.composer-bar { display: flex; align-items: center; gap: 8px; }
+.composer-left { display: flex; align-items: center; gap: 2px; min-width: 0; flex: 1; }
+.composer-right { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+
+.composer-add {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  padding: 0;
+  background: var(--bg-hover);
+  border: 0;
+  border-radius: 50%;
+  color: var(--fg-mute);
+  cursor: pointer;
+  transition: background-color var(--fast) ease, color var(--fast) ease;
+}
+.composer-add .icon { width: 16px; height: 16px; }
+.composer-add:hover { background: var(--bg-raised); color: var(--fg); }
+.composer-add:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.composer-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  max-width: 190px;
+  padding: 0 9px;
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  color: var(--fg-mute);
+  font: inherit;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  letter-spacing: 0;
+  cursor: pointer;
+  transition: background-color var(--fast) ease, color var(--fast) ease;
+}
+.composer-choice > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-choice .icon { width: 15px; height: 15px; color: var(--fg-dim); flex: none; }
+.composer-choice .composer-caret { width: 12px; height: 12px; margin-left: -1px; }
+.composer-choice:hover { background: var(--bg-hover); color: var(--fg); }
+.composer-choice:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.composer-model { max-width: 210px; }
+.composer-model .brand-dot { width: 16px; height: 16px; flex: none; }
+.composer-model-name { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-project { max-width: 170px; }
+.composer-effort { color: var(--fg-mute); }
 
 /* One slot for the two things that can come next. The microphone holds it
    until there is something to send; the arrow takes it over from then, in the
@@ -612,8 +695,9 @@ code, kbd, pre, samp { font-family: var(--mono); }
 .composer-slot {
   position: relative;
   display: block;
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
+  margin-left: 2px;
 }
 .composer-slot > * { position: absolute; inset: 0; }
 .composer-tool {
@@ -630,8 +714,7 @@ code, kbd, pre, samp { font-family: var(--mono); }
 .composer-tool .icon { width: var(--icon); height: var(--icon); }
 .composer-tool:hover { background: var(--bg-hover); color: var(--fg); }
 .composer-tool.is-recording { background: var(--danger-quiet); color: var(--danger); }
-/* The microphone sits in the send slot, so it takes the slot's shape. */
-.composer-slot .composer-tool { width: 32px; height: 32px; border-radius: 50%; }
+.composer-slot .composer-tool { width: 34px; height: 34px; border-radius: 50%; }
 
 /* The provider and model pickers, in the bar where they are used. They are the
    reference for every dropdown in the application (see "One dropdown" below):
@@ -646,8 +729,8 @@ code, kbd, pre, samp { font-family: var(--mono); }
 .composer-send {
   display: grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
   padding: 0;
   background: var(--accent);
   border: 0;
@@ -670,8 +753,8 @@ code, kbd, pre, samp { font-family: var(--mono); }
 .composer-stop {
   display: grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
   background: var(--danger-quiet);
   border: var(--hairline) solid var(--danger-line);
   border-radius: 50%;
@@ -681,6 +764,124 @@ code, kbd, pre, samp { font-family: var(--mono); }
 .composer-stop .icon { width: var(--icon); height: var(--icon); }
 .composer-stop:hover { background: var(--bg-hover); border-color: var(--danger); }
 .composer-stop:focus-visible { outline: none; box-shadow: var(--focus-ring); border-color: var(--danger); }
+
+/* ------------------------------------------------------ composer popovers
+ * Body-level and fixed: a popover is never clipped by the conversation's
+ * scroll area, and it opens upward when the card sits near the bottom.
+ */
+.composer-popover {
+  position: fixed;
+  z-index: 1200;
+  max-height: min(440px, calc(100vh - 24px));
+  padding: 6px;
+  overflow: auto;
+  background: var(--bg-raised);
+  border: var(--hairline) solid var(--line-strong);
+  border-radius: 16px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.35);
+  color: var(--fg);
+}
+/* A popover is short enough to drag or use a wheel; the bar itself would only
+   take width from the names. */
+.composer-popover, .composer-popover *, .mention-menu, .top-pop, .palette-list, .picker-list {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.composer-popover::-webkit-scrollbar, .composer-popover *::-webkit-scrollbar,
+.mention-menu::-webkit-scrollbar, .top-pop::-webkit-scrollbar,
+.palette-list::-webkit-scrollbar, .picker-list::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+.popover-head {
+  padding: 9px 10px 7px;
+  color: var(--fg-dim);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+.popover-body { display: flex; flex-direction: column; gap: 2px; }
+.popover-choice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  background: transparent;
+  border: 0;
+  border-radius: 10px;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.popover-choice:hover, .popover-choice.is-active { background: var(--bg-hover); }
+.popover-choice:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.popover-choice-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.popover-choice-main b { color: var(--fg); font-size: var(--text-sm); font-weight: 600; letter-spacing: 0; }
+.popover-choice-main span { color: var(--fg-dim); font-size: var(--text-xs); line-height: 1.45; overflow-wrap: anywhere; }
+.popover-choice-main span.mono { font-size: var(--text-2xs); }
+.popover-choice > .icon { width: 16px; height: 16px; color: var(--fg-dim); flex: none; }
+.popover-check { color: var(--accent-strong) !important; }
+.popover-label { margin: 10px 10px 4px; color: var(--fg-dim); font-size: var(--text-2xs); font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; }
+.popover-note { padding: 7px 10px 10px; color: var(--fg-dim); font-size: var(--text-xs); line-height: 1.5; }
+.popover-note.is-warn { color: var(--warn); }
+
+.composer-popover.is-model { width: 360px; }
+.model-picker-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px 8px 14px; }
+.model-picker-heading { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.model-picker-title { color: var(--fg-mute); font-size: var(--text-sm); font-weight: 600; letter-spacing: 0; }
+.provider-badge { display: inline-flex; align-items: center; gap: 5px; min-width: 0; padding: 2px 7px; background: var(--bg-hover); border-radius: 999px; color: var(--fg-mute); font-size: var(--text-2xs); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.provider-badge::before { content: ""; width: 5px; height: 5px; flex: none; border-radius: 50%; background: var(--dot-ok); }
+.provider-badge.is-off { color: var(--warn); }
+.provider-badge.is-off::before { background: var(--dot-warn); }
+.model-search { display: flex; align-items: center; gap: 5px; color: var(--fg-dim); cursor: text; }
+.model-search .icon { order: 2; width: 14px; height: 14px; }
+.model-search input { width: 104px; height: 24px; padding: 0; background: none; border: 0; outline: none; color: var(--fg); font: inherit; font-size: var(--text-xs); text-align: right; }
+.model-search input::placeholder { color: var(--fg-dim); }
+.model-picker-body { display: grid; grid-template-columns: 42px minmax(0, 1fr); max-height: 350px; padding: 0 6px 6px; }
+.model-rail { display: flex; flex-direction: column; gap: 2px; min-height: 0; padding: 2px 4px 4px 0; border-right: 1px solid var(--line); overflow: auto; }
+.model-rail-item {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.provider-state { position: absolute; right: 2px; bottom: 2px; width: 7px; height: 7px; box-sizing: border-box; border: 1.5px solid var(--bg-raised); border-radius: 50%; background: var(--dot-warn); }
+.provider-state.is-ok { background: var(--dot-ok); }
+.model-rail-item:hover, .model-rail-item.is-active { background: var(--bg-hover); }
+.model-brand { width: 18px; height: 18px; flex: none; margin: 0; padding: 1px; border-radius: 4px; background: #e6e9f2; object-fit: contain; align-self: center; vertical-align: middle; }
+.composer-model .model-brand { width: 18px; height: 18px; }
+.model-list { display: flex; flex-direction: column; gap: 1px; min-height: 0; padding: 2px 0 2px 6px; overflow: auto; }
+.model-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 36px;
+  padding: 0 8px 0 10px;
+  background: none;
+  border: 0;
+  border-radius: 9px;
+  color: var(--fg-mute);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.model-row .model-brand { width: 18px; height: 18px; }
+.model-row:hover, .model-row.is-active { background: var(--bg-hover); color: var(--fg); }
+.model-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); font-size: var(--text-sm); font-weight: 500; }
+.model-radio { display: grid; place-items: center; width: 15px; height: 15px; flex: none; border: 1.5px solid var(--line-strong); border-radius: 50%; }
+.model-row.is-active .model-radio { border-color: var(--accent-strong); }
+.model-row.is-active .model-radio::after { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--accent-strong); }
 
 /* What devd is, where it is working, and which branch: the state of the
    session, in one line under the box. */
@@ -2585,9 +2786,16 @@ pre.code {
   .chat-stream { padding: var(--s3); gap: var(--s2); }
   .msg-user .bubble { max-width: 90%; }
   .step { max-width: 100%; }
-  .composer { padding: var(--s2) var(--s3) var(--s3); }
+  .composer-dock { margin: 0 var(--s3) var(--s3); }
+  .composer { padding: 12px 11px 10px; border-radius: 20px; }
   .composer .hint { display: none; }
-  .composer .inline:first-child select { width: 100%; }
+  .composer-model { max-width: 150px; }
+  .composer-model-name { max-width: 96px; }
+  .composer-project { display: none; }
+  .composer-choice { padding: 0 7px; }
+  .composer-popover { max-width: calc(100vw - 16px); }
+  .composer-popover.is-model { width: min(360px, calc(100vw - 16px)); }
+  .model-picker-body { grid-template-columns: 38px minmax(0, 1fr); }
   .drawer { width: 100vw; bottom: 0; }
   .overlay { padding: 4vh var(--s2) var(--s2); }
   .palette, .modal { width: 100%; }

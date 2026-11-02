@@ -996,6 +996,7 @@ pub fn verify(p: &Provider, key: Option<&str>, model: &str) -> VerifyReport {
         }],
         tool_choice: Some("echo".into()),
         max_tokens: 64,
+        effort: None,
     };
     match chat(p, key, &req) {
         Ok(r) => {
@@ -1139,6 +1140,9 @@ pub struct ChatRequest {
     pub tool_choice: Option<String>,
     /// Output limit.
     pub max_tokens: u32,
+    /// Reasoning effort, for models that accept one. `None` leaves the
+    /// provider's default alone.
+    pub effort: Option<String>,
 }
 
 /// A model's answer.
@@ -1210,6 +1214,19 @@ fn openai_body(p: &Provider, r: &ChatRequest) -> Value {
     }
     let mut body = json!({ "model": r.model, "messages": msgs });
     body[if p.kind == "openai" { "max_completion_tokens" } else { "max_tokens" }] = json!(r.max_tokens);
+    // Only reasoning-capable OpenAI models accept this, and sending it to the
+    // others is an error rather than a no-op.
+    if let Some(effort) = &r.effort {
+        let reasoning = p.kind == "openai"
+            && (r.model.starts_with("o1")
+                || r.model.starts_with("o3")
+                || r.model.starts_with("o4")
+                || r.model.starts_with("gpt-5")
+                || r.model.contains("reasoning"));
+        if reasoning {
+            body["reasoning_effort"] = json!(effort);
+        }
+    }
     if !r.tools.is_empty() {
         body["tools"] = json!(r.tools.iter().map(|t| json!({ "type": "function", "function": { "name": t.name, "description": t.description, "parameters": t.schema } })).collect::<Vec<_>>());
         if let Some(name) = &r.tool_choice {
@@ -1731,6 +1748,7 @@ data: [DONE]\n\n";
             tools: vec![],
             tool_choice: None,
             max_tokens: 32,
+            effort: None,
         };
         let mut seen = String::new();
         let answer = chat_stream(&p, None, &req, &mut |piece| seen.push_str(piece)).unwrap();
@@ -1876,6 +1894,7 @@ data: {\"type\":\"message_stop\"}
             tools: vec![ToolSpec { name: "devd_groups".into(), description: "d".into(), schema: json!({"type":"object"}) }],
             tool_choice: Some("devd_groups".into()),
             max_tokens: 100,
+            effort: None,
         };
         let b = openai_body(&p, &req);
         assert_eq!(b["tool_choice"]["function"]["name"], "devd_groups");
@@ -2047,6 +2066,7 @@ data: {\"type\":\"message_stop\"}
             tools: vec![ToolSpec { name: "echo".into(), description: "e".into(), schema: json!({"type":"object"}) }],
             tool_choice: Some("echo".into()),
             max_tokens: 16,
+            effort: None,
         };
         let a = anthropic_body(&req);
         assert_eq!(a["tool_choice"]["type"], "tool");

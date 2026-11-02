@@ -381,6 +381,7 @@ mod tests {
             }],
             tool_choice: None,
             max_tokens: 1000,
+            effort: None,
         }
     }
 

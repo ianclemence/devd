@@ -185,6 +185,7 @@ fn one_shot(ctx: &Ctx, role: &str, system: &str, prompt: &str, max_tokens: u32) 
         tools: Vec::new(),
         tool_choice: None,
         max_tokens,
+        effort: None,
     };
     let response = providers::chat(&provider, key.as_deref(), &request)?;
     let text = response
