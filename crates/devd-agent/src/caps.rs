@@ -17,7 +17,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use devd_core::capability::{Ctx, Effect, Outcome, Plan, Tier};
-use devd_core::{browse, util, DevdError, Provider, Registry, Result};
+use devd_core::{browse, util, CatalogueModel, DevdError, Provider, Registry, Result};
 
 use crate::charter;
 use crate::chat::{Hub, SendRequest};
@@ -503,6 +503,14 @@ struct IdArgs {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct ProviderModelArgs {
+    /// Provider id.
+    id: String,
+    /// The model id exactly as the provider expects it.
+    model: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct CatalogueArgs {
     /// `anthropic-docs` or `provider:<id>`; omit for everything.
     #[serde(default)]
@@ -709,6 +717,7 @@ struct FsDelete {
 fn provider_view(ctx: &Ctx, p: &Provider) -> Value {
     let key = secrets::read_key(&ctx.paths, p);
     let pre = providers::preset(&p.id);
+    let check = ctx.store.get_provider_check(&p.id).ok().flatten();
     let loopback = p.base_url.contains("localhost")
         || p.base_url.contains("127.0.0.1")
         || p.base_url.contains("[::1]");
@@ -721,6 +730,10 @@ fn provider_view(ctx: &Ctx, p: &Provider) -> Value {
         "key_hint": key.as_deref().map(secrets::mask),
         "has_key": key.is_some(),
         "needs_key": pre.as_ref().map(|x| x.requires_key).unwrap_or(!loopback),
+        "checked_at": check.as_ref().map(|c| c.checked_at.clone()),
+        "check_ok": check.as_ref().map(|c| c.ok),
+        "check_message": check.as_ref().map(|c| c.message.clone()),
+        "model_count": check.as_ref().and_then(|c| c.models),
         "category": pre.as_ref().map(|x| x.category.clone()).unwrap_or_else(|| if loopback { "local".into() } else { "custom".into() }),
         "tools": pre.as_ref().map(|x| x.tools.clone()).unwrap_or_else(|| "model".into()),
         "discovery": pre.as_ref().map(|x| x.discovery.clone()).unwrap_or_else(|| "openai".into()),
@@ -1397,7 +1410,9 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
         |ctx, _| {
             let catalogue = ctx.store.list_catalogue(None)?;
             let rows: Vec<Value> = ctx.store.list_role_models()?.into_iter().map(|a| {
-                let listed: Vec<_> = catalogue.iter().filter(|m| m.source == format!("provider:{}", a.provider_id)).collect();
+                let api = format!("provider:{}", a.provider_id);
+                let manual = format!("manual:{}", a.provider_id);
+                let listed: Vec<_> = catalogue.iter().filter(|m| m.source == api || m.source == manual).collect();
                 let status = if listed.is_empty() { "unverified" } else if listed.iter().any(|m| m.model_id == a.model) { "available" } else { "missing" };
                 json!({ "role": a.role, "scope": a.scope, "position": a.position, "provider": a.provider_id, "model": a.model, "status": status })
             }).collect();
@@ -1709,6 +1724,70 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             let _ = ctx.store.set_provider_check(&p.id, true, &format!("{} model(s) listed", models.len()), Some(models.len() as i64));
             ctx.store.replace_catalogue(&format!("provider:{}", p.id), &models)?;
             Ok(Outcome::with_data(format!("{} model(s) from {}", models.len(), p.label), serde_json::to_value(&models)?))
+        },
+    )?;
+
+    reg.define::<ProviderModelArgs>("provider.model_add", "Add a model id by hand")
+    .description("Adds a model id to a provider's choices when the provider does not list it, as with a private deployment, an alias or a model released before discovery caught up. The id is sent exactly as written. Human only.")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .human_only()
+    .dry_run()
+    .handlers(
+        |_, a| simple("provider.model_add", format!("add model `{}` to `{}`", a.model, a.id)),
+        |ctx, a| {
+            let p = find_provider(ctx, &a.id)?;
+            let model = a.model.trim();
+            if model.is_empty() {
+                return Err(DevdError::invalid("a model id is required"));
+            }
+            if model.chars().count() > 200 {
+                return Err(DevdError::invalid("a model id is longer than 200 characters"));
+            }
+            let source = format!("manual:{}", p.id);
+            let mut rows = ctx.store.list_catalogue(Some(&source))?;
+            if !rows.iter().any(|m| m.model_id == model) {
+                rows.push(CatalogueModel {
+                    source: source.clone(),
+                    model_id: model.to_string(),
+                    display: model.to_string(),
+                    description: Some("Added by hand; this provider does not list it.".into()),
+                    context_window: None,
+                    max_output: None,
+                    input_price: None,
+                    output_price: None,
+                    retirement: None,
+                    url: None,
+                    fetched_at: util::now(),
+                });
+                ctx.store.replace_catalogue(&source, &rows)?;
+            }
+            Ok(Outcome::with_data(
+                format!("{model} is available for {}", p.label),
+                json!({ "provider": p.id, "model": model }),
+            ))
+        },
+    )?;
+
+    reg.define::<ProviderModelArgs>("provider.model_remove", "Remove a model id added by hand")
+    .description("Removes a model id that was added by hand. Models found by the provider's own list are not removed here; fetch the list again instead. Human only.")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .human_only()
+    .dry_run()
+    .handlers(
+        |_, a| simple("provider.model_remove", format!("remove model `{}` from `{}`", a.model, a.id)),
+        |ctx, a| {
+            let p = find_provider(ctx, &a.id)?;
+            let source = format!("manual:{}", p.id);
+            let rows: Vec<CatalogueModel> = ctx
+                .store
+                .list_catalogue(Some(&source))?
+                .into_iter()
+                .filter(|m| m.model_id != a.model.trim())
+                .collect();
+            ctx.store.replace_catalogue(&source, &rows)?;
+            Ok(Outcome::ok(format!("{} is no longer listed for {}", a.model.trim(), p.label)))
         },
     )?;
 

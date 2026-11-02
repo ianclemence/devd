@@ -6179,7 +6179,8 @@
       read("chat.list").catch(function () { return []; }),
       read("provider.list").catch(function () { return []; }),
       read("team.list").catch(function () { return []; }),
-      request("/api/audit?limit=300").then(function (r) { return r.ok ? r.body.items || [] : []; })
+      request("/api/audit?limit=300").then(function (r) { return r.ok ? r.body.items || [] : []; }),
+      read("models.catalogue").catch(function () { return []; })
     ]);
     var slowDone = fast.then(function () {
       return Promise.all([
@@ -6205,6 +6206,7 @@
         requirements: AI.requirements || null
       };
       AI.providers = r[4] || [];
+      AI.catalogue = r[7] || [];
       state.projectCount = AI.home.projects.length;
     });
   }
@@ -6561,8 +6563,20 @@
 
   function modelOptions(providerId) {
     var seen = {}, out = [];
-    (AI.catalogue || []).filter(function (m) { return m.source === "provider:" + providerId || (m.source === "anthropic-docs" && providerKind(providerId) === "anthropic"); }).forEach(function (m) {
-      if (!seen[m.model_id]) { seen[m.model_id] = 1; out.push(m); }
+    var api = "provider:" + providerId;
+    var manual = "manual:" + providerId;
+    // The provider's own list is the authority. Hand-added ids come next, so a
+    // private deployment can still be chosen. Documentation-only models are a
+    // reference and are never offered as if this account could use them.
+    (AI.catalogue || []).filter(function (m) { return m.source === api; }).forEach(function (m) {
+      if (!m.model_id || seen[m.model_id]) return;
+      seen[m.model_id] = 1;
+      out.push(Object.assign({}, m, { origin: "provider" }));
+    });
+    (AI.catalogue || []).filter(function (m) { return m.source === manual; }).forEach(function (m) {
+      if (!m.model_id || seen[m.model_id]) return;
+      seen[m.model_id] = 1;
+      out.push(Object.assign({}, m, { origin: "custom" }));
     });
     return out;
   }
@@ -6587,7 +6601,7 @@
     }).join("");
     var all = {};
     (AI.providers || []).forEach(function (p) { if (p.default_model) all[p.default_model] = 1; });
-    (AI.catalogue || []).filter(function (m) { return String(m.source || "").indexOf("provider:") === 0; })
+    (AI.catalogue || []).filter(function (m) { return String(m.source || "").indexOf("provider:") === 0 || String(m.source || "").indexOf("manual:") === 0; })
       .forEach(function (m) { all[m.model_id] = 1; });
     return '<div class="section-title">Which model does which work</div><div class="panel"><div class="table-wrap"><table class="table roles-table"><thead><tr><th>Work</th><th>First choice</th><th>Fallback if it fails</th><th></th></tr></thead><tbody>' + rows + "</tbody></table><datalist id=\"rm-models\">" + Object.keys(all).map(function (m) { return '<option value="' + attr(m) + '"></option>'; }).join("") + "</datalist></div>" +
       '<div class="panel-body panel-foot row-sub">The fallback is used only when the first choice fails, and only the providers you list here are ever used. A conversation where you pick a model yourself never falls back. Each reply records which model answered and why.</div></div>';
@@ -6602,7 +6616,12 @@
     else out.push('<span class="cap">tools: model-dependent</span>');
     if (p.discovery === "catalog") out.push('<span class="cap">maintained list</span>');
     if (p.discovery === "ollama") out.push('<span class="cap">native discovery</span>');
-    if (p.needs_key && !p.has_key) out.push('<span class="cap cap-warn">no key</span>');
+    var st = providerState(p);
+    if (st.key === "unconfigured") out.push('<span class="cap cap-warn">no key</span>');
+    else if (st.key === "verified") out.push('<span class="cap cap-ok" title="' + attr(st.detail) + '">verified</span>');
+    else if (st.key === "stale") out.push('<span class="cap" title="' + attr(st.detail) + '">cached models</span>');
+    else if (st.key === "error") out.push('<span class="cap cap-warn" title="' + attr(st.detail) + '">not answering</span>');
+    else out.push('<span class="cap">not checked</span>');
     if (!p.needs_key) out.push('<span class="cap">no key needed</span>');
     return '<div class="caps">' + out.join("") + "</div>";
   }
@@ -6667,6 +6686,8 @@
           '<div class="provider-fact"><dt>Model list</dt><dd>' + (models.length ? models.length + " known" : "not fetched") + "</dd></div>" +
           '<div class="provider-fact"><dt>Discovery</dt><dd>' + esc(p.models_from || p.discovery) + "</dd></div>" +
         "</dl>" +
+        '<div class="inline provider-model-add"><input class="input mono grow" data-model-add="' + attr(p.id) + '" placeholder="Add a model id this provider does not list" spellcheck="false" aria-label="Add a model id for ' + attr(p.label) + '">' +
+        '<button type="button" class="btn btn-mini" data-action="prov-model-add" data-id="' + attr(p.id) + '">Add model</button></div>' +
         (result ? '<div class="notice ' + (AI.provBusy[p.id + ":ok"] ? "notice-ok" : "notice-bad") + ' provider-note">' + esc(result) + "</div>" : "") +
       "</div>" +
       '<div class="provider-actions">' +
@@ -6719,15 +6740,18 @@
     var rows = [];
     (AI.providers || []).forEach(function (p) {
       var seen = {};
-      var listed = (AI.catalogue || []).filter(function (m) { return m.source === "provider:" + p.id; });
+      var api = "provider:" + p.id;
+      var manual = "manual:" + p.id;
+      var listed = (AI.catalogue || []).filter(function (m) { return m.source === api || m.source === manual; });
       if (p.default_model) {
         seen[p.default_model] = 1;
-        rows.push({ provider: p, model: { model_id: p.default_model, context_window: null }, isDefault: true, source: "configured default" });
+        rows.push({ provider: p, model: { model_id: p.default_model, context_window: null }, isDefault: true, origin: "default", source: "configured default" });
       }
       listed.forEach(function (m) {
         if (!m.model_id || seen[m.model_id]) return;
         seen[m.model_id] = 1;
-        rows.push({ provider: p, model: m, isDefault: false, source: "provider list" });
+        var custom = m.source === manual;
+        rows.push({ provider: p, model: m, isDefault: false, origin: custom ? "custom" : "provider", source: custom ? "custom model" : "provider list" });
       });
       if (!p.default_model && !listed.length) rows.push({ provider: p, model: null });
     });
@@ -6762,11 +6786,13 @@
               '<td colspan="3" class="cell-dim">No model selected. Fetch this provider\'s models, or edit its default.</td>' +
               '<td><button type="button" class="btn btn-mini" data-action="prov-edit" data-id="' + attr(p.id) + '">Edit</button></td></tr>';
           }
+          var actions = row.isDefault ? '<span class="pill pill-accent">default</span>' : '<button type="button" class="btn btn-mini" data-action="prov-pick" data-id="' + attr(p.id) + '" data-model="' + attr(row.model.model_id) + '">Use as default</button>';
+          if (row.origin === "custom") actions += ' <button type="button" class="btn btn-mini btn-ghost" data-action="prov-model-remove" data-id="' + attr(p.id) + '" data-model="' + attr(row.model.model_id) + '" title="Remove this hand-added model">Remove</button>';
           return '<tr><td><div class="cell-strong">' + label + '</div><div class="cell-dim">' + esc(p.kind) + "</div></td>" +
             '<td class="cell-mono">' + esc(row.model.model_id) + "</td>" +
             "<td>" + tok(row.model.context_window) + "</td>" +
             '<td class="dim">' + esc(row.source) + "</td>" +
-            "<td>" + (row.isDefault ? '<span class="pill pill-accent">default</span>' : '<button type="button" class="btn btn-mini" data-action="prov-pick" data-id="' + attr(p.id) + '" data-model="' + attr(row.model.model_id) + '">Use as default</button>') + "</td></tr>";
+            "<td>" + actions + "</td></tr>";
         }).join("") +
         "</tbody></table></div></div>";
     } else {
@@ -8289,19 +8315,81 @@
   }
 
   /* A provider can have a default model before its catalogue has been fetched.
-     The picker still shows that model, so a fresh provider is usable at once. */
+     The picker still shows that model, clearly marked as saved rather than
+     confirmed, so a fresh provider is usable at once. */
   function composerModels(providerId) {
     var list = modelOptions(providerId).slice();
     var known = {};
     list.forEach(function (m) { known[m.model_id] = 1; });
-    var p = (AI.providers || []).filter(function (x) { return x.id === providerId; })[0];
-    [composerModel(providerId), p && p.default_model].forEach(function (id) {
+    var p = providerById(providerId);
+    var current = composerModel(providerId);
+    [current, p && p.default_model].forEach(function (id) {
       if (id && !known[id]) {
-        list.unshift({ model_id: id, display: id });
+        list.push({ model_id: id, display: id, origin: "saved" });
         known[id] = 1;
       }
     });
+    var first = [current, p && p.default_model];
+    list.sort(function (a, b) {
+      var ai = first.indexOf(a.model_id), bi = first.indexOf(b.model_id);
+      if (ai >= 0 || bi >= 0) {
+        if (ai < 0) return 1;
+        if (bi < 0) return -1;
+        return ai - bi;
+      }
+      return String(a.display || a.model_id).localeCompare(String(b.display || b.model_id));
+    });
     return list;
+  }
+
+  var MODEL_TTL_MS = 60 * 60 * 1000;
+
+  /* When the provider's list was last fetched. Only the provider's own rows
+     count: a hand-added id must not make the account's list look current. */
+  function modelCacheTime(providerId) {
+    var at = 0;
+    (AI.catalogue || []).forEach(function (m) {
+      if (m.source !== "provider:" + providerId) return;
+      var t = Date.parse(m.fetched_at || "");
+      if (t > at) at = t;
+    });
+    var p = providerById(providerId);
+    // Only a check that actually listed models says the list is current.
+    var checked = p && p.model_count != null ? Date.parse(p.checked_at || "") : 0;
+    if (checked > at) at = checked;
+    return at;
+  }
+
+  /* Configured, verified, stale, or failing. A key is not proof that the
+     provider answers, so the rail shows what the last check found. */
+  function providerState(id) {
+    var p = typeof id === "string" ? providerById(id) : id;
+    if (!p) return { key: "missing", tone: "off", label: "missing", detail: "This provider no longer exists." };
+    if (!providerConfigured(p)) {
+      return { key: "unconfigured", tone: "warn", label: "needs a key", detail: "Add a key on its card in Models." };
+    }
+    if (p.check_ok === false) {
+      return { key: "error", tone: "bad", label: "not answering", detail: p.check_message || "The last check failed." };
+    }
+    var at = modelCacheTime(p.id);
+    if (p.check_ok === true && p.model_count != null && at && Date.now() - at < MODEL_TTL_MS) {
+      return { key: "verified", tone: "ok", label: "verified", detail: "The provider answered and its models are current." };
+    }
+    if (modelOptions(p.id).length) {
+      return { key: "stale", tone: "warn", label: "cached", detail: "Showing saved models; refresh to check the account." };
+    }
+    return { key: "unchecked", tone: "off", label: "not checked", detail: "Refresh to fetch this provider's models." };
+  }
+
+  /* The built-in agent needs tool calls. A model known not to support them can
+     still be chosen for a plain answer, but the picker should say so first. */
+  function modelHasTools(model) {
+    var id = String(model || "").toLowerCase();
+    if (id.indexOf("deepseek-reasoner") >= 0) return false;
+    if (/^(o1|o3|o4|gpt-5)/.test(id)) return true;
+    if (id.indexOf("gpt-4o") >= 0 || id.indexOf("claude") >= 0 || id.indexOf("gemini") >= 0) return true;
+    if (id.indexOf("mistral") >= 0 || id.indexOf("qwen") >= 0 || id.indexOf("kimi") >= 0 || id.indexOf("glm") >= 0 || id.indexOf("deepseek") >= 0) return true;
+    return null;
   }
 
   function providerById(id) {
@@ -8319,16 +8407,29 @@
   /* Fetch the provider's own model list once per session, the same call the
      Models screen makes. The composer then offers what the account can really
      use, not only the default written on the provider card. */
-  function ensureProviderModels(id) {
+  function ensureProviderModels(id, force) {
     var p = providerById(id);
     if (!p || AI.modelBusy[id]) return;
     // A key may have been added after the last look. A missing key is not a
     // permanent answer, so it does not stop a later fetch.
     if (AI.modelFetched[id] === "no-key" && providerConfigured(p)) delete AI.modelFetched[id];
-    if (AI.modelFetched[id]) return;
     if (!providerConfigured(p)) {
       AI.modelFetched[id] = "no-key";
       return;
+    }
+    if (!force) {
+      if (p.check_ok === false) {
+        // A failed check is not a cache. Retry after a short pause, or at once
+        // when the person presses refresh.
+        var checkedAt = Date.parse(p.checked_at || "");
+        if (checkedAt && Date.now() - checkedAt < 60 * 1000) return;
+      } else {
+        var at = modelCacheTime(id);
+        if (at && Date.now() - at < MODEL_TTL_MS) {
+          AI.modelFetched[id] = true;
+          return;
+        }
+      }
     }
     AI.modelBusy[id] = true;
     delete AI.modelError[id];
@@ -8344,7 +8445,13 @@
       AI.modelError[id] = e.message;
     }).then(function () {
       AI.modelBusy[id] = false;
-      if (AI.popover && AI.popover.kind === "model") paintComposerPopover();
+      // Refresh the provider row so its verified/error state follows the fetch.
+      read("provider.list").then(function (list) {
+        if (Array.isArray(list)) AI.providers = list;
+        if (AI.popover && AI.popover.kind === "model") paintComposerPopover();
+      }).catch(function () {
+        if (AI.popover && AI.popover.kind === "model") paintComposerPopover();
+      });
     });
   }
 
@@ -8549,20 +8656,16 @@
     if (p.kind === "model") {
       var provs = (AI.providers || []).filter(function (x) { return x.enabled; });
       var rail = AI.modelRail || (provs[0] || {}).id || "";
-      ensureProviderModels(rail);
+      ensureProviderModels(rail, false);
       var railHtml = provs.map(function (x) {
-        var ready = providerConfigured(x);
-        return '<button type="button" class="model-rail-item' + (x.id === rail ? " is-active" : "") + '" data-action="composer-rail" data-value="' + attr(x.id) + '" title="' + attr(x.label + (ready ? " · configured" : " · not configured")) + '" aria-label="' + attr(x.label + (ready ? ", configured" : ", not configured")) + '">' +
-          brandImg(x.id, "model-brand") + '<span class="provider-state ' + (ready ? "is-ok" : "is-off") + '" aria-hidden="true"></span></button>';
+        var st = providerState(x);
+        return '<button type="button" class="model-rail-item' + (x.id === rail ? " is-active" : "") + '" data-action="composer-rail" data-value="' + attr(x.id) + '" title="' + attr(x.label + " · " + st.label + (st.detail ? " — " + st.detail : "")) + '" aria-label="' + attr(x.label + ", " + st.label) + '">' +
+          brandImg(x.id, "model-brand") + '<span class="provider-state is-' + attr(st.tone) + '" aria-hidden="true"></span></button>';
       }).join("") || '<div class="popover-note">No provider.</div>';
-      var active = providerById(rail);
-      var activeReady = active && providerConfigured(active);
-      var badge = active
-        ? '<span class="provider-badge ' + (activeReady ? "is-ok" : "is-off") + '">' + esc(active.label) + " · " + (activeReady ? "configured" : "needs a key") + "</span>"
-        : "";
-      return '<div class="model-picker-head"><div class="model-picker-heading"><span class="model-picker-title">Models</span>' + badge + "</div>" +
+      return '<div class="model-picker-head"><div class="model-picker-heading"><span class="model-picker-title">Models</span></div>' +
         '<label class="model-search"><input id="model-search" type="search" placeholder="Quick Search" aria-label="Quick search models" autocomplete="off" spellcheck="false" value="' + attr(AI.modelQuery || "") + '">' +
-        '<svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg></label></div>' +
+        '<svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg></label>' +
+        '<button type="button" class="model-refresh" data-action="composer-refresh-models" title="Refresh this provider\'s models" aria-label="Refresh this provider\'s models"><svg class="icon" aria-hidden="true"><use href="#i-refresh"></use></svg></button></div>' +
         '<div class="model-picker-body"><div class="model-rail" role="tablist" aria-label="Providers">' + railHtml +
         '</div><div class="model-list" id="model-list" role="listbox" aria-label="Models">' + modelRowsHtml(rail) + "</div></div>";
     }
@@ -8573,33 +8676,48 @@
      its name, the effort control on the chosen row, and the radio that says
      which model is in use. */
   function modelRowsHtml(rail) {
-    var q = (AI.modelQuery || "").trim().toLowerCase();
+    var q = (AI.modelQuery || "").trim();
+    var lower = q.toLowerCase();
     var cur = composerProvider();
     var activeModel = cur.id === rail ? composerModel(rail) : "";
-    var models = composerModels(rail).filter(function (m) {
-      if (!q) return true;
+    var all = composerModels(rail);
+    var models = all.filter(function (m) {
+      if (!lower) return true;
       var label = m.display || m.model_id;
-      return label.toLowerCase().indexOf(q) >= 0 || m.model_id.toLowerCase().indexOf(q) >= 0;
+      return label.toLowerCase().indexOf(lower) >= 0 || m.model_id.toLowerCase().indexOf(lower) >= 0;
     });
     var notes = [];
     var provider = providerById(rail);
-    if (provider && !providerConfigured(provider)) {
+    var state = provider ? providerState(provider) : null;
+    if (state && state.key === "unconfigured") {
       notes.push('<div class="popover-note is-warn">No key for ' + esc(provider.label) + ". Add one in Models.</div>");
     }
     if (AI.modelBusy[rail]) {
-      notes.push('<div class="popover-note">Fetching the provider\'s models…</div>');
-    } else if (AI.modelError[rail]) {
-      notes.push('<div class="popover-note" title="' + attr(AI.modelError[rail]) + '">Could not fetch the official list. Showing saved models.</div>');
+      notes.push('<div class="popover-note">Refreshing ' + esc(provider ? provider.label : "the provider") + "’s models…</div>");
+    } else if (AI.modelError[rail] && state && state.key !== "unconfigured") {
+      notes.push('<div class="popover-note" title="' + attr(AI.modelError[rail]) + '">Could not refresh the official list. Showing saved models.</div>');
     }
     var rows = models.map(function (m) {
       var label = m.display || m.model_id;
       var active = !!activeModel && m.model_id === activeModel;
-      return '<div class="model-row' + (active ? " is-active" : "") + '" data-action="composer-model-set" data-provider="' + attr(rail) + '" data-value="' + attr(m.model_id) + '" role="option" aria-selected="' + (active ? "true" : "false") + '">' +
+      var tags = "";
+      if (m.origin === "custom") tags += '<span class="model-tag" title="Added by hand">custom</span>';
+      if (m.origin === "saved") tags += '<span class="model-tag is-warn" title="Not in the provider’s fetched list">saved</span>';
+      if (modelHasTools(m.model_id) === false) tags += '<span class="model-tag is-warn" title="This model is known not to call tools; agent work may fail">no tools</span>';
+      var title = (m.origin === "provider" ? "From the provider's list" : m.origin === "custom" ? "Added by hand" : "Saved on the provider card");
+      return '<div class="model-row' + (active ? " is-active" : "") + '" data-action="composer-model-set" data-provider="' + attr(rail) + '" data-value="' + attr(m.model_id) + '" role="option" aria-selected="' + (active ? "true" : "false") + '" title="' + attr(title) + '">' +
         brandImg(rail, "model-brand") +
         '<span class="model-row-name">' + esc(label) + "</span>" +
+        tags +
         '<span class="model-radio" aria-hidden="true"></span></div>';
-    }).join("") || '<div class="popover-note">' + (q ? "No model matches." : "No models listed. Save one on the provider's card in Models.") + "</div>";
-    return notes.join("") + rows;
+    }).join("") || '<div class="popover-note">' + (q ? "No model matches." : "No models listed. Refresh, or add one in Models.") + "</div>";
+    var exact = models.some(function (m) { return m.model_id === q; });
+    var custom = q && !models.length && !exact
+      ? '<button type="button" class="model-row model-row-custom" data-action="composer-custom-model" data-value="' + attr(q) + '">' +
+        '<svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg>' +
+        '<span class="model-row-name">Use “' + esc(q) + '”</span><span class="model-tag">custom id</span></button>'
+      : "";
+    return notes.join("") + rows + custom;
   }
 
   function loadComposerSkills() {
@@ -9022,6 +9140,39 @@
       } else {
         renderAssistant();
       }
+    },
+
+    "composer-refresh-models": function () {
+      var rail = AI.modelRail;
+      if (!rail) return;
+      AI.modelFetched[rail] = undefined;
+      delete AI.modelError[rail];
+      ensureProviderModels(rail, true);
+      paintComposerPopover();
+    },
+
+    "composer-custom-model": function (node) {
+      var rail = AI.modelRail;
+      var model = (node.dataset.value || "").trim();
+      if (!rail || !model) return;
+      run("provider.model_add", { id: rail, model: model }).then(function (o) {
+        if (!o) return null;
+        AI.pickProvider = rail;
+        AI.pickModel = model;
+        return read("models.catalogue").then(function (list) {
+          if (Array.isArray(list)) AI.catalogue = list;
+        });
+      }).then(function () {
+        closeComposerPopover();
+        if (AI.thread) {
+          AI.thread.provider_id = rail;
+          AI.thread.model = model;
+          return run("chat.update", { thread: AI.thread.id, provider: rail, model: model }, { quiet: true })
+            .then(function () { return pollThread(false); })
+            .then(function () { renderAssistant(); });
+        }
+        if (state.view === "home") renderHome(); else renderAssistant();
+      });
     },
 
     "composer-project": function (node) {
@@ -9511,6 +9662,23 @@
     "prov-default": function (n) { run("provider.default", { id: n.dataset.id }).then(function () { return loadProviders(); }).then(renderProviders); },
     "prov-remove": function (n) { run("provider.remove", { id: n.dataset.id }).then(function (o) { if (o) return loadProviders().then(function () { renderProviders(); loadHealth().then(healthChip); }); }); },
     "prov-pick": function (n) { setProviderModel(n.dataset.id, n.dataset.model); },
+    "prov-model-add": function (n) {
+      var id = n.dataset.id;
+      var input = document.querySelector('[data-model-add="' + id + '"]');
+      var model = input ? input.value.trim() : "";
+      if (!model) return toast("warn", "Type the model id the provider expects");
+      run("provider.model_add", { id: id, model: model }).then(function (o) {
+        if (!o) return;
+        if (input) input.value = "";
+        return loadProviders().then(function () { renderProviders(); });
+      });
+    },
+    "prov-model-remove": function (n) {
+      run("provider.model_remove", { id: n.dataset.id, model: n.dataset.model }).then(function (o) {
+        if (!o) return;
+        return loadProviders().then(function () { renderProviders(); });
+      });
+    },
     "prov-use-model": function (n) {
       var d = (AI.providers || []).filter(function (p) { return p.kind === "anthropic"; })[0];
       if (!d) return toast("warn", "Add an Anthropic provider first");
@@ -10914,6 +11082,7 @@
     AI.provBusy[id] = true; delete AI.provBusy[id + ":msg"]; renderProviders();
     read(cap, args).then(function (d) {
       AI.provBusy[id + ":ok"] = true;
+      if (cap === "provider.models") { AI.modelFetched[id] = true; delete AI.modelError[id]; }
       AI.provBusy[id + ":msg"] = d && d.message ? d.message : (cap === "provider.test" ? "Connection works" : cap === "provider.verify" ? "The model answered" : "Models updated");
     }).catch(function (e) {
       AI.provBusy[id + ":ok"] = false; AI.provBusy[id + ":msg"] = e.message;
