@@ -4176,15 +4176,6 @@ body { letter-spacing: 0; font-feature-settings: normal; }
   background: none;
 }
 .subtab.active { color: var(--fg); font-weight: 550; }
-.subtab.active::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -1px;
-  height: 2px;
-  background: var(--fg);
-}
 
 /* Section headings belong to what follows them. */
 .page > .ui-head { margin: var(--s4) 0 calc(var(--s2) - var(--s5)); }
@@ -5013,17 +5004,8 @@ td .pill-bad, .kv .pill-bad { color: var(--danger); }
 
 
 /* ------------------------------------------------- navigation: where you are
- * The bar's destinations carry the active state as a soft pill. The page's own
- * tab row keeps a short bar because it has no pill. Inside a menu, the open
- * destination carries a dot. */
-.subtab.active::after {
-  left: 0;
-  bottom: -1px;
-  width: 18px;
-  height: 3px;
-  border-radius: 3px 3px 0 0;
-  background: var(--accent-strong);
-}
+ * Every tab row carries the active state as a soft pill. Inside a menu, the
+ * open destination carries a dot. */
 
 /* ------------------------------------------------ talking to a run, and its form
  * The message box under a run is the shared composer in one row. The new-run
