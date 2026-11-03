@@ -239,7 +239,7 @@
       loading: false
     },
     preview: { site: null, url: null, typed: "", error: null },
-    files: { root: null, entries: null, truncated: false, treeError: null, loadingTree: false, file: null, fileLoading: false, fileError: null }
+    files: { project: null, root: null, entries: null, truncated: false, treeError: null, loadingTree: false, file: null, fileLoading: false, fileError: null }
   };
 
   // ------------------------------------------------------------------ helpers
@@ -4375,6 +4375,8 @@
     state.tabs = {};
     state.diff = null;
     state.project = { path: path, name: dirName(path), status: null, open: null, error: null };
+    // Files state is per project; opening a different one starts at its root.
+    state.files = null;
     writeRoute("project", false);
     render();
     return loadProject().then(render);
@@ -5088,9 +5090,23 @@
    * per folder opened, which keeps a large project from costing one request per
    * visible row on every redraw.
    */
+  /* The files state belongs to one project.
+   *
+   * The tree, the open file and the folder being walked are all paths under
+   * a particular project. Carrying them to another project made its Files tab
+   * show the previous project's tree until a reload. The state is replaced,
+   * not cleared in place, so a request still in flight for the old project
+   * cannot write its answer into the new one. */
+  function filesForProject() {
+    var path = state.project && state.project.path;
+    if (!state.files || state.files.project !== path) {
+      state.files = { project: path, root: path, entries: null, truncated: false, treeError: null, loadingTree: false, file: null, fileLoading: false, fileError: null };
+    }
+    return state.files;
+  }
+
   function renderFiles() {
-    var fs = state.files;
-    if (!fs.root) fs.root = state.project.path;
+    var fs = filesForProject();
     var crumbs = fs.root.split(/[\\/]/).filter(Boolean);
     var parts = [];
     for (var k = 0; k < crumbs.length; k++) {
@@ -5236,8 +5252,8 @@
     else if (tab === "files") {
       // The tree loads itself: it is a stack of folder requests, not one value,
       // so it cannot be filled from `state.tabs` the way the other tabs are.
-      if (!state.files.root) state.files.root = state.project.path;
-      if (!state.files.entries && !state.files.treeError && !state.files.loadingTree) loadFileTree(state.files.root);
+      var fs = filesForProject();
+      if (!fs.entries && !fs.treeError && !fs.loadingTree) loadFileTree(fs.root);
       body = renderFiles();
     }
     else if (tab === "changes") body = renderChanges();

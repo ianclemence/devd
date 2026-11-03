@@ -656,6 +656,19 @@ fn the_working_indicator_actually_moves() {
 }
 
 #[test]
+fn the_files_tab_belongs_to_the_project_that_is_open() {
+    // The tree, the folder being walked and the open file are paths under one
+    // project. A project switch used to leave the previous tree in state, so
+    // another project's Files tab showed the files of the one before it until
+    // a reload. The state is now keyed to the open project and replaced whole,
+    // so a late answer for the old project cannot land in the new one.
+    assert!(APP.contains("function filesForProject()"), "files state is scoped to a project");
+    assert!(APP.contains("state.files.project !== path"), "a different project gets fresh state");
+    assert!(APP.contains("state.files = null;"), "opening a project drops the old tree");
+    assert!(APP.contains("var fs = filesForProject();"), "the Files tab reads the scoped state");
+}
+
+#[test]
 fn agent_actions_are_grouped_into_one_collapsed_line() {
     assert!(APP.contains("class=\"msg-tools"), "steps are wrapped in one group");
     assert!(APP.contains("closeGroup()"), "the group is closed by whatever is not a step");
