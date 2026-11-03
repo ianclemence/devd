@@ -57,6 +57,22 @@ may change capability identifiers where the design was wrong.
   folder it pointed at did not exist.
 
 
+- **`web.open` reads a page's structure, not only its prose.** `docs.fetch`
+  answers "what does this page say?"; `web.open` answers "what is on this page?"
+  with the title, the headings, the links (resolved to absolute addresses) and the
+  form controls with their name, type and label, alongside the readable text. Both
+  share one fetch, so the address rules cannot drift: public https only, private,
+  loopback and metadata addresses refused, and every redirect re-checked.
+  `javascript:`, `mailto:` and fragment-only targets are not reported as links,
+  because they are not pages an agent can open.
+- **Preview any address on this machine.** The Preview tab used to show a site
+  devd serves. It now takes any loopback address in a bar above the frame, so a
+  `php artisan serve` on 8000 or a `next dev` on 3000 can be looked at without
+  leaving the window. The address is checked by the server (`POST /api/preview`)
+  before it reaches the frame, because a frame is a place a page can run script:
+  http and https only, a host on this machine only, no credentials, fragment
+  dropped. The rule lives in `devd_core::preview` so the window holds no second
+  copy of it.
 - **One question, not a status report.** A run that cannot continue now answers
   with a structured `needs` object - the one task to look at, what evidence is
   missing, and the actions that resolve it (retry with a note, accept by hand
