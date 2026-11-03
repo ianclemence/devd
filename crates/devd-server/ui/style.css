@@ -1154,13 +1154,8 @@ button.composer-tab:hover { color: var(--fg); }
 /* Remove and forget are destructive words: give them the delete colour, not
    the neutral ghost one. The selector covers project, site, MCP, cron, worker,
    remote and attachment removals without a second class on every button. */
-.btn-ghost[data-action*="remove"], .btn-ghost[data-action="project-forget"], .btn-ghost[data-action="untrack"] {
-  color: var(--danger);
-}
-.btn-ghost[data-action*="remove"]:hover, .btn-ghost[data-action="project-forget"]:hover, .btn-ghost[data-action="untrack"]:hover {
-  background: var(--danger-quiet);
-  color: var(--danger);
-}
+
+
 
 .input, .textarea, .select {
   width: 100%;
@@ -4482,7 +4477,6 @@ body { letter-spacing: 0; font-feature-settings: normal; }
   font-weight: 600;
 }
 .btn-ghost { background: transparent; border-color: transparent; color: var(--fg-mute); }
-.btn-danger { background: transparent; border-color: var(--danger-line); color: var(--danger); }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .btn:active:not(:disabled) { transform: scale(0.97); }
 .btn:focus-visible { outline: 2px solid var(--info); outline-offset: 2px; }
@@ -5378,7 +5372,7 @@ td .pill-bad, .kv .pill-bad { color: var(--danger); }
 .provider-fact .input { width: 100%; }
 .provider-actions { max-width: none; flex-direction: column; align-items: stretch; gap: 6px; min-width: 128px; }
 .provider-actions .btn { justify-content: center; }
-.provider-actions .btn-danger { background: none; border-color: transparent; }
+.provider-actions .btn-danger { background: none; border-color: transparent; height: var(--h-control); }
 @media (max-width: 1100px) {
   .provider { grid-template-columns: minmax(0, 1fr); }
   .provider-actions { flex-direction: row; flex-wrap: wrap; }

@@ -2379,7 +2379,7 @@
       (row.shared
         ? '<button type="button" class="btn" data-action="unshare-site" data-name="' + attr(SITE.name) + '">Stop sharing</button>'
         : '<button type="button" class="btn" data-action="share-site" data-name="' + attr(SITE.name) + '">Share</button>') +
-      '<button type="button" class="btn btn-ghost" data-action="remove-site" data-name="' + attr(SITE.name) + '">Remove</button>';
+      '<button type="button" class="btn btn-danger" data-action="remove-site" data-name="' + attr(SITE.name) + '">Remove</button>';
     el("main").innerHTML = page(SITE.name, "", actions, '<div class="site-page">' + siteTabs() + siteBody(row) + "</div>");
   }
 
@@ -2477,7 +2477,7 @@
         '<td class="cell-actions"><button type="button" class="btn btn-mini" data-action="ops-cron-run" data-id="' + attr(j.id) + '">Run now</button>' +
           '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-cron-log" data-id="' + attr(j.id) + '" data-log="' + attr(j.log) + '">Log</button>' +
           '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-cron-toggle" data-id="' + attr(j.id) + '" data-on="' + (j.enabled ? "0" : "1") + '">' + (j.enabled ? "Turn off" : "Turn on") + "</button>" +
-          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-cron-remove" data-id="' + attr(j.id) + '">Remove</button></td></tr>';
+          '<button type="button" class="btn btn-mini btn-danger" data-action="ops-cron-remove" data-id="' + attr(j.id) + '">Remove</button></td></tr>';
     });
     var actions = '<button type="button" class="btn btn-mini btn-primary" data-action="ops-cron-add">Add job</button>' +
       '<button type="button" class="btn btn-mini" data-action="ops-cron-laravel">Run the Laravel scheduler</button>';
@@ -2498,7 +2498,7 @@
         '<td class="cell-actions"><button type="button" class="btn btn-mini" data-action="ops-queue" data-do="' + (w.running ? "restart" : "start") + '" data-id="' + attr(w.id) + '">' + (w.running ? "Restart" : "Start") + "</button>" +
           (w.running ? '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-queue" data-do="stop" data-id="' + attr(w.id) + '">Stop</button>' : "") +
           '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-queue-log" data-id="' + attr(w.id) + '">Log</button>' +
-          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-queue-remove" data-id="' + attr(w.id) + '">Remove</button></td></tr>';
+          '<button type="button" class="btn btn-mini btn-danger" data-action="ops-queue-remove" data-id="' + attr(w.id) + '">Remove</button></td></tr>';
     });
     var actions = '<button type="button" class="btn btn-mini btn-primary" data-action="ops-queue-add">Add queue worker</button>' +
       '<button type="button" class="btn btn-mini" data-action="ops-queue-add-command">Add a program</button>';
@@ -2515,7 +2515,7 @@
       var perm = r.status === 301 || r.status === 308;
       return '<tr><td class="cell-mono">' + esc(r.from) + '</td><td class="cell-mono">' + esc(r.to) + "</td>" +
         "<td>" + (perm ? "Permanent" : "Temporary") + ' <span class="dim">' + esc(String(r.status)) + "</span></td>" +
-        '<td class="cell-actions"><button type="button" class="btn btn-mini btn-ghost" data-action="ops-redirect-remove" data-id="' + attr(r.id) + '">Remove</button></td></tr>';
+        '<td class="cell-actions"><button type="button" class="btn btn-mini btn-danger" data-action="ops-redirect-remove" data-id="' + attr(r.id) + '">Remove</button></td></tr>';
     });
     return uiHead("Redirects", list.length, '<button type="button" class="btn btn-mini btn-primary" data-action="ops-redirect-add">Add redirect</button>') +
       (list.length ? opsTable([{ name: "From" }, { name: "To" }, { name: "Type" }], rows, "Redirects") : uiEmpty("No redirects yet", "Point a path at another path or an https address. `/blog/*` covers everything under /blog/.")) +
@@ -2597,7 +2597,7 @@
         title: esc(t.channel) + (t.site ? ' <span class="pill">' + esc(t.site) + "</span>" : ""),
         sub: esc(t.destination) + " · " + esc(t.events.join(", ")), wrap: true, hover: true,
         actions: '<button type="button" class="btn btn-mini" data-action="ops-notify-test" data-id="' + attr(t.id) + '">Send a test</button>' +
-          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-notify-remove" data-id="' + attr(t.id) + '">Remove</button>'
+          '<button type="button" class="btn btn-mini btn-danger" data-action="ops-notify-remove" data-id="' + attr(t.id) + '">Remove</button>'
       });
     });
     return uiHead("Alerts", list.length, '<button type="button" class="btn btn-mini btn-primary" data-action="ops-notify-add">Add</button>') +
@@ -2759,7 +2759,7 @@
       return "<tr><td>" + opsDot(dot) + "<b>" + esc(b.database) + "</b></td><td>" + esc(b.schedule) + "</td><td>" + last + "</td><td>" + (b.next_run_at ? esc(shortTime(b.next_run_at)) : '<span class="dim">none</span>') + "</td><td>" + esc(String(b.keep)) + " newest</td>" +
         '<td class="cell-actions"><button type="button" class="btn btn-mini" data-action="ops-backup-run" data-id="' + attr(b.id) + '">Back up now</button>' +
         '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-backup-files" data-db="' + attr(b.database) + '">Files</button>' +
-        '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-backup-remove" data-id="' + attr(b.id) + '">Stop</button></td></tr>';
+        '<button type="button" class="btn btn-mini btn-danger" data-action="ops-backup-remove" data-id="' + attr(b.id) + '">Stop</button></td></tr>';
     });
     return uiHead("Database users", users.length, '<button type="button" class="btn btn-mini btn-primary" data-action="ops-db-user-add">Add user</button>') +
       (userRows.length ? opsTable([{ name: "User" }, { name: "From" }], userRows, "Database users") : uiEmpty("No users yet", "Apps connect as root now. A user with its own password and one database is what a server has.")) +
@@ -2793,7 +2793,7 @@
       return uiRow({
         dot: c.state === "up" ? "ok" : c.state === "down" ? "bad" : "off", title: esc(c.site) + ' <span class="pill">' + esc(c.state || "unknown") + "</span>",
         sub: (c.last_at ? "asked " + esc(shortTime(c.last_at)) : "not asked yet") + (c.last_status ? " · answered " + c.last_status + " in " + c.last_ms + " ms" : "") + (c.last_error ? " · " + esc(c.last_error) : "") + (c.url ? " · " + esc(c.url) : " · through devd's own web server"), wrap: true, hover: true,
-        actions: '<button type="button" class="btn btn-mini" data-action="ops-health-check" data-site="' + attr(c.site) + '">Ask now</button><button type="button" class="btn btn-mini btn-ghost" data-action="ops-health-remove" data-site="' + attr(c.site) + '">Stop</button>'
+        actions: '<button type="button" class="btn btn-mini" data-action="ops-health-check" data-site="' + attr(c.site) + '">Ask now</button><button type="button" class="btn btn-mini btn-danger" data-action="ops-health-remove" data-site="' + attr(c.site) + '">Stop</button>'
       });
     });
     return uiHead("Machine", null, "") + machine +
@@ -2814,11 +2814,11 @@
           '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-srv-info" data-name="' + n + '">Look</button>' +
           '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-srv-provision" data-name="' + n + '">Set up for PHP</button>' +
           '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-srv-run" data-name="' + n + '">Run…</button>' +
-          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-srv-remove" data-name="' + n + '">Forget</button></td></tr>';
+          '<button type="button" class="btn btn-mini btn-danger" data-action="ops-srv-remove" data-name="' + n + '">Forget</button></td></tr>';
     });
     var linkRows = links.map(function (l) {
       return "<tr><td><b>" + esc(l.site) + "</b></td><td>" + esc(l.server) + "</td><td>" + esc(l.mode) + '</td><td class="cell-mono">' + esc(l.path) + (l.domain ? " · " + esc(l.domain) : "") + "</td>" +
-        '<td class="cell-actions"><button type="button" class="btn btn-mini btn-ghost" data-action="ops-link-remove" data-id="' + attr(l.id) + '">Unlink</button></td></tr>';
+        '<td class="cell-actions"><button type="button" class="btn btn-mini btn-danger" data-action="ops-link-remove" data-id="' + attr(l.id) + '">Unlink</button></td></tr>';
     });
     var values = lim.values || {};
     var limitText = lim.assumed
@@ -2857,7 +2857,7 @@
           (l.mode === "releases" ? '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-remote-releases" data-link="' + id + '">Releases</button><button type="button" class="btn btn-mini btn-ghost" data-action="ops-remote-rollback" data-link="' + id + '">Roll back</button>' : "") +
           '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-remote-env" data-link="' + id + '">Send .env</button>' +
           (l.domain ? '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-remote-site" data-link="' + id + '">Create site</button><button type="button" class="btn btn-mini btn-ghost" data-action="ops-remote-ssl" data-link="' + id + '">HTTPS</button>' : "") +
-          '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-link-remove" data-id="' + id + '">Unlink</button>'
+          '<button type="button" class="btn btn-mini btn-danger" data-action="ops-link-remove" data-id="' + id + '">Unlink</button>'
       });
     });
     var more = [
@@ -2866,7 +2866,7 @@
       uiRow({ dot: sched.length ? "warn" : "off", title: "Scheduled", sub: sched.length ? sched.map(function (x) { return esc(shortTime(x.at)); }).join(", ") : "nothing is scheduled", wrap: true,
         actions: '<button type="button" class="btn btn-mini" data-action="ops-sched-add">Deploy later…</button>' }),
       uiRow({ dot: staging ? "ok" : "off", title: "Staging", sub: staging ? esc(staging.staging_site) + " on branch " + esc(staging.branch) : "a second copy of this site on its own branch", wrap: true,
-        actions: staging ? '<button type="button" class="btn btn-mini btn-primary" data-action="ops-staging-promote">Ship to production</button><button type="button" class="btn btn-mini btn-ghost" data-action="ops-staging-remove">Remove</button>' : '<button type="button" class="btn btn-mini" data-action="ops-staging-create">Make a staging site</button>' })
+        actions: staging ? '<button type="button" class="btn btn-mini btn-primary" data-action="ops-staging-promote">Ship to production</button><button type="button" class="btn btn-mini btn-danger" data-action="ops-staging-remove">Remove</button>' : '<button type="button" class="btn btn-mini" data-action="ops-staging-create">Make a staging site</button>' })
     ];
     var schedRows = sched.map(function (x) {
       return uiRow({ dot: "warn", title: "Deploy at " + esc(shortTime(x.at)), sub: esc(x.note || ""), actions: '<button type="button" class="btn btn-mini btn-ghost" data-action="ops-sched-cancel" data-id="' + attr(x.id) + '">Cancel</button>' });
@@ -2973,7 +2973,7 @@
             : '<button type="button" class="btn btn-mini btn-primary" data-action="install-service" data-name="' + attr(svc.name) + '">Install</button>') +
           (svc.running ? '<button type="button" class="btn btn-mini btn-ghost" data-action="restart-service" data-name="' + attr(svc.name) + '">Restart</button>' : "") +
           '<button type="button" class="btn btn-mini btn-ghost" data-action="service-logs" data-name="' + attr(svc.name) + '">Logs</button>' +
-          '<button type="button" class="btn btn-mini btn-ghost" data-action="remove-service" data-name="' + attr(svc.name) + '">Remove</button>',
+          '<button type="button" class="btn btn-mini btn-danger" data-action="remove-service" data-name="' + attr(svc.name) + '">Remove</button>',
         hover: !svc.running && svc.installed ? true : true
       });
     }
@@ -3154,7 +3154,7 @@
           sub: '<span class="mono" title="' + attr(rt.path) + '">' + esc(rt.path) + "</span>",
           meta: usage ? esc(usage) : "",
           actions: (kind.kind === "php" && !r.primary && own ? '<button type="button" class="btn btn-mini" data-action="use-runtime" data-version="' + attr(rt.version) + '">Use for new sites</button>' : "") +
-            (own ? '<button type="button" class="btn btn-mini btn-ghost" data-action="remove-runtime" data-kind="' + attr(kind.kind) + '" data-version="' + attr(rt.version) + '">Remove</button>' : ""),
+            (own ? '<button type="button" class="btn btn-mini btn-danger" data-action="remove-runtime" data-kind="' + attr(kind.kind) + '" data-version="' + attr(rt.version) + '">Remove</button>' : ""),
           hover: true
         });
       });
@@ -6315,7 +6315,7 @@
         }
         if (id === "adb" && st.installed) acts += '<button type="button" class="btn btn-mini btn-ghost" data-action="devices">Devices</button>';
         if (id === "eas-cli" && st.installed) acts += '<button type="button" class="btn btn-mini btn-ghost" data-action="eas-projects">Projects</button>';
-        if (st.installed && !t.tool.per_project) acts += '<button type="button" class="btn btn-mini btn-ghost" data-action="tool-remove" data-id="' + attr(id) + '">Remove</button>';
+        if (st.installed && !t.tool.per_project) acts += '<button type="button" class="btn btn-mini btn-danger" data-action="tool-remove" data-id="' + attr(id) + '">Remove</button>';
         var sub = st.installed ? (sv ? sv.detail + (sv.port_conflict ? " - port held by " + sv.port_conflict : "") : t.tool.purpose) : (st.problem && !t.tool.per_project ? st.problem : t.tool.purpose);
         return uiRow({
           dot: st.installed ? (st.outdated ? "warn" : "ok") : (t.tool.per_project ? "off" : "bad"),
@@ -7439,7 +7439,7 @@
               '<td><button type="button" class="btn btn-mini" data-action="prov-edit" data-id="' + attr(p.id) + '">Edit</button></td></tr>';
           }
           var actions = row.isDefault ? '<span class="pill pill-accent">default</span>' : '<button type="button" class="btn btn-mini" data-action="prov-pick" data-id="' + attr(p.id) + '" data-model="' + attr(row.model.model_id) + '">Use as default</button>';
-          if (row.origin === "custom") actions += ' <button type="button" class="btn btn-mini btn-ghost" data-action="prov-model-remove" data-id="' + attr(p.id) + '" data-model="' + attr(row.model.model_id) + '" title="Remove this hand-added model">Remove</button>';
+          if (row.origin === "custom") actions += ' <button type="button" class="btn btn-mini btn-danger" data-action="prov-model-remove" data-id="' + attr(p.id) + '" data-model="' + attr(row.model.model_id) + '" title="Remove this hand-added model">Remove</button>';
           return '<tr><td><div class="cell-strong">' + label + '</div><div class="cell-dim">' + esc(p.kind) + "</div></td>" +
             '<td class="cell-mono">' + esc(row.model.model_id) + "</td>" +
             "<td>" + tok(row.model.context_window) + "</td>" +
@@ -8648,7 +8648,7 @@
           '<button type="button" class="btn btn-mini" data-action="mcp-edit" data-name="' + attr(s.name) + '">Edit</button>' +
           '<button type="button" class="btn btn-mini" data-action="mcp-test" data-name="' + attr(s.name) + '">Test</button>' +
           '<button type="button" class="btn btn-mini btn-ghost" data-action="mcp-enable" data-name="' + attr(s.name) + '" data-on="' + (s.enabled ? "1" : "0") + '">' + (s.enabled ? "Turn off" : "Turn on") + "</button>" +
-          '<button type="button" class="btn btn-mini btn-ghost" data-action="mcp-remove" data-name="' + attr(s.name) + '">Remove</button>'
+          '<button type="button" class="btn btn-mini btn-danger" data-action="mcp-remove" data-name="' + attr(s.name) + '">Remove</button>'
       });
     }).join("");
     var toolsLine = MCP.servers.length
@@ -9701,7 +9701,7 @@
     return ATTACHMENTS.map(function (a, i) {
       var thumb = a.preview ? '<img src="' + attr(a.preview) + '" alt="">' : '<svg class="icon" aria-hidden="true"><use href="#i-file"></use></svg>';
       return '<span class="composer-attachment' + (a.preview ? " is-image" : "") + '">' + thumb + '<b title="' + attr(a.path) + '">' + esc(a.name) + "</b>" +
-        '<button type="button" data-action="chat-remove-file" data-index="' + i + '" aria-label="Remove ' + attr(a.name) + '">×</button></span>';
+        '<button class="btn btn-mini btn-danger" type="button" data-action="chat-remove-file" data-index="' + i + '" aria-label="Remove ' + attr(a.name) + '">×</button></span>';
     }).join("");
   }
 
@@ -11049,7 +11049,7 @@
         return uiRow({
           title: esc(c.title), sub: esc(ago(c.created_at) + " ago"),
           open: 'data-action="chapter-jump" data-event="' + c.event_id + '"',
-          actions: '<button type="button" class="btn btn-mini" data-action="chapter-jump" data-event="' + c.event_id + '">Jump</button><button type="button" class="btn btn-mini btn-ghost" data-action="chapter-remove" data-id="' + attr(c.id) + '">Remove</button>',
+          actions: '<button type="button" class="btn btn-mini" data-action="chapter-jump" data-event="' + c.event_id + '">Jump</button><button type="button" class="btn btn-mini btn-danger" data-action="chapter-remove" data-id="' + attr(c.id) + '">Remove</button>',
           hover: true
         });
       });

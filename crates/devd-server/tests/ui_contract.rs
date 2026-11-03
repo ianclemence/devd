@@ -812,3 +812,28 @@ fn the_composer_has_two_triggers_and_each_offers_the_right_thing() {
     // The placeholder now says what each trigger does.
     assert!(APP.contains("/ for a skill or tool, @ for a file"), "the promise matches the behaviour");
 }
+
+#[test]
+fn a_destructive_button_says_so_with_a_class_not_with_its_name() {
+    // Buttons used to be coloured red by `[data-action*="remove"]`: colour chosen
+    // by spelling. A button called `remove-from-view` would have turned red for
+    // removing nothing, and one called `purge` would have stayed neutral.
+    assert!(!CSS.contains("data-action*="), "no button is styled by the name of its action");
+
+    // Every destructive action now carries the class that means destructive.
+    for action in [
+        "chat-remove-file", "mcp-remove", "remove-site", "remove-service", "remove-runtime",
+        "ops-cron-remove", "skill-remove", "tool-remove", "prov-remove",
+    ] {
+        let needle = format!("data-action=\"{action}\"");
+        let at = APP.find(&needle).unwrap_or_else(|| panic!("{action} is gone"));
+        // The class is in the same tag, either before or after the action.
+        let tag_start = APP[..at].rfind("<button").expect("a button tag");
+        let tag_end = APP[at..].find('>').map(|i| at + i).expect("a closing bracket");
+        let tag = &APP[tag_start..tag_end];
+        assert!(
+            tag.contains("btn-danger"),
+            "{action} removes something, so it must say btn-danger, not rely on its name: {tag}"
+        );
+    }
+}
