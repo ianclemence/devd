@@ -26,6 +26,7 @@ pub mod merge3;
 pub mod ports;
 pub mod preview;
 pub mod process;
+pub mod provider;
 pub mod terminal_session;
 pub mod registry;
 pub mod repair;

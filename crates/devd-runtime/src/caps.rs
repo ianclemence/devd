@@ -88,6 +88,25 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             },
         )?;
 
+    reg.define::<NoArgs>("runtime.providers", "What this machine can run work in")
+    .description("The execution providers devd found: native processes (always available), and any container engine, with its version, whether it runs rootless, and what it can actually enforce - resource limits, a private network, a read-only mount, an isolated filesystem. A provider that is installed but not running says which it is and the command that would start it; one that is missing says what would install it. devd never installs an engine itself: that is a change to the machine a person should make deliberately. Nothing here assumes a container engine exists - native processes are the default and the only thing devd promises on every platform.")
+    .group("runtime")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, _| Ok(Plan::new("runtime.providers", "report what this machine can run work in")),
+        |_, _| {
+            let v = devd_core::provider::describe();
+            let usable = v["providers"]
+                .as_array()
+                .map(|a| a.iter().filter(|p| p["unusable"].is_null()).count())
+                .unwrap_or(0);
+            Ok(Outcome::with_data(format!("{usable} usable provider(s)"), v))
+        },
+    )?;
     reg.define::<AvailableArgs>(
         "runtime.available",
         "List runtime versions published upstream",
@@ -494,6 +513,7 @@ mod tests {
                 "runtime.list",
                 "runtime.pin",
                 "runtime.pins",
+                "runtime.providers",
                 "runtime.remove",
                 "runtime.use",
                 "runtime.verify",
