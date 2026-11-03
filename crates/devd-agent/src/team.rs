@@ -404,12 +404,42 @@ impl Team {
     fn tell_requester(&self, run: &TeamRun, kind: &str, subject: &str, body: &str, needs_reply: bool) {
         match run.thread_id.as_deref() {
             Some(thread) => {
-                let _ = self.ctx.store.queue_report(&run.id, thread, kind, &format!("{subject}\n\n{body}"));
+                // The report is for the assistant, not for the person directly.
+                // The assistant speaks it in its own words, in the conversation
+                // that asked - which is the whole point of a conversation rather
+                // than an inbox: it can say what it means, what it will do next,
+                // and what it needs, instead of pasting a status line.
+                let text = format!("{subject}\n\n{body}");
+                let _ = self.ctx.store.queue_report(&run.id, thread, kind, &text);
+                self.ask_assistant_to_report(thread, &run.title, kind, &text);
             }
             None => {
                 let _ = self.ctx.store.post_inbox("agent:devd-team", run.project.as_deref(), subject, body, needs_reply);
             }
         }
+    }
+
+    /// Hand the assistant its team's report and let it answer.
+    ///
+    /// This is a message in the existing conversation, not a new one: the person
+    /// asked one question and gets one thread of replies. If the assistant is
+    /// mid-turn the message is queued at the next step boundary, so a tool call
+    /// is never split in half.
+    fn ask_assistant_to_report(&self, thread: &str, title: &str, kind: &str, text: &str) {
+        let ask = match kind {
+            "finished" => format!(
+                "Your team finished \"{title}\". Read their report and tell me the outcome in your own words, in this conversation: what was done, how it was proved, and anything I should know. Do not paste the raw report.",
+            ),
+            "paused" => format!(
+                "Your team stopped on \"{title}\". Their report is below. Tell me plainly what is blocked, what they tried, and what you need from me - or what you will do instead. If you can unblock it yourself, say what you are doing.",
+            ),
+            "plan" => format!(
+                "Your team has a plan for \"{title}\". Summarise it for me and say what you recommend, then wait for my go-ahead.",
+            ),
+            _ => format!("Your team reported on \"{title}\". Tell me what it means."),
+        };
+        let message = format!("{ask}\n\n---\n{text}");
+        let _ = self.hub.tell(thread, &message);
     }
 
     pub fn new(hub: Arc<Hub>, ctx: Ctx) -> Arc<Self> {

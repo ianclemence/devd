@@ -477,3 +477,47 @@ fn the_watchdog_waits_longer_than_a_model_call_is_allowed_to_take() {
     assert!(devd_agent::team::STALL_FLOOR <= Duration::from_secs(600));
 }
 
+#[test]
+fn a_run_reports_into_the_conversation_that_asked_for_it() {
+    // The complaint this answers: the assistant delegated, the agent worked, and
+    // the person was told nothing in the conversation they were having. The run
+    // could not even address them - it had no conversation to reply into.
+    let e = env();
+    let dir = project(&e);
+    let run = e
+        .human
+        .store
+        .create_run("Add search", "add search", Some(&dir), 1, "human:http")
+        .unwrap();
+
+    // A conversation asked for the work, so the run carries it.
+    let thread = e.human.store.create_thread("Add search to the site", Some(&dir), None, None).unwrap();
+    e.human.store.set_run_thread(&run.id, &thread.id).unwrap();
+    assert_eq!(
+        e.human.store.run_thread(&run.id).unwrap().as_deref(),
+        Some(thread.id.as_str()),
+        "the run remembers who asked"
+    );
+
+    // A report queued for that conversation is readable, and is addressed to it.
+    e.human
+        .store
+        .queue_report(&run.id, &thread.id, "finished", "Finished: Add search\n\nThe tests pass.")
+        .unwrap();
+    let pending = e.human.store.pending_reports(&thread.id).unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].2, "finished");
+    assert!(pending[0].3.contains("The tests pass"), "the body survives: {pending:?}");
+
+    // Delivered once, so the same result cannot be announced twice.
+    e.human.store.mark_reports_delivered(&[pending[0].0.clone()]).unwrap();
+    assert!(
+        e.human.store.pending_reports(&thread.id).unwrap().is_empty(),
+        "a delivered report is not handed over again"
+    );
+
+    // A run with no conversation has nothing to address, and says so rather than
+    // inventing a thread.
+    let lone = e.human.store.create_run("Direct", "run from the CLI", None, 1, "human:cli").unwrap();
+    assert_eq!(e.human.store.run_thread(&lone.id).unwrap(), None);
+}
