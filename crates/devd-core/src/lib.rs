@@ -24,6 +24,7 @@ pub mod platform;
 pub mod maintenance;
 pub mod merge3;
 pub mod ports;
+pub mod preview;
 pub mod process;
 pub mod registry;
 pub mod repair;

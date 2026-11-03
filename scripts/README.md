@@ -33,3 +33,8 @@ that test fail. Regenerate it instead:
 ```bash
 $env:DEVD_UPDATE_DOCS = "1"; cargo test -p devd-stacks; Remove-Item Env:\DEVD_UPDATE_DOCS
 ```
+
+A design note that proposes a capability it has not built marks the line
+`(planned)`. The check skips those lines, so a proposal is never reported as a
+claim — but the marker is also a promise to a reader that the capability does not
+exist yet. Remove it in the same commit that builds the capability.

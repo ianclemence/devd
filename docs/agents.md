@@ -514,7 +514,9 @@ refers only to skills and capability groups that exist.
 `search.query` (projects, files by path, literal text in a project, conversations,
 models, tasks, activity — each response says what was searched and whether it
 was cut short), `docs.fetch` (public https pages only; private, loopback and
-metadata addresses refused and re-checked across redirects), `skills.*`,
+metadata addresses refused and re-checked across redirects), `web.open` (the
+same fetch, returning the page's title, headings, links and form fields as well
+as its text, for a page an agent has to act on), `skills.*`,
 `team.*`, `services.inventory`, `environment.get`, and the file, git, project,
 toolchain and stack capabilities.
 
