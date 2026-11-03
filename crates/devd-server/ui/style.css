@@ -165,6 +165,7 @@
   --h-control-sm: 24px;
   --h-control: 28px;
   --h-control-lg: 32px;
+  --h-pane-head: 44px;  /* the header of a pane: the run list and the chat it sits beside must line up */
   --h-tile: 40px;
   --h-row: 44px;
   --h-panel: 56px;
@@ -2234,7 +2235,7 @@ button.svc { width: 100%; background: none; border: 0; border-bottom: 1px solid 
 }
 .thread.active { background: var(--accent-quiet); color: var(--fg); }
 
-.chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
+.chat { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; height: 100%; overflow: hidden; background: var(--bg); }
 .chat-head {
   display: flex;
   align-items: center;
@@ -3670,7 +3671,7 @@ textarea,
 .team-result { display: flex; flex-direction: column; gap: var(--s2); align-items: flex-start; padding: var(--s4) var(--s5); margin: var(--s3) var(--s5); background: var(--bg-surface); border-radius: var(--radius-lg); }
 .tcard { background: none; border: 0; border-radius: var(--radius); padding: var(--s3) var(--s5); }
 .tcard + .tcard { border-top: 1px solid var(--line); border-radius: 0; }
-.team-detail .chat-head { border-bottom: 1px solid var(--line); padding: var(--s4) var(--s5); }
+.team-detail .chat-head { border-bottom: 1px solid var(--line); padding: 0 var(--s5); }
 .chat-title { font-size: var(--text-lg); font-weight: 600; }
 .thread { font-size: var(--text-md); }
 
@@ -4930,7 +4931,7 @@ ol.stages { list-style: none; padding: 0; }
 /* Workspace screens (Assistant, Agent runs) share the page's edge and header. */
 .workspace-head { padding: var(--s6) var(--gutter) var(--s4); align-items: flex-end; }
 .workspace-head .page-title { font-size: 22px; }
-.threads-head { min-height: 44px; }
+.threads-head { height: var(--h-pane-head); min-height: var(--h-pane-head); padding: 0 var(--s3); }
 .team-new { max-width: 720px; }
 .team-north-line { margin-top: var(--s2); padding: 0; background: none; color: var(--fg-mute); border-radius: 0; }
 .team-north-line button { color: var(--accent-text); }
@@ -5060,7 +5061,7 @@ td .pill-bad, .kv .pill-bad { color: var(--danger); }
 .tcard .row-sub { margin-top: 3px; color: var(--fg-dim); font-size: var(--text-xs); }
 .tcard .warn-text { color: var(--danger); }
 .tcard .table { margin-top: var(--s2); }
-.team-detail .chat-head { padding: var(--s4) var(--s5); border-bottom: 1px solid var(--line); }
+.team-detail .chat-head { padding: 0 var(--s5); border-bottom: 1px solid var(--line); }
 .team-detail .chat-title { font-size: var(--text-lg); letter-spacing: -0.01em; }
 .team-detail .section-title { margin-left: var(--s5) !important; margin-right: var(--s5) !important; color: var(--fg); font-size: var(--text-sm); font-weight: 650; text-transform: none; letter-spacing: 0; }
 .team-detail .section-title .count { color: var(--fg-dim); font-weight: 500; }
@@ -5603,7 +5604,7 @@ a, .link, .pill-accent, .tag-unt, .feed-agent, .chat-plan-count, .cap-accent, .m
  * The page title already says "Assistant"; this line says which conversation
  * is open and where it stands. It stays thin, so the conversation keeps the
  * height it needs. */
-.chat-head { min-height: 46px; padding: 6px var(--s4); gap: 10px; flex-wrap: nowrap; background: transparent; }
+.chat-head { height: var(--h-pane-head); min-height: var(--h-pane-head); padding: 0 var(--s4); gap: 10px; flex-wrap: nowrap; background: transparent; }
 .chat-head-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .chat-head .chat-title { font-size: var(--text-sm); font-weight: 600; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-head-sub { color: var(--fg-dim); font-size: var(--text-2xs); line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
