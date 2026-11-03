@@ -306,6 +306,35 @@ people and agents use the same capability API.
   approval.
 * See [`shared-state.md`](shared-state.md).
 
+## Terminal
+
+**Terminal** in the navigation bar runs a shell in a project, inside devd.
+
+The shell is a real PTY, and it lives in the devd process rather than in the window. That has three consequences worth knowing:
+
+* **It keeps running** while devd does. Closing the window, reloading the page or moving to another screen does not end it; the session is listed until you close it.
+* **An agent can read it.** `terminal.read` returns the same screen the window shows. A person opens the shell; an agent may read a session it was given, and may not open one, because a shell is where anything can happen and an agent typing into one would be `project.exec` with no argument to review.
+* **The sessions belong to the process that opened them.** A `devd call` in a separate process cannot reach them: each command is its own process.
+
+| Capability | Who | What |
+|---|---|---|
+| `terminal.open` | a person | Start a shell in a folder. Returns the session id. |
+| `terminal.read` | a person, an agent | The visible screen as text, whether it is still running, and its exit code once it has ended. |
+| `terminal.write` | a person | Send exactly the characters given; a command runs when they end with a newline. |
+| `terminal.resize` | a person | Columns and rows, so a program that draws a screen draws it at the right size. |
+| `terminal.list` | a person, an agent | Every terminal this process has open, with its owner and folder. |
+| `terminal.close` | a person, approved | End the shell and the processes it started. |
+
+The folder passes the same fence the file tools use, so a shell cannot be opened somewhere an agent could not read.
+
+### Why it answers the terminal's questions
+
+A program in a terminal does not only write: it asks, and waits for the answer. Windows' console host asks "where is the cursor?" (`ESC[6n`) as soon as it starts, and a shell that gets no reply **blocks forever** - the screen stays empty and no command runs. devd therefore keeps the small part of a terminal emulator a shell needs (cursor position, device status, device attributes) and replies to it. This was found by building it: the first version hung on its first prompt.
+
+The screen is kept as text with the escape sequences removed, so what a person and a model both read is the screen rather than the raw byte stream.
+
+`portable-pty` (MIT, from wezterm) is the only way to get a terminal across Windows, Linux and macOS, and it is the workspace's one native dependency. devd still downloads and verifies every other binary it uses.
+
 ## Preview
 
 **Preview** embeds the running site in the window: on a site's page choose the **Preview** tab, see it render, reload it, or open it in the system browser. The certificate authority has to be trusted for an HTTPS site to render without a warning, and the page says so when it is not.

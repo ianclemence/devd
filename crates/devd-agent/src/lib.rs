@@ -54,7 +54,6 @@ pub mod skills;
 pub mod skills_data;
 pub mod skills_install;
 pub mod team;
-pub mod terminal_session;
 pub mod templates;
 pub mod workflows;
 

@@ -29,7 +29,7 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 
-use devd_core::{DevdError, Result};
+use crate::{DevdError, Result};
 
 /// How much of a session's output is kept. A terminal scrolls; the buffer a model
 /// reads is bounded so one `yes` cannot fill memory.
@@ -347,7 +347,7 @@ impl Registry {
         // The reader notices end of file when the process goes. Killing the tree
         // is what makes that happen for a shell with children.
         if let Some(pid) = s.pid {
-            devd_core::process::kill_tree(pid);
+            crate::process::kill_tree(pid);
         }
         self.sessions.lock().unwrap().remove(id);
         Ok(())
@@ -605,4 +605,32 @@ mod tests {
         let e = reg.open("human:ui", "D:\\definitely\\not\\a\\folder", None, 80, 24).unwrap_err();
         assert!(e.to_string().contains("not a folder"), "{e}");
     }
+}
+
+/// The sessions this process owns.
+///
+/// A terminal is the one thing devd keeps that is not a row: a PTY outlives any
+/// single capability call, and both the person's window and an agent have to
+/// reach the same one. A `OnceLock` is the honest shape for that - one registry
+/// per process, created on first use, never replaced.
+pub fn registry() -> &'static Registry {
+    static REGISTRY: std::sync::OnceLock<Registry> = std::sync::OnceLock::new();
+    REGISTRY.get_or_init(Registry::new)
+}
+
+/// Answer a session for `terminal.read`: the tail of its screen.
+pub fn read_screen(id: &str, lines: usize) -> Result<Value> {
+    let s = registry().get(id)?;
+    let d = s.describe();
+    Ok(json!({
+        "id": d["id"],
+        "running": d["running"],
+        "exit_code": d["exit_code"],
+        "cols": d["cols"],
+        "rows": d["rows"],
+        // The screen as text, with the escape sequences already removed. A model
+        // given `\x1b[32m` noise is worse at this than one given the screen.
+        "screen": s.tail(lines),
+        "note": "This is the terminal's visible output as text, not the raw byte stream.",
+    }))
 }
