@@ -419,6 +419,22 @@ impl Team {
         }
     }
 
+    /// Write down what a finished run leaves behind.
+    ///
+    /// Two layers, both cheap: the note (what happened, for the project's
+    /// history) and any lesson the run recorded (what the team learned, for
+    /// everything after). The digest is rebuilt from them, never edited.
+    fn remember_run(&self, run: &TeamRun, state: &str, summary: &str, lessons: &[String]) {
+        let Some(project) = run.project.as_deref() else {
+            return;
+        };
+        let memory = crate::memory::Memory::at(self.ctx.paths.root());
+        let _ = memory.note_run(project, &run.title, state, summary);
+        for lesson in lessons {
+            let _ = memory.remember(project, lesson);
+        }
+        let _ = memory.rebuild_digest(project);
+    }
     /// Hand the assistant its team's report and let it answer.
     ///
     /// This is a message in the existing conversation, not a new one: the person
@@ -2328,6 +2344,7 @@ impl Team {
             .store
             .set_run_state(&run.id, "done", Some(&summary), None)?;
         self.event(&run.id, None, "done", json!({ "tasks": real.len(), "verified": verified, "accepted_by_hand": by_hand, "lessons": lessons }));
+        self.remember_run(run, "done", &summary, &lessons);
         self.tell_requester(
             run,
             "finished",

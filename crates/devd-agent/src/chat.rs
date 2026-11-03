@@ -1038,16 +1038,41 @@ impl Hub {
     }
 
     fn system_prompt(&self, t: &ChatThread) -> String {
+        // What devd has learned about how this person works, and about the
+        // project. Gated: a message that could not depend on memory gets the
+        // conventions only, not the recent history. See `memory`.
+        let remembered = crate::memory::Memory::at(self.ctx.paths.root())
+            .context_for(t.project.as_deref(), &self.last_user_text(t.id.as_str()).unwrap_or_default());
+        let remembered = if remembered.trim().is_empty() {
+            String::new()
+        } else {
+            format!("\n## What devd remembers\n{remembered}\n")
+        };
         format!(
-            "{PROMPT}\n{COMMON_CALLS}\n\n{}\n\n## Skills\n{}\n## Context\nToday is {}.\n{}\n{}",
+            "{PROMPT}\n{COMMON_CALLS}\n\n{}\n\n## Skills\n{}\n## Context\nToday is {}.\n{}\n{}{}",
             crate::skills::CORE,
             crate::skills::index_for(&self.ctx.paths, None),
             &util::now()[..10],
             self.brief(t),
+            remembered,
             // AGENTS.md, CLAUDE.md, .devd/instructions.md and .cursorrules, including
             // nested package-level files. They are marked as data by the builder.
             context::instructions_text(t.project.as_deref()),
         )
+    }
+
+    /// The person's most recent message, which is what decides whether memory is
+    /// recalled. Reading it costs one query; recalling on every turn costs the
+    /// model's attention on every turn.
+    fn last_user_text(&self, tid: &str) -> Option<String> {
+        self.ctx
+            .store
+            .list_events(tid, 0, 200)
+            .ok()?
+            .into_iter()
+            .rev()
+            .find(|e| e.kind == "user")
+            .and_then(|e| e.data.get("text").and_then(|v| v.as_str()).map(str::to_string))
     }
 
     fn run(&self, tid: &str, cancel: &Arc<AtomicBool>) -> Result<()> {

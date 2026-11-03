@@ -138,6 +138,20 @@ struct EnvSet {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct MemoryProject {
+    /// The project's directory, absolute.
+    project: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct MemoryNote {
+    /// The project's directory, absolute.
+    project: String,
+    /// One short sentence: a convention, a working command, a trap.
+    fact: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct TeamStart {
     /// What to build or change, in plain words.
     goal: String,
@@ -1235,6 +1249,38 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             let needs = crate::needs::of(&run, &tasks);
             let pending: Vec<Value> = ctx.store.list_requests(true, None, 200)?.into_iter().filter(|r| r.thread_id.as_deref().map(|t| tasks.iter().any(|x| x.thread_id.as_deref() == Some(t))).unwrap_or(false)).map(|r| serde_json::to_value(r).unwrap_or(Value::Null)).collect();
             Ok(Outcome::with_data(format!("{} · {} task(s)", run.state, tasks.len()), json!({ "run": run, "run_id": ctx.store.run_for_team_run(&a.run)?.map(|r| r.id), "tasks": tasks, "events": events, "approvals": pending, "needs": needs })))
+        },
+    )?;
+    reg.define::<MemoryProject>("memory.get", "What devd remembers about a project")
+    .description("The layered memory devd keeps for a project: the digest it puts in front of a model, the conventions it has learned, the notes each finished run left, and the persona it has of the person. Everything is Markdown under the devd home, so a person can read it and correct it. Read only.")
+    .group("memory")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, a| simple("memory.get", format!("read the memory for {}", a.project)),
+        |ctx, a| {
+            let m = crate::memory::Memory::at(ctx.paths.root());
+            let v = m.describe(&a.project);
+            Ok(Outcome::with_data(format!("{} bytes of digest", v["digest"].as_str().map(|s| s.len()).unwrap_or(0)), v))
+        },
+    )?;
+
+    reg.define::<MemoryNote>("memory.note", "Write down something the team learned")
+    .description("Adds one short fact to a project's memory: a convention, a command that works, a trap to avoid. The digest is rebuilt from it. A fact already known is not added twice. Human only: an agent may report a lesson through its run, but it may not write itself into the memory a person is judged against.")
+    .group("memory")
+    .tier(Tier::Write)
+    .effect(Effect::Data)
+    .human_only()
+    .handlers(
+        |_, a| Ok(Plan::new("memory.note", format!("remember one fact about {}", a.project)).step(crate::memory::clip_for_plan(&a.fact))),
+        |ctx, a| {
+            let m = crate::memory::Memory::at(ctx.paths.root());
+            let added = m.remember(&a.project, &a.fact)?;
+            let _ = m.rebuild_digest(&a.project);
+            Ok(Outcome::with_data(if added { "remembered" } else { "already known" }, serde_json::json!({ "added": added })))
         },
     )?;
     reg.define::<NoArgs>("team.roles", "The team's specialists")
