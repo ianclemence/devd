@@ -425,6 +425,12 @@ struct ReportArgs {
     status: String,
     /// What you did and what you saw; for `blocked`, exactly what you need.
     summary: String,
+    /// One thing worth remembering next time you work in this project: a
+    /// convention you had to discover, a command that works, a trap. Optional,
+    /// and worth filling in when you learned something you did not know when
+    /// you started - it is kept for this role, in this project.
+    #[serde(default)]
+    lesson: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -1480,7 +1486,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
     .idempotent()
     .handlers(
         |_, _| simple("team.report", "report on the task"),
-        move |_, a| Ok(Outcome::with_data("recorded", t.report(&a.task, &a.status, &a.summary)?)),
+        move |_, a| Ok(Outcome::with_data("recorded", t.report(&a.task, &a.status, &a.summary, a.lesson.as_deref())?)),
     )?;
     }
 

@@ -52,6 +52,7 @@ pub mod schedule;
 pub mod search;
 pub mod secrets;
 pub mod skills;
+pub mod souls;
 pub mod skills_data;
 pub mod skills_install;
 pub mod team;

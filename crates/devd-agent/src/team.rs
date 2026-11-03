@@ -355,7 +355,13 @@ fn task_brief(
                 crate::memory::clip(digest, 2000)
             ));
         }
+        // What this teammate has learned here. Separate from the project memory
+        // above: that is what the team shares, this is what this role picked up -
+        // a QA agent is not told the frontend's habits, and the frontend is not
+        // told which test database to use.
+        s.push_str(&crate::souls::Souls::at(home).section(project, &t.role));
     }
+        // What this teammate has learned here. Separate from the project memory
     s.push_str("\nStart now. When finished, call team.report.");
     s
 }
@@ -982,7 +988,7 @@ impl Team {
 
     /// A specialist reports. The state does not change here; the scheduler
     /// decides what the report is worth once the conversation ends.
-    pub fn report(&self, task_id: &str, status: &str, summary: &str) -> Result<Value> {
+    pub fn report(&self, task_id: &str, status: &str, summary: &str, lesson: Option<&str>) -> Result<Value> {
         let t = self
             .ctx
             .store
@@ -997,7 +1003,16 @@ impl Team {
         if summary.trim().is_empty() {
             return Err(DevdError::invalid("say what you did and what you saw"));
         }
-        self.event(&t.run_id, Some(&t.id), "report", json!({ "task": t.key, "role": t.role, "status": status, "summary": util::truncate(summary, 6000) }));
+        // What this member learned, kept for the next time this role works in
+        // this project. Bounded and de-duplicated: a soul is a distillation,
+        // not a log.
+        let mut kept = false;
+        if let (Some(note), Some(project)) = (lesson, self.project_of_run(&t.run_id).as_deref()) {
+            kept = crate::souls::Souls::at(self.ctx.paths.root())
+                .remember(project, &t.role, note)
+                .unwrap_or(false);
+        }
+        self.event(&t.run_id, Some(&t.id), "report", json!({ "task": t.key, "role": t.role, "status": status, "summary": util::truncate(summary, 6000), "lesson_kept": kept }));
         Ok(
             json!({ "recorded": true, "note": "devd now checks the evidence in your tool results before the task is accepted" }),
         )
@@ -1005,6 +1020,15 @@ impl Team {
 
     // --------------------------------------------------------- person's levers
 
+    /// The project a run belongs to, if it belongs to one.
+    fn project_of_run(&self, run_id: &str) -> Option<String> {
+        self.ctx
+            .store
+            .get_run(run_id)
+            .ok()
+            .flatten()
+            .and_then(|r| r.project)
+    }
     /// Hand one piece of work to one member of the team.
     ///
     /// The planner-driven run is one way to use the team. Often the person
