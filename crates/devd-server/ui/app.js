@@ -1425,7 +1425,14 @@
    * names, and reachable from the keyboard with Ctrl K. What needs a person is
    * not a destination among the others: it sits apart, at the end, and speaks
    * only when there is something to decide. */
-  function rail() {
+  /* The bar is redrawn by every timer in the window. Replacing its markup when
+     the answer is the same would rebuild the buttons the pointer is on: an open
+     menu would close, its popover animation would replay, and a focused tab
+     would lose focus. The last markup is kept, and the bar is left alone while
+     a menu is open; closing the menu repaints it. */
+  var RAIL_CACHE = { html: null, attn: null };
+
+  function rail(force) {
     var server = state.server;
     var attention = (AI.counts.approvals + AI.counts.questions) || null;
     var working = AI.threads ? (AI.threads.filter(function (t) { return t.state === "running"; }).length || null) : null;
@@ -1435,10 +1442,7 @@
       { label: "Work", items: [
         { view: "home", label: "Home" },
         { view: "projects", label: "Projects", count: state.projects.length || state.projectCount || null },
-        { view: "sites", label: "Sites", count: (server.sites || []).length || null },
-        // A shell is where the work happens, so it sits with the work rather
-        // than under the machine's settings.
-        { view: "terminal", label: "Terminal", count: (TERM.sessions || []).length || null }
+        { view: "sites", label: "Sites", count: (server.sites || []).length || null }
       ] },
       { label: "Agents", items: [
         { view: "assistant", label: "Assistant", count: working },
@@ -1506,8 +1510,16 @@
       '<svg class="icon" aria-hidden="true"><use href="#i-inbox"></use></svg>' +
       '<span class="top-needs-label">Inbox</span>' +
       (attention ? '<span class="top-needs-n">' + esc(attention) + "</span>" : "") + "</button>";
-    el("rail").innerHTML = html;
-    el("top-attn").innerHTML = chip + needs;
+    var attn = chip + needs;
+    var menuOpen = !!(state.topMenu || state.navMenu);
+    if (force || (!menuOpen && html !== RAIL_CACHE.html)) {
+      el("rail").innerHTML = html;
+      RAIL_CACHE.html = html;
+    }
+    if (force || attn !== RAIL_CACHE.attn) {
+      el("top-attn").innerHTML = attn;
+      RAIL_CACHE.attn = attn;
+    }
   }
 
   /* The path above the page, only when it says something the title and the tabs do not: a project is
@@ -4356,7 +4368,10 @@
 
   function openProject(path) {
     state.view = "project";
-    state.tab = "changes";
+    // A folder that is not a repository has nothing to say on Changes; its
+    // files are the useful first screen.
+    var known = (state.projects || []).filter(function (p) { return p.path === path; })[0];
+    state.tab = known && known.is_repository === false ? "files" : "changes";
     state.tabs = {};
     state.diff = null;
     state.project = { path: path, name: dirName(path), status: null, open: null, error: null };
@@ -4401,6 +4416,13 @@
         });
       }
     };
+    // Files loads itself, one folder at a time, so it has no entry here. A tab
+    // without a loader is simply already answered; calling it anyway used to
+    // throw before the screen could draw, which left the tree on "Loading".
+    if (!loaders[tab]) {
+      state.tabs[tab] = { loading: false };
+      return Promise.resolve();
+    }
     state.tabs[tab] = { loading: true };
     return loaders[tab]()
       .then(function (data) {
@@ -4455,7 +4477,12 @@
 
   function renderChanges() {
     var st = state.project.status;
-    if (!st) return '<div class="empty">Status is unavailable for this repository.</div>';
+    if (!st) {
+      var why = state.project.error ? esc(state.project.error) + " " : "";
+      return uiEmpty("No Git state to show",
+        why + "This folder is not a Git repository, or devd cannot read it. Its files are still available on the Files tab.",
+        '<button type="button" class="btn btn-primary" data-action="tab" data-tab="files">Browse files</button>');
+    }
 
     var conflicts = (st.conflicted || []).length;
     var staged = (st.staged || []).length;
@@ -4871,7 +4898,9 @@
       if (st.conflicted.length) codeBits.push('<span class="ov-bad">' + st.conflicted.length + " conflicted</span>");
       if (st.in_progress) codeBits.push('<span class="ov-warn">' + esc(st.in_progress) + "</span>");
     }
-    cells.push('<div class="ov-cell"><div class="ov-k">Code</div><div class="ov-v">' + esc(known.stack || "Stack not detected") + '</div><div class="ov-d">' + (codeBits.join(" · ") || "reading git status") + "</div></div>");
+    var codeNote = codeBits.join(" · ");
+    if (!codeNote) codeNote = state.project.error ? "devd could not read its Git state" : known.is_repository === false ? "not a Git repository" : "reading git status";
+    cells.push('<div class="ov-cell"><div class="ov-k">Code</div><div class="ov-v">' + esc(known.stack || "Stack not detected") + '</div><div class="ov-d">' + codeNote + "</div></div>");
 
     if (!state.server.loaded) {
       cells.push('<div class="ov-cell"><div class="ov-k">Serves at</div><div class="ov-v ov-wait">Reading sites…</div></div>');
@@ -5002,6 +5031,57 @@
     return out || " ";
   }
 
+  /* The mark on a row of the tree.
+   *
+   * An extension people already recognise gets its language's colour and a
+   * short tag, the way an editor's tree does; a folder gets a folder. Every
+   * mark is the same width, so the names line up whatever the kind of file. */
+  var FILE_MARKS = [
+    { tone: "js", label: "JS", ext: ["js", "mjs", "cjs", "jsx"] },
+    { tone: "ts", label: "TS", ext: ["ts", "tsx"] },
+    { tone: "json", label: "{}", ext: ["json", "jsonc", "lock"] },
+    { tone: "php", label: "PHP", ext: ["php", "phtml"] },
+    { tone: "css", label: "CSS", ext: ["css", "scss", "sass", "less"] },
+    { tone: "html", label: "<>", ext: ["html", "htm", "vue", "svelte"] },
+    { tone: "md", label: "MD", ext: ["md", "mdx", "txt", "rst"] },
+    { tone: "img", label: "IMG", ext: ["png", "jpg", "jpeg", "gif", "svg", "webp", "ico", "avif"] },
+    { tone: "sh", label: ">_", ext: ["sh", "bash", "zsh", "ps1", "bat", "cmd"] },
+    { tone: "py", label: "PY", ext: ["py", "pyw"] },
+    { tone: "rb", label: "RB", ext: ["rb", "erb"] },
+    { tone: "go", label: "GO", ext: ["go"] },
+    { tone: "rs", label: "RS", ext: ["rs"] },
+    { tone: "sql", label: "SQL", ext: ["sql"] },
+    { tone: "yaml", label: "YML", ext: ["yml", "yaml"] },
+    { tone: "log", label: "LOG", ext: ["log", "out", "err"] },
+    { tone: "env", label: "ENV", ext: ["env", "ini", "toml", "conf", "properties"] }
+  ];
+  var FILE_EXACT = {
+    "package.json": { tone: "npm", label: "NPM" },
+    "composer.json": { tone: "php", label: "PHP" },
+    "cargo.toml": { tone: "rs", label: "RS" },
+    "dockerfile": { tone: "docker", label: "DOCK" },
+    "makefile": { tone: "make", label: "MK" },
+    ".gitignore": { tone: "git", label: "GIT" }
+  };
+
+  function fileMark(name, kind, secret) {
+    if (kind === "dir") {
+      return '<span class="fmark fmark-dir" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M1.6 3.4h4.1l1.2 1.4h7.5c.5 0 .9.4.9.9v6.4c0 .5-.4.9-.9.9H1.9c-.5 0-.9-.4-.9-.9V4.3c0-.5.4-.9.6-.9z"/></svg></span>';
+    }
+    var low = String(name || "").toLowerCase();
+    var mark = FILE_EXACT[low];
+    if (!mark && /^\.env(\.|$)/.test(low)) mark = { tone: "env", label: "ENV" };
+    if (!mark) {
+      var ext = low.split(".").pop();
+      mark = FILE_MARKS.filter(function (m) { return m.ext.indexOf(ext) !== -1; })[0];
+    }
+    if (!mark && secret) mark = { tone: "secret", label: "KEY" };
+    if (!mark) {
+      return '<span class="fmark fmark-file" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3.5 1.6h5.2l3.8 3.8v8.1c0 .5-.4.9-.9.9H3.5c-.5 0-.9-.4-.9-.9V2.5c0-.5.4-.9.9-.9z" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M8.6 1.8v4h3.7" fill="none" stroke="currentColor" stroke-width="1.2"/></svg></span>';
+    }
+    return '<span class="fmark fmark-' + mark.tone + '" aria-hidden="true">' + esc(mark.label) + "</span>";
+  }
+
   /* The file list and the open file.
    *
    * The tree is a stack of folders rather than a nested list: one `fs.tree` call
@@ -5028,6 +5108,7 @@
         var note = e.secret ? "secret file — not opened" : e.skipped ? "skipped folder" : isDir ? "" : bytesLabel(e.bytes);
         return '<button type="button" class="' + cls + '" data-action="file-open" data-path="' + attr(fs.root + "/" + e.name) + '" data-kind="' + attr(e.kind) + '"' +
           (e.secret || e.skipped ? ' title="' + attr(note) + '"' : "") + ">" +
+          fileMark(e.name, e.kind, e.secret) +
           '<span class="file-name">' + esc(e.name) + "</span>" +
           (note ? '<span class="file-note">' + esc(note) + "</span>" : "") +
           "</button>";
@@ -5054,7 +5135,7 @@
         body.push(lang ? highlightLine(text, lang) : escapeHtml(text));
       }
       doc =
-        '<div class="panel-head file-open-head"><span class="mono grow nowrap" title="' + attr(fs.file.path) + '">' + esc(fs.file.name || fs.file.path) + "</span>" +
+        '<div class="panel-head file-open-head">' + fileMark(fs.file.name || fs.file.path, "file", false) + '<span class="mono grow nowrap" title="' + attr(fs.file.path) + '">' + esc(fs.file.name || fs.file.path) + "</span>" +
         '<span class="panel-note">' + (fs.file.total_lines || lines.length) + " line" + ((fs.file.total_lines || lines.length) === 1 ? "" : "s") + "</span>" +
         '<button type="button" class="btn btn-mini btn-ghost" data-action="file-raw">Copy</button></div>' +
         (fs.file.truncated && from > 1 ? '<div class="ui-quiet" style="padding:6px 12px">Showing from line ' + from + ".</div>" : "") +
@@ -6247,7 +6328,7 @@
     permission: "auto", effort: "medium", composerSkills: null, composerSkillsAt: 0,
     popover: null, modelRail: "", modelQuery: "",
     modelBusy: {}, modelFetched: {}, modelError: {},
-    composer: "", project: "", timer: null, openSteps: {}, todos: [], todosAt: 0,
+    composer: "", project: "", timer: null, openSteps: {}, openTools: {}, todos: [], todosAt: 0,
     inbox: null, requests: null, history: null
   };
 
@@ -7441,12 +7522,15 @@
     if (b.name === "devd_invoke") {
       var id = i.id || "invoke";
       var a = i.args || {};
-      return { title: id, detail: callDetail(id, a) };
+      return { title: capabilityName(id), detail: callDetail(id, a) || id };
     }
-    if (b.name === "devd_describe") return { title: "describe " + (i.id || ""), detail: "" };
-    if (b.name === "devd_capabilities") return { title: "search capabilities", detail: [i.group, i.query].filter(Boolean).join(" ") };
-    if (b.name === "devd_groups") return { title: "list domains", detail: "" };
-    return { title: b.name, detail: "" };
+    if (b.name === "devd_describe") return { title: "Describe", detail: i.id || "" };
+    if (b.name === "devd_capabilities") {
+      var q = [i.group, i.query].filter(Boolean).join(" ");
+      return { title: "Search capabilities", detail: q ? "for " + q : "" };
+    }
+    if (b.name === "devd_groups") return { title: "List domains", detail: "" };
+    return { title: capabilityName(b.name), detail: "" };
   }
 
   /* The one-line detail of a capability call.
@@ -7471,6 +7555,16 @@
       .slice(0, 2)
       .map(function (k) { return k + "=" + JSON.stringify(a[k]); })
       .join(" ");
+  }
+
+  /* Token counts are context, not arithmetic: 192497 is read as 192k. */
+  function compactCount(n) {
+    if (!n || n < 1000) return String(n || 0);
+    if (n < 1000000) {
+      var k = n / 1000;
+      return (k >= 100 ? Math.round(k) : k.toFixed(1).replace(/\.0$/, "")) + "k";
+    }
+    return (n / 1000000).toFixed(1).replace(/\.0$/, "") + "M";
   }
 
   /* How long an action took, in the words people use. */
@@ -7499,48 +7593,113 @@
     "project.run": "Run",
     "project.tasks": "Tasks",
     "project.detect": "Detect",
+    "project.list": "Projects",
     "git.status": "Status",
     "git.log": "Log",
     "git.diff": "Diff",
     "git.commit": "Commit",
+    "skills.get": "Skill",
+    "skills.list": "Skills",
+    "skills.search": "Skills",
+    "todo.list": "Todos",
+    "todo.create": "Plan",
+    "todo.update": "Plan",
+    "inbox.list": "Inbox",
+    "approval.list": "Approvals",
+    "devd_doctor": "Doctor",
+    "devd_describe": "Describe",
+    "devd_capabilities": "Search",
+    "devd_groups": "Domains",
+    "list_files": "List files",
+    "search_files": "Search files",
+    "read_file": "Read file",
+    "write_file": "Write file",
+    "edit_file": "Edit file",
+    "run_task": "Run task",
+    "project_tasks": "Tasks",
+    "todo_list": "Todos",
+    "git_status": "Status",
+    "git_diff": "Diff",
+    "git_log": "Log"
   };
 
+  /* A capability id read as words: "skills.get" is a skill, "search_files"
+   * is a search. Unknown ids keep their shape but stop shouting snake_case. */
   function capabilityName(id) {
     if (!id) return "Tool";
     if (CAPABILITY_NAME[id]) return CAPABILITY_NAME[id];
     var tail = String(id).split(".").pop() || String(id);
+    tail = tail.replace(/_/g, " ");
     return tail.charAt(0).toUpperCase() + tail.slice(1);
   }
 
-  /* What a tool call was, in words.
+  /* What kind of work a call did, for the one-line summary of a run.
    *
-   * The agent calls one generic tool, "devd_invoke", and passes it the
-   * capability to run. The capability is the interesting part, so that is
-   * what the name is built from. */
-  function toolLabel(block) {
-    var i = block.input || {};
-    if (block.name === "devd_invoke") return capabilityName(i.id);
-    if (block.name === "devd_describe") return "Describe";
-    if (block.name === "devd_capabilities") return "Search";
-    if (block.name === "devd_groups") return "Domains";
-    return capabilityName(block.name);
+   * People read "ran 2 commands, read 3 files"; they do not read the id of the
+   * capability that happened to do it. */
+  function toolKind(block) {
+    var id = block.name === "devd_invoke" ? (block.input || {}).id : block.name;
+    id = String(id || "").toLowerCase();
+    if (/exec|shell|terminal|run_task|project\.run/.test(id)) return "command";
+    if (/fs\.edit|edit_file/.test(id)) return "edit";
+    if (/fs\.write|write_file/.test(id)) return "write";
+    if (/fs\.read|read_file/.test(id)) return "read";
+    if (/devd_capabilities/.test(id)) return "searchcaps";
+    if (/search/.test(id)) return "search";
+    if (/fs\.list|list_files|fs\.tree|fs\.browse/.test(id)) return "list";
+    if (/^project\.list/.test(id)) return "projects";
+    if (/devd_describe|describe/.test(id)) return "describe";
+    if (/devd_groups|groups/.test(id)) return "domains";
+    if (/^skills\.|skill/.test(id)) return "skill";
+    if (/^approval\./.test(id)) return "approval";
+    if (/^inbox\./.test(id)) return "inbox";
+    if (/^todo[_.]/.test(id)) return "plan";
+    if (/^project\.tasks|project_tasks/.test(id)) return "tasks";
+    if (/devd_doctor/.test(id)) return "doctor";
+    if (/git\.status|git_status/.test(id)) return "git";
+    if (/git\.diff|git\.log|git_diff|git_log/.test(id)) return "diff";
+    return "other";
   }
 
-  /* "Used 4 Edit, Shell, Read" - what the agent did before it spoke.
-   *
-   * The number counts the calls; the names are the distinct ones, so three
-   * edits read as "Used 3 Edit" and a mix reads as "Used 4 Edit, Shell". */
-  function usedLine(blocks) {
-    var calls = 0;
-    var names = [];
+  function countWords(n, word) {
+    return (n === 1 ? "a " : n + " ") + word + (n === 1 ? "" : "s");
+  }
+
+  /* The heading of a collapsed run: what happened, not which tool was called. */
+  function toolSummary(blocks, results) {
+    var counts = {};
+    var failed = 0;
     (blocks || []).forEach(function (b) {
       if (b.type !== "tool_use") return;
-      calls += 1;
-      var name = toolLabel(b);
-      if (names.indexOf(name) === -1) names.push(name);
+      var kind = toolKind(b);
+      counts[kind] = (counts[kind] || 0) + 1;
+      if (results && results[b.id] && results[b.id].is_error) failed += 1;
     });
-    if (!calls) return "";
-    return '<div class="msg-used">Used ' + calls + " " + names.join(", ") + "</div>";
+    var parts = [];
+    if (counts.command) parts.push("ran " + countWords(counts.command, "command"));
+    if (counts.edit) parts.push("edited " + countWords(counts.edit, "file"));
+    if (counts.write) parts.push("created " + countWords(counts.write, "file"));
+    if (counts.read) parts.push("read " + countWords(counts.read, "file"));
+    if (counts.search) parts.push("searched " + (counts.search === 1 ? "once" : counts.search + " times"));
+    if (counts.searchcaps) parts.push("searched capabilities " + (counts.searchcaps === 1 ? "once" : counts.searchcaps + " times"));
+    if (counts.list) parts.push("listed " + countWords(counts.list, "folder"));
+    if (counts.projects) parts.push("listed projects");
+    if (counts.describe) parts.push(counts.describe === 1 ? "described a capability" : "described " + counts.describe + " capabilities");
+    if (counts.domains) parts.push("listed the domains");
+    if (counts.skill) parts.push("read " + countWords(counts.skill, "skill"));
+    if (counts.approval) parts.push("checked approvals");
+    if (counts.inbox) parts.push("checked the inbox");
+    if (counts.plan) parts.push("checked the plan");
+    if (counts.tasks) parts.push("checked tasks");
+    if (counts.doctor) parts.push("ran diagnostics");
+    if (counts.git) parts.push("checked the repository");
+    if (counts.diff) parts.push("read the diff");
+    if (counts.other) parts.push("used " + counts.other + (counts.other === 1 ? " other tool" : " other tools"));
+    if (!parts.length) return "";
+    var text = parts[0].charAt(0).toUpperCase() + parts[0].slice(1) +
+      (parts.length > 1 ? ", " + parts.slice(1).join(", ") : "");
+    if (failed) text += " (" + failed + " failed)";
+    return text;
   }
 
   /* The row under a reply. Copy takes the reply's text; Fork starts a new conversation from it and
@@ -7579,13 +7738,21 @@
      * the agent produced them, under one heading. */
     var blocks = []; // the conversation in order: a person's message, then one assistant turn
     var current = null; // the assistant turn being built, if any
-    var activity = ""; // an open run of steps in that turn
-    // Steps stay in one group until something that is not a step arrives.
+    var activity = null; // { key, calls, rows } for the run of steps being built
+    // A run is one model call's tools, closed by the next call or by prose.
     var closeGroup = function () {
       if (!activity) return;
-      activity += "</div>";
-      if (current) current.items.push(activity);
-      activity = "";
+      var open = !!AI.openTools[activity.key];
+      var html = '<div class="msg-tools' + (open ? " open" : "") + '" data-group="' + attr(activity.key) + '">' +
+        '<button type="button" class="tools-head" data-action="tools-toggle" data-group="' + attr(activity.key) + '" aria-expanded="' + (open ? "true" : "false") + '" title="Show what the agent did">' +
+        '<span class="tools-summary">' + esc(toolSummary(activity.calls, results) || "Worked") + "</span>" +
+        '<span class="tools-chevron" aria-hidden="true"><svg class="icon"><use href="#i-chevron-down"></use></svg></span>' +
+        "</button>" +
+        '<div class="tools-list"' + (open ? "" : " hidden") + ">" +
+        activity.rows.join("") +
+        "</div></div>";
+      if (current) current.items.push(html);
+      activity = null;
     };
     var openTurn = function (at) {
       current = { at: at || "", items: [], copy: null, last: "none" };
@@ -7607,9 +7774,9 @@
       }
       if (e.kind === "assistant") {
         if (!current) openTurn(e.created_at);
-        // Each model call's tool run gets its own count. Flushing here keeps
-        // "Used N" honest when a turn makes several tool calls in a row across
-        // model calls; they stay in one turn because the turn is the container.
+        // Each model call's tools are one run: three searches in one call read
+        // as "Searched 3 times", while the next call gets its own line. The
+        // turn still holds them all together.
         closeGroup();
         (e.data.content || []).forEach(function (b) {
           if (b.type === "text" && b.text.trim()) {
@@ -7630,11 +7797,13 @@
               var ms = Date.parse(resultAt[b.id]) - Date.parse(e.created_at);
               if (ms > 0 && ms < 3600000) took = duration(ms);
             }
-            // Consecutive actions read as one run with its own count, inside the
-            // turn: "Used 2 Read, List" and the two rows are one block.
-            if (!activity) activity = '<div class="msg-tools">' + usedLine(e.data.content);
+            // Consecutive actions read as one run, inside the turn, under one
+            // heading. The heading is collapsed until someone asks what the
+            // agent did: the answer's prose is what the conversation is for.
+            if (!activity) activity = { key: b.id, calls: [], rows: [] };
+            activity.calls.push(b);
             current.last = "tools";
-            activity += '<div class="step' + (r && r.is_error ? " step-bad" : "") + (open ? " open" : "") + '">' +
+            activity.rows.push('<div class="step' + (r && r.is_error ? " step-bad" : "") + (open ? " open" : "") + '">' +
               '<button type="button" class="step-head" data-action="step-toggle" data-id="' + attr(b.id) + '" aria-expanded="' + (open ? "true" : "false") + '" title="' + attr(c.title + (c.detail ? " — " + c.detail : "")) + '">' +
               '<span class="step-arrow" aria-hidden="true"><svg class="icon"><use href="#i-chevron-down"></use></svg></span>' +
               '<span class="step-dot ' + (pend ? "wait" : r ? (r.is_error ? "bad" : "ok") : "run") + '" aria-hidden="true"></span>' +
@@ -7649,7 +7818,7 @@
                     : "") +
                   "</div>"
                 : "") +
-              "</div>";
+              "</div>");
           }
         });
         return;
@@ -7691,7 +7860,7 @@
       // The working dots are the wait before the first word (or while a tool
       // runs). Once text has been written they give way to the text itself.
       var typing = active && turn.last !== "text"
-        ? '<div class="bubble typing typing-inline" id="chat-typing" role="status" aria-label="devd is working"><span></span><span></span><span></span></div>'
+        ? '<div class="bubble typing typing-inline" id="chat-typing" role="status" aria-label="devd is working"><span class="tdot"></span><span class="tdot"></span><span class="tdot"></span><span class="typing-label">Working</span></div>'
         : "";
       // The text being written is placed here; paintStreamTail fills it. It is
       // an overlay so a token does not re-render the whole conversation.
@@ -7699,7 +7868,7 @@
       return '<div class="turn msg-agent">' +
         '<div class="avatar" aria-hidden="true">d</div>' +
         '<div class="turn-body">' + body + typing + tail +
-        (body || typing || tail ? '<div class="msg-meta">devd' + (shortTime(turn.at) ? " · " + shortTime(turn.at) : "") + "</div>" : "") +
+        (!active && (body || typing || tail) ? '<div class="msg-meta">devd' + (shortTime(turn.at) ? " · " + shortTime(turn.at) : "") + "</div>" : "") +
         (turn.copy && !active ? msgActions(turn.copy, 0) : "") +
         "</div></div>";
     }).join("");
@@ -7768,13 +7937,15 @@
       AI.queued || 0,
       (AI.pending || []).map(function (r) { return r.id + (r.state || ""); }).join(","),
       (AI.chapters || []).map(function (c) { return c.event_id + ":" + c.title; }).join(","),
-      Object.keys(AI.openSteps || {}).filter(function (k) { return AI.openSteps[k]; }).sort().join(",")
+      Object.keys(AI.openSteps || {}).filter(function (k) { return AI.openSteps[k]; }).sort().join(","),
+      Object.keys(AI.openTools || {}).filter(function (k) { return AI.openTools[k]; }).sort().join(",")
     ].join("|");
   }
 
   function paintChat(force) {
     var box = el("chat-stream");
     if (!box) return;
+    paintComposerStatus();
     var key = chatPaintKey();
     if (!force && key === AI.paintKey) return;
     // A text selection lives in the DOM; replacing it just to redraw the same conversation is rude.
@@ -7826,9 +7997,18 @@
   function chatHeadHtml() {
     var t = AI.thread;
     var r = AI.run;
+    var busy = t.state === "running" || AI.running;
+    var word = busy ? "working" : t.state === "waiting_approval" ? "waiting for you" : t.state === "error" ? "stopped with an error" : "";
+    var used = (t.input_tokens || 0) + (t.output_tokens || 0);
     // The provider and the model live in the composer, where they are used.
-    // The head says what the conversation is and where it stands.
-    return '<div class="grow"><div class="chat-title">' + esc(t.title) + '</div><div class="dim mono nowrap">' + esc(t.project || "no project") + " · " + t.input_tokens + " in / " + t.output_tokens + " out tokens</div></div>" +
+    // The head is a quiet line: what this conversation is, and where it stands.
+    // It is not a second title bar; the page title is above it.
+    return '<span class="chat-state' + (busy ? " is-live" : t.state === "error" ? " is-bad" : "") + '" aria-hidden="true"></span>' +
+      '<div class="chat-head-main">' +
+      '<div class="chat-title">' + esc(t.title || "New conversation") + "</div>" +
+      '<div class="chat-head-sub">' + esc(t.project ? dirName(t.project) : "No project") +
+      (used ? " · " + compactCount(t.input_tokens) + " in / " + compactCount(t.output_tokens) + " out" : "") +
+      (word ? " · " + esc(word) : "") + "</div></div>" +
       (AI.queued > 0 ? '<span class="pill pill-warn" title="Messages waiting for the next step">' + AI.queued + " queued</span>" : "") +
       (AI.chapters && AI.chapters.length ? '<button type="button" class="btn btn-mini btn-ghost" data-action="chapters-open">Chapters (' + AI.chapters.length + ")</button>" : "") +
       (r ? '<button type="button" class="btn btn-mini btn-ghost" data-action="open-run" data-id="' + attr(r.id) + '" title="See this conversation as a run: steps, capability calls, evidence and the durable timeline">' + runPill(r.state) + "</button>" : "") +
@@ -8305,7 +8485,13 @@
       if (state.view === "toolchain") return loadToolchain().then(render);
       return loadServer().then(render);
     }
-    if (state.view === "projects") return loadProjects().then(render);
+    if (state.view === "projects") {
+      // A project row says where it is served from. The site list is read in
+      // the background so the folders are not held back, and the rows get
+      // their address as soon as it arrives.
+      if (!state.server.loaded) loadServer().then(function () { if (state.view === "projects") render(); });
+      return loadProjects().then(render);
+    }
     if (state.view === "project") {
       state.tabs = {};
       // What serves a project and which runs name it come from the server inventory and the
@@ -8911,7 +9097,18 @@
       return '<button type="button" class="composer-tab" data-action="composer-mode-toggle" title="' + attr(s.hint) + '">' +
         dot + '<span>' + esc(s.text) + "</span></button>";
     }
-    return '<span class="composer-tab" title="' + attr(s.hint) + '">' + dot + "<span>" + esc(s.text) + "</span></span>";
+    return '<span class="composer-tab" id="chat-status" title="' + attr(s.hint) + '">' + dot + "<span>" + esc(s.text) + "</span></span>";
+  }
+
+  /* The small tab above the composer says what the conversation is doing. It
+   * used to be written once, when the screen was built, so a finished reply
+   * left it saying "Working" until something else redrew the page. */
+  function paintComposerStatus() {
+    var node = el("chat-status");
+    if (!node) return;
+    var s = composerStatus("chat");
+    node.title = s.hint;
+    node.innerHTML = '<span class="composer-tab-dot dot-' + attr(s.tone) + '"></span><span>' + esc(s.text) + "</span>";
   }
 
   function composerModelButton(prefix) {
@@ -10048,6 +10245,7 @@
       AI.todosAt = 0;
       AI.queued = 0;
       AI.openSteps = {};
+      AI.openTools = {};
       AI.composer = "";
       AI.project = path;
       AI.askProject = path;
@@ -10061,7 +10259,7 @@
       var name = n.dataset.menu;
       state.navMenu = "";
       state.topMenu = state.topMenu === name ? "" : name;
-      rail();
+      rail(true);
       if (state.topMenu) {
         var first = document.querySelector('.top-menu .top-pop:not([hidden]) .top-item');
         if (first && n.matches(":focus-visible")) first.focus();
@@ -10070,7 +10268,7 @@
     "nav-menu": function (n) {
       state.topMenu = "";
       state.navMenu = state.navMenu === "all" ? "" : "all";
-      rail();
+      rail(true);
       if (state.navMenu) {
         var first = document.querySelector('.top-all-pop:not([hidden]) .top-item');
         if (first && n.matches(":focus-visible")) first.focus();
@@ -10165,6 +10363,16 @@
     "mention-pick": function (n) {
       var it = MENTIONS.items[Number(n.dataset.index)];
       if (it) applyMention(it);
+    },
+    "tools-toggle": function (n) {
+      var key = n.dataset.group;
+      var open = !AI.openTools[key];
+      AI.openTools[key] = open;
+      var box = n.closest(".msg-tools");
+      var list = box && box.querySelector(".tools-list");
+      n.setAttribute("aria-expanded", open ? "true" : "false");
+      if (box) box.classList.toggle("open", open);
+      if (list) list.hidden = !open;
     },
     "step-toggle": function (n) { AI.openSteps[n.dataset.id] = !AI.openSteps[n.dataset.id]; paintChat(); },
     "req-decide": function (n) {

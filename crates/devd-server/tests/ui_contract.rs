@@ -644,10 +644,29 @@ fn the_composer_has_one_primary_action() {
 }
 
 #[test]
-fn agent_actions_are_grouped_with_their_count() {
-    assert!(APP.contains("class=\"msg-tools\""), "steps are wrapped in one group");
+fn the_working_indicator_actually_moves() {
+    // The dots were given staggered delays but no animation, so the wait before
+    // the first word looked like three static dots. A loading indicator that
+    // does not move is not a loading indicator.
+    assert!(APP.contains("class=\"tdot\""), "the wait is drawn as dots");
+    assert!(APP.contains("typing-label"), "the wait says what it is");
+    assert!(CSS.contains("animation: typing-breathe"), "the dots move");
+    assert!(CSS.contains("@keyframes typing-breathe"), "the animation exists");
+    assert!(CSS.contains("prefers-reduced-motion"), "the motion can be turned off");
+}
+
+#[test]
+fn agent_actions_are_grouped_into_one_collapsed_line() {
+    assert!(APP.contains("class=\"msg-tools"), "steps are wrapped in one group");
     assert!(APP.contains("closeGroup()"), "the group is closed by whatever is not a step");
-    assert!(CSS.contains(".msg-tools > .msg-used"), "the count is the group's heading");
+    // The run reads as one line of prose, collapsed by default; the calls
+    // themselves are one click away rather than crowding the answer.
+    assert!(APP.contains("data-action=\"tools-toggle\""), "the run opens and closes");
+    assert!(APP.contains("function toolSummary"), "the heading says what happened in words");
+    assert!(APP.contains("class=\"tools-list\""), "the calls sit in one list");
+    assert!(APP.contains("(open ? \"\" : \" hidden\")"), "the list starts collapsed");
+    assert!(CSS.contains(".tools-list[hidden]"), "a collapsed list takes no space");
+    assert!(!CSS.contains(".msg-tools > .msg-used"), "no count line above the rows");
 }
 
 #[test]
