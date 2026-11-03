@@ -687,7 +687,7 @@ button.composer-tab:hover { color: var(--fg); }
 .composer-model .brand-dot { width: 16px; height: 16px; flex: none; }
 .composer-model-name { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composer-project { max-width: 170px; }
-.composer-effort { color: var(--fg-mute); }
+.composer-model-effort { flex: none; color: var(--fg-dim); font-size: var(--text-2xs); }
 
 /* One slot for the two things that can come next. The microphone holds it
    until there is something to send; the arrow takes it over from then, in the
@@ -897,6 +897,51 @@ button.composer-tab:hover { color: var(--fg); }
 .model-row.is-active .model-radio::after { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--accent-strong); }
 .model-row.is-disabled { opacity: 0.55; cursor: default; }
 .model-foot { padding: 8px 10px 4px; color: var(--fg-dim); font-size: var(--text-2xs); }
+
+/* Effort is the last row of the model picker, where it belongs to the model
+ * rather than sitting beside it as a second control. */
+.model-effort {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 38px;
+  margin-top: 2px;
+  padding: 8px 14px;
+  background: none;
+  border: 0;
+  border-top: 1px solid var(--line);
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.model-effort:hover { background: var(--bg-hover); }
+.model-effort:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.model-effort-label { color: var(--fg-dim); }
+.model-effort-value { margin-left: auto; color: var(--fg-mute); }
+.model-effort .icon { width: 12px; height: 12px; flex: none; color: var(--fg-dim); }
+
+.model-effort-head { justify-content: flex-start; gap: 6px; padding-left: 10px; }
+.popover-back {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: 8px;
+  color: var(--fg-dim);
+  cursor: pointer;
+}
+.popover-back:hover { background: var(--bg-hover); color: var(--fg); }
+.popover-back:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.popover-back .icon { width: 15px; height: 15px; transform: rotate(180deg); }
+.effort-choice .popover-choice-main b { display: flex; align-items: center; gap: 8px; }
+.effort-recommended { background: var(--bg-raised); color: var(--fg-mute); }
 .model-field {
   display: flex;
   align-items: center;
@@ -5479,6 +5524,12 @@ select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .segmented.site-tabs .seg, .segmented.ops-tabs .seg, .segmented.remote-tabs .seg { position: relative; height: 32px; padding: 0 12px; border-radius: 9px; background: none; box-shadow: none; color: var(--fg-mute); font-size: var(--text-sm); font-weight: 500; }
 .segmented.site-tabs .seg.active, .segmented.ops-tabs .seg.active, .segmented.remote-tabs .seg.active { background: var(--bg-raised); color: var(--fg); font-weight: 600; box-shadow: 0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 1px 2px rgba(0, 0, 0, 0.25); }
 .segmented.site-tabs .seg.active::after, .segmented.ops-tabs .seg.active::after, .segmented.remote-tabs .seg.active::after { content: none; }
+/* The first section under a tab strip is part of that strip's page, not a new
+ * chapter: its own top margin would leave a dead band between the two. */
+.segmented.site-tabs + .ui-head { margin-top: 0; }
+/* One wrapper keeps the page gap between the title and this block, while the
+ * tab strip and its sections space themselves. */
+.site-page { display: flex; flex-direction: column; min-width: 0; }
 @media (hover: hover) and (pointer: fine) { .segmented.site-tabs .seg:not(.active):hover, .segmented.ops-tabs .seg:not(.active):hover, .segmented.remote-tabs .seg:not(.active):hover { background: var(--bg-hover); color: var(--fg); } }
 .tab.active { border-bottom-color: transparent; background: var(--bg-raised); border-radius: 9px; }
 .tabs { border-bottom: 0; }
@@ -5560,6 +5611,19 @@ a, .link, .pill-accent, .tag-unt, .feed-agent, .chat-plan-count, .cap-accent, .m
  * same work here without a sheet of icons. */
 .file-row { align-items: center; gap: 8px; padding: 4px var(--s3); }
 .file-row.is-dir .file-name::before { content: none; }
+.file-go {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  margin-left: auto;
+  color: var(--fg-dim);
+  opacity: 0.55;
+  transition: opacity var(--fast), color var(--fast);
+}
+.file-go .icon { width: 12px; height: 12px; }
+.file-row:hover .file-go, .file-row:focus-visible .file-go { color: var(--fg-mute); opacity: 1; }
 .fmark { flex: none; display: grid; place-items: center; width: 20px; height: 20px; border-radius: 5px; font-family: var(--mono); font-size: 8px; font-weight: 700; line-height: 1; letter-spacing: 0.02em; color: var(--fg-mute); background: var(--bg-raised); }
 .fmark svg { width: 14px; height: 14px; fill: currentColor; }
 .fmark-file, .fmark-dir { background: transparent; }

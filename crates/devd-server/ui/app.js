@@ -2380,7 +2380,7 @@
         ? '<button type="button" class="btn" data-action="unshare-site" data-name="' + attr(SITE.name) + '">Stop sharing</button>'
         : '<button type="button" class="btn" data-action="share-site" data-name="' + attr(SITE.name) + '">Share</button>') +
       '<button type="button" class="btn btn-ghost" data-action="remove-site" data-name="' + attr(SITE.name) + '">Remove</button>';
-    el("main").innerHTML = page(SITE.name, "", actions, siteTabs() + siteBody(row));
+    el("main").innerHTML = page(SITE.name, "", actions, '<div class="site-page">' + siteTabs() + siteBody(row) + "</div>");
   }
 
   // ---------------------------------------------------------------- databases
@@ -5122,11 +5122,17 @@
         var isDir = e.kind === "dir";
         var cls = "file-row" + (isDir ? " is-dir" : "") + (e.skipped ? " is-skipped" : "") + (e.secret ? " is-secret" : "");
         var note = e.secret ? "secret file — not opened" : e.skipped ? "skipped folder" : isDir ? "" : bytesLabel(e.bytes);
+        // A folder opens into its own listing, so the row says so with a
+        // chevron at the end. A skipped folder is not a door.
+        var go = isDir && !e.skipped
+          ? '<span class="file-go" aria-hidden="true"><svg class="icon"><use href="#i-chevron"></use></svg></span>'
+          : "";
         return '<button type="button" class="' + cls + '" data-action="file-open" data-path="' + attr(fs.root + "/" + e.name) + '" data-kind="' + attr(e.kind) + '"' +
           (e.secret || e.skipped ? ' title="' + attr(note) + '"' : "") + ">" +
           fileMark(e.name, e.kind, e.secret) +
           '<span class="file-name">' + esc(e.name) + "</span>" +
           (note ? '<span class="file-note">' + esc(note) + "</span>" : "") +
+          go +
           "</button>";
       }).join("") +
         (fs.truncated ? '<div class="ui-quiet" style="padding:8px 10px">Only the first entries of this folder are shown.</div>' : "");
@@ -8917,7 +8923,7 @@
 
   var EFFORTS = [
     { value: "low", label: "Low", hint: "Quick answers. Less reasoning before acting." },
-    { value: "medium", label: "Medium", hint: "The balanced default." },
+    { value: "medium", label: "Medium", hint: "The balanced default.", recommended: true },
     { value: "high", label: "High", hint: "Think longer before answering or acting." }
   ];
 
@@ -9131,10 +9137,15 @@
     var cur = composerProvider();
     var model = composerModel(cur.id);
     var p = cur.provider;
+    // The effort is part of the model choice, not a second control beside it.
+    var effort = effortSupported(cur.id, model)
+      ? '<span class="composer-model-effort">' + esc(effortInfo().label) + "</span>"
+      : "";
     return '<button type="button" class="composer-choice composer-model" data-action="composer-model" data-chat="model" aria-label="Model" aria-haspopup="dialog" aria-expanded="false" title="' +
-      attr((p ? p.label + " · " : "") + modelLabel(cur.id, model)) + '">' +
+      attr((p ? p.label + " · " : "") + modelLabel(cur.id, model) + (effort ? " · " + effortInfo().label : "")) + '">' +
       (p ? brandImg(p.id, "model-brand") : "") +
       '<span class="composer-model-name">' + esc(modelLabel(cur.id, model)) + "</span>" +
+      effort +
       '<svg class="icon composer-caret" aria-hidden="true"><use href="#i-chevron-down"></use></svg></button>';
   }
 
@@ -9155,11 +9166,6 @@
     var disabled = o.disabled ? " disabled" : "";
     var showProject = !!o.showProject;
     var project = o.project || "";
-    var model = composerModel(composerProvider().id);
-    var effort = effortSupported(composerProvider().id, model)
-      ? '<button type="button" class="composer-choice composer-effort" data-action="composer-effort" aria-haspopup="dialog" aria-expanded="false" title="Reasoning effort">' +
-        '<svg class="icon" aria-hidden="true"><use href="#i-gauge"></use></svg><span>' + esc(effortInfo().label) + "</span></button>"
-      : "";
     var actions = prefix === "chat"
       ? '<span class="composer-slot">' +
           '<button type="button" class="composer-stop" id="chat-stop" data-action="chat-stop" title="Stop after this step" aria-label="Stop" hidden><svg class="icon" aria-hidden="true"><use href="#i-stop"></use></svg></button>' +
@@ -9187,7 +9193,7 @@
             (showProject ? composerProjectButton(prefix, o.projects, project) : "") +
           "</div>" +
           '<div class="composer-right">' +
-            composerModelButton(prefix) + effort + actions +
+            composerModelButton(prefix) + actions +
           "</div>" +
         "</div>" +
       "</div>" +
@@ -9281,7 +9287,14 @@
 
   function positionComposerPopover() {
     var p = AI.popover;
-    if (!p || !p.anchor) return;
+    if (!p) return;
+    // A repaint can replace the trigger while its popover is open. The old
+    // node's rectangle is then zero, which used to park the popover in the
+    // corner; find the trigger that took its place.
+    if ((!p.anchor || !document.contains(p.anchor)) && p.anchorAction) {
+      p.anchor = document.querySelector('[data-action="' + p.anchorAction + '"]');
+    }
+    if (!p.anchor) return;
     var node = composerPopoverNode();
     if (node.hidden) return;
     var r = p.anchor.getBoundingClientRect();
@@ -9300,7 +9313,7 @@
     closeComposerPopover();
     extra = extra || {};
     if (kind === "model") { AI.modelRail = extra.provider || composerProvider().id || ""; AI.modelQuery = ""; }
-    AI.popover = Object.assign({ kind: kind, anchor: anchor, prefix: prefix }, extra);
+    AI.popover = Object.assign({ kind: kind, anchor: anchor, prefix: prefix, anchorAction: anchor && anchor.dataset ? (anchor.dataset.action || "") : "" }, extra);
     if (anchor && anchor.setAttribute) anchor.setAttribute("aria-expanded", "true");
     paintComposerPopover();
     if (kind === "add" && !AI.composerSkills) loadComposerSkills();
@@ -9314,6 +9327,9 @@
     node.className = "composer-popover" + (p.kind === "model" ? " is-model" : "") + (p.kind === "select" ? " is-select" : "");
     node.innerHTML = composerPopoverHtml(p);
     positionComposerPopover();
+    // The effort page is a different height from the model list. Measure again
+    // after the browser has laid it out, so the picker does not jump.
+    if (window.requestAnimationFrame) window.requestAnimationFrame(positionComposerPopover);
     if (p.kind === "select") {
       var chosen = node.querySelector(".select-choice.is-active:not([disabled])") || node.querySelector(".select-choice:not([disabled])");
       if (chosen) chosen.focus();
@@ -9326,17 +9342,49 @@
       (active ? '<svg class="icon popover-check" aria-hidden="true"><use href="#i-check"></use></svg>' : "") + "</button>";
   }
 
+  /* Effort belongs to the model, under the list, not as a second control in
+   * the composer. It is only offered where the model accepts a reasoning
+   * effort: an inert control is worse than no control. */
+  function modelEffortRow(rail) {
+    var p = providerById(rail);
+    if (!p || p.enabled === false) return "";
+    var model = composerModel(rail);
+    if (!effortSupported(rail, model)) return "";
+    return '<button type="button" class="model-effort" data-action="composer-effort" aria-haspopup="dialog">' +
+      '<span class="model-effort-label">Effort</span>' +
+      '<span class="model-effort-value">' + esc(effortInfo().label) + "</span>" +
+      '<svg class="icon" aria-hidden="true"><use href="#i-chevron"></use></svg></button>';
+  }
+
+  /* The effort list, in place of the model list. A back row returns to the
+   * models, because this is one picker with two pages rather than a stack of
+   * floating menus. */
+  function effortPickerHtml() {
+    return '<div class="model-picker-head model-effort-head">' +
+      '<button type="button" class="popover-back" data-action="composer-effort-back" aria-label="Back to models" title="Back to models">' +
+      '<svg class="icon" aria-hidden="true"><use href="#i-chevron"></use></svg></button>' +
+      '<span class="model-picker-title">Effort</span></div>' +
+      '<div class="popover-body">' +
+      '<div class="popover-note">Higher effort means more thorough responses, but takes longer and uses your limits faster.</div>' +
+      EFFORTS.map(function (x) {
+        var active = AI.effort === x.value;
+        return '<button type="button" class="popover-choice effort-choice' + (active ? " is-active" : "") + '" data-action="composer-effort-set" data-value="' + attr(x.value) + '" role="menuitemradio" aria-checked="' + (active ? "true" : "false") + '">' +
+          '<span class="popover-choice-main"><b>' + esc(x.label) +
+          (x.recommended ? '<span class="model-tag effort-recommended">Recommended</span>' : "") +
+          "</b></span>" +
+          (active ? '<svg class="icon popover-check" aria-hidden="true"><use href="#i-check"></use></svg>' : "") +
+          "</button>";
+      }).join("") +
+      "</div>";
+  }
+
   function composerPopoverHtml(p) {
     if (p.kind === "select") return selectOptionsHtml(p.select);
+    if (p.kind === "model" && p.sub === "effort") return effortPickerHtml();
     if (p.kind === "permission") {
       return '<div class="popover-head">What may the agent do?</div><div class="popover-body">' +
         PERMISSIONS.map(function (x) { return popoverChoice("composer-permission-set", x.value, x.label, x.hint, AI.permission === x.value); }).join("") +
         '<div class="popover-note">Bypass applies to this conversation only. Human-only operations still wait.</div></div>';
-    }
-    if (p.kind === "effort") {
-      return '<div class="popover-head">Reasoning effort</div><div class="popover-body">' +
-        EFFORTS.map(function (x) { return popoverChoice("composer-effort-set", x.value, x.label, x.hint, AI.effort === x.value); }).join("") +
-        "</div>";
     }
     if (p.kind === "project") {
       var projects = p.projects || [];
@@ -9376,7 +9424,8 @@
         '<label class="model-search"><input id="model-search" type="search" placeholder="Quick Search" aria-label="Quick search models" autocomplete="off" spellcheck="false" value="' + attr(AI.modelQuery || "") + '">' +
         '<svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg></label></div>' +
         '<div class="model-picker-body"><div class="model-rail" role="tablist" aria-label="Providers">' + railHtml +
-        '</div><div class="model-list" id="model-list" role="listbox" aria-label="Models">' + modelRowsHtml(rail) + "</div></div>";
+        '</div><div class="model-list" id="model-list" role="listbox" aria-label="Models">' + modelRowsHtml(rail) + "</div></div>" +
+        (p.target ? "" : modelEffortRow(rail));
     }
     return "";
   }
@@ -9837,14 +9886,28 @@
       if (state.view === "home") renderHome(); else renderAssistant();
     },
 
-    "composer-effort": function (node) {
-      openComposerPopover("effort", node, state.view === "home" ? "home" : "chat");
+    "composer-effort": function () {
+      if (!AI.popover) return;
+      AI.popover.sub = "effort";
+      paintComposerPopover();
+    },
+
+    "composer-effort-back": function () {
+      if (!AI.popover) return;
+      AI.popover.sub = "";
+      paintComposerPopover();
     },
 
     "composer-effort-set": function (node) {
       AI.effort = node.dataset.value || "medium";
-      closeComposerPopover();
-      if (state.view === "home") renderHome(); else renderAssistant();
+      // The model trigger carries the effort, so it changes too; the picker
+      // stays on the effort page so the check mark can be seen.
+      var tag = document.querySelector(".composer-model-effort");
+      if (tag) tag.textContent = effortInfo().label;
+      if (AI.popover) {
+        AI.popover.sub = "effort";
+        paintComposerPopover();
+      } else if (state.view === "home") renderHome(); else renderAssistant();
     },
 
     "composer-model": function (node) {
@@ -10249,7 +10312,7 @@
       var args = {}; try { args = JSON.parse(n.dataset.args || "{}"); } catch (e) {}
       run(n.dataset.cap, args).then(function (o) { if (o) loadHealth().then(function () { healthChip(); openHealth(); }); });
     },
-    "home-open": function (n) { DEV.path = n.dataset.path; DEV.ctx = null; DEV.detect = null; navigate("develop"); },
+    "home-open": function (n) { openProject(n.dataset.path); },
     "home-chat": function (n) {
       var path = (n && n.dataset.path) || "";
       if (AI.permission === "bypass") AI.permission = "auto";

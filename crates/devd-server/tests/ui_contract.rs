@@ -669,6 +669,58 @@ fn the_files_tab_belongs_to_the_project_that_is_open() {
 }
 
 #[test]
+fn effort_belongs_to_the_model_picker() {
+    // Effort sits under the model list of the selected provider, not beside
+    // the model as a second control. It is offered only where the model has
+    // a reasoning dial, and it opens in place with a way back.
+    assert!(APP.contains("function modelEffortRow"), "the effort row is built with the picker");
+    assert!(APP.contains("data-action=\"composer-effort\""), "the row opens the effort page");
+    assert!(APP.contains("function effortPickerHtml"), "the effort page is in the same picker");
+    assert!(APP.contains("data-action=\"composer-effort-back\""), "there is a way back to the models");
+    assert!(APP.contains("Higher effort means more thorough responses"), "the page explains the trade-off");
+    assert!(APP.contains("effort-recommended"), "Medium is marked as the recommendation");
+    assert!(!APP.contains("composer-choice composer-effort"), "effort is not a second chip in the bar");
+    assert!(APP.contains("if (!effortSupported(rail, model)) return \"\";"), "an inert control is not offered");
+    assert!(APP.contains("(p.target ? \"\" : modelEffortRow(rail))"), "provider and role pickers do not carry conversation effort");
+}
+
+#[test]
+fn polling_does_not_rebuild_an_open_menu() {
+    // The rail is painted by every timer. Replacing it while a menu is open
+    // would close the menu, replay its animation and move the pointer's target.
+    assert!(APP.contains("var menuOpen = !!(state.topMenu || state.navMenu);"), "the rail knows a menu is open");
+    assert!(APP.contains("if (force || (!menuOpen && html !== RAIL_CACHE.html))"), "an open menu is left alone");
+    assert!(APP.contains("RAIL_CACHE"), "the rail keeps its last markup");
+    // A live refresh must not pull a page from under an open dialog either.
+    assert!(APP.contains("[role=\\\"dialog\\\"]"), "an open dialog pauses live repainting");
+    assert!(APP.contains("p.anchorAction"), "an open popover finds its trigger after a repaint");
+}
+
+#[test]
+fn opening_a_project_from_home_opens_that_project() {
+    // The card's Open button and its row are the same act: open this project.
+    // It used to go to the generic Stacks and tasks screen instead.
+    assert!(APP.contains("\"home-open\": function (n) { openProject(n.dataset.path); }"), "home opens the project");
+    assert!(!APP.contains("\"home-open\": function (n) { DEV.path"), "home does not fall back to Develop");
+}
+
+#[test]
+fn the_first_section_under_site_tabs_has_no_dead_band() {
+    // A section head carries its own top margin for separating chapters. The
+    // first one under a tab strip is not a new chapter, so it must not leave a
+    // gap between the tabs and the content.
+    assert!(CSS.contains(".segmented.site-tabs + .ui-head { margin-top: 0; }"));
+    assert!(APP.contains("class=\"site-page\""), "the tab strip and its sections are one block");
+    assert!(CSS.contains(".site-page {"), "the block sets its own spacing");
+}
+
+#[test]
+fn file_folders_look_like_doors() {
+    assert!(APP.contains("class=\"file-go\""), "a folder row has a way-in mark");
+    assert!(CSS.contains(".file-go"), "the mark has its own alignment and hover state");
+}
+
+#[test]
 fn agent_actions_are_grouped_into_one_collapsed_line() {
     assert!(APP.contains("class=\"msg-tools"), "steps are wrapped in one group");
     assert!(APP.contains("closeGroup()"), "the group is closed by whatever is not a step");
