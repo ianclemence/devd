@@ -6915,6 +6915,23 @@
           '<button type="button" class="btn btn-primary" data-action="nav" data-view="providers">Connect a model</button></div></div>';
 
     var decisions = [], work = [], machine = [];
+
+    // One thing that needs a person is one entry, and the run is the truth.
+    //
+    // A paused run used to appear twice - derived here from `teamRuns` and
+    // also as the inbox message the team posted about itself - so every pause
+    // counted twice and read as two problems. The run is authoritative; a
+    // message about a run is that run, not a second one.
+    //
+    // Runs that report into a conversation are left to the conversation: the
+    // assistant answers there, in its own words, which is the point.
+    var runKeys = {};
+    (d.teamRuns || []).forEach(function (t) { runKeys[t.title] = true; });
+    function aboutARun(m) {
+      var s = String(m.subject || "");
+      var at = s.indexOf(": ");
+      return at > 0 && runKeys[s.slice(at + 2)] === true;
+    }
     (d.teamRuns || []).filter(function (t) { return t.state === "awaiting_plan"; }).forEach(function (t) {
       work.push(uiRow({ accent: true, dot: "warn", title: esc(t.title), sub: "The team has a plan with " + t.tasks_total + " task(s). Nothing runs until you approve it.", meta: esc(ago(t.updated_at)),
         actions: '<button type="button" class="btn btn-primary btn-mini" data-action="team-open-from" data-id="' + attr(t.id) + '">Review plan</button>' }));
@@ -6924,7 +6941,7 @@
         actions: '<button type="button" class="btn btn-mini" data-action="team-open-from" data-id="' + attr(t.id) + '">Open</button>' }));
     });
     d.approvals.forEach(function (r) { decisions.push(approvalRow(r)); });
-    d.inbox.filter(function (m) { return m.needs_reply; }).forEach(function (m) { decisions.push(questionRow(m)); });
+    d.inbox.filter(function (m) { return m.needs_reply && !aboutARun(m); }).forEach(function (m) { decisions.push(questionRow(m)); });
     (h.checks || []).filter(function (c) { return c.required && c.state !== "healthy" && c.state !== "starting"; }).forEach(function (c) {
       var f = c.fix || {}, bad = c.state === "critical" || c.state === "unavailable" || c.state === "degraded";
       var act = f.capability
