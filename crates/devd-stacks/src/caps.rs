@@ -74,6 +74,51 @@ struct DescribeArgs {
     stack: String,
 }
 
+/// Where to start a shell.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct TerminalOpen {
+    /// Absolute folder to start in.
+    path: String,
+    /// Shell to start (default: the person's own shell).
+    #[serde(default)]
+    shell: Option<String>,
+    /// Columns (default 100).
+    #[serde(default)]
+    cols: Option<u16>,
+    /// Rows (default 30).
+    #[serde(default)]
+    rows: Option<u16>,
+}
+
+/// A terminal session to read.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct TerminalId {
+    /// The session id from terminal.open.
+    id: String,
+    /// Lines of screen to return (default 200, at most 5000).
+    #[serde(default)]
+    lines: Option<usize>,
+}
+
+/// Input for a terminal.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct TerminalWrite {
+    /// The session id from terminal.open.
+    id: String,
+    /// Exactly the characters to send. A command runs only when it ends with a newline.
+    data: String,
+}
+
+/// A new size for a terminal.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct TerminalResize {
+    /// The session id from terminal.open.
+    id: String,
+    /// Columns (20-400).
+    cols: u16,
+    /// Rows (5-200).
+    rows: u16,
+}
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct PathArgs {
     /// Absolute project directory.
@@ -682,6 +727,104 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             Ok(p)
         },
         |ctx, a| exec_cmd(ctx, a, false),
+    )?;
+
+    reg.define::<TerminalOpen>("terminal.open", "Open a shell in a folder")
+    .description("Starts a shell in a real terminal, kept in devd so its screen can be read by the window and by an agent. Returns the session id that terminal.read, terminal.write, terminal.resize and terminal.close take. Human only: it hands a person an interactive shell.")
+    .tier(Tier::Exec)
+    .effect(Effect::Process)
+    .human_only()
+    .handlers(
+        |_, a| Ok(Plan::new("terminal.open", format!("open a shell in {}", a.path)).step("a real terminal, owned by this process")),
+        |ctx, a| {
+            // The folder passes the same fence the file tools use, so a shell
+            // cannot be opened somewhere an agent could not read.
+            let dir = authz::authorize_dir(ctx, std::path::Path::new(&a.path))?;
+            if !dir.is_dir() {
+                return Err(DevdError::invalid(format!("{} is not a folder", dir.display())));
+            }
+            let s = devd_core::terminal_session::registry().open(
+                &ctx.actor.label(),
+                &dir.display().to_string(),
+                a.shell.as_deref(),
+                a.cols.unwrap_or(100),
+                a.rows.unwrap_or(30),
+            )?;
+            Ok(Outcome::with_data(format!("terminal {}", s.id), s.describe()))
+        },
+    )?;
+
+    reg.define::<TerminalId>("terminal.read", "Read what a terminal is showing")
+    .description("Returns the visible screen of a terminal as text, with the escape sequences already removed: the last N lines, whether the shell is still running, and its exit code once it has ended. Reading does not consume the output, so two readers see the same thing. An agent may read a terminal it did not open; it may not open one.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, a| Ok(Plan::new("terminal.read", format!("read {}", a.id))),
+        |_, a| {
+            let v = devd_core::terminal_session::read_screen(&a.id, a.lines.unwrap_or(200))?;
+            let n = v["screen"].as_str().map(|s| s.lines().count()).unwrap_or(0);
+            Ok(Outcome::with_data(format!("{n} lines"), v))
+        },
+    )?;
+
+    reg.define::<TerminalWrite>("terminal.write", "Send input to a terminal")
+    .description("Types into a terminal, exactly the bytes given: a command is not run until it ends with a newline. Human only, because a shell is where anything can happen and an agent typing into one would be project.exec with no argument to review.")
+    .tier(Tier::Exec)
+    .effect(Effect::Process)
+    .human_only()
+    .handlers(
+        |_, a| Ok(Plan::new("terminal.write", "type into the terminal").step(format!("{} characters", a.data.chars().count()))),
+        |_, a| {
+            let s = devd_core::terminal_session::registry().get(&a.id)?;
+            s.write(&a.data)?;
+            Ok(Outcome::with_data(format!("sent {} characters", a.data.chars().count()), json!({ "id": a.id })))
+        },
+    )?;
+
+    reg.define::<TerminalResize>("terminal.resize", "Tell a terminal its size")
+    .description("Sets the terminal's columns and rows, so a program that draws a screen - a full-screen editor, a progress bar - draws it at the right size. Human only.")
+    .tier(Tier::Exec)
+    .effect(Effect::Process)
+    .human_only()
+    .idempotent()
+    .handlers(
+        |_, a| Ok(Plan::new("terminal.resize", format!("resize to {}x{}", a.cols, a.rows))),
+        |_, a| {
+            let s = devd_core::terminal_session::registry().get(&a.id)?;
+            s.resize(a.cols, a.rows)?;
+            Ok(Outcome::with_data(format!("{} by {}", a.cols, a.rows), json!({ "id": a.id, "cols": a.cols, "rows": a.rows })))
+        },
+    )?;
+
+    reg.define::<NoArgs>("terminal.list", "List the terminals this process has open")
+    .description("Every terminal this process opened, with its owner, folder, shell, size, whether it is still running and its exit code. Reading this does not open anything.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, _| Ok(Plan::new("terminal.list", "list terminals")),
+        |_, _| {
+            let all = devd_core::terminal_session::registry().list();
+            Ok(Outcome::with_data(format!("{} terminal(s)", all.len()), json!({ "terminals": all })))
+        },
+    )?;
+
+    reg.define::<TerminalId>("terminal.close", "Close a terminal")
+    .description("Ends a terminal's shell and the processes it started, and forgets the session. Human only: closing someone else's shell is not an agent's decision.")
+    .tier(Tier::Destructive)
+    .effect(Effect::Process)
+    .human_only()
+    .handlers(
+        |_, a| Ok(Plan::new("terminal.close", format!("close {}", a.id)).effect("ends the shell and everything it started").destructive(true)),
+        |_, a| {
+            devd_core::terminal_session::registry().close(&a.id)?;
+            Ok(Outcome::with_data(format!("closed {}", a.id), json!({ "id": a.id })))
+        },
     )?;
 
     reg.define::<PathArgs>("project.terminal", "Open a terminal in a project")

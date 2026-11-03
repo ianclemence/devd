@@ -1435,7 +1435,10 @@
       { label: "Work", items: [
         { view: "home", label: "Home" },
         { view: "projects", label: "Projects", count: state.projects.length || state.projectCount || null },
-        { view: "sites", label: "Sites", count: (server.sites || []).length || null }
+        { view: "sites", label: "Sites", count: (server.sites || []).length || null },
+        // A shell is where the work happens, so it sits with the work rather
+        // than under the machine's settings.
+        { view: "terminal", label: "Terminal", count: (TERM.sessions || []).length || null }
       ] },
       { label: "Agents", items: [
         { view: "assistant", label: "Assistant", count: working },
@@ -3871,6 +3874,184 @@
 
   // ------------------------------------------------------------------- preview
 
+  /* ------------------------------------------------------------------ terminal
+   *
+   * A shell in the window, driven by devd's own terminal capabilities
+   * (`terminal.open`, `terminal.read`, `terminal.write`, `terminal.resize`,
+   * `terminal.close`). The session lives in the server, so closing the window does
+   * not kill it and an agent can read the same screen.
+   *
+   * There is no xterm.js here. A full terminal emulator is what you need for a
+   * program that paints a screen; for a shell at a prompt, a scrolled log of the
+   * screen text and a line input are honest and much smaller. What the pane shows
+   * is exactly what `terminal.read` returns, which is also what an agent sees - so
+   * the two views cannot disagree.
+   */
+
+  var TERM = {
+    sessions: [],
+    active: null,
+    screen: "",
+    lines: 400,
+    loading: false,
+    error: null,
+    poll: null,
+    draft: ""
+  };
+
+  var TERM_POLL_MS = 900;
+
+  function termSession() {
+    return (TERM.sessions || []).filter(function (s) { return s.id === TERM.active; })[0] || null;
+  }
+
+  /* Read the screen of the active session. */
+  function termRefresh() {
+    if (!TERM.active) return;
+    run("terminal.read", { id: TERM.active, lines: TERM.lines }, { quiet: true }).then(function (o) {
+      if (!o || !o.ok || !o.data) return;
+      var d = o.data;
+      // Only repaint when the text changed: a poll that redraws the same screen
+      // would fight a person's selection.
+      if (d.screen !== TERM.screen) {
+        TERM.screen = d.screen || "";
+        termPaint();
+      }
+      // A shell that has ended stops being polled.
+      if (d.running === false) {
+        termStopPolling();
+        termLoadSessions();
+      }
+    });
+  }
+
+  function termPaint() {
+    if (state.view !== "terminal") return;
+    var out = el("term-screen");
+    if (!out) return;
+    var atBottom = out.scrollHeight - out.scrollTop - out.clientHeight < 40;
+    out.textContent = TERM.screen || "";
+    if (atBottom) out.scrollTop = out.scrollHeight;
+  }
+
+  function termStartPolling() {
+    termStopPolling();
+    TERM.poll = setInterval(termRefresh, TERM_POLL_MS);
+  }
+
+  function termStopPolling() {
+    if (TERM.poll) clearInterval(TERM.poll);
+    TERM.poll = null;
+  }
+
+  function termLoadSessions() {
+    TERM.loading = true;
+    run("terminal.list", {}, { quiet: true }).then(function (o) {
+      TERM.loading = false;
+      TERM.sessions = (o && o.ok && o.data && o.data.terminals) || [];
+      // An active session that has gone is no longer active.
+      if (TERM.active && !TERM.sessions.some(function (s) { return s.id === TERM.active; })) {
+        TERM.active = null;
+        TERM.screen = "";
+      }
+      // The first one open, if none is chosen.
+      if (!TERM.active && TERM.sessions.length) {
+        TERM.active = TERM.sessions[TERM.sessions.length - 1].id;
+        TERM.screen = "";
+        termRefresh();
+      }
+      if (state.view === "terminal") render();
+    });
+  }
+
+  function termOpen() {
+    var dir = state.project.path || (state.session && state.session.paths && state.session.paths.root) || "";
+    if (!dir) return toast("warn", "Open a project first: a shell starts in a folder");
+    act("terminal.open", { path: dir, cols: 100, rows: 30 }).then(function (o) {
+      if (!o) return;
+      TERM.active = (o.data && o.data.id) || null;
+      TERM.screen = "";
+      termLoadSessions();
+      termStartPolling();
+    });
+  }
+
+  /* Send the line in the input, with the newline a shell needs to run it. */
+  function termSend() {
+    var input = el("term-input");
+    if (!input || !TERM.active) return;
+    var text = input.value;
+    if (!text) return;
+    input.value = "";
+    TERM.draft = "";
+    act("terminal.write", { id: TERM.active, data: text + "\r" }, { quiet: true }).then(function () {
+      // A shell echoes what it is given; reading straight after the write makes
+      // the typed line appear without waiting for the next poll.
+      setTimeout(termRefresh, 120);
+    });
+  }
+
+  function renderTerminal() {
+    if (state.view !== "terminal") return;
+    if (!TERM.sessions.length && !TERM.loading && !TERM.error) termLoadSessions();
+
+    var s = termSession();
+    var tabs = (TERM.sessions || []).map(function (t) {
+      var on = t.id === TERM.active;
+      return '<button type="button" class="term-tab' + (on ? " active" : "") + '" data-action="term-pick" data-id="' + attr(t.id) + '">' +
+        '<span class="mono nowrap">' + esc((t.cwd || "").split(/[\\/]/).filter(Boolean).pop() || t.id) + "</span>" +
+        (t.running === false ? ' <span class="term-tab-note">ended</span>' : "") + "</button>";
+    }).join("");
+
+    var head =
+      '<div class="page-actions">' +
+      '<button type="button" class="btn btn-primary" data-action="term-open"' + (state.project.path ? "" : " disabled") + '>New terminal</button>' +
+      (s ? '<button type="button" class="btn btn-ghost" data-action="term-close" data-id="' + attr(s.id) + '">Close</button>' : "") +
+      "</div>";
+
+    var body;
+    if (TERM.error) body = '<div class="notice notice-bad">' + esc(TERM.error) + "</div>";
+    else if (!TERM.sessions.length) {
+      body = '<div class="panel"><div class="empty"><div class="empty-title">No terminal open</div>' +
+        "<div>A shell starts in the project you have open. It keeps running while devd does, so closing this window does not end it.</div>" +
+        '<div class="inline" style="margin-top:12px">' +
+        (state.project.path
+          ? '<button type="button" class="btn btn-primary" data-action="term-open">New terminal in ' + esc(state.project.name || "this project") + "</button>"
+          : '<button type="button" class="btn btn-primary" data-action="nav" data-view="projects">Open a project first</button>') +
+        "</div></div></div>";
+    } else if (!s) {
+      body = '<div class="loading">Loading</div>';
+    } else {
+      body =
+        '<div class="panel term-panel">' +
+        '<div class="panel-head"><span class="mono grow nowrap" title="' + attr(s.cwd) + '">' + esc(s.cwd) + "</span>" +
+        '<span class="panel-note">' + esc(s.shell) + (s.running === false ? " \\u00b7 ended" : "") + "</span></div>" +
+        '<div class="term-screen mono" id="term-screen" role="log" aria-live="polite" tabindex="0">' + esc(TERM.screen) + "</div>" +
+        (s.running === false
+          ? '<div class="term-ended">This shell has ended. Open another one to keep working.</div>'
+          : '<div class="term-input-row">' +
+            '<span class="term-prompt mono" aria-hidden="true">&gt;</span>' +
+            '<input class="term-input mono" id="term-input" spellcheck="false" autocomplete="off" autocapitalize="off" ' +
+            'placeholder="Type a command and press Enter" aria-label="Command">' +
+            '<button type="button" class="btn btn-mini" data-action="term-send">Run</button></div>') +
+        "</div>";
+    }
+
+    el("main").innerHTML =
+      '<div class="page">' +
+      '<div class="page-head"><div>' +
+      pageTitle("Terminal", "terminal") +
+      '<div class="page-sub">A shell in a project, kept in devd so it keeps running and an agent can read the same screen.</div>' +
+      "</div>" + head + "</div>" +
+      (tabs ? '<div class="term-tabs">' + tabs + "</div>" : "") +
+      body +
+      "</div>";
+
+    termPaint();
+    var input = el("term-input");
+    if (input) input.focus();
+  }
+
   /* The preview frame, for a site devd serves or any address on this machine.
    *
    * The address is checked by the server (`POST /api/preview`) before it reaches
@@ -3936,14 +4117,7 @@
     if (select && row) select.value = row.url;
   }
 
-  /*
-   * Register a folder as a project.
-   *
-   * The folder is not moved, not copied and not changed: devd records where it
-   * is and what is in it. A folder that is also a Git repository is indexed as
-   * one, so that the Git screens and the project screens talk about the same
-   * thing.
-   */
+
   function addProjectAt(path) {
     return run("project.import", { path: path })
       .then(function (outcome) {
@@ -8451,6 +8625,7 @@
       else if (state.view === "site") renderSite();
       else if (state.view === "operations") renderOperations();
       else if (state.view === "preview") renderPreview();
+      else if (state.view === "terminal") { renderTerminal(); if (!TERM.poll) termStartPolling(); }
       else if (state.view === "services") renderServices();
       else if (state.view === "runtimes") renderRuntimes();
       else if (state.view === "databases") renderDatabases();
@@ -10815,6 +10990,26 @@
     "note-save": function () { saveNote(); },
     "note-delete": function () { deleteNote(); },
 
+    /* Terminal. */
+    "term-open": function () { termOpen(); },
+    "term-send": function () { termSend(); },
+    "term-pick": function (node) {
+      TERM.active = node.dataset.id;
+      TERM.screen = "";
+      termRefresh();
+      render();
+      termStartPolling();
+    },
+    "term-close": function (node) {
+      var id = node.dataset.id;
+      act("terminal.close", { id: id }).then(function (o) {
+        if (!o) return;
+        if (TERM.active === id) { TERM.active = null; TERM.screen = ""; }
+        termStopPolling();
+        termLoadSessions();
+        render();
+      });
+    },
     /* The file tree: open a folder, open a file, go up, copy the open file. */
     "file-open": function (node) {
       var path = node.dataset.path;
@@ -10847,11 +11042,6 @@
       if (frame) frame.src = frame.src;
     },
 
-    /* Ask the server whether an address may be previewed, then show it.
-     *
-     * The check is not done here: a frame is a place a page can run script, and
-     * devd decides what may go in one (`POST /api/preview`). This only carries
-     * the answer. */
     "preview-go": function () {
       var input = el("preview-url");
       var raw = input ? input.value.trim() : "";
@@ -10880,6 +11070,10 @@
       var row = (state.server.sites || []).filter(function (s) { return s.url === node.value; })[0];
       if (row) state.preview.site = row.site.name;
       renderPreview();
+    },
+    "reload-preview": function () {
+      var frame = el("preview-frame");
+      if (frame) frame.src = frame.src;
     },
 
     "track-path": function () {
@@ -11542,6 +11736,15 @@
           }
         });
       }, 140);
+    }
+  });
+
+  /* Enter in the terminal's input runs the line; the shell needs the newline,
+   * and a form submit would reload the page. */
+  document.addEventListener("keydown", function (event) {
+    if (event.target && event.target.id === "term-input" && event.key === "Enter") {
+      event.preventDefault();
+      termSend();
     }
   });
 

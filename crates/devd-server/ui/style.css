@@ -2584,6 +2584,81 @@ pre.code {
 /* -------------------------------------------------------------- processes */
 
 
+/* --------------------------------------------------------------- terminal */
+
+.term-tabs { display: flex; gap: var(--s1); margin-bottom: var(--s2); flex-wrap: wrap; }
+.term-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: 5px var(--s3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+  color: var(--fg-mute);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.term-tab:hover { border-color: var(--line-strong); color: var(--fg); }
+.term-tab.active { border-color: var(--accent-line); background: var(--accent-quiet); color: var(--fg); }
+.term-tab-note { color: var(--warn); font-size: var(--text-2xs); }
+
+/*
+ * The screen is a log, not a terminal grid: it holds what `terminal.read`
+ * returned, so what a person sees here is what an agent reads. Monospace and
+ * pre-wrapped, and tall enough that a build's output does not scroll away
+ * immediately.
+ */
+.term-screen {
+  height: 56vh;
+  min-height: 260px;
+  overflow: auto;
+  margin: 0;
+  padding: var(--s3);
+  background: var(--bg-deep);
+  color: var(--fg-mute);
+  font-size: var(--text-2xs);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  tab-size: 4;
+  user-select: text;
+}
+.term-screen:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: -2px; }
+
+.term-input-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s2) var(--s3);
+  border-top: 1px solid var(--line);
+  background: var(--bg-surface);
+}
+.term-prompt { color: var(--ok); }
+.term-input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-sm);
+  background: var(--bg-deep);
+  color: var(--fg);
+  font-size: var(--text-2xs);
+}
+.term-input:focus { outline: none; box-shadow: var(--focus-ring); border-color: var(--accent-line); }
+
+.term-ended {
+  padding: var(--s2) var(--s3);
+  border-top: 1px solid var(--line);
+  background: var(--warn-quiet);
+  color: var(--warn);
+  font-size: var(--text-xs);
+}
+
+@media (max-width: 720px) {
+  .term-screen { height: 46vh; }
+}
 /* ------------------------------------------------------------------ files */
 
 /*

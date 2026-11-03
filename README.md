@@ -193,6 +193,8 @@ cargo test --workspace            # everything
 
 MIT. See [`LICENSE`](LICENSE).
 
-devd bundles no third-party binaries. PHP, Node.js, Go, nginx and MariaDB are downloaded from their publishers on first use and verified against the digest the publisher gives; where a publisher gives none, the install says so. The window vendors xterm.js and its fit addon (both MIT); their licences are in [`crates/devd-server/ui/vendor/`](crates/devd-server/ui/vendor/).
+devd downloads the runtimes it manages — PHP, Node.js, Go, nginx and MariaDB — from their publishers on first use, and verifies each against the digest the publisher gives; where a publisher gives none, the install says so rather than pretending. Nothing else is shipped as a separate binary.
+
+The one native library in the build is [`portable-pty`](https://crates.io/crates/portable-pty) (MIT, from the wezterm project), which is what gives the integrated terminal a real PTY on Windows, Linux and macOS. It is compiled in rather than downloaded.
 
 

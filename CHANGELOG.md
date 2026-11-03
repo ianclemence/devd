@@ -40,6 +40,22 @@ may change capability identifiers where the design was wrong.
 
 ### Added
 
+- **A terminal in the window.** A shell in a project, running in devd rather than
+  in the page, so it keeps running when the window closes and `terminal.read`
+  returns the same screen to an agent that the person sees. `terminal.open`,
+  `terminal.read`, `terminal.write`, `terminal.resize`, `terminal.list` and
+  `terminal.close` are the whole surface: a person opens and types, an agent may
+  read, and closing a shell is destructive and approved.
+- **The terminal answers its shell's questions.** The Windows console host asks
+  "where is the cursor?" (`ESC[6n`) as soon as it starts, and blocks until it is
+  answered - so a shell whose output is merely stripped never runs a command at
+  all. devd keeps the small part of a terminal emulator that answers it.
+- **`portable-pty` is the one native dependency.** It is the only cross-platform
+  way to get a PTY, it is MIT, and it is compiled in. The README says so instead
+  of repeating that devd bundles no third-party code.
+- **The README no longer claims the window vendors xterm.js.** It did not, and the
+  folder it pointed at did not exist.
+
 - **A project's files, in the window.** A **Files** tab lists a project's folders
   and opens its files: `fs.tree` asks for one folder at a time, so a large project
   costs one request per folder opened rather than one per visible row, and a file
