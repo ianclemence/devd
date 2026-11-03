@@ -788,3 +788,27 @@ fn alert_copy_flows_as_one_paragraph() {
     assert!(APP.contains("offline-title") && APP.contains("offline-text"));
 }
 
+#[test]
+fn the_composer_has_two_triggers_and_each_offers_the_right_thing() {
+    // The placeholder has said "Type / or @" since the composer was written, and
+    // neither worked: "/" did nothing at all, and "@" offered capabilities,
+    // skills, projects and roles but never a file - the one thing "@" means.
+    assert!(APP.contains("function triggerAt(text, caret)"), "one pipeline detects both triggers");
+    assert!(APP.contains("function triggerItems(kind, query)"), "one pipeline, sources by kind");
+    // "/" is commands: skills and the tools an agent can run.
+    assert!(APP.contains("if (kind === \"/\")"), "a slash source exists");
+    assert!(APP.contains("group: \"Skills\""), "skills are offered by name");
+    assert!(APP.contains("group: \"Tools\""), "tools are offered under the slash too");
+    // "@" is references, and a file is one of them.
+    assert!(APP.contains("function fileMentions(q)"), "files are searchable");
+    assert!(APP.contains("group: \"Files\""), "a file is a reference kind");
+    assert!(APP.contains("read(\"fs.tree\""), "files come from the project's tree");
+    // A path query is a path: it may contain the separators a path has.
+    assert!(!APP.contains("if (/[\\s]/.test(query)) return null;\n    return { start: at, query: query };"),
+        "the old mention trigger rejected the characters a path is made of");
+    // Both composers open the list, and the one typed into is the one edited.
+    assert!(APP.contains("var ht = triggerAt(t.value, t.selectionStart);"), "the home box opens the list");
+    assert!(APP.contains("composerInput(prefix)"), "the pick goes into the box that was typed in");
+    // The placeholder now says what each trigger does.
+    assert!(APP.contains("/ for a skill or tool, @ for a file"), "the promise matches the behaviour");
+}

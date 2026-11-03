@@ -8244,7 +8244,7 @@
       projects: projectList,
       project: projectName,
       showProject: !AI.thread,
-      placeholder: "What are we working on? Type / or @ to bring in a skill, a tool or a project"
+      placeholder: "What are we working on? / for a skill or tool, @ for a file"
     });
 
     el("main").innerHTML =
@@ -9760,62 +9760,139 @@
    * it can run, a skill it can load, a project it can work in. The mention is
    * written into the message as text, so the agent reads exactly what the
    * person wrote - the list is a way of naming things, not a side channel. */
-  var MENTIONS = { open: false, items: [], index: 0, start: 0, query: "", seq: 0, timer: null };
+  var MENTIONS = { open: false, kind: "@", items: [], index: 0, start: 0, query: "", seq: 0, timer: null };
 
-  /* Where the "@" that opens the list is, and what has been typed after it. */
-  function mentionTrigger(text, caret) {
+  /* Where a trigger is, and what has been typed after it.
+   *
+   * Two triggers, two sources, one pipeline - the shape both reference apps use:
+   *
+   *   "/"  commands: the skills an agent can load, and the tools it can run
+   *   "@"  references: a file in the open project, a project, a teammate
+   *
+   * The composer already promised this in its placeholder ("Type / or @") and
+   * delivered neither: "/" did nothing at all, and "@" offered capabilities,
+   * skills, projects and roles but never a file - the one thing everyone means
+   * by "@".
+   *
+   * A path query may contain "/" and ".", because that is what a path is. Only
+   * whitespace ends it. */
+  function triggerAt(text, caret) {
     if (caret == null) caret = text.length;
     var upto = text.slice(0, caret);
-    var at = upto.lastIndexOf("@");
-    if (at < 0) return null;
-    // An "@" inside a word is part of that word - an address, a version - and
-    // should not open a list.
-    if (at > 0 && !/[\s(]/.test(upto.charAt(at - 1))) return null;
-    var query = upto.slice(at + 1);
-    if (/[\s]/.test(query)) return null;
-    return { start: at, query: query };
+    var slash = triggerAt_(upto, "/");
+    var at = triggerAt_(upto, "@");
+    // Whichever trigger was typed most recently wins.
+    if (slash && at) return slash.start > at.start ? slash : at;
+    return slash || at;
   }
 
-  function mentionItems(query) {
-    var q = query.trim();
-    var caps = request("/api/capabilities?limit=8&q=" + encodeURIComponent(q))
-      .then(function (res) { return res.ok ? (res.body.items || []) : []; })
-      .catch(function () { return []; });
-    var skills = read("skills.list", { query: q })
-      .then(function (d) { return Array.isArray(d) ? d : []; })
-      .catch(function () { return []; });
+  function triggerAt_(upto, ch) {
+    var i = upto.lastIndexOf(ch);
+    if (i < 0) return null;
+    // Inside a word it is part of that word - an address, a version, a path
+    // segment - and should not open a list.
+    if (i > 0 && !/[\s(]/.test(upto.charAt(i - 1))) return null;
+    var query = upto.slice(i + 1);
+    if (/\s/.test(query)) return null;
+    return { start: i, query: query };
+  }
+
+  /* A file in the open project, matched by path.
+   *
+   * `fs.search` searches text inside files; this needs names, so `fs.tree` walks
+   * the project's folders a level at a time and matches the path. Bounded, and
+   * only over the project that is open. */
+  function fileMentions(q) {
+    var root = (state.project && state.project.path) || "";
+    if (!root) return Promise.resolve([]);
+    var want = String(q || "").toLowerCase();
+    function walk(dir, depth) {
+      if (depth > 3) return Promise.resolve([]);
+      return read("fs.tree", { path: dir, limit: 400 })
+        .then(function (v) {
+          var entries = (v && v.entries) || [];
+          var hits = [];
+          var descents = [];
+          entries.forEach(function (e) {
+            if (e.secret || e.skipped) return;
+            var rel = dir.slice(root.length).replace(/^[\\/]/, "").replace(/\\/g, "/");
+            var path = (rel ? rel + "/" : "") + e.name;
+            if (!want || path.toLowerCase().indexOf(want) >= 0) {
+              hits.push({ kind: "file", token: "@" + path, title: e.name, detail: path, path: path, dir: false, group: "Files" });
+            }
+            // Descend only where the query could still match something inside.
+            if (e.kind === "dir" && (!want || path.toLowerCase().indexOf(want) >= 0 || want.indexOf(path.toLowerCase() + "/") === 0 || want.indexOf("/") >= 0)) {
+              descents.push(path);
+            }
+          });
+          return Promise.all(descents.slice(0, 6).map(function (p) {
+            return walk(root.replace(/[\\/]$/, "") + "\\" + p.replace(/\//g, "\\"), depth + 1);
+          })).then(function (rest) {
+            var all = hits.slice();
+            rest.forEach(function (r) { all = all.concat(r); });
+            return all;
+          });
+        })
+        .catch(function () { return []; });
+    }
+    return walk(root, 1).then(function (all) {
+      // The obvious match first: a file whose name starts with what was typed.
+      return all.sort(function (a, b) {
+        var an = a.title.toLowerCase().indexOf(want) === 0 ? 0 : 1;
+        var bn = b.title.toLowerCase().indexOf(want) === 0 ? 0 : 1;
+        return an - bn || a.detail.length - b.detail.length;
+      }).slice(0, 12);
+    });
+  }
+
+  /* Everything a trigger can offer. */
+  function triggerItems(kind, query) {
+    var q = String(query || "").trim();
+    if (kind === "/") {
+      // Commands: the skills an agent can load, and the tools it can run.
+      var skills = read("skills.list", { query: q })
+        .then(function (d) { return Array.isArray(d) ? d : []; })
+        .catch(function () { return []; });
+      var caps = request("/api/capabilities?limit=8&q=" + encodeURIComponent(q))
+        .then(function (res) { return res.ok ? (res.body.items || []) : []; })
+        .catch(function () { return []; });
+      return Promise.all([skills, caps]).then(function (r) {
+        var items = [];
+        r[0].forEach(function (s) {
+          items.push({ kind: "skill", token: "/" + s.name, title: s.name, detail: s.description, group: "Skills" });
+        });
+        r[1].forEach(function (c) {
+          items.push({ kind: "capability", token: "/" + c.id, title: c.id, detail: c.summary || c.group, group: "Tools" });
+        });
+        return items;
+      });
+    }
+    // References: files first, because that is what a person reaches for.
+    var files = fileMentions(q);
     var projects = read("project.list")
       .then(function (d) { return Array.isArray(d) ? d : []; })
       .catch(function () { return []; });
     var roster = read("team.roles")
       .then(function (d) { return Array.isArray(d) ? d : []; })
       .catch(function () { return []; });
-    return Promise.all([caps, skills, projects, roster]).then(function (r) {
-      var items = [];
-      r[0].forEach(function (c) {
-        items.push({ kind: "capability", token: "@" + c.id, title: c.id, detail: c.summary || c.group, group: "Capabilities" });
-      });
-      r[1].forEach(function (s) {
-        if (q && s.name.indexOf(q.toLowerCase()) < 0 && String(s.description || "").toLowerCase().indexOf(q.toLowerCase()) < 0) return;
-        items.push({ kind: "skill", token: "@skill:" + s.name, title: s.name, detail: s.description, group: "Skills" });
-      });
-      r[2].forEach(function (p) {
+    return Promise.all([files, projects, roster]).then(function (r) {
+      var items = r[0] || [];
+      r[1].forEach(function (p) {
         var name = p.name || dirName(p.path || "");
-        if (q && name.toLowerCase().indexOf(q.toLowerCase()) < 0 && String(p.path || "").toLowerCase().indexOf(q.toLowerCase()) < 0) return;
+        if (q && name.toLowerCase().indexOf(q.toLowerCase()) < 0) return;
         items.push({ kind: "project", token: "@project:" + name, title: name, detail: p.path, path: p.path, group: "Projects" });
       });
-      // The members of devd's team a message can be handed to.
-      (r[3] || []).forEach(function (m) {
-        if (q && m.id.indexOf(q.toLowerCase()) < 0 && m.title.toLowerCase().indexOf(q.toLowerCase()) < 0 && String(m.summary || "").toLowerCase().indexOf(q.toLowerCase()) < 0) return;
-        items.push({ kind: "member", token: "@" + m.id + ":", title: m.title, detail: m.summary, group: "devd's team", member: m.id });
+      (r[2] || []).forEach(function (m) {
+        if (q && m.id.toLowerCase().indexOf(q.toLowerCase()) < 0 && m.title.toLowerCase().indexOf(q.toLowerCase()) < 0) return;
+        items.push({ kind: "member", token: "@" + m.id + " ", title: m.title, detail: m.summary, group: "devd's team", member: m.id });
       });
       return items;
     });
   }
 
-  function openMentions(start, query) {
+  function openMentions(start, query, kind) {
     MENTIONS.start = start;
-    MENTIONS.query = query;
+    MENTIONS.kind = kind || "@";
     MENTIONS.open = true;
     MENTIONS.index = 0;
     var seq = ++MENTIONS.seq;
@@ -9825,8 +9902,7 @@
     paintMentions();
     MENTIONS.timer = setTimeout(function () {
       if (seq !== MENTIONS.seq) return;
-      mentionItems(query).then(function (items) {
-        if (seq !== MENTIONS.seq) return;
+      triggerItems(MENTIONS.kind, query).then(function (items) {
         MENTIONS.items = items;
         MENTIONS.index = 0;
         paintMentions();
@@ -9889,8 +9965,18 @@
 
   /* Put the mention into the message and, for a project, say where the work
    * happens. */
+  /* Put what was picked into the message.
+   *
+   * The mention is written as text, so the agent reads exactly what the person
+   * wrote - `@src/components/Button.tsx` names the file, and the agent opens it
+   * with `fs.read`. A skill is written as `/name`, which is the command form the
+   * prompt already tells it to load with `skills.get`.
+   *
+   * The composer that was typed into is the one that is edited: Home has its own
+   * box, and writing into the Assistant's box from Home did nothing at all. */
   function applyMention(item) {
-    var inp = el("chat-input");
+    var prefix = (state.view === "home" && el("home-ask")) ? "home" : "chat";
+    var inp = composerInput(prefix);
     if (!inp) return;
     var text = inp.value;
     var caret = inp.selectionStart == null ? text.length : inp.selectionStart;
@@ -9898,7 +9984,8 @@
     var after = text.slice(caret);
     var token = item.token + " ";
     inp.value = before + token + after;
-    AI.composer = inp.value;
+    if (prefix === "home") AI.askText = inp.value;
+    else AI.composer = inp.value;
     var pos = before.length + token.length;
     inp.focus();
     try { inp.setSelectionRange(pos, pos); } catch (e) { /* not a text control */ }
@@ -9907,6 +9994,7 @@
     fitComposer();
     if (item.kind === "project" && item.path && !AI.thread) AI.project = item.path;
   }
+
 
   /* The microphone and the send arrow share one slot. The microphone holds it
    * until there is something to send; typing takes the slot back. */
@@ -12353,16 +12441,15 @@
       return;
     }
     if (t.id === "team-say") { var tsb = el("team-say-send"); if (tsb) tsb.disabled = !t.value.trim(); }
-    if (t.id === "home-ask") { AI.askText = t.value; var hs = el("home-send"); if (hs) hs.disabled = !t.value.trim(); }
+    if (t.id === "home-ask") { AI.askText = t.value; var hs = el("home-send"); if (hs) hs.disabled = !t.value.trim(); var ht = triggerAt(t.value, t.selectionStart); if (!ht) closeMentions(); else if (!MENTIONS.open || MENTIONS.start !== ht.start || MENTIONS.query !== ht.query) openMentions(ht.start, ht.query, t.value.charAt(ht.start)); }
     else if (t.id === "chat-input") {
       AI.composer = t.value;
       syncComposerAction();
       fitComposer();
       // "@" opens the list of things a message can refer to.
-      var trig = mentionTrigger(t.value, t.selectionStart);
+      var trig = triggerAt(t.value, t.selectionStart);
       if (!trig) closeMentions();
-      else if (!MENTIONS.open || MENTIONS.start !== trig.start || MENTIONS.query !== trig.query) openMentions(trig.start, trig.query);
-    } else if (t.dataset && t.dataset.filter) {
+      else if (!MENTIONS.open || MENTIONS.start !== trig.start || MENTIONS.query !== trig.query) openMentions(trig.start, trig.query, t.value.charAt(trig.start));
       // The list is re-rendered from the same data, so there is nothing to
       // fetch; a short pause keeps the screen from redrawing on every letter.
       state.filters[t.dataset.filter] = t.value;
