@@ -641,7 +641,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             // that stops with a review pending tries it again when it starts,
             // and a review that keeps failing is visible on the health screen
             // instead of vanishing with the process.
-            crate::effects_bridge::queue_review(&ctx, &review_id, &serde_json::to_value(&args)?, &project_text)?;
+            crate::effects_bridge::queue_review(ctx, &review_id, &serde_json::to_value(&args)?, &project_text)?;
             // Start one immediately when the owners of the queue are running, so
             // an interactive review does not wait for the guardian's next pass.
             let _ = &worker_ctx;
