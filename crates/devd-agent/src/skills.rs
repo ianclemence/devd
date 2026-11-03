@@ -450,7 +450,7 @@ mod tests {
             }
             let start = i + 1;
             let mut end = None;
-            while let Some((j, d)) = chars.next() {
+            for (j, d) in chars.by_ref() {
                 if d == '`' {
                     end = Some(j);
                     break;
@@ -479,13 +479,13 @@ mod tests {
 
     #[test]
     fn every_built_in_skill_parses_and_is_named_after_its_file() {
-        let parsed: Vec<Skill> = BUILTIN.iter().filter_map(|(f, raw)| {
-            let s = parse(raw, "builtin");
-            assert!(s.is_some(), "skills/{f}.md does not parse");
-            let s = s.unwrap();
+        // `parse` returning None is a failure this test is here to report, so the
+        // assertion is the filter: no Option is carried past it.
+        let parsed: Vec<Skill> = BUILTIN.iter().map(|(f, raw)| {
+            let s = parse(raw, "builtin").unwrap_or_else(|| panic!("skills/{f}.md does not parse"));
             assert_eq!(s.name, *f, "skills/{f}.md declares name `{}`", s.name);
             assert!(!s.body.is_empty(), "{f} has no instructions");
-            Some(s)
+            s
         }).collect();
         assert_eq!(parsed.len(), BUILTIN.len());
     }

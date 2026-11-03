@@ -207,6 +207,32 @@ pub struct CatalogEntry {
     pub note: String,
 }
 
+/// Whether devd installs a service, and whether it may adopt one already there.
+///
+/// The two travel together at every call site, and as consecutive positional
+/// booleans they were one transposition away from a silent mistake: a service
+/// marked installable but not adoptable reads the same either way.
+#[derive(Debug, Clone, Copy)]
+struct Offer {
+    /// devd can install it.
+    installable: bool,
+    /// devd can take over an installation already on the machine.
+    adoptable: bool,
+}
+
+impl Offer {
+    /// devd installs it; nothing already on the machine is adopted.
+    const INSTALL: Offer = Offer { installable: true, adoptable: false };
+    /// devd adopts an existing copy and installs nothing.
+    const ADOPT: Offer = Offer { installable: false, adoptable: true };
+    /// devd installs a verified build, or takes over one already on the machine.
+    const ADOPT_INSTALL: Offer = Offer { installable: true, adoptable: true };
+    /// Both, on a platform where the download is what devd uses and adopting is a fallback.
+    const BOTH: Offer = Offer { installable: true, adoptable: true };
+    /// devd neither installs nor adopts it; something else provides it.
+    const NONE: Offer = Offer { installable: false, adoptable: false };
+}
+
 /// The canonical service catalogue for this platform.
 pub fn catalog() -> Vec<CatalogEntry> {
     let windows = cfg!(windows);
@@ -217,22 +243,20 @@ pub fn catalog() -> Vec<CatalogEntry> {
         label: &'static str,
         summary: &'static str,
         default_port: u16,
-        installable: bool,
-        adoptable: bool,
+        offer: Offer,
         providers: &[&'static str],
         note: &str,
     ) -> CatalogEntry {
-        let system_only = providers.iter().any(|p| *p == "system")
-            && !providers.iter().any(|p| *p == "download" || *p == "pinned");
+        let system_only = providers.contains(&"system") && !providers.iter().any(|p| *p == "download" || *p == "pinned");
         CatalogEntry {
             name,
             label,
             summary,
             providers: providers.to_vec(),
-            installable,
-            install_label: if installable && system_only { "Use system copy" } else { "Install" },
-            adoptable,
-            findable: adoptable,
+            installable: offer.installable,
+            install_label: if offer.installable && system_only { "Use system copy" } else { "Install" },
+            adoptable: offer.adoptable,
+            findable: offer.adoptable,
             runtime: name == PHP_SERVICE,
             default_port,
             note: note.to_string(),
@@ -242,52 +266,52 @@ pub fn catalog() -> Vec<CatalogEntry> {
     let mut out = vec![
         entry(
             "nginx", "nginx", "The web server that fronts every site", 0,
-            windows || system, false, if windows { &["download"] } else { &["system"] },
+            if windows || system { Offer::INSTALL } else { Offer::ADOPT }, if windows { &["download"] } else { &["system"] },
             if windows { "Web server; downloaded and checked." } else { "Adopts the system's installed nginx." },
         ),
         entry(
             "apache", "Apache", "Web server for sites that depend on .htaccess", 0,
-            windows, true, if windows { &["download", "adopt", "find"] } else { &["adopt", "find"] },
+            Offer::ADOPT_INSTALL, if windows { &["download", "adopt", "find"] } else { &["adopt", "find"] },
             if windows { "Verified Windows build, or an existing Apache folder." } else { "devd serves sites with nginx here; an existing Apache folder can still be adopted." },
         ),
         entry(
             "mariadb", "MariaDB", "The database for new projects", 3306,
-            windows || system, false, if windows { &["download"] } else { &["system"] },
+            if windows || system { Offer::INSTALL } else { Offer::ADOPT }, if windows { &["download"] } else { &["system"] },
             if windows { "Verified Windows build; downloaded and checked." } else { "Adopts the system's installed MariaDB." },
         ),
         entry(
             "mysql", "MySQL", "Oracle's MySQL server (MariaDB is the default)", 3307,
-            windows, true, if windows { &["pinned", "adopt", "find"] } else { &["adopt", "find"] },
+            Offer::ADOPT_INSTALL, if windows { &["pinned", "adopt", "find"] } else { &["adopt", "find"] },
             if windows { "Pinned Windows build with a verified digest, or an existing MySQL folder." } else { "Adopt an existing MySQL folder; devd does not install it here." },
         ),
         entry(
             "postgres", "PostgreSQL", "PostgreSQL for projects that need it", 5432,
-            windows, true, if windows { &["pinned", "adopt", "find"] } else { &["adopt", "find"] },
+            Offer::ADOPT_INSTALL, if windows { &["pinned", "adopt", "find"] } else { &["adopt", "find"] },
             if windows { "Pinned Windows build with a verified digest, or an existing PostgreSQL folder." } else { "Adopt an existing PostgreSQL folder; devd does not install it here." },
         ),
         entry(
             "mongodb", "MongoDB", "A document database", 27017,
-            false, true, &["adopt", "find"],
+            Offer::ADOPT, &["adopt", "find"],
             "devd does not verify a MongoDB build; find and adopt an existing folder.",
         ),
         entry(
             "redis", "Redis", "Cache, queues and sessions", 6379,
-            windows || system, true, if windows { &["download", "adopt", "find"] } else { &["system", "adopt", "find"] },
+            Offer::BOTH, if windows { &["download", "adopt", "find"] } else { &["system", "adopt", "find"] },
             if windows { "Verified Windows build, or an existing Redis folder." } else { "Adopts the system's installed Redis, or an existing folder." },
         ),
         entry(
             "memcached", "Memcached", "An in-memory object cache", 11211,
-            windows, true, if windows { &["download", "adopt", "find"] } else { &["adopt", "find"] },
+            Offer::ADOPT_INSTALL, if windows { &["download", "adopt", "find"] } else { &["adopt", "find"] },
             if windows { "Verified Windows build, or an existing Memcached folder." } else { "Adopt an existing Memcached folder; devd does not install it here." },
         ),
         entry(
             "mailpit", "Mailpit", "Catches the mail your applications send", extras::MAILPIT_UI_PORT,
-            true, false, &["download"],
+            Offer::INSTALL, &["download"],
             "Downloaded and checked on every platform.",
         ),
         entry(
             "php-cgi", "php-cgi", "PHP FastCGI listeners built from installed runtimes", 9000,
-            false, false, &["runtime"],
+            Offer::NONE, &["runtime"],
             "Install PHP on Runtimes; the listener follows.",
         ),
     ];
@@ -296,7 +320,7 @@ pub fn catalog() -> Vec<CatalogEntry> {
     for def in DEFINITIONS {
         if !out.iter().any(|e| e.name == def.name) {
             out.push(entry(
-                def.name, def.name, def.summary, def.default_port, true, false, &["download"], def.summary,
+                def.name, def.name, def.summary, def.default_port, Offer::INSTALL, &["download"], def.summary,
             ));
         }
     }

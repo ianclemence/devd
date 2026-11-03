@@ -267,7 +267,7 @@ pub fn evaluate_intake(ctx: &Ctx, team: &Arc<Team>) -> Result<usize> {
                     } else {
                         // Observe, or production: say what would have happened and
                         // let a person decide.
-                        intake::observe(ctx, &rule, &detail)?;
+                        intake::observe(ctx, &rule, detail)?;
                     }
                 }
             }
