@@ -9,3 +9,15 @@
 *.json text eol=lf
 *.yml text eol=lf
 *.yaml text eol=lf
+
+# The window's stylesheet and script are read with include_str! by the UI
+# contract tests, which compare exact text. A Windows checkout used to convert
+# them to CRLF, so a rule that was present failed its test on one platform only.
+*.css text eol=lf
+*.js text eol=lf
+
+# Images and fonts are bytes; never touch them.
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff2 binary
