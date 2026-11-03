@@ -117,6 +117,11 @@ pub struct TeamRun {
     pub error: Option<String>,
     /// Tasks that may run side by side.
     pub parallel: i64,
+    /// The conversation that asked for this run, when one did.
+    ///
+    /// A run reports its result here rather than into the inbox: the person
+    /// who asked is in a conversation, and that is where the answer belongs.
+    pub thread_id: Option<String>,
     /// Who started it.
     pub created_by: String,
     /// Created.
@@ -208,7 +213,7 @@ pub struct TeamEvent {
     pub at: String,
 }
 
-const RUN_COLS: &str = "id,title,goal,project,state,plan_approved,summary,error,parallel,created_by,created_at,updated_at";
+const RUN_COLS: &str = "id,title,goal,project,state,plan_approved,summary,error,parallel,created_by,created_at,updated_at,thread_id";
 /// The columns of one task row, for queries that live in other modules.
 pub(crate) const TASK_COLUMNS: &str =
     "id,run_id,key,role,title,instructions,depends_on,scope,state,attempts,workdir,branch,thread_id,result,evidence,error,created_at,started_at,finished_at,mandate,last_step_at,stalls";
@@ -225,6 +230,7 @@ fn row_run(r: &rusqlite::Row) -> rusqlite::Result<TeamRun> {
         summary: r.get(6)?,
         error: r.get(7)?,
         parallel: r.get(8)?,
+        thread_id: r.get(12).ok(),
         created_by: r.get(9)?,
         created_at: r.get(10)?,
         updated_at: r.get(11)?,
@@ -418,6 +424,7 @@ impl Store {
             project: project.map(str::to_string),
             state: "planning".into(),
             plan_approved: false,
+            thread_id: None,
             summary: None,
             error: None,
             parallel: parallel.clamp(1, 6),
@@ -427,8 +434,8 @@ impl Store {
         };
         self.with(|c| {
             c.execute(
-                &format!("INSERT INTO team_runs ({RUN_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)"),
-                params![run.id, run.title, run.goal, run.project, run.state, run.plan_approved as i32, run.summary, run.error, run.parallel, run.created_by, run.created_at, run.updated_at],
+                &format!("INSERT INTO team_runs ({RUN_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)"),
+                params![run.id, run.title, run.goal, run.project, run.state, run.plan_approved as i32, run.summary, run.error, run.parallel, run.created_by, run.created_at, run.updated_at, run.thread_id],
             )?;
             Ok(())
         })?;
@@ -440,6 +447,55 @@ impl Store {
         Ok(run)
     }
 
+    /// Point a run at the conversation that asked for it.
+    ///
+    /// Set after creation rather than passed in: `create_run` has five callers
+    /// already and only the assistant-driven one has a conversation to give.
+    pub fn set_run_thread(&self, run_id: &str, thread_id: &str) -> Result<()> {
+        self.with(|c| {
+            c.execute("UPDATE team_runs SET thread_id=?1 WHERE id=?2", params![thread_id, run_id])?;
+            Ok(())
+        })
+    }
+
+    /// The conversation a run belongs to, if it belongs to one.
+    pub fn run_thread(&self, run_id: &str) -> Result<Option<String>> {
+        self.with(|c| {
+            let mut st = c.prepare("SELECT thread_id FROM team_runs WHERE id=?1")?;
+            let mut rows = st.query(params![run_id])?;
+            Ok(rows.next()?.and_then(|r| r.get::<_, Option<String>>(0).ok().flatten()))
+        })
+    }
+
+    /// Record a report for a conversation to pick up.
+    pub fn queue_report(&self, run_id: &str, thread_id: &str, kind: &str, body: &str) -> Result<()> {
+        self.with(|c| {
+            c.execute(
+                "INSERT INTO team_reports (id,run_id,thread_id,kind,body,delivered,created_at) VALUES (?1,?2,?3,?4,?5,0,?6)",
+                params![util::new_id(), run_id, thread_id, kind, body, util::now()],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Reports a conversation has not received yet, oldest first.
+    pub fn pending_reports(&self, thread_id: &str) -> Result<Vec<(String, String, String, String)>> {
+        self.with(|c| {
+            let mut st = c.prepare("SELECT id,run_id,kind,body FROM team_reports WHERE thread_id=?1 AND delivered=0 ORDER BY created_at")?;
+            let rows = st.query_map(params![thread_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+            Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+        })
+    }
+
+    /// Mark reports delivered, so the same result is never announced twice.
+    pub fn mark_reports_delivered(&self, ids: &[String]) -> Result<()> {
+        self.with(|c| {
+            for id in ids {
+                c.execute("UPDATE team_reports SET delivered=1 WHERE id=?1", params![id])?;
+            }
+            Ok(())
+        })
+    }
     /// Mirror a team-run state onto its unified run.
     ///
     /// The team table is still the scheduler's own record; this keeps the run

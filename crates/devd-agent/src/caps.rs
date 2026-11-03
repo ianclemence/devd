@@ -147,6 +147,11 @@ struct TeamStart {
     /// Or a name for a brand-new project in the projects folder.
     #[serde(default)]
     new_project: Option<String>,
+    /// The conversation this run answers into. The team reports its progress
+    /// and its result there, so the person who asked hears back where they asked.
+    /// The assistant passes its own conversation id.
+    #[serde(default)]
+    thread: Option<String>,
     /// Tasks that may run side by side (1-6, default 2).
     #[serde(default)]
     parallel: Option<i64>,
@@ -1153,6 +1158,10 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                     done_when: a.done_when.clone().unwrap_or_default(),
                     max_rounds: a.max_rounds.unwrap_or(2),
                 })?;
+                // The run answers into the conversation that asked for it.
+                if let Some(thread) = a.thread.as_deref().filter(|t| !t.is_empty()) {
+                    let _ = ctx.store.set_run_thread(&run.id, thread);
+                }
                 Ok(Outcome::with_data("the planner is working; you will be asked to approve the plan", serde_json::to_value(&run)?))
             },
     )?;

@@ -392,6 +392,26 @@ pub fn stalled(t: &TeamTask, now: chrono::DateTime<chrono::Utc>, window: Duratio
 
 impl Team {
     /// Build the team over a base context and the assistant's engine.
+    /// Tell the person who asked.
+    ///
+    /// A run started from a conversation reports **into that conversation**, so
+    /// the answer appears where the question was asked. Only a run with no
+    /// conversation - one started from the command line or a schedule - falls
+    /// back to the inbox, because there is no thread to address.
+    ///
+    /// This is why the inbox and Home no longer both show a paused run: the run
+    /// speaks once, to the place that asked.
+    fn tell_requester(&self, run: &TeamRun, kind: &str, subject: &str, body: &str, needs_reply: bool) {
+        match run.thread_id.as_deref() {
+            Some(thread) => {
+                let _ = self.ctx.store.queue_report(&run.id, thread, kind, &format!("{subject}\n\n{body}"));
+            }
+            None => {
+                let _ = self.ctx.store.post_inbox("agent:devd-team", run.project.as_deref(), subject, body, needs_reply);
+            }
+        }
+    }
+
     pub fn new(hub: Arc<Hub>, ctx: Ctx) -> Arc<Self> {
         Arc::new(Self {
             hub,
@@ -883,9 +903,9 @@ impl Team {
             self.ctx
                 .store
                 .set_run_state(&run.id, "awaiting_plan", None, None)?;
-            let _ = self.ctx.store.post_inbox(
-                "agent:devd-team",
-                run.project.as_deref(),
+            self.tell_requester(
+                &run,
+                "plan",
                 &format!("Plan ready: {}", run.title),
                 &format!(
                     "The team has a plan with {} task(s). Review it and approve to start the work.",
@@ -1446,9 +1466,9 @@ impl Team {
                 let msg = format!("{} ({}): its authority no longer holds: {why}", t.key, t.role);
                 self.ctx.store.set_run_state(&run.id, "paused", None, Some(&msg))?;
                 self.event(&run.id, Some(&t.id), "mandate_revoked", json!({ "task": t.key, "why": why }));
-                let _ = self.ctx.store.post_inbox(
-                    "agent:devd-team",
-                    run.project.as_deref(),
+                self.tell_requester(
+                    run,
+                    "paused",
                     &format!("Run paused: {}", run.title),
                     &format!("{msg}\n\nResume the run to accept the new rules and continue, or cancel it."),
                     true,
@@ -1530,9 +1550,9 @@ impl Team {
                 ),
                 None => format!("{msg}\n\nRetry the task with a note, accept it by hand, or cancel the run."),
             };
-            let _ = self.ctx.store.post_inbox(
-                "agent:devd-team",
-                run.project.as_deref(),
+            self.tell_requester(
+                run,
+                "paused",
                 &format!("Run paused: {}", run.title),
                 &body,
                 true,
@@ -2278,9 +2298,9 @@ impl Team {
             .store
             .set_run_state(&run.id, "done", Some(&summary), None)?;
         self.event(&run.id, None, "done", json!({ "tasks": real.len(), "verified": verified, "accepted_by_hand": by_hand, "lessons": lessons }));
-        let _ = self.ctx.store.post_inbox(
-            "agent:devd-team",
-            run.project.as_deref(),
+        self.tell_requester(
+            run,
+            "finished",
             &format!("Finished: {}", run.title),
             &summary,
             false,
