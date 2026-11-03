@@ -144,6 +144,11 @@ struct MemoryProject {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct PersonaLine {
+    /// One short sentence.
+    line: String,
+}
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct MemoryNote {
     /// The project's directory, absolute.
     project: String,
@@ -1274,6 +1279,53 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
         },
     )?;
 
+    reg.define::<PersonaLine>("memory.persona_propose", "Suggest a line for what devd remembers about you")
+    .description("Proposes one short line about how this person works - the kind of thing they would not want to explain twice. It is NOT taken: it waits in persona.proposed.md until a person accepts it, and it never reaches a prompt before then. Only devd should call this, from something it actually observed; an agent proposing its own preferences is how a system starts flattering its operator.")
+    .group("memory")
+    .tier(Tier::Write)
+    .effect(Effect::Data)
+    .agent_safe()
+    .handlers(
+        |_, a| Ok(Plan::new("memory.persona_propose", format!("propose: {}", crate::memory::clip_for_plan(&a.line)))),
+        |ctx, a| {
+            let m = crate::memory::Memory::at(ctx.paths.root());
+            let added = m.propose(&a.line)?;
+            Ok(Outcome::with_data(if added { "proposed; it is not part of who devd thinks you are until you accept it" } else { "already known or already proposed" }, serde_json::json!({ "proposed": added })))
+        },
+    )?;
+
+    reg.define::<PersonaLine>("memory.persona_accept", "Accept a proposed line about how you work")
+    .description("Moves one proposed line into the persona, so it is used from now on. Human only: this is the gate that keeps devd from deciding who you are on its own.")
+    .group("memory")
+    .tier(Tier::Write)
+    .effect(Effect::Data)
+    .human_only()
+    .handlers(
+        |_, a| Ok(Plan::new("memory.persona_accept", format!("remember: {}", crate::memory::clip_for_plan(&a.line)))),
+        |ctx, a| {
+            let m = crate::memory::Memory::at(ctx.paths.root());
+            let taken = m.accept(&a.line)?;
+            if !taken {
+                return Err(devd_core::DevdError::not_found("that line is not waiting to be accepted"));
+            }
+            Ok(Outcome::with_data("accepted", serde_json::json!({ "persona_lines": m.persona().lines().filter(|l| l.starts_with("- ")).count() })))
+        },
+    )?;
+
+    reg.define::<PersonaLine>("memory.persona_drop", "Drop a proposed line")
+    .description("Removes a proposal without taking it. Human only.")
+    .group("memory")
+    .tier(Tier::Write)
+    .effect(Effect::Data)
+    .human_only()
+    .handlers(
+        |_, a| Ok(Plan::new("memory.persona_drop", format!("forget the proposal: {}", crate::memory::clip_for_plan(&a.line)))),
+        |ctx, a| {
+            let m = crate::memory::Memory::at(ctx.paths.root());
+            let dropped = m.drop_proposal(&a.line)?;
+            Ok(Outcome::with_data(if dropped { "dropped" } else { "not found" }, serde_json::json!({ "dropped": dropped })))
+        },
+    )?;
     reg.define::<MemoryNote>("memory.note", "Write down something the team learned")
     .description("Adds one short fact to a project's memory: a convention, a command that works, a trap to avoid. The digest is rebuilt from it. A fact already known is not added twice. Human only: an agent may report a lesson through its run, but it may not write itself into the memory a person is judged against.")
     .group("memory")

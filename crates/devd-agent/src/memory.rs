@@ -103,6 +103,99 @@ impl Memory {
         std::fs::read_to_string(self.persona_path()).unwrap_or_default()
     }
 
+    /// Lines proposed for the persona but not yet accepted.
+    ///
+    /// Separate from the persona itself on purpose: a proposed line is not in
+    /// any prompt until a person takes it. That is the whole safeguard - devd
+    /// can notice a pattern, but it does not get to decide it is who you are.
+    fn proposals_path(&self) -> PathBuf {
+        self.root.join("persona.proposed.md")
+    }
+
+    /// What devd has noticed and would like to remember about how you work.
+    pub fn proposals(&self) -> Vec<String> {
+        std::fs::read_to_string(self.proposals_path())
+            .unwrap_or_default()
+            .lines()
+            .filter(|l| l.starts_with("- "))
+            .map(|l| l[2..].trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect()
+    }
+
+    /// Propose one line for the persona. Returns whether it is new.
+    ///
+    /// A line already in the persona, or already proposed, is not proposed again.
+    pub fn propose(&self, line: &str) -> Result<bool> {
+        let line = line.trim();
+        if line.is_empty() || line.chars().count() > 200 {
+            return Ok(false);
+        }
+        let norm = |s: &str| -> String {
+            s.to_lowercase().chars().filter(|c| c.is_alphanumeric() || *c == ' ').collect()
+        };
+        let want = norm(line);
+        for known in self.persona().lines().chain(std::fs::read_to_string(self.proposals_path()).unwrap_or_default().lines()) {
+            if norm(known.trim_start_matches("- ")) == want {
+                return Ok(false);
+            }
+        }
+        std::fs::create_dir_all(&self.root)
+            .map_err(|e| DevdError::internal(format!("could not create {}: {e}", self.root.display())))?;
+        let mut body = std::fs::read_to_string(self.proposals_path()).unwrap_or_else(|_| {
+            "# Proposed, not yet part of who devd thinks you are\n\nAccept one with memory.persona_accept, or drop it with memory.persona_drop.\n\n".to_string()
+        });
+        if !body.ends_with('\n') {
+            body.push('\n');
+        }
+        body.push_str(&format!("- {line}\n"));
+        std::fs::write(self.proposals_path(), body)
+            .map_err(|e| DevdError::internal(format!("could not write the proposals: {e}")))?;
+        Ok(true)
+    }
+
+    /// Take a proposal into the persona. Returns whether it was there to take.
+    ///
+    /// This is the only way a line becomes part of the persona, and it is
+    /// reachable only by a person - see the `memory.persona_accept` capability.
+    pub fn accept(&self, line: &str) -> Result<bool> {
+        let line = line.trim();
+        let pending = self.proposals();
+        if !pending.iter().any(|p| p == line) {
+            return Ok(false);
+        }
+        let mut persona = self.persona();
+        if persona.trim().is_empty() {
+            persona = "# How this person works\n\nAccepted by them, from what devd noticed. Every line here was chosen.\n\n".to_string();
+        }
+        if !persona.ends_with('\n') {
+            persona.push('\n');
+        }
+        persona.push_str(&format!("- {line}\n"));
+        std::fs::write(self.persona_path(), &persona)
+            .map_err(|e| DevdError::internal(format!("could not write the persona: {e}")))?;
+        self.rewrite_proposals(&pending.into_iter().filter(|p| p != line).collect::<Vec<_>>())?;
+        Ok(true)
+    }
+
+    /// Drop a proposal without taking it.
+    pub fn drop_proposal(&self, line: &str) -> Result<bool> {
+        let pending = self.proposals();
+        if !pending.iter().any(|p| p == line.trim()) {
+            return Ok(false);
+        }
+        self.rewrite_proposals(&pending.into_iter().filter(|p| p != line.trim()).collect::<Vec<_>>())?;
+        Ok(true)
+    }
+
+    fn rewrite_proposals(&self, lines: &[String]) -> Result<()> {
+        let mut body = "# Proposed, not yet part of who devd thinks you are\n\nAccept one with memory.persona_accept, or drop it with memory.persona_drop.\n\n".to_string();
+        for l in lines {
+            body.push_str(&format!("- {l}\n"));
+        }
+        std::fs::write(self.proposals_path(), body)
+            .map_err(|e| DevdError::internal(format!("could not write the proposals: {e}")))
+    }
     /// A project's distilled memory.
     pub fn digest(&self, project: &str) -> String {
         std::fs::read_to_string(self.digest_path(project)).unwrap_or_default()
@@ -251,6 +344,7 @@ impl Memory {
             "facts": read(self.facts_path(project)),
             "notes": read(self.notes_path(project)),
             "persona": self.persona(),
+            "proposed": std::fs::read_to_string(self.proposals_path()).unwrap_or_default(),
         })
     }
 }
@@ -371,5 +465,44 @@ mod tests {
 
         // A project with no memory adds no section at all.
         assert!(m.digest("D:/work/other").trim().is_empty());
+    }
+
+    #[test]
+    fn a_proposal_is_not_part_of_who_you_are_until_it_is_accepted() {
+        // The safeguard: devd may notice a pattern, but it does not get to decide
+        // it is a fact about the person. Until a person takes the line, it is not
+        // in any prompt.
+        let (_d, m) = mem();
+        assert!(m.propose("Prefers short answers with the reason first.").unwrap());
+        assert!(!m.propose("prefers short answers with the reason first").unwrap(), "the same line twice");
+        assert!(m.proposals().len() == 1);
+
+        // Proposed is not accepted: the prompt says nothing yet.
+        assert_eq!(m.context_for(None, "hello"), "", "a proposal never reaches a prompt");
+
+        // Accepted, it becomes part of how the assistant addresses them.
+        assert!(m.accept("Prefers short answers with the reason first.").unwrap());
+        assert!(m.proposals().is_empty(), "taken lines leave the pending list");
+        let ctx = m.context_for(None, "hello");
+        assert!(ctx.contains("short answers"), "{ctx}");
+    }
+
+    #[test]
+    fn a_proposal_can_be_dropped_and_a_line_not_proposed_cannot_be_accepted() {
+        let (_d, m) = mem();
+        m.propose("Likes long explanations.").unwrap();
+        assert!(m.drop_proposal("Likes long explanations.").unwrap());
+        assert!(m.proposals().is_empty());
+        assert!(m.persona().trim().is_empty(), "dropping it wrote nothing");
+        assert!(!m.accept("something that was never proposed").unwrap());
+    }
+
+    #[test]
+    fn a_line_already_in_the_persona_is_not_proposed_again() {
+        let (_d, m) = mem();
+        m.propose("Wants tests before merging.").unwrap();
+        m.accept("Wants tests before merging.").unwrap();
+        assert!(!m.propose("wants tests before merging").unwrap(), "already known");
+        assert!(m.proposals().is_empty());
     }
 }
