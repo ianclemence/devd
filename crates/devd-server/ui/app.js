@@ -4399,8 +4399,11 @@
     } else if (state.projectsError && !all.length) {
       body = uiEmpty("Couldn't read your projects", state.projectsError, '<button type="button" class="btn btn-primary" data-action="projects-reload">Try again</button>');
     } else if (!all.length) {
-      body = uiEmpty("No projects yet", "devd works with projects on your disk. Add a folder that has one, or start a new one from a stack.",
-        '<div class="inline"><button type="button" class="btn btn-primary" data-action="nav" data-view="create">Create a project</button><button type="button" class="btn" data-action="add-project">Add a folder</button></div>');
+      // The header already offers the primary action. Repeating it here gave the
+      // same screen two primaries that disagreed, so this explains the two ways
+      // in and leaves the acting to the header.
+      body = uiEmpty("No projects yet", "A project is a folder devd can read, run and hand to its agents. Use Add a folder above for one you already have, or Start a new one from a stack.",
+        '<div class="inline"><button type="button" class="btn" data-action="nav" data-view="create">Start a new one</button></div>');
     } else {
       var exposed = all.filter(function (p) { return (p.sites || []).length; }).length;
       var registered = all.filter(function (p) { return p.registered; }).length;

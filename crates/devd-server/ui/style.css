@@ -2893,6 +2893,9 @@ pre.code {
 .hrow-info .health-dot { background: var(--warn); }
 .hrow-fail .health-dot { background: var(--danger); }
 .hrow-title { font-size: var(--text-md); }
+.hrow .grow { min-width: 0; }
+.hrow .row-sub { overflow-wrap: anywhere; }
+.hrow > .btn { flex: none; align-self: flex-start; }
 
 .hstate-healthy .health-dot { background: var(--ok); }
 .hstate-degraded .health-dot, .hstate-unavailable .health-dot { background: var(--warn); }
