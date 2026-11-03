@@ -2659,6 +2659,82 @@ pre.code {
 @media (max-width: 720px) {
   .term-screen { height: 46vh; }
 }
+/* ------------------------------------------------------------------ files */
+
+/*
+ * A project's files: the tree on the left, the open file on the right. The tree
+ * column is sized like the rail, so a long file name gets the space it needs and
+ * the file itself keeps the width to be read in.
+ */
+.files-view { display: grid; grid-template-columns: minmax(220px, 320px) minmax(0, 1fr); gap: var(--s3); align-items: start; }
+.files-tree-body { max-height: 70vh; overflow-y: auto; padding: var(--s1) 0; }
+
+.file-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  width: 100%;
+  padding: 5px var(--s3);
+  border: 0;
+  background: transparent;
+  color: var(--fg-mute);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.file-row:hover { background: var(--bg-hover); color: var(--fg); }
+.file-row:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: -2px; }
+/* A folder is a thing you open; it carries the weight a door carries. */
+.file-row.is-dir .file-name { color: var(--fg); font-weight: 500; }
+.file-row.is-dir .file-name::before { content: "\25B8 "; color: var(--fg-dim); }
+/* A secrets file is listed, so it is seen; it is dimmed, because it will not open. */
+.file-row.is-secret { color: var(--fg-dim); cursor: not-allowed; }
+.file-row.is-skipped { color: var(--fg-dim); cursor: default; }
+.file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A note sits at the end of its own row rather than on a second line, so a list
+   of files reads as a list and not as a wall. */
+.file-note { margin-left: auto; color: var(--fg-dim); font-size: var(--text-2xs); white-space: nowrap; }
+
+.crumb { color: var(--fg-mute); }
+.crumb-sep { color: var(--fg-dim); padding: 0 1px; }
+
+.files-doc { min-height: 240px; }
+.file-open-head { display: flex; align-items: center; gap: var(--s2); }
+
+/*
+ * The code view: a gutter that does not scroll away from its lines and a body
+ * that scrolls in both directions. The gutter is its own column rather than
+ * part of the text, so a wrapped line cannot push the numbers out of step.
+ */
+.code-view { display: grid; grid-template-columns: auto minmax(0, 1fr); max-height: 70vh; overflow: auto; }
+.code-gutter {
+  padding: var(--s3) var(--s2) var(--s3) var(--s3);
+  color: var(--fg-dim);
+  font-size: var(--text-2xs);
+  line-height: 1.65;
+  text-align: right;
+  white-space: pre;
+  user-select: none;
+  border-right: 1px solid var(--line);
+  position: sticky;
+  left: 0;
+  background: var(--bg-surface);
+}
+.code-body { margin: 0; padding: var(--s3); font-size: var(--text-2xs); line-height: 1.65; white-space: pre; tab-size: 4; }
+
+/* Tokens. Four colours, and each one is a category rather than a mood: a string
+   is a string in every language shown here. */
+.hl-kw { color: #8fb8ff; }
+.hl-str { color: #9fe0b0; }
+.hl-num { color: #f0b978; }
+.hl-cm { color: var(--fg-dim); font-style: italic; }
+.hl-ty { color: #d7b6ff; }
+
+@media (max-width: 900px) {
+  .files-view { grid-template-columns: minmax(0, 1fr); }
+  .files-tree-body { max-height: 240px; }
+}
 /* ---------------------------------------------------------------- preview */
 
 .preview-frame {

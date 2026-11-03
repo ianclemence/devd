@@ -56,6 +56,15 @@ may change capability identifiers where the design was wrong.
 - **The README no longer claims the window vendors xterm.js.** It did not, and the
   folder it pointed at did not exist.
 
+- **A project's files, in the window.** A **Files** tab lists a project's folders
+  and opens its files: `fs.tree` asks for one folder at a time, so a large project
+  costs one request per folder opened rather than one per visible row, and a file
+  is opened with `fs.read`, so a person sees what an agent would see - the same
+  text, bounds and refusals. A secrets file is **listed and marked** rather than
+  hidden, so a person can see it is there and will not open; a dependency folder is
+  listed and marked skipped; `.git` is refused. Files are syntax-highlighted for
+  the languages devd's own stacks use and shown as plain text otherwise, and
+  **Copy** leaves the line numbers behind.
 
 - **`web.open` reads a page's structure, not only its prose.** `docs.fetch`
   answers "what does this page say?"; `web.open` answers "what is on this page?"

@@ -334,6 +334,23 @@ A program in a terminal does not only write: it asks, and waits for the answer. 
 The screen is kept as text with the escape sequences removed, so what a person and a model both read is the screen rather than the raw byte stream.
 
 `portable-pty` (MIT, from wezterm) is the only way to get a terminal across Windows, Linux and macOS, and it is the workspace's one native dependency. devd still downloads and verifies every other binary it uses.
+## Files
+
+A project's **Files** tab lists its folders and opens its files in the window.
+
+The tree asks devd for **one folder at a time** (`fs.tree`), so a large project costs one request per folder you open rather than one per row you can see. A file is opened with `fs.read`, so a person sees exactly what an agent would see: the same line-numbered text, the same size limit, the same refusals.
+
+What the fence does in the tree, and why:
+
+* a **secrets file** (`.env`, a key, `.npmrc`) is **listed and marked**, not hidden. A person should be able to see that their project has a `.env` and that devd will not open it, rather than wonder why it is missing. Choosing it gives the same refusal `fs.read` gives;
+* a **dependency or build folder** (`node_modules`, `vendor`, `target`, `dist`) is listed and marked as skipped, so a folder's real contents are accounted for;
+* `.git` is refused: it is managed through the Git capabilities, not browsed.
+
+Folders sort before files, each by name without regard to case. `fs.tree` is `Read`, `agent_safe` and idempotent: it changes nothing.
+
+Open files are syntax-highlighted for the languages devd's own stacks use (PHP, JavaScript and TypeScript, JSON, YAML, TOML, Rust, Python, Ruby, Go, SQL, HTML, CSS, shell and Markdown). Anything else is shown as plain text rather than guessed at. **Copy** puts the file's text on the clipboard without the line numbers, which are a reading aid and would break the file if pasted back.
+
+There is no editing here: an edit is a `Write` capability with an undo snapshot, and a person editing a file is better served by their own editor.
 
 ## Preview
 
