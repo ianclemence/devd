@@ -10,10 +10,45 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.18.1] - 2026-11-03 - Home opens the project
+
+### Fixed
+
+- **A project on Home opens that project.** Its row, and the Open button beside
+  it, went to Develop's generic Stacks and tasks screen - every stack in the world
+  listed for a project you had already chosen. Both now call `openProject`, the
+  same function the Projects screen uses, so either route reaches the same screen.
+- **No dead band under a site's tabs.** A section head carries a 32px top margin
+  to separate chapters; the first one under a tab strip is not a new chapter, so
+  it left a gap between the tabs and what they had just revealed. The strip and
+  its sections are now one block and the first head inside it sits flush.
+
+### Changed
+
+- **Effort belongs to the model.** It was a second chip beside the model in the
+  composer. It is now the last row of the model picker, offered only for models
+  that accept a reasoning effort, and it opens in place with a way back. An inert
+  control for a model without a reasoning dial is gone rather than shown disabled.
+- **An open menu survives a repaint.** The rail is painted by every timer, which
+  closed an open menu, replayed its animation and moved the pointer's target. A
+  repaint now leaves an open menu and an open dialog alone, and a popover whose
+  trigger was replaced finds the trigger that took its place.
+- **Agent tool runs collapse into one line.** A turn that called six tools used to
+  be six blocks; it is now one group that opens on demand, so the conversation
+  reads as a conversation.
+- **Files folders look like doors.** A folder row opens into its own listing and
+  now carries a chevron, dimmed until hover or focus. A skipped folder has none,
+  because it does not open.
+- **Files state belongs to its project.** Opening a second project no longer
+  leaves the first one's tree and open file behind.
+
+---
+
 ## [Unreleased]
 
 Nothing yet.
 
+---
 ---
 
 ## [0.18.0] - 2026-11-03 - The window sees the work
