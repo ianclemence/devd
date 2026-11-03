@@ -1020,9 +1020,15 @@ mod tests {
             .unwrap_err();
         stopper.join().unwrap();
         assert!(matches!(err, DevdError::Cancelled(_)), "got {err:?}");
+        // The cancel lands at 400ms and the program sleeps for 30s, so any
+        // bound between those two proves the cancel is what ended the wait.
+        // 15s sat inside that window but a full parallel suite occasionally
+        // exceeded it on a loaded machine, which made the test report the
+        // machine's load as a defect in the code.
         assert!(
-            started.elapsed() < std::time::Duration::from_secs(15),
-            "the wait ended with the cancel, not with the program"
+            started.elapsed() < std::time::Duration::from_secs(25),
+            "the cancel should end the wait well before the program ends on its own, and it took {:?}",
+            started.elapsed()
         );
     }
 
