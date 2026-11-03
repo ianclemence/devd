@@ -295,6 +295,7 @@ pub fn system_prompt(ctx: &Ctx, t: &TeamTask) -> String {
 /// The first message of a task's conversation.
 fn task_brief(
     store: &devd_core::state::Store,
+    home: &std::path::Path,
     run: &TeamRun,
     t: &TeamTask,
     tasks: &[TeamTask],
@@ -340,6 +341,20 @@ fn task_brief(
         s.push_str(&format!(
             "\n# Why the previous attempt was not accepted\n{feedback}\n"
         ));
+    }
+    // What the team already knows about this project: the conventions, the
+    // traps, what the last runs did. A member that starts from nothing repeats
+    // the mistake the previous one recorded - which is the difference between a
+    // team and a queue of strangers.
+    if let Some(project) = run.project.as_deref() {
+        let digest = crate::memory::Memory::at(home).digest(project);
+        let digest = digest.trim();
+        if !digest.is_empty() {
+            s.push_str(&format!(
+                "\n# What the team already knows about this project (do not relearn it)\n{}\n",
+                crate::memory::clip(digest, 2000)
+            ));
+        }
     }
     s.push_str("\nStart now. When finished, call team.report.");
     s
@@ -1701,7 +1716,7 @@ impl Team {
             .thread_id
             .clone()
             .filter(|id| self.ctx.store.get_thread(id).ok().flatten().is_some());
-        let message = task_brief(&self.ctx.store, run, t, tasks);
+        let message = task_brief(&self.ctx.store, self.ctx.paths.root(), run, t, tasks);
         let thread = match existing_thread {
             Some(id) => {
                 // After a restart the assistant may already have resumed this conversation; telling it again would clash.

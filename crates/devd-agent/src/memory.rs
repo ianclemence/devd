@@ -45,7 +45,7 @@ fn today() -> String {
 }
 
 /// At most `n` characters, marked when something was dropped.
-fn clip(s: &str, n: usize) -> String {
+pub fn clip(s: &str, n: usize) -> String {
     if s.chars().count() <= n {
         return s.to_string();
     }
@@ -354,5 +354,22 @@ mod tests {
         // And a turn that could not depend on it is not.
         let plain = m.context_for(Some(p), "add a button");
         assert!(!plain.contains("Set up the project"), "recent work is not forced in: {plain}");
+    }
+
+    #[test]
+    fn a_member_of_the_team_inherits_what_the_team_learned() {
+        // The difference between a team and a queue of strangers: the next member
+        // starts from what the last one wrote down, not from nothing.
+        let (_d, m) = mem();
+        let p = "D:/work/shop";
+        m.remember(p, "Migrations run with `make db-migrate`; `cargo run` skips them.").unwrap();
+        m.rebuild_digest(p).unwrap();
+
+        // This is what `task_brief` appends to every member's instructions.
+        let digest = m.digest(p);
+        assert!(digest.contains("make db-migrate"), "the brief carries the convention: {digest}");
+
+        // A project with no memory adds no section at all.
+        assert!(m.digest("D:/work/other").trim().is_empty());
     }
 }
