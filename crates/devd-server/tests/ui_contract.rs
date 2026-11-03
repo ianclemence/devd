@@ -498,11 +498,15 @@ fn row_actions_are_visible_without_hover_on_touch_and_narrow_windows() {
     // A phone cannot hover. The rows use a hover-only reveal for Manage, Open,
     // Stop and Remove, so without an explicit touch rule those controls are in
     // the document but invisible and unreachable.
+    // The stylesheet is compared without its line endings. A Windows checkout
+    // uses CRLF and a Linux one LF, and a test that hard-codes one of them fails
+    // on the other platform for a reason that has nothing to do with the rule.
+    let css = CSS.replace("\r\n", "\n");
     assert!(
-        CSS.contains("@media (hover: none) {\n  .ui-row-actions.hover { opacity: 1; }\n}"),
+        css.contains("@media (hover: none) {\n  .ui-row-actions.hover { opacity: 1; }\n}"),
         "touch screens need the row actions visible"
     );
-    let narrow = &CSS[CSS.find("@media (max-width: 720px)").expect("the narrow layout")..];
+    let narrow = &css[css.find("@media (max-width: 720px)").expect("the narrow layout")..];
     assert!(
         narrow.contains(".ui-row { flex-wrap: wrap; row-gap: var(--s2); }"),
         "the row wraps on a phone"
