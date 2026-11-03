@@ -3893,11 +3893,11 @@
    * `terminal.close`). The session lives in the server, so closing the window does
    * not kill it and an agent can read the same screen.
    *
-   * There is no xterm.js here. A full terminal emulator is what you need for a
-   * program that paints a screen; for a shell at a prompt, a scrolled log of the
-   * screen text and a line input are honest and much smaller. What the pane shows
-   * is exactly what `terminal.read` returns, which is also what an agent sees - so
-   * the two views cannot disagree.
+   * The screen is drawn by xterm.js, vendored beside this file. A text log was
+   * the first version: it was honest and much smaller, but it could not show a
+   * cursor, a colour, or any program that paints a screen - which is most of what
+   * a terminal is for. What xterm draws still comes from `terminal.read`, so the
+   * person's view and the agent's view remain the same screen.
    */
 
   var TERM = {
@@ -3917,24 +3917,104 @@
     return (TERM.sessions || []).filter(function (s) { return s.id === TERM.active; })[0] || null;
   }
 
-  /* Read the screen of the active session. */
+  /* The terminal renderer.
+   *
+   * xterm.js draws the screen: the cursor, colours, scrollback and the
+   * full-screen programs a text log cannot show. What it draws comes from
+   * `terminal.read`, which is the same screen an agent reads, so the two views
+   * cannot disagree.
+   *
+   * One instance is kept for the life of the window and moved between screens
+   * rather than rebuilt: xterm holds a DOM subtree and its own scroll state, and
+   * recreating it on every render would lose the scrollback with every poll.
+   */
+  var XTERM = { term: null, fit: null, written: "" };
+
+  function termTerminal() {
+    if (XTERM.term) return XTERM.term;
+    if (typeof window.Terminal !== "function") return null;
+    var t = new window.Terminal({
+      convertEol: true,
+      cursorBlink: true,
+      fontSize: 12,
+      scrollback: 5000,
+      fontFamily: 'ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace',
+      // The window's own palette, so a shell looks like part of devd rather than
+      // a block pasted in from another program.
+      theme: {
+        background: "#070b14",
+        foreground: "#aab3c7",
+        cursor: "#6cb4ff",
+        selectionBackground: "rgba(10, 132, 255, 0.32)",
+        black: "#0a0f1a", red: "#ff7b7b", green: "#1fc16b", yellow: "#f6b51e",
+        blue: "#0a84ff", magenta: "#d7b6ff", cyan: "#47c2ff", white: "#eef1f8",
+        brightBlack: "#3b4660", brightRed: "#ffb4b4", brightGreen: "#8fe3b4",
+        brightYellow: "#ffd479", brightBlue: "#6cb4ff", brightMagenta: "#e3ccff",
+        brightCyan: "#8fd8ff", brightWhite: "#ffffff"
+      }
+    });
+    if (window.FitAddon && window.FitAddon.FitAddon) {
+      XTERM.fit = new window.FitAddon.FitAddon();
+      t.loadAddon(XTERM.fit);
+    }
+    // Typing goes to the shell. A newline is `\r`, which is what a terminal sends
+    // for Enter; `terminal.write` takes the bytes as given.
+    t.onData(function (data) {
+      if (!TERM.active) return;
+      run("terminal.write", { id: TERM.active, data: data }, { quiet: true });
+    });
+    // A resize is told to the shell, so a full-screen program redraws at the new
+    // size instead of wrapping at the old one.
+    t.onResize(function (size) {
+      if (!TERM.active) return;
+      run("terminal.resize", { id: TERM.active, cols: size.cols, rows: size.rows }, { quiet: true });
+    });
+    XTERM.term = t;
+    return t;
+  }
+
+  /* Read the screen of the active session and draw anything new on it.
+   *
+   * The whole screen is returned each time, so what is already drawn is compared
+   * with what arrived: text that is already on screen is not written again, or a
+   * poll would duplicate it. When the screen is not a continuation - a different
+   * session, or a shell that cleared - it is reset and redrawn in full. */
   function termRefresh() {
     if (!TERM.active) return;
     run("terminal.read", { id: TERM.active, lines: TERM.lines }, { quiet: true }).then(function (o) {
       if (!o || !o.ok || !o.data) return;
       var d = o.data;
-      // Only repaint when the text changed: a poll that redraws the same screen
-      // would fight a person's selection.
-      if (d.screen !== TERM.screen) {
-        TERM.screen = d.screen || "";
+      var screen = d.screen || "";
+      var t = termTerminal();
+      if (t) {
+        if (screen !== TERM.screen) {
+          var added = termNewText(TERM.screen, screen);
+          if (added === null) t.reset();
+          if (added) t.write(added);
+          TERM.screen = screen;
+        }
+      } else {
+        // No renderer (an old cached page): fall back to the text block.
+        TERM.screen = screen;
         termPaint();
       }
-      // A shell that has ended stops being polled.
       if (d.running === false) {
         termStopPolling();
         termLoadSessions();
       }
     });
+  }
+
+  /* What is on `next` that was not on `prev`, or null when the two are not the
+   * same screen continuing. A terminal that has scrolled or cleared rewrites from
+   * the top, and appending the difference would produce nonsense. */
+  function termNewText(prev, next) {
+    if (!prev) return next;
+    if (next === prev) return "";
+    if (next.indexOf(prev) === 0) return next.slice(prev.length);
+    if (prev.indexOf(next) === 0) return "";
+    // A cleared screen, or one that scrolled past its head: draw it again.
+    return null;
   }
 
   function termPaint() {
@@ -3944,6 +4024,32 @@
     var atBottom = out.scrollHeight - out.scrollTop - out.clientHeight < 40;
     out.textContent = TERM.screen || "";
     if (atBottom) out.scrollTop = out.scrollHeight;
+  }
+
+  /* Put the terminal in the page and size it to its box.
+   *
+   * A render replaces `main`, so the container the terminal lived in is gone and
+   * its element has to be put into the new one. It is **moved**, not reopened:
+   * `Terminal.open()` builds a fresh canvas and screen, and calling it again
+   * discarded everything written so far - which is why the pane stayed empty
+   * while `terminal.read` was returning a full screen.
+   *
+   * `open()` is called exactly once, when there is no element yet. */
+  function termMount() {
+    var host = el("term-host");
+    if (!host) return;
+    var t = termTerminal();
+    if (!t) return;
+    if (t.element) {
+      // Move the existing subtree into the container this render made.
+      if (t.element.parentNode !== host) host.appendChild(t.element);
+      termFit();
+      return;
+    }
+    host.innerHTML = "";
+    t.open(host);
+    termFit();
+    t.focus();
   }
 
   function termStartPolling() {
@@ -3977,7 +4083,7 @@
   }
 
   function termOpen() {
-    var dir = state.project.path || (state.session && state.session.paths && state.session.paths.root) || "";
+    var dir = termStartDir();
     if (!dir) return toast("warn", "Open a project first: a shell starts in a folder");
     act("terminal.open", { path: dir, cols: 100, rows: 30 }).then(function (o) {
       if (!o) return;
@@ -4003,6 +4109,21 @@
     });
   }
 
+  /* Where a new shell starts: the open project, or the folder devd was started
+   * in. Empty only when neither is known, which is what disables the button. */
+  function termStartDir() {
+    if (state.project && state.project.path) return state.project.path;
+    if (state.session && state.session.paths && state.session.paths.root) return state.session.paths.root;
+    return "";
+  }
+
+  /* What to call that folder in a button. */
+  function termStartLabel() {
+    if (state.project && state.project.name) return state.project.name;
+    var dir = termStartDir();
+    return dir ? dir.split(/[\\/]/).filter(Boolean).pop() : "a folder";
+  }
+
   function renderTerminal() {
     if (state.view !== "terminal") return;
     if (!TERM.sessions.length && !TERM.loading && !TERM.error) termLoadSessions();
@@ -4015,9 +4136,15 @@
         (t.running === false ? ' <span class="term-tab-note">ended</span>' : "") + "</button>";
     }).join("");
 
+    // `state.project` is null until a project is opened, and the terminal is
+    // reachable without one: a shell starts in the open project, or in the
+    // folder the window last used. Reading `state.project.path` unguarded
+    // crashed the whole screen on a fresh visit, which is why it sat on
+    // "Loading" for ever instead of drawing an empty terminal.
+    var startDir = termStartDir();
     var head =
       '<div class="page-actions">' +
-      '<button type="button" class="btn btn-primary" data-action="term-open"' + (state.project.path ? "" : " disabled") + '>New terminal</button>' +
+      '<button type="button" class="btn btn-primary" data-action="term-open"' + (startDir ? "" : " disabled") + '>New terminal</button>' +
       (s ? '<button type="button" class="btn btn-ghost" data-action="term-close" data-id="' + attr(s.id) + '">Close</button>' : "") +
       "</div>";
 
@@ -4027,26 +4154,42 @@
       body = '<div class="panel"><div class="empty"><div class="empty-title">No terminal open</div>' +
         "<div>A shell starts in the project you have open. It keeps running while devd does, so closing this window does not end it.</div>" +
         '<div class="inline" style="margin-top:12px">' +
-        (state.project.path
-          ? '<button type="button" class="btn btn-primary" data-action="term-open">New terminal in ' + esc(state.project.name || "this project") + "</button>"
+        (startDir
+          ? '<button type="button" class="btn btn-primary" data-action="term-open">New terminal in ' + esc(termStartLabel()) + "</button>"
           : '<button type="button" class="btn btn-primary" data-action="nav" data-view="projects">Open a project first</button>') +
         "</div></div></div>";
     } else if (!s) {
       body = '<div class="loading">Loading</div>';
     } else {
+      // A real terminal, not a text log: xterm draws the cursor, colours,
+      // scrollback and full-screen programs, and takes the keystrokes itself.
+      var hasRenderer = typeof window.Terminal === "function";
       body =
         '<div class="panel term-panel">' +
         '<div class="panel-head"><span class="mono grow nowrap" title="' + attr(s.cwd) + '">' + esc(s.cwd) + "</span>" +
         '<span class="panel-note">' + esc(s.shell) + (s.running === false ? " \\u00b7 ended" : "") + "</span></div>" +
-        '<div class="term-screen mono" id="term-screen" role="log" aria-live="polite" tabindex="0">' + esc(TERM.screen) + "</div>" +
+        (hasRenderer
+          ? '<div class="term-host" id="term-host"></div>'
+          : '<div class="term-screen mono" id="term-screen" role="log" aria-live="polite" tabindex="0">' + esc(TERM.screen) + "</div>") +
         (s.running === false
           ? '<div class="term-ended">This shell has ended. Open another one to keep working.</div>'
-          : '<div class="term-input-row">' +
-            '<span class="term-prompt mono" aria-hidden="true">&gt;</span>' +
-            '<input class="term-input mono" id="term-input" spellcheck="false" autocomplete="off" autocapitalize="off" ' +
-            'placeholder="Type a command and press Enter" aria-label="Command">' +
-            '<button type="button" class="btn btn-mini" data-action="term-send">Run</button></div>') +
+          : hasRenderer
+            ? ""
+            : '<div class="term-input-row">' +
+              '<span class="term-prompt mono" aria-hidden="true">&gt;</span>' +
+              '<input class="term-input mono" id="term-input" spellcheck="false" autocomplete="off" autocapitalize="off" ' +
+              'placeholder="Type a command and press Enter" aria-label="Command">' +
+              '<button type="button" class="btn btn-mini" data-action="term-send">Run</button></div>') +
         "</div>";
+    }
+
+    // The terminal element is a live DOM subtree that xterm owns. Assigning
+    // `main.innerHTML` destroys whatever is inside it, so the subtree is lifted
+    // out first and put back by `termMount`. Without this, every paint threw the
+    // terminal away and rebuilt an empty one, so the pane stayed blank while
+    // `terminal.read` was returning a full screen.
+    if (XTERM.term && XTERM.term.element && XTERM.term.element.parentNode) {
+      XTERM.term.element.parentNode.removeChild(XTERM.term.element);
     }
 
     el("main").innerHTML =
@@ -4059,9 +4202,25 @@
       body +
       "</div>";
 
-    termPaint();
-    var input = el("term-input");
-    if (input) input.focus();
+    if (typeof window.Terminal === "function") {
+      termMount();
+      // The box has its size once the browser has laid the page out.
+      if (window.requestAnimationFrame) window.requestAnimationFrame(termFit);
+    } else {
+      termPaint();
+      var input = el("term-input");
+      if (input) input.focus();
+    }
+  }
+
+  /* Fit the terminal to the box it was just put in. */
+  function termFit() {
+    if (!XTERM.fit) return;
+    try {
+      XTERM.fit.fit();
+    } catch (e) {
+      // The box has no size yet; the next paint tries again.
+    }
   }
 
   /* The preview frame, for a site devd serves or any address on this machine.
@@ -8540,6 +8699,9 @@
     if (state.view === "capabilities") return loadCapabilities().then(render);
     if (state.view === "activity") return loadActivity().then(render);
     if (state.view === "system") return loadSystem().then(render);
+    // The terminal reads its own sessions (`termLoadSessions`) and polls the one
+    // on screen; there is nothing here to fetch first.
+    if (state.view === "terminal") { termLoadSessions(); return Promise.resolve(); }
     return Promise.resolve();
   }
 
@@ -8563,7 +8725,10 @@
     schedules: "/schedules",
     shared: "/shared",
     mcp: "/agents/mcp",
-    projects: "/projects",
+    // The terminal is a destination as well as a panel, so it has an address: a
+    // link to it, and a reload while standing on it, both land on the terminal
+    // rather than quietly on Home.
+    terminal: "/terminal",
     overview: "/server",
     services: "/server/services",
     sites: "/server/sites",
@@ -8841,7 +9006,8 @@
       else if (state.view === "certificates") renderCertificates();
       else if (state.view === "hosts") renderHosts();
       else if (state.view === "toolchain") renderToolchain();
-    } else if (state.view === "home") renderHome();
+    } else if (state.view === "terminal") { renderTerminal(); if (!TERM.poll) termStartPolling(); }
+    else if (state.view === "home") renderHome();
     else if (state.view === "assistant") renderAssistant();
     else if (state.view === "team") renderTeam();
     else if (state.view === "inbox") renderInbox();
@@ -10622,7 +10788,25 @@
       }).then(function () { toast(CREATE.report.status === "ok" ? "ok" : "error", "project.init: " + CREATE.report.status); paintReview(); paintProgress(); });
     },
     "create-cancel": function () { act("stacks.cancel", { run_id: CREATE.runId }); },
-    "open-terminal": function (n) { run("project.terminal", { path: n.dataset.path }); },
+    /* The Terminal button opens a shell *in devd* and shows it.
+     *
+     * It used to ask for a window on the operating system's desktop and then say
+     * it had opened one, which left the person with a message and no terminal.
+     * Now it starts a session through the same capability the Terminal screen
+     * uses and takes you to it, so the shell you asked for is the shell you see. */
+    "open-terminal": function (n) {
+      var path = n.dataset.path;
+      act("project.terminal", { path: path }).then(function (o) {
+        if (!o || !o.data || !o.data.id) return;
+        TERM.active = o.data.id;
+        TERM.screen = "";
+        TERM.sessions = [];
+        navigate("terminal");
+        termLoadSessions();
+        termStartPolling();
+      });
+    },
+    "open-terminal-external": function (n) { run("project.terminal_external", { path: n.dataset.path }); },
     "open-develop": function (n) { DEV.path = n.dataset.path; DEV.ctx = null; DEV.detect = null; navigate("develop"); },
     "tool-install": function (n) { act("toolchain.install", { tool: n.dataset.id }).then(function () { if (state.view === "create") scheduleValidate(); }); },
     "tool-remove": function (n) { act("toolchain.remove", { tool: n.dataset.id }); },

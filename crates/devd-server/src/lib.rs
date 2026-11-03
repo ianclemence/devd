@@ -266,6 +266,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/favicon.svg", get(ui::favicon))
         .route("/brands/:file", get(ui::brand))
         .route("/fonts/:file", get(ui::font))
+        .route("/vendor/xterm.js", get(ui::xterm))
+        .route("/vendor/xterm.css", get(ui::xterm_style))
+        .route("/vendor/addon-fit.js", get(ui::xterm_fit))
         // Every screen has an address of its own, so a link to it can be
         // copied and the back button means something. The shell answers for
         // any path it does not have a file for, and the interface reads the

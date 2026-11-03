@@ -2722,6 +2722,21 @@ pre.code {
   tab-size: 4;
   user-select: text;
 }
+
+/* The xterm canvas fills a fixed box; the fit addon measures this element, so it
+   must have a height of its own rather than growing with its content. */
+.term-host {
+  height: 56vh;
+  min-height: 260px;
+  padding: var(--s2) var(--s3);
+  background: var(--bg-deep);
+  overflow: hidden;
+}
+.term-host .xterm { height: 100%; }
+.term-host .xterm-viewport { background: transparent !important; scrollbar-width: thin; }
+.term-host .xterm-viewport::-webkit-scrollbar { width: 10px; }
+.term-host .xterm-viewport::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 6px; }
+.term-host .xterm-viewport::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
 .term-screen:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: -2px; }
 
 .term-input-row {

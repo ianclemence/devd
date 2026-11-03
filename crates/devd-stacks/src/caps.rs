@@ -827,13 +827,45 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
+    // A terminal *inside devd*. This used to hand the folder to the operating
+    // system's own terminal and report that it had opened one, which was true on
+    // a desktop and silently false from a service, where there is no desktop to
+    // open it on. It is also the wrong act now that devd has a terminal of its
+    // own: the shell should be the one a person can see, and the one an agent can
+    // read, rather than a window devd cannot see into.
     reg.define::<PathArgs>("project.terminal", "Open a terminal in a project")
-    .description("Opens the operating system's own terminal window in the project folder, with the runtimes the project is pinned to (and the devd command) first on PATH. Human only: it hands a person an interactive shell.")
+    .description("Starts a shell in a real terminal inside devd, in the project folder, with the runtimes the project is pinned to (and the devd command) first on PATH. Returns the terminal session id, which terminal.read, terminal.write, terminal.resize and terminal.close take. Human only: it hands a person an interactive shell.")
     .tier(Tier::Exec)
     .effect(Effect::Process)
     .human_only()
     .handlers(
-        |_, a| Ok(Plan::new("project.terminal", format!("open a terminal in {}", a.path)).step("pinned runtimes and devd first on PATH")),
+        |_, a| Ok(Plan::new("project.terminal", format!("open a terminal in {}", a.path)).step("a shell inside devd, on the project's pinned runtimes")),
+        |ctx, a| {
+            let dir = crate::authz::authorize_dir(ctx, std::path::Path::new(&a.path))?;
+            if !dir.is_dir() {
+                return Err(DevdError::invalid(format!("{} is not a folder", dir.display())));
+            }
+            let s = devd_core::terminal_session::registry().open(
+                &ctx.actor.label(),
+                &dir.display().to_string(),
+                None,
+                100,
+                30,
+            )?;
+            Ok(Outcome::with_data(format!("terminal {}", s.id), s.describe()))
+        },
+    )?;
+
+    // The operating system's own window stays available, under a name that says
+    // so. It is the escape hatch for a person who wants their shell of choice, not
+    // the way devd opens a terminal.
+    reg.define::<PathArgs>("project.terminal_external", "Open the system's own terminal")
+    .description("Opens the operating system's own terminal window in the project folder, with the project's pinned runtimes (and the devd command) first on PATH. This leaves devd: the shell is not visible in the window and an agent cannot read it. Use project.terminal for a shell devd can see. Human only.")
+    .tier(Tier::Exec)
+    .effect(Effect::Process)
+    .human_only()
+    .handlers(
+        |_, a| Ok(Plan::new("project.terminal_external", format!("open the system terminal in {}", a.path)).step("pinned runtimes and devd first on PATH")),
         |ctx, a| {
             let msg = crate::terminal::open(ctx, std::path::Path::new(&a.path))?;
             Ok(Outcome::with_data(msg, json!({ "path": a.path })))

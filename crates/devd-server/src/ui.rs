@@ -37,6 +37,13 @@ const FAVICON: &str = include_str!("../ui/favicon.svg");
 /// and never asks a font service for anything.
 const FONT_INTER_TIGHT: &[u8] = include_bytes!("../ui/fonts/inter-tight-latin.woff2");
 
+// xterm.js renders a real terminal: cursor, colours, scrollback and the
+// full-screen programs a text log cannot show. It is MIT, it is vendored rather
+// than fetched, and its licences sit beside it.
+const XTERM_JS: &str = include_str!("../ui/vendor/xterm.js");
+const XTERM_CSS: &str = include_str!("../ui/vendor/xterm.css");
+const ADDON_FIT: &str = include_str!("../ui/vendor/addon-fit.js");
+
 /// Placeholder substituted with the bearer token at serve time.
 ///
 /// The token is 64 hex characters, so it needs no escaping to be safe in an
@@ -73,6 +80,21 @@ pub async fn script() -> Response {
 /// The stylesheet.
 pub async fn style() -> Response {
     build("text/css; charset=utf-8", Body::from(STYLE), None)
+}
+
+/// xterm.js - the terminal renderer.
+pub async fn xterm() -> Response {
+    build("text/javascript; charset=utf-8", Body::from(XTERM_JS), None)
+}
+
+/// xterm.js's stylesheet.
+pub async fn xterm_style() -> Response {
+    build("text/css; charset=utf-8", Body::from(XTERM_CSS), None)
+}
+
+/// The fit addon, which sizes the terminal to its box.
+pub async fn xterm_fit() -> Response {
+    build("text/javascript; charset=utf-8", Body::from(ADDON_FIT), None)
 }
 
 /// The window icon.
