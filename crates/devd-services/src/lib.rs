@@ -23,6 +23,7 @@ pub mod catalogue;
 pub mod dump;
 pub mod engines;
 pub mod extras;
+pub mod mail;
 pub mod mariadb;
 pub mod nginx;
 pub mod phpcaps;

@@ -1156,6 +1156,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "time",
+ "ureq",
  "uuid",
  "zip",
 ]

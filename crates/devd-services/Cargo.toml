@@ -16,6 +16,7 @@ uuid.workspace = true
 hex.workspace = true
 zip.workspace = true
 chrono.workspace = true
+ureq.workspace = true
 time = { workspace = true, features = ["formatting"] }
 
 [dev-dependencies]
