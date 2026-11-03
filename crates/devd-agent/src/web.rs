@@ -77,9 +77,8 @@ fn squeeze(s: &str) -> String {
 fn inner_text(html: &str, from: usize, to: usize) -> String {
     let slice = &html[from..to.min(html.len())];
     let mut out = String::with_capacity(slice.len());
-    let mut chars = slice.chars().peekable();
     let mut in_tag = false;
-    while let Some(c) = chars.next() {
+    for c in slice.chars() {
         match c {
             '<' => in_tag = true,
             '>' if in_tag => in_tag = false,
