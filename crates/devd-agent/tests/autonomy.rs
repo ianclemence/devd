@@ -473,7 +473,7 @@ fn the_watchdog_waits_longer_than_a_model_call_is_allowed_to_take() {
     // window is a multiple of the provider's own timeout, so it cannot fire on a
     // model that is still answering.
     assert_eq!(devd_agent::team::STALL_FACTOR, 2);
-    assert!(devd_agent::team::STALL_FACTOR * 300 >= 300);
+    assert!(devd_agent::team::STALL_FACTOR as u64 * devd_agent::providers::READ_TIMEOUT_SECS > devd_agent::providers::READ_TIMEOUT_SECS, "the window must exceed one provider timeout");
     assert!(devd_agent::team::STALL_FLOOR <= Duration::from_secs(600));
 }
 
