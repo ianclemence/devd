@@ -477,6 +477,34 @@ fn strip_escapes(s: &str) -> String {
     Emulator::new().consume(s).0
 }
 
+/// The sessions this process owns.
+///
+/// A terminal is the one thing devd keeps that is not a row: a PTY outlives any
+/// single capability call, and both the person's window and an agent have to
+/// reach the same one. A `OnceLock` is the honest shape for that - one registry
+/// per process, created on first use, never replaced.
+pub fn registry() -> &'static Registry {
+    static REGISTRY: std::sync::OnceLock<Registry> = std::sync::OnceLock::new();
+    REGISTRY.get_or_init(Registry::new)
+}
+
+/// Answer a session for `terminal.read`: the tail of its screen.
+pub fn read_screen(id: &str, lines: usize) -> Result<Value> {
+    let s = registry().get(id)?;
+    let d = s.describe();
+    Ok(json!({
+        "id": d["id"],
+        "running": d["running"],
+        "exit_code": d["exit_code"],
+        "cols": d["cols"],
+        "rows": d["rows"],
+        // The screen as text, with the escape sequences already removed. A model
+        // given `\x1b[32m` noise is worse at this than one given the screen.
+        "screen": s.tail(lines),
+        "note": "This is the terminal's visible output as text, not the raw byte stream.",
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -607,30 +635,3 @@ mod tests {
     }
 }
 
-/// The sessions this process owns.
-///
-/// A terminal is the one thing devd keeps that is not a row: a PTY outlives any
-/// single capability call, and both the person's window and an agent have to
-/// reach the same one. A `OnceLock` is the honest shape for that - one registry
-/// per process, created on first use, never replaced.
-pub fn registry() -> &'static Registry {
-    static REGISTRY: std::sync::OnceLock<Registry> = std::sync::OnceLock::new();
-    REGISTRY.get_or_init(Registry::new)
-}
-
-/// Answer a session for `terminal.read`: the tail of its screen.
-pub fn read_screen(id: &str, lines: usize) -> Result<Value> {
-    let s = registry().get(id)?;
-    let d = s.describe();
-    Ok(json!({
-        "id": d["id"],
-        "running": d["running"],
-        "exit_code": d["exit_code"],
-        "cols": d["cols"],
-        "rows": d["rows"],
-        // The screen as text, with the escape sequences already removed. A model
-        // given `\x1b[32m` noise is worse at this than one given the screen.
-        "screen": s.tail(lines),
-        "note": "This is the terminal's visible output as text, not the raw byte stream.",
-    }))
-}
