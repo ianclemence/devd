@@ -42,9 +42,13 @@ Write-Host "==> cargo build --release" -ForegroundColor Cyan
 cargo build --release -p devd-cli -p devd-desktop
 if ($LASTEXITCODE -ne 0) { throw "the release build failed" }
 
-$bin = "target/release/devd.exe"
+# The artifacts are wherever cargo put them. `scripts/dev-env.ps1` sets
+# CARGO_TARGET_DIR because this project's dependency tree overflows Windows path
+# limits under a long checkout path, so assuming `target/` finds nothing there.
+$targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $repo "target" }
+$bin = Join-Path $targetDir "release/devd.exe"
 if (-not (Test-Path $bin)) { throw "the build did not produce $bin" }
-$desktopBin = "target/release/devd-desktop.exe"
+$desktopBin = Join-Path $targetDir "release/devd-desktop.exe"
 if (-not (Test-Path $desktopBin)) { throw "the build did not produce $desktopBin" }
 
 # The artifact is only published after it has run. A temporary home keeps this
@@ -79,7 +83,7 @@ New-Item -ItemType Directory -Force dist | Out-Null
 Copy-Item $bin "dist/$name" -Force
 $desktopName = "devd-desktop-v$version-$target.exe"
 Copy-Item $desktopBin "dist/$desktopName" -Force
-$webview2 = "target/release/WebView2Loader.dll"
+$webview2 = Join-Path $targetDir "release/WebView2Loader.dll"
 if (-not (Test-Path $webview2)) { throw "the build did not produce $webview2" }
 
 $zipName = "devd-desktop-v$version-$target.zip"
