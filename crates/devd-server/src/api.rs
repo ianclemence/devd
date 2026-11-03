@@ -1113,6 +1113,22 @@ pub async fn open_url(Json(body): Json<OpenUrlBody>) -> Response {
     }
 }
 
+// ------------------------------------------------------------------ previews
+
+/// `POST /api/preview` - check an address before the window puts it in a frame.
+///
+/// The window renders a preview in an `<iframe>`, and a frame is a place a page
+/// can run script. The rule for what may go in one lives in
+/// `devd_core::preview` so there is one copy of it; this handler only carries the
+/// answer to the window. An address that is not on this machine is refused here,
+/// not in the page's JavaScript, because the page is not the thing being trusted.
+pub async fn preview(Json(body): Json<OpenUrlBody>) -> Response {
+    match devd_core::preview::previewable(&body.url) {
+        Ok(url) => Json(json!({ "url": url })).into_response(),
+        Err(why) => refuse(StatusCode::BAD_REQUEST, "invalid_url", &why),
+    }
+}
+
 // ------------------------------------------------------------------ uploads
 
 /// The largest upload devd accepts.

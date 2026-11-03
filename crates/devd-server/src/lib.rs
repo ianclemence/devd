@@ -251,6 +251,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/project/restart", post(api::project_restart))
         .route("/api/project/logs", get(api::project_logs))
         .route("/api/open-url", post(api::open_url))
+        .route("/api/preview", post(api::preview))
         .route("/api/pick-folder", post(api::pick_folder))
         .route("/api/upload", post(api::upload))
         // The push-to-deploy hook. Not under /api: it carries its own secret in the path, so a service

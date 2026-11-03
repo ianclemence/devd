@@ -238,7 +238,7 @@
       busy: false,
       loading: false
     },
-    preview: { site: null },
+    preview: { site: null, url: null, typed: "", error: null },
     files: { root: null, entries: null, truncated: false, treeError: null, loadingTree: false, file: null, fileLoading: false, fileError: null }
   };
 
@@ -3871,53 +3871,69 @@
 
   // ------------------------------------------------------------------- preview
 
-  function renderPreview() {
-    if (state.view !== "preview") return;
-    var sites = state.server.sites;
-    if (!sites.length) {
-      el("main").innerHTML = page(
-        "Preview",
-        "The site you are working on, inside the window.",
-        "",
-        '<div class="panel"><div class="empty"><div class="empty-title">No sites to preview</div>' +
-          "<div>Create a site and it appears here.</div>" +
-          '<div class="inline" style="margin-top:12px"><button type="button" class="btn btn-primary" data-action="nav" data-view="sites">Create a site</button></div>' +
-          "</div></div>"
-      );
-      return;
-    }
-
-    var name = state.preview.site;
-    var row =
-      sites.filter(function (s) { return s.site.name === name; })[0] || sites[0];
-    state.preview.site = row.site.name;
-
-    var options = sites
-      .map(function (s) {
-        return (
-          '<option value="' + attr(s.site.name) + '"' + (s.site.name === row.site.name ? " selected" : "") + ">" +
-          esc(s.site.name) + " — " + esc(s.url) + "</option>"
-        );
-      })
-      .join("");
-
-    var notice = caTrusted()
+  /* The preview frame, for a site devd serves or any address on this machine.
+   *
+   * The address is checked by the server (`POST /api/preview`) before it reaches
+   * this function, because a frame is a place a page can run script and that
+   * decision belongs in devd's code rather than in this file.
+   */
+  function previewFrame(url, title) {
+    var notice = caTrusted() || !/^https:/.test(url || "")
       ? ""
       : '<div class="notice" style="margin-bottom:12px"><div class="grow">The certificate authority is not trusted yet, so an HTTPS preview may show a warning.</div>' +
         '<button type="button" class="btn btn-mini" data-action="ca-trust" data-machine="false">Trust the CA</button></div>';
+    return notice +
+      '<div class="panel"><div class="panel-head"><span class="mono grow">' + esc(url) + "</span>" +
+      '<button type="button" class="btn btn-mini btn-ghost" data-action="reload-preview">Reload</button>' +
+      '<button type="button" class="btn btn-mini btn-ghost" data-action="open-url" data-url="' + attr(url) + '">Open externally</button></div>' +
+      '<div class="panel-body flush"><iframe id="preview-frame" class="preview-frame" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads allow-modals" src="' +
+      attr(url) + '" title="' + attr(title || "Preview") + '"></iframe></div></div>';
+  }
 
-    el("main").innerHTML = page(
-      "Preview",
-      "The running site, inside the window.",
-      '<button type="button" class="btn" data-action="reload-preview">Reload</button>' +
-        '<button type="button" class="btn" data-action="open-url" data-url="' + attr(row.url) + '">Open externally</button>',
-      notice +
-        '<div class="panel"><div class="panel-head">' +
-        '<select class="select" id="preview-site">' + options + "</select>" +
-        '<span class="panel-note mono">' + esc(row.url) + "</span></div>" +
-        '<div class="panel-body flush"><iframe id="preview-frame" class="preview-frame" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads allow-modals" src="' +
-        attr(row.url) + '" title="' + attr(row.site.name) + '"></iframe></div></div>'
-    );
+  /* The address bar above the frame: any http(s) address on this machine, not
+   * only a site devd serves, so a `php artisan serve` or a `next dev` can be
+   * looked at without leaving the window. */
+  function previewUrlBar(sites) {
+    var options = (sites || []).map(function (s) {
+      return '<option value="' + attr(s.url) + '">' + esc(s.site.name) + " — " + esc(s.url) + "</option>";
+    }).join("");
+    return '<div class="panel"><div class="panel-body">' +
+      (options
+        ? '<div class="field"><label class="field-label" for="preview-site">A site devd serves</label>' +
+          '<select class="select" id="preview-site" data-change="preview-site">' + options + "</select></div>"
+        : "") +
+      '<div class="field" style="margin-top:10px"><label class="field-label" for="preview-url">Or any address on this machine</label>' +
+      '<div class="inline"><input class="input mono grow" id="preview-url" spellcheck="false" value="' + attr(state.preview.typed || "") + '" ' +
+      'placeholder="http://127.0.0.1:3000" aria-label="Address to preview">' +
+      '<button type="button" class="btn btn-primary" data-action="preview-go">Preview</button>' +
+      (state.preview.url ? '<button type="button" class="btn btn-ghost" data-action="preview-clear">Back to the site</button>' : "") +
+      "</div></div></div></div>";
+  }
+
+  function previewBody(row) {
+    var bar = previewUrlBar(state.server.sites || []);
+    if (state.preview.error) {
+      return bar + '<div class="panel"><div class="panel-body"><div class="notice notice-warn">' + esc(state.preview.error) + "</div></div></div>";
+    }
+    if (state.preview.url) return bar + previewFrame(state.preview.url, "Preview");
+    if (!row) {
+      return bar +
+        '<div class="panel"><div class="empty"><div class="empty-title">Nothing to preview yet</div>' +
+        "<div>Create a site, or type the address of a program already running on this machine.</div>" +
+        '<div class="inline" style="margin-top:12px"><button type="button" class="btn btn-primary" data-action="nav" data-view="sites">Create a site</button></div>' +
+        "</div></div>";
+    }
+    return bar + previewFrame(row.url, row.site.name);
+  }
+
+  function renderPreview() {
+    if (state.view !== "preview") return;
+    var sites = state.server.sites || [];
+    var row = sites.filter(function (s) { return s.site.name === state.preview.site; })[0] || sites[0] || null;
+    if (row) state.preview.site = row.site.name;
+    el("main").innerHTML = page("Preview", "A page on this machine, inside the window.", "", previewBody(row));
+    var select = el("preview-site");
+    if (select && row) select.value = row.url;
   }
 
   /*
@@ -10829,6 +10845,41 @@
     "reload-preview": function () {
       var frame = el("preview-frame");
       if (frame) frame.src = frame.src;
+    },
+
+    /* Ask the server whether an address may be previewed, then show it.
+     *
+     * The check is not done here: a frame is a place a page can run script, and
+     * devd decides what may go in one (`POST /api/preview`). This only carries
+     * the answer. */
+    "preview-go": function () {
+      var input = el("preview-url");
+      var raw = input ? input.value.trim() : "";
+      state.preview.typed = raw;
+      if (!raw) return toast("warn", "Type the address of a program on this machine");
+      post("/api/preview", { url: raw }).then(function (res) {
+        if (!res.ok) {
+          state.preview.url = null;
+          state.preview.error = errorOf(res.body, "that address cannot be previewed");
+        } else {
+          state.preview.url = res.body.url;
+          state.preview.error = null;
+        }
+        renderPreview();
+      });
+    },
+    "preview-clear": function () {
+      state.preview.url = null;
+      state.preview.error = null;
+      state.preview.typed = "";
+      renderPreview();
+    },
+    "preview-site": function (node) {
+      state.preview.url = null;
+      state.preview.error = null;
+      var row = (state.server.sites || []).filter(function (s) { return s.url === node.value; })[0];
+      if (row) state.preview.site = row.site.name;
+      renderPreview();
     },
 
     "track-path": function () {
