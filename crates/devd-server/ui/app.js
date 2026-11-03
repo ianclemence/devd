@@ -238,7 +238,8 @@
       busy: false,
       loading: false
     },
-    preview: { site: null, url: null, typed: "", error: null }
+    preview: { site: null, url: null, typed: "", error: null },
+    files: { root: null, entries: null, truncated: false, treeError: null, loadingTree: false, file: null, fileLoading: false, fileError: null }
   };
 
   // ------------------------------------------------------------------ helpers
@@ -4166,6 +4167,7 @@
   // ------------------------------------------------------------------- project
 
   var TAB_LABELS = {
+    files: "Files",
     changes: "Changes",
     history: "History",
     branches: "Branches",
@@ -4720,6 +4722,235 @@
     return '<div class="ov" aria-label="What this project is connected to">' + cells.join("") + "</div>";
   }
 
+  /* --------------------------------------------------------------------- files
+   *
+   * A project's files, in the window. The tree asks devd for one folder at a time
+   * (`fs.tree`) and a file is opened with `fs.read`, so a person sees exactly what
+   * an agent would see: the same bounds, the same refusals, the same words when
+   * something is because it holds secrets.
+   *
+   * Highlighting is local and small. A syntax highlighter is about 40 KB of
+   * grammars for languages this window does not show, so this covers the
+   * languages devd's own stacks use and leaves the rest plain. It works on one
+   * line at a time, which is enough for the shapes that matter (strings, comments,
+   * numbers, keywords) and cannot mangle a file it does not understand.
+   */
+
+  var FILE_LANGS = {
+    js: "js", mjs: "js", cjs: "js", jsx: "js", ts: "js", tsx: "js", json: "json",
+    php: "php", rs: "rust", py: "py", rb: "ruby", go: "go", sql: "sql",
+    html: "html", htm: "html", vue: "html", svelte: "html",
+    css: "css", scss: "css", less: "css",
+    sh: "sh", bash: "sh", zsh: "sh", ps1: "sh",
+    yml: "yaml", yaml: "yaml", toml: "toml", ini: "toml", env: "toml",
+    md: "md", markdown: "md"
+  };
+
+  var KEYWORDS = {
+    js: "const let var function return if else for while class extends new this async await import from export default try catch throw typeof instanceof of in null true false undefined",
+    php: "function return if else elseif foreach as public private protected class extends implements new use namespace echo instanceof null true false static const array",
+    rust: "fn let mut pub use struct enum impl trait match if else for while loop return self Self where async await move ref dyn mod crate super const static true false",
+    py: "def return if elif else for while class import from as try except finally with lambda None True False and or not in is pass raise async await",
+    ruby: "def end if elsif else unless while do class module require include attr_accessor nil true false self return yield",
+    go: "func return if else for range struct interface map chan go defer select package import type var const nil true false switch case",
+    sql: "select from where join left right inner outer on group by order having limit insert into values update set delete create table primary key foreign references not null as distinct union",
+    sh: "if then else elif fi for while do done case esac function return export local echo set source"
+  };
+
+  function escapeHtml(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  /* One line of source to one line of highlighted HTML.
+   *
+   * The scan is a single pass with one lookahead rule: when it meets a quote,
+   * a comment marker or a number it consumes as much as that token allows and
+   * escapes the whole span at once. That means a `<` inside a string cannot be
+   * mistaken for a tag, and no rule can run past the end of its own token.
+   */
+  function highlightLine(line, lang) {
+    var kw = (KEYWORDS[lang] || "").split(" ").filter(Boolean);
+    var kwSet = {};
+    kw.forEach(function (k) { kwSet[k] = true; });
+    var out = "";
+    var i = 0;
+    var n = line.length;
+    var word;
+
+    function span(cls, text) { return '<span class="hl-' + cls + '">' + escapeHtml(text) + "</span>"; }
+
+    while (i < n) {
+      var c = line[i];
+      var rest = line.slice(i);
+
+      // Line comments.
+      var cm = lang === "sql" ? /^--/ : (lang === "py" || lang === "ruby" || lang === "sh" || lang === "yaml") ? /^#/ : /^(\/\/)/;
+      if (cm.test(rest)) { out += span("cm", rest); break; }
+
+      // Block comment opening on this line.
+      if ((lang === "js" || lang === "php" || lang === "rust" || lang === "css" || lang === "go") && rest.startsWith("/*")) {
+        out += span("cm", rest);
+        break;
+      }
+
+      // Strings.
+      if (c === '"' || c === "'" || c === "`") {
+        var j = i + 1;
+        while (j < n) {
+          if (line[j] === "\\") { j += 2; continue; }
+          if (line[j] === c) { j += 1; break; }
+          j += 1;
+        }
+        out += span("str", line.slice(i, j));
+        i = j;
+        continue;
+      }
+
+      // Numbers.
+      if (/[0-9]/.test(c) && !(i > 0 && /[\w$]/.test(line[i - 1]))) {
+        var m = /^[0-9][0-9_.]*[a-zA-Z%]*/.exec(rest);
+        if (m) { out += span("num", m[0]); i += m[0].length; continue; }
+      }
+
+      // Words: keywords, types, everything else as plain text.
+      if (/[A-Za-z_$]/.test(c)) {
+        var w = /^[A-Za-z_$][\w$]*/.exec(rest)[0];
+        i += w.length;
+        if (kwSet[w]) out += span("kw", w);
+        else if (/^[A-Z]/.test(w) && lang !== "md" && lang !== "yaml") out += span("ty", w);
+        else out += escapeHtml(w);
+        continue;
+      }
+
+      out += escapeHtml(c);
+      i += 1;
+    }
+    return out || " ";
+  }
+
+  /* The file list and the open file.
+   *
+   * The tree is a stack of folders rather than a nested list: one `fs.tree` call
+   * per folder opened, which keeps a large project from costing one request per
+   * visible row on every redraw.
+   */
+  function renderFiles() {
+    var fs = state.files;
+    if (!fs.root) fs.root = state.project.path;
+    var crumbs = fs.root.split(/[\\/]/).filter(Boolean);
+    var parts = [];
+    for (var k = 0; k < crumbs.length; k++) {
+      parts.push('<span class="crumb">' + esc(crumbs[k]) + "</span>");
+    }
+
+    var treeHtml;
+    if (fs.treeError) treeHtml = '<div class="notice notice-bad">' + esc(fs.treeError) + "</div>";
+    else if (!fs.entries) treeHtml = '<div class="loading">Loading</div>';
+    else if (!fs.entries.length) treeHtml = '<div class="ui-quiet">This folder is empty.</div>';
+    else {
+      treeHtml = fs.entries.map(function (e) {
+        var isDir = e.kind === "dir";
+        var cls = "file-row" + (isDir ? " is-dir" : "") + (e.skipped ? " is-skipped" : "") + (e.secret ? " is-secret" : "");
+        var note = e.secret ? "secret file — not opened" : e.skipped ? "skipped folder" : isDir ? "" : bytesLabel(e.bytes);
+        return '<button type="button" class="' + cls + '" data-action="file-open" data-path="' + attr(fs.root + "/" + e.name) + '" data-kind="' + attr(e.kind) + '"' +
+          (e.secret || e.skipped ? ' title="' + attr(note) + '"' : "") + ">" +
+          '<span class="file-name">' + esc(e.name) + "</span>" +
+          (note ? '<span class="file-note">' + esc(note) + "</span>" : "") +
+          "</button>";
+      }).join("") +
+        (fs.truncated ? '<div class="ui-quiet" style="padding:8px 10px">Only the first entries of this folder are shown.</div>' : "");
+    }
+
+    var doc;
+    if (fs.fileError) doc = '<div class="notice notice-warn">' + esc(fs.fileError) + "</div>";
+    else if (fs.fileLoading) doc = '<div class="loading">Loading</div>';
+    else if (!fs.file) {
+      doc = '<div class="empty"><div class="empty-title">Pick a file</div>' +
+        "<div>Its contents open here, read the same way an agent reads them.</div></div>";
+    } else {
+      var lines = fs.file.content.split("\n");
+      var lang = FILE_LANGS[(fs.file.name || "").split(".").pop().toLowerCase()] || "";
+      var from = fs.file.from_line || 1;
+      var gutter = [];
+      var body = [];
+      for (var i = 0; i < lines.length; i++) {
+        // `fs.read` prefixes each line with a line number and a tab.
+        var text = lines[i].replace(/^\s*\d+\t/, "");
+        gutter.push(from + i);
+        body.push(lang ? highlightLine(text, lang) : escapeHtml(text));
+      }
+      doc =
+        '<div class="panel-head file-open-head"><span class="mono grow nowrap" title="' + attr(fs.file.path) + '">' + esc(fs.file.name || fs.file.path) + "</span>" +
+        '<span class="panel-note">' + (fs.file.total_lines || lines.length) + " line" + ((fs.file.total_lines || lines.length) === 1 ? "" : "s") + "</span>" +
+        '<button type="button" class="btn btn-mini btn-ghost" data-action="file-raw">Copy</button></div>' +
+        (fs.file.truncated && from > 1 ? '<div class="ui-quiet" style="padding:6px 12px">Showing from line ' + from + ".</div>" : "") +
+        '<div class="panel-body flush"><div class="code-view"><div class="code-gutter mono">' +
+        gutter.join("\n") + '</div><pre class="mono code-body">' + body.join("\n") + "</pre></div></div>";
+    }
+
+    return '<div class="files-view">' +
+      '<div class="files-tree panel"><div class="panel-head"><span class="mono grow nowrap" title="' + attr(fs.root) + '">' +
+      parts.join('<span class="crumb-sep">/</span>') + "</span>" +
+      (fs.root !== state.project.path ? '<button type="button" class="btn btn-mini btn-ghost" data-action="file-up">Up</button>' : "") +
+      '</div><div class="panel-body flush files-tree-body">' + treeHtml + "</div></div>" +
+      '<div class="panel files-doc">' + doc + "</div></div>";
+  }
+
+  function bytesLabel(n) {
+    if (n === null || n === undefined) return "";
+    if (n < 1024) return n + " B";
+    if (n < 1024 * 1024) return (n / 1024).toFixed(n < 10240 ? 1 : 0) + " KB";
+    return (n / 1024 / 1024).toFixed(1) + " MB";
+  }
+
+  /* Open a folder in the tree.
+   *
+   * `refresh()` is skipped on purpose: walking the whole application state to
+   * list one folder would make browsing cost a full reload per click. The result
+   * is the folder, and nothing else changed. */
+  function loadFileTree(path) {
+    var fs = state.files;
+    fs.root = path;
+    fs.entries = null;
+    fs.treeError = null;
+    fs.loadingTree = true;
+    render();
+    run("fs.tree", { path: path }, { quiet: true }).then(function (o) {
+      fs.loadingTree = false;
+      // A failed call has already been reported by `run`. The list stays empty and
+      // says it could not be read rather than pretending the folder is empty.
+      if (o && o.ok && o.data) {
+        fs.entries = o.data.entries || [];
+        fs.truncated = !!o.data.truncated;
+      } else {
+        fs.entries = [];
+        fs.treeError = "This folder could not be read. The reason is in the message above.";
+      }
+      render();
+    });
+  }
+
+  /* Open a file in the pane. */
+  function loadFile(path) {
+    var fs = state.files;
+    fs.file = null;
+    fs.fileError = null;
+    fs.fileLoading = true;
+    render();
+    run("fs.read", { path: path, offset: 1, limit: 2000 }, { quiet: true }).then(function (o) {
+      fs.fileLoading = false;
+      if (o && o.ok && o.data) {
+        fs.file = o.data;
+        fs.file.name = path.split(/[\\/]/).pop();
+      } else {
+        // The refusal is the point: a secrets file says so in its own words, and
+        // repeating a guess here would be a second, worse explanation.
+        fs.fileError = "This file was not opened. The reason is in the message above.";
+      }
+      render();
+    });
+  }
+
   function renderProject() {
     if (state.view !== "project") return;
     var st = state.project.status;
@@ -4747,6 +4978,13 @@
     var body;
     if (current.loading) body = '<div class="loading">Loading</div>';
     else if (current.error) body = '<div class="notice notice-bad">' + esc(current.error) + "</div>";
+    else if (tab === "files") {
+      // The tree loads itself: it is a stack of folder requests, not one value,
+      // so it cannot be filled from `state.tabs` the way the other tabs are.
+      if (!state.files.root) state.files.root = state.project.path;
+      if (!state.files.entries && !state.files.treeError && !state.files.loadingTree) loadFileTree(state.files.root);
+      body = renderFiles();
+    }
     else if (tab === "changes") body = renderChanges();
     else if (tab === "history") body = renderHistory();
     else if (tab === "branches") body = renderBranches();
@@ -10576,6 +10814,33 @@
     "note-create": function () { createNote(); },
     "note-save": function () { saveNote(); },
     "note-delete": function () { deleteNote(); },
+
+    /* The file tree: open a folder, open a file, go up, copy the open file. */
+    "file-open": function (node) {
+      var path = node.dataset.path;
+      if (node.dataset.kind === "dir") loadFileTree(path);
+      else loadFile(path);
+    },
+    "file-up": function () {
+      var root = state.files.root || "";
+      var parent = root.replace(/[\\/][^\\/]+[\\/]?$/, "");
+      // Never climb above the project the tab belongs to.
+      var stop = state.project.path;
+      if (!parent || parent.length < stop.length) parent = stop;
+      loadFileTree(parent);
+    },
+    "file-raw": function () {
+      var f = state.files.file;
+      if (!f) return;
+      // What is copied is the file, not the gutter: the line numbers are a
+      // reading aid, and pasting them back into a file would break it.
+      var text = f.content.split("\n").map(function (l) { return l.replace(/^\s*\d+\t/, ""); }).join("\n");
+      navigator.clipboard.writeText(text).then(function () {
+        toast("ok", "Copied");
+      }, function () {
+        toast("warn", "The clipboard is not available in this window");
+      });
+    },
 
     "reload-preview": function () {
       var frame = el("preview-frame");
