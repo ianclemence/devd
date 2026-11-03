@@ -12,6 +12,12 @@ may change capability identifiers where the design was wrong.
 
 ## [Unreleased]
 
+Nothing yet.
+
+---
+
+## [0.18.0] - 2026-11-03 - The window sees the work
+
 ### Changed
 
 - **Skills are grouped by the stage of work, not by kind.** The old `playbook`,
