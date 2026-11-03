@@ -467,6 +467,26 @@ pub fn register(reg: &mut Registry) -> Result<()> {
     )?;
 
     // -------------------------------------------------------------- detect / import
+    reg.define::<PathArgs>("project.manifest", "What this project declares it needs")
+    .description("Reads the project's devd.toml: the services it needs and their versions, the port and start command, the health check, the environment variable names (never their values), the runtimes it pins, and what an agent may do inside this project. The file declares what no ecosystem file can - .nvmrc says which Node, but nothing says which database. A project without one is normal and is not an error. A manifest that is invalid is an error with the file and line, not a silent fallback.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, a| Ok(Plan::new("project.manifest", format!("read the manifest in {}", a.path))),
+        |_, a| {
+            let p = std::path::Path::new(&a.path);
+            let v = crate::manifest::describe(p)?;
+            let msg = if v["declared"] == true {
+                format!("{} declares {} service(s)", p.display(), v["services"].as_array().map(|s| s.len()).unwrap_or(0))
+            } else {
+                format!("{} has no devd.toml; nothing is declared", p.display())
+            };
+            Ok(Outcome::with_data(msg, v))
+        },
+    )?;
     reg.define::<PathArgs>("project.detect", "Understand an existing project")
     .description("Inspects a directory and returns what it is: matching stacks with evidence and confidence, package manager, runtime versions the project asks for and whether the installed ones satisfy them, entry points, scripts, tests/lint/typecheck tooling, services it needs, environment-variable names (never values), documentation files, git state, official docs and conventions, and any missing tools with the capability that fixes each. Works on projects devd did not create. When detection is uncertain it says so (ambiguous: true).")
     .tier(Tier::Read)

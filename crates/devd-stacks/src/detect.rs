@@ -392,6 +392,38 @@ fn runtime_needs(dir: &Path) -> Vec<(String, String, String)> {
             }
         }
     }
+    // `.tool-versions` is asdf's and mise's file, and it covers every runtime
+    // in one place: `nodejs 20.11.0` and `php 8.4.0` on two lines. It is read
+    // before the per-language files because a project that uses mise has said
+    // so deliberately, and the per-language files are usually duplicates of it.
+    if let Some(t) = read(dir, ".tool-versions") {
+        for line in t.lines() {
+            // A file edited on Windows often starts with a UTF-8 BOM, which is not
+            // whitespace and would make the first tool's name unmatchable.
+            let line = line.trim_start_matches('\u{feff}').trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let mut parts = line.split_whitespace();
+            let (Some(tool), Some(version)) = (parts.next(), parts.next()) else {
+                continue;
+            };
+            // asdf calls the runtime `nodejs`; every other tool calls it `node`.
+            let tool = if tool == "nodejs" { "node" } else { tool };
+            if !matches!(tool, "node" | "php" | "python" | "ruby" | "go" | "rust" | "java" | "dotnet") {
+                continue;
+            }
+            // `latest` and `system` name no version, so they pin nothing.
+            if version == "latest" || version == "system" {
+                continue;
+            }
+            let v = version.trim_start_matches('v');
+            if v.chars().next().map(|ch| ch.is_ascii_digit()).unwrap_or(false) {
+                push(tool, format!("={v}"), ".tool-versions");
+            }
+        }
+    }
+
     for f in [".nvmrc", ".node-version"] {
         if let Some(t) = read(dir, f) {
             let c = t.trim().trim_start_matches('v').to_string();
@@ -824,5 +856,26 @@ mod tests {
         assert_eq!(constraint_ok("21.0.0", "=20"), Some(false));
         assert_eq!(constraint_ok("3.2.1", "~3.2"), Some(true));
         assert_eq!(constraint_ok("1.2.3", "latest"), None);
+    }
+
+    #[test]
+    fn a_tool_versions_file_is_read_for_every_runtime_it_names() {
+        // asdf and mise write one file for all runtimes. A project that has it
+        // has said which Node and which PHP deliberately, so it is read before
+        // the per-language files.
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(
+            d.path().join(".tool-versions"),
+            "\u{feff}# managed by mise\nnodejs 20.11.0\nphp 8.4\npython 3.12.1\nruby system\nsome-unrelated-tool 1.0\n",
+        )
+        .unwrap();
+        let wants = super::runtime_needs(d.path());
+        let by = |tool: &str| wants.iter().find(|w| w.0 == tool).map(|w| w.1.clone());
+        assert_eq!(by("node"), Some("=20.11.0".to_string()), "asdf calls it nodejs, devd calls it node");
+        assert_eq!(by("php"), Some("=8.4".to_string()));
+        assert_eq!(by("python"), Some("=3.12.1".to_string()));
+        assert_eq!(by("ruby"), None, "`system` names no version");
+        // A tool devd does not manage is ignored rather than reported as missing.
+        assert!(wants.iter().all(|w| w.0 != "some-unrelated-tool"));
     }
 }

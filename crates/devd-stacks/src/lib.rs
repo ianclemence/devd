@@ -6,6 +6,7 @@
 pub mod authz;
 pub mod caps;
 pub mod detect;
+pub mod manifest;
 pub mod env;
 pub mod exec;
 pub mod init;
