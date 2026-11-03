@@ -38,13 +38,22 @@ if (-not $SkipTests) {
     if ($LASTEXITCODE -ne 0) { throw "the test suite failed" }
 }
 
+# The artifacts are wherever cargo put them.
+#
+# This project's dependency tree overflows Windows path limits under a long
+# checkout path, so dev-env.ps1 points cargo at a short directory such as
+# C:\dt. A release must not depend on which shell started it, so the same
+# directory is chosen here when the caller has not: without it the build lands
+# under a path long enough to crash gcc while compiling ring, and the failure
+# reads only as "the release build failed".
+if (-not $env:CARGO_TARGET_DIR) {
+    $env:CARGO_TARGET_DIR = "C:\dt"
+}
+
 Write-Host "==> cargo build --release" -ForegroundColor Cyan
 cargo build --release -p devd-cli -p devd-desktop
 if ($LASTEXITCODE -ne 0) { throw "the release build failed" }
 
-# The artifacts are wherever cargo put them. `scripts/dev-env.ps1` sets
-# CARGO_TARGET_DIR because this project's dependency tree overflows Windows path
-# limits under a long checkout path, so assuming `target/` finds nothing there.
 $targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $repo "target" }
 $bin = Join-Path $targetDir "release/devd.exe"
 if (-not (Test-Path $bin)) { throw "the build did not produce $bin" }

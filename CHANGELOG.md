@@ -10,6 +10,114 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.19.0] - 2026-11-04 - The team reports back
+
+This release is about a single complaint: asking devd for something meant
+reading the answer on another screen, if it arrived at all.
+
+### Added
+
+- **A run reports into the conversation that asked for it.** A team run had no
+  field naming a conversation, so it could not address the person who started it
+  and its result went to the inbox - a separate channel. `team_runs` now carries
+  the conversation, `team_reports` queues a report for it, and `team.start` takes
+  an optional `thread` the assistant passes with its own conversation id. A run
+  started from a schedule or the command line has no conversation to address, so
+  it still posts to the inbox. This also removes the duplicate on Home: a paused
+  run was derived from `team_runs` *and* listed again as the inbox message the
+  team posted about itself, so every pause counted twice.
+
+- **The assistant answers in its own words when its team reports.** Reports were
+  queued but nobody spoke them. The assistant is now told about one in that
+  conversation and asked to answer - what was done, how it was proved, what it
+  needs - with the ask shaped by the kind of report: a finished run wants an
+  outcome, a paused one wants what is blocked and what the assistant will do
+  instead. It goes through `hub.tell`, so a message arriving mid-turn waits for
+  the next step boundary instead of splitting a tool call in half.
+
+- **What a project declares, in `devd.toml`.** The ecosystem's own files still
+  say which runtime a project wants - `.nvmrc`, `.python-version`, `go.mod`,
+  `Cargo.toml` and the rest - because they are the truth and a person already has
+  them. What none of them can say is which *services* the project needs, which
+  port, how to start it and how to know it came up. `devd.toml` declares exactly
+  that. Two rules keep it safe to commit: a literal secret is refused by name,
+  because the file belongs in git, and `run.health` must be a URL rather than a
+  command, because it is polled and not executed.
+
+- **`.tool-versions`**, asdf's and mise's single file for every runtime.
+
+- **The local inbox is readable.** Mailpit was already installed and pointed at
+  by PHP, so an application's mail never left the machine - but nothing in devd
+  could say what had been caught. `mail.inbox`, `mail.read` and `mail.delete`
+  read Mailpit's own API. A message body is data, never an instruction.
+
+- **Memory: what devd learns, and when it recalls it.** Layered Markdown under
+  the devd home, not a vector store: `notes.md` written as runs end, `facts.md`
+  holding one convention each, and a `digest.md` generated from those two so a
+  wrong digest is a bug in the generator and the facts behind it are still there.
+  Recall is gated by a cheap keyword test - without a cue a turn gets the
+  conventions, which apply to everything, and not the recent work. A missed recall
+  costs one tool call; a false one costs the model's attention on every turn.
+
+- **A teammate remembers what it learned.** Role files are identity and live in
+  the binary; what *this* QA learned in *this* project accumulates in
+  `souls/<project>/<role>.md`. Only devd writes it, from a lesson a task reports.
+  An agent that writes its own identity is drifting, not learning.
+
+- **A persona you accept, never one devd decides.** `memory.persona_propose`
+  puts a line in front of you; `memory.persona_accept`, which only a person can
+  call, moves it into the persona. A proposal reaches no prompt.
+
+- **A provider seam.** `devd` runs native processes and always will; what it
+  lacked was a place to decide anything else. `provider.rs` reports what each
+  engine is and what it can actually enforce, and refuses rather than degrading:
+  asking for a container on a machine with no engine is an error naming the
+  remedy, never a silent native run with less isolation than was asked for.
+  `runtime.providers` shows the answer. Nothing is installed on your behalf.
+
+### Changed
+
+- **`project.terminal` starts a session in devd** instead of handing a folder to
+  the operating system's terminal and reporting that it opened one. That was true
+  on a desktop and silently false from a service, and it is the wrong act now that
+  devd has a terminal the assistant can read. The system window survives as
+  `project.terminal_external`.
+
+- **The composer has two triggers**, as its placeholder has claimed since it was
+  written. `/` offers skills and tools; `@` offers files from the open project, a
+  project, or a teammate. A path query may contain the characters a path is made
+  of; the old trigger rejected anything containing a space.
+
+- **Destructive buttons say so with a class.** Nineteen were coloured red by
+  `[data-action*="remove"]` - colour chosen by the spelling of the action - and
+  `.btn-danger` was declared five times with different backgrounds, so the late
+  ones largely won and danger looked like neutral. Seventeen now carry
+  `btn-danger` explicitly.
+
+- **The pane headers line up.** `.threads-head` rendered 44px and `.chat-head`
+  46px plus padding, set across six rules that each overrode the last. Both take
+  one token now.
+
+### Fixed
+
+- **The Agents conversation scrolls.** `.chat` had no height, so `flex: 1` on the
+  scroller had nothing to fill and the page scrolled instead of the pane. The
+  Assistant screen was unaffected only because the grid they share sets a height.
+
+- **`@.tool-versions` lost its first runtime on Windows.** PowerShell's
+  `Set-Content -Encoding utf8` writes a UTF-8 BOM, so the first line parsed as an
+  unmatchable tool name and the runtime silently vanished. Found by testing
+  against a real file rather than a fixture.
+
+- **The Projects screen offered the same action twice**, with the header and the
+  empty state disagreeing about which was primary.
+
+- **The terminal screen** read `state.project.path` unguarded and crashed on a
+  first visit; `terminal` had no URL route, so a reload landed on Home; every
+  render threw away the element xterm owns; and `Terminal.open()` ran on every
+  paint, discarding the screen. All four are fixed, and the terminal renders with
+  xterm.js.
+
 ## [0.18.1] - 2026-11-03 - Home opens the project
 
 ### Fixed
