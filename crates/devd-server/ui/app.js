@@ -4530,10 +4530,10 @@
 
   function openProject(path) {
     state.view = "project";
-    // A folder that is not a repository has nothing to say on Changes; its
-    // files are the useful first screen.
-    var known = (state.projects || []).filter(function (p) { return p.path === path; })[0];
-    state.tab = known && known.is_repository === false ? "files" : "changes";
+    // Open where the tab strip says the screen begins. `files` is the first tab
+    // in TAB_LABELS, so opening a repository on `changes` - the second - put
+    // the person one tab along from the one the strip implies, every time.
+    state.tab = "files";
     state.tabs = {};
     state.diff = null;
     state.project = { path: path, name: dirName(path), status: null, open: null, error: null };
@@ -7341,8 +7341,6 @@
           '<div class="provider-fact"><dt>Model list</dt><dd>' + (models.length ? models.length + " known" : "not fetched") + "</dd></div>" +
           '<div class="provider-fact"><dt>Discovery</dt><dd>' + esc(p.models_from || p.discovery) + "</dd></div>" +
         "</dl>" +
-        '<div class="inline provider-model-add"><input class="input mono grow" data-model-add="' + attr(p.id) + '" placeholder="Add a model id this provider does not list" spellcheck="false" aria-label="Add a model id for ' + attr(p.label) + '">' +
-        '<button type="button" class="btn btn-mini" data-action="prov-model-add" data-id="' + attr(p.id) + '">Add model</button></div>' +
         (result ? '<div class="notice ' + (AI.provBusy[p.id + ":ok"] ? "notice-ok" : "notice-bad") + ' provider-note">' + esc(result) + "</div>" : "") +
       "</div>" +
       '<div class="provider-actions">' +
@@ -8320,8 +8318,13 @@
     var list = el("team-list"), box = el("team-detail");
     if (!list || !box) return;
     list.innerHTML = (TEAM.runs || []).map(function (r) {
+      // Whether the run is over decides what the control does, not whether it exists.
       var over = ["done", "failed", "cancelled"].indexOf(r.state) >= 0;
-      return '<div class="thread-row"><button type="button" class="thread' + (TEAM.sel === r.id ? " active" : "") + '" data-action="team-open" data-id="' + attr(r.id) + '"><span class="dot ' + (r.state === "running" || r.state === "planning" ? "dot-ok" : r.state === "awaiting_plan" || r.state === "paused" ? "dot-warn" : r.state === "failed" ? "dot-bad" : "dot-off") + '"></span><span class="grow nowrap">' + esc(r.title) + '</span><span class="dim">' + r.tasks_done + "/" + r.tasks_total + '</span></button>' + (over ? '<button type="button" class="thread-del" data-action="team-delete" data-id="' + attr(r.id) + '" title="Delete this run" aria-label="Delete this run">\u00d7</button>' : "") + "</div>";
+      return '<div class="thread-row"><button type="button" class="thread' + (TEAM.sel === r.id ? " active" : "") + '" data-action="team-open" data-id="' + attr(r.id) + '"><span class="dot ' + (r.state === "running" || r.state === "planning" ? "dot-ok" : r.state === "awaiting_plan" || r.state === "paused" ? "dot-warn" : r.state === "failed" ? "dot-bad" : "dot-off") + '"></span><span class="grow nowrap">' + esc(r.title) + '</span><span class="dim">' + r.tasks_done + "/" + r.tasks_total + '</span></button>' +
+        '<button type="button" class="thread-del" data-action="team-delete" data-id="' + attr(r.id) +
+        '" title="' + (over ? "Delete this run" : "Cancel this run before deleting it") +
+        '" aria-label="Delete this run">\u00d7</button>' +
+        "</div>";
     }).join("") || '<div class="empty-inline">No runs yet. Give the team a goal and it will show up here.</div>';
     if (!TEAM.sel || !TEAM.data) { box.innerHTML = teamForm(); return; }
     var focus = document.activeElement && document.activeElement.id;
@@ -8459,7 +8462,12 @@
   // ------------------------------------------------------------------- inbox
 
   function loadInbox() {
-    return Promise.all([read("approval.list", { pending_only: true }), read("inbox.list", { open_only: true }), read("approval.list", { pending_only: false }), read("inbox.list", { open_only: false }), read("team.list").catch(function () { return []; }), read("team.suggestions", { state: "open" }).catch(function () { return []; })]).then(function (r) {
+    // Each source is guarded to its own empty value. A screen that needs four
+    // reads must still draw when three of them answer: an unguarded `Promise.all`
+    // here meant one failed request left the screen on "Loading" for ever, with
+    // no error shown and no way to retry.
+    var soft = function (p) { return p.catch(function () { return []; }); };
+    return Promise.all([soft(read("approval.list", { pending_only: true })), soft(read("inbox.list", { open_only: true })), soft(read("approval.list", { pending_only: false })), soft(read("inbox.list", { open_only: false })), soft(read("team.list")), soft(read("team.suggestions", { state: "open" }))]).then(function (r) {
       AI.requests = r[0]; AI.inbox = r[1];
       AI.history = { requests: (r[2] || []).filter(function (x) { return x.state !== "pending"; }).slice(0, 15), messages: (r[3] || []).filter(function (x) { return x.state === "resolved"; }).slice(0, 15) };
       // The one question each paused run is holding on, asked in the words the
@@ -8473,7 +8481,8 @@
       })).then(function () { return r[5] || []; });
     }).then(function (suggestions) {
       AI.suggestions = suggestions || [];
-      return loadHealth();
+      // The health chip is elsewhere on the page; it must not stop the inbox.
+      return loadHealth().catch(function () {});
     });
   }
 
@@ -10856,17 +10865,6 @@
           var label = n.querySelector(".role-model-name");
           if (label) label.textContent = model;
         }
-      });
-    },
-    "prov-model-add": function (n) {
-      var id = n.dataset.id;
-      var input = document.querySelector('[data-model-add="' + id + '"]');
-      var model = input ? input.value.trim() : "";
-      if (!model) return toast("warn", "Type the model id the provider expects");
-      run("provider.model_add", { id: id, model: model }).then(function (o) {
-        if (!o) return;
-        if (input) input.value = "";
-        return loadProviders().then(function () { renderProviders(); });
       });
     },
     "prov-model-remove": function (n) {

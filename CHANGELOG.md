@@ -10,6 +10,40 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.19.1] - 2026-11-04 - The screen that waited for ever
+
+Four fixes, all reported after living with 0.19.0.
+
+### Fixed
+
+- **The Inbox could sit on "Loading" for ever.** `renderInbox` draws nothing
+  until `AI.requests` is set, and that happened only when all six reads in
+  `loadInbox` succeeded. Two of them already had `.catch` handlers; the four that
+  carry the screen's actual content did not, so one failed request rejected the
+  whole batch and the screen waited on a promise that had already settled - with
+  no error shown and nothing to retry. Every read is now guarded to its own empty
+  value, so the screen draws with whatever could be read.
+
+- **A run could not be deleted the way a conversation can.** The Assistant list
+  offers delete on every conversation; the Agents list offered it only on runs
+  that were already over, so the same gesture existed in one place and not the
+  other. The reason was sound - `team.delete` refuses a run that is still working
+  - but hiding the control is not how to say so. Every run row now carries it:
+  on a finished run it deletes, on one still going the server answers with what
+  to do first.
+
+- **A project opened on Changes instead of Files.** `files` is the first tab in
+  the strip and `openProject` sent a repository to the second, so opening any
+  repository put the person one tab along from where the strip implies the
+  screen begins. It now opens on Files.
+
+### Removed
+
+- **The "add a model id this provider does not list" field** on each provider
+  card, with its handler. The model picker already offers "use the id you typed"
+  for ids the provider does not list, so the card carried a permanent text field
+  and a button to reach a place one click away.
+
 ## [0.19.0] - 2026-11-04 - The team reports back
 
 This release is about a single complaint: asking devd for something meant

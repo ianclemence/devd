@@ -837,3 +837,81 @@ fn a_destructive_button_says_so_with_a_class_not_with_its_name() {
         );
     }
 }
+
+#[test]
+fn the_inbox_cannot_hang_waiting_for_one_failed_read() {
+    // `renderInbox` draws nothing until `AI.requests` is set, and it is set only
+    // when every read in `loadInbox` succeeds. Two of the six had `.catch`
+    // handlers and four did not, so one failed request rejected the batch and the
+    // screen sat on "Loading" for ever with no error and nothing to retry.
+    let start = APP.find("function loadInbox()").expect("loadInbox is gone");
+    let body = &APP[start..start + 1400];
+    assert!(body.contains("var soft = function"), "each read is guarded to its own empty value");
+    let batch = &body[body.find("return Promise.all").expect("the batch")..];
+    let batch = &batch[..batch.find(".then(function (r)").expect("the then")];
+    assert!(
+        !batch.contains("read(\"") || batch.matches("soft(read(").count() == batch.matches("read(\"").count(),
+        "an unguarded read in the batch can hang the screen: {batch}"
+    );
+}
+
+#[test]
+fn every_run_row_has_the_same_delete_control_as_a_conversation() {
+    // The Assistant list offers delete on every conversation. The Agents list
+    // offered it only on runs that were already over, so the same gesture existed
+    // in one place and not the other. The capability still refuses a run that is
+    // working, with a sentence saying to cancel it first.
+    let start = APP.find("function paintTeam()").expect("paintTeam is gone");
+    let body = &APP[start..start + 1000];
+    assert!(
+        body.contains("data-action=\"team-delete\""),
+        "a run row carries a delete control"
+    );
+    assert!(
+        !body.contains("(over ? '<button"),
+        "the control is not conditional on the run being over: {body}"
+    );
+
+    let assistant = APP.find("function paintThreads()").expect("paintThreads is gone");
+    let assistant_body = &APP[assistant..assistant + 900];
+    assert!(
+        assistant_body.contains("data-action=\"chat-delete\""),
+        "and a conversation still does, the way it always has"
+    );
+}
+
+#[test]
+fn the_provider_card_has_one_way_to_use_a_model_id_and_not_two() {
+    // A permanent text field on every provider card, beside a picker that already
+    // offers "use the id you typed", was two ways to do one thing.
+    assert!(
+        !APP.contains("Add a model id this provider does not"),
+        "the inline add-a-model field is gone"
+    );
+    assert!(
+        !APP.contains("data-action=\"prov-model-add\""),
+        "and nothing still calls it"
+    );
+    assert!(
+        APP.contains("composer-custom-model"),
+        "the picker still offers an id the provider does not list"
+    );
+}
+
+#[test]
+fn a_project_opens_on_the_first_tab_the_strip_shows() {
+    // `files` is first in TAB_LABELS. Opening a repository on `changes` put the
+    // person one tab along from where the strip implies the screen starts.
+    let labels = APP.find("var TAB_LABELS = {").expect("TAB_LABELS is gone");
+    let labels = &APP[labels..labels + 300];
+    assert!(
+        labels.find("files:").unwrap() < labels.find("changes:").unwrap(),
+        "Files is the first tab"
+    );
+    let open = APP.find("function openProject(path)").expect("openProject is gone");
+    let open = &APP[open..open + 500];
+    assert!(
+        open.contains("state.tab = \"files\""),
+        "so opening a project starts there: {open}"
+    );
+}
