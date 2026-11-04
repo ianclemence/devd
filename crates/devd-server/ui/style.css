@@ -5673,3 +5673,176 @@ a, .link, .pill-accent, .tag-unt, .feed-agent, .chat-plan-count, .cap-accent, .m
 .files-view .files-tree-body { padding: 4px 0; }
 .files-view .panel > .empty { padding: var(--s6) var(--s4); }
 @media (max-width: 820px) { .files-view { grid-template-columns: minmax(0, 1fr); } }
+
+/* ---- skeletons: a page keeps its shape while it waits -------------------- */
+
+.skel {
+  display: block;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(90deg, var(--bg-raised) 0%, var(--bg-hover) 50%, var(--bg-raised) 100%);
+  background-size: 200% 100%;
+  animation: skel-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes skel-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+.skel-title { width: 180px; height: 28px; border-radius: 6px; }
+.skel-list { display: flex; flex-direction: column; margin-top: var(--s4); }
+.skel-row { display: flex; align-items: center; gap: var(--s3); padding: 14px 4px; border-bottom: 1px solid var(--line); }
+.skel-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.skel-lines { display: flex; flex-direction: column; gap: 8px; flex: 1; min-width: 0; }
+.skel-line { height: 11px; }
+.skel-sub { height: 9px; opacity: 0.6; }
+.skel-note { margin-top: var(--s4); text-align: left; }
+@media (prefers-reduced-motion: reduce) { .skel { animation: none; } }
+
+.empty-lg { padding: var(--s7) var(--s4); }
+.empty-code { font-size: 44px; font-weight: 600; letter-spacing: -0.04em; color: var(--fg-dim); margin-bottom: var(--s2); }
+
+/* ---- project tabs: three groups, then the tabs of the group you are in ---- */
+
+.subtabs { display: flex; flex-wrap: wrap; gap: var(--s1); margin: var(--s3) 0 var(--s4); }
+.subtab-pill {
+  height: 28px;
+  padding: 0 var(--s3);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: none;
+  color: var(--fg-mute);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.subtab-pill:hover { color: var(--fg); background: var(--bg-hover); }
+.subtab-pill.active { color: var(--fg); background: var(--bg-raised); border-color: var(--line-strong); }
+.subtab-pill:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 1px; }
+
+/* ---- an overflow menu: the quiet place for what should not be one click --- */
+
+.more { position: relative; display: inline-flex; }
+.btn-icon { width: 32px; padding: 0; justify-content: center; }
+.btn-icon .icon { width: 16px; height: 16px; }
+.more-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  min-width: 236px;
+  padding: var(--s1);
+  background: var(--bg-raised);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  transform-origin: top right;
+  animation: more-in 120ms ease-out;
+}
+@keyframes more-in { from { opacity: 0; transform: scale(0.97); } }
+.more-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.more-item:hover, .more-item:focus-visible { background: var(--bg-hover); outline: none; }
+.more-item.btn-danger { color: var(--danger); }
+.more-item.btn-danger:hover { background: var(--danger-quiet); }
+.more-hint { font-size: var(--text-2xs); color: var(--fg-dim); }
+.more-sep { height: 1px; background: var(--line); margin: var(--s1) 0; }
+@media (prefers-reduced-motion: reduce) { .more-pop { animation: none; } }
+
+@media (min-width: 1000px) { .cap-inspector { position: sticky; top: var(--s4); align-self: start; } }
+.cap-inspector { scroll-margin-top: calc(var(--top-h) + var(--s3)); }
+
+.diag-checking { display: flex; flex-direction: column; gap: 4px; padding: var(--s4) var(--s4); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--bg-surface); }
+.diag-checking b { font-weight: 600; letter-spacing: -0.01em; }
+.diag-checking span { color: var(--fg-mute); font-size: var(--text-sm); }
+
+/* ---- the composer with no model: an invitation, not an alarm -------------- */
+
+.composer.composer-off {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--s4);
+  padding: var(--s4) var(--s4) var(--s4) var(--s4);
+  border-radius: var(--radius-xl);
+  border-style: dashed;
+}
+.composer-off-mark {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--accent-quiet);
+  color: var(--accent-text);
+}
+.composer-off-mark .icon { width: 18px; height: 18px; }
+.composer-offline { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.composer-offline b { font-weight: 600; letter-spacing: -0.01em; }
+.composer-offline span { color: var(--fg-mute); font-size: var(--text-sm); }
+.composer.composer-off .btn { flex: none; }
+@media (max-width: 560px) { .composer.composer-off { flex-wrap: wrap; } .composer.composer-off .btn { width: 100%; } }
+
+/* The status line gives way from the left, never mid-word: what runs where is on the right. */
+.statusbar .sb-left { min-width: 0; flex: 1 1 auto; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.statusbar .sb-right { flex: none; white-space: nowrap; }
+
+/* The conversation strip sits on the page's own gutter, so the title above it and the strip share one left edge. */
+@media (max-width: 900px) {
+  .threads { padding-left: calc(var(--gutter) - var(--s3)); }
+  .assist-empty { padding-left: var(--gutter); padding-right: var(--gutter); }
+}
+
+.st-facts-row { display: contents; }
+
+/* ---- the sites list on a narrow window: a list, not a stack of cards -----------
+ * The address and its actions share the first line. The three facts sit on one
+ * line under it, each a word, with the long explanations left to the site's own
+ * page. A row is two lines, so twelve sites fit where they used to need eighteen
+ * hundred pixels. */
+@media (max-width: 1060px) {
+  .st-row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 6px; padding: 12px; }
+  .st-host { grid-column: 1; grid-row: 1; }
+  .st-actions { grid-column: 2; grid-row: 1; }
+  .st-col { grid-row: 2; }
+  .st-row { grid-template-areas: "host actions" "facts facts"; }
+  .st-col[data-label="Serves"], .st-col[data-label="Security"], .st-col[data-label="Reachability"] { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; }
+  .st-facts-row { display: flex; flex-wrap: wrap; gap: 4px var(--s4); grid-column: 1 / -1; grid-row: 2; }
+  .st-col::before { display: inline; margin: 0; }
+  .st-col[data-label="Security"] .st-sub, .st-col[data-label="Reachability"] .st-sub { display: none; }
+  .st-col[data-label="Serves"] .st-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 28ch; }
+  .st-col[data-label="Serves"] .st-sub.st-warn { max-width: none; white-space: normal; }
+}
+
+/* ---- skills: a stage folds, so sixty skills are not one scroll ------------- */
+.skill-stage > summary.panel-head { cursor: pointer; list-style: none; user-select: none; }
+.skill-stage > summary.panel-head::-webkit-details-marker { display: none; }
+.skill-stage > summary.panel-head::before { content: "\25B8"; color: var(--fg-dim); margin-right: var(--s2); font-size: 11px; transition: transform var(--fast) ease; display: inline-block; }
+.skill-stage[open] > summary.panel-head::before { transform: rotate(90deg); }
+.skill-stage > summary.panel-head:hover { background: var(--bg-hover); }
+.skill-stage > summary.panel-head:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: -2px; }
+
+/* On a phone the status line starts at its own left edge and fades out at the right,
+   instead of being clipped at both ends. */
+.statusbar .sb-left { display: flex; align-items: center; justify-content: flex-start; }
+.statusbar .sb-left > * { flex: none; }
+@media (max-width: 560px) {
+  .statusbar .sb-left { -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent); }
+}
+
+/* The summary band on a phone is one column of tiles divided by hairlines; the two-column
+   fallback above left a third tile with a stray vertical rule. */
+@media (max-width: 640px) {
+  .summary-band { grid-template-columns: minmax(0, 1fr); row-gap: 0; }
+  .summary-item, .summary-item:first-child { padding: var(--s3) 0; border-left: 0; border-top: 1px solid var(--line); }
+  .summary-item:first-child { border-top: 0; padding-top: 0; }
+}

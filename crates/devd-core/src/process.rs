@@ -641,13 +641,21 @@ pub fn kill_tree(pid: u32) {
                 "/T".to_string(),
                 "/F".to_string(),
             ];
-            let _ = util::run(
-                &taskkill,
-                &args,
-                None,
-                &[],
-                Some(std::time::Duration::from_secs(15)),
-            );
+            // The kill must not be cancellable. `util::run` asks "was this run stopped?"
+            // every 200ms, and this is called because it was: on a busy machine
+            // `taskkill` takes longer than that, the inner call saw the same answer,
+            // called `kill_tree` again, and each level started another `taskkill`
+            // until the stack overflowed. Stopping a run is the one thing a stopped
+            // run must still be allowed to do.
+            let _ = util::with_cancellation(std::sync::Arc::new(|| false), || {
+                util::run(
+                    &taskkill,
+                    &args,
+                    None,
+                    &[],
+                    Some(std::time::Duration::from_secs(15)),
+                )
+            });
         }
     }
     #[cfg(unix)]

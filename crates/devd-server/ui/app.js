@@ -1289,6 +1289,14 @@
     return units;
   }
 
+  /* The one sentence about how many services are up. The monitor counts every
+     process, so a PHP version with four workers read "10/10 services" beside
+     Home's "4 of 4"; people count services, so that is what this counts. */
+  function servicesLine() {
+    var c = serviceCounts(state.server.services);
+    return c.total ? c.up + " of " + c.total + " services running" : "";
+  }
+
   function serviceCounts(rows) {
     var units = serviceUnits(rows);
     var needed = units.filter(function (u) { return u.required; });
@@ -1438,11 +1446,15 @@
     var working = AI.threads ? (AI.threads.filter(function (t) { return t.state === "running"; }).length || null) : null;
     var runs = (state.view === "team" && TEAM.runs && TEAM.runs.length) ? TEAM.runs : (AI.liveRuns || (AI.home && AI.home.teamRuns) || []);
     var live = runs.filter(function (t) { return ["planning", "running"].indexOf(t.state) >= 0; });
+    // Four destinations, not ten: where work happens (Home, Projects, Terminal), who
+    // does it (Assistant, Agents), and the machine and its records behind them. Sites,
+    // hostnames and certificates are the machine's answer to "how do I reach this?",
+    // so they live with the rest of it rather than as a peer of the project.
     var groups = [
       { label: "Work", items: [
         { view: "home", label: "Home" },
         { view: "projects", label: "Projects", count: state.projects.length || state.projectCount || null },
-        { view: "sites", label: "Sites", count: (server.sites || []).length || null }
+        { view: "terminal", label: "Terminal", count: (TERM.sessions || []).filter(function (t) { return t.running !== false; }).length || null }
       ] },
       { label: "Agents", items: [
         { view: "assistant", label: "Assistant", count: working },
@@ -1450,13 +1462,12 @@
         { view: "team", label: "Agents", count: live.length || null, exact: true }
       ] },
       { label: "Machine", menu: true, items: [
+        { view: "sites", label: "Sites", count: (server.sites || []).length || null, hint: "addresses, serving and certificates" },
         { view: "overview", label: "Environment", hint: "services, runtimes, databases, hostnames" },
         { view: "providers", label: "Models", hint: "providers, defaults and fallbacks" },
-        { view: "capabilities", label: "API and tools", hint: "what agents are able to call" }
-      ] },
-      { label: "Records", menu: true, items: [
         { view: "activity", label: "Activity", hint: "everything devd did, and who asked" },
-        { view: "system", label: "Diagnostics", hint: "health checks and what to do about them" }
+        { view: "system", label: "Diagnostics", hint: "health checks and what to do about them" },
+        { view: "capabilities", label: "API and tools", hint: "every capability, with its schema" }
       ] }
     ];
     function tab(i) {
@@ -1822,7 +1833,7 @@
       m.cpu_percent != null ? "CPU " + Math.round(m.cpu_percent) + "%" : (m.load_average != null ? "load " + m.load_average : ""),
       mem.total_mb ? "memory " + Math.round(mem.used_mb / 1024 * 10) / 10 + " of " + Math.round(mem.total_mb / 1024 * 10) / 10 + " GB" : "",
       m.uptime_hours != null ? "up " + m.uptime_hours + " h" : "",
-      m.devd ? m.devd.running + "/" + m.devd.services + " devd services" : ""
+      servicesLine()
     ].filter(Boolean);
     var disks = (m.disks || []).map(function (x) { return esc(x.mount) + " " + esc(String(x.free_gb)) + " GB free of " + esc(String(x.total_gb)) + " GB"; }).join(" \u00b7 ");
     return uiHead("Machine", null, "") + uiList([
@@ -1881,7 +1892,7 @@
     if (!MACHINE.data && !MACHINE.loading && !MACHINE.error) loadMachine();
     var machine = MACHINE.data ? machineSummary(MACHINE.data) : "";
     var actions = total
-      ? '<button type="button" class="btn" data-action="stack-down"' + (up ? "" : " disabled") + '>Stop all</button><button type="button" class="btn" data-action="stack-start">Start needed</button><button type="button" class="btn btn-primary" data-action="stack-up">Start all</button>'
+      ? '<button type="button" class="btn btn-primary" data-action="stack-start">Start needed</button><button type="button" class="btn" data-action="stack-up">Start all</button><button type="button" class="btn btn-ghost btn-danger" data-action="stack-down"' + (up ? "" : " disabled") + ' title="Stops every service devd runs; it asks first">Stop all</button>'
       : '<button type="button" class="btn btn-primary" data-action="setup-open">Set up devd</button>';
 
     var notices = [];
@@ -2021,14 +2032,15 @@
         reach = checked.ok
           ? '<div class="st-main ' + (st >= 400 ? "st-warn" : "st-ok") + '">Answered' + (st ? " " + st : "") + '</div><div class="st-sub">' + (st >= 400 ? "an answer, not the page" : "request succeeded") + "</div>"
           : '<div class="st-main st-bad">' + esc(st ? "HTTP " + st : !checked.resolves ? "Does not resolve" : checked.resolves && !checked.listening ? "Nothing listening" : "No answer") + '</div><div class="st-sub st-bad" title="' + attr(checked.detail || "") + '">' + esc(checked.detail || "") + "</div>";
-      } else reach = '<div class="st-main st-dim">Not checked</div><div class="st-sub">a listening port is not a healthy site</div>';
+      } else reach = '<div class="st-main st-dim">Not checked</div>';
 
       return '<div class="st-row" data-open="1" data-action="open-site" data-name="' + attr(site.name) + '">' +
         '<div class="st-host">' + uiDot(dot) + '<div class="st-hostbody"><div class="st-name mono">' + esc(site.host || site.name) + '</div><div class="st-sub mono" title="' + attr(row.url) + '">' + esc(row.url) +
           (row.shared ? '</div><div class="st-sub"><a href="' + attr(row.shared) + '" target="_blank" rel="noreferrer">public link</a>' : "") + "</div></div></div>" +
+        '<div class="st-facts-row">' +
         '<div class="st-col" data-label="Serves">' + serves + "</div>" +
         '<div class="st-col" data-label="Security">' + cert + "</div>" +
-        '<div class="st-col" data-label="Reachability">' + reach + "</div>" +
+        '<div class="st-col" data-label="Reachability">' + reach + "</div></div>" +
         '<div class="st-actions">' +
           '<button type="button" class="btn btn-mini" data-action="verify-site" data-name="' + attr(site.name) + '"' + (pending ? " disabled" : "") + ' title="Request the address and report what answered">Check</button>' +
           '<button type="button" class="btn btn-mini btn-ghost" data-action="open-url" data-url="' + attr(row.url) + '" aria-label="Open ' + attr(row.url) + ' in the browser">Open</button>' +
@@ -2058,7 +2070,7 @@
     } else if (!state.siteFormOpen) {
       body += uiEmpty("No sites yet", "Give a project folder an address and devd handles the hostname, the certificate and the HTTPS.", '<button type="button" class="btn btn-primary" data-action="new-site">Create a site</button>');
     }
-    if (all.length) body += '<div class="ui-more"><b>Verify</b> requests each address the way a browser would: the hostname, the listener, the TLS handshake and the HTTP status. A certificate on disk or a running web server is not proof that a site answers.</div>';
+    if (all.length) body += '<div class="ui-more"><b>Check</b> requests an address the way a browser would: the hostname, the listener, the TLS handshake and the HTTP status. A listening port, a certificate on disk or a running web server is not proof that a site answers.</div>';
     el("main").innerHTML = page("Sites", "",
       (all.length ? '<button type="button" class="btn" data-action="verify-sites">Check all</button>' : "") +
       '<button type="button" class="btn btn-primary" data-action="new-site">New site</button>', body);
@@ -2227,8 +2239,18 @@
   // the site named at the top. The old Operations screen stays reachable as a
   // fallback for one release.
 
-  function siteTabs() {
-    return '<div class="segmented site-tabs">' + SITE_TABS.map(function (t) {
+  /* A tab is offered when it applies. A site that does not serve PHP has no
+     Laravel to run, so its tab would only ever say "This isn't a Laravel
+     project"; a tab that can only apologise is clutter. */
+  function siteTabsFor(row) {
+    var php = !row || row.serving === "php";
+    return SITE_TABS.filter(function (t) { return t[0] !== "laravel" || php; });
+  }
+
+  function siteTabs(row) {
+    var tabs = siteTabsFor(row);
+    if (!tabs.some(function (t) { return t[0] === SITE.tab; })) SITE.tab = "overview";
+    return '<div class="segmented site-tabs">' + tabs.map(function (t) {
       return '<button type="button" class="seg' + (SITE.tab === t[0] ? " active" : "") + '" data-action="site-tab" data-tab="' + t[0] + '">' + esc(t[1]) + "</button>";
     }).join("") + "</div>";
   }
@@ -2281,6 +2303,7 @@
       ? '<select class="select compact" data-change="ops-site-profile" data-site="' + attr(site.name) + '" aria-label="PHP limits for ' + attr(site.name) + '"><option value=""' + (own ? "" : " selected") + '>Follow the machine (' + esc(profileData.profile || "local") + ")</option>" +
         '<option value="local"' + (own === "local" ? " selected" : "") + '>Local limits</option><option value="production"' + (own === "production" ? " selected" : "") + ">Production limits</option></select>"
       : "";
+    var knownProject = !!row.project_known || (state.projects || []).some(function (p) { return p.path === row.project; });
     var details = [
       uiRow({
         dot: row.server_running ? "ok" : "off",
@@ -2291,8 +2314,8 @@
       }),
       uiRow({
         title: "Project",
-        sub: '<span class="mono">' + esc(row.project || site.root) + "</span>" + (row.project_known ? "" : " \u00b7 not registered in Projects yet"),
-        actions: '<button type="button" class="btn btn-mini btn-ghost" data-action="home-open" data-path="' + attr(row.project) + '">' + (row.project_known ? "Open project" : "Open folder") + "</button>"
+        sub: '<span class="mono">' + esc(row.project || site.root) + "</span>" + (knownProject ? "" : " \u00b7 not imported into devd yet"),
+        actions: '<button type="button" class="btn btn-mini btn-ghost" data-action="home-open" data-path="' + attr(row.project) + '">' + (knownProject ? "Open project" : "Open folder") + "</button>"
       }),
       uiRow({ title: "Serves", sub: esc(runtime) + (row.upstream_listening === false ? " (not running)" : "") + (row.serving_source === "detected" && row.serving !== "proxy" ? " \u00b7 read from the folder" : row.serving_source === "configured" ? " \u00b7 your choice" : "") }),
       uiRow({ title: "TLS", sub: site.tls_mode === "off" ? "off" : row.certificate ? "HTTPS, certificate present" : "HTTPS, no certificate yet" }),
@@ -2340,6 +2363,12 @@
   }
 
   function sitePreview(row) {
+    // A site with nothing to serve answers with the web server's own refusal. Framing
+    // that gave a white box in a dark window and said nothing; say why instead.
+    if (row.serving === "no_entry") {
+      return uiEmpty("Nothing to preview", (function (r) { return r.charAt(0).toUpperCase() + r.slice(1); })(siteAttentionReason(row) || "This folder has no entry point") + ". Add an index.html or index.php, or point the site at a running program, and the preview appears here.",
+        '<button type="button" class="btn" data-action="site-tab" data-tab="overview">Back to the overview</button>');
+    }
     var notice = caTrusted()
       ? ""
       : '<div class="notice" style="margin-bottom:12px"><div class="grow">The certificate authority is not trusted yet, so an HTTPS preview may show a warning.</div>' +
@@ -2380,7 +2409,7 @@
         ? '<button type="button" class="btn" data-action="unshare-site" data-name="' + attr(SITE.name) + '">Stop sharing</button>'
         : '<button type="button" class="btn" data-action="share-site" data-name="' + attr(SITE.name) + '">Share</button>') +
       '<button type="button" class="btn btn-danger" data-action="remove-site" data-name="' + attr(SITE.name) + '">Remove</button>';
-    el("main").innerHTML = page(SITE.name, "", actions, '<div class="site-page">' + siteTabs() + siteBody(row) + "</div>");
+    el("main").innerHTML = page(SITE.name, "", actions, '<div class="site-page">' + siteTabs(row) + siteBody(row) + "</div>");
   }
 
   // ---------------------------------------------------------------- databases
@@ -2786,7 +2815,7 @@
     var mem = m.memory || {};
     var disks = (m.disks || []).map(function (x) { return esc(x.mount) + " " + esc(String(x.free_gb)) + " GB free of " + esc(String(x.total_gb)) + " GB"; }).join(" · ");
     var machine = uiList([
-      uiRow({ dot: "off", title: "This machine", sub: esc([m.cpu_percent != null ? "CPU " + Math.round(m.cpu_percent) + "%" : (m.load_average != null ? "load " + m.load_average : ""), mem.total_mb ? "memory " + Math.round(mem.used_mb / 1024 * 10) / 10 + " of " + Math.round(mem.total_mb / 1024 * 10) / 10 + " GB" : "", m.uptime_hours != null ? "up " + m.uptime_hours + " h" : "", m.devd ? m.devd.running + "/" + m.devd.services + " devd services" : ""].filter(Boolean).join(" · ")), wrap: true }),
+      uiRow({ dot: "off", title: "This machine", sub: esc([m.cpu_percent != null ? "CPU " + Math.round(m.cpu_percent) + "%" : (m.load_average != null ? "load " + m.load_average : ""), mem.total_mb ? "memory " + Math.round(mem.used_mb / 1024 * 10) / 10 + " of " + Math.round(mem.total_mb / 1024 * 10) / 10 + " GB" : "", m.uptime_hours != null ? "up " + m.uptime_hours + " h" : "", servicesLine()].filter(Boolean).join(" · ")), wrap: true }),
       disks ? uiRow({ dot: "off", title: "Disks", sub: disks, wrap: true }) : ""
     ].filter(Boolean));
     var rows = checks.map(function (c) {
@@ -3040,7 +3069,7 @@
       '<div class="ui-more">devd never replaces what you have. Using or watching a service only records your choice.</div>';
     if (missing.length) body += uiHead("Available", missing.length) + uiList(missing);
     el("main").innerHTML = page("Services", "",
-      '<button type="button" class="btn" data-action="stack-down">Stop all</button><button type="button" class="btn" data-action="stack-start">Start needed</button><button type="button" class="btn btn-primary" data-action="stack-up">Start all</button>', body);
+      '<button type="button" class="btn btn-primary" data-action="stack-start">Start needed</button><button type="button" class="btn" data-action="stack-up">Start all</button><button type="button" class="btn btn-ghost btn-danger" data-action="stack-down" title="Stops every service devd runs; it asks first">Stop all</button>', body);
   }
 
   // --------------------------------------------------------------------- sites
@@ -3671,11 +3700,16 @@
       body += '<div class="panel"><div class="empty"><div class="empty-title">No skills</div>' +
         "<div>devd ships a small set of its own. Install more from a GitHub repository, or import the ones another agent on this machine already has.</div></div></div>";
     } else {
+      var firstStage = true;
       Object.keys(kinds).forEach(function (k) {
         var items = groups[k];
         if (!items || !items.length) return;
-        body += '<div class="panel"><div class="panel-head"><span>' + kinds[k] + "</span>" +
-          '<span class="panel-note">' + items.length + "</span></div><div class=\"rows\">" +
+        // Sixty-odd skills in one scroll is a wall. Each stage folds; the first is open,
+        // and a search opens every stage that has a match.
+        var openStage = firstStage || !!q;
+        firstStage = false;
+        body += '<details class="panel skill-stage"' + (openStage ? " open" : "") + '><summary class="panel-head"><span>' + kinds[k] + "</span>" +
+          '<span class="panel-note">' + items.length + "</span></summary><div class=\"rows\">" +
           items.map(function (s) {
             return '<div class="svc"><div class="svc-main"><div class="svc-name">' +
               esc(s.name) + ' <span class="pill">' + esc(s.source) + "</span>" +
@@ -3685,7 +3719,7 @@
               '<button type="button" class="btn btn-mini" data-action="skill-read" data-name="' + attr(s.name) + '">Read</button>' +
               (s.source === "user" ? '<button type="button" class="btn btn-mini btn-danger" data-action="skill-remove" data-name="' + attr(s.name) + '">Remove</button>' : "") +
               "</div></div>";
-          }).join("") + "</div></div>";
+          }).join("") + "</div></details>";
       });
       if (q && !Object.keys(groups).length) {
         body += '<div class="panel"><div class="panel-body empty-inline">No skill matches "' + esc(q) + '".</div></div>';
@@ -3789,7 +3823,7 @@
     }
 
     el("main").innerHTML = page(
-      "Shared",
+      "Notes",
       "Project notes and todos for humans and agents — durable across sessions and reloads.",
       tabs,
       head + body
@@ -3911,7 +3945,10 @@
     draft: ""
   };
 
-  var TERM_POLL_MS = 900;
+  /* The screen is read, not streamed, so how often it is read is how fast typing
+ * feels. 900 ms made every keystroke echo a second late; a read is cheap, and
+ * a keystroke also asks for one straight away (`termKick`). */
+var TERM_POLL_MS = 250;
 
   function termSession() {
     return (TERM.sessions || []).filter(function (s) { return s.id === TERM.active; })[0] || null;
@@ -3961,7 +3998,7 @@
     // for Enter; `terminal.write` takes the bytes as given.
     t.onData(function (data) {
       if (!TERM.active) return;
-      run("terminal.write", { id: TERM.active, data: data }, { quiet: true });
+      run("terminal.write", { id: TERM.active, data: data }, { quiet: true }).then(termKick);
     });
     // A resize is told to the shell, so a full-screen program redraws at the new
     // size instead of wrapping at the old one.
@@ -4008,6 +4045,14 @@
     });
   }
 
+  /* Read the screen soon after something was typed, so the echo does not wait
+   * for the next poll. Several keystrokes in a row share one read. */
+  var termKickTimer = null;
+  function termKick() {
+    if (termKickTimer) return;
+    termKickTimer = setTimeout(function () { termKickTimer = null; termRefresh(); }, 35);
+  }
+
   /* What is on `next` that was not on `prev`, or null when the two are not the
    * same screen continuing. A terminal that has scrolled or cleared rewrites from
    * the top, and appending the difference would produce nonsense. */
@@ -4047,12 +4092,22 @@
       // Move the existing subtree into the container this render made.
       if (t.element.parentNode !== host) host.appendChild(t.element);
       termFit();
+      termFocus(t);
       return;
     }
     host.innerHTML = "";
     t.open(host);
     termFit();
     t.focus();
+  }
+
+  /* A terminal you have just opened is one you are about to type in. Focus goes to
+   * it unless a control on the page already has it, so a re-render while someone
+   * types into another field does not take their keystrokes. */
+  function termFocus(t) {
+    var a = document.activeElement;
+    var typing = a && a !== document.body && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && !(a.classList && a.classList.contains("xterm-helper-textarea"));
+    if (!typing) t.focus();
   }
 
   function termStartPolling() {
@@ -4088,7 +4143,7 @@
   function termOpen() {
     var dir = termStartDir();
     if (!dir) return toast("warn", "Open a project first: a shell starts in a folder");
-    act("terminal.open", { path: dir, cols: 100, rows: 30 }).then(function (o) {
+    run("terminal.open", { path: dir, cols: 100, rows: 30 }, { quiet: true }).then(function (o) {
       if (!o) return;
       TERM.active = (o.data && o.data.id) || null;
       TERM.screen = "";
@@ -4105,7 +4160,7 @@
     if (!text) return;
     input.value = "";
     TERM.draft = "";
-    act("terminal.write", { id: TERM.active, data: text + "\r" }, { quiet: true }).then(function () {
+    run("terminal.write", { id: TERM.active, data: text + "\r" }, { quiet: true }).then(function () {
       // A shell echoes what it is given; reading straight after the write makes
       // the typed line appear without waiting for the next poll.
       setTimeout(termRefresh, 120);
@@ -4398,7 +4453,7 @@
 
     var body;
     if (!state.projectsLoaded) {
-      body = '<div class="loading" role="status" aria-live="polite">Reading your projects…</div>';
+      body = skelRows(7, "Reading your projects");
     } else if (state.projectsError && !all.length) {
       body = uiEmpty("Couldn't read your projects", state.projectsError, '<button type="button" class="btn btn-primary" data-action="projects-reload">Try again</button>');
     } else if (!all.length) {
@@ -4409,7 +4464,11 @@
         '<div class="inline"><button type="button" class="btn" data-action="nav" data-view="create">Start a new one</button></div>');
     } else {
       var exposed = all.filter(function (p) { return (p.sites || []).length; }).length;
-      var registered = all.filter(function (p) { return p.registered; }).length;
+      // What a person can act on, not how devd came to know about the folder: a
+      // folder that is gone, a repository Git cannot read, or a merge in conflict.
+      var attention = all.filter(function (p) {
+        return p.exists === false || p.error || (p.status && (p.status.conflicted || []).length);
+      }).length;
       var sorts = PROJECT_SORTS.map(function (s) {
         return '<button type="button" class="ui-sort' + (state.projectSort === s.id ? " active" : "") + '" data-action="project-sort" data-sort="' + attr(s.id) + '">' + esc(s.label) + "</button>";
       }).join("");
@@ -4435,10 +4494,9 @@
           if (st.ahead) bits.push(st.ahead + " ahead");
           if (st.behind) bits.push(st.behind + " behind");
           dotKind = changes ? "warn" : "ok";
-        } else if (p.is_repository) bits.push("repository");
+        }
         if (p.exists === false) { facts.push('<span class="fact fact-bad">folder is gone</span>'); dotKind = "bad"; }
         if (p.error) dotKind = "warn";
-        if (!p.registered) bits.push(p.source === "site" ? "known from its site" : "not imported");
         var site = siteFor[p.path];
         if (site) facts.push('<span class="fact mono" title="The address that serves it">' + esc(site.site.host || site.site.name) + "</span>");
         if (agentWork[p.path]) facts.push('<span class="fact fact-ok">' + uiDot("live") + agentWork[p.path] + " agent" + (agentWork[p.path] === 1 ? "" : "s") + " working</span>");
@@ -4461,7 +4519,7 @@
       body = summaryBand([
         { label: "Projects", value: all.length + (all.length === 1 ? " project" : " projects"), detail: "in the folders devd knows" },
         { label: "With an address", value: String(exposed), detail: exposed === all.length ? "every project has a site" : (all.length - exposed) + " not exposed as a site" },
-        { label: "Registered", value: String(registered), detail: registered === all.length ? "all imported into devd" : (all.length - registered) + " known only because a site serves them" }
+        { label: "Needs attention", value: attention ? String(attention) : "None", detail: attention ? "a missing folder, unreadable Git or a conflict" : "every project opens cleanly", tone: attention ? "warn" : "ok", dot: attention ? "warn" : "ok" }
       ]) + (all.length > 4 ? controls : "") + (visible.length ? uiList(rows) : uiEmpty('No project matches "' + state.projectQuery + '"', "Clear the search to see the rest."));
     }
     el("main").innerHTML = page("Projects", "",
@@ -4530,6 +4588,17 @@
     reviews: "Reviews",
     memory: "Agent memory"
   };
+
+  var TAB_GROUPS = [
+    { id: "files", label: "Files", tabs: ["files"] },
+    { id: "git", label: "Git", tabs: ["changes", "history", "branches", "tags", "remotes", "stashes", "worktrees", "recover"] },
+    { id: "agents", label: "Agents", tabs: ["reviews", "memory"] }
+  ];
+  var TAB_LAST = {};
+
+  function tabGroupOf(tab) {
+    return TAB_GROUPS.filter(function (g) { return g.tabs.indexOf(tab) !== -1; })[0] || TAB_GROUPS[0];
+  }
 
   function openProject(path) {
     state.view = "project";
@@ -4682,9 +4751,9 @@
       '<span class="panel-note">' + esc(st.branch || "(detached)") +
       (total ? " · " + total + " file" + (total === 1 ? "" : "s") : "") + "</span>" +
       '<span class="inline right">' +
-      mini("Stage all", "stage-all") +
-      mini("Unstage all", "unstage-all") +
-      mini("Stash changes", "stash-push") +
+      (changed + untracked ? mini("Stage all", "stage-all") : "") +
+      (staged ? mini("Unstage all", "unstage-all") : "") +
+      (total ? mini("Stash changes", "stash-push") : "") +
       "</span></div>" +
       '<div class="panel-body flush">' + summary + '<div class="rows">' + groups + "</div></div></div>";
 
@@ -5280,7 +5349,7 @@
 
     var treeHtml;
     if (fs.treeError) treeHtml = '<div class="notice notice-bad">' + esc(fs.treeError) + "</div>";
-    else if (!fs.entries) treeHtml = '<div class="loading">Loading</div>';
+    else if (!fs.entries) treeHtml = skelRows(7, "Loading the folder");
     else if (!fs.entries.length) treeHtml = '<div class="ui-quiet">This folder is empty.</div>';
     else {
       treeHtml = fs.entries.map(function (e) {
@@ -5397,14 +5466,21 @@
     if (state.view !== "project") return;
     var st = state.project.status;
     var tab = state.tab;
-    var tabs = Object.keys(TAB_LABELS)
-      .map(function (name) {
-        return (
-          '<button type="button" class="tab' + (tab === name ? " active" : "") +
-          '" data-action="tab" data-tab="' + name + '">' + esc(TAB_LABELS[name]) + "</button>"
-        );
-      })
-      .join("");
+    // Eleven tabs in one strip made Git and agent work look like peers of the
+    // files. Three groups are the project; the tabs inside a group are a second,
+    // quieter row that appears only for the group you are in.
+    var group = tabGroupOf(tab);
+    var tabs = '<div class="tabs" role="tablist" aria-label="Project">' + TAB_GROUPS.map(function (g) {
+      var on = g.id === group.id;
+      return '<button type="button" role="tab" aria-selected="' + on + '" class="tab' + (on ? " active" : "") +
+        '" data-action="tab-group" data-group="' + g.id + '">' + esc(g.label) + "</button>";
+    }).join("") + "</div>" +
+      (group.tabs.length > 1
+        ? '<div class="subtabs" role="tablist" aria-label="' + attr(group.label) + '">' + group.tabs.map(function (name) {
+          return '<button type="button" role="tab" aria-selected="' + (tab === name) + '" class="subtab-pill' + (tab === name ? " active" : "") +
+            '" data-action="tab" data-tab="' + name + '">' + esc(TAB_LABELS[name]) + "</button>";
+        }).join("") + "</div>"
+        : "");
 
     var current = state.tabs[tab] || {};
     if (tab === "reviews" || tab === "memory") {
@@ -5418,7 +5494,7 @@
       else STUDIO.memory = current.data || [];
     }
     var body;
-    if (current.loading) body = '<div class="loading">Loading</div>';
+    if (current.loading || (!state.tabs[tab] && tab !== "files")) body = skelRows(5, "Loading " + (TAB_LABELS[tab] || "").toLowerCase());
     else if (current.error) body = '<div class="notice notice-bad">' + esc(current.error) + "</div>";
     else if (tab === "files") {
       // The tree loads itself: it is a stack of folder requests, not one value,
@@ -5451,9 +5527,14 @@
       "</div>" +
       '<div class="page-actions">' +
       '<button type="button" class="btn" data-action="open-terminal" data-path="' + attr(state.project.path) + '" title="Open your terminal in this project, with its pinned runtimes and devd first on PATH">Terminal</button>' +
-      '<button type="button" class="btn" data-action="project-refresh">Refresh</button>' +
-      '<button type="button" class="btn btn-ghost" data-action="untrack">Remove from devd</button>' +
-      '<button type="button" class="btn btn-ghost btn-danger" data-action="delete-folder">Delete from disk</button>' +
+      '<button type="button" class="btn btn-ghost" data-action="project-refresh">Refresh</button>' +
+      '<div class="more"><button type="button" class="btn btn-ghost btn-icon" data-action="more-toggle" aria-haspopup="menu" aria-expanded="false" aria-label="More actions for this project" title="More">' +
+      '<svg class="icon" aria-hidden="true" viewBox="0 0 16 16"><circle cx="3" cy="8" r="1.4" fill="currentColor"/><circle cx="8" cy="8" r="1.4" fill="currentColor"/><circle cx="13" cy="8" r="1.4" fill="currentColor"/></svg></button>' +
+      '<div class="more-pop" role="menu" hidden>' +
+      '<button type="button" role="menuitem" class="more-item" data-action="untrack"><span>Remove from devd</span><span class="more-hint">The folder is kept</span></button>' +
+      '<div class="more-sep"></div>' +
+      '<button type="button" role="menuitem" class="more-item btn-danger" data-action="delete-folder"><span>Delete from disk</span><span class="more-hint">Removes the folder and its files</span></button>' +
+      "</div></div>" +
       "</div></div>" +
       projectContext(state.project.path) +
       '<div class="tabs">' + tabs + "</div>" +
@@ -5474,6 +5555,12 @@
           state.selectedCapDetail = res.body;
           if (!Object.keys(state.capArgs).length) state.capArgs = skeleton(res.body.args_schema);
           render();
+          // When the window is narrow the detail stacks under a 50-row list, out of
+          // sight: the row lights up and nothing else seems to happen. Bring it up.
+          var inspector = el("cap-inspector");
+          if (inspector && inspector.getBoundingClientRect().top > window.innerHeight * 0.6) {
+            inspector.scrollIntoView({ block: "start", behavior: "smooth" });
+          }
         }
       });
   }
@@ -5708,7 +5795,7 @@
       "</div></div>" +
       pager(state.caps.items.length, page, "cap-page") +
       "</div>" +
-      "<div>" + inspector + "</div>" +
+      '<div id="cap-inspector" class="cap-inspector">' + inspector + "</div>" +
       "</div></div>";
   }
 
@@ -5761,7 +5848,15 @@
      name devd has no sentence for is shown as it is, never guessed at. */
   var ACT_VERB = { start: "Started", stop: "Stopped", restart: "Restarted", install: "Installed", remove: "Removed", delete: "Deleted", import: "Imported", create: "Created", save: "Saved", write: "Wrote", edit: "Edited", read: "Read", run: "Ran", verify: "Checked", approve: "Approved", deny: "Declined", sync: "Updated", issue: "Issued", trust: "Trusted", untrust: "Stopped trusting", retry: "Retried", resume: "Resumed", pause: "Paused", cancel: "Cancelled", say: "Told", plan_submit: "Submitted a plan for", report: "Reported on", set_startup: "Changed startup for", test: "Tested", discover: "Looked for", use: "Switched to", list: "Listed", status: "Checked the status of", get: "Read", show: "Looked at" };
   var ACT_NOUN = { service: "a service", stack: "the whole stack", site: "a site", tls: "a certificate", hosts: "the hostnames", dns: "local DNS", project: "a project", fs: "a file", git: "a repository", team: "an agent run", run: "an agent run", provider: "a model provider", models: "the model setup", runtime: "a runtime", php: "PHP", approval: "an approval request", inbox: "a message", mcp: "an MCP tool", web: "the web server", share: "a shared link", schedule: "a schedule", environment: "the environment", health: "devd's health", template: "the run templates" };
+  /* Capabilities whose name does not read as verb + noun get their own sentence. */
+  var ACT_PHRASE = {
+    "project.terminal": "Opened a terminal in a project", "terminal.open": "Opened a terminal", "terminal.close": "Closed a terminal",
+    "models.inventory": "Read the model setup", "models.catalogue": "Read the model catalogue", "models.roles": "Read which model does which work",
+    "provider.presets": "Read the provider list", "team.roles": "Read the agent roster", "services.inventory": "Read the installed services",
+    "toolchain.list": "Checked the installed tools", "tls.ca.status": "Checked the certificate authority", "service.catalogue": "Read the service catalogue"
+  };
   function activityWords(cap) {
+    if (ACT_PHRASE[cap]) return ACT_PHRASE[cap];
     var m = String(cap || "").split(".");
     var verb = ACT_VERB[m.slice(1).join("_")] || ACT_VERB[m[1]];
     var noun = ACT_NOUN[m[0]];
@@ -6697,7 +6792,7 @@
   function loadHealth() {
     if (AI.healthPending) return AI.healthPending;
     AI.healthLoading = true;
-    var timeout = new Promise(function (_, rej) { setTimeout(function () { rej(new Error("health check timed out after 15 s")); }, 15000); });
+    var timeout = new Promise(function (_, rej) { setTimeout(function () { rej(new Error("health check timed out after 45 s")); }, 45000); });
     AI.healthPending = Promise.race([read("health.status"), timeout]).then(function (h) {
       AI.health = h; AI.healthError = null; AI.healthAt = Date.now();
       read("environment.get").then(function (e) { AI.env = e; }).catch(function () {});
@@ -6739,6 +6834,9 @@
 
   function healthBody(withClose) {
     var h = AI.health;
+    // A check that is still running says so. "Not checked yet" with a Try again
+    // button, shown for the whole time a slow check takes, read as a failure.
+    if (!h && AI.healthLoading) return '<div class="diag-checking"><b>Checking this machine…</b><span>Ports, services, the database and Git are being asked. This can take a few seconds.</span></div>' + skelRows(4, "Checking this machine");
     if (!h) return '<div class="notice notice-warn">' + esc(AI.healthError || "Not checked yet") + '</div><div class="inline"><button type="button" class="btn" data-action="health-recheck">Try again</button></div>';
     var order = { critical: 0, unavailable: 1, degraded: 2, starting: 3, unknown: 4, setup_incomplete: 5, healthy: 6 };
     var sorted = h.checks.slice().sort(function (a, b) { return order[a.state] - order[b.state]; });
@@ -6916,7 +7014,8 @@
           sendAction: team ? "home-team" : "home-ask",
           sendLabel: team ? "Ask the team to plan this" : "Ask devd"
         })
-      : '<div class="composer-dock composer-dock-home"><div class="composer composer-off"><div class="composer-offline"><b>No model is connected.</b> Connect one to give devd goals. Everything else on this page works without it.</div>' +
+      : '<div class="composer-dock composer-dock-home"><div class="composer composer-off"><span class="composer-off-mark" aria-hidden="true"><svg class="icon"><use href="#i-spark"></use></svg></span>' +
+          '<div class="composer-offline"><b>Connect a model to give devd goals</b><span>Projects, sites and the terminal work without one.</span></div>' +
           '<button type="button" class="btn btn-primary" data-action="nav" data-view="providers">Connect a model</button></div></div>';
 
     var decisions = [], work = [], machine = [];
@@ -7469,8 +7568,7 @@
       var cat = pr.category === "local" ? "local" : pr.category === "aggregator" ? "aggregator" : "cloud";
       return '<button type="button" class="preset" data-action="prov-new" data-preset="' + attr(pr.id) + '">' +
         '<span class="preset-head">' + brandImg(pr.id, "brand-dot") + "<b>" + esc(pr.label) + '</b><span class="preset-cat">' + esc(cat) + "</span></span>" +
-        "<span>" + esc(pr.requires_key ? "Needs an API key" : "No key") + " · " + esc(pr.tools === "documented" ? "tool calling" : "tools depend on the model") + "</span>" +
-        "<small>" + esc(pr.models_from || "") + "</small></button>";
+        "<span>" + esc(pr.requires_key ? "Needs an API key" : "No key") + " · " + esc(pr.tools === "documented" ? "tool calling" : "tools depend on the model") + "</span></button>";
     }).join("");
     var empty = '<div class="panel"><div class="empty"><div class="empty-icon"><svg class="icon" aria-hidden="true"><use href="#i-sliders"></use></svg></div>' +
       '<div class="empty-title">No model provider yet</div>' +
@@ -7485,7 +7583,11 @@
       (AI.provForm ? providerForm(AI.provForm) : "") +
       localPanel() +
       (roles ? '<details class="ui-fold"><summary>Which model does which work</summary>' + roles + "</details>" : "") +
-      uiHead("Add a provider", null) + '<div class="preset-grid" id="add-provider">' + presetCards + "</div>" +
+      // With a provider already working, the fifteen others are a reference, not the
+      // page: they sit behind one line. With none, they are the whole point.
+      (AI.providers.length
+        ? '<details class="ui-fold" id="add-provider-fold"><summary>Add another provider</summary><div class="preset-grid" id="add-provider">' + presetCards + "</div></details>"
+        : uiHead("Add a provider", null) + '<div class="preset-grid" id="add-provider">' + presetCards + "</div>") +
       '<details class="ui-fold"><summary>Model catalogue</summary>' + modelPanels() + "</details>");
   }
 
@@ -8174,7 +8276,8 @@
     // The render replaced the tail element with a fresh empty one.
     AI.streamPainted = "";
     // Follow the bottom only when the person was already there; otherwise stay exactly where they were.
-    box.scrollTop = near ? box.scrollHeight : top;
+    // An empty conversation starts at its heading; following the bottom cut it off under the top strip.
+    box.scrollTop = box.querySelector(".assist-empty") ? 0 : near ? box.scrollHeight : top;
     // The text of the turn being written is an overlay on the last turn; a
     // re-render rebuilds the boxes under it, so it is laid down again.
     paintStreamTail();
@@ -8270,7 +8373,7 @@
     paintChatPlan();
     paintAttachments();
     fitComposer();
-    var box = el("chat-stream"); if (box) box.scrollTop = box.scrollHeight;
+    var box = el("chat-stream"); if (box) box.scrollTop = box.querySelector(".assist-empty") ? 0 : box.scrollHeight;
     startThreadTimer();
   }
 
@@ -8661,7 +8764,10 @@
       }
     });
     var earlier = AI.history.requests.map(function (r) {
-      return uiRow({ dot: r.state === "approved" ? "ok" : r.state === "failed" ? "bad" : "off", title: esc(r.capability), sub: esc(r.state), meta: esc(ago(r.decided_at || r.created_at)), mono: true });
+      // What was asked, in words, and who asked: "fs.delete declined" said neither.
+      var asked = (r.plan && r.plan.summary) || activityWords(r.capability) || r.capability;
+      var verdict = r.state === "approved" ? "You approved it" : r.state === "denied" || r.state === "declined" ? "You declined it" : r.state === "failed" ? "It was approved but failed" : String(r.state || "");
+      return uiRow({ dot: r.state === "approved" ? "ok" : r.state === "failed" ? "bad" : "off", title: esc(asked), sub: esc(verdict) + (r.actor ? " · asked by " + esc(String(r.actor).replace("agent:", "agent ")) : "") + ' · <span class="mono">' + esc(r.capability) + "</span>", meta: esc(ago(r.decided_at || r.created_at)) });
     }).concat(AI.history.messages.map(function (x) {
       return uiRow({ dot: "off", title: esc(x.subject), sub: esc(x.reply ? "You answered: " + x.reply : "Read") });
     }));
@@ -8833,11 +8939,13 @@
     home: "/",
     inbox: "/inbox",
     assistant: "/assistant",
-    team: "/team",
+    // Runs and the roster live under /agents, named for what they show. The first
+    // version had them the other way round (the roster at /agents, runs at /team).
+    team: "/agents/runs",
     projects: "/projects",
     create: "/create",
     develop: "/develop",
-    agents: "/agents",
+    agents: "/agents/team",
     skills: "/skills",
     schedules: "/schedules",
     shared: "/shared",
@@ -8863,6 +8971,8 @@
     capabilities: "/api-tools"
   };
 
+  var LEGACY_ROUTES = { "/team": "team", "/agents": "agents" };
+
   /* The address of the screen that is showing. */
   function routeFor(view) {
     if (view === "project") {
@@ -8875,6 +8985,7 @@
     if (view === "site") {
       return SITE.name ? "/server/sites/" + encodeURIComponent(SITE.name) : "/server/sites";
     }
+    if (view === "notfound") return location.pathname;
     return ROUTES[view] || "/";
   }
 
@@ -8888,7 +8999,12 @@
     for (var k in ROUTES) {
       if (ROUTES[k] === p) return k;
     }
-    return "home";
+    // Addresses from before the rename still open what they used to: a saved link
+    // or an open tab is not broken by moving a page.
+    if (LEGACY_ROUTES[p]) return LEGACY_ROUTES[p];
+    // An address that means nothing says so, rather than quietly showing Home
+    // under a URL that does not belong to it.
+    return "notfound";
   }
 
   /* Put the address in the bar without adding a history entry. */
@@ -8930,6 +9046,10 @@
         OPS.error = "";
         OPS.errorTab = "";
       }
+    }
+    // An old address is rewritten to its current one without adding a history entry.
+    if (view !== "notfound" && view !== "project" && view !== "site" && view !== "assistant" && location.pathname.replace(/\/+$/, "") !== routeFor(view) && LEGACY_ROUTES[location.pathname.replace(/\/+$/, "")]) {
+      history.replaceState({ view: view }, "", routeFor(view) + location.search);
     }
     if (state.view === view && !state.pendingThread && !siteChanged) return;
     navigate(view, true);
@@ -9073,10 +9193,26 @@
     render();
   }
 
+  /* Rows that stand where the content will be, so a page keeps its shape while
+     it waits instead of collapsing to a spinner in the middle of nothing. The
+     widths are fixed, not random: a reload must not look like new data. */
+  var SKEL_WIDTHS = [62, 48, 71, 55, 66, 44];
+  function skelRows(rows, label) {
+    var out = "";
+    for (var i = 0; i < (rows || 5); i++) {
+      var w = SKEL_WIDTHS[i % SKEL_WIDTHS.length];
+      out += '<div class="skel-row"><span class="skel skel-dot"></span><span class="skel-lines">' +
+        '<span class="skel skel-line" style="width:' + w + '%"></span>' +
+        '<span class="skel skel-line skel-sub" style="width:' + Math.max(24, w - 22) + '%"></span></span></div>';
+    }
+    return '<div class="skel-list" role="status" aria-live="polite" aria-label="' + attr(label || "Loading") + '">' + out + "</div>";
+  }
+
   function renderLoading(note) {
     el("main").innerHTML =
-      '<div class="page"><div class="loading" role="status" aria-live="polite">Loading…</div>' +
-      (note ? '<div class="loading-note">' + esc(note) + "</div>" : "") + "</div>";
+      '<div class="page"><div class="page-head"><div class="page-heading"><span class="skel skel-title"></span></div></div>' +
+      skelRows(6, note || "Loading") +
+      (note ? '<div class="loading-note skel-note">' + esc(note) + "</div>" : "") + "</div>";
   }
 
   /* Reading the server means probing this machine - installed services,
@@ -9100,6 +9236,23 @@
       table.parentNode.insertBefore(wrap, table);
       wrap.appendChild(table);
     });
+  }
+
+  /* The destinations whose names are nearest to what was typed, so a stale
+     bookmark or a mistyped address lands somewhere useful. */
+  function renderNotFound() {
+    var typed = location.pathname.toLowerCase().replace(/[^a-z]/g, "");
+    var near = Object.keys(ROUTES).filter(function (k) {
+      var r = ROUTES[k].toLowerCase().replace(/[^a-z]/g, "");
+      return r && (typed.indexOf(r) !== -1 || r.indexOf(typed) !== -1);
+    }).slice(0, 3);
+    var links = (near.length ? near : ["home", "projects", "sites"]).map(function (k) {
+      return '<button type="button" class="btn" data-action="nav" data-view="' + k + '">' + esc(ROUTES[k]) + "</button>";
+    }).join("");
+    el("main").innerHTML = '<div class="page"><div class="empty empty-lg"><div class="empty-code mono">404</div>' +
+      '<div class="empty-title">There is nothing at this address</div>' +
+      '<div class="mono dim nowrap" style="max-width:100%;overflow:hidden;text-overflow:ellipsis">' + esc(location.pathname) + "</div>" +
+      '<div class="inline" style="margin-top:16px;justify-content:center">' + links + "</div></div></div>";
   }
 
   function render() {
@@ -9141,6 +9294,7 @@
     else if (state.view === "capabilities") renderCapabilities();
     else if (state.view === "activity") renderActivity();
     else if (state.view === "system") renderSystem();
+    else if (state.view === "notfound") renderNotFound();
     wrapTables();
   }
 
@@ -10717,6 +10871,19 @@
         if (input) input.focus();
       });
     },
+    "tab-group": function (n) {
+      var g = TAB_GROUPS.filter(function (x) { return x.id === n.dataset.group; })[0];
+      if (!g) return;
+      ACTIONS.tab({ dataset: { tab: TAB_LAST[g.id] || g.tabs[0] } });
+    },
+    "more-toggle": function (n) {
+      var pop = n.parentNode.querySelector(".more-pop");
+      var open = pop.hidden;
+      closeMoreMenus();
+      pop.hidden = !open;
+      n.setAttribute("aria-expanded", String(open));
+      if (open) { var first = pop.querySelector(".more-item"); if (first && n.matches(":focus-visible")) first.focus(); }
+    },
     "top-menu": function (n) {
       var name = n.dataset.menu;
       state.navMenu = "";
@@ -11002,7 +11169,10 @@
      * uses and takes you to it, so the shell you asked for is the shell you see. */
     "open-terminal": function (n) {
       var path = n.dataset.path;
-      act("project.terminal", { path: path }).then(function (o) {
+      // `run`, not `act`: `act` re-reads the whole application before it resolves, and
+      // opening a shell does not change anything that read would show. Waiting for it
+      // made the button look dead for seconds, and a second click opened a second shell.
+      run("project.terminal", { path: path }, { quiet: true }).then(function (o) {
         if (!o || !o.data || !o.data.id) return;
         TERM.active = o.data.id;
         TERM.screen = "";
@@ -11679,7 +11849,7 @@
     },
     "term-close": function (node) {
       var id = node.dataset.id;
-      act("terminal.close", { id: id }).then(function (o) {
+      run("terminal.close", { id: id }, { quiet: true }).then(function (o) {
         if (!o) return;
         if (TERM.active === id) { TERM.active = null; TERM.screen = ""; }
         termStopPolling();
@@ -11874,10 +12044,17 @@
 
     tab: function (node) {
       state.tab = node.dataset.tab;
+      TAB_LAST[tabGroupOf(state.tab).id] = state.tab;
       state.diff = null;
-      render();
+      // `loadTab` marks the tab as loading before it returns, so it runs first:
+      // drawing a tab that has not started loading painted its empty state
+      // ("No history loaded") for as long as the request took.
       if (!state.tabs[state.tab] || state.tabs[state.tab].error) {
-        loadTab(state.tab).then(render);
+        var pending = loadTab(state.tab);
+        render();
+        pending.then(render);
+      } else {
+        render();
       }
     },
 
@@ -12257,7 +12434,16 @@
   document.addEventListener("pointerdown", captureSelect, true);
   document.addEventListener("mousedown", captureSelect, true);
 
+  function closeMoreMenus() {
+    Array.prototype.forEach.call(document.querySelectorAll(".more-pop:not([hidden])"), function (p) {
+      p.hidden = true;
+      var t = p.parentNode.querySelector("[data-action=more-toggle]");
+      if (t) t.setAttribute("aria-expanded", "false");
+    });
+  }
+
   document.addEventListener("click", function (event) {
+    if (!event.target.closest(".more")) closeMoreMenus();
     if (state.topMenu && !event.target.closest(".top-menu")) { state.topMenu = ""; rail(); }
     if (state.navMenu && !event.target.closest(".top-all")) { state.navMenu = ""; rail(); }
     if (AI.popover && !event.target.closest("#composer-popover") && !event.target.closest("select") && !event.target.closest('[data-action^="composer-"]')) closeComposerPopover();
@@ -12280,6 +12466,12 @@
       return;
     }
     if (event.key === "Escape") {
+      if (document.querySelector(".more-pop:not([hidden])")) {
+        var moreBtn = document.querySelector('[data-action=more-toggle][aria-expanded="true"]');
+        closeMoreMenus();
+        if (moreBtn) moreBtn.focus();
+        return;
+      }
       if (AI.popover) {
         var popAnchor = AI.popover.anchor;
         closeComposerPopover();

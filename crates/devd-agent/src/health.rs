@@ -72,14 +72,36 @@ fn label_of(name: &str) -> &'static str {
     }
 }
 
+/// A port held by the web server devd itself runs is how it should be, not a
+/// problem to look at. It is only called expected when that service is up and
+/// the holder is named after it; anything else keeps its warning.
+fn mark_owned_ports(comps: &mut [Component], web_up: &[&str]) {
+    for c in comps.iter_mut().filter(|c| c.id.starts_with("port.") && c.state == "degraded") {
+        let held = c.detail.to_lowercase();
+        let ours = web_up.iter().any(|w| {
+            if *w == "apache" {
+                held.contains("httpd") || held.contains("apache")
+            } else {
+                held.contains(w)
+            }
+        });
+        if ours {
+            c.state = "healthy";
+            c.detail = format!("{} - devd's own web server", c.detail);
+        }
+    }
+}
+
 fn explain(id: &str, state: &str, detail: &str) -> (String, Value) {
     let (text, fix): (String, Value) = match id {
         "git" => ("Git is needed for every repository feature, and for the isolated workspaces the agent team uses.".into(), json!({ "label": "Install Git", "capability": "toolchain.install", "args": { "tool": "git" } })),
         "port.http" | "port.https" => (
-            "Nothing is wrong if the program named above is devd's own nginx or Apache: it is expected to hold this port. If it is another program, start your sites on another port or stop that program.".into(),
+            "devd's own web server is not what holds this port, so another program does. Start your sites on another port, or stop that program.".into(),
             json!({ "label": "See what is using it", "view": "overview" }),
         ),
-        "state" => (format!("devd's database could not be opened or is damaged ({detail}). Nothing is saved until this is fixed. Check free disk space and permissions on the devd directory."), json!({ "label": "Open diagnostics", "view": "system" })),
+        // The detail is printed above this text, so the text must not print it again.
+        "state" if detail.contains("newer devd") => ("This copy of devd is older than the one that last wrote the database, so it can read it but not change it. Nothing is lost. Run the newer devd, or update this one.".into(), json!({ "label": "Open diagnostics", "view": "system" })),
+        "state" => ("Nothing is saved until this is fixed. Check free disk space and permissions on the devd directory.".into(), json!({ "label": "Open diagnostics", "view": "system" })),
         "settings" => ("The settings file is invalid. Fix the file named in the detail.".into(), json!({ "label": "Open diagnostics", "view": "system" })),
         "layout" | "home" => ("devd cannot use its data directory. Check that it exists and is writable.".into(), json!({ "label": "Open diagnostics", "view": "system" })),
         "www_root" => ("The folder devd serves sites from is missing or not writable.".into(), json!({ "label": "Open diagnostics", "view": "system" })),
@@ -92,7 +114,9 @@ fn explain(id: &str, state: &str, detail: &str) -> (String, Value) {
             if state == "starting" { "The process is up but its port is not answering yet. Give it a moment; if it stays like this, read its log.".to_string() } else { "This service is needed but is not running. It may have stopped unexpectedly; start it from Services, or change its startup policy.".to_string() },
             json!({ "label": "Open services", "view": "services" }),
         ),
-        _ => (if state == "healthy" { "Working.".into() } else { "See the detail.".into() }, json!({ "label": "Open diagnostics", "view": "system" })),
+        "home.conflict" | "home.other" => ("Restart the program that was started before the variable changed, so the window, the terminal and the command line all use one folder.".into(), json!({ "label": "Open diagnostics", "view": "system" })),
+        "jobs" => ("Cron jobs, backups and scheduled deploys only run while the window, `devd ui` or `devd serve` is open. Leave one open, or start the daemon at sign-in.".into(), json!({ "label": "Open diagnostics", "view": "system" })),
+        _ => (if state == "healthy" { "Working.".into() } else { "This check did not pass. The line above is what it found.".into() }, json!({ "label": "Open diagnostics", "view": "system" })),
     };
     (text, fix)
 }
@@ -163,6 +187,12 @@ pub fn status(ctx: &Ctx) -> Result<Value> {
 
     // ---- services devd manages
     let statuses = devd_services::list(ctx).unwrap_or_default();
+    let web_up: Vec<&str> = statuses
+        .iter()
+        .filter(|s| s.running && (s.name == "nginx" || s.name == "apache"))
+        .map(|s| s.name.as_str())
+        .collect();
+    mark_owned_ports(&mut comps, &web_up);
     let mut php_seen: Vec<String> = Vec::new();
     for s in &statuses {
         if let Some((series, _)) = devd_services::php_pool_of(&s.name) {
@@ -430,6 +460,30 @@ pub fn status(ctx: &Ctx) -> Result<Value> {
 mod tests {
     use super::*;
 
+    fn port(detail: &str) -> Component {
+        Component::new("port.http", "HTTP port", "server", "degraded", false, detail)
+    }
+
+    #[test]
+    fn a_port_held_by_the_web_server_devd_runs_is_expected() {
+        let mut comps = vec![port("80 is held by nginx.exe (pid 10444) on 0.0.0.0:80")];
+        mark_owned_ports(&mut comps, &["nginx"]);
+        assert_eq!(comps[0].state, "healthy");
+        assert!(comps[0].detail.ends_with("devd's own web server"));
+    }
+
+    #[test]
+    fn a_port_held_by_anything_else_keeps_its_warning() {
+        // devd's nginx is not running, so whatever holds the port is a stranger.
+        let mut comps = vec![port("80 is held by nginx.exe (pid 10444) on 0.0.0.0:80")];
+        mark_owned_ports(&mut comps, &[]);
+        assert_eq!(comps[0].state, "degraded");
+        // devd's nginx is up but the holder is another program.
+        let mut comps = vec![port("80 is held by skype.exe (pid 7) on 0.0.0.0:80")];
+        mark_owned_ports(&mut comps, &["nginx"]);
+        assert_eq!(comps[0].state, "degraded");
+    }
+
     fn ctx() -> (Ctx, std::path::PathBuf) {
         use devd_core::capability::Actor;
         use devd_core::config::Settings;
@@ -511,8 +565,10 @@ mod tests {
             !meaning.contains("80 is held"),
             "the detail is shown beside the note, not repeated in it: {meaning}"
         );
-        assert!(meaning.contains("expected"), "{meaning}");
-        assert!(!meaning.contains("Another program"), "{meaning}");
+        // A port that is still flagged was not recognised as devd's own web server, so the
+        // note says another program holds it instead of hedging that it might be devd's.
+        assert!(meaning.contains("not what holds this port"), "{meaning}");
+        assert!(!meaning.contains("Nothing is wrong"), "{meaning}");
         assert_eq!(fix["view"], "overview");
     }
 }

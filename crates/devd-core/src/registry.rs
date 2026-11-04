@@ -403,6 +403,13 @@ impl Registry {
         duration_ms: i64,
         started_at: &str,
     ) {
+        // Keystrokes are not an audit trail. `terminal.write` carries what a person
+        // types, which can be a password at a prompt, and it is called once per key:
+        // recording it would store secrets in the clear and bury every real change
+        // under thousands of rows. Starting and closing a terminal are still audited.
+        if matches!(cap.id.as_str(), "terminal.write" | "terminal.resize") {
+            return;
+        }
         let (ok, message) = match result {
             Ok(_) => (true, "ok".to_string()),
             Err(e) => (false, e.to_string()),
