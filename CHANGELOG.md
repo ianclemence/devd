@@ -16,6 +16,61 @@ Nothing yet.
 
 ---
 
+## [0.21.0] - 2026-11-05 - A design pass, and a terminal you can type in
+
+### Added
+
+- **Terminal is a main destination.** It sits in the navigation beside Home and
+  Projects, takes focus when it opens so you can type straight away, and the
+  Terminal button on a project no longer waits for a full refresh before it
+  switches screens. The screen is read on every keystroke, so echo is about
+  110 ms instead of up to a second.
+- **A real 404.** An address that means nothing says so and offers the nearest
+  real one, instead of quietly showing Home under the wrong URL.
+- **Skeleton loading.** Projects, project tabs, Files and Diagnostics keep their
+  shape while data arrives. Diagnostics says it is checking and no longer gives
+  up on a slow check at 15 seconds (it waits 45).
+
+### Changed
+
+- **Navigation is four destinations.** Home, Projects and Terminal; Assistant
+  and Agents; and Machine, which holds Sites, Environment, Models, Activity,
+  Diagnostics and API and tools. Runs and the roster moved to `/agents/runs` and
+  `/agents/team`; `/team` and `/agents` still open the right page.
+- **The project page is Files, Git and Agents.** The eleven tabs are three
+  groups with a sub-row. Git actions appear only when they apply. Remove and
+  Delete are in a "..." menu instead of beside Terminal and Refresh.
+- **Sites.** Rows are two lines on narrow windows. The Laravel tab is hidden for
+  sites that do not serve PHP, and Preview explains a site with nothing to serve
+  instead of showing a white page.
+- **Counts agree.** Home and Environment count services the same way; Projects
+  says what needs attention instead of how devd came to know a folder.
+- **Words, not identifiers.** Inbox says what was declined and who asked;
+  Activity says "Opened a terminal in a project".
+- **Models, Skills and Home** are quieter: providers and skill stages fold, and
+  "no model connected" is an invitation, not an alarm. Environment makes Start
+  needed the primary action and Stop all a quiet one.
+- **Diagnostics.** A port held by devd's own running web server is expected; one
+  held by anything else keeps its warning, and the note says another program
+  holds it. The state-database message is printed once.
+
+### Fixed
+
+- **Terminal input is no longer recorded.** `terminal.write` was written to the
+  audit trail once per keystroke, which stored typed characters, including
+  anything typed at a password prompt, and buried real changes. Opening and
+  closing a terminal are still audited.
+- **Cancelling a run could overflow the stack.** `kill_tree` ran `taskkill` through
+  a call that also checks whether the run was cancelled; on a busy machine
+  `taskkill` took longer than the 200 ms check, which called `kill_tree` again,
+  and so on until the stack overflowed. The kill is no longer cancellable.
+- **No more empty states before data.** History and Branches no longer say "No
+  history loaded" or "No branches" for the moment a request is in flight.
+- **The Assistant heading is no longer cut off** at about 785 px, and the status
+  line and summary tiles no longer clip on a phone.
+
+---
+
 ## [0.20.0] - 2026-11-04 - One inbox, one run view
 
 ### Fixed
