@@ -633,8 +633,9 @@ Nothing is deleted on its own; a person decides, and every deletion asks for app
 | Answered or dismissed messages | Clear under Earlier in the Inbox | `devd chats clear-inbox` | `inbox.clear` |
 
 Deleting a conversation stops it first if it is working, then removes its log and the approval requests it made. Deleting a
-run removes its tasks, its log and the conversations its tasks had; a run that is still working must be cancelled first, and
-work already merged stays. `prune` never touches a conversation that is working or waiting for you, and a run that is not
+run removes its tasks, its log, the conversations its tasks had, and the Inbox messages and undelivered reports that were about
+it; cancelling a run resolves those messages, so a decision that can no longer be taken stops being offered. A run that is
+still working must be cancelled first, and work already merged stays. `prune` never touches a conversation that is working or waiting for you, and a run that is not
 over. Deleted data cannot be recovered.
 
 ## Under a reply: copy, fork, chapters

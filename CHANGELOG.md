@@ -10,6 +10,57 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [Unreleased]
+
+Nothing yet.
+
+---
+
+## [0.20.0] - 2026-11-04 - One inbox, one run view
+
+### Fixed
+
+- **The Inbox, the badge and Home now count the same thing.** An inbox row
+  records the run and the kind of event that produced it (`run_id`, `task_id`,
+  `kind`). The badge is derived from the rows the Inbox actually renders, not
+  from a second raw count. One existing database repair removes the pre-0.20
+  `Run paused:` / `Plan ready:` copies that duplicated a live run's Needs-you
+  card.
+- **Deleting a run deletes its notifications.** `delete_run` now removes the
+  inbox rows and undelivered team reports that belong to the run. Cancelling a
+  run resolves them, so a plan that can no longer be approved stops being
+  offered. Previously an orphaned pause notice became a new Decision on Home
+  the moment the run was deleted.
+- **A cancelled run no longer offers Retry, Accept or "Needs you".** The single
+  source of that question returns nothing for a finished run, and the run view
+  only offers task actions while the run can still act.
+- **Agents can read long runs again.** Tool results were compacted before the
+  context budget was checked, blinding an agent after eight tool calls even on
+  a large model. Results are cleared only when the prompt is actually over
+  budget, oldest first, and the most recent results stay whole. This was the
+  cause of the implementer reporting blocked and the reviewer looping.
+- **A plain PHP project can run its own tool.** The exec allow-list now reads
+  the same serving evidence as the site view: a directory served as PHP may run
+  `php` (and `composer` when it has a manifest), even with no framework stack.
+- **Home and the Assistant both have a working `/` and `@` menu.** Home renders
+  its own menu, `openMentions` remembers the query, and one lookup serves both
+  composers. The trigger itself is part of that identity: typing `/` and then
+  `@` at the same position is a different list, so the old one is replaced
+  rather than left on screen.
+- **Refreshing a run no longer pulls the reader to the top.** The run detail
+  keeps its scroll position, skips an identical repaint, and follows the bottom
+  only when the reader was already there.
+- **The run detail is a conversation, not a log.** It uses the Assistant's
+  `.chat-stream`, `.turn`, `.bubble` and `.msg-meta` components instead of a
+  64-pixel monospace gutter and plain-text rows.
+- **The terminal gives its emulator the raw stream.** `terminal.read` can return
+  the untranslated bytes for xterm (colour, cursor movement, full-screen
+  programs), while readers and agents still get the escape-stripped screen.
+- **The task strip counts work, not the planner.** `tasks_done` no longer
+  includes the planner task against a total that excludes it.
+
+---
+
 ## [0.19.2] - 2026-11-04 - The caret, the inbox, and a pid that lied
 
 ### Fixed

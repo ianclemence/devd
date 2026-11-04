@@ -621,6 +621,20 @@ pub fn exec_allowed(
             }
         }
     }
+    // A plain PHP directory often has no framework, so `project.detect` finds
+    // no stack and the allow-list above is empty - yet the site detail says
+    // "serves PHP (index.php)". Read the same evidence the site view reads: if
+    // the directory is served as PHP, php and composer are its tools, with or
+    // without a framework definition.
+    let served = devd_core::serving::detect(dir);
+    if served.content == Some(devd_core::serving::Content::Php) {
+        if !allowed.iter().any(|a| a == "php") {
+            allowed.push("php".into());
+        }
+        if dir.join("composer.json").exists() && !allowed.iter().any(|a| a == "composer") {
+            allowed.push("composer".into());
+        }
+    }
     let ok = allowed.iter().any(|a| {
         a == program
             || Path::new(a).file_name().and_then(|n| n.to_str()) == Some(base.as_str())

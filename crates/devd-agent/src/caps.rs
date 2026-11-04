@@ -1223,6 +1223,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                         let tasks = ctx.store.list_tasks_of_run(&r.id).unwrap_or_default();
                         let done = tasks
                             .iter()
+                            .filter(|t| t.role != "planner")
                             .filter(|t| matches!(t.state.as_str(), "done" | "skipped"))
                             .count();
                         let mut v = serde_json::to_value(r).unwrap_or(Value::Null);

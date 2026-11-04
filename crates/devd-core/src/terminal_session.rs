@@ -59,6 +59,8 @@ pub struct Session {
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     /// Everything read so far, escape sequences stripped.
     buffer: Arc<Mutex<String>>,
+    /// The same stream with escapes intact, for the browser's terminal.
+    raw: Arc<Mutex<String>>,
     /// Columns and rows, as the reader last set them.
     size: Mutex<(u16, u16)>,
     /// Set when the shell has exited.
@@ -104,6 +106,11 @@ impl Session {
             out.pop();
         }
         out
+    }
+
+    /// The whole raw stream, escapes intact, for a terminal emulator.
+    pub fn output_raw(&self) -> String {
+        self.raw.lock().unwrap().clone()
     }
 
     /// Send input to the shell.
@@ -233,6 +240,7 @@ impl Registry {
         let ended = Arc::new(AtomicBool::new(false));
         let exit = Arc::new(Mutex::new(None));
         let buffer = Arc::new(Mutex::new(String::new()));
+        let raw = Arc::new(Mutex::new(String::new()));
 
         let session = Arc::new(Session {
             id: id.clone(),
@@ -247,6 +255,7 @@ impl Registry {
             // like the same thing and is not: the session would show an empty
             // screen while the reader wrote into a buffer nobody read.
             buffer: buffer.clone(),
+            raw: raw.clone(),
             size: Mutex::new((cols, rows)),
             ended: ended.clone(),
             exit: exit.clone(),
@@ -260,6 +269,7 @@ impl Registry {
         // and holds it only for the length of one reply.
         let reply_writer = writer.clone();
         let buf = buffer.clone();
+        let raw_buf = raw.clone();
         std::thread::Builder::new()
             .name(format!("pty-{id}"))
             .spawn(move || {
@@ -292,6 +302,19 @@ impl Registry {
                                     s
                                 }
                             };
+                            // Keep the untouched stream for the browser's terminal,
+                            // which draws colour and cursor motion itself. The text
+                            // buffer below is for reads and for agents, who want none
+                            // of that noise.
+                            {
+                                let mut r = raw_buf.lock().unwrap();
+                                r.push_str(&text);
+                                if r.len() > MAX_BUFFER {
+                                    let cut = r.len() - MAX_BUFFER;
+                                    let at = r[cut..].find('\n').map(|i| cut + i + 1).unwrap_or(cut);
+                                    r.drain(..at);
+                                }
+                            }
                             // The emulator strips the escapes *and* collects the
                             // replies a program is waiting for. Not answering one
                             // is what makes a shell hang on its first prompt.
@@ -489,7 +512,7 @@ pub fn registry() -> &'static Registry {
 }
 
 /// Answer a session for `terminal.read`: the tail of its screen.
-pub fn read_screen(id: &str, lines: usize) -> Result<Value> {
+pub fn read_screen(id: &str, lines: usize, raw: bool) -> Result<Value> {
     let s = registry().get(id)?;
     let d = s.describe();
     Ok(json!({
@@ -500,8 +523,12 @@ pub fn read_screen(id: &str, lines: usize) -> Result<Value> {
         "rows": d["rows"],
         // The screen as text, with the escape sequences already removed. A model
         // given `\x1b[32m` noise is worse at this than one given the screen.
-        "screen": s.tail(lines),
-        "note": "This is the terminal's visible output as text, not the raw byte stream.",
+        "screen": if raw { s.output_raw() } else { s.tail(lines) },
+        "note": if raw {
+            "The raw byte stream, escapes intact, for a terminal emulator."
+        } else {
+            "This is the terminal's visible output as text, not the raw byte stream."
+        },
     }))
 }
 

@@ -3981,11 +3981,14 @@
    * session, or a shell that cleared - it is reset and redrawn in full. */
   function termRefresh() {
     if (!TERM.active) return;
-    run("terminal.read", { id: TERM.active, lines: TERM.lines }, { quiet: true }).then(function (o) {
+    var t = termTerminal();
+    // The emulator draws colour, the cursor and full-screen programs itself, so
+    // it is given the stream the shell wrote. The text fallback still gets the
+    // escape-stripped screen, because `\x1b[32m` in a <pre> is noise.
+    run("terminal.read", { id: TERM.active, lines: TERM.lines, raw: !!t }, { quiet: true }).then(function (o) {
       if (!o || !o.ok || !o.data) return;
       var d = o.data;
       var screen = d.screen || "";
-      var t = termTerminal();
       if (t) {
         if (screen !== TERM.screen) {
           var added = termNewText(TERM.screen, screen);
@@ -6698,10 +6701,8 @@
     AI.healthPending = Promise.race([read("health.status"), timeout]).then(function (h) {
       AI.health = h; AI.healthError = null; AI.healthAt = Date.now();
       read("environment.get").then(function (e) { AI.env = e; }).catch(function () {});
-      return Promise.all([read("approval.list", { pending_only: true }), read("inbox.list", { open_only: true })]).then(function (r) {
-        AI.counts.approvals = (r[0] || []).length;
-        AI.counts.questions = (r[1] || []).filter(function (m) { return m.needs_reply; }).length;
-      });
+      // The Inbox badge is derived from the same rows the Inbox renders (see
+      // refreshCounts). It is never a second, independent count of the inbox.
     }).catch(function (e) { AI.healthError = e.message; }).then(function () {
       AI.healthLoading = false;
       AI.healthPending = null;
@@ -6802,6 +6803,7 @@
       AI.catalogue = r[7] || [];
       AI.inventory = r[8] || null;
       state.projectCount = AI.home.projects.length;
+      refreshHomeCounts();
     });
   }
 
@@ -6928,9 +6930,10 @@
     //
     // Runs that report into a conversation are left to the conversation: the
     // assistant answers there, in its own words, which is the point.
-    var runKeys = {};
-    (d.teamRuns || []).forEach(function (t) { runKeys[t.title] = true; });
+    var runKeys = {}, runIds = {};
+    (d.teamRuns || []).forEach(function (t) { runKeys[t.title] = true; runIds[t.id] = true; });
     function aboutARun(m) {
+      if (m.run_id) return runIds[m.run_id] === true;
       var s = String(m.subject || "");
       var at = s.indexOf(": ");
       return at > 0 && runKeys[s.slice(at + 2)] === true;
@@ -8310,6 +8313,7 @@
       '<div class="assistant"><aside class="threads"><div class="threads-head"><b>Runs</b><span class="grow"></span><button type="button" class="btn btn-mini btn-ghost" data-action="team-prune" title="Delete every run that is over">Clear finished</button><button type="button" class="btn btn-mini" data-action="team-new">New</button></div><div id="team-list"></div></aside>' +
       '<section class="chat"><div id="team-detail" class="team-detail"></div></section></div></div>';
     TEAM.ready = ready; TEAM.projOpts = projOpts;
+    TEAM.lastHtml = "";
     paintTeam();
     startTeamTimer();
   }
@@ -8329,7 +8333,20 @@
     if (!TEAM.sel || !TEAM.data) { box.innerHTML = teamForm(); return; }
     var focus = document.activeElement && document.activeElement.id;
     var val = focus === "team-say" ? document.activeElement.value : null;
-    box.innerHTML = teamDetail(TEAM.data);
+    // The run view is refreshed every 1.2 s. Replacing its markup reset the
+    // scroll position to the top, which is why reading a long conversation
+    // felt like being pulled away from it. Keep the position, and do not
+    // replace the tree at all when nothing changed.
+    var scroll = box.querySelector(".chat-stream") || box.querySelector(".team-scroll");
+    var top = scroll ? scroll.scrollTop : 0;
+    var atBottom = scroll ? (scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 40) : false;
+    var html = teamDetail(TEAM.data);
+    if (html !== TEAM.lastHtml) {
+      box.innerHTML = html;
+      TEAM.lastHtml = html;
+    }
+    scroll = box.querySelector(".chat-stream") || box.querySelector(".team-scroll");
+    if (scroll) scroll.scrollTop = atBottom ? scroll.scrollHeight : top;
     if (val !== null) { var i = el("team-say"); if (i) { i.value = val; i.focus(); var ts = el("team-say-send"); if (ts) ts.disabled = !val.trim(); } }
   }
 
@@ -8417,16 +8434,17 @@
     else actions += '<button type="button" class="btn btn-ghost" data-action="team-delete" data-id="' + attr(r.id) + '">Delete</button>';
     if (d.run_id) actions += '<button type="button" class="btn btn-ghost" data-action="open-run" data-id="' + attr(d.run_id) + '" title="What devd recorded for this run: steps, capability calls, evidence and the durable timeline">Evidence</button>';
     var head = '<div class="chat-head"><div class="grow"><div class="chat-title">' + esc(r.title) + '</div><div class="dim mono nowrap">' + esc(r.project || "") + ' · started by ' + esc((r.created_by || "").replace("human:", "")) + " " + esc(ago(r.created_at)) + '</div></div><span class="pill ' + (r.state === "failed" ? "pill-bad" : r.state === "done" ? "pill-ok" : r.state === "awaiting_plan" || r.state === "paused" ? "pill-warn" : "pill-accent") + '">' + esc(RUN_WORD[r.state] || r.state) + "</span>" + actions + "</div>";
-    var note = r.error ? '<div class="notice notice-warn" style="margin:12px 16px"><b>Needs you.</b> ' + esc(r.error) + "</div>" : "";
+    var note = r.error ? '<div class="notice notice-warn"><b>' + (runNeedsWork(r) ? "Needs you." : "Stopped.") + "</b> " + esc(r.error) + "</div>" : "";
     // The same structured answer the Inbox shows, so the two screens agree about
     // what is wrong and what to do about it. The run's own error line above is
     // the record; this is the question.
     if (d.needs) note += needsCard(d.needs);
-    if (r.state === "planning") note += '<div class="notice" style="margin:12px 16px">The planner is reading the project and writing the plan' + (planner && planner.state === "waiting_approval" ? ", and is waiting for you to approve something" : "") + ".</div>";
+    if (r.state === "planning") note += '<div class="notice">The planner is reading the project and writing the plan' + (planner && planner.state === "waiting_approval" ? ", and is waiting for you to approve something" : "") + ".</div>";
     var cards = work.map(function (t) {
       var open = TEAM.open[t.id], dep = t.depends_on.length ? "after " + t.depends_on.join(", ") : "starts first";
       var btns = "";
-      if (["unverified", "blocked", "failed"].indexOf(t.state) >= 0) btns = '<button type="button" class="btn btn-mini btn-primary" data-action="team-retry" data-id="' + attr(t.id) + '">Retry</button><button type="button" class="btn btn-mini" data-action="team-accept" data-id="' + attr(t.id) + '" title="Accept it without the proof devd asked for. This is recorded.">Accept as is</button>';
+      var over = ["done", "failed", "cancelled"].indexOf(r.state) >= 0;
+      if (!over && ["unverified", "blocked", "failed"].indexOf(t.state) >= 0) btns = '<button type="button" class="btn btn-mini btn-primary" data-action="team-retry" data-id="' + attr(t.id) + '">Retry</button><button type="button" class="btn btn-mini" data-action="team-accept" data-id="' + attr(t.id) + '" title="Accept it without the proof devd asked for. This is recorded.">Accept as is</button>';
       if (t.thread_id) btns += '<button type="button" class="btn btn-mini btn-ghost" data-action="open-thread" data-id="' + attr(t.thread_id) + '">Conversation</button>';
       return '<div class="tcard tstate-' + t.state + '"><div class="tcard-head"><span class="step-dot ' + (t.state === "done" || t.state === "skipped" ? "ok" : t.state === "running" ? "run" : t.state === "waiting_approval" ? "wait" : ["failed", "unverified", "blocked"].indexOf(t.state) >= 0 ? "bad" : "") + '"></span><b>' + esc(t.title) + '</b><span class="pill">' + esc(t.role) + '</span><span class="pill ' + (t.state === "done" ? "pill-ok" : ["failed", "unverified", "blocked"].indexOf(t.state) >= 0 ? "pill-bad" : t.state === "running" ? "pill-accent" : "") + '">' + esc(TASK_WORD[t.state] || t.state) + '</span><span class="grow"></span><button type="button" class="btn btn-mini btn-ghost" data-action="team-toggle" data-id="' + attr(t.id) + '">' + (open ? "Hide" : "Details") + "</button></div>" +
         '<div class="row-sub">' + esc(dep) + (t.attempts > 1 ? " · attempt " + t.attempts : "") + (t.branch ? " · own copy on " + esc(t.branch) : "") + (evidenceLine(t) ? " · " + esc(evidenceLine(t)) : "") + "</div>" +
@@ -8436,18 +8454,23 @@
     }).join("") || (r.state === "planning" ? "" : '<div class="empty-inline">No tasks yet.</div>');
     var approvals = (d.approvals || []).map(function (a) { return approvalCard(a, false); }).join("");
     var log = events.filter(function (e) { return ["started", "plan", "plan_approved", "report", "accepted", "rejected", "unverified", "blocked", "merge_blocked", "failed", "retrying", "retry", "direction", "paused", "resumed", "cancelled", "accepted_by_hand", "needs_person", "done", "note", "recovered", "waiting_approval"].indexOf(e.kind) >= 0; }).slice(-60).reverse().map(function (e) {
-      var x = e.data || {}, text = "";
+      var x = e.data || {}, text = "", who = "";
       switch (e.kind) {
-        case "started": text = x.task ? "started " + x.task + " (" + x.role + ")" : "run started"; break;
-        case "plan": text = "plan: " + (x.tasks || []).length + " task(s)"; break;
-        case "report": text = x.task + " reported " + x.status + ": " + String(x.summary || "").split("\n")[0]; break;
-        case "accepted": text = "accepted " + x.task + (x.verified ? " (" + x.verified + " passing check" + (x.verified === 1 ? "" : "s") + ")" : ""); break;
-        case "rejected": case "unverified": text = "not accepted " + x.task + ": " + x.why; break;
-        case "direction": text = "you said: " + x.text; break;
-        case "note": text = x.text; break;
-        default: text = e.kind.replace(/_/g, " ") + (x.task ? " " + x.task : "") + (x.why ? ": " + x.why : "");
+        case "started": text = x.task ? "Started " + x.task + " (" + x.role + ")." : "The run started."; who = x.role || "devd"; break;
+        case "plan": text = "Plan: " + (x.tasks || []).length + " task(s)."; who = "planner"; break;
+        case "report": text = String(x.summary || "").split("\n")[0] || (x.task + " reported " + x.status); who = x.role || x.task || "agent"; break;
+        case "accepted": text = "Accepted " + x.task + (x.verified ? " (" + x.verified + " passing check" + (x.verified === 1 ? "" : "s") + ")." : "."); who = "devd"; break;
+        case "rejected": case "unverified": text = "Not accepted " + x.task + ": " + (x.why || "the proof did not match."); who = x.role || "devd"; break;
+        case "direction": return '<div class="msg msg-user"><div><div class="bubble">' + md(x.text || "") + '</div><div class="msg-meta">You · ' + esc(ago(e.at)) + "</div></div></div>";
+        case "note": text = x.text; who = "devd"; break;
+        default: text = e.kind.replace(/_/g, " ") + (x.task ? " " + x.task : "") + (x.why ? ": " + x.why : ""); who = x.role || "devd";
       }
-      return '<div class="feed"><span class="dim mono">' + esc(ago(e.at)) + '</span><span class="grow">' + esc(text) + "</span></div>";
+      if (!String(text || "").trim()) return "";
+      // The same message components as the Assistant: an avatar, a prose
+      // bubble rendered as Markdown, and the speaker under it. A run is a
+      // conversation with a team, not a second kind of log.
+      var initial = String(who || "devd").charAt(0).toLowerCase();
+      return '<div class="turn msg-agent"><div class="avatar" aria-hidden="true">' + esc(initial) + '</div><div class="turn-body"><div class="bubble">' + md(text) + '</div><div class="msg-meta">' + esc(who) + " · " + esc(ago(e.at)) + "</div></div></div>";
     }).join("");
     var summary = r.summary ? '<div class="team-result"><div class="ui-row-title">Result</div><div class="ui-row-sub wrap">' + esc(uiSummary(r.summary, 260)) + '</div><button type="button" class="btn btn-mini" data-action="team-report" data-id="' + attr(r.id) + '">Read the full report</button></div>' : "";
     var say = ["done", "failed", "cancelled"].indexOf(r.state) < 0
@@ -8456,10 +8479,51 @@
           '<button type="button" class="composer-send" data-action="team-say" data-id="' + attr(r.id) + '" id="team-say-send" disabled aria-label="Send to the team" title="Send to the team (Enter)"><svg class="icon" aria-hidden="true"><use href="#i-arrow-up"></use></svg></button>' +
         "</div>"
       : "";
-    return head + '<div class="team-scroll">' + runGoal(r) + '<div class="run-track">' + runStages(r, work, events) + "</div>" + note + approvals + (summary) + '<div class="section-title" style="margin:16px 16px 8px">Tasks <span class="count">' + work.length + "</span></div>" + '<div class="tlist">' + cards + "</div>" + '<div class="section-title" style="margin:16px 16px 8px">Log</div><div class="run-log">' + (log || '<div class="empty-inline">Nothing yet.</div>') + "</div></div>" + say;
+    return head + '<div class="chat-stream run-stream">' + runGoal(r) + '<div class="run-track">' + runStages(r, work, events) + "</div>" + note + approvals + (summary) + '<div class="section-title">Tasks <span class="count">' + work.length + "</span></div>" + '<div class="tlist">' + cards + "</div>" + '<div class="section-title">Conversation</div>' + (log || '<div class="empty-inline">Nothing yet.</div>') + "</div>" + say;
   }
 
   // ------------------------------------------------------------------- inbox
+
+  /* The one definition of "waiting for a person".
+   *
+   * The badge used to count every open inbox row; the Inbox hid some of them
+   * by subject prefix; Home applied a third rule. Three counts of one thing is
+   * three answers. Both the badge and Home now read these functions, so the
+   * number in the rail is the number of decisions the Inbox actually renders.
+   */
+  function inboxQuestionRows(list) {
+    return (list || []).filter(function (m) { return m.needs_reply && !aboutShownRun(m); });
+  }
+
+  /* A message about a run is that run, and the run's Needs-you card is where
+   * it is handled. Linked rows are hidden by `run_id`; rows written before the
+   * link existed are matched by the one relation they had - subject text. */
+  function aboutShownRun(m) {
+    if (m.run_id) {
+      return (AI.needs || []).some(function (n) { return n.run_id === m.run_id; });
+    }
+    var s = String(m.subject || "");
+    return s.indexOf("Run paused: ") === 0 || s.indexOf("Plan ready: ") === 0;
+  }
+
+  function runNeedsWork(t) {
+    return t.state === "awaiting_plan" || (t.state === "paused" && t.error);
+  }
+
+  function refreshHomeCounts() {
+    var d = AI.home;
+    if (!d) return;
+    var runKeys = {};
+    (d.teamRuns || []).forEach(function (t) { runKeys[t.title] = true; });
+    var questions = (d.inbox || []).filter(function (m) {
+      if (!m.needs_reply) return false;
+      var s = String(m.subject || ""), at = s.indexOf(": ");
+      return !(at > 0 && runKeys[s.slice(at + 2)] === true);
+    }).length;
+    var work = (d.teamRuns || []).filter(runNeedsWork).length;
+    AI.counts.approvals = (d.approvals || []).length;
+    AI.counts.questions = questions + work;
+  }
 
   function loadInbox() {
     // Each source is guarded to its own empty value. A screen that needs four
@@ -8494,8 +8558,11 @@
       });
     }).then(function (suggestions) {
       AI.suggestions = suggestions || [];
+      AI.counts.approvals = (AI.requests || []).length;
+      AI.counts.questions = (AI.needs || []).length + inboxQuestionRows(AI.inbox).length;
       // The health chip is elsewhere on the page; it must not stop the inbox.
-      return loadHealth().catch(function () {});
+      // Fire it and paint with the data already read.
+      loadHealth().catch(function () {});
     });
   }
 
@@ -8569,14 +8636,6 @@
     });
     // A message about a run is that run, already shown above as a Needs-you
     // card. Without this the same pause reads as two separate things.
-    var runTitles = {};
-    (AI.needs || []).forEach(function (n) { if (n.run_id) runTitles[n.run_id] = true; });
-    function aboutShownRun(m) {
-      var s = String(m.subject || "");
-      if (s.indexOf("Run paused: ") === 0) return true;
-      if (s.indexOf("Plan ready: ") === 0) return true;
-      return false;
-    }
     var updates = [];
     AI.inbox.forEach(function (m) {
       var who = m.from_actor.replace("agent:", "").replace("devd-", "");
@@ -9398,14 +9457,16 @@
         "</span>"
       : '<button type="button" class="composer-send" id="home-send" data-action="' + sendAction + '"' + disabled + ' aria-label="' + attr(o.sendLabel || (team ? "Ask the team to plan this" : "Ask devd")) + '" title="' + attr(o.sendLabel || (team ? "Ask the team to plan this" : "Ask devd")) + '"><svg class="icon" aria-hidden="true"><use href="#i-arrow-up"></use></svg></button>';
     var textarea = prefix === "home"
-      ? '<textarea class="composer-input" id="home-ask" rows="2" placeholder="' + attr(placeholder) + '" aria-label="' + attr(o.label || "Message") + '">' + esc(o.text || "") + "</textarea>"
+      ? '<textarea class="composer-input" id="home-ask" rows="2" placeholder="' + attr(placeholder) + '" aria-label="' + attr(o.label || "Message") + '" aria-autocomplete="list" aria-controls="home-mentions">' + esc(o.text || "") + "</textarea>"
       : '<textarea class="composer-input" id="chat-input" rows="2" placeholder="' + attr(placeholder) + '" aria-label="' + attr(o.label || "Message") + '" aria-autocomplete="list" aria-controls="chat-mentions">' + esc(o.text || "") + "</textarea>";
 
     return '<div class="composer-dock' + (prefix === "home" ? " composer-dock-home" : "") + '">' +
       statusTab(prefix) +
       '<div class="composer" role="group" aria-label="' + attr(o.aria || "Tell devd what you are working on") + '">' +
         composerTop(prefix) +
-        (prefix === "chat" ? '<div class="mention-menu" id="chat-mentions" hidden role="listbox" aria-label="Reference"></div>' : "") +
+        (prefix === "home"
+          ? '<div class="mention-menu" id="home-mentions" hidden role="listbox" aria-label="Reference"></div>'
+          : '<div class="mention-menu" id="chat-mentions" hidden role="listbox" aria-label="Reference"></div>') +
         '<label class="sr-only" for="' + inputId + '">' + esc(o.label || "Message") + "</label>" +
         textarea +
         '<div class="composer-bar">' +
@@ -9931,9 +9992,18 @@
     });
   }
 
+  function mentionBox() {
+    return el("home-mentions") || el("chat-mentions");
+  }
+
   function openMentions(start, query, kind) {
     MENTIONS.start = start;
-    MENTIONS.kind = kind || "@";
+    MENTIONS.query = String(query || "");
+    // A different trigger is a different list: showing the previous one for a
+    // moment is how "/" appeared while typing "@".
+    var nextKind = kind || "@";
+    if (MENTIONS.kind !== nextKind) MENTIONS.items = [];
+    MENTIONS.kind = nextKind;
     MENTIONS.open = true;
     MENTIONS.index = 0;
     var seq = ++MENTIONS.seq;
@@ -9943,7 +10013,7 @@
     paintMentions();
     MENTIONS.timer = setTimeout(function () {
       if (seq !== MENTIONS.seq) return;
-      triggerItems(MENTIONS.kind, query).then(function (items) {
+      triggerItems(MENTIONS.kind, MENTIONS.query).then(function (items) {
         MENTIONS.items = items;
         MENTIONS.index = 0;
         paintMentions();
@@ -9954,14 +10024,15 @@
   function closeMentions() {
     MENTIONS.open = false;
     MENTIONS.items = [];
+    MENTIONS.query = "";
     MENTIONS.seq += 1;
     clearTimeout(MENTIONS.timer);
-    var box = el("chat-mentions");
+    var box = mentionBox();
     if (box) { box.hidden = true; box.innerHTML = ""; }
   }
 
   function paintMentions() {
-    var box = el("chat-mentions");
+    var box = mentionBox();
     if (!box) return;
     if (!MENTIONS.open) { box.hidden = true; box.innerHTML = ""; return; }
     if (!MENTIONS.items.length) {
@@ -12471,7 +12542,7 @@
       return;
     }
     if (t.id === "team-say") { var tsb = el("team-say-send"); if (tsb) tsb.disabled = !t.value.trim(); }
-    if (t.id === "home-ask") { AI.askText = t.value; var hs = el("home-send"); if (hs) hs.disabled = !t.value.trim(); var ht = triggerAt(t.value, t.selectionStart); if (!ht) closeMentions(); else if (!MENTIONS.open || MENTIONS.start !== ht.start || MENTIONS.query !== ht.query) openMentions(ht.start, ht.query, t.value.charAt(ht.start)); }
+    if (t.id === "home-ask") { AI.askText = t.value; var hs = el("home-send"); if (hs) hs.disabled = !t.value.trim(); var ht = triggerAt(t.value, t.selectionStart); if (!ht) closeMentions(); else if (!MENTIONS.open || MENTIONS.start !== ht.start || MENTIONS.query !== ht.query || MENTIONS.kind !== t.value.charAt(ht.start)) openMentions(ht.start, ht.query, t.value.charAt(ht.start)); }
     else if (t.id === "chat-input") {
       AI.composer = t.value;
       syncComposerAction();
@@ -12479,7 +12550,7 @@
       // "@" opens the list of things a message can refer to.
       var trig = triggerAt(t.value, t.selectionStart);
       if (!trig) closeMentions();
-      else if (!MENTIONS.open || MENTIONS.start !== trig.start || MENTIONS.query !== trig.query) openMentions(trig.start, trig.query, t.value.charAt(trig.start));
+      else if (!MENTIONS.open || MENTIONS.start !== trig.start || MENTIONS.query !== trig.query || MENTIONS.kind !== t.value.charAt(trig.start)) openMentions(trig.start, trig.query, t.value.charAt(trig.start));
     }
     // A filter box, not a composer: only this branch re-renders the screen.
     else if (t.dataset && t.dataset.filter) {

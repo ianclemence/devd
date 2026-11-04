@@ -98,6 +98,9 @@ struct TerminalId {
     /// Lines of screen to return (default 200, at most 5000).
     #[serde(default)]
     lines: Option<usize>,
+    /// Return the raw byte stream with escapes intact, for a terminal emulator.
+    #[serde(default)]
+    raw: Option<bool>,
 }
 
 /// Input for a terminal.
@@ -784,7 +787,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
     .handlers(
         |_, a| Ok(Plan::new("terminal.read", format!("read {}", a.id))),
         |_, a| {
-            let v = devd_core::terminal_session::read_screen(&a.id, a.lines.unwrap_or(200))?;
+            let v = devd_core::terminal_session::read_screen(&a.id, a.lines.unwrap_or(200), a.raw.unwrap_or(false))?;
             let n = v["screen"].as_str().map(|s| s.lines().count()).unwrap_or(0);
             Ok(Outcome::with_data(format!("{n} lines"), v))
         },

@@ -220,6 +220,11 @@ fn gaps_of(role: &roles::Role, evidence: &Value) -> Vec<String> {
 /// because the agent has stopped and is idle until it is answered. Then a plan
 /// nobody has read, then the tasks, then the definition of done.
 pub fn of(run: &TeamRun, tasks: &[TeamTask]) -> Option<Needs> {
+    // A run that is over needs nothing. A cancelled run used to keep offering
+    // Retry and Accept for a task that will never run again.
+    if matches!(run.state.as_str(), "done" | "failed" | "cancelled") {
+        return None;
+    }
     if run.state == "awaiting_plan" {
         return Some(Needs {
             scope: "run".into(),

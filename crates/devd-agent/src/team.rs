@@ -435,7 +435,16 @@ impl Team {
                 self.ask_assistant_to_report(thread, &run.title, kind, &text);
             }
             None => {
-                let _ = self.ctx.store.post_inbox("agent:devd-team", run.project.as_deref(), subject, body, needs_reply);
+                let _ = self.ctx.store.post_inbox_origin(
+                    "agent:devd-team",
+                    run.project.as_deref(),
+                    Some(&run.id),
+                    None,
+                    Some(kind),
+                    subject,
+                    body,
+                    needs_reply,
+                );
             }
         }
     }
@@ -1186,6 +1195,13 @@ impl Team {
         self.ctx
             .store
             .set_run_state(run_id, "cancelled", None, None)?;
+        // Nothing about a cancelled run is still a decision: a plan that can no
+        // longer be approved, or a pause that will never resume, must not sit
+        // in the Inbox asking for an answer.
+        let _ = self
+            .ctx
+            .store
+            .resolve_inbox_for_run(run_id, Some(&run.title));
         self.event(
             run_id,
             None,

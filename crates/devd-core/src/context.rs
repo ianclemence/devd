@@ -457,6 +457,12 @@ fn compact(
 
     // 1. Replace old tool result bodies with the artifact reference, if one is
     //    recorded, or a short factual note. This keeps every tool_use paired.
+    //
+    //    Only when the prompt is actually over budget. The previous version
+    //    cleared every long result except the last eight before checking, which
+    //    made an agent blind on any run with more than eight tool calls even on
+    //    a model with a huge window - the implementer could no longer read the
+    //    file it had just written, and the reviewer looped on the placeholder.
     let total_results: usize = msgs
         .iter()
         .map(|m| {
@@ -466,32 +472,46 @@ fn compact(
                 .unwrap_or(0)
         })
         .sum();
-    let keep = if budget.available < 24_000 { 2 } else { 8 };
-    let mut to_clear = total_results.saturating_sub(keep);
-    for m in msgs.iter_mut() {
-        if to_clear == 0 {
-            break;
-        }
-        if let Some(c) = m["content"].as_array_mut() {
-            for b in c.iter_mut().filter(|b| b["type"] == "tool_result") {
-                if to_clear == 0 {
-                    break;
-                }
-                let text = b["content"].as_str().unwrap_or("");
-                let long = text.chars().count() > 240;
-                if long {
-                    b["content"] = json!("[older tool result compacted to save context. The full output is in the run timeline; call the tool again if you need it.]");
-                    to_clear -= 1;
-                    manifest.results_cleared += 1;
+    if over(msgs, fixed) {
+        let keep = if budget.available < 24_000 { 2 } else { 8 };
+        let clearable_before = total_results.saturating_sub(keep);
+        let mut seen = 0usize;
+        let mut current: usize = msgs.iter().map(message_tokens).sum::<usize>() + fixed;
+        for m in msgs.iter_mut() {
+            if current <= budget.available {
+                break;
+            }
+            if let Some(c) = m["content"].as_array_mut() {
+                for b in c.iter_mut().filter(|b| b["type"] == "tool_result") {
+                    seen += 1;
+                    // The most recent results stay whole: they are the ones the
+                    // current turn is still reasoning about.
+                    if seen > clearable_before {
+                        continue;
+                    }
+                    if current <= budget.available {
+                        break;
+                    }
+                    let text = b["content"].as_str().unwrap_or("");
+                    if text.chars().count() > 240 {
+                        let freed = estimate_tokens(text).saturating_sub(estimate_tokens(
+                            "[older tool result compacted to save context. The full output is in the run timeline; call the tool again if you need it.]",
+                        ));
+                        b["content"] = json!("[older tool result compacted to save context. The full output is in the run timeline; call the tool again if you need it.]");
+                        current = current.saturating_sub(freed);
+                        manifest.results_cleared += 1;
+                    }
                 }
             }
         }
-    }
-    manifest.results_in_full = total_results.saturating_sub(manifest.results_cleared);
-    if over(msgs, fixed) {
-        manifest
-            .notes
-            .push("older tool results were compacted".into());
+        manifest.results_in_full = total_results.saturating_sub(manifest.results_cleared);
+        if manifest.results_cleared > 0 {
+            manifest
+                .notes
+                .push("older tool results were compacted to fit the model's window".into());
+        }
+    } else {
+        manifest.results_in_full = total_results;
     }
 
     // 2. Summarize old assistant prose that has no tool call. A message with a

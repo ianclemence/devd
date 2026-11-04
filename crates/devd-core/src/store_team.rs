@@ -663,6 +663,7 @@ impl Store {
     /// Delete a run with its tasks, its log and the conversations its tasks had. Returns the
     /// conversations that were removed. The caller has checked that nothing is still working.
     pub fn delete_run(&self, id: &str) -> Result<usize> {
+        let title = self.get_run(id)?.map(|r| r.title);
         let threads: Vec<String> = self
             .list_tasks_of_run(id)?
             .into_iter()
@@ -671,6 +672,10 @@ impl Store {
         for t in &threads {
             self.delete_thread(t)?;
         }
+        // A message about a run is the run. If the run goes, the message goes
+        // with it - otherwise deleting a run turns its old pause notices into
+        // fresh decisions on Home, which is the opposite of deleting it.
+        self.forget_run_inbox(id, title.as_deref())?;
         self.with(|c| {
             c.execute("DELETE FROM team_events WHERE run_id=?1", params![id])?;
             c.execute("DELETE FROM team_tasks WHERE run_id=?1", params![id])?;

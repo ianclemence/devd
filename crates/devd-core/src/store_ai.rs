@@ -174,6 +174,15 @@ pub struct InboxMessage {
     pub replied_at: Option<String>,
     /// Created.
     pub created_at: String,
+    /// The run this message is about, when it is about one.
+    #[serde(default)]
+    pub run_id: Option<String>,
+    /// The task this message is about, when it is about one.
+    #[serde(default)]
+    pub task_id: Option<String>,
+    /// What kind of event produced it: `plan`, `paused`, `finished`, `notice`.
+    #[serde(default)]
+    pub kind: Option<String>,
 }
 
 /// An operation an agent asked a person to approve.
@@ -703,6 +712,49 @@ impl Store {
         body: &str,
         needs_reply: bool,
     ) -> Result<InboxMessage> {
+        self.post_inbox_origin(from, project, None, None, None, subject, body, needs_reply)
+    }
+
+    /// Post a message, recording the run and task it came from.
+    ///
+    /// A run-linked message is unique per `(run_id, kind)` while it is open.
+    /// A run that pauses twice, or whose two blocked tasks each ask for the
+    /// same thing, updates the one row instead of piling up near-identical
+    /// entries that every screen then has to guess about.
+    #[allow(clippy::too_many_arguments)]
+    pub fn post_inbox_origin(
+        &self,
+        from: &str,
+        project: Option<&str>,
+        run_id: Option<&str>,
+        task_id: Option<&str>,
+        kind: Option<&str>,
+        subject: &str,
+        body: &str,
+        needs_reply: bool,
+    ) -> Result<InboxMessage> {
+        if let (Some(run_id), Some(kind)) = (run_id, kind) {
+            let existing: Option<String> = self.with(|c| {
+                Ok(c.query_row(
+                    "SELECT id FROM inbox WHERE run_id=?1 AND kind=?2 AND state='open' ORDER BY created_at DESC LIMIT 1",
+                    params![run_id, kind],
+                    |r| r.get(0),
+                )
+                .optional()?)
+            })?;
+            if let Some(id) = existing {
+                self.with(|c| {
+                    c.execute(
+                        "UPDATE inbox SET subject=?2, body=?3, needs_reply=?4, task_id=COALESCE(?5,task_id), project=COALESCE(?6,project) WHERE id=?1",
+                        params![id, subject, body, needs_reply as i32, task_id, project],
+                    )?;
+                    Ok(())
+                })?;
+                if let Some(m) = self.get_inbox(&id)? {
+                    return Ok(m);
+                }
+            }
+        }
         let m = InboxMessage {
             id: util::new_id(),
             from_actor: from.into(),
@@ -714,11 +766,14 @@ impl Store {
             reply: None,
             replied_at: None,
             created_at: util::now(),
+            run_id: run_id.map(|s| s.to_string()),
+            task_id: task_id.map(|s| s.to_string()),
+            kind: kind.map(|s| s.to_string()),
         };
         self.with(|c| {
             c.execute(
-                "INSERT INTO inbox (id,from_actor,project,subject,body,needs_reply,state,created_at) VALUES (?1,?2,?3,?4,?5,?6,'open',?7)",
-                params![m.id, m.from_actor, m.project, m.subject, m.body, m.needs_reply as i32, m.created_at],
+                "INSERT INTO inbox (id,from_actor,project,subject,body,needs_reply,state,created_at,run_id,task_id,kind) VALUES (?1,?2,?3,?4,?5,?6,'open',?7,?8,?9,?10)",
+                params![m.id, m.from_actor, m.project, m.subject, m.body, m.needs_reply as i32, m.created_at, m.run_id, m.task_id, m.kind],
             )?;
             Ok(())
         })?;
@@ -729,7 +784,7 @@ impl Store {
     pub fn list_inbox(&self, only_open: bool, limit: i64) -> Result<Vec<InboxMessage>> {
         self.with(|c| {
             let mut st = c.prepare(
-                "SELECT id,from_actor,project,subject,body,needs_reply,state,reply,replied_at,created_at FROM inbox
+                "SELECT id,from_actor,project,subject,body,needs_reply,state,reply,replied_at,created_at,run_id,task_id,kind FROM inbox
                  WHERE (?1=0 OR state='open') ORDER BY created_at DESC LIMIT ?2",
             )?;
             let rows = st.query_map(params![only_open as i32, limit], row_inbox)?;
@@ -741,11 +796,47 @@ impl Store {
     pub fn get_inbox(&self, id: &str) -> Result<Option<InboxMessage>> {
         self.with(|c| {
             Ok(c.query_row(
-                "SELECT id,from_actor,project,subject,body,needs_reply,state,reply,replied_at,created_at FROM inbox WHERE id=?1",
+                "SELECT id,from_actor,project,subject,body,needs_reply,state,reply,replied_at,created_at,run_id,task_id,kind FROM inbox WHERE id=?1",
                 params![id],
                 row_inbox,
             )
             .optional()?)
+        })
+    }
+
+    /// Resolve every open message a run owns. Used when the run is cancelled,
+    /// so a decision that can no longer be taken stops being offered.
+    pub fn resolve_inbox_for_run(&self, run_id: &str, title: Option<&str>) -> Result<usize> {
+        self.with(|c| {
+            let mut n = c.execute(
+                "UPDATE inbox SET state='resolved', replied_at=?2 WHERE run_id=?1 AND state='open'",
+                params![run_id, util::now()],
+            )?;
+            // Rows written before origin columns existed have no run_id. Match
+            // them once, by the one relation they always had: a subject of the
+            // form "<kind>: <run title>".
+            if let Some(title) = title {
+                n += c.execute(
+                    "UPDATE inbox SET state='resolved', replied_at=?2 WHERE run_id IS NULL AND state='open' AND subject LIKE ?1",
+                    params![format!("%: {title}"), util::now()],
+                )?;
+            }
+            Ok(n)
+        })
+    }
+
+    /// Delete every message a run owns, and its undelivered reports.
+    pub fn forget_run_inbox(&self, run_id: &str, title: Option<&str>) -> Result<usize> {
+        self.with(|c| {
+            let mut n = c.execute("DELETE FROM inbox WHERE run_id=?1", params![run_id])?;
+            if let Some(title) = title {
+                n += c.execute(
+                    "DELETE FROM inbox WHERE run_id IS NULL AND subject LIKE ?1",
+                    params![format!("%: {title}")],
+                )?;
+            }
+            c.execute("DELETE FROM team_reports WHERE run_id=?1", params![run_id])?;
+            Ok(n)
         })
     }
 
@@ -880,5 +971,8 @@ fn row_inbox(r: &rusqlite::Row) -> rusqlite::Result<InboxMessage> {
         reply: r.get(7)?,
         replied_at: r.get(8)?,
         created_at: r.get(9)?,
+        run_id: r.get(10)?,
+        task_id: r.get(11)?,
+        kind: r.get(12)?,
     })
 }

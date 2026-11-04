@@ -971,3 +971,74 @@ fn a_pid_file_carries_a_start_token_because_a_pid_alone_is_not_an_identity() {
         "a holder is live only when the start token still matches"
     );
 }
+
+#[test]
+fn the_badge_and_the_inbox_count_the_same_rows() {
+    // The rail counted every open row with needs_reply; the Inbox hid some by
+    // subject prefix; Home applied a third rule. The number beside "Inbox" is
+    // now derived from the rows the Inbox actually renders.
+    let start = APP.find("function inboxQuestionRows(list)").expect("the shared question filter is gone");
+    let body = &APP[start..start + 500];
+    assert!(body.contains("m.needs_reply && !aboutShownRun(m)"), "one definition of a visible question: {body}");
+    let load = APP.find("AI.counts.questions = (AI.needs || []).length + inboxQuestionRows(AI.inbox).length")
+        .expect("the inbox no longer derives the badge from its own rows");
+    assert!(load > start);
+    assert!(!APP.contains("AI.counts.questions = (r[1] || []).filter"), "the health read is not a second count");
+}
+
+#[test]
+fn deleting_a_run_takes_its_notifications_with_it() {
+    // `delete_run` removed the run, its tasks and its events, but not the inbox
+    // rows that were about it. Those orphans then showed up as fresh Decisions.
+    let src = include_str!("../../devd-core/src/store_team.rs");
+    let start = src.find("pub fn delete_run(&self, id: &str)").expect("delete_run is gone");
+    let body = &src[start..start + 900];
+    assert!(body.contains("forget_run_inbox"), "the run's messages and reports are deleted with it: {body}");
+    let store = include_str!("../../devd-core/src/store_ai.rs");
+    assert!(store.contains("pub fn forget_run_inbox"), "there is one place that owns that deletion");
+    assert!(store.contains("DELETE FROM team_reports WHERE run_id"), "an undelivered report cannot outlive its run");
+}
+
+#[test]
+fn a_run_that_is_over_does_not_keep_asking_for_a_person() {
+    // A cancelled run still offered Retry and Accept for a task that would never
+    // run again. The question comes from one function, and it answers none.
+    let src = include_str!("../../devd-agent/src/needs.rs");
+    let start = src.find("pub fn of(run: &TeamRun").expect("needs::of is gone");
+    let body = &src[start..start + 500];
+    assert!(body.contains("\"done\" | \"failed\" | \"cancelled\""), "a finished run needs nothing: {body}");
+    assert!(body.contains("return None"), "and the answer is None, not a card");
+}
+
+#[test]
+fn both_composers_have_a_mention_menu_and_a_stable_query() {
+    // Home's "/" and "@" opened a pipeline with nowhere to paint: only the chat
+    // composer rendered `#chat-mentions`. And `openMentions` never stored the
+    // query, so the "has it changed?" test was always true and the list reset.
+    assert!(APP.contains("id=\"home-mentions\""), "Home has its own menu");
+    assert!(APP.contains("id=\"chat-mentions\""), "and the Assistant still has its own");
+    let start = APP.find("function openMentions(start, query, kind)").expect("openMentions is gone");
+    let body = &APP[start..start + 400];
+    assert!(body.contains("MENTIONS.query = String(query || \"\")"), "the query is remembered: {body}");
+    assert!(APP.contains("function mentionBox()"), "one lookup serves both composers");
+    // "/" then "@" at the same position is a different list. The change test
+    // compared the start and the query only, so typing one after the other kept
+    // the first list on screen - skills while typing "@".
+    assert!(
+        APP.contains("MENTIONS.kind !== t.value.charAt(ht.start)")
+            && APP.contains("MENTIONS.kind !== t.value.charAt(trig.start)"),
+        "the trigger kind is part of deciding whether the list changed"
+    );
+    assert!(APP.contains("if (MENTIONS.kind !== nextKind) MENTIONS.items = []"), "a new kind does not inherit the old items");
+}
+
+#[test]
+fn refreshing_a_run_keeps_the_readers_place() {
+    // The run detail was rebuilt every 1.2 s, and replacing its markup reset the
+    // scroll container to the top - the reported "sent back up while scrolling".
+    let start = APP.find("function paintTeam()").expect("paintTeam is gone");
+    let body = &APP[start..start + 3000];
+    assert!(body.contains("scroll.scrollTop = top") || body.contains("scroll.scrollTop = atBottom"),
+        "the scroll position is restored after a repaint: {body}");
+    assert!(body.contains("html !== TEAM.lastHtml"), "an unchanged run is not repainted at all");
+}
