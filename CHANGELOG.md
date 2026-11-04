@@ -16,6 +16,52 @@ Nothing yet.
 
 ---
 
+## [0.22.0] - 2026-11-05 - Branches get an address, and the mail is readable
+
+### Added
+
+- **A site for every git worktree.** `worktree.sites`, `worktree.create`,
+  `worktree.serve` and `worktree.unserve` (and `devd worktree ...`) check out a
+  branch under devd's own folder and serve it at `<branch>.<site>.test`, with a
+  `.env` pointed at that address and a shared, copied or untouched database. The
+  site page has a Worktrees section with the branch, its address and the
+  dependencies a fresh checkout still needs.
+- **Mail, in the window and for agents.** `mail.setup`, `mail.inbox`,
+  `mail.read`, `mail.delete` and `mail.clear` read the Mailpit catcher devd
+  already supervises. A message opens as HTML (scripts and remote requests
+  blocked), text, raw source or headers, and can be handed to the assistant or
+  the team with its id rather than its body.
+- **The site a folder belongs to.** `site.current` names the site whose project
+  contains a folder, preferring the most specific one, so a worktree is reported
+  as itself.
+- **Agent context in MCP.** `initialize` now carries the site for the working
+  folder, and the server exposes `devd://sites`, `devd://site/current` and
+  `devd://site/<name>` resources and a `debug_site` prompt.
+- **Coding-agent setup.** `agent_client.list`, `agent_client.add` and
+  `agent_client.remove` add devd to Claude Code, Claude Desktop, Cursor, VS Code,
+  Windsurf or Codex by editing only devd's entry, keeping a backup and leaving
+  the rest of the file byte-for-byte. Shown on Agents → MCP.
+- **Project pins.** `site.pin` writes `.devdrc` (`php=8.4`, `node=22`) so a
+  version belongs to the repository; `.php-version`, `.nvmrc` and
+  `.node-version` are read too. Precedence is isolated, then pinned, then the
+  machine default, and the site page says which one is in effect.
+- **A guideline for a project's coding agents.** `project.agent_guidelines`
+  writes `.ai/guidelines/devd.md` for Laravel Boost projects: the site is already
+  served, versions come from the project, and mail is caught locally.
+- **Two skills:** `check-the-mail` proves what a change sends by reading the
+  caught message, and `work-on-a-branch` gives parallel work a branch and an
+  address of its own.
+
+### Changed
+
+- **`devd site php` isolates a version on this machine; `devd site pin` pins it
+  in the project.** The site page distinguishes “isolated”, “pinned by the
+  project” and “follows the default”.
+- **Removing a folder that is listed only because a site serves it** now names
+  the site and explains that removing the site is what removes the row.
+
+---
+
 ## [0.21.0] - 2026-11-05 - A design pass, and a terminal you can type in
 
 ### Added

@@ -113,6 +113,16 @@ pub(crate) enum Command {
         #[command(subcommand)]
         cmd: HostsCommand,
     },
+    /// A site for every git worktree: list them, make one, serve one, stop serving one.
+    Worktree {
+        #[command(subcommand)]
+        cmd: SiteWorktreeCommand,
+    },
+    /// The mail the local catcher has caught: list it, read it, clear it.
+    Mail {
+        #[command(subcommand)]
+        cmd: MailCommand,
+    },
     /// The generated web server configuration.
     Web {
         #[command(subcommand)]
@@ -1200,13 +1210,88 @@ pub(crate) enum SiteCommand {
         #[arg(long)]
         delete_files: bool,
     },
-    /// Pin a site to a PHP version, or let it follow the default again.
+    /// Isolate a site on a PHP version on this machine only, or let it follow the project again.
     Php {
         /// Project name.
         name: String,
-        /// The PHP version to pin it to. Omit to let it follow the default.
+        /// The PHP version to isolate it on. Omit to let it follow the project or the default.
         version: Option<String>,
     },
+    /// Pin a tool's version in the project's .devdrc, for everyone who works on it.
+    Pin {
+        /// Project name.
+        name: String,
+        /// `php` or `node`.
+        tool: String,
+        /// The version, like 8.4 or 22. Omit to remove the pin.
+        version: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum SiteWorktreeCommand {
+    /// A site's worktrees and the address each is served at.
+    List {
+        /// The site.
+        site: String,
+    },
+    /// Check out a branch as a worktree and serve it at <branch>.<site>.test.
+    Create {
+        /// The site whose repository to branch from.
+        site: String,
+        /// A branch to check out, or a new name. Omit for a made-up name like brave-otter.
+        branch: Option<String>,
+        /// Where a new branch starts (a branch, tag or commit). Defaults to the current branch.
+        #[arg(long)]
+        from: Option<String>,
+        /// `share` the site's database (default), `clone` it for this branch, or `none`.
+        #[arg(long)]
+        database: Option<String>,
+    },
+    /// Serve a worktree that already exists (made with `git worktree add`, or by a tool).
+    Serve {
+        /// The site whose repository the worktree is a checkout of.
+        site: String,
+        /// The worktree's folder.
+        path: String,
+        /// `share`, `clone` or `none`.
+        #[arg(long)]
+        database: Option<String>,
+    },
+    /// Stop serving a worktree. Its folder is kept.
+    Unserve {
+        /// The site the worktree belongs to.
+        site: String,
+        /// The worktree's own site, from `devd worktree list`.
+        worktree_site: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum MailCommand {
+    /// Whether the catcher is running, where its inbox is, and the .env lines that point an app at it.
+    Setup,
+    /// What has been caught, newest first.
+    List {
+        /// How many to show.
+        #[arg(long, default_value_t = 25)]
+        limit: i64,
+        /// Only messages whose subject or addresses contain this.
+        #[arg(long)]
+        query: Option<String>,
+    },
+    /// One message in full: headers, text, HTML and attachments.
+    Read {
+        /// The message id, from `devd mail list`.
+        id: String,
+    },
+    /// Delete one message.
+    Delete {
+        /// The message id, from `devd mail list`.
+        id: String,
+    },
+    /// Delete every message.
+    Clear,
 }
 
 #[derive(Subcommand, Debug)]
@@ -1947,6 +2032,14 @@ fn run(cli: Cli) -> Result<i32> {
         }
         Command::Hosts { cmd } => {
             stackcat::hosts(&app, cmd)?;
+            Ok(0)
+        }
+        Command::Worktree { cmd } => {
+            stackcat::worktree(&app, cmd)?;
+            Ok(0)
+        }
+        Command::Mail { cmd } => {
+            stackcat::mail(&app, cmd)?;
             Ok(0)
         }
         Command::Web { cmd } => {

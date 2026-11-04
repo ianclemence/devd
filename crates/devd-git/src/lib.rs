@@ -1698,12 +1698,31 @@ impl GitService {
         branch: &str,
         create_branch: bool,
     ) -> Result<()> {
+        self.worktree_add_from(repo, path, branch, create_branch, None)
+    }
+
+    /// [`worktree_add`](Self::worktree_add), starting a new branch from `from` (a branch, tag or
+    /// commit) instead of the current HEAD.
+    pub fn worktree_add_from(
+        &self,
+        repo: &Path,
+        path: &Path,
+        branch: &str,
+        create_branch: bool,
+        from: Option<&str>,
+    ) -> Result<()> {
         validate_ref(branch)?;
+        if let Some(f) = from {
+            validate_ref(f)?;
+        }
         let mut args = vec!["worktree".to_string(), "add".to_string()];
         if create_branch {
             args.push("-b".into());
             args.push(branch.to_string());
             args.push(path.to_string_lossy().to_string());
+            if let Some(f) = from {
+                args.push(f.to_string());
+            }
         } else {
             args.push(path.to_string_lossy().to_string());
             args.push(branch.to_string());

@@ -669,6 +669,27 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             if ctx.store.delete_repo(&p)? {
                 removed = true;
             }
+            if !removed {
+                // Nothing was registered, but the folder is still in the project list when a
+                // site serves it: that row is the site's, not a project's. Saying "not
+                // registered" and leaving the row there is true and no help, so the answer
+                // names what keeps it listed and what removes it.
+                let serving: Vec<String> = ctx
+                    .store
+                    .list_sites()?
+                    .iter()
+                    .filter(|s| devd_core::util::same_folder(&authz::normalise(&s.project_dir()), &want))
+                    .map(|s| s.name.clone())
+                    .collect();
+                if !serving.is_empty() {
+                    return Err(devd_core::DevdError::conflict(format!(
+                        "{p} is listed because {} serve{} it, not because it was imported. Remove the site with site.remove ({}); the folder is not touched",
+                        if serving.len() == 1 { format!("the site {}", serving[0]) } else { format!("the sites {}", serving.join(", ")) },
+                        if serving.len() == 1 { "s" } else { "" },
+                        serving.join(", "),
+                    )));
+                }
+            }
             Ok(Outcome::ok(if removed {
                 format!("forgot {p}; the folder is untouched")
             } else {

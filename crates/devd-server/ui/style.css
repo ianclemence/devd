@@ -5846,3 +5846,67 @@ a, .link, .pill-accent, .tag-unt, .feed-agent, .chat-plan-count, .cap-accent, .m
   .summary-item, .summary-item:first-child { padding: var(--s3) 0; border-left: 0; border-top: 1px solid var(--line); }
   .summary-item:first-child { border-top: 0; padding-top: 0; }
 }
+
+
+/* ---- mail: the catcher's inbox, in the window ---------------------------------- */
+
+.mail-layout { display: grid; grid-template-columns: minmax(280px, 380px) minmax(0, 1fr); gap: var(--s4); align-items: start; }
+.mail-list, .mail-pane { background: var(--bg-surface); border: 1px solid var(--line); border-radius: var(--radius-lg); min-width: 0; }
+.mail-tools { padding: var(--s3); border-bottom: 1px solid var(--line); }
+.mail-tools .ui-search { width: 100%; }
+.mail-apps { display: flex; flex-wrap: wrap; gap: var(--s1); padding: var(--s3); border-bottom: 1px solid var(--line); }
+.mail-app { height: 26px; padding: 0 var(--s3); border: 1px solid var(--line); border-radius: 999px; background: none; color: var(--fg-mute); font: inherit; font-size: var(--text-xs); cursor: pointer; }
+.mail-app span { color: var(--fg-dim); margin-left: 4px; }
+.mail-app:hover { color: var(--fg); background: var(--bg-hover); }
+.mail-app.active { color: var(--fg); background: var(--accent-quiet); border-color: var(--accent-line); }
+.mail-rows { display: flex; flex-direction: column; max-height: min(64vh, 640px); overflow-y: auto; }
+.mail-row { display: flex; flex-direction: column; gap: 2px; text-align: left; width: 100%; padding: 11px var(--s3) 11px var(--s4); border: 0; border-bottom: 1px solid var(--line); background: none; color: var(--fg); font: inherit; cursor: pointer; position: relative; }
+.mail-row:hover { background: var(--bg-hover); }
+.mail-row.active { background: var(--accent-quiet); }
+.mail-row.unread::before { content: ""; position: absolute; left: 6px; top: 17px; width: 6px; height: 6px; border-radius: 50%; background: var(--accent-strong); }
+.mail-row-top { display: flex; gap: var(--s2); justify-content: space-between; align-items: baseline; }
+.mail-row-subject { font-weight: 600; font-size: var(--text-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mail-row:not(.unread) .mail-row-subject { font-weight: 500; }
+.mail-row-time { flex: none; color: var(--fg-dim); font-size: var(--text-2xs); }
+.mail-row-from, .mail-row-snippet { color: var(--fg-mute); font-size: var(--text-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mail-row-snippet { color: var(--fg-dim); }
+.mail-pane { padding: var(--s4); }
+.mail-pane-empty { display: grid; place-items: center; min-height: 260px; }
+.mail-head { display: flex; gap: var(--s3); align-items: flex-start; justify-content: space-between; margin-bottom: var(--s3); }
+.mail-subject { font-size: 20px; font-weight: 650; letter-spacing: -0.02em; min-width: 0; overflow-wrap: anywhere; }
+.mail-meta { display: grid; grid-template-columns: max-content 1fr; gap: 2px var(--s3); margin: 0 0 var(--s3); font-size: var(--text-sm); }
+.mail-meta dt { color: var(--fg-dim); } .mail-meta dd { margin: 0; color: var(--fg-mute); overflow-wrap: anywhere; }
+.mail-files { display: flex; flex-wrap: wrap; gap: var(--s2); margin-bottom: var(--s3); }
+.mail-file { display: inline-flex; align-items: center; gap: var(--s2); height: 30px; padding: 0 var(--s3); border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--bg-raised); color: var(--fg); font: inherit; font-size: var(--text-xs); cursor: pointer; }
+.mail-file:hover { border-color: var(--accent-line); }
+.mail-file .icon { width: 14px; height: 14px; }
+.mail-views { margin: var(--s2) 0 var(--s3); }
+.mail-frame { width: 100%; height: min(54vh, 520px); border: 1px solid var(--line); border-radius: var(--radius); background: #fff; }
+.mail-note, .mail-pane-note { margin-top: var(--s2); color: var(--fg-dim); font-size: var(--text-xs); }
+.mail-text { margin: 0; padding: var(--s3); max-height: min(54vh, 520px); overflow: auto; background: var(--bg-deep); border: 1px solid var(--line); border-radius: var(--radius); white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-sm); color: var(--fg-mute); }
+.mail-headers { width: 100%; border-collapse: collapse; font-size: var(--text-xs); }
+.mail-headers th { text-align: left; vertical-align: top; width: 28%; padding: 6px var(--s3) 6px 0; color: var(--fg-dim); font-weight: 600; white-space: nowrap; }
+.mail-headers td { padding: 6px 0; color: var(--fg-mute); overflow-wrap: anywhere; border-bottom: 1px solid var(--line); }
+.mail-start { max-width: 560px; padding: var(--s6) 0; }
+.mail-start p { color: var(--fg-mute); }
+.mail-env { margin-top: var(--s5); border-top: 1px solid var(--line); padding-top: var(--s3); }
+.mail-env summary { cursor: pointer; color: var(--fg-mute); font-size: var(--text-sm); }
+.mail-env-body { display: grid; gap: var(--s2); margin-top: var(--s3); max-width: 560px; }
+@media (max-width: 900px) {
+  .mail-layout { grid-template-columns: minmax(0, 1fr); }
+  .mail-layout.has-message .mail-list { display: none; }
+  .mail-rows { max-height: none; }
+}
+
+
+/* ---- worktrees on the site page ------------------------------------------------ */
+.ui-quiet { color: var(--fg-dim); font-size: var(--text-sm); padding: var(--s3) 0; max-width: 62ch; }
+
+
+/* ---- handing a message to an agent ---------------------------------------------- */
+.mail-ask { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); margin: 0 0 var(--s3); padding: var(--s2) var(--s3); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--accent-quiet); }
+.mail-ask-label { display: inline-flex; align-items: center; gap: 6px; margin-right: var(--s1); color: var(--accent-text); font-size: var(--text-xs); font-weight: 600; letter-spacing: 0.02em; }
+.mail-ask-label .icon { width: 14px; height: 14px; }
+.mail-ask-btn { height: 26px; padding: 0 var(--s3); border: 1px solid var(--accent-line); border-radius: 999px; background: var(--bg-surface); color: var(--fg); font: inherit; font-size: var(--text-xs); cursor: pointer; }
+.mail-ask-btn:hover { background: var(--bg-hover); border-color: var(--accent-strong); }
+.mail-ask-btn:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 1px; }

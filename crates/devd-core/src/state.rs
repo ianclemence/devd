@@ -168,6 +168,20 @@ impl Site {
             _ => root,
         }
     }
+
+    /// The PHP series this site asks for, and why.
+    ///
+    /// Three sources, in this order: `isolated` (a choice for this machine, kept in devd's
+    /// state), `pinned` (a choice for the project, written in a file that is committed), and
+    /// neither, in which case the site follows the machine's default and this is `None`. One
+    /// function decides, so the web server configuration, the site list and an agent can
+    /// never disagree about which PHP a site runs on.
+    pub fn php_wanted(&self) -> Option<(String, &'static str)> {
+        if let Some(own) = self.php.as_deref().filter(|s| !s.trim().is_empty()) {
+            return Some((own.to_string(), "isolated"));
+        }
+        crate::pins::read(&self.project_dir()).php.map(|p| (p.version, "pinned"))
+    }
 }
 
 /// An installed runtime build.

@@ -270,6 +270,12 @@ pub fn create(ctx: &Ctx, request: &CreateRequest) -> Result<Created> {
     create_with(ctx, request, true, true)
 }
 
+/// Create a site for a folder that already has its own content, such as a git worktree:
+/// no starter page is written into it.
+pub fn create_for_existing_folder(ctx: &Ctx, request: &CreateRequest) -> Result<Created> {
+    create_with(ctx, request, false, true)
+}
+
 /// [`create`], with control over the two things a caller creating many sites
 /// does not want repeated: writing a starter page into a directory that has
 /// nothing to serve, and re-rendering and reloading the web server.
@@ -689,9 +695,13 @@ pub struct SiteRow {
     /// The PHP version the site is served by. `None` unless the site serves PHP: a version
     /// means nothing for a Go module, a static site or a proxy.
     pub php_effective: Option<String>,
-    /// How that version came about: `pinned` (a person chose it) or `inherited` (it follows
-    /// the default). `None` unless the site serves PHP.
+    /// How that version came about: `isolated` (chosen for this machine), `pinned` (written in
+    /// the project, for everyone) or `inherited` (it follows the default). `None` unless the
+    /// site serves PHP.
     pub php_source: Option<&'static str>,
+    /// What the project's own files pin, whether or not it is in effect: an isolated choice
+    /// overrides a pin, and the person should be able to see both.
+    pub pins: devd_core::pins::Pins,
     /// A PHP version recorded for the site that nothing uses, because the site does not
     /// serve PHP. Shown so it can be removed, not presented as the site's runtime.
     pub php_unused_pin: Option<String>,
@@ -737,10 +747,10 @@ pub fn list(ctx: &Ctx) -> Result<Vec<SiteRow>> {
             // The version a site runs on: its own, or the default. A site
             // pinned to a version that is not installed falls back to the
             // default, because that is what it is actually served by.
-            let pinned = site
-                .php
-                .as_deref()
-                .map(devd_services::php_series)
+            let wanted = site.php_wanted();
+            let pinned = wanted
+                .as_ref()
+                .map(|(s, _)| devd_services::php_series(s))
                 .filter(|s| !s.is_empty());
             let effective = site.effective_serving();
             let uses_php = effective.serving.uses_php();
@@ -758,10 +768,10 @@ pub fn list(ctx: &Ctx) -> Result<Vec<SiteRow>> {
                     None => primary.clone(),
                 }
             };
-            let php_source = uses_php.then_some(if pinned.is_some() {
-                "pinned"
-            } else {
-                "inherited"
+            let php_source = uses_php.then_some(match wanted.as_ref().map(|(_, why)| *why) {
+                Some("isolated") => "isolated",
+                Some(_) => "pinned",
+                None => "inherited",
             });
             let php_unused_pin = if uses_php { None } else { site.php.clone() };
             let detected = effective.detection.as_ref().map(|d| d.summary());
@@ -777,6 +787,7 @@ pub fn list(ctx: &Ctx) -> Result<Vec<SiteRow>> {
                 detected,
                 detection: effective.detection,
                 php_source,
+                pins: devd_core::pins::read(&site.project_dir()),
                 php_unused_pin,
                 // A proxy site has no project directory to be missing.
                 present: site.upstream.is_some() || Path::new(&site.root).is_dir(),
@@ -871,6 +882,90 @@ pub fn set_php(ctx: &Ctx, name: &str, version: Option<&str>) -> Result<serde_jso
     Ok(json!({
         "site": site,
         "php": site.php,
+        "started": started,
+        "warnings": warnings,
+    }))
+}
+
+/// The site a folder belongs to: the one whose project folder contains it, the most specific
+/// when several do (a worktree's folder wins over the main checkout's, which is why an agent
+/// started inside a worktree is told about the worktree's address, not the main one's).
+pub fn current(ctx: &Ctx, folder: &Path) -> Result<Option<SiteRow>> {
+    let want = folder.canonicalize().unwrap_or_else(|_| folder.to_path_buf());
+    let lower = |p: &Path| p.to_string_lossy().replace('\\', "/").trim_end_matches('/').to_ascii_lowercase();
+    let want_s = lower(&want);
+    let best = list(ctx)?
+        .into_iter()
+        .filter_map(|row| {
+            let dir = row.site.project_dir();
+            let dir = dir.canonicalize().unwrap_or(dir);
+            let d = lower(&dir);
+            (want_s == d || want_s.starts_with(&format!("{d}/"))).then(|| (d.len(), row))
+        })
+        .max_by_key(|(len, _)| *len);
+    Ok(best.map(|(_, row)| row))
+}
+
+/// Pin a tool's version for the whole project, or remove the pin.
+///
+/// This writes the project's `.devdrc`, which is meant to be committed, so it is a different
+/// act from `set_php`, which only changes this machine. When the site has an isolated choice
+/// the pin is written but does not take effect here, and the result says so.
+pub fn pin(ctx: &Ctx, name: &str, tool: &str, version: Option<&str>) -> Result<serde_json::Value> {
+    let site = ctx
+        .store
+        .list_sites()?
+        .into_iter()
+        .find(|s| s.name == name)
+        .ok_or_else(|| DevdError::not_found(format!("no site named `{name}`")))?;
+    if tool == "php" {
+        if let Some(v) = version.map(str::trim).filter(|v| !v.is_empty()) {
+            let series = devd_core::pins::php_series(v)
+                .ok_or_else(|| DevdError::invalid(format!("`{v}` is not a PHP version; write it like 8.4")))?;
+            let installed = devd_services::installed_php_series(ctx)?;
+            if !installed.iter().any(|s| s == &series) {
+                return Err(DevdError::invalid(format!(
+                    "PHP {series} is not installed, so pinning it would break the site here; the installed versions are {}",
+                    installed.join(", ")
+                )));
+            }
+        }
+    }
+    let written = devd_core::pins::set(&site.project_dir(), tool, version)?;
+
+    // The site's listener for the pinned version has to be up, as it is for `set_php`.
+    let mut started = Vec::new();
+    let site = ctx.store.list_sites()?.into_iter().find(|s| s.name == name).unwrap_or(site);
+    if tool == "php" {
+        if let Some((series, _)) = site.php_wanted() {
+            let _ = devd_services::ensure_php_services(ctx);
+            let listener = devd_services::php_service_name(&devd_services::php_series(&series));
+            let running = ctx
+                .store
+                .get_service(&listener)?
+                .map(|s| devd_services::running_pid(ctx, &s).is_some())
+                .unwrap_or(false);
+            if !running {
+                if let Ok(status) = devd_services::start(ctx, &listener) {
+                    started.push(status.name);
+                }
+            }
+        }
+    }
+    let mut warnings = Vec::new();
+    if tool == "php" && version.is_some() && site.php.is_some() {
+        warnings.push(format!(
+            "this site is isolated on PHP {} on this machine, so the pin applies to everyone else; use the isolation to follow the project again",
+            site.php.as_deref().unwrap_or_default()
+        ));
+    }
+    if let Err(e) = devd_services::web::render(ctx) {
+        warnings.push(format!("the web server configuration could not be re-rendered: {e}"));
+    }
+    Ok(json!({
+        "file": written.display().to_string(),
+        "pins": devd_core::pins::read(&site.project_dir()),
+        "php_wanted": site.php_wanted().map(|(v, why)| json!({ "version": v, "source": why })),
         "started": started,
         "warnings": warnings,
     }))
@@ -1232,7 +1327,7 @@ mod tests {
     }
 
     #[test]
-    fn a_php_site_says_whether_its_version_is_pinned_or_follows_the_default() {
+    fn a_php_site_says_whether_its_version_is_isolated_pinned_or_follows_the_default() {
         let c = ctx("phprow");
         let dir = project(&c.paths.root().join("www"), "blog", &["index.php"]);
         create(
@@ -1250,16 +1345,30 @@ mod tests {
             .unwrap();
         assert_eq!(inherited.serving, devd_core::serving::Serving::Php);
         assert_eq!(inherited.php_source, Some("inherited"));
+        assert_eq!(inherited.pins.php, None);
 
+        // A choice stored in devd is isolated to this machine.
         let mut site = c.store.get_site("blog").unwrap().unwrap();
         site.php = Some("8.4".to_string());
         c.store.upsert_site(&site).unwrap();
+        let isolated = list(&c)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.site.name == "blog")
+            .unwrap();
+        assert_eq!(isolated.php_source, Some("isolated"));
+
+        // A choice written into the project belongs to everyone.
+        site.php = None;
+        c.store.upsert_site(&site).unwrap();
+        std::fs::write(dir.join(devd_core::pins::FILE), "php=8.3\n").unwrap();
         let pinned = list(&c)
             .unwrap()
             .into_iter()
             .find(|r| r.site.name == "blog")
             .unwrap();
         assert_eq!(pinned.php_source, Some("pinned"));
+        assert_eq!(pinned.pins.php.as_ref().map(|p| p.version.as_str()), Some("8.3"));
     }
 
     #[test]

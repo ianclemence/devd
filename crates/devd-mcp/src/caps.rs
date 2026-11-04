@@ -32,6 +32,24 @@ const MIN_TIMEOUT: u64 = 5;
 pub struct NoArgs {}
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct ClientArgs {
+    /// Which coding agent: `claude-code`, `claude-desktop`, `cursor`, `vscode`, `windsurf` or `codex`.
+    pub client: String,
+}
+
+fn client_named(id: &str) -> Result<crate::clients::Client> {
+    crate::clients::this_machine()
+        .into_iter()
+        .find(|c| c.id == id)
+        .ok_or_else(|| DevdError::not_found(format!("`{id}` is not a coding agent devd knows; the choices are claude-code, claude-desktop, cursor, vscode, windsurf and codex")))
+}
+
+fn devd_command() -> Result<std::path::PathBuf> {
+    let exe = std::env::current_exe().map_err(|e| DevdError::internal(format!("could not find the devd program: {e}")))?;
+    Ok(crate::clients::command_for(&exe))
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct ServerArgs {
     /// The server's name.
     pub name: String,
@@ -335,6 +353,73 @@ fn call_apply(ctx: &Ctx, a: &CallArgs) -> Result<Outcome> {
 
 /// Register the MCP-client capabilities.
 pub fn register(reg: &mut Registry) -> Result<()> {
+    reg.define::<NoArgs>("agent_client.list", "Which coding agents can use devd, and have they been set up?")
+        .description("For Claude Code, Claude Desktop, Cursor, VS Code, Windsurf and Codex: whether the program looks installed, whether its configuration already lists devd, and whether that entry runs this devd. Reads only the one entry it looks for; it changes nothing.")
+        .group("mcp")
+        .tier(Tier::Read)
+        .effect(Effect::Read)
+        .idempotent()
+        .handlers(
+            |_ctx, _a| Ok(Plan::new("agent_client.list", "look for devd in each coding agent's configuration")),
+            |_ctx, _a| {
+                let command = devd_command()?;
+                let rows = crate::clients::status(&crate::clients::this_machine(), &command);
+                let added = rows.iter().filter(|r| r.added).count();
+                Ok(Outcome::with_data(
+                    format!("devd is set up in {added} of {} coding agents", rows.len()),
+                    json!({ "command": command.display().to_string(), "clients": rows }),
+                ))
+            },
+        )?;
+
+    reg.define::<ClientArgs>("agent_client.add", "Let a coding agent use devd")
+        .description("Adds a `devd` entry to the coding agent's own MCP configuration, so it can use devd's capabilities (`devd mcp`). Only that entry is written: everything else in the file stays exactly as it was, a copy of the old file is kept beside it, and a file that cannot be read as the right format is left alone and named. A program that does not look installed is refused. The agent has to be restarted, or its MCP servers reloaded, to see it. For a person alone: a configuration file decides what another program will run.")
+        .group("mcp")
+        .tier(Tier::Write)
+        .effect(Effect::Config)
+        .human_only()
+        .idempotent()
+        .handlers(
+            |_ctx, a| {
+                let c = client_named(&a.client)?;
+                Ok(Plan::new("agent_client.add", format!("add devd to {}", c.name))
+                    .step(format!("edit {} (only the devd entry)", c.config.display()))
+                    .step("keep a copy of the old file as .devd-backup")
+                    .effect(format!("{} will offer devd's tools after it is restarted", c.name)))
+            },
+            |_ctx, a| {
+                let c = client_named(&a.client)?;
+                let command = devd_command()?;
+                let (file, backup) = crate::clients::add(&c, &command)?;
+                Ok(Outcome::with_data(
+                    format!("devd is added to {}; restart it to use devd", c.name),
+                    json!({ "client": c.id, "file": file.display().to_string(), "backup": backup.map(|b| b.display().to_string()), "command": command.display().to_string() }),
+                ))
+            },
+        )?;
+
+    reg.define::<ClientArgs>("agent_client.remove", "Take devd out of a coding agent")
+        .description("Removes the `devd` entry from the coding agent's configuration and nothing else, keeping a copy of the old file. It is not an error when devd was not listed.")
+        .group("mcp")
+        .tier(Tier::Write)
+        .effect(Effect::Config)
+        .human_only()
+        .idempotent()
+        .handlers(
+            |_ctx, a| {
+                let c = client_named(&a.client)?;
+                Ok(Plan::new("agent_client.remove", format!("remove devd from {}", c.name)).step(format!("edit {} (only the devd entry)", c.config.display())))
+            },
+            |_ctx, a| {
+                let c = client_named(&a.client)?;
+                let removed = crate::clients::remove(&c)?;
+                Ok(Outcome::with_data(
+                    if removed { format!("devd is removed from {}", c.name) } else { format!("devd was not listed in {}", c.name) },
+                    json!({ "client": c.id, "removed": removed }),
+                ))
+            },
+        )?;
+
     reg.define::<NoArgs>("mcp.list", "List the MCP servers devd connects to")
         .description("The Model Context Protocol servers configured as tools for the assistant, with what each is, whether it is enabled, what agents may do with it, how many tools it last published, and why it last failed. Environment values are never returned, only their names.")
         .group("mcp")

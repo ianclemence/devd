@@ -13,11 +13,13 @@
 //! things through the same approval and audit path. Anything that runs a command is `exec`
 //! tier; anything that reaches a remote server is `remote`.
 
+pub mod agentctx;
 pub mod caps;
 pub mod caps_more;
 pub mod caps_remote;
 pub mod caps_shell;
 pub mod caps_update;
+pub mod caps_worktree;
 pub mod cron;
 pub mod daemons;
 pub mod dbadmin;
@@ -33,6 +35,7 @@ pub mod remote;
 pub mod runner;
 pub mod servers;
 pub mod shell;
+pub mod worktree;
 pub mod ssh;
 
 use std::path::{Path, PathBuf};

@@ -17,7 +17,7 @@ use devd_core::Result;
 
 use crate::app::App;
 use crate::{
-    DbCommand, HostsCommand, PhpCommand, ServiceCommand, SiteCommand, StackCommand, TlsCommand, WebCommand,
+    DbCommand, HostsCommand, MailCommand, PhpCommand, ServiceCommand, SiteCommand, SiteWorktreeCommand, StackCommand, TlsCommand, WebCommand,
 };
 
 /// Run a `devd php` subcommand.
@@ -163,10 +163,37 @@ pub fn site(app: &App, cmd: SiteCommand) -> Result<()> {
             "site.remove",
             json!({ "name": name, "delete_files": delete_files }),
         ),
+        SiteCommand::Pin { name, tool, version } => app.invoke(
+            "site.pin",
+            json!({ "name": name, "tool": tool, "version": version }),
+        ),
         SiteCommand::Php { name, version } => app.invoke(
             "site.set_php",
             json!({ "name": name, "version": version }),
         ),
+    }
+}
+
+/// Run a `devd worktree` subcommand.
+pub fn worktree(app: &App, cmd: SiteWorktreeCommand) -> Result<()> {
+    match cmd {
+        SiteWorktreeCommand::List { site } => app.invoke("worktree.sites", json!({ "site": site })),
+        SiteWorktreeCommand::Create { site, branch, from, database } => {
+            app.invoke("worktree.create", json!({ "site": site, "branch": branch, "from": from, "database": database }))
+        }
+        SiteWorktreeCommand::Serve { site, path, database } => app.invoke("worktree.serve", json!({ "site": site, "path": path, "database": database })),
+        SiteWorktreeCommand::Unserve { site, worktree_site } => app.invoke("worktree.unserve", json!({ "site": site, "worktree_site": worktree_site })),
+    }
+}
+
+/// Run a `devd mail` subcommand.
+pub fn mail(app: &App, cmd: MailCommand) -> Result<()> {
+    match cmd {
+        MailCommand::Setup => app.invoke("mail.setup", json!({})),
+        MailCommand::List { limit, query } => app.invoke("mail.inbox", json!({ "limit": limit, "query": query })),
+        MailCommand::Read { id } => app.invoke("mail.read", json!({ "id": id })),
+        MailCommand::Delete { id } => app.invoke("mail.delete", json!({ "id": id })),
+        MailCommand::Clear => app.invoke("mail.clear", json!({})),
     }
 }
 

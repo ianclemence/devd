@@ -12,6 +12,7 @@ pub const BUILTIN: &[(&str, &str)] = &[
     ("build-feature", include_str!("../skills/build-feature.md")),
     ("build-the-tool-if-it-repeats", include_str!("../skills/build-the-tool-if-it-repeats.md")),
     ("catch-up", include_str!("../skills/catch-up.md")),
+    ("check-the-mail", include_str!("../skills/check-the-mail.md")),
     ("check-the-request", include_str!("../skills/check-the-request.md")),
     ("choose-by-the-outcome", include_str!("../skills/choose-by-the-outcome.md")),
     ("correct", include_str!("../skills/correct.md")),
@@ -65,4 +66,5 @@ pub const BUILTIN: &[(&str, &str)] = &[
     ("weigh-several-shapes", include_str!("../skills/weigh-several-shapes.md")),
     ("why", include_str!("../skills/why.md")),
     ("work", include_str!("../skills/work.md")),
+    ("work-on-a-branch", include_str!("../skills/work-on-a-branch.md")),
 ];

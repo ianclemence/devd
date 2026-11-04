@@ -62,6 +62,10 @@ args! {
     ShareArgs { name: String, minutes: Option<u64> }
     /// A site to pin to a PHP version.
     SetPhpArgs { name: String, version: Option<String> }
+    /// A folder, to find the site it belongs to.
+    CurrentArgs { folder: Option<String> }
+    /// A tool's version to pin for a site's whole project.
+    PinArgs { name: String, tool: String, version: Option<String> }
 }
 
 fn site_named(ctx: &Ctx, name: &str) -> Result<devd_core::state::Site> {
@@ -692,6 +696,60 @@ pub fn register(reg: &mut Registry) -> Result<()> {
                 },
                 result,
             ))
+        },
+    )?;
+
+    reg.define::<CurrentArgs>("site.current", "Which site does this folder belong to?")
+    .description("The site whose project folder contains `folder` (the folder devd was started in when it is left out): its address, folder, PHP version and where that version comes from, what it serves, and its HTTPS state. The most specific site wins, so a git worktree is reported as itself and not as the main checkout. An agent started in a project folder calls this first to learn the address devd serves the project at, so it does not start a server of its own. Reads only.")
+    .group("site")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, a| Ok(Plan::new("site.current", format!("find the site for {}", a.folder.as_deref().unwrap_or("the current folder")))),
+        |ctx, a| {
+            let folder = match a.folder.as_deref().map(str::trim).filter(|f| !f.is_empty()) {
+                Some(f) => std::path::PathBuf::from(f),
+                None => std::env::current_dir().map_err(|e| DevdError::internal(format!("no current folder: {e}")))?,
+            };
+            let row = sites::current(ctx, &folder)?;
+            let msg = match &row {
+                Some(r) => format!("{} at {}", r.site.name, r.url),
+                None => "this folder is not served by a site".to_string(),
+            };
+            Ok(Outcome::with_data(msg, json!({ "folder": folder.display().to_string(), "site": row })))
+        },
+    )?;
+
+    reg.define::<PinArgs>("site.pin", "Pin a tool's version for the whole project")
+    .description("Writes the project's .devdrc so that everyone who works on it, and CI, and an agent, start from the same PHP (or Node.js) version: `tool` is `php` or `node`, `version` is like 8.4 or 22, and no version removes the pin. This is different from site.set_php, which isolates a version on this machine only and writes nothing into the project. Order of precedence: isolated, then pinned, then the machine's default. A PHP version that is not installed is refused.")
+    .group("site")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .agent_safe()
+    .idempotent()
+    .handlers(
+        |ctx, args| {
+            let site = site_named(ctx, &args.name)?;
+            let file = site.project_dir().join(devd_core::pins::FILE);
+            let what = match args.version.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+                Some(v) => format!("pin {} to {} {v} for the whole project", args.name, args.tool),
+                None => format!("remove the {} pin from {}", args.tool, args.name),
+            };
+            Ok(Plan::new("site.pin", what)
+                .step(format!("edit {} (the file is meant to be committed)", file.display()))
+                .step("re-render the web server configuration")
+                .data(json!({ "file": file.display().to_string(), "tool": args.tool, "version": args.version })))
+        },
+        |ctx, args| {
+            let result = sites::pin(ctx, &args.name, &args.tool, args.version.as_deref())?;
+            let msg = match args.version.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+                Some(v) => format!("{} is pinned to {} {v} in the project", args.name, args.tool),
+                None => format!("the {} pin is removed from {}", args.tool, args.name),
+            };
+            Ok(Outcome::with_data(msg, result))
         },
     )?;
 

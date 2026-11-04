@@ -10,6 +10,7 @@ devd-core = { path = "../devd-core" }
 devd-runtime = { path = "../devd-runtime" }
 devd-services = { path = "../devd-services" }
 devd-sites = { path = "../devd-sites" }
+devd-git = { path = "../devd-git" }
 chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true

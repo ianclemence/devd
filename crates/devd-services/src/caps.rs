@@ -156,6 +156,48 @@ fn register_service(reg: &mut Registry) -> Result<()> {
             Ok(Outcome::with_data("deleted", serde_json::json!({ "id": a.id })))
         },
     )?;
+    reg.define::<NoArgs>("mail.clear", "Delete every caught message")
+    .description("Empties the local inbox. The inbox is development data the application can regenerate by sending again, so this is not destructive to real mail; it is a write, so it asks first and is not offered to agents by default.")
+    .group("mail")
+    .tier(Tier::Write)
+    .effect(Effect::Data)
+    .handlers(
+        |_, _| Ok(Plan::new("mail.clear", "delete every message in the local inbox")),
+        |_, _| {
+            crate::mail::clear(crate::mail::discover_port(None))?;
+            Ok(Outcome::with_data("cleared", serde_json::json!({})))
+        },
+    )?;
+
+    reg.define::<NoArgs>("mail.setup", "Say whether the mail catcher is ready, and how to point an app at it")
+    .description("Whether Mailpit is installed and running, where its inbox is, and the .env lines that send a Laravel app's mail to it. Reads only: it installs and starts nothing.")
+    .group("mail")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, _| Ok(Plan::new("mail.setup", "read the mail catcher's state")),
+        |ctx, _| {
+            let rows = services::list(ctx)?;
+            let row = rows.iter().find(|r| r.kind == "mailpit" || r.name == "mailpit");
+            let (installed, running) = row.map(|r| (r.installed, r.running)).unwrap_or((false, false));
+            let ui = crate::mail::discover_port(None);
+            let smtp = crate::extras::SMTP_PORT;
+            let v = serde_json::json!({
+                "installed": installed,
+                "running": running,
+                "smtp": format!("127.0.0.1:{smtp}"),
+                "smtp_port": smtp,
+                "inbox": format!("http://127.0.0.1:{ui}"),
+                "env": crate::mail::env_lines(smtp),
+            });
+            let msg = if running { "the mail catcher is running" } else if installed { "the mail catcher is installed but not running" } else { "the mail catcher is not installed" };
+            Ok(Outcome::with_data(msg, v))
+        },
+    )?;
+
     reg.define::<NoArgs>("service.list", "List services")
     .description("Every service devd manages, with a live check that its files exist, its recorded \
          process is still the process it claims to be, and its port is answering.")

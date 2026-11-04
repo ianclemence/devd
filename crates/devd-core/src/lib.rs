@@ -20,6 +20,7 @@ pub mod events;
 pub mod health;
 pub mod observe;
 pub mod paths;
+pub mod pins;
 pub mod platform;
 pub mod maintenance;
 pub mod merge3;

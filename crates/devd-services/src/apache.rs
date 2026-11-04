@@ -226,7 +226,7 @@ fn balancer(series: &str, port: u16, workers: u8, offset: u16) -> String {
 /// Where a site's PHP requests go: the balancer over its series' workers when they can be balanced, else one port.
 fn php_target(render: &Render, site: &Site) -> String {
     if render.balanced() {
-        let pinned = site.php.as_deref().map(crate::php_series).filter(|s| render.php.iter().any(|(p, _)| p == s));
+        let pinned = site.php_wanted().map(|(s, _)| crate::php_series(&s)).filter(|s| render.php.iter().any(|(p, _)| p == s));
         let series = pinned
             .or_else(|| render.primary.clone().filter(|s| render.php.iter().any(|(p, _)| p == s)))
             .or_else(|| render.php.first().map(|(s, _)| s.clone()));

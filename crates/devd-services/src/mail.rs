@@ -59,6 +59,40 @@ fn get(url: &str) -> Result<Value> {
     serde_json::from_str(&text).map_err(|e| DevdError::internal(format!("the mail catcher sent something that is not JSON: {e}")))
 }
 
+fn get_text(url: &str) -> Result<String> {
+    agent()
+        .get(url)
+        .call()
+        .map_err(|e| match e {
+            ureq::Error::Transport(t) if t.kind() == ureq::ErrorKind::ConnectionFailed => {
+                DevdError::conflict(format!("the mail catcher is not running, so there is no inbox to read ({t})"))
+            }
+            other => DevdError::internal(format!("the mail catcher did not answer: {other}")),
+        })?
+        .into_string()
+        .map_err(|e| DevdError::internal(format!("the mail catcher sent an unreadable reply: {e}")))
+}
+
+/// Which application a message came from.
+///
+/// Mailpit has no per-app inbox of its own. A message's tags are the one thing an
+/// application (or a Mailpit rule) can set to say who it is; failing that the sender's
+/// name, then its address, which is what separates one app's mail from another's in
+/// practice: each sets its own `From`.
+pub fn app_of(m: &Value) -> String {
+    if let Some(tag) = m.get("Tags").and_then(|t| t.as_array()).and_then(|t| t.first()).and_then(|t| t.as_str()) {
+        if !tag.is_empty() {
+            return tag.to_string();
+        }
+    }
+    let from = m.get("From");
+    let name = from.and_then(|f| f.get("Name")).and_then(|x| x.as_str()).unwrap_or("").trim();
+    if !name.is_empty() {
+        return name.to_string();
+    }
+    from.and_then(|f| f.get("Address")).and_then(|x| x.as_str()).unwrap_or("unknown sender").to_string()
+}
+
 /// What has been caught, newest first, without the bodies.
 pub fn list(ui_port: u16, limit: usize, query: Option<&str>) -> Result<Value> {
     let url = format!("{}/messages?limit={limit}", base(ui_port));
@@ -87,12 +121,30 @@ pub fn list(ui_port: u16, limit: usize, query: Option<&str>) -> Result<Value> {
             "to": m.get("To"),
             "created": m.get("Created"),
             "size": m.get("Size"),
+            "app": app_of(&m),
+            "snippet": m.get("Snippet"),
+            "read": m.get("Read"),
+            "attachments": m.get("Attachments"),
+            "tags": m.get("Tags"),
         }));
     }
+    // The apps that sent what is listed, most mail first: the window turns these into the
+    // inbox's filter, so one app's mail does not drown another's.
+    let mut apps: Vec<(String, usize)> = Vec::new();
+    for m in &out {
+        let name = m.get("app").and_then(|a| a.as_str()).unwrap_or("").to_string();
+        match apps.iter_mut().find(|(n, _)| *n == name) {
+            Some((_, c)) => *c += 1,
+            None => apps.push((name, 1)),
+        }
+    }
+    apps.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
     Ok(json!({
         "total": v.get("total").cloned().unwrap_or(Value::Null),
+        "unread": v.get("unread").cloned().unwrap_or(Value::Null),
         "messages": out,
         "count": out.len(),
+        "apps": apps.into_iter().map(|(name, count)| json!({ "name": name, "count": count })).collect::<Vec<_>>(),
         "inbox": format!("http://127.0.0.1:{ui_port}"),
     }))
 }
@@ -103,12 +155,24 @@ pub fn read(ui_port: u16, id: &str) -> Result<Value> {
         return Err(DevdError::invalid("a message id is letters, digits, '-' and '_'"));
     }
     let v = get(&format!("{}/message/{}", base(ui_port), id))?;
+    // The header block and the source, as the catcher stored them: what a person debugging
+    // a mail template wants beside the rendered parts. A failure here must not hide the
+    // message, so each falls back to nothing.
+    let headers = get(&format!("{}/message/{}/headers", base(ui_port), id)).unwrap_or(Value::Null);
+    let raw = get_text(&format!("{}/message/{}/raw", base(ui_port), id)).unwrap_or_default();
+    let raw: String = raw.chars().take(200_000).collect();
     Ok(json!({
+        "app": app_of(&json!({ "Tags": v.get("Tags"), "From": v.get("From") })),
+        "headers": headers,
+        "raw": raw,
+        "cc": v.get("Cc"),
+        "reply_to": v.get("ReplyTo"),
         "id": v.get("ID"),
         "subject": v.get("Subject"),
         "from": v.get("From"),
         "to": v.get("To"),
         "created": v.get("Created"),
+        "date": v.get("Date"),
         // Both parts, as data. The text part is what an agent should read; the
         // HTML part is for a person to look at, and is never rendered as HTML
         // anywhere devd puts it in a prompt.
@@ -132,6 +196,32 @@ pub fn delete(ui_port: u16, id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Delete everything the catcher holds.
+pub fn clear(ui_port: u16) -> Result<()> {
+    agent()
+        .delete(&format!("{}/messages", base(ui_port)))
+        .call()
+        .map_err(|e| match e {
+            ureq::Error::Transport(t) if t.kind() == ureq::ErrorKind::ConnectionFailed => {
+                DevdError::conflict(format!("the mail catcher is not running, so there is no inbox to clear ({t})"))
+            }
+            other => DevdError::internal(format!("the mail catcher did not accept the clear: {other}")),
+        })?;
+    Ok(())
+}
+
+/// The `.env` lines that point a Laravel app at the catcher.
+pub fn env_lines(smtp_port: u16) -> Vec<String> {
+    vec![
+        "MAIL_MAILER=smtp".to_string(),
+        "MAIL_HOST=127.0.0.1".to_string(),
+        format!("MAIL_PORT={smtp_port}"),
+        "MAIL_USERNAME=null".to_string(),
+        "MAIL_PASSWORD=null".to_string(),
+        "MAIL_SCHEME=null".to_string(),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,6 +235,23 @@ mod tests {
     fn the_port_falls_back_to_the_catchers_own() {
         assert_eq!(discover_port(None), MAILPIT_UI_PORT);
         assert_eq!(discover_port(Some(9000)), 9000);
+    }
+
+    #[test]
+    fn a_message_belongs_to_the_app_that_tagged_it_or_else_the_sender() {
+        let tagged = json!({ "Tags": ["shop"], "From": { "Name": "Acme", "Address": "a@acme.test" } });
+        assert_eq!(app_of(&tagged), "shop");
+        let named = json!({ "Tags": [], "From": { "Name": "Acme", "Address": "a@acme.test" } });
+        assert_eq!(app_of(&named), "Acme");
+        let bare = json!({ "From": { "Name": "", "Address": "a@acme.test" } });
+        assert_eq!(app_of(&bare), "a@acme.test");
+        assert_eq!(app_of(&json!({})), "unknown sender");
+    }
+
+    #[test]
+    fn the_env_lines_name_the_port_the_catcher_listens_on() {
+        let lines = env_lines(1025);
+        assert!(lines.contains(&"MAIL_PORT=1025".to_string()) && lines.contains(&"MAIL_HOST=127.0.0.1".to_string()));
     }
 
     #[test]

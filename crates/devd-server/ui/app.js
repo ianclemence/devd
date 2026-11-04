@@ -1454,7 +1454,8 @@
       { label: "Work", items: [
         { view: "home", label: "Home" },
         { view: "projects", label: "Projects", count: state.projects.length || state.projectCount || null },
-        { view: "terminal", label: "Terminal", count: (TERM.sessions || []).filter(function (t) { return t.running !== false; }).length || null }
+        { view: "terminal", label: "Terminal", count: (TERM.sessions || []).filter(function (t) { return t.running !== false; }).length || null },
+        { view: "mail", label: "Mail", count: (MAIL.list && MAIL.list.unread) || null }
       ] },
       { label: "Agents", items: [
         { view: "assistant", label: "Assistant", count: working },
@@ -1951,7 +1952,7 @@
   function servingLabel(row) {
     switch (row.serving) {
       case "proxy": return "proxy" + (row.site && row.site.upstream ? " → " + row.site.upstream : "");
-      case "php": return "PHP " + (row.php_effective || "") + (row.php_source === "inherited" ? " \u00b7 default" : "");
+      case "php": return "PHP " + (row.php_effective || "") + (row.php_source === "inherited" ? " \u00b7 default" : row.php_source === "pinned" ? " \u00b7 pinned" : " \u00b7 isolated");
       case "static": return "static files";
       case "no_entry": return "no web entry point";
       default: return "";
@@ -2285,18 +2286,73 @@
       uiList(steps);
   }
 
+  /* Worktrees of a site: each a second checkout on its own branch, served at its own address,
+     so a branch under review (or an agent's work) has somewhere to be looked at. */
+  var WT = { name: "", data: null, error: "", loading: false };
+  var AG = { name: "", data: null, loading: false };
+
+  /* A Laravel Boost project gets one row: whether devd's note for coding agents is in it. */
+  function agLoad(name) {
+    AG.name = name; AG.loading = true;
+    return read("project.agent_guidelines", { site: name }).then(function (d) { AG.data = d; }).catch(function () { AG.data = null; })
+      .then(function () { AG.loading = false; if (state.view === "site" && SITE.name === name) render(); });
+  }
+
+  function agRow(site) {
+    if (AG.name !== site.name && !AG.loading) agLoad(site.name);
+    var d = AG.name === site.name ? AG.data : null;
+    if (!d || !d.uses_boost) return "";
+    var sub = d.state === "current" ? "devd's note is in the project, so every agent that opens it knows devd serves it"
+      : d.state === "custom" ? "there is a file of your own at that name, so devd leaves it alone"
+      : d.state === "older" ? "devd's note is from an older version" : "Laravel Boost builds agents' guidelines from .ai/guidelines; devd's note tells them not to start a server";
+    var act = d.state === "current" || d.state === "custom" ? "" : '<button type="button" class="btn btn-mini" data-action="agent-guideline" data-site="' + attr(site.name) + '">' + (d.state === "older" ? "Update the note" : "Add devd's note") + "</button>";
+    return uiRow({ title: "Note for coding agents", sub: esc(sub) + ' <span class="mono dim">.ai/guidelines/devd.md</span>', actions: act, wrap: true });
+  }
+
+  function wtLoad(name) {
+    WT.name = name; WT.loading = true; WT.error = "";
+    return read("worktree.sites", { site: name }).then(function (d) { WT.data = d; }).catch(function (e) { WT.data = null; WT.error = e.message; })
+      .then(function () { WT.loading = false; if (state.view === "site" && SITE.name === name) render(); });
+  }
+
+  function wtSection(site) {
+    if (WT.name !== site.name && !WT.loading) wtLoad(site.name);
+    // A site that is not in a git repository has no worktrees to speak of; say so quietly.
+    if (WT.name === site.name && WT.error) return "";
+    if (WT.name !== site.name || !WT.data) return uiHead("Worktrees", null, "") + skelRows(2, "Reading worktrees");
+    var trees = WT.data.worktrees || [];
+    var rows = trees.map(function (t) {
+      var branch = t.branch || "(detached)";
+      var title = '<span class="row-name">' + esc(branch) + "</span>" + (t.main ? ' <span class="fact">main checkout</span>' : "") + (t.site ? ' <span class="fact fact-ok">served</span>' : "");
+      var sub = t.url ? '<span class="mono">' + esc(t.url) + "</span>" : '<span class="mono" title="' + attr(t.path) + '">' + esc(t.path) + "</span>";
+      if (t.missing_dependencies && t.missing_dependencies.length && !t.main) sub += " &middot; needs " + esc(t.missing_dependencies.join(" and ")) + " installed";
+      var actions = "";
+      if (!t.main && t.site) {
+        actions = '<button type="button" class="btn btn-mini btn-primary" data-action="open-url" data-url="' + attr(t.url) + '">Open</button>' +
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="worktree-unserve" data-site="' + attr(site.name) + '" data-worktree-site="' + attr(t.site) + '" title="Stop serving it; the checkout and its files are kept">Stop serving</button>';
+      } else if (!t.main) {
+        actions = '<button type="button" class="btn btn-mini" data-action="worktree-serve" data-site="' + attr(site.name) + '" data-path="' + attr(t.path) + '">Serve</button>';
+      }
+      return uiRow({ dot: t.main ? "off" : t.site ? "ok" : "warn", title: title, sub: sub, actions: actions, wrap: true });
+    });
+    return uiHead("Worktrees", trees.length > 1 ? trees.length - 1 : null,
+      '<button type="button" class="btn btn-mini" data-action="worktree-new" data-site="' + attr(site.name) + '">New worktree</button>') +
+      (trees.length > 1 ? uiList(rows) : '<div class="ui-quiet">Only the main checkout. A worktree is a second checkout on another branch: review one without stashing, or give an agent a branch and an address of its own.</div>');
+  }
+
   function siteOverview(row) {
     var site = row.site;
     var runtime = row.serving === "proxy" ? "proxy to " + site.upstream
-      : row.serving === "php" ? "PHP " + (row.php_effective || "") + (row.php_source === "pinned" ? " (pinned for this site)" : " (follows the default)")
+      : row.serving === "php" ? "PHP " + (row.php_effective || "") + (row.php_source === "pinned" ? " (pinned by the project)" : row.php_source === "isolated" ? " (isolated on this machine)" : " (follows the default)")
       : row.serving === "static" ? "static files"
       : "not served: " + (row.detected || "nothing to serve");
     var profileData = OPS.data.overview && OPS.data.overview[0];
     var own = profileData ? ((profileData.site_profiles || []).filter(function (p) { return p.site === site.name; })[0] || {}).profile || "" : "";
     var installed = row.php_installed || [];
     var pinned = site.php ? devdSeries(site.php) : "";
+    var pinFile = row.pins && row.pins.php;
     var phpSelect = row.serving === "php" && installed.length
-      ? '<select class="select compact" data-action="site-php" data-name="' + attr(site.name) + '" aria-label="PHP version for ' + attr(site.name) + '"><option value=""' + (pinned ? "" : " selected") + ">Default PHP</option>" +
+      ? '<select class="select compact" data-action="site-php" data-name="' + attr(site.name) + '" aria-label="PHP version for ' + attr(site.name) + '"><option value=""' + (pinned ? "" : " selected") + ">" + (pinFile ? "Follow the project (" + esc(pinFile.version) + ")" : "Follow the default") + "</option>" +
         installed.map(function (v) { return '<option value="' + attr(v) + '"' + (pinned === v ? " selected" : "") + ">" + esc(v) + "</option>"; }).join("") + "</select>"
       : "";
     var profileSelect = profileData
@@ -2330,16 +2386,30 @@
     var rowsSettings = [];
     if (servingSelect) rowsSettings.push(uiRow({ title: "What it serves", sub: site.serving ? "set to " + esc(site.serving) : "read from the folder: " + esc(row.detected || ""), actions: servingSelect }));
     if (row.serving === "php") {
-      rowsSettings.push(uiRow({ title: "PHP version", sub: pinned ? "pinned to " + esc(pinned) : "follows the machine default", actions: phpSelect }));
+      var effective = devdSeries(row.php_effective || "");
+      var phpWhy = row.php_source === "isolated"
+        ? "isolated on this machine, so nothing is written to the project" + (pinFile ? "; the project pins " + esc(pinFile.version) + " in " + esc(pinFile.file) : "")
+        : row.php_source === "pinned"
+          ? "pinned in " + esc(pinFile ? pinFile.file : ".devdrc") + ", so everyone who works on this project gets it"
+          : "follows the machine default";
+      var pinButton = pinFile && pinFile.file === ".devdrc"
+        ? '<button type="button" class="btn btn-mini btn-ghost" data-action="site-pin" data-name="' + attr(site.name) + '" data-tool="php" data-version="">Remove the pin</button>'
+        : (effective && (!pinFile || pinFile.version !== effective) ? '<button type="button" class="btn btn-mini" data-action="site-pin" data-name="' + attr(site.name) + '" data-tool="php" data-version="' + attr(effective) + '" title="Writes .devdrc in the project, which you commit">Pin ' + esc(effective) + " to the project</button>" : "");
+      rowsSettings.push(uiRow({ title: "PHP " + esc(row.php_effective || ""), sub: phpWhy, actions: pinButton + phpSelect, wrap: true }));
+      if (row.pins && row.pins.node) {
+        rowsSettings.push(uiRow({ title: "Node.js " + esc(row.pins.node.version), sub: "pinned in " + esc(row.pins.node.file) + " for everyone who works on this project" }));
+      }
       rowsSettings.push(uiRow({ title: "PHP limits", sub: own ? "uses the " + esc(own) + " profile" : "follows the machine", actions: profileSelect + '<button type="button" class="btn btn-mini btn-ghost" data-action="nav" data-view="runtimes">Runtimes</button>' }));
     } else if (row.php_unused_pin) {
       rowsSettings.push(uiRow({ title: "PHP " + esc(row.php_unused_pin) + " is recorded but unused", sub: "this site does not serve PHP, so the version does nothing", actions: '<button type="button" class="btn btn-mini btn-ghost" data-action="site-clear-php" data-name="' + attr(site.name) + '">Clear it</button>' }));
     }
+    var guide = agRow(site);
+    if (guide) rowsSettings.push(guide);
     var settings = uiList(rowsSettings);
     if (!OPS.data.overview && !(OPS.error && OPS.errorTab === "overview")) opsLoad("overview");
     var loadError = OPS.error && OPS.errorTab === "overview" ? '<div class="notice notice-bad">' + esc(OPS.error) + "</div>" : "";
     return siteReachability(site) + uiHead("Site", null, "") + uiList(details) +
-      uiHead("Serving", null, "") + settings + loadError +
+      uiHead("Serving", null, "") + settings + loadError + wtSection(site) +
       '<div class="ui-more">Environment, deploys, cron, workers, logs, Laravel, redirects and the web server are on the tabs above.</div>';
   }
 
@@ -3173,10 +3243,10 @@
         var serving = kind.kind === "php" ? (state.server.sites || []).filter(function (row) {
           return row.serving === "php" && devdSeries(row.php_effective) === series;
         }) : [];
-        var pinned = serving.filter(function (row) { return row.php_source === "pinned"; }).length;
+        var pinned = serving.filter(function (row) { return row.php_source === "pinned" || row.php_source === "isolated"; }).length;
         var usage = kind.kind !== "php" || !serving.length
           ? (kind.kind === "php" ? "not used by a site" : "")
-          : serving.length + (serving.length === 1 ? " site" : " sites") + (pinned ? " · " + pinned + " pinned" : "");
+          : serving.length + (serving.length === 1 ? " site" : " sites") + (pinned ? " · " + pinned + " chosen" : "");
         return uiRow({
           dot: r.present ? "ok" : "bad",
           title: esc(rt.version) + (r.primary ? ' <span class="pill pill-accent">default</span>' : "") + (own ? "" : ' <span class="pill">found on this computer</span>'),
@@ -3920,6 +3990,231 @@
 
   // ------------------------------------------------------------------- preview
 
+  /* ------------------------------------------------------------------ mail
+   *
+   * What the local catcher (Mailpit) has caught, read in the window instead of in a second
+   * browser tab. The list is the catcher's own, filtered by the app that sent it; a message
+   * opens as HTML, Text, Raw or Headers, the way a person debugging a template needs them.
+   *
+   * A message body is whatever an application wrote. The HTML view is a frame with no
+   * scripts, no forms and a content policy that blocks every remote request, so a caught
+   * message cannot phone home or run code, and the other three views are escaped text.
+   */
+
+  var MAIL = { setup: null, list: null, app: "all", sel: null, msg: null, view: "html", error: "", loading: false, timer: null, sig: "" };
+
+  function mailRefreshList() {
+    return read("mail.inbox", { limit: 200 }).then(function (d) {
+      var sig = JSON.stringify((d.messages || []).map(function (m) { return [m.id, m.read]; }));
+      var changed = sig !== MAIL.sig;
+      MAIL.sig = sig;
+      MAIL.list = d;
+      MAIL.error = "";
+      return changed;
+    }).catch(function (e) { MAIL.error = e.message; return true; });
+  }
+
+  function loadMail() {
+    MAIL.loading = true;
+    return read("mail.setup").then(function (s) {
+      MAIL.setup = s;
+      if (!s.running) { MAIL.list = null; return null; }
+      return mailRefreshList().then(function () {
+        if (MAIL.sel && !MAIL.msg) return mailOpen(MAIL.sel, true);
+      });
+    }).catch(function (e) { MAIL.error = e.message; }).then(function () { MAIL.loading = false; });
+  }
+
+  function mailOpen(id, quiet) {
+    MAIL.sel = id;
+    if (!quiet) { MAIL.msg = null; render(); }
+    return read("mail.read", { id: id }).then(function (m) {
+      if (MAIL.sel === id) { MAIL.msg = m; }
+    }).catch(function (e) { MAIL.msg = { id: id, error: e.message }; }).then(function () { if (state.view === "mail") render(); });
+  }
+
+  /* The catcher is polled while the screen is open, so a message an app has just sent
+     appears without a refresh; it redraws only when something changed. */
+  function mailPoll() {
+    if (MAIL.timer) return;
+    MAIL.timer = setInterval(function () {
+      if (state.view !== "mail" || !MAIL.setup || !MAIL.setup.running) return;
+      mailRefreshList().then(function (changed) { if (changed && state.view === "mail") render(); });
+    }, 3000);
+  }
+
+  function mailStop() {
+    if (MAIL.timer) clearInterval(MAIL.timer);
+    MAIL.timer = null;
+  }
+
+  function mailBytes(n) {
+    if (n === null || n === undefined) return "";
+    return n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(n < 10240 ? 1 : 0) + " KB" : (n / 1048576).toFixed(1) + " MB";
+  }
+
+  function mailAddr(a) {
+    if (!a) return "";
+    var one = function (x) { return x && x.Name ? x.Name + " <" + x.Address + ">" : (x && x.Address) || ""; };
+    return Array.isArray(a) ? a.map(one).join(", ") : one(a);
+  }
+
+  /* A message's HTML with everything that can act removed: scripts, frames, forms, event
+     handlers, `javascript:` links, redirects and stylesheets from elsewhere. What is left is
+     markup and inline style, which is what an email is. */
+  function mailSafeHtml(html) {
+    var doc = new DOMParser().parseFromString(String(html || ""), "text/html");
+    doc.querySelectorAll("script,iframe,frame,object,embed,form,base,link,meta,applet,audio,video,source,template").forEach(function (n) { n.remove(); });
+    doc.querySelectorAll("*").forEach(function (n) {
+      Array.prototype.slice.call(n.attributes).forEach(function (a) {
+        var name = a.name.toLowerCase();
+        if (name.indexOf("on") === 0 || /^\s*(javascript|vbscript|data:text\/html)/i.test(a.value) && (name === "href" || name === "src" || name === "action" || name === "xlink:href")) n.removeAttribute(a.name);
+      });
+    });
+    return doc.body ? doc.body.innerHTML : "";
+  }
+
+  /* The HTML part, shown in a frame under a policy that blocks every script and every request
+     to anywhere. A link inside it is opened by devd (in the browser), never inside the frame. */
+  function mailFrame(html) {
+    var policy = "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:\">";
+    var base = "<style>body{font:14px/1.5 system-ui,sans-serif;margin:16px;color:#1a1f2b;background:#fff;overflow-wrap:anywhere}img{max-width:100%;height:auto}a{color:#0a64c8}</style>";
+    return '<iframe class="mail-frame" referrerpolicy="no-referrer" title="The message as HTML" srcdoc="' + attr(policy + base + mailSafeHtml(html)) + '"></iframe>';
+  }
+
+  /* After a render: make the frame's links open outside it. Done here because the frame is
+     part of a string of markup, not an element anyone holds. */
+  function mailWireFrame() {
+    var f = document.querySelector(".mail-frame");
+    if (!f) return;
+    var wire = function () {
+      var d; try { d = f.contentDocument; } catch (e) { return; }
+      if (!d) return;
+      d.addEventListener("click", function (ev) {
+        var a = ev.target.closest && ev.target.closest("a[href]");
+        if (!a) return;
+        ev.preventDefault();
+        var href = a.getAttribute("href") || "";
+        if (/^https?:\/\//i.test(href)) post("/api/open-url", { url: href });
+      });
+    };
+    if (f.contentDocument && f.contentDocument.readyState === "complete" && f.contentDocument.body && f.contentDocument.body.childNodes.length) wire();
+    else f.addEventListener("load", wire, { once: true });
+  }
+
+  function mailEnvPanel(s) {
+    var lines = (s && s.env) || [];
+    return '<details class="mail-env"><summary>Point an app at it</summary><div class="mail-env-body">' +
+      '<div class="row-sub">Add these to the app\'s <span class="mono">.env</span>. Mail it sends stops here instead of reaching anyone.</div>' +
+      '<pre class="log-block mono" id="mail-env-lines">' + esc(lines.join("\n")) + "</pre>" +
+      '<button type="button" class="btn btn-mini" data-action="mail-copy-env">Copy the lines</button></div></details>';
+  }
+
+  /* Hand a message to an agent. The prompt carries the message's id, never its body: the body
+     is whatever an application wrote, so the agent reads it itself through mail.read, which
+     returns it as data. */
+  function mailPrompt(kind, m) {
+    var ref = '"' + String(m.subject || "(no subject)").replace(/"/g, "'") + '" (caught mail id ' + m.id + ", from " + (mailAddr(m.from) || "an app") + ")";
+    if (kind === "code") return "Find the code that sends the email " + ref + " and tell me where it is built and what triggers it. Read the message with mail.read first.";
+    if (kind === "links") return "Read the email " + ref + " with mail.read and check every link in it. Say which ones point somewhere wrong for local development (localhost, a production host, a missing route) and how to fix each.";
+    if (kind === "team") return "Work on the email " + ref + ": ";
+    return "About the email " + ref + ": ";
+  }
+
+  function mailAskStrip(m) {
+    var btn = function (kind, label, hint) {
+      return '<button type="button" class="mail-ask-btn" data-action="mail-ask" data-kind="' + kind + '" data-id="' + attr(m.id) + '" title="' + attr(hint) + '">' + label + "</button>";
+    };
+    return '<div class="mail-ask" role="group" aria-label="Ask devd about this message"><span class="mail-ask-label"><svg class="icon" aria-hidden="true"><use href="#i-spark"></use></svg>Ask devd</span>' +
+      btn("ask", "About this message", "Open the assistant with this message referenced; you write the question") +
+      btn("code", "Find the code that sent it", "The assistant reads the message and searches the project") +
+      btn("links", "Check its links", "The assistant reads the message and checks each link") +
+      btn("team", "Give it to the team", "Start a team run with this message as the starting point") + "</div>";
+  }
+
+  function mailMessage(m) {
+    if (!MAIL.sel) {
+      return '<div class="mail-pane mail-pane-empty"><div class="empty"><div class="empty-title">Pick a message</div><div>It opens here as HTML, text, raw source or headers.</div></div></div>';
+    }
+    if (!m) return '<div class="mail-pane">' + skelRows(4, "Opening the message") + "</div>";
+    if (m.error) return '<div class="mail-pane"><div class="notice notice-bad">' + esc(m.error) + "</div></div>";
+    var views = [["html", "HTML"], ["text", "Text"], ["raw", "Raw"], ["headers", "Headers"]];
+    var tabs = '<div class="segmented mail-views" role="tablist" aria-label="View as">' + views.map(function (v) {
+      return '<button type="button" role="tab" aria-selected="' + (MAIL.view === v[0]) + '" class="seg' + (MAIL.view === v[0] ? " active" : "") + '" data-action="mail-view" data-view="' + v[0] + '">' + v[1] + "</button>";
+    }).join("") + "</div>";
+    var body;
+    if (MAIL.view === "html") {
+      body = m.html ? mailFrame(m.html) + '<div class="mail-note">Scripts are off and remote images are blocked, so this shows what the message is, not what it would fetch.</div>'
+        : '<div class="mail-pane-note">This message has no HTML part. Its text is under Text.</div>';
+    } else if (MAIL.view === "text") {
+      body = '<pre class="mail-text">' + esc(m.text || "(no text part)") + "</pre>";
+    } else if (MAIL.view === "raw") {
+      body = '<pre class="mail-text mono">' + esc(m.raw || "(the source is not available)") + "</pre>";
+    } else {
+      var h = m.headers && typeof m.headers === "object" ? m.headers : {};
+      var rows = Object.keys(h).map(function (k) {
+        return "<tr><th>" + esc(k) + "</th><td class=\"mono\">" + esc(Array.isArray(h[k]) ? h[k].join("; ") : String(h[k])) + "</td></tr>";
+      }).join("");
+      body = rows ? '<table class="mail-headers"><tbody>' + rows + "</tbody></table>" : '<div class="mail-pane-note">No headers were returned.</div>';
+    }
+    var base = (MAIL.setup && MAIL.setup.inbox) || "";
+    var files = (m.attachments || []).map(function (a) {
+      return '<button type="button" class="mail-file" data-action="open-url" data-url="' + attr(base + "/api/v1/message/" + m.id + "/part/" + a.PartID) + '" title="Save ' + attr(a.FileName) + '">' +
+        '<svg class="icon" aria-hidden="true"><use href="#i-file"></use></svg><span>' + esc(a.FileName || "attachment") + '</span><span class="dim">' + esc(mailBytes(a.Size)) + "</span></button>";
+    }).join("");
+    return '<div class="mail-pane"><div class="mail-head"><div class="mail-subject">' + esc(m.subject || "(no subject)") + "</div>" +
+      '<button type="button" class="btn btn-mini btn-ghost btn-danger" data-action="mail-delete" data-id="' + attr(m.id) + '">Delete</button></div>' +
+      '<dl class="mail-meta"><dt>From</dt><dd>' + esc(mailAddr(m.from)) + "</dd><dt>To</dt><dd>" + esc(mailAddr(m.to)) + "</dd>" +
+      (m.cc && m.cc.length ? "<dt>Cc</dt><dd>" + esc(mailAddr(m.cc)) + "</dd>" : "") +
+      "<dt>Sent</dt><dd>" + esc(m.created || m.date ? new Date(m.created || m.date).toLocaleString() : "") + (m.app ? ' <span class="pill">' + esc(m.app) + "</span>" : "") + "</dd></dl>" +
+      (files ? '<div class="mail-files">' + files + "</div>" : "") + mailAskStrip(m) + tabs + '<div class="mail-body">' + body + "</div></div>";
+  }
+
+  function renderMail() {
+    if (state.view !== "mail") return;
+    var s = MAIL.setup;
+    var actions = s && s.running ? '<button type="button" class="btn btn-ghost" data-action="open-url" data-url="' + attr(s.inbox) + '">Open Mailpit</button>' +
+      '<button type="button" class="btn btn-ghost btn-danger" data-action="mail-clear"' + (MAIL.list && MAIL.list.count ? "" : " disabled") + ">Clear all</button>" : "";
+    var body;
+    if (!s) {
+      body = MAIL.error ? '<div class="notice notice-bad">' + esc(MAIL.error) + "</div>" : skelRows(5, "Reading the mail catcher");
+    } else if (!s.installed) {
+      body = '<div class="mail-start"><div class="empty-title">Catch your app\'s mail</div>' +
+        "<p>Mailpit is a small program that accepts mail from your apps and keeps it here. Nothing it receives reaches a real inbox. devd downloads it, checks it against the publisher's digest, and points PHP at it.</p>" +
+        '<div class="inline"><button type="button" class="btn btn-primary" data-action="mail-install">Install Mailpit</button></div></div>' + mailEnvPanel(s);
+    } else if (!s.running) {
+      body = '<div class="mail-start"><div class="empty-title">The mail catcher is not running</div>' +
+        "<p>Mailpit is installed. Start it and anything your apps send appears here.</p>" +
+        '<div class="inline"><button type="button" class="btn btn-primary" data-action="mail-start">Start Mailpit</button></div></div>' + mailEnvPanel(s);
+    } else if (MAIL.error && !MAIL.list) {
+      body = '<div class="notice notice-bad">' + esc(MAIL.error) + "</div>";
+    } else if (!MAIL.list) {
+      body = skelRows(5, "Reading the inbox");
+    } else {
+      var q = state.filters.mail || "";
+      var all = MAIL.list.messages || [];
+      var chips = '<button type="button" class="mail-app' + (MAIL.app === "all" ? " active" : "") + '" data-action="mail-app" data-app="all">All <span>' + all.length + "</span></button>" +
+        (MAIL.list.apps || []).map(function (a) {
+          return '<button type="button" class="mail-app' + (MAIL.app === a.name ? " active" : "") + '" data-action="mail-app" data-app="' + attr(a.name) + '">' + esc(a.name) + " <span>" + a.count + "</span></button>";
+        }).join("");
+      var shown = all.filter(function (m) {
+        return (MAIL.app === "all" || m.app === MAIL.app) && keeps(q, m.subject, m.from, m.snippet, JSON.stringify(m.to || ""));
+      });
+      var rows = shown.map(function (m) {
+        var to = (m.to || []).map(function (t) { return t.Address; }).join(", ");
+        return '<button type="button" class="mail-row' + (MAIL.sel === m.id ? " active" : "") + (m.read ? "" : " unread") + '" data-action="mail-open" data-id="' + attr(m.id) + '">' +
+          '<span class="mail-row-top"><span class="mail-row-subject">' + esc(m.subject || "(no subject)") + '</span><span class="mail-row-time">' + esc(ago(m.created)) + "</span></span>" +
+          '<span class="mail-row-from">' + esc(m.app) + " &rarr; " + esc(to) + (m.attachments ? " &middot; " + m.attachments + (m.attachments === 1 ? " file" : " files") : "") + "</span>" +
+          (m.snippet ? '<span class="mail-row-snippet">' + esc(m.snippet) + "</span>" : "") + "</button>";
+      }).join("");
+      var list = '<div class="mail-list"><div class="mail-tools">' + filterBox("mail", "Search subject, sender or text") + '</div><div class="mail-apps" role="group" aria-label="Filter by app">' + chips + "</div>" +
+        '<div class="mail-rows">' + (rows || '<div class="empty-inline">' + (all.length ? "No message matches." : "Nothing caught yet. Send something from an app and it lands here.") + "</div>") + "</div></div>";
+      body = '<div class="mail-layout' + (MAIL.sel ? " has-message" : "") + '">' + list + mailMessage(MAIL.msg) + "</div>" + mailEnvPanel(s);
+    }
+    el("main").innerHTML = page("Mail", "What your apps send while you develop. Nothing here reaches a real inbox.", actions, body);
+    mailWireFrame();
+  }
+
   /* ------------------------------------------------------------------ terminal
    *
    * A shell in the window, driven by devd's own terminal capabilities
@@ -4512,7 +4807,9 @@ var TERM_POLL_MS = 250;
           actions: '<button type="button" class="btn btn-mini btn-primary" data-action="open-project" data-path="' + attr(p.path) + '">Open</button>' +
             (site ? '<button type="button" class="btn btn-mini" data-action="open-site" data-name="' + attr(site.site.name) + '">Site</button>' : "") +
             '<button type="button" class="btn btn-mini btn-ghost" data-action="pin-project" data-path="' + attr(p.path) + '" title="' + (isPinned ? "Unpin" : "Pin to the top") + '">' + (isPinned ? "Unpin" : "Pin") + "</button>" +
-            '<button type="button" class="btn btn-mini btn-ghost" data-action="project-forget" data-path="' + attr(p.path) + '" title="Remove it from devd; the folder is kept">Remove</button>',
+            (!p.registered && p.source === "site" && (p.sites || []).length
+              ? '<button type="button" class="btn btn-mini btn-ghost" data-action="project-remove-sites" data-path="' + attr(p.path) + '" data-sites="' + attr((p.sites || []).join(",")) + '" title="This folder is listed because a site serves it; removing the site removes it from the list">Remove site' + ((p.sites || []).length > 1 ? "s" : "") + "</button>"
+              : '<button type="button" class="btn btn-mini btn-ghost" data-action="project-forget" data-path="' + attr(p.path) + '" title="Remove it from devd; the folder is kept">Remove</button>'),
           hover: true
         });
       });
@@ -5145,7 +5442,7 @@ var TERM_POLL_MS = 250;
       var attn = siteNeedsAttention(site) ? '<span class="ov-warn">' + esc(siteAttentionReason(site)) + "</span>" : esc(servingLabel(site) || "not serving");
       cells.push('<button type="button" class="ov-cell ov-link" data-action="open-site" data-name="' + attr(site.site.name) + '"><div class="ov-k">Serves at</div><div class="ov-v mono">' + esc(site.site.host || site.site.name) + '</div><div class="ov-d">' + attn + (site.certificate ? " · HTTPS certificate" : site.site.tls_mode !== "off" ? ' · <span class="ov-warn">no certificate</span>' : " · HTTP only") + "</div></button>");
       var run;
-      if (site.serving === "php") run = ['PHP ' + esc(site.php_effective || ""), site.php_source === "pinned" ? "pinned for this site" : "follows the machine default"];
+      if (site.serving === "php") run = ['PHP ' + esc(site.php_effective || ""), site.php_source === "pinned" ? "pinned by the project" : site.php_source === "isolated" ? "isolated on this machine" : "follows the machine default"];
       else if (site.serving === "proxy") run = ["Proxy", esc(site.site.upstream || "") + (site.upstream_listening ? " · listening" : ' · <span class="ov-warn">not running</span>')];
       else if (site.serving === "static") run = ["Static files", "no runtime needed"];
       else run = ["Nothing to run", esc(site.detected || "no web entry point")];
@@ -8818,13 +9115,37 @@ var TERM_POLL_MS = 250;
   // trust column decides whether an agent's call waits for a person.
 
   function loadMcp() {
-    return read("mcp.list").then(function (d) {
-      MCP.servers = (d && d.servers) || [];
-      MCP.error = "";
-    }).catch(function (e) {
-      MCP.servers = MCP.servers || [];
-      MCP.error = e.message;
+    return Promise.all([
+      read("mcp.list").then(function (d) {
+        MCP.servers = (d && d.servers) || [];
+        MCP.error = "";
+      }).catch(function (e) {
+        MCP.servers = MCP.servers || [];
+        MCP.error = e.message;
+      }),
+      read("agent_client.list").then(function (d) { MCP.clients = (d && d.clients) || []; }).catch(function () { MCP.clients = MCP.clients || []; })
+    ]);
+  }
+
+  /* The other direction: devd as the server, and the coding agents that can use it. */
+  function agentClientsSection() {
+    var list = MCP.clients || [];
+    if (!list.length) return "";
+    var rows = list.map(function (c) {
+      var state = c.problem ? "warn" : c.added && c.current ? "ok" : c.added ? "warn" : "off";
+      var sub = c.problem ? esc(c.problem) : !c.found ? "not found. Open " + esc(c.name) + " once, then add devd" :
+        c.added && c.current ? "devd is set up. Restart " + esc(c.name) + " if it was open" :
+        c.added ? "devd is listed, but it points at a different devd" : "not set up yet";
+      var act = !c.found && !c.added ? '<button type="button" class="btn btn-mini" disabled>Add devd</button>' :
+        (c.added
+          ? (c.current ? "" : '<button type="button" class="btn btn-mini" data-action="agent-client-add" data-id="' + attr(c.id) + '" data-name="' + attr(c.name) + '" data-file="' + attr(c.config) + '">Update</button>') +
+            '<button type="button" class="btn btn-mini btn-ghost" data-action="agent-client-remove" data-id="' + attr(c.id) + '" data-name="' + attr(c.name) + '" data-file="' + attr(c.config) + '">Remove</button>'
+          : '<button type="button" class="btn btn-mini btn-primary" data-action="agent-client-add" data-id="' + attr(c.id) + '" data-name="' + attr(c.name) + '" data-file="' + attr(c.config) + '">Add devd</button>');
+      return uiRow({ dot: state, title: esc(c.name), sub: sub + ' <span class="mono dim" title="' + attr(c.config) + '">' + esc(c.config) + "</span>", actions: act, wrap: true });
     });
+    return uiHead("Use devd from your coding agent", null, "") +
+      '<p class="dim">Add devd to the tools you already work in, and they can read your sites, mail and logs, and ask before they change anything. devd edits only its own entry in each program\'s settings, keeps a copy of the old file, and never writes to a program that is not installed.</p>' +
+      uiList(rows);
   }
 
   function mcpWhat(s) {
@@ -8860,8 +9181,8 @@ var TERM_POLL_MS = 250;
     var toolsLine = MCP.servers.length
       ? uiHead("Servers", MCP.servers.length)
       : "";
-    el("main").innerHTML = page("MCP servers", "tools from other programs, for the assistant", "",
-      (MCP.error ? '<div class="notice notice-bad">' + esc(MCP.error) + "</div>" : "") +
+    el("main").innerHTML = page("MCP servers", "devd for your coding agents, and tools from other programs for the assistant", "",
+      (MCP.error ? '<div class="notice notice-bad">' + esc(MCP.error) + "</div>" : "") + agentClientsSection() +
       '<p class="dim">These are Model Context Protocol servers another program provides. The assistant sees each tool as <span class="mono">mcp__&lt;server&gt;__&lt;tool&gt;</span> and gets its result as data, never as an instruction. <b>Ask me each time</b> is the default; <b>Let agents use it without asking</b> means a model can use whatever that server can do with your permissions.</p>' +
       toolsLine + (rows ? uiList(rows) : uiEmpty("No MCP servers yet", "Add a program that speaks MCP, or import the servers Claude Code or Claude Desktop already has.", "")) +
       '<div class="panel"><div class="panel-head"><span>Add a server</span><span class="panel-note">names are lower-case; they become the tool prefix</span></div><div class="panel-body">' +
@@ -8906,6 +9227,7 @@ var TERM_POLL_MS = 250;
         .then(function () { return loadTab(state.tab); })
         .then(render);
     }
+    if (state.view === "mail") return loadMail().then(render);
     if (state.view === "home") return loadHome().then(render);
     if (state.view === "assistant") return loadAssistant().then(render);
     if (state.view === "team") return loadTeam().then(render);
@@ -8954,6 +9276,7 @@ var TERM_POLL_MS = 250;
     // link to it, and a reload while standing on it, both land on the terminal
     // rather than quietly on Home.
     terminal: "/terminal",
+    mail: "/mail",
     overview: "/server",
     services: "/server/services",
     sites: "/server/sites",
@@ -9294,7 +9617,9 @@ var TERM_POLL_MS = 250;
     else if (state.view === "capabilities") renderCapabilities();
     else if (state.view === "activity") renderActivity();
     else if (state.view === "system") renderSystem();
+    else if (state.view === "mail") renderMail();
     else if (state.view === "notfound") renderNotFound();
+    if (state.view === "mail") mailPoll(); else mailStop();
     wrapTables();
   }
 
@@ -10876,6 +11201,119 @@ var TERM_POLL_MS = 250;
       if (!g) return;
       ACTIONS.tab({ dataset: { tab: TAB_LAST[g.id] || g.tabs[0] } });
     },
+    "agent-client-add": function (n) {
+      uiConfirm({ title: "Add devd to " + n.dataset.name + "?", text: "devd adds one entry to " + n.dataset.file + ". Everything else in the file stays as it is, and a copy of the old file is kept beside it. Restart " + n.dataset.name + " afterwards.", confirm: "Add devd" }).then(function (yes) {
+        if (!yes) return;
+        run("agent_client.add", { client: n.dataset.id }, { quiet: true }).then(function (o) {
+          if (o) toast("ok", "devd is added to " + n.dataset.name + ". Restart it to use devd.");
+          return loadMcp().then(render);
+        });
+      });
+    },
+    "agent-client-remove": function (n) {
+      uiConfirm({ title: "Take devd out of " + n.dataset.name + "?", text: "Only the devd entry in " + n.dataset.file + " is removed.", confirm: "Remove", danger: true }).then(function (yes) {
+        if (!yes) return;
+        run("agent_client.remove", { client: n.dataset.id }, { quiet: true }).then(function () { return loadMcp().then(render); });
+      });
+    },
+    "mail-open": function (n) { mailOpen(n.dataset.id); },
+    "mail-view": function (n) { MAIL.view = n.dataset.view; render(); },
+    "mail-ask": function (n) {
+      var m = MAIL.msg && MAIL.msg.id === n.dataset.id ? MAIL.msg : { id: n.dataset.id, subject: "" };
+      var text = mailPrompt(n.dataset.kind, m);
+      if (n.dataset.kind === "team") {
+        TEAM.form.goal = text; TEAM.sel = null; TEAM.data = null;
+        navigate("team").then(function () { var g = el("team-goal"); if (g) { g.focus(); g.setSelectionRange(g.value.length, g.value.length); } });
+        return;
+      }
+      AI.askText = text; AI.askProject = AI.askProject || "";
+      navigate("home").then(function () {
+        var box = el("home-ask");
+        if (box) { box.value = text; box.focus(); box.setSelectionRange(text.length, text.length); var send = el("home-send"); if (send) send.disabled = false; }
+      });
+    },
+    "mail-app": function (n) { MAIL.app = n.dataset.app; render(); },
+    "mail-delete": function (n) {
+      var id = n.dataset.id;
+      run("mail.delete", { id: id }, { quiet: true }).then(function (o) {
+        if (!o) return;
+        MAIL.sel = null; MAIL.msg = null;
+        mailRefreshList().then(render);
+      });
+    },
+    "mail-clear": function () {
+      uiConfirm({ title: "Clear the whole inbox?", text: "Every caught message is deleted. Nothing real is lost: the app can send them again.", confirm: "Clear all", danger: true }).then(function (yes) {
+        if (!yes) return;
+        run("mail.clear", {}, { quiet: true }).then(function (o) {
+          if (!o) return;
+          MAIL.sel = null; MAIL.msg = null;
+          mailRefreshList().then(render);
+        });
+      });
+    },
+    "mail-install": function () {
+      run("service.install", { name: "mailpit", version: null }).then(function (o) {
+        if (!o) return;
+        return run("service.start", { name: "mailpit" }, { quiet: true });
+      }).then(function () { return loadMail(); }).then(render);
+    },
+    "mail-start": function () {
+      run("service.start", { name: "mailpit" }, { quiet: true }).then(function () { return loadMail(); }).then(render);
+    },
+    "mail-copy-env": function () {
+      var lines = (MAIL.setup && MAIL.setup.env) || [];
+      copyText(lines.join("\n"), function () { toast("ok", "Copied. Paste them into the app's .env."); });
+    },
+    "agent-guideline": function (n) {
+      var name = n.dataset.site;
+      uiConfirm({ title: "Add devd's note to this project?", text: "Writes .ai/guidelines/devd.md in the project. It says nothing about this machine, so you can commit it. Then run `php artisan boost:update` so Laravel Boost includes it for your agents.", confirm: "Write the note" }).then(function (yes) {
+        if (!yes) return;
+        run("project.agent_guidelines", { site: name, write: true }, { quiet: true }).then(function (o) {
+          if (o) toast("ok", "Written. Run php artisan boost:update, and commit the file.");
+          return agLoad(name);
+        });
+      });
+    },
+    "worktree-new": function (n) {
+      var name = n.dataset.site;
+      uiSheet("New worktree", '<div class="field"><label class="field-label" for="wt-branch">Branch</label>' +
+        '<input class="input mono" id="wt-branch" placeholder="feature/login, or leave empty for a made-up name" spellcheck="false" autocomplete="off">' +
+        '<div class="row-sub">A branch that exists is checked out. A new name is created from the one below.</div></div>' +
+        '<div class="field"><label class="field-label" for="wt-from">Start a new branch from</label><input class="input mono" id="wt-from" placeholder="the current branch" spellcheck="false" autocomplete="off"></div>' +
+        '<div class="field"><label class="field-label" for="wt-db">Database</label><select class="select" id="wt-db">' +
+        '<option value="share">Use the site\'s database</option><option value="clone">Make a copy for this branch</option><option value="none">Leave .env as it is</option></select>' +
+        '<div class="row-sub">A copy means a migration on this branch cannot touch the main one.</div></div>' +
+        '<div class="inline"><button type="button" class="btn btn-primary" data-action="worktree-create" data-site="' + attr(name) + '">Create and serve</button>' +
+        '<button type="button" class="btn btn-ghost" data-action="close-drawer">Cancel</button></div>');
+      setTimeout(function () { var b = el("wt-branch"); if (b) b.focus(); }, 60);
+    },
+    "worktree-create": function (n) {
+      var name = n.dataset.site;
+      var args = { site: name, branch: readInput("wt-branch") || null, from: readInput("wt-from") || null, database: (el("wt-db") || {}).value || "share" };
+      n.disabled = true;
+      run("worktree.create", args, { quiet: true }).then(function (o) {
+        n.disabled = false;
+        if (!o) return;
+        closeDrawer();
+        var d = o.data || {};
+        toast("ok", (d.branch || "The worktree") + " is served at " + (d.url || "its own address") + (d.todo && d.todo.length ? ". Next: " + d.todo.join(", ") : ""));
+        return wtLoad(name);
+      });
+    },
+    "worktree-serve": function (n) {
+      var name = n.dataset.site;
+      run("worktree.serve", { site: name, path: n.dataset.path, database: "share" }, { quiet: true }).then(function (o) {
+        if (o) toast("ok", "Served at " + ((o.data || {}).url || "its own address"));
+        return wtLoad(name);
+      });
+    },
+    "worktree-unserve": function (n) {
+      var name = n.dataset.site, ws = n.dataset.worktreeSite;
+      uiConfirm({ title: "Stop serving " + ws + "?", text: "Its address, certificate and web server entry go. The checkout and its files are kept, because they hold work.", confirm: "Stop serving", danger: true }).then(function (yes) {
+        if (!yes) return;
+        run("worktree.unserve", { site: name, worktree_site: ws }, { quiet: true }).then(function () { return wtLoad(name); });
+      });
+    },
     "more-toggle": function (n) {
       var pop = n.parentNode.querySelector(".more-pop");
       var open = pop.hidden;
@@ -11728,6 +12166,14 @@ var TERM_POLL_MS = 250;
       });
     },
 
+    /* Pin, or remove the pin of, one tool's version for the whole project: writes .devdrc. */
+    "site-pin": function (node) {
+      var version = node.dataset.version || null;
+      act("site.pin", { name: node.dataset.name, tool: node.dataset.tool, version: version }).then(function (o) {
+        if (o) { toast("ok", version ? "Pinned. Commit .devdrc so the team gets it." : "The pin is removed."); }
+      });
+    },
+
     "site-php": function (node) {
       var version = node.value || null;
       run("site.set_php", { name: node.dataset.name, version: version }).then(function (o) {
@@ -11990,6 +12436,28 @@ var TERM_POLL_MS = 250;
         danger: true
       }).then(function (yes) {
         if (yes) act("project.forget", { path: path });
+      });
+    },
+
+    /* A project that is listed only because a site serves its folder is the site's row:
+       what removes it is removing the site. Says so before doing it, because a site owns
+       an address, a certificate and a hosts entry. */
+    "project-remove-sites": function (node) {
+      var names = String(node.dataset.sites || "").split(",").filter(Boolean);
+      var path = node.dataset.path;
+      var gone = !!(state.projects || []).filter(function (p) { return p.path === path && p.exists === false; })[0];
+      uiConfirm({
+        title: "Remove " + (names.length === 1 ? "the site " + names[0] : names.length + " sites") + "?",
+        text: dirName(path) + " is in this list because " + (names.length === 1 ? "the site " + names[0] + " serves" : "these sites serve") + " it" +
+          (gone ? ", and the folder no longer exists" : "") + ". Removing " + (names.length === 1 ? "the site" : "them") + " takes its address, certificate and hosts entry away" +
+          (gone ? "." : "; the folder and its files are kept."),
+        confirm: "Remove site" + (names.length === 1 ? "" : "s"),
+        danger: true
+      }).then(function (yes) {
+        if (!yes) return;
+        names.reduce(function (chain, name) {
+          return chain.then(function () { return act("site.remove", { name: name }); });
+        }, Promise.resolve()).then(function () { loadProjects(true).then(render); });
       });
     },
 

@@ -321,9 +321,8 @@ fn site_upstream(render: &Render, site: &Site) -> String {
 
 fn site_upstream_base(render: &Render, site: &Site) -> String {
     let pinned = site
-        .php
-        .as_deref()
-        .map(crate::php_series)
+        .php_wanted()
+        .map(|(s, _)| crate::php_series(&s))
         .filter(|s| !s.is_empty());
     if let Some(series) = pinned {
         if render.php.iter().any(|(s, _)| s == &series) {
