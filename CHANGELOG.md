@@ -10,6 +10,44 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.19.2] - 2026-11-04 - The caret, the inbox, and a pid that lied
+
+### Fixed
+
+- **The Assistant composer lost the caret while typing.** The input handler is a
+  chain of `if / else if`. The `home-ask` branch is one statement, so the chain
+  ends there. The `chat-input` branch was written as a block and never closed, so
+  every keystroke also ran the *filter* branch below it: it set
+  `state.filters[undefined]` and scheduled `render()` 120ms later. `render()`
+  replaces `main`, the composer lives inside `main`, and the textarea was
+  therefore rebuilt twice a second with the caret going with it. Home was never
+  affected because its branch ends the chain. The block is closed, and the filter
+  branch now requires a real filter box.
+
+- **The Inbox stayed on "Loading" whenever a run was paused.** `needsCard` read
+  `n.primary.id` for every action, but the server has no `primary` field - it is
+  a Rust method that is never serialised. So the first paused run threw
+  `Cannot read properties of undefined (reading 'id')` *inside the render*, the
+  markup was never written, and the error was visible only in the console. The
+  primary is now computed the way the server decides it: the first action that is
+  not dangerous, else the first.
+
+- **The Inbox showed four cards for two paused runs.** Two separate causes:
+  `loadInbox` reset `AI.needs = []` and then pushed from inside each per-run
+  read, so two overlapping loads appended to each other's result; and the
+  `Run paused: <title>` inbox message became a second "Question" card about a run
+  already shown above. The list is built locally and de-duplicated by run, and a
+  message that is about a shown run is dropped - the same rule Home already used.
+
+- **A pid file naming a recycled process read as a live owner.**
+  `live_devd_holder` checked only that the pid was alive and its image name
+  contained "devd". A pid file left by a dead process, whose number a later devd
+  run reuses, therefore blocked recovery while naming an unrelated process. The
+  claim files now carry the writer's start token beside the pid - the same
+  identity the daemon record already used - and a file with no token is treated
+  as stale rather than as a claim, so a legacy file cannot block recovery for
+  ever.
+
 ## [0.19.1] - 2026-11-04 - The screen that waited for ever
 
 Four fixes, all reported after living with 0.19.0.

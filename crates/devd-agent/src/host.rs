@@ -21,12 +21,13 @@ fn claim_file(paths: &Paths) -> PathBuf {
 pub fn claim(paths: &Paths) -> bool {
     let file = claim_file(paths);
     let me = std::process::id();
-    if let Some(owner) = std::fs::read_to_string(&file).ok().and_then(|s| s.trim().parse::<u32>().ok()) {
-        if owner != me && devd_core::process::pid_alive(owner) && devd_core::process::process_image(owner).map(|i| i.to_ascii_lowercase().contains("devd")).unwrap_or(false) {
-            return false;
-        }
+    // Only the process that wrote the file holds it. A bare pid cannot say that:
+    // the operating system reuses ids, so the file now carries the writer's start
+    // token as well (see `live_devd_holder`).
+    if devd_core::process::live_devd_holder(&file).is_some_and(|owner| owner != me) {
+        return false;
     }
-    std::fs::write(&file, me.to_string()).is_ok()
+    std::fs::write(&file, devd_core::process::holder_line()).is_ok()
 }
 
 #[cfg(test)]
@@ -42,6 +43,12 @@ mod tests {
         // A process id that is not running is not an owner.
         std::fs::write(claim_file(&paths), "4294967").unwrap();
         assert!(claim(&paths));
-        assert_eq!(std::fs::read_to_string(claim_file(&paths)).unwrap().trim(), std::process::id().to_string());
+        let written = std::fs::read_to_string(claim_file(&paths)).unwrap();
+        let mut parts = written.split_whitespace();
+        assert_eq!(parts.next(), Some(std::process::id().to_string().as_str()), "the pid is first");
+        assert!(
+            parts.next().is_some(),
+            "the start token is written beside it, so a recycled pid is not mistaken for the owner: {written}"
+        );
     }
 }

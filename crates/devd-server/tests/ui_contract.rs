@@ -915,3 +915,59 @@ fn a_project_opens_on_the_first_tab_the_strip_shows() {
         "so opening a project starts there: {open}"
     );
 }
+
+#[test]
+fn the_inbox_needs_card_does_not_read_a_field_the_server_never_sends() {
+    // `needs` has no `primary` key: the server computes it with a Rust method and
+    // never serialises it. `needsCard` read `n.primary.id` for every action, so
+    // the first paused run threw "Cannot read properties of undefined" *inside*
+    // the render - the markup was never written and the Inbox sat on "Loading".
+    assert!(
+        !APP.contains("n.primary.id"),
+        "the needs card must not read a primary field the server does not send"
+    );
+    let start = APP.find("function needsCard(n)").expect("needsCard is gone");
+    let body = &APP[start..start + 1200];
+    assert!(
+        body.contains("!a.dangerous"),
+        "the primary is the first action that is not dangerous, as the server decides it: {body}"
+    );
+}
+
+#[test]
+fn typing_in_the_assistant_composer_does_not_rebuild_the_screen() {
+    // The input handler is an if/else-if chain. The chat-input branch never closed,
+    // so every keystroke also ran the filter branch: it set `state.filters[undefined]`
+    // and scheduled `render()` 120ms later, which rebuilt `main` - and the textarea
+    // with it, twice a second. Home's composer was unaffected because its branch
+    // ends the chain.
+    let start = APP.find("else if (t.id === \"chat-input\")").expect("the chat composer handler is gone");
+    let body = &APP[start..start + 900];
+    // The branch must be closed before the filter branch starts.
+    let filter_at = body.find("dataset.filter").expect("the filter branch is gone");
+    let close_at = body.find("\n    }").expect("the chat branch never closes");
+    assert!(
+        close_at < filter_at,
+        "the composer branch must end before the filter branch, or typing re-renders the screen"
+    );
+    assert!(
+        body.contains("else if (t.dataset && t.dataset.filter)"),
+        "the filter branch must require a filter box: {body}"
+    );
+}
+
+#[test]
+fn a_pid_file_carries_a_start_token_because_a_pid_alone_is_not_an_identity() {
+    // The operating system reuses process ids, so a pid file left by a dead devd
+    // read as owned by whatever held that number later - which is how a stale
+    // agent-host.pid blocked recovery while naming an unrelated process.
+    let src = include_str!("../../devd-core/src/process.rs");
+    assert!(
+        src.contains("pub fn holder_line()"),
+        "there is one way to write a holder line, and it includes the start token"
+    );
+    assert!(
+        src.contains("(Some(wrote), Some(is)) => (wrote == is).then_some(pid)"),
+        "a holder is live only when the start token still matches"
+    );
+}

@@ -27,7 +27,9 @@ pub fn claim(paths: &Paths) -> bool {
     if devd_core::process::live_devd_holder(&file).is_some_and(|owner| owner != me) {
         return false;
     }
-    std::fs::write(&file, me.to_string()).is_ok()
+    // The write mirrors the read: a pid alone cannot tell this process from one
+    // that later reuses its number.
+    std::fs::write(&file, devd_core::process::holder_line()).is_ok()
 }
 
 /// The devd process that is running the jobs, if any is. Cron jobs, scheduled backups and deploys

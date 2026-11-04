@@ -487,7 +487,9 @@ mod tests {
         );
 
         // This test process is a devd program holding the claim, so the jobs are being run.
-        std::fs::write(dir.join("ops-host.pid"), std::process::id().to_string()).unwrap();
+        // A real claim, written the way the runner writes it: the pid and the
+        // writer's start token, because a pid alone is not an identity.
+        std::fs::write(dir.join("ops-host.pid"), devd_core::process::holder_line()).unwrap();
         let running = background_jobs(&c);
         assert_eq!(running.state, "healthy", "{running:?}");
         assert!(running.detail.contains(&std::process::id().to_string()));

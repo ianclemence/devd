@@ -895,15 +895,47 @@ impl PidRecord {
 /// The process that holds a claim file: the id written in it, when that process is still running
 /// and is a devd program. A claim whose process has gone, or whose id was reused by something else,
 /// is stale and held by nobody.
+/// The process that wrote a pid file, if it is still the one that wrote it.
+///
+/// The file holds `<pid>` alone, which cannot answer the question: the operating
+/// system reuses process ids, so a file left by a dead devd reads as owned by
+/// whatever holds that number now. The file therefore also carries the process's
+/// start token, and a holder is live only when both still match - the same
+/// reasoning as the daemon record in `daemon.rs`.
+fn parse_holder(text: &str) -> Option<(u32, Option<String>)> {
+    let mut parts = text.split_whitespace();
+    let pid = parts.next()?.parse::<u32>().ok()?;
+    Some((pid, parts.next().map(str::to_string)))
+}
+
 pub fn live_devd_holder(file: &std::path::Path) -> Option<u32> {
-    let pid = std::fs::read_to_string(file)
-        .ok()?
-        .trim()
-        .parse::<u32>()
-        .ok()?;
-    (pid_alive(pid)
-        && process_image(pid).is_some_and(|image| image.to_ascii_lowercase().contains("devd")))
-    .then_some(pid)
+    let text = std::fs::read_to_string(file).ok()?;
+    let (pid, started) = parse_holder(&text)?;
+    if !pid_alive(pid) {
+        return None;
+    }
+    if !process_image(pid).is_some_and(|image| image.to_ascii_lowercase().contains("devd")) {
+        return None;
+    }
+    // A file written before this rule existed carries only the pid. It cannot be
+    // trusted, so it is treated as stale rather than as a claim - which is the
+    // safe direction: a new process claims and recovers, instead of a stale file
+    // blocking recovery for ever.
+    let now = process_start_token(pid);
+    match (started, now) {
+        (Some(wrote), Some(is)) => (wrote == is).then_some(pid),
+        _ => None,
+    }
+}
+
+/// The text to write into a pid file: the pid and the start token that makes it
+/// survive a recycled number.
+pub fn holder_line() -> String {
+    let pid = std::process::id();
+    match process_start_token(pid) {
+        Some(token) => format!("{pid} {token}"),
+        None => pid.to_string(),
+    }
 }
 
 #[cfg(test)]

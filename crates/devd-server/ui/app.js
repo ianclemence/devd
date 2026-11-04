@@ -8473,12 +8473,25 @@
       // The one question each paused run is holding on, asked in the words the
       // run view uses, so the two screens cannot disagree.
       var paused = (r[4] || []).filter(function (x) { return x.state === "paused" || x.state === "awaiting_plan"; });
-      AI.needs = [];
+      // Built locally and assigned once. Pushing into a shared array from inside
+      // the reads let two overlapping loads append to each other's result, which
+      // showed the same run twice.
       return Promise.all(paused.slice(0, 12).map(function (run) {
         return read("team.get", { run: run.id }).then(function (d) {
-          if (d && d.needs) AI.needs.push(d.needs);
-        }).catch(function () {});
-      })).then(function () { return r[5] || []; });
+          return d && d.needs ? d.needs : null;
+        }).catch(function () { return null; });
+      })).then(function (found) {
+        // A person sees one question per run, in the order the runs were listed.
+        var seen = {};
+        AI.needs = found.filter(function (n) {
+          if (!n) return false;
+          var key = n.run_id || n.task_id || n.question;
+          if (seen[key]) return false;
+          seen[key] = true;
+          return true;
+        });
+        return r[5] || [];
+      });
     }).then(function (suggestions) {
       AI.suggestions = suggestions || [];
       // The health chip is elsewhere on the page; it must not stop the inbox.
@@ -8490,9 +8503,14 @@
    * without, in the run's own words: what is missing and the action that fixes
    * it. Everything else on the page is below it. */
   function needsCard(n) {
-    var primary = n.primary;
-    var actions = (n.actions || []).map(function (a) {
-      var cls = a.id === n.primary.id ? "btn btn-primary btn-mini" : a.dangerous ? "btn btn-mini btn-danger" : "btn btn-mini";
+    // The server has no `primary` field - it is a Rust method - so the rule is
+    // reproduced here: the first action that is not dangerous, else the first.
+    // Reading a `primary` field here threw on every paused run and left the screen blank.
+    var list = n.actions || [];
+    var first = list.filter(function (a) { return !a.dangerous; })[0] || list[0] || {};
+    var primary = first.id;
+    var actions = list.map(function (a) {
+      var cls = a.id === primary ? "btn btn-primary btn-mini" : a.dangerous ? "btn btn-mini btn-danger" : "btn btn-mini";
       return '<button type="button" class="' + cls + '" data-action="needs-act" data-run="' + attr(n.run_id) + '" data-task="' + attr(n.task_id || "") + '" data-act="' + attr(a.id) + '" data-cap="' + attr(a.capability || "") + '" data-args="' + attr(JSON.stringify(a.args)) + '">' + esc(a.label) + "</button>";
     }).join("");
     return '<article class="decision decision-needs" data-kind="needs">' +
@@ -8549,9 +8567,20 @@
           "</div>" +
         "</div></article>");
     });
+    // A message about a run is that run, already shown above as a Needs-you
+    // card. Without this the same pause reads as two separate things.
+    var runTitles = {};
+    (AI.needs || []).forEach(function (n) { if (n.run_id) runTitles[n.run_id] = true; });
+    function aboutShownRun(m) {
+      var s = String(m.subject || "");
+      if (s.indexOf("Run paused: ") === 0) return true;
+      if (s.indexOf("Plan ready: ") === 0) return true;
+      return false;
+    }
     var updates = [];
     AI.inbox.forEach(function (m) {
       var who = m.from_actor.replace("agent:", "").replace("devd-", "");
+      if (m.needs_reply && aboutShownRun(m)) return;
       if (m.needs_reply) {
         waiting.push('<article class="decision" data-kind="question">' +
           '<div class="decision-kind">Question</div>' +
@@ -12451,6 +12480,9 @@
       var trig = triggerAt(t.value, t.selectionStart);
       if (!trig) closeMentions();
       else if (!MENTIONS.open || MENTIONS.start !== trig.start || MENTIONS.query !== trig.query) openMentions(trig.start, trig.query, t.value.charAt(trig.start));
+    }
+    // A filter box, not a composer: only this branch re-renders the screen.
+    else if (t.dataset && t.dataset.filter) {
       // The list is re-rendered from the same data, so there is nothing to
       // fetch; a short pause keeps the screen from redrawing on every letter.
       state.filters[t.dataset.filter] = t.value;
