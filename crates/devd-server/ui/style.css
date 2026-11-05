@@ -6098,3 +6098,30 @@ a, .link, .pill-accent, .tag-unt, .feed-agent, .chat-plan-count, .cap-accent, .m
 /* A row laid out on one line must not inherit the stacked-sibling margin.
  * It pushed every control after the first 12px down inside its own row. */
 .panel-body.inline > * + * { margin-top: 0; }
+
+/* ---- table heads: one line, never one letter per line ----------------------
+ * A 1%-wide action column used to break "Actions" into A/C/T/I/O/N/S because
+ * the shared rule let every header cell wrap. Data-table heads stay on one
+ * line at reading widths; only narrow screens may wrap the descriptive ones,
+ * never the action column. */
+.table th,
+.mu th,
+.drift-table th,
+.md th {
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+.table th.cell-actions,
+.mu th.cell-actions,
+.drift-table th.cell-actions {
+  width: 1%;
+  min-width: 68px;
+  white-space: nowrap;
+}
+@media (max-width: 760px) {
+  .table th:not(.cell-actions),
+  .mu th:not(.cell-actions),
+  .drift-table th:not(.cell-actions),
+  .md th { white-space: normal; }
+}

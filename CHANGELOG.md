@@ -16,6 +16,19 @@ Nothing yet.
 
 ---
 
+## [0.23.1] - 2026-11-05 - Table heads stay on one line
+
+### Fixed
+
+- **Table heads stay on one line.** The shared rule no longer lets header text
+  wrap; the action column has a minimum width, so "Actions" cannot break into
+  one letter per row. Applies to models, roles, skills, diagnostics, tasks,
+  evidence, operations and Markdown tables.
+- **No duplicate roles title.** The "Which model does which work" disclosure
+  already names its section; the repeated heading above the table is gone.
+
+---
+
 ## [0.23.0] - 2026-11-05 - One navigation, one tab language, one table
 
 ### Changed

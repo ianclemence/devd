@@ -167,6 +167,13 @@ fn tables_keep_one_grid_and_inline_rows_stay_on_one_line() {
         CSS.contains(".panel-body.inline > * + * { margin-top: 0; }"),
         "inline controls line up on one baseline"
     );
+    // A data-table head is one line. The action column must never break its
+    // word into one letter per row in a 1%-wide cell.
+    assert!(CSS.contains(".table th.cell-actions,"), "action headers are named and nowrap");
+    assert!(
+        CSS.contains(".drift-table th,\n.md th {\n  white-space: nowrap;"),
+        "every table head stays on one line"
+    );
 }
 
 #[test]
