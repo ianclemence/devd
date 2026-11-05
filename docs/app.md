@@ -180,7 +180,9 @@ The window has one primary axis and one permanent context layer. A person
 works on **projects**; their **sites** are the addresses through which that work
 is reached; the **environment** is the stack underneath both. Sites is therefore
 a destination of its own, not a tab inside the environment, and Home shows the
-state of all three at once.
+state of all three at once. The rail groups what you work on (Home, Projects,
+Sites), who does the thinking (Assistant, Agents, Models), and the machine behind
+them (Environment, API and tools, Activity, Diagnostics, under Machine).
 
 | Area | Source of truth |
 | --- | --- |
@@ -201,6 +203,8 @@ state of all three at once.
 | Project → Reviews / Agent memory | `review.*`, `memory.*`, `compat.*` |
 | Environment (services, runtimes, databases, tools, remote) | the Environment screen, each tab reading its own capability group |
 | Hosts and certificates | tabs of Sites; both are properties of an address |
+| Mail | a tab of Sites; the inbox your apps sent to, read from Mailpit |
+| Models | `provider.list` and the model defaults |
 
 Every panel reads a real capability. There are no placeholder controls, because a
 switch that does nothing is worse than an honest empty state.

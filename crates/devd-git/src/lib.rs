@@ -129,6 +129,9 @@ pub struct BranchInfo {
     pub name: String,
     /// Whether this is the current branch.
     pub current: bool,
+    /// Whether this entry lives under `refs/remotes/` rather than `refs/heads/`.
+    /// A local branch may contain a slash too, so the name alone cannot say.
+    pub remote: bool,
     /// Upstream tracking reference.
     pub upstream: Option<String>,
     /// Tip commit subject.
@@ -751,7 +754,7 @@ impl GitService {
             "for-each-ref".to_string(),
             // `for-each-ref` has its own format language, where `%1f` is the
             // 0x1f separator byte. It does not understand `%x1f`.
-            "--format=%(refname:short)%1f%(upstream:short)%1f%(subject)%1f%(HEAD)".to_string(),
+            "--format=%(refname)%1f%(refname:short)%1f%(upstream:short)%1f%(subject)%1f%(HEAD)".to_string(),
         ];
         if include_remotes {
             args.push("refs/heads".into());
@@ -763,18 +766,25 @@ impl GitService {
         let mut branches = Vec::new();
         for line in out.lines() {
             let parts: Vec<&str> = line.split('\u{1f}').collect();
-            if parts.len() < 4 {
+            if parts.len() < 5 {
+                continue;
+            }
+            let remote = parts[0].starts_with("refs/remotes/");
+            // `refs/remotes/origin/HEAD` is a symbolic pointer to the remote's
+            // default branch, not a branch of its own.
+            if remote && parts[1].ends_with("/HEAD") {
                 continue;
             }
             branches.push(BranchInfo {
-                name: parts[0].to_string(),
-                upstream: if parts[1].is_empty() {
+                name: parts[1].to_string(),
+                remote,
+                upstream: if parts[2].is_empty() {
                     None
                 } else {
-                    Some(parts[1].to_string())
+                    Some(parts[2].to_string())
                 },
-                subject: parts[2].to_string(),
-                current: parts[3].trim() == "*",
+                subject: parts[3].to_string(),
+                current: parts[4].trim() == "*",
             });
         }
         Ok(branches)

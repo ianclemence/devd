@@ -116,6 +116,87 @@ fn the_sidebar_is_short_and_search_is_not_about_capabilities() {
 }
 
 #[test]
+fn project_and_site_lists_do_not_repeat_the_counts_above_them() {
+    // The Changes view drew "1 untracked" pills directly above a group header
+    // that said "UNTRACKED 1". Hosts and Certificates repeated their summary
+    // count in the section heading. A section says what it is; the summary and
+    // the rows already carry the numbers.
+    assert!(!APP.contains("change-summary"), "the change groups own their counts");
+    assert!(!APP.contains("var summary = total"), "there is no second summary row");
+    assert!(APP.contains("uiHead(\"Published names\", null)"), "Hosts does not repeat its count");
+    assert!(APP.contains("uiHead(\"Issued certificates\", null)"), "Certificates does not repeat its count");
+    // Branches used an empty bordered tag as a spacer, which looked like an
+    // unchecked checkbox on every row.
+    assert!(APP.contains("class=\"branch-name-cell\""), "the current pill stays beside the branch name");
+    assert!(!APP.contains("'<span class=\"tag\"> </span>'"), "no empty tag boxes");
+    // A site is named without its default port; the full URL stays in the link.
+    assert!(APP.contains("function displayUrl"), "site addresses drop the default port when displayed");
+}
+
+#[test]
+fn interaction_states_use_the_shared_motion_language() {
+    // Tabs are pressed often, so the feedback is a short scale, not a slide.
+    assert!(CSS.contains(".subnav .subtab:active,"), "the tab strip has press feedback");
+    assert!(CSS.contains("transform 120ms var(--ease-out)"), "tab movement is short and eased");
+    // A popover grows from its trigger, not from the middle of the viewport.
+    assert!(APP.contains("node.style.transformOrigin ="), "the composer popover knows its trigger");
+    assert!(CSS.contains("@keyframes popover-in"), "the popover has one entrance");
+    assert!(CSS.contains("animation: popover-in 140ms var(--ease-out);"), "the entrance stays under 200ms");
+    // Exact properties only: `background` would also animate images and paint.
+    assert!(!CSS.contains("transition: all"), "no transition: all");
+    assert!(!CSS.contains("transition: background var("), "transition background-color, not background");
+}
+
+#[test]
+fn tables_keep_one_grid_and_inline_rows_stay_on_one_line() {
+    // The branch list is a real table: named columns, a fixed grid, local
+    // branches before remote-tracking refs, and one per-row action menu.
+    assert!(APP.contains("class=\"table branch-table\""), "branches use the shared table");
+    assert!(APP.contains("class=\"branch-name-cell\""), "the current pill stays beside the name");
+    assert!(APP.contains("class=\"cell-actions\">Actions</th>"), "the actions column is named");
+    assert!(CSS.contains(".branch-table { table-layout: fixed; }"), "branch columns do not drift");
+    assert!(
+        !APP.contains("'<span class=\"tag\"> </span>'"),
+        "no branch is marked by an empty tag box"
+    );
+    // Markdown tables use the same header and padding as a panel table.
+    assert!(CSS.contains(".md th, .md td { padding: 10px var(--s4) 10px 0;"), "Markdown tables share the grid");
+    assert!(!CSS.contains(".md tbody tr:nth-child(even)"), "no second striping language");
+    // A flex row must not inherit the margin used between stacked blocks.
+    assert!(
+        CSS.contains(".panel-body.inline > * + * { margin-top: 0; }"),
+        "inline controls line up on one baseline"
+    );
+}
+
+#[test]
+fn every_tab_strip_speaks_the_same_visual_language() {
+    // Section tabs, project groups and sub-tabs, site/remote tabs, mail views,
+    // activity filters, Form/JSON, and terminal sessions are one control: a row
+    // of quiet pills with the current one raised. A new strip joins this list
+    // instead of inventing its own height, radius and border.
+    for selector in [
+        ".subnav .subtab,",
+        ".tabs .tab,",
+        ".subtabs .subtab-pill,",
+        ".segmented .seg,",
+        ".ui-sort,",
+        ".term-tabs .term-tab {",
+    ] {
+        assert!(CSS.contains(selector), "{selector} must share the tab styling");
+    }
+    // One shell needs no tab above it: the panel head already names the folder
+    // and the shell. Session tabs appear only when there is a choice.
+    assert!(APP.contains("var tabs = sessions.length > 1 ?"), "a single terminal session has no tab");
+    // The group row and the sub-tab row are two strips, not two items in one
+    // flex row. Wrapping them again put every tab on a single line.
+    assert!(
+        !APP.contains("'<div class=\"tabs\">' + tabs + \"</div>\""),
+        "the project tab strips must not be nested"
+    );
+}
+
+#[test]
 fn every_icon_comes_from_the_same_logo() {
     // The artwork has one source: `assets/devd-logo.png`. Everything else is
     // generated from it by `scripts/make-icons.py`, so the mark in the window,
@@ -248,7 +329,7 @@ fn server_and_site_tabs_match_the_agreed_information_architecture() {
         .next()
         .unwrap();
     let mut at = 0;
-    for label in ["All sites", "Hosts", "Certificates"] {
+    for label in ["All sites", "Hosts", "Certificates", "Mail"] {
         let needle = format!("\"{label}\"");
         let found = sites[at..]
             .find(&needle)
@@ -301,8 +382,9 @@ fn tools_and_runtimes_do_not_offer_the_same_install() {
 
 #[test]
 fn site_detail_has_an_address_and_its_own_preview() {
-    assert!(APP.contains("return SITE.name ? \"/server/sites/\" + encodeURIComponent(SITE.name) : \"/server/sites\";"));
-    assert!(APP.contains("p.indexOf(\"/server/sites/\") === 0"));
+    assert!(APP.contains("return SITE.name ? \"/sites/\" + encodeURIComponent(SITE.name) : \"/sites\";"));
+    assert!(APP.contains("if (p.indexOf(\"/sites/\") === 0) return \"site\";"));
+    assert!(APP.contains("if (p.indexOf(\"/server/sites/\") === 0) return \"site\";"), "old site links still resolve");
     assert!(APP.contains("data-action=\"site-tab\" data-tab=\"preview\""));
     assert!(APP.contains("function sitePreview(row)"));
     assert!(APP.contains("function siteDatabase(row)"));
@@ -666,6 +748,16 @@ fn the_files_tab_belongs_to_the_project_that_is_open() {
     assert!(APP.contains("state.files.project !== path"), "a different project gets fresh state");
     assert!(APP.contains("state.files = null;"), "opening a project drops the old tree");
     assert!(APP.contains("var fs = filesForProject();"), "the Files tab reads the scoped state");
+    // The tree and the document are two columns of one pane. The generic
+    // `.panel + .panel` gap pushed the document down and broke the top edge.
+    assert!(CSS.contains(".files-view .panel + .panel { margin-top: 0; }"), "both files panes start at the same line");
+    // A long line wraps inside its own row, so the number stays beside it and
+    // the code never hides behind a horizontal scrollbar.
+    assert!(APP.contains("class=\"code-line\""), "each code line is its own row");
+    assert!(
+        CSS.contains(".code-text { min-width: 0; padding: 0 var(--s3); white-space: pre-wrap;"),
+        "long lines wrap instead of scrolling sideways"
+    );
 }
 
 #[test]
@@ -896,6 +988,10 @@ fn the_provider_card_has_one_way_to_use_a_model_id_and_not_two() {
         APP.contains("composer-custom-model"),
         "the picker still offers an id the provider does not list"
     );
+    // Test, Fetch models, Verify model, Edit and Remove belong to the provider's
+    // header. As a second grid row they fell under the facts.
+    assert!(APP.contains("class=\"provider-head\""), "the provider actions live in the header");
+    assert!(CSS.contains(".provider-head { display: flex;"), "the header puts the name and actions on one line");
 }
 
 #[test]

@@ -308,7 +308,9 @@ people and agents use the same capability API.
 
 ## Terminal
 
-**Terminal** in the navigation bar runs a shell in a project, inside devd.
+**Terminal** is a tab on a project and runs a shell in that project's folder,
+inside devd. The tab lists only the shells started in that folder, so a
+terminal always belongs to the project on screen.
 
 The shell is a real PTY, and it lives in the devd process rather than in the window. That has three consequences worth knowing:
 

@@ -52,23 +52,44 @@ Home
   environment ledger, attention, projects, sites, recent work
 Projects
   all projects, new project, stacks and tasks
-  project detail: changes, history, branches, reviews, memory
+  project detail: files, changes, history, branches, reviews, memory, terminal
 Sites
-  all sites, hosts, certificates
+  all sites, hosts, certificates, mail
   site detail: overview, environment, deploy, logs, web server, preview
-Environment
-  overview, services, runtimes, databases, tools, remote
 Assistant
-Team
-  runs, schedules, skills, notes, MCP
-Activity
-Diagnostics
-API and tools
+Agents
+  agent runs, team, schedules, skills, notes, MCP
+Models
+Machine
+  Environment: overview, services, runtimes, databases, tools, remote
+  API and tools
+  Activity
+  Diagnostics
 ```
 
 The rail keeps three groups because they answer different questions: *what am I
-building* (Work), *what is running* (Run), and *what is the record* (System).
-Sites sits beside Projects because it is the access layer of the work.
+building* (Work), *who does the thinking* (AI), and *what is the machine behind
+it* (Machine). Sites sits beside Projects because it is the access layer of the
+work, and a terminal is a tab of the project whose folder it runs in rather than
+a place of its own.
+
+Every tab strip is the same control, whether it switches a section, a project
+group, a site's page, a mail view, an activity filter or Form/JSON: a row of
+quiet pills where the current one is raised. Filters and tabs are both a choice,
+so they are not given two different shapes. A terminal with one session has no
+session tab; the panel head already names the folder and the shell.
+
+Every table shares one grid: the same uppercase header, the same cell padding
+and divider, tabular numbers for counts and times, and actions in a named
+right-hand column. That holds in a panel, a run's evidence, the task list, the
+models screen and a table written in Markdown. A row laid out on one line does
+not inherit the top margin used to space stacked blocks.
+
+Motion follows frequency. Tabs and chips press in with a short scale; hover
+styles run only on devices that can hover; popovers grow from their trigger;
+dialogs and drawers move because they are occasional. Every transition names
+the property it changes, and reduced-motion users keep the fade that explains a
+change but lose the movement.
 
 ## The system
 

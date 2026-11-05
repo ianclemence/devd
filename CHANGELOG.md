@@ -16,6 +16,62 @@ Nothing yet.
 
 ---
 
+## [0.23.0] - 2026-11-05 - One navigation, one tab language, one table
+
+### Changed
+
+- **One rail, seven places.** Home, Projects, Sites, Assistant, Agents and Models are
+  top-level destinations, with Environment, API and tools, Activity and Diagnostics
+  under Machine. Sites moved out of the Machine menu and now lives at `/sites`.
+- **The terminal belongs to a project.** It is the project's own tab, lists only
+  the shells started in that folder, and is no longer a destination in the rail.
+  Opening a system terminal is still in the project's More menu.
+- **Mail is read beside the sites.** It is a tab on Sites, where the apps that send
+  the mail are already listed, rather than a seventh place of its own.
+- Schedules, Skills and Notes keep their Agent addresses (`/agents/...`); links to
+  the old `/schedules`, `/skills` and `/shared` addresses still open them.
+- **One tab control everywhere.** Section tabs, project groups and sub-tabs, site
+  and remote tabs, mail views, activity filters, Form/JSON and terminal sessions
+  share the same height, radius, type and raised current state. Filters and tabs
+  no longer look like two different controls.
+- **A single terminal has no session tab.** The panel head already names the
+  folder and shell; session tabs appear only when there is more than one.
+
+### Fixed
+
+- **Provider actions stay in the card header.** Test, Fetch models, Verify model,
+  Edit and Remove sit beside the provider name at every width instead of falling
+  under the facts as a second row.
+- **Long code lines wrap in place.** The Files viewer gives every line its own
+  row, so a wrapped line keeps its line number and no code hides behind a
+  horizontal scrollbar.
+- **The Files panes start on the same line.** The tree and the document are two
+  columns, so the generic stacked-panel gap no longer pushes the document down.
+- **Lists stop repeating their own counts.** The Changes view no longer shows
+  "1 untracked" above "UNTRACKED 1"; Hosts and Certificates no longer repeat the
+  summary count in the section heading.
+- **Project and site rows read cleanly.** Branch rows use a plain current-branch
+  marker instead of an empty checkbox-like tag, site addresses drop the default
+  `:443`, site fact labels have colons, and the project overview no longer
+  repeats the runtime in both "Serves at" and "Runs on".
+- **Branches are a table.** The Git branch list now names its columns, keeps the
+  current branch first, separates local from remote-tracking refs using Git's
+  own `refs/remotes` namespace, omits `origin/HEAD`, and puts the secondary
+  actions behind one per-row menu.
+- **Tables share one grid.** Header rhythm, cell padding, borders and right-hand
+  action columns are the same in panels, evidence, tasks, models and Markdown;
+  no action header is left as an empty cell.
+- **Inline rows line up.** Controls in a single-line form row no longer inherit
+  the stacked-sibling top margin, which pushed every control after the first one
+  down by 12px (the tag form was one example).
+- **Motion is one language.** Tabs and chips give short press feedback, hover
+  styles only apply to devices that really hover, transitions name exact
+  properties (`background-color`, not `background`), and the composer and
+  mention popovers grow from their trigger in 140ms instead of appearing from
+  nowhere. Reduced-motion users keep the fades but lose the movement.
+
+---
+
 ## [0.22.0] - 2026-11-05 - Branches get an address, and the mail is readable
 
 ### Added

@@ -255,6 +255,14 @@
     return esc(value);
   }
 
+  /* The address as a person reads it. The default port is part of the URL the
+   * server uses, not part of the name: `https://x.test:443` is `https://x.test`. */
+  function displayUrl(url) {
+    return String(url || "")
+      .replace(/^https:\/\/([^\/:]+):443(\/|$)/i, "https://$1$2")
+      .replace(/^http:\/\/([^\/:]+):80(\/|$)/i, "http://$1$2");
+  }
+
   /* Long tool output is bounded once, at render time, with a note that says so.
      The complete text stays in the transcript; the page never tries to lay out
      a megabyte of monospace. */
@@ -1018,6 +1026,7 @@
   var GO_TO = [
     ["home", "Home", "what needs you, what is running"], ["inbox", "Inbox", "approvals and questions from agents"],
     ["projects", "Projects", "repositories, folders and stacks"], ["sites", "Sites", "addresses, serving and certificates"],
+    ["mail", "Mail", "what your apps sent while you develop"],
     ["assistant", "Assistant", "talk to the built-in agent"], ["team", "Agents", "goals planned, approved and run by the team"],
     ["agents", "Team", "your team and what each member does"],
     ["create", "New project", "start from a stack"], ["develop", "Stacks and tasks", "detect and run project tasks"],
@@ -1036,7 +1045,7 @@
     var acts = [
       { key: "a:new", title: "Create a project", detail: stackCount() ? "from " + stackCount() + " stacks" : "from a stack", run: function () { navigate("create"); } },
       { key: "a:import", title: "Import an existing project", detail: "detect its stack and tasks", run: function () { navigate("develop"); } },
-      { key: "a:terminal", title: "Open a terminal in this project", detail: "its pinned runtimes first on PATH", run: function () { var p = palContext(); if (!p) return toast("warn", "Choose a project first"); run("project.terminal", { path: p }); } },
+      { key: "a:terminal", title: "Open the terminal in this project", detail: "a shell kept in devd, in the project's own tab", run: function () { var p = palContext(); if (!p) return toast("warn", "Choose a project first"); if (state.view === "project" && state.project && state.project.path === p) ACTIONS.tab({ dataset: { tab: "terminal" } }); else openProject(p).then(function () { ACTIONS.tab({ dataset: { tab: "terminal" } }); }); } },
       { key: "a:provider", title: "Add an AI provider", detail: "key and default model", run: function () { navigate("providers"); } },
       { key: "a:models", title: "Refresh the official model list", detail: "reads Anthropic's documentation", run: function () { run("models.refresh_official", {}); } },
       { key: "a:health", title: "Check system health", detail: "re-runs every check", run: function () { ACTIONS["health-recheck"](); } },
@@ -1203,22 +1212,22 @@
   var AREA = {
     assistant: "assistant", team: "agents",
     projects: "projects", project: "projects", create: "projects", develop: "projects",
-    sites: "sites", site: "sites", hosts: "sites", certificates: "sites",
+    sites: "sites", site: "sites", hosts: "sites", certificates: "sites", mail: "sites",
     agents: "agents", schedules: "agents", shared: "agents", skills: "agents", mcp: "agents",
     overview: "server", services: "server", operations: "server", toolchain: "server", runtimes: "server",
     databases: "server", remote: "server", preview: "server"
   };
   var TABS = {
     projects: [["projects", "Projects"], ["create", "New project"], ["develop", "Stacks and tasks"]],
-    sites: [["sites", "All sites"], ["hosts", "Hosts"], ["certificates", "Certificates"]],
-    agents: [["team", "Runs"], ["agents", "Team"], ["schedules", "Schedules"], ["skills", "Skills"], ["mcp", "MCP"], ["shared", "Notes"]],
+    sites: [["sites", "All sites"], ["hosts", "Hosts"], ["certificates", "Certificates"], ["mail", "Mail"]],
+    agents: [["team", "Agent Runs"], ["agents", "Team"], ["schedules", "Schedules"], ["skills", "Skills"], ["mcp", "MCP"], ["shared", "Notes"]],
     server: [["overview", "Overview"], ["services", "Services"], ["runtimes", "Runtimes"], ["databases", "Databases"], ["toolchain", "Tools"], ["remote", "Remote"]]
   };
   var AREA_HOME = { assistant: "assistant", projects: "projects", sites: "sites", agents: "team", server: "overview" };
 
   function areaOf(view) { return AREA[view] || view; }
 
-  var TAB_ICON = { projects: "i-folder", create: "i-plus", develop: "i-wrench", sites: "i-globe", hosts: "i-server", certificates: "i-lock", team: "i-layers", agents: "i-team", schedules: "i-calendar", skills: "i-book", shared: "i-file", mcp: "i-code", overview: "i-home", services: "i-layers", runtimes: "i-bolt", databases: "i-db", toolchain: "i-wrench", remote: "i-cloud" };
+  var TAB_ICON = { projects: "i-folder", create: "i-plus", develop: "i-wrench", sites: "i-globe", hosts: "i-server", certificates: "i-lock", mail: "i-inbox", terminal: "i-code", team: "i-layers", agents: "i-team", schedules: "i-calendar", skills: "i-book", shared: "i-file", mcp: "i-code", overview: "i-home", services: "i-layers", runtimes: "i-bolt", databases: "i-db", toolchain: "i-wrench", remote: "i-cloud" };
 
   function subnav() {
     var area = AREA[state.view];
@@ -1426,13 +1435,12 @@
 
   /* The command bar.
    *
-   * Twelve destinations are not twelve equals. Six are where work happens every
-   * day and are always in view, in the order a change travels: look at the
-   * project, its address, what runs, then ask for something, then watch it run.
-   * Five are the machine and its records. They are one step away, under two
-   * names, and reachable from the keyboard with Ctrl K. What needs a person is
-   * not a destination among the others: it sits apart, at the end, and speaks
-   * only when there is something to decide. */
+   * Six destinations are where work happens every day and are always in view:
+   * the project, its address, who answers, and the models behind them. The
+   * machine and its records are one step away under Machine, and reachable from
+   * the keyboard with Ctrl K. What needs a person is not a destination among the
+   * others: it sits apart, at the end, and speaks only when there is something
+   * to decide. */
   /* The bar is redrawn by every timer in the window. Replacing its markup when
      the answer is the same would rebuild the buttons the pointer is on: an open
      menu would close, its popover animation would replay, and a focused tab
@@ -1446,29 +1454,27 @@
     var working = AI.threads ? (AI.threads.filter(function (t) { return t.state === "running"; }).length || null) : null;
     var runs = (state.view === "team" && TEAM.runs && TEAM.runs.length) ? TEAM.runs : (AI.liveRuns || (AI.home && AI.home.teamRuns) || []);
     var live = runs.filter(function (t) { return ["planning", "running"].indexOf(t.state) >= 0; });
-    // Four destinations, not ten: where work happens (Home, Projects, Terminal), who
-    // does it (Assistant, Agents), and the machine and its records behind them. Sites,
-    // hostnames and certificates are the machine's answer to "how do I reach this?",
-    // so they live with the rest of it rather than as a peer of the project.
+    // Seven destinations in three readings: where the work lives (Home, Projects,
+    // Sites), who does the thinking (Assistant, Agents, Models), and the machine and
+    // its records behind them. A terminal belongs to a project, not to the rail, so
+    // it is a tab on the project rather than a place of its own.
     var groups = [
       { label: "Work", items: [
         { view: "home", label: "Home" },
         { view: "projects", label: "Projects", count: state.projects.length || state.projectCount || null },
-        { view: "terminal", label: "Terminal", count: (TERM.sessions || []).filter(function (t) { return t.running !== false; }).length || null },
-        { view: "mail", label: "Mail", count: (MAIL.list && MAIL.list.unread) || null }
+        { view: "sites", label: "Sites", count: (server.sites || []).length || null }
       ] },
-      { label: "Agents", items: [
+      { label: "AI", items: [
         { view: "assistant", label: "Assistant", count: working },
         // Named for one screen, so it always opens that screen, not the last tab used.
-        { view: "team", label: "Agents", count: live.length || null, exact: true }
+        { view: "team", label: "Agents", count: live.length || null, exact: true },
+        { view: "providers", label: "Models" }
       ] },
       { label: "Machine", menu: true, items: [
-        { view: "sites", label: "Sites", count: (server.sites || []).length || null, hint: "addresses, serving and certificates" },
         { view: "overview", label: "Environment", hint: "services, runtimes, databases, hostnames" },
-        { view: "providers", label: "Models", hint: "providers, defaults and fallbacks" },
+        { view: "capabilities", label: "API and tools", hint: "every capability, with its schema" },
         { view: "activity", label: "Activity", hint: "everything devd did, and who asked" },
-        { view: "system", label: "Diagnostics", hint: "health checks and what to do about them" },
-        { view: "capabilities", label: "API and tools", hint: "every capability, with its schema" }
+        { view: "system", label: "Diagnostics", hint: "health checks and what to do about them" }
       ] }
     ];
     function tab(i) {
@@ -2036,7 +2042,7 @@
       } else reach = '<div class="st-main st-dim">Not checked</div>';
 
       return '<div class="st-row" data-open="1" data-action="open-site" data-name="' + attr(site.name) + '">' +
-        '<div class="st-host">' + uiDot(dot) + '<div class="st-hostbody"><div class="st-name mono">' + esc(site.host || site.name) + '</div><div class="st-sub mono" title="' + attr(row.url) + '">' + esc(row.url) +
+        '<div class="st-host">' + uiDot(dot) + '<div class="st-hostbody"><div class="st-name mono">' + esc(site.host || site.name) + '</div><div class="st-sub mono" title="' + attr(row.url) + '">' + esc(displayUrl(row.url)) +
           (row.shared ? '</div><div class="st-sub"><a href="' + attr(row.shared) + '" target="_blank" rel="noreferrer">public link</a>' : "") + "</div></div></div>" +
         '<div class="st-facts-row">' +
         '<div class="st-col" data-label="Serves">' + serves + "</div>" +
@@ -2363,7 +2369,7 @@
     var details = [
       uiRow({
         dot: row.server_running ? "ok" : "off",
-        title: esc(row.url),
+        title: esc(displayUrl(row.url)),
         sub: esc(row.document_root || "") + (row.present === false ? " (directory missing)" : ""),
         actions: '<button type="button" class="btn btn-mini btn-primary" data-action="open-url" data-url="' + attr(row.url) + '">Open</button>' +
           '<button type="button" class="btn btn-mini btn-ghost" data-action="site-tab" data-tab="preview">Preview</button>'
@@ -2444,7 +2450,7 @@
       : '<div class="notice" style="margin-bottom:12px"><div class="grow">The certificate authority is not trusted yet, so an HTTPS preview may show a warning.</div>' +
         '<button type="button" class="btn btn-mini" data-action="ca-trust" data-machine="false">Trust the CA</button></div>';
     return notice +
-      '<div class="panel"><div class="panel-head"><span class="mono">' + esc(row.url) + '</span><span class="panel-note">' +
+      '<div class="panel"><div class="panel-head"><span class="mono">' + esc(displayUrl(row.url)) + '</span><span class="panel-note">' +
       '<button type="button" class="btn btn-mini btn-ghost" data-action="reload-preview">Reload</button>' +
       '<button type="button" class="btn btn-mini btn-ghost" data-action="open-url" data-url="' + attr(row.url) + '">Open externally</button>' +
       "</span></div>" +
@@ -2560,7 +2566,7 @@
   function opsTable(cols, rows, label) {
     return '<div class="table-wrap"><table class="table table-ops" aria-label="' + attr(label) + '"><thead><tr>' +
       cols.map(function (c) { return "<th" + (c.cls ? ' class="' + c.cls + '"' : "") + ">" + esc(c.name) + "</th>"; }).join("") +
-      '<th class="cell-actions"><span class="sr-only">Actions</span></th></tr></thead><tbody>' + rows.join("") + "</tbody></table></div>";
+      '<th class="cell-actions">Actions</th></tr></thead><tbody>' + rows.join("") + "</tbody></table></div>";
   }
   function opsDot(kind) { return '<span class="ui-dot ui-dot-' + kind + '" aria-hidden="true"></span>'; }
 
@@ -3319,7 +3325,7 @@
         actions: site ? '<button type="button" class="btn btn-mini btn-ghost" data-action="open-site" data-name="' + attr(site) + '">Site</button>' : ""
       });
     });
-    var issued = uiHead("Issued certificates", s.certs.length) +
+    var issued = uiHead("Issued certificates", null) +
       (rows.length ? uiList(rows) : uiEmpty("No certificates yet", "An HTTPS site issues one, or issue one for a hostname above."));
 
     el("main").innerHTML = page(
@@ -3361,7 +3367,7 @@
       });
     }
     var changes = pending ? uiHead("Pending changes", pending) + uiList(adding.map(function (e) { return entryRow(e, "add"); }).concat(removing.map(function (e) { return entryRow(e, "remove"); }))) : "";
-    var published = uiHead("Published names", entries.length) + (entries.length
+    var published = uiHead("Published names", null) + (entries.length
       ? uiList(entries.map(function (e) { return entryRow(e, ""); }))
       : uiEmpty("No names published", "Sites on localhost resolve without one."));
 
@@ -3716,7 +3722,7 @@
         "<td>" + (sc.last_run_at ? esc(whenText(sc.last_run_at)) : '<span class="dim">not yet</span>') +
           (sc.last_error ? '<div class="dim">' + esc(sc.last_error) + "</div>" : "") +
           (sc.last_run_id ? '<div><button type="button" class="btn btn-mini btn-ghost" data-action="team-open-from" data-id="' + attr(sc.last_run_id) + '">Open the run</button></div>' : "") + "</td>" +
-        '<td class="actions"><button type="button" class="btn btn-mini" data-action="schedule-run" data-name="' + attr(sc.name) + '">Run now</button> ' +
+        '<td class="cell-actions"><button type="button" class="btn btn-mini" data-action="schedule-run" data-name="' + attr(sc.name) + '">Run now</button> ' +
         '<button type="button" class="btn btn-mini" data-action="schedule-toggle" data-name="' + attr(sc.name) + '" data-on="' + (sc.enabled ? "1" : "0") + '">' + (sc.enabled ? "Turn off" : "Turn on") + "</button> " +
         '<button type="button" class="btn btn-mini btn-ghost" data-action="schedule-delete" data-name="' + attr(sc.name) + '">Delete</button></td></tr>';
     }).join("");
@@ -3726,7 +3732,7 @@
     var projects = '<option value="">Choose a project…</option>' + state.projects.map(function (p) { return '<option value="' + attr(p.path) + '"' + (f.project === p.path ? " selected" : "") + ">" + esc(p.name || dirName(p.path)) + "</option>"; }).join("");
     el("main").innerHTML = page("Schedules", "Team runs devd starts on a clock", "",
       '<div class="panel"><div class="panel-head"><span>Schedules</span><span class="panel-note">they run only while devd is open or serving</span></div>' +
-      (SCHED.list.length ? '<div class="table-wrap"><table class="table"><thead><tr><th>Name</th><th>What</th><th>Next</th><th>Last</th><th></th></tr></thead><tbody>' + rows + "</tbody></table></div>"
+      (SCHED.list.length ? '<div class="table-wrap"><table class="table"><thead><tr><th>Name</th><th>What</th><th>Next</th><th>Last</th><th class="cell-actions">Actions</th></tr></thead><tbody>' + rows + "</tbody></table></div>"
         : '<div class="panel-body empty-inline">No schedules yet. A schedule starts the team on a project at times you choose; it never piles runs up and a person still approves each plan unless you waive it.</div>') + "</div>" +
       '<div class="panel"><div class="panel-head"><span>New schedule</span></div><div class="panel-body stack">' +
       '<div class="inline"><input class="input" id="sched-name" placeholder="name, e.g. weekly-security" value="' + attr(f.name) + '" style="max-width:240px" spellcheck="false">' +
@@ -3809,7 +3815,7 @@
       '<span class="panel-note">skills another agent on this machine already has</span></div>' +
       '<div class="panel-body flush">' +
       (sources.length
-        ? "<table class=\"table\"><thead><tr><th>Agent</th><th>Skills</th><th>Folder</th><th></th></tr></thead><tbody>" +
+        ? "<table class=\"table\"><thead><tr><th>Agent</th><th>Skills</th><th>Folder</th><th class=\"cell-actions\">Actions</th></tr></thead><tbody>" +
           sources.map(function (s) {
             return '<tr><td class="cell-strong">' + esc(s.agent) + '</td><td class="cell-mono">' + s.count + "</td>" +
               '<td class="cell-mono cell-dim" title="' + attr(s.path) + '">' + esc(s.path) + "</td>" +
@@ -4245,8 +4251,26 @@
  * a keystroke also asks for one straight away (`termKick`). */
 var TERM_POLL_MS = 250;
 
+  /* A terminal belongs to the project it was started in. Sessions are kept in
+   * the server for the life of the window, so the list is narrowed to the folder
+   * of the project on screen (including a shell started in a subfolder). */
+  function termScopedSessions() {
+    var dir = termStartDir();
+    if (!dir) return [];
+    var root = String(dir).replace(/[\\/]+$/, "").toLowerCase();
+    return (TERM.sessions || []).filter(function (s) {
+      var cwd = String(s.cwd || "").replace(/[\\/]+$/, "").toLowerCase();
+      return cwd === root || cwd.indexOf(root + "\\") === 0 || cwd.indexOf(root + "/") === 0;
+    });
+  }
+
   function termSession() {
-    return (TERM.sessions || []).filter(function (s) { return s.id === TERM.active; })[0] || null;
+    return termScopedSessions().filter(function (s) { return s.id === TERM.active; })[0] || null;
+  }
+
+  /* True wherever the terminal is drawn: the project tab, or an old /terminal link. */
+  function termOnScreen() {
+    return state.view === "terminal" || (state.view === "project" && state.tab === "terminal");
   }
 
   /* The terminal renderer.
@@ -4361,7 +4385,7 @@ var TERM_POLL_MS = 250;
   }
 
   function termPaint() {
-    if (state.view !== "terminal") return;
+    if (!termOnScreen()) return;
     var out = el("term-screen");
     if (!out) return;
     var atBottom = out.scrollHeight - out.scrollTop - out.clientHeight < 40;
@@ -4420,18 +4444,19 @@ var TERM_POLL_MS = 250;
     run("terminal.list", {}, { quiet: true }).then(function (o) {
       TERM.loading = false;
       TERM.sessions = (o && o.ok && o.data && o.data.terminals) || [];
-      // An active session that has gone is no longer active.
-      if (TERM.active && !TERM.sessions.some(function (s) { return s.id === TERM.active; })) {
+      // A session that is not in this project is not this screen's active one.
+      var here = termScopedSessions();
+      if (TERM.active && !here.some(function (s) { return s.id === TERM.active; })) {
         TERM.active = null;
         TERM.screen = "";
       }
       // The first one open, if none is chosen.
-      if (!TERM.active && TERM.sessions.length) {
-        TERM.active = TERM.sessions[TERM.sessions.length - 1].id;
+      if (!TERM.active && here.length) {
+        TERM.active = here[here.length - 1].id;
         TERM.screen = "";
         termRefresh();
       }
-      if (state.view === "terminal") render();
+      if (termOnScreen()) render();
     });
   }
 
@@ -4462,12 +4487,10 @@ var TERM_POLL_MS = 250;
     });
   }
 
-  /* Where a new shell starts: the open project, or the folder devd was started
-   * in. Empty only when neither is known, which is what disables the button. */
+  /* Where a new shell starts: the open project. A terminal without a project is
+   * not a place devd offers any more, so an empty value disables the button. */
   function termStartDir() {
-    if (state.project && state.project.path) return state.project.path;
-    if (state.session && state.session.paths && state.session.paths.root) return state.session.paths.root;
-    return "";
+    return state.project && state.project.path ? state.project.path : "";
   }
 
   /* What to call that folder in a button. */
@@ -4477,35 +4500,26 @@ var TERM_POLL_MS = 250;
     return dir ? dir.split(/[\\/]/).filter(Boolean).pop() : "a folder";
   }
 
-  function renderTerminal() {
-    if (state.view !== "terminal") return;
-    if (!TERM.sessions.length && !TERM.loading && !TERM.error) termLoadSessions();
-
+  /* The terminal panel, for the project tab and for the old /terminal address. */
+  function termPane() {
+    var sessions = termScopedSessions();
     var s = termSession();
-    var tabs = (TERM.sessions || []).map(function (t) {
+    // One shell needs no tab above it: the panel head already names the folder
+    // and the shell. Tabs appear when there is something to switch between.
+    var tabs = sessions.length > 1 ? sessions.map(function (t) {
       var on = t.id === TERM.active;
       return '<button type="button" class="term-tab' + (on ? " active" : "") + '" data-action="term-pick" data-id="' + attr(t.id) + '">' +
         '<span class="mono nowrap">' + esc((t.cwd || "").split(/[\\/]/).filter(Boolean).pop() || t.id) + "</span>" +
         (t.running === false ? ' <span class="term-tab-note">ended</span>' : "") + "</button>";
-    }).join("");
+    }).join("") : "";
 
-    // `state.project` is null until a project is opened, and the terminal is
-    // reachable without one: a shell starts in the open project, or in the
-    // folder the window last used. Reading `state.project.path` unguarded
-    // crashed the whole screen on a fresh visit, which is why it sat on
-    // "Loading" for ever instead of drawing an empty terminal.
     var startDir = termStartDir();
-    var head =
-      '<div class="page-actions">' +
-      '<button type="button" class="btn btn-primary" data-action="term-open"' + (startDir ? "" : " disabled") + '>New terminal</button>' +
-      (s ? '<button type="button" class="btn btn-ghost" data-action="term-close" data-id="' + attr(s.id) + '">Close</button>' : "") +
-      "</div>";
 
     var body;
     if (TERM.error) body = '<div class="notice notice-bad">' + esc(TERM.error) + "</div>";
-    else if (!TERM.sessions.length) {
+    else if (!sessions.length) {
       body = '<div class="panel"><div class="empty"><div class="empty-title">No terminal open</div>' +
-        "<div>A shell starts in the project you have open. It keeps running while devd does, so closing this window does not end it.</div>" +
+        "<div>A shell starts in this project. It keeps running while devd does, so closing this window does not end it.</div>" +
         '<div class="inline" style="margin-top:12px">' +
         (startDir
           ? '<button type="button" class="btn btn-primary" data-action="term-open">New terminal in ' + esc(termStartLabel()) + "</button>"
@@ -4520,7 +4534,10 @@ var TERM_POLL_MS = 250;
       body =
         '<div class="panel term-panel">' +
         '<div class="panel-head"><span class="mono grow nowrap" title="' + attr(s.cwd) + '">' + esc(s.cwd) + "</span>" +
-        '<span class="panel-note">' + esc(s.shell) + (s.running === false ? " \\u00b7 ended" : "") + "</span></div>" +
+        '<span class="panel-note">' + esc(s.shell) + (s.running === false ? " \\u00b7 ended" : "") + "</span>" +
+        '<button type="button" class="btn btn-mini" data-action="term-open"' + (startDir ? "" : " disabled") + '>New terminal</button>' +
+        (s ? '<button type="button" class="btn btn-mini btn-ghost" data-action="term-close" data-id="' + attr(s.id) + '">Close</button>' : "") +
+        "</div>" +
         (hasRenderer
           ? '<div class="term-host" id="term-host"></div>'
           : '<div class="term-screen mono" id="term-screen" role="log" aria-live="polite" tabindex="0">' + esc(TERM.screen) + "</div>") +
@@ -4535,26 +4552,11 @@ var TERM_POLL_MS = 250;
               '<button type="button" class="btn btn-mini" data-action="term-send">Run</button></div>') +
         "</div>";
     }
+    return { tabs: tabs, body: body };
+  }
 
-    // The terminal element is a live DOM subtree that xterm owns. Assigning
-    // `main.innerHTML` destroys whatever is inside it, so the subtree is lifted
-    // out first and put back by `termMount`. Without this, every paint threw the
-    // terminal away and rebuilt an empty one, so the pane stayed blank while
-    // `terminal.read` was returning a full screen.
-    if (XTERM.term && XTERM.term.element && XTERM.term.element.parentNode) {
-      XTERM.term.element.parentNode.removeChild(XTERM.term.element);
-    }
-
-    el("main").innerHTML =
-      '<div class="page">' +
-      '<div class="page-head"><div>' +
-      pageTitle("Terminal", "terminal") +
-      '<div class="page-sub">A shell in a project, kept in devd so it keeps running and an agent can read the same screen.</div>' +
-      "</div>" + head + "</div>" +
-      (tabs ? '<div class="term-tabs">' + tabs + "</div>" : "") +
-      body +
-      "</div>";
-
+  /* Lift xterm's subtree out before the page is replaced, then put it back. */
+  function termDraw() {
     if (typeof window.Terminal === "function") {
       termMount();
       // The box has its size once the browser has laid the page out.
@@ -4564,6 +4566,31 @@ var TERM_POLL_MS = 250;
       var input = el("term-input");
       if (input) input.focus();
     }
+  }
+
+  function renderTerminal() {
+    if (state.view !== "terminal") return;
+    if (!TERM.sessions.length && !TERM.loading && !TERM.error) termLoadSessions();
+
+    var p = termPane();
+    // The terminal element is a live DOM subtree that xterm owns. Assigning
+    // `main.innerHTML` destroys whatever is inside it, so the subtree is lifted
+    // out first and put back by `termMount`.
+    if (XTERM.term && XTERM.term.element && XTERM.term.element.parentNode) {
+      XTERM.term.element.parentNode.removeChild(XTERM.term.element);
+    }
+
+    el("main").innerHTML =
+      '<div class="page">' +
+      '<div class="page-head"><div>' +
+      pageTitle("Terminal", "terminal") +
+      '<div class="page-sub">A shell in a project, kept in devd so it keeps running and an agent can read the same screen.</div>' +
+      "</div></div>" +
+      (p.tabs ? '<div class="term-tabs">' + p.tabs + "</div>" : "") +
+      p.body +
+      "</div>";
+
+    termDraw();
   }
 
   /* Fit the terminal to the box it was just put in. */
@@ -4883,13 +4910,15 @@ var TERM_POLL_MS = 250;
     worktrees: "Worktrees",
     recover: "Recover",
     reviews: "Reviews",
-    memory: "Agent memory"
+    memory: "Agent memory",
+    terminal: "Terminal"
   };
 
   var TAB_GROUPS = [
     { id: "files", label: "Files", tabs: ["files"] },
     { id: "git", label: "Git", tabs: ["changes", "history", "branches", "tags", "remotes", "stashes", "worktrees", "recover"] },
-    { id: "agents", label: "Agents", tabs: ["reviews", "memory"] }
+    { id: "agents", label: "Agents", tabs: ["reviews", "memory"] },
+    { id: "terminal", label: "Terminal", tabs: ["terminal"] }
   ];
   var TAB_LAST = {};
 
@@ -5032,17 +5061,8 @@ var TERM_POLL_MS = 250;
     if (!groups) groups = '<div class="empty"><div class="empty-title">Working tree clean</div>' +
       '<div class="empty-hint">Nothing to commit. New changes appear here as you work.</div></div>';
 
-    // Say what is in the tree before listing it. The counts are the actual
-    // groups below, not a second opinion about them.
-    var summary = total
-      ? '<div class="change-summary">' +
-        (conflicts ? '<span class="pill pill-bad">' + conflicts + " conflicted</span>" : "") +
-        (staged ? '<span class="pill pill-accent">' + staged + " staged</span>" : "") +
-        (changed ? '<span class="pill pill-warn">' + changed + " changed</span>" : "") +
-        (untracked ? '<span class="pill">' + untracked + " untracked</span>" : "") +
-        "</div>"
-      : "";
-
+    // The groups below name themselves and carry their own counts. A row of
+    // "1 untracked" pills above "UNTRACKED 1" said the same thing twice.
     var left =
       '<div class="panel"><div class="panel-head"><span>Working tree</span>' +
       '<span class="panel-note">' + esc(st.branch || "(detached)") +
@@ -5052,7 +5072,7 @@ var TERM_POLL_MS = 250;
       (staged ? mini("Unstage all", "unstage-all") : "") +
       (total ? mini("Stash changes", "stash-push") : "") +
       "</span></div>" +
-      '<div class="panel-body flush">' + summary + '<div class="rows">' + groups + "</div></div></div>";
+      '<div class="panel-body flush"><div class="rows">' + groups + "</div></div></div>";
 
     var diffPanel =
       '<div class="panel"><div class="panel-head"><span>Diff</span>' +
@@ -5107,43 +5127,60 @@ var TERM_POLL_MS = 250;
     );
   }
 
+  /* Branches are a table, not a row of loose text. The server says which refs
+   * live under refs/remotes, so a local `feature/x` is never mistaken for a
+   * remote branch. Local branches come first, current first of all; remote
+   * tracking refs are a second group below them. */
   function renderBranches() {
     var data = state.tabs.branches && state.tabs.branches.data;
     var branches = Array.isArray(data) ? data : [];
+    var byName = function (a, b) { return a.name.localeCompare(b.name); };
+    var locals = branches.filter(function (b) { return !b.remote; }).sort(function (a, b) {
+      if (a.current !== b.current) return a.current ? -1 : 1;
+      return byName(a, b);
+    });
+    var remotes = branches.filter(function (b) { return b.remote; }).sort(byName);
 
-    var rows = branches.length
-      ? branches
-          .map(function (b) {
-            // A remote-tracking entry is a name of the form `<remote>/<branch>`.
-            // It is shown for reference but has no local actions, because
-            // switching to it would detach HEAD.
-            var remote = !b.current && /^[^/]+\/.+/.test(b.name) && !b.upstream;
-            var actions = b.current
-              ? []
-              : remote
-              ? [mini("Merge into current", "merge-current", { branch: b.name })]
-              : [mini("Switch", "switch", { branch: b.name }),
-                 mini("Merge into current", "merge-current", { branch: b.name }),
-                 mini("Rename", "rename-branch", { from: b.name }),
-                 mini("Delete", "delete-branch", { name: b.name }, { danger: true })];
-            return (
-              '<div class="row">' +
-              (b.current ? '<span class="tag tag-add">*</span>' : '<span class="tag"> </span>') +
-              '<span class="row-main nowrap"><span class="' + (b.current ? "branch-current" : "") + '">' + esc(b.name) + "</span>" +
-              (remote ? ' <span class="faint">remote-tracking</span>' : "") + "</span>" +
-              '<span class="row-meta">' + esc(b.upstream || "") + "</span>" +
-              '<span class="row-meta nowrap" title="' + attr(b.subject) + '">' + esc((b.subject || "").slice(0, 48)) + "</span>" +
-              '<span class="row-actions">' + actions.join("") + "</span>" +
-              "</div>"
-            );
-          })
-          .join("")
+    function actionSet(b, remote) {
+      if (b.current) return "";
+      if (remote) return mini("Merge into current", "merge-current", { branch: b.name });
+      // One primary action stays visible; the rest are a per-row menu, so four
+      // text buttons do not turn every branch into a tall stack.
+      return mini("Switch", "switch", { branch: b.name }) +
+        '<div class="more"><button type="button" class="btn btn-mini btn-ghost btn-icon" data-action="more-toggle" aria-haspopup="menu" aria-expanded="false" aria-label="More actions for ' + attr(b.name) + '" title="More">' +
+        '<svg class="icon" aria-hidden="true" viewBox="0 0 16 16"><circle cx="3" cy="8" r="1.4" fill="currentColor"/><circle cx="8" cy="8" r="1.4" fill="currentColor"/><circle cx="13" cy="8" r="1.4" fill="currentColor"/></svg></button>' +
+        '<div class="more-pop" role="menu" hidden>' +
+        '<button type="button" role="menuitem" class="more-item" data-action="merge-current" data-branch="' + attr(b.name) + '"><span>Merge into current</span></button>' +
+        '<button type="button" role="menuitem" class="more-item" data-action="rename-branch" data-from="' + attr(b.name) + '"><span>Rename</span></button>' +
+        '<div class="more-sep"></div>' +
+        '<button type="button" role="menuitem" class="more-item btn-danger" data-action="delete-branch" data-name="' + attr(b.name) + '"><span>Delete branch</span></button>' +
+        "</div></div>";
+    }
+
+    function branchRow(b, remote) {
+      return '<tr class="' + (b.current ? "is-current" : "") + '">' +
+        '<td><div class="branch-name-cell"><span class="mono branch-name" title="' + attr(b.name) + '">' + esc(b.name) + "</span>" +
+          (b.current ? '<span class="pill pill-ok">current</span>' : "") + "</div></td>" +
+        '<td>' + (b.upstream ? '<span class="branch-upstream mono dim" title="' + attr(b.upstream) + '">' + esc(b.upstream) + "</span>"
+          : remote ? '<span class="dim">remote</span>' : '<span class="dim">not tracking</span>') + "</td>" +
+        '<td><span class="branch-subject" title="' + attr(b.subject || "") + '">' + esc(b.subject || "No commit") + "</span></td>" +
+        '<td class="cell-actions">' + actionSet(b, remote) + "</td></tr>";
+    }
+
+    var rows = locals.map(function (b) { return branchRow(b, false); }).join("") +
+      (remotes.length ? '<tr class="branch-group-row"><td colspan="4">Remote-tracking <span class="branch-group-count">' + remotes.length + "</span></td></tr>" +
+        remotes.map(function (b) { return branchRow(b, true); }).join("") : "");
+
+    var body = branches.length
+      ? '<div class="table-wrap"><table class="table branch-table">' +
+        "<thead><tr><th>Branch</th><th>Upstream</th><th>Tip commit</th><th class=\"cell-actions\">Actions</th></tr></thead>" +
+        "<tbody>" + rows + "</tbody></table></div>"
       : '<div class="empty">No branches</div>';
 
     return (
       '<div class="panel"><div class="panel-head"><span>Branches</span>' +
-      '<span class="panel-note">' + branches.length + "</span></div>" +
-      '<div class="panel-body flush"><div class="rows">' + rows + "</div></div>" +
+      '<span class="panel-note">' + locals.length + " local" + (remotes.length ? " · " + remotes.length + " remote-tracking" : "") + "</span></div>" +
+      '<div class="panel-body flush">' + body + "</div>" +
       '<div class="panel-body inline">' +
       '<input class="input mono" id="new-branch" placeholder="new-branch-name" style="width:220px">' +
       '<button type="button" class="btn btn-primary" data-action="create-branch">Create and switch</button>' +
@@ -5439,8 +5476,10 @@ var TERM_POLL_MS = 250;
       cells.push('<div class="ov-cell"><div class="ov-k">Serves at</div><div class="ov-v ov-wait">Reading sites…</div></div>');
       cells.push('<div class="ov-cell"><div class="ov-k">Runs on</div><div class="ov-v ov-wait">Reading sites…</div></div>');
     } else if (site) {
-      var attn = siteNeedsAttention(site) ? '<span class="ov-warn">' + esc(siteAttentionReason(site)) + "</span>" : esc(servingLabel(site) || "not serving");
-      cells.push('<button type="button" class="ov-cell ov-link" data-action="open-site" data-name="' + attr(site.site.name) + '"><div class="ov-k">Serves at</div><div class="ov-v mono">' + esc(site.site.host || site.site.name) + '</div><div class="ov-d">' + attn + (site.certificate ? " · HTTPS certificate" : site.site.tls_mode !== "off" ? ' · <span class="ov-warn">no certificate</span>' : " · HTTP only") + "</div></button>");
+      // What it serves is the "Runs on" cell. Saying "static files" or "PHP 8.4"
+      // here too repeated the same fact in two neighbouring cells.
+      var attn = siteNeedsAttention(site) ? '<span class="ov-warn">' + esc(siteAttentionReason(site)) + "</span>" : "";
+      cells.push('<button type="button" class="ov-cell ov-link" data-action="open-site" data-name="' + attr(site.site.name) + '"><div class="ov-k">Serves at</div><div class="ov-v mono">' + esc(site.site.host || site.site.name) + '</div><div class="ov-d">' + (attn ? attn + " \u00b7 " : "") + (site.certificate ? "HTTPS certificate" : site.site.tls_mode !== "off" ? '<span class="ov-warn">no certificate</span>' : "HTTP only") + "</div></button>");
       var run;
       if (site.serving === "php") run = ['PHP ' + esc(site.php_effective || ""), site.php_source === "pinned" ? "pinned by the project" : site.php_source === "isolated" ? "isolated on this machine" : "follows the machine default"];
       else if (site.serving === "proxy") run = ["Proxy", esc(site.site.upstream || "") + (site.upstream_listening ? " · listening" : ' · <span class="ov-warn">not running</span>')];
@@ -5679,21 +5718,21 @@ var TERM_POLL_MS = 250;
       var lines = fs.file.content.split("\n");
       var lang = FILE_LANGS[(fs.file.name || "").split(".").pop().toLowerCase()] || "";
       var from = fs.file.from_line || 1;
-      var gutter = [];
-      var body = [];
+      // One row per line, not one gutter block and one <pre>: a long line wraps
+      // inside its own row, so the number stays beside the line it belongs to.
+      var codeRows = [];
       for (var i = 0; i < lines.length; i++) {
         // `fs.read` prefixes each line with a line number and a tab.
         var text = lines[i].replace(/^\s*\d+\t/, "");
-        gutter.push(from + i);
-        body.push(lang ? highlightLine(text, lang) : escapeHtml(text));
+        codeRows.push('<div class="code-line"><span class="code-no">' + (from + i) + '</span><span class="code-text">' +
+          (lang ? highlightLine(text, lang) : escapeHtml(text)) + "</span></div>");
       }
       doc =
         '<div class="panel-head file-open-head">' + fileMark(fs.file.name || fs.file.path, "file", false) + '<span class="mono grow nowrap" title="' + attr(fs.file.path) + '">' + esc(fs.file.name || fs.file.path) + "</span>" +
         '<span class="panel-note">' + (fs.file.total_lines || lines.length) + " line" + ((fs.file.total_lines || lines.length) === 1 ? "" : "s") + "</span>" +
         '<button type="button" class="btn btn-mini btn-ghost" data-action="file-raw">Copy</button></div>' +
         (fs.file.truncated && from > 1 ? '<div class="ui-quiet" style="padding:6px 12px">Showing from line ' + from + ".</div>" : "") +
-        '<div class="panel-body flush"><div class="code-view"><div class="code-gutter mono">' +
-        gutter.join("\n") + '</div><pre class="mono code-body">' + body.join("\n") + "</pre></div></div>";
+        '<div class="panel-body flush"><div class="code-view mono">' + codeRows.join("") + "</div></div>";
     }
 
     return '<div class="files-view">' +
@@ -5791,7 +5830,7 @@ var TERM_POLL_MS = 250;
       else STUDIO.memory = current.data || [];
     }
     var body;
-    if (current.loading || (!state.tabs[tab] && tab !== "files")) body = skelRows(5, "Loading " + (TAB_LABELS[tab] || "").toLowerCase());
+    if (current.loading || (!state.tabs[tab] && tab !== "files" && tab !== "terminal")) body = skelRows(5, "Loading " + (TAB_LABELS[tab] || "").toLowerCase());
     else if (current.error) body = '<div class="notice notice-bad">' + esc(current.error) + "</div>";
     else if (tab === "files") {
       // The tree loads itself: it is a stack of folder requests, not one value,
@@ -5810,7 +5849,18 @@ var TERM_POLL_MS = 250;
     else if (tab === "recover") body = renderRecover();
     else if (tab === "reviews") body = renderReviewTab(true);
     else if (tab === "memory") body = renderMemoryTab(true);
+    else if (tab === "terminal") {
+      if (!TERM.sessions.length && !TERM.loading && !TERM.error) termLoadSessions();
+      var tp = termPane();
+      body = (tp.tabs ? '<div class="term-tabs">' + tp.tabs + "</div>" : "") + tp.body;
+    }
     else body = "";
+
+    // xterm owns a live subtree; lift it out before the page is replaced so it
+    // can be put back instead of being thrown away.
+    if (XTERM.term && XTERM.term.element && XTERM.term.element.parentNode) {
+      XTERM.term.element.parentNode.removeChild(XTERM.term.element);
+    }
 
     el("main").innerHTML =
       '<div class="page">' +
@@ -5823,20 +5873,29 @@ var TERM_POLL_MS = 250;
         esc(state.project.error) + "</div>" : "") +
       "</div>" +
       '<div class="page-actions">' +
-      '<button type="button" class="btn" data-action="open-terminal" data-path="' + attr(state.project.path) + '" title="Open your terminal in this project, with its pinned runtimes and devd first on PATH">Terminal</button>' +
+      '<button type="button" class="btn" data-action="tab" data-tab="terminal" title="Open a shell in this project, kept in devd so an agent can read the same screen">Terminal</button>' +
       '<button type="button" class="btn btn-ghost" data-action="project-refresh">Refresh</button>' +
       '<div class="more"><button type="button" class="btn btn-ghost btn-icon" data-action="more-toggle" aria-haspopup="menu" aria-expanded="false" aria-label="More actions for this project" title="More">' +
       '<svg class="icon" aria-hidden="true" viewBox="0 0 16 16"><circle cx="3" cy="8" r="1.4" fill="currentColor"/><circle cx="8" cy="8" r="1.4" fill="currentColor"/><circle cx="13" cy="8" r="1.4" fill="currentColor"/></svg></button>' +
       '<div class="more-pop" role="menu" hidden>' +
+      '<button type="button" role="menuitem" class="more-item" data-action="open-terminal" data-path="' + attr(state.project.path) + '"><span>Open in a system terminal</span><span class="more-hint">Your own terminal, with this project\'s PATH</span></button>' +
+      '<div class="more-sep"></div>' +
       '<button type="button" role="menuitem" class="more-item" data-action="untrack"><span>Remove from devd</span><span class="more-hint">The folder is kept</span></button>' +
       '<div class="more-sep"></div>' +
       '<button type="button" role="menuitem" class="more-item btn-danger" data-action="delete-folder"><span>Delete from disk</span><span class="more-hint">Removes the folder and its files</span></button>' +
       "</div></div>" +
       "</div></div>" +
       projectContext(state.project.path) +
-      '<div class="tabs">' + tabs + "</div>" +
+      tabs +
       body +
       "</div>";
+
+    if (tab === "terminal") {
+      if (!TERM.poll) termStartPolling();
+      termDraw();
+    } else {
+      termStopPolling();
+    }
   }
 
   // -------------------------------------------------------------- capabilities
@@ -6640,9 +6699,9 @@ var TERM_POLL_MS = 250;
     if (c.docs.length) h += '<div class="kv"><dt>Docs</dt><dd class="mono">' + esc(c.docs.join(", ")) + "</dd></div>";
     if (c.official_docs.length) h += '<div class="kv"><dt>Official docs</dt><dd>' + docLinks(c.official_docs) + "</dd></div>";
     h += "</div></div>";
-    h += '<div class="panel"><div class="panel-head"><span>Tasks</span><span class="panel-note">' + c.tasks.length + "</span></div><div class=\"panel-body flush\"><table class=\"table\"><tbody>" +
+    h += '<div class="panel"><div class="panel-head"><span>Tasks</span><span class="panel-note">' + c.tasks.length + "</span></div><div class=\"panel-body flush\"><table class=\"table\"><thead><tr><th>Task</th><th>Command</th><th>Risk</th><th class=\"cell-actions\">Actions</th></tr></thead><tbody>" +
       c.tasks.map(function (t) {
-        return "<tr><td class=\"cell-strong\">" + esc(t.id) + '</td><td class="cell-mono">' + esc(t.command) + "</td><td>" + pill(t.risk === "safe" ? "ok" : t.risk === "mutating" ? "warn" : "bad", t.risk) + "</td><td>" +
+        return "<tr><td class=\"cell-strong\">" + esc(t.id) + '</td><td class="cell-mono">' + esc(t.command) + "</td><td>" + pill(t.risk === "safe" ? "ok" : t.risk === "mutating" ? "warn" : "bad", t.risk) + '</td><td class="cell-actions">' +
           (t.available ? '<button type="button" class="btn btn-mini' + (t.risk === "destructive" ? " btn-danger" : " btn-primary") + '" data-action="task-run" data-task="' + attr(t.id) + '" data-risk="' + attr(t.risk) + '">' + (t.long_running ? "Start" : "Run") + "</button>" : '<span class="dim" title="' + attr(t.unavailable_reason) + '">unavailable</span>') + "</td></tr>";
       }).join("") + "</tbody></table></div></div>";
     if (DEV.log) h += '<div class="panel"><div class="panel-head"><span>Output</span></div><div class="panel-body"><pre class="log-block">' + esc(DEV.log) + "</pre></div></div>";
@@ -7656,9 +7715,9 @@ var TERM_POLL_MS = 250;
           (a.model ? '<span class="pill ' + (a.status === "available" ? "pill-ok" : a.status === "missing" ? "pill-bad" : "") + '" title="' + (a.status === "available" ? "This provider's own list includes it" : a.status === "missing" ? "Not in the list this key can see. Fetch the provider's models to refresh it." : "Fetch the provider's models to check this account can use it") + '">' + esc(a.status) + "</span>" : "") + "</div>";
       };
       var i = info[role] || { title: "Everything else", summary: "Used when a kind of work has no model of its own, and for the assistant." };
-      return '<tr><td><div class="cell-strong">' + esc(i.title || role) + '</div><div class="cell-dim">' + esc(i.summary) + "</div></td><td>" + cell(0) + "</td><td>" + cell(1) + '</td><td><button type="button" class="btn btn-mini btn-primary" data-action="role-save" data-role="' + attr(role) + '">Save</button></td></tr>';
+      return '<tr><td><div class="cell-strong">' + esc(i.title || role) + '</div><div class="cell-dim">' + esc(i.summary) + "</div></td><td>" + cell(0) + "</td><td>" + cell(1) + '</td><td class="cell-actions"><button type="button" class="btn btn-mini btn-primary" data-action="role-save" data-role="' + attr(role) + '">Save</button></td></tr>';
     }).join("");
-    return '<div class="section-title">Which model does which work</div><div class="panel"><div class="table-wrap"><table class="table roles-table"><thead><tr><th>Work</th><th>First choice</th><th>Fallback if it fails</th><th></th></tr></thead><tbody>' + rows + "</tbody></table></div>" +
+    return '<div class="section-title">Which model does which work</div><div class="panel"><div class="table-wrap"><table class="table roles-table"><thead><tr><th>Work</th><th>First choice</th><th>Fallback if it fails</th><th class="cell-actions">Actions</th></tr></thead><tbody>' + rows + "</tbody></table></div>" +
       '<div class="panel-body panel-foot row-sub">The fallback is used only when the first choice fails, and only the providers you list here are ever used. A conversation where you pick a model yourself never falls back. Each reply records which model answered and why.</div></div>';
   }
 
@@ -7726,14 +7785,28 @@ var TERM_POLL_MS = 250;
       ? '<span class="pill pill-ok" title="' + attr(source) + '">key ' + esc(p.key_hint || "") + "</span>"
       : p.needs_key ? '<span class="pill pill-warn">no key</span>' : '<span class="pill">none needed</span>';
     var result = AI.provBusy[p.id + ":msg"];
+    // The actions belong to the provider's header, beside its name, at every
+    // width. As a second grid row they fell to the bottom of the card.
     return '<article class="provider' + (p.is_default ? " is-default" : "") + '">' +
-      "<div>" +
-        '<div class="provider-name">' + brandImg(p.preset || p.id, "brand-dot brand-dot-lead") + esc(p.label) +
-          (p.is_default ? ' <span class="pill pill-accent">default</span>' : "") +
-          (p.enabled ? "" : ' <span class="pill">disabled</span>') +
-          ' <span class="pill">' + esc(p.kind) + "</span></div>" +
-        '<div class="provider-meta">' + esc(p.base_url) + "</div>" +
-        providerChips(p) +
+      '<div class="provider-head">' +
+        '<div class="provider-head-main">' +
+          '<div class="provider-name">' + brandImg(p.preset || p.id, "brand-dot brand-dot-lead") + esc(p.label) +
+            (p.is_default ? ' <span class="pill pill-accent">default</span>' : "") +
+            (p.enabled ? "" : ' <span class="pill">disabled</span>') +
+            ' <span class="pill">' + esc(p.kind) + "</span></div>" +
+          '<div class="provider-meta">' + esc(p.base_url) + "</div>" +
+          providerChips(p) +
+        "</div>" +
+        '<div class="provider-actions">' +
+          '<button type="button" class="btn btn-mini" data-action="prov-test" data-id="' + attr(p.id) + '"' + (busy ? " disabled" : "") + ">Test</button>" +
+          '<button type="button" class="btn btn-mini" data-action="prov-models" data-id="' + attr(p.id) + '"' + (busy ? " disabled" : "") + ">Fetch models</button>" +
+          '<button type="button" class="btn btn-mini" data-action="prov-verify" data-id="' + attr(p.id) + '"' + (busy || !p.default_model ? " disabled" : "") + ' title="' + attr(p.default_model ? "Run one real request against " + p.default_model + " and force a tool call" : "Choose a model first") + '">Verify model</button>' +
+          '<button type="button" class="btn btn-mini" data-action="prov-edit" data-id="' + attr(p.id) + '">Edit</button>' +
+          (p.is_default ? "" : '<button type="button" class="btn btn-mini" data-action="prov-default" data-id="' + attr(p.id) + '">Make default</button>') +
+          '<button type="button" class="btn btn-mini btn-danger" data-action="prov-remove" data-id="' + attr(p.id) + '">Remove</button>' +
+        "</div>" +
+      "</div>" +
+      '<div class="provider-body">' +
         '<dl class="provider-facts">' +
           '<div class="provider-fact"><dt>Model</dt><dd><button type="button" class="model-field" data-action="prov-model-picker" data-id="' + attr(p.id) + '" aria-haspopup="dialog" aria-expanded="false"><span class="mono">' + esc(p.default_model || "Choose a model") + '</span><svg class="icon" aria-hidden="true"><use href="#i-chevron-down"></use></svg></button></dd></div>' +
           '<div class="provider-fact"><dt>API key</dt><dd>' + keyState + "</dd></div>" +
@@ -7741,14 +7814,6 @@ var TERM_POLL_MS = 250;
           '<div class="provider-fact"><dt>Discovery</dt><dd>' + esc(p.models_from || p.discovery) + "</dd></div>" +
         "</dl>" +
         (result ? '<div class="notice ' + (AI.provBusy[p.id + ":ok"] ? "notice-ok" : "notice-bad") + ' provider-note">' + esc(result) + "</div>" : "") +
-      "</div>" +
-      '<div class="provider-actions">' +
-        '<button type="button" class="btn btn-mini" data-action="prov-test" data-id="' + attr(p.id) + '"' + (busy ? " disabled" : "") + ">Test</button>" +
-        '<button type="button" class="btn btn-mini" data-action="prov-models" data-id="' + attr(p.id) + '"' + (busy ? " disabled" : "") + ">Fetch models</button>" +
-        '<button type="button" class="btn btn-mini" data-action="prov-verify" data-id="' + attr(p.id) + '"' + (busy || !p.default_model ? " disabled" : "") + ' title="' + attr(p.default_model ? "Run one real request against " + p.default_model + " and force a tool call" : "Choose a model first") + '">Verify model</button>' +
-        '<button type="button" class="btn btn-mini" data-action="prov-edit" data-id="' + attr(p.id) + '">Edit</button>' +
-        (p.is_default ? "" : '<button type="button" class="btn btn-mini" data-action="prov-default" data-id="' + attr(p.id) + '">Make default</button>') +
-        '<button type="button" class="btn btn-mini btn-danger" data-action="prov-remove" data-id="' + attr(p.id) + '">Remove</button>' +
       "</div></article>";
   }
 
@@ -7814,10 +7879,10 @@ var TERM_POLL_MS = 250;
     var official = (AI.catalogue || []).filter(function (m) { return m.source === "anthropic-docs"; });
     var offRows = official.map(function (m) {
       return '<tr><td class="cell-mono">' + esc(m.model_id) + '</td><td class="cell-strong">' + esc(m.display) + "</td><td>" + tok(m.context_window) + "</td><td>" + tok(m.max_output) + "</td><td>" + money(m.input_price) + " / " + money(m.output_price) + '</td><td class="dim">' + esc(m.retirement || "") + "</td>" +
-        '<td><button type="button" class="btn btn-mini" data-action="prov-use-model" data-model="' + attr(m.model_id) + '">Use</button></td></tr>';
+        '<td class="cell-actions"><button type="button" class="btn btn-mini" data-action="prov-use-model" data-model="' + attr(m.model_id) + '">Use</button></td></tr>';
     }).join("");
     return '<div class="panel"><div class="panel-head"><span>Official Claude models</span><span class="panel-note">' + (official.length ? "fetched " + esc(ago(official[0].fetched_at)) + " from " + '<a class="link" target="_blank" rel="noopener noreferrer" href="https://platform.claude.com/docs/en/about-claude/models/overview">Anthropic docs</a>' : "not fetched yet") + "</span></div>" +
-      (offRows ? '<div class="table-wrap"><table class="table"><thead><tr><th>API id</th><th>Name</th><th>Context</th><th>Max output</th><th>$/MTok in / out</th><th>Retirement</th><th></th></tr></thead><tbody>' + offRows + "</tbody></table></div>" : '<div class="panel-body empty-inline">The official list is read from Anthropic\'s documentation and needs no API key.</div>') +
+      (offRows ? '<div class="table-wrap"><table class="table"><thead><tr><th>API id</th><th>Name</th><th>Context</th><th>Max output</th><th>$/MTok in / out</th><th>Retirement</th><th class="cell-actions">Actions</th></tr></thead><tbody>' + offRows + "</tbody></table></div>" : '<div class="panel-body empty-inline">The official list is read from Anthropic\'s documentation and needs no API key.</div>') +
       '<div class="panel-body panel-foot"><button type="button" class="btn btn-primary btn-mini" data-action="models-refresh">' + (official.length ? "Refresh from Anthropic" : "Fetch the official list") + "</button></div></div>";
   }
 
@@ -7827,7 +7892,7 @@ var TERM_POLL_MS = 250;
     var body = "";
     if (rows.length) {
       body = '<div class="panel"><div class="panel-head"><span>Configured models</span><span class="panel-note">' + models.length + " model" + (models.length === 1 ? "" : "s") + " from " + (AI.providers || []).length + " provider" + ((AI.providers || []).length === 1 ? "" : "s") + "</span></div>" +
-        '<div class="table-wrap"><table class="table"><thead><tr><th>Provider</th><th>Model</th><th>Context</th><th>Source</th><th></th></tr></thead><tbody>' +
+        '<div class="table-wrap"><table class="table"><thead><tr><th>Provider</th><th>Model</th><th>Context</th><th>Source</th><th class="cell-actions">Actions</th></tr></thead><tbody>' +
         rows.map(function (row) {
           var p = row.provider;
           var label = brandImg(p.preset || p.id, "brand-dot") + esc(p.label) +
@@ -7836,7 +7901,7 @@ var TERM_POLL_MS = 250;
           if (!row.model) {
             return '<tr><td><div class="cell-strong">' + label + '</div><div class="cell-dim">' + esc(p.kind) + "</div></td>" +
               '<td colspan="3" class="cell-dim">No model selected. Fetch this provider\'s models, or edit its default.</td>' +
-              '<td><button type="button" class="btn btn-mini" data-action="prov-edit" data-id="' + attr(p.id) + '">Edit</button></td></tr>';
+              '<td class="cell-actions"><button type="button" class="btn btn-mini" data-action="prov-edit" data-id="' + attr(p.id) + '">Edit</button></td></tr>';
           }
           var actions = row.isDefault ? '<span class="pill pill-accent">default</span>' : '<button type="button" class="btn btn-mini" data-action="prov-pick" data-id="' + attr(p.id) + '" data-model="' + attr(row.model.model_id) + '">Use as default</button>';
           if (row.origin === "custom") actions += ' <button type="button" class="btn btn-mini btn-danger" data-action="prov-model-remove" data-id="' + attr(p.id) + '" data-model="' + attr(row.model.model_id) + '" title="Remove this hand-added model">Remove</button>';
@@ -7844,7 +7909,7 @@ var TERM_POLL_MS = 250;
             '<td class="cell-mono">' + esc(row.model.model_id) + "</td>" +
             "<td>" + tok(row.model.context_window) + "</td>" +
             '<td class="dim">' + esc(row.source) + "</td>" +
-            "<td>" + actions + "</td></tr>";
+            '<td class="cell-actions">' + actions + "</td></tr>";
         }).join("") +
         "</tbody></table></div></div>";
     } else {
@@ -8709,7 +8774,7 @@ var TERM_POLL_MS = 250;
     var projOpts = '<option value="">Choose a project…</option>' + state.projects.map(function (p) { return '<option value="' + attr(p.path) + '"' + (TEAM.form.project === p.path ? " selected" : "") + ">" + esc(p.name || dirName(p.path)) + "</option>"; }).join("") + '<option value="__new"' + (TEAM.form.project === "__new" ? " selected" : "") + ">A new project…</option>";
     el("main").innerHTML =
       '<div class="workspace">' +
-      '<div class="workspace-head">' + pageTitle("Agents") + '<span class="grow"></span><button type="button" class="btn btn-mini" data-action="nav" data-view="agents">Team room</button></div>' +
+      '<div class="workspace-head">' + pageTitle("Agent Runs") + '<span class="grow"></span><button type="button" class="btn btn-mini" data-action="nav" data-view="agents">Team room</button></div>' +
       '<div class="assistant"><aside class="threads"><div class="threads-head"><b>Runs</b><span class="grow"></span><button type="button" class="btn btn-mini btn-ghost" data-action="team-prune" title="Delete every run that is over">Clear finished</button><button type="button" class="btn btn-mini" data-action="team-new">New</button></div><div id="team-list"></div></aside>' +
       '<section class="chat"><div id="team-detail" class="team-detail"></div></section></div></div>';
     TEAM.ready = ready; TEAM.projOpts = projOpts;
@@ -8849,7 +8914,7 @@ var TERM_POLL_MS = 250;
       return '<div class="tcard tstate-' + t.state + '"><div class="tcard-head"><span class="step-dot ' + (t.state === "done" || t.state === "skipped" ? "ok" : t.state === "running" ? "run" : t.state === "waiting_approval" ? "wait" : ["failed", "unverified", "blocked"].indexOf(t.state) >= 0 ? "bad" : "") + '"></span><b>' + esc(t.title) + '</b><span class="pill">' + esc(t.role) + '</span><span class="pill ' + (t.state === "done" ? "pill-ok" : ["failed", "unverified", "blocked"].indexOf(t.state) >= 0 ? "pill-bad" : t.state === "running" ? "pill-accent" : "") + '">' + esc(TASK_WORD[t.state] || t.state) + '</span><span class="grow"></span><button type="button" class="btn btn-mini btn-ghost" data-action="team-toggle" data-id="' + attr(t.id) + '">' + (open ? "Hide" : "Details") + "</button></div>" +
         '<div class="row-sub">' + esc(dep) + (t.attempts > 1 ? " · attempt " + t.attempts : "") + (t.branch ? " · own copy on " + esc(t.branch) : "") + (evidenceLine(t) ? " · " + esc(evidenceLine(t)) : "") + "</div>" +
         (t.error && ["unverified", "blocked", "failed"].indexOf(t.state) >= 0 ? '<div class="row-sub warn-text">' + esc(t.error) + "</div>" : "") +
-        (open ? '<div class="field-label" style="margin-top:8px">Instructions</div><div class="ask-body">' + md(t.instructions) + (t.result ? '<div class="field-label" style="margin-top:8px">What it reported</div>' + md(t.result) : "") + '<div class="field-label" style="margin-top:8px">Evidence devd recorded</div>' + ((t.evidence || []).length ? '<table class="table"><tbody>' + t.evidence.map(function (f) { return "<tr><td><span class=\"pill " + (f.ok ? "pill-ok" : "pill-bad") + '">' + esc(f.kind) + '</span></td><td class="cell-mono">' + esc(f.capability) + '</td><td class="cell-mono nowrap">' + esc(f.summary || "") + "</td></tr>"; }).join("") + "</tbody></table>" : '<div class="empty-inline">None yet.</div>') + "</div>" : "") +
+        (open ? '<div class="field-label" style="margin-top:8px">Instructions</div><div class="ask-body">' + md(t.instructions) + (t.result ? '<div class="field-label" style="margin-top:8px">What it reported</div>' + md(t.result) : "") + '<div class="field-label" style="margin-top:8px">Evidence devd recorded</div>' + ((t.evidence || []).length ? '<table class="table"><thead><tr><th>Kind</th><th>Capability</th><th>Summary</th></tr></thead><tbody>' + t.evidence.map(function (f) { return "<tr><td><span class=\"pill " + (f.ok ? "pill-ok" : "pill-bad") + '">' + esc(f.kind) + '</span></td><td class="cell-mono">' + esc(f.capability) + '</td><td class="cell-mono nowrap">' + esc(f.summary || "") + "</td></tr>"; }).join("") + "</tbody></table>" : '<div class="empty-inline">None yet.</div>') + "</div>" : "") +
         (btns ? '<div class="inline" style="margin-top:8px">' + btns + "</div>" : "") + "</div>";
     }).join("") || (r.state === "planning" ? "" : '<div class="empty-inline">No tasks yet.</div>');
     var approvals = (d.approvals || []).map(function (a) { return approvalCard(a, false); }).join("");
@@ -9268,33 +9333,41 @@ var TERM_POLL_MS = 250;
     create: "/create",
     develop: "/develop",
     agents: "/agents/team",
-    skills: "/skills",
-    schedules: "/schedules",
-    shared: "/shared",
+    skills: "/agents/skills",
+    schedules: "/agents/schedules",
+    shared: "/agents/notes",
     mcp: "/agents/mcp",
-    // The terminal is a destination as well as a panel, so it has an address: a
-    // link to it, and a reload while standing on it, both land on the terminal
-    // rather than quietly on Home.
+    // The terminal belongs to a project and lives as a tab there. The address is
+    // kept so an old link still opens a shell, but the rail no longer offers it.
     terminal: "/terminal",
     mail: "/mail",
     overview: "/server",
     services: "/server/services",
-    sites: "/server/sites",
+    sites: "/sites",
     operations: "/server/operations",
     toolchain: "/server/tools",
     runtimes: "/server/runtimes",
     databases: "/server/databases",
     remote: "/server/remote",
     preview: "/server/preview",
-    certificates: "/server/certificates",
-    hosts: "/server/hosts",
+    certificates: "/sites/certificates",
+    hosts: "/sites/hosts",
     providers: "/models",
     activity: "/activity",
     system: "/diagnostics",
     capabilities: "/api-tools"
   };
 
-  var LEGACY_ROUTES = { "/team": "team", "/agents": "agents" };
+  var LEGACY_ROUTES = {
+    "/team": "team",
+    "/agents": "agents",
+    "/skills": "skills",
+    "/schedules": "schedules",
+    "/shared": "shared",
+    "/server/sites": "sites",
+    "/server/hosts": "hosts",
+    "/server/certificates": "certificates"
+  };
 
   /* The address of the screen that is showing. */
   function routeFor(view) {
@@ -9306,7 +9379,7 @@ var TERM_POLL_MS = 250;
       return AI.thread && AI.thread.id ? "/assistant/" + encodeURIComponent(AI.thread.id) : "/assistant";
     }
     if (view === "site") {
-      return SITE.name ? "/server/sites/" + encodeURIComponent(SITE.name) : "/server/sites";
+      return SITE.name ? "/sites/" + encodeURIComponent(SITE.name) : "/sites";
     }
     if (view === "notfound") return location.pathname;
     return ROUTES[view] || "/";
@@ -9318,10 +9391,15 @@ var TERM_POLL_MS = 250;
     if (p === "/" ) return "home";
     if (p.indexOf("/projects/") === 0) return "project";
     if (p.indexOf("/assistant/") === 0) return "assistant";
-    if (p.indexOf("/server/sites/") === 0) return "site";
+    // Mail is a Sites tab; both addresses open it.
+    if (p === "/sites/mail") return "mail";
+    // Exact destinations first, so /sites/hosts and /sites/certificates are
+    // pages and only an unknown name under /sites/ is a site.
     for (var k in ROUTES) {
       if (ROUTES[k] === p) return k;
     }
+    if (p.indexOf("/sites/") === 0) return "site";
+    if (p.indexOf("/server/sites/") === 0) return "site";
     // Addresses from before the rename still open what they used to: a saved link
     // or an open tab is not broken by moving a page.
     if (LEGACY_ROUTES[p]) return LEGACY_ROUTES[p];
@@ -9345,7 +9423,8 @@ var TERM_POLL_MS = 250;
     var parts = location.pathname.split("/").filter(Boolean);
     var site = "";
     if (view === "site") {
-      var rawSite = parts.slice(2).join("/");
+      // /sites/<name> now, /server/sites/<name> from before the rename.
+      var rawSite = parts.slice(parts[0] === "sites" ? 1 : 2).join("/");
       if (rawSite) {
         try { site = decodeURIComponent(rawSite); } catch (e) { site = ""; }
       }
@@ -9371,6 +9450,9 @@ var TERM_POLL_MS = 250;
       }
     }
     // An old address is rewritten to its current one without adding a history entry.
+    if (view === "site" && site && location.pathname.indexOf("/server/sites/") === 0) {
+      history.replaceState({ view: "site" }, "", routeFor("site") + location.search);
+    }
     if (view !== "notfound" && view !== "project" && view !== "site" && view !== "assistant" && location.pathname.replace(/\/+$/, "") !== routeFor(view) && LEGACY_ROUTES[location.pathname.replace(/\/+$/, "")]) {
       history.replaceState({ view: view }, "", routeFor(view) + location.search);
     }
@@ -9579,6 +9661,8 @@ var TERM_POLL_MS = 250;
   }
 
   function render() {
+    // The shell is read on a timer only while its screen is on show.
+    if (!termOnScreen()) termStopPolling();
     rail();
     subnav();
     crumbs();
@@ -10069,6 +10153,10 @@ var TERM_POLL_MS = 250;
     var top = r.bottom + 8;
     if (window.innerHeight - r.bottom < height + 16 && r.top > height + 16) top = r.top - height - 8;
     top = Math.max(8, Math.min(top, window.innerHeight - height - 8));
+    // Grow from the trigger: the bottom edge when it opens above, the top edge
+    // when it opens below, and the trigger's horizontal centre.
+    var originX = Math.max(0, Math.min(width, r.left + r.width / 2 - left));
+    node.style.transformOrigin = Math.round(originX) + "px " + Math.round(top < r.top ? height : 0) + "px";
     node.style.left = Math.round(left) + "px";
     node.style.top = Math.round(top) + "px";
   }
