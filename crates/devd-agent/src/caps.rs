@@ -2200,7 +2200,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
         |ctx, _| Ok(Outcome::with_data("the team's record", crate::team_stats::stats(ctx)?)),
     )?;
     reg.define::<NoArgs>("models.usage", "Tokens by model and by who used them")
-    .description("Input and output tokens per model and per member (the assistant or a team role), and the heaviest conversations, as providers reported them. No cost is shown: prices and cache tiers are not recorded per call, and an estimate would mislead.")
+    .description("Input and output tokens per model and per member (the assistant or a team role), and the heaviest conversations, as providers reported them. Spend is estimated from the catalogue's current price for each model; cache tiers and per-call price changes are not recorded, so it is an estimate and unpriced models are counted separately.")
     .tier(Tier::Read)
     .effect(Effect::Read)
     .agent_safe()
@@ -2209,6 +2209,21 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
     .handlers(
         |_, _| simple("models.usage", "read token usage"),
         |ctx, _| Ok(Outcome::with_data("token usage", crate::team_stats::usage(ctx)?)),
+    )?;
+    reg.define::<NoArgs>("design.manifest", "The interface an agent may produce")
+    .description("The design contract for agent-generated content: the Markdown blocks and inline styles that are rendered, the application components an agent must not fabricate, the semantic colour and shape token names, and the constructs that are refused. Read this before writing a report with tables or code so the result matches the window.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, _| simple("design.manifest", "read the interface contract"),
+        |_, _| {
+            let manifest: serde_json::Value = serde_json::from_str(include_str!("../../../docs/design/manifest.json"))
+                .unwrap_or(serde_json::Value::Null);
+            Ok(Outcome::with_data("the interface contract", manifest))
+        },
     )?;
     reg.define::<NoArgs>("chat.list", "List conversations")
     .description("Recent conversations with the built-in agent, with their state (idle, running, waiting_approval, error) and token use.")

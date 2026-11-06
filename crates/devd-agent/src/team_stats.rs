@@ -130,39 +130,93 @@ pub fn usage(ctx: &Ctx) -> Result<Value> {
         .iter()
         .filter_map(|t| t.thread_id.clone().map(|id| (id, t.role.clone())))
         .collect();
+    // Spend is an estimate, not a provider invoice: it uses the catalogue's
+    // current price for a model against the tokens that model actually reported.
+    // A model with no known price stays unpriced and is counted as such.
+    let price: BTreeMap<String, (f64, f64)> = ctx
+        .store
+        .list_catalogue(None)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|m| Some((m.model_id.to_lowercase(), (m.input_price?, m.output_price?))))
+        .collect();
+
     #[derive(Default)]
     struct U {
         conversations: i64,
         input: i64,
         output: i64,
+        cost: f64,
+        priced: i64,
+        unpriced: i64,
     }
+    // A conversation that did not name a model used its provider's default. Name
+    // that model here so the row can be priced and read, instead of every such
+    // conversation collecting under the opaque label "default model".
+    let default_model_of: BTreeMap<String, String> = ctx
+        .store
+        .list_providers()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|p| Some((p.id, p.default_model?)))
+        .collect();
+
     let mut by_model: BTreeMap<String, U> = BTreeMap::new();
     let mut by_who: BTreeMap<String, U> = BTreeMap::new();
     let mut top: Vec<(i64, Value)> = Vec::new();
     for t in &threads {
-        let model = t.model.clone().unwrap_or_else(|| "default model".into());
+        let model = t
+            .model
+            .clone()
+            .or_else(|| t.provider_id.as_ref().and_then(|id| default_model_of.get(id)).cloned())
+            .unwrap_or_else(|| "default model".into());
         let who = role_of.get(&t.id).cloned().unwrap_or_else(|| "assistant".into());
+        let rate = price.get(&model.to_lowercase()).copied();
+        let cost = rate.map(|(i, o)| (i * t.input_tokens as f64 + o * t.output_tokens as f64) / 1_000_000.0);
         for (map, key) in [(&mut by_model, model.clone()), (&mut by_who, who.clone())] {
             let u = map.entry(key).or_default();
             u.conversations += 1;
             u.input += t.input_tokens;
             u.output += t.output_tokens;
+            match cost {
+                Some(c) => {
+                    u.cost += c;
+                    u.priced += 1;
+                }
+                None => u.unpriced += 1,
+            }
         }
-        top.push((t.input_tokens + t.output_tokens, json!({ "id": t.id, "title": t.title, "who": who, "model": model, "input": t.input_tokens, "output": t.output_tokens })));
+        top.push((t.input_tokens + t.output_tokens, json!({
+            "id": t.id, "title": t.title, "who": who, "model": model,
+            "input": t.input_tokens, "output": t.output_tokens,
+            "cost_usd": cost,
+        })));
     }
     top.sort_by(|a, b| b.0.cmp(&a.0));
     let rows = |m: BTreeMap<String, U>| -> Vec<Value> {
         let mut v: Vec<Value> = m
             .into_iter()
-            .map(|(k, u)| json!({ "name": k, "conversations": u.conversations, "input": u.input, "output": u.output }))
+            .map(|(k, u)| json!({
+                "name": k,
+                "conversations": u.conversations,
+                "input": u.input,
+                "output": u.output,
+                "cost_usd": if u.priced > 0 { Some(u.cost) } else { None },
+                "priced_conversations": u.priced,
+                "unpriced_conversations": u.unpriced,
+            }))
             .collect();
         v.sort_by(|a, b| (b["input"].as_i64().unwrap_or(0) + b["output"].as_i64().unwrap_or(0)).cmp(&(a["input"].as_i64().unwrap_or(0) + a["output"].as_i64().unwrap_or(0))));
         v
     };
+    let known: Vec<f64> = by_model.values().filter(|u| u.priced > 0).map(|u| u.cost).collect();
+    let unpriced: i64 = by_model.values().map(|u| u.unpriced).sum();
     Ok(json!({
         "by_model": rows(by_model),
         "by_who": rows(by_who),
         "heaviest": top.into_iter().take(8).map(|(_, v)| v).collect::<Vec<_>>(),
-        "note": "Tokens as each provider reported them. Prices and cache tiers are not recorded per call yet, so no cost is shown rather than an estimate.",
+        "total_cost_usd": if known.is_empty() { None } else { Some(known.iter().sum::<f64>()) },
+        "unpriced_conversations": unpriced,
+        "note": "Tokens as each provider reported them. Spend is estimated at the catalogue's current price per million tokens; cache tiers and per-call price changes are not recorded, so it is an estimate, not an invoice.",
     }))
 }

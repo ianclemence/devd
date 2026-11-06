@@ -44,9 +44,49 @@ Nothing yet.
 - Built-in skills `agent-browser` and `agent-desktop`; FFmpeg, HyperFrames, agent-browser and
   agent-desktop in the tool catalogue; one-click HyperFrames and Stageshow skills.
 - Long code blocks fold; a "Jump to latest" pill appears when you have scrolled up.
+- **One design system, applied in the product.** Shape, size and depth tokens
+  (`--radius-selector`, `--radius-field`, `--radius-box`, `--size-selector`, `--size-field`,
+  `--border`, `--depth`, `--noise`) join the semantic colours; every existing control uses them.
+  A 68-component reference review and the existing-component audit are recorded in
+  `docs/design/components.md`; the principles and token contract are in `docs/design/README.md`.
+- **An inline chart an agent may produce.** A fenced `chart` block carrying a small JSON object is
+  validated (labels, finite non-negative values, at most 12 bars) and drawn with the shared
+  stylesheet inside the conversation. Invalid data stays a code block.
+- **An interface contract for agents.** `design.manifest` returns the Markdown blocks an agent may
+  produce, the components it must not fabricate, the token names and the refused constructs. The
+  `interface-contract` skill puts the same rules in front of the agent while it works.
 
 ### Fixed
 
+- **The diagnostics status icon sits on its sentence.** The green check in "Healthy, 2 optional
+  notes. Checked just now..." was drawn in the top corner of the larger notice; it is now centred
+  on the first line.
+- **A new conversation says only what matters.** "What are we working on?" shows the project, the
+  model and whether changes are asked about first, without the instruction on choosing a project,
+  the provider's remote host, or the paragraph about auditing.
+- **Adding a folder is one clear step.** The picker opens on a real folder, lists only folders,
+  takes a typed path on Enter, keeps its confirm button disabled until there is a folder to use,
+  and says "Add this folder" or "Browse..." consistently with Clone and Import.
+- **The Diagnostics registry is explained.** The cloud of group-count pills is gone; the panel says
+  what the registry is for and links to API and tools, where the same list can be searched.
+- **Form buttons reflect the form.** Clone, Start a member, Save a rule and Create the schedule stay
+  disabled until their required fields are filled, instead of accepting a click and answering with
+  a warning.
+- **Colour is named by role throughout.** Every component rule uses `--color-primary`,
+  `--color-base-200`, `--color-success` and the rest of the semantic set; the palette values and the
+  app background are unchanged. A contract test keeps new rules on the same names.
+- **A conversation can be renamed** from its header (`chat.update`), so a title the agent chose can
+  be corrected without starting a new conversation.
+- **Home has dictation too.** The composer's microphone was only on the Assistant screen; both now
+  record, transcribe and insert at the cursor, and Home's send button wakes when the text arrives.
+- **Usage shows estimated spend** where the model catalogue has a price, with the unpriced
+  conversations counted separately instead of hidden.
+- **Projects agree with their own summary.** A project with a site showed "no address" while the
+  tiles counted it as exposed; the row now shows the site name and keeps the Site action.
+- **A "Plan ready" message asks for a decision, not an answer.** The Inbox and its sheet offer
+  "Review the plan"; the free-text answer box belongs to agent questions, not approvals.
+- **The Environment page has one setup action.** The empty Services block no longer repeats the
+  header's primary "Set up devd" button.
 - **A handoff's conversation appears without a refresh**, on every screen, and the Inbox stays
   in sync. Live events for any conversation or run now reach the window.
 - **Reading a conversation no longer jumps.** Updates patch the page in place, so the scroll

@@ -8,7 +8,7 @@ to build and test safely on this machine, and the rules the owner has set. Work 
 ## What devd is
 
 A local development environment built for working with AI agents (Rust workspace, Windows-first).
-Every action is a capability in a registry (454 of them: `crates/devd-core/src/registry.rs`,
+Every action is a capability in a registry (456 of them: `crates/devd-core/src/registry.rs`,
 `crates/*/src/caps.rs`), planned, approved where needed and audited, whether it comes from the
 desktop window, the CLI (`devd`), or an agent over MCP (`devd mcp`).
 
@@ -63,7 +63,7 @@ disk without a rebuild), `local-ui.mjs`, `conv.mjs`, `check2.mjs`, `livecheck.mj
 conversation appears live), `timing.mjs` (API calls per screen with durations), `sheet.mjs`
 (contact sheets). Before/after shots: `D:\devd-promo\public\audit\{before,after1,conv-before,nav2,final,check2}`.
 
-## Done and committed (commit 3dedaee on main, not yet pushed)
+## Done and committed (commits 3dedaee and 0e37240, both pushed to origin/main)
 
 See `docs/review-2026-11.md` for root causes and verification. In short:
 - Navigation: 72px rail + 264px context panel + page (no top bar, no tab bar). Panel folds to an
@@ -86,7 +86,7 @@ See `docs/review-2026-11.md` for root causes and verification. In short:
 
 Version is 0.25.0 in `Cargo.toml` and `crates/devd-desktop/tauri.conf.json`; the CHANGELOG has the
 0.25.0 entry. `cargo test --workspace` passed (1,074 tests) and `ui_contract` passed (72) after the
-last change. The binary at `C:\dt\debug\devd.exe` is OLDER than this commit: rebuild before use.
+last change. The debug binary was rebuilt after the commit for the visual QA pass below.
 Also in this commit:
 - Fixed a regression from the navigation work: the context panel's styles were named `.panel`,
   `.panel-head`, `.panel-body` - devd's generic card classes - and broke API & Tools, Team room
@@ -112,29 +112,97 @@ Also in this commit:
 - `chat.fork` now emits a live event.
 - `docs/HANDOFF.md` (this file).
 
+## Design system (new in this pass)
+
+- `docs/design/README.md`: principles, the complete colour token set, shape/size/depth,
+  typography, spacing, motion, layering, component layers and the process for adding a component.
+- `docs/design/components.md`: the 68-reference review with a decision and reason for each, plus the
+  existing DEVD component audit and the consolidations made.
+- `docs/design/agent-ui.md` and `docs/design/manifest.json`: what an agent may emit, what it must
+  not, and the machine-readable component list. The manifest is served by the read capability
+  `design.manifest`; the `interface-contract` skill carries the same rules into every relevant
+  agent prompt.
+- The system is applied in the product, not in a separate gallery. Existing controls (buttons,
+  fields, selects, checks, notices, tables, rows, tabs, drawers, modals, the conversation) are the
+  components; they use the semantic tokens. The one new inline rendering is the agent `chart`
+  block, drawn by the same stylesheet inside a conversation. Keyboard hints use the shared `kbd`
+  treatment.
+- Shape/size/depth tokens were added; `--radius` and `--radius-lg` now point at the field and box
+  radii, so no rendered radius changed. The page background was not changed.
+
+## Navigation: the decision
+
+The rail shipped as **Home · Inbox · Assistant · Runs · Team · Projects · Sites · Machine**, with
+**Models · Activity · API · Diagnostics** at the foot. This is the agreed structure for 0.25.0:
+Inbox and Runs are now real, separately addressable pages with their own lists, and splitting
+`Agents` into `Runs` (the work) and `Team` (the people and the room) makes the two questions
+distinct. The earlier sketch that kept `Agents` and put Activity/API/Diagnostics under Machine
+predates those pages; it is superseded, not drifted. Do not re-merge them without a design pass.
+
+## Visual QA (done in this pass)
+
+1. **Built UI verified.** `cargo build -p devd-cli` from this tree; test server on
+   `C:\dthome-025` (port 18787) using the macro. `node capture/check2.mjs` in
+   `D:\devd-promo` captured Team record, Models Usage, Inbox, API & tools, skills, services, MCP
+   and certificates at desktop, tablet and phone widths. Team record and Usage render with real
+   data (5 KPI tiles + 3-row role table; per-model and per-member token tables).
+2. **API & Tools at five widths.** `audit.mjs` covers `api-tools` at 1600/1280/1024/800/390.
+   The registry stays one column and does not scroll sideways; the filter shrinks rather than
+   squeezing the list.
+3. **Full 130-shot audit.** `public/audit/after3` holds every route at five widths, with
+   `report.json` / `issues.jsonl` from the overflow/clipping checker: **130 shots, 0 issues, 0
+   errors**. `public/audit/final2` holds the screens changed afterwards (diagnostics, assistant,
+   Projects, the folder picker at rest and after a typed path, Clone's picker, Team, Models, Inbox,
+   and API & tools at five widths).
+4. **Buttons.** `.btn`, `.btn-mini`, `.btn-ghost`, `.btn-primary`, `.btn-icon` are used per the
+   system; icon-only buttons in the rail, chat header, thread list and sheet headers carry
+   `aria-label`; destructive actions are quiet or confirmed. The 72 `ui_contract` tests cover
+   handlers, ids, one primary action per view and the shared motion language.
+
+### Fixes made after the 0.25.0 commit
+
+- Diagnostics: the status icon sat above the "Healthy, ..." sentence because the larger
+  `ui-diag` notice inherited the compact callout's `top: 6px`; it is now centred on the first
+  line and the text has a 52 px gutter.
+- A new conversation's "What are we working on?" panel no longer explains how to choose a
+  project, does not show the provider's remote host, and shortens the approval line to
+  "Asks first" / "Automatic".
+- The Diagnostics "Registry" cloud of group counts is replaced by one sentence explaining what
+  the registry is, a count, and a link to API and tools. The full searchable list already lived
+  there; two presentations of the same counts helped nobody.
+- Adding a folder: the picker now opens on the starting folder (Clone's destination picker
+  previously ignored it), lists folders only, accepts a typed path on Enter, disables its confirm
+  button until a folder is open, and uses one vocabulary - "Add a folder", "Browse...",
+  "Import a project". Files could not be chosen, so showing them was noise.
+- Form submit buttons follow their forms: Clone, Start a member, Save the rule and Create the
+  schedule are disabled until their required fields are filled. A disabled button is clearer than
+  a live one that answers with a warning.
+- Every component colour now uses the semantic names (`--color-primary`, `--color-base-100`,
+  `--color-base-200`, `--color-base-300`, `--color-base-content`, `--color-info`,
+  `--color-success`, `--color-warning`, `--color-error`). The palette values and the page
+  background are unchanged; the old palette variables remain only as the source of those values.
+  `ui_contract` now fails if a component rule reaches for them directly.
+- A conversation can be renamed from its header with `chat.update`; the agent can call the same
+  capability. Team rows still show the task name, not the conversation title.
+- Usage adds an estimated spend column and total from the model catalogue, with unpriced
+  conversations counted separately. It is labelled as an estimate; cache tiers are still not
+  recorded per call.
+- The one raw `<details>` in the review studio now uses the shared `ui-fold` treatment.
+
 ## What to do next, in order
 
-1. **Verify the built UI**: `cargo build -p devd-cli`, start the test server, run
-   `node capture/check2.mjs` (from `D:\devd-promo`) and look at every shot in
-   `public/audit/check2`. The Team record ("How the team is doing") and Models "Usage" sections have
-   NOT been seen rendered yet (the old binary lacked `team.stats` / `models.usage`): check them with
-   real data. Then run `UI_DIR=D:/devd/www/devd/crates/devd-server/ui node capture/audit.mjs
-   http://127.0.0.1:18787 public/audit/after2` and review all 130 shots (5 widths) for regressions.
-2. **API & Tools screen at all sizes** (owner asked): check `api-tools` at 1600/1280/1024/800/390;
-   the registry table must not squeeze or scroll sideways on phones.
-3. **Buttons review** (owner asked): every button's action works and its style matches the system
-   (`.btn`, `.btn-mini`, `.btn-ghost`, `.btn-primary`, `.btn-icon`): one primary per view, icon
-   buttons have `aria-label`, destructive actions are quiet icons or confirmed.
-4. **Commit, push, release** (authorised): bump version in `Cargo.toml` AND
-   `crates/devd-desktop/tauri.conf.json` (current 0.24.1 -> 0.25.0), add a CHANGELOG entry, commit,
-   `git tag -a v0.25.0`, push main and the tag. Release: `scripts/release-windows.ps1 -SkipTests`
-   (after the workspace suite passed), then `gh release create v0.25.0 --notes-file ... <the new
-   dist files> dist/SHA256SUMS.txt` (attach only the new version's files). Notes say "unsigned".
-   0.24.1 was never published on GitHub either; mention or publish it as the owner prefers.
-5. **Update the installs**: `D:\devd` and `%LOCALAPPDATA%\Programs\devd`. Rename `devd.exe` and
-   `devd-desktop.exe` to `*.before-0.25.0`, copy the new ones, compare hashes. Do not run anything
-   that opens the live home to "check" it; `--version` is safe.
-6. **Launch video** (~60 s, dark, desktop landscape 1600x1000, real devd UI, no mention of Claude,
+1. **Commit the QA fixes**, then tag and release (authorised): version is already 0.25.0 in
+   `Cargo.toml` and `crates/devd-desktop/tauri.conf.json` and the CHANGELOG has the entry.
+   `git tag -a v0.25.0`, push main and the tag. Release:
+   `scripts/release-windows.ps1 -SkipTests` (workspace and contract suites passed), then
+   `gh release create v0.25.0 --notes-file ... <the new dist files> dist/SHA256SUMS.txt`
+   (attach only the new version's files). Notes say **unsigned**.
+   0.24.1 was never published on GitHub; leave it unpublished unless the owner asks.
+2. **Update the installs**: `D:\devd` and `%LOCALAPPDATA%\Programs\devd`. Rename `devd.exe` and
+   `devd-desktop.exe` to `*.before-0.25.0`, copy the new ones, compare hashes, and set the
+   uninstall registry entry to 0.25.0. Do not run anything that opens the live home to "check"
+   it; `--version` is safe.
+3. **Launch video** (~60 s, dark, desktop landscape 1600x1000, real devd UI, no mention of Claude,
    zoom in/out like the owner's reference videos, no button left highlighted in any frame).
    Project: `D:\devd-promo` (Remotion 4.0.541 already set up; HyperFrames is an alternative the
    owner suggested). Story: tell the assistant a goal -> it brings in the team -> approve the plan
@@ -165,27 +233,38 @@ The owner wants colour named by role, DaisyUI-style. The names are defined at th
 | warning / warning-content | `--color-warning`, `--color-warning-content` | warnings and caution |
 | error / error-content | `--color-error`, `--color-error-content` | errors, danger, destructive actions |
 
-To do: move every component rule from the older tokens (`--accent`, `--bg-surface`, `--ok`,
-`--danger`...) to these names, area by area, keeping the rendered colours identical (compare
-screenshots before and after); then make the older tokens aliases of the new names, not the other
-way round. Check every `-content` pairing for at least 4.5:1 contrast. Add a ui_contract test
-that new rules use only `--color-*` names for colour.
+**Done (0.25.0):** the palette the owner asked for is implemented - graphite surfaces with a
+single devd blue - and it is what the app renders. Every component rule now uses the semantic
+names; the old palette variables remain only as the source of their values, so nothing rendered
+changed and the page background is untouched. `ui_contract::components_use_the_semantic_colour_names`
+fails if a component reaches for `var(--accent)`, `var(--bg-surface)`, `var(--ok)` and the like
+directly. The `-content` pairings are unchanged from the palette that shipped.
+
+Still to check when the palette is next revised: every `-content` pairing at 4.5:1 contrast, and
+turning the old palette variables into aliases of the semantic ones (the reverse of today's
+mapping) once nothing else reads them.
 
 ## Still open (document, do not fake)
 
 From the owner's large request, not built yet - each needs real design, not a stub:
-- Composer: compact auto-growing redesign, voice controls polish, unified drafts, send/interrupt.
-  NOTE: devd never had auto-compaction or a "#" indicator (checked git history); building
-  conversation auto-compaction + "Send now" to interrupt it is a feature of its own.
+- Composer: the auto-growing composer, attachments, dictation, stop/send and queued messages
+  already exist on the Assistant screen; Home still has no dictation button.
+  NOTE: devd never had auto-compaction, a "#" indicator or "Send now"; context is compacted
+  deterministically against the model window (`devd-core::context`). A user toggle would need a
+  policy decision about overflow, not a cosmetic switch.
 - LaTeX and Mermaid rendering (needs vendored libraries embedded in the binary; must work offline).
 - Interactive in-chat visualisations (an agent-authored, sandboxed component format).
-- Agent-driven thread renaming/title regeneration; PR linking and thread "settled" state.
+- PR linking and a thread "settled" state. Renaming now exists for the person and the agent
+  (`chat.update`); automatic title regeneration does not.
 - Offline message queue with pending/sending/sent/failed states and de-duplicated resend.
+  (The server's `chat_queue` is different: it holds messages sent while the agent is working.)
 - Automations: webhook-triggered tasks with filtering/routing, GitHub PR monitoring and automated
-  review feedback (schedules exist: `schedule.*`; deploy hooks exist: `/hooks/deploy/...`).
-- Usage cost and cache-tier analytics need per-call price/cache data recorded at the provider layer.
+  review feedback. Schedules (`schedule.*`), intake rules (`intake.*`) and deploy hooks
+  (`/hooks/deploy/...`) exist; they are not a general webhook router.
+- Cache-tier analytics and true per-call spend need the provider layer to record cache tokens and
+  the price used at call time. Usage now shows an estimate from the catalogue, labelled as such.
 - Performance: server memory in long conversations, idle CPU, catch-up payload size
   (`chat.get` re-sends tool results), cold probe latency (`health.status` 5-25 s; run probes in
   parallel), 90 write capabilities without dry run, every UI read is audited.
 - Team commits nothing at the end of a run; no standing team monitors a live site.
-- Inbox/Projects information architecture review; promo re-capture in the new design.
+- Promo re-capture in the new design; the launch video is explicitly deferred.

@@ -1,0 +1,222 @@
+{
+  "name": "devd design system",
+  "version": "0.25.0",
+  "direction": [
+    "dark only",
+    "graphite surfaces",
+    "one blue for the primary action, location and live state",
+    "status colour only beside a word or an icon",
+    "hairlines and space instead of nested boxes",
+    "restrained 120-220ms motion, removed under prefers-reduced-motion"
+  ],
+  "tokens": {
+    "colour": {
+      "primary": "--color-primary",
+      "primary-content": "--color-primary-content",
+      "secondary": "--color-secondary",
+      "secondary-content": "--color-secondary-content",
+      "accent": "--color-accent",
+      "accent-content": "--color-accent-content",
+      "neutral": "--color-neutral",
+      "neutral-content": "--color-neutral-content",
+      "base-100": "--color-base-100",
+      "base-200": "--color-base-200",
+      "base-300": "--color-base-300",
+      "base-content": "--color-base-content",
+      "info": "--color-info",
+      "info-content": "--color-info-content",
+      "success": "--color-success",
+      "success-content": "--color-success-content",
+      "warning": "--color-warning",
+      "warning-content": "--color-warning-content",
+      "error": "--color-error",
+      "error-content": "--color-error-content"
+    },
+    "shape": {
+      "radius-selector": "6px",
+      "radius-field": "8px",
+      "radius-box": "12px",
+      "size-selector": "14px",
+      "size-field": "28px",
+      "border": "1px",
+      "depth": "0",
+      "noise": "0"
+    },
+    "type": {
+      "2xs": "11px",
+      "xs": "12px",
+      "sm": "13px",
+      "md": "14px",
+      "lg": "16px",
+      "xl": "18px",
+      "2xl": "22px",
+      "display": "28px"
+    },
+    "space": { "s1": "4px", "s2": "8px", "s3": "12px", "s4": "16px", "s5": "24px", "s6": "32px", "s7": "48px" },
+    "motion": { "fast": "120ms", "base": "180ms", "slow": "220ms" }
+  },
+  "agent_output": {
+    "format": "markdown",
+    "allowed_blocks": ["heading", "paragraph", "ordered-list", "unordered-list", "table", "fenced-code", "chart", "blockquote", "horizontal-rule"],
+    "allowed_inline": ["strong", "emphasis", "inline-code", "link-http-https"],
+    "notes": [
+      "Every block is sanitised and rendered by the application's md() renderer with the shared classes.",
+      "Use a fenced code block with the language name for code; long blocks fold automatically.",
+      "Use a Markdown table for structured results; it becomes the shared table with numeric alignment.",
+      "A ```chart fence holds JSON {title, unit, bars:[{label,value,tone}]}. It is validated and drawn as the shared bar chart; at most 12 bars, tone is success, warning or error.",
+      "State a status in words as well as a tag: 'failed', 'passed', 'waiting for you'.",
+      "Never produce a raw URL image; attach a file through the upload/reference mechanism instead."
+    ],
+    "forbidden": [
+      "raw HTML of any kind",
+      "script, style, iframe, object, embed, form or input elements",
+      "inline event handlers such as onclick",
+      "javascript: or data: URLs",
+      "external stylesheets, fonts or widgets",
+      "arbitrary CSS, CSS variables or positioning",
+      "canvas, WebGL or video elements"
+    ]
+  },
+  "components": [
+    {
+      "id": "markdown",
+      "surface": "conversation",
+      "agent": true,
+      "description": "The one rich-content renderer.",
+      "elements": ["headings", "paragraphs", "lists", "tables", "blockquotes", "inline code", "links", "fenced code", "horizontal rule"],
+      "classes": ["md"]
+    },
+    {
+      "id": "code-block",
+      "surface": "conversation",
+      "agent": true,
+      "description": "A fenced code block; long blocks fold behind Expand.",
+      "classes": ["md-code", "log-block"],
+      "states": ["default", "folded", "expanded"]
+    },
+    {
+      "id": "table",
+      "surface": "conversation",
+      "agent": true,
+      "description": "A Markdown table. The first row is the head; numeric cells align end.",
+      "classes": ["md-table", "table"],
+      "props": ["columns", "align"]
+    },
+    {
+      "id": "chart",
+      "surface": "conversation",
+      "agent": true,
+      "description": "A bar chart from a ```chart JSON block; validated to labels, finite non-negative values, at most 12 bars and an optional success/warning/error tone.",
+      "classes": ["ds-chart", "ds-chart-row", "ds-chart-track", "ds-chart-fill"],
+      "schema": { "title": "string?", "unit": "string?", "max": "number?", "bars": "[{label:string, value:number, tone?:success|warning|error}]" }
+    },
+    {
+      "id": "callout",
+      "surface": "app",
+      "agent": false,
+      "description": "A tinted line with a tone icon and a word. Agent prose uses a blockquote instead.",
+      "classes": ["notice", "notice-ok", "notice-warn", "notice-bad", "notice-info"],
+      "props": ["tone", "title", "body"]
+    },
+    {
+      "id": "status",
+      "surface": "app",
+      "agent": false,
+      "description": "A dot and a word. Never a colour alone.",
+      "classes": ["dot", "dot-ok", "dot-warn", "dot-bad", "dot-live", "dot-off", "pill"],
+      "props": ["tone", "label"]
+    },
+    {
+      "id": "button",
+      "surface": "app",
+      "agent": false,
+      "description": "One control vocabulary.",
+      "classes": ["btn", "btn-primary", "btn-go", "btn-ghost", "btn-danger", "btn-mini", "btn-icon"],
+      "states": ["hover", "focus-visible", "pressed", "disabled", "loading"]
+    },
+    {
+      "id": "field",
+      "surface": "app",
+      "agent": false,
+      "description": "A label, a control and an optional hint or error.",
+      "classes": ["field", "field-label", "input", "select", "textarea", "ds-validator"],
+      "states": ["default", "focus", "invalid", "disabled", "read-only"]
+    },
+    {
+      "id": "choice",
+      "surface": "app",
+      "agent": false,
+      "description": "Checkbox, radio, toggle and range on one token set.",
+      "classes": ["ds-check", "ds-radio", "ds-toggle", "ds-range"],
+      "states": ["default", "checked", "indeterminate", "disabled", "focus-visible"]
+    },
+    {
+      "id": "progress",
+      "surface": "app",
+      "agent": false,
+      "description": "Determinate work; a share bar for proportions.",
+      "classes": ["ds-progress", "ds-radial", "share"],
+      "props": ["value", "max", "tone"]
+    },
+    {
+      "id": "steps",
+      "surface": "app",
+      "agent": false,
+      "description": "A short ordered process with a current step.",
+      "classes": ["ds-steps", "ds-step"],
+      "props": ["steps", "current"]
+    },
+    {
+      "id": "timeline",
+      "surface": "app",
+      "agent": false,
+      "description": "Recorded events, newest first.",
+      "classes": ["timeline", "tl-item", "run-event"],
+      "props": ["items"]
+    },
+    {
+      "id": "collapse",
+      "surface": "app",
+      "agent": false,
+      "description": "One arrow language for every folded section.",
+      "classes": ["ui-fold", "run-fold", "worked"],
+      "states": ["closed", "open"]
+    },
+    {
+      "id": "drawer",
+      "surface": "app",
+      "agent": false,
+      "description": "A right-side detail sheet; Escape closes it and focus returns.",
+      "classes": ["drawer", "drawer-head", "drawer-body"]
+    },
+    {
+      "id": "modal",
+      "surface": "app",
+      "agent": false,
+      "description": "A decision, with a cancel and one confirm.",
+      "classes": ["modal", "modal-head", "modal-body", "modal-foot"],
+      "states": ["default", "danger", "busy"]
+    },
+    {
+      "id": "conversation",
+      "surface": "conversation",
+      "agent": false,
+      "description": "One turn with who, body, actions and a worked fold.",
+      "classes": ["turn", "turn-who", "turn-body", "worked", "team-note", "chat-plan"],
+      "states": ["streaming", "complete", "stopped", "error"]
+    },
+    {
+      "id": "diff",
+      "surface": "conversation",
+      "agent": false,
+      "description": "A real patch, counted by code, tests and docs.",
+      "classes": ["diff", "diff-line", "diff-add", "diff-del", "diff-badge"],
+      "states": ["added", "removed", "context", "folded"]
+    }
+  ],
+  "excluded": [
+    "aura", "carousel", "countdown", "fab", "hero", "hover-3d", "hover-gallery",
+    "mask", "megamenu", "mockup-phone", "mockup-window", "otp", "rating", "swap",
+    "text-rotate", "theme-controller"
+  ]
+}

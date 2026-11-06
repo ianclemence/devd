@@ -1261,3 +1261,43 @@ fn a_teams_report_in_a_conversation_is_not_drawn_as_the_person() {
     assert!(!APP.contains("if (block.type === \"user\" && block.from) {"));
     assert!(CSS.contains(".team-note {"));
 }
+
+#[test]
+fn components_use_the_semantic_colour_names() {
+    // Colour is named by role (--color-primary, --color-base-200, --color-success...).
+    // The palette variables remain as the source of the values, but a component rule
+    // must not reach past the semantic names: that is what keeps a screen and a new
+    // component on the same palette.
+    let marker = "/* ---- semantic colour names";
+    let cut = CSS.find(marker).expect("the semantic colour block is defined");
+    let components = &CSS[..cut];
+    for token in [
+        "var(--accent)",
+        "var(--bg)",
+        "var(--bg-surface)",
+        "var(--bg-raised)",
+        "var(--fg)",
+        "var(--ok)",
+        "var(--warn)",
+        "var(--danger)",
+        "var(--info)",
+    ] {
+        assert!(!components.contains(token), "a component rule still uses {token}; use its --color-* name");
+    }
+    for token in ["--color-primary:", "--color-base-100:", "--color-success:", "--color-error:"] {
+        assert!(CSS.contains(token), "the semantic palette defines {token}");
+    }
+}
+
+#[test]
+fn an_agent_chart_is_declared_and_drawn_by_the_shared_renderer() {
+    // An agent may emit a ```chart block, but only data: labels, finite values
+    // and a tone. The renderer chooses the markup and the classes.
+    assert!(APP.contains("if (lang === \"chart\")"), "the fenced chart block is recognised");
+    assert!(APP.contains("function chartHtml(spec)"), "charts have one renderer");
+    assert!(APP.contains("Math.max(1, Math.round(b.value / max * 100))"), "bar width is computed from the value");
+    assert!(!APP.contains("spec.html") && !APP.contains("spec.innerHTML"), "chart data never carries markup");
+    assert!(CSS.contains(".ds-chart-row") && CSS.contains(".ds-chart-fill"));
+    let manifest = include_str!("../../../docs/design/manifest.json");
+    assert!(manifest.contains("\"chart\""), "the agent contract declares the chart block");
+}

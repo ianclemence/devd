@@ -767,6 +767,23 @@
   // on it - detecting the project, registering it - goes through a capability
   // that inspects it first.
 
+  /* The starting places are read once, when a screen that can open the picker
+   * is shown, so the dialog does not pay for that first read when it opens.
+   * The last answer is also kept per browser: after a restart the server can be
+   * busy for several seconds, and the places are the same folders either way. */
+  var PICKER_PLACES = null;
+  function savedPickerPlaces() {
+    try {
+      var raw = window.localStorage.getItem("devd.picker.places");
+      var list = raw ? JSON.parse(raw) : null;
+      return Array.isArray(list) && list.length ? list : null;
+    } catch (e) { return null; }
+  }
+  function rememberPickerPlaces(list) {
+    PICKER_PLACES = list || [];
+    try { window.localStorage.setItem("devd.picker.places", JSON.stringify(PICKER_PLACES)); } catch (e) { /* storage refused */ }
+  }
+
   var picker = {
     open: false,
     title: "Choose a folder",
@@ -802,6 +819,10 @@
     picker.selected = options.start || null;
     picker.opener = document.activeElement;
     picker.native = false;
+    // The first read is slow on a cold server. If the person types a path or
+    // moves before it returns, that choice wins; the default opening folder
+    // must not replace it when the read finally lands.
+    picker.pathDirty = false;
 
     el("picker-title").textContent = picker.title;
     el("picker-note").textContent = picker.note;
@@ -809,17 +830,39 @@
     el("picker-path-input").value = picker.selected || "";
     el("picker").hidden = false;
     picker.open = true;
+    picker.loading = true;
+    // Say that the first read is happening. The server may be finishing other
+    // work, and a blank dialog reads as a broken one.
+    paintPicker();
     // The desktop shell can put the operating system's own dialog in front of
     // this one; a plain browser cannot, and the button is not offered there.
     picker.native = !!(state.session && state.session.native_picker);
 
+    // Always open a folder: the given start, or the first place the system
+    // offers. Leaving the list empty until a place is clicked added a step that
+    // told the person nothing about where they were.
     var start = picker.selected;
-    if (!start) {
+    var begin = function (places) {
+      picker.places = places || [];
+      picker.loading = false;
+      var target = start || (picker.places[0] && picker.places[0].path);
+      if (target && !picker.pathDirty) return pickerGo(target);
+      paintPicker();
+    };
+    var cached = PICKER_PLACES || savedPickerPlaces();
+    if (cached) {
+      begin(cached);
+      if (!PICKER_PLACES) {
+        read("fs.browse", {}).then(rememberPickerPlaces).catch(function () {});
+      }
+    } else {
       read("fs.browse", {}).then(function (places) {
-        picker.places = places || [];
-        paintPicker();
+        rememberPickerPlaces(places);
+        begin(places);
       }).catch(function (e) {
+        picker.loading = false;
         toast("error", e.message);
+        paintPicker();
       });
     }
     return new Promise(function (resolve) {
@@ -842,38 +885,38 @@
     done(path || null);
   }
 
-  /* Load a directory and show it. */
+  /* Load a directory and show it.
+   *
+   * The listing is painted as soon as it arrives. Detecting the stack reads the
+   * folder, which on a large home directory can take many seconds; waiting for
+   * that before painting left the picker blank and looked broken. */
   function pickerGo(path) {
-    var current = picker.listing ? picker.listing.path : null;
     return read("fs.browse", { path: path }).then(function (listing) {
       picker.listing = listing;
       picker.selected = listing.path;
       picker.inspect = null;
       el("picker-path-input").value = listing.path;
-      if (current !== listing.path) {
-        // The person moved: what used to be highlighted is no longer relevant.
-        picker.inspect = null;
-      }
-      return pickerInspect(listing.path);
-    }).then(function () {
       paintPicker();
+      return pickerInspect(listing.path).then(function () { paintPicker(); });
     }).catch(function (e) {
       toast("error", e.message);
       paintPicker();
     });
   }
 
-  /* Ask what is in the highlighted folder. */
+  /* Ask what is in the highlighted folder, and only show the answer if the
+   * person is still looking at that folder when it arrives. */
   function pickerInspect(path) {
     if (picker.intent !== "project") {
       picker.inspect = null;
       return Promise.resolve(null);
     }
+    var want = path;
     return read("project.detect", { path: path }).then(function (ctx) {
-      picker.inspect = ctx;
+      if (picker.listing && picker.listing.path === want) picker.inspect = ctx;
       return ctx;
     }).catch(function (e) {
-      picker.inspect = { error: e.message };
+      if (picker.listing && picker.listing.path === want) picker.inspect = { error: e.message };
       return null;
     });
   }
@@ -921,29 +964,32 @@
 
     // The folders.
     var list = el("picker-list");
+    // This picker chooses one folder. Listing files made the list noisy and
+    // offered something that could never be chosen; a file click only went to
+    // its parent folder, which the crumbs already do.
+    el("picker-choose").disabled = !listing;
     if (!listing) {
-      list.innerHTML = '<div class="picker-inspect-empty" style="padding:var(--s3)">Choose one of the places above to begin.</div>';
+      list.innerHTML = picker.loading
+        ? skelRows(5, "Opening your folders")
+        : '<div class="picker-inspect-empty" style="padding:var(--s3)">Choose one of the places above to begin.</div>';
     } else {
       var folders = (listing.entries || []).filter(function (e) { return e.kind === "directory"; });
-      var files = (listing.entries || []).filter(function (e) { return e.kind !== "directory"; });
       var rows = "";
-      folders.concat(files).forEach(function (e) {
-        var isFolder = e.kind === "directory";
+      folders.forEach(function (e) {
         var selected = picker.selected === e.path;
         rows +=
-          '<button type="button" class="picker-item' + (isFolder ? "" : " is-file") + '" role="option"' +
+          '<button type="button" class="picker-item" role="option"' +
           ' aria-selected="' + (selected ? "true" : "false") + '"' +
-          ' data-action="' + (isFolder ? "picker-goto" : "picker-pick-file") + '"' +
+          ' data-action="picker-goto"' +
           ' data-path="' + attr(e.path) + '"' +
           ' title="' + attr(e.path) + '">' +
-          '<svg class="icon" aria-hidden="true"><use href="#' + (isFolder ? "i-folder" : "i-code") + '"></use></svg>' +
+          '<svg class="icon" aria-hidden="true"><use href="#i-folder"></use></svg>' +
           '<span class="picker-item-name">' + esc(e.name) + "</span>" +
           (e.symlink ? '<span class="picker-item-kind">link</span>' : "") +
-          '<span class="picker-item-kind">' + (isFolder ? "folder" : "file") + "</span>" +
           "</button>";
       });
       if (!rows) {
-        rows = '<div class="picker-inspect-empty" style="padding:var(--s3)">This folder is empty.</div>';
+        rows = '<div class="picker-inspect-empty" style="padding:var(--s3)">No folders inside this one. Use this folder, or go up.</div>';
       }
       if (listing.warning) {
         rows += '<div class="picker-inspect-warn" style="padding:var(--s2) var(--s3)">' + esc(listing.warning) + "</div>";
@@ -961,7 +1007,7 @@
     var box = el("picker-inspect");
     var ctx = picker.inspect;
     if (!ctx) {
-      box.innerHTML = '<div class="picker-inspect-empty">Nothing is selected yet.</div>';
+      box.innerHTML = '<div class="picker-inspect-empty">Open a folder to see what it contains.</div>';
       return;
     }
     if (ctx.error) {
@@ -1308,7 +1354,7 @@
     var src = (PAL.sources || []).map(function (s) {
       return s.searched ? s.source + (s.complete === false ? " (partial)" : "") : s.source + " (not searched: " + s.note + ")";
     }).join(" · ");
-    el("palette-foot").innerHTML = '<span>↑↓ move</span><span>Enter open</span><span>Esc close</span>' + (src ? '<span class="grow nowrap" title="' + attr(src) + '">searched: ' + esc(src) + "</span>" : '<span class="grow dim nowrap">> do · / files · ~ text · @ projects · # conversations · ? ask</span>');
+    el("palette-foot").innerHTML = '<span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>Enter</kbd> open</span><span><kbd>Esc</kbd> close</span>' + (src ? '<span class="grow nowrap" title="' + attr(src) + '">searched: ' + esc(src) + "</span>" : '<span class="grow dim nowrap">> do · / files · ~ text · @ projects · # conversations · ? ask</span>');
   }
 
   function paletteActivate(index) {
@@ -2098,7 +2144,7 @@
       machineChain() +
       siteLine + machine +
       uiHead("Services", total ? (counts.needed ? counts.neededUp + " of " + counts.needed + " needed" : total + " installed") : null) +
-      (services.length ? uiList(services) : serverFailed("service.list") ? uiEmpty("Couldn't read your services", serverFailed("service.list") + ".", '<button type="button" class="btn" data-action="refresh">Try again</button>') : uiEmpty("No services installed", "devd installs PHP, a web server and MariaDB from their makers.", '<button type="button" class="btn btn-primary" data-action="setup-open">Set up devd</button>')) +
+      (services.length ? uiList(services) : serverFailed("service.list") ? uiEmpty("Couldn't read your services", serverFailed("service.list") + ".", '<button type="button" class="btn" data-action="refresh">Try again</button>') : uiEmpty("No services installed", "devd installs PHP, a web server and MariaDB from their makers. Use Set up devd above.")) +
       '<div class="ui-more">Also: <button type="button" data-action="nav" data-view="toolchain">Tools</button> \u00b7 <button type="button" data-action="nav" data-view="runtimes">Runtimes</button> \u00b7 <button type="button" data-action="nav" data-view="databases">Databases</button> \u00b7 <button type="button" data-action="nav" data-view="remote">Remote</button> \u00b7 <button type="button" data-action="nav" data-view="system">Diagnostics</button></div>');
   }
 
@@ -3892,7 +3938,7 @@
       '<div class="field"><label class="field-label" for="intake-role">Who would do it</label><select class="input" id="intake-role">' + roleOpts + "</select></div>" +
       '<div class="field"><label class="field-label" for="intake-mode">Mode</label><select class="input" id="intake-mode"><option value="observe">Record what it would do (nothing runs)</option><option value="auto">Start a run, which still waits for my plan approval</option></select></div>' +
       '<div class="row-sub">In observe mode the rule only records a proposal, which appears in the Inbox and in the team room. Start with that, read a few, and only then let it start runs. A started run plans first and waits for you, and never starts itself in production.</div>' +
-      '<div class="inline"><span class="grow"></span><button type="button" class="btn" data-action="team-charter-cancel">Cancel</button><button type="button" class="btn btn-primary" data-action="team-intake-save">Save the rule</button></div>' +
+      '<div class="inline"><span class="grow"></span><button type="button" class="btn" data-action="team-charter-cancel">Cancel</button><button type="button" class="btn btn-primary" id="intake-save" data-action="team-intake-save" disabled>Save the rule</button></div>' +
       "</div>");
   }
 
@@ -3917,20 +3963,27 @@
     return uiHead("How the team is doing", null) + '<div class="kpi-row">' + tiles + "</div>" +
       '<table class="table kpi-table"><thead><tr><th>Member</th><th class="num">Tasks</th><th class="num">Accepted</th><th class="num">Rework</th><th class="num">Changes asked</th><th class="num">Checks passing</th><th class="num">Median time</th></tr></thead><tbody>' + rows + "</tbody></table>";
   }
-  /* Tokens by model and by who used them, as providers reported them. No cost: prices and
-     cache tiers are not recorded per call, and an estimate would mislead. */
+  /* Tokens by model and by who used them, as providers reported them. Spend is an
+     estimate from the catalogue price; a model with no known price says so. */
   function usageHtml(u) {
     if (!u || !u.by_model) return "";
     var tok = function (x) { return compactCount(x || 0); };
+    var money = function (v) { return v === null || v === undefined ? "\u2014" : "$" + (v > 0 && v < 1 ? v.toFixed(4) : v.toFixed(2)); };
+    var priced = u.by_model.some(function (r) { return r.cost_usd !== null && r.cost_usd !== undefined; });
     var table = function (rows, label) {
       var total = rows.reduce(function (a, r) { return a + r.input + r.output; }, 0) || 1;
-      return '<table class="table kpi-table"><thead><tr><th>' + label + '</th><th class="num">Conversations</th><th class="num">Input</th><th class="num">Output</th><th>Share</th></tr></thead><tbody>' +
+      return '<table class="table kpi-table"><thead><tr><th>' + label + '</th><th class="num">Conversations</th><th class="num">Input</th><th class="num">Output</th>' + (priced ? '<th class="num">Est. spend</th>' : "") + '<th>Share</th></tr></thead><tbody>' +
         rows.map(function (r) {
           var share = (r.input + r.output) / total;
-          return "<tr><td>" + esc(label === "Member" ? roleFace(r.name).name : r.name) + '</td><td class="num">' + r.conversations + '</td><td class="num">' + tok(r.input) + '</td><td class="num">' + tok(r.output) + '</td><td><span class="share"><span style="width:' + Math.max(2, Math.round(share * 100)) + '%"></span></span> <span class="dim">' + Math.round(share * 100) + "%</span></td></tr>";
+          return "<tr><td>" + esc(label === "Member" ? roleFace(r.name).name : r.name) + '</td><td class="num">' + r.conversations + '</td><td class="num">' + tok(r.input) + '</td><td class="num">' + tok(r.output) + '</td>' +
+            (priced ? '<td class="num" title="' + attr(r.cost_usd === null || r.cost_usd === undefined ? "This model has no price in the catalogue" : "Estimated at the catalogue price") + '">' + money(r.cost_usd) + '</td>' : "") +
+            '<td><span class="share"><span style="width:' + Math.max(2, Math.round(share * 100)) + '%"></span></span> <span class="dim">' + Math.round(share * 100) + "%</span></td></tr>";
         }).join("") + "</tbody></table>";
     };
-    return uiHead("Usage", null) + '<div class="ui-quiet">' + esc(u.note) + "</div>" +
+    var spend = u.total_cost_usd !== null && u.total_cost_usd !== undefined
+      ? '<div class="usage-total">Estimated spend <b>' + money(u.total_cost_usd) + "</b>" + (u.unpriced_conversations ? ' <span class="dim">- ' + u.unpriced_conversations + " conversation" + (u.unpriced_conversations === 1 ? "" : "s") + " have no known price</span>" : "") + "</div>"
+      : "";
+    return uiHead("Usage", null) + spend + '<div class="ui-quiet">' + esc(u.note) + "</div>" +
       table(u.by_model, "Model") + table(u.by_who, "Member") +
       ((u.heaviest || []).length ? '<div class="run-section">Heaviest conversations</div>' + uiList(u.heaviest.map(function (h) {
         return uiRow({ title: esc(h.title), sub: esc(roleFace(h.who).name + " \u00b7 " + h.model), meta: esc(tok(h.input + h.output) + " tokens"), open: 'data-action="open-thread" data-id="' + attr(h.id) + '"' });
@@ -3974,7 +4027,7 @@
       '<div class="field"><label class="field-label" for="member-project">Project</label>' +
       '<select class="select mono" id="member-project">' + (options || '<option value="">No projects yet</option>') + "</select></div>" +
       '<div class="faint">They work in the project directory only. Anything above their permissions asks you first, and the task is accepted only when its tool results prove it.</div>' +
-      '<button type="button" class="btn btn-primary" data-action="member-assign-submit" data-id="' + attr(r.id) + '">Start ' + esc(r.title) + "</button></div>");
+      '<button type="button" class="btn btn-primary" id="member-assign-submit" data-action="member-assign-submit" disabled data-id="' + attr(r.id) + '">Start ' + esc(r.title) + "</button></div>");
   }
 
   function submitAssign(id) {
@@ -4111,7 +4164,8 @@
         : '<div class="field"><label class="field-label">Goal</label><textarea class="input" id="sched-goal" rows="3" placeholder="What the team should do each time">' + esc(f.goal) + "</textarea></div>") +
       '<div class="field"><label class="field-label">More to prove <span class="dim">(optional, one per line)</span></label><textarea class="input" id="sched-done" rows="4">' + esc(f.done) + "</textarea></div>" +
       '<label class="check"><input type="checkbox" id="sched-waive"' + (f.waive ? " checked" : "") + '> Start each run without asking me to approve the plan <span class="dim">(not in production mode)</span></label>' +
-      '<div><button type="button" class="btn btn-primary" data-action="schedule-create">Create the schedule</button></div></div></div>');
+      '<div><button type="button" class="btn btn-primary" id="schedule-create" data-action="schedule-create" disabled>Create the schedule</button></div></div></div>');
+    syncFormButtons();
   }
 
   function loadSkills() {
@@ -5143,6 +5197,10 @@ var TERM_POLL_MS = 250;
 
   function renderProjects() {
     if (state.view !== "projects") return;
+    // Warm the folder picker's starting places before Add a folder is clicked.
+    if (!PICKER_PLACES) {
+      read("fs.browse", {}).then(rememberPickerPlaces).catch(function () {});
+    }
     var query = state.projectQuery.trim().toLowerCase();
     var pinned = pinnedProjects();
     var all = state.projects.slice();
@@ -5214,6 +5272,11 @@ var TERM_POLL_MS = 250;
         if (p.exists === false) { facts.push('<span class="fact fact-bad">folder is gone</span>'); dotKind = "bad"; }
         if (p.error) dotKind = "warn";
         var site = siteFor[p.path];
+        // project.list also says which sites serve a folder. On this screen the
+        // full site rows are often not loaded yet, so a project with an address
+        // must still show it rather than claiming "no address" beside a KPI that
+        // counts it as exposed.
+        var siteNames = p.sites || [];
         if (site) facts.push('<span class="fact mono" title="The address that serves it">' + esc(site.site.host || site.site.name) + "</span>");
         if (agentWork[p.path]) facts.push('<span class="fact fact-ok">' + uiDot("live") + agentWork[p.path] + " agent" + (agentWork[p.path] === 1 ? "" : "s") + " working</span>");
         var isPinned = pinned.indexOf(p.path) !== -1;
@@ -5223,10 +5286,10 @@ var TERM_POLL_MS = 250;
             (p.error ? ' <span class="fact fact-warn" title="' + attr(p.is_repository ? "Git cannot open this repository. " + p.error : gitErrorShort(p.error) || p.error) + '">Git unavailable</span>' : "") +
             (facts.length ? ' <span class="facts">' + facts.join("") + "</span>" : ""),
           sub: '<span class="mono" title="' + attr(p.path) + '">' + esc(p.path) + "</span>" + (bits.length ? " · " + esc(bits.join(" · ")) : ""),
-          meta: site ? esc(servingLabel(site)) : "no address",
+          meta: site ? esc(servingLabel(site) || site.site.host || site.site.name) : siteNames.length ? esc(siteNames.join(", ")) : "no address",
           open: 'data-action="open-project" data-path="' + attr(p.path) + '"',
           actions: '<button type="button" class="btn btn-mini btn-primary" data-action="open-project" data-path="' + attr(p.path) + '">Open</button>' +
-            (site ? '<button type="button" class="btn btn-mini" data-action="open-site" data-name="' + attr(site.site.name) + '">Site</button>' : "") +
+            (site ? '<button type="button" class="btn btn-mini" data-action="open-site" data-name="' + attr(site.site.name) + '">Site</button>' : siteNames.length ? '<button type="button" class="btn btn-mini" data-action="open-site" data-name="' + attr(siteNames[0]) + '">Site</button>' : "") +
             '<button type="button" class="btn btn-mini btn-ghost" data-action="pin-project" data-path="' + attr(p.path) + '" title="' + (isPinned ? "Unpin" : "Pin to the top") + '">' + (isPinned ? "Unpin" : "Pin") + "</button>" +
             (!p.registered && p.source === "site" && (p.sites || []).length
               ? '<button type="button" class="btn btn-mini btn-ghost" data-action="project-remove-sites" data-path="' + attr(p.path) + '" data-sites="' + attr((p.sites || []).join(",")) + '" title="This folder is listed because a site serves it; removing the site removes it from the list">Remove site' + ((p.sites || []).length > 1 ? "s" : "") + "</button>"
@@ -6773,11 +6836,8 @@ var TERM_POLL_MS = 250;
       .join("");
 
     var s = state.session || { paths: {}, settings: {}, registry: { groups: [] } };
-    var groups = (s.registry.groups || [])
-      .map(function (g) {
-        return '<span class="pill">' + esc(g.name) + " " + g.count + "</span>";
-      })
-      .join("");
+    var groupCount = (s.registry.groups || []).length;
+    var capCount = (s.registry && s.registry.capabilities) || 0;
     var reqs = (AI.requirements && AI.requirements.requirements) || [];
     var reqPanel = reqs.length
       ? '<div class="panel"><div class="panel-head"><span>Requirements</span><span class="panel-note">' +
@@ -6813,9 +6873,10 @@ var TERM_POLL_MS = 250;
         .map(function (k) { return "<dt>" + esc(k) + "</dt><dd>" + esc(JSON.stringify(s.settings[k])) + "</dd>"; })
         .join("") +
       "</dl></div></div>" +
-      '<div class="panel"><div class="panel-head"><span>Registry</span>' +
-      '<span class="panel-note">' + ((s.registry && s.registry.capabilities) || 0) + " capabilities</span></div>" +
-      '<div class="panel-body inline">' + groups + "</div></div></details>" +
+      '<div class="panel"><div class="panel-head"><span>Capability registry</span>' +
+      '<span class="panel-note">' + capCount + " in " + groupCount + " groups</span></div>" +
+      '<div class="panel-body"><div class="row-sub">Every action devd can take - from this window, the CLI or an agent - is defined once here, with its arguments, permission tier and audit record. Browse the full list, filter it or try one in ' +
+      '<button type="button" class="text-link" data-action="nav" data-view="capabilities">API and tools</button>.</div></div></div></details>' +
       '<details class="ui-fold"><summary>Notifications</summary>' + notificationsBody() + "</details>" +
       "</div>";
   }
@@ -7052,6 +7113,9 @@ var TERM_POLL_MS = 250;
 
   function renderDevelop() {
     if (state.view !== "develop") return;
+    if (!PICKER_PLACES) {
+      read("fs.browse", {}).then(rememberPickerPlaces).catch(function () {});
+    }
     if (!DEV.projects) return renderLoading();
     var list = DEV.projects.map(function (p) {
       return '<button type="button" class="svc ' + (DEV.path === p.path ? "active" : "") + '" data-action="dev-open" data-path="' + attr(p.path) + '" style="width:100%;text-align:left">' +
@@ -7059,7 +7123,7 @@ var TERM_POLL_MS = 250;
     }).join("") || '<div class="panel-body empty-inline">No projects yet. Create one or import a checkout.</div>';
     var imp = '<div class="panel"><div class="panel-head"><span>Import an existing project</span></div><div class="panel-body">' +
       '<div class="inline"><input class="input mono grow" id="dev-import" placeholder="Where the project is" value="' + attr(DEV.importPath) + '" spellcheck="false">' +
-      '<button type="button" class="btn" data-action="dev-pick">Choose folder…</button>' +
+      '<button type="button" class="btn" data-action="dev-pick">Browse…</button>' +
       '<button type="button" class="btn" data-action="dev-detect">Detect</button><button type="button" class="btn btn-primary" data-action="dev-import">Import</button></div>' +
       '<div class="row-sub">Nothing is changed in the project. Clone a repository first with <span class="mono">git clone</span> or the Projects view.</div></div></div>';
     el("main").innerHTML = page("Stacks and tasks", "Detect any project's stack, run its tasks, and make it available to agents.", "",
@@ -7349,6 +7413,27 @@ var TERM_POLL_MS = 250;
     return { html: html, next: i };
   }
 
+  /* A chart an agent may emit: a JSON object in a ```chart fence.
+   * Only labels, numbers and a tone are accepted; the app draws it with the
+   * shared classes. Nothing in the data becomes HTML. */
+  function chartHtml(spec) {
+    var bars = (spec.bars || []).slice(0, 12).filter(function (b) {
+      return b && typeof b.label === "string" && isFinite(Number(b.value)) && Number(b.value) >= 0;
+    }).map(function (b) {
+      return { label: b.label.slice(0, 80), value: Number(b.value), tone: ["success", "warning", "error"].indexOf(b.tone) >= 0 ? b.tone : "" };
+    });
+    if (!bars.length) return "";
+    var max = Math.max.apply(null, bars.map(function (b) { return b.value; }).concat([Number(spec.max) || 0, 1]));
+    return '<figure class="ds-chart">' +
+      (spec.title ? "<figcaption>" + esc(String(spec.title).slice(0, 120)) + "</figcaption>" : "") +
+      bars.map(function (b) {
+        return '<div class="ds-chart-row"><span class="ds-chart-label" title="' + attr(b.label) + '">' + esc(b.label) + "</span>" +
+          '<span class="ds-chart-track"><span class="ds-chart-fill' + (b.tone ? " tone-" + b.tone : "") + '" style="width:' + Math.max(1, Math.round(b.value / max * 100)) + '%"></span></span>' +
+          '<span class="ds-chart-value">' + esc(compactCount(b.value)) + (spec.unit ? " " + esc(String(spec.unit).slice(0, 12)) : "") + "</span></div>";
+      }).join("") +
+      "</figure>";
+  }
+
   function mdBlocks(lines) {
     var out = [], i = 0;
     while (i < lines.length) {
@@ -7359,6 +7444,16 @@ var TERM_POLL_MS = 250;
         i++;
         while (i < lines.length && !(new RegExp("^\\s{0,3}" + fence.charAt(0) + "{" + fence.length + ",}\\s*$").test(lines[i]))) { body.push(lines[i]); i++; }
         i++;
+        // A declared chart block is data, validated and drawn by the app. If it
+        // does not parse it stays a code block rather than disappearing.
+        if (lang === "chart") {
+          var spec = null;
+          try { spec = JSON.parse(body.join("\n")); } catch (e) { spec = null; }
+          if (spec && Array.isArray(spec.bars) && spec.bars.length) {
+            out.push(chartHtml(spec));
+            continue;
+          }
+        }
         var longCode = body.length > 18;
         // A long block shows its first lines and expands in place; the toggle is a <details>,
         // so a conversation patched under the reader keeps it open.
@@ -9313,8 +9408,6 @@ var TERM_POLL_MS = 250;
       provs.filter(function (p) { return p.is_default; })[0] || provs[0];
     var projPath = AI.project || "";
     var projName = projPath ? ((state.projects || []).filter(function (x) { return x.path === projPath; })[0] || {}).name || dirName(projPath) : "";
-    var host = ""; try { host = prov && prov.base_url ? new URL(prov.base_url).host : ""; } catch (e) { host = ""; }
-    var where = !prov ? "" : prov.category === "local" ? "runs on this machine" : "remote" + (host ? ": " + host : "");
     var auto = state.session && state.session.settings && state.session.settings.agent_auto_approve_write;
     var starts = projPath
       ? [["Review my changes", "Review the uncommitted changes in this project and tell me what needs attention."],
@@ -9326,9 +9419,9 @@ var TERM_POLL_MS = 250;
     return '<div class="assist-empty">' +
       '<h2 class="assist-title">What are we working on?</h2>' +
       '<dl class="assist-ctx">' +
-        '<div><dt>Project</dt><dd>' + (projName ? esc(projName) : '<span class="dim">none selected - choose one below to give it a codebase</span>') + "</dd></div>" +
-        '<div><dt>Model</dt><dd>' + (prov ? esc(prov.label) + (prov.default_model ? ' <span class="mono">' + esc(prov.default_model) + "</span>" : "") + ' <span class="dim">' + esc(where) + "</span>" : '<span class="dim">none connected</span>') + "</dd></div>" +
-        '<div><dt>Changes</dt><dd>' + (auto ? "Writes files without asking" : "Checks with you before it writes files or does anything hard to undo") + ' <span class="dim">- every call is recorded in Activity</span></dd></div>' +
+        '<div><dt>Project</dt><dd>' + (projName ? esc(projName) : '<span class="dim">none selected</span>') + "</dd></div>" +
+        '<div><dt>Model</dt><dd>' + (prov ? esc(prov.label) + (prov.default_model ? ' <span class="mono">' + esc(prov.default_model) + "</span>" : "") : '<span class="dim">none connected</span>') + "</dd></div>" +
+        '<div><dt>Changes</dt><dd>' + (auto ? "Automatic" : "Asks first") + "</dd></div>" +
       "</dl>" +
       '<div class="assist-starts" role="group" aria-label="Ways to start"><div class="assist-label">Start with</div>' +
         starts.map(function (x) { return '<button type="button" class="assist-start" data-action="chat-suggest" data-prompt="' + attr(x[1]) + '"><span>' + esc(x[0]) + '</span><svg class="icon" aria-hidden="true"><use href="#i-chevron"></use></svg></button>'; }).join("") +
@@ -9605,6 +9698,7 @@ var TERM_POLL_MS = 250;
       (AI.queued > 0 ? '<span class="chip chip-warn" title="Messages waiting for the next step">' + AI.queued + " queued</span>" : "") +
       (team && team.parent ? '<button type="button" class="btn btn-mini btn-ghost" data-action="open-thread" data-id="' + attr(team.parent) + '" title="The conversation that asked for this work">Back to request</button>' : "") +
       (team ? '<button type="button" class="btn btn-mini btn-ghost" data-action="team-open-from" data-id="' + attr(team.run) + '">See the run</button>' : "") +
+      (!team ? '<button type="button" class="btn btn-mini btn-ghost btn-icon" data-action="thread-rename" title="Rename this conversation" aria-label="Rename this conversation"><svg class="icon" aria-hidden="true"><use href="#i-pencil"></use></svg></button>' : "") +
       '<button type="button" class="btn btn-mini btn-ghost btn-icon" data-action="thread-find" title="Search this conversation (Ctrl F)" aria-label="Search this conversation"><svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg></button>' +
       (AI.chapters && AI.chapters.length ? '<button type="button" class="btn btn-mini btn-ghost" data-action="chapters-open">Chapters ' + AI.chapters.length + "</button>" : "") +
       (r ? '<button type="button" class="btn btn-mini btn-ghost" data-action="open-run" data-id="' + attr(r.id) + '" title="Steps, capability calls, evidence and the durable timeline">Evidence</button>' : "") +
@@ -10211,7 +10305,21 @@ var TERM_POLL_MS = 250;
     AI.inbox.forEach(function (m) {
       var who = m.from_actor.replace("agent:", "").replace("devd-", "");
       if (m.needs_reply && aboutShownRun(m)) return;
-      if (m.needs_reply) {
+      // "Plan ready" is a decision about a run, not a question that wants
+      // prose. Offering an answer box here asked the person to type an approval.
+      var planReady = m.needs_reply && m.run_id && /^plan ready/i.test(String(m.subject || ""));
+      if (planReady) {
+        waiting.push('<article class="decision" data-kind="plan">' +
+          '<div class="decision-kind">Plan</div>' +
+          '<div class="decision-main">' +
+            '<h3 class="decision-title">' + esc(m.subject) + "</h3>" +
+            '<div class="decision-meta"><span>' + esc(who) + "</span> <span>" + esc(ago(m.created_at)) + "</span></div>" +
+            '<div class="decision-body">' + uiBody(m.body) + "</div>" +
+            '<div class="decision-actions"><button type="button" class="btn btn-primary" data-action="team-open-from" data-id="' + attr(m.run_id) + '">Review the plan</button>' +
+            '<button type="button" class="btn" data-action="inbox-reply" data-id="' + attr(m.id) + '" data-resolve="1">Dismiss</button>' +
+            '<span class="decision-hint">Nothing runs until you approve the plan.</span></div>' +
+          "</div></article>");
+      } else if (m.needs_reply) {
         waiting.push('<article class="decision" data-kind="question">' +
           '<div class="decision-kind">Question</div>' +
           '<div class="decision-main">' +
@@ -10261,7 +10369,9 @@ var TERM_POLL_MS = 250;
     uiSheet(m.subject,
       '<div class="ui-quiet">' + esc(who) + " · " + esc(ago(m.created_at)) + "</div>" +
       "<div>" + uiBody(m.body) + "</div>" +
-      (m.needs_reply
+      (m.needs_reply && m.run_id && /^plan ready/i.test(String(m.subject || ""))
+        ? '<div class="ui-actions"><button type="button" class="btn btn-primary" data-action="team-open-from" data-id="' + attr(m.run_id) + '">Review the plan</button></div>'
+        : m.needs_reply
         ? '<div class="inline"><input class="input grow" id="reply-' + attr(m.id) + '" placeholder="Your answer"><button type="button" class="btn btn-primary" data-action="inbox-reply" data-id="' + attr(m.id) + '">Send</button></div>'
         : '<div class="ui-actions"><button type="button" class="btn" data-action="inbox-reply" data-id="' + attr(m.id) + '" data-resolve="1">Mark as read</button></div>'));
   }
@@ -10651,7 +10761,7 @@ var TERM_POLL_MS = 250;
         '<button type="button" class="btn btn-mini btn-ghost" data-action="studio-delete-review" data-id="' + attr(selected.id) + '">Delete</button></div>' +
         '<div class="panel-body stack">' + (selected.summary ? md(selected.summary) : "") +
         (findings || '<div class="empty-inline">No findings.</div>') +
-        (selected.diff ? '<details><summary class="row-sub">The diff it read' + (selected.diff_truncated ? " (shortened)" : "") + '</summary><pre class="log-block">' + esc(selected.diff) + "</pre></details>" : "") +
+        (selected.diff ? '<details class="ui-fold"><summary>The diff it read' + (selected.diff_truncated ? " (shortened)" : "") + '</summary><pre class="log-block">' + esc(selected.diff) + "</pre></details>" : "") +
         "</div></div>";
     }
     return (embedded ? "" : studioProjectBar('<button type="button" class="btn btn-primary" data-action="studio-review"' + (project ? "" : " disabled") + ">Review changes</button>")) +
@@ -10822,6 +10932,23 @@ var TERM_POLL_MS = 250;
   function readInput(id) {
     var node = el(id);
     return node ? node.value.trim() : "";
+  }
+
+  /* A button that submits a form is enabled only when the form can be sent.
+   * Leaving it live and answering with a toast made every empty form look
+   * accepted; being disabled until the required fields are there says the same
+   * thing before the click. */
+  function setFormButton(id, enabled) {
+    var node = el(id);
+    if (node) node.disabled = !enabled;
+  }
+
+  function syncFormButtons() {
+    setFormButton("clone-go", !!(readInput("clone-url") && readInput("clone-dest")));
+    setFormButton("member-assign-submit", !!readInput("member-task"));
+    setFormButton("intake-save", !!(readInput("intake-name") && readInput("intake-goal")));
+    var project = el("sched-project");
+    setFormButton("schedule-create", !!(readInput("sched-name") && readInput("sched-spec") && project && project.value));
   }
 
   function checked(id) {
@@ -11127,7 +11254,8 @@ var TERM_POLL_MS = 250;
           '<button type="button" class="composer-tool" id="chat-mic" data-action="chat-dictate" title="Dictate with Whisper" aria-label="Dictate with Whisper"><svg class="icon" aria-hidden="true"><use href="#i-mic"></use></svg></button>' +
           '<button type="button" class="composer-send" id="chat-send" data-action="' + sendAction + '" title="Send" aria-label="Send"><svg class="icon" aria-hidden="true"><use href="#i-arrow-up"></use></svg></button>' +
         "</span>"
-      : '<button type="button" class="composer-send" id="home-send" data-action="' + sendAction + '"' + disabled + ' aria-label="' + attr(o.sendLabel || (team ? "Ask the team to plan this" : "Ask devd")) + '" title="' + attr(o.sendLabel || (team ? "Ask the team to plan this" : "Ask devd")) + '"><svg class="icon" aria-hidden="true"><use href="#i-arrow-up"></use></svg></button>';
+      : '<button type="button" class="composer-tool" id="home-mic" data-action="chat-dictate" title="Dictate with Whisper" aria-label="Dictate with Whisper"><svg class="icon" aria-hidden="true"><use href="#i-mic"></use></svg></button>' +
+        '<button type="button" class="composer-send" id="home-send" data-action="' + sendAction + '"' + disabled + ' aria-label="' + attr(o.sendLabel || (team ? "Ask the team to plan this" : "Ask devd")) + '" title="' + attr(o.sendLabel || (team ? "Ask the team to plan this" : "Ask devd")) + '"><svg class="icon" aria-hidden="true"><use href="#i-arrow-up"></use></svg></button>';
     var textarea = prefix === "home"
       ? '<textarea class="composer-input" id="home-ask" rows="2" placeholder="' + attr(placeholder) + '" aria-label="' + attr(o.label || "Message") + '" aria-autocomplete="list" aria-controls="home-mentions">' + esc(o.text || "") + "</textarea>"
       : '<textarea class="composer-input" id="chat-input" rows="2" placeholder="' + attr(placeholder) + '" aria-label="' + attr(o.label || "Message") + '" aria-autocomplete="list" aria-controls="chat-mentions">' + esc(o.text || "") + "</textarea>";
@@ -12048,7 +12176,7 @@ var TERM_POLL_MS = 250;
   }
 
   function insertAtCursor(text) {
-    var input = el("chat-input");
+    var input = el("chat-input") || el("home-ask");
     if (!input) return;
     var start = input.selectionStart || input.value.length;
     var end = input.selectionEnd || start;
@@ -12056,6 +12184,12 @@ var TERM_POLL_MS = 250;
     var at = start + text.length;
     input.focus();
     try { input.setSelectionRange(at, at); } catch (e) { /* not a text field */ }
+    // Dictation on Home must wake the send button the same way typing does.
+    if (input.id === "home-ask") {
+      AI.askText = input.value;
+      var send = el("home-send");
+      if (send) send.disabled = !input.value.trim();
+    }
   }
 
 
@@ -12497,7 +12631,7 @@ var TERM_POLL_MS = 250;
     "team-retry": function (n) { uiPrompt({ title: "Try this task again", text: "What should it do differently? You can leave this empty.", input: { placeholder: "Optional note for the agent" }, confirm: "Retry" }).then(function (note) { if (note === null) return; run("team.retry", { task: n.dataset.id, note: note || undefined }); }); },
     "team-accept": function (n) { uiConfirm({ title: "Accept without the proof?", text: "devd asked for proof that this task worked and did not get it. The final report will say you accepted it by hand.", confirm: "Accept anyway", danger: true }).then(function (yes) { if (yes) run("team.accept", { task: n.dataset.id }); }); },
     "team-say": function (n) { var i = el("team-say"); if (!i.value.trim()) return; var t = i.value.trim(); i.value = ""; var ts = el("team-say-send"); if (ts) ts.disabled = true; run("team.say", { run: n.dataset.id, text: t }); },
-    "team-open-from": function (n) { TEAM.sel = n.dataset.id; TEAM.data = null; navigate("team"); },
+    "team-open-from": function (n) { closeDrawer(); TEAM.sel = n.dataset.id; TEAM.data = null; navigate("team"); },
     "home-team": function () {
       var text = (el("home-ask").value || "").trim(), p = AI.askProject || "";
       var goal = takeAttachments(text, "home");
@@ -12785,6 +12919,26 @@ var TERM_POLL_MS = 250;
     },
     "thread-find-step": function (n) { findStep(Number(n.dataset.dir) || 1); },
     "thread-find-close": function () { findClose(); },
+    "thread-rename": function () {
+      var t = AI.thread;
+      if (!t) return;
+      uiPrompt({
+        title: "Rename this conversation",
+        text: "A short name makes it easier to find. The agent can rename a conversation the same way.",
+        input: { value: t.title || "" },
+        confirm: "Rename"
+      }).then(function (value) {
+        if (value === null) return;
+        var title = String(value || "").trim();
+        if (!title) return toast("warn", "A conversation needs a name");
+        return run("chat.update", { thread: t.id, title: title }).then(function (outcome) {
+          if (!outcome) return;
+          t.title = title;
+          if (AI.thread) AI.thread.title = title;
+          return refreshThreadList().then(function () { renderAssistant(); });
+        });
+      });
+    },
     "thread-group": function (n) {
       AI.groupClosed = AI.groupClosed || {};
       var key = n.dataset.id || "";
@@ -13067,8 +13221,8 @@ var TERM_POLL_MS = 250;
     "dev-open": function (n) { detectProject(n.dataset.path); },
     "dev-pick": function () {
       openPicker({
-        title: "Choose a project folder",
-        note: "Pick the folder that holds the project. devd will look at what is inside it.",
+        title: "Import a project",
+        note: "Pick the folder that holds the project. devd reads it before registering anything, and never changes it.",
         confirm: "Use this folder",
         intent: "project",
         start: DEV.importPath
@@ -13284,9 +13438,9 @@ var TERM_POLL_MS = 250;
 
     "add-project": function () {
       openPicker({
-        title: "Add a project",
-        note: "Choose the folder that holds the project. devd looks at what is inside it before anything is registered.",
-        confirm: "Add this project",
+        title: "Add a folder",
+        note: "Pick the folder that holds the project. devd reads it before registering anything, and never changes it.",
+        confirm: "Add this folder",
         intent: "project"
       }).then(function (path) {
         if (!path) return;
@@ -13318,6 +13472,7 @@ var TERM_POLL_MS = 250;
     // ------------------------------------------------------------- picker
 
     "picker-goto": function (node) {
+      picker.pathDirty = true;
       pickerGo(node.dataset.path);
     },
 
@@ -13330,7 +13485,7 @@ var TERM_POLL_MS = 250;
     },
 
     "picker-up": function () {
-      if (picker.listing && picker.listing.parent) pickerGo(picker.listing.parent);
+      if (picker.listing && picker.listing.parent) { picker.pathDirty = true; pickerGo(picker.listing.parent); }
     },
 
     "picker-native": function () {
@@ -13839,8 +13994,8 @@ var TERM_POLL_MS = 250;
           '<input class="input mono" id="clone-url" placeholder="https://host/owner/repo.git"></div>' +
           '<div class="field"><label class="field-label" for="clone-dest">Destination</label>' +
           '<div class="inline"><input class="input mono grow" id="clone-dest" placeholder="Where the clone should go">' +
-          '<button type="button" class="btn" data-action="clone-pick">Choose folder…</button></div></div>' +
-          '<div class="inline"><button type="button" class="btn btn-primary" data-action="clone-go">Clone</button>' +
+          '<button type="button" class="btn" data-action="clone-pick">Browse…</button></div></div>' +
+          '<div class="inline"><button type="button" class="btn btn-primary" id="clone-go" data-action="clone-go" disabled>Clone</button>' +
           '<span class="faint">Credentials come from your Git credential manager; devd never stores them.</span></div>' +
           "</div>"
       );
@@ -14713,6 +14868,14 @@ var TERM_POLL_MS = 250;
     if (t.dataset && t.dataset.provModel !== undefined && t.dataset.provModel !== "") setProviderModel(t.dataset.provModel, t.value.trim());
   });
   document.addEventListener("keydown", function (e) {
+    // The path line in the folder picker is a real jump field. It used to
+    // accept typing and then do nothing.
+    if (e.target.id === "picker-path-input" && e.key === "Enter" && !e.isComposing) {
+      e.preventDefault();
+      var typed = String(e.target.value || "").trim();
+      if (typed) { picker.pathDirty = true; pickerGo(typed); }
+      return;
+    }
     if (e.target.id === "team-say" && e.key === "Enter" && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
       var tb = el("team-say-send");
@@ -14745,9 +14908,11 @@ var TERM_POLL_MS = 250;
     if (t.id === "sched-done") SCHED.form.done = t.value;
     if (t.id === "team-done") TEAM.form.done = t.value;
     if (t.id === "team-name") TEAM.form.name = t.value;
+    syncFormButtons();
   });
   document.addEventListener("change", function (e) {
     var t = e.target;
+    syncFormButtons();
     if (t.id === "composer-mode") {
       var hb = el("home-ask"); if (hb) AI.askText = hb.value;
       var cb = el("chat-input"); if (cb) AI.composer = cb.value;
