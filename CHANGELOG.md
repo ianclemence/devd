@@ -16,7 +16,7 @@ Nothing yet.
 
 ---
 
-## [0.25.0] - 2026-11-06 - A team you can watch work
+## [0.25.0] - 2026-11-07 - A team you can watch work
 
 ### Changed
 
@@ -41,8 +41,8 @@ Nothing yet.
 - `team.stats`: how the team is doing, per role and project, from every task's record:
   accepted on proof, rework, reviews asking for changes, verification pass rate, time to finish.
 - `models.usage`: tokens by model and by member, and the heaviest conversations.
-- Built-in skills `agent-browser` and `agent-desktop`; FFmpeg, HyperFrames, agent-browser and
-  agent-desktop in the tool catalogue; one-click HyperFrames and Stageshow skills.
+- Built-in skills `agent-browser`, `agent-desktop`, `hyperframes` and `stageshow`; these are
+  instructions, not tool-catalogue entries. FFmpeg remains the only media tool.
 - Long code blocks fold; a "Jump to latest" pill appears when you have scrolled up.
 - **One design system, applied in the product.** Shape, size and depth tokens
   (`--radius-selector`, `--radius-field`, `--radius-box`, `--size-selector`, `--size-field`,
@@ -55,6 +55,33 @@ Nothing yet.
 - **An interface contract for agents.** `design.manifest` returns the Markdown blocks an agent may
   produce, the components it must not fabricate, the token names and the refused constructs. The
   `interface-contract` skill puts the same rules in front of the agent while it works.
+- **Home is a launchpad.** One centred column: the ask box, the projects you work in as one-click
+  targets, what needs you as cards, your work as two-line rows, and the machine as one quiet status
+  line. The project picks wrap on a phone instead of hiding behind a sideways scroll.
+- **A conversation list that reads like the work.** Two lines per request: title, then the
+  specialists' faces and count, working / waiting / stopped / settled, the PR number and the time.
+  Specialists fold under their request; settled conversations sink.
+- **Rich agent replies, offline.** Math and diagrams are rendered by vendored runtimes, with no CDN:
+  KaTeX, Mermaid, and declared `chart`, `metrics`, `steps`, `timeline` and `details` blocks. Code and
+  diffs are highlighted in the application's own colours; the agent prompt and the interface
+  contract teach the formats.
+- **An offline outbox.** A message written while devd cannot be reached stays in the browser with a
+  visible state (waiting, sending, not sent), is retried when the connection returns, and is
+  delivered once because every message carries a client id the server accepts once. Home and the
+  Assistant share one draft.
+- **Pull requests and settled conversations.** A conversation can be linked to a pull request, and
+  settled or reopened; the list and header show both. `chat.link_pr` and `chat.settle` are the
+  capabilities behind the controls.
+- **Incoming hooks.** `automation.*` stores a token, an event, a filter and one action;
+  `/hooks/task/<token>` accepts a GitHub-shaped `pull_request` or `push`, starts a team run, messages
+  the assistant or posts to the Inbox, and records the last result. Team > Automations has presets and
+  rotates the address.
+- **Usage that reflects the bill.** Cache read/write tokens are recorded per call for Anthropic,
+  OpenAI-compatible, Gemini and DeepSeek; spend uses the price in force and the provider's cache
+  multipliers. A provider limit now pauses the conversation, says when it will continue, and the
+  guardian resumes it after the reset.
+- **Faster catch-up.** `chat.get {brief:true}` trims tool output to head and tail, `chat.result`
+  fetches one step's full output when it is opened, and idle polling is reduced.
 
 ### Fixed
 
@@ -87,6 +114,16 @@ Nothing yet.
   "Review the plan"; the free-text answer box belongs to agent questions, not approvals.
 - **The Environment page has one setup action.** The empty Services block no longer repeats the
   header's primary "Set up devd" button.
+- **nginx accepts many local names.** The rendered http block sets
+  `server_names_hash_bucket_size 128`, so `nginx -t` no longer fails before the server starts.
+- **Service logs are not empty.** nginx writes its error log to the file the Logs sheet reads, and
+  nginx/MariaDB fall back to the file they actually write. A refused `nginx -t` is appended with a
+  timestamp.
+- **An install no longer says it can destroy work.** Only a destructive plan gets the red warning; an
+  admin change says it changes the machine and that nothing is removed unless the steps say so.
+- **Dropdowns survive a page refresh.** Choosing an option resolves the control that is on screen
+  now, by id or label, instead of writing to the detached select from before the refresh. A contract
+  test now fails if a select has no handler or a `data-change` value has no action.
 - **A handoff's conversation appears without a refresh**, on every screen, and the Inbox stays
   in sync. Live events for any conversation or run now reach the window.
 - **Reading a conversation no longer jumps.** Updates patch the page in place, so the scroll

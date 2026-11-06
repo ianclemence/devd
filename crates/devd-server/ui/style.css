@@ -7422,3 +7422,116 @@ pre.mermaid { border-color: var(--code-line); border-radius: 14px; background: v
 .md .viz-tl > li + li, .md .viz-steps > li + li { margin-top: 0; }
 .viz-takeaway { font-size: 15px; font-weight: 700; line-height: 1.4; }
 .md .viz-tl > li.viz-tl-item { padding-left: 0; }
+
+/* ---- Home: a launchpad ----------------------------------------------------------------
+   One centred column, in the order a person needs it: where they are, the ask box, where
+   to start, what waits for them, what they were doing, and the machine in one line. */
+.page.home.home-launch { max-width: 760px; margin: 0 auto; padding-top: clamp(28px, 9vh, 96px); padding-bottom: 56px; }
+.home-launch .home-head { display: block; margin: 0 0 22px; }
+.home-launch .home-status { margin: 0; color: #fff; font-size: 32px; font-weight: 700; letter-spacing: -0.028em; line-height: 1.1; }
+.home-launch .home-lead { margin-top: 8px; max-width: none; color: var(--fg-mute); font-size: 14.5px; font-weight: 400; letter-spacing: 0; }
+.home-launch .home-ask .composer-dock-home { margin: 0; }
+
+/* where to start: one click aims the ask box at a project */
+.home-picks { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+.home-pick {
+  display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 11px;
+  border: 1px solid var(--line); border-radius: 999px; background: transparent;
+  color: var(--fg-mute); font: inherit; font-size: 12.5px; white-space: nowrap; cursor: pointer;
+  transition: color var(--fast) var(--ease-out), border-color var(--fast) var(--ease-out), background-color var(--fast) var(--ease-out);
+}
+.home-pick-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--c, var(--viz-grey)); }
+.home-pick.is-on { color: #fff; border-color: color-mix(in srgb, var(--color-primary) 60%, var(--line)); background: color-mix(in srgb, var(--color-primary) 12%, transparent); }
+.home-pick.is-more { border-style: dashed; color: var(--fg-dim); }
+@media (hover: hover) and (pointer: fine) { .home-pick:hover { color: #fff; border-color: #3a3d46; } }
+.home-pick:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+
+/* what waits for you: a card per decision, its kind in words */
+.home-needs { display: grid; gap: 8px; margin-top: 28px; }
+.home-need {
+  display: flex; align-items: center; gap: 14px; padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--viz-orange) 34%, var(--line)); border-radius: 12px;
+  background: color-mix(in srgb, var(--viz-orange) 6%, transparent);
+}
+.home-need.is-bad { border-color: color-mix(in srgb, var(--viz-red) 40%, var(--line)); background: color-mix(in srgb, var(--viz-red) 6%, transparent); }
+.home-need[data-open] { cursor: pointer; }
+.home-need-mark { display: grid; place-items: center; flex: none; width: 28px; height: 28px; border-radius: 8px; color: var(--viz-orange); background: color-mix(in srgb, var(--viz-orange) 14%, transparent); }
+.home-need.is-bad .home-need-mark { color: var(--viz-red); background: color-mix(in srgb, var(--viz-red) 14%, transparent); }
+.home-need-mark .icon { width: 14px; height: 14px; }
+.home-need-text { flex: 1; min-width: 0; }
+.home-need-kicker { color: var(--viz-orange); font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
+.home-need.is-bad .home-need-kicker { color: var(--viz-red); }
+.home-need-text b { display: block; margin-top: 2px; color: #fff; font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.home-need-text span { display: block; margin-top: 2px; color: var(--fg-mute); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.home-need-actions { display: flex; flex: none; gap: 6px; }
+
+/* what you were doing */
+.home-work { margin-top: 34px; }
+.home-label-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.home-label { margin: 0; color: var(--fg-dim); font-size: 11.5px; font-weight: 650; letter-spacing: 0.05em; text-transform: uppercase; }
+.home-work-list { display: grid; margin: 0 -10px; }
+.home-work-row {
+  display: flex; align-items: center; gap: 12px; width: 100%; min-width: 0; padding: 10px; border: 0; border-radius: 10px;
+  background: none; color: inherit; font: inherit; text-align: left; cursor: pointer;
+  transition: background-color var(--fast) var(--ease-out);
+}
+@media (hover: hover) and (pointer: fine) { .home-work-row:hover { background: rgba(255, 255, 255, 0.035); } }
+.home-work-row:focus-visible { outline: 2px solid var(--color-primary); outline-offset: -2px; }
+.home-work-faces { flex: none; min-width: 20px; }
+.home-work-faces .face { box-shadow: 0 0 0 2px var(--color-base-100); }
+.home-work-dot { flex: none; width: 7px; height: 7px; margin: 0 6px 0 7px; border-radius: 50%; background: var(--fg-dim); opacity: 0.6; }
+.home-work-dot.is-live { background: var(--color-primary); opacity: 1; box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 25%, transparent); }
+.home-work-dot.is-warn { background: var(--viz-orange); opacity: 1; }
+.home-work-dot.is-bad { background: var(--viz-red); opacity: 1; }
+.home-work-dot.is-ok { background: var(--viz-green); opacity: 1; }
+.home-work-main { flex: 1; min-width: 0; }
+.home-work-title { display: block; color: var(--color-base-content); font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.home-work-sub { display: flex; align-items: center; gap: 6px; margin-top: 2px; color: var(--fg-dim); font-size: 12px; white-space: nowrap; overflow: hidden; }
+.home-work-sub > span:first-child { color: var(--fg-mute); }
+.home-work-sub .sep { opacity: 0.6; }
+.home-work-sub .is-ok { color: var(--viz-green); }
+.home-work-sub .is-live { color: var(--accent-text, var(--color-primary)); }
+.home-work-sub .is-warn { color: var(--viz-orange); }
+.home-work-sub .is-bad { color: var(--viz-red); }
+.home-work-time { flex: none; color: var(--fg-dim); font-size: 12px; font-variant-numeric: tabular-nums; }
+
+/* the machine, in one line */
+.home-status-line { display: flex; flex-wrap: wrap; gap: 2px 4px; margin-top: 36px; padding-top: 14px; border-top: 1px solid var(--line); }
+.home-status-line.is-loading { color: var(--fg-dim); font-size: 12px; }
+.home-stat {
+  display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 8px; border: 0; border-radius: 7px;
+  background: none; color: var(--fg-dim); font: inherit; font-size: 12px; cursor: pointer;
+}
+.home-stat b { color: var(--fg-mute); font-weight: 550; }
+@media (hover: hover) and (pointer: fine) { .home-stat:hover { background: rgba(255, 255, 255, 0.04); color: var(--fg-mute); } .home-stat:hover b { color: #fff; } }
+.home-stat:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 1px; }
+.home-stat-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--viz-grey); }
+.home-stat-dot.is-ok { background: var(--viz-green); }
+.home-stat-dot.is-warn { background: var(--viz-orange); }
+.home-stat-dot.is-live { background: var(--color-primary); }
+.home-stat-dot.is-off { background: #4a4b52; }
+.home-status-line > .home-stat:first-child { margin-left: -8px; }
+
+@media (max-width: 640px) {
+  .page.home.home-launch { padding-top: 24px; }
+  .home-launch .home-status { font-size: 26px; }
+  /* Seven projects fit in three short rows far better than in a clipped
+     sideways rail nobody knows to swipe. */
+  .home-picks { flex-wrap: wrap; overflow: visible; margin-right: 0; padding-right: 0; }
+  .home-need { flex-wrap: wrap; align-items: flex-start; }
+  .home-need-text { flex-basis: calc(100% - 42px); }
+  .home-need-text b, .home-need-text span { white-space: normal; }
+  .home-need-actions { width: 100%; justify-content: flex-end; }
+}
+/* Every work row leads with the same width, faces or a dot, so the titles line up. */
+.home-work-faces, .home-work-dot { box-sizing: content-box; }
+.home-work-faces { display: inline-flex; justify-content: flex-start; width: 46px; min-width: 46px; }
+.home-work-faces .face { margin-left: -6px; }
+.home-work-faces .face:first-child { margin-left: 0; }
+.home-work-dot { margin: 0 33px 0 6px; }
+/* Phones: the ask box toolbar stays on one line; the model name gives way first. */
+@media (max-width: 640px) {
+  .composer-left { flex-wrap: nowrap; }
+  .composer-model { max-width: 128px; }
+  .composer-model-name { max-width: 72px; }
+}

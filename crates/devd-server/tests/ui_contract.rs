@@ -1314,3 +1314,54 @@ fn an_agent_chart_is_declared_and_drawn_by_the_shared_renderer() {
     let manifest = include_str!("../../../docs/design/manifest.json");
     assert!(manifest.contains("\"chart\""), "the agent contract declares the chart block");
 }
+
+#[test]
+fn every_select_is_wired_to_something() {
+    // A select that has no id, no data-change and no data-action is a dead
+    // control: the menu opens and choosing an option changes nothing. Every
+    // select must be identifiable to its handler, or be a form field the
+    // capability form reads by `data-arg` / `data-create`.
+    let bytes = APP.as_bytes();
+    let mut at = 0usize;
+    let mut count = 0usize;
+    while let Some(found) = APP[at..].find("<select") {
+        let start = at + found;
+        at = start + 7;
+        let end = APP[start..].find('>').map(|n| start + n).unwrap_or(APP.len());
+        let tag = &APP[start..end];
+        // `<select>` in a comment is prose, not a control.
+        if tag == "<select" {
+            continue;
+        }
+        count += 1;
+        assert!(
+            tag.contains("id=\"") || tag.contains("data-change=") || tag.contains("data-action=")
+                || tag.contains("data-arg=") || tag.contains("data-create=") || tag.contains("data-pf="),
+            "a select is not wired to a handler: {tag}"
+        );
+    }
+    assert!(count > 20, "the scan found the application's selects (found {count})");
+    let _ = bytes;
+}
+
+#[test]
+fn every_data_change_value_has_a_handler() {
+    // The delegated change listener looks the value up in the action table. A
+    // value with no entry is silently ignored, which is how a dropdown "does
+    // nothing".
+    let mut seen = std::collections::BTreeSet::new();
+    let mut rest = APP;
+    while let Some(i) = rest.find("data-change=\"") {
+        let after = &rest[i + 13..];
+        let value = after.split('"').next().unwrap_or("");
+        if !value.is_empty() && !value.contains('\'') {
+            seen.insert(value.to_string());
+        }
+        rest = after;
+    }
+    assert!(!seen.is_empty());
+    for value in seen {
+        let handler = format!("\"{value}\": function");
+        assert!(APP.contains(&handler), "no handler for data-change `{value}`");
+    }
+}

@@ -4255,7 +4255,8 @@
       "</div>" +
       '<div class="field"><label class="field-label" for="auto-goal">What the team does <span class="dim">({{path.in.the.event}} fills in from the call)</span></label><textarea class="input" id="auto-goal" rows="4">' + esc(f.goal || preset.goal) + "</textarea></div>" +
       '<div class="ui-quiet">GitHub has to reach this address. On this machine that means a shared site or a tunnel; on a server it is the server\u2019s own address. Point a GitHub webhook (content type application/json) at it, for the events above.</div>' +
-      '<div class="ui-actions"><button type="button" class="btn btn-primary" id="automation-create" data-action="automation-create">Create the automation</button></div>');
+      '<div class="ui-actions"><button type="button" class="btn btn-primary" id="automation-create" data-action="automation-create" disabled>Create the automation</button></div>');
+    syncFormButtons();
   }
 
   function loadSkills() {
@@ -8088,11 +8089,14 @@ var TERM_POLL_MS = 250;
       read("models.catalogue").catch(function () { return []; }),
       read("models.inventory").catch(function () { return null; })
     ]);
+    // Each slow answer repaints Home when it arrives: the machine line does not wait for the
+    // health checks, which take the longest.
+    var homeRepaint = function () { if (state.view === "home") repaintKeepingFocus(); };
     var slowDone = fast.then(function () {
       return Promise.all([
         loadHealth(),
         read("setup.requirements").catch(function () { return null; }),
-        state.server.loaded ? refreshServices() : loadServer()
+        (state.server.loaded ? refreshServices() : loadServer()).then(function (v) { homeRepaint(); return v; })
       ]);
     }).then(function (r) {
       AI.requirements = r[1];
@@ -8179,29 +8183,7 @@ var TERM_POLL_MS = 250;
     return reqs.filter(function (r) { return r.id === id; })[0] || null;
   }
 
-  function approvalRow(r) {
-    var title = (r.plan && r.plan.summary) || capLabel(r.capability);
-    return uiRow({
-      accent: true, dot: "warn",
-      title: esc(title),
-      sub: esc(activityWho(r.actor) + " asks to: " + capLabel(r.capability).toLowerCase()),
-      meta: esc(ago(r.created_at)),
-      open: 'data-action="open-approval" data-id="' + attr(r.id) + '"',
-      actions: '<button type="button" class="btn btn-go btn-mini" data-action="req-decide" data-id="' + attr(r.id) + '" data-approve="1">Approve</button>' +
-        '<button type="button" class="btn btn-mini btn-ghost" data-action="req-decide" data-id="' + attr(r.id) + '" data-approve="0">Decline</button>'
-    });
-  }
 
-  function questionRow(m) {
-    var who = m.from_actor.replace("agent:", "").replace("devd-", "");
-    return uiRow({
-      accent: true, dot: "warn",
-      title: esc(m.subject), sub: esc(uiSummary(m.body, 170)), wrap: true,
-      meta: esc(who + " · " + ago(m.created_at)),
-      open: 'data-action="open-message" data-id="' + attr(m.id) + '"',
-      actions: '<button type="button" class="btn btn-primary btn-mini" data-action="open-message" data-id="' + attr(m.id) + '">Answer</button>'
-    });
-  }
 
   function renderHome() {
     if (state.view !== "home") return;
@@ -8251,197 +8233,188 @@ var TERM_POLL_MS = 250;
       var at = s.indexOf(": ");
       return at > 0 && runKeys[s.slice(at + 2)] === true;
     }
+    var projName = function (path) { return path ? threadProjectName(path) : ""; };
     (d.teamRuns || []).filter(function (t) { return t.state === "awaiting_plan"; }).forEach(function (t) {
-      work.push(uiRow({ accent: true, dot: "warn", title: esc(t.title), sub: "The team has a plan with " + t.tasks_total + " task(s). Nothing runs until you approve it.", meta: esc(ago(t.updated_at)),
-        actions: '<button type="button" class="btn btn-primary btn-mini" data-action="team-open-from" data-id="' + attr(t.id) + '">Review plan</button>' }));
+      work.push(homeNeed({ kicker: "Plan ready", face: "planner", title: t.title,
+        sub: [projName(t.project), (t.tasks_total || 0) + (t.tasks_total === 1 ? " task" : " tasks"), "nothing runs until you approve"].filter(Boolean).join(" \u00b7 "),
+        actions: '<button type="button" class="btn btn-primary btn-mini" data-action="team-open-from" data-id="' + attr(t.id) + '">Review the plan</button>' }));
     });
     (d.teamRuns || []).filter(function (t) { return t.state === "paused" && t.error; }).forEach(function (t) {
-      work.push(uiRow({ accent: true, dot: "warn", title: esc(t.title), sub: esc(uiSummary(t.error, 150)), wrap: true, meta: "paused",
-        actions: '<button type="button" class="btn btn-mini" data-action="team-open-from" data-id="' + attr(t.id) + '">Open</button>' }));
+      work.push(homeNeed({ kicker: "Paused", face: "team", title: t.title, sub: uiSummary(t.error, 150),
+        actions: '<button type="button" class="btn btn-mini" data-action="team-open-from" data-id="' + attr(t.id) + '">Open the run</button>' }));
     });
-    d.approvals.forEach(function (r) { decisions.push(approvalRow(r)); });
-    d.inbox.filter(function (m) { return m.needs_reply && !aboutARun(m); }).forEach(function (m) { decisions.push(questionRow(m)); });
+    d.approvals.forEach(function (r) {
+      decisions.push(homeNeed({ kicker: "Approval needed", face: r.actor && r.actor.indexOf("agent:") === 0 ? r.actor.replace("agent:", "").replace("devd-", "") : "", title: (r.plan && r.plan.summary) || capLabel(r.capability),
+        sub: activityWho(r.actor) + " asks to: " + capLabel(r.capability).toLowerCase(), open: 'data-action="open-approval" data-id="' + attr(r.id) + '"',
+        actions: '<button type="button" class="btn btn-mini btn-ghost" data-action="req-decide" data-id="' + attr(r.id) + '" data-approve="0">Decline</button>' +
+          '<button type="button" class="btn btn-go btn-mini" data-action="req-decide" data-id="' + attr(r.id) + '" data-approve="1">Approve</button>' }));
+    });
+    d.inbox.filter(function (m) { return m.needs_reply && !aboutARun(m); }).forEach(function (m) {
+      decisions.push(homeNeed({ kicker: "Question", face: String(m.from_actor || "").replace("agent:", "").replace("devd-", ""), title: m.subject, sub: uiSummary(m.body, 160),
+        open: 'data-action="open-message" data-id="' + attr(m.id) + '"',
+        actions: '<button type="button" class="btn btn-primary btn-mini" data-action="open-message" data-id="' + attr(m.id) + '">Answer</button>' }));
+    });
     (h.checks || []).filter(function (c) { return c.required && c.state !== "healthy" && c.state !== "starting"; }).forEach(function (c) {
       var f = c.fix || {}, bad = c.state === "critical" || c.state === "unavailable" || c.state === "degraded";
       var act = f.capability
         ? '<button type="button" class="btn btn-primary btn-mini" data-action="health-fix" data-cap="' + attr(f.capability) + '" data-args="' + attr(JSON.stringify(f.args || {})) + '">' + esc(f.label) + "</button>"
         : f.view ? '<button type="button" class="btn btn-mini" data-action="health-go" data-view="' + attr(f.view) + '">' + esc(f.label) + "</button>" : "";
-      machine.push(uiRow({ accent: true, dot: bad ? "bad" : "warn", title: esc(c.label), sub: esc(c.meaning || c.detail), wrap: true, actions: act }));
+      machine.push(homeNeed({ kicker: "This machine", tone: bad ? "bad" : "warn", title: c.label, sub: c.meaning || c.detail || "", actions: act }));
     });
     AI.homeSig = healthSig();
-    var updates = d.inbox.filter(function (m) { return !m.needs_reply; }).length;
     var attentionTotal = decisions.length + work.length + machine.length;
-    var needsHtml = "";
-    if (attentionTotal) {
-      [
-        { title: "Decisions", items: decisions, view: "inbox", link: "Open Inbox", more: "in the Inbox" },
-        { title: "Agent work", items: work, view: "team", link: "Open Agents", more: "in Agents" },
-        { title: "Machine attention", items: machine, view: "services", link: "Open Services", more: "in Services" }
-      ].forEach(function (g) {
-        if (!g.items.length) return;
-        needsHtml += uiHead(g.title, g.items.length, '<button type="button" class="btn btn-mini btn-ghost" data-action="nav" data-view="' + g.view + '">' + g.link + "</button>") +
-          uiList(g.items.slice(0, 3));
-        if (g.items.length > 3) {
-          needsHtml += '<div class="ui-more"><button type="button" data-action="nav" data-view="' + g.view + '">' + (g.items.length - 3) + " more " + g.more + "</button></div>";
-        }
-      });
-      if (updates) needsHtml += '<div class="ui-more"><button type="button" data-action="nav" data-view="inbox">' + updates + " update" + (updates === 1 ? "" : "s") + " in the Inbox</button></div>";
-    } else if (updates) {
-      needsHtml += '<div class="ui-more"><button type="button" data-action="nav" data-view="inbox">' + updates + " update" + (updates === 1 ? "" : "s") + " in the Inbox</button></div>";
-    }
+    var needs = decisions.concat(work, machine);
 
     var reqs = ((AI.requirements && AI.requirements.requirements) || []).filter(function (r) { return r.state !== "ready"; });
     // Only what devd needs is "setup". Something optional is offered, not nagged about.
     var required = reqs.filter(function (r) { return r.required; });
-    var setup = reqs.length
-      ? uiList([uiRow({ dot: required.length ? "warn" : "off", title: required.length ? "Let's finish setting up" : "When you're ready", sub: (required.length ? required.length + " needed" + (reqs.length > required.length ? ", " + (reqs.length - required.length) + " optional" : "") : "Whenever you like") + ": " + esc(reqs.slice(0, 3).map(function (r) { return r.title; }).join(", ")) + (reqs.length > 3 ? "…" : ""),
-          actions: '<button type="button" class="btn btn-mini" data-action="open-setup">Review</button>' })])
-      : "";
+    if (required.length) {
+      needs.push(homeNeed({ kicker: "Setup", tone: "warn", title: "Let's finish setting devd up",
+        sub: required.length + " needed: " + reqs.filter(function (r) { return r.required; }).slice(0, 3).map(function (r) { return r.title; }).join(", "),
+        actions: '<button type="button" class="btn btn-mini" data-action="open-setup">Review</button>' }));
+    }
 
-    // Projects and sites are two views of the same work. The map is built here,
-    // once, so a project row can say which address serves it without a second
-    // capability call or a guess about the folder.
+    // Start here: the projects you are most likely to work in, one click to aim the ask box.
     var siteFor = {};
-    (state.server.sites || []).forEach(function (row) {
-      if (row.project && !siteFor[row.project]) siteFor[row.project] = row;
-    });
+    (state.server.sites || []).forEach(function (row) { if (row.project && !siteFor[row.project]) siteFor[row.project] = row; });
     var allSites = state.server.sites || [];
     var allProjects = d.projects || [];
-    var exposed = allProjects.filter(function (p) { return siteFor[p.path]; }).length;
+    var lastUsed = {};
+    d.threads.forEach(function (t) { if (t.project && (!lastUsed[t.project] || t.updated_at > lastUsed[t.project])) lastUsed[t.project] = t.updated_at; });
+    var picksOrder = allProjects.slice().sort(function (x, y) {
+      var a1 = lastUsed[x.path] || "", b1 = lastUsed[y.path] || "";
+      if (a1 !== b1) return a1 < b1 ? 1 : -1;
+      return (siteFor[y.path] ? 1 : 0) - (siteFor[x.path] ? 1 : 0) || (x.name < y.name ? -1 : 1);
+    });
+    var PICKS = 6;
+    var picks = allProjects.length
+      ? '<div class="home-picks" role="group" aria-label="Start in a project">' + picksOrder.slice(0, PICKS).map(function (p) {
+          var on = AI.askProject === p.path;
+          return '<button type="button" class="home-pick' + (on ? " is-on" : "") + '" data-action="home-pick" data-path="' + attr(p.path) + '" aria-pressed="' + (on ? "true" : "false") + '" title="' + attr(p.path) + '">' +
+            '<i class="home-pick-dot" style="--c:var(--viz-' + projectColor(p, siteFor[p.path]) + ')" aria-hidden="true"></i>' + esc(p.name) + "</button>";
+        }).join("") +
+        (allProjects.length > PICKS ? '<button type="button" class="home-pick is-more" data-action="nav" data-view="projects">' + (allProjects.length - PICKS) + " more</button>" : "") +
+        "</div>"
+      : '<div class="home-picks"><button type="button" class="home-pick is-more" data-action="nav" data-view="create">Start your first project</button><button type="button" class="home-pick is-more" data-action="nav" data-view="develop">Import a folder</button></div>';
 
-    var projects = allProjects.length
-      ? uiList(allProjects.slice(0, 8).map(function (p) {
-        var site = siteFor[p.path];
-        return uiRow({
-          dot: site ? (site.serving === "no_entry" ? "warn" : "ok") : "off",
-          title: '<span class="row-name">' + esc(p.name) + "</span>" + ((p.stack || site) ? ' <span class="facts">' +
-            (p.stack ? '<span class="fact">' + esc(p.stack) + "</span>" : "") +
-            (site ? '<span class="fact mono">' + esc(site.site.host || site.site.name) + "</span>" : "") + "</span>" : ""),
-          sub: '<span class="mono">' + esc(p.path) + "</span>",
-          meta: site ? esc(servingLabel(site)) : "no address",
-          open: 'data-action="home-open" data-path="' + attr(p.path) + '"',
-          actions: '<button type="button" class="btn btn-mini btn-primary" data-action="home-open" data-path="' + attr(p.path) + '">Open</button>' +
-            (site ? '<button type="button" class="btn btn-mini" data-action="open-site" data-name="' + attr(site.site.name) + '">Site</button>' : "") +
-            (ready ? '<button type="button" class="btn btn-mini btn-ghost" data-action="home-chat" data-path="' + attr(p.path) + '">Ask</button>' : ""),
-          hover: true
-        });
-      }))
-      : uiEmpty("Your workspace is empty", "Start from a stack, or point devd at a folder you already have.",
-        '<div class="inline"><button type="button" class="btn btn-primary" data-action="nav" data-view="create">Create a project</button><button type="button" class="btn" data-action="nav" data-view="develop">Import a folder</button></div>');
+    // Your work: conversations and team runs in one list, the live ones first. A request
+    // that started a team shows the team's faces; a run with no conversation shows itself.
+    var kidsOf = {}, runOwned = {};
+    d.threads.forEach(function (t) {
+      if (t.team && t.team.parent) { (kidsOf[t.team.parent] = kidsOf[t.team.parent] || []).push(t); runOwned[t.team.run] = true; }
+    });
+    var runById = {}, runByThread = {}, threadIds = {};
+    d.threads.forEach(function (t) { threadIds[t.id] = true; });
+    (d.teamRuns || []).forEach(function (r) {
+      runById[r.id] = r;
+      if (r.thread_id && (!runByThread[r.thread_id] || r.updated_at > runByThread[r.thread_id].updated_at)) runByThread[r.thread_id] = r;
+    });
+    var items = [];
+    d.threads.filter(function (t) { return !t.team; }).forEach(function (t) {
+      var kids = kidsOf[t.id] || [];
+      var run = runByThread[t.id] || (kids.length ? runById[kids[0].team.run] : null);
+      var liveT = t.state === "running" || t.state === "waiting_approval" || (run && ["planning", "running"].indexOf(run.state) >= 0);
+      items.push({ live: !!liveT, at: t.updated_at || "", html: homeWorkRow({
+        id: t.id, action: "open-thread", title: t.title || "Conversation", project: projName(t.project),
+        faces: kids.map(function (k) { return k.team.role; }),
+        state: t.state === "running" ? ["live", "working"] : t.state === "waiting_approval" ? ["warn", "waiting for your decision"] : t.state === "error" ? ["bad", "stopped"] : run ? runWords(run) : t.settled_at ? ["ok", "settled"] : ["", ""],
+        pr: t.pr_url, at: t.updated_at }) });
+    });
+    (d.teamRuns || []).filter(function (r) { return !runOwned[r.id] && !(r.thread_id && threadIds[r.thread_id]); }).forEach(function (r) {
+      items.push({ live: ["planning", "running", "awaiting_plan"].indexOf(r.state) >= 0, at: r.updated_at || "", html: homeWorkRow({
+        id: r.id, action: "team-open-from", title: r.title || r.goal || "Team run", project: projName(r.project), faces: ["team"], state: runWords(r), at: r.updated_at }) });
+    });
+    items.sort(function (x, y) { return x.live !== y.live ? (x.live ? -1 : 1) : x.at < y.at ? 1 : -1; });
+    var liveCount = items.filter(function (x) { return x.live; }).length;
+    var work5 = items.slice(0, Math.max(5, liveCount));
 
+    // The machine, in one line a person can click through.
     var counts = serviceCounts(state.server.services);
     var noEntry = allSites.filter(function (row) { return row.serving === "no_entry"; });
-    var siteAttention = allSites.filter(siteNeedsAttention);
-    var pendingHosts = ((state.server.hosts && (state.server.hosts.adding || []).concat(state.server.hosts.removing || [])) || []).length;
-    var phps = (state.server.runtimes || []).filter(function (r) { return r.runtime && r.runtime.kind === "php"; });
-    var defaultPhp = phpPrimary();
-
-    // Running is not the same as answering. A service counts as ready only when
-    // it answered a question in its own protocol; one that holds its port and
-    // says nothing is reported as such.
-    var svcRows = (state.server.services || []).filter(function (r) { return r.installed; });
-    var svcRunning = svcRows.filter(function (r) { return r.running; });
-    var svcReady = svcRunning.filter(function (r) { return r.ready === true; });
-    var svcSilent = svcRunning.filter(function (r) { return r.ready === false; });
     var svcHeld = (state.server.services || []).filter(function (r) { return !r.running && r.listening; });
+    var defaultPhp = phpPrimary();
     var working = d.threads.filter(function (t) { return t.state === "running"; }).length +
       (d.teamRuns || []).filter(function (t) { return ["planning", "running"].indexOf(t.state) >= 0; }).length;
-    var waiting = d.approvals.length + (d.teamRuns || []).filter(function (t) { return t.state === "awaiting_plan"; }).length;
-
-    function cell(view, label, dot, value, detail) {
-      return '<button type="button" class="env-cell" data-action="nav" data-view="' + view + '">' +
-        '<span class="env-cell-label">' + uiDot(dot) + esc(label) + "</span>" +
-        '<span class="env-cell-value">' + esc(value) + "</span>" +
-        '<span class="env-cell-detail">' + esc(detail) + "</span></button>";
-    }
-    // devd has just opened and is starting what it needs: say so, not "0 of 4 running".
-    var booting = !!(AI.health && AI.health.state === "starting" && counts.up < counts.total);
-    var env = state.server.loaded
-      ? '<div class="env-strip" role="group" aria-label="This machine">' +
-        (booting
-          ? cell("services", "Services", "warn", "Starting…", counts.up + " of " + counts.total + " running so far")
-          : cell("services", "Services", !counts.total ? "off" : svcSilent.length || svcHeld.length ? "warn" : counts.up === counts.total ? "ok" : counts.up ? "warn" : "off",
-          counts.total ? counts.up + " of " + counts.total + " running" : "None installed",
-          svcSilent.length ? svcSilent.length + " running but not answering" :
-          svcHeld.length ? svcHeld.length + (svcHeld.length === 1 ? " port" : " ports") + " held by other programs" : svcRunning.length ? svcReady.length + " answered in their own protocol" : counts.total ? "start them when you need them" : "install a web server and a database")) +
-        cell("sites", "Sites", noEntry.length || siteAttention.length ? "warn" : allSites.length ? "ok" : "off",
-          allSites.length ? (allSites.length - noEntry.length) + " of " + allSites.length + " can serve" : "No sites",
-          noEntry.length ? noEntry.length + " with nothing to serve" : pendingHosts ? pendingHosts + " hostname" + (pendingHosts === 1 ? "" : "s") + " not published" : allSites.length ? "HTTPS from devd's own authority" : "give a project an address") +
-        cell("runtimes", "Runtimes", (state.server.runtimes || []).length ? "ok" : "off",
-          (state.server.runtimes || []).length ? (state.server.runtimes || []).length + " installed" : "None installed",
-          phps.length ? "PHP default " + (defaultPhp || "not selected") : "PHP, Node.js, Go, Python, Ruby") +
-        cell("team", "Agents", waiting ? "warn" : working ? "live" : "off",
-          working ? working + " working" : waiting ? waiting + " waiting for you" : "Idle",
-          waiting && working ? waiting + " waiting for you" : ready ? "plans need your approval before they run" : "connect a model to use agents") +
-        "</div>"
-      : '<div class="loading" role="status">Reading the environment…</div>';
-    var envLinks = (counts.up < counts.total || noEntry.length || pendingHosts)
-      ? '<div class="env-links">' +
-        (counts.up < counts.total ? '<button type="button" class="btn btn-mini" data-action="stack-up">Start all services</button>' : "") +
-        (noEntry.length ? '<button type="button" class="btn btn-mini" data-action="nav" data-view="sites">Review ' + noEntry.length + " site" + (noEntry.length === 1 ? "" : "s") + "</button>" : "") +
-        (pendingHosts ? '<button type="button" class="btn btn-mini" data-action="nav" data-view="hosts">Publish ' + pendingHosts + " hostname" + (pendingHosts === 1 ? "" : "s") + "</button>" : "") +
-        "</div>"
-      : "";
-
-    var sites = allSites.length
-      ? uiList(allSites.slice(0, 5).map(function (row) {
-        return uiRow({
-          dot: row.serving === "no_entry" ? "warn" : row.server_running ? "ok" : "off",
-          title: '<span class="mono">' + esc(row.site.host || row.site.name) + "</span>",
-          sub: esc(servingLabel(row) || "not serving"),
-          open: 'data-action="open-site" data-name="' + attr(row.site.name) + '"',
-          actions: '<button type="button" class="btn btn-mini" data-action="open-site" data-name="' + attr(row.site.name) + '">Manage</button>' +
-            '<button type="button" class="btn btn-mini btn-ghost" data-action="open-url" data-url="' + attr(row.url) + '" aria-label="Open ' + attr(row.url) + ' in the browser">Open</button>',
-          hover: true
-        });
-      }))
-      : uiEmpty("No sites yet", "A site gives a project an HTTPS address on this machine.", '<button type="button" class="btn btn-primary btn-mini" data-action="new-site">Create a site</button>');
-
-    var live = [];
-    d.threads.filter(function (t) { return t.state === "running" || t.state === "waiting_approval"; }).forEach(function (t) {
-      live.push(uiRow({ dot: t.state === "running" ? "live" : "warn", title: esc(t.title), sub: t.state === "running" ? "Assistant · working" : "Assistant · waiting for your decision",
-        actions: '<button type="button" class="btn btn-mini" data-action="open-thread" data-id="' + attr(t.id) + '">Open</button>' }));
-    });
-    (d.teamRuns || []).filter(function (t) { return ["planning", "running"].indexOf(t.state) >= 0; }).forEach(function (t) {
-      live.push(uiRow({ dot: "live", title: esc(t.title), sub: "Team · " + esc(t.state === "planning" ? "planning" : (t.tasks_done || 0) + " of " + (t.tasks_total || 0) + " tasks done"),
-        actions: '<button type="button" class="btn btn-mini" data-action="team-open-from" data-id="' + attr(t.id) + '">Open</button>' }));
-    });
-
-    // What happened, newest first, as a timeline. A refusal is shown as one.
-    var events = d.audit.filter(function (a) { return !a.dry_run && a.tier !== "read"; }).slice(0, 8);
-    var feed = events.length
-      ? '<div class="timeline">' + events.map(function (a) {
-        var who = a.actor.replace("human:", "you via ").replace("agent:", "agent ");
-        return '<div class="tl-item">' + uiDot(a.ok ? (a.actor.indexOf("agent:") === 0 ? "live" : "ok") : "bad") +
-          '<span class="tl-text" title="' + attr(a.capability + " · " + (a.message || "")) + '">' + esc(who) + (a.ok ? ": " : " (refused): ") + esc(capLabel(a.capability).charAt(0).toLowerCase() + capLabel(a.capability).slice(1)) + "</span>" +
-          '<span class="tl-when">' + esc(ago(a.at)) + "</span></div>";
-      }).join("") + "</div>" +
-        '<div class="ui-more"><button type="button" data-action="nav" data-view="activity">All activity</button></div>'
-      : '<div class="ui-quiet">Quiet lately. Whenever something changes, from a window, an agent or a script, it lands here and in Activity.</div>';
+    var stat = function (view, tone, strong, rest) {
+      return '<button type="button" class="home-stat" data-action="nav" data-view="' + view + '">' + (tone !== null ? '<i class="home-stat-dot is-' + tone + '" aria-hidden="true"></i>' : "") +
+        "<b>" + esc(strong) + "</b>" + (rest ? " " + esc(rest) : "") + "</button>";
+    };
+    var status = state.server.loaded
+      ? '<nav class="home-status-line" aria-label="This machine">' +
+        (allSites.length ? stat("sites", noEntry.length ? "warn" : "ok", (allSites.length - noEntry.length) + " of " + allSites.length + " sites", "serve") : stat("sites", "off", "No sites", "yet")) +
+        (noEntry.length ? stat("sites", "warn", noEntry.length + (noEntry.length === 1 ? " site" : " sites"), "with nothing to serve") : "") +
+        (counts.total ? stat("services", counts.up === counts.total ? "ok" : "warn", counts.up + " of " + counts.total + " services", "running") : stat("services", "off", "No services", "installed")) +
+        (svcHeld.length ? stat("services", "warn", svcHeld.length + (svcHeld.length === 1 ? " port" : " ports"), "held by other programs") : "") +
+        (defaultPhp ? stat("runtimes", null, "PHP " + defaultPhp, "default") : "") +
+        stat("team", working ? "live" : "off", working ? working + (working === 1 ? " agent" : " agents") : "Agents", working ? "working" : "idle") +
+        "</nav>"
+      : '<div class="home-status-line is-loading" role="status">Reading this machine\u2026</div>';
 
     el("main").innerHTML =
-      '<div class="page home">' +
-      '<header class="home-head">' +
-        '<div class="home-head-text">' +
+      '<div class="page home home-launch">' +
+        '<header class="home-head">' +
           '<h1 class="home-status" id="home-status">' + esc(greeting()) + ".</h1>" +
           '<p class="home-lead">' + esc(homeLead(attentionTotal, d, required.length)) + "</p>" +
-          '<p class="home-sub">' + esc(homeSentence(d, counts, allSites, noEntry, svcHeld)) + "</p>" +
-        "</div>" +
-      "</header>" +
-      ask +
-      '<div class="home-grid">' +
-        '<div class="home-col home-main-col">' +
-          (needsHtml ? '<section class="home-attention" aria-label="Attention">' + needsHtml + "</section>" : "") + setup +
-          (live.length ? uiHead("Working now", live.length) + uiList(live) : "") +
-          uiHead("Projects", allProjects.length || null, '<button type="button" class="btn btn-mini btn-ghost" data-action="nav" data-view="develop">Import one</button><button type="button" class="btn btn-mini" data-action="nav" data-view="create">Start a new one</button><button type="button" class="btn btn-mini btn-ghost" data-action="nav" data-view="projects">See all</button>') + projects +
-        "</div>" +
-        '<aside class="home-col home-side-col" aria-label="This machine and recent activity">' +
-          uiHead("This machine", null, '<button type="button" class="btn btn-mini btn-ghost" data-action="nav" data-view="overview">Environment</button>') +
-          '<section class="home-env" aria-label="This machine">' + env + envLinks + "</section>" +
-          uiHead("Recently", null) + feed +
-        "</aside>" +
-      "</div>" +
+        "</header>" +
+        '<div class="home-ask">' + ask + "</div>" + picks +
+        (needs.length ? '<section class="home-needs" aria-label="Needs you">' + needs.slice(0, 3).join("") +
+          (needs.length > 3 ? '<div class="ui-more"><button type="button" data-action="nav" data-view="inbox">' + (needs.length - 3) + " more in the Inbox</button></div>" : "") + "</section>" : "") +
+        (work5.length ? '<section class="home-work" aria-labelledby="home-work-h"><div class="home-label-row"><h2 class="home-label" id="home-work-h">' + (liveCount ? "Working now" : "Your work") + "</h2>" +
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="nav" data-view="assistant">All conversations</button></div>' +
+          '<div class="home-work-list">' + work5.map(function (x) { return x.html; }).join("") + "</div></section>" : "") +
+        status +
       "</div>";
+  }
+
+  /* One thing that needs a person: what kind, who asks, the decision, and the buttons that
+     make it. The kicker says the kind in words; the colour only repeats it. */
+  function homeNeed(o) {
+    var faceRole = o.face && (ROLE_FACE[o.face] || o.face === "team") ? o.face : "";
+    return '<div class="home-need' + (o.tone === "bad" ? " is-bad" : "") + '"' + (o.open ? " " + o.open + ' data-open="1" role="button" tabindex="0" aria-label="' + attr(o.title || o.kicker) + '"' : "") + ">" +
+      (faceRole ? faceHtml(faceRole, "sm") : '<span class="home-need-mark" aria-hidden="true"><svg class="icon"><use href="#i-warn"></use></svg></span>') +
+      '<div class="home-need-text"><div class="home-need-kicker">' + esc(o.kicker) + "</div><b>" + esc(o.title || "") + "</b>" +
+      (o.sub ? "<span>" + esc(o.sub) + "</span>" : "") + "</div>" +
+      (o.actions ? '<div class="home-need-actions">' + o.actions + "</div>" : "") + "</div>";
+  }
+
+  /* Where a team run stands, in words, with the tone of its dot. */
+  function runWords(r) {
+    if (!r) return ["", ""];
+    if (r.state === "planning") return ["live", "planning"];
+    if (r.state === "running") return ["live", (r.tasks_done || 0) + " of " + (r.tasks_total || 0) + " tasks done"];
+    if (r.state === "awaiting_plan") return ["warn", "plan waiting for you"];
+    if (r.state === "paused") return ["warn", "paused"];
+    if (r.state === "done") return ["ok", "finished \u00b7 " + (r.tasks_done || 0) + " of " + (r.tasks_total || 0) + " tasks"];
+    if (r.state === "failed") return ["bad", "failed"];
+    if (r.state === "cancelled") return ["", "cancelled"];
+    return ["", r.state || ""];
+  }
+
+  function homeWorkRow(o) {
+    var faces = (o.faces || []).filter(function (r, i, all) { return all.indexOf(r) === i; }).slice(0, 3);
+    var tone = o.state[0], words = o.state[1];
+    return '<button type="button" class="home-work-row" data-action="' + o.action + '" data-id="' + attr(o.id) + '" title="' + attr(o.title) + '">' +
+      (faces.length ? '<span class="kid-faces home-work-faces" aria-hidden="true">' + faces.map(function (r) { return faceHtml(r, "xs"); }).join("") + "</span>"
+        : '<span class="home-work-dot' + (tone ? " is-" + tone : "") + '" aria-hidden="true"></span>') +
+      '<span class="home-work-main"><span class="home-work-title">' + esc(o.title) + "</span>" +
+      '<span class="home-work-sub">' + (o.project ? "<span>" + esc(o.project) + "</span>" : "<span>No project</span>") +
+        (words ? '<span class="sep" aria-hidden="true">\u00b7</span><span class="' + (tone ? "is-" + tone : "") + '">' + esc(words) + "</span>" : "") +
+        (o.pr ? '<span class="sep" aria-hidden="true">\u00b7</span><span class="mono">' + esc(prLabel(o.pr)) + "</span>" : "") + "</span></span>" +
+      '<span class="home-work-time">' + esc(ago(o.at)) + "</span></button>";
+  }
+
+  /* A project's colour on Home: what it is built with, from its stack or what its site serves. */
+  function projectColor(p, site) {
+    var stack = String(p.stack || "").toLowerCase();
+    if (/laravel|symfony|rails/.test(stack)) return "red";
+    if (/rust/.test(stack)) return "orange";
+    if (/node|next|nuxt|vue|react|svelte|astro/.test(stack)) return "green";
+    if (/python|django|flask|go/.test(stack)) return "blue";
+    var serving = site && site.serving;
+    if (serving === "php") return "violet";
+    if (serving === "static") return "yellow";
+    if (serving === "proxy") return "teal";
+    return "grey";
   }
 
   /* What to say first, in the voice of someone glad you are here. Every branch is
@@ -8457,31 +8430,7 @@ var TERM_POLL_MS = 250;
     return "All quiet. Pick up where you left off, or start something new.";
   }
 
-  /* The sentence under the headline: only things devd has measured, in the order
-     a person would ask about them. Nothing here is a total for its own sake. */
-  function homeSentence(d, counts, allSites, noEntry, held) {
-    var bits = [];
-    if (counts.total) bits.push(serviceSummary(counts));
-    if (held && held.length) bits.push(held.length + (held.length === 1 ? " port is" : " ports are") + " held by other programs");
-    if (allSites.length) bits.push((allSites.length - noEntry.length) + " of " + allSites.length + " sites can serve");
-    var working = d.threads.filter(function (t) { return t.state === "running"; }).length +
-      (d.teamRuns || []).filter(function (t) { return ["planning", "running"].indexOf(t.state) >= 0; }).length;
-    bits.push(working ? working + (working === 1 ? " agent is working" : " agents are working") : "no agents working");
-    return bits.join("  ·  ");
-  }
 
-  /* Home's headline says what state things are in, in words: what needs a person
-     first, then what is working, then quiet. It is never a question to the user. */
-  function homeHeadline(needCount, d, setupCount) {
-    if (needCount) return needCount === 1 ? "One thing needs you" : needCount + " things need you";
-    if (setupCount) return "devd is almost set up";
-    var working = d.threads.filter(function (t) { return t.state === "running"; }).length +
-      (d.teamRuns || []).filter(function (t) { return ["planning", "running"].indexOf(t.state) >= 0; }).length;
-    if (working) return working === 1 ? "An agent is working" : working + " agents are working";
-    var counts = serviceCounts(state.server.services || []);
-    if (counts.needed && counts.neededUp < counts.needed) return "Some services need attention";
-    return "Nothing needs you";
-  }
 
   function openSetupSheet() {
     var reqs = ((AI.requirements && AI.requirements.requirements) || []).filter(function (r) { return r.state !== "ready"; });
@@ -11350,6 +11299,8 @@ var TERM_POLL_MS = 250;
     setFormButton("intake-save", !!(readInput("intake-name") && readInput("intake-goal")));
     var project = el("sched-project");
     setFormButton("schedule-create", !!(readInput("sched-name") && readInput("sched-spec") && project && project.value));
+    var autoProject = el("auto-project");
+    setFormButton("automation-create", !!(readInput("auto-name") && autoProject && autoProject.value && readInput("auto-goal")));
   }
 
   function checked(id) {
@@ -12774,6 +12725,13 @@ var TERM_POLL_MS = 250;
       paintComposerPopover();
     },
 
+    "home-pick": function (node) {
+      var path = node.dataset.path || "";
+      AI.askProject = AI.askProject === path ? "" : path;
+      renderHome();
+      var box = el("home-ask");
+      if (box) box.focus();
+    },
     "composer-project-set": function (node) {
       var path = node.dataset.value || "";
       var prefix = AI.popover && AI.popover.prefix;
@@ -15513,6 +15471,13 @@ var TERM_POLL_MS = 250;
     if (t.dataset && t.dataset.provModel !== undefined && t.dataset.provModel !== "") setProviderModel(t.dataset.provModel, t.value.trim());
   });
   document.addEventListener("keydown", function (e) {
+    // A card that opens a sheet is a control, so Enter and Space must work on
+    // it as they do on a button.
+    if ((e.key === "Enter" || e.key === " ") && e.target.matches && e.target.matches(".home-need[data-open]")) {
+      e.preventDefault();
+      e.target.click();
+      return;
+    }
     // The path line in the folder picker is a real jump field. It used to
     // accept typing and then do nothing.
     if (e.target.id === "picker-path-input" && e.key === "Enter" && !e.isComposing) {
