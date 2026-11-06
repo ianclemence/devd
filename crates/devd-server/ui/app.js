@@ -8696,6 +8696,10 @@ var TERM_POLL_MS = 250;
   function renderAssistant() {
     if (state.view !== "assistant") return;
     if (!AI.threads) return renderLoading();
+    // Files belong to the conversation they were attached in. Opening another one,
+    // or starting a new one, starts with none.
+    var forThread = AI.thread ? AI.thread.id : "";
+    if (ATT.chatFor !== forThread) { clearAttachments("chat"); ATT.chatFor = forThread; }
     var ready = (AI.providers || []).some(function (p) { return p.enabled && (p.has_key || !p.needs_key); });
     var projOpts = '<option value="">No project</option>' + state.projects.map(function (p) { return '<option value="' + attr(p.path) + '"' + (AI.project === p.path ? " selected" : "") + ">" + esc(p.name || dirName(p.path)) + "</option>"; }).join("") +
       (DEV.projects || []).map(function (p) { return '<option value="' + attr(p.path) + '"' + (AI.project === p.path ? " selected" : "") + ">" + esc(p.name) + "</option>"; }).join("");
@@ -8734,7 +8738,7 @@ var TERM_POLL_MS = 250;
       "</section></div></div>";
     paintThreads(); paintChat(true);
     paintChatPlan();
-    paintAttachments();
+    paintAttachments("chat");
     fitComposer();
     var box = el("chat-stream"); if (box) box.scrollTop = box.querySelector(".assist-empty") ? 0 : box.scrollHeight;
     startThreadTimer();
@@ -8796,7 +8800,14 @@ var TERM_POLL_MS = 250;
         '" aria-label="Delete this run">\u00d7</button>' +
         "</div>";
     }).join("") || '<div class="empty-inline">No runs yet. Give the team a goal and it will show up here.</div>';
-    if (!TEAM.sel || !TEAM.data) { box.innerHTML = teamForm(); return; }
+    if (!TEAM.sel || !TEAM.data) {
+      // The form is drawn once, when it comes on screen, and again only when something
+      // changes what it shows (a template, the project, New). The run timer calls this
+      // every 1.2 s; redrawing the form each time closed an open dropdown before a
+      // choice could be made and took the cursor out of the goal box.
+      if (TEAM.lastHtml !== "<form>") { box.innerHTML = teamForm(); TEAM.lastHtml = "<form>"; }
+      return;
+    }
     var focus = document.activeElement && document.activeElement.id;
     var val = focus === "team-say" ? document.activeElement.value : null;
     // The run view is refreshed every 1.2 s. Replacing its markup reset the
@@ -9730,14 +9741,17 @@ var TERM_POLL_MS = 250;
   // paths are remembered; speech is recorded in the browser as 16 kHz mono
   // WAV - the shape Whisper wants - and transcribed on this machine.
 
-  var ATTACHMENTS = [];
+  /* Each composer keeps its own files: the one on Home and the one in a conversation.
+     A file attached on Home belongs to the message being written on Home, and must not
+     turn up in the Assistant because both boxes happen to be called a composer. */
+  var ATT = { home: [], chat: [], chatFor: "" };
   var RECORDER = null;
 
   /* The strip along the top of a composer: the paperclip, and beside it the
      files that will go with the message. It lives inside the composer, above
      the words, so what is attached is read together with what is asked. */
   function composerTop(prefix) {
-    return '<div class="composer-attachments" id="' + prefix + '-attachments"' + (ATTACHMENTS.length ? "" : " hidden") + ">" + attachmentChips() + "</div>" +
+    return '<div class="composer-attachments" id="' + prefix + '-attachments"' + (ATT[prefix].length ? "" : " hidden") + ">" + attachmentChips(prefix) + "</div>" +
       '<input type="file" id="' + prefix + '-file" multiple hidden>';
   }
 
@@ -10385,8 +10399,8 @@ var TERM_POLL_MS = 250;
     return n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : n >= 1024 ? Math.round(n / 1024) + " KB" : n + " B";
   }
 
-  function attachmentChips() {
-    return ATTACHMENTS.map(function (a, i) {
+  function attachmentChips(lane) {
+    return ATT[lane].map(function (a, i) {
       var st = a.state || "done";
       var image = !!a.preview;
       var glyph = '<span class="attach-glyph"><svg class="icon" aria-hidden="true"><use href="#i-file"></use></svg></span>';
@@ -10396,47 +10410,49 @@ var TERM_POLL_MS = 250;
         : glyph + '<span class="attach-meta"><b>' + esc(midName(a.name, 20)) + "</b><i>" + esc(info) + "</i></span>";
       var action = st === "error" ? "chat-retry-file" : image ? "chat-preview-file" : "";
       return '<span class="composer-attachment ' + (image ? "is-image" : "is-file") + (st === "uploading" ? " is-uploading" : "") + (st === "error" ? " is-error" : "") + '" title="' + attr(a.name + " (" + attachmentSize(a.bytes) + ")" + (st === "error" ? ": " + (a.error || "failed") : "")) + '">' +
-        '<button type="button" class="attach-open"' + (action ? ' data-action="' + action + '"' : "") + ' data-index="' + i + '" aria-label="' + attr((st === "error" ? "Retry " : image ? "Preview " : "") + a.name) + '">' + body + "</button>" +
-        '<button class="attach-x btn-danger" type="button" data-action="chat-remove-file" data-index="' + i + '" aria-label="Remove ' + attr(a.name) + '">×</button></span>';
+        '<button type="button" class="attach-open"' + (action ? ' data-action="' + action + '"' : "") + ' data-lane="' + lane + '" data-index="' + i + '" aria-label="' + attr((st === "error" ? "Retry " : image ? "Preview " : "") + a.name) + '">' + body + "</button>" +
+        '<button class="attach-x btn-danger" type="button" data-action="chat-remove-file" data-lane="' + lane + '" data-index="' + i + '" aria-label="Remove ' + attr(a.name) + '">×</button></span>';
     }).join("");
   }
 
   /* Fold the attached files into what is sent, and clear them. It answers null
      while a file is still going up or has failed: a message must not leave
      without a file the person believes is attached. */
-  function takeAttachments(text) {
-    if (ATTACHMENTS.some(function (a) { return a.state === "uploading"; })) { toast("warn", "A file is still uploading"); return null; }
-    if (ATTACHMENTS.some(function (a) { return a.state === "error"; })) { toast("warn", "A file did not upload. Retry it or remove it first"); return null; }
-    if (ATTACHMENTS.length) {
-      text += (text ? "\n\n" : "") + "Attached files:\n" + ATTACHMENTS.map(function (a) { return "- " + a.path; }).join("\n");
+  function takeAttachments(text, lane) {
+    var list = ATT[lane];
+    if (list.some(function (a) { return a.state === "uploading"; })) { toast("warn", "A file is still uploading"); return null; }
+    if (list.some(function (a) { return a.state === "error"; })) { toast("warn", "A file did not upload. Retry it or remove it first"); return null; }
+    if (list.length) {
+      text += (text ? "\n\n" : "") + "Attached files:\n" + list.map(function (a) { return "- " + a.path; }).join("\n");
     }
-    releaseAttachments();
-    ATTACHMENTS = [];
-    paintAttachments();
+    clearAttachments(lane);
     return text;
   }
 
-  function releaseAttachments() {
-    ATTACHMENTS.forEach(function (a) { if (a.preview && window.URL) { try { URL.revokeObjectURL(a.preview); } catch (e) { /* already gone */ } } });
+  /* Empty one composer's files and let go of their previews. */
+  function clearAttachments(lane) {
+    ATT[lane].forEach(function (a) { if (a.preview && window.URL) { try { URL.revokeObjectURL(a.preview); } catch (e) { /* already gone */ } } });
+    ATT[lane] = [];
+    paintAttachments(lane);
   }
 
   var ATTACH_MAX = 12;
 
   /* Each file gets its tile at once, from the copy already in the browser, and
      the tile says what the upload is doing. */
-  function addFiles(files) {
-    var room = ATTACH_MAX - ATTACHMENTS.length;
+  function addFiles(files, lane) {
+    var room = ATTACH_MAX - ATT[lane].length;
     if (files.length > room) {
       toast("warn", room > 0 ? "Only " + ATTACH_MAX + " files go with one message. The rest were left out" : "A message takes up to " + ATTACH_MAX + " files");
       files = files.slice(0, Math.max(0, room));
     }
     var jobs = files.map(function (f) {
-      var a = { name: f.name || "file", bytes: f.size, file: f, state: "uploading", path: "", error: "" };
+      var a = { name: f.name || "file", bytes: f.size, file: f, state: "uploading", path: "", error: "", lane: lane };
       if (/^image\//.test(f.type || "") && window.URL) a.preview = URL.createObjectURL(f);
-      ATTACHMENTS.push(a);
+      ATT[lane].push(a);
       return sendAttachment(a);
     });
-    paintAttachments();
+    paintAttachments(lane);
     return Promise.all(jobs);
   }
 
@@ -10447,16 +10463,21 @@ var TERM_POLL_MS = 250;
     }).catch(function (err) {
       a.state = "error"; a.error = err.message || "the file could not be uploaded";
       toast("error", a.name + ": " + a.error);
-    }).then(function () { paintAttachments(); });
+    }).then(function () { paintAttachments(a.lane); });
   }
 
-  function paintAttachments() {
-    ["chat-attachments", "home-attachments"].forEach(function (id) {
-      var box = el(id);
-      if (!box) return;
-      box.hidden = !ATTACHMENTS.length;
-      box.innerHTML = attachmentChips();
-    });
+  /* Which composer a place on the page belongs to. */
+  function laneOf(node) {
+    var composer = node && node.closest ? node.closest(".composer") : null;
+    return composer && composer.querySelector("#home-ask") ? "home" : "chat";
+  }
+
+  function paintAttachments(lane) {
+    var box = el(lane + "-attachments");
+    if (box) {
+      box.hidden = !ATT[lane].length;
+      box.innerHTML = attachmentChips(lane);
+    }
     syncComposerAction();
   }
 
@@ -10735,7 +10756,7 @@ var TERM_POLL_MS = 250;
     var inp = el("chat-input"), send = el("chat-send"), mic = el("chat-mic");
     if (!inp || !send || !mic) return;
     var busy = !!(AI.thread && (AI.thread.state === "running" || AI.running));
-    var hasText = !!(inp.value || "").trim() || ATTACHMENTS.length;
+    var hasText = !!(inp.value || "").trim() || ATT.chat.length;
     // One primary action in the slot, and it says what pressing it does now:
     // while the agent works with nothing typed, it stops; the moment there is
     // text it becomes the arrow, which sends (or queues when it is still
@@ -11118,19 +11139,21 @@ var TERM_POLL_MS = 250;
     },
 
     "chat-remove-file": function (node) {
-      var gone = ATTACHMENTS.splice(Number(node.dataset.index), 1)[0];
+      var lane = node.dataset.lane === "home" ? "home" : "chat";
+      var gone = ATT[lane].splice(Number(node.dataset.index), 1)[0];
       if (gone && gone.preview && window.URL) { try { URL.revokeObjectURL(gone.preview); } catch (e) { /* already gone */ } }
-      paintAttachments();
+      paintAttachments(lane);
     },
     "chat-retry-file": function (node) {
-      var a = ATTACHMENTS[Number(node.dataset.index)];
+      var lane = node.dataset.lane === "home" ? "home" : "chat";
+      var a = ATT[lane][Number(node.dataset.index)];
       if (!a || !a.file) return;
       a.state = "uploading"; a.error = "";
-      paintAttachments();
+      paintAttachments(lane);
       sendAttachment(a);
     },
     "chat-preview-file": function (node) {
-      var a = ATTACHMENTS[Number(node.dataset.index)];
+      var a = ATT[node.dataset.lane === "home" ? "home" : "chat"][Number(node.dataset.index)];
       if (!a || !a.preview) return;
       uiSheet(a.name, '<img class="attach-full" src="' + attr(a.preview) + '" alt="' + attr(a.name) + '">' +
         '<p class="dim">' + esc(attachmentSize(a.bytes)) + (a.path ? ' &middot; <span class="mono">' + esc(a.path) + "</span>" : "") + "</p>");
@@ -11244,7 +11267,7 @@ var TERM_POLL_MS = 250;
       }).then(function () { if (state.view === "agents") renderRoster(); });
     },
 
-    "team-new": function () { TEAM.sel = null; TEAM.data = null; paintTeam(); },
+    "team-new": function () { TEAM.sel = null; TEAM.data = null; TEAM.lastHtml = ""; paintTeam(); },
     "team-open": function (n) { TEAM.sel = n.dataset.id; read("team.get", { run: TEAM.sel }).then(function (d) { TEAM.data = d; paintTeam(); }); },
     "team-toggle": function (n) { TEAM.open[n.dataset.id] = !TEAM.open[n.dataset.id]; paintTeam(); },
     "team-start": function () {
@@ -11271,7 +11294,7 @@ var TERM_POLL_MS = 250;
     "team-open-from": function (n) { TEAM.sel = n.dataset.id; TEAM.data = null; navigate("team"); },
     "home-team": function () {
       var text = (el("home-ask").value || "").trim(), p = AI.askProject || "";
-      var goal = takeAttachments(text);
+      var goal = takeAttachments(text, "home");
       if (goal === null) return;
       TEAM.form.goal = goal; if (p) TEAM.form.project = p;
       TEAM.sel = null; TEAM.data = null; navigate("team");
@@ -11511,7 +11534,7 @@ var TERM_POLL_MS = 250;
     "home-ask": function () {
       var text = (el("home-ask").value || "").trim();
       if (!text) return toast("warn", "Write what you want done first");
-      var full = takeAttachments(text);
+      var full = takeAttachments(text, "home");
       if (full === null) return;
       startChat(full, AI.askProject || "");
     },
@@ -11535,9 +11558,9 @@ var TERM_POLL_MS = 250;
     },
     "chat-send": function () {
       var inp = el("chat-input"); var text = (inp.value || "").trim();
-      if (!text && !ATTACHMENTS.length) return;
+      if (!text && !ATT.chat.length) return;
       // The files travel with the message, so the agent can read them.
-      text = takeAttachments(text);
+      text = takeAttachments(text, "chat");
       if (text === null) return;
       inp.value = ""; AI.composer = "";
       fitComposer();
@@ -13469,7 +13492,7 @@ var TERM_POLL_MS = 250;
     if (t.id === "chat-file" || t.id === "home-file") {
       var files = Array.prototype.slice.call(t.files || []);
       if (!files.length) return;
-      addFiles(files).then(function () { t.value = ""; });
+      addFiles(files, t.id === "home-file" ? "home" : "chat").then(function () { t.value = ""; });
       return;
     }
     if (t.id === "team-template") {
@@ -13478,6 +13501,7 @@ var TERM_POLL_MS = 250;
       read("template.get", { id: t.value }).then(function (tpl) {
         TEAM.form.goal = tpl.body;
         TEAM.form.done = (tpl.done_when || []).join("\n");
+        TEAM.lastHtml = "";
         paintTeam();
         toast("info", "Replace the {{blanks}} in the goal with your own words before you start.");
       });
@@ -13486,7 +13510,7 @@ var TERM_POLL_MS = 250;
     if (t.id === "sched-project") SCHED.form.project = t.value;
     if (t.id === "sched-template") { SCHED.form.template = t.value; renderSchedules(); return; }
     if (t.id === "sched-waive") SCHED.form.waive = t.checked;
-    if (t.id === "team-project") { TEAM.form.project = t.value; paintTeam(); }
+    if (t.id === "team-project") { TEAM.form.project = t.value; TEAM.lastHtml = ""; paintTeam(); }
     if (t.id === "team-parallel") TEAM.form.parallel = parseInt(t.value, 10);
   });
   // ----------------------------------------------------------------------- boot
@@ -13584,7 +13608,7 @@ var TERM_POLL_MS = 250;
       if (f.name && !/^image\.\w+$/i.test(f.name)) return f;
       var ext = ((f.type || "").split("/")[1] || "png").replace("jpeg", "jpg");
       return new File([f], "Pasted image " + stamp + (i ? " (" + (i + 1) + ")" : "") + "." + ext, { type: f.type });
-    }));
+    }), laneOf(composer));
   });
 
   /* A picture that cannot be shown falls back to the file card, not a broken icon. */
@@ -13603,7 +13627,7 @@ var TERM_POLL_MS = 250;
     event.preventDefault();
     var files = Array.prototype.slice.call((event.dataTransfer && event.dataTransfer.files) || []);
     if (!files.length) return;
-    addFiles(files);
+    addFiles(files, laneOf(composer));
   });
 
 

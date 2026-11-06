@@ -1145,3 +1145,27 @@ fn refreshing_a_run_keeps_the_readers_place() {
         "the scroll position is restored after a repaint: {body}");
     assert!(body.contains("html !== TEAM.lastHtml"), "an unchanged run is not repainted at all");
 }
+
+#[test]
+fn the_run_form_is_not_redrawn_by_the_timer_that_refreshes_the_run_list() {
+    // `paintTeam` runs every 1.2 s. Rebuilding the new-run form each time closed an
+    // open template dropdown before a choice could be made.
+    let start = APP.find("function paintTeam()").expect("paintTeam is gone");
+    let body = &APP[start..start + 2400];
+    assert!(
+        body.contains("TEAM.lastHtml !== \"<form>\""),
+        "the form is drawn once and only again when something that it shows changes"
+    );
+    assert!(
+        APP.matches("TEAM.lastHtml = \"\";").count() >= 4,
+        "opening the page, choosing a template, a project and New redraw the form on purpose"
+    );
+}
+
+#[test]
+fn each_composer_keeps_its_own_files() {
+    // One list for the whole app put a file attached on Home into the Assistant.
+    assert!(!APP.contains("ATTACHMENTS"), "attachments are kept per composer (ATT.home, ATT.chat)");
+    assert!(APP.contains("var ATT = { home: [], chat: [], chatFor: \"\" }"));
+    assert!(APP.contains("takeAttachments(text, \"home\")") && APP.contains("takeAttachments(text, \"chat\")"));
+}
