@@ -138,16 +138,13 @@ GitHub-shaped hook call; `ONLY=hooks` runs only the hook part), `livecheck.mjs`,
    agreed with the rule "directions before CSS": three Home directions mocked as real screens in
    `D:\devd-promo\mock\home-*.html` (devd's own style.css + real test data) -> owner picks one ->
    implement only that, check 1600/1280/1024/800/390, then the other screens.
-   **Owner picked B "Workbench" (2026-11-07; first said A, then "NO GO WITH B-WORKBENCH")**: work
-   on the left (greeting, ask box, needs-you cards, your work with result numbers), a "This
-   machine" column on the right (services card + project tiles with address, status and stack).
-   Mock: `D:\devd-promo\public\audit\home-mocks\B-workbench-1440.png` (script `capture/home-mocks.mjs`).
-   Code state (uncommitted, in progress): `renderHome` in app.js already has the needs-you cards
-   (`homeNeed`), the work list (`homeWorkRow`, `runWords`, runs linked to their conversation by
-   `thread_id`), `projectColor`, and a `home-pick` action from the A build; style.css ends with a
-   "Home: a launchpad" block. Converting that to B: drop the picks and the status line, add the
-   right-hand machine column (services card + project tiles + "All N projects"), result numbers
-   on finished runs (only real numbers: tasks done/total, specialists, PR), then shoot every width.
+   **FINAL: the team chose A "Launchpad" (2026-11-07: "GO WITH A. THE TEAM CHOSE A. IT IS CLEANER").**
+   Do not build B. Mock: `D:\devd-promo\public\audit\home-mocks\A-launchpad-1440.png` (script `capture/home-mocks.mjs`).
+   A = one centred column: greeting + lead, ask box, project picks (one click aims the ask box,
+   `home-pick`), needs-you cards (`homeNeed`: kind in words, face, buttons), "Your work" /
+   "Working now" (`homeWorkRow`, `runWords`; runs linked to their conversation by `thread_id`),
+   and the machine as one clickable status line (`home-stat`). Styles: style.css block
+   "Home: a launchpad". Next: verify at 1600/1280/1024/800/390, then commit.
    Directions were: A "Launchpad" (centred greeting + composer, projects as one-click "start here"
    picks, needs-you inline, recent work, machine as one quiet status line); B "Workbench" (work on
    the left, a live machine column of project tiles with their addresses and service lights on the
