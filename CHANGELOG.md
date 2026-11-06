@@ -16,6 +16,51 @@ Nothing yet.
 
 ---
 
+## [0.25.0] - 2026-11-06 - A team you can watch work
+
+### Changed
+
+- **Navigation is a rail and a context panel.** The top bar and the section tabs are gone:
+  a rail says where you are, a panel lists what is in that area (its pages, its projects or
+  sites, or the conversations and runs, grouped by project), and the page starts at the top
+  of the window. The panel folds over the page below 1024 px; phones get a bottom bar.
+- **Graphite and one blue**, one type scale, one icon line weight, and semantic colour names
+  (`--color-primary`, `--color-base-100`, `--color-success`...) for new work.
+- **Conversations read as a team at work.** Each role has its own mark; steps say what was
+  done to what ("Read Meetup.php", "Ran test ... 41 passed"); edits show their diff; a finished
+  turn folds its work behind "Worked for 12m 55s" with result tiles; a specialist's
+  conversation sits under the request it works for.
+- **Plain words for operations.** Activity, Home, approvals and evidence name an operation
+  the way a person would ("Start a new conversation from a message"), not by its id.
+
+### Added
+
+- Search inside a conversation (Ctrl F), including folded steps and reports.
+- A project card beside a conversation: branch, changed files, and lines changed split into
+  code, tests and docs, counted from the real patch.
+- `team.stats`: how the team is doing, per role and project, from every task's record:
+  accepted on proof, rework, reviews asking for changes, verification pass rate, time to finish.
+- `models.usage`: tokens by model and by member, and the heaviest conversations.
+- Built-in skills `agent-browser` and `agent-desktop`; FFmpeg, HyperFrames, agent-browser and
+  agent-desktop in the tool catalogue; one-click HyperFrames and Stageshow skills.
+- Long code blocks fold; a "Jump to latest" pill appears when you have scrolled up.
+
+### Fixed
+
+- **A handoff's conversation appears without a refresh**, on every screen, and the Inbox stays
+  in sync. Live events for any conversation or run now reach the window.
+- **Reading a conversation no longer jumps.** Updates patch the page in place, so the scroll
+  position, opened cards and loaded images survive them.
+- **A reviewer's "changes needed" is acted on.** The findings go back for a fix and a re-review,
+  at most twice, then the person decides; before, the run finished anyway.
+- **Screens load in about 2 s, not 5-15 s.** A new event stream no longer replays all history;
+  Git state loads in the background four at a time; machine probes are shared and cached until
+  something changes.
+- The person's own message was drawn as a note from the team.
+- The Sites table's headings now sit over their columns.
+
+---
+
 ## [0.24.1] - 2026-11-06 - The assistant hears back from its team
 
 ### Fixed

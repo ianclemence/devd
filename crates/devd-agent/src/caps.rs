@@ -2188,6 +2188,28 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             },
     )?;
     }
+    reg.define::<NoArgs>("team.stats", "How the team is performing")
+    .description("Measured from every task the team was given: per role, per project and overall - tasks accepted on proof, rejected and abandoned, the acceptance rate of tasks that ended, rework (extra attempts per task), reviews that asked for changes, the pass rate of verification runs devd recorded, and median time to finish. Output volume is never a score.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, _| simple("team.stats", "measure the team's record"),
+        |ctx, _| Ok(Outcome::with_data("the team's record", crate::team_stats::stats(ctx)?)),
+    )?;
+    reg.define::<NoArgs>("models.usage", "Tokens by model and by who used them")
+    .description("Input and output tokens per model and per member (the assistant or a team role), and the heaviest conversations, as providers reported them. No cost is shown: prices and cache tiers are not recorded per call, and an estimate would mislead.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, _| simple("models.usage", "read token usage"),
+        |ctx, _| Ok(Outcome::with_data("token usage", crate::team_stats::usage(ctx)?)),
+    )?;
     reg.define::<NoArgs>("chat.list", "List conversations")
     .description("Recent conversations with the built-in agent, with their state (idle, running, waiting_approval, error) and token use.")
     .tier(Tier::Read)

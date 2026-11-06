@@ -370,8 +370,17 @@
     });
     if (box.parentNode) box.parentNode.insertBefore(pill, box.nextSibling);
     box._pill = pill;
+    // The pill sits just above where the messages end, measured each time it shows:
+    // the composer below grows as a person types, so a fixed offset drifts onto it.
+    var place = function () {
+      var host = box.parentNode;
+      if (!host) return;
+      var gap = host.getBoundingClientRect().bottom - box.getBoundingClientRect().bottom;
+      pill.style.bottom = Math.round(gap + 14) + "px";
+    };
     box.addEventListener("scroll", function () {
       box._stick.on = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+      if (!box._stick.on && pill.hidden) place();
       pill.hidden = box._stick.on;
     }, { passive: true });
     // An image or video finishing late is the main thing that grows a conversation
@@ -3714,6 +3723,7 @@
    * prove, and which skills each carries. Read from team.roles, so this screen
    * cannot disagree with the capability the agents themselves use. */
   function loadRoster() {
+    read("team.stats").then(function (d) { state.teamStats = d; if (state.view === "agents") renderRoster(); }).catch(function () {});
     return Promise.all([
       read("team.roles"),
       state.projects.length ? Promise.resolve() : loadProjects()
@@ -3886,6 +3896,47 @@
       "</div>");
   }
 
+  /* The team's record, from what every task left behind. Acceptance counts only tasks
+     that ended; rework and review outcomes sit beside it so speed never reads as quality. */
+  function pct(x) { return x === null || x === undefined ? "\u2014" : Math.round(x * 100) + "%"; }
+  function secs(x) { return x === null || x === undefined ? "\u2014" : duration(x * 1000); }
+  function teamRecordHtml(d) {
+    if (!d || !d.team) return "";
+    var t = d.team;
+    if (!t.tasks) return uiHead("How the team is doing", null) + '<div class="ui-quiet">No team tasks yet. Give the team a goal and its record builds from the work.</div>';
+    var tiles = [
+      ["Accepted on proof", pct(t.acceptance_rate), t.accepted + " of " + (t.accepted + t.rejected + t.abandoned) + " that ended"],
+      ["Rework", t.rework_per_task === null ? "\u2014" : t.rework_per_task.toFixed(2), "extra attempts per task"],
+      ["Reviews asking for changes", String(t.changes_requested), "fix rounds reviewers sent back"],
+      ["Verification runs passing", pct(t.verification_pass_rate), t.verification_runs + " runs recorded by devd"],
+      ["Median time to finish", secs(t.median_seconds), t.open ? t.open + " still open" : "all settled"]
+    ].map(function (x) { return '<div class="kpi"><div class="kpi-k">' + esc(x[0]) + '</div><div class="kpi-v">' + esc(x[1]) + '</div><div class="kpi-s">' + esc(x[2]) + "</div></div>"; }).join("");
+    var rows = (d.roles || []).map(function (r) {
+      return "<tr><td>" + faceHtml(r.name, "xs") + " " + esc(roleFace(r.name).name) + '</td><td class="num">' + r.tasks + '</td><td class="num">' + pct(r.acceptance_rate) + '</td><td class="num">' + (r.rework_per_task === null ? "\u2014" : r.rework_per_task.toFixed(2)) + '</td><td class="num">' + r.changes_requested + '</td><td class="num">' + pct(r.verification_pass_rate) + '</td><td class="num">' + secs(r.median_seconds) + "</td></tr>";
+    }).join("");
+    return uiHead("How the team is doing", null) + '<div class="kpi-row">' + tiles + "</div>" +
+      '<table class="table kpi-table"><thead><tr><th>Member</th><th class="num">Tasks</th><th class="num">Accepted</th><th class="num">Rework</th><th class="num">Changes asked</th><th class="num">Checks passing</th><th class="num">Median time</th></tr></thead><tbody>' + rows + "</tbody></table>";
+  }
+  /* Tokens by model and by who used them, as providers reported them. No cost: prices and
+     cache tiers are not recorded per call, and an estimate would mislead. */
+  function usageHtml(u) {
+    if (!u || !u.by_model) return "";
+    var tok = function (x) { return compactCount(x || 0); };
+    var table = function (rows, label) {
+      var total = rows.reduce(function (a, r) { return a + r.input + r.output; }, 0) || 1;
+      return '<table class="table kpi-table"><thead><tr><th>' + label + '</th><th class="num">Conversations</th><th class="num">Input</th><th class="num">Output</th><th>Share</th></tr></thead><tbody>' +
+        rows.map(function (r) {
+          var share = (r.input + r.output) / total;
+          return "<tr><td>" + esc(label === "Member" ? roleFace(r.name).name : r.name) + '</td><td class="num">' + r.conversations + '</td><td class="num">' + tok(r.input) + '</td><td class="num">' + tok(r.output) + '</td><td><span class="share"><span style="width:' + Math.max(2, Math.round(share * 100)) + '%"></span></span> <span class="dim">' + Math.round(share * 100) + "%</span></td></tr>";
+        }).join("") + "</tbody></table>";
+    };
+    return uiHead("Usage", null) + '<div class="ui-quiet">' + esc(u.note) + "</div>" +
+      table(u.by_model, "Model") + table(u.by_who, "Member") +
+      ((u.heaviest || []).length ? '<div class="run-section">Heaviest conversations</div>' + uiList(u.heaviest.map(function (h) {
+        return uiRow({ title: esc(h.title), sub: esc(roleFace(h.who).name + " \u00b7 " + h.model), meta: esc(tok(h.input + h.output) + " tokens"), open: 'data-action="open-thread" data-id="' + attr(h.id) + '"' });
+      })) : "");
+  }
+
   function renderRoster() {
     if (state.view !== "agents") return;
     var rows = state.roster || [];
@@ -3906,7 +3957,7 @@
       ? uiHead("The roster", rows.length) + groups.map(function (g) { return uiHead(g.title, g.members.length) + uiList(g.members.map(memberCard)); }).join("")
       : uiEmpty("The team is not available", "team.roles did not answer."));
     el("main").innerHTML = page("Team", "The people, the written agreement, and the context every agent works from.",
-      '<button type="button" class="btn btn-primary" data-action="nav" data-view="team">Give the team a goal</button>', body);
+      '<button type="button" class="btn btn-primary" data-action="nav" data-view="team">Give the team a goal</button>', teamRecordHtml(state.teamStats) + body);
   }
 
   function openAssign(id) {
@@ -6576,6 +6627,32 @@ var TERM_POLL_MS = 250;
     if (verb === "Listed" && noun && /^an? /.test(noun)) noun = noun.replace(/^an? /, "") + "s";
     return verb && noun ? verb + " " + noun : "";
   }
+  /* What a capability is called where a person reads it. The id ("chat.fork") is for
+     machines; people get the phrase devd writes for it, else the registry's own
+     summary ("Start a new conversation from a message"), else words from the id. */
+  var CAP_SUMMARY = {};
+  function loadCapSummaries() {
+    var page = function (offset) {
+      return fetch("/api/capabilities?offset=" + offset + "&limit=200", { headers: { Authorization: "Bearer " + TOKEN } })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) {
+          if (!d || !d.items) return;
+          d.items.forEach(function (c) { if (c.summary) CAP_SUMMARY[c.id] = c.summary; });
+          if (offset + 200 < d.total) return page(offset + 200);
+        });
+    };
+    return page(0).catch(function () {});
+  }
+  function capLabel(id) {
+    var words = activityWords(id);
+    if (words) return words;
+    if (CAP_SUMMARY[id]) return CAP_SUMMARY[id];
+    var parts = String(id || "").replace(/^mcp__[^_]+__/, "").split(/[._]/).filter(Boolean);
+    if (!parts.length) return "an operation";
+    var text = parts.join(" ");
+    return text.charAt(0).toUpperCase() + text.slice(1);
+  }
+
   function activityWho(actor) {
     var a = String(actor || "");
     if (a.indexOf("agent:") === 0) return "Agent " + a.replace("agent:", "").replace("devd-", "");
@@ -6598,13 +6675,13 @@ var TERM_POLL_MS = 250;
       var outcome = a.dry_run ? '<span class="fact">only previewed</span>' : a.ok ? '<span class="fact fact-ok">went through</span>' : '<span class="fact fact-bad">was refused</span>';
       rows.push(uiRow({
         dot: a.dry_run ? "off" : a.ok ? "ok" : "bad",
-        title: '<span class="row-name">' + esc(words || a.capability) + "</span>" +
+        title: '<span class="row-name" title="' + attr(a.capability) + '">' + esc(words || capLabel(a.capability)) + "</span>" +
           ' <span class="facts">' + outcome + '<span class="fact">' + esc(activityWho(a.actor)) + "</span>" +
-          (words ? '<span class="fact mono">' + esc(a.capability) + "</span>" : "") + "</span>",
+          "</span>",
         sub: a.message && a.message !== "ok" ? esc(uiSummary(a.message, 160)) : "",
         meta: '<time datetime="' + attr(a.at) + '" title="' + attr(stamp(a.at)) + '">' + esc(auditTime(a.at)) + "</time>",
         open: 'data-action="open-audit" data-at="' + attr(a.at) + '" data-cap="' + attr(a.capability) + '"',
-        actions: (function () { var d = activityDest(a.capability); return d ? '<button type="button" class="btn btn-mini btn-ghost" data-action="nav" data-view="' + d.view + '"' + (d.view === "team" ? ' data-exact="1"' : "") + ' aria-label="Open ' + attr(d.label) + ' for ' + attr(a.capability) + '">' + esc(d.label) + "</button>" : ""; })(),
+        actions: (function () { var d = activityDest(a.capability); return d ? '<button type="button" class="btn btn-mini btn-ghost" data-action="nav" data-view="' + d.view + '"' + (d.view === "team" ? ' data-exact="1"' : "") +  ' aria-label="Open ' + attr(d.label) + ' for ' + attr(capLabel(a.capability)) + '">' + esc(d.label) + "</button>" : ""; })(),
         hover: true
       }));
     });
@@ -7282,7 +7359,12 @@ var TERM_POLL_MS = 250;
         i++;
         while (i < lines.length && !(new RegExp("^\\s{0,3}" + fence.charAt(0) + "{" + fence.length + ",}\\s*$").test(lines[i]))) { body.push(lines[i]); i++; }
         i++;
-        out.push('<div class="md-code"><div class="md-code-head"><span>' + esc(lang || "text") + '</span><button type="button" class="md-copy" data-action="copy-code">Copy</button></div><pre class="code"><code>' + esc(body.join("\n")) + "</code></pre></div>");
+        var longCode = body.length > 18;
+        // A long block shows its first lines and expands in place; the toggle is a <details>,
+        // so a conversation patched under the reader keeps it open.
+        out.push('<div class="md-code' + (longCode ? " is-long" : "") + '"><div class="md-code-head"><span>' + esc(lang || "text") + (longCode ? ' <span class="dim">' + body.length + " lines</span>" : "") + "</span>" +
+          (longCode ? '<details class="md-code-more"><summary>Expand</summary></details>' : "") +
+          '<button type="button" class="md-copy" data-action="copy-code">Copy</button></div><pre class="code"><code>' + esc(body.join("\n")) + "</code></pre></div>");
         continue;
       }
       if ((m = MD_HEAD.exec(line))) { out.push('<h' + m[1].length + ' class="md-h">' + mdInline(m[2]) + "</h" + m[1].length + ">"); i++; continue; }
@@ -7470,7 +7552,7 @@ var TERM_POLL_MS = 250;
     var calls = (d.tool_calls || []).map(function (c) {
       return uiRow({
         dot: c.ok ? "ok" : "bad",
-        title: esc(c.capability) + (c.exit_code !== null && c.exit_code !== undefined ? ' <span class="dim">exit ' + c.exit_code + "</span>" : ""),
+        title: '<span title="' + attr(c.capability) + '">' + esc(capLabel(c.capability)) + "</span>" + (c.exit_code !== null && c.exit_code !== undefined ? ' <span class="dim">exit ' + c.exit_code + "</span>" : ""),
         sub: esc((c.ok ? "succeeded" : c.error_code || "failed") + ", " + c.duration_ms + " ms, " + (c.surface || "") + (c.error ? ", " + c.error : "")),
         wrap: true
       });
@@ -7485,7 +7567,7 @@ var TERM_POLL_MS = 250;
       '<div class="chat-head"><div class="grow"><div class="chat-title">' + esc(run.goal || "Untitled run") + '</div><div class="dim mono">' + esc(run.mode || "") + (run.project ? ", " + esc(run.project) : "") + ", started " + esc(ago(run.created_at) || "") + '</div></div>' + runPill(state) + actions + "</div>" +
       (run.error ? '<div class="notice notice-warn">' + esc(run.error) + "</div>" : "") +
       (pending.length ? '<div class="panel"><div class="panel-head"><span>Waiting for a person</span><span class="panel-note">' + pending.length + '</span></div><div class="panel-body">' + pending.map(function (a) {
-        return '<div class="run-approval"><div class="grow"><div><b>' + esc(a.capability) + "</b> " + (a.risk === "destructive" ? '<span class="pill pill-bad">destructive</span>' : a.risk === "sensitive" ? '<span class="pill pill-warn">sensitive</span>' : "") + "</div>" +
+        return '<div class="run-approval"><div class="grow"><div><b title="' + attr(a.capability) + '">' + esc(capLabel(a.capability)) + "</b> " + (a.risk === "destructive" ? '<span class="pill pill-bad">destructive</span>' : a.risk === "sensitive" ? '<span class="pill pill-warn">sensitive</span>' : "") + "</div>" +
           '<div class="dim">asked by ' + esc(a.actor || "") + ", expires " + esc(ago(a.expires_at) || a.expires_at || "") + "</div>" +
           '<details class="run-event-data"><summary>the exact operation</summary><pre>' + esc(clip(JSON.stringify(a.args || {}, null, 2), 4000)) + "</pre></details></div></div>";
       }).join("") + '<div class="inline" style="margin-top:8px"><button type="button" class="btn btn-mini" data-action="nav" data-view="inbox">Decide in Inbox</button></div></div></div>' : "") +
@@ -7634,7 +7716,7 @@ var TERM_POLL_MS = 250;
   function approvalCard(r, compact) {
     var steps = (r.plan && r.plan.steps || []).slice(0, compact ? 3 : 12).map(function (x) { return "<li>" + esc(x) + "</li>"; }).join("");
     var effects = (r.plan && r.plan.effects || []).slice(0, 4).map(function (x) { return '<li class="warn-text">' + esc(x) + "</li>"; }).join("");
-    return '<div class="ask ask-approval"><div class="ask-head"><span class="pill pill-warn">approval</span><b>' + esc(r.capability) + '</b><span class="dim">' + esc(r.actor.replace("agent:", "")) + " · " + esc(ago(r.created_at)) + "</span></div>" +
+    return '<div class="ask ask-approval"><div class="ask-head"><span class="pill pill-warn">approval</span><b title="' + attr(r.capability) + '">' + esc(capLabel(r.capability)) + '</b><span class="dim">' + esc(r.actor.replace("agent:", "")) + " · " + esc(ago(r.created_at)) + "</span></div>" +
       ((r.plan && r.plan.summary) ? '<div class="ask-body">' + esc(r.plan.summary) + "</div>" : "") +
       (steps || effects ? '<ul class="ask-steps">' + steps + effects + "</ul>" : "") +
       '<div class="mono ask-args nowrap" title="' + attr(JSON.stringify(r.args)) + '">' + esc(JSON.stringify(r.args)) + "</div>" +
@@ -7687,11 +7769,11 @@ var TERM_POLL_MS = 250;
   }
 
   function approvalRow(r) {
-    var title = (r.plan && r.plan.summary) || ("Run " + r.capability);
+    var title = (r.plan && r.plan.summary) || capLabel(r.capability);
     return uiRow({
       accent: true, dot: "warn",
       title: esc(title),
-      sub: esc(r.actor.replace("agent:", "") + " asks to use " + r.capability),
+      sub: esc(activityWho(r.actor) + " asks to: " + capLabel(r.capability).toLowerCase()),
       meta: esc(ago(r.created_at)),
       open: 'data-action="open-approval" data-id="' + attr(r.id) + '"',
       actions: '<button type="button" class="btn btn-go btn-mini" data-action="req-decide" data-id="' + attr(r.id) + '" data-approve="1">Approve</button>' +
@@ -7920,7 +8002,7 @@ var TERM_POLL_MS = 250;
       ? '<div class="timeline">' + events.map(function (a) {
         var who = a.actor.replace("human:", "you via ").replace("agent:", "agent ");
         return '<div class="tl-item">' + uiDot(a.ok ? (a.actor.indexOf("agent:") === 0 ? "live" : "ok") : "bad") +
-          '<span class="tl-text" title="' + attr(a.capability + " · " + (a.message || "")) + '">' + esc(who) + (a.ok ? " ran " : " was refused ") + '<span class="mono">' + esc(a.capability) + "</span></span>" +
+          '<span class="tl-text" title="' + attr(a.capability + " · " + (a.message || "")) + '">' + esc(who) + (a.ok ? ": " : " (refused): ") + esc(capLabel(a.capability).charAt(0).toLowerCase() + capLabel(a.capability).slice(1)) + "</span>" +
           '<span class="tl-when">' + esc(ago(a.at)) + "</span></div>";
       }).join("") + "</div>" +
         '<div class="ui-more"><button type="button" data-action="nav" data-view="activity">All activity</button></div>'
@@ -8308,9 +8390,13 @@ var TERM_POLL_MS = 250;
       '<div class="empty-actions"><a class="btn btn-primary" href="#add-provider">Choose a provider</a></div></div></div>';
 
     var roles = AI.providers.length ? rolesPanel() : "";
+    if (!AI.usage && !AI.usageLoading) {
+      AI.usageLoading = true;
+      read("models.usage").then(function (u) { AI.usage = u; AI.usageLoading = false; if (state.view === "providers") renderProviders(); }).catch(function () { AI.usageLoading = false; });
+    }
     el("main").innerHTML = page("Models", "",
       '<button type="button" class="btn" data-action="prov-discover">Find local servers</button>',
-      (AI.providers.length ? modelsInUse() : "") +
+      (AI.providers.length ? modelsInUse() : "") + usageHtml(AI.usage) +
       (cards ? uiHead("Providers", AI.providers.length) + '<div class="provider-list">' + cards + "</div>" : empty) +
       (AI.provForm ? providerForm(AI.provForm) : "") +
       localPanel() +
@@ -8378,6 +8464,12 @@ var TERM_POLL_MS = 250;
       if (project && (!AI.ws || AI.ws.path !== project || Date.now() - AI.ws.at > 20000)) {
         AI.ws = { path: project, at: Date.now(), st: AI.ws && AI.ws.path === project ? AI.ws.st : null };
         read("git.status", { repo: project }).then(function (st) { if (AI.ws && AI.ws.path === project) { AI.ws.st = st; paintWsCard(); } }).catch(function () {});
+        // What the changes are, counted from the patch itself: unstaged and staged, no context.
+        Promise.all([read("git.diff", { repo: project, context: 0 }).catch(function () { return null; }), read("git.diff", { repo: project, staged: true, context: 0 }).catch(function () { return null; })]).then(function (r) {
+          if (!AI.ws || AI.ws.path !== project) return;
+          AI.ws.diff = diffKinds(((r[0] && r[0].patch) || "") + "\n" + ((r[1] && r[1].patch) || ""));
+          paintWsCard();
+        });
       }
       if (project && Date.now() - (AI.todosAt || 0) > 5000) {
         AI.todosAt = Date.now();
@@ -8519,8 +8611,17 @@ var TERM_POLL_MS = 250;
         liveSoon("threads", known ? 800 : 200, refreshThreadList);
       }
     }
-    if (String(event.kind || "").indexOf("approval.") === 0 || String(event.kind || "").indexOf("inbox.") === 0) {
+    var k = String(event.kind || "");
+    if (k.indexOf("approval.") === 0 || k.indexOf("inbox.") === 0 || k === "team.event") {
       liveSoon("health", 300, function () { loadHealth().then(healthChip).catch(function () {}); });
+      // The Inbox is what is waiting for a person; anything that changes that repaints it
+      // (and the rail's count) where it is open, with no refresh.
+      liveSoon("inbox", 400, function () {
+        loadInbox().then(function () {
+          rail(); statusbar();
+          if (state.view === "inbox" && !document.querySelector(".inbox textarea:focus, .inbox input:focus")) render();
+        }).catch(function () {});
+      });
     }
   }
 
@@ -8905,7 +9006,7 @@ var TERM_POLL_MS = 250;
         var parts = String(t0.id || "").split(".");
         var verb = { get: "Checked", list: "Listed", status: "Checked", show: "Checked", read: "Read", create: "Created", add: "Added", update: "Updated", set: "Set", start: "Started", stop: "Stopped", run: "Ran", delete: "Removed", remove: "Removed", post: "Posted", fetch: "Fetched" }[parts[1]];
         if (parts.length === 2 && verb) return verb + " " + parts[0].replace(/_/g, " ") + (t0.name || t0.query ? " " + cut(t0.name || t0.query, 40) : "");
-        return capabilityName(t0.id) + (t0.cmd || t0.name || t0.query ? " " + cut(t0.cmd || t0.name || t0.query, 50) : "");
+        return (CAP_SUMMARY[t0.id] || capLabel(t0.id)) + (t0.cmd || t0.name || t0.query ? " · " + cut(t0.cmd || t0.name || t0.query, 50) : "");
     }
   }
   function describeSteps(calls, results) {
@@ -9262,6 +9363,36 @@ var TERM_POLL_MS = 250;
   /* The project a conversation works on, beside it: where the work lands (branch, what
      changed) and the two places to go next. Only on windows wide enough for a third
      column; narrower, the same facts are in the header's line. */
+  /* Lines added and removed, by what the file is: tests, documentation or code. Counted
+     from the patch's own +/- lines, never estimated. */
+  function diffKind(path) {
+    var p = String(path || "").toLowerCase();
+    if (/(^|\/)(tests?|spec|specs|__tests__|e2e)\//.test(p) || /[._-](test|spec)\.[a-z0-9]+$/.test(p) || /test\.php$/.test(p)) return "tests";
+    if (/\.(md|mdx|rst|adoc|txt)$/.test(p) || /(^|\/)docs?\//.test(p) || /(^|\/)(readme|changelog|license)/.test(p)) return "docs";
+    return "code";
+  }
+  function diffKinds(patch) {
+    var out = { code: { add: 0, del: 0, files: {} }, tests: { add: 0, del: 0, files: {} }, docs: { add: 0, del: 0, files: {} } };
+    var kind = null;
+    String(patch || "").split("\n").forEach(function (line) {
+      var m = /^\+\+\+ b\/(.+)$/.exec(line);
+      if (m) { kind = out[diffKind(m[1])]; kind.files[m[1]] = true; return; }
+      if (/^diff --git /.test(line)) { kind = null; var g = / b\/(.+)$/.exec(line); if (g) { kind = out[diffKind(g[1])]; kind.files[g[1]] = true; } return; }
+      if (!kind || /^(\+\+\+|---) /.test(line)) return;
+      if (line.charAt(0) === "+") kind.add++;
+      else if (line.charAt(0) === "-") kind.del++;
+    });
+    return out;
+  }
+  function diffBadges(d) {
+    if (!d) return "";
+    return ["code", "tests", "docs"].map(function (k) {
+      var x = d[k];
+      if (!x.add && !x.del) return "";
+      return '<span class="diff-badge diff-badge-' + k + '" title="' + Object.keys(x.files).length + " " + k + ' file(s)"><b>' + k + "</b> <span class=\"plus\">+" + x.add + "</span> <span class=\"minus\">−" + x.del + "</span></span>";
+    }).join("");
+  }
+
   function paintWsCard() {
     var box = el("ws-card");
     if (!box) return;
@@ -9277,12 +9408,94 @@ var TERM_POLL_MS = 250;
         (st.ahead ? '<span class="dim">' + st.ahead + " ahead</span>" : "") + "</div>");
       rows.push('<button type="button" class="ws-row ws-link" data-action="open-project" data-path="' + attr(path) + '"><svg class="icon" aria-hidden="true"><use href="#i-file"></use></svg><span class="grow">Changes</span>' +
         (changed ? '<span class="ws-diff">' + changed + " file" + (changed === 1 ? "" : "s") + "</span>" : '<span class="dim">clean</span>') + "</button>");
+      var badges = diffBadges(AI.ws && AI.ws.diff);
+      if (badges) rows.push('<div class="ws-badges">' + badges + "</div>");
     }
     rows.push('<div class="ws-sep"></div>');
     rows.push('<button type="button" class="ws-row ws-link" data-action="open-project" data-path="' + attr(path) + '"><svg class="icon" aria-hidden="true"><use href="#i-chevron"></use></svg><span class="grow">Open project</span></button>');
     rows.push('<button type="button" class="ws-row ws-link" data-action="open-terminal" data-path="' + attr(path) + '"><svg class="icon" aria-hidden="true"><use href="#i-code"></use></svg><span class="grow">Terminal here</span></button>');
     box.hidden = false;
     morph(box, rows.join(""));
+  }
+
+  /* Search within one conversation: messages, steps, plans and reports.
+   *
+   * Matches are marked with the CSS Custom Highlight API, so the conversation's DOM is
+   * never touched: patching, scroll anchoring and open cards are unaffected. A match
+   * inside a folded step or report opens that fold so it can be seen. */
+  var FIND = { q: "", hits: [], at: -1 };
+  function findBar() {
+    var bar = el("thread-find");
+    if (bar) return bar;
+    var stream = el("chat-stream");
+    if (!stream) return null;
+    var holder = document.createElement("div");
+    holder.innerHTML = '<div class="thread-find" id="thread-find" hidden></div>';
+    bar = holder.firstChild;
+    bar.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg>' +
+      '<input type="search" id="thread-find-input" placeholder="Search this conversation" aria-label="Search this conversation" spellcheck="false" autocomplete="off">' +
+      '<span class="thread-find-count" id="thread-find-count" aria-live="polite"></span>' +
+      '<button type="button" class="btn btn-mini btn-ghost btn-icon" data-action="thread-find-step" data-dir="-1" aria-label="Previous match" title="Previous (Shift Enter)"><svg class="icon" aria-hidden="true"><use href="#i-arrow-up"></use></svg></button>' +
+      '<button type="button" class="btn btn-mini btn-ghost btn-icon" data-action="thread-find-step" data-dir="1" aria-label="Next match" title="Next (Enter)"><svg class="icon" aria-hidden="true"><use href="#i-chevron-down"></use></svg></button>' +
+      '<button type="button" class="btn btn-mini btn-ghost btn-icon" data-action="thread-find-close" aria-label="Close search" title="Close (Esc)"><svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg></button>';
+    stream.parentNode.insertBefore(bar, stream);
+    var input = bar.querySelector("input");
+    input.addEventListener("input", function () { findRun(input.value); });
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { e.preventDefault(); findStep(e.shiftKey ? -1 : 1); }
+      if (e.key === "Escape") { e.preventDefault(); findClose(); }
+    });
+    return bar;
+  }
+  function findRun(q) {
+    FIND.q = String(q || "").trim().toLowerCase();
+    FIND.hits = []; FIND.at = -1;
+    var stream = el("chat-stream");
+    if (stream && FIND.q.length >= 2) {
+      var walker = document.createTreeWalker(stream, NodeFilter.SHOW_TEXT);
+      var node;
+      while ((node = walker.nextNode())) {
+        var text = node.nodeValue.toLowerCase(), from = 0, k;
+        while ((k = text.indexOf(FIND.q, from)) >= 0) {
+          var r = document.createRange();
+          r.setStart(node, k); r.setEnd(node, k + FIND.q.length);
+          FIND.hits.push(r);
+          from = k + FIND.q.length;
+          if (FIND.hits.length > 500) break;
+        }
+      }
+    }
+    if (window.CSS && CSS.highlights) {
+      CSS.highlights.set("thread-find", new Highlight(...FIND.hits));
+      CSS.highlights.delete("thread-find-now");
+    }
+    var count = el("thread-find-count");
+    if (count) count.textContent = FIND.q.length < 2 ? "" : FIND.hits.length ? FIND.hits.length + " found" : "No matches";
+    if (FIND.hits.length) findStep(1);
+  }
+  function findStep(dir) {
+    if (!FIND.hits.length) return;
+    FIND.at = (FIND.at + dir + FIND.hits.length) % FIND.hits.length;
+    var r = FIND.hits[FIND.at];
+    // Open whatever folds the match sits in, so it can be seen.
+    for (var n = r.startContainer.parentElement; n && n.id !== "chat-stream"; n = n.parentElement) {
+      if (n.tagName === "DETAILS" && !n.open) n.open = true;
+      if (n.hidden && n.classList.contains("tools-list")) {
+        var group = n.closest(".msg-tools");
+        if (group && group.dataset.group) { AI.openTools[group.dataset.group] = true; n.hidden = false; group.classList.add("open"); }
+      }
+    }
+    if (window.CSS && CSS.highlights) CSS.highlights.set("thread-find-now", new Highlight(r));
+    var box = r.startContainer.parentElement;
+    if (box && box.scrollIntoView) box.scrollIntoView({ block: "center" });
+    var count = el("thread-find-count");
+    if (count) count.textContent = (FIND.at + 1) + " of " + FIND.hits.length;
+  }
+  function findClose() {
+    var bar = el("thread-find");
+    if (bar) bar.hidden = true;
+    FIND.q = ""; FIND.hits = [];
+    if (window.CSS && CSS.highlights) { CSS.highlights.delete("thread-find"); CSS.highlights.delete("thread-find-now"); }
   }
 
   function chatPaintKey() {
@@ -9392,6 +9605,7 @@ var TERM_POLL_MS = 250;
       (AI.queued > 0 ? '<span class="chip chip-warn" title="Messages waiting for the next step">' + AI.queued + " queued</span>" : "") +
       (team && team.parent ? '<button type="button" class="btn btn-mini btn-ghost" data-action="open-thread" data-id="' + attr(team.parent) + '" title="The conversation that asked for this work">Back to request</button>' : "") +
       (team ? '<button type="button" class="btn btn-mini btn-ghost" data-action="team-open-from" data-id="' + attr(team.run) + '">See the run</button>' : "") +
+      '<button type="button" class="btn btn-mini btn-ghost btn-icon" data-action="thread-find" title="Search this conversation (Ctrl F)" aria-label="Search this conversation"><svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg></button>' +
       (AI.chapters && AI.chapters.length ? '<button type="button" class="btn btn-mini btn-ghost" data-action="chapters-open">Chapters ' + AI.chapters.length + "</button>" : "") +
       (r ? '<button type="button" class="btn btn-mini btn-ghost" data-action="open-run" data-id="' + attr(r.id) + '" title="Steps, capability calls, evidence and the durable timeline">Evidence</button>' : "") +
       (r && !busy && runCanRetry(r.state) ? '<button type="button" class="btn btn-mini btn-primary" data-action="run-retry" data-id="' + attr(r.id) + '">Continue</button>' : "") +
@@ -9723,7 +9937,10 @@ var TERM_POLL_MS = 250;
     var goal = String(r.goal || "").trim();
     var more = goal && goal !== String(r.title || "").trim();
     return '<section class="run-goal" aria-label="Goal">' +
-      (more ? '<div class="run-label">Goal in full</div><div class="run-goal-text">' + esc(goal) + "</div>" : "") +
+      // The goal reads as text (it is often Markdown), and a long one folds after its opening.
+      (more ? (goal.length > 420
+        ? '<details class="run-goal-fold"><summary><span class="run-label">The goal in full</span><span class="run-goal-lead">' + esc(cut(goal, 200)) + "</span></summary>" + md(goal) + "</details>"
+        : '<div class="run-label">The goal in full</div>' + md(goal)) : "") +
       '<dl class="run-facts">' +
         '<div><dt>Plan</dt><dd>' + (r.plan_approved ? "Approved by a person" : '<span class="dim">Not approved. Nothing has run on this goal.</span>') + "</dd></div>" +
         '<div><dt>Up to</dt><dd>' + esc(r.parallel || 1) + (r.parallel === 1 ? " task at a time" : " tasks at once") + "</dd></div>" +
@@ -9770,7 +9987,7 @@ var TERM_POLL_MS = 250;
         '<button type="button" class="btn btn-mini btn-ghost" data-action="team-toggle" data-id="' + attr(t.id) + '" aria-expanded="' + (open ? "true" : "false") + '">' + (open ? "Hide" : "Details") + "</button></div>" +
         '<div class="row-sub">' + esc(dep) + (t.attempts > 1 ? " · attempt " + t.attempts : "") + (t.branch ? " · own copy on " + esc(t.branch) : "") + (evidenceLine(t) ? " · " + esc(evidenceLine(t)) : "") + "</div>" +
         (t.error && ["unverified", "blocked", "failed"].indexOf(t.state) >= 0 ? '<div class="row-sub warn-text">' + esc(t.error) + "</div>" : "") +
-        (open ? '<div class="field-label" style="margin-top:8px">Instructions</div><div class="ask-body">' + md(t.instructions) + (t.result ? '<div class="field-label" style="margin-top:8px">What it reported</div>' + md(t.result) : "") + '<div class="field-label" style="margin-top:8px">Evidence devd recorded</div>' + ((t.evidence || []).length ? '<table class="table"><thead><tr><th>Kind</th><th>Capability</th><th>Summary</th></tr></thead><tbody>' + t.evidence.map(function (f) { return "<tr><td><span class=\"pill " + (f.ok ? "pill-ok" : "pill-bad") + '">' + esc(f.kind) + '</span></td><td class="cell-mono">' + esc(f.capability) + '</td><td class="cell-mono nowrap">' + esc(f.summary || "") + "</td></tr>"; }).join("") + "</tbody></table>" : '<div class="empty-inline">None yet.</div>') + "</div>" : "") +
+        (open ? '<div class="field-label" style="margin-top:8px">Instructions</div><div class="ask-body">' + md(t.instructions) + (t.result ? '<div class="field-label" style="margin-top:8px">What it reported</div>' + md(t.result) : "") + '<div class="field-label" style="margin-top:8px">Evidence devd recorded</div>' + ((t.evidence || []).length ? '<table class="table"><thead><tr><th>Kind</th><th>Capability</th><th>Summary</th></tr></thead><tbody>' + t.evidence.map(function (f) { return "<tr><td><span class=\"pill " + (f.ok ? "pill-ok" : "pill-bad") + '">' + esc(f.kind) + '</span></td><td title="' + attr(f.capability) + '">' + esc(capLabel(f.capability)) + '</td><td class="cell-mono nowrap">' + esc(f.summary || "") + "</td></tr>"; }).join("") + "</tbody></table>" : '<div class="empty-inline">None yet.</div>') + "</div>" : "") +
         (btns ? '<div class="inline" style="margin-top:8px">' + btns + "</div>" : "") + "</div>";
     }).join("") || (r.state === "planning" ? "" : '<div class="empty-inline">No tasks yet.</div>');
     var approvals = (d.approvals || []).map(function (a) { return approvalCard(a, false); }).join("");
@@ -9971,14 +10188,14 @@ var TERM_POLL_MS = 250;
     // Each kind of intervention is a different decision, so each has its own shape.
     var waiting = [];
     AI.requests.forEach(function (r) {
-      var title = (r.plan && r.plan.summary) || ("Run " + r.capability);
+      var title = (r.plan && r.plan.summary) || capLabel(r.capability);
       var steps = (r.plan && r.plan.steps || []).map(function (x) { return "<li>" + esc(x) + "</li>"; }).join("");
       var effects = (r.plan && r.plan.effects || []).map(function (x) { return '<li class="decision-effect">' + esc(x) + "</li>"; }).join("");
       waiting.push('<article class="decision" data-kind="approval">' +
         '<div class="decision-kind">Approval</div>' +
         '<div class="decision-main">' +
           '<h3 class="decision-title">' + esc(title) + "</h3>" +
-          '<div class="decision-meta"><span>' + esc(r.actor.replace("agent:", "agent ")) + ' asks to run</span> <span class="mono">' + esc(r.capability) + "</span> <span>" + esc(ago(r.created_at)) + "</span></div>" +
+          '<div class="decision-meta"><span>' + esc(r.actor.replace("agent:", "agent ")) + ' asks to</span> <span title="' + attr(r.capability) + '">' + esc(capLabel(r.capability).toLowerCase()) + "</span> <span>" + esc(ago(r.created_at)) + "</span></div>" +
           (steps || effects ? '<div class="decision-label">If you approve, devd will</div><ul class="decision-steps">' + steps + effects + "</ul>" : '<div class="decision-note">The request carries no description of its steps. Open the details before deciding.</div>') +
           '<details class="decision-args"><summary>Exact arguments</summary><pre class="log-block">' + esc(JSON.stringify(r.args, null, 2)) + "</pre></details>" +
           '<div class="decision-actions">' +
@@ -10018,7 +10235,7 @@ var TERM_POLL_MS = 250;
       // What was asked, in words, and who asked: "fs.delete declined" said neither.
       var asked = (r.plan && r.plan.summary) || activityWords(r.capability) || r.capability;
       var verdict = r.state === "approved" ? "You approved it" : r.state === "denied" || r.state === "declined" ? "You declined it" : r.state === "failed" ? "It was approved but failed" : String(r.state || "");
-      return uiRow({ dot: r.state === "approved" ? "ok" : r.state === "failed" ? "bad" : "off", title: esc(asked), sub: esc(verdict) + (r.actor ? " · asked by " + esc(String(r.actor).replace("agent:", "agent ")) : "") + ' · <span class="mono">' + esc(r.capability) + "</span>", meta: esc(ago(r.decided_at || r.created_at)) });
+      return uiRow({ dot: r.state === "approved" ? "ok" : r.state === "failed" ? "bad" : "off", title: esc(asked), sub: esc(verdict) + (r.actor ? " · asked by " + esc(activityWho(r.actor)) : ""), meta: esc(ago(r.decided_at || r.created_at)) });
     }).concat(AI.history.messages.map(function (x) {
       return uiRow({ dot: "off", title: esc(x.subject), sub: esc(x.reply ? "You answered: " + x.reply : "Read") });
     }));
@@ -10055,7 +10272,7 @@ var TERM_POLL_MS = 250;
     var steps = (r.plan && r.plan.steps || []).map(function (x) { return "<li>" + esc(x) + "</li>"; }).join("");
     var effects = (r.plan && r.plan.effects || []).map(function (x) { return '<li class="warn-text">' + esc(x) + "</li>"; }).join("");
     uiSheet((r.plan && r.plan.summary) || r.capability,
-      '<div class="ui-quiet">' + esc(r.actor.replace("agent:", "")) + " · " + esc(ago(r.created_at)) + " · <span class=\"mono\">" + esc(r.capability) + "</span></div>" +
+      '<div class="ui-quiet">' + esc(r.actor.replace("agent:", "")) + " · " + esc(ago(r.created_at)) + "</div>" +
       (steps || effects ? "<h3>What will happen</h3><ul class=\"ask-steps\">" + steps + effects + "</ul>" : "") +
       '<h3>Arguments</h3><pre class="log-block">' + esc(JSON.stringify(r.args, null, 2)) + "</pre>" +
       '<div class="ui-actions"><button type="button" class="btn btn-go" data-action="req-decide" data-id="' + attr(r.id) + '" data-approve="1">Approve and run</button>' +
@@ -12558,6 +12775,16 @@ var TERM_POLL_MS = 250;
       if (shell) shell.classList.toggle("panel-open");
     },
     // A project's conversations fold away under its name; the choice is kept for the session.
+    "thread-find": function () {
+      var bar = findBar();
+      if (!bar) return;
+      bar.hidden = false;
+      var input = bar.querySelector("input");
+      input.focus(); input.select();
+      if (input.value) findRun(input.value);
+    },
+    "thread-find-step": function (n) { findStep(Number(n.dataset.dir) || 1); },
+    "thread-find-close": function () { findClose(); },
     "thread-group": function (n) {
       AI.groupClosed = AI.groupClosed || {};
       var key = n.dataset.id || "";
@@ -12999,7 +13226,7 @@ var TERM_POLL_MS = 250;
     },
     "copy-code": function (n) {
       var pre = n.closest(".md-code").querySelector("pre");
-      var text = pre ? pre.innerText : "";
+      var text = pre ? pre.textContent : "";
       var done = function () { n.textContent = "Copied"; setTimeout(function () { n.textContent = "Copy"; }, 1400); };
       if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, done);
       else { var t = document.createElement("textarea"); t.value = text; document.body.appendChild(t); t.select(); try { document.execCommand("copy"); } catch (e) { /* nothing to do */ } t.remove(); done(); }
@@ -14144,6 +14371,13 @@ var TERM_POLL_MS = 250;
 
   document.addEventListener("keydown", function (event) {
     var mod = event.ctrlKey || event.metaKey;
+    // In a conversation, Ctrl F searches the conversation (the page's own find would
+    // miss folded steps and reports).
+    if (mod && event.key.toLowerCase() === "f" && state.view === "assistant" && AI.thread) {
+      event.preventDefault();
+      ACTIONS["thread-find"]();
+      return;
+    }
     if (mod && event.key.toLowerCase() === "k") {
       event.preventDefault();
       if (state.palette.open) closePalette();
@@ -14573,6 +14807,7 @@ var TERM_POLL_MS = 250;
         // One live channel for the whole window: runs moving on, handoffs and replies
         // repaint whichever screen shows them, without a refresh.
         openLive();
+        loadCapSummaries().then(function () { if (["activity", "home", "assistant", "inbox"].indexOf(state.view) >= 0) render(); });
         var first = refresh();
         if (current !== "home" && current !== "projects" && current !== "project") {
           loadProjects().then(paintChrome).catch(function () {});

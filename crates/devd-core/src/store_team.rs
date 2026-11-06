@@ -468,6 +468,27 @@ impl Store {
         Ok(run)
     }
 
+    /// Every task the team has ever been given, for measuring how the team works.
+    pub fn all_team_tasks(&self) -> Result<Vec<TeamTask>> {
+        self.with(|c| {
+            let mut st = c.prepare(&format!("SELECT {TASK_COLS} FROM team_tasks ORDER BY created_at"))?;
+            let rows = st.query_map([], row_task)?;
+            Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+        })
+    }
+
+    /// How often each kind of team event happened, per task: rework and review outcomes.
+    pub fn team_event_counts(&self, kinds: &[&str]) -> Result<Vec<(String, String, i64)>> {
+        self.with(|c| {
+            let marks = kinds.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            let mut st = c.prepare(&format!(
+                "SELECT COALESCE(task_id,''), kind, COUNT(*) FROM team_events WHERE kind IN ({marks}) GROUP BY task_id, kind"
+            ))?;
+            let rows = st.query_map(rusqlite::params_from_iter(kinds.iter()), |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+            Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+        })
+    }
+
     /// Every conversation a team specialist works in, with what it belongs to.
     ///
     /// One read for the whole list, so the conversation list can nest each
