@@ -8626,7 +8626,7 @@ var TERM_POLL_MS = 250;
         // A person's message stands on its own. The assistant's reply is the
         // turn that follows it; it does not share the person's row or avatar.
         endTurn();
-        blocks.push({ type: "user", at: e.created_at, text: e.data.text || "" });
+        blocks.push({ type: "user", at: e.created_at, text: e.data.text || "", from: e.data.from || "" });
         return;
       }
       if (e.kind === "assistant") {
@@ -8707,6 +8707,20 @@ var TERM_POLL_MS = 250;
     }
 
     var html = blocks.map(function (block, i) {
+      if (block.type === "user" && block.from) {
+        // A run this conversation started has come back with its plan, a pause or its result.
+        // It is not the person speaking, so it is not drawn as "You": a line says who it is
+        // from and what it is, the raw report folds away, and the assistant's answer follows.
+        var parts = String(block.text).split("\n---\n");
+        var report = (parts[1] || parts[0]).trim();
+        var subject = report.split("\n")[0];
+        var rest = report.slice(subject.length).trim();
+        var whenT = shortTime(block.at);
+        return '<div class="msg msg-team"><div class="team-note"><span class="team-note-mark" aria-hidden="true"><svg class="icon"><use href="#i-team"></use></svg></span>' +
+          '<div class="grow"><div class="team-note-head"><b>' + esc(subject) + '</b><span class="dim">Your team' + (whenT ? " · " + esc(whenT) : "") + "</span></div>" +
+          (rest ? '<details class="team-note-body"><summary>What they sent</summary><div class="md">' + md(rest) + "</div></details>" : "") +
+          "</div></div></div>";
+      }
       if (block.type === "user") {
         var when = shortTime(block.at);
         var shown = splitAttachments(block.text);

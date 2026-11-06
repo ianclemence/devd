@@ -453,6 +453,23 @@ fn route_call(
     (name.to_string(), input, name.to_string())
 }
 
+/// Give a team run started from this conversation this conversation's id.
+///
+/// The run uses it to bring its plan, its pauses and its result back here, where the person
+/// asked. It is always this conversation: a model that forgets the id, or names another, cannot
+/// send the report somewhere the person is not.
+fn attach_thread(invoke: &mut Value, thread: &str) {
+    if invoke["id"].as_str() != Some("team.start") {
+        return;
+    }
+    if !invoke["args"].is_object() {
+        invoke["args"] = json!({});
+    }
+    if let Some(args) = invoke["args"].as_object_mut() {
+        args.insert("thread".to_string(), json!(thread));
+    }
+}
+
 /// A provider, the model to ask it for, and the two labels shown for the pick.
 type Candidate = (Provider, Option<String>, String, String);
 
@@ -1370,6 +1387,11 @@ impl Hub {
                 // capability, so they get the same validation, approval queue and audit trail as
                 // everything else. The capability is what decides whether the call is allowed.
                 let (surface, mut invoke, tool_name) = route_call(&name, input, &direct, &external);
+                // A team run started from the person's conversation answers into it. The model is
+                // told to pass its own conversation id and does not always; the harness does it.
+                if surface == "devd_invoke" && binding.is_none() {
+                    attach_thread(&mut invoke, tid);
+                }
                 if surface == "devd_invoke" {
                     if let Err(msg) = self.gate(binding.as_ref(), &mut invoke) {
                         self.log(tid, "tool_result", json!({ "tool_use_id": id, "content": json!({ "ok": false, "error": { "code": "not_allowed_for_this_task", "message": msg } }).to_string(), "is_error": true, "tool": tool_name }))?;
@@ -1877,6 +1899,28 @@ impl Hub {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_team_run_started_here_answers_here_even_when_the_model_forgets() {
+        // The run that prompted this: the assistant handed off with team.start and no thread, so
+        // the result went to the Inbox and the conversation that asked was never told.
+        let mut forgot = json!({ "id": "team.start", "args": { "goal": "email the host", "project": "D:/p" } });
+        attach_thread(&mut forgot, "t-1");
+        assert_eq!(forgot["args"]["thread"], "t-1");
+        assert_eq!(forgot["args"]["goal"], "email the host", "the rest of the call is untouched");
+
+        let mut elsewhere = json!({ "id": "team.start", "args": { "goal": "g", "thread": "someone-else" } });
+        attach_thread(&mut elsewhere, "t-1");
+        assert_eq!(elsewhere["args"]["thread"], "t-1", "a report goes where the person asked, whatever the model named");
+
+        let mut bare = json!({ "id": "team.start" });
+        attach_thread(&mut bare, "t-1");
+        assert_eq!(bare["args"]["thread"], "t-1");
+
+        let mut other = json!({ "id": "site.list", "args": {} });
+        attach_thread(&mut other, "t-1");
+        assert!(other["args"].get("thread").is_none(), "only a team run is given the conversation");
+    }
 
     fn ev(id: i64, kind: &str, data: Value) -> ChatEvent {
         ChatEvent {

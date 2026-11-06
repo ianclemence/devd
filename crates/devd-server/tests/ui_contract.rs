@@ -1240,3 +1240,12 @@ fn uploads_come_back_by_name_through_the_token_and_expire() {
     assert!(APP.contains("Authorization: \"Bearer \" + TOKEN"));
     assert!(APP.contains("msg-file-open"), "a conversation shows the files a message carried");
 }
+
+#[test]
+fn a_teams_report_in_a_conversation_is_not_drawn_as_the_person() {
+    // The team hands its report to the conversation that asked as a message; it is not the
+    // person speaking, so it must not be labelled "You".
+    assert!(APP.contains("from: e.data.from || \"\""), "the event says who it is from");
+    assert!(APP.contains("if (block.type === \"user\" && block.from) {"), "a message from the team has its own shape");
+    assert!(CSS.contains(".team-note {"));
+}

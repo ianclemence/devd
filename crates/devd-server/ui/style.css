@@ -6215,3 +6215,14 @@ button.msg-file.is-image { position: relative; justify-content: center; }
 .pv-step > span:first-child { flex: 1 1 260px; }
 .pv-tag { flex: 1 1 100%; padding: 6px 10px; background: var(--bg-hover); border-radius: 8px; color: var(--fg-mute); font-size: var(--text-xs); overflow-wrap: anywhere; }
 .pv-step-actions { display: inline-flex; gap: var(--s2); }
+
+/* ---- a run this conversation started, reporting back ----------------------- */
+.msg-team { display: flex; justify-content: flex-start; margin: 4px 0 2px; }
+.team-note { display: flex; gap: 12px; align-items: flex-start; width: 100%; max-width: 720px; padding: 12px 14px; border-radius: 12px; background: var(--bg-surface); border: 1px solid var(--line); }
+.team-note-mark { display: grid; place-items: center; flex: none; width: 28px; height: 28px; border-radius: 8px; background: var(--accent-quiet); color: var(--accent-text); }
+.team-note-mark .icon { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; }
+.team-note-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; font-size: var(--text-sm); }
+.team-note-head b { color: var(--fg); font-weight: 600; }
+.team-note-body { margin-top: 6px; }
+.team-note-body > summary { cursor: pointer; color: var(--fg-mute); font-size: var(--text-xs); }
+.team-note-body .md { margin-top: 8px; font-size: var(--text-sm); color: var(--fg-mute); }
