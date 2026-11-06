@@ -169,9 +169,12 @@ fn tables_keep_one_grid_and_inline_rows_stay_on_one_line() {
     );
     // A data-table head is one line. The action column must never break its
     // word into one letter per row in a 1%-wide cell.
-    assert!(CSS.contains(".table th.cell-actions,"), "action headers are named and nowrap");
     assert!(
-        CSS.contains(".drift-table th,\n.md th {\n  white-space: nowrap;"),
+        CSS.contains(":is(.table, .mu, .drift-table) :is(th, td).cell-actions {\n  display: table-cell;\n  width: 1%;\n  text-align: right;\n  white-space: nowrap;"),
+        "action headers are table cells, right aligned and nowrap"
+    );
+    assert!(
+        CSS.contains("vertical-align: bottom;\n  white-space: nowrap;") && CSS.contains(".md th { white-space: nowrap;"),
         "every table head stays on one line"
     );
 }
@@ -1176,4 +1179,22 @@ fn a_row_of_buttons_has_a_gap_wherever_it_is_drawn() {
     let rule = CSS.find("\n.ui-actions {").expect(".ui-actions needs a rule that applies on every screen");
     let body = &CSS[rule..rule + 140];
     assert!(body.contains("display: flex") && body.contains("gap:"), "the row spaces its buttons itself: {body}");
+}
+
+#[test]
+fn every_table_shares_one_head_and_one_action_column() {
+    // The action head used to be `display: flex` (from the generic `.cell-actions`),
+    // which left its line short and its label floating away from its column.
+    assert!(
+        CSS.contains(":is(.table, .mu, .drift-table) :is(th, td).cell-actions {\n  display: table-cell;"),
+        "an action head or cell is a real table cell"
+    );
+    // One definition of the head, not one per screen.
+    assert_eq!(
+        CSS.matches("text-transform: uppercase;\n  vertical-align: bottom;").count(),
+        1,
+        "the table head is defined once"
+    );
+    // Numbers line up by their digits.
+    assert!(CSS.contains(".cell-num"));
 }

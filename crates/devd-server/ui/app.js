@@ -3722,8 +3722,8 @@
         "<td>" + (sc.last_run_at ? esc(whenText(sc.last_run_at)) : '<span class="dim">not yet</span>') +
           (sc.last_error ? '<div class="dim">' + esc(sc.last_error) + "</div>" : "") +
           (sc.last_run_id ? '<div><button type="button" class="btn btn-mini btn-ghost" data-action="team-open-from" data-id="' + attr(sc.last_run_id) + '">Open the run</button></div>' : "") + "</td>" +
-        '<td class="cell-actions"><button type="button" class="btn btn-mini" data-action="schedule-run" data-name="' + attr(sc.name) + '">Run now</button> ' +
-        '<button type="button" class="btn btn-mini" data-action="schedule-toggle" data-name="' + attr(sc.name) + '" data-on="' + (sc.enabled ? "1" : "0") + '">' + (sc.enabled ? "Turn off" : "Turn on") + "</button> " +
+        '<td class="cell-actions"><button type="button" class="btn btn-mini" data-action="schedule-run" data-name="' + attr(sc.name) + '">Run now</button>' +
+        '<button type="button" class="btn btn-mini" data-action="schedule-toggle" data-name="' + attr(sc.name) + '" data-on="' + (sc.enabled ? "1" : "0") + '">' + (sc.enabled ? "Turn off" : "Turn on") + "</button>" +
         '<button type="button" class="btn btn-mini btn-ghost" data-action="schedule-delete" data-name="' + attr(sc.name) + '">Delete</button></td></tr>';
     }).join("");
     var tpl = SCHED.templates.map(function (t) { return '<option value="' + attr(t.id) + '"' + (f.template === t.id ? " selected" : "") + ">" + esc(t.title) + "</option>"; }).join("");
@@ -7639,7 +7639,7 @@ var TERM_POLL_MS = 250;
   }
 
   function money(v) { return v === null || v === undefined ? "–" : "$" + (v < 1 ? v.toFixed(2) : String(v)); }
-  function tok(v) { return !v ? "–" : v >= 1000000 ? (v / 1000000) + "M" : Math.round(v / 1000) + "K"; }
+  function tok(v) { return !v ? "–" : v >= 1000000 ? (v / 1000000).toFixed(1).replace(/\.0$/, "") + "M" : Math.round(v / 1000) + "K"; }
 
   function curlExample(kind, base, env) {
     if (kind === "anthropic") return 'curl ' + base + '/v1/messages \\\n  -H "x-api-key: $' + (env || "ANTHROPIC_API_KEY") + '" \\\n  -H "anthropic-version: 2023-06-01" \\\n  -H "content-type: application/json" \\\n  -d \'{"model":"MODEL","max_tokens":256,"messages":[{"role":"user","content":"Hello"}]}\'';
@@ -7879,11 +7879,11 @@ var TERM_POLL_MS = 250;
   function officialClaudePanel() {
     var official = (AI.catalogue || []).filter(function (m) { return m.source === "anthropic-docs"; });
     var offRows = official.map(function (m) {
-      return '<tr><td class="cell-mono">' + esc(m.model_id) + '</td><td class="cell-strong">' + esc(m.display) + "</td><td>" + tok(m.context_window) + "</td><td>" + tok(m.max_output) + "</td><td>" + money(m.input_price) + " / " + money(m.output_price) + '</td><td class="dim">' + esc(m.retirement || "") + "</td>" +
+      return '<tr><td class="cell-mono">' + esc(m.model_id) + '</td><td class="cell-strong">' + esc(m.display) + "</td><td class=\"cell-num\">" + tok(m.context_window) + "</td><td class=\"cell-num\">" + tok(m.max_output) + "</td><td>" + money(m.input_price) + " / " + money(m.output_price) + '</td><td class="dim">' + esc(m.retirement || "") + "</td>" +
         '<td class="cell-actions"><button type="button" class="btn btn-mini" data-action="prov-use-model" data-model="' + attr(m.model_id) + '">Use</button></td></tr>';
     }).join("");
     return '<div class="panel"><div class="panel-head"><span>Official Claude models</span><span class="panel-note">' + (official.length ? "fetched " + esc(ago(official[0].fetched_at)) + " from " + '<a class="link" target="_blank" rel="noopener noreferrer" href="https://platform.claude.com/docs/en/about-claude/models/overview">Anthropic docs</a>' : "not fetched yet") + "</span></div>" +
-      (offRows ? '<div class="table-wrap"><table class="table"><thead><tr><th>API id</th><th>Name</th><th>Context</th><th>Max output</th><th>$/MTok in / out</th><th>Retirement</th><th class="cell-actions">Actions</th></tr></thead><tbody>' + offRows + "</tbody></table></div>" : '<div class="panel-body empty-inline">The official list is read from Anthropic\'s documentation and needs no API key.</div>') +
+      (offRows ? '<div class="table-wrap"><table class="table"><thead><tr><th>API id</th><th>Name</th><th class="cell-num">Context</th><th class="cell-num">Max output</th><th>$/MTok in / out</th><th>Retirement</th><th class="cell-actions">Actions</th></tr></thead><tbody>' + offRows + "</tbody></table></div>" : '<div class="panel-body empty-inline">The official list is read from Anthropic\'s documentation and needs no API key.</div>') +
       '<div class="panel-body panel-foot"><button type="button" class="btn btn-primary btn-mini" data-action="models-refresh">' + (official.length ? "Refresh from Anthropic" : "Fetch the official list") + "</button></div></div>";
   }
 
@@ -7893,7 +7893,7 @@ var TERM_POLL_MS = 250;
     var body = "";
     if (rows.length) {
       body = '<div class="panel"><div class="panel-head"><span>Configured models</span><span class="panel-note">' + models.length + " model" + (models.length === 1 ? "" : "s") + " from " + (AI.providers || []).length + " provider" + ((AI.providers || []).length === 1 ? "" : "s") + "</span></div>" +
-        '<div class="table-wrap"><table class="table"><thead><tr><th>Provider</th><th>Model</th><th>Context</th><th>Source</th><th class="cell-actions">Actions</th></tr></thead><tbody>' +
+        '<div class="table-wrap"><table class="table"><thead><tr><th>Provider</th><th>Model</th><th class="cell-num">Context</th><th>Source</th><th class="cell-actions">Actions</th></tr></thead><tbody>' +
         rows.map(function (row) {
           var p = row.provider;
           var label = brandImg(p.preset || p.id, "brand-dot") + esc(p.label) +
@@ -7908,7 +7908,7 @@ var TERM_POLL_MS = 250;
           if (row.origin === "custom") actions += ' <button type="button" class="btn btn-mini btn-danger" data-action="prov-model-remove" data-id="' + attr(p.id) + '" data-model="' + attr(row.model.model_id) + '" title="Remove this hand-added model">Remove</button>';
           return '<tr><td><div class="cell-strong">' + label + '</div><div class="cell-dim">' + esc(p.kind) + "</div></td>" +
             '<td class="cell-mono">' + esc(row.model.model_id) + "</td>" +
-            "<td>" + tok(row.model.context_window) + "</td>" +
+            '<td class="cell-num">' + tok(row.model.context_window) + "</td>" +
             '<td class="dim">' + esc(row.source) + "</td>" +
             '<td class="cell-actions">' + actions + "</td></tr>";
         }).join("") +

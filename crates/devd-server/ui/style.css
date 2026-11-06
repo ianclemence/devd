@@ -1742,39 +1742,74 @@ kbd {
 .req-title { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-weight: 500; }
 .req-action { flex: 0 0 auto; }
 
-/* ----------------------------------------------------------------- tables */
+/* ----------------------------------------------------------------- tables
+ *
+ * One system for every data table (.table, and the .mu and .drift-table variants).
+ *
+ *   head     small capitals, dim, one hairline under it that spans the whole table
+ *   cells    the same vertical rhythm everywhere; text sits at the first edge
+ *   actions  the last column. It is a real table cell, right aligned, never a flex
+ *            box: a header cell that is not a table cell leaves its line short and
+ *            its label floating away from its column
+ *   numbers  .cell-num right aligns, so figures compare by their digits
+ *
+ * A table never scrolls sideways; it wraps. Rules for one table belong next to that
+ * table (column widths, a dot in the first cell), not here. */
 
-.table-wrap { overflow-x: auto; }
-.table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
-.table th {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  padding: var(--s2) var(--s3);
-  border-bottom: 1px solid var(--line);
-  background: var(--bg-surface);
+.table-wrap { overflow-x: visible; }
+.table, .mu, .drift-table {
+  width: 100%;
+  max-width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+.table th, .mu th, .drift-table th {
+  padding: 0 var(--s4) 10px 0;
+  border-bottom: 1px solid var(--line-strong);
   color: var(--fg-dim);
   font-size: var(--text-2xs);
   font-weight: 650;
   letter-spacing: 0.06em;
   text-align: left;
   text-transform: uppercase;
+  vertical-align: bottom;
   white-space: nowrap;
 }
-.table td {
-  padding: var(--s2);
+.table td, .mu td, .drift-table td {
+  min-width: 0;
+  padding: 12px var(--s4) 12px 0;
   border-bottom: 1px solid var(--line);
-  vertical-align: top;
+  line-height: 1.45;
+  overflow-wrap: break-word;
+  vertical-align: middle;
 }
-.table td.cell-actions, .table th:last-child { white-space: nowrap; }
-.table td.cell-actions { width: 1%; }
-.table tbody tr:last-child td { border-bottom: 0; }
+.table th:last-child, .mu th:last-child, .drift-table th:last-child,
+.table td:last-child, .mu td:last-child, .drift-table td:last-child { padding-right: 0; }
+.table tbody tr:last-child td, .mu tbody tr:last-child td, .drift-table tbody tr:last-child td { border-bottom: 0; }
+
+/* The action column: a cell that hugs its buttons and lines up with its head. */
+:is(.table, .mu, .drift-table) :is(th, td).cell-actions {
+  display: table-cell;
+  width: 1%;
+  text-align: right;
+  white-space: nowrap;
+}
+:is(.table, .mu, .drift-table) td.cell-actions .btn { vertical-align: middle; }
+/* Buttons in an action cell sit one gap apart. The markup writes no space between
+   them: a space would add a few pixels of its own. */
+:is(.table, .mu, .drift-table) td.cell-actions .btn + .btn { margin-left: var(--s2); }
+:is(.table, .mu, .drift-table) :is(th, td).cell-num { padding-left: var(--s3); text-align: right; white-space: nowrap; }
+@media (max-width: 760px) {
+  .table th:not(.cell-actions), .mu th:not(.cell-actions), .drift-table th:not(.cell-actions) { white-space: normal; }
+}
+
 .table .cell-mono, .cell-mono { color: var(--fg-mute); font-family: var(--mono); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
 .cell-strong { color: var(--fg); font-weight: 500; }
 .cell-dim { color: var(--fg-dim); font-size: var(--text-xs); }
 .cell-warn { color: var(--warn); font-size: var(--text-xs); }
+/* Outside a table, a group of buttons is a row. */
 .cell-actions { display: flex; gap: var(--s2); justify-content: flex-end; white-space: nowrap; }
-.table td.cell-actions { text-align: right; }
 
 /* A definition list. The label column is as wide as the widest label in that
    list, not a fixed guess: a fixed column leaves a gap the size of a word
@@ -3041,9 +3076,15 @@ pre.code {
 .model-tools { display: flex; gap: var(--s2); align-items: center; margin-left: auto; flex-wrap: wrap; }
 .model-filter { width: 220px; }
 
-.roles-table td { vertical-align: top; }
-.roles-table .inline { flex-wrap: nowrap; }
-.roles-table input, .roles-table select { min-width: 120px; }
+/* Models: three equal choices and a narrow action. A control keeps room for its own
+   words ("use the default"); when the column is too narrow the model picker drops
+   under the provider instead of squeezing it. */
+.roles-table { table-layout: fixed; }
+.roles-table th:nth-child(1) { width: 28%; }
+.roles-table th:nth-child(4) { width: 76px; }
+.roles-table .inline { flex-wrap: wrap; gap: var(--s2); }
+.roles-table .inline > select { flex: 1 1 150px; min-width: 150px; }
+.roles-table .inline > .role-model-field { flex: 1 1 150px; min-width: 0; }
 
 /* --------------------------------------------------------------- responsive */
 
@@ -3372,9 +3413,6 @@ textarea,
   }
   .row:hover .row-actions {
     opacity: 1;
-  }
-  .table tbody tr:hover td {
-    background: var(--stripe);
   }
   .tab:hover {
     color: var(--fg);
@@ -5427,21 +5465,8 @@ td .pill-bad, .kv .pill-bad { color: var(--danger); }
 .composer-top .composer-attachments[hidden] { display: none; }
 @media (hover: hover) and (pointer: fine) { .composer-attach:hover { background: var(--bg-raised); color: var(--fg); } }
 
-/* ---- tables share one grid: same header, same rhythm, columns that line up -- */
-.table, .mu, .drift-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
-.table th, .mu th, .drift-table th {
-  padding: 0 var(--s4) 8px 0; text-align: left; vertical-align: bottom;
-  border-bottom: 1px solid var(--line-strong); color: var(--fg-dim);
-  font-size: var(--text-2xs); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap;
-}
-.table td, .mu td, .drift-table td { padding: 11px var(--s4) 11px 0; border-bottom: 1px solid var(--line); vertical-align: top; line-height: 1.45; }
-.table th:last-child, .mu th:last-child, .drift-table th:last-child,
-.table td:last-child, .mu td:last-child, .drift-table td:last-child { padding-right: 0; }
-.table tbody tr:last-child td, .mu tbody tr:last-child td, .drift-table tbody tr:last-child td { border-bottom: 0; }
-.table td, .mu td { overflow-wrap: anywhere; }
-.table td.cell-actions, .table th.cell-actions { text-align: right; }
 .mu { table-layout: fixed; }
-.mu th:nth-child(1) { width: 30%; } .mu th:nth-child(2) { width: 30%; } .mu th:nth-child(3) { width: 16%; } .mu th:nth-child(4) { width: 24%; }
+.mu th:nth-child(1) { width: 26%; } .mu th:nth-child(2) { width: 28%; } .mu th:nth-child(3) { width: 30%; } .mu th:nth-child(4) { width: 16%; }
 .mu-sub { font-weight: 400; }
 
 /* ---- providers: one surface, rows that share four columns ------------------ */
@@ -5464,19 +5489,12 @@ td .pill-bad, .kv .pill-bad { color: var(--danger); }
 }
 
 /* ---- the site tabs that list things are tables now ------------------------- */
-.table-ops { table-layout: auto; }
 .table-ops .ui-dot { display: inline-block; flex: none; width: 8px; height: 8px; margin: 0 10px 1px 0; border-radius: 50%; vertical-align: middle; }
 .table-ops .ui-dot-off { background: var(--fg-dim); opacity: 0.55; }
-.table-ops td { vertical-align: middle; }
 .table-ops .cell-mono { overflow-wrap: anywhere; word-break: break-word; max-width: 46ch; }
 .table-ops .cell-note { color: var(--fg-mute); }
 .table-ops .cell-bad, .cell-bad { color: var(--danger); }
 .table-ops tr.is-off td { color: var(--fg-dim); }
-.table-ops td.cell-actions { white-space: nowrap; text-align: right; }
-.table-ops td.cell-actions .btn + .btn { margin-left: 4px; }
-@media (hover: hover) and (pointer: fine) { .table-ops tbody tr:hover td { background: var(--bg-hover); } }
-.table-ops td.cell-actions { display: table-cell; width: 1%; }
-.table-ops td.cell-actions .btn { vertical-align: middle; }
 
 /* ---- one centred column: the bar, the tabs, the page and the footer share it */
 .page, .page.home, .page:has(> .columns), .page:has(> .two-col), .page:has(> .tool-grid) { max-width: 1240px; margin-left: auto; margin-right: auto; width: 100%; }
@@ -5641,18 +5659,10 @@ select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 @media (hover: hover) and (pointer: fine) { .composer .composer-attach:hover { background: var(--bg-hover); color: var(--fg); } }
 @media (max-width: 1000px) { .threads .thread-row { flex: none; max-width: 260px; margin-right: var(--s3); } .threads .thread { min-width: 0; } .threads .thread .grow { overflow: hidden; text-overflow: ellipsis; } }
 .table-ops .cell-warn { color: var(--warn); }
-.table-ops td.cell-actions { white-space: normal; min-width: 240px; }
-.table-ops td.cell-actions .btn { margin: 2px 0 2px 4px; }
-.table-wrap:has(> .table-ops) { overflow-x: visible; }
-.table-ops th:last-child, .table-ops td:last-child { white-space: normal; }
 
 /* ---- nothing scrolls sideways: tables, code and tab rows wrap instead ------- */
-.table-wrap, .table-wrap:has(> .table-ops), .md .md-table { overflow-x: visible; }
-.table, .table-ops, .mu, .drift-table, .md-table table { width: 100%; max-width: 100%; }
-.table th, .table td, .mu th, .mu td, .drift-table th, .drift-table td { white-space: normal; overflow-wrap: anywhere; min-width: 0; }
-.table td.cell-actions, .table th:last-child, .table-ops td.cell-actions { white-space: normal; }
-.table td.cell-actions { display: table-cell; width: auto; text-align: right; }
-.table th.cell-actions { width: 1%; }
+.md .md-table { overflow-x: visible; }
+.md-table table { width: 100%; max-width: 100%; }
 .log-block, .log-pre, pre.code, .patch-block, .diff, .decision-args pre { overflow-x: hidden; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
 .subnav, .tabs, .picker-crumbs { overflow-x: visible; flex-wrap: wrap; }
 .tabs { row-gap: 2px; }
@@ -5660,8 +5670,6 @@ select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   #thread-list { display: block; overflow-x: hidden; }
   .threads .thread-row { max-width: none; margin-right: 0; }
 }
-.table-ops thead th, .table thead th.cell-actions { border-bottom: 1px solid var(--line-strong); }
-.table-ops thead th.cell-actions { padding: 0; }
 
 /* ---- the accent as text is the lighter tone, so it reads on the dark page ----- */
 a, .link, .pill-accent, .tag-unt, .feed-agent, .chat-plan-count, .cap-accent, .msg-act-on, .seg.active .seg-count, .md a.link, .steps li::before, .card-pin[aria-pressed="true"] { color: var(--accent-text); }
@@ -6169,29 +6177,6 @@ a, .link, .pill-accent, .tag-unt, .feed-agent, .chat-plan-count, .cap-accent, .m
  * It pushed every control after the first 12px down inside its own row. */
 .panel-body.inline > * + * { margin-top: 0; }
 
-/* ---- table heads: one line, never one letter per line ----------------------
- * A 1%-wide action column used to break "Actions" into A/C/T/I/O/N/S because
- * the shared rule let every header cell wrap. Data-table heads stay on one
- * line at reading widths; only narrow screens may wrap the descriptive ones,
- * never the action column. */
-.table th,
-.mu th,
-.drift-table th,
-.md th {
-  white-space: nowrap;
-  overflow-wrap: normal;
-  word-break: normal;
-}
-.table th.cell-actions,
-.mu th.cell-actions,
-.drift-table th.cell-actions {
-  width: 1%;
-  min-width: 68px;
-  white-space: nowrap;
-}
-@media (max-width: 760px) {
-  .table th:not(.cell-actions),
-  .mu th:not(.cell-actions),
-  .drift-table th:not(.cell-actions),
-  .md th { white-space: normal; }
-}
+/* ---- md tables keep their heads on one line too -------------------------- */
+.md th { white-space: nowrap; overflow-wrap: normal; word-break: normal; }
+@media (max-width: 760px) { .md th { white-space: normal; } }
