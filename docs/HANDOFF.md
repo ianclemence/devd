@@ -25,6 +25,11 @@ an agent over MCP (`devd mcp`).
 
 ## Owner's rules (follow exactly)
 
+- **Keep this file updated as you go** (owner: "ALWAYS UPDATE THE HANDOFF"), not only at the end.
+- **No component showcase page.** Components are applied in the screens; agents learn them from
+  the prompt, the `interface-contract` skill and `design.manifest`.
+- Show **design directions on real screens before rewriting a layout**; the owner picks.
+
 - Design bar: the Claude Code desktop app - match or beat it, never copy. Dark only, graphite + one
   blue, colour where it means something (charts, diagrams, code), no slop, no generic dashboards, no
   unnecessary cards, every width (1600/1280/1024/800/390). **Always visualise**: take screenshots and
@@ -126,15 +131,37 @@ GitHub-shaped hook call; `ONLY=hooks` runs only the hook part), `livecheck.mjs`,
 
 ## What to do next, in order
 
-1. **Layout revamp of every screen, Home first** (owner asked: rethink hierarchy, density and
+1. **Home: the owner rejected the restructured Home ("THAT HOME SUCKS", "I don't want something
+   generic, I want a perfect Home").** Uncommitted in app.js `renderHome` (updates shown as rows,
+   a "Pick up where you left off" list, compact project rows, plain-word feed) and style.css
+   (block "Home, in the order a person asks"). That is an interim state, NOT approved. Next step
+   agreed with the rule "directions before CSS": three Home directions mocked as real screens in
+   `D:\devd-promo\mock\home-*.html` (devd's own style.css + real test data) -> owner picks one ->
+   implement only that, check 1600/1280/1024/800/390, then the other screens.
+   **Owner picked B "Workbench" (2026-11-07; first said A, then "NO GO WITH B-WORKBENCH")**: work
+   on the left (greeting, ask box, needs-you cards, your work with result numbers), a "This
+   machine" column on the right (services card + project tiles with address, status and stack).
+   Mock: `D:\devd-promo\public\audit\home-mocks\B-workbench-1440.png` (script `capture/home-mocks.mjs`).
+   Code state (uncommitted, in progress): `renderHome` in app.js already has the needs-you cards
+   (`homeNeed`), the work list (`homeWorkRow`, `runWords`, runs linked to their conversation by
+   `thread_id`), `projectColor`, and a `home-pick` action from the A build; style.css ends with a
+   "Home: a launchpad" block. Converting that to B: drop the picks and the status line, add the
+   right-hand machine column (services card + project tiles + "All N projects"), result numbers
+   on finished runs (only real numbers: tasks done/total, specialists, PR), then shoot every width.
+   Directions were: A "Launchpad" (centred greeting + composer, projects as one-click "start here"
+   picks, needs-you inline, recent work, machine as one quiet status line); B "Workbench" (work on
+   the left, a live machine column of project tiles with their addresses and service lights on the
+   right); C "Briefing" (a short written brief of what agents did since you were last here,
+   grouped by project with result tiles, composer docked at the bottom like a chat with devd).
+2. **Layout revamp of every other screen** (owner asked: rethink hierarchy, density and
    placement; no generic dashboards, no unnecessary cards, a distinct product identity). Screenshot
    each screen at 5 widths first, decide per screen, implement, re-shoot, compare.
-2. **Use the component system in the screens** (owner: "use our own components to build the
+3. **Use the component system in the screens** (owner: "use our own components to build the
    pages"). Do NOT add a showcase page.
-3. **Language and copy review** of the whole app and its docs: clear, consistent, natural.
-4. Full verification: `audit.mjs` at 5 widths (look at every shot), the e2e scripts, the workspace
+4. **Language and copy review** of the whole app and its docs: clear, consistent, natural.
+5. Full verification: `audit.mjs` at 5 widths (look at every shot), the e2e scripts, the workspace
    tests, and the browser pane.
-5. Delete this file; commit; push; tag `v0.25.0` (already 0.25.0 in Cargo.toml and tauri.conf.json;
+6. Delete this file; commit; push; tag `v0.25.0` (already 0.25.0 in Cargo.toml and tauri.conf.json;
    extend the CHANGELOG entry); `scripts/release-windows.ps1 -SkipTests` after the suite passed;
    `gh release create v0.25.0 --notes-file <notes> <the new dist files> dist/SHA256SUMS.txt`
    (unsigned); update `D:\devd` and `%LOCALAPPDATA%\Programs\devd` (rename old exes to
