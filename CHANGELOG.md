@@ -16,6 +16,21 @@ Nothing yet.
 
 ---
 
+## [0.24.1] - 2026-11-06 - The assistant hears back from its team
+
+### Fixed
+
+- **A team run reports into the conversation that started it.** The run already knew how
+  to bring its plan, a pause or its result back to the conversation that asked, but only
+  when the model passed its own conversation id to `team.start`, and a model does not
+  always. The harness now attaches it, always to the conversation the call came from, so
+  the assistant comes back with the outcome instead of the result landing only in the Inbox.
+- **The team's note is not drawn as you.** The report reaches the conversation as a
+  message; it is now shown as a note from your team, with the raw report folded away and
+  the assistant's answer after it, instead of a "You" bubble.
+
+---
+
 ## [0.24.0] - 2026-11-06 - Calmer pages, real uploads, mail that knows its site
 
 ### Added
