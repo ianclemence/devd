@@ -3717,7 +3717,9 @@ textarea,
 .ui-sheet { display: flex; flex-direction: column; gap: var(--s4); font-size: var(--text-md); line-height: 1.65; }
 .ui-sheet h3 { font-size: var(--text-md); font-weight: 600; margin-top: var(--s3); }
 .ui-sheet .ui-pre { white-space: pre-wrap; word-break: break-word; font-family: var(--sans); color: var(--fg-mute); }
-.ui-sheet .ui-actions { display: flex; gap: var(--s2); flex-wrap: wrap; justify-content: flex-end; }
+/* A row of buttons: one place says how far apart they sit, so no screen has to remember. */
+.ui-actions { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+.ui-sheet .ui-actions { justify-content: flex-end; }
 
 .ui-greet { display: flex; flex-direction: column; gap: var(--s1); margin-bottom: var(--s2); }
 .ui-greet .sub { color: var(--fg-mute); font-size: var(--text-md); }

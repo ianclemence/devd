@@ -1169,3 +1169,11 @@ fn each_composer_keeps_its_own_files() {
     assert!(APP.contains("var ATT = { home: [], chat: [], chatFor: \"\" }"));
     assert!(APP.contains("takeAttachments(text, \"home\")") && APP.contains("takeAttachments(text, \"chat\")"));
 }
+
+#[test]
+fn a_row_of_buttons_has_a_gap_wherever_it_is_drawn() {
+    // `.ui-actions` was only styled inside a sheet, so on a page its buttons touched.
+    let rule = CSS.find("\n.ui-actions {").expect(".ui-actions needs a rule that applies on every screen");
+    let body = &CSS[rule..rule + 140];
+    assert!(body.contains("display: flex") && body.contains("gap:"), "the row spaces its buttons itself: {body}");
+}
