@@ -1765,15 +1765,16 @@ kbd {
   font-variant-numeric: tabular-nums;
 }
 .table th, .mu th, .drift-table th {
-  padding: 0 var(--s4) 10px 0;
+  padding: 10px var(--s4) 10px 0;
   border-bottom: 1px solid var(--line-strong);
   color: var(--fg-dim);
   font-size: var(--text-2xs);
   font-weight: 650;
   letter-spacing: 0.06em;
+  line-height: 1.2;
   text-align: left;
   text-transform: uppercase;
-  vertical-align: bottom;
+  vertical-align: middle;
   white-space: nowrap;
 }
 .table td, .mu td, .drift-table td {
@@ -3898,7 +3899,7 @@ textarea,
 .md .md-table { margin: 0 0 var(--s3); overflow-x: visible; }
 .md table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
 .md th, .md td { padding: 10px var(--s4) 10px 0; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); line-height: 1.45; }
-.md th { padding-bottom: 8px; border-bottom-color: var(--line-strong); color: var(--fg-dim); font-size: var(--text-2xs); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap; }
+.md th { padding-bottom: 10px; vertical-align: middle; border-bottom-color: var(--line-strong); color: var(--fg-dim); font-size: var(--text-2xs); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap; }
 .md th:last-child, .md td:last-child { padding-right: 0; }
 .md tbody tr:last-child td { border-bottom: 0; }
 
@@ -5380,9 +5381,7 @@ td .pill-bad, .kv .pill-bad { color: var(--danger); }
 @media (max-width: 980px) { .chain { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: var(--s2); } }
 
 /* Models in use: a plain table of decisions. */
-.mu { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
-.mu th { padding: 0 var(--s4) 7px 0; border-bottom: 1px solid var(--line); color: var(--fg-dim); font-size: var(--text-2xs); font-weight: 600; text-align: left; }
-.mu td { padding: 10px var(--s4) 10px 0; border-bottom: 1px solid var(--line); vertical-align: top; color: var(--fg); }
+.mu td { color: var(--fg); vertical-align: top; }
 .mu td .mono { color: var(--fg-mute); font-size: var(--text-xs); margin-left: 4px; }
 .mu .dim { color: var(--fg-dim); }
 .mu-sub { margin-top: 2px; color: var(--fg-dim); font-size: var(--text-xs); }
@@ -5446,9 +5445,8 @@ td .pill-bad, .kv .pill-bad { color: var(--danger); }
 .drift { margin: 0 0 var(--s5); }
 .drift h3 { font-size: var(--text-md); font-weight: 600; letter-spacing: -0.005em; }
 .drift-lead { margin: 4px 0 var(--s3); max-width: 70ch; color: var(--fg-mute); font-size: var(--text-sm); line-height: 1.55; }
-.drift-table { width: 100%; margin-bottom: var(--s3); border-collapse: collapse; font-size: var(--text-sm); }
-.drift-table th { padding: 0 var(--s4) 7px 0; border-bottom: 1px solid var(--line); color: var(--fg-dim); font-size: var(--text-2xs); font-weight: 600; text-align: left; }
-.drift-table td { padding: 9px var(--s4) 9px 0; border-bottom: 1px solid var(--line); vertical-align: top; color: var(--fg-mute); line-height: 1.5; }
+.drift-table { margin-bottom: var(--s3); }
+.drift-table td { vertical-align: top; color: var(--fg-mute); line-height: 1.5; }
 .drift-table td.mono { color: var(--fg); white-space: nowrap; }
 
 /* ---- the composer's top strip: attach, and what is attached ---------------- */

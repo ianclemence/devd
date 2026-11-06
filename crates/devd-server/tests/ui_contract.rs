@@ -174,7 +174,7 @@ fn tables_keep_one_grid_and_inline_rows_stay_on_one_line() {
         "action headers are table cells, right aligned and nowrap"
     );
     assert!(
-        CSS.contains("vertical-align: bottom;\n  white-space: nowrap;") && CSS.contains(".md th { white-space: nowrap;"),
+        CSS.contains("vertical-align: middle;\n  white-space: nowrap;") && CSS.contains(".md th { white-space: nowrap;"),
         "every table head stays on one line"
     );
 }
@@ -1191,10 +1191,19 @@ fn every_table_shares_one_head_and_one_action_column() {
     );
     // One definition of the head, not one per screen.
     assert_eq!(
-        CSS.matches("text-transform: uppercase;\n  vertical-align: bottom;").count(),
+        CSS.matches("text-transform: uppercase;\n  vertical-align: middle;").count(),
         1,
         "the table head is defined once"
     );
     // Numbers line up by their digits.
     assert!(CSS.contains(".cell-num"));
+}
+
+#[test]
+fn a_table_head_sits_centred_between_its_lines() {
+    // The head had no space above it and ten pixels below, so beside the rule of a
+    // panel heading the words hung from the top. Equal space above and below.
+    let at = CSS.find(".table th, .mu th, .drift-table th {").expect("the shared head rule");
+    let body = &CSS[at..at + 120];
+    assert!(body.contains("padding: 10px var(--s4) 10px 0;"), "the head has the same space above and below: {body}");
 }
