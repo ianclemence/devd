@@ -210,6 +210,7 @@ struct Accumulator {
     finish: Option<String>,
     input_tokens: i64,
     output_tokens: i64,
+    cache_read_tokens: i64,
     calls: usize,
 }
 
@@ -254,6 +255,9 @@ impl Accumulator {
         if let Some(n) = v.pointer("/usageMetadata/promptTokenCount").and_then(Value::as_i64) {
             self.input_tokens = n;
         }
+        if let Some(n) = v.pointer("/usageMetadata/cachedContentTokenCount").and_then(Value::as_i64) {
+            self.cache_read_tokens = n;
+        }
         let out = v
             .pointer("/usageMetadata/candidatesTokenCount")
             .and_then(Value::as_i64)
@@ -282,6 +286,8 @@ impl Accumulator {
             stop_reason: stop_reason.to_string(),
             input_tokens: self.input_tokens,
             output_tokens: self.output_tokens,
+            cache_read_tokens: self.cache_read_tokens,
+            cache_write_tokens: 0,
         })
     }
 }

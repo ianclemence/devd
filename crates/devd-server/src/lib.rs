@@ -44,6 +44,7 @@
 pub mod api;
 pub mod approval;
 pub mod events;
+mod katex_fonts;
 pub mod picker;
 pub mod ui;
 
@@ -258,6 +259,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         // The push-to-deploy hook. Not under /api: it carries its own secret in the path, so a service
         // that cannot hold the bearer token (GitHub) can start a deploy.
         .route("/hooks/deploy/:site/:token", post(api::deploy_hook))
+        // A general incoming hook: the token names a stored rule, the body is
+        // matched against its filter, and the rule's action runs through the
+        // ordinary capability registry.
+        .route("/hooks/task/:token", post(api::task_hook))
         .with_state(state.clone());
 
     let pages = Router::new()
@@ -270,6 +275,11 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/vendor/xterm.js", get(ui::xterm))
         .route("/vendor/xterm.css", get(ui::xterm_style))
         .route("/vendor/addon-fit.js", get(ui::xterm_fit))
+        .route("/vendor/katex.min.js", get(ui::katex))
+        .route("/vendor/katex.min.css", get(ui::katex_style))
+        .route("/vendor/auto-render.min.js", get(ui::katex_auto))
+        .route("/vendor/katex/fonts/:file", get(ui::katex_font))
+        .route("/vendor/mermaid.min.js", get(ui::mermaid))
         // Every screen has an address of its own, so a link to it can be
         // copied and the back button means something. The shell answers for
         // any path it does not have a file for, and the interface reads the
@@ -451,14 +461,14 @@ pub fn attach_or_claim(paths: &devd_core::Paths, role: &str) -> Result<Attach> {
 async fn guard(State(state): State<Arc<AppState>>, req: Request<Body>, next: Next) -> Response {
     // A deploy hook is called from outside, through a public link, so its Host is not a loopback
     // name. It is POST only, and the secret in its path is what authorises it.
-    if req.uri().path().starts_with("/hooks/deploy/") {
+    if req.uri().path().starts_with("/hooks/deploy/") || req.uri().path().starts_with("/hooks/task/") {
         return if req.method() == Method::POST {
             next.run(req).await
         } else {
             refuse(
                 StatusCode::METHOD_NOT_ALLOWED,
                 "post_only",
-                "a deploy hook accepts POST only",
+                "a hook accepts POST only",
             )
         };
     }

@@ -41,6 +41,7 @@ pub mod shims;
 pub mod snapshot;
 pub mod state;
 pub mod store_ai;
+pub mod store_automation;
 pub mod store_autonomy;
 pub mod store_mcp;
 pub mod store_ops;

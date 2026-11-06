@@ -96,6 +96,25 @@ pub struct ChatThread {
     pub input_tokens: i64,
     /// Output tokens used.
     pub output_tokens: i64,
+    /// Input tokens served from the provider's prompt cache.
+    #[serde(default)]
+    pub cache_read_tokens: i64,
+    /// Input tokens written to the provider's prompt cache.
+    #[serde(default)]
+    pub cache_write_tokens: i64,
+    /// What the provider calls actually cost, in US dollars, when the price was
+    /// known at call time. `None` means no call recorded a price.
+    #[serde(default)]
+    pub cost_usd: Option<f64>,
+    /// A provider limit that stopped the turn, and when devd may continue.
+    #[serde(default)]
+    pub resume_at: Option<String>,
+    /// The pull request this conversation is about.
+    #[serde(default)]
+    pub pr_url: Option<String>,
+    /// When a person marked the conversation settled.
+    #[serde(default)]
+    pub settled_at: Option<String>,
     /// Created.
     pub created_at: String,
     /// Updated.
@@ -239,7 +258,7 @@ fn row_provider(r: &rusqlite::Row) -> rusqlite::Result<Provider> {
 
 const PROVIDER_COLS: &str =
     "id,kind,label,base_url,key_env,default_model,is_default,enabled,created_at,updated_at";
-const THREAD_COLS: &str = "id,title,project,provider_id,model,state,error,input_tokens,output_tokens,created_at,updated_at,kind";
+const THREAD_COLS: &str = "id,title,project,provider_id,model,state,error,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,cost_usd,resume_at,pr_url,settled_at,created_at,updated_at,kind";
 const REQ_COLS: &str = "id,actor,capability,args,plan,state,result,error,thread_id,tool_use_id,created_at,decided_at,decided_by,approval_id";
 
 fn row_thread(r: &rusqlite::Row) -> rusqlite::Result<ChatThread> {
@@ -253,9 +272,15 @@ fn row_thread(r: &rusqlite::Row) -> rusqlite::Result<ChatThread> {
         error: r.get(6)?,
         input_tokens: r.get(7)?,
         output_tokens: r.get(8)?,
-        created_at: r.get(9)?,
-        updated_at: r.get(10)?,
-        kind: r.get(11)?,
+        cache_read_tokens: r.get(9)?,
+        cache_write_tokens: r.get(10)?,
+        cost_usd: r.get(11)?,
+        resume_at: r.get(12)?,
+        pr_url: r.get(13)?,
+        settled_at: r.get(14)?,
+        created_at: r.get(15)?,
+        updated_at: r.get(16)?,
+        kind: r.get(17)?,
     })
 }
 
@@ -421,14 +446,20 @@ impl Store {
             error: None,
             input_tokens: 0,
             output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            cost_usd: None,
+            resume_at: None,
+            pr_url: None,
+            settled_at: None,
             created_at: now.clone(),
             updated_at: now,
             kind: kind.to_string(),
         };
         self.with(|c| {
             c.execute(
-                &format!("INSERT INTO chat_threads ({THREAD_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)"),
-                params![t.id, t.title, t.project, t.provider_id, t.model, t.state, t.error, t.input_tokens, t.output_tokens, t.created_at, t.updated_at, t.kind],
+                &format!("INSERT INTO chat_threads ({THREAD_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)"),
+                params![t.id, t.title, t.project, t.provider_id, t.model, t.state, t.error, t.input_tokens, t.output_tokens, t.cache_read_tokens, t.cache_write_tokens, t.cost_usd, t.resume_at, t.pr_url, t.settled_at, t.created_at, t.updated_at, t.kind],
             )?;
             Ok(())
         })?;
@@ -491,6 +522,102 @@ impl Store {
         self.with(|c| {
             c.execute("UPDATE chat_threads SET input_tokens=input_tokens+?2, output_tokens=output_tokens+?3 WHERE id=?1", params![id, input, output])?;
             Ok(())
+        })
+    }
+
+    /// Add tokens, prompt-cache use and the cost of the call that used them.
+    pub fn add_thread_usage_full(
+        &self,
+        id: &str,
+        input: i64,
+        output: i64,
+        cache_read: i64,
+        cache_write: i64,
+        cost: Option<f64>,
+    ) -> Result<()> {
+        self.with(|c| {
+            c.execute(
+                "UPDATE chat_threads SET input_tokens=input_tokens+?2, output_tokens=output_tokens+?3, \
+                 cache_read_tokens=cache_read_tokens+?4, cache_write_tokens=cache_write_tokens+?5, \
+                 cost_usd=COALESCE(cost_usd,0)+COALESCE(?6,0) WHERE id=?1",
+                params![id, input, output, cache_read, cache_write, cost],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Stop after a provider limit and say when the conversation may continue.
+    /// `state` is `waiting_limit`, which is not a failure: nothing was lost.
+    pub fn set_thread_limit(&self, id: &str, error: &str, resume_at: &str) -> Result<()> {
+        self.with(|c| {
+            c.execute(
+                "UPDATE chat_threads SET state='waiting_limit', error=?2, resume_at=?3, updated_at=?4 WHERE id=?1",
+                params![id, error, resume_at, util::now()],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Conversations whose provider limit has reset.
+    pub fn due_limited_threads(&self, now: &str) -> Result<Vec<ChatThread>> {
+        self.with(|c| {
+            let mut st = c.prepare(&format!(
+                "SELECT {THREAD_COLS} FROM chat_threads WHERE state='waiting_limit' AND resume_at IS NOT NULL AND resume_at<=?1 ORDER BY resume_at"
+            ))?;
+            let rows = st.query_map(params![now], row_thread)?;
+            Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+        })
+    }
+
+    /// Clear a limit and prepare to continue.
+    pub fn clear_thread_limit(&self, id: &str) -> Result<()> {
+        self.with(|c| {
+            c.execute(
+                "UPDATE chat_threads SET state='idle', error=NULL, resume_at=NULL, updated_at=?2 WHERE id=?1",
+                params![id, util::now()],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Link (or unlink) a pull request.
+    pub fn set_thread_pr(&self, id: &str, url: Option<&str>) -> Result<()> {
+        self.with(|c| {
+            c.execute("UPDATE chat_threads SET pr_url=?2, updated_at=?3 WHERE id=?1", params![id, url, util::now()])?;
+            Ok(())
+        })
+    }
+
+    /// Settle or reopen a conversation.
+    pub fn set_thread_settled(&self, id: &str, settled: bool) -> Result<()> {
+        let at = if settled { Some(util::now()) } else { None };
+        self.with(|c| {
+            c.execute("UPDATE chat_threads SET settled_at=?2, updated_at=?3 WHERE id=?1", params![id, at, util::now()])?;
+            Ok(())
+        })
+    }
+
+    /// Claim a client message id. True when this is the first delivery; false
+    /// when the same message was already accepted and is being retried.
+    pub fn claim_client_message(&self, client_id: &str, thread_id: &str) -> Result<bool> {
+        self.with(|c| {
+            let inserted = c.execute(
+                "INSERT OR IGNORE INTO chat_client_messages (client_id,thread_id,created_at) VALUES (?1,?2,?3)",
+                params![client_id, thread_id, util::now()],
+            )?;
+            Ok(inserted > 0)
+        })
+    }
+
+    /// The conversation a client message id already belongs to.
+    pub fn client_message_thread(&self, client_id: &str) -> Result<Option<String>> {
+        self.with(|c| {
+            Ok(c.query_row(
+                "SELECT thread_id FROM chat_client_messages WHERE client_id=?1",
+                params![client_id],
+                |r| r.get(0),
+            )
+            .optional()?)
         })
     }
 

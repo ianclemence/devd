@@ -655,8 +655,38 @@ impl CompletionPolicy {
     /// require a test run, and a request to fix code does. A person's explicit
     /// criteria always require verification.
     pub fn for_goal(goal: &str, acceptance: &[String]) -> Self {
-        let g = goal.to_ascii_lowercase();
-        let has = |words: &[&str]| words.iter().any(|w| g.contains(w));
+        // Words inside code (fences or backticks) are content, not the request: "Build"
+        // in a diagram is not an instruction to build. The rest is matched on word starts,
+        // so "address" does not read as "add".
+        let mut plain = String::with_capacity(goal.len());
+        let mut in_fence = false;
+        for line in goal.lines() {
+            if line.trim_start().starts_with("```") {
+                in_fence = !in_fence;
+                continue;
+            }
+            if !in_fence {
+                let mut tick = false;
+                for ch in line.chars() {
+                    if ch == '`' {
+                        tick = !tick;
+                    } else if !tick {
+                        plain.push(ch);
+                    }
+                }
+                plain.push('\n');
+            }
+        }
+        let g = format!(" {}", plain.to_ascii_lowercase());
+        let has = |words: &[&str]| {
+            words.iter().any(|w| {
+                let w = w.trim_end();
+                g.match_indices(w).any(|(i, _)| {
+                    let before = g[..i].chars().last().unwrap_or(' ');
+                    !before.is_ascii_alphanumeric()
+                })
+            })
+        };
         let (kind, change, verify, why) = if has(&[
             "research",
             "explain",
@@ -1806,6 +1836,16 @@ mod tests {
             "a deliberate retry is allowed"
         );
         assert!(!RunState::Cancelled.can_transition_to(RunState::Executing));
+    }
+
+    #[test]
+    fn words_inside_code_or_other_words_do_not_turn_a_question_into_a_change() {
+        let diagram = CompletionPolicy::for_goal("Draw this as a diagram: `Plan --> Build --> Review`", &[]);
+        assert!(!diagram.requires_change, "\"Build\" in code is content, not an instruction");
+        let address = CompletionPolicy::for_goal("What is the server's address?", &[]);
+        assert!(!address.requires_change, "\"address\" is not \"add\"");
+        let real = CompletionPolicy::for_goal("Build the login page", &[]);
+        assert!(real.requires_change);
     }
 
     #[test]

@@ -168,6 +168,221 @@ pub struct InvokeBody {
 /// `POST /hooks/deploy/:site/:token` - start a deploy of a site whose push-to-deploy hook is on.
 ///
 /// Every refusal is the same `404`, so a wrong site, a wrong secret and a hook that is off cannot be told apart.
+/// Read a dotted path out of a JSON body: `repository.full_name`.
+fn hook_pick<'a>(body: &'a Value, path: &str) -> Option<&'a Value> {
+    let mut at = body;
+    for part in path.split('.') {
+        at = at.get(part)?;
+    }
+    Some(at)
+}
+
+/// Whether a hook's stored filter accepts this body and event.
+fn hook_matches(filter: &Value, body: &Value, event: &str) -> bool {
+    let Some(obj) = filter.as_object() else { return true };
+    if let Some(want) = obj.get("event").and_then(Value::as_str) {
+        if want != event {
+            return false;
+        }
+    }
+    if let Some(actions) = obj.get("actions").and_then(Value::as_array) {
+        let actual = body.get("action").and_then(Value::as_str).unwrap_or("");
+        if !actions.iter().any(|a| a.as_str() == Some(actual)) {
+            return false;
+        }
+    }
+    if let Some(repo) = obj.get("repo").and_then(Value::as_str) {
+        if hook_pick(body, "repository.full_name").and_then(Value::as_str) != Some(repo) {
+            return false;
+        }
+    }
+    // A branch matches a pull request's target or source branch, or a push's ref.
+    if let Some(branch) = obj.get("branch").and_then(Value::as_str) {
+        let pushed = hook_pick(body, "ref")
+            .and_then(Value::as_str)
+            .map(|r| r.trim_start_matches("refs/heads/"));
+        let hit = [
+            hook_pick(body, "pull_request.base.ref").and_then(Value::as_str),
+            hook_pick(body, "pull_request.head.ref").and_then(Value::as_str),
+            pushed,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|b| b == branch);
+        if !hit {
+            return false;
+        }
+    }
+    if let Some(equals) = obj.get("equals").and_then(Value::as_object) {
+        for (path, want) in equals {
+            if hook_pick(body, path) != Some(want) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Replace `{{dotted.path}}` in a stored action string with a body value.
+fn hook_fill(template: &str, body: &Value, event: &str) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(start) = rest.find("{{") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        let Some(end) = after.find("}}") else {
+            out.push_str(&rest[start..]);
+            return out;
+        };
+        let key = after[..end].trim();
+        let value = if key == "event" {
+            Some(Value::String(event.to_string()))
+        } else {
+            hook_pick(body, key).cloned()
+        };
+        match value {
+            Some(Value::String(s)) => out.push_str(&s),
+            Some(Value::Null) | None => out.push_str("(none)"),
+            Some(other) => out.push_str(&other.to_string()),
+        }
+        rest = &after[end + 2..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// `POST /hooks/task/:token` - an incoming event from a service that cannot hold
+/// a bearer token. The token names a stored rule, so this is a caller with no
+/// person behind it and no new permission path: the action goes through the
+/// ordinary registry.
+pub async fn task_hook(
+    State(state): State<Arc<AppState>>,
+    Path(token): Path<String>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    // GitHub names the event in a header ("pull_request", "push"); other senders put it
+    // in the body. Either way it is matched against the hook's stored event.
+    let event = headers
+        .get("x-github-event")
+        .and_then(|v| v.to_str().ok())
+        .map(|e| format!("github.{e}"))
+        .or_else(|| body.get("event").and_then(Value::as_str).map(str::to_string))
+        .or_else(|| body.get("_event").and_then(Value::as_str).map(str::to_string))
+        .unwrap_or_default();
+    let st = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let rule = st
+            .ctx
+            .store
+            .automation_by_token(&token)
+            .ok()
+            .flatten();
+        let Some(rule) = rule else {
+            return (
+                StatusCode::NOT_FOUND,
+                json!({ "ok": false, "error": "no hook has that token" }),
+            );
+        };
+        if !rule.enabled {
+            return (
+                StatusCode::FORBIDDEN,
+                json!({ "ok": false, "error": "that hook is switched off" }),
+            );
+        }
+        let event = if event.is_empty() {
+            // GitHub sends its event in a header; the body still names the
+            // action. The stored event is the contract, so use it.
+            rule.event.clone()
+        } else {
+            event
+        };
+        if event != rule.event {
+            return (
+                StatusCode::ACCEPTED,
+                json!({ "ok": true, "ignored": "event does not match this hook" }),
+            );
+        }
+        if !hook_matches(&rule.filter, &body, &event) {
+            return (
+                StatusCode::ACCEPTED,
+                json!({ "ok": true, "ignored": "the filter did not match" }),
+            );
+        }
+        let kind = rule.action["type"].as_str().unwrap_or("");
+        let (capability, args) = match kind {
+            "team" => {
+                let goal = hook_fill(rule.action["goal"].as_str().unwrap_or(""), &body, &event);
+                let mut args = json!({ "goal": goal });
+                if let Some(p) = rule.action["project"].as_str().filter(|p| !p.trim().is_empty()) {
+                    args["project"] = json!(p);
+                }
+                if let Some(list) = rule.action["done_when"].as_array() {
+                    args["done_when"] = json!(list.iter().filter_map(Value::as_str).map(|s| hook_fill(s, &body, &event)).collect::<Vec<_>>());
+                }
+                ("team.start", args)
+            }
+            "chat" => {
+                let message = hook_fill(rule.action["message"].as_str().unwrap_or(""), &body, &event);
+                let mut args = json!({ "message": message });
+                if let Some(t) = rule.action["thread"].as_str() {
+                    args["thread"] = json!(t);
+                }
+                ("chat.send", args)
+            }
+            "inbox" => {
+                let subject = hook_fill(rule.action["subject"].as_str().unwrap_or("Incoming event"), &body, &event);
+                let text = hook_fill(rule.action["body"].as_str().unwrap_or(""), &body, &event);
+                let mut args = json!({ "subject": subject, "body": text });
+                if let Some(p) = rule.action["project"].as_str().filter(|p| !p.trim().is_empty()) {
+                    args["project"] = json!(p);
+                }
+                ("inbox.post", args)
+            }
+            _ => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json!({ "ok": false, "error": "the hook action is not understood" }),
+                )
+            }
+        };
+        let mut ctx: Ctx = st.ctx.clone();
+        ctx.actor = devd_core::capability::Actor::system();
+        ctx.run = None;
+        let req = InvokeRequest { id: capability.into(), args, dry_run: false };
+        let dispatch = st
+            .registry
+            .dispatch_with(&ctx, &req, Approval::None, &DispatchOptions::default());
+        match dispatch {
+            Ok(result) => {
+                let _ = st.ctx.store.mark_automation(&rule.name, None);
+                let data = result.outcome.as_ref().map(|o| o.data.clone()).unwrap_or(Value::Null);
+                (
+                    StatusCode::ACCEPTED,
+                    json!({ "ok": true, "hook": rule.name, "action": kind, "result": data }),
+                )
+            }
+            Err(e) => {
+                let why = e.to_string();
+                let _ = st.ctx.store.mark_automation(&rule.name, Some(&why));
+                (
+                    StatusCode::BAD_GATEWAY,
+                    json!({ "ok": false, "hook": rule.name, "error": why }),
+                )
+            }
+        }
+    })
+    .await;
+    match result {
+        Ok((status, body)) => (status, axum::Json(body)).into_response(),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(json!({ "ok": false, "error": "the hook could not run" })),
+        )
+            .into_response(),
+    }
+}
+
 pub async fn deploy_hook(
     State(state): State<Arc<AppState>>,
     axum::extract::Path((site, token)): axum::extract::Path<(String, String)>,
@@ -905,6 +1120,24 @@ fn parse<T: for<'de> Deserialize<'de>>(raw: &str) -> Option<T> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_hook_filter_matches_the_branch_a_pull_request_targets_or_a_push_updates() {
+        use serde_json::json;
+        let pr = json!({ "action": "opened", "repository": { "full_name": "acme/shop" },
+            "pull_request": { "html_url": "https://github.com/acme/shop/pull/7", "base": { "ref": "main" }, "head": { "ref": "fix-cart" } } });
+        let filter = json!({ "actions": ["opened", "synchronize"], "repo": "acme/shop", "branch": "main" });
+        assert!(super::hook_matches(&filter, &pr, "github.pull_request"));
+        assert!(!super::hook_matches(&json!({ "actions": ["closed"] }), &pr, "github.pull_request"));
+        assert!(!super::hook_matches(&json!({ "repo": "acme/other" }), &pr, "github.pull_request"));
+        let push = json!({ "ref": "refs/heads/main", "repository": { "full_name": "acme/shop" } });
+        assert!(super::hook_matches(&json!({ "branch": "main" }), &push, "github.push"));
+        assert!(!super::hook_matches(&json!({ "branch": "dev" }), &push, "github.push"));
+        assert_eq!(
+            super::hook_fill("Review {{pull_request.html_url}} ({{event}})", &pr, "github.pull_request"),
+            "Review https://github.com/acme/shop/pull/7 (github.pull_request)"
+        );
+    }
+
     use super::*;
 
     #[test]

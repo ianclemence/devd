@@ -146,6 +146,8 @@ pub fn usage(ctx: &Ctx) -> Result<Value> {
         conversations: i64,
         input: i64,
         output: i64,
+        cache_read: i64,
+        cache_write: i64,
         cost: f64,
         priced: i64,
         unpriced: i64,
@@ -172,12 +174,18 @@ pub fn usage(ctx: &Ctx) -> Result<Value> {
             .unwrap_or_else(|| "default model".into());
         let who = role_of.get(&t.id).cloned().unwrap_or_else(|| "assistant".into());
         let rate = price.get(&model.to_lowercase()).copied();
-        let cost = rate.map(|(i, o)| (i * t.input_tokens as f64 + o * t.output_tokens as f64) / 1_000_000.0);
+        // Prefer what was recorded when the call was made; fall back to the
+        // catalogue price for conversations recorded before per-call cost.
+        let cost = t.cost_usd.or_else(|| {
+            rate.map(|(i, o)| (i * t.input_tokens as f64 + o * t.output_tokens as f64) / 1_000_000.0)
+        });
         for (map, key) in [(&mut by_model, model.clone()), (&mut by_who, who.clone())] {
             let u = map.entry(key).or_default();
             u.conversations += 1;
             u.input += t.input_tokens;
             u.output += t.output_tokens;
+            u.cache_read += t.cache_read_tokens;
+            u.cache_write += t.cache_write_tokens;
             match cost {
                 Some(c) => {
                     u.cost += c;
@@ -201,6 +209,8 @@ pub fn usage(ctx: &Ctx) -> Result<Value> {
                 "conversations": u.conversations,
                 "input": u.input,
                 "output": u.output,
+                "cache_read": u.cache_read,
+                "cache_write": u.cache_write,
                 "cost_usd": if u.priced > 0 { Some(u.cost) } else { None },
                 "priced_conversations": u.priced,
                 "unpriced_conversations": u.unpriced,
@@ -217,6 +227,6 @@ pub fn usage(ctx: &Ctx) -> Result<Value> {
         "heaviest": top.into_iter().take(8).map(|(_, v)| v).collect::<Vec<_>>(),
         "total_cost_usd": if known.is_empty() { None } else { Some(known.iter().sum::<f64>()) },
         "unpriced_conversations": unpriced,
-        "note": "Tokens as each provider reported them. Spend is estimated at the catalogue's current price per million tokens; cache tiers and per-call price changes are not recorded, so it is an estimate, not an invoice.",
+        "note": "Tokens and cache use as each provider reported them. Spend is what was recorded per call from the price in force; a conversation recorded before that shows the catalogue estimate. It remains an estimate of the provider's bill, not the invoice.",
     }))
 }

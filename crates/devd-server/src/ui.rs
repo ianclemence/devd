@@ -43,6 +43,10 @@ const FONT_INTER_TIGHT: &[u8] = include_bytes!("../ui/fonts/inter-tight-latin.wo
 const XTERM_JS: &str = include_str!("../ui/vendor/xterm.js");
 const XTERM_CSS: &str = include_str!("../ui/vendor/xterm.css");
 const ADDON_FIT: &str = include_str!("../ui/vendor/addon-fit.js");
+const KATEX_JS: &str = include_str!("../ui/vendor/katex.min.js");
+const KATEX_CSS: &str = include_str!("../ui/vendor/katex.min.css");
+const KATEX_AUTO: &str = include_str!("../ui/vendor/auto-render.min.js");
+const MERMAID_JS: &str = include_str!("../ui/vendor/mermaid.min.js");
 
 /// Placeholder substituted with the bearer token at serve time.
 ///
@@ -95,6 +99,34 @@ pub async fn xterm_style() -> Response {
 /// The fit addon, which sizes the terminal to its box.
 pub async fn xterm_fit() -> Response {
     build("text/javascript; charset=utf-8", Body::from(ADDON_FIT), None)
+}
+
+/// KaTeX: math set in the browser, offline.
+pub async fn katex() -> Response {
+    build("text/javascript; charset=utf-8", Body::from(KATEX_JS), None)
+}
+
+/// KaTeX's stylesheet, with its fonts served from this binary.
+pub async fn katex_style() -> Response {
+    build("text/css; charset=utf-8", Body::from(KATEX_CSS), None)
+}
+
+/// KaTeX's auto-render extension.
+pub async fn katex_auto() -> Response {
+    build("text/javascript; charset=utf-8", Body::from(KATEX_AUTO), None)
+}
+
+/// One KaTeX font file.
+pub async fn katex_font(Path(file): Path<String>) -> Response {
+    match crate::katex_fonts::bytes(&file) {
+        Some(bytes) => build("font/woff2", Body::from(bytes), None),
+        None => missing(),
+    }
+}
+
+/// The diagram renderer, offline.
+pub async fn mermaid() -> Response {
+    build("text/javascript; charset=utf-8", Body::from(MERMAID_JS), None)
 }
 
 /// The window icon.

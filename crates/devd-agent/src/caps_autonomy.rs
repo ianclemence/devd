@@ -26,6 +26,42 @@ use crate::intake;
 use crate::roles;
 use crate::team::{StartRequest, Team};
 
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+struct NoAutomationArgs {}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct AutomationSet {
+    /// A short name, lower-case.
+    name: String,
+    /// The event this accepts: `github.pull_request`, `github.push` or a name
+    /// your own sender uses.
+    event: String,
+    /// Optional match conditions. `actions`, `repo`, `branch`, or `equals` with
+    /// dot paths into the JSON body.
+    #[serde(default)]
+    filter: Option<Value>,
+    /// What to do: `{ "type": "team", "project": "...", "goal": "..." }`,
+    /// `{ "type": "chat", "message": "..." }` or
+    /// `{ "type": "inbox", "subject": "...", "body": "..." }`.
+    action: Value,
+    /// A token to use. Absent: an existing hook keeps its token (so its sender keeps
+    /// working) and a new hook gets a fresh one.
+    #[serde(default)]
+    token: Option<String>,
+    /// True to replace the token: the old address stops working at once.
+    #[serde(default)]
+    rotate: Option<bool>,
+    /// Default true.
+    #[serde(default)]
+    enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct AutomationRef {
+    /// Rule name.
+    name: String,
+}
+
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct SuggestArgs {
     /// Project the work is for (new work needs one).
@@ -375,6 +411,112 @@ pub fn register(reg: &mut Registry, team: Arc<Team>) -> Result<()> {
             Ok(Outcome::ok(format!("deleted rule {}", a.name)))
         },
     )?;
+
+    reg.define::<NoAutomationArgs>("automation.list", "List incoming hooks")
+        .description("Every incoming hook: its name, event, filter, action and whether it is enabled. It does not reveal the token; a person can rotate one with automation.set. Read-only.")
+        .group("automation")
+        .tier(Tier::Read)
+        .effect(Effect::Read)
+        .agent_safe()
+        .dry_run()
+        .idempotent()
+        .handlers(
+            |_, _| simple("automation.list", "list incoming hooks"),
+            |ctx, _| {
+                let rows: Vec<Value> = ctx.store.list_automations()?.into_iter().map(|a| json!({
+                    "name": a.name, "event": a.event, "filter": a.filter, "action": a.action,
+                    "enabled": a.enabled, "created_at": a.created_at, "last_at": a.last_at,
+                    "last_error": a.last_error
+                })).collect();
+                Ok(Outcome::with_data(format!("{} hook(s)", rows.len()), json!(rows)))
+            },
+        )?;
+
+    reg.define::<AutomationSet>("automation.set", "Create or change an incoming hook")
+        .description("Stores one rule for an incoming HTTP hook at /hooks/task/<token>. An event is matched against the filter, then the action starts a team run, messages the assistant, or posts an Inbox item. The token is returned once here. Human only; a hook is a caller with no person behind it, so it can only do what the action names.")
+        .group("automation")
+        .tier(Tier::Write)
+        .effect(Effect::Write)
+        .human_only()
+        .dry_run()
+        .handlers(
+            |_, a| simple("automation.set", format!("store the hook `{}`", a.name)),
+            |ctx, a| {
+                let name = a.name.trim().to_ascii_lowercase();
+                if name.is_empty() || name.len() > 40 || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+                    return Err(DevdError::invalid("a hook name is 1-40 letters, digits, - or _"));
+                }
+                let event = a.event.trim();
+                if event.is_empty() || event.len() > 80 {
+                    return Err(DevdError::invalid("say which event this hook accepts"));
+                }
+                let action = match &a.action {
+                    Value::String(text) => serde_json::from_str::<Value>(text)
+                        .map_err(|e| DevdError::invalid(format!("the action is not JSON: {e}")))?,
+                    other => other.clone(),
+                };
+                let kind = action["type"].as_str().unwrap_or("");
+                match kind {
+                    "team" => {
+                        if action["goal"].as_str().unwrap_or("").trim().chars().count() < 10 {
+                            return Err(DevdError::invalid("a team action needs a goal of at least 10 characters"));
+                        }
+                    }
+                    "chat" => {
+                        if action["message"].as_str().unwrap_or("").trim().is_empty() {
+                            return Err(DevdError::invalid("a chat action needs a message"));
+                        }
+                    }
+                    "inbox" => {
+                        if action["subject"].as_str().unwrap_or("").trim().is_empty() {
+                            return Err(DevdError::invalid("an inbox action needs a subject"));
+                        }
+                    }
+                    _ => return Err(DevdError::invalid("the action type is team, chat or inbox")),
+                }
+                let filter = match a.filter.clone().unwrap_or_else(|| json!({})) {
+                    Value::String(text) => serde_json::from_str::<Value>(&text)
+                        .map_err(|e| DevdError::invalid(format!("the filter is not JSON: {e}")))?,
+                    other => other,
+                };
+                if !filter.is_object() {
+                    return Err(DevdError::invalid("the filter is an object"));
+                }
+                // Editing a hook (turning it off, changing its goal) must not move its address
+                // from under the sender; a new address is only made when asked for.
+                let kept = if a.rotate.unwrap_or(false) {
+                    None
+                } else {
+                    ctx.store.list_automations()?.into_iter().find(|x| x.name == name).map(|x| x.token)
+                };
+                let token = a.token.clone().filter(|t| t.trim().len() >= 16).or(kept).unwrap_or_else(|| util::new_id());
+                if token.len() < 16 {
+                    return Err(DevdError::invalid("a token is at least 16 characters"));
+                }
+                ctx.store.put_automation(&name, &token, event, &filter, &action, a.enabled.unwrap_or(true))?;
+                Ok(Outcome::with_data(
+                    "saved; the hook address is /hooks/task/<token>",
+                    json!({ "name": name, "event": event, "token": token, "url": format!("/hooks/task/{token}") }),
+                ))
+            },
+        )?;
+
+    reg.define::<AutomationRef>("automation.delete", "Delete an incoming hook")
+        .description("Removes one hook. Calls already accepted are not touched. Human only.")
+        .group("automation")
+        .tier(Tier::Write)
+        .effect(Effect::Write)
+        .human_only()
+        .dry_run()
+        .handlers(
+            |_, a| simple("automation.delete", format!("delete the hook `{}`", a.name)),
+            |ctx, a| {
+                if !ctx.store.delete_automation(a.name.trim())? {
+                    return Err(DevdError::not_found(format!("no hook called `{}`", a.name)));
+                }
+                Ok(Outcome::ok("deleted"))
+            },
+        )?;
 
     Ok(())
 }

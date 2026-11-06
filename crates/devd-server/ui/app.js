@@ -72,7 +72,10 @@
         '<button type="button" class="btn btn-mini" data-action="reconnect">Try now</button>'
       : "";
     if (el("health-chip")) healthChip();
-    if (!OFFLINE && !quiet) toast("ok", "Back in touch with devd");
+    if (!OFFLINE) {
+      flushOutbox();
+      if (!quiet) toast("ok", "Back in touch with devd");
+    }
   }
 
   function sessionEnded() {
@@ -142,7 +145,7 @@
                 method: "POST",
                 body: JSON.stringify({ token: res.body.token })
               }).then(function () {
-                toast("warn", id + " was not approved");
+                toast("warn", "Not approved: " + capLabel(id).charAt(0).toLowerCase() + capLabel(id).slice(1));
                 return null;
               });
             }
@@ -155,20 +158,23 @@
                 return null;
               }
               var outcome = done.body.outcome;
-              if (!opts.quiet) toast("ok", (outcome && outcome.message) || id + " applied");
-              return outcome || { ok: true, message: id + " applied" };
+              if (!opts.quiet) toast("ok", (outcome && outcome.message) || capLabel(id) + ": done");
+              return outcome || { ok: true, message: capLabel(id) + ": done" };
             });
           });
         }
         if (!res.ok) {
-          toast("error", errorOf(res.body, id + " failed"));
+          toast("error", errorOf(res.body, capLabel(id) + " failed"));
           return null;
         }
         var outcome = res.body.outcome;
-        if (!opts.quiet) toast("ok", (outcome && outcome.message) || id + " done");
-        return outcome || { ok: true, message: id + " done" };
+        if (!opts.quiet) toast("ok", (outcome && outcome.message) || capLabel(id) + ": done");
+        return outcome || { ok: true, message: capLabel(id) + ": done" };
       })
       .catch(function (e) {
+        // A caller that keeps work for later (the outbox) needs to see a lost connection;
+        // everyone else gets the toast.
+        if (opts.rethrow) throw e;
         toast("error", e.message);
         return null;
       });
@@ -691,6 +697,7 @@
     if (!wasOpen) drawerOrigin = document.activeElement;
     el("drawer-title").textContent = title;
     el("drawer-body").innerHTML = html;
+    scheduleRich(el("drawer-body"));
     el("drawer").hidden = false;
     el("drawer-scrim").hidden = false;
     // Focus moves into the drawer: the close button is the first thing a keyboard
@@ -1065,6 +1072,7 @@
   // -------------------------------------------------------------------- modal
 
   var pendingDecision = null;
+  var TIER_WORDS = { read: "Reads only", write: "Changes files", exec: "Runs a program", admin: "Changes this machine", destructive: "Can remove things" };
 
   /* Present a plan and resolve to true (approved) or false (declined). */
   function askApproval(view) {
@@ -1072,19 +1080,32 @@
       pendingDecision = resolve;
 
       var plan = view.plan;
-      var destructive = !!(plan && plan.destructive) || view.tier === "destructive" || view.tier === "admin";
+      // "admin" covered installs and settings as well as real destruction, and
+      // every one of them read "This can destroy work." Say what is true: a
+      // destructive plan gets the red warning, an admin change gets the calmer
+      // "changes this machine" note, and an ordinary write says nothing extra.
+      var destructive = !!(plan && plan.destructive) || view.tier === "destructive";
+      var admin = view.tier === "admin" && !destructive;
 
-      el("modal-kicker").textContent = view.capability;
-      el("modal-title").textContent = view.summary || view.capability;
+      // People read what is being asked and how far it reaches; the id stays in a tooltip.
+      el("modal-kicker").textContent = "Approval needed";
+      el("modal-kicker").title = view.capability;
+      el("modal-title").textContent = view.summary || capLabel(view.capability);
       var tierPill = el("modal-tier");
       tierPill.className = tierClass(view.tier);
-      tierPill.textContent = view.tier;
+      tierPill.textContent = TIER_WORDS[view.tier] || view.tier;
+      tierPill.title = view.tier + " tier";
 
       var parts = [];
       if (destructive) {
         parts.push(
           '<div class="notice notice-bad"><strong>This can destroy work.</strong> ' +
           "Read the steps below before approving.</div>"
+        );
+      } else if (admin) {
+        parts.push(
+          '<div class="notice notice-warn"><strong>This changes this machine.</strong> ' +
+          "Read what it will do before approving. Nothing existing is removed unless the steps say so.</div>"
         );
       }
       if (view.description) {
@@ -1378,14 +1399,14 @@
     assistant: "assistant", team: "runs",
     projects: "projects", project: "projects", create: "projects", develop: "projects",
     sites: "sites", site: "sites", hosts: "sites", certificates: "sites", mail: "sites",
-    agents: "agents", schedules: "agents", shared: "agents", skills: "agents", mcp: "agents",
+    agents: "agents", schedules: "agents", automations: "agents", shared: "agents", skills: "agents", mcp: "agents",
     overview: "server", services: "server", operations: "server", toolchain: "server", runtimes: "server",
     databases: "server", remote: "server", preview: "server"
   };
   var TABS = {
     projects: [["projects", "All projects"], ["create", "New project"], ["develop", "Stacks and tasks"]],
     sites: [["sites", "All sites"], ["hosts", "Hosts"], ["certificates", "Certificates"], ["mail", "Mail"]],
-    agents: [["agents", "Team room"], ["schedules", "Schedules"], ["skills", "Skills"], ["mcp", "MCP servers"], ["shared", "Notes"]],
+    agents: [["agents", "Team room"], ["schedules", "Schedules"], ["automations", "Automations"], ["skills", "Skills"], ["mcp", "MCP servers"], ["shared", "Notes"]],
     server: [["overview", "Overview"], ["services", "Services"], ["runtimes", "Runtimes"], ["databases", "Databases"], ["toolchain", "Tools"], ["remote", "Remote"]]
   };
   var AREA_HOME = { assistant: "assistant", runs: "team", projects: "projects", sites: "sites", agents: "agents", server: "overview" };
@@ -1393,7 +1414,7 @@
 
   function areaOf(view) { return AREA[view] || view; }
 
-  var TAB_ICON = { projects: "i-folder", create: "i-plus", develop: "i-wrench", sites: "i-globe", hosts: "i-server", certificates: "i-lock", mail: "i-inbox", terminal: "i-code", team: "i-layers", agents: "i-team", schedules: "i-calendar", skills: "i-book", shared: "i-file", mcp: "i-code", overview: "i-home", services: "i-layers", runtimes: "i-bolt", databases: "i-db", toolchain: "i-wrench", remote: "i-cloud" };
+  var TAB_ICON = { projects: "i-folder", create: "i-plus", develop: "i-wrench", sites: "i-globe", hosts: "i-server", certificates: "i-lock", mail: "i-inbox", terminal: "i-code", team: "i-layers", agents: "i-team", schedules: "i-calendar", automations: "i-bolt", skills: "i-book", shared: "i-file", mcp: "i-code", overview: "i-home", services: "i-layers", runtimes: "i-bolt", databases: "i-db", toolchain: "i-wrench", remote: "i-cloud" };
 
   /* The section tabs used to be a second bar under the top one. They are now the
      context panel's list, so this only keeps the old bar out of the way. */
@@ -3142,7 +3163,9 @@
   }
 
   function setupProgress(steps) {
-    return '<div class="setup-steps">' + steps.map(function (s) {
+    var done = steps.filter(function (s) { return s.state === "done"; }).length;
+    return '<progress class="ds-progress' + (done === steps.length ? " is-done" : "") + '" value="' + done + '" max="' + Math.max(1, steps.length) + '" aria-label="Setup progress"></progress>' +
+      '<div class="setup-steps">' + steps.map(function (s) {
       var mark = s.state === "done" ? "✓" : s.state === "failed" ? "✗" : s.state === "running" ? "…" : "·";
       return '<div class="setup-step setup-' + s.state + '"><span class="setup-mark">' + mark + "</span> " + esc(s.label) + (s.note ? '<div class="dim">' + esc(s.note) + "</div>" : "") + "</div>";
     }).join("") + "</div>";
@@ -3970,18 +3993,21 @@
     var tok = function (x) { return compactCount(x || 0); };
     var money = function (v) { return v === null || v === undefined ? "\u2014" : "$" + (v > 0 && v < 1 ? v.toFixed(4) : v.toFixed(2)); };
     var priced = u.by_model.some(function (r) { return r.cost_usd !== null && r.cost_usd !== undefined; });
+    var cached = u.by_model.some(function (r) { return (r.cache_read || 0) + (r.cache_write || 0) > 0; });
     var table = function (rows, label) {
       var total = rows.reduce(function (a, r) { return a + r.input + r.output; }, 0) || 1;
-      return '<table class="table kpi-table"><thead><tr><th>' + label + '</th><th class="num">Conversations</th><th class="num">Input</th><th class="num">Output</th>' + (priced ? '<th class="num">Est. spend</th>' : "") + '<th>Share</th></tr></thead><tbody>' +
+      return '<table class="table kpi-table"><thead><tr><th>' + label + '</th><th class="num">Conversations</th><th class="num">Input</th><th class="num">Output</th>' +
+        (cached ? '<th class="num">Cache read / write</th>' : "") + (priced ? '<th class="num">Spend</th>' : "") + '<th>Share</th></tr></thead><tbody>' +
         rows.map(function (r) {
           var share = (r.input + r.output) / total;
           return "<tr><td>" + esc(label === "Member" ? roleFace(r.name).name : r.name) + '</td><td class="num">' + r.conversations + '</td><td class="num">' + tok(r.input) + '</td><td class="num">' + tok(r.output) + '</td>' +
-            (priced ? '<td class="num" title="' + attr(r.cost_usd === null || r.cost_usd === undefined ? "This model has no price in the catalogue" : "Estimated at the catalogue price") + '">' + money(r.cost_usd) + '</td>' : "") +
+            (cached ? '<td class="num">' + tok(r.cache_read || 0) + " / " + tok(r.cache_write || 0) + '</td>' : "") +
+            (priced ? '<td class="num" title="' + attr(r.cost_usd === null || r.cost_usd === undefined ? "This model has no price in the catalogue" : "Recorded from the price in force when the call ran") + '">' + money(r.cost_usd) + '</td>' : "") +
             '<td><span class="share"><span style="width:' + Math.max(2, Math.round(share * 100)) + '%"></span></span> <span class="dim">' + Math.round(share * 100) + "%</span></td></tr>";
         }).join("") + "</tbody></table>";
     };
     var spend = u.total_cost_usd !== null && u.total_cost_usd !== undefined
-      ? '<div class="usage-total">Estimated spend <b>' + money(u.total_cost_usd) + "</b>" + (u.unpriced_conversations ? ' <span class="dim">- ' + u.unpriced_conversations + " conversation" + (u.unpriced_conversations === 1 ? "" : "s") + " have no known price</span>" : "") + "</div>"
+      ? '<div class="usage-total">Spend <b>' + money(u.total_cost_usd) + "</b>" + (u.unpriced_conversations ? ' <span class="dim">- ' + u.unpriced_conversations + " conversation" + (u.unpriced_conversations === 1 ? "" : "s") + " have no known price</span>" : "") + "</div>"
       : "";
     return uiHead("Usage", null) + spend + '<div class="ui-quiet">' + esc(u.note) + "</div>" +
       table(u.by_model, "Model") + table(u.by_who, "Member") +
@@ -4163,9 +4189,73 @@
       (chosen ? '<div class="field"><label class="field-label">Values <span class="dim">(name=value, one per line)</span></label><textarea class="input mono" id="sched-params" rows="3" placeholder="' + attr(hint) + '">' + esc(f.params) + "</textarea></div>"
         : '<div class="field"><label class="field-label">Goal</label><textarea class="input" id="sched-goal" rows="3" placeholder="What the team should do each time">' + esc(f.goal) + "</textarea></div>") +
       '<div class="field"><label class="field-label">More to prove <span class="dim">(optional, one per line)</span></label><textarea class="input" id="sched-done" rows="4">' + esc(f.done) + "</textarea></div>" +
-      '<label class="check"><input type="checkbox" id="sched-waive"' + (f.waive ? " checked" : "") + '> Start each run without asking me to approve the plan <span class="dim">(not in production mode)</span></label>' +
+      '<label class="check"><input type="checkbox" class="ds-toggle" id="sched-waive"' + (f.waive ? " checked" : "") + '> Start each run without asking me to approve the plan <span class="dim">(not in production mode)</span></label>' +
       '<div><button type="button" class="btn btn-primary" id="schedule-create" data-action="schedule-create" disabled>Create the schedule</button></div></div></div>');
     syncFormButtons();
+  }
+
+  /* Automations: work an event starts.
+   *
+   * A schedule starts the team on a clock; an automation starts it when something happens
+   * elsewhere - a pull request opens, a branch is pushed, your own system sends an event.
+   * Each one is an address with a secret in it, a filter and one action, and the action runs
+   * through the same capabilities and approvals as anything a person starts here. */
+  var AUTO = { list: null, form: { preset: "pr-review", name: "", event: "github.pull_request", repo: "", branch: "", project: "", goal: "", kind: "team" } };
+  var AUTO_PRESETS = {
+    "pr-review": { label: "Review every pull request", event: "github.pull_request", actions: ["opened", "synchronize", "reopened"],
+      goal: "Review the pull request {{pull_request.html_url}} ({{pull_request.title}}). Read the diff, run the project's checks, and report findings with file and line, then a verdict: approve or changes needed." },
+    "push-check": { label: "Check every push", event: "github.push", actions: null,
+      goal: "A push reached {{ref}} ({{head_commit.message}}). Run the project's tests, lint and build, and report what passed and what failed." },
+    "custom": { label: "Your own event", event: "custom", actions: null, goal: "" }
+  };
+  function loadAutomations() {
+    return Promise.all([
+      read("automation.list").catch(function () { return []; }),
+      state.projects.length ? Promise.resolve() : loadProjects()
+    ]).then(function (r) { AUTO.list = Array.isArray(r[0]) ? r[0] : []; });
+  }
+  function hookAddress(token) { return location.origin + "/hooks/task/" + token; }
+  function renderAutomations() {
+    if (state.view !== "automations") return;
+    if (!AUTO.list) return renderLoading();
+    var f = AUTO.form, preset = AUTO_PRESETS[f.preset] || AUTO_PRESETS.custom;
+    var rows = AUTO.list.map(function (a) {
+      var act = a.action || {}, filter = a.filter || {};
+      var does = act.type === "team" ? "Gives the team a goal" + (act.project ? " in " + threadProjectName(act.project) : "") : act.type === "chat" ? "Tells the assistant" : act.type === "inbox" ? "Puts a note in the Inbox" : "Runs " + (act.type || "an action");
+      var when = (a.event === "github.pull_request" ? "A pull request" + (filter.actions ? " is " + filter.actions.join(", ") : " changes") : a.event === "github.push" ? "A push" : "Event " + a.event) +
+        (filter.repo ? " in " + filter.repo : "") + (filter.branch ? " on " + filter.branch : "");
+      return uiRow({
+        dot: !a.enabled ? "off" : a.last_error ? "bad" : a.last_at ? "ok" : "off",
+        title: esc(a.name),
+        sub: esc(when + " \u2192 " + does) + (a.last_error ? '<div class="ui-row-err">' + esc(a.last_error) + "</div>" : ""),
+        meta: esc(a.last_at ? "last " + ago(a.last_at) : "not called yet"),
+        // The address carries a secret and is shown once, when it is made; a lost one is
+        // replaced, not revealed.
+        actions: '<button type="button" class="btn btn-mini btn-ghost" data-action="automation-rotate" data-name="' + attr(a.name) + '" title="Make a new address; the old one stops working">New address</button>' +
+          '<button type="button" class="btn btn-mini" data-action="automation-toggle" data-name="' + attr(a.name) + '" data-on="' + (a.enabled ? "1" : "0") + '">' + (a.enabled ? "Turn off" : "Turn on") + "</button>" +
+          '<button type="button" class="btn btn-mini btn-ghost btn-icon" data-action="automation-delete" data-name="' + attr(a.name) + '" aria-label="Delete ' + attr(a.name) + '" title="Delete"><svg class="icon" aria-hidden="true"><use href="#i-trash"></use></svg></button>'
+      });
+    });
+    var projects = '<option value="">Choose a project\u2026</option>' + state.projects.map(function (p) { return '<option value="' + attr(p.path) + '"' + (f.project === p.path ? " selected" : "") + ">" + esc(p.name || dirName(p.path)) + "</option>"; }).join("");
+    var presets = Object.keys(AUTO_PRESETS).map(function (k) {
+      return '<button type="button" class="seg' + (f.preset === k ? " active" : "") + '" data-action="automation-preset" data-preset="' + k + '" aria-pressed="' + (f.preset === k ? "true" : "false") + '">' + esc(AUTO_PRESETS[k].label) + "</button>";
+    }).join("");
+    el("main").innerHTML = page("Automations", "Work an event starts: a pull request opens, a branch is pushed, your own system calls.", "",
+      (AUTO.shown ? '<div class="notice notice-ok auto-address"><b>' + esc(AUTO.shown.name) + ' answers at this address.</b> It is shown only now: copy it into the sender. <code class="mono">' + esc(AUTO.shown.url) + '</code> <button type="button" class="btn btn-mini" data-action="automation-copy" data-url="' + attr(AUTO.shown.url) + '">Copy</button></div>' : "") +
+      uiHead("Automations", AUTO.list.length || null) +
+      (rows.length ? uiList(rows) : uiEmpty("No automations yet", "Add one below. It gets an address to give the sender; each call is filtered, then starts its action through the same approvals as anything you start here.")) +
+      uiHead("New automation", null) +
+      '<div class="segmented auto-presets" role="group" aria-label="Start from">' + presets + "</div>" +
+      '<div class="form-grid">' +
+        '<div class="field"><label class="field-label" for="auto-name">Name</label><input class="input" id="auto-name" value="' + attr(f.name) + '" placeholder="review-prs" spellcheck="false"></div>' +
+        (f.preset === "custom" ? '<div class="field"><label class="field-label" for="auto-event">Event name</label><input class="input mono" id="auto-event" value="' + attr(f.event === "custom" ? "" : f.event) + '" placeholder="deploy.finished" spellcheck="false"></div>' : "") +
+        (f.preset !== "custom" ? '<div class="field"><label class="field-label" for="auto-repo">Repository <span class="dim">(optional)</span></label><input class="input mono" id="auto-repo" value="' + attr(f.repo) + '" placeholder="owner/name" spellcheck="false"></div>' : "") +
+        '<div class="field"><label class="field-label" for="auto-branch">Branch <span class="dim">(optional)</span></label><input class="input mono" id="auto-branch" value="' + attr(f.branch) + '" placeholder="main" spellcheck="false"></div>' +
+        '<div class="field"><label class="field-label" for="auto-project">Project</label><select class="input" id="auto-project">' + projects + "</select></div>" +
+      "</div>" +
+      '<div class="field"><label class="field-label" for="auto-goal">What the team does <span class="dim">({{path.in.the.event}} fills in from the call)</span></label><textarea class="input" id="auto-goal" rows="4">' + esc(f.goal || preset.goal) + "</textarea></div>" +
+      '<div class="ui-quiet">GitHub has to reach this address. On this machine that means a shared site or a tunnel; on a server it is the server\u2019s own address. Point a GitHub webhook (content type application/json) at it, for the events above.</div>' +
+      '<div class="ui-actions"><button type="button" class="btn btn-primary" id="automation-create" data-action="automation-create">Create the automation</button></div>');
   }
 
   function loadSkills() {
@@ -4223,20 +4313,6 @@
         body += '<div class="panel"><div class="panel-body empty-inline">No skill matches "' + esc(q) + '".</div></div>';
       }
     }
-
-    // Skills devd recommends: one click, from their authors' own repositories, and only
-    // the ones a team actually uses (HyperFrames publishes nine; its core four are these).
-    var have = {};
-    (SKILLS.list || []).forEach(function (k) { have[k.name] = true; });
-    body += '<div class="panel"><div class="panel-head"><span>Recommended</span><span class="panel-note">made for agents, used by any project’s team</span></div><div class="rows">' +
-      SKILL_PICKS.map(function (r) {
-        var done = r.skills.every(function (n) { return have[n]; });
-        return '<div class="svc"><div class="svc-main"><div class="svc-name">' + esc(r.name) + ' <span class="dim mono">' + esc(r.source) + "</span></div>" +
-          '<div class="svc-sub">' + esc(r.what) + "</div></div>" +
-          '<div class="svc-actions">' + (done ? '<span class="chip chip-ok">Installed</span>'
-            : '<button type="button" class="btn btn-mini btn-primary" data-action="skill-pick" data-source="' + attr(r.source) + '" data-skills="' + attr(r.skills.join(",")) + '">Install</button>') +
-          '<a class="btn btn-mini btn-ghost" href="' + attr(r.url) + '" target="_blank" rel="noreferrer">About</a></div></div>';
-      }).join("") + "</div></div>";
 
     body += '<div class="panel"><div class="panel-head"><span>Install</span>' +
       '<span class="panel-note">from GitHub, where the skills on skills.sh live</span></div>' +
@@ -7210,14 +7286,6 @@ var TERM_POLL_MS = 250;
 
   var TC = { data: null, devices: null, loading: false };
   var TOOL_RUNTIME_IDS = { php: 1, node: 1, python: 1, ruby: 1, go: 1 };
-  var SKILL_PICKS = [
-    { name: "HyperFrames", source: "heygen-com/hyperframes", url: "https://github.com/heygen-com/hyperframes",
-      skills: ["hyperframes", "hyperframes-cli", "hyperframes-registry", "media-use"],
-      what: "Make video by writing HTML: launch films, PR walkthroughs, captions and charts, rendered to MP4. Pairs with the HyperFrames tool under Machine > Tools." },
-    { name: "Stageshow", source: "benjitaylor/skills", url: "https://github.com/benjitaylor/skills",
-      skills: ["stageshow"],
-      what: "Better faux UI stills, animations and bento grids for product shots and marketing pages." }
-  ];
   var TOOL_CATEGORY = { vcs: "Version control", "package-manager": "Package managers", runtime: "Runtimes", build: "Build tools", mobile: "Mobile", framework: "Frameworks", editor: "Editors", browser: "Browsers", design: "Design", container: "Containers", database: "Databases", ai: "AI tools", media: "Media" };
 
   // Runtimes, services and databases have their own screens. Keeping them out
@@ -7417,7 +7485,9 @@ var TERM_POLL_MS = 250;
    * Only labels, numbers and a tone are accepted; the app draws it with the
    * shared classes. Nothing in the data becomes HTML. */
   function chartHtml(spec) {
-    var bars = (spec.bars || []).slice(0, 12).filter(function (b) {
+    // `bars` is the contract; `items` (the key the other blocks use) is accepted too, so a
+    // near-miss from an agent still draws instead of falling back to raw JSON.
+    var bars = (spec.bars || spec.items || []).slice(0, 12).filter(function (b) {
       return b && typeof b.label === "string" && isFinite(Number(b.value)) && Number(b.value) >= 0;
     }).map(function (b) {
       return { label: b.label.slice(0, 80), value: Number(b.value), tone: ["success", "warning", "error"].indexOf(b.tone) >= 0 ? b.tone : "" };
@@ -7426,12 +7496,51 @@ var TERM_POLL_MS = 250;
     var max = Math.max.apply(null, bars.map(function (b) { return b.value; }).concat([Number(spec.max) || 0, 1]));
     return '<figure class="ds-chart">' +
       (spec.title ? "<figcaption>" + esc(String(spec.title).slice(0, 120)) + "</figcaption>" : "") +
-      bars.map(function (b) {
+      bars.map(function (b, idx) {
         return '<div class="ds-chart-row"><span class="ds-chart-label" title="' + attr(b.label) + '">' + esc(b.label) + "</span>" +
-          '<span class="ds-chart-track"><span class="ds-chart-fill' + (b.tone ? " tone-" + b.tone : "") + '" style="width:' + Math.max(1, Math.round(b.value / max * 100)) + '%"></span></span>' +
+          '<span class="ds-chart-track"><span class="ds-chart-fill' + (b.tone ? " tone-" + b.tone : " viz-" + ((idx % 6) + 1)) + '" style="width:' + Math.max(1, Math.round(b.value / max * 100)) + '%"></span></span>' +
           '<span class="ds-chart-value">' + esc(compactCount(b.value)) + (spec.unit ? " " + esc(String(spec.unit).slice(0, 12)) : "") + "</span></div>";
       }).join("") +
       "</figure>";
+  }
+
+  /* More declared blocks an agent may emit. Each is data in, shared markup
+   * out: no field is ever inserted as HTML and no element can run. */
+  function declaredBlockHtml(kind, spec) {
+    if (!spec || typeof spec !== "object") return "";
+    if (kind === "metrics") {
+      var items = (spec.items || []).slice(0, 8).filter(function (i) { return i && typeof i.label === "string"; });
+      if (!items.length) return "";
+      return '<div class="kpi-row" aria-label="' + attr(String(spec.title || "Metrics").slice(0, 120)) + '">' + items.map(function (i) {
+        return '<div class="kpi"><div class="kpi-k">' + esc(String(i.label).slice(0, 80)) + '</div><div class="kpi-v">' + esc(String(i.value == null ? "" : i.value).slice(0, 40)) + "</div>" +
+          (i.detail ? '<div class="kpi-s">' + esc(String(i.detail).slice(0, 140)) + "</div>" : "") + "</div>";
+      }).join("") + "</div>";
+    }
+    if (kind === "timeline") {
+      var events = (spec.items || []).slice(0, 20).filter(function (i) { return i && typeof i.text === "string"; });
+      if (!events.length) return "";
+      return '<div class="timeline" aria-label="' + attr(String(spec.title || "Timeline").slice(0, 120)) + '">' + events.map(function (i) {
+        var tone = ["ok", "warn", "bad", "live"].indexOf(i.tone) >= 0 ? i.tone : "off";
+        return '<div class="tl-item">' + uiDot(tone) + '<span class="tl-text">' + esc(String(i.text).slice(0, 300)) + "</span>" +
+          (i.at ? '<span class="tl-when">' + esc(String(i.at).slice(0, 40)) + "</span>" : "") + "</div>";
+      }).join("") + "</div>";
+    }
+    if (kind === "details") {
+      var title = String(spec.title || "Details").slice(0, 140);
+      var text = String(spec.body || "");
+      if (!text.trim()) return "";
+      return '<details class="ui-fold"><summary>' + esc(title) + "</summary>" + md(text.slice(0, 20000)) + "</details>";
+    }
+    if (kind === "steps") {
+      var steps = (spec.items || []).slice(0, 8).map(String);
+      if (!steps.length) return "";
+      var current = Number(spec.current) || 0;
+      return '<ol class="ds-steps" aria-label="' + attr(String(spec.title || "Steps").slice(0, 120)) + '">' + steps.map(function (s, i) {
+        var cls = i < current ? " is-done" : i === current ? " is-current" : "";
+        return '<li class="ds-step' + cls + '">' + esc(s.slice(0, 120)) + "</li>";
+      }).join("") + "</ol>";
+    }
+    return "";
   }
 
   function mdBlocks(lines) {
@@ -7449,8 +7558,23 @@ var TERM_POLL_MS = 250;
         if (lang === "chart") {
           var spec = null;
           try { spec = JSON.parse(body.join("\n")); } catch (e) { spec = null; }
-          if (spec && Array.isArray(spec.bars) && spec.bars.length) {
+          if (spec && ((Array.isArray(spec.bars) && spec.bars.length) || (Array.isArray(spec.items) && spec.items.length))) {
             out.push(chartHtml(spec));
+            continue;
+          }
+        }
+        if (lang === "mermaid") {
+          // The escaped text is decoded by textContent; the renderer turns it
+          // into an SVG and refuses scripts. A bad diagram keeps the source.
+          out.push('<pre class="mermaid">' + esc(body.join("\n")) + "</pre>");
+          continue;
+        }
+        if (lang === "metrics" || lang === "timeline" || lang === "details" || lang === "steps") {
+          var block = null;
+          try { block = JSON.parse(body.join("\n")); } catch (e) { block = null; }
+          var rendered = block ? declaredBlockHtml(lang, block) : "";
+          if (rendered) {
+            out.push(rendered);
             continue;
           }
         }
@@ -7459,7 +7583,7 @@ var TERM_POLL_MS = 250;
         // so a conversation patched under the reader keeps it open.
         out.push('<div class="md-code' + (longCode ? " is-long" : "") + '"><div class="md-code-head"><span>' + esc(lang || "text") + (longCode ? ' <span class="dim">' + body.length + " lines</span>" : "") + "</span>" +
           (longCode ? '<details class="md-code-more"><summary>Expand</summary></details>' : "") +
-          '<button type="button" class="md-copy" data-action="copy-code">Copy</button></div><pre class="code"><code>' + esc(body.join("\n")) + "</code></pre></div>");
+          '<button type="button" class="md-copy" data-action="copy-code">Copy</button></div><pre class="code"><code>' + highlightCode(lang, body.join("\n")) + "</code></pre></div>");
         continue;
       }
       if ((m = MD_HEAD.exec(line))) { out.push('<h' + m[1].length + ' class="md-h">' + mdInline(m[2]) + "</h" + m[1].length + ">"); i++; continue; }
@@ -7491,9 +7615,116 @@ var TERM_POLL_MS = 250;
     return out.join("");
   }
 
+  /* Syntax colour for code in conversations.
+   *
+   * A small tokenizer, not a library: comments, strings, numbers, keywords, types and
+   * calls, for the languages devd's projects are written in. Every token is escaped
+   * before it is wrapped, so highlighting can never inject markup. Unknown languages
+   * still get strings, comments and numbers. */
+  var HL_KEYWORDS = (
+    "abstract and as async await break case catch class const continue def default defer del delete do echo elif else enum " +
+    "export extends false final finally fn for foreach from func function go if impl implements import in instanceof interface " +
+    "is lambda let loop match mod module move mut namespace new nil none not null of or package pass private protected pub " +
+    "public raise readonly return select self static struct super switch then this throw trait true try type typeof union unsafe " +
+    "use var void where while with yield"
+  ).split(" ");
+  var HL_SQL = "select from where join left right inner outer on group by order having insert into values update set delete create table alter drop index and or not null as limit offset distinct".split(" ");
+  var HL_KW = {};
+  HL_KEYWORDS.forEach(function (k) { HL_KW[k] = true; });
+  function highlightCode(lang, code) {
+    var l = String(lang || "").toLowerCase();
+    if (code.length > 60000 || l === "text" || l === "txt" || l === "plain" || l === "log" || l === "output") return esc(code);
+    var sql = l === "sql";
+    var hashComments = /^(py|python|sh|bash|shell|zsh|ps1|powershell|yaml|yml|toml|rb|ruby|r|conf|ini|dockerfile|make|makefile)$/.test(l);
+    var dashComments = sql;
+    var kw = HL_KW;
+    if (sql) { kw = {}; HL_SQL.forEach(function (k) { kw[k] = true; }); }
+    var out = "", i = 0, n = code.length;
+    var wrap = function (cls, text) { out += '<span class="tk-' + cls + '">' + esc(text) + "</span>"; };
+    while (i < n) {
+      var c = code.charAt(i), rest = code.slice(i, i + 2);
+      // comments
+      if (rest === "//" && !hashComments && !sql || (c === "#" && hashComments) || (rest === "--" && dashComments)) {
+        var e = code.indexOf("\n", i); if (e < 0) e = n;
+        wrap("comment", code.slice(i, e)); i = e; continue;
+      }
+      if (rest === "/*" && !hashComments) {
+        var e2 = code.indexOf("*/", i + 2); e2 = e2 < 0 ? n : e2 + 2;
+        wrap("comment", code.slice(i, e2)); i = e2; continue;
+      }
+      if (rest === "<!") {
+        var e3 = code.indexOf("-->", i); e3 = e3 < 0 ? n : e3 + 3;
+        wrap("comment", code.slice(i, e3)); i = e3; continue;
+      }
+      // strings
+      if (c === '"' || c === "'" || c === "`") {
+        var j = i + 1;
+        while (j < n && code.charAt(j) !== c) { if (code.charAt(j) === "\\") j++; if (code.charAt(j) === "\n" && c !== "`") break; j++; }
+        wrap("string", code.slice(i, Math.min(n, j + 1))); i = Math.min(n, j + 1); continue;
+      }
+      // numbers
+      if (/[0-9]/.test(c) && !/[A-Za-z_$]/.test(code.charAt(i - 1) || "")) {
+        var m = /^(0x[0-9a-fA-F_]+|[0-9][0-9_]*(\.[0-9_]+)?([eE][+-]?[0-9]+)?)[a-zA-Z%]*/.exec(code.slice(i));
+        wrap("number", m[0]); i += m[0].length; continue;
+      }
+      // words
+      if (/[A-Za-z_$@]/.test(c)) {
+        var w = /^[@$]?[A-Za-z_][A-Za-z0-9_$]*/.exec(code.slice(i))[0];
+        var next = code.slice(i + w.length).match(/^\s*(\()/);
+        var lw = w.toLowerCase();
+        if (kw[sql ? lw : w] || (sql && kw[lw])) wrap("keyword", w);
+        else if (w.charAt(0) === "$" || w.charAt(0) === "@") wrap("variable", w);
+        else if (next) wrap("call", w);
+        else if (/^[A-Z][A-Za-z0-9]*[a-z][A-Za-z0-9]*$/.test(w)) wrap("type", w);
+        else out += esc(w);
+        i += w.length; continue;
+      }
+      // a JSON or YAML key: a word followed by a colon
+      if (/[{}\[\]()]/.test(c)) { wrap("punct", c); i++; continue; }
+      out += esc(c); i++;
+    }
+    return out;
+  }
+
   function md(text) {
     var html = mdBlocks(String(text || "").replace(/\r\n?/g, "\n").split("\n"));
     return html ? '<div class="md">' + html + "</div>" : "";
+  }
+
+  /* Math and diagrams are rendered by vendored, offline runtimes after the
+   * content is in the DOM. They only ever read text the renderer escaped. */
+  var RICH_TIMER = 0;
+  function renderRich(root) {
+    if (!root || !root.querySelectorAll) return;
+    if (window.renderMathInElement) {
+      try {
+        window.renderMathInElement(root, {
+          delimiters: [
+            { left: "$$", right: "$$", display: true },
+            { left: "\\[", right: "\\]", display: true },
+            { left: "$", right: "$", display: false },
+            { left: "\\(", right: "\\)", display: false }
+          ],
+          throwOnError: false,
+          ignoredTags: ["script", "noscript", "style", "textarea", "pre", "code"]
+        });
+      } catch (e) { /* a bad formula stays as text */ }
+    }
+    if (window.mermaid) {
+      var nodes = root.querySelectorAll("pre.mermaid:not([data-processed])");
+      if (nodes.length) {
+        try {
+          var done = window.mermaid.run({ nodes: Array.prototype.slice.call(nodes) });
+          if (done && done.catch) done.catch(function () {});
+        } catch (e) { /* a bad diagram stays as text */ }
+      }
+    }
+  }
+  function scheduleRich(root) {
+    clearTimeout(RICH_TIMER);
+    RICH_TIMER = setTimeout(function () {
+      renderRich(root || el("main") || document.body);
+    }, 80);
   }
 
   var AI = {
@@ -8536,7 +8767,9 @@ var TERM_POLL_MS = 250;
 
   function pollThread(full) {
     if (!AI.thread) return Promise.resolve();
-    return read("chat.get", { thread: AI.thread.id, after: full ? 0 : AI.lastId }).then(function (d) {
+    // Brief: tool output arrives as a head-and-tail preview (most of a conversation's
+    // weight); a step's full output is read when the step is opened.
+    return read("chat.get", { thread: AI.thread.id, after: full ? 0 : AI.lastId, brief: true }).then(function (d) {
       if (full) { AI.events = []; AI.lastId = 0; }
       d.events.forEach(function (e) {
         // Two polls can overlap (the timer and the live channel, or a click and
@@ -9654,7 +9887,8 @@ var TERM_POLL_MS = 250;
     paintStreamTail();
     var t = AI.thread;
     var head = el("chat-head");
-    if (head) morph(head, chatHeadHtml());
+    // An open menu in the header is the person's; a live update must not close it.
+    if (head && !head.querySelector(".more-pop:not([hidden])")) morph(head, chatHeadHtml());
     paintWsCard();
     var send = el("chat-send");
     if (send) {
@@ -9668,6 +9902,7 @@ var TERM_POLL_MS = 250;
       var stop = el("chat-stop");
       if (stop) stop.hidden = !busy;
     }
+    scheduleRich(box);
     syncComposerAction();
   }
 
@@ -9688,6 +9923,7 @@ var TERM_POLL_MS = 250;
     var sub = [t.project ? threadProjectName(t.project) : "No project"];
     if (team) sub.push(face.name + " on " + clip(team.run_title || "a team run", 60));
     if (word) sub.push(word);
+    if (t.resume_at) sub.push("paused by a usage limit, resumes " + (Date.parse(t.resume_at) > Date.now() ? "at " + new Date(t.resume_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "now"));
     if (used) sub.push(compactCount(used) + " tokens");
     // The head is a quiet line: who this is, what it is for and where it stands. The
     // actions that matter sit at its end; the rest are one click away.
@@ -9698,12 +9934,31 @@ var TERM_POLL_MS = 250;
       (AI.queued > 0 ? '<span class="chip chip-warn" title="Messages waiting for the next step">' + AI.queued + " queued</span>" : "") +
       (team && team.parent ? '<button type="button" class="btn btn-mini btn-ghost" data-action="open-thread" data-id="' + attr(team.parent) + '" title="The conversation that asked for this work">Back to request</button>' : "") +
       (team ? '<button type="button" class="btn btn-mini btn-ghost" data-action="team-open-from" data-id="' + attr(team.run) + '">See the run</button>' : "") +
-      (!team ? '<button type="button" class="btn btn-mini btn-ghost btn-icon" data-action="thread-rename" title="Rename this conversation" aria-label="Rename this conversation"><svg class="icon" aria-hidden="true"><use href="#i-pencil"></use></svg></button>' : "") +
+      (t.pr_url ? '<button type="button" class="chip chip-pr" data-action="open-url" data-url="' + attr(t.pr_url) + '" title="' + attr(t.pr_url) + '"><svg class="icon" aria-hidden="true"><use href="#i-branch"></use></svg>' + esc(prLabel(t.pr_url)) + "</button>" : "") +
+      (t.settled_at ? '<span class="chip chip-ok" title="Settled ' + attr(ago(t.settled_at)) + '">Settled</span>' : "") +
       '<button type="button" class="btn btn-mini btn-ghost btn-icon" data-action="thread-find" title="Search this conversation (Ctrl F)" aria-label="Search this conversation"><svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg></button>' +
       (AI.chapters && AI.chapters.length ? '<button type="button" class="btn btn-mini btn-ghost" data-action="chapters-open">Chapters ' + AI.chapters.length + "</button>" : "") +
       (r ? '<button type="button" class="btn btn-mini btn-ghost" data-action="open-run" data-id="' + attr(r.id) + '" title="Steps, capability calls, evidence and the durable timeline">Evidence</button>' : "") +
       (r && !busy && runCanRetry(r.state) ? '<button type="button" class="btn btn-mini btn-primary" data-action="run-retry" data-id="' + attr(r.id) + '">Continue</button>' : "") +
-      '<button type="button" class="btn btn-mini btn-ghost btn-icon" data-action="chat-delete" data-id="' + attr(t.id) + '" title="Delete this conversation" aria-label="Delete this conversation"><svg class="icon" aria-hidden="true"><use href="#i-trash"></use></svg></button>';
+      // The conversation's own housekeeping lives in one menu, so the header keeps to
+      // what is used while working: search, evidence and the action that moves it on.
+      '<div class="more"><button type="button" class="btn btn-mini btn-ghost btn-icon" data-action="more-toggle" aria-haspopup="menu" aria-expanded="false" aria-label="More for this conversation" title="More">' +
+      '<svg class="icon" aria-hidden="true" viewBox="0 0 16 16"><circle cx="3" cy="8" r="1.4" fill="currentColor"/><circle cx="8" cy="8" r="1.4" fill="currentColor"/><circle cx="13" cy="8" r="1.4" fill="currentColor"/></svg></button>' +
+      '<div class="more-pop" role="menu" hidden>' +
+      (!team ? '<button type="button" role="menuitem" class="more-item" data-action="thread-rename"><span>Rename</span></button>' : "") +
+      '<button type="button" role="menuitem" class="more-item" data-action="thread-link-pr"><span>' + (t.pr_url ? "Change the pull request" : "Link a pull request") + '</span><span class="more-hint">Shown on the conversation and in the list</span></button>' +
+      (t.pr_url ? '<button type="button" role="menuitem" class="more-item" data-action="thread-unlink-pr"><span>Unlink the pull request</span></button>' : "") +
+      '<button type="button" role="menuitem" class="more-item" data-action="thread-settle" data-settled="' + (t.settled_at ? "0" : "1") + '"><span>' + (t.settled_at ? "Reopen" : "Mark as settled") + '</span><span class="more-hint">' + (t.settled_at ? "Back among the open work" : "Done: it stays, quieter, in the list") + "</span></button>" +
+      '<div class="more-sep"></div>' +
+      '<button type="button" role="menuitem" class="more-item btn-danger" data-action="chat-delete" data-id="' + attr(t.id) + '"><span>Delete</span></button>' +
+      "</div></div>";
+  }
+
+  /* "owner/repo#123" for a GitHub or GitLab pull request address; the host otherwise. */
+  function prLabel(url) {
+    var m = /\/([^\/]+\/[^\/]+)\/(?:pull|merge_requests)\/(\d+)/.exec(String(url || ""));
+    if (m) return m[1] + "#" + m[2];
+    try { return new URL(url).host; } catch (e) { return "Pull request"; }
   }
 
   /* The conversation list, organised the way the work is.
@@ -9736,9 +9991,10 @@ var TERM_POLL_MS = 250;
       var f = roleFace(r0);
       label = faceHtml(r0, "xs") + '<span class="thread-role">' + esc(f.name) + '</span><span class="grow nowrap thread-task">' + esc((t.team && t.team.task) || title.replace(/^[^·]+· /, "")) + "</span>";
     } else {
-      label = '<span class="thread-state' + (st ? " is-" + st : "") + '" aria-hidden="true"></span><span class="grow nowrap">' + esc(title) + "</span>";
+      label = (t.settled_at ? '<svg class="icon thread-settled" aria-label="Settled"><use href="#i-check"></use></svg>' : '<span class="thread-state' + (st ? " is-" + st : "") + '" aria-hidden="true"></span>') +
+        '<span class="grow nowrap">' + esc(title) + "</span>" + (t.pr_url ? '<span class="thread-pr">' + esc(prLabel(t.pr_url).replace(/^.*#/, "#")) + "</span>" : "");
     }
-    return '<div class="thread-row' + (child ? " thread-child" : "") + '" data-key="r' + attr(t.id) + '">' +
+    return '<div class="thread-row' + (child ? " thread-child" : "") + (t.settled_at ? " is-settled" : "") + '" data-key="r' + attr(t.id) + '">' +
       '<button type="button" class="thread' + (active ? " active" : "") + (st ? " is-" + st : "") + '" data-action="open-thread" data-id="' + attr(t.id) + '"' + (active ? ' aria-current="true"' : "") + ' title="' + attr(title) + '">' +
       label + '<span class="thread-time">' + esc(ago(t.updated_at)) + "</span></button>" +
       '<button type="button" class="thread-del" data-action="chat-delete" data-id="' + attr(t.id) + '" title="Delete this conversation" aria-label="Delete this conversation"><svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg></button></div>';
@@ -10015,7 +10271,10 @@ var TERM_POLL_MS = 250;
       passed ? at(stopped ? "stop" : "now", passed + " passed so far") : stopped && approved ? at("stop", st) : at("todo", "");
     var list = [["Goal", at("done", "")], ["Plan", plan], ["Approval", approval], ["Execution", exec], ["Evidence", evidence], ["Verification", verify]];
     var words = { done: "done", now: "in progress", wait: "waiting", stop: "stopped", todo: "not started" };
-    return '<ol class="stages" aria-label="Run progress">' + list.map(function (x, i) {
+    var progress = work.length
+      ? '<div class="run-progress"><progress class="ds-progress' + (doneTasks === work.length ? " is-done" : "") + '" value="' + doneTasks + '" max="' + work.length + '" aria-label="Tasks done"></progress><span class="dim">' + doneTasks + " of " + work.length + " tasks</span></div>"
+      : "";
+    return progress + '<ol class="stages" aria-label="Run progress">' + list.map(function (x, i) {
       var k = x[1].kind;
       var mark = k === "done" ? '<svg class="icon"><use href="#i-check"></use></svg>' : k === "stop" ? '<svg class="icon"><use href="#i-x"></use></svg>' : k === "wait" ? '<svg class="icon"><use href="#i-warn"></use></svg>' : String(i + 1);
       return '<li class="stage stage-' + k + '"' + (k === "now" || k === "wait" ? ' aria-current="step"' : "") + ' title="' + attr(x[0] + ": " + words[k] + (x[1].note ? " - " + x[1].note : "")) + '">' +
@@ -10175,19 +10434,13 @@ var TERM_POLL_MS = 250;
     return t.state === "awaiting_plan" || (t.state === "paused" && t.error);
   }
 
+  /* Home used to count "waiting for you" from its own copy of the inbox with a different
+     rule, and the badge on the rail went blank on Home while showing on every other screen.
+     There is one definition: the Inbox's own read sets the count, and the rail repaints. */
   function refreshHomeCounts() {
-    var d = AI.home;
-    if (!d) return;
-    var runKeys = {};
-    (d.teamRuns || []).forEach(function (t) { runKeys[t.title] = true; });
-    var questions = (d.inbox || []).filter(function (m) {
-      if (!m.needs_reply) return false;
-      var s = String(m.subject || ""), at = s.indexOf(": ");
-      return !(at > 0 && runKeys[s.slice(at + 2)] === true);
-    }).length;
-    var work = (d.teamRuns || []).filter(runNeedsWork).length;
-    AI.counts.approvals = (d.approvals || []).length;
-    AI.counts.questions = questions + work;
+    if (AI.countsPending) return;
+    AI.countsPending = true;
+    loadInbox().then(function () { rail(); statusbar(); }).catch(function () {}).then(function () { AI.countsPending = false; });
   }
 
   function loadInbox() {
@@ -10521,6 +10774,7 @@ var TERM_POLL_MS = 250;
     if (state.view === "mcp") return loadMcp().then(render);
     // The project picker lists every known project, so they are read first when this is the first screen.
     if (state.view === "schedules") return loadSchedules().then(render);
+    if (state.view === "automations") return loadAutomations().then(render);
     if (state.view === "shared") return loadShared().then(render);
     if (state.view === "capabilities") return loadCapabilities().then(render);
     if (state.view === "activity") return loadActivity().then(render);
@@ -10551,6 +10805,7 @@ var TERM_POLL_MS = 250;
     agents: "/agents/team",
     skills: "/agents/skills",
     schedules: "/agents/schedules",
+    automations: "/agents/automations",
     shared: "/agents/notes",
     mcp: "/agents/mcp",
     // The terminal belongs to a project and lives as a tab there. The address is
@@ -10579,6 +10834,7 @@ var TERM_POLL_MS = 250;
     "/agents": "agents",
     "/skills": "skills",
     "/schedules": "schedules",
+    "/automations": "automations",
     "/shared": "shared",
     "/server/sites": "sites",
     "/server/hosts": "hosts",
@@ -10911,6 +11167,7 @@ var TERM_POLL_MS = 250;
     else if (state.view === "skills") renderSkills();
     else if (state.view === "mcp") renderMcp();
     else if (state.view === "schedules") renderSchedules();
+    else if (state.view === "automations") renderAutomations();
     else if (state.view === "shared") renderShared();
     else if (state.view === "projects") renderProjects();
     else if (state.view === "project") renderProject();
@@ -10921,12 +11178,26 @@ var TERM_POLL_MS = 250;
     else if (state.view === "notfound") renderNotFound();
     if (state.view === "mail") mailPoll(); else mailStop();
     wrapTables();
+    scheduleRich(el("main"));
+    paintOutbox();
   }
 
   // -------------------------------------------------------------------- actions
 
   function project() {
     return state.project ? state.project.path : null;
+  }
+
+  /* One draft, whichever composer is on screen. Moving between Home and the
+   * Assistant does not lose what was written. */
+  function draftLoad() {
+    try { return window.localStorage.getItem("devd.draft") || ""; } catch (e) { return ""; }
+  }
+  function draftSave(text) {
+    try {
+      if (String(text || "").trim()) window.localStorage.setItem("devd.draft", text);
+      else window.localStorage.removeItem("devd.draft");
+    } catch (e) { /* storage refused */ }
   }
 
   function readInput(id) {
@@ -11282,6 +11553,7 @@ var TERM_POLL_MS = 250;
           "</div>" +
         "</div>" +
       "</div>" +
+      '<div class="outbox" id="' + (prefix === "home" ? "home-outbox" : "chat-outbox") + '" hidden></div>' +
     "</div>";
   }
 
@@ -11320,7 +11592,7 @@ var TERM_POLL_MS = 250;
     var selected = option.selected;
     var text = (option.textContent || "").trim() || option.value;
     return '<button type="button" class="popover-choice select-choice' + (selected ? " is-active" : "") + '"' +
-      (disabled || option.disabled ? ' disabled aria-disabled="true"' : ' data-action="select-option" data-index="' + index + '"') +
+      (disabled || option.disabled ? ' disabled aria-disabled="true"' : ' data-action="select-option" data-index="' + index + '" data-value="' + attr(option.value) + '"') +
       ' role="option" aria-selected="' + (selected ? "true" : "false") + '">' +
       '<span class="popover-choice-main"><b>' + esc(text) + "</b></span>" +
       (selected ? '<svg class="icon popover-check" aria-hidden="true"><use href="#i-check"></use></svg>' : "") + "</button>";
@@ -11356,7 +11628,7 @@ var TERM_POLL_MS = 250;
       return;
     }
     closeComposerPopover();
-    AI.popover = { kind: "select", anchor: select, select: select };
+    AI.popover = { kind: "select", anchor: select, select: select, selectId: select.id || "", selectLabel: select.getAttribute("aria-label") || "" };
     paintComposerPopover();
   }
 
@@ -12204,11 +12476,21 @@ var TERM_POLL_MS = 250;
     "select-option": function (node) {
       var p = AI.popover;
       if (!p || p.kind !== "select") return;
-      var sel = p.select;
+      // The page may have refreshed while the menu was open. The select the
+      // menu was opened from is then detached, and writing to it changed
+      // nothing. Resolve the control that is on screen now, by its id, and
+      // pick the option by value rather than by an index that may have moved.
+      var sel = (p.selectId && document.getElementById(p.selectId)) || p.select;
+      if (sel && !document.contains(sel)) sel = null;
+      if (!sel && p.selectLabel) sel = document.querySelector('select[aria-label="' + attr(p.selectLabel) + '"]');
+      var value = node.dataset.value;
       var index = Number(node.dataset.index);
       closeComposerPopover();
-      if (!sel || !isFinite(index) || !sel.options[index]) return;
-      sel.selectedIndex = index;
+      if (!sel) return;
+      var choice = value !== undefined ? Array.prototype.findIndex.call(sel.options, function (o) { return o.value === value; }) : -1;
+      if (choice < 0) choice = index;
+      if (!isFinite(choice) || !sel.options[choice]) return;
+      sel.selectedIndex = choice;
       sel.dispatchEvent(new Event("change", { bubbles: true }));
       if (sel.focus) sel.focus();
     },
@@ -12589,7 +12871,8 @@ var TERM_POLL_MS = 250;
         closeDrawer();
         return loadRoster();
       }).then(function () { if (state.view === "agents") renderRoster(); });
-    },    "team-charter-cancel": function () { closeDrawer(); },
+    },
+    "team-charter-cancel": function () { closeDrawer(); },
     "team-charter-save": function () {
       if (!state.rosterProject) return toast("warn", "Choose a project for the team room first");
       var roles = Array.prototype.map.call(document.querySelectorAll('input[name="charter-role"]:checked'), function (n) { return n.value; });
@@ -12909,6 +13192,95 @@ var TERM_POLL_MS = 250;
       if (shell) shell.classList.toggle("panel-open");
     },
     // A project's conversations fold away under its name; the choice is kept for the session.
+    "automation-preset": function (n) {
+      var f = AUTO.form;
+      f.name = (el("auto-name") || {}).value || f.name;
+      f.project = (el("auto-project") || {}).value || f.project;
+      f.preset = n.dataset.preset;
+      f.goal = "";
+      renderAutomations();
+    },
+    "automation-create": function () {
+      var f = AUTO.form, preset = AUTO_PRESETS[f.preset] || AUTO_PRESETS.custom;
+      var name = String((el("auto-name") || {}).value || "").trim().toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-|-$/g, "");
+      var event = f.preset === "custom" ? String((el("auto-event") || {}).value || "").trim() : preset.event;
+      var project = (el("auto-project") || {}).value || "";
+      var goal = String((el("auto-goal") || {}).value || "").trim();
+      if (!name) return toast("warn", "Give the automation a name");
+      if (!event) return toast("warn", "Name the event it answers");
+      if (!project) return toast("warn", "Choose the project the team works in");
+      if (!goal) return toast("warn", "Say what the team should do");
+      var filter = {};
+      if (preset.actions) filter.actions = preset.actions;
+      var repo = String((el("auto-repo") || {}).value || "").trim(), branch = String((el("auto-branch") || {}).value || "").trim();
+      if (repo) filter.repo = repo;
+      if (branch) filter.branch = branch;
+      run("automation.set", { name: name, event: event, filter: filter, action: { type: "team", project: project, goal: goal } }).then(function (o) {
+        if (!o) return;
+        var d = (o.outcome && o.outcome.data) || o.data || {};
+        if (d.token) AUTO.shown = { name: d.name || name, url: hookAddress(d.token) };
+        AUTO.form = { preset: "pr-review", name: "", event: "github.pull_request", repo: "", branch: "", project: "", goal: "", kind: "team" };
+        return loadAutomations().then(renderAutomations);
+      });
+    },
+    "automation-toggle": function (n) {
+      var a = (AUTO.list || []).filter(function (x) { return x.name === n.dataset.name; })[0];
+      if (!a) return;
+      run("automation.set", { name: a.name, event: a.event, filter: a.filter, action: a.action, enabled: n.dataset.on !== "1" }).then(function () { return loadAutomations().then(renderAutomations); });
+    },
+    "automation-rotate": function (n) {
+      var a = (AUTO.list || []).filter(function (x) { return x.name === n.dataset.name; })[0];
+      if (!a) return;
+      uiConfirm({ title: "Make a new address for " + a.name + "?", text: "The current address stops working at once; the sender needs the new one.", confirm: "Make a new address" }).then(function (ok) {
+        if (!ok) return;
+        run("automation.set", { name: a.name, event: a.event, filter: a.filter, action: a.action, enabled: a.enabled, rotate: true }).then(function (o) {
+          var d = (o && ((o.outcome && o.outcome.data) || o.data)) || {};
+          if (d.token) AUTO.shown = { name: a.name, url: hookAddress(d.token) };
+          return loadAutomations().then(renderAutomations);
+        });
+      });
+    },
+    "automation-delete": function (n) {
+      var name = n.dataset.name;
+      uiConfirm({ title: "Delete " + name + "?", text: "Calls to its address will be refused from now on.", confirm: "Delete", danger: true }).then(function (ok) {
+        if (!ok) return;
+        run("automation.delete", { name: name }).then(function () { return loadAutomations().then(renderAutomations); });
+      });
+    },
+    "automation-copy": function (n) {
+      var url = n.dataset.url;
+      var done = function () { toast("ok", "Address copied"); };
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(url).then(done, function () { toast("warn", url); });
+      else toast("warn", url);
+    },
+    "thread-link-pr": function () {
+      var t = AI.thread;
+      if (!t) return;
+      closeMoreMenus();
+      uiPrompt({
+        title: "Link a pull request",
+        text: "Paste the pull request's address. It shows on this conversation and in the list, and the team can read it.",
+        input: { value: t.pr_url || "", placeholder: "https://github.com/owner/repo/pull/123" },
+        confirm: "Link"
+      }).then(function (value) {
+        if (value === null) return;
+        var url = String(value || "").trim();
+        if (!/^https?:\/\/\S+$/.test(url)) return toast("warn", "That is not a web address");
+        return run("chat.link_pr", { thread: t.id, url: url }).then(function () { return pollThread(true); }).then(function () { refreshThreadList(); paintChat(true); });
+      });
+    },
+    "thread-unlink-pr": function () {
+      var t = AI.thread;
+      if (!t) return;
+      closeMoreMenus();
+      run("chat.link_pr", { thread: t.id }).then(function () { return pollThread(true); }).then(function () { refreshThreadList(); paintChat(true); });
+    },
+    "thread-settle": function (n) {
+      var t = AI.thread;
+      if (!t) return;
+      closeMoreMenus();
+      run("chat.settle", { thread: t.id, settled: n.dataset.settled === "1" }).then(function () { return pollThread(true); }).then(function () { refreshThreadList(); paintChat(true); });
+    },
     "thread-find": function () {
       var bar = findBar();
       if (!bar) return;
@@ -12951,7 +13323,7 @@ var TERM_POLL_MS = 250;
       var shell = document.querySelector(".shell");
       if (shell) shell.classList.toggle("panel-open");
     },
-    "chat-new": function () { if (AI.permission === "bypass") AI.permission = "auto"; AI.thread = null; AI.events = []; AI.pending = []; AI.lastId = 0; AI.todos = []; AI.todosAt = 0; AI.queued = 0; writeRoute("assistant", false); renderAssistant(); },
+    "chat-new": function () { if (AI.permission === "bypass") AI.permission = "auto"; AI.composer = AI.askText || draftLoad(); AI.thread = null; AI.events = []; AI.pending = []; AI.lastId = 0; AI.todos = []; AI.todosAt = 0; AI.queued = 0; writeRoute("assistant", false); renderAssistant(); },
     "chat-plan": function () {
       var rows = (AI.todos || []).map(function (t) {
         var st = t.status || "open";
@@ -12975,6 +13347,11 @@ var TERM_POLL_MS = 250;
       startChat(text, AI.project || "");
     },
     "chat-stop": function () { if (AI.thread) run("chat.stop", { thread: AI.thread.id }).then(function () { pollThread(false).then(paintChat); }); },
+    "outbox-retry": function (n) {
+      outboxMark(n.dataset.id, "pending");
+      flushOutbox();
+    },
+    "outbox-remove": function (n) { outboxRemove(n.dataset.id); },
     "open-run": function (n) { openRun(n.dataset.id); },
     "run-team-open": function (n) {
       TEAM.sel = n.dataset.id;
@@ -13031,7 +13408,21 @@ var TERM_POLL_MS = 250;
       if (box) box.classList.toggle("open", open);
       if (list) list.hidden = !open;
     },
-    "step-toggle": function (n) { AI.openSteps[n.dataset.id] = !AI.openSteps[n.dataset.id]; paintChat(); },
+    "step-toggle": function (n) {
+      var id = n.dataset.id;
+      AI.openSteps[id] = !AI.openSteps[id];
+      paintChat();
+      if (!AI.openSteps[id] || !AI.thread) return;
+      // Opening a trimmed step reads its whole output once, then shows it in place.
+      var ev = (AI.events || []).filter(function (e) { return e.kind === "tool_result" && e.data && e.data.tool_use_id === id && e.data.truncated_from; })[0];
+      if (!ev) return;
+      read("chat.result", { thread: AI.thread.id, tool_use_id: id }).then(function (full) {
+        if (!full) return;
+        ev.data = full;
+        AI.paintKey = "";
+        paintChat(true);
+      }).catch(function () { /* the preview stays */ });
+    },
     "req-decide": function (n) {
       closeDrawer();
       var approve = n.dataset.approve === "1";
@@ -13620,7 +14011,7 @@ var TERM_POLL_MS = 250;
         '<div class="inline"><div class="field grow"><label class="field-label">Timeout <span class="dim">(seconds)</span></label><input class="input" id="mcp-edit-timeout" value="' + attr(String(s.timeout_secs)) + '" inputmode="numeric"></div>' +
         '<div class="field grow"><label class="field-label">Working directory</label><input class="input mono" id="mcp-edit-cwd" value="' + attr(s.cwd || "") + '" spellcheck="false"></div></div>' +
         '<div class="inline"><div class="field grow"><label class="field-label">Agents</label><select class="select" id="mcp-edit-trust">' + trust + "</select></div>" +
-        '<label class="check"><input type="checkbox" id="mcp-edit-enabled"' + (s.enabled ? " checked" : "") + "> Enabled</label></div>" +
+        '<label class="check"><input type="checkbox" class="ds-toggle" id="mcp-edit-enabled"' + (s.enabled ? " checked" : "") + "> Enabled</label></div>" +
         '<p class="dim">Environment: ' + esc((s.env_keys || []).join(", ") || "none") + ". It is kept as it is; remove and re-add the server to replace it.</p>" +
         '<div class="ui-actions"><button type="button" class="btn btn-primary" data-action="mcp-edit-save" data-name="' + attr(s.name) + '">Save</button></div>' +
         "</div>");
@@ -14747,17 +15138,125 @@ var TERM_POLL_MS = 250;
     sendChat({ message: text, project: project || undefined });
   }
 
+  // --------------------------------------------------------------- the outbox
+  //
+  // A message written while devd cannot be reached is kept in the browser and
+  // delivered when it returns. The client id is what makes that safe: the
+  // server accepts each id once, so a retry after an unknown outcome cannot
+  // append the same message twice.
+  var OUTBOX = (function () {
+    try {
+      var raw = window.localStorage.getItem("devd.outbox");
+      var list = raw ? JSON.parse(raw) : [];
+      return Array.isArray(list) ? list.filter(function (x) { return x && x.client_id && x.text; }) : [];
+    } catch (e) { return []; }
+  })();
+  var OUTBOX_FLUSHING = false;
+
+  function outboxSave() {
+    try { window.localStorage.setItem("devd.outbox", JSON.stringify(OUTBOX.slice(-50))); } catch (e) { /* storage refused */ }
+  }
+  function newClientId() {
+    return "c-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+  }
+  function outboxAdd(args, error) {
+    if (OUTBOX.some(function (x) { return x.client_id === args.client_id; })) return;
+    OUTBOX.push({
+      client_id: args.client_id,
+      thread: args.thread || "",
+      text: args.message || "",
+      project: args.project || "",
+      permission: args.permission || "",
+      effort: args.effort || "",
+      provider: args.provider || "",
+      model: args.model || "",
+      kind: args.kind || "",
+      state: "pending",
+      error: error || "",
+      at: Date.now()
+    });
+    outboxSave();
+    paintOutbox();
+  }
+  function outboxMark(id, state, error) {
+    OUTBOX.forEach(function (x) { if (x.client_id === id) { x.state = state; x.error = error || ""; } });
+    outboxSave();
+    paintOutbox();
+  }
+  function outboxRemove(id) {
+    OUTBOX = OUTBOX.filter(function (x) { return x.client_id !== id; });
+    outboxSave();
+    paintOutbox();
+  }
+  function paintOutbox() {
+    ["chat-outbox", "home-outbox"].forEach(function (id) {
+      var node = el(id);
+      if (!node) return;
+      var here = id === "chat-outbox" ? ((AI.thread && AI.thread.id) || "") : "";
+      var rows = OUTBOX.filter(function (x) { return id === "home-outbox" ? !x.thread : (!x.thread || x.thread === here); });
+      node.hidden = !rows.length;
+      node.innerHTML = rows.map(function (x) {
+        var state = x.state === "sending" ? "Sending" : x.state === "failed" ? "Not sent" : "Waiting for devd";
+        return '<div class="outbox-item" data-state="' + attr(x.state) + '"><span class="outbox-state">' + esc(state) + "</span>" +
+          '<span class="outbox-text" title="' + attr(x.error || x.text) + '">' + esc(x.text.replace(/\s+/g, " ").slice(0, 140)) + "</span>" +
+          (x.error ? '<span class="outbox-error">' + esc(x.error.slice(0, 120)) + "</span>" : "") +
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="outbox-retry" data-id="' + attr(x.client_id) + '">Retry</button>' +
+          '<button type="button" class="btn btn-mini btn-ghost" data-action="outbox-remove" data-id="' + attr(x.client_id) + '">Discard</button></div>';
+      }).join("");
+    });
+  }
+  function flushOutbox() {
+    if (OFFLINE || OUTBOX_FLUSHING) return;
+    var next = OUTBOX.filter(function (x) { return x.state === "pending"; })[0];
+    if (!next) return;
+    OUTBOX_FLUSHING = true;
+    outboxMark(next.client_id, "sending");
+    var args = {
+      message: next.text,
+      client_id: next.client_id,
+      permission: next.permission || AI.permission,
+      effort: next.effort || AI.effort
+    };
+    if (next.thread) args.thread = next.thread;
+    if (next.project) args.project = next.project;
+    if (next.provider) args.provider = next.provider;
+    if (next.model) args.model = next.model;
+    if (next.kind) args.kind = next.kind;
+    run("chat.send", args, { quiet: true, rethrow: true }).then(function (o) {
+      outboxRemove(next.client_id);
+      var id = (o && o.data && (o.data.id || o.data.thread)) || next.thread;
+      if (id && AI.thread && (!AI.thread.id || AI.thread.id === next.thread)) {
+        AI.thread.id = id;
+        pollThread(false).then(paintChat);
+      }
+    }).catch(function (e) {
+      var network = OFFLINE || /cannot reach|can't reach|failed to fetch|network/i.test(e.message || "");
+      outboxMark(next.client_id, network ? "pending" : "failed", e.message || "could not send");
+    }).then(function () {
+      OUTBOX_FLUSHING = false;
+      if (OUTBOX.some(function (x) { return x.state === "pending"; })) setTimeout(flushOutbox, 400);
+    });
+  }
+
   function sendChat(args) {
     // The composer's choices travel with every message, so the agent loop reads
     // the permission and effort that were on screen when the person pressed send.
+    args.client_id = args.client_id || newClientId();
     args.permission = AI.permission;
     args.effort = AI.effort;
     if (!args.thread) {
       if (AI.pickProvider) args.provider = AI.pickProvider;
       if (AI.pickModel) args.model = AI.pickModel;
     }
-    run("chat.send", args, { quiet: true }).then(function (o) {
+    if (OFFLINE) {
+      outboxAdd(args);
+      toast("info", "Saved. It will send when devd is back.");
+      return;
+    }
+    run("chat.send", args, { quiet: true, rethrow: true }).then(function (o) {
       if (!o) return;
+      outboxRemove(args.client_id);
+      if (!args.thread) { draftSave(""); AI.askText = ""; }
       var id = (o.data && (o.data.id || o.data.thread)) || args.thread;
       if (!id) return;
       if (o.data && o.data.provider_id) AI.pickProvider = o.data.provider_id;
@@ -14774,6 +15273,12 @@ var TERM_POLL_MS = 250;
       state.view = "assistant"; render();
       read("chat.list").then(function (t) { AI.threads = t; return pollThread(true); }).then(renderAssistant);
     }).catch(function (e) {
+      var network = OFFLINE || /cannot reach|can't reach|failed to fetch|network/i.test(e.message || "");
+      if (network) {
+        outboxAdd(args, e.message);
+        toast("info", "Not sent yet. It is kept and will send when devd is back.");
+        return;
+      }
       // The draft was cleared before the call; put it back so a refusal does not lose it.
       var inp = el("chat-input");
       if (inp && !inp.value) { inp.value = args.message || ""; AI.composer = inp.value; fitComposer(); syncComposerAction(); }
@@ -14808,9 +15313,12 @@ var TERM_POLL_MS = 250;
       return;
     }
     if (t.id === "team-say") { var tsb = el("team-say-send"); if (tsb) tsb.disabled = !t.value.trim(); }
-    if (t.id === "home-ask") { AI.askText = t.value; var hs = el("home-send"); if (hs) hs.disabled = !t.value.trim(); var ht = triggerAt(t.value, t.selectionStart); if (!ht) closeMentions(); else if (!MENTIONS.open || MENTIONS.start !== ht.start || MENTIONS.query !== ht.query || MENTIONS.kind !== t.value.charAt(ht.start)) openMentions(ht.start, ht.query, t.value.charAt(ht.start)); }
+    if (t.id === "home-ask") { AI.askText = t.value; if (!AI.thread) AI.composer = t.value; draftSave(t.value); var hs = el("home-send"); if (hs) hs.disabled = !t.value.trim(); var ht = triggerAt(t.value, t.selectionStart); if (!ht) closeMentions(); else if (!MENTIONS.open || MENTIONS.start !== ht.start || MENTIONS.query !== ht.query || MENTIONS.kind !== t.value.charAt(ht.start)) openMentions(ht.start, ht.query, t.value.charAt(ht.start)); }
     else if (t.id === "chat-input") {
       AI.composer = t.value;
+      // A new conversation's box and Home's box are the same draft: start a thought on
+      // one, finish it on the other.
+      if (!AI.thread) { AI.askText = t.value; draftSave(t.value); }
       syncComposerAction();
       fitComposer();
       // "@" opens the list of things a message can refer to.
@@ -14972,6 +15480,11 @@ var TERM_POLL_MS = 250;
         // One live channel for the whole window: runs moving on, handoffs and replies
         // repaint whichever screen shows them, without a refresh.
         openLive();
+        // A message started before the window closed is still there.
+        var draft = draftLoad();
+        if (draft) { AI.askText = AI.askText || draft; AI.composer = AI.composer || draft; }
+        // The rail's "waiting for you" count is right from the first screen, whichever it is.
+        refreshHomeCounts();
         loadCapSummaries().then(function () { if (["activity", "home", "assistant", "inbox"].indexOf(state.view) >= 0) render(); });
         var first = refresh();
         if (current !== "home" && current !== "projects" && current !== "project") {
@@ -15111,6 +15624,48 @@ var TERM_POLL_MS = 250;
     if (!n) return;
     n.focus();
     try { n.setSelectionRange(s, e); } catch (x) { /* not a text field */ }
+  }
+
+  if (window.mermaid) {
+    try {
+      window.mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: "strict",
+        theme: "base",
+        // Diagrams take the data palette: blue nodes, teal and violet for the other
+        // shapes, a readable line colour - never grey boxes on a grey page.
+        themeVariables: {
+          darkMode: true,
+          background: "#141416",
+          fontFamily: "Inter Tight, system-ui, sans-serif",
+          fontSize: "14px",
+          primaryColor: "#16233d",
+          primaryTextColor: "#e6eefc",
+          primaryBorderColor: "#4f8ff7",
+          secondaryColor: "#10302e",
+          secondaryTextColor: "#d9f5f2",
+          secondaryBorderColor: "#2fb5a8",
+          tertiaryColor: "#241a3d",
+          tertiaryTextColor: "#ece6fd",
+          tertiaryBorderColor: "#9b7bf5",
+          lineColor: "#8ab4ff",
+          textColor: "#d6d6dc",
+          mainBkg: "#16233d",
+          nodeBorder: "#4f8ff7",
+          clusterBkg: "#17171b",
+          clusterBorder: "#33333a",
+          edgeLabelBackground: "#141416",
+          noteBkgColor: "#2c2510",
+          noteBorderColor: "#e9b44c",
+          noteTextColor: "#f6e7c4",
+          actorBkg: "#16233d",
+          actorBorder: "#4f8ff7",
+          signalColor: "#8ab4ff",
+          git0: "#4f8ff7", git1: "#2fb5a8", git2: "#9b7bf5", git3: "#e9b44c", git4: "#f08fb1", git5: "#3ec27f",
+          pie1: "#4f8ff7", pie2: "#2fb5a8", pie3: "#9b7bf5", pie4: "#e9b44c", pie5: "#f08fb1", pie6: "#3ec27f"
+        }
+      });
+    } catch (e) { /* the fence stays as text */ }
   }
 
   setInterval(function () {

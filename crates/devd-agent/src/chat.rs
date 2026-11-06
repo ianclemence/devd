@@ -184,6 +184,8 @@ pub struct SendRequest {
     /// with [`devd_core::classify`], and the decision is recorded on the
     /// conversation so a resume reaches the same runner.
     pub kind: Option<devd_core::RunKind>,
+    /// A client-chosen id, so a retried delivery is accepted once.
+    pub client_id: Option<String>,
 }
 
 /// The built-in agent's engine. One per devd process.
@@ -199,6 +201,9 @@ pub struct Hub {
     /// The reasoning effort chosen for this conversation, when the model accepts
     /// one.
     effort: Mutex<HashMap<String, String>>,
+    /// One message is accepted at a time, so the same client id cannot create
+    /// two conversations when a reconnect retries it.
+    send_lock: Mutex<()>,
 }
 
 /// The advertised context window for a model, when the catalogue has one.
@@ -477,6 +482,32 @@ fn attach_thread(invoke: &mut Value, thread: &str) {
 /// A provider, the model to ask it for, and the two labels shown for the pick.
 type Candidate = (Provider, Option<String>, String, String);
 
+/// When a provider limit stopped a turn, the time devd may continue.
+///
+/// Only a limit that is expected to reset is retried: a rejected key, an unpaid
+/// balance or a missing model is a decision for the person, not a wait.
+fn limit_resume_at(message: &str) -> Option<String> {
+    let lower = message.to_lowercase();
+    let limited = lower.contains("rate limiting")
+        || lower.contains("http 429")
+        || (lower.contains("quota") && lower.contains("reset"))
+        || lower.contains("too many requests");
+    if !limited {
+        return None;
+    }
+    let mut secs = 900i64;
+    if let Some(i) = lower.find("retry after ") {
+        let digits: String = lower[i + 12..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        if let Ok(n) = digits.parse::<i64>() {
+            secs = n.clamp(30, 86_400);
+        }
+    }
+    Some((chrono::Utc::now() + chrono::Duration::seconds(secs)).to_rfc3339())
+}
+
 impl Hub {
     /// Build the hub over a base context.
     pub fn new(ctx: Ctx) -> Arc<Self> {
@@ -487,6 +518,7 @@ impl Hub {
             cancel: Mutex::new(HashMap::new()),
             permission: Mutex::new(HashMap::new()),
             effort: Mutex::new(HashMap::new()),
+            send_lock: Mutex::new(()),
         })
     }
 
@@ -517,6 +549,35 @@ impl Hub {
                 }
                 let _ = self.log(&t.id, "notice", json!({ "text": "devd restarted while the assistant was working. Say \"continue\" to resume." }));
                 let _ = self.ctx.store.set_thread_state(&t.id, "idle", None);
+            }
+        }
+    }
+
+    /// Continue conversations whose provider limit has reset. Only the process
+    /// that owns the agents calls this, from the guardian's tick.
+    pub fn resume_limited(self: &Arc<Self>) {
+        let Ok(due) = self.ctx.store.due_limited_threads(&devd_core::util::now()) else {
+            return;
+        };
+        for t in due {
+            if self.is_running(&t.id) {
+                continue;
+            }
+            if self.ctx.store.clear_thread_limit(&t.id).is_err() {
+                continue;
+            }
+            let _ = self.log(
+                &t.id,
+                "notice",
+                json!({ "text": "The provider limit has reset. Continuing." }),
+            );
+            if self
+                .ctx
+                .store
+                .set_thread_state(&t.id, "running", None)
+                .is_ok()
+            {
+                self.spawn(&t.id);
             }
         }
     }
@@ -560,6 +621,19 @@ impl Hub {
     /// Send a message, starting a conversation if needed. Returns immediately;
     /// the agent works in the background and appends to the log.
     pub fn send(self: &Arc<Self>, caller: &Ctx, req: SendRequest) -> Result<ChatThread> {
+        let _one_at_a_time = self
+            .send_lock
+            .lock()
+            .map_err(|_| DevdError::internal("the send lock was poisoned"))?;
+        // A reconnecting client may send the same message again. It is accepted
+        // once; the second call answers with the conversation already holding it.
+        if let Some(cid) = req.client_id.as_deref().filter(|c| !c.trim().is_empty()) {
+            if let Some(tid) = self.ctx.store.client_message_thread(cid)? {
+                if let Some(t) = self.ctx.store.get_thread(&tid)? {
+                    return Ok(t);
+                }
+            }
+        }
         let text = req.message.trim().to_string();
         if text.is_empty() {
             return Err(DevdError::invalid("say something"));
@@ -652,6 +726,15 @@ impl Hub {
         // delivered first.
         self.remember_options(&thread.id, &req);
         self.deliver_queued(&thread.id)?;
+        if let Some(cid) = req.client_id.as_deref().filter(|c| !c.trim().is_empty()) {
+            if !self.ctx.store.claim_client_message(cid, &thread.id)? {
+                return Ok(self
+                    .ctx
+                    .store
+                    .get_thread(&thread.id)?
+                    .unwrap_or(thread));
+            }
+        }
         self.log(
             &thread.id,
             "user",
@@ -746,8 +829,18 @@ impl Hub {
                 ),
             };
             if let Some(msg) = failure {
-                let _ = hub.log(&tid, "error", json!({ "message": msg }));
-                let _ = hub.ctx.store.set_thread_state(&tid, "error", Some(&msg));
+                if let Some(at) = limit_resume_at(&msg) {
+                    // A limit is not a failure of the work. Say when devd will
+                    // continue and leave the conversation resumable.
+                    let when = chrono::DateTime::parse_from_rfc3339(&at)
+                        .map(|t| t.with_timezone(&chrono::Local).format("%H:%M").to_string())
+                        .unwrap_or_else(|_| at.clone());
+                    let _ = hub.log(&tid, "notice", json!({ "text": format!("The provider's usage limit stopped this turn. devd will continue by itself at {when}.") }));
+                    let _ = hub.ctx.store.set_thread_limit(&tid, &msg, &at);
+                } else {
+                    let _ = hub.log(&tid, "error", json!({ "message": msg }));
+                    let _ = hub.ctx.store.set_thread_state(&tid, "error", Some(&msg));
+                }
             }
             if let Ok(mut r) = hub.running.lock() {
                 r.remove(&tid);
@@ -1335,24 +1428,53 @@ impl Hub {
                 );
                 return self.fail(tid, &last_err);
             };
-            self.ctx
-                .store
-                .add_thread_usage(tid, response.input_tokens, response.output_tokens)?;
+            let cost = match self.ctx.store.get_provider(&chosen_provider)? {
+                Some(p) => {
+                    let caps = crate::policy::model_caps(&self.ctx.store, &p, &model);
+                    // DeepSeek is OpenAI-compatible on the wire but prices a cache hit at a
+                    // tenth of a miss; it is told apart by its address.
+                    let kind = if p.base_url.contains("deepseek") { "deepseek" } else { p.kind.as_str() };
+                    crate::policy::cost_usd_cached(
+                        &caps,
+                        kind,
+                        response.input_tokens,
+                        response.output_tokens,
+                        response.cache_read_tokens,
+                        response.cache_write_tokens,
+                    )
+                }
+                None => None,
+            };
+            self.ctx.store.add_thread_usage_full(
+                tid,
+                response.input_tokens,
+                response.output_tokens,
+                response.cache_read_tokens,
+                response.cache_write_tokens,
+                cost,
+            )?;
             let _ = self.ctx.store.add_run_usage(
                 &run_id,
                 response.input_tokens,
                 response.output_tokens,
                 0,
             );
-            if let Some(provider) = candidates.iter().map(|c| &c.0).find(|p| p.id == chosen_provider) {
-                let caps = crate::policy::model_caps(&self.ctx.store, provider, &model);
-                if let Some(usd) =
-                    crate::policy::cost_usd(&caps, response.input_tokens, response.output_tokens)
-                {
-                    let _ = self.ctx.store.add_run_cost(&run_id, usd);
-                }
+            if let Some(usd) = cost {
+                let _ = self.ctx.store.add_run_cost(&run_id, usd);
             }
-            self.log(tid, "assistant", json!({ "content": response.content, "stop_reason": response.stop_reason, "model": model, "routing": why, "usage": { "input": response.input_tokens, "output": response.output_tokens } }))?;
+            self.log(tid, "assistant", json!({
+                "content": response.content,
+                "stop_reason": response.stop_reason,
+                "model": model,
+                "routing": why,
+                "usage": {
+                    "input": response.input_tokens,
+                    "output": response.output_tokens,
+                    "cache_read": response.cache_read_tokens,
+                    "cache_write": response.cache_write_tokens,
+                    "cost_usd": cost
+                }
+            }))?;
 
             let calls: Vec<&Value> = response
                 .content
@@ -1678,7 +1800,24 @@ impl Hub {
         let run = self.ctx.store.run_by_id(run_id).ok().flatten()?;
         self.record_observed(&run);
         let evidence = self.ctx.store.list_evidence(run_id, 10_000).ok()?;
-        let verdict = evaluate(&run.completion_policy, &evidence);
+        // A run whose agent called no tool at all answered in words: there is nothing to
+        // verify, and "not verified" would be a false alarm on every plain question. A run
+        // that tried something (even a declined call) keeps its policy and its honest notice.
+        let acted = run
+            .thread_id
+            .as_deref()
+            .and_then(|tid| self.ctx.store.list_events(tid, 0, 100_000).ok())
+            .map(|events| {
+                let start = events.iter().rposition(|e| e.kind == "user").unwrap_or(0);
+                events[start..].iter().any(|e| e.kind == "tool_result" || e.kind == "approval")
+            })
+            .unwrap_or(true);
+        let policy = if evidence.is_empty() && !acted {
+            devd_core::CompletionPolicy::for_goal("", &run.completion_policy.acceptance)
+        } else {
+            run.completion_policy.clone()
+        };
+        let verdict = evaluate(&policy, &evidence);
         let _ = self.ctx.store.transition_run(run_id, verdict.state, None);
         Some(verdict)
     }
@@ -1902,6 +2041,32 @@ impl Hub {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_usage_limit_is_recognised_and_its_retry_time_is_kept() {
+        let at = super::limit_resume_at("HTTP 429 Too Many Requests: retry after 120 seconds").expect("a limit");
+        let t = chrono::DateTime::parse_from_rfc3339(&at).unwrap();
+        let wait = (t.with_timezone(&chrono::Utc) - chrono::Utc::now()).num_seconds();
+        assert!((100..=125).contains(&wait), "waits the time the provider asked for, got {wait}s");
+        assert!(super::limit_resume_at("the model refused the request: invalid tool schema").is_none());
+        let default = super::limit_resume_at("quota exceeded, resets later").expect("a limit");
+        let d = (chrono::DateTime::parse_from_rfc3339(&default).unwrap().with_timezone(&chrono::Utc) - chrono::Utc::now()).num_seconds();
+        assert!((800..=905).contains(&d), "a limit without a time waits fifteen minutes");
+    }
+
+    #[test]
+    fn a_limited_conversation_is_due_once_its_time_has_passed() {
+        let store = devd_core::state::Store::open_in_memory().unwrap();
+        store.migrate().unwrap();
+        let t = store.create_thread("probe", None, None, None).unwrap();
+        let past = (chrono::Utc::now() - chrono::Duration::seconds(5)).to_rfc3339();
+        store.set_thread_limit(&t.id, "HTTP 429", &past).unwrap();
+        let due = store.due_limited_threads(&devd_core::util::now()).unwrap();
+        assert!(due.iter().any(|x| x.id == t.id));
+        store.clear_thread_limit(&t.id).unwrap();
+        assert!(!store.due_limited_threads(&devd_core::util::now()).unwrap().iter().any(|x| x.id == t.id));
+    }
+
     use super::*;
 
     #[test]

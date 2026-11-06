@@ -203,7 +203,9 @@ fn render_text(render: Render, sites: &[Site]) -> String {
     out.push_str("# checks it with `nginx -t`, and `devd web reload` makes nginx read it.\n\n");
     out.push_str("worker_processes  1;\n");
     out.push_str(&format!(
-        "error_log  \"{}/nginx-error.log\" warn;\n",
+        // The service log reads `<name>.log`; nginx keeps its own error log, so
+        // point it at the file the Logs sheet reads rather than a second one.
+        "error_log  \"{}/nginx.log\" warn;\n",
         render.logs
     ));
     out.push_str(&format!(
@@ -216,7 +218,11 @@ fn render_text(render: Render, sites: &[Site]) -> String {
         "    include       \"{}conf/mime.types\";\n",
         render.prefix
     ));
-    out.push_str("    default_type  application/octet-stream;\n\n");
+    out.push_str("    default_type  application/octet-stream;\n");
+    // Many local sites on one machine produce long server names; nginx's
+    // default 32-byte bucket refuses the configuration before it starts.
+    out.push_str("    server_names_hash_bucket_size 128;\n");
+    out.push_str("    server_names_hash_max_size 2048;\n\n");
     out.push_str(&format!(
         "    access_log  \"{}/nginx-access.log\";\n\n",
         render.logs
@@ -543,6 +549,13 @@ fn invoke(ctx: &Ctx, extra: &[&str]) -> Result<String> {
 pub fn test(ctx: &Ctx) -> Result<String> {
     let output = invoke(ctx, &["-t"])?;
     if !output.contains("syntax is ok") || output.contains("[emerg]") {
+        // A refused configuration is the first thing a person looks for in the Logs sheet,
+        // so nginx's own words go into the log it reads, with when it happened.
+        let log = ctx.paths.logs().join("nginx.log");
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log) {
+            use std::io::Write;
+            let _ = writeln!(f, "{} devd: nginx -t refused the configuration\n{}", util::now(), output.trim());
+        }
         return Err(DevdError::Command {
             program: "nginx -t".to_string(),
             code: 1,

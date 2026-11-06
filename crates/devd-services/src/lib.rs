@@ -2381,7 +2381,30 @@ pub fn logs(ctx: &Ctx, name: &str, lines: usize) -> Result<Vec<String>> {
     ctx.store
         .get_service(name)?
         .ok_or_else(|| DevdError::not_found(format!("`{name}` is not a devd service")))?;
-    tail(&log_path(ctx, name), lines)
+    let primary = log_path(ctx, name);
+    let mut rows = tail(&primary, lines)?;
+    // Some services write their own log beside the captured stdout. A service
+    // that has run but whose sheet is empty is worse than useless, so fall back
+    // to the file it actually writes.
+    if rows.is_empty() {
+        let dir = ctx.paths.logs();
+        let extra: Vec<std::path::PathBuf> = match name {
+            "nginx" => vec![dir.join("nginx-error.log"), dir.join("nginx-access.log")],
+            "mariadb" | "mysql" => vec![dir.join("mariadb-error.log")],
+            _ => Vec::new(),
+        };
+        for path in extra {
+            if let Ok(mut more) = tail(&path, lines) {
+                if !more.is_empty() {
+                    if !rows.is_empty() {
+                        rows.push(String::new());
+                    }
+                    rows.append(&mut more);
+                }
+            }
+        }
+    }
+    Ok(rows)
 }
 
 fn tail(path: &Path, lines: usize) -> Result<Vec<String>> {

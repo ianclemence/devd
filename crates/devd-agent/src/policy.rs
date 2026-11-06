@@ -214,6 +214,44 @@ pub fn cost_usd(caps: &ModelCaps, input_tokens: i64, output_tokens: i64) -> Opti
     Some((input * input_tokens as f64 + output * output_tokens as f64) / 1_000_000.0)
 }
 
+/// What a call cost, with prompt-cache tokens priced as the provider bills them.
+///
+/// The provider's list price is for ordinary input. A cache read is cheaper and
+/// a cache write is dearer; the multipliers below are the vendors' published
+/// ratios and are applied only when the provider reported those tokens. `input`
+/// already includes them, so the uncached part is the remainder.
+pub fn cost_usd_cached(
+    caps: &ModelCaps,
+    provider_kind: &str,
+    input_tokens: i64,
+    output_tokens: i64,
+    cache_read: i64,
+    cache_write: i64,
+) -> Option<f64> {
+    let input = caps.input_price?;
+    let output = caps.output_price?;
+    let (read_mult, write_mult) = if provider_kind == "anthropic" {
+        (0.1, 1.25)
+    } else if provider_kind == "gemini" {
+        (0.25, 1.0)
+    } else if provider_kind == "deepseek" {
+        // A cache hit costs a tenth of a miss; DeepSeek charges no premium to write the cache.
+        (0.1, 1.0)
+    } else {
+        // OpenAI-compatible listings report a cached prompt token at half price.
+        (0.5, 1.0)
+    };
+    let cached = (cache_read + cache_write).min(input_tokens.max(0));
+    let uncached = (input_tokens - cached).max(0);
+    Some(
+        (input * uncached as f64
+            + input * read_mult * cache_read as f64
+            + input * write_mult * cache_write as f64
+            + output * output_tokens as f64)
+            / 1_000_000.0,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

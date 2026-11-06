@@ -7063,7 +7063,7 @@ th, .table th { font-size: var(--text-xs); font-weight: 600; text-transform: non
 .run-label { color: var(--fg-dim); font-size: var(--text-xs); font-weight: 600; text-transform: none; letter-spacing: 0; margin-bottom: 4px; }
 
 /* ---- semantic colour names ------------------------------------------------------
- * One vocabulary for colour, by role (the names DaisyUI made familiar). Every
+ * One vocabulary for colour, named by role rather than by hue. Every
  * component rule uses these names, not the palette variables directly; the
  * graphite + blue palette above supplies the values, so the rendered colours are
  * unchanged. Each colour has a -content partner: the foreground that reads on it.
@@ -7127,6 +7127,45 @@ kbd {
   white-space: nowrap;
 }
 kbd + kbd { margin-left: 3px; }
+
+/* Progress and switches are shared controls, used by setup, runs and settings. */
+.ds-progress { appearance: none; width: 100%; height: 6px; border: 0; border-radius: 999px; overflow: hidden; background: var(--color-base-300); }
+.ds-progress::-webkit-progress-bar { background: var(--color-base-300); }
+.ds-progress::-webkit-progress-value { background: var(--color-primary); border-radius: 999px; }
+.ds-progress::-moz-progress-bar { background: var(--color-primary); border-radius: 999px; }
+.ds-progress.is-done::-webkit-progress-value { background: var(--color-success); }
+.ds-progress.is-done::-moz-progress-bar { background: var(--color-success); }
+
+.ds-toggle { appearance: none; position: relative; width: 36px; height: 20px; flex: none; margin: 0; border: var(--border) solid var(--line-control); border-radius: 999px; background: var(--color-base-300); cursor: pointer; transition: background-color var(--fast), border-color var(--fast); }
+.ds-toggle::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--color-base-content); transition: transform var(--fast), background-color var(--fast); }
+.ds-toggle:checked { background: var(--color-primary); border-color: var(--color-primary); }
+.ds-toggle:checked::after { transform: translateX(16px); background: var(--color-primary-content); }
+.ds-toggle:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+.ds-toggle:disabled { opacity: 0.45; cursor: not-allowed; }
+.outbox { margin: 0 0 var(--s2); border: var(--border) solid var(--line); border-radius: var(--radius-box); background: var(--color-base-200); overflow: hidden; }
+.outbox-item { display: flex; align-items: center; gap: var(--s2); padding: 8px 10px; border-top: var(--border) solid var(--line); font-size: var(--text-xs); }
+.outbox-item:first-child { border-top: 0; }
+.outbox-state { flex: none; padding: 1px 6px; border-radius: var(--radius-selector); background: var(--color-base-300); color: var(--fg-mute); }
+.outbox-item[data-state="failed"] .outbox-state { background: var(--danger-quiet); color: var(--color-error); }
+.outbox-item[data-state="sending"] .outbox-state { color: var(--color-primary); }
+.outbox-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-base-content); }
+.outbox-error { flex: none; max-width: 30%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-error); }
+.ds-steps { display: flex; gap: 0; margin: var(--s3) 0; padding: 0; list-style: none; }
+.ds-step { flex: 1; position: relative; padding: 18px 12px 0 0; color: var(--fg-dim); font-size: var(--text-xs); }
+.ds-step::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: var(--color-base-300); }
+.ds-step::after { content: ""; position: absolute; top: -4px; left: 0; width: 10px; height: 10px; border-radius: 50%; background: var(--color-base-300); }
+.ds-step.is-done { color: var(--fg-mute); }
+.ds-step.is-done::before, .ds-step.is-done::after { background: var(--color-success); }
+.ds-step.is-current { color: var(--color-base-content); }
+.ds-step.is-current::after { background: var(--color-primary); }
+.ds-step.is-current::before { background: linear-gradient(90deg, var(--color-primary) 50%, var(--color-base-300) 50%); }
+pre.mermaid { margin: var(--s3) 0; padding: var(--s4); overflow: auto; border: var(--border) solid var(--line); border-radius: var(--radius-box); background: var(--color-base-200); color: var(--fg-mute); font: var(--text-xs)/1.5 var(--mono); }
+pre.mermaid[data-processed] { display: flex; justify-content: center; }
+pre.mermaid svg { max-width: 100%; height: auto; }
+.katex { font-size: 1.04em; }
+.katex-display { margin: var(--s2) 0; overflow-x: auto; overflow-y: hidden; padding: 2px 0; }
+.run-progress { display: flex; align-items: center; gap: var(--s2); margin-bottom: var(--s3); }
+.run-progress .ds-progress { flex: 1; }
 .ds-chart { margin: var(--s3) 0; padding: var(--s4); border: var(--border) solid var(--line); border-radius: var(--radius-box); background: var(--color-base-200); }
 .ds-chart figcaption { margin-bottom: var(--s2); color: var(--color-base-content); font-size: var(--text-sm); font-weight: 600; }
 .ds-chart-row { display: grid; grid-template-columns: minmax(72px, 150px) minmax(60px, 1fr) auto; gap: var(--s2); align-items: center; margin-top: 6px; font-size: var(--text-xs); }
@@ -7161,3 +7200,74 @@ kbd + kbd { margin-left: 3px; }
   .brief-body > .md, .team-note-body > .md, .run-fold > .md { animation: none !important; }
   .btn:active, .rail-item:active, .chat-switch:active { transform: none; }
 }
+
+/* ---- a conversation's pull request and its settled state ------------------------ */
+.chip-pr { gap: 5px; border: 0; cursor: pointer; font: inherit; font-size: var(--text-xs); color: var(--color-base-content); background: var(--color-base-300); }
+.chip-pr .icon { width: 12px; height: 12px; }
+@media (hover: hover) and (pointer: fine) { .chip-pr:hover { color: var(--color-primary); } }
+.thread-row.is-settled .thread { color: var(--fg-dim); }
+.thread-settled { flex: none; width: 12px; height: 12px; color: var(--color-success); }
+.thread-pr { flex: none; color: var(--fg-dim); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
+.chat-head .more { position: relative; }
+.chat-head .more-pop { right: 0; left: auto; min-width: 240px; }
+
+.auto-presets { margin: 4px 0 14px; flex-wrap: wrap; }
+
+/* ============================================================ responses with life
+ *
+ * Colour in a reply comes from two sets of tokens: syntax colours for code and the
+ * data palette for charts and diagrams. Each colour has one meaning everywhere it
+ * appears, so a teal bar and a teal node are the same "second series".
+ */
+:root {
+  --viz-1: #4f8ff7; --viz-2: #2fb5a8; --viz-3: #9b7bf5; --viz-4: #e9b44c; --viz-5: #f08fb1; --viz-6: #3ec27f;
+  --code-bg: #0e1014; --code-head: #13161c; --code-line: #232731;
+  --tk-keyword: #c792ea; --tk-string: #a5d6a7; --tk-number: #f2b880; --tk-comment: #6b7280;
+  --tk-call: #82aaff; --tk-type: #ffcb6b; --tk-variable: #f07178; --tk-punct: #89ddff;
+}
+
+/* code blocks: a distinct, slightly cool surface, a quiet header, real syntax colour */
+.md .md-code { margin: 6px 0 14px; border: 1px solid var(--code-line); border-radius: 10px; background: var(--code-bg); overflow: hidden; }
+.md .md-code-head { padding: 6px 10px 6px 12px; background: var(--code-head); border-bottom: 1px solid var(--code-line); color: #8b93a3; font-size: 11.5px; font-family: var(--mono); }
+.md .md-code-head > span:first-child { color: var(--tk-call); text-transform: lowercase; }
+.md .md-copy { border: 0; background: none; color: #8b93a3; font: inherit; cursor: pointer; padding: 2px 6px; border-radius: 6px; }
+@media (hover: hover) and (pointer: fine) { .md .md-copy:hover { background: #1c2029; color: #e6e9ef; } }
+.md pre.code { margin: 0; padding: 12px 14px; background: none; border: 0; color: #d7dae0; font-size: 12.5px; line-height: 1.6; }
+.workspace-chat .md pre, .run-feed .md pre { background: var(--code-bg); border-color: var(--code-line); }
+.tk-keyword { color: var(--tk-keyword); }
+.tk-string { color: var(--tk-string); }
+.tk-number { color: var(--tk-number); }
+.tk-comment { color: var(--tk-comment); font-style: italic; }
+.tk-call { color: var(--tk-call); }
+.tk-type { color: var(--tk-type); }
+.tk-variable { color: var(--tk-variable); }
+.tk-punct { color: var(--tk-punct); }
+
+/* inline code reads as code: cool tint, not another grey */
+.workspace-chat .md code:not(pre code), .run-feed .md code:not(pre code), .run-col .md code:not(pre code) {
+  background: rgba(130, 170, 255, 0.10); color: #b9cfff; border: 0;
+}
+
+/* prose with structure: headings marked, quotes barred, lists with coloured markers */
+.workspace-chat .md .md-h, .run-feed .md .md-h { color: #f2f3f7; }
+.workspace-chat .md h2.md-h, .workspace-chat .md h3.md-h { padding-left: 10px; border-left: 2px solid var(--viz-1); }
+.workspace-chat .md ul > li::marker, .run-feed .md ul > li::marker { color: var(--viz-1); }
+.workspace-chat .md ol > li::marker, .run-feed .md ol > li::marker { color: var(--viz-1); font-weight: 600; font-variant-numeric: tabular-nums; }
+.workspace-chat .md blockquote, .run-feed .md blockquote { margin: 6px 0 12px; padding: 8px 14px; border-left: 3px solid var(--viz-3); background: rgba(155, 123, 245, 0.07); border-radius: 0 8px 8px 0; color: var(--fg-mute); }
+.workspace-chat .md strong, .run-feed .md strong { color: #f4f5f8; }
+.workspace-chat .md a, .run-feed .md a { color: var(--accent-text); text-decoration: underline; text-decoration-color: rgba(138, 180, 255, 0.35); text-underline-offset: 3px; }
+.workspace-chat .md th, .run-feed .md th { background: rgba(79, 143, 247, 0.07); color: #c9d6f2; padding-left: 10px; }
+.workspace-chat .md td, .run-feed .md td { padding-left: 10px; }
+.workspace-chat .md table, .run-feed .md table { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; border-collapse: separate; border-spacing: 0; }
+.workspace-chat .md hr.md-hr { border: 0; height: 1px; background: linear-gradient(90deg, transparent, var(--line-strong), transparent); margin: 16px 0; }
+
+/* diagrams: their own framed surface */
+.md pre.mermaid { margin: 6px 0 14px; padding: 16px; border: 1px solid #23283a; border-radius: 10px; background: #12141b; text-align: center; overflow-x: auto; }
+
+/* charts: each series its own colour */
+.ds-chart-fill.viz-1 { background: var(--viz-1); }
+.ds-chart-fill.viz-2 { background: var(--viz-2); }
+.ds-chart-fill.viz-3 { background: var(--viz-3); }
+.ds-chart-fill.viz-4 { background: var(--viz-4); }
+.ds-chart-fill.viz-5 { background: var(--viz-5); }
+.ds-chart-fill.viz-6 { background: var(--viz-6); }

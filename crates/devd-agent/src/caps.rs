@@ -583,6 +583,10 @@ struct SendArgs {
     /// the same runner every time.
     #[serde(default)]
     kind: Option<String>,
+    /// A client-chosen id for this message. A reconnect that retries the same
+    /// id is delivered once, not twice.
+    #[serde(default)]
+    client_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -592,7 +596,23 @@ struct ThreadArgs {
     /// Only events after this sequence number.
     #[serde(default)]
     after: Option<i64>,
+    /// Trim each tool result to a preview (the window opens a step's full output on
+    /// demand with `chat.result`). Absent or false: everything, as before.
+    #[serde(default)]
+    brief: Option<bool>,
 }
+
+/// One tool result in full.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct ResultArgs {
+    /// Conversation id.
+    thread: String,
+    /// The tool call's id (`tool_use_id`).
+    tool_use_id: String,
+}
+
+/// How much of a tool result a brief read carries.
+const RESULT_PREVIEW: usize = 1600;
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct UpdateThread {
@@ -607,6 +627,24 @@ struct UpdateThread {
     /// Model id.
     #[serde(default)]
     model: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct LinkPullRequest {
+    /// Conversation id.
+    thread: String,
+    /// The pull request address, or absent to unlink it.
+    #[serde(default)]
+    url: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct SettleThread {
+    /// Conversation id.
+    thread: String,
+    /// True to settle it, false to reopen it. Default true.
+    #[serde(default)]
+    settled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -2173,7 +2211,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
     .handlers(
         |_, a| simple("chat.send", format!("send a message to the built-in agent{}", a.project.as_ref().map(|p| format!(" in {p}")).unwrap_or_default())),
         move |ctx, a| {
-                let t = hub.send(ctx, SendRequest { thread_id: a.thread.clone(), message: a.message.clone(), project: a.project.clone(), provider: a.provider.clone(), model: a.model.clone(), permission: a.permission.clone(), effort: a.effort.clone(), kind: a.kind.as_deref().map(devd_core::RunKind::parse) })?;
+                let t = hub.send(ctx, SendRequest { thread_id: a.thread.clone(), message: a.message.clone(), project: a.project.clone(), provider: a.provider.clone(), model: a.model.clone(), permission: a.permission.clone(), effort: a.effort.clone(), kind: a.kind.as_deref().map(devd_core::RunKind::parse), client_id: a.client_id.clone() })?;
                 let queued = ctx.store.queued_count(&t.id)?;
                 let mut data = serde_json::to_value(&t)?;
                 if let Some(obj) = data.as_object_mut() {
@@ -2278,7 +2316,33 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
         |_, a| simple("chat.get", format!("read conversation {}", a.thread)),
         move |ctx, a| {
                 let t = ctx.store.get_thread(&a.thread)?.ok_or_else(|| DevdError::not_found("no such conversation"))?;
-                let ev = ctx.store.list_events(&a.thread, a.after.unwrap_or(0), 500)?;
+                let mut ev = ctx.store.list_events(&a.thread, a.after.unwrap_or(0), 500)?;
+                // Tool output is most of a conversation's weight and is read only when a
+                // step is opened, so a brief read sends a preview and the full size.
+                if a.brief.unwrap_or(false) {
+                    for e in ev.iter_mut().filter(|e| e.kind == "tool_result") {
+                        let text = e.data["content"].as_str().map(str::to_string);
+                        if let Some(text) = text.filter(|t| t.len() > RESULT_PREVIEW) {
+                            // The start says what ran; the end says how it went (a test
+                            // summary, an exit code). Both stay; the middle waits for a click.
+                            let mut head = RESULT_PREVIEW * 2 / 3;
+                            while !text.is_char_boundary(head) {
+                                head -= 1;
+                            }
+                            let mut tail = text.len() - RESULT_PREVIEW / 3;
+                            while !text.is_char_boundary(tail) {
+                                tail += 1;
+                            }
+                            e.data["content"] = json!(format!(
+                                "{}\n\u{2026} {} more characters \u{2026}\n{}",
+                                &text[..head],
+                                tail - head,
+                                &text[tail..]
+                            ));
+                            e.data["truncated_from"] = json!(text.len());
+                        }
+                    }
+                }
                 let pending = ctx.store.list_requests(true, Some(&a.thread), 50)?;
                 let chapters = ctx.store.list_chapters(&a.thread)?;
                 let queued = ctx.store.queued_count(&a.thread)?;
@@ -2289,6 +2353,23 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
     }
     {
         let hub = hub.clone();
+        reg.define::<ResultArgs>("chat.result", "Read one step's full output")
+    .description("The full output of one tool call in a conversation, for a step a brief chat.get trimmed.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, a| simple("chat.result", format!("read a step's output in {}", a.thread)),
+        |ctx, a| {
+            let ev = ctx.store.list_events(&a.thread, 0, 100_000)?;
+            let found = ev
+                .into_iter()
+                .find(|e| e.kind == "tool_result" && e.data["tool_use_id"].as_str() == Some(a.tool_use_id.as_str()))
+                .ok_or_else(|| DevdError::not_found("no such step in this conversation"))?;
+            Ok(Outcome::with_data("the step's output", found.data))
+        },
+    )?;
         reg.define::<ThreadArgs>("chat.stop", "Stop the agent")
     .description("Stops the agent after its current step and declines anything it was waiting to have approved.")
     .tier(Tier::Exec)
@@ -2338,6 +2419,45 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                     a.model.as_deref(),
                 )?;
                 Ok(Outcome::ok("updated"))
+            },
+        )?;
+    reg.define::<LinkPullRequest>("chat.link_pr", "Link a pull request to a conversation")
+        .description("Records the pull request a conversation is about, so the window and the record show it together. Pass a null url to unlink. The address must be https.")
+        .tier(Tier::Write)
+        .effect(Effect::Write)
+        .dry_run()
+        .handlers(
+            |_, a| simple("chat.link_pr", format!("link a pull request to {}", a.thread)),
+            |ctx, a| {
+                ctx.store
+                    .get_thread(&a.thread)?
+                    .ok_or_else(|| DevdError::not_found("no such conversation"))?;
+                if let Some(url) = a.url.as_deref().filter(|u| !u.trim().is_empty()) {
+                    let url = url.trim();
+                    if !url.starts_with("https://") {
+                        return Err(DevdError::invalid("a pull request address must start with https://"));
+                    }
+                    ctx.store.set_thread_pr(&a.thread, Some(url))?;
+                } else {
+                    ctx.store.set_thread_pr(&a.thread, None)?;
+                }
+                Ok(Outcome::ok("the pull request is linked"))
+            },
+        )?;
+    reg.define::<SettleThread>("chat.settle", "Settle or reopen a conversation")
+        .description("Marks a conversation settled so it leaves the working list, or reopens it. The log is kept either way.")
+        .tier(Tier::Write)
+        .effect(Effect::Write)
+        .dry_run()
+        .handlers(
+            |_, a| simple("chat.settle", format!("settle conversation {}", a.thread)),
+            |ctx, a| {
+                ctx.store
+                    .get_thread(&a.thread)?
+                    .ok_or_else(|| DevdError::not_found("no such conversation"))?;
+                let settled = a.settled.unwrap_or(true);
+                ctx.store.set_thread_settled(&a.thread, settled)?;
+                Ok(Outcome::ok(if settled { "settled" } else { "reopened" }))
             },
         )?;
     {

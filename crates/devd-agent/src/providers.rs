@@ -1157,10 +1157,14 @@ pub struct ChatResponse {
     pub content: Vec<Value>,
     /// `end_turn`, `tool_use`, `max_tokens`, ...
     pub stop_reason: String,
-    /// Input tokens.
+    /// Input tokens, including any served from or written to a prompt cache.
     pub input_tokens: i64,
     /// Output tokens.
     pub output_tokens: i64,
+    /// Input tokens that came from the provider's prompt cache.
+    pub cache_read_tokens: i64,
+    /// Input tokens written to the provider's prompt cache.
+    pub cache_write_tokens: i64,
 }
 
 fn anthropic_body(r: &ChatRequest) -> Value {
@@ -1252,13 +1256,17 @@ fn openai_body(p: &Provider, r: &ChatRequest) -> Value {
 
 fn parse_anthropic(v: &Value) -> Result<ChatResponse> {
     let content = v.get("content").and_then(|c| c.as_array()).cloned().ok_or_else(|| DevdError::internal("the response had no content"))?;
+    let cache_read = v.pointer("/usage/cache_read_input_tokens").and_then(|x| x.as_i64()).unwrap_or(0);
+    let cache_write = v.pointer("/usage/cache_creation_input_tokens").and_then(|x| x.as_i64()).unwrap_or(0);
     Ok(ChatResponse {
         content,
         stop_reason: v["stop_reason"].as_str().unwrap_or("end_turn").to_string(),
         input_tokens: v.pointer("/usage/input_tokens").and_then(|x| x.as_i64()).unwrap_or(0)
-            + v.pointer("/usage/cache_read_input_tokens").and_then(|x| x.as_i64()).unwrap_or(0)
-            + v.pointer("/usage/cache_creation_input_tokens").and_then(|x| x.as_i64()).unwrap_or(0),
+            + cache_read
+            + cache_write,
         output_tokens: v.pointer("/usage/output_tokens").and_then(|x| x.as_i64()).unwrap_or(0),
+        cache_read_tokens: cache_read,
+        cache_write_tokens: cache_write,
     })
 }
 
@@ -1285,6 +1293,14 @@ fn parse_openai(v: &Value) -> Result<ChatResponse> {
         stop_reason: if has_calls { "tool_use".into() } else if finish == "length" { "max_tokens".into() } else { "end_turn".into() },
         input_tokens: v.pointer("/usage/prompt_tokens").and_then(|x| x.as_i64()).unwrap_or(0),
         output_tokens: v.pointer("/usage/completion_tokens").and_then(|x| x.as_i64()).unwrap_or(0),
+        // OpenAI reports cached prompt tokens as a subset of prompt_tokens.
+        // OpenAI names it prompt_tokens_details.cached_tokens; DeepSeek, prompt_cache_hit_tokens.
+        cache_read_tokens: v
+            .pointer("/usage/prompt_tokens_details/cached_tokens")
+            .or_else(|| v.pointer("/usage/prompt_cache_hit_tokens"))
+            .and_then(|x| x.as_i64())
+            .unwrap_or(0),
+        cache_write_tokens: 0,
     })
 }
 
@@ -1466,6 +1482,7 @@ fn parse_anthropic_stream(reader: impl BufRead, on: &mut dyn FnMut(&str)) -> Res
     let mut tool_json: std::collections::HashMap<usize, String> = std::collections::HashMap::new();
     let mut stop_reason = String::from("end_turn");
     let (mut input_tokens, mut output_tokens) = (0i64, 0i64);
+    let (mut cache_read_tokens, mut cache_write_tokens) = (0i64, 0i64);
     let mut saw_message_stop = false;
     let mut feed = |payload: &str| -> Result<()> {
         let Ok(v) = serde_json::from_str::<Value>(payload) else {
@@ -1473,16 +1490,16 @@ fn parse_anthropic_stream(reader: impl BufRead, on: &mut dyn FnMut(&str)) -> Res
         };
         match v["type"].as_str().unwrap_or("") {
             "message_start" => {
+                let read = v.pointer("/message/usage/cache_read_input_tokens").and_then(|x| x.as_i64()).unwrap_or(0);
+                let write = v.pointer("/message/usage/cache_creation_input_tokens").and_then(|x| x.as_i64()).unwrap_or(0);
+                cache_read_tokens += read;
+                cache_write_tokens += write;
                 input_tokens += v
                     .pointer("/message/usage/input_tokens")
                     .and_then(|x| x.as_i64())
                     .unwrap_or(0)
-                    + v.pointer("/message/usage/cache_read_input_tokens")
-                        .and_then(|x| x.as_i64())
-                        .unwrap_or(0)
-                    + v.pointer("/message/usage/cache_creation_input_tokens")
-                        .and_then(|x| x.as_i64())
-                        .unwrap_or(0);
+                    + read
+                    + write;
             }
             "content_block_start" => {
                 let index = v["index"].as_u64().unwrap_or(0) as usize;
@@ -1583,6 +1600,8 @@ fn parse_anthropic_stream(reader: impl BufRead, on: &mut dyn FnMut(&str)) -> Res
         stop_reason,
         input_tokens,
         output_tokens,
+        cache_read_tokens,
+        cache_write_tokens,
     })
 }
 
@@ -1591,6 +1610,7 @@ fn parse_openai_stream(reader: impl BufRead, on: &mut dyn FnMut(&str)) -> Result
     let mut calls: Vec<(String, String, String)> = Vec::new(); // id, name, arguments
     let mut finish = String::new();
     let (mut input_tokens, mut output_tokens) = (0i64, 0i64);
+    let mut cache_read_tokens = 0i64;
     let mut feed = |payload: &str| -> Result<()> {
         if payload.trim() == "[DONE]" {
             return Ok(());
@@ -1601,6 +1621,11 @@ fn parse_openai_stream(reader: impl BufRead, on: &mut dyn FnMut(&str)) -> Result
         if let Some(u) = v.get("usage").filter(|u| !u.is_null()) {
             input_tokens = u["prompt_tokens"].as_i64().unwrap_or(input_tokens);
             output_tokens = u["completion_tokens"].as_i64().unwrap_or(output_tokens);
+            cache_read_tokens = u
+                .pointer("/prompt_tokens_details/cached_tokens")
+                .or_else(|| u.get("prompt_cache_hit_tokens"))
+                .and_then(|x| x.as_i64())
+                .unwrap_or(cache_read_tokens);
         }
         let Some(choice) = v.pointer("/choices/0") else {
             return Ok(());
@@ -1672,6 +1697,8 @@ fn parse_openai_stream(reader: impl BufRead, on: &mut dyn FnMut(&str)) -> Result
         },
         input_tokens,
         output_tokens,
+        cache_read_tokens,
+        cache_write_tokens: 0,
     })
 }
 

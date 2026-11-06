@@ -1,4 +1,4 @@
-# The tool catalogue: what devd can detect, install, remove and (for services)
+﻿# The tool catalogue: what devd can detect, install, remove and (for services)
 # run. Every entry names its trust model; install recipes use the host's own
 # package manager or a digest-verified devd runtime download.
 package_managers:
@@ -781,51 +781,3 @@ tools:
     trust: Host package manager; on Windows the Gyan.dev builds that winget distributes.
     upgrade: Follows the package manager.
 
-  - id: hyperframes
-    name: HyperFrames
-    category: media
-    purpose: "Writes video as HTML: an agent composes a launch film, a PR walkthrough or captions in HTML and CSS, previews it in the browser and renders a deterministic MP4. Needs Node.js 22 or newer and FFmpeg; add its agent skills from Agents > Skills."
-    exes: [hyperframes]
-    version_regex: '(\d+\.\d+\.\d+)'
-    docs:
-      - {title: HyperFrames quickstart, url: "https://hyperframes.heygen.com/quickstart"}
-      - {title: HyperFrames on GitHub, url: "https://github.com/heygen-com/hyperframes"}
-    depends: [node, ffmpeg]
-    install:
-      - {manager: npm, packages: [hyperframes]}
-    remove:
-      - {manager: npm, packages: [hyperframes]}
-    trust: The npm package published by HeyGen from github.com/heygen-com/hyperframes (Apache 2.0). It can also run without installing, with `npx hyperframes`.
-    upgrade: "`npm install -g hyperframes@latest`, then `npx hyperframes skills update` so the agent skills match the CLI."
-
-  # ---- agents: browsers and desktops an agent can operate ----------------------
-  - id: agent-browser
-    name: agent-browser
-    category: ai
-    purpose: "Lets an agent drive a real browser: open a page, click, fill a form, read it back and take a screenshot. devd's built-in agent-browser skill teaches the team to use it."
-    exes: [agent-browser]
-    version_regex: '(\d+\.\d+\.\d+)'
-    docs: [{title: agent-browser on GitHub, url: "https://github.com/vercel-labs/agent-browser"}]
-    depends: [node]
-    install:
-      - {manager: npm, packages: [agent-browser]}
-    remove:
-      - {manager: npm, packages: [agent-browser]}
-    trust: The npm package published by Vercel Labs from github.com/vercel-labs/agent-browser (Apache 2.0). Run `agent-browser install` once afterwards to fetch its browser.
-    upgrade: "`npm install -g agent-browser@latest`; its usage guide updates with it (`agent-browser skills get core`)."
-
-  - id: agent-desktop
-    name: agent-desktop
-    category: ai
-    purpose: "Lets an agent operate desktop apps through the accessibility tree: read a window, click, type and take a screenshot. devd's built-in agent-desktop skill teaches the team to use it."
-    exes: [agent-desktop]
-    version_regex: '(\d+\.\d+\.\d+)'
-    docs: [{title: agent-desktop on GitHub, url: "https://github.com/vercel-labs/agent-desktop"}]
-    depends: [node]
-    install:
-      - {manager: npm, packages: [agent-desktop]}
-      - {manager: brew, packages: [agent-desktop]}
-    remove:
-      - {manager: npm, packages: [agent-desktop]}
-    trust: The npm package published by Vercel Labs from github.com/vercel-labs/agent-desktop (Apache 2.0), with native binaries for x64 and ARM64.
-    upgrade: "`npm install -g agent-desktop@latest`; its platform guide updates with it (`agent-desktop skills get platform`)."

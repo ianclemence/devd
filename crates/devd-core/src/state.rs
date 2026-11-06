@@ -41,6 +41,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (19, include_str!("../sql/019_autonomy.sql")),
     (20, include_str!("../sql/020_run_thread.sql")),
     (21, include_str!("../sql/021_inbox_origin.sql")),
+    (22, include_str!("../sql/022_chat_reliability.sql")),
 ];
 
 /// The newest schema this build knows. A database below it is migrated the first time devd

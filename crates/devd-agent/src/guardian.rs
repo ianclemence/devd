@@ -25,6 +25,7 @@ use serde_json::{json, Value};
 use devd_core::capability::Ctx;
 use devd_core::{util, IntakeRule, Result};
 
+use crate::chat::Hub;
 use crate::intake;
 use crate::team::{StartRequest, Team};
 
@@ -53,7 +54,7 @@ pub fn nudge(ctx: Ctx) {
 }
 
 /// Start the guardian, once per process.
-pub fn spawn(team: Arc<Team>) {
+pub fn spawn(team: Arc<Team>, hub: Arc<Hub>) {
     use std::sync::atomic::{AtomicBool, Ordering};
     static STARTED: AtomicBool = AtomicBool::new(false);
     if STARTED.swap(true, Ordering::SeqCst) {
@@ -62,13 +63,17 @@ pub fn spawn(team: Arc<Team>) {
     std::thread::spawn(move || loop {
         std::thread::sleep(TICK);
         let ctx = team.context().clone();
+        // A conversation stopped by a provider limit continues by itself once
+        // the reset time has passed. Nothing else about it is special.
+        hub.resume_limited();
         drain_effects(&team);
         let _ = evaluate_intake(&ctx, &team);
     });
 }
 
 /// Run one pass of the guardian, for `devd doctor` and for a test.
-pub fn tick_once(team: &Arc<Team>) {
+pub fn tick_once(team: &Arc<Team>, hub: &Arc<Hub>) {
+    hub.resume_limited();
     drain_effects(team);
     let _ = evaluate_intake(team.context(), team);
 }
