@@ -19,13 +19,43 @@ exact list.
 - fenced `diff` for a patch you applied or read
 - blockquotes
 - public `http` and `https` links, inline code, strong and emphasis
+- maths as `$...$` inline and `$$...$$` on its own lines
+- a fenced `mermaid` diagram for a flow or a structure
+- declared visuals: a fenced block named `chart`, `metrics`, `steps`, `timeline`
+  or `details` holding JSON. The window checks the data and draws it; data that
+  does not check stays a code block.
 
 Everything else is escaped as text. There is no HTML path.
+
+## Declared visuals
+
+```chart
+{"title":"Time to set up a worktree","subtitle":"median of 42 runs","unit":"s",
+ "bars":[{"label":"macOS","note":"before","value":38.6,"color":"red"},
+         {"label":"Linux","note":"after the cache fix","value":3.8,"color":"green"}],
+ "takeaway":"Linux is 10x faster","source":"pnpm install, fresh worktree"}
+```
+
+- `metrics`: `{"items":[{"label","value","unit?","delta?","detail?","color?"}],"lower_is_better?"}`;
+  a delta starting with + is green and with - is red (the other way round when
+  lower is better). For one number where lower is better in a mixed strip, set
+  `"delta_tone": "success"` or `"error"` on that item.
+- `steps`: `{"title?","items":["Plan","Build","Test"],"current":1}`.
+- `timeline`: `{"items":[{"at?","text","detail?","tone?"}]}`.
+- `details`: `{"title","hint?","body":"Markdown"}`, folded until opened.
+
+A colour is one of red, orange, yellow, green, teal, blue, violet, pink, or a
+tone: success, warning, error, info. Give it a meaning and keep it: green is
+better, red is worse, one colour per series.
 
 ## Choose the shape
 
 | You have | Write |
 |---|---|
+| numbers to compare | a `chart` with a takeaway |
+| a few headline numbers | `metrics` |
+| where a process stands | `steps` |
+| what happened, in order | `timeline` |
 | named columns | a table |
 | a command, file or patch | a fenced code block |
 | a sequence | an ordered list |

@@ -90,7 +90,7 @@ surface. `prefers-reduced-motion` removes movement and keeps the fade.
 
 - **Foundation**: tokens, reset, typography, icons, focus ring, scrollbars.
 - **Primitives**: `btn`, `input`, `select`, `textarea`, `ds-check`, `ds-radio`,
-  `ds-toggle`, `ds-range`, `ds-progress`, `ds-radial`, `ds-kbd`, `ds-steps`,
+  `ds-toggle`, `ds-range`, `ds-progress`, `ds-radial`, `ds-kbd`, `viz-steps`,
   `ds-timeline`, `ds-validator`, `pill`, `dot`, `face`, `skel`.
 - **Composed**: `panel`, `ui-row`, `summary-band`, `kpi`, `notice`, `toast`,
   `drawer`, `modal`, `picker`, `palette`, `subnav`, `table`.

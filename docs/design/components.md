@@ -75,7 +75,7 @@ Decision words:
 | 54 | Stack | Existing | `stack`, `inline`, `composer-dock`; vertical rhythm from the spacing scale. |
 | 55 | Stat | Existing | `kpi`, `kpi-row`, `summary-band`, `env-cell`. Label, value, one supporting sentence. |
 | 56 | Status | Existing | `uiDot` (`ok`, `warn`, `bad`, `live`, `off`), `health-dot`, `dot`; always beside a word. |
-| 57 | Steps | Adopt | `ds-steps` for a short ordered process (setup, run stages); not for every list. |
+| 57 | Steps | Adopt | `viz-steps` for a short ordered process (setup, run stages, a ```steps block in a reply); not for every list. |
 | 58 | Swap | Exclude | No icon-swap control; the only theme is dark. |
 | 59 | Tab | Existing | `subnav`/`subtab` for page tabs, `tabs` for secondary sections. |
 | 60 | Table | Existing | `.table`, `.table-wrap`, `.kpi-table`, `.roles-table`, `.mu`; sticky heads and numeric alignment. |

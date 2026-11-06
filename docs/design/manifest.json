@@ -57,13 +57,15 @@
   },
   "agent_output": {
     "format": "markdown",
-    "allowed_blocks": ["heading", "paragraph", "ordered-list", "unordered-list", "table", "fenced-code", "chart", "blockquote", "horizontal-rule"],
+    "allowed_blocks": ["heading", "paragraph", "ordered-list", "unordered-list", "table", "fenced-code", "chart", "metrics", "steps", "timeline", "details", "mermaid", "math", "blockquote", "horizontal-rule"],
     "allowed_inline": ["strong", "emphasis", "inline-code", "link-http-https"],
     "notes": [
       "Every block is sanitised and rendered by the application's md() renderer with the shared classes.",
       "Use a fenced code block with the language name for code; long blocks fold automatically.",
       "Use a Markdown table for structured results; it becomes the shared table with numeric alignment.",
-      "A ```chart fence holds JSON {title, unit, bars:[{label,value,tone}]}. It is validated and drawn as the shared bar chart; at most 12 bars, tone is success, warning or error.",
+      "A ```chart fence holds JSON {title, subtitle?, unit?, bars:[{label, note?, value, color?|tone?}], takeaway?, source?}. It is validated and drawn as the shared bar chart; at most 12 bars.",
+      "```metrics {items:[{label, value, unit?, delta?, detail?, color?}], lower_is_better?}, ```steps {title?, items, current}, ```timeline {items:[{at?, text, detail?, tone?}]} and ```details {title, hint?, body} are drawn the same way; data that does not validate stays a code block.",
+      "A colour is red, orange, yellow, green, teal, blue, violet or pink, or a tone (success, warning, error, info). Give it a meaning and say the same in words.",
       "State a status in words as well as a tag: 'failed', 'passed', 'waiting for you'.",
       "Never produce a raw URL image; attach a file through the upload/reference mechanism instead."
     ],
@@ -106,9 +108,17 @@
       "id": "chart",
       "surface": "conversation",
       "agent": true,
-      "description": "A bar chart from a ```chart JSON block; validated to labels, finite non-negative values, at most 12 bars and an optional success/warning/error tone.",
-      "classes": ["ds-chart", "ds-chart-row", "ds-chart-track", "ds-chart-fill"],
-      "schema": { "title": "string?", "unit": "string?", "max": "number?", "bars": "[{label:string, value:number, tone?:success|warning|error}]" }
+      "description": "A bar chart from a ```chart JSON block: a title, labelled bars with notes, the value in the colour of its bar, and a takeaway. Validated to labels, finite non-negative values and at most 12 bars.",
+      "classes": ["viz", "viz-bars", "viz-bar-row", "viz-bar-fill", "viz-bar-value", "viz-foot"],
+      "schema": { "title": "string?", "subtitle": "string?", "unit": "string?", "max": "number?", "color": "palette?", "bars": "[{label:string, note?:string, value:number, color?:palette, tone?:success|warning|error}]", "takeaway": "string?", "source": "string?" }
+    },
+    {
+      "id": "metrics",
+      "surface": "conversation",
+      "agent": true,
+      "description": "Headline numbers in one strip, each with a label, an optional delta and a detail line.",
+      "classes": ["viz", "viz-metrics", "viz-metric", "viz-delta"],
+      "schema": { "title": "string?", "items": "[{label:string, value:number|string, unit?:string, delta?:string, detail?:string, color?:palette}]", "lower_is_better": "boolean?" }
     },
     {
       "id": "callout",
@@ -160,18 +170,18 @@
     },
     {
       "id": "steps",
-      "surface": "app",
-      "agent": false,
-      "description": "A short ordered process with a current step.",
-      "classes": ["ds-steps", "ds-step"],
+      "surface": "conversation",
+      "agent": true,
+      "description": "A short ordered process with a current step, from a ```steps JSON block.",
+      "classes": ["viz-steps", "viz-step", "viz-step-node"],
       "props": ["steps", "current"]
     },
     {
       "id": "timeline",
       "surface": "app",
-      "agent": false,
-      "description": "Recorded events, newest first.",
-      "classes": ["timeline", "tl-item", "run-event"],
+      "agent": true,
+      "description": "Recorded events in order. In a conversation, from a ```timeline JSON block (viz-tl); in the app, the run feed.",
+      "classes": ["timeline", "tl-item", "run-event", "viz-tl", "viz-tl-item"],
       "props": ["items"]
     },
     {

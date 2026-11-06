@@ -7484,24 +7484,69 @@ var TERM_POLL_MS = 250;
   /* A chart an agent may emit: a JSON object in a ```chart fence.
    * Only labels, numbers and a tone are accepted; the app draws it with the
    * shared classes. Nothing in the data becomes HTML. */
+  /* Colour in a reply means something: a named colour the agent chose, or a tone. The
+     palette is the data palette (--viz-*), bright enough to read on the near-black
+     artifact surface; nothing here is the interface accent. */
+  var VIZ_NAMES = ["red", "orange", "yellow", "green", "teal", "blue", "violet", "pink"];
+  var VIZ_ORDER = ["blue", "teal", "violet", "orange", "pink", "green", "yellow", "red"];
+  var VIZ_TONE = { success: "green", ok: "green", good: "green", warning: "orange", warn: "orange", error: "red", bad: "red", danger: "red", info: "blue", live: "blue", neutral: "", off: "" };
+  function vizColor(item, idx, fallback) {
+    var c = item && String(item.color || item.colour || "").toLowerCase();
+    if (VIZ_NAMES.indexOf(c) >= 0) return c;
+    var t = item && String(item.tone || "").toLowerCase();
+    if (VIZ_TONE[t] !== undefined) return VIZ_TONE[t];
+    return fallback === undefined ? VIZ_ORDER[(idx || 0) % VIZ_ORDER.length] : fallback;
+  }
+  function vizVar(name) { return name ? ' style="--c:var(--viz-' + name + ')"' : ""; }
+  function vizNumber(v) {
+    var n = Number(v);
+    if (!isFinite(n)) return esc(String(v));
+    if (Math.abs(n) >= 100000) return esc(compactCount(n));
+    return esc(n.toLocaleString(undefined, { maximumFractionDigits: Math.abs(n) < 10 ? 2 : 1 }));
+  }
+  /* A unit of one to three characters sits on the number (38.6s, 92%); a longer
+     one is a word after it (12 tests). */
+  function vizUnit(unit) {
+    var u = String(unit || "").slice(0, 16);
+    if (!u) return "";
+    return u.length <= 3 ? '<small class="viz-unit">' + esc(u) + "</small>" : '<small class="viz-unit is-word">' + esc(u) + "</small>";
+  }
+  function vizHead(spec) {
+    var title = spec.title ? String(spec.title).slice(0, 120) : "";
+    var sub = spec.subtitle || spec.description ? String(spec.subtitle || spec.description).slice(0, 200) : "";
+    if (!title && !sub) return "";
+    return '<header class="viz-head">' + (title ? '<div class="viz-title">' + esc(title) + "</div>" : "") + (sub ? '<div class="viz-sub">' + esc(sub) + "</div>" : "") + "</header>";
+  }
+  function vizFoot(spec) {
+    var take = spec.takeaway || spec.summary ? String(spec.takeaway || spec.summary).slice(0, 160) : "";
+    var source = spec.source || spec.note ? String(spec.source || spec.note).slice(0, 200) : "";
+    if (!take && !source) return "";
+    var tc = vizColor({ color: spec.takeaway_color, tone: spec.takeaway_tone }, 0, "green");
+    return '<footer class="viz-foot">' + (take ? '<b class="viz-takeaway"' + vizVar(tc) + ">" + esc(take) + "</b>" : "") +
+      (source ? '<span class="viz-source">' + esc(source) + "</span>" : "") + "</footer>";
+  }
+
   function chartHtml(spec) {
     // `bars` is the contract; `items` (the key the other blocks use) is accepted too, so a
     // near-miss from an agent still draws instead of falling back to raw JSON.
     var bars = (spec.bars || spec.items || []).slice(0, 12).filter(function (b) {
       return b && typeof b.label === "string" && isFinite(Number(b.value)) && Number(b.value) >= 0;
-    }).map(function (b) {
-      return { label: b.label.slice(0, 80), value: Number(b.value), tone: ["success", "warning", "error"].indexOf(b.tone) >= 0 ? b.tone : "" };
     });
     if (!bars.length) return "";
-    var max = Math.max.apply(null, bars.map(function (b) { return b.value; }).concat([Number(spec.max) || 0, 1]));
-    return '<figure class="ds-chart">' +
-      (spec.title ? "<figcaption>" + esc(String(spec.title).slice(0, 120)) + "</figcaption>" : "") +
-      bars.map(function (b, idx) {
-        return '<div class="ds-chart-row"><span class="ds-chart-label" title="' + attr(b.label) + '">' + esc(b.label) + "</span>" +
-          '<span class="ds-chart-track"><span class="ds-chart-fill' + (b.tone ? " tone-" + b.tone : " viz-" + ((idx % 6) + 1)) + '" style="width:' + Math.max(1, Math.round(b.value / max * 100)) + '%"></span></span>' +
-          '<span class="ds-chart-value">' + esc(compactCount(b.value)) + (spec.unit ? " " + esc(String(spec.unit).slice(0, 12)) : "") + "</span></div>";
-      }).join("") +
-      "</figure>";
+    var max = Math.max.apply(null, bars.map(function (b) { return Number(b.value); }).concat([Number(spec.max) || 0]));
+    if (!(max > 0)) max = 1;
+    // One colour for every bar when the agent gave none and the bars are one series of
+    // the same thing; a palette when they are different things. A colour or tone wins.
+    var single = spec.color && VIZ_NAMES.indexOf(String(spec.color)) >= 0 ? String(spec.color) : "";
+    return '<figure class="viz viz-bars">' + vizHead(spec) +
+      '<div class="viz-bar-rows">' + bars.map(function (b, idx) {
+        var c = vizColor(b, idx, single || undefined);
+        var note = b.note || b.detail || b.sub;
+        return '<div class="viz-bar-row" style="--i:' + idx + (c ? ";--c:var(--viz-" + c + ")" : "") + '">' +
+          '<div class="viz-bar-label"><b title="' + attr(b.label) + '">' + esc(b.label.slice(0, 60)) + "</b>" + (note ? "<span>" + esc(String(note).slice(0, 80)) + "</span>" : "") + "</div>" +
+          '<div class="viz-bar-track"><span class="viz-bar-fill" style="width:' + Math.max(1.5, Math.round(Number(b.value) / max * 1000) / 10) + '%"></span></div>' +
+          '<div class="viz-bar-value">' + vizNumber(b.value) + vizUnit(b.unit || spec.unit) + "</div></div>";
+      }).join("") + "</div>" + vizFoot(spec) + "</figure>";
   }
 
   /* More declared blocks an agent may emit. Each is data in, shared markup
@@ -7511,34 +7556,51 @@ var TERM_POLL_MS = 250;
     if (kind === "metrics") {
       var items = (spec.items || []).slice(0, 8).filter(function (i) { return i && typeof i.label === "string"; });
       if (!items.length) return "";
-      return '<div class="kpi-row" aria-label="' + attr(String(spec.title || "Metrics").slice(0, 120)) + '">' + items.map(function (i) {
-        return '<div class="kpi"><div class="kpi-k">' + esc(String(i.label).slice(0, 80)) + '</div><div class="kpi-v">' + esc(String(i.value == null ? "" : i.value).slice(0, 40)) + "</div>" +
-          (i.detail ? '<div class="kpi-s">' + esc(String(i.detail).slice(0, 140)) + "</div>" : "") + "</div>";
-      }).join("") + "</div>";
+      return '<figure class="viz viz-metrics" aria-label="' + attr(String(spec.title || "Metrics").slice(0, 120)) + '">' + vizHead(spec) +
+        '<div class="viz-metric-row">' + items.map(function (i, idx) {
+          var c = vizColor(i, idx, "");
+          var delta = i.delta == null ? "" : String(i.delta).slice(0, 24);
+          var dTone = i.delta_tone ? vizColor({ tone: i.delta_tone }, 0, "") : /^\s*[+\u2191\u25b2]/.test(delta) ? (spec.lower_is_better ? "red" : "green") : /^\s*[-\u2212\u2193\u25bc]/.test(delta) ? (spec.lower_is_better ? "green" : "red") : "";
+          var raw = i.value == null ? "" : i.value;
+          var value = typeof raw === "number" ? vizNumber(raw) : esc(String(raw).slice(0, 40));
+          return '<div class="viz-metric"' + vizVar(c) + '><div class="viz-metric-k">' + esc(String(i.label).slice(0, 80)) + "</div>" +
+            '<div class="viz-metric-v' + (c ? " is-colored" : "") + '">' + value + vizUnit(i.unit) + "</div>" +
+            (delta ? '<div class="viz-delta"' + vizVar(dTone) + ">" + esc(delta) + "</div>" : "") +
+            (i.detail ? '<div class="viz-metric-s">' + esc(String(i.detail).slice(0, 140)) + "</div>" : "") + "</div>";
+        }).join("") + "</div>" + vizFoot(spec) + "</figure>";
     }
     if (kind === "timeline") {
       var events = (spec.items || []).slice(0, 20).filter(function (i) { return i && typeof i.text === "string"; });
       if (!events.length) return "";
-      return '<div class="timeline" aria-label="' + attr(String(spec.title || "Timeline").slice(0, 120)) + '">' + events.map(function (i) {
-        var tone = ["ok", "warn", "bad", "live"].indexOf(i.tone) >= 0 ? i.tone : "off";
-        return '<div class="tl-item">' + uiDot(tone) + '<span class="tl-text">' + esc(String(i.text).slice(0, 300)) + "</span>" +
-          (i.at ? '<span class="tl-when">' + esc(String(i.at).slice(0, 40)) + "</span>" : "") + "</div>";
-      }).join("") + "</div>";
+      return '<figure class="viz viz-timeline" aria-label="' + attr(String(spec.title || "Timeline").slice(0, 120)) + '">' + vizHead(spec) +
+        '<ol class="viz-tl">' + events.map(function (i) {
+          var c = vizColor(i, 0, "grey");
+          return '<li class="viz-tl-item"' + vizVar(c) + ">" +
+            (i.at ? '<span class="viz-tl-when">' + esc(String(i.at).slice(0, 40)) + "</span>" : '<span class="viz-tl-when"></span>') +
+            '<span class="viz-tl-node" aria-hidden="true"></span>' +
+            '<span class="viz-tl-body"><span class="viz-tl-text">' + esc(String(i.text).slice(0, 300)) + "</span>" +
+            (i.detail ? '<span class="viz-tl-detail">' + esc(String(i.detail).slice(0, 300)) + "</span>" : "") + "</span></li>";
+        }).join("") + "</ol>" + vizFoot(spec) + "</figure>";
     }
     if (kind === "details") {
       var title = String(spec.title || "Details").slice(0, 140);
       var text = String(spec.body || "");
       if (!text.trim()) return "";
-      return '<details class="ui-fold"><summary>' + esc(title) + "</summary>" + md(text.slice(0, 20000)) + "</details>";
+      return '<details class="viz-fold"' + vizVar(vizColor(spec, 0, "")) + '><summary><svg class="icon" aria-hidden="true"><use href="#i-chevron-down"></use></svg><span>' + esc(title) + "</span>" +
+        (spec.hint ? '<span class="viz-fold-hint">' + esc(String(spec.hint).slice(0, 60)) + "</span>" : "") + "</summary>" +
+        '<div class="viz-fold-body">' + md(text.slice(0, 20000)) + "</div></details>";
     }
     if (kind === "steps") {
-      var steps = (spec.items || []).slice(0, 8).map(String);
+      var steps = (spec.items || []).slice(0, 8).map(function (x) { return typeof x === "string" ? { text: x } : x && typeof x === "object" ? { text: String(x.text || x.label || ""), detail: x.detail } : { text: String(x) }; });
       if (!steps.length) return "";
       var current = Number(spec.current) || 0;
-      return '<ol class="ds-steps" aria-label="' + attr(String(spec.title || "Steps").slice(0, 120)) + '">' + steps.map(function (s, i) {
-        var cls = i < current ? " is-done" : i === current ? " is-current" : "";
-        return '<li class="ds-step' + cls + '">' + esc(s.slice(0, 120)) + "</li>";
-      }).join("") + "</ol>";
+      return '<figure class="viz viz-steps-box" aria-label="' + attr(String(spec.title || "Steps").slice(0, 120)) + '">' + vizHead(spec) +
+        '<ol class="viz-steps">' + steps.map(function (st, i) {
+          var cls = i < current ? " is-done" : i === current ? " is-current" : "";
+          return '<li class="viz-step' + cls + '"' + (i === current ? ' aria-current="step"' : "") + '><span class="viz-step-node">' +
+            (i < current ? '<svg class="icon" aria-hidden="true"><use href="#i-check"></use></svg>' : String(i + 1)) + "</span>" +
+            '<span class="viz-step-text">' + esc(st.text.slice(0, 120)) + (st.detail ? "<small>" + esc(String(st.detail).slice(0, 120)) + "</small>" : "") + "</span></li>";
+        }).join("") + "</ol>" + vizFoot(spec) + "</figure>";
     }
     return "";
   }
@@ -7581,9 +7643,10 @@ var TERM_POLL_MS = 250;
         var longCode = body.length > 18;
         // A long block shows its first lines and expands in place; the toggle is a <details>,
         // so a conversation patched under the reader keeps it open.
-        out.push('<div class="md-code' + (longCode ? " is-long" : "") + '"><div class="md-code-head"><span>' + esc(lang || "text") + (longCode ? ' <span class="dim">' + body.length + " lines</span>" : "") + "</span>" +
+        var langKey = String(lang || "text").toLowerCase();
+        out.push('<div class="md-code' + (longCode ? " is-long" : "") + '" data-lang="' + attr(CODE_LANG_GROUP[langKey] || "other") + '"><div class="md-code-head"><span class="md-code-lang"><i aria-hidden="true"></i>' + esc(CODE_LANG_NAME[langKey] || lang || "text") + (longCode ? ' <span class="dim">' + body.length + " lines</span>" : "") + "</span>" +
           (longCode ? '<details class="md-code-more"><summary>Expand</summary></details>' : "") +
-          '<button type="button" class="md-copy" data-action="copy-code">Copy</button></div><pre class="code"><code>' + highlightCode(lang, body.join("\n")) + "</code></pre></div>");
+          '<button type="button" class="md-copy" data-action="copy-code" aria-label="Copy the code"><svg class="icon" aria-hidden="true"><use href="#i-copy"></use></svg><span>Copy</span></button></div><pre class="code"><code>' + highlightCode(lang, body.join("\n")) + "</code></pre></div>");
         continue;
       }
       if ((m = MD_HEAD.exec(line))) { out.push('<h' + m[1].length + ' class="md-h">' + mdInline(m[2]) + "</h" + m[1].length + ">"); i++; continue; }
@@ -7601,7 +7664,12 @@ var TERM_POLL_MS = 250;
         i += 2;
         var rows = [];
         while (i < lines.length && lines[i].trim() !== "" && lines[i].indexOf("|") >= 0) { rows.push(mdCells(lines[i])); i++; }
-        var cell = function (tag, c, k) { return "<" + tag + (aligns[k] ? ' style="text-align:' + aligns[k] + '"' : "") + ">" + mdInline(c) + "</" + tag + ">"; };
+        // A column of numbers lines up on the right, the way a reader compares them.
+        var numeric = head.map(function (_, k) {
+          var vals = rows.map(function (r) { return String(r[k] || "").trim(); }).filter(Boolean);
+          return !aligns[k] && vals.length > 0 && vals.every(function (v) { return /^[-+\u2212]?[$\u20ac\u00a3]?[0-9][0-9.,_]*\s?(%|ms|s|m|h|kb|mb|gb|x|\u00d7|k|M)?$/i.test(v.replace(/\*\*/g, "")); });
+        });
+        var cell = function (tag, c, k) { return "<" + tag + (aligns[k] ? ' style="text-align:' + aligns[k] + '"' : "") + (numeric[k] ? ' class="num"' : "") + ">" + mdInline(c) + "</" + tag + ">"; };
         out.push('<div class="md-table"><table><thead><tr>' + head.map(function (c, k) { return cell("th", c, k); }).join("") + "</tr></thead><tbody>" +
           rows.map(function (r) { return "<tr>" + head.map(function (_, k) { return cell("td", r[k] || "", k); }).join("") + "</tr>"; }).join("") + "</tbody></table></div>");
         continue;
@@ -7631,8 +7699,24 @@ var TERM_POLL_MS = 250;
   var HL_SQL = "select from where join left right inner outer on group by order having insert into values update set delete create table alter drop index and or not null as limit offset distinct".split(" ");
   var HL_KW = {};
   HL_KEYWORDS.forEach(function (k) { HL_KW[k] = true; });
+  /* The language label on a code block: its proper name, and a colour family for the dot. */
+  var CODE_LANG_NAME = { js: "JavaScript", javascript: "JavaScript", ts: "TypeScript", typescript: "TypeScript", tsx: "TSX", jsx: "JSX", php: "PHP", rs: "Rust", rust: "Rust",
+    py: "Python", python: "Python", sh: "Shell", bash: "Bash", shell: "Shell", zsh: "Shell", ps1: "PowerShell", powershell: "PowerShell", sql: "SQL", json: "JSON",
+    yaml: "YAML", yml: "YAML", toml: "TOML", html: "HTML", css: "CSS", go: "Go", rb: "Ruby", ruby: "Ruby", diff: "Diff", patch: "Diff", md: "Markdown", markdown: "Markdown",
+    dockerfile: "Dockerfile", ini: "INI", conf: "Config", nginx: "nginx", java: "Java", kotlin: "Kotlin", swift: "Swift", c: "C", cpp: "C++", cs: "C#", vue: "Vue", blade: "Blade" };
+  var CODE_LANG_GROUP = { js: "yellow", javascript: "yellow", jsx: "yellow", ts: "blue", typescript: "blue", tsx: "blue", php: "violet", blade: "red", rs: "orange", rust: "orange",
+    py: "blue", python: "blue", sh: "green", bash: "green", shell: "green", zsh: "green", ps1: "blue", powershell: "blue", sql: "teal", json: "yellow", yaml: "pink", yml: "pink",
+    toml: "pink", html: "orange", css: "violet", go: "teal", rb: "red", ruby: "red", diff: "green", patch: "green", vue: "green", java: "orange", kotlin: "violet", swift: "orange",
+    c: "blue", cpp: "blue", cs: "violet", dockerfile: "blue", nginx: "green" };
   function highlightCode(lang, code) {
     var l = String(lang || "").toLowerCase();
+    if (l === "diff" || l === "patch") {
+      return code.split("\n").map(function (line) {
+        var c = line.charAt(0);
+        var cls = /^(\+\+\+|---) /.test(line) ? "tk-file" : c === "+" ? "tk-add" : c === "-" ? "tk-del" : c === "@" ? "tk-hunk" : "";
+        return cls ? '<span class="' + cls + '">' + esc(line) + "</span>" : esc(line);
+      }).join("\n");
+    }
     if (code.length > 60000 || l === "text" || l === "txt" || l === "plain" || l === "log" || l === "output") return esc(code);
     var sql = l === "sql";
     var hashComments = /^(py|python|sh|bash|shell|zsh|ps1|powershell|yaml|yml|toml|rb|ruby|r|conf|ini|dockerfile|make|makefile)$/.test(l);
@@ -7766,7 +7850,8 @@ var TERM_POLL_MS = 250;
   }
 
   function runCanRetry(state) {
-    return ["failed", "unverified", "paused", "blocked", "review", "completed", "cancelled"].indexOf(state) !== -1;
+    // A finished run has nothing to continue; the composer is the way to ask for more.
+    return ["failed", "unverified", "paused", "blocked", "review", "cancelled"].indexOf(state) !== -1;
   }
 
   function runCanCancel(state) {
@@ -9978,26 +10063,51 @@ var TERM_POLL_MS = 250;
     if (!s && t.team && (t.team.task_state === "unverified" || t.team.task_state === "failed" || t.team.task_state === "blocked")) s = "bad";
     return s;
   }
+  /* Where a conversation stands, in a word, for the second line of its row. */
+  function threadStanding(t, kids) {
+    var bits = [];
+    var running = t.state === "running" || (kids || []).some(function (k) { return k.state === "running"; });
+    if (t.state === "waiting_approval" || (kids || []).some(function (k) { return k.state === "waiting_approval"; })) bits.push('<span class="stand stand-wait">Waiting for you</span>');
+    else if (running) bits.push('<span class="stand stand-run">Working</span>');
+    else if (t.state === "error") bits.push('<span class="stand stand-bad">Stopped</span>');
+    else if (t.settled_at) bits.push('<span class="stand stand-ok">Settled</span>');
+    if (t.pr_url) bits.push('<span class="stand">' + esc(prLabel(t.pr_url).replace(/^.*#/, "PR #")) + "</span>");
+    if (t.resume_at) bits.push('<span class="stand">resumes later</span>');
+    return bits.join('<span class="stand-sep" aria-hidden="true">\u00b7</span>');
+  }
+
+  /* One row. A request has two lines: its title, then where it stands and when. A
+     specialist under it is one line: its face (the role) and its task. */
   function threadRowHtml(t, child) {
     var active = AI.thread && AI.thread.id === t.id;
     var st = threadState(t);
     var title = t.title || "Conversation";
-    var label;
-    // A specialist's conversation whose run was deleted still says who it was.
-    var named = !t.team && /^([A-Za-z]+) · (.+)$/.exec(title);
+    var named = !t.team && /^([A-Za-z]+) \u00b7 (.+)$/.exec(title);
     var namedRole = named && ROLE_FACE[named[1].toLowerCase()] ? named[1].toLowerCase() : "";
+    var del = '<button type="button" class="thread-del" data-action="chat-delete" data-id="' + attr(t.id) + '" title="Delete this conversation" aria-label="Delete this conversation"><svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg></button>';
     if ((child && t.team) || namedRole) {
-      var r0 = t.team ? t.team.role : namedRole;
-      var f = roleFace(r0);
-      label = faceHtml(r0, "xs") + '<span class="thread-role">' + esc(f.name) + '</span><span class="grow nowrap thread-task">' + esc((t.team && t.team.task) || title.replace(/^[^·]+· /, "")) + "</span>";
-    } else {
-      label = (t.settled_at ? '<svg class="icon thread-settled" aria-label="Settled"><use href="#i-check"></use></svg>' : '<span class="thread-state' + (st ? " is-" + st : "") + '" aria-hidden="true"></span>') +
-        '<span class="grow nowrap">' + esc(title) + "</span>" + (t.pr_url ? '<span class="thread-pr">' + esc(prLabel(t.pr_url).replace(/^.*#/, "#")) + "</span>" : "");
+      var role = t.team ? t.team.role : namedRole;
+      var f = roleFace(role);
+      var task = (t.team && t.team.task) || title.replace(/^[^\u00b7]+\u00b7 /, "");
+      return '<div class="thread-row thread-child' + (t.settled_at ? " is-settled" : "") + '" data-key="r' + attr(t.id) + '">' +
+        '<button type="button" class="thread' + (active ? " active" : "") + (st ? " is-" + st : "") + '" data-action="open-thread" data-id="' + attr(t.id) + '"' + (active ? ' aria-current="true"' : "") + ' title="' + attr(f.name + ": " + task) + '">' +
+        faceHtml(role, "xs") + '<span class="grow nowrap thread-task"><b>' + esc(f.name) + "</b> " + esc(task) + "</span>" +
+        (st === "run" ? '<span class="thread-state is-run" aria-label="working"></span>' : st ? '<span class="thread-state is-' + st + '"></span>' : "") +
+        "</button>" + del + "</div>";
     }
-    return '<div class="thread-row' + (child ? " thread-child" : "") + (t.settled_at ? " is-settled" : "") + '" data-key="r' + attr(t.id) + '">' +
-      '<button type="button" class="thread' + (active ? " active" : "") + (st ? " is-" + st : "") + '" data-action="open-thread" data-id="' + attr(t.id) + '"' + (active ? ' aria-current="true"' : "") + ' title="' + attr(title) + '">' +
-      label + '<span class="thread-time">' + esc(ago(t.updated_at)) + "</span></button>" +
-      '<button type="button" class="thread-del" data-action="chat-delete" data-id="' + attr(t.id) + '" title="Delete this conversation" aria-label="Delete this conversation"><svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg></button></div>';
+    var kids = t._kids || [];
+    var standing = threadStanding(t, kids);
+    var faces = kids.length ? '<span class="kid-faces" aria-hidden="true">' + kids.slice(0, 4).map(function (k) { return faceHtml(k.team ? k.team.role : "team", "xs"); }).join("") + "</span>" : "";
+    var open = t._open;
+    return '<div class="thread-row thread-top' + (t.settled_at ? " is-settled" : "") + (kids.length ? " has-kids" : "") + '" data-key="r' + attr(t.id) + '">' +
+      '<button type="button" class="thread thread-2' + (active ? " active" : "") + (st ? " is-" + st : "") + '" data-action="open-thread" data-id="' + attr(t.id) + '"' + (active ? ' aria-current="true"' : "") + ' title="' + attr(title) + '">' +
+      '<span class="thread-line1">' + (t.settled_at ? '<svg class="icon thread-settled" aria-label="Settled"><use href="#i-check"></use></svg>' : '<span class="thread-state' + (st ? " is-" + st : "") + '" aria-hidden="true"></span>') +
+        '<span class="grow nowrap thread-title">' + esc(title) + "</span></span>" +
+      '<span class="thread-line2">' + faces + (kids.length ? '<span class="stand">' + kids.length + (kids.length === 1 ? " specialist" : " specialists") + "</span>" + (standing ? '<span class="stand-sep" aria-hidden="true">\u00b7</span>' : "") : "") + standing +
+        (standing || faces ? '<span class="grow"></span>' : "") + '<span class="thread-time">' + esc(ago(t._at || t.updated_at)) + "</span></span>" +
+      "</button>" +
+      (kids.length ? '<button type="button" class="thread-kids" data-action="thread-kids" data-id="' + attr(t.id) + '" aria-expanded="' + (open ? "true" : "false") + '" title="' + (open ? "Hide the specialists" : "Show the specialists") + '" aria-label="' + (open ? "Hide" : "Show") + ' the specialists"><svg class="icon" aria-hidden="true"><use href="#i-chevron-down"></use></svg></button>' : "") +
+      del + "</div>";
   }
   function threadListHtml() {
     var all = AI.threads || [];
@@ -10005,7 +10115,7 @@ var TERM_POLL_MS = 250;
     var byId = {};
     all.forEach(function (t) { byId[t.id] = t; });
     // Specialists under the conversation that asked; a run with no conversation of its own
-    // (started from the CLI or a schedule) gets its own line, named for the run.
+    // (started by an automation, the CLI or a schedule) gets its own line, named for the run.
     var kids = {}, orphanRuns = {}, tops = [];
     all.forEach(function (t) {
       var parent = t.team && t.team.parent;
@@ -10016,30 +10126,50 @@ var TERM_POLL_MS = 250;
     Object.keys(orphanRuns).forEach(function (k) {
       var g = orphanRuns[k];
       var latest = g.items.reduce(function (a, b) { return a.updated_at > b.updated_at ? a : b; });
-      tops.push({ id: "run:" + k, title: g.run.run_title || "Team run", project: g.project, updated_at: latest.updated_at, state: "", runGroup: g.items });
+      tops.push({ id: "run:" + k, title: g.run.run_title || "Team run", project: g.project, updated_at: latest.updated_at, state: "", runGroup: g.items, runId: k });
     });
     var groups = {}, order = [];
+    AI.kidsOpen = AI.kidsOpen || {};
     tops.forEach(function (t) {
       var key = t.project || "";
       if (!groups[key]) { groups[key] = { path: key, items: [], at: "" }; order.push(key); }
       groups[key].items.push(t);
+      var children = (kids[t.id] || t.runGroup || []).slice().sort(function (a, b) { return a.created_at < b.created_at ? -1 : 1; });
+      t._kids = children;
       var at = t.updated_at;
-      (kids[t.id] || t.runGroup || []).forEach(function (k) { if (k.updated_at > at) at = k.updated_at; });
-      if (at > groups[key].at) groups[key].at = at;
+      children.forEach(function (k) { if (k.updated_at > at) at = k.updated_at; });
       t._at = at;
+      // The specialists show while the team is at work or one of them is open; otherwise
+      // they fold into the request's row, and a click opens them.
+      var live = children.some(function (k) { return k.state === "running" || k.state === "waiting_approval"; });
+      var here = AI.thread && children.some(function (k) { return k.id === AI.thread.id; });
+      t._open = AI.kidsOpen[t.id] !== undefined ? AI.kidsOpen[t.id] : (live || here);
+      if (here) t._open = true;
+      if (at > groups[key].at) groups[key].at = at;
     });
     order.sort(function (a, b) { return groups[a].at < groups[b].at ? 1 : -1; });
     AI.groupClosed = AI.groupClosed || {};
     return order.map(function (key) {
       var g = groups[key];
-      g.items.sort(function (a, b) { return a._at < b._at ? 1 : -1; });
+      g.items.sort(function (a, b) {
+        // Open work first, then by when it last moved; settled conversations sink.
+        if (!!a.settled_at !== !!b.settled_at) return a.settled_at ? 1 : -1;
+        return a._at < b._at ? 1 : -1;
+      });
       var closed = !!AI.groupClosed[key];
       var rows = g.items.map(function (t) {
-        var children = (kids[t.id] || t.runGroup || []).slice().sort(function (a, b) { return a.created_at < b.created_at ? -1 : 1; });
-        var head = t.runGroup
-          ? '<div class="thread-row thread-run" data-key="r' + attr(t.id) + '"><div class="thread thread-static">' + faceHtml("team", "xs") + '<span class="grow nowrap">' + esc(t.title) + '</span><span class="thread-time">' + esc(ago(t._at)) + "</span></div></div>"
-          : threadRowHtml(t, false);
-        return head + children.map(function (c) { return threadRowHtml(c, true); }).join("");
+        var head;
+        if (t.runGroup) {
+          var standing = threadStanding(t, t._kids);
+          head = '<div class="thread-row thread-top thread-run has-kids" data-key="r' + attr(t.id) + '">' +
+            '<button type="button" class="thread thread-2" data-action="team-open-from" data-id="' + attr(t.runId) + '" title="' + attr(t.title) + '">' +
+            '<span class="thread-line1">' + faceHtml("team", "xs") + '<span class="grow nowrap thread-title">' + esc(t.title) + "</span></span>" +
+            '<span class="thread-line2"><span class="stand">Team run</span><span class="stand-sep" aria-hidden="true">\u00b7</span><span class="stand">' + t._kids.length + (t._kids.length === 1 ? " specialist" : " specialists") + "</span>" + (standing ? '<span class="stand-sep" aria-hidden="true">\u00b7</span>' + standing : "") + '<span class="grow"></span><span class="thread-time">' + esc(ago(t._at)) + "</span></span></button>" +
+            '<button type="button" class="thread-kids" data-action="thread-kids" data-id="' + attr(t.id) + '" aria-expanded="' + (t._open ? "true" : "false") + '" aria-label="' + (t._open ? "Hide" : "Show") + ' the specialists"><svg class="icon" aria-hidden="true"><use href="#i-chevron-down"></use></svg></button></div>';
+        } else {
+          head = threadRowHtml(t, false);
+        }
+        return head + (t._open ? '<div class="thread-kids-list">' + t._kids.map(function (c) { return threadRowHtml(c, true); }).join("") + "</div>" : "");
       }).join("");
       return '<div class="thread-group' + (closed ? " is-closed" : "") + '" data-key="p' + attr(key || "none") + '">' +
         '<button type="button" class="thread-group-head" data-action="thread-group" data-id="' + attr(key) + '" aria-expanded="' + (closed ? "false" : "true") + '">' +
@@ -13311,6 +13441,12 @@ var TERM_POLL_MS = 250;
         });
       });
     },
+    "thread-kids": function (n) {
+      AI.kidsOpen = AI.kidsOpen || {};
+      var open = n.getAttribute("aria-expanded") === "true";
+      AI.kidsOpen[n.dataset.id] = !open;
+      paintThreads();
+    },
     "thread-group": function (n) {
       AI.groupClosed = AI.groupClosed || {};
       var key = n.dataset.id || "";
@@ -13772,7 +13908,8 @@ var TERM_POLL_MS = 250;
     "copy-code": function (n) {
       var pre = n.closest(".md-code").querySelector("pre");
       var text = pre ? pre.textContent : "";
-      var done = function () { n.textContent = "Copied"; setTimeout(function () { n.textContent = "Copy"; }, 1400); };
+      var label = n.querySelector("span") || n;
+      var done = function () { label.textContent = "Copied"; n.classList.add("is-copied"); setTimeout(function () { label.textContent = "Copy"; n.classList.remove("is-copied"); }, 1400); };
       if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, done);
       else { var t = document.createElement("textarea"); t.value = text; document.body.appendChild(t); t.select(); try { document.execCommand("copy"); } catch (e) { /* nothing to do */ } t.remove(); done(); }
     },

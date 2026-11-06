@@ -435,12 +435,24 @@ fn every_custom_property_the_stylesheet_uses_is_defined() {
     // silently falls back to its initial value. That is how a brand mark ends
     // up filling a whole card, and nothing complains.
     let mut defined: Vec<String> = Vec::new();
-    for line in CSS.lines() {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("--") {
-            if let Some((name, _)) = rest.split_once(':') {
-                defined.push(name.trim().to_string());
-            }
+    // A definition is `--name:` at the start of a declaration, wherever it sits on its
+    // line (several tokens often share one line, and a rule may set one inline).
+    let bytes = CSS.as_bytes();
+    let mut at = 0;
+    while let Some(off) = CSS[at..].find("--") {
+        let start = at + off;
+        at = start + 2;
+        let before = CSS[..start].trim_end().chars().last();
+        if !matches!(before, None | Some('{') | Some(';') | Some('}') | Some('/')) {
+            continue;
+        }
+        let name: String = CSS[start + 2..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
+            .collect();
+        let after = start + 2 + name.len();
+        if !name.is_empty() && bytes.get(after) == Some(&b':') {
+            defined.push(name);
         }
     }
     let mut used: Vec<String> = Vec::new();
@@ -671,7 +683,7 @@ fn normal_message_sending_does_not_toast() {
     // The conversation's own running state is the acknowledgement. The
     // capability's message is still available to a CLI caller, but the window
     // does not turn every submission into a toast.
-    assert!(APP.contains("run(\"chat.send\", args, { quiet: true })"));
+    assert!(APP.contains("run(\"chat.send\", args, { quiet: true, rethrow: true })"), "a send is quiet; a failure reaches the outbox instead of a toast");
 }
 
 #[test]
@@ -1295,9 +1307,10 @@ fn an_agent_chart_is_declared_and_drawn_by_the_shared_renderer() {
     // and a tone. The renderer chooses the markup and the classes.
     assert!(APP.contains("if (lang === \"chart\")"), "the fenced chart block is recognised");
     assert!(APP.contains("function chartHtml(spec)"), "charts have one renderer");
-    assert!(APP.contains("Math.max(1, Math.round(b.value / max * 100))"), "bar width is computed from the value");
+    assert!(APP.contains("Math.round(Number(b.value) / max * 1000) / 10"), "bar width is computed from the value");
+    assert!(APP.contains("VIZ_NAMES.indexOf(c) >= 0"), "a bar colour is one of the named palette colours, never free text");
     assert!(!APP.contains("spec.html") && !APP.contains("spec.innerHTML"), "chart data never carries markup");
-    assert!(CSS.contains(".ds-chart-row") && CSS.contains(".ds-chart-fill"));
+    assert!(CSS.contains(".viz-bar-row") && CSS.contains(".viz-bar-fill"));
     let manifest = include_str!("../../../docs/design/manifest.json");
     assert!(manifest.contains("\"chart\""), "the agent contract declares the chart block");
 }

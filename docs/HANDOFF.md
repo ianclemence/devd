@@ -103,19 +103,38 @@ GitHub-shaped hook call; `ONLY=hooks` runs only the hook part), `livecheck.mjs`,
   conversations); `chat.result` returns one step's full output when a step is opened. Idle server:
   about 1% of one core, 32 MB (debug build).
 
+- Conversation list (done, checked at 1440/1280/1024/390 with real data): two lines per request
+  (full-width title; then specialists' faces and count, Working / Waiting for you / Stopped /
+  Settled, PR number, then the time); specialists fold under their request (open while the team
+  works or one of them is open; the chevron toggles, kept in `AI.kidsOpen`); runs started by an
+  automation or the CLI get their own "Team run" line; settled conversations sink in their group.
+  Phone tab bar lost a stray "panel" tick (`rail-icon::after`).
+- Reply visuals (owner: "like T3 Code's chart", "not just the charts"): `chart`, `metrics`, `steps`,
+  `timeline` and `details` blocks are drawn on a near-black artifact surface (`.viz`, container
+  queries for narrow widths) in a named palette (`--viz-red..pink`): chart = title, label + note,
+  thick bars that grow in, the value in the colour of its bar with a small unit, a coloured
+  takeaway and a source line; metrics = one strip of large coloured numbers with delta pills;
+  steps = numbered nodes, green checks, the current one glowing; timeline = time, glowing node,
+  event; details = coloured-edge fold. Code blocks: language name + colour dot, icon copy button,
+  diffs in green/red rows; numeric table columns align right. The assistant prompt (`chat.rs`,
+  "Showing data"), the `interface-contract` skill and `docs/design/manifest.json` teach the
+  formats; verified with the real model (it used all of them unasked). **No component page**: the
+  owner does not want one ("components are to be applied, not displayed").
+- Header "Continue" no longer shows on a run that completed.
+- `ui_contract`: the custom-property test now reads every definition on a line; the send test
+  expects `{ quiet: true, rethrow: true }`. 74 pass; devd-agent lib 165 pass.
+
 ## What to do next, in order
 
-1. **Conversation list polish** (owner asked): grouping by project, specialists nested under their
-   request, settled, PR and state marks, no breakage at any width; check it with real data.
-2. **Layout revamp of every screen, Home first** (owner asked: rethink hierarchy, density and
+1. **Layout revamp of every screen, Home first** (owner asked: rethink hierarchy, density and
    placement; no generic dashboards, no unnecessary cards, a distinct product identity). Screenshot
    each screen at 5 widths first, decide per screen, implement, re-shoot, compare.
-3. **Use the component system in the screens, and add an in-app showcase** built from the
-   production components (owner: "use our own components to build the pages").
-4. **Language and copy review** of the whole app and its docs: clear, consistent, natural.
-5. Full verification: `audit.mjs` at 5 widths (look at every shot), the e2e scripts, the workspace
+2. **Use the component system in the screens** (owner: "use our own components to build the
+   pages"). Do NOT add a showcase page.
+3. **Language and copy review** of the whole app and its docs: clear, consistent, natural.
+4. Full verification: `audit.mjs` at 5 widths (look at every shot), the e2e scripts, the workspace
    tests, and the browser pane.
-6. Delete this file; commit; push; tag `v0.25.0` (already 0.25.0 in Cargo.toml and tauri.conf.json;
+5. Delete this file; commit; push; tag `v0.25.0` (already 0.25.0 in Cargo.toml and tauri.conf.json;
    extend the CHANGELOG entry); `scripts/release-windows.ps1 -SkipTests` after the suite passed;
    `gh release create v0.25.0 --notes-file <notes> <the new dist files> dist/SHA256SUMS.txt`
    (unsigned); update `D:\devd` and `%LOCALAPPDATA%\Programs\devd` (rename old exes to
