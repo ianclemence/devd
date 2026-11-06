@@ -16,6 +16,44 @@ Nothing yet.
 
 ---
 
+## [0.24.0] - 2026-11-06 - Calmer pages, real uploads, mail that knows its site
+
+### Added
+
+- **Preview loop.** A one-file helper (`devd-inspector.js`, written by
+  `site.preview_helper_install`) lets a site's Preview tab show the page's console
+  errors and failed requests, pick an element, and send the page address, the element
+  and the errors you leave ticked to an agent. It does nothing outside the preview
+  frame or on a non-local address, and devd never edits the layout: it reports the one
+  line to add (`site.preview_helper` reads the state).
+- **Mail tied to its site.** Each message names the site it came from when that can be
+  told, and how it is known: an `X-Devd-Site` header (proof), a tag, a sender on the
+  site's hostname, or a link back to it. The Mail screen filters by site, every site
+  has a Mail tab, and `devd mail list --site` / `mail.inbox` take a site.
+- **Pictures reach a model that can see.** Attached pictures go to Anthropic,
+  OpenAI-compatible and Gemini models as images, not only as a path; only files in the
+  uploads folder whose bytes really are a picture, the three most recent.
+- **Attachments.** Real thumbnails, paste a screenshot, a drop zone, per-file upload
+  and retry states, files kept per composer, drafts that survive a reload, and files
+  shown in the conversation they were sent in. Uploads are checked by their own bytes
+  (programs and fake pictures are refused), kept 30 days, and read back by name with
+  the token.
+
+### Fixed
+
+- **Open sections stay open** when a page redraws, and a page is not redrawn under a
+  field that holds unsaved input.
+- **Home refreshes** while its composer has focus, and repaints when what needs
+  attention changes.
+- **Boot.** A needed service with no process yet is "Starting" for the first 90 seconds
+  after devd opens, not an error card.
+- **Run templates** can be chosen: the new-run form was redrawn every 1.2 s.
+- **Tables.** One style for every data table; the Actions head is a real table cell;
+  heads are centred between their lines; numbers right-align.
+- **Buttons in a row** are spaced wherever they appear, not only inside a sheet.
+
+---
+
 ## [0.23.1] - 2026-11-05 - Table heads stay on one line
 
 ### Fixed
