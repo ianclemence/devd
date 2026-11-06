@@ -355,7 +355,7 @@ fn server_and_site_tabs_match_the_agreed_information_architecture() {
         vec![
             "overview", "Overview", "env", "Environment", "deploy", "Deploy", "cron", "Cron",
             "queue", "Queue", "logs", "Logs", "laravel", "Laravel", "redirects", "Redirects",
-            "nginx", "Web server", "db", "Database", "preview", "Preview"
+            "nginx", "Web server", "db", "Database", "mail", "Mail", "preview", "Preview"
         ]
     );
     assert!(APP.contains("data-action=\"open-site\" data-name="), "the Sites list needs a Manage action");
@@ -1206,4 +1206,37 @@ fn a_table_head_sits_centred_between_its_lines() {
     let at = CSS.find(".table th, .mu th, .drift-table th {").expect("the shared head rule");
     let body = &CSS[at..at + 120];
     assert!(body.contains("padding: 10px var(--s4) 10px 0;"), "the head has the same space above and below: {body}");
+}
+
+#[test]
+fn an_open_section_stays_as_the_person_left_it_when_the_page_is_redrawn() {
+    // A timer redraws a page, and a section the person had opened used to snap shut.
+    assert!(APP.contains("var FOLDS = {};") && APP.contains("function restoreFolds()"));
+    assert!(APP.contains("restoreFolds(); }).observe(mainNode"), "restored after every redraw of the page");
+    assert!(APP.contains("FOLDS[foldKey(details)] = !details.open;"), "only a click on the heading is a decision");
+}
+
+#[test]
+fn a_timer_never_redraws_a_page_under_a_field_that_holds_unsaved_input() {
+    let start = APP.find("function liveIsEditing()").expect("liveIsEditing is gone");
+    let body = &APP[start..start + 900];
+    assert!(body.contains("liveIsDirty()"), "an unsaved field holds the page still");
+    // The composer is kept in the page's state, so it must not stop Home from refreshing.
+    assert!(APP.contains("f.closest(\".composer\")"), "the composer is not a reason to skip a refresh");
+    assert!(APP.contains("load().then(function () { if (state.view === view) repaintKeepingFocus(); })"));
+}
+
+#[test]
+fn the_previews_helper_is_only_believed_when_it_comes_from_the_preview_frame() {
+    assert!(APP.contains("event.source !== f.contentWindow"), "a message from anywhere else is ignored");
+    assert!(APP.contains("(The element and error details above came from the page itself."), "page text is handed on as data");
+    // The panel is filled in place: replacing it with the page would reload the frame.
+    assert!(APP.contains("'<div id=\"pv-slot\"></div>'"));
+}
+
+#[test]
+fn uploads_come_back_by_name_through_the_token_and_expire() {
+    assert!(APP.contains("/api/upload/\" + encodeURIComponent(id)"));
+    assert!(APP.contains("Authorization: \"Bearer \" + TOKEN"));
+    assert!(APP.contains("msg-file-open"), "a conversation shows the files a message carried");
 }

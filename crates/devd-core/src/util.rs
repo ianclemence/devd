@@ -494,6 +494,19 @@ pub fn truncate(s: &str, max: usize) -> String {
     format!("{}... [truncated {} bytes]", &s[..end], s.len() - end)
 }
 
+static PROCESS_START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+/// Record that this devd process has just started. Called first thing by each program.
+pub fn note_process_start() {
+    let _ = PROCESS_START.set(std::time::Instant::now());
+}
+
+/// How long this devd process has been running. A process that never said when it
+/// started counts as old, so a real problem is never excused as "still starting".
+pub fn process_age() -> std::time::Duration {
+    PROCESS_START.get().map(|t| t.elapsed()).unwrap_or(std::time::Duration::from_secs(3600))
+}
+
 /// Current UTC timestamp, RFC 3339.
 pub fn now() -> String {
     chrono::Utc::now().to_rfc3339()

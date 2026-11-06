@@ -1174,12 +1174,33 @@ pub async fn upload(
         .and_then(|v| v.to_str().ok())
         .map(safe_file_name)
         .unwrap_or_else(|| "upload".to_string());
-    let extension = std::path::Path::new(&name)
+    let mut extension = std::path::Path::new(&name)
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase())
         .unwrap_or_default();
-    let stored = format!("{}.{}", upload_id(), extension);
+
+    // What the file is is decided by its first bytes, not by its name. A program is not
+    // something to hand to an assistant, and a "picture" that is not one is refused
+    // rather than stored under a name that says otherwise.
+    if is_program(&body) {
+        return refuse(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "upload_program",
+            "program files cannot be attached. Attach the source, or a description of what it does",
+        );
+    }
+    let picture = picture_type(&body);
+    if let Some((_, right)) = picture {
+        extension = right.to_string();
+    } else if matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp") {
+        return refuse(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "upload_not_a_picture",
+            "this file is named like a picture but is not one",
+        );
+    }
+    let stored = if extension.is_empty() { upload_id() } else { format!("{}.{}", upload_id(), extension) };
 
     let dir = state.ctx.paths.root().join("uploads");
     if let Err(e) = std::fs::create_dir_all(&dir) {
@@ -1189,6 +1210,7 @@ pub async fn upload(
             &format!("the upload directory could not be created: {e}"),
         );
     }
+    prune_uploads(&dir, UPLOAD_KEEP_DAYS);
     let path = dir.join(&stored);
     if let Err(e) = std::fs::write(&path, &body) {
         return refuse(
@@ -1202,8 +1224,82 @@ pub async fn upload(
         "path": path.display().to_string(),
         "name": name,
         "bytes": body.len(),
+        "id": stored,
+        "mime": picture.map(|(mime, _)| mime),
     }))
     .into_response()
+}
+
+/// How long an upload is kept. Files a conversation still names keep working for this long;
+/// after it the file is gone and the conversation still reads fine, because it only ever
+/// held the path.
+const UPLOAD_KEEP_DAYS: u64 = 30;
+
+/// Remove uploads older than `days`. Called when a new one arrives, so a folder nobody adds
+/// to is not touched and there is no timer to run.
+fn prune_uploads(dir: &std::path::Path, days: u64) {
+    let Some(cutoff) = std::time::SystemTime::now().checked_sub(std::time::Duration::from_secs(days * 86_400)) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let old = entry.metadata().ok().filter(|m| m.is_file()).and_then(|m| m.modified().ok()).is_some_and(|t| t < cutoff);
+        if old {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// A program (Windows, Linux or macOS) by its first bytes.
+fn is_program(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"MZ")
+        || bytes.starts_with(b"\x7fELF")
+        || bytes.starts_with(&[0xCF, 0xFA, 0xED, 0xFE])
+        || bytes.starts_with(&[0xCA, 0xFE, 0xBA, 0xBE])
+}
+
+/// A raster picture by its first bytes: its type and the extension that belongs to it.
+fn picture_type(bytes: &[u8]) -> Option<(&'static str, &'static str)> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some(("image/png", "png"))
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some(("image/jpeg", "jpg"))
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some(("image/gif", "gif"))
+    } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some(("image/webp", "webp"))
+    } else {
+        None
+    }
+}
+
+/// `GET /api/upload/:id` - read back a file the page uploaded.
+///
+/// A picture comes back as a picture, so a thumbnail survives a reload and a conversation
+/// can show what it was sent. Anything else is a download, never something the browser
+/// renders, and nothing is ever sniffed into another type. Only a name `upload` itself made
+/// is accepted, so this cannot reach anything else on the disk.
+pub async fn upload_get(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    let plain = !id.is_empty() && id.len() <= 80 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_') && !id.starts_with('.');
+    if !plain {
+        return refuse(StatusCode::BAD_REQUEST, "bad_upload_name", "that is not an upload name");
+    }
+    let path = state.ctx.paths.root().join("uploads").join(&id);
+    let Ok(bytes) = std::fs::read(&path) else {
+        return refuse(StatusCode::NOT_FOUND, "upload_gone", "that file is no longer stored (uploads are kept for 30 days)");
+    };
+    let (kind, disposition) = match picture_type(&bytes) {
+        Some((mime, _)) => (mime, "inline"),
+        None => ("application/octet-stream", "attachment"),
+    };
+    (
+        [
+            (axum::http::header::CONTENT_TYPE, kind.to_string()),
+            (axum::http::header::CONTENT_DISPOSITION, disposition.to_string()),
+            (axum::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
+            (axum::http::header::CACHE_CONTROL, "private, max-age=3600".to_string()),
+        ],
+        bytes,
+    )
+        .into_response()
 }
 
 /// A file name that cannot reach outside the upload directory.

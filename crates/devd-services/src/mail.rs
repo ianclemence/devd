@@ -93,8 +93,110 @@ pub fn app_of(m: &Value) -> String {
     from.and_then(|f| f.get("Address")).and_then(|x| x.as_str()).unwrap_or("unknown sender").to_string()
 }
 
+/// A site, by what a message can say about it: its name and its hostname.
+pub type SiteName = (String, String);
+
+/// Which site a message came from, and how that is known.
+///
+/// Mailpit holds one inbox for every site, and what a message says about itself is
+/// whatever the application wrote. The answer is therefore evidence, strongest first,
+/// and it says which kind it found, so it is never mistaken for a certainty:
+///
+///   header  `X-Devd-Site: <site>`, set by the application. The only proof there is.
+///   tag     a Mailpit tag equal to a site's name.
+///   sender  the From, Reply-To or Return-Path address is on a site's hostname.
+///   link    the body links to exactly one site's hostname (a reset or verify link).
+///
+/// A message that none of these names, or that names two sites, belongs to no site.
+pub fn site_of(sites: &[SiteName], summary: &Value, detail: Option<&Value>, headers: Option<&Value>) -> Option<(String, &'static str)> {
+    if sites.is_empty() {
+        return None;
+    }
+    let by_name = |name: &str| sites.iter().find(|(n, _)| n.eq_ignore_ascii_case(name.trim())).map(|(n, _)| n.clone());
+    if let Some(h) = headers.and_then(|h| h.get("X-Devd-Site")).and_then(|v| v.as_array()).and_then(|v| v.first()).and_then(|v| v.as_str()) {
+        if let Some(n) = by_name(h) {
+            return Some((n, "header"));
+        }
+    }
+    for tag in summary.get("Tags").and_then(|t| t.as_array()).into_iter().flatten().filter_map(|t| t.as_str()) {
+        if let Some(n) = by_name(tag) {
+            return Some((n, "tag"));
+        }
+    }
+    let mut addresses: Vec<String> = Vec::new();
+    let mut take = |v: Option<&Value>| match v {
+        Some(Value::Array(a)) => addresses.extend(a.iter().filter_map(|x| x.get("Address")).filter_map(|x| x.as_str()).map(str::to_lowercase)),
+        Some(o @ Value::Object(_)) => addresses.extend(o.get("Address").and_then(|x| x.as_str()).map(str::to_lowercase)),
+        Some(Value::String(s)) => addresses.push(s.to_lowercase()),
+        _ => {}
+    };
+    take(summary.get("From"));
+    take(summary.get("ReplyTo"));
+    take(detail.and_then(|d| d.get("ReturnPath")));
+    let sender: Vec<&String> = sites
+        .iter()
+        .filter(|(_, host)| addresses.iter().any(|a| a.rsplit('@').next().is_some_and(|d| d == host || d.ends_with(&format!(".{host}")))))
+        .map(|(n, _)| n)
+        .collect();
+    if let [one] = sender.as_slice() {
+        return Some(((*one).clone(), "sender"));
+    }
+    let body = detail
+        .map(|d| format!("{} {}", d.get("Text").and_then(|x| x.as_str()).unwrap_or(""), d.get("HTML").and_then(|x| x.as_str()).unwrap_or("")))
+        .unwrap_or_default()
+        .to_lowercase();
+    let linked: Vec<&String> = sites.iter().filter(|(_, host)| links_to(&body, host)).map(|(n, _)| n).collect();
+    if let [one] = linked.as_slice() {
+        return Some(((*one).clone(), "link"));
+    }
+    None
+}
+
+/// Whether `text` holds a link whose hostname is exactly `host`. `myshop.test` is not `shop.test`.
+fn links_to(text: &str, host: &str) -> bool {
+    let mut rest = text;
+    while let Some(at) = rest.find("://") {
+        let after = &rest[at + 3..];
+        let end = after.find(|c: char| !(c.is_ascii_alphanumeric() || c == '.' || c == '-')).unwrap_or(after.len());
+        if &after[..end] == host {
+            return true;
+        }
+        rest = &after[end..];
+    }
+    false
+}
+
+fn resolved() -> &'static std::sync::Mutex<std::collections::HashMap<String, Option<(String, &'static str)>>> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, Option<(String, &'static str)>>>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+/// The site of one listed message, read from the message itself once and remembered: a
+/// message does not change, and reading each one in full on every refresh would be wasteful.
+fn link_for(ui_port: u16, sites: &[SiteName], m: &Value) -> Option<(String, &'static str)> {
+    let id = m.get("ID").and_then(|x| x.as_str())?;
+    let sig = sites.iter().map(|(n, h)| format!("{n}={h}")).collect::<Vec<_>>().join(",");
+    let key = format!("{id}|{sig}");
+    if let Some(hit) = resolved().lock().ok().and_then(|c| c.get(&key).cloned()) {
+        return hit;
+    }
+    let detail = get(&format!("{}/message/{}", base(ui_port), id)).ok();
+    let headers = get(&format!("{}/message/{}/headers", base(ui_port), id)).ok();
+    let found = site_of(sites, m, detail.as_ref(), headers.as_ref());
+    if let Ok(mut c) = resolved().lock() {
+        if c.len() > 5000 {
+            c.clear();
+        }
+        c.insert(key, found.clone());
+    }
+    found
+}
+
 /// What has been caught, newest first, without the bodies.
-pub fn list(ui_port: u16, limit: usize, query: Option<&str>) -> Result<Value> {
+///
+/// `sites` are the sites devd serves, so each message can be tied to one (see [`site_of`]).
+/// `site` keeps only that site's mail; `"-"` keeps only the mail no site claims.
+pub fn list(ui_port: u16, limit: usize, query: Option<&str>, sites: &[SiteName], site: Option<&str>) -> Result<Value> {
     let url = format!("{}/messages?limit={limit}", base(ui_port));
     let mut v = get(&url)?;
     // Mailpit answers `{ "total": n, "messages": [...] }`.
@@ -114,6 +216,12 @@ pub fn list(ui_port: u16, limit: usize, query: Option<&str>) -> Result<Value> {
                 continue;
             }
         }
+        let link = link_for(ui_port, sites, &m);
+        match site {
+            Some("-") if link.is_some() => continue,
+            Some(s) if s != "-" && link.as_ref().map(|(n, _)| n.as_str()) != Some(s) => continue,
+            _ => {}
+        }
         out.push(json!({
             "id": m.get("ID"),
             "subject": m.get("Subject"),
@@ -121,6 +229,8 @@ pub fn list(ui_port: u16, limit: usize, query: Option<&str>) -> Result<Value> {
             "to": m.get("To"),
             "created": m.get("Created"),
             "size": m.get("Size"),
+            "site": link.as_ref().map(|(n, _)| n.clone()),
+            "site_how": link.as_ref().map(|(_, how)| *how),
             "app": app_of(&m),
             "snippet": m.get("Snippet"),
             "read": m.get("Read"),
@@ -139,7 +249,20 @@ pub fn list(ui_port: u16, limit: usize, query: Option<&str>) -> Result<Value> {
         }
     }
     apps.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    let mut by_site: Vec<(String, usize)> = Vec::new();
+    for m in &out {
+        if let Some(name) = m.get("site").and_then(|a| a.as_str()) {
+            match by_site.iter_mut().find(|(n, _)| n == name) {
+                Some((_, c)) => *c += 1,
+                None => by_site.push((name.to_string(), 1)),
+            }
+        }
+    }
+    by_site.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    let unassigned = out.iter().filter(|m| m.get("site").map_or(true, Value::is_null)).count();
     Ok(json!({
+        "sites": by_site.into_iter().map(|(name, count)| json!({ "name": name, "count": count })).collect::<Vec<_>>(),
+        "unassigned": unassigned,
         "total": v.get("total").cloned().unwrap_or(Value::Null),
         "unread": v.get("unread").cloned().unwrap_or(Value::Null),
         "messages": out,
@@ -150,7 +273,7 @@ pub fn list(ui_port: u16, limit: usize, query: Option<&str>) -> Result<Value> {
 }
 
 /// One message in full: headers, the text part and the HTML part.
-pub fn read(ui_port: u16, id: &str) -> Result<Value> {
+pub fn read(ui_port: u16, id: &str, sites: &[SiteName]) -> Result<Value> {
     if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
         return Err(DevdError::invalid("a message id is letters, digits, '-' and '_'"));
     }
@@ -161,7 +284,10 @@ pub fn read(ui_port: u16, id: &str) -> Result<Value> {
     let headers = get(&format!("{}/message/{}/headers", base(ui_port), id)).unwrap_or(Value::Null);
     let raw = get_text(&format!("{}/message/{}/raw", base(ui_port), id)).unwrap_or_default();
     let raw: String = raw.chars().take(200_000).collect();
+    let link = site_of(sites, &v, Some(&v), Some(&headers));
     Ok(json!({
+        "site": link.as_ref().map(|(n, _)| n.clone()),
+        "site_how": link.as_ref().map(|(_, how)| *how),
         "app": app_of(&json!({ "Tags": v.get("Tags"), "From": v.get("From") })),
         "headers": headers,
         "raw": raw,
@@ -248,6 +374,49 @@ mod tests {
         assert_eq!(app_of(&json!({})), "unknown sender");
     }
 
+    fn sites() -> Vec<SiteName> {
+        vec![("shop".into(), "shop.test".into()), ("blog".into(), "blog.test".into())]
+    }
+
+    #[test]
+    fn an_explicit_header_is_the_proof_and_beats_everything_else() {
+        let m = json!({ "From": { "Address": "hello@blog.test" }, "Tags": [] });
+        let headers = json!({ "X-Devd-Site": ["shop"] });
+        assert_eq!(site_of(&sites(), &m, None, Some(&headers)), Some(("shop".into(), "header")));
+    }
+
+    #[test]
+    fn a_tag_or_a_sender_on_the_sites_host_names_the_site() {
+        let tagged = json!({ "From": { "Address": "hello@example.com" }, "Tags": ["Blog"] });
+        assert_eq!(site_of(&sites(), &tagged, None, None), Some(("blog".into(), "tag")));
+        let sent = json!({ "From": { "Address": "noreply@shop.test" }, "Tags": [] });
+        assert_eq!(site_of(&sites(), &sent, None, None), Some(("shop".into(), "sender")));
+    }
+
+    #[test]
+    fn a_link_in_the_body_names_the_site_when_the_sender_cannot() {
+        let m = json!({ "From": { "Address": "hello@example.com" }, "Tags": [] });
+        let d = json!({ "Text": "Reset it here: https://shop.test/reset/abc", "HTML": "" });
+        assert_eq!(site_of(&sites(), &m, Some(&d), None), Some(("shop".into(), "link")));
+    }
+
+    #[test]
+    fn a_host_must_match_whole_not_as_the_end_of_another() {
+        assert!(links_to("see https://shop.test/x", "shop.test"));
+        assert!(links_to("see http://shop.test:8080/x", "shop.test"));
+        assert!(!links_to("see https://myshop.test/x", "shop.test"));
+        assert!(!links_to("see https://shop.test.evil.com/x", "shop.test"));
+    }
+
+    #[test]
+    fn mail_that_names_two_sites_or_none_belongs_to_no_site() {
+        let m = json!({ "From": { "Address": "hello@example.com" }, "Tags": [] });
+        let both = json!({ "Text": "https://shop.test and https://blog.test", "HTML": "" });
+        assert_eq!(site_of(&sites(), &m, Some(&both), None), None, "two sites is a guess, not an answer");
+        assert_eq!(site_of(&sites(), &m, None, None), None);
+        assert_eq!(site_of(&[], &m, Some(&both), None), None);
+    }
+
     #[test]
     fn the_env_lines_name_the_port_the_catcher_listens_on() {
         let lines = env_lines(1025);
@@ -258,9 +427,9 @@ mod tests {
     fn a_message_id_may_not_be_a_path() {
         // The id goes into the path, so a traversal must not be expressible.
         for bad in ["../../etc/passwd", "a/b", "", "x?y=1"] {
-            assert!(read(8025, bad).is_err(), "{bad} should be refused");
+            assert!(read(8025, bad, &[]).is_err(), "{bad} should be refused");
             assert!(delete(8025, bad).is_err(), "{bad} should be refused");
         }
-        assert!(read(8025, "aBc-123_x").is_err(), "a valid id still tries the network, and fails when nothing is listening");
+        assert!(read(8025, "aBc-123_x", &[]).is_err(), "a valid id still tries the network, and fails when nothing is listening");
     }
 }

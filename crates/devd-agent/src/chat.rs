@@ -1239,10 +1239,13 @@ impl Hub {
                     );
                     continue;
                 }
+                // A model that can see is given the pictures attached to the conversation,
+                // not only the paths they were stored under.
+                let sees = crate::policy::model_caps(&self.ctx.store, provider, model).vision == Some(true);
                 let request = ChatRequest {
                     model: model.clone(),
                     system: system.clone(),
-                    messages: messages.clone(),
+                    messages: crate::attachments::with_images(&messages, sees, &self.ctx.paths.root().join("uploads")),
                     tools: tools.clone(),
                     tool_choice: None,
                     max_tokens: 16_000,

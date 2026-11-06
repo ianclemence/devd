@@ -1212,7 +1212,16 @@ fn openai_body(p: &Provider, r: &ChatRequest) -> Value {
                 msgs.push(json!({ "role": "tool", "tool_call_id": b["tool_use_id"], "content": content }));
             }
             let t = text_of(&blocks);
-            if !t.is_empty() {
+            let pictures: Vec<Value> = blocks
+                .iter()
+                .filter(|b| b["type"] == "image")
+                .map(|b| json!({ "type": "image_url", "image_url": { "url": format!("data:{};base64,{}", b["source"]["media_type"].as_str().unwrap_or("image/png"), b["source"]["data"].as_str().unwrap_or("")) } }))
+                .collect();
+            if !pictures.is_empty() {
+                let mut parts = vec![json!({ "type": "text", "text": if t.is_empty() { "(see the attached picture)".to_string() } else { t } })];
+                parts.extend(pictures);
+                msgs.push(json!({ "role": "user", "content": parts }));
+            } else if !t.is_empty() {
                 msgs.push(json!({ "role": "user", "content": t }));
             }
         }

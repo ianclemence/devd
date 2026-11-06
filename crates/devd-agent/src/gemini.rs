@@ -169,6 +169,9 @@ pub fn body(r: &ChatRequest) -> Value {
                             parts.push(json!({ "text": t }));
                         }
                     }
+                    Some("image") => {
+                        parts.push(json!({ "inlineData": { "mimeType": b["source"]["media_type"], "data": b["source"]["data"] } }));
+                    }
                     _ => {}
                 }
             }

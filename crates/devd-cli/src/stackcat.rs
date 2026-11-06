@@ -190,7 +190,7 @@ pub fn worktree(app: &App, cmd: SiteWorktreeCommand) -> Result<()> {
 pub fn mail(app: &App, cmd: MailCommand) -> Result<()> {
     match cmd {
         MailCommand::Setup => app.invoke("mail.setup", json!({})),
-        MailCommand::List { limit, query } => app.invoke("mail.inbox", json!({ "limit": limit, "query": query })),
+        MailCommand::List { limit, query, site } => app.invoke("mail.inbox", json!({ "limit": limit, "query": query, "site": site })),
         MailCommand::Read { id } => app.invoke("mail.read", json!({ "id": id })),
         MailCommand::Delete { id } => app.invoke("mail.delete", json!({ "id": id })),
         MailCommand::Clear => app.invoke("mail.clear", json!({})),

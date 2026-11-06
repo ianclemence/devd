@@ -1279,6 +1279,9 @@ pub(crate) enum MailCommand {
         /// Only messages whose subject or addresses contain this.
         #[arg(long)]
         query: Option<String>,
+        /// Only this site's mail, or `-` for mail no site claims.
+        #[arg(long)]
+        site: Option<String>,
     },
     /// One message in full: headers, text, HTML and attachments.
     Read {
@@ -1904,6 +1907,7 @@ fn shim_main(raw: &[String]) -> i32 {
 }
 
 fn main() {
+    devd_core::util::note_process_start();
     let raw: Vec<String> = std::env::args().skip(1).collect();
     if raw.first().map(String::as_str) == Some("shim") {
         std::process::exit(shim_main(&raw[1..]));

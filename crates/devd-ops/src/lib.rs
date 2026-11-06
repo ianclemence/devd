@@ -14,6 +14,7 @@
 //! tier; anything that reaches a remote server is `remote`.
 
 pub mod agentctx;
+pub mod previewhelper;
 pub mod caps;
 pub mod caps_more;
 pub mod caps_remote;

@@ -92,6 +92,15 @@ fn mark_owned_ports(comps: &mut [Component], web_up: &[&str]) {
     }
 }
 
+/// What a service that is needed but has no process is called. In the first minute after devd
+/// opens it is being started, which is not a fault; after that it is one.
+fn absent_state(booting: bool) -> &'static str {
+    if booting { "starting" } else { "degraded" }
+}
+
+/// How long after devd opens a missing service is still "starting".
+const BOOT_GRACE: std::time::Duration = std::time::Duration::from_secs(90);
+
 fn explain(id: &str, state: &str, detail: &str) -> (String, Value) {
     let (text, fix): (String, Value) = match id {
         "git" => ("Git is needed for every repository feature, and for the isolated workspaces the agent team uses.".into(), json!({ "label": "Install Git", "capability": "toolchain.install", "args": { "tool": "git" } })),
@@ -111,7 +120,7 @@ fn explain(id: &str, state: &str, detail: &str) -> (String, Value) {
             _ => ("Whether the provider works has not been checked yet.".into(), json!({ "label": "Test the provider", "view": "providers" })),
         },
         i if i.starts_with("service.") => (
-            if state == "starting" { "The process is up but its port is not answering yet. Give it a moment; if it stays like this, read its log.".to_string() } else { "This service is needed but is not running. It may have stopped unexpectedly; start it from Services, or change its startup policy.".to_string() },
+            if state == "starting" { "devd is bringing this up. Give it a moment; if it is still like this after a minute, read its log.".to_string() } else { "This service is needed but is not running. It may have stopped unexpectedly; start it from Services, or change its startup policy.".to_string() },
             json!({ "label": "Open services", "view": "services" }),
         ),
         "home.conflict" | "home.other" => ("Restart the program that was started before the variable changed, so the window, the terminal and the command line all use one folder.".into(), json!({ "label": "Open diagnostics", "view": "system" })),
@@ -194,6 +203,9 @@ pub fn status(ctx: &Ctx) -> Result<Value> {
         .collect();
     mark_owned_ports(&mut comps, &web_up);
     let mut php_seen: Vec<String> = Vec::new();
+    // In the first minute after devd opens, a service it will start itself is coming
+    // up, not broken. After that, a missing process is reported as it is.
+    let booting = devd_core::util::process_age() < BOOT_GRACE;
     for s in &statuses {
         if let Some((series, _)) = devd_services::php_pool_of(&s.name) {
             if php_seen.contains(&series) {
@@ -217,7 +229,7 @@ pub fn status(ctx: &Ctx) -> Result<Value> {
             };
             let up = required_rows.iter().filter(|r| r.running).count();
             let (state, detail) = if required && !running {
-                ("degraded", format!("{up} of {} needed PHP workers are running", required_rows.len()))
+                (absent_state(booting), if booting { format!("{up} of {} needed PHP workers are up; devd is starting the rest", required_rows.len()) } else { format!("{up} of {} needed PHP workers are running", required_rows.len()) })
             } else if running {
                 ("healthy", format!("{up} PHP worker(s) running for {series}"))
             } else if needed {
@@ -259,8 +271,8 @@ pub fn status(ctx: &Ctx) -> Result<Value> {
             )
         } else if required {
             (
-                "degraded",
-                "is needed but no process was found".to_string(),
+                absent_state(booting),
+                if booting { "devd is starting it; this is normal in the first minute after devd opens".to_string() } else { "is needed but no process was found".to_string() },
             )
         } else if s.startup_mode == "off" {
             ("healthy", "installed, off".to_string())
@@ -570,5 +582,17 @@ mod tests {
         assert!(meaning.contains("not what holds this port"), "{meaning}");
         assert!(!meaning.contains("Nothing is wrong"), "{meaning}");
         assert_eq!(fix["view"], "overview");
+    }
+}
+
+#[cfg(test)]
+mod boot_tests {
+    use super::*;
+
+    #[test]
+    fn a_missing_service_is_starting_only_in_the_first_minute() {
+        assert_eq!(absent_state(true), "starting");
+        assert_eq!(absent_state(false), "degraded");
+        assert!(BOOT_GRACE.as_secs() <= 120, "a real crash is not excused for long");
     }
 }

@@ -26,6 +26,7 @@
 //!   operations above the agent tier are queued for a person with their plan, and
 //!   the agent is told plainly that it must not claim they happened.
 
+pub mod attachments;
 pub mod caps;
 pub mod caps_autonomy;
 pub mod charter;

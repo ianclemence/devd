@@ -272,6 +272,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
     crate::caps_update::register(reg)?;
     crate::caps_worktree::register(reg)?;
     crate::agentctx::register(reg)?;
+    crate::previewhelper::register(reg)?;
     Ok(())
 }
 

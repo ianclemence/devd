@@ -254,6 +254,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/preview", post(api::preview))
         .route("/api/pick-folder", post(api::pick_folder))
         .route("/api/upload", post(api::upload))
+        .route("/api/upload/:id", get(api::upload_get))
         // The push-to-deploy hook. Not under /api: it carries its own secret in the path, so a service
         // that cannot hold the bearer token (GitHub) can start a deploy.
         .route("/hooks/deploy/:site/:token", post(api::deploy_hook))
