@@ -410,6 +410,10 @@ impl Registry {
         if matches!(cap.id.as_str(), "terminal.write" | "terminal.resize") {
             return;
         }
+        // Anything that changes the machine makes every kept probe answer out of date.
+        if cap.effect != crate::capability::Effect::Read && !req.dry_run {
+            crate::memo::bump();
+        }
         let (ok, message) = match result {
             Ok(_) => (true, "ok".to_string()),
             Err(e) => (false, e.to_string()),

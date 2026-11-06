@@ -277,6 +277,116 @@
   }
 
   /*
+   * Patch a live region in place instead of replacing it.
+   *
+   * Assigning `innerHTML` to a conversation that updates several times a second throws
+   * away everything the reader has done to it: images reload at zero height (so the
+   * scroll position is clamped upwards and the view jumps), opened cards close, a text
+   * selection vanishes. `morph` walks the old and new trees together and touches only
+   * what differs, so an unchanged message is the same element it was and the browser's
+   * own scroll anchoring keeps the reader's place.
+   *
+   * What the reader owns is left alone: whether a <details> is open, what is typed in a
+   * field. Siblings are matched by `data-key` (or id) when they have one, else by position,
+   * which is what a conversation that grows at its end needs.
+   */
+  function morph(target, html) {
+    var tpl = document.createElement("template");
+    tpl.innerHTML = html;
+    morphChildren(target, tpl.content);
+  }
+  function morphKey(n) {
+    return n && n.nodeType === 1 ? (n.getAttribute("data-key") || n.id || null) : null;
+  }
+  function morphSame(a, b) {
+    if (a.nodeType !== b.nodeType) return false;
+    if (a.nodeType !== 1) return true;
+    return a.tagName === b.tagName && morphKey(a) === morphKey(b);
+  }
+  function morphChildren(a, b) {
+    var ac = a.firstChild;
+    var bc = b.firstChild;
+    while (bc) {
+      var next = bc.nextSibling;
+      if (!ac) { a.appendChild(bc); bc = next; continue; }
+      if (morphSame(ac, bc)) {
+        morphNode(ac, bc);
+        ac = ac.nextSibling;
+      } else {
+        var key = morphKey(bc), match = null;
+        if (key) for (var s = ac.nextSibling; s; s = s.nextSibling) if (morphKey(s) === key) { match = s; break; }
+        if (match) { a.insertBefore(match, ac); morphNode(match, bc); }
+        else a.insertBefore(bc, ac);
+      }
+      bc = next;
+    }
+    while (ac) { var rest = ac.nextSibling; a.removeChild(ac); ac = rest; }
+  }
+  function morphNode(a, b) {
+    if (a.nodeType !== 1) {
+      if (a.nodeValue !== b.nodeValue) a.nodeValue = b.nodeValue;
+      return;
+    }
+    var tag = a.tagName;
+    var i, name;
+    for (i = a.attributes.length - 1; i >= 0; i--) {
+      name = a.attributes[i].name;
+      if (tag === "DETAILS" && name === "open") continue;
+      // An image whose source was filled in after the paint (an upload read with the
+      // token) keeps it; stripping it would reload the picture and move the page.
+      if ((tag === "IMG" || tag === "VIDEO") && name === "src") continue;
+      if (!b.hasAttribute(name)) a.removeAttribute(name);
+    }
+    for (i = 0; i < b.attributes.length; i++) {
+      name = b.attributes[i].name;
+      if (tag === "DETAILS" && name === "open") continue;
+      if (a.getAttribute(name) !== b.attributes[i].value) a.setAttribute(name, b.attributes[i].value);
+    }
+    // A field's text is the person's; a media element with the same source is already loaded.
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || tag === "IMG" || tag === "VIDEO") return;
+    if (a.getAttribute("data-morph") === "skip") return;
+    morphChildren(a, b);
+  }
+
+  /*
+   * Follow the bottom of a scroller only while the reader is at it.
+   *
+   * Whether someone is "at the bottom" is decided when they scroll, not guessed at paint
+   * time: a screenshot that finishes loading after a paint grows the page, and the
+   * question then is whether they were following, which only their last scroll can say.
+   */
+  function stickToBottom(box) {
+    if (!box || box._stick) return;
+    box._stick = { on: true };
+    // Scrolled up to read: a pill offers the way back to the end, and nothing pulls the
+    // reader down while it shows.
+    var pill = document.createElement("button");
+    pill.type = "button";
+    pill.className = "jump-end";
+    pill.hidden = true;
+    pill.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#i-chevron-down"></use></svg>Jump to latest';
+    pill.addEventListener("click", function () {
+      box.scrollTo({ top: box.scrollHeight, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    });
+    if (box.parentNode) box.parentNode.insertBefore(pill, box.nextSibling);
+    box._pill = pill;
+    box.addEventListener("scroll", function () {
+      box._stick.on = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+      pill.hidden = box._stick.on;
+    }, { passive: true });
+    // An image or video finishing late is the main thing that grows a conversation
+    // after it is painted; keep a following reader at the end of it.
+    box.addEventListener("load", function () {
+      if (box._stick.on) box.scrollTop = box.scrollHeight;
+    }, true);
+  }
+  function following(box) {
+    if (!box) return false;
+    if (!box._stick) return box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+    return box._stick.on;
+  }
+
+  /*
    * Paging.
    *
    * A list that grows without bound is a list nobody can read. The page size
@@ -1210,7 +1320,7 @@
   // machine it runs on, and the settings behind it. Related pages share one
   // entry and appear as tabs, so the rail stays short.
   var AREA = {
-    assistant: "assistant", team: "agents",
+    assistant: "assistant", team: "runs",
     projects: "projects", project: "projects", create: "projects", develop: "projects",
     sites: "sites", site: "sites", hosts: "sites", certificates: "sites", mail: "sites",
     agents: "agents", schedules: "agents", shared: "agents", skills: "agents", mcp: "agents",
@@ -1218,27 +1328,92 @@
     databases: "server", remote: "server", preview: "server"
   };
   var TABS = {
-    projects: [["projects", "Projects"], ["create", "New project"], ["develop", "Stacks and tasks"]],
+    projects: [["projects", "All projects"], ["create", "New project"], ["develop", "Stacks and tasks"]],
     sites: [["sites", "All sites"], ["hosts", "Hosts"], ["certificates", "Certificates"], ["mail", "Mail"]],
-    agents: [["team", "Agent Runs"], ["agents", "Team"], ["schedules", "Schedules"], ["skills", "Skills"], ["mcp", "MCP"], ["shared", "Notes"]],
+    agents: [["agents", "Team room"], ["schedules", "Schedules"], ["skills", "Skills"], ["mcp", "MCP servers"], ["shared", "Notes"]],
     server: [["overview", "Overview"], ["services", "Services"], ["runtimes", "Runtimes"], ["databases", "Databases"], ["toolchain", "Tools"], ["remote", "Remote"]]
   };
-  var AREA_HOME = { assistant: "assistant", projects: "projects", sites: "sites", agents: "team", server: "overview" };
+  var AREA_HOME = { assistant: "assistant", runs: "team", projects: "projects", sites: "sites", agents: "agents", server: "overview" };
+  var AREA_NAME = { assistant: "Assistant", runs: "Agent runs", projects: "Projects", sites: "Sites", agents: "Team", server: "Machine" };
 
   function areaOf(view) { return AREA[view] || view; }
 
   var TAB_ICON = { projects: "i-folder", create: "i-plus", develop: "i-wrench", sites: "i-globe", hosts: "i-server", certificates: "i-lock", mail: "i-inbox", terminal: "i-code", team: "i-layers", agents: "i-team", schedules: "i-calendar", skills: "i-book", shared: "i-file", mcp: "i-code", overview: "i-home", services: "i-layers", runtimes: "i-bolt", databases: "i-db", toolchain: "i-wrench", remote: "i-cloud" };
 
+  /* The section tabs used to be a second bar under the top one. They are now the
+     context panel's list, so this only keeps the old bar out of the way. */
   function subnav() {
-    var area = AREA[state.view];
-    var tabs = area && TABS[area];
     var box = el("subnav");
-    if (!tabs || state.view === "project" || state.view === "site") { box.hidden = true; box.innerHTML = ""; return; }
-    box.hidden = false;
-    box.innerHTML = tabs.map(function (t) {
-      var active = state.view === t[0] || (t[0] === "sites" && state.view === "site");
-      return '<button type="button" class="subtab' + (active ? " active" : "") + '" data-action="nav" data-view="' + t[0] + '">' + (TAB_ICON[t[0]] ? '<svg class="icon" aria-hidden="true"><use href="#' + TAB_ICON[t[0]] + '"></use></svg>' : "") + esc(t[1]) + "</button>";
-    }).join("");
+    if (box) { box.hidden = true; box.innerHTML = ""; }
+    paintPanel();
+  }
+
+  /* The context panel: what is in the area you are in.
+   *
+   * The Assistant's panel is its conversations, Agent runs' is its runs; Projects,
+   * Sites, Team and Machine list their pages, then the things in them (each project,
+   * each site) so the next click is one away. Home, the Inbox and the records pages
+   * are whole-width and have none. Below 1024px the panel folds away and opens over
+   * the page from the rail or the page's own header. */
+  var PANEL = { mode: "" };
+  function panelArea() {
+    var a = areaOf(state.view);
+    return TABS[a] || a === "assistant" || a === "runs" ? a : "";
+  }
+  function paintPanel() {
+    var box = el("panel");
+    if (!box) return;
+    var area = panelArea();
+    var shell = document.querySelector(".shell");
+    if (shell) shell.classList.toggle("has-panel", !!area);
+    box.hidden = !area;
+    if (!area) { PANEL.mode = ""; box.innerHTML = ""; return; }
+    if (area === "assistant" || area === "runs") {
+      // The list's own frame is drawn once per area; its rows are patched by the
+      // screen that owns them, so a running team does not redraw the whole panel.
+      if (PANEL.mode !== area) {
+        var isChat = area === "assistant";
+        box.innerHTML = '<div class="panel-head"><b>' + (isChat ? "Conversations" : "Agent runs") + "</b>" +
+          '<button type="button" class="btn btn-mini btn-ghost btn-icon" data-action="' + (isChat ? "chats-prune" : "team-prune") + '" title="' + (isChat ? "Delete every conversation that is not working" : "Delete every run that is over") + '" aria-label="Clear finished"><svg class="icon" aria-hidden="true"><use href="#i-trash"></use></svg></button>' +
+          '<button type="button" class="btn btn-mini" data-action="' + (isChat ? "chat-new" : "team-new") + '"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg>New</button></div>' +
+          (isChat ? '<div id="thread-list" class="panel-body thread-list"></div>' : '<div id="team-list" class="panel-body thread-list"></div>');
+        PANEL.mode = area;
+        if (isChat) paintThreads(); else if (TEAM.runs) paintTeamList();
+      }
+      return;
+    }
+    PANEL.mode = area;
+    var html = '<div class="panel-head"><b>' + esc(AREA_NAME[area]) + "</b></div><div class=\"panel-body\">" +
+      TABS[area].map(function (t) {
+        var on = state.view === t[0] || (t[0] === "sites" && state.view === "site") || (t[0] === "projects" && state.view === "project");
+        var count = t[0] === "projects" ? state.projects.length : t[0] === "sites" ? (state.server.sites || []).length : null;
+        return '<button type="button" class="panel-item' + (on ? " active" : "") + '" data-action="nav" data-view="' + t[0] + '"' + (on ? ' aria-current="page"' : "") + ">" +
+          '<svg class="icon" aria-hidden="true"><use href="#' + (TAB_ICON[t[0]] || "i-file") + '"></use></svg><span class="grow">' + esc(t[1]) + "</span>" +
+          (count ? '<span class="panel-count">' + count + "</span>" : "") + "</button>";
+      }).join("") + panelThings(area) + "</div>";
+    morph(box, html);
+  }
+  /* The things in an area, under its pages: a project or a site is one click from anywhere. */
+  function panelThings(area) {
+    var rows = [];
+    if (area === "projects") {
+      rows = (state.projects || []).slice().sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); }).map(function (p) {
+        var on = state.view === "project" && state.project && state.project.path === p.path;
+        return '<button type="button" class="panel-item panel-thing' + (on ? " active" : "") + '" data-action="open-project" data-path="' + attr(p.path) + '" title="' + attr(p.path) + '">' +
+          '<span class="thread-state" aria-hidden="true"></span><span class="grow nowrap">' + esc(p.name || dirName(p.path)) + "</span></button>";
+      });
+    }
+    if (area === "sites") {
+      rows = (state.server.sites || []).map(function (row) {
+        // A site row carries its configuration under `site`, beside what devd observed.
+        var st = row.site || row;
+        var on = state.view === "site" && SITE.name === st.name;
+        return '<button type="button" class="panel-item panel-thing' + (on ? " active" : "") + '" data-action="open-site" data-name="' + attr(st.name) + '">' +
+          '<span class="thread-state" aria-hidden="true"></span><span class="grow nowrap mono">' + esc(st.host || st.name) + "</span></button>";
+      });
+    }
+    if (!rows.length) return "";
+    return '<div class="panel-label">' + (area === "projects" ? "Projects" : "Sites") + "</div>" + rows.join("");
   }
 
   var RAIL_ICON = {
@@ -1448,96 +1623,64 @@
      a menu is open; closing the menu repaints it. */
   var RAIL_CACHE = { html: null, attn: null };
 
+  /* The rail: where you are.
+   *
+   * One column of destinations down the left edge, each an icon with its name under
+   * it, in the order work flows: the day (Home, Inbox), who does the thinking
+   * (Assistant, Agent runs, Team), what is being built (Projects, Sites), and the
+   * machine under it. The records and settings sit at the foot with the machine's
+   * health. On a phone the rail is a bar along the bottom with the five places used
+   * most and a More sheet for the rest.
+   */
   function rail(force) {
-    var server = state.server;
-    var attention = (AI.counts.approvals + AI.counts.questions) || null;
-    var working = AI.threads ? (AI.threads.filter(function (t) { return t.state === "running"; }).length || null) : null;
+    var attention = (AI.counts.approvals + AI.counts.questions) || 0;
+    var working = AI.threads ? AI.threads.filter(function (t) { return t.state === "running"; }).length : 0;
     var runs = (state.view === "team" && TEAM.runs && TEAM.runs.length) ? TEAM.runs : (AI.liveRuns || (AI.home && AI.home.teamRuns) || []);
     var live = runs.filter(function (t) { return ["planning", "running"].indexOf(t.state) >= 0; });
-    // Seven destinations in three readings: where the work lives (Home, Projects,
-    // Sites), who does the thinking (Assistant, Agents, Models), and the machine and
-    // its records behind them. A terminal belongs to a project, not to the rail, so
-    // it is a tab on the project rather than a place of its own.
-    var groups = [
-      { label: "Work", items: [
-        { view: "home", label: "Home" },
-        { view: "projects", label: "Projects", count: state.projects.length || state.projectCount || null },
-        { view: "sites", label: "Sites", count: (server.sites || []).length || null }
-      ] },
-      { label: "AI", items: [
-        { view: "assistant", label: "Assistant", count: working },
-        // Named for one screen, so it always opens that screen, not the last tab used.
-        { view: "team", label: "Agents", count: live.length || null, exact: true },
-        { view: "providers", label: "Models" }
-      ] },
-      { label: "Machine", menu: true, items: [
-        { view: "overview", label: "Environment", hint: "services, runtimes, databases, hostnames" },
-        { view: "capabilities", label: "API and tools", hint: "every capability, with its schema" },
-        { view: "activity", label: "Activity", hint: "everything devd did, and who asked" },
-        { view: "system", label: "Diagnostics", hint: "health checks and what to do about them" }
-      ] }
+    var waiting = runs.filter(function (t) { return t.state === "awaiting_plan" || t.state === "paused" && t.error; });
+    var health = AI.health && AI.health.state;
+    var here = areaOf(state.view);
+    var items = [
+      { view: "home", area: "home", label: "Home", icon: "i-home", phone: true },
+      { view: "inbox", area: "inbox", label: "Inbox", icon: "i-inbox", badge: attention, phone: true },
+      { sep: true },
+      { view: "assistant", area: "assistant", label: "Assistant", icon: "i-spark", live: working > 0, phone: true },
+      { view: "team", area: "runs", label: "Runs", icon: "i-layers", live: live.length > 0, badge: waiting.length, phone: true },
+      { view: "agents", area: "agents", label: "Team", icon: "i-team" },
+      { sep: true },
+      { view: "projects", area: "projects", label: "Projects", icon: "i-folder" },
+      { view: "sites", area: "sites", label: "Sites", icon: "i-globe" },
+      { view: "overview", area: "server", label: "Machine", icon: "i-server" }
     ];
-    function tab(i) {
-      var active = areaOf(state.view) === areaOf(i.view);
-      return '<button type="button" class="top-tab' + (active ? " active" : "") + '" data-action="nav" data-view="' + i.view + '"' + (i.exact ? ' data-exact="1"' : "") + (active ? ' aria-current="page"' : "") + ">" +
-        esc(i.label) + (i.count !== null && i.count !== undefined ? '<span class="top-count">' + esc(i.count) + "</span>" : "") + "</button>";
+    var foot = [
+      { view: "providers", area: "providers", label: "Models", icon: "i-sliders" },
+      { view: "activity", area: "activity", label: "Activity", icon: "i-clock" },
+      { view: "capabilities", area: "capabilities", label: "API", icon: "i-code" },
+      { view: "system", area: "system", label: "Diagnostics", icon: "i-gauge", dot: health === "critical" || health === "unavailable" ? "bad" : health === "degraded" || health === "setup_incomplete" ? "warn" : "" }
+    ];
+    function item(i, small) {
+      if (i.sep) return '<span class="rail-sep" aria-hidden="true"></span>';
+      var on = here === i.area;
+      return '<button type="button" class="rail-item' + (small ? " rail-small" : "") + (on ? " active" : "") + (i.phone ? " rail-phone" : "") + '" data-action="rail-go" data-view="' + i.view + '"' +
+        (on ? ' aria-current="page"' : "") + ' title="' + attr(i.label) + '">' +
+        '<span class="rail-icon"><svg class="icon" aria-hidden="true"><use href="#' + i.icon + '"></use></svg>' +
+        (i.badge ? '<span class="rail-badge">' + esc(i.badge > 99 ? "99+" : i.badge) + "</span>" : i.live ? '<span class="rail-live" aria-label="working"></span>' : i.dot ? '<span class="rail-dot rail-dot-' + i.dot + '"></span>' : "") +
+        '</span><span class="rail-label">' + esc(i.label) + "</span></button>";
     }
-    // One renderer for a destination inside any menu, so the compact menu and
-    // the two grouped menus cannot drift apart.
-    function menuItem(i, showHint) {
-      var on = areaOf(state.view) === areaOf(i.view);
-      return '<button type="button" class="top-item' + (on ? " active" : "") + '" data-action="nav" data-view="' + i.view + '"' + (on ? ' aria-current="page"' : "") + ">" +
-        '<span class="top-item-name">' + esc(i.label) + (i.count !== null && i.count !== undefined ? '<span class="top-count">' + esc(i.count) + "</span>" : "") + "</span>" +
-        (showHint && i.hint ? '<span class="top-item-hint">' + esc(i.hint) + "</span>" : "") + "</button>";
-    }
-    var html = groups.map(function (group, gi) {
-      var sep = gi ? '<span class="top-sep" aria-hidden="true"></span>' : "";
-      if (!group.menu) return sep + '<div class="top-group" role="group" aria-label="' + attr(group.label) + '">' + group.items.map(tab).join("") + "</div>";
-      var open = state.topMenu === group.label;
-      var here = group.items.some(function (i) { return areaOf(state.view) === areaOf(i.view); });
-      return sep + '<div class="top-menu"><button type="button" class="top-tab top-tab-menu' + (here ? " active" : "") + '" data-action="top-menu" data-menu="' + attr(group.label) + '" aria-haspopup="true" aria-expanded="' + open + '">' +
-        esc(group.label) + '<svg class="icon" aria-hidden="true"><use href="#i-chevron-down"></use></svg></button>' +
-        '<div class="top-pop" role="group" aria-label="' + attr(group.label) + '"' + (open ? "" : " hidden") + ">" +
-        group.items.map(function (i) { return menuItem(i, true); }).join("") + "</div></div>";
-    }).join("");
-
-    // Below the compact breakpoint the groups above are hidden and this menu
-    // takes their place, so the bar never reflows into a second row.
-    var allOpen = state.navMenu === "all";
-    html += '<div class="top-all">' +
-      '<button type="button" class="top-tab top-all-trigger' + (allOpen ? " active" : "") + '" data-action="nav-menu" aria-haspopup="true" aria-expanded="' + allOpen + '">' +
-      '<svg class="icon" aria-hidden="true"><use href="#i-menu"></use></svg>Menu</button>' +
-      '<div class="top-pop top-all-pop"' + (allOpen ? "" : " hidden") + ' role="group" aria-label="All destinations">' +
-      groups.map(function (group, gi) {
-        return (gi ? '<div class="top-pop-sep"></div>' : "") +
-          '<div class="top-pop-label">' + esc(group.label) + "</div>" +
-          group.items.map(function (i) { return menuItem(i, !!group.menu); }).join("");
-      }).join("") + "</div></div>";
-
-    // Work in flight, named as it is: the run's own title and its real state.
-    var chip = "";
-    if (live.length) {
-      var first = live[0];
-      var title = String(first.title || "").length > 34 ? String(first.title).slice(0, 33) + "…" : String(first.title || "Agent run");
-      chip = '<button type="button" class="top-live" data-action="team-open-from" data-id="' + attr(first.id) + '" title="' + attr(first.title || "") + '">' +
-        '<span class="top-live-state">' + esc(first.state === "planning" ? "Planning" : "Running") + "</span>" +
-        '<span class="top-live-title">' + esc(title) + "</span>" +
-        (live.length > 1 ? '<span class="top-count">+' + (live.length - 1) + "</span>" : "") + "</button>";
-    }
-    var needs = '<button type="button" class="top-needs' + (attention ? " has" : "") + (areaOf(state.view) === "inbox" ? " active" : "") + '" data-action="nav" data-view="inbox"' + (areaOf(state.view) === "inbox" ? ' aria-current="page"' : "") + ">" +
-      '<svg class="icon" aria-hidden="true"><use href="#i-inbox"></use></svg>' +
-      '<span class="top-needs-label">Inbox</span>' +
-      (attention ? '<span class="top-needs-n">' + esc(attention) + "</span>" : "") + "</button>";
-    var attn = chip + needs;
-    var menuOpen = !!(state.topMenu || state.navMenu);
-    if (force || (!menuOpen && html !== RAIL_CACHE.html)) {
-      el("rail").innerHTML = html;
+    var html =
+      // The mark is the one picture the window, the taskbar and the favicon share.
+      '<button type="button" class="rail-brand" data-action="rail-go" data-view="home" title="devd"><img src="' + attr((el("brand-logo") || {}).src || "/favicon.svg") + '" alt="devd" width="26" height="26"></button>' +
+      '<button type="button" class="rail-item rail-search" data-action="palette" title="Search or run anything (Ctrl K)" aria-label="Search or run anything"><span class="rail-icon"><svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg></span><span class="rail-label">Search</span></button>' +
+      '<div class="rail-main">' + items.map(function (i) { return item(i, false); }).join("") + "</div>" +
+      '<div class="rail-foot">' + foot.map(function (i) { return item(i, true); }).join("") + "</div>" +
+      '<div class="rail-sheet" role="group" aria-label="More places">' + items.concat(foot).filter(function (i) { return !i.sep && !i.phone; }).map(function (i) { return item(i, false); }).join("") + "</div>" +
+      '<button type="button" class="rail-item rail-more" data-action="rail-more" aria-expanded="' + (state.railMore ? "true" : "false") + '" title="More"><span class="rail-icon"><svg class="icon" aria-hidden="true"><use href="#i-menu"></use></svg></span><span class="rail-label">More</span></button>';
+    if (force || html !== RAIL_CACHE.html) {
+      morph(el("rail"), html);
       RAIL_CACHE.html = html;
     }
-    if (force || attn !== RAIL_CACHE.attn) {
-      el("top-attn").innerHTML = attn;
-      RAIL_CACHE.attn = attn;
-    }
+    var shell = document.querySelector(".shell");
+    if (shell) shell.classList.toggle("rail-more-open", !!state.railMore);
   }
 
   /* The path above the page, only when it says something the title and the tabs do not: a project is
@@ -3976,6 +4119,20 @@
       }
     }
 
+    // Skills devd recommends: one click, from their authors' own repositories, and only
+    // the ones a team actually uses (HyperFrames publishes nine; its core four are these).
+    var have = {};
+    (SKILLS.list || []).forEach(function (k) { have[k.name] = true; });
+    body += '<div class="panel"><div class="panel-head"><span>Recommended</span><span class="panel-note">made for agents, used by any project’s team</span></div><div class="rows">' +
+      SKILL_PICKS.map(function (r) {
+        var done = r.skills.every(function (n) { return have[n]; });
+        return '<div class="svc"><div class="svc-main"><div class="svc-name">' + esc(r.name) + ' <span class="dim mono">' + esc(r.source) + "</span></div>" +
+          '<div class="svc-sub">' + esc(r.what) + "</div></div>" +
+          '<div class="svc-actions">' + (done ? '<span class="chip chip-ok">Installed</span>'
+            : '<button type="button" class="btn btn-mini btn-primary" data-action="skill-pick" data-source="' + attr(r.source) + '" data-skills="' + attr(r.skills.join(",")) + '">Install</button>') +
+          '<a class="btn btn-mini btn-ghost" href="' + attr(r.url) + '" target="_blank" rel="noreferrer">About</a></div></div>';
+      }).join("") + "</div></div>";
+
     body += '<div class="panel"><div class="panel-head"><span>Install</span>' +
       '<span class="panel-note">from GitHub, where the skills on skills.sh live</span></div>' +
       '<div class="panel-body stack">' +
@@ -5036,6 +5193,26 @@ var TERM_POLL_MS = 250;
       '<button type="button" class="btn" data-action="clone-form">Clone</button><button type="button" class="btn btn-primary" data-action="add-project">Add a folder</button>', body);
   }
 
+  /* Git state for every repository, four at a time so twelve projects do not start
+     twelve git processes at once and slow each other (and the machine) down. */
+  function loadProjectStatuses() {
+    if (state.statusPending) return state.statusPending;
+    var queue = state.projects.filter(function (p) { return p.is_repository; });
+    var next = function () {
+      var p = queue.shift();
+      if (!p) return Promise.resolve();
+      return read("git.status", { repo: p.path })
+        .then(function (st) { p.status = st; p.error = null; })
+        .catch(function (e) { p.error = e.message; })
+        .then(next);
+    };
+    state.statusPending = Promise.all([next(), next(), next(), next()]).then(function () {
+      state.statusPending = null;
+      if (["projects", "home"].indexOf(state.view) >= 0) render();
+    });
+    return state.statusPending;
+  }
+
   function loadProjects(quiet) {
     if (state.projectsPending) return state.projectsPending;
     state.projectsPending = read("project.list")
@@ -5060,16 +5237,10 @@ var TERM_POLL_MS = 250;
           };
         });
         state.projectCount = state.projects.length;
-        // The state of a repository is worth knowing, but a folder that is not
-        // a repository is not an error - it simply has no Git state.
-        return Promise.all(
-          state.projects.map(function (p) {
-            if (!p.is_repository) return Promise.resolve();
-            return read("git.status", { repo: p.path })
-              .then(function (st) { p.status = st; })
-              .catch(function (e) { p.error = e.message; });
-          })
-        );
+        // The list is what most screens need (a name in a picker, a row in the panel).
+        // Each repository's Git state is a process per project, so it is read after the
+        // list has been shown, a few at a time, and only by the screens that show it.
+        if (["projects", "home", "project"].indexOf(state.view) >= 0) loadProjectStatuses();
       })
       .catch(function (e) {
         state.projectsLoaded = true;
@@ -6898,7 +7069,15 @@ var TERM_POLL_MS = 250;
 
   var TC = { data: null, devices: null, loading: false };
   var TOOL_RUNTIME_IDS = { php: 1, node: 1, python: 1, ruby: 1, go: 1 };
-  var TOOL_CATEGORY = { vcs: "Version control", "package-manager": "Package managers", runtime: "Runtimes", build: "Build tools", mobile: "Mobile", framework: "Frameworks", editor: "Editors", browser: "Browsers", design: "Design", container: "Containers", database: "Databases", ai: "AI tools" };
+  var SKILL_PICKS = [
+    { name: "HyperFrames", source: "heygen-com/hyperframes", url: "https://github.com/heygen-com/hyperframes",
+      skills: ["hyperframes", "hyperframes-cli", "hyperframes-registry", "media-use"],
+      what: "Make video by writing HTML: launch films, PR walkthroughs, captions and charts, rendered to MP4. Pairs with the HyperFrames tool under Machine > Tools." },
+    { name: "Stageshow", source: "benjitaylor/skills", url: "https://github.com/benjitaylor/skills",
+      skills: ["stageshow"],
+      what: "Better faux UI stills, animations and bento grids for product shots and marketing pages." }
+  ];
+  var TOOL_CATEGORY = { vcs: "Version control", "package-manager": "Package managers", runtime: "Runtimes", build: "Build tools", mobile: "Mobile", framework: "Frameworks", editor: "Editors", browser: "Browsers", design: "Design", container: "Containers", database: "Databases", ai: "AI tools", media: "Media" };
 
   // Runtimes, services and databases have their own screens. Keeping them out
   // of Tools means each install, start and version appears in one place.
@@ -8196,6 +8375,10 @@ var TERM_POLL_MS = 250;
       // The plan the agent wrote is project state, not conversation state. Read it when a thread
       // opens and every few seconds after, so it stays true while the person works elsewhere.
       var project = d.thread.project;
+      if (project && (!AI.ws || AI.ws.path !== project || Date.now() - AI.ws.at > 20000)) {
+        AI.ws = { path: project, at: Date.now(), st: AI.ws && AI.ws.path === project ? AI.ws.st : null };
+        read("git.status", { repo: project }).then(function (st) { if (AI.ws && AI.ws.path === project) { AI.ws.st = st; paintWsCard(); } }).catch(function () {});
+      }
       if (project && Date.now() - (AI.todosAt || 0) > 5000) {
         AI.todosAt = Date.now();
         read("todo.list", { project: project }).then(function (list) {
@@ -8287,16 +8470,66 @@ var TERM_POLL_MS = 250;
     if (AI.thread && AI.run && AI.run.id === event.run) {
       pollThread(false).then(paintChat).catch(function () {});
     }
+    liveSoon("runs", 250, refreshRuns);
     if (String(event.kind || "").indexOf("approval.") === 0) {
-      loadHealth().then(healthChip).catch(function () {});
+      liveSoon("health", 300, function () { loadHealth().then(healthChip).catch(function () {}); });
+    }
+  }
+
+  /* Work that is not on screen still changes what is on screen: a team hands a task to
+   * the next specialist, whose conversation is new; a run moves on; a thread finishes.
+   * Those arrive here as hints and are folded into one re-read each, a beat later, so a
+   * burst of events costs one request rather than one per event. */
+  var LIVE_SOON = {};
+  function liveSoon(key, ms, fn) {
+    if (LIVE_SOON[key]) return;
+    LIVE_SOON[key] = setTimeout(function () { LIVE_SOON[key] = 0; fn(); }, ms);
+  }
+  function refreshThreadList() {
+    return read("chat.list").then(function (t) {
+      AI.threads = t || [];
+      if (state.view === "assistant") paintThreads();
+    }).catch(function () {});
+  }
+  function refreshRuns() {
+    return read("team.list").then(function (runs) {
+      if (!Array.isArray(runs)) return null;
+      AI.liveRuns = runs;
+      AI.liveSig = runs.map(function (t) { return t.id + t.state; }).join("|");
+      if (state.view === "team") TEAM.runs = runs;
+      rail(); statusbar();
+      return state.view === "team" && TEAM.sel ? read("team.get", { run: TEAM.sel }) : null;
+    }).then(function (d) {
+      if (d && state.view === "team") { TEAM.data = d; paintTeam(); }
+    }).catch(function () {});
+  }
+  function onOtherWork(event) {
+    var data = event.data || {};
+    if (event.kind === "team.event") {
+      liveSoon("runs", 250, refreshRuns);
+      // A task starting or ending is a specialist's conversation opening or closing.
+      liveSoon("threads", 400, refreshThreadList);
+      return;
+    }
+    if (event.kind === "chat.event" && data.thread) {
+      var known = (AI.threads || []).some(function (t) { return t.id === data.thread; });
+      // A conversation we have never seen is a new one (a handoff); a reply, a notice or an
+      // error changes the state and time shown beside a known one.
+      if (!known || data.kind === "assistant" || data.kind === "notice" || data.kind === "error" || data.kind === "user") {
+        liveSoon("threads", known ? 800 : 200, refreshThreadList);
+      }
+    }
+    if (String(event.kind || "").indexOf("approval.") === 0 || String(event.kind || "").indexOf("inbox.") === 0) {
+      liveSoon("health", 300, function () { loadHealth().then(healthChip).catch(function () {}); });
     }
   }
 
   function onLive(event) {
     if (!event || !event.data) return;
     var data = event.data;
+    onOtherWork(event);
     if (data.thread && (!AI.thread || data.thread !== AI.thread.id)) return;
-    if (!AI.thread) return;
+    if (!AI.thread || !data.thread && event.kind !== "chat.event") return;
     if (event.kind === "chat.delta") {
       if (state.view !== "assistant") return;
       if (data.start) {
@@ -8335,10 +8568,13 @@ var TERM_POLL_MS = 250;
     if (!box) return;
     var stream = el("chat-stream");
     // Follow the bottom only when the person is already reading there.
-    var near = stream ? stream.scrollHeight - stream.scrollTop - stream.clientHeight < 90 : false;
+    var near = following(stream);
     box.hidden = !text;
-    if (AI.streamPainted !== text) {
+    // What the tail shows is kept on the element itself: a patch keeps the element, a
+    // fresh draw makes a new empty one, and both cases are then right without bookkeeping.
+    if (box._text !== text) {
       box.innerHTML = text ? '<div class="bubble">' + md(text) + "</div>" : "";
+      box._text = text;
       AI.streamPainted = text;
     }
     if (stream && near) stream.scrollTop = stream.scrollHeight;
@@ -8429,7 +8665,9 @@ var TERM_POLL_MS = 250;
     if (!ms || ms < 0) return "";
     if (ms < 1000) return Math.round(ms) + "ms";
     if (ms < 60000) return (ms / 1000).toFixed(1) + "s";
-    return Math.round(ms / 60000) + "m";
+    var m = Math.floor(ms / 60000), sec = Math.round((ms % 60000) / 1000);
+    if (m >= 60) return Math.floor(m / 60) + "h " + (m % 60) + "m";
+    return m + "m" + (sec ? " " + sec + "s" : "");
   }
 
   /* The name of a capability, as a person would say it.
@@ -8559,6 +8797,170 @@ var TERM_POLL_MS = 250;
     return text;
   }
 
+  /* Who is speaking.
+   *
+   * A conversation is a team at work, so each voice has its own mark: the assistant (devd),
+   * each specialist by role, the team as a whole when it reports back. The mark is an icon
+   * on a tinted disc, never a lone letter, and the tint is the role's own so a Reviewer
+   * reads as a Reviewer at a glance in a list, a timeline or a conversation. */
+  var ROLE_FACE = {
+    devd: { name: "devd", icon: "i-spark", tone: "accent" },
+    planner: { name: "Planner", icon: "i-layers", tone: "violet" },
+    product: { name: "Product", icon: "i-book", tone: "violet" },
+    architect: { name: "Architect", icon: "i-branch", tone: "rose" },
+    implementer: { name: "Implementer", icon: "i-code", tone: "green" },
+    frontend: { name: "Frontend", icon: "i-code", tone: "green" },
+    backend: { name: "Backend", icon: "i-server", tone: "green" },
+    mobile: { name: "Mobile", icon: "i-code", tone: "green" },
+    data: { name: "Data", icon: "i-db", tone: "green" },
+    designer: { name: "Designer", icon: "i-pencil", tone: "rose" },
+    reviewer: { name: "Reviewer", icon: "i-check-circle", tone: "amber" },
+    qa: { name: "QA", icon: "i-shield", tone: "teal" },
+    security: { name: "Security", icon: "i-lock", tone: "red" },
+    infra: { name: "Infra", icon: "i-wrench", tone: "sky" },
+    researcher: { name: "Researcher", icon: "i-search", tone: "sky" },
+    docs: { name: "Docs", icon: "i-book", tone: "sky" },
+    team: { name: "Your team", icon: "i-team", tone: "neutral" }
+  };
+  function roleFace(role) {
+    var key = String(role || "devd").toLowerCase();
+    return ROLE_FACE[key] || { name: key.charAt(0).toUpperCase() + key.slice(1), icon: "i-spark", tone: "neutral" };
+  }
+  function faceHtml(role, size) {
+    var f = roleFace(role);
+    return '<span class="face face-' + f.tone + (size ? " face-" + size : "") + '" aria-hidden="true"><svg class="icon"><use href="#' + f.icon + '"></use></svg></span>';
+  }
+  /* The role a conversation's agent plays: a specialist's thread is that specialist; the
+     rest are the assistant. */
+  function threadRole(t) {
+    if (!t) return "devd";
+    if (t.team && t.team.role) return t.team.role;
+    var listed = (AI.threads || []).filter(function (x) { return x.id === t.id; })[0];
+    if (listed && listed.team && listed.team.role) return listed.team.role;
+    var m = /^([A-Za-z]+) · /.exec(t.title || "");
+    return m && ROLE_FACE[m[1].toLowerCase()] ? m[1].toLowerCase() : "devd";
+  }
+
+  /* What one step did, as a sentence with its object: "Read Meetup.php", "Ran php artisan
+   * test", "Searched for “addAttendee”". A count ("Read 1 file") says nothing a person can
+   * follow; the file, the command and the query do. */
+  function baseName(p) {
+    var s = String(p || "").replace(/[\\/]+$/, "");
+    var i = Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\"));
+    return i >= 0 ? s.slice(i + 1) : s;
+  }
+  function stepTarget(b) {
+    var i = b.input || {};
+    var id = b.name === "devd_invoke" ? String(i.id || "") : b.name;
+    var a = b.name === "devd_invoke" ? (i.args || {}) : i;
+    var kind = toolKind(b);
+    var path = a.path || a.file || a.dir || "";
+    var cmd = a.task ? (a.args ? a.task + " " + [].concat(a.args).join(" ") : a.task) : Array.isArray(a.argv) ? a.argv.join(" ") : (a.command || a.cmd || "");
+    var q = a.query || a.pattern || a.q || (b.name === "devd_capabilities" ? [i.group, i.query].filter(Boolean).join(" ") : "");
+    return { kind: kind, id: id, path: String(path || ""), name: baseName(path), cmd: String(cmd || ""), query: String(q || ""), args: a };
+  }
+  /* One line of a phrase, cut cleanly: `clip` is for tool output and says where the rest is. */
+  function cut(text, n) {
+    var t = String(text || "").replace(/\s+/g, " ").trim();
+    return t.length > n ? t.slice(0, n - 1) + "…" : t;
+  }
+  function listNames(names, noun) {
+    var uniq = names.filter(function (n, k) { return n && names.indexOf(n) === k; });
+    if (!uniq.length) return noun ? countWords(names.length, noun) : "";
+    if (uniq.length <= 3) return uniq.length === 1 ? uniq[0] : uniq.slice(0, -1).join(", ") + " and " + uniq[uniq.length - 1];
+    return uniq.slice(0, 2).join(", ") + " and " + (uniq.length - 2) + " more";
+  }
+  var STEP_WORDS = {
+    "team.get": "Checked the team's run", "team.list": "Listed the team's runs", "team.start": "Gave the team the goal",
+    "team.assign": "Gave a member a task", "team.report": "Reported to the team", "team.roles": "Checked who is on the team",
+    "inbox.post": "Messaged you", "docs.fetch": "Read the documentation", "project.detect": "Read how the project is set up",
+    "git.commit": "Committed the change", "git.log": "Read the history", "todo.create": "Wrote the plan", "todo.update": "Updated the plan"
+  };
+  function stepPhrase(kind, items) {
+    var t0 = items[0];
+    var names = items.map(function (t) { return t.name; });
+    switch (kind) {
+      case "read": return "Read " + listNames(names, "file");
+      case "edit": return "Edited " + listNames(names, "file");
+      case "write": return "Created " + listNames(names, "file");
+      case "command": return items.length === 1 ? "Ran " + cut(t0.cmd || "a command", 70) : "Ran " + items.length + " commands";
+      case "search": return t0.query ? "Searched for “" + cut(t0.query, 40) + "”" + (items.length > 1 ? " and " + (items.length - 1) + " more" : "") : "Searched the code";
+      case "searchcaps": return "Looked up devd's tools" + (t0.query ? " for " + cut(t0.query, 40) : "");
+      case "list": return "Looked through " + listNames(names.map(function (n) { return n ? n + "/" : ""; }), "folder");
+      case "describe": return "Checked how " + listNames(items.map(function (t) { return t.args && t.args.id ? t.args.id : (t.id === "devd_describe" ? ((t.args || {}).id || "") : ""); }), "tool") + " works";
+      case "domains": return "Listed devd's tool areas";
+      case "skill": return "Read the " + listNames(items.map(function (t) { return (t.args && t.args.name) || ""; }), "skill") + (items.length === 1 ? " skill" : " skills");
+      case "plan": return "Updated the plan";
+      case "tasks": return "Checked the project's tasks";
+      case "doctor": return "Ran diagnostics";
+      case "git": return "Checked the repository";
+      case "diff": return "Read the diff";
+      case "approval": return "Checked approvals";
+      case "inbox": return "Checked the inbox";
+      case "projects": return "Listed projects";
+      default:
+        if (STEP_WORDS[t0.id]) return STEP_WORDS[t0.id] + (t0.args && t0.args.url ? " " + cut(t0.args.url, 50) : "");
+        // An unknown capability still reads as an action on a thing: "team.get" is
+        // "Checked team", not "Get".
+        var parts = String(t0.id || "").split(".");
+        var verb = { get: "Checked", list: "Listed", status: "Checked", show: "Checked", read: "Read", create: "Created", add: "Added", update: "Updated", set: "Set", start: "Started", stop: "Stopped", run: "Ran", delete: "Removed", remove: "Removed", post: "Posted", fetch: "Fetched" }[parts[1]];
+        if (parts.length === 2 && verb) return verb + " " + parts[0].replace(/_/g, " ") + (t0.name || t0.query ? " " + cut(t0.name || t0.query, 40) : "");
+        return capabilityName(t0.id) + (t0.cmd || t0.name || t0.query ? " " + cut(t0.cmd || t0.name || t0.query, 50) : "");
+    }
+  }
+  function describeSteps(calls, results) {
+    var groups = [];
+    var failed = 0;
+    calls.forEach(function (b) {
+      if (b.type && b.type !== "tool_use") return;
+      var t = stepTarget(b);
+      var last = groups[groups.length - 1];
+      if (last && last.kind === t.kind) last.items.push(t);
+      else groups.push({ kind: t.kind, items: [t] });
+      if (results && results[b.id] && results[b.id].is_error) failed += 1;
+    });
+    if (!groups.length) return "";
+    var phrases = groups.map(function (g) { return stepPhrase(g.kind, g.items); });
+    var lower = function (s) { return s.charAt(0).toLowerCase() + s.slice(1); };
+    var text = phrases.length === 1 ? phrases[0]
+      : phrases.length === 2 ? phrases[0] + ", then " + lower(phrases[1])
+      : phrases[0] + ", " + lower(phrases[1]) + " and " + (phrases.length - 2) + " more step" + (phrases.length > 3 ? "s" : "");
+    if (failed) text += " · " + failed + " failed";
+    return text;
+  }
+  /* What a finished command showed, in a word or two, beside its line: tests are the
+     answer most commands exist to give. */
+  function resultChip(calls, results) {
+    var out = "";
+    calls.forEach(function (b) {
+      if (out || toolKind(b) !== "command") return;
+      var r = results[b.id];
+      if (!r) return;
+      var text = String(r.content == null ? "" : r.content);
+      var pass = /(\d+)\s+passed/.exec(text), fail = /(\d+)\s+failed/.exec(text);
+      if (fail && +fail[1] > 0) out = '<span class="chip chip-bad">' + esc(fail[1]) + " failed</span>";
+      else if (pass) out = '<span class="chip chip-ok">' + esc(pass[1]) + " passed</span>";
+      else if (r.is_error) out = '<span class="chip chip-bad">failed</span>';
+    });
+    return out;
+  }
+  /* An edit, shown as the change it made: the lines removed and the lines added. */
+  function editPreview(b) {
+    var t = stepTarget(b);
+    if (t.kind !== "edit" && t.kind !== "write") return "";
+    var a = t.args || {};
+    var oldS = a.old_string != null ? String(a.old_string) : a.old != null ? String(a.old) : "";
+    var newS = a.new_string != null ? String(a.new_string) : a.new != null ? String(a.new) : a.content != null ? String(a.content) : "";
+    if (!oldS && !newS) return "";
+    var lines = [];
+    var cap = 40;
+    oldS.split("\n").slice(0, cap).forEach(function (l) { if (oldS) lines.push('<div class="diff-line diff-del"><span class="diff-sign">−</span>' + esc(l) + "</div>"); });
+    newS.split("\n").slice(0, cap).forEach(function (l) { lines.push('<div class="diff-line diff-add"><span class="diff-sign">+</span>' + esc(l) + "</div>"); });
+    var more = Math.max(0, oldS.split("\n").length - cap) + Math.max(0, newS.split("\n").length - cap);
+    return '<div class="diff-card"><div class="diff-head"><svg class="icon" aria-hidden="true"><use href="#i-file"></use></svg><span class="mono">' + esc(t.path || t.name) + "</span></div>" +
+      '<div class="diff-body">' + lines.join("") + (more ? '<div class="diff-more">' + more + " more lines</div>" : "") + "</div></div>";
+  }
+
   /* The row under a reply. Copy takes the reply's text; Fork starts a new conversation from it and
    * leaves this one as it is; Pin marks it as a chapter of this conversation. */
   function msgActions(eventId, block) {
@@ -8600,9 +9002,12 @@ var TERM_POLL_MS = 250;
     var closeGroup = function () {
       if (!activity) return;
       var open = !!AI.openTools[activity.key];
-      var html = '<div class="msg-tools' + (open ? " open" : "") + '" data-group="' + attr(activity.key) + '">' +
-        '<button type="button" class="tools-head" data-action="tools-toggle" data-group="' + attr(activity.key) + '" aria-expanded="' + (open ? "true" : "false") + '" title="Show what the agent did">' +
-        '<span class="tools-summary">' + esc(toolSummary(activity.calls, results) || "Worked") + "</span>" +
+      var running = activity.calls.some(function (c) { return !results[c.id]; });
+      var html = '<div class="msg-tools' + (open ? " open" : "") + (running ? " is-running" : "") + '" data-key="g' + attr(activity.key) + '" data-group="' + attr(activity.key) + '">' +
+        '<button type="button" class="tools-head" data-action="tools-toggle" data-group="' + attr(activity.key) + '" aria-expanded="' + (open ? "true" : "false") + '" title="Show each step">' +
+        '<span class="tools-dot" aria-hidden="true"></span>' +
+        '<span class="tools-summary">' + esc(describeSteps(activity.calls, results) || toolSummary(activity.calls, results) || "Worked") + "</span>" +
+        resultChip(activity.calls, results) +
         '<span class="tools-chevron" aria-hidden="true"><svg class="icon"><use href="#i-chevron-down"></use></svg></span>' +
         "</button>" +
         '<div class="tools-list"' + (open ? "" : " hidden") + ">" +
@@ -8611,8 +9016,8 @@ var TERM_POLL_MS = 250;
       if (current) current.items.push(html);
       activity = null;
     };
-    var openTurn = function (at) {
-      current = { at: at || "", items: [], copy: null, last: "none" };
+    var openTurn = function (at, key) {
+      current = { at: at || "", end: at || "", items: [], copy: null, last: "none", key: key || "", lastText: -1, edits: {}, commands: 0, passed: 0, failed: 0 };
       blocks.push({ type: "turn", turn: current });
     };
     var endTurn = function () {
@@ -8626,11 +9031,12 @@ var TERM_POLL_MS = 250;
         // A person's message stands on its own. The assistant's reply is the
         // turn that follows it; it does not share the person's row or avatar.
         endTurn();
-        blocks.push({ type: "user", at: e.created_at, text: e.data.text || "", from: e.data.from || "" });
+        blocks.push({ type: "user", at: e.created_at, text: e.data.text || "", from: e.data.from || "", key: e.id });
         return;
       }
       if (e.kind === "assistant") {
-        if (!current) openTurn(e.created_at);
+        if (!current) openTurn(e.created_at, e.id);
+        current.end = (resultAt && e.created_at) || current.end;
         // Each model call's tools are one run: three searches in one call read
         // as "Searched 3 times", while the next call gets its own line. The
         // turn still holds them all together.
@@ -8643,10 +9049,21 @@ var TERM_POLL_MS = 250;
             // under a turn acts on the turn: copy, fork, pin.
             closeGroup();
             current.items.push('<div class="bubble" data-event="' + e.id + '">' + md(b.text) + "</div>");
+            current.lastText = current.items.length - 1;
             current.copy = e.id;
             current.last = "text";
           } else if (b.type === "tool_use") {
             var c = summarizeCall(b), r = results[b.id], open = AI.openSteps[b.id];
+            var st = stepTarget(b);
+            if (st.kind === "edit" || st.kind === "write") current.edits[st.path || st.name] = true;
+            if (st.kind === "command") {
+              current.commands += 1;
+              var rt = r ? String(r.content == null ? "" : r.content) : "";
+              var mp = /(\d+)\s+passed/.exec(rt), mf = /(\d+)\s+failed/.exec(rt);
+              if (mp) current.passed = Math.max(current.passed, +mp[1]);
+              if (mf) current.failed = Math.max(current.failed, +mf[1]);
+            }
+            c = { title: stepPhrase(st.kind, [st]), detail: st.kind === "command" || st.kind === "read" || st.kind === "edit" || st.kind === "write" ? (st.path && st.path !== st.name ? st.path : "") : c.detail };
             var pend = pendingByTool[b.id];
             var out = r ? clip(String(r.content == null ? "" : r.content), 20000) : "";
             var took = "";
@@ -8660,7 +9077,7 @@ var TERM_POLL_MS = 250;
             if (!activity) activity = { key: b.id, calls: [], rows: [] };
             activity.calls.push(b);
             current.last = "tools";
-            activity.rows.push('<div class="step' + (r && r.is_error ? " step-bad" : "") + (open ? " open" : "") + '">' +
+            activity.rows.push('<div class="step' + (r && r.is_error ? " step-bad" : "") + (open ? " open" : "") + '" data-key="s' + attr(b.id) + '">' +
               '<button type="button" class="step-head" data-action="step-toggle" data-id="' + attr(b.id) + '" aria-expanded="' + (open ? "true" : "false") + '" title="' + attr(c.title + (c.detail ? " — " + c.detail : "")) + '">' +
               '<span class="step-arrow" aria-hidden="true"><svg class="icon"><use href="#i-chevron-down"></use></svg></span>' +
               '<span class="step-dot ' + (pend ? "wait" : r ? (r.is_error ? "bad" : "ok") : "run") + '" aria-hidden="true"></span>' +
@@ -8669,7 +9086,7 @@ var TERM_POLL_MS = 250;
               (took ? '<span class="step-time">' + esc(took) + "</span>" : "") +
               "</button>" +
               (open
-                ? '<div class="step-body"><div class="field-label">Input</div><pre class="log-block">' + esc(JSON.stringify(b.input, null, 2)) + "</pre>" +
+                ? '<div class="step-body">' + editPreview(b) + '<div class="field-label">Input</div><pre class="log-block">' + esc(JSON.stringify(b.input, null, 2)) + "</pre>" +
                   (r
                     ? '<div class="inline"><div class="field-label grow">Result</div><button type="button" class="btn btn-mini btn-ghost" data-action="copy-output" data-id="out-' + attr(b.id) + '">Copy</button></div><pre class="log-block" id="out-' + attr(b.id) + '">' + esc(out) + "</pre>"
                     : "") +
@@ -8680,7 +9097,7 @@ var TERM_POLL_MS = 250;
         });
         return;
       }
-      if (!current) openTurn(e.created_at);
+      if (!current) openTurn(e.created_at, e.id);
       if (e.kind === "approval") {
         closeGroup();
         var req = AI.pending.filter(function (r) { return r.id === e.data.request_id; })[0];
@@ -8706,42 +9123,83 @@ var TERM_POLL_MS = 250;
       blocks.push({ type: "turn", turn: { at: "", items: [], copy: null, last: "none" } });
     }
 
+    var role = threadRole(AI.thread);
+    var face = roleFace(role);
+    var specialist = role !== "devd";
     var html = blocks.map(function (block, i) {
-      if (block.type === "user" && block.from) {
+      // Every message names who sent it ("human:…" for the person); only the team's own
+      // messages are drawn as the team's.
+      if (block.type === "user" && block.from === "devd-team") {
+        var whenT = shortTime(block.at);
+        if (specialist) {
+          // In a specialist's conversation the team's message is the brief: devd handing
+          // this member its task. It opens with what the member must do, and the full
+          // brief folds away under it.
+          var brief = String(block.text);
+          var taskLine = (/# Your task: ([^\n]+)/.exec(brief) || [])[1];
+          if (!taskLine) {
+            // Not the brief: devd speaking to the member mid-task (a report it did not
+            // accept, a nudge, the person's new instruction passed on).
+            return '<div class="msg msg-brief is-note" data-key="u' + block.key + '"><div class="brief">' + faceHtml("devd", "sm") +
+              '<div class="grow"><div class="brief-head"><b>devd</b><span class="dim">to ' + esc(face.name) + (whenT ? " · " + esc(whenT) : "") + "</span></div>" +
+              md(brief) + "</div></div></div>";
+          }
+          var task = taskLine;
+          return '<div class="msg msg-brief" data-key="u' + block.key + '"><div class="brief">' + faceHtml("devd", "sm") +
+            '<div class="grow"><div class="brief-head"><b>devd</b><span class="dim">handed ' + esc(face.name) + " a task" + (whenT ? " · " + esc(whenT) : "") + "</span></div>" +
+            '<div class="brief-task">' + esc(task.replace(/\s*\([a-z0-9-]+\)$/, "")) + "</div>" +
+            '<details class="brief-body"><summary>Full brief</summary>' + md(brief) + "</details>" +
+            "</div></div></div>";
+        }
         // A run this conversation started has come back with its plan, a pause or its result.
-        // It is not the person speaking, so it is not drawn as "You": a line says who it is
-        // from and what it is, the raw report folds away, and the assistant's answer follows.
+        // It is not the person speaking: a line says who it is from and what it is, the raw
+        // report folds away, and the assistant's answer follows.
         var parts = String(block.text).split("\n---\n");
         var report = (parts[1] || parts[0]).trim();
         var subject = report.split("\n")[0];
         var rest = report.slice(subject.length).trim();
-        var whenT = shortTime(block.at);
-        return '<div class="msg msg-team"><div class="team-note"><span class="team-note-mark" aria-hidden="true"><svg class="icon"><use href="#i-team"></use></svg></span>' +
+        return '<div class="msg msg-team" data-key="u' + block.key + '"><div class="team-note">' + faceHtml("team", "sm") +
           '<div class="grow"><div class="team-note-head"><b>' + esc(subject) + '</b><span class="dim">Your team' + (whenT ? " · " + esc(whenT) : "") + "</span></div>" +
-          (rest ? '<details class="team-note-body"><summary>What they sent</summary><div class="md">' + md(rest) + "</div></details>" : "") +
+          (rest ? '<details class="team-note-body"><summary>Their report</summary>' + md(rest) + "</details>" : "") +
           "</div></div></div>";
       }
       if (block.type === "user") {
         var when = shortTime(block.at);
         var shown = splitAttachments(block.text);
         setTimeout(fillMessageFiles, 0);
-        return '<div class="msg msg-user"><div>' + messageFiles(shown.files) + (shown.text ? '<div class="bubble">' + md(shown.text) + "</div>" : "") + '<div class="msg-meta">You' + (when ? " · " + when : "") + "</div></div></div>";
+        return '<div class="msg msg-user" data-key="u' + block.key + '"><div class="msg-user-body">' + messageFiles(shown.files) + (shown.text ? '<div class="bubble">' + md(shown.text) + "</div>" : "") + '<div class="msg-meta">You' + (when ? " · " + when : "") + "</div></div></div>";
       }
       var turn = block.turn;
       var active = i === blocks.length - 1 && working;
       var body = turn.items.join("");
-      // The working dots are the wait before the first word (or while a tool
-      // runs). Once text has been written they give way to the text itself.
+      // A finished turn leads with its answer. Everything it did on the way (the steps
+      // and the running commentary) folds behind one line that says how long it worked
+      // and what that came to; the reader opens it when they want the trail.
+      var workN = turn.lastText > 0 ? turn.lastText : 0;
+      var hasSteps = turn.items.slice(0, workN).some(function (h) { return h.indexOf("msg-tools") >= 0; });
+      if (!active && workN >= 2 && hasSteps) {
+        var took = turn.at && turn.end ? Date.parse(turn.end) - Date.parse(turn.at) : 0;
+        var files = Object.keys(turn.edits).length;
+        var tiles = [];
+        if (files) tiles.push('<span class="tile"><b>' + files + "</b> file" + (files === 1 ? "" : "s") + " changed</span>");
+        if (turn.passed) tiles.push('<span class="tile tile-ok"><b>' + turn.passed + "</b> tests passed</span>");
+        if (turn.failed) tiles.push('<span class="tile tile-bad"><b>' + turn.failed + "</b> failed</span>");
+        if (turn.commands && !turn.passed && !turn.failed) tiles.push('<span class="tile"><b>' + turn.commands + "</b> command" + (turn.commands === 1 ? "" : "s") + " run</span>");
+        body = '<details class="worked" data-key="w' + attr(turn.key) + '"><summary><span class="worked-line">Worked' + (took > 1000 ? " for " + esc(duration(took)) : "") + '</span><svg class="icon" aria-hidden="true"><use href="#i-chevron"></use></svg>' + (tiles.length ? '<span class="worked-tiles">' + tiles.join("") + "</span>" : "") + "</summary>" +
+          '<div class="worked-body">' + turn.items.slice(0, workN).join("") + "</div></details>" + turn.items.slice(workN).join("");
+      }
+      // The working line is the wait before the first word (or while a tool runs). Once
+      // text has been written it gives way to the text itself.
       var typing = active && turn.last !== "text"
-        ? '<div class="bubble typing typing-inline" id="chat-typing" role="status" aria-label="devd is working"><span class="tdot"></span><span class="tdot"></span><span class="tdot"></span><span class="typing-label">Working</span></div>'
+        ? '<div class="typing typing-inline" id="chat-typing" role="status" aria-label="' + attr(face.name) + ' is working"><span class="tdot"></span><span class="tdot"></span><span class="tdot"></span><span class="typing-label">' + esc(face.name === "devd" ? "Working" : face.name + " is working") + "</span></div>"
         : "";
-      // The text being written is placed here; paintStreamTail fills it. It is
-      // an overlay so a token does not re-render the whole conversation.
-      var tail = active ? '<div class="msg-tail" id="chat-tail" hidden></div>' : "";
-      return '<div class="turn msg-agent">' +
-        '<div class="avatar" aria-hidden="true">d</div>' +
+      // The text being written is placed here; paintStreamTail fills it. It is an overlay
+      // so a token does not re-render the whole conversation.
+      var tail = active ? '<div class="msg-tail" id="chat-tail" data-morph="skip" hidden></div>' : "";
+      var whenA = shortTime(turn.at);
+      return '<div class="turn msg-agent" data-key="t' + (turn.key || "live") + '">' +
+        '<div class="turn-who">' + faceHtml(role) + '<b>' + esc(face.name) + "</b>" + (whenA ? '<span class="dim">' + esc(whenA) + "</span>" : "") + "</div>" +
         '<div class="turn-body">' + body + typing + tail +
-        (!active && (body || typing || tail) ? '<div class="msg-meta">devd' + (shortTime(turn.at) ? " · " + shortTime(turn.at) : "") + "</div>" : "") +
         (turn.copy && !active ? msgActions(turn.copy, 0) : "") +
         "</div></div>";
     }).join("");
@@ -8788,7 +9246,9 @@ var TERM_POLL_MS = 250;
   function paintChatPlan() {
     var box = el("chat-plan");
     if (!box) return;
-    var all = AI.todos || [];
+    // The project's plan belongs to the person's conversation about it; a specialist's
+    // conversation is one task of a run and has the run's own task list instead.
+    var all = threadRole(AI.thread) === "devd" ? AI.todos || [] : [];
     var open = all.filter(function (t) { return t.status !== "done" && t.status !== "cancelled"; });
     if (!open.length) { box.hidden = true; box.innerHTML = ""; return; }
     var done = all.filter(function (t) { return t.status === "done"; }).length;
@@ -8797,6 +9257,32 @@ var TERM_POLL_MS = 250;
       open.slice(0, 3).map(function (t) { return '<span class="chat-plan-item" title="' + attr(t.title) + '">' + esc(t.title) + "</span>"; }).join("") +
       (open.length > 3 ? '<span class="dim">+' + (open.length - 3) + "</span>" : "") +
       '<button type="button" class="btn btn-mini btn-ghost" data-action="chat-plan">View</button>';
+  }
+
+  /* The project a conversation works on, beside it: where the work lands (branch, what
+     changed) and the two places to go next. Only on windows wide enough for a third
+     column; narrower, the same facts are in the header's line. */
+  function paintWsCard() {
+    var box = el("ws-card");
+    if (!box) return;
+    var t = AI.thread;
+    var path = t && t.project;
+    if (!path) { box.hidden = true; return; }
+    var st = AI.ws && AI.ws.path === path ? AI.ws.st : null;
+    var rows = [];
+    rows.push('<div class="ws-row"><svg class="icon" aria-hidden="true"><use href="#i-folder"></use></svg><span class="grow nowrap">' + esc(threadProjectName(path)) + "</span></div>");
+    if (st) {
+      var changed = (st.staged || []).length + (st.unstaged || []).length + (st.untracked || []).length;
+      rows.push('<div class="ws-row"><svg class="icon" aria-hidden="true"><use href="#i-branch"></use></svg><span class="grow nowrap mono">' + esc(st.branch || "detached") + "</span>" +
+        (st.ahead ? '<span class="dim">' + st.ahead + " ahead</span>" : "") + "</div>");
+      rows.push('<button type="button" class="ws-row ws-link" data-action="open-project" data-path="' + attr(path) + '"><svg class="icon" aria-hidden="true"><use href="#i-file"></use></svg><span class="grow">Changes</span>' +
+        (changed ? '<span class="ws-diff">' + changed + " file" + (changed === 1 ? "" : "s") + "</span>" : '<span class="dim">clean</span>') + "</button>");
+    }
+    rows.push('<div class="ws-sep"></div>');
+    rows.push('<button type="button" class="ws-row ws-link" data-action="open-project" data-path="' + attr(path) + '"><svg class="icon" aria-hidden="true"><use href="#i-chevron"></use></svg><span class="grow">Open project</span></button>');
+    rows.push('<button type="button" class="ws-row ws-link" data-action="open-terminal" data-path="' + attr(path) + '"><svg class="icon" aria-hidden="true"><use href="#i-code"></use></svg><span class="grow">Terminal here</span></button>');
+    box.hidden = false;
+    morph(box, rows.join(""));
   }
 
   function chatPaintKey() {
@@ -8838,21 +9324,32 @@ var TERM_POLL_MS = 250;
       AI.streamPainted = "";
       stopStreamPaint();
     }
-    var near = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
-    var top = box.scrollTop;
+    stickToBottom(box);
+    // A different conversation is a fresh page: drawn whole and opened at its end.
+    var fresh = box.getAttribute("data-thread") !== tid;
+    var near = fresh || following(box);
     box.setAttribute("aria-busy", busy ? "true" : "false");
-    box.innerHTML = chatHtml();
-    // The render replaced the tail element with a fresh empty one.
-    AI.streamPainted = "";
-    // Follow the bottom only when the person was already there; otherwise stay exactly where they were.
+    if (fresh) {
+      box.innerHTML = chatHtml();
+      box.setAttribute("data-thread", tid);
+    } else {
+      // Same conversation: patch it, so what the reader has open, loaded or selected stays.
+      morph(box, chatHtml());
+    }
+    // A fresh draw rebuilt the tail element empty; a patch kept it and what it holds.
+    if (fresh) AI.streamPainted = "";
+    // Follow the bottom only when the person was already there; otherwise the patch left
+    // them exactly where they were, and nothing here moves them.
     // An empty conversation starts at its heading; following the bottom cut it off under the top strip.
-    box.scrollTop = box.querySelector(".assist-empty") ? 0 : near ? box.scrollHeight : top;
+    if (box.querySelector(".assist-empty")) box.scrollTop = 0;
+    else if (near) { box.scrollTop = box.scrollHeight; box._stick.on = true; }
     // The text of the turn being written is an overlay on the last turn; a
     // re-render rebuilds the boxes under it, so it is laid down again.
     paintStreamTail();
     var t = AI.thread;
     var head = el("chat-head");
-    if (head && t) head.innerHTML = chatHeadHtml();
+    if (head) morph(head, chatHeadHtml());
+    paintWsCard();
     var send = el("chat-send");
     if (send) {
       // The arrow always sends or queues. While it works, the square beside it stops; a message
@@ -8870,33 +9367,128 @@ var TERM_POLL_MS = 250;
 
   function chatHeadHtml() {
     var t = AI.thread;
+    var switcher = '<button type="button" class="chat-switch" data-action="threads-toggle" aria-expanded="false" aria-controls="threads" title="Conversations"><svg class="icon" aria-hidden="true"><use href="#i-menu"></use></svg></button>';
+    if (!t) {
+      return switcher + '<div class="chat-head-main"><div class="chat-title">New conversation</div><div class="chat-head-sub">Ask devd, or give the team a goal</div></div>';
+    }
     var r = AI.run;
     var busy = t.state === "running" || AI.running;
-    var word = busy ? "working" : t.state === "waiting_approval" ? "waiting for you" : t.state === "error" ? "stopped with an error" : "";
+    var role = threadRole(t);
+    var face = roleFace(role);
+    var listed = (AI.threads || []).filter(function (x) { return x.id === t.id; })[0] || {};
+    var team = listed.team;
+    var word = busy ? (role === "devd" ? "working" : face.name + " is working") : t.state === "waiting_approval" ? "waiting for you" : t.state === "error" ? "stopped with an error" : "";
     var used = (t.input_tokens || 0) + (t.output_tokens || 0);
-    // The provider and the model live in the composer, where they are used.
-    // The head is a quiet line: what this conversation is, and where it stands.
-    // It is not a second title bar; the page title is above it.
-    return '<span class="chat-state' + (busy ? " is-live" : t.state === "error" ? " is-bad" : "") + '" aria-hidden="true"></span>' +
+    var sub = [t.project ? threadProjectName(t.project) : "No project"];
+    if (team) sub.push(face.name + " on " + clip(team.run_title || "a team run", 60));
+    if (word) sub.push(word);
+    if (used) sub.push(compactCount(used) + " tokens");
+    // The head is a quiet line: who this is, what it is for and where it stands. The
+    // actions that matter sit at its end; the rest are one click away.
+    return switcher + faceHtml(role) +
       '<div class="chat-head-main">' +
-      '<div class="chat-title">' + esc(t.title || "New conversation") + "</div>" +
-      '<div class="chat-head-sub">' + esc(t.project ? dirName(t.project) : "No project") +
-      (used ? " · " + compactCount(t.input_tokens) + " in / " + compactCount(t.output_tokens) + " out" : "") +
-      (word ? " · " + esc(word) : "") + "</div></div>" +
-      (AI.queued > 0 ? '<span class="pill pill-warn" title="Messages waiting for the next step">' + AI.queued + " queued</span>" : "") +
-      (AI.chapters && AI.chapters.length ? '<button type="button" class="btn btn-mini btn-ghost" data-action="chapters-open">Chapters (' + AI.chapters.length + ")</button>" : "") +
-      (r ? '<button type="button" class="btn btn-mini btn-ghost" data-action="open-run" data-id="' + attr(r.id) + '" title="See this conversation as a run: steps, capability calls, evidence and the durable timeline">' + runPill(r.state) + "</button>" : "") +
-      (r && !(t.state === "running" || AI.running) && runCanRetry(r.state) ? '<button type="button" class="btn btn-mini btn-primary" data-action="run-retry" data-id="' + attr(r.id) + '">Continue</button>' : "") +
-      (r ? "" : '<span class="pill ' + (t.state === "error" ? "pill-bad" : t.state === "idle" ? "" : "pill-accent") + '">' + esc(t.state.replace("_", " ")) + '</span>') +
-      '<button type="button" class="btn btn-mini btn-ghost" data-action="chat-delete" data-id="' + attr(t.id) + '">Delete</button>';
+      '<div class="chat-title">' + esc(team ? team.task || t.title : t.title || "New conversation") + "</div>" +
+      '<div class="chat-head-sub">' + esc(sub.join(" · ")) + "</div></div>" +
+      (AI.queued > 0 ? '<span class="chip chip-warn" title="Messages waiting for the next step">' + AI.queued + " queued</span>" : "") +
+      (team && team.parent ? '<button type="button" class="btn btn-mini btn-ghost" data-action="open-thread" data-id="' + attr(team.parent) + '" title="The conversation that asked for this work">Back to request</button>' : "") +
+      (team ? '<button type="button" class="btn btn-mini btn-ghost" data-action="team-open-from" data-id="' + attr(team.run) + '">See the run</button>' : "") +
+      (AI.chapters && AI.chapters.length ? '<button type="button" class="btn btn-mini btn-ghost" data-action="chapters-open">Chapters ' + AI.chapters.length + "</button>" : "") +
+      (r ? '<button type="button" class="btn btn-mini btn-ghost" data-action="open-run" data-id="' + attr(r.id) + '" title="Steps, capability calls, evidence and the durable timeline">Evidence</button>' : "") +
+      (r && !busy && runCanRetry(r.state) ? '<button type="button" class="btn btn-mini btn-primary" data-action="run-retry" data-id="' + attr(r.id) + '">Continue</button>' : "") +
+      '<button type="button" class="btn btn-mini btn-ghost btn-icon" data-action="chat-delete" data-id="' + attr(t.id) + '" title="Delete this conversation" aria-label="Delete this conversation"><svg class="icon" aria-hidden="true"><use href="#i-trash"></use></svg></button>';
   }
 
+  /* The conversation list, organised the way the work is.
+   *
+   * Conversations sit under their project, most recently active project first, so the
+   * work on one codebase is read together and never mixed with another's. A specialist's
+   * conversation is not a separate item in the list: it is nested under the conversation
+   * that started its run, in the order the team handed the work along, so a handoff from
+   * Implementer to Reviewer reads as the next line under the same request. */
+  function threadProjectName(path) {
+    if (!path) return "No project";
+    var p = (state.projects || []).filter(function (x) { return x.path === path; })[0];
+    return (p && p.name) || dirName(path);
+  }
+  function threadState(t) {
+    var s = t.state === "running" ? "run" : t.state === "waiting_approval" ? "wait" : t.state === "error" ? "bad" : "";
+    if (!s && t.team && (t.team.task_state === "unverified" || t.team.task_state === "failed" || t.team.task_state === "blocked")) s = "bad";
+    return s;
+  }
+  function threadRowHtml(t, child) {
+    var active = AI.thread && AI.thread.id === t.id;
+    var st = threadState(t);
+    var title = t.title || "Conversation";
+    var label;
+    // A specialist's conversation whose run was deleted still says who it was.
+    var named = !t.team && /^([A-Za-z]+) · (.+)$/.exec(title);
+    var namedRole = named && ROLE_FACE[named[1].toLowerCase()] ? named[1].toLowerCase() : "";
+    if ((child && t.team) || namedRole) {
+      var r0 = t.team ? t.team.role : namedRole;
+      var f = roleFace(r0);
+      label = faceHtml(r0, "xs") + '<span class="thread-role">' + esc(f.name) + '</span><span class="grow nowrap thread-task">' + esc((t.team && t.team.task) || title.replace(/^[^·]+· /, "")) + "</span>";
+    } else {
+      label = '<span class="thread-state' + (st ? " is-" + st : "") + '" aria-hidden="true"></span><span class="grow nowrap">' + esc(title) + "</span>";
+    }
+    return '<div class="thread-row' + (child ? " thread-child" : "") + '" data-key="r' + attr(t.id) + '">' +
+      '<button type="button" class="thread' + (active ? " active" : "") + (st ? " is-" + st : "") + '" data-action="open-thread" data-id="' + attr(t.id) + '"' + (active ? ' aria-current="true"' : "") + ' title="' + attr(title) + '">' +
+      label + '<span class="thread-time">' + esc(ago(t.updated_at)) + "</span></button>" +
+      '<button type="button" class="thread-del" data-action="chat-delete" data-id="' + attr(t.id) + '" title="Delete this conversation" aria-label="Delete this conversation"><svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg></button></div>';
+  }
+  function threadListHtml() {
+    var all = AI.threads || [];
+    if (!all.length) return '<div class="threads-empty">No conversations yet. Ask devd something to start one.</div>';
+    var byId = {};
+    all.forEach(function (t) { byId[t.id] = t; });
+    // Specialists under the conversation that asked; a run with no conversation of its own
+    // (started from the CLI or a schedule) gets its own line, named for the run.
+    var kids = {}, orphanRuns = {}, tops = [];
+    all.forEach(function (t) {
+      var parent = t.team && t.team.parent;
+      if (t.team && parent && byId[parent]) (kids[parent] = kids[parent] || []).push(t);
+      else if (t.team) (orphanRuns[t.team.run] = orphanRuns[t.team.run] || { run: t.team, project: t.project, items: [] }).items.push(t);
+      else tops.push(t);
+    });
+    Object.keys(orphanRuns).forEach(function (k) {
+      var g = orphanRuns[k];
+      var latest = g.items.reduce(function (a, b) { return a.updated_at > b.updated_at ? a : b; });
+      tops.push({ id: "run:" + k, title: g.run.run_title || "Team run", project: g.project, updated_at: latest.updated_at, state: "", runGroup: g.items });
+    });
+    var groups = {}, order = [];
+    tops.forEach(function (t) {
+      var key = t.project || "";
+      if (!groups[key]) { groups[key] = { path: key, items: [], at: "" }; order.push(key); }
+      groups[key].items.push(t);
+      var at = t.updated_at;
+      (kids[t.id] || t.runGroup || []).forEach(function (k) { if (k.updated_at > at) at = k.updated_at; });
+      if (at > groups[key].at) groups[key].at = at;
+      t._at = at;
+    });
+    order.sort(function (a, b) { return groups[a].at < groups[b].at ? 1 : -1; });
+    AI.groupClosed = AI.groupClosed || {};
+    return order.map(function (key) {
+      var g = groups[key];
+      g.items.sort(function (a, b) { return a._at < b._at ? 1 : -1; });
+      var closed = !!AI.groupClosed[key];
+      var rows = g.items.map(function (t) {
+        var children = (kids[t.id] || t.runGroup || []).slice().sort(function (a, b) { return a.created_at < b.created_at ? -1 : 1; });
+        var head = t.runGroup
+          ? '<div class="thread-row thread-run" data-key="r' + attr(t.id) + '"><div class="thread thread-static">' + faceHtml("team", "xs") + '<span class="grow nowrap">' + esc(t.title) + '</span><span class="thread-time">' + esc(ago(t._at)) + "</span></div></div>"
+          : threadRowHtml(t, false);
+        return head + children.map(function (c) { return threadRowHtml(c, true); }).join("");
+      }).join("");
+      return '<div class="thread-group' + (closed ? " is-closed" : "") + '" data-key="p' + attr(key || "none") + '">' +
+        '<button type="button" class="thread-group-head" data-action="thread-group" data-id="' + attr(key) + '" aria-expanded="' + (closed ? "false" : "true") + '">' +
+        '<svg class="icon" aria-hidden="true"><use href="#i-chevron-down"></use></svg><span class="grow nowrap">' + esc(threadProjectName(key)) + '</span><span class="thread-count">' + g.items.length + "</span></button>" +
+        (closed ? "" : '<div class="thread-group-body">' + rows + "</div>") + "</div>";
+    }).join("");
+  }
   function paintThreads() {
     var box = el("thread-list");
     if (!box) return;
-    box.innerHTML = (AI.threads || []).map(function (t) {
-      return '<div class="thread-row"><button type="button" class="thread' + (AI.thread && AI.thread.id === t.id ? " active" : "") + '" data-action="open-thread" data-id="' + attr(t.id) + '"><span class="dot ' + (t.state === "running" ? "dot-ok" : t.state === "waiting_approval" ? "dot-warn" : t.state === "error" ? "dot-bad" : "dot-off") + '"></span><span class="grow nowrap">' + esc(t.title) + '</span><span class="dim">' + esc(ago(t.updated_at)) + '</span></button><button type="button" class="thread-del" data-action="chat-delete" data-id="' + attr(t.id) + '" title="Delete this conversation" aria-label="Delete this conversation">\u00d7</button></div>';
-    }).join("") || '<div class="empty-inline">No conversations yet.</div>';
+    // Patched, not replaced: the list keeps its scroll position and focus while a run
+    // adds the next specialist under the request.
+    morph(box, threadListHtml());
   }
 
   function renderAssistant() {
@@ -8928,11 +9520,10 @@ var TERM_POLL_MS = 250;
     });
 
     el("main").innerHTML =
-      '<div class="workspace">' +
-      '<div class="workspace-head">' + pageTitle("Assistant") + '<span class="grow"></span><button type="button" class="btn btn-mini" data-action="nav" data-view="agents">Team room</button></div>' +
-      '<div class="assistant"><aside class="threads"><div class="threads-head"><b>Conversations</b><span class="grow"></span><button type="button" class="btn btn-mini btn-ghost" data-action="chats-prune" title="Delete every conversation that is not working">Clear finished</button><button type="button" class="btn btn-mini" data-action="chat-new">New</button></div><div id="thread-list"></div></aside>' +
+      '<div class="workspace workspace-chat">' +
+      '<div class="assistant has-card">' +
       '<section class="chat">' +
-      (AI.thread ? '<div class="chat-head" id="chat-head"></div>' : "") +
+      '<div class="chat-head" id="chat-head"></div>' +
       (!ready ? '<div class="notice notice-warn chat-notice">No usable AI provider yet. <button type="button" class="btn btn-mini btn-primary" data-action="nav" data-view="providers">Set one up</button></div>' : "") +
       '<div class="chat-plan" id="chat-plan" hidden></div>' +
       // The conversation and the box share one column, and the box sits at the
@@ -8941,8 +9532,8 @@ var TERM_POLL_MS = 250;
       '<div class="chat-stream" id="chat-stream" role="log" aria-live="off" aria-label="Conversation"></div>' +
       composer +
       "</div>" +
-      "</section></div></div>";
-    paintThreads(); paintChat(true);
+      '</section><aside class="ws-card" id="ws-card" aria-label="This conversation’s project" hidden></aside></div></div>';
+    paintThreads(); paintChat(true); paintWsCard();
     paintChatPlan();
     paintAttachments("chat");
     fitComposer();
@@ -8968,6 +9559,9 @@ var TERM_POLL_MS = 250;
 
   function startTeamTimer() {
     clearInterval(TEAM.timer);
+    // The live channel repaints on every step; this timer only covers a window whose
+    // stream is down, so with the stream open it is a slow safety net, not a 1.2 s poll.
+    openLive();
     TEAM.timer = setInterval(function () {
       if (state.view !== "team") return clearInterval(TEAM.timer);
       read("team.list").then(function (runs) {
@@ -8975,7 +9569,7 @@ var TERM_POLL_MS = 250;
         rail();
         return TEAM.sel ? read("team.get", { run: TEAM.sel }) : null;
       }).then(function (d) { if (d) TEAM.data = d; paintTeam(); }).catch(function () {});
-    }, 1200);
+    }, AI.live && AI.live.readyState !== 2 ? 15000 : 1500);
   }
 
   function renderTeam() {
@@ -8984,9 +9578,8 @@ var TERM_POLL_MS = 250;
     var ready = (AI.providers || []).some(function (p) { return p.enabled && (p.has_key || !p.needs_key); });
     var projOpts = '<option value="">Choose a project…</option>' + state.projects.map(function (p) { return '<option value="' + attr(p.path) + '"' + (TEAM.form.project === p.path ? " selected" : "") + ">" + esc(p.name || dirName(p.path)) + "</option>"; }).join("") + '<option value="__new"' + (TEAM.form.project === "__new" ? " selected" : "") + ">A new project…</option>";
     el("main").innerHTML =
-      '<div class="workspace">' +
-      '<div class="workspace-head">' + pageTitle("Agent Runs") + '<span class="grow"></span><button type="button" class="btn btn-mini" data-action="nav" data-view="agents">Team room</button></div>' +
-      '<div class="assistant"><aside class="threads"><div class="threads-head"><b>Runs</b><span class="grow"></span><button type="button" class="btn btn-mini btn-ghost" data-action="team-prune" title="Delete every run that is over">Clear finished</button><button type="button" class="btn btn-mini" data-action="team-new">New</button></div><div id="team-list"></div></aside>' +
+      '<div class="workspace workspace-chat">' +
+      '<div class="assistant">' +
       '<section class="chat"><div id="team-detail" class="team-detail"></div></section></div></div>';
     TEAM.ready = ready; TEAM.projOpts = projOpts;
     TEAM.lastHtml = "";
@@ -8994,18 +9587,42 @@ var TERM_POLL_MS = 250;
     startTeamTimer();
   }
 
+  function paintTeamList() {
+    var list = el("team-list");
+    if (!list) return;
+    // Runs under their project, like conversations, most recently active project first.
+    var runs = TEAM.runs || [];
+    var groups = {}, order = [];
+    runs.forEach(function (r) {
+      var key = r.project || "";
+      if (!groups[key]) { groups[key] = { items: [], at: "" }; order.push(key); }
+      groups[key].items.push(r);
+      var at = r.updated_at || r.created_at || "";
+      if (at > groups[key].at) groups[key].at = at;
+    });
+    order.sort(function (x, y) { return groups[x].at < groups[y].at ? 1 : -1; });
+    AI.groupClosed = AI.groupClosed || {};
+    morph(list, order.map(function (key) {
+      var closed = !!AI.groupClosed["runs:" + key];
+      var rows = groups[key].items.map(function (r) {
+        // Whether the run is over decides what the control does, not whether it exists.
+        var over = ["done", "failed", "cancelled"].indexOf(r.state) >= 0;
+        var st = r.state === "running" || r.state === "planning" ? "run" : r.state === "awaiting_plan" || r.state === "paused" ? "wait" : r.state === "failed" ? "bad" : "";
+        return '<div class="thread-row" data-key="r' + attr(r.id) + '"><button type="button" class="thread' + (TEAM.sel === r.id ? " active" : "") + (st ? " is-" + st : "") + '" data-action="team-open" data-id="' + attr(r.id) + '" title="' + attr(r.title) + '">' +
+          '<span class="thread-state' + (st ? " is-" + st : "") + '" aria-hidden="true"></span><span class="grow nowrap">' + esc(r.title) + '</span><span class="thread-time">' + r.tasks_done + "/" + r.tasks_total + "</span></button>" +
+          '<button type="button" class="thread-del" data-action="team-delete" data-id="' + attr(r.id) + '" title="' + (over ? "Delete this run" : "Cancel this run before deleting it") + '" aria-label="Delete this run"><svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg></button></div>';
+      }).join("");
+      return '<div class="thread-group' + (closed ? " is-closed" : "") + '" data-key="p' + attr(key || "none") + '">' +
+        '<button type="button" class="thread-group-head" data-action="thread-group" data-id="' + attr("runs:" + key) + '" aria-expanded="' + (closed ? "false" : "true") + '">' +
+        '<svg class="icon" aria-hidden="true"><use href="#i-chevron-down"></use></svg><span class="grow nowrap">' + esc(threadProjectName(key)) + '</span><span class="thread-count">' + groups[key].items.length + "</span></button>" +
+        (closed ? "" : '<div class="thread-group-body">' + rows + "</div>") + "</div>";
+    }).join("") || '<div class="threads-empty">No runs yet. Give the team a goal and it will show up here.</div>');
+  }
+
   function paintTeam() {
-    var list = el("team-list"), box = el("team-detail");
-    if (!list || !box) return;
-    list.innerHTML = (TEAM.runs || []).map(function (r) {
-      // Whether the run is over decides what the control does, not whether it exists.
-      var over = ["done", "failed", "cancelled"].indexOf(r.state) >= 0;
-      return '<div class="thread-row"><button type="button" class="thread' + (TEAM.sel === r.id ? " active" : "") + '" data-action="team-open" data-id="' + attr(r.id) + '"><span class="dot ' + (r.state === "running" || r.state === "planning" ? "dot-ok" : r.state === "awaiting_plan" || r.state === "paused" ? "dot-warn" : r.state === "failed" ? "dot-bad" : "dot-off") + '"></span><span class="grow nowrap">' + esc(r.title) + '</span><span class="dim">' + r.tasks_done + "/" + r.tasks_total + '</span></button>' +
-        '<button type="button" class="thread-del" data-action="team-delete" data-id="' + attr(r.id) +
-        '" title="' + (over ? "Delete this run" : "Cancel this run before deleting it") +
-        '" aria-label="Delete this run">\u00d7</button>' +
-        "</div>";
-    }).join("") || '<div class="empty-inline">No runs yet. Give the team a goal and it will show up here.</div>';
+    paintTeamList();
+    var box = el("team-detail");
+    if (!box) return;
     if (!TEAM.sel || !TEAM.data) {
       // The form is drawn once, when it comes on screen, and again only when something
       // changes what it shows (a template, the project, New). The run timer calls this
@@ -9020,16 +9637,24 @@ var TERM_POLL_MS = 250;
     // scroll position to the top, which is why reading a long conversation
     // felt like being pulled away from it. Keep the position, and do not
     // replace the tree at all when nothing changed.
+    // A different run is drawn whole and opens at its end; the same run is patched in
+    // place, so a card the reader opened stays open, a screenshot stays loaded and the
+    // reader stays where they were. Only a reader already at the end is followed.
     var scroll = box.querySelector(".chat-stream") || box.querySelector(".team-scroll");
-    var top = scroll ? scroll.scrollTop : 0;
-    var atBottom = scroll ? (scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 40) : false;
+    var fresh = box.getAttribute("data-run") !== TEAM.data.run.id || !scroll;
+    var follow = fresh || following(scroll);
     var html = teamDetail(TEAM.data);
     if (html !== TEAM.lastHtml) {
-      box.innerHTML = html;
+      if (fresh || TEAM.lastHtml === "<form>") box.innerHTML = html;
+      else morph(box, html);
+      box.setAttribute("data-run", TEAM.data.run.id);
       TEAM.lastHtml = html;
     }
     scroll = box.querySelector(".chat-stream") || box.querySelector(".team-scroll");
-    if (scroll) scroll.scrollTop = atBottom ? scroll.scrollHeight : top;
+    if (scroll) {
+      stickToBottom(scroll);
+      if (follow) { scroll.scrollTop = scroll.scrollHeight; scroll._stick.on = true; }
+    }
     if (val !== null) { var i = el("team-say"); if (i) { i.value = val; i.focus(); var ts = el("team-say-send"); if (ts) ts.disabled = !val.trim(); } }
   }
 
@@ -9110,13 +9735,22 @@ var TERM_POLL_MS = 250;
     var planner = tasks.filter(function (t) { return t.role === "planner"; })[0];
     var work = tasks.filter(function (t) { return t.role !== "planner"; });
     var actions = "";
-    if (r.state === "awaiting_plan") actions += '<button type="button" class="btn btn-go" data-action="team-approve" data-id="' + attr(r.id) + '">Approve plan and start</button>';
-    if (r.state === "running") actions += '<button type="button" class="btn" data-action="team-pause" data-id="' + attr(r.id) + '">Pause</button>';
-    if (r.state === "paused") actions += '<button type="button" class="btn btn-primary" data-action="team-resume" data-id="' + attr(r.id) + '">Resume</button>';
-    if (["planning", "awaiting_plan", "running", "paused"].indexOf(r.state) >= 0) actions += '<button type="button" class="btn btn-danger" data-action="team-cancel" data-id="' + attr(r.id) + '">Cancel</button>';
-    else actions += '<button type="button" class="btn btn-ghost" data-action="team-delete" data-id="' + attr(r.id) + '">Delete</button>';
-    if (d.run_id) actions += '<button type="button" class="btn btn-ghost" data-action="open-run" data-id="' + attr(d.run_id) + '" title="What devd recorded for this run: steps, capability calls, evidence and the durable timeline">Evidence</button>';
-    var head = '<div class="chat-head"><div class="grow"><div class="chat-title">' + esc(r.title) + '</div><div class="dim mono nowrap">' + esc(r.project || "") + ' · started by ' + esc((r.created_by || "").replace("human:", "")) + " " + esc(ago(r.created_at)) + '</div></div><span class="pill ' + (r.state === "failed" ? "pill-bad" : r.state === "done" ? "pill-ok" : r.state === "awaiting_plan" || r.state === "paused" ? "pill-warn" : "pill-accent") + '">' + esc(RUN_WORD[r.state] || r.state) + "</span>" + actions + "</div>";
+    // The one action that moves the run on goes last, where the eye ends the line.
+    var primary = "";
+    if (r.state === "awaiting_plan") primary = '<button type="button" class="btn btn-mini btn-primary" data-action="team-approve" data-id="' + attr(r.id) + '">Approve plan and start</button>';
+    if (r.state === "running") primary = '<button type="button" class="btn btn-mini" data-action="team-pause" data-id="' + attr(r.id) + '">Pause</button>';
+    if (r.state === "paused") primary = '<button type="button" class="btn btn-mini btn-primary" data-action="team-resume" data-id="' + attr(r.id) + '">Resume</button>';
+    var over0 = ["planning", "awaiting_plan", "running", "paused"].indexOf(r.state) < 0;
+    if (!over0) actions += '<button type="button" class="btn btn-mini btn-ghost" data-action="team-cancel" data-id="' + attr(r.id) + '">Cancel run</button>';
+    // Evidence first, then the run's own control; deleting a finished run is a quiet icon.
+    if (d.run_id) actions = '<button type="button" class="btn btn-mini btn-ghost" data-action="open-run" data-id="' + attr(d.run_id) + '" title="What devd recorded for this run: steps, capability calls, evidence and the durable timeline">Evidence</button>' + actions;
+    if (over0) actions += '<button type="button" class="btn btn-mini btn-ghost btn-icon" data-action="team-delete" data-id="' + attr(r.id) + '" title="Delete this run" aria-label="Delete this run"><svg class="icon" aria-hidden="true"><use href="#i-trash"></use></svg></button>';
+    var by = String(r.created_by || "").replace(/^human:.*/, "you").replace(/^agent:devd-agent$/, "devd").replace(/^agent:/, "");
+    var head = '<div class="chat-head">' +
+      '<button type="button" class="chat-switch" data-action="threads-toggle" aria-expanded="false" aria-controls="threads" title="Runs"><svg class="icon" aria-hidden="true"><use href="#i-menu"></use></svg></button>' +
+      faceHtml("team") +
+      '<div class="chat-head-main"><div class="chat-title">' + esc(r.title) + '</div><div class="chat-head-sub">' + esc([r.project ? threadProjectName(r.project) : "No project", "started by " + (by || "devd") + " " + ago(r.created_at)].join(" · ")) + "</div></div>" +
+      '<span class="chip ' + (r.state === "failed" ? "chip-bad" : r.state === "done" ? "chip-ok" : r.state === "awaiting_plan" || r.state === "paused" ? "chip-warn" : "chip-live") + '">' + esc(RUN_WORD[r.state] || r.state) + "</span>" + actions + primary + "</div>";
     var note = r.error ? '<div class="notice notice-warn"><b>' + (runNeedsWork(r) ? "Needs you." : "Stopped.") + "</b> " + esc(r.error) + "</div>" : "";
     // The same structured answer the Inbox shows, so the two screens agree about
     // what is wrong and what to do about it. The run's own error line above is
@@ -9129,31 +9763,66 @@ var TERM_POLL_MS = 250;
       var over = ["done", "failed", "cancelled"].indexOf(r.state) >= 0;
       if (!over && ["unverified", "blocked", "failed"].indexOf(t.state) >= 0) btns = '<button type="button" class="btn btn-mini btn-primary" data-action="team-retry" data-id="' + attr(t.id) + '">Retry</button><button type="button" class="btn btn-mini" data-action="team-accept" data-id="' + attr(t.id) + '" title="Accept it without the proof devd asked for. This is recorded.">Accept as is</button>';
       if (t.thread_id) btns += '<button type="button" class="btn btn-mini btn-ghost" data-action="open-thread" data-id="' + attr(t.thread_id) + '">Conversation</button>';
-      return '<div class="tcard tstate-' + t.state + '"><div class="tcard-head"><span class="step-dot ' + (t.state === "done" || t.state === "skipped" ? "ok" : t.state === "running" ? "run" : t.state === "waiting_approval" ? "wait" : ["failed", "unverified", "blocked"].indexOf(t.state) >= 0 ? "bad" : "") + '"></span><b>' + esc(t.title) + '</b><span class="pill">' + esc(t.role) + '</span><span class="pill ' + (t.state === "done" ? "pill-ok" : ["failed", "unverified", "blocked"].indexOf(t.state) >= 0 ? "pill-bad" : t.state === "running" ? "pill-accent" : "") + '">' + esc(TASK_WORD[t.state] || t.state) + '</span><span class="grow"></span><button type="button" class="btn btn-mini btn-ghost" data-action="team-toggle" data-id="' + attr(t.id) + '">' + (open ? "Hide" : "Details") + "</button></div>" +
+      var bad = ["failed", "unverified", "blocked"].indexOf(t.state) >= 0;
+      return '<div class="tcard tstate-' + t.state + '" data-key="k' + attr(t.id) + '"><div class="tcard-head">' + faceHtml(t.role) +
+        '<div class="tcard-title"><b>' + esc(t.title) + '</b><span class="dim">' + esc(roleFace(t.role).name) + "</span></div>" +
+        '<span class="chip ' + (t.state === "done" || t.state === "skipped" ? "chip-ok" : bad ? "chip-bad" : t.state === "running" ? "chip-live" : t.state === "waiting_approval" ? "chip-warn" : "") + '">' + esc(TASK_WORD[t.state] || t.state) + "</span>" +
+        '<button type="button" class="btn btn-mini btn-ghost" data-action="team-toggle" data-id="' + attr(t.id) + '" aria-expanded="' + (open ? "true" : "false") + '">' + (open ? "Hide" : "Details") + "</button></div>" +
         '<div class="row-sub">' + esc(dep) + (t.attempts > 1 ? " · attempt " + t.attempts : "") + (t.branch ? " · own copy on " + esc(t.branch) : "") + (evidenceLine(t) ? " · " + esc(evidenceLine(t)) : "") + "</div>" +
         (t.error && ["unverified", "blocked", "failed"].indexOf(t.state) >= 0 ? '<div class="row-sub warn-text">' + esc(t.error) + "</div>" : "") +
         (open ? '<div class="field-label" style="margin-top:8px">Instructions</div><div class="ask-body">' + md(t.instructions) + (t.result ? '<div class="field-label" style="margin-top:8px">What it reported</div>' + md(t.result) : "") + '<div class="field-label" style="margin-top:8px">Evidence devd recorded</div>' + ((t.evidence || []).length ? '<table class="table"><thead><tr><th>Kind</th><th>Capability</th><th>Summary</th></tr></thead><tbody>' + t.evidence.map(function (f) { return "<tr><td><span class=\"pill " + (f.ok ? "pill-ok" : "pill-bad") + '">' + esc(f.kind) + '</span></td><td class="cell-mono">' + esc(f.capability) + '</td><td class="cell-mono nowrap">' + esc(f.summary || "") + "</td></tr>"; }).join("") + "</tbody></table>" : '<div class="empty-inline">None yet.</div>') + "</div>" : "") +
         (btns ? '<div class="inline" style="margin-top:8px">' + btns + "</div>" : "") + "</div>";
     }).join("") || (r.state === "planning" ? "" : '<div class="empty-inline">No tasks yet.</div>');
     var approvals = (d.approvals || []).map(function (a) { return approvalCard(a, false); }).join("");
-    var log = events.filter(function (e) { return ["started", "plan", "plan_approved", "report", "accepted", "rejected", "unverified", "blocked", "merge_blocked", "failed", "retrying", "retry", "direction", "paused", "resumed", "cancelled", "accepted_by_hand", "needs_person", "done", "note", "recovered", "waiting_approval"].indexOf(e.kind) >= 0; }).slice(-60).reverse().map(function (e) {
-      var x = e.data || {}, text = "", who = "";
+    // The run read as the team talking: oldest first, like any conversation, each line
+    // from the member who said it. A task starting after another finished is a handoff
+    // and reads as one ("Reviewer picked up …"); devd's own checks speak as devd.
+    var titleOf = {};
+    tasks.forEach(function (t) { titleOf[t.key] = t.title; titleOf[t.id] = t.title; });
+    var taskName = function (k) { return titleOf[k] || k || "the task"; };
+    var lastWho = "";
+    var log = events.filter(function (e) { return ["started", "plan", "plan_approved", "report", "accepted", "rejected", "unverified", "blocked", "merge_blocked", "failed", "retrying", "retry", "direction", "paused", "resumed", "cancelled", "accepted_by_hand", "needs_person", "done", "note", "recovered", "waiting_approval", "changes_requested"].indexOf(e.kind) >= 0; }).slice(-80).map(function (e) {
+      var x = e.data || {}, text = "", who = "devd", fold = "";
       switch (e.kind) {
-        case "started": text = x.task ? "Started " + x.task + " (" + x.role + ")." : "The run started."; who = x.role || "devd"; break;
-        case "plan": text = "Plan: " + (x.tasks || []).length + " task(s)."; who = "planner"; break;
-        case "report": text = String(x.summary || "").split("\n")[0] || (x.task + " reported " + x.status); who = x.role || x.task || "agent"; break;
-        case "accepted": text = "Accepted " + x.task + (x.verified ? " (" + x.verified + " passing check" + (x.verified === 1 ? "" : "s") + ")." : "."); who = "devd"; break;
-        case "rejected": case "unverified": text = "Not accepted " + x.task + ": " + (x.why || "the proof did not match."); who = x.role || "devd"; break;
-        case "direction": return '<div class="msg msg-user"><div><div class="bubble">' + md(x.text || "") + '</div><div class="msg-meta">You · ' + esc(ago(e.at)) + "</div></div></div>";
-        case "note": text = x.text; who = "devd"; break;
-        default: text = e.kind.replace(/_/g, " ") + (x.task ? " " + x.task : "") + (x.why ? ": " + x.why : ""); who = x.role || "devd";
+        case "started":
+          if (!x.task) { text = "Started the run."; break; }
+          who = x.role || "devd";
+          text = (x.role === "planner" ? "Reading the project to write the plan." : "Picked up “" + taskName(x.task) + "”.");
+          break;
+        case "plan":
+          who = "planner";
+          text = "The plan has " + countWords((x.tasks || []).length, "task") + ".";
+          if ((x.tasks || []).length) fold = (x.tasks || []).map(function (t, k) { return (k + 1) + ". " + (t.title || t.key || t) + (t.role ? " — " + roleFace(t.role).name : ""); }).join("\n");
+          break;
+        case "plan_approved": who = "you"; text = "Approved the plan."; break;
+        case "report":
+          who = x.role || "devd";
+          var full = String(x.summary || "").trim();
+          text = full.split("\n")[0] || "Reported " + (x.status || "back") + " on “" + taskName(x.task) + "”.";
+          if (full.split("\n").length > 1) fold = full;
+          break;
+        case "accepted": text = "Accepted “" + taskName(x.task) + "”" + (x.verified ? ", with " + countWords(x.verified, "passing check") : "") + "."; break;
+        case "rejected": case "unverified": text = "Did not accept “" + taskName(x.task) + "”: " + (x.why || "the proof did not match the claim."); break;
+        case "blocked": who = x.role || "devd"; text = "Blocked on “" + taskName(x.task) + "”" + (x.why ? ": " + x.why : "."); break;
+        case "changes_requested": text = "The " + roleFace(x.role).name.toLowerCase() + " asked for changes, so devd handed the findings back to " + roleFace(x.to).name + " and will have them reviewed again" + (x.round > 1 ? " (round " + x.round + ")" : "") + "."; break;
+        case "accepted_by_hand": who = "you"; text = "Accepted “" + taskName(x.task) + "” without proof."; break;
+        case "direction": who = "you"; text = x.text || ""; break;
+        case "paused": text = "Paused" + (x.why ? ": " + x.why : "."); break;
+        case "resumed": text = "Resumed."; break;
+        case "cancelled": text = "The run was cancelled."; break;
+        case "done": text = "The run is finished."; break;
+        case "needs_person": text = "Needs you" + (x.why ? ": " + x.why : "."); break;
+        case "retrying": case "retry": text = "Trying “" + taskName(x.task) + "” again" + (x.why ? ": " + x.why : "."); break;
+        case "note": text = x.text || ""; break;
+        default: text = e.kind.replace(/_/g, " ") + (x.task ? " “" + taskName(x.task) + "”" : "") + (x.why ? ": " + x.why : ""); who = x.role || "devd";
       }
       if (!String(text || "").trim()) return "";
-      // The same message components as the Assistant: an avatar, a prose
-      // bubble rendered as Markdown, and the speaker under it. A run is a
-      // conversation with a team, not a second kind of log.
-      var initial = String(who || "devd").charAt(0).toLowerCase();
-      return '<div class="turn msg-agent"><div class="avatar" aria-hidden="true">' + esc(initial) + '</div><div class="turn-body"><div class="bubble">' + md(text) + '</div><div class="msg-meta">' + esc(who) + " · " + esc(ago(e.at)) + "</div></div></div>";
+      var same = who === lastWho;
+      lastWho = who;
+      var name = who === "you" ? "You" : roleFace(who).name;
+      var head = same ? "" : '<div class="turn-who">' + (who === "you" ? '<span class="face face-you" aria-hidden="true"><svg class="icon"><use href="#i-check"></use></svg></span>' : faceHtml(who)) + "<b>" + esc(name) + '</b><span class="dim">' + esc(ago(e.at)) + "</span></div>";
+      return '<div class="turn msg-agent run-line' + (same ? " is-cont" : "") + (who === "you" ? " is-you" : "") + '" data-key="e' + attr(e.id || e.at) + '">' + head +
+        '<div class="turn-body">' + md(text) + (fold ? '<details class="run-fold"><summary>' + (e.kind === "plan" ? "The tasks" : "The full report") + "</summary>" + md(fold) + "</details>" : "") + "</div></div>";
     }).join("");
     var summary = r.summary ? '<div class="team-result"><div class="ui-row-title">Result</div><div class="ui-row-sub wrap">' + esc(uiSummary(r.summary, 260)) + '</div><button type="button" class="btn btn-mini" data-action="team-report" data-id="' + attr(r.id) + '">Read the full report</button></div>' : "";
     var say = ["done", "failed", "cancelled"].indexOf(r.state) < 0
@@ -9162,7 +9831,9 @@ var TERM_POLL_MS = 250;
           '<button type="button" class="composer-send" data-action="team-say" data-id="' + attr(r.id) + '" id="team-say-send" disabled aria-label="Send to the team" title="Send to the team (Enter)"><svg class="icon" aria-hidden="true"><use href="#i-arrow-up"></use></svg></button>' +
         "</div>"
       : "";
-    return head + '<div class="chat-stream run-stream">' + runGoal(r) + '<div class="run-track">' + runStages(r, work, events) + "</div>" + note + approvals + (summary) + '<div class="section-title">Tasks <span class="count">' + work.length + "</span></div>" + '<div class="tlist">' + cards + "</div>" + '<div class="section-title">Conversation</div>' + (log || '<div class="empty-inline">Nothing yet.</div>') + "</div>" + say;
+    return head + '<div class="chat-stream run-stream"><div class="run-col">' + runGoal(r) + '<div class="run-track">' + runStages(r, work, events) + "</div>" + note + approvals + summary +
+      '<h3 class="run-section">Who is doing what <span class="count">' + work.length + "</span></h3>" + '<div class="tlist">' + cards + "</div>" +
+      '<h3 class="run-section">How it went</h3>' + '<div class="run-feed">' + (log || '<div class="empty-inline">Nothing yet.</div>') + "</div></div></div>" + say;
   }
 
   // ------------------------------------------------------------------- inbox
@@ -11586,7 +12257,7 @@ var TERM_POLL_MS = 250;
     },
 
     "team-new": function () { TEAM.sel = null; TEAM.data = null; TEAM.lastHtml = ""; paintTeam(); },
-    "team-open": function (n) { TEAM.sel = n.dataset.id; read("team.get", { run: TEAM.sel }).then(function (d) { TEAM.data = d; paintTeam(); }); },
+    "team-open": function (n) { var sh = document.querySelector(".shell.panel-open"); if (sh) sh.classList.remove("panel-open"); TEAM.sel = n.dataset.id; read("team.get", { run: TEAM.sel }).then(function (d) { TEAM.data = d; paintTeam(); }); },
     "team-toggle": function (n) { TEAM.open[n.dataset.id] = !TEAM.open[n.dataset.id]; paintTeam(); },
     "team-start": function () {
       var f = TEAM.form;
@@ -11859,9 +12530,45 @@ var TERM_POLL_MS = 250;
     "open-thread": function (n) {
       if (AI.permission === "bypass") AI.permission = "auto";
       AI.thread = { id: n.dataset.id, title: "", state: "idle", input_tokens: 0, output_tokens: 0 }; AI.lastId = 0; AI.events = []; AI.pending = []; AI.todos = []; AI.todosAt = 0; AI.queued = 0;
+      var shell = document.querySelector(".shell.panel-open");
+      if (shell) shell.classList.remove("panel-open");
       if (state.view !== "assistant") { state.view = "assistant"; render(); }
       writeRoute("assistant", false);
       pollThread(true).then(function () { renderAssistant(); });
+    },
+    // A rail entry opens its area. Pressed again on a window too narrow for the panel to
+    // sit beside the page, it opens the panel over the page instead.
+    "rail-go": function (n) {
+      var v = n.dataset.view;
+      state.railMore = false;
+      var shell = document.querySelector(".shell");
+      if (areaOf(state.view) === areaOf(v) && window.innerWidth < 1024 && panelArea()) {
+        if (shell) shell.classList.toggle("panel-open");
+        rail();
+        return;
+      }
+      if (shell) shell.classList.remove("panel-open");
+      var area = areaOf(v);
+      if (area !== areaOf(state.view) && state.areaTab && state.areaTab[area] && v === AREA_HOME[area]) v = state.areaTab[area];
+      navigate(v);
+    },
+    "rail-more": function () { state.railMore = !state.railMore; rail(true); },
+    "panel-toggle": function () {
+      var shell = document.querySelector(".shell");
+      if (shell) shell.classList.toggle("panel-open");
+    },
+    // A project's conversations fold away under its name; the choice is kept for the session.
+    "thread-group": function (n) {
+      AI.groupClosed = AI.groupClosed || {};
+      var key = n.dataset.id || "";
+      AI.groupClosed[key] = !AI.groupClosed[key];
+      if (state.view === "team") paintTeam(); else paintThreads();
+    },
+    // Below the width where the list and the conversation fit side by side, the list is a
+    // panel over the conversation, opened from the conversation's own header.
+    "threads-toggle": function () {
+      var shell = document.querySelector(".shell");
+      if (shell) shell.classList.toggle("panel-open");
     },
     "chat-new": function () { if (AI.permission === "bypass") AI.permission = "auto"; AI.thread = null; AI.events = []; AI.pending = []; AI.lastId = 0; AI.todos = []; AI.todosAt = 0; AI.queued = 0; writeRoute("assistant", false); renderAssistant(); },
     "chat-plan": function () {
@@ -12196,6 +12903,14 @@ var TERM_POLL_MS = 250;
     },
     "skill-remove": function (n) {
       act("skills.delete", { name: n.dataset.name }).then(function () { return loadSkills(); }).then(render);
+    },
+    // A recommended skill: each of its skills installed by name from its own repository.
+    "skill-pick": function (n) {
+      var source = n.dataset.source, names = String(n.dataset.skills || "").split(",").filter(Boolean);
+      n.disabled = true;
+      names.reduce(function (p, name) {
+        return p.then(function () { return act("skills.install", { source: source, skill: name }); });
+      }, Promise.resolve()).then(function () { return loadSkills(); }).then(render).catch(function () { n.disabled = false; });
     },
     "skill-install": function () {
       var src = el("skill-source");
@@ -13855,6 +14570,9 @@ var TERM_POLL_MS = 250;
     return loadSession()
       .then(function () {
         var current = state.view;
+        // One live channel for the whole window: runs moving on, handoffs and replies
+        // repaint whichever screen shows them, without a refresh.
+        openLive();
         var first = refresh();
         if (current !== "home" && current !== "projects" && current !== "project") {
           loadProjects().then(paintChrome).catch(function () {});
@@ -14020,7 +14738,10 @@ var TERM_POLL_MS = 250;
       if (changed) { rail(); statusbar(); }
     }).then(function () {
       var busy = (AI.liveRuns || []).some(function (t) { return t.state === "planning" || t.state === "running"; });
-      setTimeout(pollLive, busy ? 4000 : 10000);
+      // With the live channel open every change already arrives as it happens; this read
+      // is then only a slow check that nothing was missed.
+      var live = AI.live && AI.live.readyState === 1;
+      setTimeout(pollLive, live ? 30000 : busy ? 4000 : 10000);
     });
   }
   setTimeout(pollLive, 10000);

@@ -4,6 +4,8 @@
 pub const BUILTIN: &[(&str, &str)] = &[
     ("accessibility-check", include_str!("../skills/accessibility-check.md")),
     ("act-then-ask", include_str!("../skills/act-then-ask.md")),
+    ("agent-browser", include_str!("../skills/agent-browser.md")),
+    ("agent-desktop", include_str!("../skills/agent-desktop.md")),
     ("api-design", include_str!("../skills/api-design.md")),
     ("architect", include_str!("../skills/architect.md")),
     ("arena", include_str!("../skills/arena.md")),

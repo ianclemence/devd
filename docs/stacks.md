@@ -72,6 +72,10 @@ Every stack's commands and flags come from its official documentation or CLI hel
 | Archive tools (zip/unzip) | utility | — | apt, dnf, pacman, brew | — |
 | ImageMagick | utility | — | apt, dnf, pacman, brew, winget | — |
 | libvips | utility | — | apt, dnf, pacman, brew | — |
+| FFmpeg | media | — | apt, dnf, pacman, brew, winget | — |
+| HyperFrames | media | — | npm | — |
+| agent-browser | ai | — | npm | — |
+| agent-desktop | ai | — | npm, brew | — |
 
 ## Operating systems
 

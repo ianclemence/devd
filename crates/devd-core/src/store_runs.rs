@@ -941,6 +941,11 @@ impl Store {
 
     /// Events across every run after a global cursor. This is the SSE replay
     /// query: ids are stable, ordered and never reused.
+    /// The newest durable event id, or 0 when there are none.
+    pub fn latest_event_id(&self) -> Result<i64> {
+        self.with(|c| Ok(c.query_row("SELECT COALESCE(MAX(id), 0) FROM run_events", [], |r| r.get(0))?))
+    }
+
     pub fn events_after(&self, after_id: i64, limit: i64) -> Result<Vec<RunEvent>> {
         self.with(|c| {
             let mut st = c.prepare("SELECT id,run_id,seq,step_id,kind,message,data,created_at FROM run_events WHERE id>?1 ORDER BY id LIMIT ?2")?;

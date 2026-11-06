@@ -215,6 +215,27 @@ pub struct TeamEvent {
 
 const RUN_COLS: &str = "id,title,goal,project,state,plan_approved,summary,error,parallel,created_by,created_at,updated_at,thread_id";
 /// The columns of one task row, for queries that live in other modules.
+/// A conversation that a team specialist works in, and what it belongs to.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreadTeamLink {
+    /// The specialist's conversation.
+    pub thread_id: String,
+    /// The team run.
+    pub run_id: String,
+    /// The specialist's role (`planner`, `implementer`, `reviewer`, `qa`, ...).
+    pub role: String,
+    /// The task's title.
+    pub task: String,
+    /// The task's state.
+    pub task_state: String,
+    /// The run's title.
+    pub run_title: String,
+    /// The person's conversation that started the run, if one did.
+    pub parent_thread: Option<String>,
+    /// The run's state.
+    pub run_state: String,
+}
+
 pub(crate) const TASK_COLUMNS: &str =
     "id,run_id,key,role,title,instructions,depends_on,scope,state,attempts,workdir,branch,thread_id,result,evidence,error,created_at,started_at,finished_at,mandate,last_step_at,stalls";
 const TASK_COLS: &str = TASK_COLUMNS;
@@ -445,6 +466,34 @@ impl Store {
         let _ = self.ensure_run_for_team(&run.id, &run.goal, run.project.as_deref(), by, &[]);
         let _ = self.sync_team_state(&run.id, &run.state, None);
         Ok(run)
+    }
+
+    /// Every conversation a team specialist works in, with what it belongs to.
+    ///
+    /// One read for the whole list, so the conversation list can nest each
+    /// specialist under the run and the conversation that started it without a
+    /// query per row.
+    pub fn thread_team_links(&self) -> Result<Vec<ThreadTeamLink>> {
+        self.with(|c| {
+            let mut st = c.prepare(
+                "SELECT t.thread_id, t.run_id, t.role, t.title, t.state, r.title, r.thread_id, r.state
+                 FROM team_tasks t JOIN team_runs r ON r.id = t.run_id
+                 WHERE t.thread_id IS NOT NULL AND t.thread_id <> ''",
+            )?;
+            let rows = st.query_map([], |row| {
+                Ok(ThreadTeamLink {
+                    thread_id: row.get(0)?,
+                    run_id: row.get(1)?,
+                    role: row.get(2)?,
+                    task: row.get(3)?,
+                    task_state: row.get(4)?,
+                    run_title: row.get(5)?,
+                    parent_thread: row.get(6)?,
+                    run_state: row.get(7)?,
+                })
+            })?;
+            Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+        })
     }
 
     /// Point a run at the conversation that asked for it.

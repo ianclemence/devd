@@ -1042,11 +1042,18 @@ pub fn register(reg: &mut Registry) -> Result<()> {
     .handlers(
         |_, _| read_plan("toolchain.list", "probe the toolchain"),
         |ctx, a| {
-            let r = stacks(ctx);
-            let (host, views) = toolchain::overview(ctx, &r);
-            let views: Vec<_> = views.into_iter().filter(|v| a.category.as_ref().map(|c| &v.tool.category == c).unwrap_or(true)).collect();
-            let installed = views.iter().filter(|v| v.status.installed).count();
-            Ok(Outcome::with_data(format!("{installed} of {} installed", views.len()), json!({"host": host, "tools": views})))
+            // Probing every tool runs every tool; concurrent callers share one probe and
+            // the answer is kept until something is installed or removed.
+            let all = devd_core::memo::cached("toolchain.list", std::time::Duration::from_secs(30), || {
+                let r = stacks(ctx);
+                let (host, views) = toolchain::overview(ctx, &r);
+                Ok(json!({"host": host, "tools": views}))
+            })?;
+            let tools: Vec<Value> = all["tools"].as_array().cloned().unwrap_or_default().into_iter()
+                .filter(|v| a.category.as_ref().map(|c| v["tool"]["category"].as_str() == Some(c.as_str())).unwrap_or(true))
+                .collect();
+            let installed = tools.iter().filter(|v| v["status"]["installed"].as_bool().unwrap_or(false)).count();
+            Ok(Outcome::with_data(format!("{installed} of {} installed", tools.len()), json!({"host": all["host"], "tools": tools})))
         },
     )?;
 

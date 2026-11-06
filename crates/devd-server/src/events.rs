@@ -67,12 +67,16 @@ pub async fn events(
     }
     // The cursor is the durable event id, not a byte offset. A reconnecting
     // EventSource sends it automatically; a manual client can use `?after=`.
+    // A reconnect says where it left off (`Last-Event-ID`) and is given exactly what it
+    // missed. A new connection has already read the current state, so it starts at the
+    // newest event: replaying the whole history made every page load re-read the run
+    // list once per past event.
     let cursor = headers
         .get("last-event-id")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.trim().parse::<i64>().ok())
         .or(q.after)
-        .unwrap_or(0)
+        .unwrap_or_else(|| state.ctx.store.latest_event_id().unwrap_or(0))
         .max(0);
     let thread = headers
         .get("x-devd-thread")

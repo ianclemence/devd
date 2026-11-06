@@ -2110,7 +2110,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
     .handlers(
         |_, _| simple("setup.requirements", "list what devd needs on this machine"),
         |ctx, _| {
-            let r = requirements::list(ctx)?;
+            let r = devd_core::memo::cached("setup.requirements", std::time::Duration::from_secs(15), || requirements::list(ctx))?;
             let missing = r["missing"].as_i64().unwrap_or(0);
             Ok(Outcome::with_data(format!("{missing} requirement(s) outstanding"), r))
         },
@@ -2198,7 +2198,35 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
         |_, _| simple("chat.list", "list conversations"),
         |ctx, _| {
             let t = ctx.store.list_threads(100)?;
-            Ok(Outcome::with_data(format!("{} conversation(s)", t.len()), serde_json::to_value(&t)?))
+            let count = t.len();
+            // A specialist's conversation says which run, role and requesting conversation
+            // it belongs to, so a list can be organised by project and by handoff.
+            let links: std::collections::HashMap<String, _> = ctx
+                .store
+                .thread_team_links()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|l| (l.thread_id.clone(), l))
+                .collect();
+            let rows: Vec<Value> = t
+                .into_iter()
+                .map(|thread| {
+                    let mut row = serde_json::to_value(&thread).unwrap_or(Value::Null);
+                    if let Some(link) = links.get(&thread.id) {
+                        row["team"] = json!({
+                            "run": link.run_id,
+                            "role": link.role,
+                            "task": link.task,
+                            "task_state": link.task_state,
+                            "run_title": link.run_title,
+                            "run_state": link.run_state,
+                            "parent": link.parent_thread,
+                        });
+                    }
+                    row
+                })
+                .collect();
+            Ok(Outcome::with_data(format!("{count} conversation(s)"), Value::Array(rows)))
         },
     )?;
     {
@@ -2292,6 +2320,13 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             let t = ctx.store.get_thread(&a.thread)?.ok_or_else(|| DevdError::not_found("no such conversation"))?;
             let title = a.title.as_deref().map(str::trim).filter(|x| !x.is_empty()).map(str::to_string).unwrap_or_else(|| format!("Fork of {}", t.title));
             let forked = ctx.store.fork_thread(&a.thread, a.event, &title)?;
+            // A new conversation is news to every open window, the same as one a team
+            // member opens: announce it, so a list on screen shows it without a refresh.
+            ctx.events.emit_with(
+                "chat.event",
+                format!("conversation {} forked", forked.id),
+                json!({ "thread": forked.id, "kind": "created", "id": 0 }),
+            );
             Ok(Outcome::with_data("forked", json!({ "thread": forked })))
         },
     )?;
@@ -2665,7 +2700,8 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
     .handlers(
         |_, _| simple("health.status", "check health"),
         |ctx, _| {
-            let v = health::status(ctx)?;
+            // Shared between concurrent callers and kept a few seconds; any change discards it.
+            let v = devd_core::memo::cached("health.status", std::time::Duration::from_secs(8), || health::status(ctx))?;
             Ok(Outcome::with_data(v["headline"].as_str().unwrap_or("health").to_string(), v))
         },
     )?;

@@ -107,12 +107,14 @@ fn every_action_in_the_markup_has_a_handler() {
 fn the_sidebar_is_short_and_search_is_not_about_capabilities() {
     assert!(!HTML.contains("Search capabilities"));
     assert!(APP.contains("id=\"health-chip\"") && !HTML.contains("health-pill") && !HTML.contains("health-chip"), "the health chip lives in the footer");
-    assert!(HTML.contains("id=\"subnav\""));
-    let rail = &APP[APP.find("var groups = [").unwrap()..];
-    let rail = &rail[..rail.find("el(\"rail\")").unwrap()];
+    // One rail of destinations; an area's own pages are the context panel's list, not
+    // more rail entries or a second bar of tabs.
+    assert!(HTML.contains("id=\"rail\"") && HTML.contains("id=\"panel\""));
+    let rail = &APP[APP.find("function rail(force)").unwrap()..];
+    let rail = &rail[..rail.find("function item(i, small)").unwrap()];
     let items = rail.matches("{ view: \"").count();
-    assert!(items <= 14, "{items} rail entries; related pages belong in tabs");
-    assert!(CSS.contains(".subtab"));
+    assert!(items <= 14, "{items} rail entries; related pages belong in the panel");
+    assert!(CSS.contains(".panel-item"));
 }
 
 #[test]
@@ -319,6 +321,7 @@ fn server_and_site_tabs_match_the_agreed_information_architecture() {
         .next()
         .unwrap();
     let labels = ["Overview", "Services", "Runtimes", "Databases", "Tools", "Remote"];
+    // (The tabs are now the context panel's list; their names and order are the same.)
     let mut at = 0;
     for label in labels {
         let needle = format!("\"{label}\"");
@@ -346,7 +349,7 @@ fn server_and_site_tabs_match_the_agreed_information_architecture() {
             .unwrap_or_else(|| panic!("{label} is missing or out of order in the Sites tabs"));
         at += found + needle.len();
     }
-    assert!(APP.contains("{ view: \"sites\", label: \"Sites\""), "Sites is a first-class rail destination");
+    assert!(APP.contains("{ view: \"sites\", area: \"sites\", label: \"Sites\""), "Sites is a first-class rail destination");
     assert!(APP.contains("page(\"Environment\""), "the environment screen does not call itself a single server");
 
     let site = quoted_after(APP, "var SITE_TABS = [");
@@ -681,11 +684,13 @@ fn tools_do_not_show_machine_implementation_metadata() {
 
 #[test]
 fn the_terminal_action_belongs_to_the_project_not_the_develop_page() {
+    // On the project page, and on the project card beside a conversation about it.
     assert_eq!(
         APP.matches("data-action=\"open-terminal\"").count(),
-        1,
-        "there is one terminal action, on the project page"
+        2,
+        "the terminal action belongs to a project: its page and its card"
     );
+    assert!(APP[APP.find("function paintWsCard()").unwrap()..].contains("data-action=\"open-terminal\""));
     let start = APP.find("function renderProject()").expect("project page");
     let end = start + APP[start..].find("// -------------------------------------------------------------- capabilities").expect("next section");
     assert!(APP[start..end].contains("data-action=\"open-terminal\""), "the project page offers the terminal");
@@ -790,8 +795,10 @@ fn effort_belongs_to_the_model_picker() {
 fn polling_does_not_rebuild_an_open_menu() {
     // The rail is painted by every timer. Replacing it while a menu is open
     // would close the menu, replay its animation and move the pointer's target.
-    assert!(APP.contains("var menuOpen = !!(state.topMenu || state.navMenu);"), "the rail knows a menu is open");
-    assert!(APP.contains("if (force || (!menuOpen && html !== RAIL_CACHE.html))"), "an open menu is left alone");
+    // The rail has no menus left to close, and it is patched, not replaced: focus and a
+    // pressed state survive a repaint.
+    assert!(APP.contains("if (force || html !== RAIL_CACHE.html) {"), "an unchanged rail is not repainted");
+    assert!(APP.contains("morph(el(\"rail\"), html);"), "the rail is patched in place");
     assert!(APP.contains("RAIL_CACHE"), "the rail keeps its last markup");
     // A live refresh must not pull a page from under an open dialog either.
     assert!(APP.contains("[role=\\\"dialog\\\"]"), "an open dialog pauses live repainting");
@@ -963,8 +970,8 @@ fn every_run_row_has_the_same_delete_control_as_a_conversation() {
     // offered it only on runs that were already over, so the same gesture existed
     // in one place and not the other. The capability still refuses a run that is
     // working, with a sentence saying to cancel it first.
-    let start = APP.find("function paintTeam()").expect("paintTeam is gone");
-    let body = &APP[start..start + 1000];
+    let start = APP.find("function paintTeamList()").expect("paintTeamList is gone");
+    let body = &APP[start..start + 4000];
     assert!(
         body.contains("data-action=\"team-delete\""),
         "a run row carries a delete control"
@@ -974,8 +981,8 @@ fn every_run_row_has_the_same_delete_control_as_a_conversation() {
         "the control is not conditional on the run being over: {body}"
     );
 
-    let assistant = APP.find("function paintThreads()").expect("paintThreads is gone");
-    let assistant_body = &APP[assistant..assistant + 900];
+    let assistant = APP.find("function threadRowHtml(t, child)").expect("threadRowHtml is gone");
+    let assistant_body = &APP[assistant..assistant + 2400];
     assert!(
         assistant_body.contains("data-action=\"chat-delete\""),
         "and a conversation still does, the way it always has"
@@ -1142,10 +1149,12 @@ fn both_composers_have_a_mention_menu_and_a_stable_query() {
 fn refreshing_a_run_keeps_the_readers_place() {
     // The run detail was rebuilt every 1.2 s, and replacing its markup reset the
     // scroll container to the top - the reported "sent back up while scrolling".
+    // The run is patched in place (see `morph`), so nothing the reader is looking at is
+    // rebuilt; only a reader already at the end is followed.
     let start = APP.find("function paintTeam()").expect("paintTeam is gone");
     let body = &APP[start..start + 3000];
-    assert!(body.contains("scroll.scrollTop = top") || body.contains("scroll.scrollTop = atBottom"),
-        "the scroll position is restored after a repaint: {body}");
+    assert!(body.contains("else morph(box, html);"), "the same run is patched, not replaced: {body}");
+    assert!(body.contains("following(scroll)"), "only a reader at the end is followed");
     assert!(body.contains("html !== TEAM.lastHtml"), "an unchanged run is not repainted at all");
 }
 
@@ -1246,6 +1255,9 @@ fn a_teams_report_in_a_conversation_is_not_drawn_as_the_person() {
     // The team hands its report to the conversation that asked as a message; it is not the
     // person speaking, so it must not be labelled "You".
     assert!(APP.contains("from: e.data.from || \"\""), "the event says who it is from");
-    assert!(APP.contains("if (block.type === \"user\" && block.from) {"), "a message from the team has its own shape");
+    assert!(APP.contains("if (block.type === \"user\" && block.from === \"devd-team\") {"), "a message from the team has its own shape");
+    // Every message carries a sender, the person's included; a bare truthiness test drew the
+    // person's own words as a note from the team.
+    assert!(!APP.contains("if (block.type === \"user\" && block.from) {"));
     assert!(CSS.contains(".team-note {"));
 }

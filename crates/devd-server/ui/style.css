@@ -2406,10 +2406,9 @@ button.svc { width: 100%; background: none; border: 0; border-bottom: 1px solid 
   padding: var(--s5) var(--s4) var(--s4);
   overflow-y: auto;
   overscroll-behavior: contain;
-  /* The conversation is repainted only when it changed, and paintChat puts the
-     scroll position back itself. Browser scroll anchoring would second-guess
-     that restore and shift the reader's place while a reply streams. */
-  overflow-anchor: none;
+  /* The conversation is patched in place (see `morph`), so the browser's own scroll
+     anchoring keeps the reader's line still when something above it grows. */
+  overflow-anchor: auto;
 }
 /* The conversation scrolls. Its children must not shrink to fit the box:
    a flex column squeezes anything that can be squeezed, and a row with
@@ -3124,17 +3123,7 @@ pre.code {
   
 }
 
-/* Tablet and below: the assistant's thread list becomes a horizontal strip so
-   the conversation keeps the full width. */
 @media (max-width: 900px) {
-  .assistant { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
-  .threads { flex-direction: row; align-items: center; border-right: 0; border-bottom: 1px solid var(--line); }
-  .threads-head { min-height: 40px; border-bottom: 0; flex: none; }
-  #thread-list { display: flex; overflow-x: auto; overflow-y: hidden; }
-  .thread { width: auto; border-bottom: 0; border-right: 1px solid var(--line); white-space: nowrap; }
-  .thread .grow { flex: none; }
-  .chat-head { min-height: 48px; }
-  .chat-stream { padding: var(--s4) var(--s3); }
   .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .two-col, .form-grid { grid-template-columns: minmax(0, 1fr); }
   .grid-3 { grid-template-columns: minmax(0, 1fr); }
@@ -4983,10 +4972,6 @@ ol.stages { list-style: none; padding: 0; }
 .ui-row-sub:has(.ui-row-err) { white-space: normal; overflow: visible; }
 .ui-row-meta time { font-family: var(--mono); font-size: var(--text-xs); }
 
-/* The conversation and run lists hold their header controls without clipping. */
-@media (min-width: 901px) {
-  .assistant { grid-template-columns: 288px minmax(0, 1fr); }
-}
 .threads { background: var(--bg); }
 .threads-head .btn { flex: none; }
 .threads-head > b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -5021,7 +5006,6 @@ ol.stages { list-style: none; padding: 0; }
   .stage { padding-top: 6px; }
   .stage-label { display: none; }
   .stage-now .stage-label, .stage-stop .stage-label, .stage-wait .stage-label { display: inline; }
-  .threads .thread-row { flex: none; max-width: 260px; }
   .home-head { flex-wrap: wrap; }
   .goalbar { flex-wrap: wrap; }
   .goalbar-input { flex-basis: 100%; order: -1; }
@@ -5655,7 +5639,6 @@ select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .composer-mode { font-weight: 600; }
 .composer-where select, .composer-bar select { height: 32px; }
 @media (hover: hover) and (pointer: fine) { .composer .composer-attach:hover { background: var(--bg-hover); color: var(--fg); } }
-@media (max-width: 1000px) { .threads .thread-row { flex: none; max-width: 260px; margin-right: var(--s3); } .threads .thread { min-width: 0; } .threads .thread .grow { overflow: hidden; text-overflow: ellipsis; } }
 .table-ops .cell-warn { color: var(--warn); }
 
 /* ---- nothing scrolls sideways: tables, code and tab rows wrap instead ------- */
@@ -5664,10 +5647,6 @@ select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .log-block, .log-pre, pre.code, .patch-block, .diff, .decision-args pre { overflow-x: hidden; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
 .subnav, .tabs, .picker-crumbs { overflow-x: visible; flex-wrap: wrap; }
 .tabs { row-gap: 2px; }
-@media (max-width: 1000px) {
-  #thread-list { display: block; overflow-x: hidden; }
-  .threads .thread-row { max-width: none; margin-right: 0; }
-}
 
 /* ---- the accent as text is the lighter tone, so it reads on the dark page ----- */
 a, .link, .pill-accent, .tag-unt, .feed-agent, .chat-plan-count, .cap-accent, .msg-act-on, .seg.active .seg-count, .md a.link, .steps li::before, .card-pin[aria-pressed="true"] { color: var(--accent-text); }
@@ -5889,11 +5868,6 @@ a, .link, .pill-accent, .tag-unt, .feed-agent, .chat-plan-count, .cap-accent, .m
 .statusbar .sb-left { min-width: 0; flex: 1 1 auto; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .statusbar .sb-right { flex: none; white-space: nowrap; }
 
-/* The conversation strip sits on the page's own gutter, so the title above it and the strip share one left edge. */
-@media (max-width: 900px) {
-  .threads { padding-left: calc(var(--gutter) - var(--s3)); }
-  .assist-empty { padding-left: var(--gutter); padding-right: var(--gutter); }
-}
 
 .st-facts-row { display: contents; }
 
@@ -6149,7 +6123,7 @@ a, .link, .pill-accent, .tag-unt, .feed-agent, .chat-plan-count, .cap-accent, .m
 /* ---- project and site rows: marks and fact labels -------------------------- */
 /* A label and its value in one line need a separator; "Security Certificate"
  * read as one three-word phrase. */
-.st-facts-row .st-col::before { content: attr(data-label) ":"; margin-right: 3px; }
+@media (max-width: 1060px) { .st-facts-row .st-col::before { content: attr(data-label) ":"; margin-right: 3px; } }
 
 /* ---- branches: a real table, local first, remote-tracking below ------------ */
 .branch-group-row td { padding-top: 18px; padding-bottom: 7px; color: var(--fg-dim); font-size: var(--text-2xs); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; border-bottom: 1px solid var(--line); }
@@ -6226,3 +6200,784 @@ button.msg-file.is-image { position: relative; justify-content: center; }
 .team-note-body { margin-top: 6px; }
 .team-note-body > summary { cursor: pointer; color: var(--fg-mute); font-size: var(--text-xs); }
 .team-note-body .md { margin-top: 8px; font-size: var(--text-sm); color: var(--fg-mute); }
+
+
+/* ============================================================== devd 0.25
+ *
+ * One authoritative layer for colour and for the conversation workspaces.
+ *
+ * Graphite and one blue. The surfaces are true neutrals - no navy cast - in four
+ * steps from the page to a raised control; text is three greys; blue marks the one
+ * action that matters and where you are. Status colours appear only beside a word.
+ * Everything below reads these tokens, so a screen not yet moved over still lands
+ * on the same palette.
+ */
+:root {
+  --bg: #111113;
+  --bg-deep: #0c0c0e;
+  --bg-rail: #0e0e10;
+  --bg-surface: #18181b;
+  --bg-raised: #1f1f23;
+  --bg-hover: #26262b;
+  --line: #26262b;
+  --line-strong: #323238;
+  --line-control: #46464e;
+  --overlay: rgba(0, 0, 0, 0.6);
+  --selection: rgba(79, 143, 247, 0.3);
+
+  --fg: #ededef;
+  --fg-mute: #a8a8b1;
+  --fg-dim: #7d7d87;
+
+  --accent: #3b82f6;
+  --accent-strong: #4f8ff7;
+  --accent-quiet: rgba(79, 143, 247, 0.13);
+  --accent-line: #25467c;
+  --accent-text: #8ab4ff;
+  --on-accent: #ffffff;
+
+  --ok: #3ec27f;
+  --ok-quiet: rgba(62, 194, 127, 0.12);
+  --warn: #e9b44c;
+  --warn-quiet: rgba(233, 180, 76, 0.12);
+  --danger: #f27b7b;
+  --danger-quiet: rgba(242, 123, 123, 0.12);
+  --info: #6cb4ff;
+  --dot-ok: #3ec27f;
+  --dot-warn: #e9b44c;
+  --dot-bad: #f06a6a;
+  --dot-live: #4f8ff7;
+  --dot-off: #45454d;
+
+  --stripe: rgba(255, 255, 255, 0.018);
+  --scrollbar-thumb: #2c2c31;
+  --scrollbar-thumb-hover: #3c3c43;
+  --focus-ring: 0 0 0 3px rgba(79, 143, 247, 0.32);
+  --shadow-float: 0 18px 48px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.05);
+
+  --radius: 8px;
+  --radius-lg: 12px;
+  --chat-col: 760px;
+  --side-w: 272px;
+}
+
+/* No decoration behind the work, and type set at its own spacing. */
+.backdrop { display: none !important; }
+body { letter-spacing: 0; }
+.page-title, .home-status, .assist-title, .team-north, .home-lead, .summary-value, .env-cell-value,
+.mail-subject, .chat-empty-title, .md .md-h, .modal-head h2, .banner-title, .decision-title,
+.run-goal-text, .top-name { letter-spacing: -0.006em; }
+.chat-plan-label { text-transform: none; letter-spacing: 0; font-size: var(--text-xs); }
+
+/* ---- chips: a state in a word, tinted, never a bordered pill --------------- */
+.chip {
+  display: inline-flex; align-items: center; gap: 5px; flex: none;
+  height: 22px; padding: 0 8px; border-radius: 999px;
+  background: var(--bg-raised); color: var(--fg-mute);
+  font-size: var(--text-xs); font-weight: 500; line-height: 1; white-space: nowrap;
+}
+.chip-ok { background: var(--ok-quiet); color: var(--ok); }
+.chip-bad { background: var(--danger-quiet); color: var(--danger); }
+.chip-warn { background: var(--warn-quiet); color: var(--warn); }
+.chip-live { background: var(--accent-quiet); color: var(--accent-text); }
+.chip-live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: face-pulse 1.6s ease-in-out infinite; }
+
+.btn-icon { width: 28px; padding: 0; justify-content: center; }
+.btn .icon { width: 14px; height: 14px; }
+.btn-mini .icon { width: 13px; height: 13px; }
+
+/* ---- faces: who is speaking ------------------------------------------------ */
+.face {
+  --face: var(--fg-mute);
+  display: inline-grid; place-items: center; flex: none;
+  width: 24px; height: 24px; border-radius: 7px;
+  background: color-mix(in srgb, var(--face) 16%, transparent);
+  color: var(--face);
+}
+.face .icon { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.7; }
+.face-sm { width: 22px; height: 22px; border-radius: 6px; }
+.face-sm .icon { width: 13px; height: 13px; }
+.face-xs { width: 18px; height: 18px; border-radius: 5px; }
+.face-xs .icon { width: 11px; height: 11px; }
+.face-accent { --face: #6ea2ff; }
+.face-violet { --face: #a78bfa; }
+.face-green { --face: #4cc38a; }
+.face-amber { --face: #e6b450; }
+.face-teal { --face: #3fc1c9; }
+.face-rose { --face: #f08fb1; }
+.face-red { --face: #f27b7b; }
+.face-sky { --face: #6cc4f5; }
+.face-neutral { --face: #b4b4bc; }
+.face-you { --face: #b4b4bc; }
+@keyframes face-pulse { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .chip-live::before { animation: none; } }
+
+/* ============================================================ workspaces
+ *
+ * The Assistant and Agent Runs are one layout: a list beside a conversation. The list
+ * is a sidebar from 1024px up; below that the conversation takes the whole width and
+ * the list is a panel over it, opened from the conversation's header.
+ */
+.workspace-chat { height: 100%; }
+.workspace-chat > .assistant {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--side-w) minmax(0, 1fr);
+  height: 100%; min-height: 0; overflow: hidden;
+  max-width: none; margin: 0;
+}
+
+.workspace-chat .threads {
+  display: flex; flex-direction: column; min-height: 0; min-width: 0;
+  padding: 0;
+  background: var(--bg-rail);
+  border-right: 1px solid var(--line);
+}
+.workspace-chat .threads-head {
+  display: flex; align-items: center; gap: 6px; flex: none;
+  height: 52px; min-height: 52px; padding: 0 10px 0 16px;
+  border-bottom: 0;
+  font-size: var(--text-sm);
+}
+.workspace-chat .threads-head > b { flex: 1; font-weight: 600; color: var(--fg); }
+.workspace-chat #thread-list, .workspace-chat #team-list {
+  display: block; flex: 1; min-height: 0;
+  overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain;
+  padding: 0 8px 12px;
+}
+.threads-foot {
+  display: flex; gap: 2px; flex: none; padding: 8px; border-top: 1px solid var(--line);
+}
+.threads-foot .btn { flex: 1; justify-content: flex-start; color: var(--fg-mute); }
+.threads-empty { padding: 12px 8px; color: var(--fg-dim); font-size: var(--text-sm); line-height: 1.5; }
+
+/* A project and what was said about it. */
+.thread-group + .thread-group { margin-top: 10px; }
+.thread-group-head {
+  display: flex; align-items: center; gap: 6px; width: 100%;
+  height: 28px; padding: 0 8px; border: 0; border-radius: 6px;
+  background: none; color: var(--fg-dim);
+  font: inherit; font-size: var(--text-xs); font-weight: 600; text-align: left; cursor: pointer;
+}
+.thread-group-head .icon { width: 12px; height: 12px; flex: none; transition: transform var(--fast) var(--ease-out); }
+.thread-group.is-closed .thread-group-head .icon { transform: rotate(-90deg); }
+.thread-count { color: var(--fg-dim); font-weight: 500; font-variant-numeric: tabular-nums; }
+@media (hover: hover) and (pointer: fine) { .thread-group-head:hover { color: var(--fg-mute); } }
+
+.workspace-chat .thread-row { position: relative; display: flex; align-items: stretch; margin: 1px 0; max-width: none; }
+.workspace-chat .thread {
+  position: relative;
+  display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0;
+  height: 32px; padding: 0 30px 0 8px;
+  border: 0; border-radius: 7px; background: none; box-shadow: none;
+  color: var(--fg-mute); font: inherit; font-size: var(--text-sm); text-align: left; cursor: pointer;
+  white-space: nowrap;
+}
+.workspace-chat .thread .grow { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.workspace-chat .thread.active { background: var(--bg-raised); color: var(--fg); }
+.workspace-chat .thread-static { cursor: default; color: var(--fg-mute); }
+@media (hover: hover) and (pointer: fine) {
+  .workspace-chat .thread:not(.active):not(.thread-static):hover { background: var(--bg-surface); color: var(--fg); }
+}
+.thread-time { flex: none; color: var(--fg-dim); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
+.workspace-chat .thread-row:hover .thread-time { visibility: hidden; }
+.thread-state { flex: none; width: 6px; height: 6px; margin: 0 3px; border-radius: 50%; background: var(--dot-off); }
+.thread-state.is-run { background: var(--dot-live); box-shadow: 0 0 0 3px color-mix(in srgb, var(--dot-live) 22%, transparent); }
+.thread-state.is-wait { background: var(--dot-warn); }
+.thread-state.is-bad { background: var(--dot-bad); }
+/* A specialist under the request it works for: the handoff chain, indented on a rule. */
+.thread-child { margin-left: 14px; padding-left: 8px; border-left: 1px solid var(--line); }
+.thread-child .thread { height: 30px; gap: 7px; font-size: var(--text-xs); }
+.thread-role { flex: none; color: var(--fg); font-weight: 500; }
+.thread-task { color: var(--fg-dim); }
+.thread-child .thread.active .thread-task { color: var(--fg-mute); }
+.thread-child .thread.is-run .thread-role::after { content: ""; display: inline-block; width: 5px; height: 5px; margin-left: 6px; vertical-align: 2px; border-radius: 50%; background: var(--dot-live); }
+.thread-run .thread { font-size: var(--text-sm); }
+.workspace-chat .thread-del {
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+  display: grid; place-items: center; width: 24px; height: 24px;
+  border: 0; border-radius: 6px; background: none; color: var(--fg-dim);
+  opacity: 0; cursor: pointer; transition: opacity var(--fast);
+}
+.workspace-chat .thread-del .icon { width: 12px; height: 12px; }
+.workspace-chat .thread-row:hover .thread-del, .workspace-chat .thread-del:focus-visible { opacity: 1; }
+.workspace-chat .thread-del:hover { background: var(--danger-quiet); color: var(--danger); }
+
+/* ---- the conversation ------------------------------------------------------ */
+.workspace-chat .chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; overflow: hidden; background: var(--bg); }
+.workspace-chat .chat-head, .team-detail .chat-head {
+  display: flex; align-items: center; gap: 10px; flex: none; flex-wrap: nowrap;
+  height: 52px; min-height: 52px; padding: 0 16px;
+  background: none; border-bottom: 1px solid var(--line);
+}
+.chat-head-main { flex: 1; min-width: 0; }
+.workspace-chat .chat-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); font-size: var(--text-md); font-weight: 600; letter-spacing: 0; }
+.chat-head-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-dim); font-size: var(--text-xs); font-family: var(--sans); }
+.workspace-chat .chat-head .btn, .workspace-chat .chat-head .chip { flex: none; }
+.chat-switch {
+  display: none; place-items: center; flex: none; width: 32px; height: 32px; margin-left: -6px;
+  border: 0; border-radius: 8px; background: none; color: var(--fg-mute); cursor: pointer;
+}
+.chat-switch .icon { width: 16px; height: 16px; }
+@media (hover: hover) and (pointer: fine) { .chat-switch:hover { background: var(--bg-surface); color: var(--fg); } }
+.workspace-chat .chat-state { display: none; }
+
+.workspace-chat .chat-plan { gap: 10px; padding: 8px 16px; background: none; border-bottom: 1px solid var(--line); }
+.workspace-chat .chat-plan-label { color: var(--fg-mute); font-weight: 600; }
+.workspace-chat .chat-plan-count { color: var(--accent-text); }
+
+.workspace-chat .chat-body { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.workspace-chat .chat-stream {
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column; gap: 22px;
+  padding: 28px clamp(16px, 4vw, 40px) 24px;
+  overflow-y: auto; overflow-anchor: auto; overscroll-behavior: contain;
+}
+.workspace-chat .chat-stream > * { flex: 0 0 auto; width: 100%; max-width: var(--chat-col); margin-inline: auto; }
+.workspace-chat .chat-body > .composer, .workspace-chat .chat-body > .composer-wrap, .workspace-chat .chat-body > .composer-card {
+  width: calc(100% - 2 * clamp(16px, 4vw, 40px)); max-width: var(--chat-col); margin: 0 auto 16px;
+}
+
+/* The person: their words on the right, in a quiet bubble. */
+.workspace-chat .msg-user { display: flex; justify-content: flex-end; }
+.workspace-chat .msg-user > .msg-user-body { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; max-width: min(82%, 600px); margin: 0; }
+.workspace-chat .msg-user .bubble {
+  max-width: 100%; padding: 10px 14px;
+  background: var(--bg-raised); border: 0; border-radius: 16px 16px 4px 16px;
+  color: var(--fg);
+}
+.workspace-chat .msg-user .msg-meta { margin: 0 4px 0 0; }
+
+/* An agent's turn: who, then what they said and did, in one column. */
+.workspace-chat .turn, .run-feed .turn { display: block; max-width: var(--chat-col); margin: 0 auto; }
+.turn-who { display: flex; align-items: center; gap: 8px; height: 24px; margin-bottom: 8px; font-size: var(--text-sm); }
+.turn-who b { color: var(--fg); font-weight: 600; }
+.turn-who .dim { color: var(--fg-dim); font-size: var(--text-xs); }
+.workspace-chat .turn .avatar { display: none; }
+.workspace-chat .turn-body, .run-feed .turn-body { display: flex; flex-direction: column; gap: 8px; padding-left: 32px; }
+.workspace-chat .turn .bubble { padding: 0; background: none; border: 0; color: var(--fg); }
+.workspace-chat .turn-body > .msg-meta { display: none; }
+
+/* Markdown as reading text. */
+.workspace-chat .md, .run-feed .md, .run-col .md { font-size: var(--text-md); line-height: 1.65; color: var(--fg); }
+.workspace-chat .md p, .run-feed .md p { margin: 0 0 10px; }
+.workspace-chat .md > :last-child, .run-feed .md > :last-child { margin-bottom: 0; }
+.workspace-chat .md ul, .workspace-chat .md ol, .run-feed .md ul, .run-feed .md ol { margin: 0 0 10px; padding-left: 22px; }
+.workspace-chat .md li + li, .run-feed .md li + li { margin-top: 3px; }
+.workspace-chat .md .md-h, .run-feed .md .md-h { margin: 18px 0 8px; font-size: var(--text-md); font-weight: 650; }
+.workspace-chat .md code:not(pre code), .run-feed .md code:not(pre code), .run-col .md code:not(pre code) {
+  padding: 1px 5px; border-radius: 5px; background: var(--bg-raised); color: #d7d7de;
+  font-family: var(--mono); font-size: 0.86em;
+}
+.workspace-chat .md pre, .run-feed .md pre {
+  margin: 4px 0 12px; padding: 12px 14px; border-radius: 10px;
+  background: var(--bg-deep); border: 1px solid var(--line);
+  font-size: var(--text-xs); line-height: 1.6;
+}
+.workspace-chat .md table, .run-feed .md table { border-collapse: collapse; margin: 4px 0 12px; font-size: var(--text-sm); }
+.workspace-chat .md th, .run-feed .md th { padding: 8px 12px 8px 0; border-bottom: 1px solid var(--line-strong); color: var(--fg-mute); font-weight: 600; text-align: left; text-transform: none; letter-spacing: 0; font-size: var(--text-xs); vertical-align: bottom; }
+.workspace-chat .md td, .run-feed .md td { padding: 8px 12px 8px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+
+/* A batch of steps is one line: what was done, with its object. */
+.workspace-chat .msg-tools { width: 100%; }
+.workspace-chat .tools-head {
+  display: inline-flex; align-items: center; gap: 8px; width: auto; max-width: 100%;
+  min-height: 26px; padding: 2px 8px 2px 0; border-radius: 6px;
+  color: var(--fg-mute); font-size: var(--text-sm);
+}
+.tools-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--fg-dim); opacity: 0.7; }
+.msg-tools.is-running .tools-dot { background: var(--dot-live); opacity: 1; animation: face-pulse 1.4s ease-in-out infinite; }
+.workspace-chat .tools-head .chip { height: 20px; }
+@media (hover: hover) and (pointer: fine) { .workspace-chat .tools-head:hover { color: var(--fg); } }
+.workspace-chat .tools-list { margin: 6px 0 2px; border-radius: 10px; background: var(--bg-surface); border: 1px solid var(--line); }
+.workspace-chat .tools-list .step-head { min-height: 34px; padding: 6px 12px; font-size: var(--text-sm); }
+.workspace-chat .tools-list .step-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); font-weight: 450; }
+.workspace-chat .tools-list .step-detail { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-xs); }
+.workspace-chat .tools-list .step-body { padding: 4px 12px 12px 30px; }
+
+/* An edit shown as the change it made. */
+.diff-card { margin: 4px 0 10px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--bg-deep); }
+.diff-head { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--line); color: var(--fg-mute); font-size: var(--text-xs); }
+.diff-head .icon { width: 12px; height: 12px; }
+.diff-body { max-height: 320px; overflow: auto; font-family: var(--mono); font-size: 12px; line-height: 1.55; }
+.diff-line { display: flex; gap: 8px; padding: 0 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.diff-sign { flex: none; width: 10px; color: var(--fg-dim); user-select: none; }
+.diff-del { background: var(--diff-del-bg); color: var(--diff-del-fg); }
+.diff-add { background: var(--diff-add-bg); color: var(--diff-add-fg); }
+.diff-more { padding: 4px 10px; color: var(--fg-dim); font-family: var(--sans); }
+
+/* The wait, and the words as they arrive. */
+.workspace-chat .typing { gap: 5px; padding: 2px 0; }
+.workspace-chat .typing .tdot { width: 5px; height: 5px; background: var(--accent-text); }
+.workspace-chat .typing-label { color: var(--fg-mute); font-size: var(--text-sm); }
+.msg-tail .bubble > :last-child::after { width: 2px; background: var(--accent-text); }
+
+/* Under a finished reply: quiet until the pointer is near. */
+.workspace-chat .msg-actions { display: flex; gap: 2px; margin: 2px 0 0 -6px; opacity: 0; transition: opacity var(--fast); }
+.workspace-chat .turn:hover .msg-actions, .workspace-chat .msg-actions:focus-within { opacity: 1; }
+@media (hover: none) { .workspace-chat .msg-actions { opacity: 1; } }
+
+/* The team's report, and devd's brief to a specialist: a note in the flow, not a bubble. */
+.workspace-chat .msg-team, .workspace-chat .msg-brief { display: block; }
+.workspace-chat .team-note, .brief {
+  display: flex; gap: 10px; align-items: flex-start; width: 100%; max-width: none;
+  padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg-surface);
+}
+.brief-head, .workspace-chat .team-note-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; font-size: var(--text-sm); line-height: 22px; }
+.brief-head b, .workspace-chat .team-note-head b { color: var(--fg); font-weight: 600; }
+.brief-head .dim, .workspace-chat .team-note-head .dim { color: var(--fg-dim); font-size: var(--text-xs); }
+.brief-task { margin-top: 2px; color: var(--fg); font-size: var(--text-md); line-height: 1.5; }
+.brief-body, .workspace-chat .team-note-body, .run-fold { margin-top: 8px; }
+.brief-body > summary, .workspace-chat .team-note-body > summary, .run-fold > summary {
+  display: inline-flex; align-items: center; gap: 4px; color: var(--fg-mute); font-size: var(--text-xs); cursor: pointer; list-style: none;
+}
+.brief-body > summary::-webkit-details-marker, .team-note-body > summary::-webkit-details-marker, .run-fold > summary::-webkit-details-marker { display: none; }
+.brief-body > summary::after, .workspace-chat .team-note-body > summary::after, .run-fold > summary::after { content: "›"; transition: transform var(--fast); }
+.brief-body[open] > summary::after, .workspace-chat .team-note-body[open] > summary::after, .run-fold[open] > summary::after { transform: rotate(90deg); }
+.brief-body > .md, .workspace-chat .team-note-body > .md, .run-fold > .md { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); font-size: var(--text-sm); color: var(--fg-mute); }
+
+/* Notices inside a turn read as a line, not a box. */
+.workspace-chat .msg-note { padding: 0; background: none; border: 0; color: var(--fg-mute); font-size: var(--text-sm); }
+.workspace-chat .msg-error { color: var(--danger); }
+
+/* An attached picture is big enough to see what it shows. */
+.workspace-chat .msg-files { justify-content: flex-end; }
+.workspace-chat button.msg-file.is-image { width: 200px; height: 140px; border-radius: 12px; }
+
+/* The empty conversation sits in the column, not against the left edge. */
+.workspace-chat .assist-empty { max-width: var(--chat-col); margin: auto; padding: 24px 0; }
+.workspace-chat .assist-title { font-size: 24px; font-weight: 600; }
+
+/* ---- a run, read as the team talking --------------------------------------- */
+.team-detail { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.team-detail .run-stream { flex: 1; min-height: 0; overflow-y: auto; overflow-anchor: auto; padding: 24px clamp(16px, 4vw, 40px); gap: 0; }
+.run-col { width: 100%; max-width: var(--chat-col); margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+.run-section { margin: 18px 0 2px; color: var(--fg); font-size: var(--text-sm); font-weight: 650; }
+.run-section .count { margin-left: 4px; color: var(--fg-dim); font-weight: 500; }
+.team-detail .tlist { display: flex; flex-direction: column; gap: 6px; }
+.team-detail .tcard { padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-surface); }
+.team-detail .tcard-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.tcard-title { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.tcard-title b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); font-weight: 550; font-size: var(--text-sm); }
+.tcard-title .dim { color: var(--fg-dim); font-size: var(--text-xs); }
+.team-detail .tcard .row-sub { margin: 6px 0 0 34px; color: var(--fg-dim); font-size: var(--text-xs); }
+.team-detail .tcard .inline { margin-left: 34px; }
+.run-feed { display: flex; flex-direction: column; gap: 14px; }
+.run-feed .turn.is-cont { margin-top: -8px; }
+.run-feed .turn-body { gap: 4px; }
+.run-feed .is-you .turn-body .md { color: var(--fg-mute); }
+.team-detail > .composer { width: calc(100% - 2 * clamp(16px, 4vw, 40px)); max-width: var(--chat-col); margin: 0 auto 16px; }
+
+/* ---- narrower windows ------------------------------------------------------ */
+@media (max-width: 1023px) {
+  .workspace-chat > .assistant { grid-template-columns: minmax(0, 1fr); }
+  .workspace-chat .threads {
+    position: absolute; z-index: 30; top: 0; bottom: 0; left: 0;
+    width: min(320px, 86vw);
+    border-right: 1px solid var(--line-strong);
+    box-shadow: var(--shadow-float);
+    transform: translateX(-102%);
+    transition: transform var(--base) var(--ease-drawer), visibility 0s linear var(--base);
+    visibility: hidden;
+  }
+  .workspace-chat .assistant.list-open .threads { transform: none; visibility: visible; transition: transform var(--base) var(--ease-drawer); }
+  .threads-scrim { position: absolute; inset: 0; z-index: 25; background: var(--overlay); opacity: 0; pointer-events: none; transition: opacity var(--base); }
+  .assistant.list-open .threads-scrim { opacity: 1; pointer-events: auto; }
+  .chat-switch { display: grid; }
+}
+@media (min-width: 1024px) { .threads-scrim { display: none; } }
+@media (prefers-reduced-motion: reduce) { .workspace-chat .threads, .threads-scrim { transition: none !important; } }
+
+@media (max-width: 640px) {
+  .workspace-chat .chat-head, .team-detail .chat-head { gap: 8px; padding: 0 12px; }
+  .workspace-chat .chat-head > .face, .team-detail .chat-head > .face { display: none; }
+  /* The header keeps the one action that matters; the rest wait in the conversation. */
+  .workspace-chat .chat-head .btn-ghost:not(.btn-icon), .team-detail .chat-head .btn-ghost:not(.btn-icon) { display: none; }
+  .workspace-chat .chat-stream, .team-detail .run-stream { padding: 20px 14px 16px; gap: 18px; }
+  .workspace-chat .turn-body, .run-feed .turn-body { padding-left: 0; }
+  .workspace-chat .msg-user > .msg-user-body { max-width: 90%; }
+  .workspace-chat .chat-body > .composer, .team-detail > .composer { width: calc(100% - 24px); margin-bottom: 10px; }
+  .team-detail .tcard .row-sub, .team-detail .tcard .inline { margin-left: 0; }
+  .workspace-chat .chat-plan-item { display: none; }
+}
+
+
+/* ---- tables built from rows: one set of columns for the heading and every row ----
+ * The heading and each row used to be separate grids. Their last column (the row's
+ * buttons) was empty in the heading, so the heading's columns came out wider and no
+ * heading sat over its column. The table is now the grid; each row borrows its tracks
+ * with subgrid, so a heading and its cells share one left edge at every width. */
+@media (min-width: 1061px) {
+  .st-table {
+    display: grid;
+    grid-template-columns: minmax(220px, 1.5fr) minmax(160px, 1.1fr) minmax(120px, 0.8fr) minmax(150px, 1fr) max-content;
+    column-gap: var(--s4);
+  }
+  .st-table > .st-headrow, .st-table > .st-row { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; column-gap: var(--s4); }
+  .st-table > .st-headrow { align-items: end; color: var(--fg-mute); font-size: var(--text-xs); font-weight: 600; }
+  .st-col::before { content: none; }
+}
+.workspace-chat .turn, .run-feed .turn { width: 100%; }
+.workspace-chat .threads-head > .grow { display: none; }
+.workspace-chat .threads-head > b { overflow: visible; }
+.workspace-chat .msg-note, .run-feed .md { text-align: left; }
+.workspace-chat .chat-notice { width: calc(100% - 2 * clamp(16px, 4vw, 40px)); max-width: var(--chat-col); margin: 12px auto 0; }
+.workspace-chat .msg-brief.is-note .brief { background: none; border-style: dashed; }
+
+
+/* ============================================================== navigation
+ *
+ * A rail, a context panel, and the page. The rail says where you are; the panel
+ * lists what is in that area (its pages, its conversations, its runs); the page is
+ * the work. There is no bar above the page and no second row of tabs: the page
+ * starts at the top of the window.
+ */
+:root {
+  --rail-w: 72px;
+  --panel-w: 264px;
+}
+
+.shell {
+  display: grid;
+  grid-template-columns: var(--rail-w) auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) var(--status-h);
+  grid-template-areas: "rail panel content" "rail status status";
+  height: 100vh;
+  height: 100dvh;
+  background: var(--bg);
+}
+.shell > .content { grid-area: content; }
+.shell > .statusbar { grid-area: status; }
+
+/* ---- the rail ---------------------------------------------------------------- */
+.rail {
+  grid-area: rail;
+  position: relative;
+  z-index: 40;
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  min-height: 0; padding: 10px 0 10px;
+  overflow-y: auto; overflow-x: hidden; scrollbar-width: none;
+  background: var(--bg-deep);
+  border-right: 1px solid var(--line);
+}
+.rail::-webkit-scrollbar { display: none; }
+.rail-brand {
+  display: grid; place-items: center; flex: none;
+  width: 40px; height: 40px; margin: 0 0 6px;
+  border: 0; border-radius: 10px; background: none; cursor: pointer;
+}
+.rail-brand img { width: 26px; height: 26px; border-radius: 7px; }
+.rail-main, .rail-foot { display: flex; flex-direction: column; align-items: center; gap: 2px; width: 100%; }
+.rail-foot { margin-top: auto; padding-top: 8px; }
+.rail-sep { flex: none; width: 28px; height: 1px; margin: 6px 0; background: var(--line); }
+
+.rail-item {
+  position: relative;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; flex: none;
+  width: 60px; min-height: 50px; padding: 5px 0 4px;
+  border: 0; border-radius: 10px; background: none;
+  color: var(--fg-dim); font: inherit; cursor: pointer;
+  transition: color var(--fast) ease, background-color var(--fast) ease;
+}
+.rail-icon {
+  position: relative; display: grid; place-items: center;
+  width: 36px; height: 28px; border-radius: 8px;
+  transition: background-color var(--fast) ease;
+}
+.rail-icon .icon { width: 18px; height: 18px; }
+.rail-label { max-width: 58px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10.5px; font-weight: 500; line-height: 1.2; letter-spacing: 0.005em; }
+.rail-item.active { color: var(--fg); }
+.rail-item.active .rail-icon { background: var(--bg-raised); color: var(--fg); }
+@media (hover: hover) and (pointer: fine) {
+  .rail-item:not(.active):hover { color: var(--fg-mute); }
+  .rail-item:not(.active):hover .rail-icon { background: var(--bg-surface); }
+}
+.rail-item:focus-visible { outline: none; }
+.rail-item:focus-visible .rail-icon { box-shadow: var(--focus-ring); }
+.rail-small { min-height: 0; padding: 3px 0; }
+.rail-small .rail-label { display: none; }
+.rail-small .rail-icon { width: 36px; height: 32px; }
+.rail-search { margin-bottom: 4px; }
+.rail-search .rail-label { display: none; }
+.rail-search .rail-icon { width: 40px; height: 32px; border: 1px solid var(--line); border-radius: 9px; }
+.rail-more, .rail-sheet { display: none; }
+
+.rail-badge {
+  position: absolute; top: -4px; right: -3px;
+  min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
+  background: var(--accent); color: var(--on-accent);
+  font-size: 10px; font-weight: 600; line-height: 16px; text-align: center;
+  box-shadow: 0 0 0 2px var(--bg-deep);
+}
+.rail-live, .rail-dot {
+  position: absolute; top: 2px; right: 4px; width: 7px; height: 7px; border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--bg-deep);
+}
+.rail-live { background: var(--dot-live); animation: face-pulse 1.6s ease-in-out infinite; }
+.rail-dot-bad { background: var(--dot-bad); }
+.rail-dot-warn { background: var(--dot-warn); }
+@media (prefers-reduced-motion: reduce) { .rail-live { animation: none; } }
+
+/* ---- the context panel ------------------------------------------------------- */
+.panel {
+  grid-area: panel;
+  display: flex; flex-direction: column;
+  width: var(--panel-w); min-height: 0; min-width: 0;
+  background: var(--bg-rail);
+  border-right: 1px solid var(--line);
+}
+.panel[hidden] { display: none; }
+.panel-head {
+  display: flex; align-items: center; gap: 6px; flex: none;
+  height: 52px; padding: 0 10px 0 16px;
+  font-size: var(--text-sm);
+}
+.panel-head > b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); font-weight: 600; }
+.panel-body { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; padding: 0 8px 12px; }
+.panel .thread-list { display: block; }
+.panel-item {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  height: 32px; margin: 1px 0; padding: 0 10px;
+  border: 0; border-radius: 7px; background: none;
+  color: var(--fg-mute); font: inherit; font-size: var(--text-sm); text-align: left; cursor: pointer;
+}
+.panel-item .icon { width: 15px; height: 15px; flex: none; color: var(--fg-dim); }
+.panel-item .grow { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.panel-item.active { background: var(--bg-raised); color: var(--fg); }
+.panel-item.active .icon { color: var(--fg); }
+@media (hover: hover) and (pointer: fine) { .panel-item:not(.active):hover { background: var(--bg-surface); color: var(--fg); } }
+.panel-count { flex: none; color: var(--fg-dim); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
+.panel-label { margin: 16px 0 4px; padding: 0 10px; color: var(--fg-dim); font-size: var(--text-xs); font-weight: 600; }
+.panel-thing { height: 30px; gap: 8px; }
+.panel-thing .mono { font-size: var(--text-xs); }
+
+/* The page owns the full height now: no bar above it. */
+.shell .crumbs:empty { display: none; }
+.shell .subnav { display: none !important; }
+.workspace-chat > .assistant { grid-template-columns: minmax(0, 1fr); }
+.page { padding-top: 28px; }
+
+/* ---- narrower: the panel folds away and opens over the page ------------------ */
+.panel-scrim { display: none; }
+@media (max-width: 1023px) {
+  .shell { grid-template-columns: var(--rail-w) minmax(0, 1fr); grid-template-areas: "rail content" "rail status"; }
+  .panel {
+    position: fixed; z-index: 35; top: 0; bottom: 0; left: var(--rail-w);
+    width: min(var(--panel-w), calc(100vw - var(--rail-w) - 24px));
+    box-shadow: var(--shadow-float);
+    transform: translateX(calc(-100% - var(--rail-w)));
+    visibility: hidden;
+    transition: transform var(--base) var(--ease-drawer), visibility 0s linear var(--base);
+  }
+  .shell.panel-open .panel { transform: none; visibility: visible; transition: transform var(--base) var(--ease-drawer); }
+  .panel-scrim { display: block; position: fixed; inset: 0; z-index: 30; background: var(--overlay); opacity: 0; pointer-events: none; transition: opacity var(--base); }
+  .shell.panel-open .panel-scrim { opacity: 1; pointer-events: auto; }
+  /* The active area's icon says the panel is there to open. */
+  .shell.has-panel .rail-item.active .rail-icon::after {
+    content: ""; position: absolute; right: -6px; top: 50%; width: 3px; height: 12px; margin-top: -6px; border-radius: 2px; background: var(--fg-dim);
+  }
+}
+@media (prefers-reduced-motion: reduce) { .panel, .panel-scrim { transition: none !important; } }
+
+/* ---- phones: the rail is a bar along the bottom ------------------------------ */
+@media (max-width: 640px) {
+  :root { --rail-w: 0px; }
+  .shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; grid-template-areas: "content" "rail"; }
+  .shell > .statusbar { display: none; }
+  .rail {
+    flex-direction: row; justify-content: space-around; align-items: stretch; gap: 0;
+    padding: 4px 4px calc(4px + env(safe-area-inset-bottom));
+    overflow: visible;
+    border-right: 0; border-top: 1px solid var(--line);
+  }
+  .rail-brand, .rail-search, .rail-sep { display: none; }
+  .rail-main, .rail-foot { display: contents; }
+  .rail-item { display: none; flex: 1 1 0; width: auto; min-height: 52px; }
+  .rail-item.rail-phone, .rail-more { display: flex; }
+  .rail-small .rail-label { display: block; }
+  /* More: everything that does not fit, as a sheet above the bar. */
+  .shell.rail-more-open .rail-sheet {
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px;
+    position: fixed; z-index: 45; left: 8px; right: 8px; bottom: calc(66px + env(safe-area-inset-bottom));
+    padding: 8px; border: 1px solid var(--line-strong); border-radius: 14px;
+    background: var(--bg-surface); box-shadow: var(--shadow-float);
+  }
+  .rail-sheet .rail-item { display: flex; width: auto; }
+  .rail-sheet .rail-small .rail-label { display: block; }
+  .panel { left: 0; width: min(320px, 88vw); bottom: calc(60px + env(safe-area-inset-bottom)); }
+  .page { padding-top: 20px; }
+}
+.shell > .statusbar { grid-column: 2 / -1; grid-row: 2; width: auto; padding-left: 16px; padding-right: 16px; }
+@media (max-width: 1023px) { .shell > .statusbar { grid-column: 2; } }
+
+/* ---- icons: one line weight at every size ------------------------------------
+ * The sprite's shapes draw with non-scaling strokes, so stroke-width is in screen
+ * pixels: a 12px chevron and an 18px rail icon carry the same 1.5px line instead of
+ * a blurry 0.85px one and a heavy 1.3px one. */
+.icon { stroke-width: 1.5; }
+.face .icon, .team-note-mark .icon { stroke-width: 1.5; }
+.rail-icon .icon { stroke-width: 1.6; }
+.stage-mark .icon { stroke-width: 2; }
+
+/* ---- type: one family, one scale -----------------------------------------------
+ * Inter Tight for the interface, the system monospace only for what a machine
+ * produced (paths, commands, hostnames, output). Seven sizes, each with a job:
+ *   11  meta and counts      12  secondary lines     13  dense rows and controls
+ *   14  reading text         16  section heads       22  page titles       28  Home
+ * Hierarchy comes from size and weight; colour stays for state. */
+:root { --text-2xs: 11px; --text-xs: 12px; --text-sm: 13px; --text-md: 14px; --text-lg: 16px; --text-xl: 18px; --text-2xl: 22px; --text-display: 28px; }
+.page-title, .workspace-head .page-title, .home-head .page-title { font-size: var(--text-2xl); font-weight: 650; line-height: 1.2; }
+.home-status { font-size: var(--text-display); font-weight: 650; line-height: 1.15; }
+.section-title, .run-section, .ui-head-title { font-size: var(--text-md); font-weight: 600; }
+.page-sub, .home-lead { font-size: var(--text-md); }
+.panel-head > span:first-child { font-size: var(--text-sm); font-weight: 600; }
+th, .table th { font-size: var(--text-xs); font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--fg-mute); }
+.mono, code, kbd, .cell-mono { font-family: var(--mono); letter-spacing: 0; }
+
+/* ---- the conversation, after T3 Code's good ideas ------------------------------ */
+/* Scrolled up to read: the way back to the end, centred above the box. */
+.chat-body, .team-detail { position: relative; }
+.jump-end {
+  position: absolute; z-index: 5; left: 50%; bottom: 150px; transform: translateX(-50%);
+  display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px 0 10px;
+  border: 1px solid var(--line-strong); border-radius: 999px;
+  background: var(--bg-raised); box-shadow: var(--shadow-float);
+  color: var(--fg); font: inherit; font-size: var(--text-xs); font-weight: 500; cursor: pointer;
+  animation: jump-in var(--base) var(--ease-out);
+}
+.jump-end[hidden] { display: none; }
+.jump-end .icon { width: 13px; height: 13px; }
+.team-detail .jump-end { bottom: 96px; }
+@keyframes jump-in { from { opacity: 0; transform: translate(-50%, 6px); } }
+@media (prefers-reduced-motion: reduce) { .jump-end { animation: none; } }
+
+/* A finished turn's work, behind one line; its answer below. */
+.worked { margin: 0 0 4px; }
+.worked > summary {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px;
+  list-style: none; cursor: pointer; color: var(--fg-mute); font-size: var(--text-sm);
+}
+.worked > summary::-webkit-details-marker { display: none; }
+.worked > summary > .icon { width: 12px; height: 12px; transition: transform var(--fast) var(--ease-out); }
+.worked[open] > summary > .icon { transform: rotate(90deg); }
+@media (hover: hover) and (pointer: fine) { .worked > summary:hover .worked-line { color: var(--fg); } }
+.worked-tiles { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.tile { display: inline-flex; align-items: baseline; gap: 4px; height: 24px; padding: 0 9px; border-radius: 7px; background: var(--bg-surface); border: 1px solid var(--line); color: var(--fg-mute); font-size: var(--text-xs); line-height: 22px; }
+.tile b { color: var(--fg); font-size: var(--text-sm); font-weight: 650; font-variant-numeric: tabular-nums; }
+.tile-ok b { color: var(--ok); }
+.tile-bad b { color: var(--danger); }
+.worked-body { display: flex; flex-direction: column; gap: 8px; margin: 10px 0 6px; padding-left: 12px; border-left: 1px solid var(--line); }
+
+/* The conversation's project, as a third column on wide windows. */
+.ws-card { display: none; }
+@media (min-width: 1440px) {
+  .workspace-chat > .assistant.has-card { grid-template-columns: minmax(0, 1fr) 232px; }
+  .ws-card:not([hidden]) {
+    display: flex; flex-direction: column; gap: 2px; align-self: start;
+    margin: 64px 16px 0 0; padding: 8px;
+    border: 1px solid var(--line); border-radius: 12px; background: var(--bg-surface);
+  }
+}
+.ws-row { display: flex; align-items: center; gap: 9px; min-height: 30px; padding: 0 8px; border: 0; border-radius: 7px; background: none; color: var(--fg-mute); font: inherit; font-size: var(--text-sm); text-align: left; }
+.ws-row .icon { width: 14px; height: 14px; color: var(--fg-dim); flex: none; }
+.ws-row .mono { font-size: var(--text-xs); }
+.ws-row .dim { color: var(--fg-dim); font-size: var(--text-xs); }
+.ws-link { cursor: pointer; }
+@media (hover: hover) and (pointer: fine) { .ws-link:hover { background: var(--bg-raised); color: var(--fg); } }
+.ws-diff { color: var(--warn); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
+.ws-sep { height: 1px; margin: 4px 6px; background: var(--line); }
+
+
+/* ============================================================ callouts
+ *
+ * Banners, notices, toasts and dialogs are one family: a quiet surface with a
+ * hairline, a small icon that carries the tone, the words in the reading colour,
+ * and the action at the end of the line. Tone is a tint of a few per cent and the
+ * icon's colour - never a block of yellow or red the eye has to read through.
+ */
+.notice, .banner {
+  --tone: var(--fg-mute);
+  --tone-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M12 11v5M12 8h.01'/%3E%3C/svg%3E");
+  position: relative;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px;
+  padding: 10px 12px 10px 40px;
+  border: 1px solid color-mix(in srgb, var(--tone) 22%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--tone) 5%, var(--bg-surface));
+  box-shadow: none;
+  color: var(--fg); font-size: var(--text-sm); line-height: 1.5;
+}
+.notice::before, .banner::before {
+  content: ""; position: absolute; left: 14px; top: 12px;
+  width: 16px; height: 16px;
+  background: var(--tone);
+  -webkit-mask: var(--tone-icon) center / contain no-repeat;
+  mask: var(--tone-icon) center / contain no-repeat;
+}
+.notice > b:first-child, .banner-title { color: var(--fg); font-weight: 600; }
+.notice .btn, .banner .btn { margin-left: auto; flex: none; }
+.notice .btn + .btn { margin-left: 0; }
+.notice-warn, .banner-warn { --tone: var(--warn); --tone-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3l9.5 17h-19z'/%3E%3Cpath d='M12 10v4M12 17h.01'/%3E%3C/svg%3E"); }
+.notice-bad, .banner-bad { --tone: var(--danger); --tone-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M15 9l-6 6M9 9l6 6'/%3E%3C/svg%3E"); }
+.notice-ok, .banner-ok { --tone: var(--ok); --tone-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M8 12.5l2.5 2.5L16 9.5'/%3E%3C/svg%3E"); padding-left: 40px; color: var(--fg); }
+.notice-info, .banner-info { --tone: var(--accent-text); }
+/* Healthy stays a sentence: the green check, no box around it. */
+.notice-ok { background: none; border-color: transparent; padding-top: 4px; padding-bottom: 4px; }
+.notice-ok::before { top: 6px; }
+
+/* ---- dialogs ---------------------------------------------------------------- */
+.overlay { background: var(--overlay); backdrop-filter: blur(3px); }
+.modal {
+  border: 1px solid var(--line-strong); border-radius: 14px;
+  background: var(--bg-surface);
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.6);
+  animation: modal-in var(--base) var(--ease-out);
+}
+.modal-head { gap: 12px; padding: 20px 20px 10px; border-bottom: 0; }
+.modal-head h2 { font-size: var(--text-lg); font-weight: 600; letter-spacing: 0; }
+.modal-kicker { color: var(--fg-dim); font-size: var(--text-xs); font-weight: 500; text-transform: none; letter-spacing: 0; }
+.modal-close { display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: 8px; background: none; color: var(--fg-dim); font-size: 18px; cursor: pointer; }
+@media (hover: hover) and (pointer: fine) { .modal-close:hover { background: var(--bg-raised); color: var(--fg); } }
+.modal-body { padding: 4px 20px 16px; color: var(--fg-mute); font-size: var(--text-md); line-height: 1.6; }
+.modal-foot { gap: 12px; padding: 12px 20px 18px; border-top: 0; background: none; }
+.modal-buttons { gap: 8px; }
+.modal-icon { width: 32px; height: 32px; border-radius: 9px; background: var(--bg-raised); color: var(--fg-mute); }
+@keyframes modal-in { from { opacity: 0; transform: translateY(6px) scale(0.985); } }
+@media (prefers-reduced-motion: reduce) { .modal { animation: none; } }
+
+/* ---- toasts ----------------------------------------------------------------- */
+.toast {
+  border: 1px solid var(--line-strong); border-radius: 10px;
+  background: var(--bg-raised); box-shadow: var(--shadow-float);
+  color: var(--fg); font-size: var(--text-sm);
+}
+
+/* ---- the conversation and run headers share one shape ----------------------- */
+.workspace-chat .chat-head .btn-danger.btn-icon, .team-detail .chat-head .btn-danger.btn-icon { color: var(--fg-dim); background: none; border-color: transparent; }
+@media (hover: hover) and (pointer: fine) {
+  .workspace-chat .chat-head .btn-icon:hover, .team-detail .chat-head .btn-icon:hover { background: var(--bg-surface); color: var(--fg); }
+}
+.team-detail .chat-head .btn, .workspace-chat .chat-head .btn { height: 28px; }
+.team-detail .chat-head .chat-title { font-size: var(--text-md); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-head .chip { margin-right: 2px; }
+
+
+/* ---- data tables: sentence-case heads, and a list on a phone ------------------
+ * A head is a label, not a shout. Below 640px a four-column table becomes one block
+ * per row, each value under its own small label, instead of four slivers of text. */
+.mu th, .table th, .drift-table th { text-transform: none; letter-spacing: 0; font-size: var(--text-xs); color: var(--fg-mute); }
+@media (max-width: 640px) {
+  .mu, .mu tbody, .mu tr, .mu td { display: block; width: 100%; }
+  .mu thead { display: none; }
+  .mu tr { padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .mu td { padding: 2px 0; border: 0; }
+  .mu td:first-child { font-weight: 600; color: var(--fg); }
+}
+
+/* Folded sections sit close: a fold is a line until it is opened. */
+.ui-fold { margin-top: 6px; }
+.ui-fold > summary { padding: 8px 0; }
+.ui-fold + .ui-fold { margin-top: 0; border-top: 1px solid var(--line); }
+
+/* A note inside a turn is a line in the reading column, not a centred caption. */
+.workspace-chat .turn-body > .msg-note, .workspace-chat .msg-note { align-self: flex-start; width: auto; margin: 0; text-align: left; }

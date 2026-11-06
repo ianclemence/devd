@@ -23,6 +23,7 @@ pub mod paths;
 pub mod pins;
 pub mod platform;
 pub mod maintenance;
+pub mod memo;
 pub mod merge3;
 pub mod ports;
 pub mod preview;
