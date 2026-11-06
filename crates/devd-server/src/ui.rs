@@ -60,7 +60,7 @@ const TOKEN_PLACEHOLDER: &str = "__DEVD_TOKEN__";
 /// `style-src` permits inline *styles* because the application uses a few for spacing. Inline
 /// style is not script: it cannot execute, and script remains limited to
 /// same-origin files.
-const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self'; img-src 'self' data:; frame-src http: https:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self'; img-src 'self' data: blob:; frame-src http: https:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 /// The application shell with the session token injected.
 pub async fn index(State(state): State<Arc<AppState>>) -> Response {

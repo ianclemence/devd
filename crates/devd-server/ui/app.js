@@ -7234,7 +7234,7 @@ var TERM_POLL_MS = 250;
       return Promise.all([
         loadHealth(),
         read("setup.requirements").catch(function () { return null; }),
-        state.server.loaded ? Promise.resolve() : loadServer()
+        state.server.loaded ? refreshServices() : loadServer()
       ]);
     }).then(function (r) {
       AI.requirements = r[1];
@@ -7410,6 +7410,7 @@ var TERM_POLL_MS = 250;
         : f.view ? '<button type="button" class="btn btn-mini" data-action="health-go" data-view="' + attr(f.view) + '">' + esc(f.label) + "</button>" : "";
       machine.push(uiRow({ accent: true, dot: bad ? "bad" : "warn", title: esc(c.label), sub: esc(c.meaning || c.detail), wrap: true, actions: act }));
     });
+    AI.homeSig = healthSig();
     var updates = d.inbox.filter(function (m) { return !m.needs_reply; }).length;
     var attentionTotal = decisions.length + work.length + machine.length;
     var needsHtml = "";
@@ -10366,34 +10367,87 @@ var TERM_POLL_MS = 250;
     input.dispatchEvent(new Event("input", { bubbles: true }));
   }
 
+  /* A name too long for the tile keeps both ends, so "report-final.pdf" does not
+     become "report-fin…" and lose the part that says what it is. */
+  function midName(name, max) {
+    name = String(name || "file");
+    if (name.length <= max) return name;
+    var dot = name.lastIndexOf(".");
+    var ext = dot > 0 && name.length - dot <= 8 ? name.slice(dot) : "";
+    var head = name.slice(0, name.length - ext.length);
+    var keep = max - ext.length - 1;
+    var front = Math.ceil(keep * 0.65), back = Math.max(0, keep - front);
+    return head.slice(0, front) + "…" + (back ? head.slice(head.length - back) : "") + ext;
+  }
+
+  function attachmentSize(n) {
+    n = Number(n) || 0;
+    return n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : n >= 1024 ? Math.round(n / 1024) + " KB" : n + " B";
+  }
+
   function attachmentChips() {
     return ATTACHMENTS.map(function (a, i) {
-      var thumb = a.preview ? '<img src="' + attr(a.preview) + '" alt="">' : '<svg class="icon" aria-hidden="true"><use href="#i-file"></use></svg>';
-      return '<span class="composer-attachment' + (a.preview ? " is-image" : "") + '">' + thumb + '<b title="' + attr(a.path) + '">' + esc(a.name) + "</b>" +
-        '<button class="btn btn-mini btn-danger" type="button" data-action="chat-remove-file" data-index="' + i + '" aria-label="Remove ' + attr(a.name) + '">×</button></span>';
+      var st = a.state || "done";
+      var image = !!a.preview;
+      var glyph = '<span class="attach-glyph"><svg class="icon" aria-hidden="true"><use href="#i-file"></use></svg></span>';
+      var info = st === "uploading" ? "Uploading…" : st === "error" ? (a.error || "Failed") + ". Click to retry" : attachmentSize(a.bytes);
+      var body = image
+        ? '<img class="attach-img" src="' + attr(a.preview) + '" alt="' + attr(a.name) + '">' + glyph
+        : glyph + '<span class="attach-meta"><b>' + esc(midName(a.name, 20)) + "</b><i>" + esc(info) + "</i></span>";
+      var action = st === "error" ? "chat-retry-file" : image ? "chat-preview-file" : "";
+      return '<span class="composer-attachment ' + (image ? "is-image" : "is-file") + (st === "uploading" ? " is-uploading" : "") + (st === "error" ? " is-error" : "") + '" title="' + attr(a.name + " (" + attachmentSize(a.bytes) + ")" + (st === "error" ? ": " + (a.error || "failed") : "")) + '">' +
+        '<button type="button" class="attach-open"' + (action ? ' data-action="' + action + '"' : "") + ' data-index="' + i + '" aria-label="' + attr((st === "error" ? "Retry " : image ? "Preview " : "") + a.name) + '">' + body + "</button>" +
+        '<button class="attach-x btn-danger" type="button" data-action="chat-remove-file" data-index="' + i + '" aria-label="Remove ' + attr(a.name) + '">×</button></span>';
     }).join("");
   }
 
-  /* Fold the attached files into what is sent, and clear them. */
+  /* Fold the attached files into what is sent, and clear them. It answers null
+     while a file is still going up or has failed: a message must not leave
+     without a file the person believes is attached. */
   function takeAttachments(text) {
+    if (ATTACHMENTS.some(function (a) { return a.state === "uploading"; })) { toast("warn", "A file is still uploading"); return null; }
+    if (ATTACHMENTS.some(function (a) { return a.state === "error"; })) { toast("warn", "A file did not upload. Retry it or remove it first"); return null; }
     if (ATTACHMENTS.length) {
       text += (text ? "\n\n" : "") + "Attached files:\n" + ATTACHMENTS.map(function (a) { return "- " + a.path; }).join("\n");
     }
+    releaseAttachments();
     ATTACHMENTS = [];
     paintAttachments();
     return text;
   }
 
+  function releaseAttachments() {
+    ATTACHMENTS.forEach(function (a) { if (a.preview && window.URL) { try { URL.revokeObjectURL(a.preview); } catch (e) { /* already gone */ } } });
+  }
+
+  var ATTACH_MAX = 12;
+
+  /* Each file gets its tile at once, from the copy already in the browser, and
+     the tile says what the upload is doing. */
   function addFiles(files) {
-    return Promise.all(files.map(function (f) {
-      return uploadFile(f).then(function (stored) {
-        if (/^image\//.test(f.type || "") && window.URL) stored.preview = URL.createObjectURL(f);
-        return stored;
-      });
-    })).then(function (stored) {
-      ATTACHMENTS = ATTACHMENTS.concat(stored);
-      paintAttachments();
-    }).catch(function (err) { toast("error", err.message); });
+    var room = ATTACH_MAX - ATTACHMENTS.length;
+    if (files.length > room) {
+      toast("warn", room > 0 ? "Only " + ATTACH_MAX + " files go with one message. The rest were left out" : "A message takes up to " + ATTACH_MAX + " files");
+      files = files.slice(0, Math.max(0, room));
+    }
+    var jobs = files.map(function (f) {
+      var a = { name: f.name || "file", bytes: f.size, file: f, state: "uploading", path: "", error: "" };
+      if (/^image\//.test(f.type || "") && window.URL) a.preview = URL.createObjectURL(f);
+      ATTACHMENTS.push(a);
+      return sendAttachment(a);
+    });
+    paintAttachments();
+    return Promise.all(jobs);
+  }
+
+  function sendAttachment(a) {
+    a.state = "uploading"; a.error = "";
+    return uploadFile(a.file).then(function (stored) {
+      a.path = stored.path; a.state = "done";
+    }).catch(function (err) {
+      a.state = "error"; a.error = err.message || "the file could not be uploaded";
+      toast("error", a.name + ": " + a.error);
+    }).then(function () { paintAttachments(); });
   }
 
   function paintAttachments() {
@@ -11064,8 +11118,22 @@ var TERM_POLL_MS = 250;
     },
 
     "chat-remove-file": function (node) {
-      ATTACHMENTS.splice(Number(node.dataset.index), 1);
+      var gone = ATTACHMENTS.splice(Number(node.dataset.index), 1)[0];
+      if (gone && gone.preview && window.URL) { try { URL.revokeObjectURL(gone.preview); } catch (e) { /* already gone */ } }
       paintAttachments();
+    },
+    "chat-retry-file": function (node) {
+      var a = ATTACHMENTS[Number(node.dataset.index)];
+      if (!a || !a.file) return;
+      a.state = "uploading"; a.error = "";
+      paintAttachments();
+      sendAttachment(a);
+    },
+    "chat-preview-file": function (node) {
+      var a = ATTACHMENTS[Number(node.dataset.index)];
+      if (!a || !a.preview) return;
+      uiSheet(a.name, '<img class="attach-full" src="' + attr(a.preview) + '" alt="' + attr(a.name) + '">' +
+        '<p class="dim">' + esc(attachmentSize(a.bytes)) + (a.path ? ' &middot; <span class="mono">' + esc(a.path) + "</span>" : "") + "</p>");
     },
 
     "chat-dictate": function (node) {
@@ -11203,7 +11271,9 @@ var TERM_POLL_MS = 250;
     "team-open-from": function (n) { TEAM.sel = n.dataset.id; TEAM.data = null; navigate("team"); },
     "home-team": function () {
       var text = (el("home-ask").value || "").trim(), p = AI.askProject || "";
-      TEAM.form.goal = takeAttachments(text); if (p) TEAM.form.project = p;
+      var goal = takeAttachments(text);
+      if (goal === null) return;
+      TEAM.form.goal = goal; if (p) TEAM.form.project = p;
       TEAM.sel = null; TEAM.data = null; navigate("team");
     },
     "copy-output": function (n) {
@@ -11441,7 +11511,9 @@ var TERM_POLL_MS = 250;
     "home-ask": function () {
       var text = (el("home-ask").value || "").trim();
       if (!text) return toast("warn", "Write what you want done first");
-      startChat(takeAttachments(text), AI.askProject || "");
+      var full = takeAttachments(text);
+      if (full === null) return;
+      startChat(full, AI.askProject || "");
     },
     "open-thread": function (n) {
       if (AI.permission === "bypass") AI.permission = "auto";
@@ -11466,6 +11538,7 @@ var TERM_POLL_MS = 250;
       if (!text && !ATTACHMENTS.length) return;
       // The files travel with the message, so the agent can read them.
       text = takeAttachments(text);
+      if (text === null) return;
       inp.value = ""; AI.composer = "";
       fitComposer();
       if (AI.thread && AI.thread.id) return sendChat({ message: text, thread: AI.thread.id });
@@ -13478,10 +13551,53 @@ var TERM_POLL_MS = 250;
   // Dropping a file on the composer is the same act as choosing it in the
   // picker. The upload path is what the message carries, so one path handles
   // both inputs.
+  function carriesFiles(event) {
+    var types = (event.dataTransfer && event.dataTransfer.types) || [];
+    return Array.prototype.indexOf.call(types, "Files") >= 0;
+  }
+  function clearDropTargets() {
+    Array.prototype.forEach.call(document.querySelectorAll(".composer.is-dropping"), function (c) { c.classList.remove("is-dropping"); });
+  }
   document.addEventListener("dragover", function (event) {
-    if (event.target.closest && event.target.closest(".composer")) event.preventDefault();
+    var composer = event.target.closest && event.target.closest(".composer");
+    if (!composer) return;
+    event.preventDefault();
+    if (carriesFiles(event)) composer.classList.add("is-dropping");
   });
+  document.addEventListener("dragleave", function (event) {
+    var composer = event.target.closest && event.target.closest(".composer");
+    if (composer && !(event.relatedTarget && composer.contains(event.relatedTarget))) composer.classList.remove("is-dropping");
+  });
+  document.addEventListener("dragend", clearDropTargets);
+
+  /* A screenshot on the clipboard is a file like any other: paste it where you
+     are typing. Pasted text is left alone, so copying from a spreadsheet (which
+     puts both on the clipboard) still pastes the cells. */
+  document.addEventListener("paste", function (event) {
+    var composer = event.target.closest && event.target.closest(".composer");
+    var data = event.clipboardData;
+    if (!composer || !data || !data.files || !data.files.length) return;
+    if ((data.getData("text/plain") || "").length) return;
+    event.preventDefault();
+    var stamp = new Date().toISOString().replace("T", " ").slice(0, 19).replace(/:/g, ".");
+    addFiles(Array.prototype.slice.call(data.files).map(function (f, i) {
+      if (f.name && !/^image\.\w+$/i.test(f.name)) return f;
+      var ext = ((f.type || "").split("/")[1] || "png").replace("jpeg", "jpg");
+      return new File([f], "Pasted image " + stamp + (i ? " (" + (i + 1) + ")" : "") + "." + ext, { type: f.type });
+    }));
+  });
+
+  /* A picture that cannot be shown falls back to the file card, not a broken icon. */
+  document.addEventListener("error", function (event) {
+    var img = event.target;
+    if (!img || img.tagName !== "IMG" || !img.classList.contains("attach-img")) return;
+    img.hidden = true;
+    var tile = img.closest(".composer-attachment");
+    if (tile) tile.classList.add("is-broken");
+  }, true);
+
   document.addEventListener("drop", function (event) {
+    clearDropTargets();
     var composer = event.target.closest && event.target.closest(".composer");
     if (!composer) return;
     event.preventDefault();
@@ -13511,9 +13627,40 @@ var TERM_POLL_MS = 250;
     if (event.type === "change" && (key === "version" || key === "package_manager")) { /* values only; review repaints */ }
   }
 
+  /* What Home shows about the machine is the failing required checks. The chip in the
+     footer reads the same answer, so when the answer changes Home must change with it. */
+  function healthSig() {
+    return ((AI.health && AI.health.checks) || [])
+      .filter(function (c) { return c.required && c.state !== "healthy" && c.state !== "starting"; })
+      .map(function (c) { return c.id + ":" + c.state + ":" + (c.detail || ""); }).join("|");
+  }
+
+  /* The service list is read once and kept; this reads it again, and repaints the footer. */
+  function refreshServices() {
+    return read("service.list").then(function (list) {
+      if (Array.isArray(list)) state.server.services = list;
+    }).catch(function () { /* the last list stays on screen */ });
+  }
+
+  /* Repaint a screen without taking the cursor out of the box being typed in. */
+  function repaintKeepingFocus() {
+    var a = document.activeElement, id = a && a.id, s = a && a.selectionStart, e = a && a.selectionEnd;
+    render();
+    if (!id) return;
+    var n = el(id);
+    if (!n) return;
+    n.focus();
+    try { n.setSelectionRange(s, e); } catch (x) { /* not a text field */ }
+  }
+
   setInterval(function () {
     if (document.hidden) return;
-    loadHealth().then(function () { healthChip(); rail(); statusbar(); });
+    Promise.all([loadHealth(), state.server.loaded ? refreshServices() : Promise.resolve()]).then(function () {
+      healthChip(); rail(); statusbar();
+      // Home skips its own refresh while the box on it has the cursor, which is nearly
+      // always, so a change in what needs attention is painted here instead.
+      if (state.view === "home" && AI.home && healthSig() !== AI.homeSig) repaintKeepingFocus();
+    });
   }, 30000);
 
   // Work in flight is shown in the command bar on every screen, so the runs are re-read on a
