@@ -9758,7 +9758,15 @@ var TERM_POLL_MS = 250;
     if (!box) return;
     var t = AI.thread;
     var path = t && t.project;
-    if (!path) { box.hidden = true; return; }
+    if (!path) {
+      // Keep the third column occupied so choosing a conversation that has a
+      // project does not make the page jump; the placeholder says why it is
+      // empty and offers the way to give it one.
+      box.hidden = false;
+      morph(box, '<div class="ws-empty"><b>No project</b>This conversation is not tied to a folder. Open a project to see its branch and changes here.</div>' +
+        '<div class="ws-sep"></div><button type="button" class="ws-row ws-link" data-action="nav" data-view="projects"><svg class="icon" aria-hidden="true"><use href="#i-folder"></use></svg><span class="grow">Open projects</span></button>');
+      return;
+    }
     var st = AI.ws && AI.ws.path === path ? AI.ws.st : null;
     var rows = [];
     rows.push('<div class="ws-row"><svg class="icon" aria-hidden="true"><use href="#i-folder"></use></svg><span class="grow nowrap">' + esc(threadProjectName(path)) + "</span></div>");
@@ -9905,6 +9913,11 @@ var TERM_POLL_MS = 250;
     if (fresh) {
       box.innerHTML = chatHtml();
       box.setAttribute("data-thread", tid);
+      // One short entrance for the new conversation; re-adding the class after
+      // a reflow replays it on the next swap without animating every refresh.
+      box.classList.remove("thread-swap");
+      void box.offsetWidth;
+      box.classList.add("thread-swap");
     } else {
       // Same conversation: patch it, so what the reader has open, loaded or selected stays.
       morph(box, chatHtml());
@@ -10284,7 +10297,9 @@ var TERM_POLL_MS = 250;
     // place, so a card the reader opened stays open, a screenshot stays loaded and the
     // reader stays where they were. Only a reader already at the end is followed.
     var scroll = box.querySelector(".chat-stream") || box.querySelector(".team-scroll");
+    var hadRun = !!box.getAttribute("data-run");
     var fresh = box.getAttribute("data-run") !== TEAM.data.run.id || !scroll;
+    var swapping = fresh && hadRun;
     var follow = fresh || following(scroll);
     var html = teamDetail(TEAM.data);
     if (html !== TEAM.lastHtml) {
@@ -10292,6 +10307,14 @@ var TERM_POLL_MS = 250;
       else morph(box, html);
       box.setAttribute("data-run", TEAM.data.run.id);
       TEAM.lastHtml = html;
+      if (swapping) {
+        var entering = box.querySelector(".run-stream");
+        if (entering) {
+          entering.classList.remove("thread-swap");
+          void entering.offsetWidth;
+          entering.classList.add("thread-swap");
+        }
+      }
     }
     scroll = box.querySelector(".chat-stream") || box.querySelector(".team-scroll");
     if (scroll) {
