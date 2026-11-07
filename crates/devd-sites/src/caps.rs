@@ -149,7 +149,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
                 devd_services::share::install(ctx, &build)?;
             }
             let share = devd_services::share::start(ctx, &site, minutes)?;
-            let mut outcome = Outcome::with_data(format!("{} is public at {} until {}", a.name, share.url, share.expires_at), serde_json::to_value(&share).unwrap_or(Value::Null));
+            let mut outcome = Outcome::with_data(format!("The share link for {} is public at {} until {}", a.name, share.url, share.expires_at), serde_json::to_value(&share).unwrap_or(Value::Null));
             for found in exposed(&site) {
                 outcome = outcome.warn(format!("{found} is in the project folder; make sure the web server does not serve it"));
             }

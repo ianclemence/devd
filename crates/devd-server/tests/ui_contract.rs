@@ -743,8 +743,8 @@ fn the_composer_has_one_primary_action() {
     let start = APP.find("function syncComposerAction()").expect("syncComposerAction");
     let end = start + APP[start..].find("\n  }").expect("end of function");
     let body = &APP[start..end];
-    assert!(body.contains("stop.hidden = !busy || hasText"), "stop follows the draft");
-    assert!(body.contains("send.hidden = busy ? hasText : !hasText"), "send follows the draft");
+    assert!(body.contains("if (stop) stop.hidden = !busy;"), "stop is the one action while busy");
+    assert!(body.contains("send.hidden = busy || !hasText;"), "send never replaces stop while busy");
     let later = &APP[end..];
     assert!(
         !later.contains("stop.hidden ="),
@@ -1033,11 +1033,15 @@ fn a_project_opens_on_the_first_tab_the_strip_shows() {
         labels.find("files:").unwrap() < labels.find("changes:").unwrap(),
         "Files is the first tab"
     );
-    let open = APP.find("function openProject(path)").expect("openProject is gone");
-    let open = &APP[open..open + 500];
+    let open = APP.find("function openProject(path, tab)").expect("openProject is gone");
+    let open = &APP[open..open + 600];
     assert!(
-        open.contains("state.tab = \"files\""),
-        "so opening a project starts there: {open}"
+        open.contains("state.tab = tab || \"files\""),
+        "opening a project starts on Files unless a link names its tab: {open}"
+    );
+    assert!(
+        APP.contains("loadTab(state.tab)"),
+        "a named tab loads before it is drawn"
     );
 }
 
@@ -1384,4 +1388,123 @@ fn opening_a_specialist_never_detaches_it_from_its_request_in_the_list() {
         !CSS.contains(".thread-child { margin-left: 14px"),
         "only the specialists' list indents them, never the row on its own"
     );
+}
+
+#[test]
+fn reply_visuals_read_their_payload_from_the_fence_line() {
+    // Models write the JSON on the opening line: ```steps {"items": [...]}.
+    // The parser used to keep only the language, so the card rendered empty.
+    assert!(
+        APP.contains("var fence = m[1], lang = m[2], rest = (m[3] || \"\").trim(), body = [];"),
+        "the info line's payload is captured"
+    );
+    assert!(APP.contains("var tries = [rest, inner"), "the info line, body and both are tried");
+    assert!(APP.contains("if (rest) body.unshift(rest);"), "an unparseable block keeps its source");
+}
+
+#[test]
+fn a_failed_test_is_red_in_the_collapsed_run_and_its_dots() {
+    assert!(APP.contains("function resultFailed(r)"), "a failed result is one rule");
+    assert!(APP.contains("resultFailed(results[c.id])"), "a tool group sees a failed command");
+    assert!(CSS.contains(".msg-tools.is-bad .tools-dot"), "the group dot turns red");
+    assert!(APP.contains("(resultFailed(r) ? \"bad\" : \"ok\")"), "the step dot turns red");
+}
+
+#[test]
+fn the_composer_keeps_stop_in_the_primary_slot_while_it_works() {
+    assert!(APP.contains("send.hidden = busy || !hasText;"), "send never replaces stop while busy");
+    assert!(APP.contains("if (stop) stop.hidden = !busy;"), "stop is the one action while busy");
+    assert!(CSS.contains("background: var(--color-error);"), "stop is the red round control");
+}
+
+#[test]
+fn the_side_card_changes_link_opens_the_git_changes_tab() {
+    assert!(APP.contains("data-tab=\"changes\""), "the link names the destination tab");
+    assert!(APP.contains("openProject(node.dataset.path, node.dataset.tab)"), "the action forwards it");
+    assert!(APP.contains("return state.tab !== \"files\" ? loadTab(state.tab) : null;"), "the tab loads before it is drawn");
+}
+
+#[test]
+fn secondary_list_controls_wait_for_hover_or_focus() {
+    assert!(CSS.contains(".thread-kids {"), "the disclosure has its own rule");
+    assert!(CSS.contains("opacity: 0; pointer-events: none;"), "it is hidden and inert until needed");
+    assert!(CSS.contains(".thread-row:hover .thread-kids"), "hover reveals it");
+}
+
+#[test]
+fn a_blocked_run_is_a_contained_card() {
+    assert!(CSS.contains(".decision.decision-needs {"), "the needs decision is a card, not a label column");
+    assert!(CSS.contains("border-left: 3px solid var(--color-warning);"), "the warning edge marks it");
+}
+
+#[test]
+fn run_progress_uses_tasks_as_its_one_denominator() {
+    // The strip used to mix changes, checks and stage numbers. Every stage now
+    // reports task counts and fills its rail by the same fraction.
+    assert!(APP.contains("var total = work.length;"), "tasks are the denominator");
+    assert!(APP.contains("with evidence"), "evidence counts tasks, not raw changes");
+    assert!(APP.contains("verified", ), "verification counts verified tasks");
+    assert!(APP.contains("style=\"--p:"), "each stage fills by its own fraction");
+    assert!(CSS.contains("scaleX(var(--p, 0))"), "the rail honours that fraction");
+}
+
+#[test]
+fn the_side_panel_mirrors_the_conversation_list() {
+    // The right column is a rail like the left one: the same head height and a
+    // hairline on the side that faces the conversation, not a floating card.
+    assert!(CSS.contains(".ws-head {"), "the panel has a head");
+    assert!(CSS.contains("height: 52px; min-height: 52px;"), "the head matches the list's");
+    assert!(CSS.contains("border-left: 1px solid var(--line); border-radius: 0;"), "the divider mirrors the left rail");
+    assert!(!CSS.contains("margin: 64px 16px 0 0"), "the floating card is gone");
+    // Outputs and terminals are wired to real data.
+    assert!(APP.contains("function outputsSection"), "outputs are a section");
+    assert!(APP.contains("function terminalsSection"), "terminals are a section");
+    assert!(APP.contains("function noteOutput(event)"), "outputs come from the conversation's own tool calls");
+    assert!(APP.contains("\"output-open\""), "an output opens its file");
+    assert!(APP.contains("\"term-open\""), "a terminal opens its shell");
+    assert!(APP.contains("read(\"terminal.list\""), "terminals are the same list the Terminal screen reads");
+}
+
+#[test]
+fn heavy_renderers_are_loaded_when_a_screen_needs_them() {
+    // Mermaid, KaTeX and xterm are three quarters of a megabyte between them and
+    // most visits use none of them.
+    assert!(!HTML.contains("/vendor/mermaid.min.js\""), "the diagram runtime is not in the shell");
+    assert!(!HTML.contains("/vendor/katex.min.js\""), "the maths runtime is not in the shell");
+    assert!(!HTML.contains("/vendor/xterm.js\""), "the terminal runtime is not in the shell");
+    assert!(APP.contains("function loadVendor"), "there is one loader for all three");
+    assert!(APP.contains("loadVendor(\"mermaid\")"), "a diagram fetches the diagram runtime");
+    assert!(APP.contains("loadVendor(\"katex\")"), "maths fetches the maths runtime");
+    assert!(APP.contains("loadVendor(\"xterm\")"), "a shell fetches the terminal runtime");
+}
+
+#[test]
+fn dictation_offers_to_install_itself() {
+    // The microphone tells the truth about what it needs instead of failing
+    // after the person has spoken.
+    assert!(APP.contains("read(\"dictation.status\""), "the microphone checks the tools");
+    assert!(APP.contains("run(\"dictation.install\""), "it offers the one download");
+    assert!(APP.contains("function encodeWav"), "the recording is encoded for Whisper");
+    assert!(APP.contains("chunks.forEach(function (c) { all.set(c, at); at += c.length; });"), "every recorded sample is transcribed");
+    assert!(APP.contains("sink.gain.value = 0"), "the microphone is not played back");
+}
+
+#[test]
+fn a_rounded_hover_uses_the_one_radius_scale() {
+    // Interactive surfaces share the radius tokens; the conversation list keeps
+    // its hover fill rounded wherever it is drawn.
+    assert!(CSS.contains(".thread { position: relative; border: 0; border-radius: var(--radius);"), "the run list row is rounded");
+    assert!(CSS.contains("border: 0; border-radius: var(--radius); background: none; box-shadow: none;"), "the conversation row is rounded");
+    assert!(CSS.contains("#panel .panel-item {") && CSS.contains("height: 32px; margin: 1px 0; padding: 0 10px;"), "panel rows are rounded");
+    assert!(CSS.contains(".assist-start {") && CSS.contains("border-radius: var(--radius); color: var(--color-base-content);"), "the start rows share the shape");
+    assert!(!CSS.contains("border-radius: 7px"), "the ad-hoc radius is gone");
+}
+
+#[test]
+fn assets_are_compressed_and_revalidated() {
+    let ui = include_str!("../src/ui.rs");
+    assert!(ui.contains("flate2::write::GzEncoder"), "the assets are gzipped once");
+    assert!(ui.contains("ETAG"), "a reload costs a 304, not the whole file");
+    assert!(ui.contains("no-cache"), "the browser revalidates instead of re-downloading");
+    assert!(ui.contains("CONTENT_ENCODING"), "the compressed body is labelled");
 }

@@ -28,13 +28,16 @@
 //! registry. Everything that happens with the path afterwards goes through the
 //! ordinary capability API, where the permission checks live.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use devd_bootstrap::Bootstrap;
 use devd_core::capability::{Actor, Ctx, Surface};
 use devd_server::{Bound, Options};
-use tauri::{RunEvent, WebviewUrl, WebviewWindowBuilder};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 
 pub mod picker;
 type Shutdown = Arc<Mutex<Option<tokio::sync::watch::Sender<bool>>>>;
@@ -113,6 +116,12 @@ fn run_with(
     let (ready_tx, ready_rx) = mpsc::channel::<Result<Bound, String>>();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let shutdown: Shutdown = Arc::new(Mutex::new(Some(shutdown_tx)));
+    // The hidden-icons tray keeps devd alive after the window is closed, the
+    // way a background service behaves. If the tray cannot be built the old
+    // behaviour (closing the window stops the process) is kept rather than
+    // leaving an invisible process.
+    let tray_ready = Arc::new(AtomicBool::new(false));
+    let data_dir = boot.paths.root().display().to_string();
 
     let registry = boot.registry.clone();
     let workspace = boot.workspace.clone();
@@ -181,12 +190,21 @@ fn run_with(
     }
 
     let shutdown_for_window = shutdown.clone();
+    let tray_ready_for_window = tray_ready.clone();
+    let data_dir_for_tray = data_dir.clone();
     let builder = tauri::Builder::default().setup(move |app| {
         let window = match startup {
             Ok(bound) => {
                 let origin = format!("http://127.0.0.1:{}", bound.port);
                 let url: tauri::Url = origin.parse().expect("the loopback URL is valid");
                 let port = bound.port;
+                match install_tray(app, port, data_dir_for_tray.clone()) {
+                    Ok(()) => {
+                        tray_ready_for_window.store(true, Ordering::SeqCst);
+                        startup_log("tray icon ready");
+                    }
+                    Err(e) => startup_log(&format!("tray icon unavailable: {e}")),
+                }
                 WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
                     .title("devd")
                     // Big enough for the three-column workspace, small enough
@@ -234,10 +252,18 @@ fn run_with(
     });
 
     let shutdown_for_event = shutdown.clone();
+    let tray_ready_for_event = tray_ready.clone();
     let app = builder
-        .on_window_event(move |_window, event| {
-            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
-                send_shutdown(&shutdown_for_event);
+        .on_window_event(move |window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // Closing the window puts devd in the hidden-icons tray, not out
+                // of the person's session. Quit is the tray menu's explicit act.
+                if tray_ready_for_event.load(Ordering::SeqCst) {
+                    api.prevent_close();
+                    let _ = window.hide();
+                } else {
+                    send_shutdown(&shutdown_for_event);
+                }
             }
         })
         .build(tauri::generate_context!())?;
@@ -258,6 +284,76 @@ fn run_with(
     // Give the server thread a moment to drop the AppState, which stops PTYs and
     // removes its process trees before the process image disappears.
     std::thread::sleep(Duration::from_millis(250));
+    Ok(())
+}
+
+/// Put the devd window in front, restoring it from the tray or a minimised state.
+fn show_main(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+/// The hidden-icons tray and its menu.
+///
+/// Left click restores the window; right click opens the menu. The menu holds
+/// the actions a person needs without reopening the app: the window, the same
+/// interface in a browser, the data folder, the desktop log, and the explicit
+/// quit that actually ends the process.
+fn install_tray(app: &tauri::App, port: u16, data_dir: String) -> tauri::Result<()> {
+    let Some(icon) = app.default_window_icon().cloned() else {
+        return Ok(());
+    };
+    let open = MenuItem::with_id(app, "open", "Open devd", true, None::<&str>)?;
+    let browser = MenuItem::with_id(app, "browser", "Open in browser", true, None::<&str>)?;
+    let folder = MenuItem::with_id(app, "folder", "Open devd folder", true, None::<&str>)?;
+    let log = MenuItem::with_id(app, "log", "Open desktop log", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit devd", true, None::<&str>)?;
+    let above = PredefinedMenuItem::separator(app)?;
+    let below = PredefinedMenuItem::separator(app)?;
+    let menu = Menu::with_items(
+        app,
+        &[&open, &browser, &above, &folder, &log, &below, &quit],
+    )?;
+    let dir_for_menu = data_dir;
+    TrayIconBuilder::with_id("devd")
+        .icon(icon)
+        .tooltip("devd - running in the background")
+        .menu(&menu)
+        // Right click is the menu; left click restores the window.
+        .show_menu_on_left_click(false)
+        .on_menu_event(move |app, event| match event.id.as_ref() {
+            "open" => show_main(app),
+            "browser" => {
+                let _ = open::that(format!("http://127.0.0.1:{port}"));
+            }
+            "folder" => {
+                let _ = open::that(&dir_for_menu);
+            }
+            "log" => {
+                let file = std::path::PathBuf::from(&dir_for_menu).join("desktop.log");
+                if file.exists() {
+                    let _ = open::that(file);
+                } else {
+                    let _ = open::that(&dir_for_menu);
+                }
+            }
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_main(tray.app_handle());
+            }
+        })
+        .build(app)?;
     Ok(())
 }
 

@@ -825,7 +825,7 @@ fn register_todos(reg: &mut Registry, ws: Arc<Workspace>) -> Result<()> {
                 if !w.store().delete_todo(&a.id)? {
                     return Err(DevdError::not_found(format!("no todo `{}`", a.id)));
                 }
-                Ok(Outcome::ok(format!("deleted {}", a.id)))
+                Ok(Outcome::ok(format!("Deleted the to-do {}", a.id)))
             },
         )?;
 

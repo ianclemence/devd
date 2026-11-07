@@ -154,7 +154,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             |_, a| Ok(Plan::new("site.preview_helper", format!("look at the preview helper for {}", a.site))),
             |ctx, a| {
                 let (project, root) = site_dirs(ctx, &a.site)?;
-                Ok(Outcome::with_data("the preview helper was looked at", apply(&project, &root, false)?))
+                Ok(Outcome::with_data("Checked the preview helper", apply(&project, &root, false)?))
             },
         )?;
 

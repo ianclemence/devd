@@ -1029,10 +1029,17 @@ impl Store {
     }
 
     /// Pending approvals across runs, newest first.
+    ///
+    /// A row whose lifetime has run out is not pending any more, even when the
+    /// sweep that marks it has not run yet. Listing it would put a decision in
+    /// the Inbox that the server will refuse to take, so the expiry is applied
+    /// in the query itself: what is shown and what can be answered are the same
+    /// set.
     pub fn list_approvals(&self, only_pending: bool, limit: i64) -> Result<Vec<ApprovalRecord>> {
+        let now = util::now();
         self.with(|c| {
-            let mut st = c.prepare(&format!("SELECT {APPROVAL_COLS} FROM approvals WHERE (?1=0 OR state='pending') ORDER BY created_at DESC LIMIT ?2"))?;
-            let rows = st.query_map(params![only_pending as i32, limit], approval_row)?.collect::<std::result::Result<Vec<_>, _>>()?;
+            let mut st = c.prepare(&format!("SELECT {APPROVAL_COLS} FROM approvals WHERE (?1=0 OR (state='pending' AND expires_at > ?3)) ORDER BY created_at DESC LIMIT ?2"))?;
+            let rows = st.query_map(params![only_pending as i32, limit, now], approval_row)?.collect::<std::result::Result<Vec<_>, _>>()?;
             Ok(rows)
         })
     }

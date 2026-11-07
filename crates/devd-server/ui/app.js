@@ -45,6 +45,38 @@
     });
   }
 
+  /* Heavy renderers are fetched when a screen first needs them, not before.
+   *
+   * Diagrams, maths and the terminal runtime are three quarters of a megabyte
+   * of parser input, and most visits never use them. Loading them on demand
+   * means the first paint only pays for the application itself; a screen that
+   * shows a diagram or opens a shell loads exactly what it uses, once. */
+  var VENDOR = { katex: null, mermaid: null, xterm: null };
+  var VENDOR_FILES = {
+    katex: ["/vendor/katex.min.js", "/vendor/auto-render.min.js"],
+    mermaid: ["/vendor/mermaid.min.js"],
+    xterm: ["/vendor/xterm.js", "/vendor/addon-fit.js"]
+  };
+  function loadVendor(which) {
+    if (VENDOR[which]) return VENDOR[which];
+    var files = VENDOR_FILES[which] || [];
+    VENDOR[which] = files.reduce(function (p, src) {
+      return p.then(function () {
+        return new Promise(function (resolve) {
+          var s = document.createElement("script");
+          s.src = src;
+          s.async = true;
+          s.onload = resolve;
+          s.onerror = resolve;
+          document.head.appendChild(s);
+        });
+      });
+    }, Promise.resolve()).then(function () {
+      if (which === "mermaid") mermaidInit();
+    });
+    return VENDOR[which];
+  }
+
   /* While the server does not answer, everything on screen is the last thing it
      said. The banner says that, and the page is marked so it does not read as live. */
   var OFFLINE = false;
@@ -376,14 +408,26 @@
     });
     if (box.parentNode) box.parentNode.insertBefore(pill, box.nextSibling);
     box._pill = pill;
-    // The pill sits just above where the messages end, measured each time it shows:
-    // the composer below grows as a person types, so a fixed offset drifts onto it.
+    // The pill sits just above the composer, not at a fixed distance from the
+    // bottom of the column: the composer grows as a person types, and the old
+    // measurement then left the pill floating in the middle of the draft or
+    // the conversation. Measure against the composer's own top edge and keep
+    // that measurement current while the box or the composer changes size.
     var place = function () {
       var host = box.parentNode;
       if (!host) return;
-      var gap = host.getBoundingClientRect().bottom - box.getBoundingClientRect().bottom;
-      pill.style.bottom = Math.round(gap + 14) + "px";
+      var dock = host.querySelector(":scope > .composer-dock") || host.querySelector(":scope > .composer");
+      var base = dock ? dock.getBoundingClientRect().top : box.getBoundingClientRect().bottom;
+      pill.style.bottom = Math.max(8, Math.round(host.getBoundingClientRect().bottom - base + 12)) + "px";
     };
+    if (window.ResizeObserver) {
+      var ro = new ResizeObserver(function () { if (!pill.hidden) place(); });
+      ro.observe(box);
+      var host = box.parentNode;
+      var dock = host && (host.querySelector(":scope > .composer-dock") || host.querySelector(":scope > .composer"));
+      if (dock) ro.observe(dock);
+      pill._resize = ro;
+    }
     box.addEventListener("scroll", function () {
       box._stick.on = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
       if (!box._stick.on && pill.hidden) place();
@@ -638,8 +682,21 @@
   // The kind is said in a word as well as the edge colour.
   var TOAST_WORD = { error: "Didn't work", warn: "Heads up", ok: "Done" };
 
+  /* Every toast is a sentence about a thing: it starts with a capital and ends
+     with a stop. The words come from the capability, so this is the one place
+     that guarantees the shape rather than trusting every message to. */
+  function sentence(text) {
+    var t = String(text == null ? "" : text).trim();
+    if (!t) return t;
+    t = t.charAt(0).toUpperCase() + t.slice(1);
+    if (!/[.!?\u2026:]$/.test(t)) t += ".";
+    return t;
+  }
+
   function toast(kind, message, detail) {
-    announce(kind, message + (detail ? ". " + detail : ""));
+    message = sentence(message);
+    if (detail) detail = sentence(detail);
+    announce(kind, message + (detail ? " " + detail : ""));
     var node = document.createElement("div");
     node.className = "toast toast-" + kind;
     node.setAttribute("aria-hidden", "true");
@@ -1710,18 +1767,32 @@
    */
   function rail(force) {
     var attention = (AI.counts.approvals + AI.counts.questions) || 0;
-    var working = AI.threads ? AI.threads.filter(function (t) { return t.state === "running"; }).length : 0;
+    var threads = AI.threads || [];
+    var working = threads.filter(function (t) { return t.state === "running"; }).length;
+    var waitThreads = threads.filter(function (t) { return t.state === "waiting_approval"; }).length;
+    var badThreads = threads.filter(function (t) { return t.state === "error"; }).length;
     var runs = (state.view === "team" && TEAM.runs && TEAM.runs.length) ? TEAM.runs : (AI.liveRuns || (AI.home && AI.home.teamRuns) || []);
     var live = runs.filter(function (t) { return ["planning", "running"].indexOf(t.state) >= 0; });
-    var waiting = runs.filter(function (t) { return t.state === "awaiting_plan" || t.state === "paused" && t.error; });
+    var waitRuns = runs.filter(function (t) { return t.state === "awaiting_plan" || t.state === "paused"; }).length;
+    var badRuns = runs.filter(function (t) { return t.state === "failed"; }).length;
+    // The rail says what is happening now, not only how many records exist:
+    // blue counts work in flight, amber counts a plan or a paused run waiting
+    // for the person, red counts a run that stopped. The same rule is used for
+    // the Assistant, whose badge is its live conversations.
+    var runsBadge = waitRuns + badRuns || live.length;
+    var runsTone = badRuns ? "bad" : waitRuns ? "warn" : "live";
+    var asstBadge = waitThreads + badThreads || working;
+    var asstTone = badThreads ? "bad" : waitThreads ? "warn" : "live";
+    var runsHint = ["Runs", live.length ? live.length + " working" : "", waitRuns ? waitRuns + " waiting for you" : "", badRuns ? badRuns + " failed" : ""].filter(Boolean).join(" · ");
+    var asstHint = ["Assistant", working ? working + " working" : "", waitThreads ? waitThreads + " waiting for you" : "", badThreads ? badThreads + " stopped" : ""].filter(Boolean).join(" · ");
     var health = AI.health && AI.health.state;
     var here = areaOf(state.view);
     var items = [
       { view: "home", area: "home", label: "Home", icon: "i-home", phone: true },
       { view: "inbox", area: "inbox", label: "Inbox", icon: "i-inbox", badge: attention, phone: true },
       { sep: true },
-      { view: "assistant", area: "assistant", label: "Assistant", icon: "i-spark", live: working > 0, phone: true },
-      { view: "team", area: "runs", label: "Runs", icon: "i-layers", live: live.length > 0, badge: waiting.length, phone: true },
+      { view: "assistant", area: "assistant", label: "Assistant", icon: "i-spark", live: working > 0 && (waitThreads + badThreads) > 0, badge: asstBadge, badgeTone: asstTone, hint: asstHint, phone: true },
+      { view: "team", area: "runs", label: "Runs", icon: "i-layers", live: live.length > 0 && (waitRuns + badRuns) > 0, badge: runsBadge, badgeTone: runsTone, hint: runsHint, phone: true },
       { view: "agents", area: "agents", label: "Team", icon: "i-team" },
       { sep: true },
       { view: "projects", area: "projects", label: "Projects", icon: "i-folder" },
@@ -1738,9 +1809,10 @@
       if (i.sep) return '<span class="rail-sep" aria-hidden="true"></span>';
       var on = here === i.area;
       return '<button type="button" class="rail-item' + (small ? " rail-small" : "") + (on ? " active" : "") + (i.phone ? " rail-phone" : "") + '" data-action="rail-go" data-view="' + i.view + '"' +
-        (on ? ' aria-current="page"' : "") + ' title="' + attr(i.label) + '">' +
+        (on ? ' aria-current="page"' : "") + ' title="' + attr(i.hint || i.label) + '">' +
         '<span class="rail-icon"><svg class="icon" aria-hidden="true"><use href="#' + i.icon + '"></use></svg>' +
-        (i.badge ? '<span class="rail-badge">' + esc(i.badge > 99 ? "99+" : i.badge) + "</span>" : i.live ? '<span class="rail-live" aria-label="working"></span>' : i.dot ? '<span class="rail-dot rail-dot-' + i.dot + '"></span>' : "") +
+        (i.badge ? '<span class="rail-badge rail-badge-' + attr(i.badgeTone || "live") + '">' + esc(i.badge > 99 ? "99+" : i.badge) + "</span>" : "") +
+        (i.live ? '<span class="rail-live" aria-label="working"></span>' : i.dot ? '<span class="rail-dot rail-dot-' + i.dot + '"></span>' : "") +
         '</span><span class="rail-label">' + esc(i.label) + "</span></button>";
     }
     var html =
@@ -3895,7 +3967,7 @@
       '<div class="context-section"><div class="field-label">Runtimes</div>' + runtimeHtml + "</div>" +
       '<div class="context-section"><div class="field-label">Project knowledge</div>' + memoryHtml + "</div>" +
       '<div class="context-section"><div class="field-label">Trust record</div>' + trustHtml + "</div>" +
-      '<div class="context-section"><div class="field-label">Rules for starting work <span class="dim">(it records what it would do; a run still needs your plan approval)</span></div>' + ruleHtml +
+      '<div class="context-section"><div class="field-label">Rules for starting work <span class="dim">(it records what it would do; a started run plans first and then works)</span></div>' + ruleHtml +
         '<div style="margin-top:6px"><button type="button" class="btn btn-mini" data-action="team-intake-edit">Write a rule</button></div></div>' +
       '<div class="context-section"><div class="field-label">Proposed, not done</div>' + proposalHtml + "</div>" +
       '<div class="context-section"><div class="field-label">Lessons and missteps</div>' + lessonHtml + "</div>" +
@@ -3941,7 +4013,7 @@
       '<div class="field"><label class="field-label" for="charter-north">North star</label><textarea class="input" id="charter-north" rows="3" placeholder="One ambitious outcome the team can point every decision at.">' + esc(charter.north_star || "") + "</textarea></div>" +
       '<div class="field"><label class="field-label" for="charter-rules">Working agreement <span class="dim">(one rule per line)</span></label><textarea class="input" id="charter-rules" rows="5">' + esc((charter.working_agreement || []).join("\n")) + "</textarea></div>" +
       '<div class="field"><div class="field-label">Invite to propose next work</div><div class="check-grid">' + roleBoxes + "</div>" +
-      '<div class="row-sub">These roles may suggest a next workstream that moves toward the north star. A person still approves the plan before anything runs.</div></div>' +
+      '<div class="row-sub">These roles may suggest a next workstream that moves toward the north star. A started run plans first, then gets to work.</div></div>' +
       '<div class="inline"><span class="grow"></span><button type="button" class="btn" data-action="team-charter-cancel">Cancel</button><button type="button" class="btn btn-primary" data-action="team-charter-save">Save charter</button></div>' +
       "</div>");
   }
@@ -3959,7 +4031,7 @@
       '<div class="field grow"><label class="field-label" for="intake-cooldown">At most once every (minutes)</label><input class="input" id="intake-cooldown" value="60" inputmode="numeric"></div></div>' +
       '<div class="field"><label class="field-label" for="intake-goal">What the run should do</label><textarea class="input" id="intake-goal" rows="3" placeholder="Make the nightly check pass again, and add a regression test for it."></textarea></div>' +
       '<div class="field"><label class="field-label" for="intake-role">Who would do it</label><select class="input" id="intake-role">' + roleOpts + "</select></div>" +
-      '<div class="field"><label class="field-label" for="intake-mode">Mode</label><select class="input" id="intake-mode"><option value="observe">Record what it would do (nothing runs)</option><option value="auto">Start a run, which still waits for my plan approval</option></select></div>' +
+      '<div class="field"><label class="field-label" for="intake-mode">Mode</label><select class="input" id="intake-mode"><option value="observe">Record what it would do (nothing runs)</option><option value="auto">Start a run, which plans first and then gets to work</option></select></div>' +
       '<div class="row-sub">In observe mode the rule only records a proposal, which appears in the Inbox and in the team room. Start with that, read a few, and only then let it start runs. A started run plans first and waits for you, and never starts itself in production.</div>' +
       '<div class="inline"><span class="grow"></span><button type="button" class="btn" data-action="team-charter-cancel">Cancel</button><button type="button" class="btn btn-primary" id="intake-save" data-action="team-intake-save" disabled>Save the rule</button></div>' +
       "</div>");
@@ -5082,6 +5154,11 @@ var TERM_POLL_MS = 250;
 
   /* Lift xterm's subtree out before the page is replaced, then put it back. */
   function termDraw() {
+    // The terminal runtime is fetched the first time a shell is shown; the text
+    // fallback is drawn meanwhile, so nothing waits on the download.
+    if (typeof window.Terminal !== "function" && !VENDOR.xterm) {
+      loadVendor("xterm").then(function () { if (termOnScreen()) render(); });
+    }
     if (typeof window.Terminal === "function") {
       termMount();
       // The box has its size once the browser has laid the page out.
@@ -5474,12 +5551,12 @@ var TERM_POLL_MS = 250;
     return TAB_GROUPS.filter(function (g) { return g.tabs.indexOf(tab) !== -1; })[0] || TAB_GROUPS[0];
   }
 
-  function openProject(path) {
+  function openProject(path, tab) {
     state.view = "project";
     // Open where the tab strip says the screen begins. `files` is the first tab
     // in TAB_LABELS, so opening a repository on `changes` - the second - put
     // the person one tab along from the one the strip implies, every time.
-    state.tab = "files";
+    state.tab = tab || "files";
     state.tabs = {};
     state.diff = null;
     state.project = { path: path, name: dirName(path), status: null, open: null, error: null };
@@ -5487,7 +5564,9 @@ var TERM_POLL_MS = 250;
     state.files = null;
     writeRoute("project", false);
     render();
-    return loadProject().then(render);
+    return loadProject()
+      .then(function () { return state.tab !== "files" ? loadTab(state.tab) : null; })
+      .then(render);
   }
 
   function loadProject() {
@@ -7418,7 +7497,10 @@ var TERM_POLL_MS = 250;
   }
 
   var MD_ITEM = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/;
-  var MD_FENCE = /^\s{0,3}(```+|~~~+)\s*([\w+#.-]*)[^\n]*$/;
+  // The info string may carry the block's JSON on the same line (models often
+  // write ```timeline {"items": [...]}). Capture it instead of discarding it:
+  // dropping it rendered an empty card with only the language name.
+  var MD_FENCE = /^\s{0,3}(```+|~~~+)\s*([\w+#.-]*)\s*(.*)$/;
   var MD_HR = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/;
   var MD_HEAD = /^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/;
   var MD_TABLE_SEP = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
@@ -7612,19 +7694,29 @@ var TERM_POLL_MS = 250;
       var line = lines[i], m;
       if (line.trim() === "") { i++; continue; }
       if ((m = MD_FENCE.exec(line))) {
-        var fence = m[1], lang = m[2], body = [];
+        var fence = m[1], lang = m[2], rest = (m[3] || "").trim(), body = [];
         i++;
         while (i < lines.length && !(new RegExp("^\\s{0,3}" + fence.charAt(0) + "{" + fence.length + ",}\\s*$").test(lines[i]))) { body.push(lines[i]); i++; }
         i++;
+        // The payload may be on the info line, in the body, or split across both.
+        var blockText = function () {
+          var inner = body.join("\n");
+          var tries = [rest, inner, rest ? rest + (inner ? "\n" + inner : "") : ""];
+          for (var n = 0; n < tries.length; n++) {
+            if (!tries[n].trim()) continue;
+            try { return JSON.parse(tries[n]); } catch (e) { /* try the next shape */ }
+          }
+          return null;
+        };
         // A declared chart block is data, validated and drawn by the app. If it
         // does not parse it stays a code block rather than disappearing.
         if (lang === "chart") {
-          var spec = null;
-          try { spec = JSON.parse(body.join("\n")); } catch (e) { spec = null; }
+          var spec = blockText();
           if (spec && ((Array.isArray(spec.bars) && spec.bars.length) || (Array.isArray(spec.items) && spec.items.length))) {
             out.push(chartHtml(spec));
             continue;
           }
+          if (rest) body.unshift(rest);
         }
         if (lang === "mermaid") {
           // The escaped text is decoded by textContent; the renderer turns it
@@ -7633,13 +7725,15 @@ var TERM_POLL_MS = 250;
           continue;
         }
         if (lang === "metrics" || lang === "timeline" || lang === "details" || lang === "steps") {
-          var block = null;
-          try { block = JSON.parse(body.join("\n")); } catch (e) { block = null; }
+          var block = blockText();
           var rendered = block ? declaredBlockHtml(lang, block) : "";
           if (rendered) {
             out.push(rendered);
             continue;
           }
+          // Unparseable: show exactly what was written (including a payload on
+          // the info line) instead of an empty card.
+          if (rest) body.unshift(rest);
         }
         var longCode = body.length > 18;
         // A long block shows its first lines and expands in place; the toggle is a <details>,
@@ -7781,7 +7875,26 @@ var TERM_POLL_MS = 250;
   var RICH_TIMER = 0;
   function renderRich(root) {
     if (!root || !root.querySelectorAll) return;
-    if (window.renderMathInElement) {
+    // Diagrams: the 2.5 MB runtime is fetched only when this content has one.
+    if (!VENDOR.mermaid) {
+      if (root.querySelector("pre.mermaid")) {
+        loadVendor("mermaid").then(function () { renderRich(root); });
+      }
+    } else if (window.mermaid) {
+      var nodes = root.querySelectorAll("pre.mermaid:not([data-processed])");
+      if (nodes.length) {
+        try {
+          var done = window.mermaid.run({ nodes: Array.prototype.slice.call(nodes) });
+          if (done && done.catch) done.catch(function () {});
+        } catch (e) { /* a bad diagram stays as text */ }
+      }
+    }
+    // Maths: fetched only when the text carries a delimiter.
+    if (!VENDOR.katex) {
+      if (/\$|\\\(|\\\[/.test(root.textContent || "")) {
+        loadVendor("katex").then(function () { renderRich(root); });
+      }
+    } else if (window.renderMathInElement) {
       try {
         window.renderMathInElement(root, {
           delimiters: [
@@ -7794,15 +7907,6 @@ var TERM_POLL_MS = 250;
           ignoredTags: ["script", "noscript", "style", "textarea", "pre", "code"]
         });
       } catch (e) { /* a bad formula stays as text */ }
-    }
-    if (window.mermaid) {
-      var nodes = root.querySelectorAll("pre.mermaid:not([data-processed])");
-      if (nodes.length) {
-        try {
-          var done = window.mermaid.run({ nodes: Array.prototype.slice.call(nodes) });
-          if (done && done.catch) done.catch(function () {});
-        } catch (e) { /* a bad diagram stays as text */ }
-      }
     }
   }
   function scheduleRich(root) {
@@ -7826,7 +7930,11 @@ var TERM_POLL_MS = 250;
     popover: null, modelRail: "", modelQuery: "",
     modelBusy: {}, modelFetched: {}, modelError: {},
     composer: "", project: "", timer: null, openSteps: {}, openTools: {}, todos: [], todosAt: 0,
-    inbox: null, requests: null, history: null
+    inbox: null, requests: null, history: null,
+    // What this conversation made, and the shells running in its project. Both
+    // are kept beside the conversation so the side panel can be redrawn without
+    // re-reading the whole log.
+    outputs: [], outputsOpen: false, terms: [], termsAt: 0
   };
 
   /* A run is not another destination. It is the durable record behind a
@@ -8008,7 +8116,7 @@ var TERM_POLL_MS = 250;
   function loadHealth() {
     if (AI.healthPending) return AI.healthPending;
     AI.healthLoading = true;
-    var timeout = new Promise(function (_, rej) { setTimeout(function () { rej(new Error("health check timed out after 45 s")); }, 45000); });
+    var timeout = new Promise(function (_, rej) { setTimeout(function () { rej(new Error("The health check did not answer within 12 seconds.")); }, 12000); });
     AI.healthPending = Promise.race([read("health.status"), timeout]).then(function (h) {
       AI.health = h; AI.healthError = null; AI.healthAt = Date.now();
       read("environment.get").then(function (e) { AI.env = e; }).catch(function () {});
@@ -8816,7 +8924,7 @@ var TERM_POLL_MS = 250;
   }
 
   function applyThread(d, full) {
-      if (full) { AI.events = []; AI.lastId = 0; }
+      if (full) { AI.events = []; AI.lastId = 0; AI.outputs = []; }
       d.events.forEach(function (e) {
         // Two polls can overlap (the timer and the live channel, or a click and
         // an event). Whichever answers second must not append what the first
@@ -8824,6 +8932,7 @@ var TERM_POLL_MS = 250;
         if (e.id <= AI.lastId) return;
         AI.events.push(e);
         AI.lastId = e.id;
+        noteOutput(e);
         if (!full) announceEvent(e);
       });
       AI.thread = d.thread; AI.pending = d.pending || []; AI.running = d.running; AI.chapters = d.chapters || []; AI.run = d.run || null;
@@ -8880,6 +8989,9 @@ var TERM_POLL_MS = 250;
       pollThread(false).then(function () {
         var was = busy, now = AI.thread.state === "running" || AI.running;
         paintChat();
+        // The side panel's outputs and terminals move with the work, not only
+        // with Git. `morph` makes an unchanged paint cost nothing.
+        paintWsCard();
         if (was && !now) { read("chat.list").then(function (t) { AI.threads = t; paintThreads(); }); loadHealth().then(healthChip); }
       }).catch(function () {});
     }, AI.live ? 20000 : 800);
@@ -9396,6 +9508,16 @@ var TERM_POLL_MS = 250;
         return (CAP_SUMMARY[t0.id] || capLabel(t0.id)) + (t0.cmd || t0.name || t0.query ? " · " + cut(t0.cmd || t0.name || t0.query, 50) : "");
     }
   }
+  /* A command that reports failed tests is a failed result even though the tool
+     itself returned normally. The card, its dot and the summary must agree with
+     the red "N failed" chip, not stay green while the run says it is broken. */
+  function resultFailed(r) {
+    if (!r) return false;
+    if (r.is_error) return true;
+    var text = String(r.content == null ? "" : r.content);
+    var m = /(\d+)\s+failed/.exec(text);
+    return !!(m && +m[1] > 0);
+  }
   function describeSteps(calls, results) {
     var groups = [];
     var failed = 0;
@@ -9405,7 +9527,7 @@ var TERM_POLL_MS = 250;
       var last = groups[groups.length - 1];
       if (last && last.kind === t.kind) last.items.push(t);
       else groups.push({ kind: t.kind, items: [t] });
-      if (results && results[b.id] && results[b.id].is_error) failed += 1;
+      if (results && results[b.id] && resultFailed(results[b.id])) failed += 1;
     });
     if (!groups.length) return "";
     var phrases = groups.map(function (g) { return stepPhrase(g.kind, g.items); });
@@ -9491,7 +9613,8 @@ var TERM_POLL_MS = 250;
       if (!activity) return;
       var open = !!AI.openTools[activity.key];
       var running = activity.calls.some(function (c) { return !results[c.id]; });
-      var html = '<div class="msg-tools' + (open ? " open" : "") + (running ? " is-running" : "") + '" data-key="g' + attr(activity.key) + '" data-group="' + attr(activity.key) + '">' +
+      var bad = !running && activity.calls.some(function (c) { return resultFailed(results[c.id]); });
+      var html = '<div class="msg-tools' + (open ? " open" : "") + (running ? " is-running" : "") + (bad ? " is-bad" : "") + '" data-key="g' + attr(activity.key) + '" data-group="' + attr(activity.key) + '">' +
         '<button type="button" class="tools-head" data-action="tools-toggle" data-group="' + attr(activity.key) + '" aria-expanded="' + (open ? "true" : "false") + '" title="Show each step">' +
         '<span class="tools-dot" aria-hidden="true"></span>' +
         '<span class="tools-summary">' + esc(describeSteps(activity.calls, results) || toolSummary(activity.calls, results) || "Worked") + "</span>" +
@@ -9565,10 +9688,10 @@ var TERM_POLL_MS = 250;
             if (!activity) activity = { key: b.id, calls: [], rows: [] };
             activity.calls.push(b);
             current.last = "tools";
-            activity.rows.push('<div class="step' + (r && r.is_error ? " step-bad" : "") + (open ? " open" : "") + '" data-key="s' + attr(b.id) + '">' +
+            activity.rows.push('<div class="step' + (r && resultFailed(r) ? " step-bad" : "") + (open ? " open" : "") + '" data-key="s' + attr(b.id) + '">' +
               '<button type="button" class="step-head" data-action="step-toggle" data-id="' + attr(b.id) + '" aria-expanded="' + (open ? "true" : "false") + '" title="' + attr(c.title + (c.detail ? " — " + c.detail : "")) + '">' +
               '<span class="step-arrow" aria-hidden="true"><svg class="icon"><use href="#i-chevron-down"></use></svg></span>' +
-              '<span class="step-dot ' + (pend ? "wait" : r ? (r.is_error ? "bad" : "ok") : "run") + '" aria-hidden="true"></span>' +
+              '<span class="step-dot ' + (pend ? "wait" : r ? (resultFailed(r) ? "bad" : "ok") : "run") + '" aria-hidden="true"></span>' +
               '<span class="step-title">' + esc(c.title) + "</span>" +
               '<span class="step-detail">' + esc(c.detail) + "</span>" +
               (took ? '<span class="step-time">' + esc(took) + "</span>" : "") +
@@ -9778,37 +9901,132 @@ var TERM_POLL_MS = 250;
     }).join("");
   }
 
+  /* What the conversation made: files it wrote or edited, newest first. Read
+     from the conversation's own tool calls, so it is a record of real work and
+     not a guess. */
+  function noteOutput(event) {
+    if (!event || event.kind !== "assistant") return;
+    var content = (event.data && event.data.content) || [];
+    content.forEach(function (b) {
+      if (b.type !== "tool_use") return;
+      var kind = toolKind(b);
+      if (kind !== "write" && kind !== "edit") return;
+      var target = stepTarget(b);
+      if (!target.path) return;
+      AI.outputs = AI.outputs.filter(function (o) { return o.path !== target.path; });
+      AI.outputs.unshift({ path: target.path, kind: kind });
+      if (AI.outputs.length > 200) AI.outputs.length = 200;
+    });
+  }
+
+  /* The mark a file gets in the panel: a page for a document, a picture for an
+     image, a note for configuration, code for everything else. */
+  function outputIcon(path) {
+    var p = String(path || "").toLowerCase();
+    if (/\.(png|jpe?g|gif|webp|svg|ico|bmp|avif|tiff?)$/.test(p)) return "i-image";
+    if (/\.(mp4|mov|webm|mkv|avi|mp3|wav|m4a|ogg|flac)$/.test(p)) return "i-play";
+    if (/\.(md|mdx|rst|txt|adoc|pdf|docx?|pages)$/.test(p)) return "i-book";
+    if (/\.(json|ya?ml|toml|ini|cfg|conf|lock)$/.test(p)) return "i-sliders";
+    return "i-code";
+  }
+
+  function wsSection(title, count, body) {
+    return '<div class="ws-sec"><div class="ws-sec-head"><span class="grow">' + esc(title) + "</span>" +
+      (count ? '<span class="ws-count">' + count + "</span>" : "") + "</div>" + body + "</div>";
+  }
+
+  function outputsSection() {
+    var list = AI.outputs || [];
+    if (!list.length) {
+      return wsSection("Outputs", 0, '<div class="ws-empty-line">Nothing created yet. Files the assistant writes or edits appear here.</div>');
+    }
+    var shown = AI.outputsOpen ? list : list.slice(0, 6);
+    var body = shown.map(function (o) {
+      return '<button type="button" class="ws-item ws-link" data-action="output-open" data-path="' + attr(o.path) + '" title="' + attr(o.path) + '">' +
+        '<svg class="icon" aria-hidden="true"><use href="#' + outputIcon(o.path) + '"></use></svg>' +
+        '<span class="grow nowrap">' + esc(baseName(o.path)) + "</span>" +
+        '<span class="ws-item-kind">' + (o.kind === "edit" ? "changed" : "created") + "</span></button>";
+    }).join("");
+    if (list.length > 6) {
+      body += '<button type="button" class="ws-more" data-action="outputs-more">' + (AI.outputsOpen ? "Show less" : "Show all " + list.length) + "</button>";
+    }
+    return wsSection("Outputs", list.length, body);
+  }
+
+  /* The shells running in this conversation's project, newest first with the
+     live ones above the ended ones. */
+  function threadTerminals(path) {
+    var root = String(path || "").replace(/[\\/]+$/, "").toLowerCase();
+    if (!root) return [];
+    return (AI.terms || []).filter(function (s) {
+      var cwd = String(s.cwd || "").replace(/[\\/]+$/, "").toLowerCase();
+      return cwd === root || cwd.indexOf(root + "\\") === 0 || cwd.indexOf(root + "/") === 0;
+    }).sort(function (a, b) {
+      return (b.running ? 1 : 0) - (a.running ? 1 : 0) || (a.started || 0) - (b.started || 0);
+    });
+  }
+
+  function terminalsSection(path) {
+    var list = threadTerminals(path);
+    var body = list.slice(0, 6).map(function (s) {
+      var where = String(s.cwd || "").split(/[\\/]/).filter(Boolean).pop() || "";
+      return '<button type="button" class="ws-item ws-link" data-action="term-open" data-id="' + attr(s.id) + '" data-path="' + attr(path) + '" title="' + attr(s.cwd || "") + '">' +
+        '<span class="ws-dot ' + (s.running === false ? "is-off" : "is-live") + '" aria-hidden="true"></span>' +
+        '<span class="grow nowrap">' + esc(s.shell || "shell") + (where ? ' <span class="dim">in ' + esc(where) + "</span>" : "") + "</span>" +
+        '<span class="ws-item-kind">' + (s.running === false ? "ended" : "running") + "</span></button>";
+    }).join("");
+    if (!list.length) body = '<div class="ws-empty-line">No terminal is running in this project.</div>';
+    return wsSection("Terminals", list.length, body);
+  }
+
+  /* Read the terminals when the panel is on screen, at most every few seconds.
+     It is the same `terminal.list` the Terminal screen uses. */
+  function loadThreadTerms(path, box) {
+    if (!path || !box || box.offsetParent === null) return;
+    if (Date.now() - (AI.termsAt || 0) < 4000) return;
+    AI.termsAt = Date.now();
+    read("terminal.list", {}).then(function (d) {
+      AI.terms = (d && d.terminals) || [];
+      if (el("ws-card")) paintWsCard();
+    }).catch(function () { /* the panel still shows the project and outputs */ });
+  }
+
   function paintWsCard() {
     var box = el("ws-card");
     if (!box) return;
     var t = AI.thread;
     var path = t && t.project;
+    box.hidden = false;
     if (!path) {
       // Keep the third column occupied so choosing a conversation that has a
       // project does not make the page jump; the placeholder says why it is
       // empty and offers the way to give it one.
-      box.hidden = false;
-      morph(box, '<div class="ws-empty"><b>No project</b>This conversation is not tied to a folder. Open a project to see its branch and changes here.</div>' +
+      morph(box, '<div class="ws-head"><b class="grow">Conversation</b></div>' +
+        '<div class="ws-empty"><b>No project</b>This conversation is not tied to a folder. Open a project to see its branch, outputs and terminals here.</div>' +
         '<div class="ws-sep"></div><button type="button" class="ws-row ws-link" data-action="nav" data-view="projects"><svg class="icon" aria-hidden="true"><use href="#i-folder"></use></svg><span class="grow">Open projects</span></button>');
       return;
     }
     var st = AI.ws && AI.ws.path === path ? AI.ws.st : null;
     var rows = [];
-    rows.push('<div class="ws-row"><svg class="icon" aria-hidden="true"><use href="#i-folder"></use></svg><span class="grow nowrap">' + esc(threadProjectName(path)) + "</span></div>");
+    rows.push('<div class="ws-head"><b class="grow nowrap" title="' + attr(path) + '">' + esc(threadProjectName(path)) + "</b></div>");
     if (st) {
       var changed = (st.staged || []).length + (st.unstaged || []).length + (st.untracked || []).length;
       rows.push('<div class="ws-row"><svg class="icon" aria-hidden="true"><use href="#i-branch"></use></svg><span class="grow nowrap mono">' + esc(st.branch || "detached") + "</span>" +
         (st.ahead ? '<span class="dim">' + st.ahead + " ahead</span>" : "") + "</div>");
-      rows.push('<button type="button" class="ws-row ws-link" data-action="open-project" data-path="' + attr(path) + '"><svg class="icon" aria-hidden="true"><use href="#i-file"></use></svg><span class="grow">Changes</span>' +
+      rows.push('<button type="button" class="ws-row ws-link" data-action="open-project" data-path="' + attr(path) + '" data-tab="changes" title="Open this project\'s Git changes"><svg class="icon" aria-hidden="true"><use href="#i-file"></use></svg><span class="grow">Changes</span>' +
         (changed ? '<span class="ws-diff">' + changed + " file" + (changed === 1 ? "" : "s") + "</span>" : '<span class="dim">clean</span>') + "</button>");
       var badges = diffBadges(AI.ws && AI.ws.diff);
       if (badges) rows.push('<div class="ws-badges">' + badges + "</div>");
     }
     rows.push('<div class="ws-sep"></div>');
+    rows.push(outputsSection());
+    rows.push('<div class="ws-sep"></div>');
+    rows.push(terminalsSection(path));
+    rows.push('<div class="ws-sep"></div>');
     rows.push('<button type="button" class="ws-row ws-link" data-action="open-project" data-path="' + attr(path) + '"><svg class="icon" aria-hidden="true"><use href="#i-chevron"></use></svg><span class="grow">Open project</span></button>');
     rows.push('<button type="button" class="ws-row ws-link" data-action="open-terminal" data-path="' + attr(path) + '"><svg class="icon" aria-hidden="true"><use href="#i-code"></use></svg><span class="grow">Terminal here</span></button>');
-    box.hidden = false;
     morph(box, rows.join(""));
+    loadThreadTerms(path, box);
   }
 
   /* Search within one conversation: messages, steps, plans and reports.
@@ -10395,6 +10613,11 @@ var TERM_POLL_MS = 250;
   /* The run's lifecycle, read from what devd recorded: the run's state, its tasks
      and their evidence. A stage is only "done" when the record says so; a finished
      run with no passing check says that, rather than showing a green last step. */
+  /* One honest denominator for a run: its tasks. Every stage reports how many of
+     those tasks it covers and fills its own rail by that fraction, so the six
+     lines read as one story instead of six unrelated counters. A stage is only
+     done when the record says so; "paused" stays paused rather than pretending
+     the remaining work is nearly finished. */
   function runStages(r, work, events) {
     var st = r.state, over = ["done", "failed", "cancelled"].indexOf(st) >= 0;
     var approved = events.some(function (e) { return e.kind === "plan_approved"; }) || ["running", "paused", "done"].indexOf(st) >= 0;
@@ -10403,27 +10626,40 @@ var TERM_POLL_MS = 250;
     var changes = ev.filter(function (f) { return f.kind === "change" && f.ok; }).length;
     var passed = ev.filter(function (f) { return f.kind === "verify" && f.ok; }).length;
     var failedChecks = ev.filter(function (f) { return f.kind === "verify" && !f.ok; }).length;
+    var total = work.length;
     var doneTasks = work.filter(function (t) { return t.state === "done" || t.state === "skipped"; }).length;
+    var withEvidence = work.filter(function (t) { return (t.evidence || []).length > 0; }).length;
+    var verified = work.filter(function (t) { return (t.evidence || []).some(function (f) { return f.kind === "verify" && f.ok; }); }).length;
     var stopped = st === "failed" || st === "cancelled";
-    function at(kind, note) { return { kind: kind, note: note }; }
-    var plan = st === "planning" ? at("now", "planner is writing it") : work.length ? at("done", work.length + " task" + (work.length === 1 ? "" : "s")) : stopped ? at("stop", st) : at("todo", "");
-    var approval = st === "awaiting_plan" ? at("wait", "needs you") : approved ? at("done", "approved") : stopped && !approved ? at(work.length ? "stop" : "todo", work.length ? "not approved" : "") : at("todo", "");
-    var exec = st === "running" ? at("now", doneTasks + " of " + work.length + " done") : st === "paused" ? at("wait", "paused") :
-      approved && over ? at(stopped ? "stop" : "done", doneTasks + " of " + work.length + " done") : at("todo", "");
-    var evidence = changes || ev.length ? at(over || doneTasks === work.length ? "done" : "now", changes + " change" + (changes === 1 ? "" : "s") + " recorded") :
-      approved && over ? at(stopped ? "stop" : "wait", "nothing recorded") : at("todo", "");
-    var verify = failedChecks && !passed ? at("stop", failedChecks + " failed") :
-      st === "done" ? (passed ? at("done", passed + " passed" + (failedChecks ? ", " + failedChecks + " failed" : "")) : at("wait", "no check ran")) :
-      passed ? at(stopped ? "stop" : "now", passed + " passed so far") : stopped && approved ? at("stop", st) : at("todo", "");
-    var list = [["Goal", at("done", "")], ["Plan", plan], ["Approval", approval], ["Execution", exec], ["Evidence", evidence], ["Verification", verify]];
+    var doneCount = function (n) { return n + " of " + total; };
+    var fill = function (n) { return total ? Math.max(0, Math.min(1, n / total)) : 0; };
+    function at(kind, note, amount) { return { kind: kind, note: note, fill: amount == null ? 0 : amount }; }
+    var plan = st === "planning" ? at("now", "writing it", 0.5) :
+      total ? at("done", total + " task" + (total === 1 ? "" : "s"), 1) :
+      stopped ? at("stop", st, 1) : at("todo", "", 0);
+    var approval = st === "awaiting_plan" ? at("wait", "needs you", 0.5) :
+      approved ? at("done", "approved", 1) :
+      stopped && total ? at("stop", "not approved", 1) : at("todo", "", 0);
+    var exec = st === "paused" ? at("wait", doneCount(doneTasks) + " · paused", fill(doneTasks)) :
+      st === "running" ? at(doneTasks === total ? "done" : "now", doneCount(doneTasks) + " done", fill(doneTasks)) :
+      approved && over ? at(stopped ? "stop" : "done", doneCount(doneTasks) + " done", fill(doneTasks)) :
+      approved && doneTasks ? at("now", doneCount(doneTasks) + " done", fill(doneTasks)) : at("todo", "", 0);
+    var evidence = !withEvidence ? (approved && over ? at("wait", "nothing recorded", 0) : at("todo", "", 0)) :
+      at(over && !stopped || withEvidence === total && total ? "done" : "now", doneCount(withEvidence) + " with evidence", fill(withEvidence));
+    var verify = failedChecks && !passed ? at("stop", failedChecks + " failed", fill(verified)) :
+      total && verified === total ? at("done", doneCount(verified) + " verified", 1) :
+      passed ? at(stopped ? "stop" : "now", doneCount(verified) + " verified" + (failedChecks ? " · " + failedChecks + " failed" : ""), fill(verified)) :
+      over && !stopped ? at("wait", "no check ran", 0) :
+      stopped && approved ? at("stop", st, 0) : at("todo", "", 0);
+    var list = [["Goal", at("done", r.project ? dirName(r.project) : "run started", 1)], ["Plan", plan], ["Approval", approval], ["Execution", exec], ["Evidence", evidence], ["Verification", verify]];
     var words = { done: "done", now: "in progress", wait: "waiting", stop: "stopped", todo: "not started" };
-    var progress = work.length
-      ? '<div class="run-progress"><progress class="ds-progress' + (doneTasks === work.length ? " is-done" : "") + '" value="' + doneTasks + '" max="' + work.length + '" aria-label="Tasks done"></progress><span class="dim">' + doneTasks + " of " + work.length + " tasks</span></div>"
-      : "";
-    return progress + '<ol class="stages" aria-label="Run progress">' + list.map(function (x, i) {
+    var pct = total ? Math.round(doneTasks / total * 100) : 0;
+    var progress = '<div class="run-progress"><progress class="ds-progress' + (doneTasks === total && total ? " is-done" : "") + '" value="' + doneTasks + '" max="' + Math.max(1, total) + '" aria-label="' + pct + '% of tasks done"></progress>' +
+      '<span class="dim">' + (total ? doneTasks + " of " + total + " tasks · " + pct + "%" + (st === "paused" ? " · paused" : "") : (st === "planning" ? "planning" : "no tasks yet")) + "</span></div>";
+    return progress + '<ol class="stages" aria-label="Run progress">' + list.map(function (x) {
       var k = x[1].kind;
-      var mark = k === "done" ? '<svg class="icon"><use href="#i-check"></use></svg>' : k === "stop" ? '<svg class="icon"><use href="#i-x"></use></svg>' : k === "wait" ? '<svg class="icon"><use href="#i-warn"></use></svg>' : String(i + 1);
-      return '<li class="stage stage-' + k + '"' + (k === "now" || k === "wait" ? ' aria-current="step"' : "") + ' title="' + attr(x[0] + ": " + words[k] + (x[1].note ? " - " + x[1].note : "")) + '">' +
+      var mark = k === "done" ? '<svg class="icon"><use href="#i-check"></use></svg>' : k === "stop" ? '<svg class="icon"><use href="#i-x"></use></svg>' : k === "wait" ? '<svg class="icon"><use href="#i-warn"></use></svg>' : "";
+      return '<li class="stage stage-' + k + '"' + (k === "now" || k === "wait" ? ' aria-current="step"' : "") + ' style="--p:' + Math.round(x[1].fill * 100) + '%" title="' + attr(x[0] + ": " + words[k] + (x[1].note ? " - " + x[1].note : "")) + '">' +
         '<span class="stage-mark" aria-hidden="true">' + mark + '</span><span class="stage-text"><span class="stage-label">' + x[0] + "</span>" +
         '<span class="sr-only">: ' + words[k] + "</span>" +
         (x[1].note ? '<span class="stage-note">' + esc(x[1].note) + "</span>" : "") + "</span></li>";
@@ -10441,7 +10677,7 @@ var TERM_POLL_MS = 250;
         ? '<details class="run-goal-fold"><summary><span class="run-label">The goal in full</span><span class="run-goal-lead">' + esc(cut(goal, 200)) + "</span></summary>" + md(goal) + "</details>"
         : '<div class="run-label">The goal in full</div>' + md(goal)) : "") +
       '<dl class="run-facts">' +
-        '<div><dt>Plan</dt><dd>' + (r.plan_approved ? "Approved by a person" : '<span class="dim">Not approved. Nothing has run on this goal.</span>') + "</dd></div>" +
+        '<div><dt>Plan</dt><dd>' + (r.plan_approved ? "Approved" : '<span class="dim">The planner has not submitted a plan yet.</span>') + "</dd></div>" +
         '<div><dt>Up to</dt><dd>' + esc(r.parallel || 1) + (r.parallel === 1 ? " task at a time" : " tasks at once") + "</dd></div>" +
       "</dl></section>";
   }
@@ -10510,7 +10746,12 @@ var TERM_POLL_MS = 250;
           text = "The plan has " + countWords((x.tasks || []).length, "task") + ".";
           if ((x.tasks || []).length) fold = (x.tasks || []).map(function (t, k) { return (k + 1) + ". " + (t.title || t.key || t) + (t.role ? " — " + roleFace(t.role).name : ""); }).join("\n");
           break;
-        case "plan_approved": who = "you"; text = "Approved the plan."; break;
+        case "plan_approved":
+          // A plan is normally approved when it is written ("waived at start");
+          // only a person's explicit approval names a person.
+          who = (x.by && x.by !== "waived at start" && x.by !== "devd:harness") ? "you" : "devd";
+          text = who === "you" ? "Approved the plan." : "Approved the plan and started the work at once.";
+          break;
         case "report":
           who = x.role || "devd";
           var full = String(x.summary || "").trim();
@@ -10596,7 +10837,12 @@ var TERM_POLL_MS = 250;
     // no error shown and no way to retry.
     var soft = function (p) { return p.catch(function () { return []; }); };
     return Promise.all([soft(read("approval.list", { pending_only: true })), soft(read("inbox.list", { open_only: true })), soft(read("approval.list", { pending_only: false })), soft(read("inbox.list", { open_only: false })), soft(read("team.list")), soft(read("team.suggestions", { state: "open" }))]).then(function (r) {
-      AI.requests = r[0]; AI.inbox = r[1];
+      // An approval that has run out of time is not a decision any more. The
+      // server already filters it out; this keeps the screen correct if the
+      // card was loaded a moment before it expired.
+      var nowIso = new Date().toISOString();
+      AI.requests = (r[0] || []).filter(function (x) { return !x.expires_at || x.expires_at > nowIso; });
+      AI.inbox = r[1];
       AI.history = { requests: (r[2] || []).filter(function (x) { return x.state !== "pending"; }).slice(0, 15), messages: (r[3] || []).filter(function (x) { return x.state === "resolved"; }).slice(0, 15) };
       // The one question each paused run is holding on, asked in the words the
       // run view uses, so the two screens cannot disagree.
@@ -10670,7 +10916,7 @@ var TERM_POLL_MS = 250;
         '<div class="decision-actions">' +
           '<button type="button" class="btn btn-primary btn-mini" data-action="suggestion-accept" data-id="' + attr(s.id) + '">Start a run from this</button>' +
           '<button type="button" class="btn btn-mini" data-action="suggestion-dismiss" data-id="' + attr(s.id) + '">Not wanted</button>' +
-          '<span class="decision-hint">Nothing has run. A started run still plans first, and you approve the plan.</span>' +
+          '<span class="decision-hint">Nothing has run. A started run plans first and then gets to work.</span>' +
         "</div>" +
       "</div></article>";
   }
@@ -10716,7 +10962,7 @@ var TERM_POLL_MS = 250;
             '<div class="decision-body">' + uiBody(m.body) + "</div>" +
             '<div class="decision-actions"><button type="button" class="btn btn-primary" data-action="team-open-from" data-id="' + attr(m.run_id) + '">Review the plan</button>' +
             '<button type="button" class="btn" data-action="inbox-reply" data-id="' + attr(m.id) + '" data-resolve="1">Dismiss</button>' +
-            '<span class="decision-hint">Nothing runs until you approve the plan.</span></div>' +
+            '<span class="decision-hint">The run plans first, then gets to work.</span></div>' +
           "</div></article>");
       } else if (m.needs_reply) {
         waiting.push('<article class="decision" data-kind="question">' +
@@ -11403,7 +11649,7 @@ var TERM_POLL_MS = 250;
   /* Who takes this: one selector, in every composer. */
   function modeSelect() {
     var team = AI.homeMode === "team";
-    return '<select class="composer-picker composer-mode" id="composer-mode" aria-label="Who takes this" title="The assistant answers one request. Agent runs plan a goal and wait for your approval before anything runs.">' +
+    return '<select class="composer-picker composer-mode" id="composer-mode" aria-label="Who takes this" title="The assistant answers one request. Agent runs plan a goal and then get to work; you can pause or stop them.">' +
       '<option value="ask"' + (team ? "" : " selected") + ">Assistant</option>" +
       '<option value="team"' + (team ? " selected" : "") + ">Agent runs</option></select>";
   }
@@ -11425,7 +11671,9 @@ var TERM_POLL_MS = 250;
   var EFFORTS = [
     { value: "low", label: "Low", hint: "Quick answers. Less reasoning before acting." },
     { value: "medium", label: "Medium", hint: "The balanced default.", recommended: true },
-    { value: "high", label: "High", hint: "Think longer before answering or acting." }
+    { value: "high", label: "High", hint: "Think longer before answering or acting." },
+    { value: "extra", label: "Extra", hint: "More room to reason and a longer answer." },
+    { value: "max", label: "Max", hint: "The most reasoning and room a model allows. Slowest." }
   ];
 
   function permissionInfo(value) {
@@ -11592,12 +11840,12 @@ var TERM_POLL_MS = 250;
     });
   }
 
-  /* Reasoning effort is only offered where the model has a dial to turn. */
+  /* Every provider has a model that can use more or less room to think. A
+   * provider that does not name a reasoning level still gets the larger answer
+   * budget, so the control is never inert. */
   function effortSupported(providerId, model) {
     var p = (AI.providers || []).filter(function (x) { return x.id === providerId; })[0];
-    if (!p || p.kind !== "openai") return false;
-    var m = String(model || "");
-    return /^(o1|o3|o4|gpt-5)/.test(m) || m.indexOf("reasoning") >= 0;
+    return !!(p && p.enabled !== false);
   }
 
   function composerStatus(prefix) {
@@ -12504,14 +12752,15 @@ var TERM_POLL_MS = 250;
     if (!inp || !send || !mic) return;
     var busy = !!(AI.thread && (AI.thread.state === "running" || AI.running));
     var hasText = !!(inp.value || "").trim() || ATT.chat.length;
-    // One primary action in the slot, and it says what pressing it does now:
-    // while the agent works with nothing typed, it stops; the moment there is
-    // text it becomes the arrow, which sends (or queues when it is still
-    // working); clearing the draft brings the stop back.
-    send.hidden = busy ? hasText : !hasText;
+    // One primary action in the slot: while the agent works the slot is Stop,
+    // always, whatever is typed. Typing never takes the control away, so the
+    // box behaves the same at every keystroke; Enter (or the queue hint) sends
+    // the draft at the next step boundary. When it is idle the slot is the
+    // microphone until there is something to send, then the arrow.
+    send.hidden = busy || !hasText;
     mic.hidden = busy || hasText;
     var stop = el("chat-stop");
-    if (stop) stop.hidden = !busy || hasText;
+    if (stop) stop.hidden = !busy;
   }
 
   /* The box grows with what is written in it, up to a share of the window, and
@@ -12541,8 +12790,13 @@ var TERM_POLL_MS = 250;
       processor.onaudioprocess = function (event) {
         chunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
       };
+      // A muted gain keeps the processor running without playing the
+      // microphone back into the room.
+      var sink = context.createGain();
+      sink.gain.value = 0;
       source.connect(processor);
-      processor.connect(context.destination);
+      processor.connect(sink);
+      sink.connect(context.destination);
       return new Promise(function (resolve) {
         RECORDER = {
           stop: function () {
@@ -12564,11 +12818,20 @@ var TERM_POLL_MS = 250;
     var total = chunks.reduce(function (n, c) { return n + c.length; }, 0);
     var target = 16000;
     var ratio = rate / target;
-    var outLength = Math.floor(total / ratio);
+    var outLength = Math.max(1, Math.floor(total / ratio));
+    // The recorder hands the audio over in 4096-sample pieces, so the pieces
+    // are joined before any sample is read. Reading `chunks[0]` alone used to
+    // transcribe only the first quarter-second and silence after it.
+    var all = new Float32Array(total);
+    var at = 0;
+    chunks.forEach(function (c) { all.set(c, at); at += c.length; });
     var out = new Float32Array(outLength);
-    for (var i = 0; i < total; i++) {
-      var to = Math.floor(i / ratio);
-      if (to < outLength) out[to] = chunks[0][i];
+    for (var i = 0; i < outLength; i++) {
+      var src = i * ratio;
+      var i0 = Math.min(total - 1, Math.floor(src));
+      var i1 = Math.min(total - 1, i0 + 1);
+      var frac = src - i0;
+      out[i] = all[i0] * (1 - frac) + all[i1] * frac;
     }
     var buffer = new ArrayBuffer(44 + outLength * 2);
     var view = new DataView(buffer);
@@ -12941,12 +13204,14 @@ var TERM_POLL_MS = 250;
         var recorder = RECORDER;
         RECORDER = null;
         node.classList.remove("is-recording");
+        node.title = "Dictate with Whisper";
         recorder.stop().then(function (audio) {
           if (!audio.chunks.length) {
-            toast("warn", "Nothing was recorded");
+            toast("warn", "Nothing was recorded.");
             return;
           }
           var blob = encodeWav(audio.chunks, audio.rate);
+          toast("warn", "Transcribing on this machine.");
           uploadFile(new File([blob], "dictation.wav", { type: "audio/wav" }))
             .then(function (stored) {
               return read("dictation.transcribe", { path: stored.path });
@@ -12954,31 +13219,60 @@ var TERM_POLL_MS = 250;
             .then(function (data) {
               var text = (data && data.text) || "";
               if (!text) {
-                toast("warn", "Whisper heard nothing");
+                toast("warn", "The recording had no words in it.");
                 return;
               }
               insertAtCursor(text);
+              toast("ok", "Added what you said to the message.");
             })
             .catch(function (e) {
-              toast("error", e.message);
+              toast("error", "The recording could not be transcribed: " + (e.message || "unknown reason"));
             });
         });
         return;
       }
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        toast("error", "This browser cannot record audio");
+        toast("error", "This browser cannot record audio.");
         return;
       }
-      toast("info", "Recording. Press the microphone again to stop.");
-      node.classList.add("is-recording");
-      recordWav(120)
-        .then(function (recorder) {
-          RECORDER = recorder;
-        })
-        .catch(function (e) {
-          node.classList.remove("is-recording");
-          toast("error", "The microphone could not be opened: " + e.message);
+      var record = function () {
+        toast("warn", "Recording. Press the microphone again to stop.");
+        node.classList.add("is-recording");
+        node.title = "Stop recording";
+        recordWav(120)
+          .then(function (recorder) { RECORDER = recorder; })
+          .catch(function (e) {
+            node.classList.remove("is-recording");
+            node.title = "Dictate with Whisper";
+            toast("error", "The microphone could not be opened: " + (e.message || "unknown reason"));
+          });
+      };
+      // Speech to text is one download, done once. The microphone tells the
+      // truth about that instead of failing after the person has spoken.
+      read("dictation.status", {}).then(function (st) {
+        var ready = st && st.binary && (st.models || []).length;
+        if (ready) return record();
+        if (!st || !st.platform_supported) {
+          toast("warn", "Speech to text needs whisper.cpp, which has no published build for this platform.");
+          return;
+        }
+        return uiConfirm({
+          title: "Set up speech to text?",
+          text: "devd downloads whisper.cpp and the Base English model once, about 152 MB. After that every recording is transcribed on this machine; nothing is sent anywhere.",
+          confirm: "Download and set up"
+        }).then(function (yes) {
+          if (!yes) return;
+          toast("warn", "Downloading the speech model. This runs once.");
+          return run("dictation.install", { model: "base.en" }, { quiet: true }).then(function (o) {
+            if (o && o.ok) {
+              toast("ok", "Speech to text is ready.");
+              record();
+            }
+          });
         });
+      }).catch(function (e) {
+        toast("error", "Speech to text could not be checked: " + (e.message || "unknown reason"));
+      });
     },
 
     nav: function (node) {
@@ -13597,8 +13891,20 @@ var TERM_POLL_MS = 250;
       closeDrawer();
       var approve = n.dataset.approve === "1";
       n.disabled = true;
-      run("approval.decide", { id: n.dataset.id, approve: approve }).then(function () {
+      // `read`, not `run`: a decision that expired while the card sat on screen
+      // is not a failure the person caused, so it is not reported as one. The
+      // card is withdrawn and the screen refreshed, which says the same thing
+      // without a red toast about a request that no longer exists.
+      read("approval.decide", { id: n.dataset.id, approve: approve }).then(function (o) {
+        if (o && o.state === "failed") toast("warn", "That approval could not be carried out, so it has been withdrawn.");
         return loadHealth();
+      }).catch(function (err) {
+        var why = String((err && err.message) || "");
+        if (/expired|not pending|unknown|no such|already/i.test(why)) {
+          toast("warn", "That approval is no longer waiting, so it has been removed.");
+        } else {
+          toast("error", why || "The approval could not be recorded.");
+        }
       }).then(function () {
         if (state.view === "inbox") return loadInbox().then(render);
         if (state.view === "home") return loadHome().then(render);
@@ -13645,7 +13951,7 @@ var TERM_POLL_MS = 250;
     "suggestion-accept": function (n) {
       run("team.accept_suggestion", { id: n.dataset.id }).then(function (o) {
         if (!o) return null;
-        return loadInbox().then(render).then(function () { if (o.data && o.data.run) toast("ok", "A run was started. Approve its plan when it is ready."); });
+        return loadInbox().then(render).then(function () { if (o.data && o.data.run) toast("ok", "A run was started. It plans first and then gets to work."); });
       });
     },
     "suggestion-dismiss": function (n) {
@@ -13756,6 +14062,39 @@ var TERM_POLL_MS = 250;
      * it had opened one, which left the person with a message and no terminal.
      * Now it starts a session through the same capability the Terminal screen
      * uses and takes you to it, so the shell you asked for is the shell you see. */
+    /* The side panel's rows are the two things a conversation leaves behind:
+       the files it made and the shells it needs. Each opens where it lives
+       rather than in a copy. */
+    "outputs-more": function () {
+      AI.outputsOpen = !AI.outputsOpen;
+      paintWsCard();
+    },
+    "output-open": function (n) {
+      var path = n.dataset.path || "";
+      var project = (AI.thread && AI.thread.project) || (AI.ws && AI.ws.path) || "";
+      if (!path) return;
+      var go = project ? openProject(project, "files") : Promise.resolve();
+      go.then(function () {
+        if (state.view !== "project") return;
+        filesForProject();
+        loadFile(path);
+      });
+    },
+    "term-open": function (n) {
+      var id = n.dataset.id;
+      var path = n.dataset.path;
+      if (!id || !path) return;
+      // The terminal screen scopes sessions to the project on screen, so the
+      // project is set before the screen is shown.
+      state.project = { path: path, name: dirName(path), status: null, open: null, error: null };
+      TERM.active = id;
+      TERM.screen = "";
+      navigate("terminal").then(function () {
+        TERM.active = id;
+        termLoadSessions();
+        termStartPolling();
+      });
+    },
     "open-terminal": function (n) {
       var path = n.dataset.path;
       // `run`, not `act`: `act` re-reads the whole application before it resolves, and
@@ -14586,7 +14925,7 @@ var TERM_POLL_MS = 250;
       });
     },
 
-    "open-project": function (node) { openProject(node.dataset.path); },
+    "open-project": function (node) { openProject(node.dataset.path, node.dataset.tab); },
 
     "project-forget": function (node) {
       var path = node.dataset.path;
@@ -15804,7 +16143,9 @@ var TERM_POLL_MS = 250;
     try { n.setSelectionRange(s, e); } catch (x) { /* not a text field */ }
   }
 
-  if (window.mermaid) {
+  /* Called once the diagram runtime has arrived. */
+  function mermaidInit() {
+    if (!window.mermaid) return;
     try {
       window.mermaid.initialize({
         startOnLoad: false,

@@ -1433,7 +1433,7 @@ fn register_exec(reg: &mut Registry, git: &Arc<GitService>) -> Result<()> {
                 ForcePush::None,
                 a.tags.unwrap_or(false),
             )?;
-            Ok(Outcome::with_data("push complete", serde_json::json!({ "output": out })))
+            Ok(Outcome::with_data("Pushed to the remote", serde_json::json!({ "output": out })))
         },
     )?;
 

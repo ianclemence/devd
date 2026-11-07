@@ -749,7 +749,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
                 "target": "AGENTS.md",
             });
             save_record(ctx, "memory", &record)?;
-            Ok(Outcome::with_data("proposed; apply it to write AGENTS.md", record))
+            Ok(Outcome::with_data("Proposed a change to AGENTS.md; apply it to write the file", record))
         },
     )?;
 
@@ -869,7 +869,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             }
             let text = proposed_agents(&project);
             fs::write(&path, text).map_err(|e| DevdError::invalid(format!("could not write {}: {e}", path.display())))?;
-            Ok(Outcome::with_data("AGENTS.md created", json!({ "path": path.display().to_string() })))
+            Ok(Outcome::with_data("Created AGENTS.md with the project's agent instructions", json!({ "path": path.display().to_string() })))
         },
     )?;
 

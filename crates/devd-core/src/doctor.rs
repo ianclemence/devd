@@ -90,6 +90,30 @@ pub fn core_checks(paths: &Paths, settings: &Settings) -> Vec<Check> {
 /// asks that database, the one the process is really using, instead of opening the file at the path
 /// a second time. `None` looks at the file, which is what the command line does.
 pub fn core_checks_for(paths: &Paths, settings: &Settings, store: Option<&Store>) -> Vec<Check> {
+    core_checks_inner(paths, settings, store, true)
+}
+
+/// The same checks without the full database read.
+///
+/// `PRAGMA integrity_check` walks every page of the state database. That is the
+/// right thing for `devd doctor`, which is asked once, and the wrong thing for
+/// the health chip, which every screen and every poll asks for: a database with
+/// a history in it takes seconds to walk. Health therefore reads the schema
+/// version (a single row) and leaves the deep check to doctor.
+pub fn core_checks_for_health(
+    paths: &Paths,
+    settings: &Settings,
+    store: Option<&Store>,
+) -> Vec<Check> {
+    core_checks_inner(paths, settings, store, false)
+}
+
+fn core_checks_inner(
+    paths: &Paths,
+    settings: &Settings,
+    store: Option<&Store>,
+    deep_state: bool,
+) -> Vec<Check> {
     let mut checks = Vec::new();
 
     // A check is a question, not an installation: it must not create the home
@@ -128,9 +152,11 @@ pub fn core_checks_for(paths: &Paths, settings: &Settings, store: Option<&Store>
     }
 
     checks.push(if let Some(store) = store {
-        state_of(store, &paths.state_db())
-    } else if home_exists {
+        state_of(store, &paths.state_db(), deep_state)
+    } else if home_exists && deep_state {
         state_check(paths)
+    } else if home_exists {
+        Check::info("state", "the schema version is read; the full check is in `devd doctor`")
     } else {
         Check::info("state", "no state database yet")
     });
@@ -237,23 +263,28 @@ fn state_check(paths: &Paths) -> Check {
     // Doctor only looks. Opening the database the usual way would create it, switch its journal
     // mode and migrate it, so the check would change the thing it is checking.
     match Store::open_read_only(&paths.state_db()) {
-        Ok(store) => state_of(&store, &paths.state_db()),
+        Ok(store) => state_of(&store, &paths.state_db(), true),
         Err(e) => Check::fail("state", format!("cannot open {}: {e}", paths.state_db().display())),
     }
 }
 
 /// What an open state database says about itself.
-fn state_of(store: &Store, file: &std::path::Path) -> Check {
-    let (integrity, version) = match (store.integrity_check(), store.schema_version()) {
-        (Ok(integrity), Ok(version)) => (integrity, version),
-        (Ok(_), Err(e)) => return Check::fail("state", format!("schema version unreadable: {e}")),
-        (Err(e), _) => return Check::fail("state", format!("integrity check failed: {e}")),
+fn state_of(store: &Store, file: &std::path::Path, deep: bool) -> Check {
+    let version = match store.schema_version() {
+        Ok(v) => v,
+        Err(e) => return Check::fail("state", format!("schema version unreadable: {e}")),
     };
-    if integrity != "ok" {
-        return Check::fail(
-            "state",
-            format!("the database is damaged; close devd and run `devd repair-state` ({})", integrity.lines().next().unwrap_or("")),
-        );
+    if deep {
+        match store.integrity_check() {
+            Ok(integrity) if integrity != "ok" => {
+                return Check::fail(
+                    "state",
+                    format!("the database is damaged; close devd and run `devd repair-state` ({})", integrity.lines().next().unwrap_or("")),
+                );
+            }
+            Err(e) => return Check::fail("state", format!("integrity check failed: {e}")),
+            _ => {}
+        }
     }
     let latest = crate::state::LATEST_SCHEMA;
     if version < latest {

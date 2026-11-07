@@ -11,7 +11,7 @@
 //! * **Intake rules.** A project's written rule - "when the nightly check has
 //!   failed three times, consider a run that fixes it" - is evaluated against
 //!   what devd already observed. In `observe` mode it records a suggestion and
-//!   stops there. In `auto` it starts a run, which still waits for plan approval,
+//!   stops there. In `auto` it starts a run, which plans first and then works,
 //!   and never in production without a person's answer.
 //!
 //! Both are ordinary code: no model is called to decide whether to look, so the

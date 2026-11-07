@@ -5,7 +5,7 @@
 //!
 //! * `team.suggest` - how work devd *proposes* is recorded. It writes one row and
 //!   no run; a person turns it into a run with `team.accept_suggestion`, which
-//!   starts an ordinary run that still waits for plan approval.
+//!   starts an ordinary run that plans first and then works.
 //! * `intake.*` - the rules a project wrote. A person writes them; the daemon
 //!   evaluates them; nothing they start escapes the ordinary approval model.
 //!
@@ -119,7 +119,7 @@ struct RuleWrite {
     #[serde(default)]
     role: Option<String>,
     /// `observe` records what it would have done and does nothing else (the
-    /// default); `auto` starts the run, which still waits for plan approval.
+    /// default); `auto` starts the run, which plans first and then works.
     #[serde(default)]
     mode: Option<String>,
 }
@@ -176,7 +176,7 @@ fn rule_json(r: &IntakeRule) -> Value {
 /// Register the suggestion and intake-rule capabilities.
 pub fn register(reg: &mut Registry, team: Arc<Team>) -> Result<()> {
     reg.define::<SuggestArgs>("team.suggest", "Propose work instead of doing it")
-    .description("Records a proposal for work that would move the project forward, with what made it worth doing and how it would be proved done. Nothing runs: the proposal is one row, shown to the person in the Inbox and the team room, and it becomes a run only if a person accepts it (team.accept_suggestion), which then waits for plan approval like any other run. Use this for the improvement you noticed while doing something else. Do not use it to ask for permission; ask in your reply instead.")
+    .description("Records a proposal for work that would move the project forward, with what made it worth doing and how it would be proved done. Nothing runs: the proposal is one row, shown to the person in the Inbox and the team room, and it becomes a run only if a person accepts it (team.accept_suggestion), which then plans and runs like any other run. Use this for the improvement you noticed while doing something else. Do not use it to ask for permission; ask in your reply instead.")
     .group("team")
     .tier(Tier::Write)
     .effect(Effect::Process)
@@ -233,7 +233,7 @@ pub fn register(reg: &mut Registry, team: Arc<Team>) -> Result<()> {
     {
         let t = team.clone();
         reg.define::<SuggestionRef>("team.accept_suggestion", "Turn a proposal into a run")
-    .description("Starts an ordinary team run from a proposal: the planner plans it and a person still approves the plan before anything runs. The run records that devd proposed it and who accepted it.")
+    .description("Starts an ordinary team run from a proposal: the planner plans it and the work starts at once. The run records that devd proposed it and who accepted it.")
     .group("team")
     .tier(Tier::Exec)
     .effect(Effect::Process)
@@ -243,7 +243,7 @@ pub fn register(reg: &mut Registry, team: Arc<Team>) -> Result<()> {
         |ctx, a| {
             let s = ctx.store.get_suggestion(&a.id)?.ok_or_else(|| DevdError::not_found("no such proposal"))?;
             Ok(Plan::new("team.accept_suggestion", format!("start a run from the proposal: {}", s.title))
-                .effect("the planner plans it; nothing else runs until you approve the plan"))
+                .effect("the planner plans it, then the team gets to work"))
         },
         move |ctx, a| {
                 let s = ctx.store.get_suggestion(&a.id)?.ok_or_else(|| DevdError::not_found("no such proposal"))?;
@@ -289,14 +289,14 @@ pub fn register(reg: &mut Registry, team: Arc<Team>) -> Result<()> {
         |ctx, a| {
             let s = ctx.store.get_suggestion(&a.id)?.ok_or_else(|| DevdError::not_found("no such proposal"))?;
             ctx.store.decide_suggestion(&a.id, false, None, &ctx.actor.label())?;
-            Ok(Outcome::ok(format!("dismissed: {}", s.title)))
+            Ok(Outcome::ok(format!("Dismissed the suggestion: {}", s.title)))
         },
     )?;
 
     // ------------------------------------------------------------- intake
 
     reg.define::<RulesQuery>("intake.list", "The project's rules for starting a run")
-    .description("Each written rule: which event it watches, how many times it must happen, how often it may start a run, what that run would do, and whether it is in observe mode (records what it would have done) or auto (starts the run, which still waits for plan approval).")
+    .description("Each written rule: which event it watches, how many times it must happen, how often it may start a run, what that run would do, and whether it is in observe mode (records what it would have done) or auto (starts the run, which plans first and then works).")
     .group("intake")
     .tier(Tier::Read)
     .effect(Effect::Read)
@@ -315,7 +315,7 @@ pub fn register(reg: &mut Registry, team: Arc<Team>) -> Result<()> {
     )?;
 
     reg.define::<RuleWrite>("intake.set", "Write a rule for starting a run")
-    .description("Adds or changes one rule for a project: when to consider a run. A person writes this, because it decides what devd may start without being asked. Starts in observe mode unless mode is given; auto still waits for plan approval and is ignored in production.")
+    .description("Adds or changes one rule for a project: when to consider a run. A person writes this, because it decides what devd may start without being asked. Starts in observe mode unless mode is given; auto plans then runs, and is ignored in production.")
     .group("intake")
     .tier(Tier::Write)
     .effect(Effect::Write)
@@ -389,7 +389,7 @@ pub fn register(reg: &mut Registry, team: Arc<Team>) -> Result<()> {
             };
             ctx.store.upsert_intake_rule(&rule)?;
             Ok(Outcome::with_data(
-                if mode == "auto" { "saved; it will start a run, which still waits for your plan approval" } else { "saved in observe mode: it records what it would have done" },
+                if mode == "auto" { "saved; it will start a run that plans first and then works" } else { "saved in observe mode: it records what it would have done" },
                 rule_json(&rule),
             ))
         },

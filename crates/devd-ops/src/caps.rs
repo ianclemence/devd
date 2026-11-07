@@ -504,7 +504,7 @@ fn register_cron(reg: &mut Registry) -> Result<()> {
             },
             |ctx, a| {
                 let (job, ran) = cron::run_now(ctx, &a.id)?;
-                Ok(Outcome::with_data(format!("exit {} after {:.1}s", ran.exit, ran.seconds), json!({ "job": job, "exit": ran.exit, "seconds": ran.seconds, "log_tail": crate::tail_bytes(std::path::Path::new(&job.log), 4000) })))
+                Ok(Outcome::with_data(format!("The job exited with {} after {:.1}s", ran.exit, ran.seconds), json!({ "job": job, "exit": ran.exit, "seconds": ran.seconds, "log_tail": crate::tail_bytes(std::path::Path::new(&job.log), 4000) })))
             },
         )?;
     Ok(())
@@ -852,7 +852,7 @@ fn register_deploy(reg: &mut Registry) -> Result<()> {
             |_, a| Ok(Plan::new("deploy.hook", format!("turn the push-to-deploy hook of {} {}", a.site, if a.enabled { "on" } else { "off" })).effect("a secret address can start deploys")),
             |ctx, a| {
                 let v = deploy::set_hook(ctx, &a.site, a.enabled)?;
-                Ok(Outcome::with_data(format!("push-to-deploy is {} for {}", if a.enabled { "on" } else { "off" }, a.site), v))
+                Ok(Outcome::with_data(format!("Push-to-deploy is {} for {}", if a.enabled { "on" } else { "off" }, a.site), v))
             },
         )?;
     Ok(())
@@ -911,7 +911,7 @@ fn register_notify(reg: &mut Registry) -> Result<()> {
             |_, a| Ok(Plan::new("notify.test", format!("send a test message to target {}", a.id)).effect("sends a message over the network")),
             |ctx, a| {
                 notify::test(ctx, &a.id)?;
-                Ok(Outcome::with_data("delivered".to_string(), json!({ "id": a.id })))
+                Ok(Outcome::with_data("Delivered the test message".to_string(), json!({ "id": a.id })))
             },
         )?;
     Ok(())

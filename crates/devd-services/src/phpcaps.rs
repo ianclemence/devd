@@ -293,7 +293,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
                         other => return Err(DevdError::invalid(format!("`{other}` is not start, stop or restart"))),
                     }
                 }
-                Ok(Outcome::with_data(format!("{} PHP process(es): {}", names.len(), a.action), json!({ "services": names, "action": a.action })))
+                Ok(Outcome::with_data(format!("Tried to {} {} PHP process(es)", a.action, names.len()), json!({ "services": names, "action": a.action })))
             },
         )?;
 

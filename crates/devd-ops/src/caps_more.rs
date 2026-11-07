@@ -159,7 +159,7 @@ fn register_laravel(reg: &mut Registry) -> Result<()> {
             |ctx, a| {
                 let args = laravel::split_args(&a.command)?;
                 let r = laravel::artisan(ctx, &a.site, &args)?;
-                Ok(Outcome::with_data(format!("artisan {} exited {} after {:.1}s", r.command, r.exit, r.seconds), json!(r)))
+                Ok(Outcome::with_data(format!("Artisan {} exited with {} after {:.1}s", r.command, r.exit, r.seconds), json!(r)))
             },
         )?;
 
@@ -445,7 +445,7 @@ fn register_deploy(reg: &mut Registry) -> Result<()> {
             |_, a| Ok(Plan::new("deploy.staging_create", format!("make {}-staging on branch {}", a.site, a.branch.clone().unwrap_or_else(|| "staging".into()))).step("git worktree add").step("create the site and its certificate").step("copy the .env with APP_ENV=staging").effect("adds a folder, a site and a branch")),
             |ctx, a| {
                 let v = deploy::staging_create(ctx, &a.site, a.branch.as_deref())?;
-                Ok(Outcome::with_data(format!("{}-staging is ready", a.site), v))
+                Ok(Outcome::with_data(format!("The staging site {}-staging is ready", a.site), v))
             },
         )?;
 
@@ -458,7 +458,7 @@ fn register_deploy(reg: &mut Registry) -> Result<()> {
             |_, a| Ok(Plan::new("deploy.staging_promote", format!("merge the staging branch into production for {} and deploy it", a.site)).step("git merge --ff-only").step("run the production deploy script").effect("production's working tree moves to the staging commit")),
             |ctx, a| {
                 let d = deploy::staging_promote(ctx, &a.site)?;
-                Ok(Outcome::with_data(format!("promotion started: deployment {}", d.id), json!(d)))
+                Ok(Outcome::with_data(format!("Promotion started: deployment {} is going live", d.id), json!(d)))
             },
         )?;
 
@@ -471,7 +471,7 @@ fn register_deploy(reg: &mut Registry) -> Result<()> {
             |_, a| Ok(Plan::new("deploy.staging_remove", format!("remove the staging site of {}", a.site)).effect("removes a working folder; the branch stays")),
             |ctx, a| {
                 let v = deploy::staging_remove(ctx, &a.site)?;
-                Ok(Outcome::with_data("staging site removed".to_string(), v))
+                Ok(Outcome::with_data("Removed the staging site".to_string(), v))
             },
         )?;
 

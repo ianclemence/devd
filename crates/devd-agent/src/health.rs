@@ -164,7 +164,9 @@ pub fn status(ctx: &Ctx) -> Result<Value> {
     let mut comps: Vec<Component> = Vec::new();
 
     // ---- devd itself and the tools it needs
-    let mut checks = doctor::core_checks_for(&ctx.paths, &ctx.settings, Some(&ctx.store));
+    // Health is asked on a timer by every screen. It reads the schema version,
+    // not every page of the database; the deep read belongs to `devd doctor`.
+    let mut checks = doctor::core_checks_for_health(&ctx.paths, &ctx.settings, Some(&ctx.store));
     checks.push(devd_git::doctor_check(
         ctx.settings.git_executable.as_deref(),
     ));

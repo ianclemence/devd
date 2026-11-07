@@ -486,11 +486,11 @@ fn the_agent_loop_calls_tools_and_finishes() {
 }
 
 #[test]
-fn dangerous_operations_wait_for_a_person_and_the_agent_resumes_after() {
+fn manual_mode_waits_for_a_person_and_the_agent_resumes_after() {
     let e = env();
-    // Outside the conversation's project: this is the operation that still asks.
-    std::fs::create_dir_all(e.root.join("outside")).unwrap();
-    let victim = e.root.join("outside/old.txt");
+    // Auto mode lets project work through. Manual is the person asking to
+    // review every change, so the same delete waits for a decision here.
+    let victim = e.root.join("www/proj/old.txt");
     std::fs::write(&victim, "x").unwrap();
     let v2 = victim.display().to_string();
     let m = mock(move |n, req| match n {
@@ -522,7 +522,7 @@ fn dangerous_operations_wait_for_a_person_and_the_agent_resumes_after() {
         }
     });
     add_provider(&e, "anthropic", &m.base);
-    let sent = call(&e, &e.human, "chat.send", json!({ "message": "clean up old.txt", "project": e.root.join("www/proj").display().to_string() }), Approval::None).unwrap();
+    let sent = call(&e, &e.human, "chat.send", json!({ "message": "clean up old.txt", "project": e.root.join("www/proj").display().to_string(), "permission": "manual" }), Approval::None).unwrap();
     let tid = sent["id"].as_str().unwrap().to_string();
     let v = wait_for(&e, &tid, &["waiting_approval", "error"]);
     assert_eq!(v["thread"]["state"], "waiting_approval", "{v}");
@@ -629,8 +629,7 @@ fn an_agent_clears_files_in_its_project_without_asking() {
 #[test]
 fn declining_tells_the_agent_not_to_retry() {
     let e = env();
-    std::fs::create_dir_all(e.root.join("outside")).unwrap();
-    let victim = e.root.join("outside/keep.txt");
+    let victim = e.root.join("www/proj/keep.txt");
     std::fs::write(&victim, "x").unwrap();
     let v2 = victim.display().to_string();
     let m = mock(move |n, req| match n {
@@ -655,7 +654,9 @@ fn declining_tells_the_agent_not_to_retry() {
         }
     });
     add_provider(&e, "anthropic", &m.base);
-    let sent = call(&e, &e.human, "chat.send", json!({ "message": "delete keep.txt", "project": e.root.join("www/proj").display().to_string() }), Approval::None).unwrap();
+    // The person chose to review every change, so this delete still asks; the
+    // point of the test is what a refusal does to the next step.
+    let sent = call(&e, &e.human, "chat.send", json!({ "message": "delete keep.txt", "project": e.root.join("www/proj").display().to_string(), "permission": "manual" }), Approval::None).unwrap();
     let tid = sent["id"].as_str().unwrap().to_string();
     let v = wait_for(&e, &tid, &["waiting_approval"]);
     let rid = v["pending"][0]["id"].as_str().unwrap().to_string();
@@ -1226,7 +1227,9 @@ fn a_team_plans_waits_for_approval_works_and_is_verified_by_evidence() {
         (200, body)
     });
     add_provider(&e, "anthropic", &m.base);
-    let run = call(&e, &e.human, "team.start", json!({ "goal": "Add a hello file to the project and make sure it works", "project": dir.display().to_string(), "parallel": 1 }), Approval::None).unwrap();
+    // A run starts at once by default; this test covers the plan-review path a
+    // person can still ask for explicitly.
+    let run = call(&e, &e.human, "team.start", json!({ "goal": "Add a hello file to the project and make sure it works", "project": dir.display().to_string(), "parallel": 1, "auto_approve": false }), Approval::None).unwrap();
     let id = run["id"].as_str().unwrap().to_string();
     let v = wait_run(&e, &id, &["awaiting_plan"]);
     assert_eq!(
@@ -1816,8 +1819,10 @@ fn production_mode_makes_every_agent_change_wait_for_a_person() {
         Approval::Granted,
     )
     .unwrap();
-    // Plan approval cannot be waived.
-    assert_eq!(call(&e, &e.human, "team.start", json!({ "goal": "x y z", "project": e.root.join("www/proj").display().to_string(), "auto_approve": true }), Approval::None).unwrap_err().code(), "permission_denied");
+    // In production a run is not refused: its plan is held for a person, and
+    // nothing runs until they approve it.
+    let run = call(&e, &e.human, "team.start", json!({ "goal": "x y z", "project": e.root.join("www/proj").display().to_string() }), Approval::None).unwrap();
+    assert_eq!(run["plan_approved"], false, "production holds the plan");
     let health = call(&e, &e.human, "health.status", json!({}), Approval::None).unwrap();
     assert!(health["checks"]
         .as_array()
@@ -2126,7 +2131,7 @@ fn a_template_fills_its_blanks_and_starts_the_team_with_its_definition_of_done()
         goal.done_when.iter().any(|c| c.contains("under 50 ms")) && goal.done_when.len() >= 4,
         "{goal:?}"
     );
-    // An agent cannot waive plan approval through a template either.
-    let err = call(&e, &e.agent, "template.run", json!({ "id": "security-review", "project": dir.display().to_string(), "auto_approve": true }), Approval::None).unwrap_err();
-    assert_eq!(err.code(), "permission_denied");
+    // A template run starts at once too, whoever starts it: the plan is
+    // recorded and the team gets to work.
+    call(&e, &e.agent, "template.run", json!({ "id": "security-review", "project": dir.display().to_string() }), Approval::None).unwrap();
 }

@@ -550,7 +550,7 @@ pub(crate) enum ProviderCommand {
 
 #[derive(Subcommand, Debug)]
 pub(crate) enum TeamCommand {
-    /// Start a run. Waits for you to approve the plan unless you pass --yes-plan.
+    /// Start a run. The team plans first and then gets to work.
     Start {
         /// What to build or change.
         goal: String,

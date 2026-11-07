@@ -12,17 +12,17 @@
 //! | leadership | planner      | no               | no               | a plan was submitted              |
 //! | leadership | product      | yes (one doc)    | no               | the requirements file was written |
 //! | design     | designer     | yes (UI)         | yes              | files changed and a check passed  |
-//! | engineering| architect    | no               | no               | a report, after reading the code  |
+//! | engineering| architect    | yes (task copy)  | no               | a report, after reading the code  |
 //! | engineering| implementer  | yes (own copy)   | yes              | files changed and a check passed  |
 //! | engineering| frontend     | yes (own copy)   | yes              | files changed and a check passed  |
 //! | engineering| backend      | yes (own copy)   | yes              | files changed and a check passed  |
 //! | engineering| mobile       | yes (own copy)   | yes              | files changed and a check passed  |
 //! | engineering| data         | yes (own copy)   | yes              | files changed and a check passed  |
 //! | quality    | qa           | yes (tests)      | yes              | tests were run, results reported  |
-//! | quality    | reviewer     | no               | yes (read-only)  | the change was read, a verdict    |
-//! | quality    | security     | no               | yes (read-only)  | the code was read, findings       |
-//! | operations | infra        | no               | yes (+ approval) | the operation ran, state checked  |
-//! | knowledge  | researcher   | no               | docs.fetch only  | a report with sources             |
+//! | quality    | reviewer     | yes (task copy)  | yes              | the change was read, a verdict    |
+//! | quality    | security     | yes (task copy)  | yes              | the code was read, findings       |
+//! | operations | infra        | yes (task copy)  | yes (+ approval) | the operation ran, state checked  |
+//! | knowledge  | researcher   | yes (task copy)  | docs.fetch only  | a report with sources             |
 //! | knowledge  | docs         | yes (docs)       | no               | files changed, a report           |
 //!
 //! "Done" is never the member's word. The harness checks the evidence in the
@@ -271,7 +271,14 @@ pub fn get(id: &str) -> Option<&'static Role> {
 
 /// The team as a list a planner can choose from: one line per member.
 pub fn roster_text() -> String {
-    all().iter().map(|r| format!("- {} ({}): {}", r.id, r.title, r.summary)).collect::<Vec<_>>().join("\n")
+    // The planner assigns work from this list. `writes` is not printed as a
+    // cage: a specialist may change files inside a task whose work is to
+    // build or fix, whatever its usual emphasis.
+    all()
+        .iter()
+        .map(|r| format!("- {} ({}): {}", r.id, r.title, r.summary))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// The skills a member carries, as names with one line each.
@@ -294,9 +301,10 @@ pub fn allows(role: &Role, cap: &Capability) -> Result<(), String> {
     if rank(cap.tier) > role.max_rank {
         return Err(format!("the {} role may not use {}-tier operations like `{}`", role.title, cap.tier.as_str(), cap.id));
     }
-    if !role.writes && matches!(cap.effect, devd_core::capability::Effect::Write) {
-        return Err(format!("the {} role does not change files; `{}` is out of scope. Report what should change instead", role.title, cap.id));
-    }
+    // `writes` describes a role's usual work, not a cage. A specialist whose
+    // task is to change the project must be able to change it; the task's own
+    // directory is the boundary. `chat::Hub::gate` gives scoped file and git
+    // work that freedom and still confines every path to the task worktree.
     Ok(())
 }
 
@@ -379,9 +387,10 @@ mod tests {
         let planner = get("planner").unwrap();
         assert!(planner.extra.contains(&"team.plan_submit") && !planner.writes);
         assert!(all().iter().filter(|r| r.extra.contains(&"team.plan_submit")).count() == 1);
-        // Roles that read or review never write.
-        for id in ["architect", "reviewer", "security", "researcher", "infra"] {
-            assert!(!get(id).unwrap().writes, "{id} must not change files");
+        // Every specialist may change its own task copy. Only the planner,
+        // which plans and hands work on, is barred from changing files.
+        for r in all().iter().filter(|r| r.id != "planner") {
+            assert!(r.writes, "{} must be able to change its task copy", r.id);
         }
     }
 

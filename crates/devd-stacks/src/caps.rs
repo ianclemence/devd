@@ -538,7 +538,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
                 created_at: now.clone(),
                 updated_at: now,
             })?;
-            let mut o = Outcome::with_data(format!("imported {}", dir.display()), serde_json::to_value(&c)?);
+            let mut o = Outcome::with_data(format!("Imported {} as a project", dir.display()), serde_json::to_value(&c)?);
             if c.ambiguous { o = o.warn(c.ambiguity.clone().unwrap_or_default()); }
             for m in &c.missing { o = o.warn(format!("{}: {} - {}", m.tool, m.why, m.fix)); }
             Ok(o)
@@ -794,7 +794,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
                 a.cols.unwrap_or(100),
                 a.rows.unwrap_or(30),
             )?;
-            Ok(Outcome::with_data(format!("terminal {}", s.id), s.describe()))
+            Ok(Outcome::with_data(format!("Opened terminal {}", s.id), s.describe()))
         },
     )?;
 
@@ -839,7 +839,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         |_, a| {
             let s = devd_core::terminal_session::registry().get(&a.id)?;
             s.resize(a.cols, a.rows)?;
-            Ok(Outcome::with_data(format!("{} by {}", a.cols, a.rows), json!({ "id": a.id, "cols": a.cols, "rows": a.rows })))
+            Ok(Outcome::with_data(format!("Resized to {} columns by {} rows", a.cols, a.rows), json!({ "id": a.id, "cols": a.cols, "rows": a.rows })))
         },
     )?;
 
@@ -854,7 +854,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         |_, _| Ok(Plan::new("terminal.list", "list terminals")),
         |_, _| {
             let all = devd_core::terminal_session::registry().list();
-            Ok(Outcome::with_data(format!("{} terminal(s)", all.len()), json!({ "terminals": all })))
+            Ok(Outcome::with_data(format!("{} terminal(s) open", all.len()), json!({ "terminals": all })))
         },
     )?;
 
@@ -896,7 +896,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
                 100,
                 30,
             )?;
-            Ok(Outcome::with_data(format!("terminal {}", s.id), s.describe()))
+            Ok(Outcome::with_data(format!("Opened terminal {}", s.id), s.describe()))
         },
     )?;
 
@@ -1123,7 +1123,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
                 let p = toolchain::plan(ctx, &r, &a.tool, action)?;
                 if action == "install" {
                     if let Some(v) = &p.already_installed {
-                        return Ok(Outcome::with_data(format!("{} is already installed ({v})", a.tool), serde_json::to_value(&p)?));
+                        return Ok(Outcome::with_data(format!("Already installed: {} ({v})", a.tool), serde_json::to_value(&p)?));
                     }
                 }
                 let run_id = devd_core::util::new_id();
@@ -1153,7 +1153,13 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         |_, _| read_plan("services.inventory", "inspect the services on this machine"),
         |ctx, _| {
             let r = stacks(ctx);
-            let v = reconcile::inventory(ctx, &r)?;
+            // Probing every service opens ports and asks the process table; the
+            // answer is shared for a few seconds and discarded by any change.
+            let v = devd_core::memo::cached(
+                "services.inventory",
+                std::time::Duration::from_secs(30),
+                || reconcile::inventory(ctx, &r),
+            )?;
             let n = v["services"].as_array().map(|a| a.len()).unwrap_or(0);
             let ready = v["services"].as_array().map(|a| a.iter().filter(|s| s["status"] == "ready").count()).unwrap_or(0);
             Ok(Outcome::with_data(format!("{ready} of {n} services ready"), v))
@@ -1179,13 +1185,13 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             if t.service.is_none() { return Err(DevdError::unsupported(format!("{} is not a service", t.name))); }
             if a.clear.unwrap_or(false) {
                 ctx.store.clear_service_decision(&a.tool)?;
-                return Ok(Outcome::ok(format!("forgot the decision about {}", t.name)));
+                return Ok(Outcome::ok(format!("Forgot the decision about {}", t.name)));
             }
             let mode = a.mode.clone().unwrap_or_default();
             if !reconcile::MODES.contains(&mode.as_str()) { return Err(DevdError::invalid("mode must be adopt, observe, external or ignore")); }
             if mode == "external" && a.port.is_none() { return Err(DevdError::invalid("external needs the port your instance listens on")); }
             ctx.store.set_service_decision(&a.tool, &mode, a.port.map(|p| p as i64), a.note.as_deref(), &ctx.actor.label())?;
-            Ok(Outcome::ok(format!("{}: {mode}", t.name)))
+            Ok(Outcome::ok(format!("Decision for {}: {mode}", t.name)))
         },
     )?;
 

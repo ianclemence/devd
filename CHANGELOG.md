@@ -10,9 +10,92 @@ may change capability identifiers where the design was wrong.
 
 ---
 
-## [Unreleased]
+## [0.25.2] - 2026-11-07 - Work that finishes without you
 
-Nothing yet.
+### Fixed
+
+- **Reply visuals render again.** A declared `chart`, `metrics`, `steps`, `timeline` or `details`
+  block whose JSON sits on the opening fence line (` ```steps {"items": [...]}`) rendered as an
+  empty card with a language name. The payload is read from the info line, the body or both, and an
+  unparseable block shows its source instead of nothing.
+- **The "Jump to latest" pill stays above the composer.** It was measured once from the bottom of
+  the column, so a growing draft left it floating in the middle of the conversation. It now
+  measures the composer's top edge and follows the composer as it resizes.
+- **The composer has one stable action while devd works.** The primary slot is the red Stop button
+  at every keystroke; typing no longer swaps it for Send. Enter still queues the draft for the next
+  step.
+- **A failed test is red everywhere.** A command that returned normally but reported `3 failed`
+  now colours its step dot, its tool group and its summary red, matching the chip.
+- **A run continues by itself.** A reply that reaches the model's output limit is continued in the
+  same turn, a restart resumes work that was running, and the 40-step pause with "Say continue" is
+  gone (240 is a runaway guard, not a work budget). Devd can also pause, resume and retry its own
+  team run without asking a person to press the button.
+- **Agents own their project.** Inside the project a conversation or task is scoped to, every
+  agent may read, create, edit, move, delete, restore, stage, commit and run the project's own
+  tasks without an approval prompt. Other projects are read-only; the Assistant assigns work to
+  one with `team.assign`/`team.start` and the task's directory becomes that agent's boundary.
+  The task directory, not a role title, decides file permissions, so a security or reviewer task
+  that asks for the fix can implement it.
+- **Machine and remote actions still ask.** Installs, services, hosts, certificates, force-pushes,
+  deploys and database drops keep their approval and stay visible as waiting, while the agent
+  carries on with everything that does not depend on them. Production mode keeps its own gate.
+- The side card's **Changes** link opens the project's Git → Changes tab directly.
+- The specialists disclosure is only visible when its row is hovered, focused or on a touch
+  screen, instead of sitting on every row.
+- The blocking **Needs you** decision is a contained card with its actions, rather than a label
+  column stretched across the page.
+
+### Added
+
+- **A hidden-icons tray.** The desktop app keeps running when its window is closed; left click
+  restores it and right click offers Open devd, Open in browser, Open devd folder, Open desktop log
+  and Quit devd.
+- **The conversation's right column is a real panel.** It mirrors the conversation list: the same
+  head height, the same rail, and a divider on the side that faces the conversation. Under the
+  project's branch it lists **Outputs** — the files the conversation created or changed, read from
+  its own tool calls, with document, image, media and code marks — and **Terminals**, the shells
+  running in that project, each one a click from its screen.
+- **Effort in the model picker.** Low, Medium (recommended), High, Extra and Max. The level raises
+  the reasoning effort a provider accepts and the room the answer has, so it is a real dial rather
+  than a label.
+- **Speech to text in the composer.** The microphone records 16 kHz mono locally and transcribes it
+  with whisper.cpp on this machine; nothing is sent anywhere. The first press offers the one-time
+  download, with its size, instead of failing after you have spoken.
+
+### Changed
+
+- **A goal starts working.** `team.start` and `template.run` make the plan and begin at once; the
+  plan stays visible in the run, and a person can pause or cancel it. Production mode still holds
+  the plan for a person.
+- **Only the work that needs you asks.** In local mode, reads, writes, edits, deletes, project
+  commands, dependency installs and an in-project `artisan`/`script` call run through; remote
+  operations (deploy, push, ssh) and destructive machine work still ask. A blocked task is retried
+  inside the same task before it becomes a question.
+- **Expired approvals never reach the Inbox.** A pending approval past its lifetime is not listed,
+  and a decision on one that expired while it was on screen withdraws the card with a plain
+  sentence instead of an error.
+- **Toasts are sentences.** Every toast is capitalised and ends with a stop, and the capability
+  messages behind them were rewritten to name the thing they changed.
+- **Rounded surfaces share one scale.** Hover fills and interactive rows use the fixed radius
+  tokens (`--radius-sm`, `--radius`, `--radius-lg`, `--radius-xl`) instead of ad-hoc pixel values;
+  the conversation and run lists now round their hover wherever they are drawn.
+
+### Performance
+
+- **The interface ships compressed and revalidates.** The script, stylesheet and vendored runtimes
+  are gzipped once and tagged with an ETag, so a reload is a 304 instead of a megabyte.
+- **Diagrams, maths and the terminal runtime load on demand.** Mermaid (2.5 MB), KaTeX and xterm are
+  fetched only when a screen shows a diagram, a formula or a shell, which removes most of the
+  first-paint parse time.
+- **The health check no longer walks the whole database.** It ran `PRAGMA integrity_check` on every
+  poll, which took ten seconds on a database with history and made the status chip — and anything
+  queued behind it — feel slow. Health now reads the schema version; the deep check belongs to
+  `devd doctor`, where it was asked for.
+- **Service probes run together.** The Services screen asked each service in turn and waited for the
+  sum of their timeouts; the independent probes now run at once, and the answer is shared for 30
+  seconds and discarded by any change.
+- **API answers are gzipped.** Capability lists, audit pages and health are a quarter of the bytes
+  on the wire; the live event stream is left uncompressed so it still arrives at once.
 
 ---
 

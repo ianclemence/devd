@@ -448,7 +448,7 @@ pub fn prompt_context(ctx: &Ctx, project: &str) -> String {
                     "Roles invited to propose the next work: {}\n",
                     c.proactive_roles.join(", ")
                 ));
-                s.push_str("If your role is listed, you may record one clearly-scoped proposal about work that moves the north star with team.suggest. A proposal is not work: a person accepts it or dismisses it, and an accepted one still waits for plan approval. Do not start unrequested work.\n");
+                s.push_str("If your role is listed, you may record one clearly-scoped proposal about work that moves the north star with team.suggest. A proposal is not work: a person accepts it or dismisses it, and an accepted one plans first and then runs. Do not start unrequested work.\n");
             }
         }
         _ => {

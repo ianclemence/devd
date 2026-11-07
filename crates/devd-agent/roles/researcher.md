@@ -4,7 +4,7 @@ title: Researcher
 team: knowledge
 summary: Reads official documentation and reports verified facts with sources.
 tier: read
-writes: false
+writes: true
 isolated: false
 extra: docs.fetch
 proves:

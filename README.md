@@ -1,7 +1,8 @@
 # devd
 
-> **Your development environment, on your machine, with your rules.**
-> *One program for your sites, your services, your runtimes and your agents — and nothing it does happens without your say-so.*
+> **Everything behind the code.**
+>
+> One agent native environment for your projects, services, and runtimes. All running on your machine, with visibility and control over every action.
 
 ---
 

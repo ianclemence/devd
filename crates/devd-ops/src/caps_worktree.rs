@@ -114,7 +114,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             |ctx, a| {
                 let db = Database::parse(a.database.as_deref())?;
                 let v = worktree::create(ctx, &a.site, a.branch.as_deref(), a.from.as_deref(), db)?;
-                Ok(Outcome::with_data(format!("{} is ready at {}", v["branch"].as_str().unwrap_or("the worktree"), v["url"].as_str().unwrap_or("")), v))
+                Ok(Outcome::with_data(format!("The worktree {} is ready at {}", v["branch"].as_str().unwrap_or("the worktree"), v["url"].as_str().unwrap_or("")), v))
             },
         )?;
 
@@ -128,7 +128,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             |_, a| Ok(Plan::new("worktree.unserve", format!("stop serving {}", a.worktree_site)).step("the checkout is kept")),
             |ctx, a| {
                 let v = worktree::unserve(ctx, &a.site, &a.worktree_site)?;
-                Ok(Outcome::with_data(format!("{} is no longer served", a.worktree_site), json!(v)))
+                Ok(Outcome::with_data(format!("The worktree {} is no longer served", a.worktree_site), json!(v)))
             },
         )?;
     Ok(())

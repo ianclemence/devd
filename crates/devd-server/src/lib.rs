@@ -288,7 +288,11 @@ pub fn router(state: Arc<AppState>) -> Router {
         .with_state(state.clone());
 
     api.merge(pages)
+        // JSON answers (capability lists, audit pages) are verbose; gzip makes
+        // them a quarter of the bytes. The predicate skips the event stream and
+        // anything already encoded, so the live channel still arrives at once.
         .layer(middleware::from_fn_with_state(state, guard))
+        .layer(tower_http::compression::CompressionLayer::new())
 }
 
 /// Where the server ended up.

@@ -25,7 +25,7 @@ use devd_core::{ports, Result};
 
 use crate::registry::StackRegistry;
 use crate::toolchain;
-use crate::tools::Host;
+use crate::tools::{Host, ServiceState, ToolStatus};
 
 /// Decisions a person can record about a service.
 pub const MODES: &[&str] = &["adopt", "observe", "external", "ignore"];
@@ -76,9 +76,36 @@ pub fn inventory(ctx: &Ctx, reg: &StackRegistry) -> Result<Value> {
     let dirs = toolchain::managed_dirs(ctx);
     let decisions = ctx.store.list_service_decisions()?;
     let mut rows = Vec::new();
-    for tool in reg.catalogue.tools.iter().filter(|t| t.service.is_some()) {
-        let status = tool.probe(&dirs);
-        let Some(state) = tool.service_state(&host, &status) else { continue };
+    // Each probe asks the machine a question (a version, a port, a handshake),
+    // and doing them one after another made the Services screen wait for the
+    // sum of every timeout. They are independent, so they run together and the
+    // screen waits for the slowest single answer instead.
+    let tools: Vec<_> = reg
+        .catalogue
+        .tools
+        .iter()
+        .filter(|t| t.service.is_some())
+        .collect();
+    let probed: Vec<(ToolStatus, Option<ServiceState>)> = std::thread::scope(|scope| {
+        let handles: Vec<_> = tools
+            .iter()
+            .map(|tool| {
+                let host = &host;
+                let dirs = &dirs;
+                scope.spawn(move || {
+                    let status = tool.probe(dirs);
+                    let state = tool.service_state(host, &status);
+                    (status, state)
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .filter_map(|h| h.join().ok())
+            .collect()
+    });
+    for (tool, (status, state)) in tools.iter().zip(probed) {
+        let Some(state) = state else { continue };
         let owner = if state.listening { ports::find_listener(state.port).ok().flatten() } else { None };
         let decision = decisions.iter().find(|d| d.tool == tool.id);
         let required = required_by(ctx, &tool.id);

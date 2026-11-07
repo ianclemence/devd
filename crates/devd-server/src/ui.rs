@@ -15,12 +15,14 @@
 //! * **`X-Devd-App`** lets `devd ui` recognise its own server on a port, so it
 //!   can attach to a running instance instead of starting a second one.
 
-use std::sync::Arc;
+use std::io::Write as _;
+use std::sync::{Arc, OnceLock};
 
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::extract::{Path, State};
-use axum::http::{header, HeaderValue, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
+use sha2::{Digest, Sha256};
 
 use crate::{AppState, INSTANCE_HEADER};
 
@@ -66,54 +68,188 @@ const TOKEN_PLACEHOLDER: &str = "__DEVD_TOKEN__";
 /// same-origin files.
 const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self'; img-src 'self' data: blob:; frame-src http: https:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
+/// An embedded asset, compressed and tagged once for the life of the process.
+///
+/// The script is nearly a megabyte of source; sending it uncompressed and
+/// re-sending it on every reload is the slowest thing the interface does. The
+/// gzip copy is built on first request and the ETag lets a reload cost a 304
+/// instead of the whole file.
+struct Packed {
+    gzip: Bytes,
+    etag: HeaderValue,
+}
+
+fn packed(slot: &'static OnceLock<Packed>, bytes: &'static [u8]) -> &'static Packed {
+    slot.get_or_init(|| {
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+        let _ = encoder.write_all(bytes);
+        let gzip = encoder.finish().unwrap_or_default();
+        let etag = format!("\"{}\"", hex::encode(Sha256::digest(bytes)));
+        Packed {
+            gzip: Bytes::from(gzip),
+            etag: HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("\"0\"")),
+        }
+    })
+}
+
+static SCRIPT_PACKED: OnceLock<Packed> = OnceLock::new();
+static STYLE_PACKED: OnceLock<Packed> = OnceLock::new();
+static XTERM_JS_PACKED: OnceLock<Packed> = OnceLock::new();
+static XTERM_CSS_PACKED: OnceLock<Packed> = OnceLock::new();
+static ADDON_FIT_PACKED: OnceLock<Packed> = OnceLock::new();
+static KATEX_JS_PACKED: OnceLock<Packed> = OnceLock::new();
+static KATEX_CSS_PACKED: OnceLock<Packed> = OnceLock::new();
+static KATEX_AUTO_PACKED: OnceLock<Packed> = OnceLock::new();
+static MERMAID_PACKED: OnceLock<Packed> = OnceLock::new();
+
+/// A static asset: revalidated by ETag, and sent compressed when the browser
+/// says it accepts gzip.
+fn asset(
+    content_type: &str,
+    bytes: &'static [u8],
+    slot: &'static OnceLock<Packed>,
+    headers: &HeaderMap,
+) -> Response {
+    let packed = packed(slot, bytes);
+    if headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        == Some(packed.etag.to_str().unwrap_or(""))
+    {
+        let mut response = StatusCode::NOT_MODIFIED.into_response();
+        let h = response.headers_mut();
+        h.insert(header::ETAG, packed.etag.clone());
+        h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+        return response;
+    }
+    let gzip = headers
+        .get(header::ACCEPT_ENCODING)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.contains("gzip"))
+        .unwrap_or(false);
+    let body = if gzip {
+        Body::from(packed.gzip.clone())
+    } else {
+        Body::from(bytes)
+    };
+    let mut response = build(content_type, body, None);
+    let h = response.headers_mut();
+    // `no-cache` means "ask again", not "do not store": the ETag makes the ask
+    // cheap, and a rebuilt binary still serves the new file immediately.
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    h.insert(header::ETAG, packed.etag.clone());
+    if gzip {
+        h.insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+    }
+    h.insert(header::VARY, HeaderValue::from_static("accept-encoding"));
+    response
+}
+
 /// The application shell with the session token injected.
-pub async fn index(State(state): State<Arc<AppState>>) -> Response {
+pub async fn index(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
     let html = INDEX.replace(TOKEN_PLACEHOLDER, &state.token);
-    build(
-        "text/html; charset=utf-8",
-        Body::from(html),
-        Some(state.port),
-    )
+    let gzip = headers
+        .get(header::ACCEPT_ENCODING)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.contains("gzip"))
+        .unwrap_or(false);
+    // The token is per session, so the page itself is never cached; it is
+    // small, and compressing it costs less than the round trip it saves.
+    let mut body = Vec::new();
+    if gzip {
+        let mut encoder = flate2::write::GzEncoder::new(&mut body, flate2::Compression::fast());
+        let _ = encoder.write_all(html.as_bytes());
+        let _ = encoder.finish();
+    } else {
+        body = html.into_bytes();
+    }
+    let mut response = build("text/html; charset=utf-8", Body::from(body), Some(state.port));
+    let h = response.headers_mut();
+    if gzip {
+        h.insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+    }
+    h.insert(header::VARY, HeaderValue::from_static("accept-encoding"));
+    response
 }
 
 /// The view logic.
-pub async fn script() -> Response {
-    build("text/javascript; charset=utf-8", Body::from(SCRIPT), None)
+pub async fn script(headers: HeaderMap) -> Response {
+    asset(
+        "text/javascript; charset=utf-8",
+        SCRIPT.as_bytes(),
+        &SCRIPT_PACKED,
+        &headers,
+    )
 }
 
 /// The stylesheet.
-pub async fn style() -> Response {
-    build("text/css; charset=utf-8", Body::from(STYLE), None)
+pub async fn style(headers: HeaderMap) -> Response {
+    asset(
+        "text/css; charset=utf-8",
+        STYLE.as_bytes(),
+        &STYLE_PACKED,
+        &headers,
+    )
 }
 
 /// xterm.js - the terminal renderer.
-pub async fn xterm() -> Response {
-    build("text/javascript; charset=utf-8", Body::from(XTERM_JS), None)
+pub async fn xterm(headers: HeaderMap) -> Response {
+    asset(
+        "text/javascript; charset=utf-8",
+        XTERM_JS.as_bytes(),
+        &XTERM_JS_PACKED,
+        &headers,
+    )
 }
 
 /// xterm.js's stylesheet.
-pub async fn xterm_style() -> Response {
-    build("text/css; charset=utf-8", Body::from(XTERM_CSS), None)
+pub async fn xterm_style(headers: HeaderMap) -> Response {
+    asset(
+        "text/css; charset=utf-8",
+        XTERM_CSS.as_bytes(),
+        &XTERM_CSS_PACKED,
+        &headers,
+    )
 }
 
 /// The fit addon, which sizes the terminal to its box.
-pub async fn xterm_fit() -> Response {
-    build("text/javascript; charset=utf-8", Body::from(ADDON_FIT), None)
+pub async fn xterm_fit(headers: HeaderMap) -> Response {
+    asset(
+        "text/javascript; charset=utf-8",
+        ADDON_FIT.as_bytes(),
+        &ADDON_FIT_PACKED,
+        &headers,
+    )
 }
 
 /// KaTeX: math set in the browser, offline.
-pub async fn katex() -> Response {
-    build("text/javascript; charset=utf-8", Body::from(KATEX_JS), None)
+pub async fn katex(headers: HeaderMap) -> Response {
+    asset(
+        "text/javascript; charset=utf-8",
+        KATEX_JS.as_bytes(),
+        &KATEX_JS_PACKED,
+        &headers,
+    )
 }
 
 /// KaTeX's stylesheet, with its fonts served from this binary.
-pub async fn katex_style() -> Response {
-    build("text/css; charset=utf-8", Body::from(KATEX_CSS), None)
+pub async fn katex_style(headers: HeaderMap) -> Response {
+    asset(
+        "text/css; charset=utf-8",
+        KATEX_CSS.as_bytes(),
+        &KATEX_CSS_PACKED,
+        &headers,
+    )
 }
 
 /// KaTeX's auto-render extension.
-pub async fn katex_auto() -> Response {
-    build("text/javascript; charset=utf-8", Body::from(KATEX_AUTO), None)
+pub async fn katex_auto(headers: HeaderMap) -> Response {
+    asset(
+        "text/javascript; charset=utf-8",
+        KATEX_AUTO.as_bytes(),
+        &KATEX_AUTO_PACKED,
+        &headers,
+    )
 }
 
 /// One KaTeX font file.
@@ -125,8 +261,13 @@ pub async fn katex_font(Path(file): Path<String>) -> Response {
 }
 
 /// The diagram renderer, offline.
-pub async fn mermaid() -> Response {
-    build("text/javascript; charset=utf-8", Body::from(MERMAID_JS), None)
+pub async fn mermaid(headers: HeaderMap) -> Response {
+    asset(
+        "text/javascript; charset=utf-8",
+        MERMAID_JS.as_bytes(),
+        &MERMAID_PACKED,
+        &headers,
+    )
 }
 
 /// The window icon.

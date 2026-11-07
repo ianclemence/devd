@@ -61,7 +61,9 @@ pub fn start_run(team: &Arc<Team>, schedule: &Schedule) -> Result<TeamRun> {
             project: Some(schedule.project.clone()),
             new_project: None,
             parallel,
-            auto_approve: schedule.auto_approve && !production,
+            // A schedule's run plans first and then works, like any other run.
+            // Production mode still holds the plan for a person.
+            auto_approve: !production,
             done_when,
             max_rounds: 2,
         },

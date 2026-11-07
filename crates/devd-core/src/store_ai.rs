@@ -1058,11 +1058,14 @@ impl Store {
         thread_id: Option<&str>,
         limit: i64,
     ) -> Result<Vec<AgentRequest>> {
+        // An expired request is not pending: the server refuses to take it, so
+        // listing it would offer a decision that cannot be made.
+        let now = crate::util::now();
         self.with(|c| {
             let mut st = c.prepare(&format!(
-                "SELECT {REQ_COLS} FROM agent_requests WHERE (?1=0 OR state='pending') AND (?2 IS NULL OR thread_id=?2) ORDER BY created_at DESC LIMIT ?3"
+                "SELECT {REQ_COLS} FROM agent_requests WHERE (?1=0 OR (state='pending' AND (expires_at IS NULL OR expires_at > ?4))) AND (?2 IS NULL OR thread_id=?2) ORDER BY created_at DESC LIMIT ?3"
             ))?;
-            let rows = st.query_map(params![only_pending as i32, thread_id, limit], row_request)?;
+            let rows = st.query_map(params![only_pending as i32, thread_id, limit, now], row_request)?;
             Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
         })
     }

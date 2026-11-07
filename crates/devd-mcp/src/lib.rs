@@ -572,30 +572,27 @@ impl McpServer {
         // only a plan and stays free.
         if !dry_run {
             if let Some(reason) = self.outside_scope(id, &cap_args) {
-                let e = DevdError::ApprovalRequired {
-                    capability: id.to_string(),
-                    reason,
-                };
-                let plan = self.plan_for(id, &cap_args);
-                return ToolOutcome::Failed(pretty(&error_body(&e, plan, Some(id))));
+                // Another project is read-only here, not an approval prompt.
+                // A person does not want to bless every read; and a write is
+                // assigned to the project by scoping an agent to it, which is
+                // a deliberate act with its own audit trail.
+                let e = DevdError::denied(reason);
+                return ToolOutcome::Failed(pretty(&error_body(&e, None, Some(id))));
             }
         }
 
-        // Clearing files inside the project the person attached to this
-        // conversation is ordinary work, not a destructive decision. The
-        // capability still refuses the project root, `.git` and secrets; every
-        // path outside the project took the approval branch above.
+        // In local mode the conversation's project is the boundary, and work
+        // inside it is the work the person assigned. Reads, writes, edits,
+        // deletes, commands and the dependencies a project needs do not stop
+        // for a decision: a person approves the finished work, not every step.
+        // Remote operations (deploy, push, ssh) and machine-wide administration
+        // still take the ordinary approval path; production mode keeps its own
+        // extra gate. Bypass is the person saying they have already read what
+        // this conversation is doing, and still cannot touch a human-only
+        // capability or production mode.
         let approval = if !dry_run
-            && self.permission == "bypass"
             && self.ctx.store.environment_mode() != "production"
-        {
-            // Bypass is the person saying "I have already read what this
-            // conversation is doing". It still cannot touch a human-only
-            // capability or production mode.
-            Approval::Granted
-        } else if !dry_run
-            && self.clears_inside_project(id, &cap_args)
-            && self.ctx.store.environment_mode() != "production"
+            && (self.permission == "bypass" || self.clears_in_auto(id, &cap_args))
         {
             Approval::Granted
         } else {
@@ -707,14 +704,45 @@ impl McpServer {
     /// has no boundary here and keeps the registry's ordinary rules.
     fn outside_scope(&self, id: &str, args: &Value) -> Option<String> {
         let root = self.project.as_deref()?;
-        self.registry.get(id)?;
+        let cap = self.registry.get(id)?;
         if !["fs.", "project.", "git.", "shell."]
             .iter()
             .any(|p| id.starts_with(p))
         {
             return None;
         }
+        // Other projects are readable. The conversation's project is the only
+        // one it may change; a write elsewhere is assigned, not approved.
+        let changes = cap.effect != devd_core::capability::Effect::Read
+            || cap.tier != devd_core::capability::Tier::Read;
+        if !changes {
+            return None;
+        }
         let root = canonicalish(root);
+        // A restore names the snapshot, not the path, so resolve what it holds:
+        // a file snapshot may be restored only where it came from, inside this
+        // project. The handler keeps database restores for a person.
+        if id == "snapshot.restore" {
+            let Some(sid) = args.get("id").and_then(Value::as_str) else {
+                return None;
+            };
+            if let Ok(snap) = devd_core::snapshot::get(&self.ctx.paths, sid) {
+                if snap.kind != devd_core::snapshot::Kind::Database {
+                    let p = Path::new(&snap.subject);
+                    if !p.is_absolute()
+                        || canonicalish(p) == root
+                        || !canonicalish(p).starts_with(&root)
+                    {
+                        return Some(format!(
+                            "`{sid}` restores `{}`, which is outside this conversation's project `{}`. Restore it from a conversation scoped to that project.",
+                            snap.subject,
+                            root.display()
+                        ));
+                    }
+                }
+            }
+            return None;
+        }
         for path in path_values(args) {
             let p = Path::new(path);
             if !p.is_absolute() {
@@ -722,7 +750,7 @@ impl McpServer {
             }
             if !canonicalish(p).starts_with(&root) {
                 return Some(format!(
-                    "`{id}` touches `{path}`, which is outside the conversation's project `{}`. A person must approve access outside the project.",
+                    "`{id}` would change `{path}`, which is outside this conversation's project `{}`. Other projects are read-only here. Assign the work to the project instead: team.assign with `project` set to `{path}` (or team.start), or start a conversation in that project. Reading it needs no permission.",
                     root.display()
                 ));
             }
@@ -730,10 +758,56 @@ impl McpServer {
         None
     }
 
-    /// Whether this is `fs.delete` and every path it names is inside the
-    /// conversation's project (and not the project root itself).
+    /// Whether ordinary work on this machine may proceed without a decision.
+    ///
+    /// The model is simple, and it is the one a person already holds in their
+    /// head: in local mode, work in the project they assigned is theirs to do;
+    /// operations that leave the machine or change the machine's own setup are
+    /// still decisions. That means reads, writes, edits, commands, project
+    /// tooling and dependency installs run through; remote operations (deploy,
+    /// push, ssh) and administration beyond installing a needed tool wait for a
+    /// person. A human-only capability is never granted here.
+    fn clears_in_auto(&self, id: &str, args: &Value) -> bool {
+        let Some(cap) = self.registry.get(id) else {
+            return false;
+        };
+        if cap.human_only {
+            return false;
+        }
+        // An untrusted MCP server is code the person configured but did not
+        // vouch for. `mcp.call_trusted` is the path for a server they did.
+        if id == "mcp.call" {
+            return false;
+        }
+        match cap.tier {
+            Tier::Read | Tier::Write | Tier::Exec => true,
+            // Destructive work is ordinary inside the project (`fs.delete`,
+            // `git.reset`, restoring a file snapshot) and a decision elsewhere
+            // (a service, a site, the machine).
+            Tier::Destructive => {
+                self.clears_inside_project(id, args) || id == "snapshot.restore"
+            }
+            // Installing a tool a project needs is the dependency step, not an
+            // administrative decision. Removing one still is.
+            Tier::Admin => id == "toolchain.install",
+            // Remote work leaves this machine.
+            Tier::Remote => false,
+        }
+    }
+
+    /// Whether this is a local file or Git operation whose every named path is
+    /// inside the conversation's project.
+    ///
+    /// Inside the project, deleting and restoring files is the assigned work,
+    /// so it is ordinary instead of destructive: `fs.delete`, `git.discard`,
+    /// `git.reset`, `git.stash.drop` and their siblings do not stop for a
+    /// person. The project root, `.git`, secrets and paths outside the project
+    /// keep the ordinary rules.
     fn clears_inside_project(&self, id: &str, args: &Value) -> bool {
-        if id != "fs.delete" {
+        let Some(cap) = self.registry.get(id) else {
+            return false;
+        };
+        if cap.tier != Tier::Destructive || !(id.starts_with("fs.") || id.starts_with("git.")) {
             return false;
         }
         let Some(root) = self.project.as_deref() else {
@@ -744,7 +818,11 @@ impl McpServer {
         !paths.is_empty()
             && paths.iter().all(|path| {
                 let p = Path::new(path);
-                p.is_absolute() && canonicalish(p).starts_with(&root) && canonicalish(p) != root
+                if !p.is_absolute() || !canonicalish(p).starts_with(&root) {
+                    return false;
+                }
+                // Deleting the project itself is never ordinary work.
+                !(id == "fs.delete" && canonicalish(p) == root)
             })
     }
 
@@ -1585,7 +1663,7 @@ mod tests {
     }
 
     #[test]
-    fn an_agent_clears_inside_its_project_and_asks_outside() {
+    fn an_agent_clears_inside_its_project_and_cannot_change_outside() {
         let root = std::env::temp_dir().join(format!("devd-mcp-scope-{}", std::process::id()));
         let project = root.join("project");
         let outside = root.join("outside");
@@ -1612,7 +1690,7 @@ mod tests {
                         },
                         move |_ctx, _a: &Value| {
                             apply.fetch_add(1, Ordering::SeqCst);
-                            Ok(devd_core::capability::Outcome::ok("deleted"))
+                            Ok(devd_core::capability::Outcome::ok("Deleted the file"))
                         },
                     )
                     .build()
@@ -1652,7 +1730,10 @@ mod tests {
         );
         assert!(err, "{text}");
         let body: Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(body["error"]["code"], "approval_required");
+        assert_eq!(
+            body["error"]["code"], "permission_denied",
+            "another project is read-only, not an approval prompt"
+        );
         assert_eq!(
             counter.load(Ordering::SeqCst),
             1,

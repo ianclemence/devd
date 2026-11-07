@@ -13,8 +13,8 @@
 //!   *observes* and records a suggestion ("devd would have started a run that
 //!   does this"); no model is called and nothing changes.
 //! * **Plan approval is never waived.** In `auto` mode the rule starts a run,
-//!   and that run still waits for a person to approve its plan, exactly as any
-//!   other. A rule cannot make the plan approval optional.
+//!   and that run plans first and then starts, exactly as any
+//!   other. A rule does not change the plan step.
 //! * **The rule is data a person wrote.** It lives in `intake_rules`, is
 //!   human-only to write, and the run it starts carries the same rules as any
 //!   other run, including production mode's stricter ones.

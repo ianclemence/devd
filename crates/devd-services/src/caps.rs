@@ -163,7 +163,7 @@ fn register_service(reg: &mut Registry) -> Result<()> {
         |_, a| Ok(Plan::new("mail.delete", format!("delete message {}", a.id))),
         |_, a| {
             crate::mail::delete(crate::mail::discover_port(None), &a.id)?;
-            Ok(Outcome::with_data("deleted", serde_json::json!({ "id": a.id })))
+            Ok(Outcome::with_data("Deleted the message", serde_json::json!({ "id": a.id })))
         },
     )?;
     reg.define::<NoArgs>("mail.clear", "Delete every caught message")
@@ -175,7 +175,7 @@ fn register_service(reg: &mut Registry) -> Result<()> {
         |_, _| Ok(Plan::new("mail.clear", "delete every message in the local inbox")),
         |_, _| {
             crate::mail::clear(crate::mail::discover_port(None))?;
-            Ok(Outcome::with_data("cleared", serde_json::json!({})))
+            Ok(Outcome::with_data("Cleared the caught mail", serde_json::json!({})))
         },
     )?;
 
@@ -416,7 +416,7 @@ fn register_service(reg: &mut Registry) -> Result<()> {
                 .into_iter()
                 .map(|(path, version)| json!({ "path": path.display().to_string(), "version": version }))
                 .collect();
-            Ok(Outcome::with_data(format!("{} {} folder(s) found", found.len(), a.name), json!(found)))
+            Ok(Outcome::with_data(format!("Found {} {} folder(s)", found.len(), a.name), json!(found)))
         },
     )?;
 
@@ -1525,11 +1525,11 @@ fn register_db(reg: &mut Registry) -> Result<()> {
     )?;
 
     reg.define::<SnapshotRef>("snapshot.restore", "Put a saved state back")
-    .description("Restores a file or directory to what it was before an operation changed it, or recreates a database from the dump taken before it was dropped. What is there now is saved first, so the restore can itself be undone (databases excepted: a database is restored over a fresh one, and refused if one of that name exists). Human only, because it overwrites current content.")
+    .description("Restores a file or directory to what it was before an operation changed it, or recreates a database from the dump taken before it was dropped. What is there now is saved first, so the restore can itself be undone (databases excepted: a database is restored over a fresh one, and refused if one of that name exists). An agent may restore a file inside its own project; restoring a database is a person's decision.")
     .group("snapshot")
     .tier(Tier::Write)
     .effect(Effect::Data)
-    .human_only()
+    .agent_safe()
     .dry_run()
     .handlers(
         |ctx, a| {
@@ -1540,6 +1540,11 @@ fn register_db(reg: &mut Registry) -> Result<()> {
         },
         |ctx, a| {
             let snap = devd_core::snapshot::get(&ctx.paths, &a.id)?;
+            if ctx.actor.is_agent() && snap.kind == devd_core::snapshot::Kind::Database {
+                return Err(DevdError::denied(
+                    "restoring a database is a person's decision; an agent may restore files inside its own project",
+                ));
+            }
             match snap.kind {
                 devd_core::snapshot::Kind::Database => {
                     let engine = snap.meta["engine"].as_str().unwrap_or("mariadb").to_string();

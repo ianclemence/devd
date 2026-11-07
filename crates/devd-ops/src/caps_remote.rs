@@ -162,7 +162,7 @@ fn register_servers(reg: &mut Registry) -> Result<()> {
             },
             |ctx, a| {
                 let v = servers::connect(ctx, &a.server)?;
-                Ok(Outcome::with_data(format!("connected to {}", a.server), v))
+                Ok(Outcome::with_data(format!("Connected to {}", a.server), v))
             },
         )?;
 
@@ -177,7 +177,7 @@ fn register_servers(reg: &mut Registry) -> Result<()> {
             |_, a| Ok(Plan::new("server.info", format!("read the state of {}", a.server)).effect("runs read-only commands on the server")),
             |ctx, a| {
                 let v = servers::info(ctx, &a.server)?;
-                Ok(Outcome::with_data(format!("state of {}", a.server), v))
+                Ok(Outcome::with_data(format!("Current state of {}", a.server), v))
             },
         )?;
 
@@ -192,7 +192,7 @@ fn register_servers(reg: &mut Registry) -> Result<()> {
             |ctx, a| {
                 let s = servers::get(ctx, &a.server)?;
                 let r = servers::run(ctx, &s, &a.command, None, std::time::Duration::from_secs(900), false)?;
-                Ok(Outcome::with_data(format!("exit {} after {:.1}s", r.code, r.seconds), json!(r)))
+                Ok(Outcome::with_data(format!("The command exited with {} after {:.1}s", r.code, r.seconds), json!(r)))
             },
         )?;
 
@@ -345,7 +345,7 @@ fn register_remote(reg: &mut Registry) -> Result<()> {
             |_, a| Ok(Plan::new("remote.releases", format!("list the releases of {}", a.link)).effect("runs a read-only command on the server")),
             |ctx, a| {
                 let v = remote::releases(ctx, &a.link)?;
-                Ok(Outcome::with_data(format!("current is {}", v["current"].as_str().unwrap_or("not set")), v))
+                Ok(Outcome::with_data(format!("The current release is {}", v["current"].as_str().unwrap_or("not set")), v))
             },
         )?;
 
@@ -373,7 +373,7 @@ fn register_remote(reg: &mut Registry) -> Result<()> {
             |ctx, a| {
                 ctx.require_human("sending a .env to a server")?;
                 let v = remote::env_push(ctx, &a.link, a.overwrite.unwrap_or(false))?;
-                Ok(Outcome::with_data("the .env is on the server".to_string(), v))
+                Ok(Outcome::with_data("The .env file is on the server".to_string(), v))
             },
         )?;
 
@@ -395,7 +395,7 @@ fn register_remote(reg: &mut Registry) -> Result<()> {
             },
             |ctx, a| {
                 let d = remote::site_create(ctx, &a.link)?;
-                Ok(Outcome::with_data("the site is configured on the server".to_string(), json!(d)))
+                Ok(Outcome::with_data("The site is configured on the server".to_string(), json!(d)))
             },
         )?;
 
@@ -409,7 +409,7 @@ fn register_remote(reg: &mut Registry) -> Result<()> {
             |_, a| Ok(Plan::new("remote.ssl", format!("get a certificate for {}", a.link)).effect("contacts Let's Encrypt from the server and edits its nginx block")),
             |ctx, a| {
                 let d = remote::ssl(ctx, &a.link, &a.email)?;
-                Ok(Outcome::with_data("the certificate is installed".to_string(), json!(d)))
+                Ok(Outcome::with_data("The certificate is installed".to_string(), json!(d)))
             },
         )?;
     Ok(())
