@@ -5,6 +5,9 @@ the agent-native architecture, portability, Quick Share, tray, monitoring, UI an
 performance passes. It records what was checked, how, and what remains genuinely
 unavailable in this environment.
 
+Released as **0.25.6** (<https://github.com/ianclemence/devd/releases/tag/v0.25.6>),
+commit `a9cc6af`; installed binaries match the published SHA-256 digests.
+
 Statuses:
 
 * **Verified** — implementation, wiring and runtime behaviour were inspected.
