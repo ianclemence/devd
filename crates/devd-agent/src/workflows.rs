@@ -708,7 +708,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         |_, a| simple("review.delete", format!("delete review {}", a.id)),
         |ctx, a| {
             delete_record(ctx, "review", &a.id)?;
-            Ok(Outcome::ok("deleted"))
+            Ok(Outcome::ok("Deleted the review"))
         },
     )?;
 

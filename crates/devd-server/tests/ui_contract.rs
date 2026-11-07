@@ -1395,10 +1395,11 @@ fn reply_visuals_read_their_payload_from_the_fence_line() {
     // Models write the JSON on the opening line: ```steps {"items": [...]}.
     // The parser used to keep only the language, so the card rendered empty.
     assert!(
-        APP.contains("var fence = m[1], lang = m[2], rest = (m[3] || \"\").trim(), body = [];"),
+        APP.contains("var fence = m[1], lang = m[2], rest = (m[3] || \"\").trim(), body = [], closed = false;"),
         "the info line's payload is captured"
     );
-    assert!(APP.contains("var tries = [rest, inner"), "the info line, body and both are tried");
+    assert!(APP.contains("try { var atInfo = JSON.parse(rest); onInfo = true;"), "the info line is tried first");
+    assert!(APP.contains("var tries = [inner, rest ? rest + (inner"), "the body and both shapes are tried");
     assert!(APP.contains("if (rest) body.unshift(rest);"), "an unparseable block keeps its source");
 }
 
@@ -1507,4 +1508,34 @@ fn assets_are_compressed_and_revalidated() {
     assert!(ui.contains("ETAG"), "a reload costs a 304, not the whole file");
     assert!(ui.contains("no-cache"), "the browser revalidates instead of re-downloading");
     assert!(ui.contains("CONTENT_ENCODING"), "the compressed body is labelled");
+}
+
+#[test]
+fn an_unclosed_fence_never_swallows_the_rest_of_the_message() {
+    // A model that forgets the closing fence must not make the rest of its
+    // reply disappear into the last block.
+    assert!(APP.contains("body = [], closed = false;"), "the fence loop records whether it closed");
+    assert!(APP.contains("if (onInfo && body.length) out.push(mdBlocks(body));"), "the rest of an unclosed block is still rendered");
+    assert!(APP.contains("onInfo = true"), "the parser knows whether the payload was on the info line");
+}
+
+#[test]
+fn the_tray_is_a_background_app_with_useful_actions() {
+    let desktop = include_str!("../../devd-desktop/src/lib.rs");
+    assert!(desktop.contains("TrayIconBuilder"), "there is a hidden-icons tray");
+    assert!(desktop.contains("show_menu_on_left_click(false)"), "right click is the menu");
+    assert!(desktop.contains("\"Open Assistant\""), "the tray opens the assistant");
+    assert!(desktop.contains("\"Open projects folder\""), "the tray opens the projects folder");
+    assert!(desktop.contains("\"Quit devd\""), "quitting is explicit");
+    assert!(desktop.contains("WindowEvent::CloseRequested"), "closing the window hides it");
+    assert!(desktop.contains("window.hide()"), "the window goes to the tray, not away");
+}
+
+#[test]
+fn the_rail_reports_live_work_on_every_screen() {
+    assert!(APP.contains("AI.liveThreadSig"), "conversations are read outside the assistant too");
+    assert!(APP.contains("live: working > 0"), "the assistant shows a live dot while it works");
+    assert!(APP.contains("live: live.length > 0"), "runs show a live dot while they work");
+    assert!(APP.contains("rail-badge-"), "the counts are tinted by state");
+    assert!(APP.contains("waiting for you"), "a waiting run says so in its hint");
 }

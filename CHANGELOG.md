@@ -10,6 +10,28 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.25.3] - 2026-11-07 - Nothing swallowed, nothing left unsaid
+
+### Fixed
+
+- **An unclosed code or visual block no longer eats the rest of the reply.** A model that forgets the
+  closing fence used to have everything after it disappear into the last block; the rest is now
+  rendered as the message it was.
+- **The rail tells the truth about the Assistant and Runs from every screen.** Both read the live
+  conversation and run state on a calm cadence: a blue dot while work is in flight, an amber count
+  when something is waiting for a person, a red count when something stopped. The hint names it.
+- **The tray menu is a whole app's.** It leads with the running version and address, then Open devd,
+  Open Assistant, Open in browser, Open devd folder, Open projects folder and Open desktop log;
+  closing the window hides devd to the tray and Quit is the explicit act.
+- **"Needs you" says it once.** A long blocked report was used as both the question and the detail,
+  so the card read `"X" is blocked: <report> — <report>`. The question now carries the first
+  sentence (capped) and the detail the full text, once; the one-line status stays one line.
+- **The last one-word alerts are sentences.** Deleting a run, a conversation, a message or a file,
+  stopping the assistant, unpinning a reply, updating a conversation, sending a team instruction and
+  recording a report each say what happened to what.
+
+---
+
 ## [0.25.2] - 2026-11-07 - Work that finishes without you
 
 ### Fixed

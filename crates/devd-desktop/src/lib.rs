@@ -306,31 +306,57 @@ fn install_tray(app: &tauri::App, port: u16, data_dir: String) -> tauri::Result<
     let Some(icon) = app.default_window_icon().cloned() else {
         return Ok(());
     };
+    // The first row names what is running and where, so the tray never leaves a
+    // person guessing which port or version they are looking at.
+    let title = MenuItem::with_id(
+        app,
+        "title",
+        format!(
+            "devd {}  ·  http://127.0.0.1:{port}",
+            env!("CARGO_PKG_VERSION")
+        ),
+        false,
+        None::<&str>,
+    )?;
     let open = MenuItem::with_id(app, "open", "Open devd", true, None::<&str>)?;
+    let assistant = MenuItem::with_id(app, "assistant", "Open Assistant", true, None::<&str>)?;
     let browser = MenuItem::with_id(app, "browser", "Open in browser", true, None::<&str>)?;
     let folder = MenuItem::with_id(app, "folder", "Open devd folder", true, None::<&str>)?;
+    let projects = MenuItem::with_id(app, "projects", "Open projects folder", true, None::<&str>)?;
     let log = MenuItem::with_id(app, "log", "Open desktop log", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit devd", true, None::<&str>)?;
     let above = PredefinedMenuItem::separator(app)?;
     let below = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(
         app,
-        &[&open, &browser, &above, &folder, &log, &below, &quit],
+        &[
+            &title, &open, &assistant, &browser, &above, &folder, &projects, &log, &below, &quit,
+        ],
     )?;
     let dir_for_menu = data_dir;
     TrayIconBuilder::with_id("devd")
         .icon(icon)
-        .tooltip("devd - running in the background")
+        .tooltip(format!(
+            "devd {} - running in the background",
+            env!("CARGO_PKG_VERSION")
+        ))
         .menu(&menu)
         // Right click is the menu; left click restores the window.
         .show_menu_on_left_click(false)
         .on_menu_event(move |app, event| match event.id.as_ref() {
             "open" => show_main(app),
+            "assistant" => {
+                let _ = open::that(format!("http://127.0.0.1:{port}/assistant"));
+            }
             "browser" => {
                 let _ = open::that(format!("http://127.0.0.1:{port}"));
             }
             "folder" => {
                 let _ = open::that(&dir_for_menu);
+            }
+            "projects" => {
+                let www = std::path::PathBuf::from(&dir_for_menu).join("www");
+                let _ = open::that(if www.is_dir() { www } else { std::path::PathBuf::from(&dir_for_menu) });
             }
             "log" => {
                 let file = std::path::PathBuf::from(&dir_for_menu).join("desktop.log");

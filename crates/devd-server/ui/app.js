@@ -1791,8 +1791,8 @@
       { view: "home", area: "home", label: "Home", icon: "i-home", phone: true },
       { view: "inbox", area: "inbox", label: "Inbox", icon: "i-inbox", badge: attention, phone: true },
       { sep: true },
-      { view: "assistant", area: "assistant", label: "Assistant", icon: "i-spark", live: working > 0 && (waitThreads + badThreads) > 0, badge: asstBadge, badgeTone: asstTone, hint: asstHint, phone: true },
-      { view: "team", area: "runs", label: "Runs", icon: "i-layers", live: live.length > 0 && (waitRuns + badRuns) > 0, badge: runsBadge, badgeTone: runsTone, hint: runsHint, phone: true },
+      { view: "assistant", area: "assistant", label: "Assistant", icon: "i-spark", live: working > 0, badge: asstBadge, badgeTone: asstTone, hint: asstHint, phone: true },
+      { view: "team", area: "runs", label: "Runs", icon: "i-layers", live: live.length > 0, badge: runsBadge, badgeTone: runsTone, hint: runsHint, phone: true },
       { view: "agents", area: "agents", label: "Team", icon: "i-team" },
       { sep: true },
       { view: "projects", area: "projects", label: "Projects", icon: "i-folder" },
@@ -7694,14 +7694,24 @@ var TERM_POLL_MS = 250;
       var line = lines[i], m;
       if (line.trim() === "") { i++; continue; }
       if ((m = MD_FENCE.exec(line))) {
-        var fence = m[1], lang = m[2], rest = (m[3] || "").trim(), body = [];
+        var fence = m[1], lang = m[2], rest = (m[3] || "").trim(), body = [], closed = false;
         i++;
-        while (i < lines.length && !(new RegExp("^\\s{0,3}" + fence.charAt(0) + "{" + fence.length + ",}\\s*$").test(lines[i]))) { body.push(lines[i]); i++; }
-        i++;
+        var closeRe = new RegExp("^\\s{0,3}" + fence.charAt(0) + "{" + fence.length + ",}\\s*$");
+        while (i < lines.length) {
+          if (closeRe.test(lines[i])) { closed = true; i++; break; }
+          body.push(lines[i]); i++;
+        }
         // The payload may be on the info line, in the body, or split across both.
+        // `onInfo` is what decides whether the body belongs to the payload or is
+        // the rest of the message: a fence the model never closed must not eat
+        // everything that follows it.
+        var onInfo = false;
         var blockText = function () {
           var inner = body.join("\n");
-          var tries = [rest, inner, rest ? rest + (inner ? "\n" + inner : "") : ""];
+          if (rest) {
+            try { var atInfo = JSON.parse(rest); onInfo = true; return atInfo; } catch (e) { /* not on the info line */ }
+          }
+          var tries = [inner, rest ? rest + (inner ? "\n" + inner : "") : ""];
           for (var n = 0; n < tries.length; n++) {
             if (!tries[n].trim()) continue;
             try { return JSON.parse(tries[n]); } catch (e) { /* try the next shape */ }
@@ -7714,6 +7724,7 @@ var TERM_POLL_MS = 250;
           var spec = blockText();
           if (spec && ((Array.isArray(spec.bars) && spec.bars.length) || (Array.isArray(spec.items) && spec.items.length))) {
             out.push(chartHtml(spec));
+            if (onInfo && body.length) out.push(mdBlocks(body));
             continue;
           }
           if (rest) body.unshift(rest);
@@ -7729,6 +7740,7 @@ var TERM_POLL_MS = 250;
           var rendered = block ? declaredBlockHtml(lang, block) : "";
           if (rendered) {
             out.push(rendered);
+            if (onInfo && body.length) out.push(mdBlocks(body));
             continue;
           }
           // Unparseable: show exactly what was written (including a payload on
@@ -16205,10 +16217,21 @@ var TERM_POLL_MS = 250;
   // quickly; with nothing running it is every 10.
   function pollLive() {
     if (document.hidden) return setTimeout(pollLive, 10000);
-    Promise.all([read("team.list").catch(function () { return null; }), read("approval.list", { pending_only: true }).catch(function () { return null; })]).then(function (r) {
+    Promise.all([
+      read("team.list").catch(function () { return null; }),
+      read("approval.list", { pending_only: true }).catch(function () { return null; }),
+      // The Assistant's own badge is its live conversations, so the list is read
+      // here too: a conversation that stopped or is waiting shows on every
+      // screen, not only while the Assistant is open.
+      state.view === "assistant" ? Promise.resolve(null) : read("chat.list").catch(function () { return null; })
+    ]).then(function (r) {
       var changed = false;
       if (Array.isArray(r[0])) { var sig = r[0].map(function (t) { return t.id + t.state; }).join("|"); if (sig !== AI.liveSig) { AI.liveSig = sig; AI.liveRuns = r[0]; changed = true; } }
       if (Array.isArray(r[1]) && r[1].length !== AI.counts.approvals) { AI.counts.approvals = r[1].length; changed = true; }
+      if (Array.isArray(r[2])) {
+        var tsig = r[2].map(function (t) { return t.id + t.state; }).join("|");
+        if (tsig !== AI.liveThreadSig) { AI.liveThreadSig = tsig; AI.threads = r[2]; changed = true; }
+      }
       if (changed) { rail(); statusbar(); }
     }).then(function () {
       var busy = (AI.liveRuns || []).some(function (t) { return t.state === "planning" || t.state === "running"; });

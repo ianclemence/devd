@@ -272,7 +272,7 @@ pub fn register(reg: &mut Registry, team: Arc<Team>) -> Result<()> {
                 })?;
                 ctx.store.decide_suggestion(&s.id, true, Some(&run.id), &ctx.actor.label())?;
                 ctx.events.emit_with("team.suggestion.accepted", s.title.clone(), json!({ "id": s.id, "run": run.id }));
-                Ok(Outcome::with_data("started; the plan will wait for you", json!({ "run": run, "suggestion": s.id })))
+                Ok(Outcome::with_data("Started the run; it plans first and then works", json!({ "run": run, "suggestion": s.id })))
             },
     )?;
     }
@@ -514,7 +514,7 @@ pub fn register(reg: &mut Registry, team: Arc<Team>) -> Result<()> {
                 if !ctx.store.delete_automation(a.name.trim())? {
                     return Err(DevdError::not_found(format!("no hook called `{}`", a.name)));
                 }
-                Ok(Outcome::ok("deleted"))
+                Ok(Outcome::ok("Deleted the hook"))
             },
         )?;
 

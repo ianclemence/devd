@@ -85,21 +85,27 @@ impl Needs {
         }
     }
 
-    /// The evidence line, for a person who wants to know why.
+    /// The evidence line, for a person who wants to know why. Capped: the whole
+    /// report is in the run, and a card is not the place for three thousand
+    /// characters of it.
     pub fn detail(&self) -> String {
-        if self.missing.is_empty() {
+        let raw = if self.missing.is_empty() {
             self.line.clone()
         } else {
             self.missing.join("; ")
-        }
+        };
+        clip(&raw, 1200)
     }
 
+    /// The opening of the reason, short enough to be a title rather than a wall
+    /// of text repeated under itself.
     fn first_missing(&self) -> String {
         self.missing
-            .first()
-            .cloned()
-            .or_else(|| Some(self.line.clone()))
-            .unwrap_or_default()
+            .iter()
+            .map(|m| m.trim())
+            .find(|m| !m.is_empty())
+            .map(first_sentence)
+            .unwrap_or_else(|| self.line.clone())
     }
 
     /// The primary action: the one button a person can press without thinking.
@@ -107,10 +113,40 @@ impl Needs {
         self.actions.iter().find(|a| !a.dangerous).or(self.actions.first())
     }
 
-    /// The whole object as one line, for a log or a terminal.
+    /// The whole object as one line, for a log or a terminal. The long detail is
+    /// left to the card: a line that repeats it reads as a stutter, not a status.
     pub fn one_line(&self) -> String {
-        format!("{} — {}", self.question(), self.detail())
+        let q = self.question();
+        let d = self.detail();
+        if d.is_empty() || d == q || d.chars().count() > 160 {
+            q
+        } else {
+            format!("{q} — {d}")
+        }
     }
+}
+
+/// The first sentence of `text`, capped, so a long report becomes a title.
+fn first_sentence(text: &str) -> String {
+    let t = text.trim();
+    let mut cut = t.len();
+    for (i, c) in t.char_indices() {
+        if i >= 32 && matches!(c, '.' | '!' | '?' | '\n') {
+            cut = i + c.len_utf8();
+            break;
+        }
+    }
+    clip(t[..cut].trim(), 180)
+}
+
+/// `text`, cut on a character boundary with an ellipsis when it is too long.
+fn clip(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let mut out: String = text.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
 }
 
 /// One task's need, when it has one.

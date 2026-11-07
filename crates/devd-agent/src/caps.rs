@@ -1459,7 +1459,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                 return Err(DevdError::conflict(format!("the run is {}; cancel it before deleting it", r.state.replace('_', " "))));
             }
             let conversations = ctx.store.delete_run(&a.run)?;
-            Ok(Outcome::with_data("deleted", json!({ "deleted": 1, "conversations": conversations })))
+            Ok(Outcome::with_data("Deleted the run and its conversations", json!({ "deleted": 1, "conversations": conversations })))
         },
     )?;
     reg.define::<PruneArgs>("team.prune", "Delete finished runs")
@@ -1546,13 +1546,13 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
     {
         let t = team.clone();
         reg.define::<SayArgs>("team.say", "Add an instruction to a run")
-    .description("Tell the team something new. Tasks that have not started receive it, running tasks get it when they next stop, and a plan that is waiting for approval is revised.")
+    .description("Tell the team something new. Tasks that have not started receive it, running tasks get it when they next stop, and a plan that is still being written takes it into account.")
     .tier(Tier::Write)
     .effect(Effect::Process)
     .dry_run()
     .handlers(
         |_, a| simple("team.say", format!("add an instruction to run {}", a.run)),
-        move |ctx, a| Ok(Outcome::with_data("recorded", t.say(ctx, &a.run, &a.text)?)),
+        move |ctx, a| Ok(Outcome::with_data("Sent the instruction to the team", t.say(ctx, &a.run, &a.text)?)),
     )?;
     }
     {
@@ -1580,7 +1580,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
     .idempotent()
     .handlers(
         |_, _| simple("team.report", "report on the task"),
-        move |_, a| Ok(Outcome::with_data("recorded", t.report(&a.task, &a.status, &a.summary, a.lesson.as_deref())?)),
+        move |_, a| Ok(Outcome::with_data("Recorded the report", t.report(&a.task, &a.status, &a.summary, a.lesson.as_deref())?)),
     )?;
     }
 
@@ -2382,7 +2382,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
         |_, a| simple("chat.stop", format!("stop conversation {}", a.thread)),
         move |ctx, a| {
                 hub.stop(ctx, &a.thread)?;
-                Ok(Outcome::ok("stopping"))
+                Ok(Outcome::ok("Stopped the assistant"))
             },
     )?;
     }
@@ -2421,7 +2421,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                     a.provider.as_deref(),
                     a.model.as_deref(),
                 )?;
-                Ok(Outcome::ok("updated"))
+                Ok(Outcome::ok("Updated the conversation"))
             },
         )?;
     reg.define::<LinkPullRequest>("chat.link_pr", "Link a pull request to a conversation")
@@ -2520,7 +2520,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                     if !ctx.store.unpin_chapter(&a.id)? {
                         return Err(DevdError::not_found("no such chapter"));
                     }
-                    Ok(Outcome::ok("unpinned"))
+                    Ok(Outcome::ok("Unpinned the reply"))
                 },
             )?;
         reg.define::<ThreadArgs>("chat.chapters", "List a conversation's chapters")
@@ -2552,7 +2552,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                 ctx.store.get_thread(&a.thread)?.ok_or_else(|| DevdError::not_found("no such conversation"))?;
                 hub.stop(ctx, &a.thread)?;
                 ctx.store.delete_thread(&a.thread)?;
-                Ok(Outcome::with_data("deleted", json!({ "deleted": 1 })))
+                Ok(Outcome::with_data("Deleted the conversation", json!({ "deleted": 1 })))
             },
         )?;
     }
@@ -2593,7 +2593,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                 if !ctx.store.delete_inbox(&a.id)? {
                     return Err(DevdError::not_found("no such message"));
                 }
-                Ok(Outcome::with_data("deleted", json!({ "deleted": 1 })))
+                Ok(Outcome::with_data("Deleted the message", json!({ "deleted": 1 })))
             },
         )?;
     reg.define::<NoArgs>("inbox.clear", "Clear answered inbox messages")
@@ -2718,7 +2718,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
         |ctx, a| {
             ctx.store.get_inbox(&a.id)?.ok_or_else(|| DevdError::not_found("no such message"))?;
             ctx.store.answer_inbox(&a.id, a.reply.as_deref().map(str::trim).filter(|r| !r.is_empty()))?;
-            Ok(Outcome::ok("resolved"))
+            Ok(Outcome::ok("Resolved the message"))
         },
     )?;
 
@@ -2841,7 +2841,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
     .dry_run()
     .handlers(
         |_, a| Ok(Plan::new("fs.delete", format!("delete {}{}", a.path, if a.recursive.unwrap_or(false) { " and everything in it" } else { "" })).destructive(true)),
-        |ctx, a| Ok(Outcome::with_data("deleted", fs::delete(ctx, &a.path, a.recursive.unwrap_or(false))?)),
+        |ctx, a| Ok(Outcome::with_data("Deleted the file or folder", fs::delete(ctx, &a.path, a.recursive.unwrap_or(false))?)),
     )?;
 
     // ------------------------------------------------------------ health
