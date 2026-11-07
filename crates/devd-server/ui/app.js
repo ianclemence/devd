@@ -7819,6 +7819,7 @@ var TERM_POLL_MS = 250;
     providers: null, presets: null, catalogue: null, inventory: null, provForm: null, provBusy: {}, localFound: null,
     live: null, streamTail: "", streamPainted: "", streamFrame: 0, streamThread: "",
     threads: null, thread: null, events: [], pending: [], running: false, lastId: 0, queued: 0,
+    threadCache: {}, prefetching: {},
     run: null,
     pickProvider: "", pickModel: "",
     permission: "auto", effort: "medium", composerSkills: null, composerSkillsAt: 0,
@@ -8314,14 +8315,14 @@ var TERM_POLL_MS = 250;
       var kids = kidsOf[t.id] || [];
       var run = runByThread[t.id] || (kids.length ? runById[kids[0].team.run] : null);
       var liveT = t.state === "running" || t.state === "waiting_approval" || (run && ["planning", "running"].indexOf(run.state) >= 0);
-      items.push({ live: !!liveT, at: t.updated_at || "", html: homeWorkRow({
+      items.push({ live: !!liveT, at: t.updated_at || "", openId: t.id, openAction: "open-thread", html: homeWorkRow({
         id: t.id, action: "open-thread", title: t.title || "Conversation", project: projName(t.project),
         faces: kids.map(function (k) { return k.team.role; }),
         state: t.state === "running" ? ["live", "working"] : t.state === "waiting_approval" ? ["warn", "waiting for your decision"] : t.state === "error" ? ["bad", "stopped"] : run ? runWords(run) : t.settled_at ? ["ok", "settled"] : ["", ""],
         pr: t.pr_url, at: t.updated_at }) });
     });
     (d.teamRuns || []).filter(function (r) { return !runOwned[r.id] && !(r.thread_id && threadIds[r.thread_id]); }).forEach(function (r) {
-      items.push({ live: ["planning", "running", "awaiting_plan"].indexOf(r.state) >= 0, at: r.updated_at || "", html: homeWorkRow({
+      items.push({ live: ["planning", "running", "awaiting_plan"].indexOf(r.state) >= 0, at: r.updated_at || "", openId: r.id, openAction: "team-open-from", html: homeWorkRow({
         id: r.id, action: "team-open-from", title: r.title || r.goal || "Team run", project: projName(r.project), faces: ["team"], state: runWords(r), at: r.updated_at }) });
     });
     items.sort(function (x, y) { return x.live !== y.live ? (x.live ? -1 : 1) : x.at < y.at ? 1 : -1; });
@@ -8364,6 +8365,21 @@ var TERM_POLL_MS = 250;
           '<div class="home-work-list">' + work5.map(function (x) { return x.html; }).join("") + "</div></section>" : "") +
         status +
       "</div>";
+
+    // These are the rows on screen. Read the conversation behind each one now,
+    // carrying the list's own title/project, so a click can paint immediately
+    // even while the machine probes are still running.
+    work5.filter(function (x) { return x.openAction === "open-thread"; }).slice(0, 5).forEach(function (x, i) {
+      if (!x.openId || AI.threadCache[x.openId] || AI.prefetching[x.openId]) return;
+      AI.prefetching[x.openId] = true;
+      setTimeout(function () {
+        read("chat.get", { thread: x.openId, brief: true }).then(function (d) {
+          AI.threadCache[x.openId] = { at: Date.now(), data: d };
+        }).catch(function () { /* clicking will ask again */ }).then(function () {
+          delete AI.prefetching[x.openId];
+        });
+      }, 250 + i * 120);
+    });
   }
 
   /* One thing that needs a person: what kind, who asks, the decision, and the buttons that
@@ -8799,11 +8815,7 @@ var TERM_POLL_MS = 250;
     if (node) node.textContent = "devd: " + clip(text, 300);
   }
 
-  function pollThread(full) {
-    if (!AI.thread) return Promise.resolve();
-    // Brief: tool output arrives as a head-and-tail preview (most of a conversation's
-    // weight); a step's full output is read when the step is opened.
-    return read("chat.get", { thread: AI.thread.id, after: full ? 0 : AI.lastId, brief: true }).then(function (d) {
+  function applyThread(d, full) {
       if (full) { AI.events = []; AI.lastId = 0; }
       d.events.forEach(function (e) {
         // Two polls can overlap (the timer and the live channel, or a click and
@@ -8840,6 +8852,16 @@ var TERM_POLL_MS = 250;
           paintChatPlan();
         }).catch(function () { /* the plan is optional */ });
       }
+  }
+
+  function pollThread(full) {
+    if (!AI.thread) return Promise.resolve();
+    var tid = AI.thread.id;
+    // Brief: tool output arrives as a head-and-tail preview (most of a conversation's
+    // weight); a step's full output is read when the step is opened.
+    return read("chat.get", { thread: tid, after: full ? 0 : AI.lastId, brief: true }).then(function (d) {
+      applyThread(d, full);
+      AI.threadCache[tid] = { at: Date.now(), data: d };
     });
   }
 
@@ -10149,7 +10171,21 @@ var TERM_POLL_MS = 250;
 
   function renderAssistant() {
     if (state.view !== "assistant") return;
-    if (!AI.threads) return renderLoading();
+    if (!AI.threads) {
+      // The conversation is the point; the list can arrive behind it. Waiting
+      // for the list here made a finished conversation opened from Home sit on
+      // a loading screen until an unrelated live event filled it in.
+      AI.threads = [];
+      var loadList = function () {
+        read("chat.list").then(function (t) {
+          AI.threads = t || [];
+          if (state.view === "assistant") { paintThreads(); if (AI.thread) paintChat(true); }
+        }).catch(function () { /* the conversation still works without the list */ });
+      };
+      // When a conversation is opening, let its log win the first request; the
+      // list is not what the person is waiting for.
+      if (AI.thread) setTimeout(loadList, 600); else loadList();
+    }
     // Files belong to the conversation they were attached in. Opening another one,
     // or starting a new one, starts with none.
     var forThread = AI.thread ? AI.thread.id : "";
@@ -13274,11 +13310,20 @@ var TERM_POLL_MS = 250;
     },
     "open-thread": function (n) {
       if (AI.permission === "bypass") AI.permission = "auto";
-      AI.thread = { id: n.dataset.id, title: "", state: "idle", input_tokens: 0, output_tokens: 0 }; AI.lastId = 0; AI.events = []; AI.pending = []; AI.todos = []; AI.todosAt = 0; AI.queued = 0;
+      var id = n.dataset.id;
+      AI.thread = { id: id, title: "", state: "idle", input_tokens: 0, output_tokens: 0 }; AI.lastId = 0; AI.events = []; AI.pending = []; AI.todos = []; AI.todosAt = 0; AI.queued = 0;
       var shell = document.querySelector(".shell.panel-open");
       if (shell) shell.classList.remove("panel-open");
       if (state.view !== "assistant") { state.view = "assistant"; render(); }
       writeRoute("assistant", false);
+      // Home preloads the rows it shows. If one is already in hand, paint it now
+      // and refresh behind the reader; otherwise read it and let the list fill
+      // in behind (see renderAssistant), so neither waits on the other.
+      var cached = AI.threadCache[id];
+      if (cached && Date.now() - cached.at < 120000) {
+        applyThread(cached.data, true);
+        renderAssistant();
+      }
       pollThread(true).then(function () { renderAssistant(); });
     },
     // A rail entry opens its area. Pressed again on a window too narrow for the panel to
