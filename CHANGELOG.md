@@ -10,6 +10,36 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.25.6] - 2026-11-07 - The tray tells the truth
+
+### Fixed
+
+- **The tray menu is no longer a startup snapshot.** It is rebuilt from the same capability API the
+  window uses, so a service row names its real state (`running`, `stopped`, `running, not
+  answering`) and only offers Start, Stop or Restart when that action would do something. The menu
+  refreshes every thirty seconds from one `service.list` read, and only when something visible changed.
+- **Start All and Stop All use `stack.up` and `stack.down`**, so they start and stop in dependency
+  order and never touch a process devd does not own.
+- **Per-service tray actions call `service.start` / `service.stop` / `service.restart`**, which are
+  the audited capabilities that do not wait for a second approval the tray cannot show.
+- **Active Quick Shares are in the tray**: each open link shows its real public address, can be
+  opened, and can be stopped; the row also says how many are active.
+- **Health is always reachable from the tray**: recent self-healing incidents are listed with what
+  was done, a healthy state says so, and Diagnostics is one click away.
+- **Services offers Add or register a service…**, which opens the screen that installs or adopts one
+  rather than pretending a menu click can do it silently.
+- Restoring the window now goes to `/diagnostics`, the tray's Runtimes entry to
+  `/server/runtimes`, Quick Share to `/sites`, and Services to `/server/services`; three older
+  entries pointed at addresses the router does not serve.
+
+### Verified
+
+- A **relocation test** moved a devd home from `C:\dthome-026` to `C:\dthome-moved`, removed the
+  old folder, and ran the installed binary with `DEVD_HOME` pointing at the new home:
+  `portability.status` reported `moved: true`, the previous home, and the one missing project;
+  `portability.repair` rewrote exactly that project; `project.list` then showed
+  `C:\dthome-moved\www\portable-demo`.
+
 ## [0.25.5] - 2026-11-07 - The whole machine in one answer
 
 ### Added

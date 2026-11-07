@@ -4607,6 +4607,10 @@ body { letter-spacing: 0; font-feature-settings: normal; }
   font-weight: 600;
 }
 .btn-ghost { background: transparent; border-color: transparent; color: var(--fg-mute); }
+/* The base .btn rule above sets its own colours and comes after the first
+   .btn-danger declaration, so the danger colours have to be restated here or a
+   destructive button renders as an ordinary secondary one. */
+.btn-danger { background: var(--danger-quiet); border-color: var(--danger-line); color: var(--color-error); }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .btn:active:not(:disabled) { transform: scale(0.97); }
 .btn:focus-visible { outline: 2px solid var(--color-info); outline-offset: 2px; }

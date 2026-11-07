@@ -1617,6 +1617,65 @@ fn quick_share_is_native_and_wired_all_the_way_down() {
 }
 
 #[test]
+fn the_tray_menu_reflects_live_state() {
+    let desktop = include_str!("../../devd-desktop/src/lib.rs");
+    assert!(
+        desktop.contains("fn live_from_api"),
+        "the tray reads the same API the window does"
+    );
+    assert!(
+        desktop.contains("\"service.list\""),
+        "a service's menu entry is built from its real state in one read"
+    );
+    assert!(
+        !desktop.contains("\"service.status\""),
+        "the tray does not probe every service separately"
+    );
+    assert!(
+        desktop.contains("set_menu(Some(menu))"),
+        "the menu is replaced when that state changes"
+    );
+    assert!(
+        desktop.contains("\"stack.up\""),
+        "Start All uses the dependency-ordered stack action"
+    );
+    assert!(
+        desktop.contains("\"stack.down\""),
+        "Stop All uses the dependency-ordered stack action"
+    );
+    assert!(
+        desktop.contains("format!(\"service.{action}\")"),
+        "per-service controls use the capability that needs no separate approval"
+    );
+    assert!(
+        desktop.contains("\"share:stop:\""),
+        "an active share can be stopped from the tray"
+    );
+    assert!(
+        desktop.contains("\"health:page\""),
+        "an incident links to the diagnostics that explain it"
+    );
+}
+
+#[test]
+fn danger_buttons_win_over_the_base_button_rule() {
+    // The second `.btn` block is the one the interface uses; because it comes
+    // later it silently overrode the earlier `.btn-danger` colours, so a
+    // destructive button rendered neutral. The danger rule has to be restated
+    // after that block.
+    let base = CSS
+        .find(".btn-mini { height: 26px;")
+        .expect("the later base button block exists");
+    let danger = CSS
+        .rfind(".btn-danger { background: var(--danger-quiet)")
+        .expect("the danger rule exists after the base rule");
+    assert!(
+        danger > base,
+        "the danger colours must come after the later .btn block"
+    );
+}
+
+#[test]
 fn portability_is_detected_and_repairable() {
     let p = include_str!("../../devd-agent/src/portability.rs");
     assert!(p.contains("\"portability.status\""), "the home can be checked");

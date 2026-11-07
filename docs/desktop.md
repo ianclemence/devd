@@ -30,9 +30,41 @@ window shows the real error rather than a blank page.
 
 ## Shutdown
 
-Closing the last window sends the shutdown signal. The HTTP server stops
-accepting, `Workspace` is dropped and project processes are terminated. The application then exits. The same path
-runs on `RunEvent::Exit`; shutdown is idempotent.
+Closing the window hides it in the notification area; the process and its
+backend keep running, so agents, shares and services are not interrupted by
+closing a window. **Quit devd** in the tray menu is the explicit exit: it sends
+the shutdown signal, the HTTP server stops accepting, `Workspace` is dropped and
+project processes are terminated. The same path runs on `RunEvent::Exit`;
+shutdown is idempotent.
+
+## The tray
+
+Right-clicking the notification-area icon opens a menu built from the same
+capability API as the window, so every action has the same permissions and the
+same audit trail. Left-clicking the icon restores the window (and reloads it only
+if it is showing the browser's network-error page).
+
+The menu is rebuilt from live state every thirty seconds instead of being a
+startup snapshot:
+
+* the title row names the version, the loopback address, and how many services
+  are running or how many incidents are open;
+* **Health** lists recent self-healing incidents and what was done, or says
+  there are none, and links to Diagnostics;
+* **www** lists registered projects, opening each project's folder;
+* **Quick Share** lists every open link with its real public address (open or
+  stop) and every site that can be shared;
+* **Services** names each service's actual state (`running`, `stopped`,
+  `running, not answering`), enables Start/Stop/Restart only when they would
+  act, and links to per-service logs, install and adoption;
+* **Start All** and **Stop All** call the dependency-ordered `stack.up` and
+  `stack.down` capabilities, so they never touch a process devd does not own;
+* **Quick app**, **Tools**, **Terminal**, **Preferences**, the devd and projects
+  folders, the desktop log, **Start at login** and **Quit devd**.
+
+Menu handlers return immediately; actions that take seconds (starting the stack,
+opening or closing a tunnel, restarting a service) run on their own thread.
+A second launch focuses the running window instead of adding a second icon.
 
 ## Permissions and isolation
 

@@ -445,31 +445,127 @@ fn set_autostart(on: bool) {
     }
 }
 
-/// The hidden-icons tray and its menu.
-///
-/// Left click restores the window; right click opens the menu. The menu holds
-/// the actions a person needs without reopening the app: the window, the same
-/// interface in a browser, the data folder, the desktop log, and the explicit
-/// quit that actually ends the process.
-fn install_tray(
-    app: &tauri::App,
+/// What the tray lists that does not change while the process runs.
+#[derive(Clone)]
+struct TrayState {
     port: u16,
     token: String,
     data_dir: String,
     projects: Vec<(String, String)>,
     sites: Vec<(String, String)>,
     services: Vec<String>,
-) -> tauri::Result<()> {
-    let Some(icon) = app.default_window_icon().cloned() else {
-        return Ok(());
+}
+
+/// What the tray shows that does change: service state, open shares, and the
+/// incidents self-healing has recorded. Refreshed from the same API the window
+/// uses, so the menu cannot claim something the backend disagrees with.
+#[derive(Clone, Default, PartialEq)]
+struct TrayLive {
+    /// name, running, ready
+    services: Vec<(String, bool, bool)>,
+    /// project, public address
+    links: Vec<(String, String)>,
+    /// "kind: service — detail"
+    incidents: Vec<String>,
+}
+
+fn live_from_api(state: &TrayState) -> TrayLive {
+    let mut live = TrayLive::default();
+    // One read for every service, rather than a probe per menu row. This is the
+    // same call the services screen makes and it carries installed, running and
+    // ready together.
+    let listed = api_call(
+        state.port,
+        &state.token,
+        "service.list",
+        serde_json::json!({}),
+    );
+    let data = listed
+        .as_ref()
+        .and_then(|v| v.get("outcome"))
+        .and_then(|o| o.get("data"));
+    let items = data
+        .and_then(|d| d.as_array())
+        .or_else(|| data.and_then(|d| d.get("services")).and_then(|v| v.as_array()));
+    let mut known: Vec<(String, bool, bool)> = Vec::new();
+    for row in items.into_iter().flatten() {
+        if let Some(name) = row["name"].as_str() {
+            known.push((
+                name.to_string(),
+                row["running"].as_bool().unwrap_or(false),
+                row["ready"].as_bool().unwrap_or(false),
+            ));
+        }
+    }
+    for name in &state.services {
+        match known.iter().find(|(n, _, _)| n == name) {
+            Some((_, running, ready)) => live.services.push((name.clone(), *running, *ready)),
+            None => live.services.push((name.clone(), false, false)),
+        }
+    }
+    if let Some(d) = api_call(
+        state.port,
+        &state.token,
+        "share.quick",
+        serde_json::json!({}),
+    )
+    .as_ref()
+    .and_then(|v| v.get("outcome"))
+    .and_then(|o| o.get("data"))
+    {
+        for link in d["links"].as_array().into_iter().flatten() {
+            if let (Some(project), Some(url)) = (link["project"].as_str(), link["url"].as_str()) {
+                live.links.push((project.to_string(), url.to_string()));
+            }
+        }
+    }
+    if let Some(d) = api_call(
+        state.port,
+        &state.token,
+        "health.status",
+        serde_json::json!({}),
+    )
+    .as_ref()
+    .and_then(|v| v.get("outcome"))
+    .and_then(|o| o.get("data"))
+    {
+        for row in d["incidents"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .rev()
+            .take(5)
+        {
+            let kind = row["kind"].as_str().unwrap_or("incident");
+            let service = row["service"].as_str().unwrap_or("");
+            let detail = row["detail"].as_str().unwrap_or("");
+            live.incidents.push(format!("{kind}: {service} — {detail}"));
+        }
+    }
+    live
+}
+
+/// Build the menu from a state snapshot. Called once at startup and again
+/// whenever the live snapshot changes, so a stopped service offers Start and a
+/// running one offers Stop instead of both being decoration.
+fn tray_menu(
+    app: &tauri::AppHandle,
+    state: &TrayState,
+    live: &TrayLive,
+) -> tauri::Result<Menu<Wry>> {
+    let base = format!("http://127.0.0.1:{}", state.port);
+    let running = live.services.iter().filter(|(_, run, _)| *run).count();
+    let summary = if !live.incidents.is_empty() {
+        format!("{} incident(s)", live.incidents.len())
+    } else if !live.services.is_empty() {
+        format!("{running}/{} service(s) running", live.services.len())
+    } else {
+        "healthy".to_string()
     };
-    let base = format!("http://127.0.0.1:{port}");
-    // The first row names what is running and where, so the tray never leaves a
-    // person guessing which port or version they are looking at.
     let title = MenuItem::with_id(
         app,
         "title",
-        format!("devd {}  ·  {base}", env!("CARGO_PKG_VERSION")),
+        format!("devd {}  ·  {summary}  ·  {base}", env!("CARGO_PKG_VERSION")),
         false,
         None::<&str>,
     )?;
@@ -478,55 +574,144 @@ fn install_tray(
     let runs = MenuItem::with_id(app, "runs", "Open agent runs", true, None::<&str>)?;
     let browser = MenuItem::with_id(app, "browser", "Open in browser", true, None::<&str>)?;
 
+    // Health: the cause and what self-healing did, not just a count. The row is
+    // always present so its absence never looks like "not checked".
+    let health = {
+        let mut rows: Vec<MenuItem<Wry>> = Vec::new();
+        if live.incidents.is_empty() {
+            rows.push(MenuItem::with_id(
+                app,
+                "health:none",
+                "No incidents; services answer",
+                false,
+                None::<&str>,
+            )?);
+        }
+        for (i, text) in live.incidents.iter().enumerate() {
+            rows.push(MenuItem::with_id(
+                app,
+                format!("health:{i}"),
+                text.as_str(),
+                false,
+                None::<&str>,
+            )?);
+        }
+        rows.push(MenuItem::with_id(
+            app,
+            "health:page",
+            "Open Diagnostics",
+            true,
+            None::<&str>,
+        )?);
+        let label = if live.incidents.is_empty() {
+            "Health · healthy".to_string()
+        } else {
+            format!("Health · {} incident(s)", live.incidents.len())
+        };
+        let refs: Vec<&dyn IsMenuItem<Wry>> = rows.iter().map(|i| i as &dyn IsMenuItem<Wry>).collect();
+        Some(Submenu::with_items(app, label, true, &refs)?)
+    };
+
     // www: the projects devd knows, each opening its folder.
     let mut www_items = vec![MenuItem::with_id(app, "www:page", "Open projects", true, None::<&str>)?];
-    if projects.is_empty() {
+    if state.projects.is_empty() {
         www_items.push(MenuItem::with_id(app, "www:none", "No projects yet", false, None::<&str>)?);
     }
-    for (i, (name, _)) in projects.iter().enumerate() {
+    for (i, (name, _)) in state.projects.iter().enumerate() {
         www_items.push(MenuItem::with_id(app, format!("www:{i}"), name.as_str(), true, None::<&str>)?);
     }
     let www_refs: Vec<&dyn IsMenuItem<Wry>> = www_items.iter().map(|i| i as &dyn IsMenuItem<Wry>).collect();
     let www = Submenu::with_items(app, "www", true, &www_refs)?;
 
-    // Quick Share: a site, one click, public.
-    let mut share_items = vec![MenuItem::with_id(app, "share:page", "Manage sharing", true, None::<&str>)?];
-    if sites.is_empty() {
-        share_items.push(MenuItem::with_id(app, "share:none", "No sites to share", false, None::<&str>)?);
-    }
-    for (i, (name, _)) in sites.iter().enumerate() {
-        share_items.push(MenuItem::with_id(app, format!("share:{i}"), format!("Share {name}"), true, None::<&str>)?);
-    }
-    let share_refs: Vec<&dyn IsMenuItem<Wry>> = share_items.iter().map(|i| i as &dyn IsMenuItem<Wry>).collect();
-    let share = Submenu::with_items(app, "Quick Share", true, &share_refs)?;
-
-    // Services: each one gets Start / Stop / Restart / Logs.
-    let mut service_subs: Vec<Submenu<Wry>> = Vec::new();
-    for name in &services {
-        let mut items = Vec::new();
-        for (action, label) in [("start", "Start"), ("stop", "Stop"), ("restart", "Restart")] {
-            items.push(MenuItem::with_id(
-                app,
-                format!("svc:{name}:{action}"),
-                label,
-                true,
-                None::<&str>,
-            )?);
+    // Quick Share: open links first, with their real addresses and a Stop.
+    let share = {
+        let mut rows: Vec<MenuItem<Wry>> = vec![
+            MenuItem::with_id(app, "share:page", "Manage sharing", true, None::<&str>)?,
+        ];
+        if !live.links.is_empty() {
+            for (i, (project, url)) in live.links.iter().enumerate() {
+                rows.push(MenuItem::with_id(
+                    app,
+                    format!("share:open:{i}"),
+                    format!("Open {project} · {url}"),
+                    true,
+                    None::<&str>,
+                )?);
+                rows.push(MenuItem::with_id(
+                    app,
+                    format!("share:stop:{i}"),
+                    format!("Stop sharing {project}"),
+                    true,
+                    None::<&str>,
+                )?);
+            }
         }
-        items.push(MenuItem::with_id(app, format!("svc:{name}:logs"), "Logs", true, None::<&str>)?);
-        let refs: Vec<&dyn IsMenuItem<Wry>> = items.iter().map(|i| i as &dyn IsMenuItem<Wry>).collect();
-        service_subs.push(Submenu::with_items(app, name.as_str(), true, &refs)?);
-    }
-    let mut service_items = vec![MenuItem::with_id(app, "svc:page", "Services", true, None::<&str>)?];
-    if service_subs.is_empty() {
-        service_items.push(MenuItem::with_id(app, "svc:none", "No services installed", false, None::<&str>)?);
-    }
-    let mut service_refs: Vec<&dyn IsMenuItem<Wry>> = service_items.iter().map(|i| i as &dyn IsMenuItem<Wry>).collect();
-    service_refs.extend(service_subs.iter().map(|s| s as &dyn IsMenuItem<Wry>));
-    let services_menu = Submenu::with_items(app, "Services", true, &service_refs)?;
+        if state.sites.is_empty() {
+            rows.push(MenuItem::with_id(app, "share:none", "No sites to share", false, None::<&str>)?);
+        }
+        for (i, (name, _)) in state.sites.iter().enumerate() {
+            rows.push(MenuItem::with_id(app, format!("share:{i}"), format!("Share {name}"), true, None::<&str>)?);
+        }
+        let label = if live.links.is_empty() {
+            "Quick Share".to_string()
+        } else {
+            format!("Quick Share · {} active", live.links.len())
+        };
+        let refs: Vec<&dyn IsMenuItem<Wry>> = rows.iter().map(|i| i as &dyn IsMenuItem<Wry>).collect();
+        Submenu::with_items(app, label, true, &refs)?
+    };
 
-    let start_all = MenuItem::with_id(app, "start-all", "Start All", true, None::<&str>)?;
-    let stop_all = MenuItem::with_id(app, "stop-all", "Stop All", true, None::<&str>)?;
+    // Services: each one names its actual state, and its Start/Stop entries
+    // are only usable when they would do something.
+    let services_menu = {
+        let mut subs: Vec<Submenu<Wry>> = Vec::new();
+        for name in &state.services {
+            let found = live.services.iter().find(|(n, _, _)| n == name);
+            let (is_running, is_ready) = match found {
+                Some((_, run, ready)) => (*run, *ready),
+                None => (false, false),
+            };
+            let state_text = if !is_running {
+                "stopped"
+            } else if is_ready {
+                "running"
+            } else {
+                "running, not answering"
+            };
+            let mut items = vec![MenuItem::with_id(
+                app,
+                format!("svc:{name}:state"),
+                state_text,
+                false,
+                None::<&str>,
+            )?];
+            items.push(MenuItem::with_id(app, format!("svc:{name}:start"), "Start", !is_running, None::<&str>)?);
+            items.push(MenuItem::with_id(app, format!("svc:{name}:stop"), "Stop", is_running, None::<&str>)?);
+            items.push(MenuItem::with_id(app, format!("svc:{name}:restart"), "Restart", is_running, None::<&str>)?);
+            items.push(MenuItem::with_id(app, format!("svc:{name}:logs"), "Logs", true, None::<&str>)?);
+            let refs: Vec<&dyn IsMenuItem<Wry>> = items.iter().map(|i| i as &dyn IsMenuItem<Wry>).collect();
+            subs.push(Submenu::with_items(app, format!("{name} · {state_text}"), true, &refs)?);
+        }
+        let mut head = vec![
+            MenuItem::with_id(app, "svc:page", "Open services", true, None::<&str>)?,
+            MenuItem::with_id(app, "svc:add", "Add or register a service…", true, None::<&str>)?,
+        ];
+        if subs.is_empty() {
+            head.push(MenuItem::with_id(app, "svc:none", "No services installed", false, None::<&str>)?);
+        }
+        let mut refs: Vec<&dyn IsMenuItem<Wry>> = head.iter().map(|i| i as &dyn IsMenuItem<Wry>).collect();
+        refs.extend(subs.iter().map(|s| s as &dyn IsMenuItem<Wry>));
+        Submenu::with_items(app, "Services", true, &refs)?
+    };
+
+    let start_all = MenuItem::with_id(
+        app,
+        "start-all",
+        "Start All",
+        running < state.services.len(),
+        None::<&str>,
+    )?;
+    let stop_all = MenuItem::with_id(app, "stop-all", "Stop All", running > 0, None::<&str>)?;
     let quick_app = MenuItem::with_id(app, "create", "Quick app", true, None::<&str>)?;
     let terminal = MenuItem::with_id(app, "terminal", "Terminal", true, None::<&str>)?;
     let prefs = MenuItem::with_id(app, "prefs", "Preferences…", true, None::<&str>)?;
@@ -559,37 +744,73 @@ fn install_tray(
     let below = PredefinedMenuItem::separator(app)?;
     let before_quit = PredefinedMenuItem::separator(app)?;
     let status_sep = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(
-        app,
-        &[
-            &title,
-            &open,
-            &assistant,
-            &runs,
-            &browser,
-            &status_sep,
-            &www,
-            &share,
-            &services_menu,
-            &start_all,
-            &stop_all,
-            &quick_app,
-            &tools,
-            &terminal,
-            &prefs,
-            &above,
-            &folder,
-            &projects_folder,
-            &log,
-            &below,
-            &autostart,
-            &before_quit,
-            &quit,
-        ],
-    )?;
-    let autostart_for_menu = autostart.clone();
-    let dir_for_menu = data_dir;
-    let token_for_menu = token;
+
+    let mut rows: Vec<&dyn IsMenuItem<Wry>> = vec![
+        &title,
+        &open,
+        &assistant,
+        &runs,
+        &browser,
+        &status_sep,
+    ];
+    if let Some(h) = health.as_ref() {
+        rows.push(h);
+    }
+    rows.extend([
+        &www as &dyn IsMenuItem<Wry>,
+        &share,
+        &services_menu,
+        &start_all,
+        &stop_all,
+        &quick_app,
+        &tools,
+        &terminal,
+        &prefs,
+        &above,
+        &folder,
+        &projects_folder,
+        &log,
+        &below,
+        &autostart,
+        &before_quit,
+        &quit,
+    ]);
+    Menu::with_items(app, &rows)
+}
+
+/// The hidden-icons tray and its menu.
+///
+/// Left click restores the window; right click opens the menu. The menu is
+/// rebuilt from live state, so the actions it offers are the ones that would
+/// work right now. Every action goes through the same capability API as the
+/// window, so permissions, approvals and the audit trail are identical.
+fn install_tray(
+    app: &tauri::App,
+    port: u16,
+    token: String,
+    data_dir: String,
+    projects: Vec<(String, String)>,
+    sites: Vec<(String, String)>,
+    services: Vec<String>,
+) -> tauri::Result<()> {
+    let Some(icon) = app.default_window_icon().cloned() else {
+        return Ok(());
+    };
+    let state = TrayState {
+        port,
+        token,
+        data_dir,
+        projects,
+        sites,
+        services,
+    };
+    let base = format!("http://127.0.0.1:{port}");
+    let live = Arc::new(Mutex::new(live_from_api(&state)));
+    let initial = live.lock().map(|l| l.clone()).unwrap_or_default();
+    let menu = tray_menu(&app.handle(), &state, &initial)?;
+
+    let state_for_menu = state.clone();
+    let live_for_menu = live.clone();
     TrayIconBuilder::with_id("devd")
         .icon(icon)
         .tooltip(format!(
@@ -601,6 +822,9 @@ fn install_tray(
         .show_menu_on_left_click(false)
         .on_menu_event(move |app, event| {
             let id = event.id.as_ref().to_string();
+            let port = state_for_menu.port;
+            let token = state_for_menu.token.clone();
+            let dir = state_for_menu.data_dir.clone();
             match id.as_str() {
                 "open" => show_main(app),
                 "assistant" => {
@@ -620,6 +844,14 @@ fn install_tray(
                 }
                 "svc:page" => {
                     let _ = open::that(format!("{base}/server/services"));
+                }
+                "svc:add" => {
+                    // Installing or adopting a service is a decision with its
+                    // own screen and options, not a menu toggle.
+                    let _ = open::that(format!("{base}/server/services"));
+                }
+                "health:page" => {
+                    let _ = open::that(format!("{base}/diagnostics"));
                 }
                 "create" => {
                     let _ = open::that(format!("{base}/create"));
@@ -647,65 +879,79 @@ fn install_tray(
                 }
                 // A menu handler must return at once; starting services and
                 // tunnels takes seconds, so those calls run on a thread.
+                // stack.up / stack.down respect dependency order and only act on
+                // services devd manages.
                 "start-all" => {
-                    let token = token_for_menu.clone();
                     std::thread::spawn(move || {
-                        let _ = api_call(port, &token, "stack.start", serde_json::json!({}));
+                        let _ = api_call(port, &token, "stack.up", serde_json::json!({}));
                     });
                 }
                 "stop-all" => {
-                    let token = token_for_menu.clone();
-                    let names = services.clone();
                     std::thread::spawn(move || {
-                        for name in names {
-                            let _ = api_call(
-                                port,
-                                &token,
-                                "toolchain.service",
-                                serde_json::json!({ "tool": name, "action": "stop" }),
-                            );
-                        }
+                        let _ = api_call(port, &token, "stack.down", serde_json::json!({}));
                     });
                 }
                 "folder" => {
-                    let _ = open::that(&dir_for_menu);
+                    let _ = open::that(&dir);
                 }
                 "projects" => {
-                    let www = std::path::PathBuf::from(&dir_for_menu).join("www");
+                    let www = std::path::PathBuf::from(&dir).join("www");
                     let _ = open::that(if www.is_dir() {
                         www
                     } else {
-                        std::path::PathBuf::from(&dir_for_menu)
+                        std::path::PathBuf::from(&dir)
                     });
                 }
                 "log" => {
-                    let file = std::path::PathBuf::from(&dir_for_menu).join("desktop.log");
+                    let file = std::path::PathBuf::from(&dir).join("desktop.log");
                     if file.exists() {
                         let _ = open::that(file);
                     } else {
-                        let _ = open::that(&dir_for_menu);
+                        let _ = open::that(&dir);
                     }
                 }
-                // The check box is the setting; the registry entry is what the
-                // operating system reads at sign-in.
-                "autostart" => {
-                    let next = !autostart_for_menu.is_checked().unwrap_or(false);
-                    let _ = autostart_for_menu.set_checked(next);
-                    set_autostart(next);
-                }
+                // The registry entry is the setting; the rebuilt menu shows the
+                // check box from what the registry actually says.
+                "autostart" => set_autostart(!autostart_on()),
                 "quit" => app.exit(0),
                 other => {
                     if let Some(rest) = other.strip_prefix("www:") {
                         if let Ok(i) = rest.parse::<usize>() {
-                            if let Some((_, path)) = projects.get(i) {
+                            if let Some((_, path)) = state_for_menu.projects.get(i) {
                                 let _ = open::that(path);
+                            }
+                        }
+                    } else if let Some(rest) = other.strip_prefix("share:open:") {
+                        if let Ok(i) = rest.parse::<usize>() {
+                            if let Ok(held) = live_for_menu.lock() {
+                                if let Some((_, url)) = held.links.get(i) {
+                                    let _ = open::that(url);
+                                }
+                            }
+                        }
+                    } else if let Some(rest) = other.strip_prefix("share:stop:") {
+                        if let Ok(i) = rest.parse::<usize>() {
+                            let project = live_for_menu
+                                .lock()
+                                .ok()
+                                .and_then(|held| held.links.get(i).map(|(p, _)| p.clone()));
+                            if let Some(project) = project {
+                                let token = token.clone();
+                                std::thread::spawn(move || {
+                                    let _ = api_call(
+                                        port,
+                                        &token,
+                                        "share.ngrok_stop",
+                                        serde_json::json!({ "project": project }),
+                                    );
+                                });
                             }
                         }
                     } else if let Some(rest) = other.strip_prefix("share:") {
                         if let Ok(i) = rest.parse::<usize>() {
-                            if let Some((_, root)) = sites.get(i) {
+                            if let Some((_, root)) = state_for_menu.sites.get(i) {
                                 let root = root.clone();
-                                let token = token_for_menu.clone();
+                                let token = token.clone();
                                 let sites_url = format!("{base}/sites");
                                 std::thread::spawn(move || {
                                     let started = api_call(
@@ -734,18 +980,18 @@ fn install_tray(
                         let mut parts = rest.splitn(2, ':');
                         let name = parts.next().unwrap_or("").to_string();
                         let action = parts.next().unwrap_or("").to_string();
-                        if action != "logs" && !name.is_empty() {
-                            let token = token_for_menu.clone();
+                        if action == "logs" {
+                            let _ = open::that(format!("{base}/server/services"));
+                        } else if matches!(action.as_str(), "start" | "stop" | "restart") && !name.is_empty() {
+                            let token = token.clone();
                             std::thread::spawn(move || {
                                 let _ = api_call(
                                     port,
                                     &token,
-                                    "toolchain.service",
-                                    serde_json::json!({ "tool": name, "action": action }),
+                                    &format!("service.{action}"),
+                                    serde_json::json!({ "name": name }),
                                 );
                             });
-                        } else {
-                            let _ = open::that(format!("{base}/machine"));
                         }
                     }
                 }
@@ -762,9 +1008,60 @@ fn install_tray(
             }
         })
         .build(app)?;
+
+    // Keep the menu truthful. Thirty seconds is fast enough to notice a service
+    // going down and slow enough that the probes are not a background load.
+    let handle = app.handle().clone();
+    let refresh_state = state.clone();
+    let refresh_live = live.clone();
+    let _ = std::thread::Builder::new()
+        .name("devd-tray-refresh".into())
+        .spawn(move || loop {
+            std::thread::sleep(Duration::from_secs(30));
+            let live = live_from_api(&refresh_state);
+            // Replacing the menu closes it if it is open, and rebuilding costs
+            // native menu objects. Only do that when something a person can see
+            // has actually changed.
+            let changed = match refresh_live.lock() {
+                Ok(held) if *held == live => false,
+                Ok(mut held) => {
+                    *held = live.clone();
+                    true
+                }
+                Err(_) => true,
+            };
+            if !changed {
+                continue;
+            }
+            let thread_handle = handle.clone();
+            let state = refresh_state.clone();
+            let _ = handle.run_on_main_thread(move || {
+                let handle = thread_handle;
+                let Some(tray) = handle.tray_by_id("devd") else {
+                    return;
+                };
+                if let Ok(menu) = tray_menu(&handle, &state, &live) {
+                    let _ = tray.set_menu(Some(menu));
+                }
+                let running = live.services.iter().filter(|(_, run, _)| *run).count();
+                let tip = if live.incidents.is_empty() {
+                    format!(
+                        "devd {} - {} service(s) running",
+                        env!("CARGO_PKG_VERSION"),
+                        running
+                    )
+                } else {
+                    format!(
+                        "devd {} - {} incident(s)",
+                        env!("CARGO_PKG_VERSION"),
+                        live.incidents.len()
+                    )
+                };
+                let _ = tray.set_tooltip(Some(&tip));
+            });
+        });
     Ok(())
 }
-
 fn send_shutdown(shutdown: &Shutdown) {
     if let Ok(guard) = shutdown.lock() {
         if let Some(tx) = guard.as_ref() {
