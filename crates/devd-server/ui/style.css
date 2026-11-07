@@ -6409,7 +6409,7 @@ body { letter-spacing: 0; }
 .thread-state.is-wait { background: var(--dot-warn); }
 .thread-state.is-bad { background: var(--dot-bad); }
 /* A specialist under the request it works for: the handoff chain, indented on a rule. */
-.thread-child { margin-left: 14px; padding-left: 8px; border-left: 1px solid var(--line); }
+.thread-child { margin: 1px 0; }
 .thread-child .thread { height: 30px; gap: 7px; font-size: var(--text-xs); }
 .thread-role { flex: none; color: var(--color-base-content); font-weight: 500; }
 .thread-task { color: var(--fg-dim); }
@@ -7301,7 +7301,6 @@ pre.mermaid svg { max-width: 100%; height: auto; }
 @media (hover: hover) and (pointer: fine) { .thread-kids:hover { background: var(--bg-surface); color: var(--fg); } }
 .thread-row.thread-top .thread-del { top: 5px; transform: none; }
 .thread-kids-list { margin: 0 0 4px 11px; padding-left: 2px; border-left: 1px solid var(--line); }
-.thread-kids-list .thread-child { margin: 1px 0; padding-left: 0; border-left: 0; }
 .thread-child .thread { height: 28px; gap: 7px; font-size: 12px; padding-right: 30px; }
 .thread-child .thread-task { color: var(--fg-dim); }
 .thread-child .thread-task b { color: var(--fg-mute); font-weight: 500; }

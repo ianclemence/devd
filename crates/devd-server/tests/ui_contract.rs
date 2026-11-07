@@ -1365,3 +1365,23 @@ fn every_data_change_value_has_a_handler() {
         assert!(APP.contains(&handler), "no handler for data-change `{value}`");
     }
 }
+
+#[test]
+fn opening_a_specialist_never_detaches_it_from_its_request_in_the_list() {
+    // Clicking through conversations repainted the list under the patcher. Two things
+    // broke the margins: the open conversation's copy replaced the list entry and lost its
+    // team link, and a request and its specialists were siblings the patcher could pair up
+    // wrongly. A request and its list are one keyed item, and the entry is merged.
+    assert!(
+        APP.contains("AI.threads[idx] = Object.assign({}, AI.threads[idx], d.thread)"),
+        "the open thread is merged into the list entry, not swapped for it"
+    );
+    assert!(
+        APP.contains("<div class=\"thread-item\" data-key=\"i") && APP.contains("<div class=\"thread-kids-list\" data-key=\"k"),
+        "a request and its specialists are one keyed item"
+    );
+    assert!(
+        !CSS.contains(".thread-child { margin-left: 14px"),
+        "only the specialists' list indents them, never the row on its own"
+    );
+}

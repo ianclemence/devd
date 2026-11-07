@@ -16,6 +16,30 @@ Nothing yet.
 
 ---
 
+## [0.25.1] - 2026-11-07 - A conversation list that holds its shape
+
+### Fixed
+
+- **The conversation list keeps its margins while you click through chats.** Opening a specialist's
+  conversation replaced its entry in the list with a copy that did not carry the team link, so the
+  specialist dropped out of the request it belonged to and was drawn with a different indent. The
+  open conversation is now merged into the list entry, a request and its specialists are one keyed
+  item the live patcher cannot pair up wrongly, and only the specialists' list indents them.
+- The header no longer offers "Continue" on a run that has already finished.
+
+### Changed
+
+- **Charts, metrics, steps, timelines and details are drawn as coloured artifacts** on a dark
+  surface in a named data palette, with a takeaway and source line on charts. Code blocks name
+  their language, diffs are green and red, and numeric table columns line up on the right. The
+  assistant prompt, the `interface-contract` skill and `design.manifest` describe the blocks, so
+  agents use them.
+
+Releases remain unsigned: there is no signing key on the build machine, so `devd update` will not
+install them. Download the build and replace the files by hand.
+
+---
+
 ## [0.25.0] - 2026-11-07 - A team you can watch work
 
 ### Changed

@@ -8831,7 +8831,10 @@ var TERM_POLL_MS = 250;
       if (d.thread.model) AI.pickModel = d.thread.model;
       AI.queued = d.queued || 0;
       var idx = (AI.threads || []).map(function (t) { return t.id; }).indexOf(d.thread.id);
-      if (idx >= 0) AI.threads[idx] = d.thread;
+      // The open conversation's own copy is fresher for what it carries, but it does not carry
+      // everything the list knows (which team run a specialist belongs to, its PR link). Merge,
+      // so opening a specialist never detaches it from the request it works for.
+      if (idx >= 0) AI.threads[idx] = Object.assign({}, AI.threads[idx], d.thread);
       // The plan the agent wrote is project state, not conversation state. Read it when a thread
       // opens and every few seconds after, so it stays true while the person works elsewhere.
       var project = d.thread.project;
@@ -10153,7 +10156,12 @@ var TERM_POLL_MS = 250;
         } else {
           head = threadRowHtml(t, false);
         }
-        return head + (t._open ? '<div class="thread-kids-list">' + t._kids.map(function (c) { return threadRowHtml(c, true); }).join("") + "</div>" : "");
+        // A request and its specialists are one keyed item. The patcher matches siblings by
+        // key, so a row and its list that were siblings could be matched to the wrong
+        // neighbours while the list was repainted under a click, leaving a specialist
+        // outside its list with the wrong indent. Inside one item they cannot separate.
+        return '<div class="thread-item" data-key="i' + attr(t.id) + '">' + head +
+          (t._open ? '<div class="thread-kids-list" data-key="k' + attr(t.id) + '">' + t._kids.map(function (c) { return threadRowHtml(c, true); }).join("") + "</div>" : "") + "</div>";
       }).join("");
       return '<div class="thread-group' + (closed ? " is-closed" : "") + '" data-key="p' + attr(key || "none") + '">' +
         '<button type="button" class="thread-group-head" data-action="thread-group" data-id="' + attr(key) + '" aria-expanded="' + (closed ? "false" : "true") + '">' +
