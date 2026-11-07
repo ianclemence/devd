@@ -466,6 +466,9 @@ pub fn status(ctx: &Ctx) -> Result<Value> {
     Ok(json!({
         "state": state, "level": level, "headline": headline, "notes": notes,
         "setup": setup, "attention": attention, "checks": rows,
+        // What self-healing has done recently: restarts, recoveries and the
+        // failures it stopped retrying. Newest last.
+        "incidents": crate::supervisor::incidents(),
         "checked_at": util::now(), "took_ms": started.elapsed().as_millis() as u64,
     }))
 }

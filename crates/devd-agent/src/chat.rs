@@ -110,6 +110,16 @@ When the person names a member - \"@implementer, add the dark mode toggle\" - gi
 A member's word is not proof: devd accepts the task only when its tool results prove it, so ask for the run with team.get and report what the tool results actually show. \
 Use team.start when nobody has said who should do the work and the work needs planning first.
 
+## The whole machine, not one conversation
+`team.overview` is your orchestration view: every recent run in every project, every specialist with
+its role, conversation, worktree, dependencies, evidence and last activity, which roles are busy, and
+the one question each run would ask a person. Read it before you plan or assign work, so you know who
+is occupied, what is blocked, what is already done and which project a new task belongs to. Use
+`team.get` for one run's detail. You are accountable for the outcome of every task a person gives you,
+whichever specialist performs it: if a member is blocked, reassign it, retry it with context, or do
+the work yourself; do not forward a failure as an answer. Prefer doing a small task directly over
+starting a run for it.
+
 ## How to work
 1. Understand before acting. For a project, call project.detect first: it gives the stack, package \
 manager, required runtimes, the tasks you can run, services and missing tools. Read the project's \
@@ -135,6 +145,21 @@ not watch, use inbox.post.
 are about to do and why, in plain words: \"Reading the meetup controller to find every place a \
 person joins.\" not \"Reading 1 file.\" The person follows your work through these lines, so make \
 each one specific to the task; skip it only for an immediate follow-up to the line before.
+
+## The machine looks after itself
+devd keeps the services a project needs running: it watched a stopped one, restarts it with
+backoff, verifies it answers, and records what it did. `health.status` is the live picture - every
+service, the environment checks and the recent self-healing incidents. When something there is
+yours to fix, fix it (toolchain.service, toolchain.install, project.run) and carry on; only a
+genuinely external dependency, or an operation that leaves this machine, is a question for the
+person.
+
+## Spend context on the problem, not on repeating it
+Read narrowly: `fs.search` with a glob and a limit, `fs.read` with offset and limit, `project.detect`
+before guessing. Do not paste whole files or long logs into a reply - quote the line that matters and
+say where it is. The task brief, the run's memory and earlier agents' records already hold what was
+learned; read those before investigating the same thing again. A short, specific report that names
+the file, the command and the result is worth more than a long one that restates the request.
 
 ## Safety and permission
 - The conversation's project is yours to work in. Inside it you may read, create, \
@@ -213,6 +238,8 @@ const COMMON_CALLS: &str = r#"
 - fs.write {"path":"<file>","content":"..."} ; fs.edit {"path":"<file>","old":"exact text","new":"exact text"} ; delete_file {"path":"<file or dir>","recursive":true|false}
 - git.status {"repo":"<dir>"} ; git.diff {"repo":"<dir>"}
 - todo.list {"project":"<dir>"} ; todo.create {"project":"<dir>","title":"..."} ; todo.complete {"id":"...","expected_revision":N}
+- team.overview {} - every run and specialist across every project; read it before assigning work
+- team.get {"run":"<id>"} ; team.list {} ; team.roles {} ; team.assign {"member":"<role>","instructions":"...","project":"<dir>"}
 For any capability not in this list, use devd_capabilities and then devd_describe before invoking it.
 The same common operations are also offered as direct tools (read_file, write_file, edit_file,
 list_files, search_files, project_info, project_tasks, run_task, git_status, git_diff, todo_list,
@@ -321,6 +348,42 @@ pub fn build_messages(events: &[ChatEvent]) -> Vec<Value> {
     repair(&mut msgs);
     clear_old_results(&mut msgs, KEEP_RESULTS);
     msgs
+}
+
+/// Withdraw pending approvals no policy would ask for any more.
+///
+/// An older build could queue an approval for a read (`fs.search` and its
+/// siblings). Reading is free now, so such a row would otherwise sit in the
+/// Inbox, as an actionable decision, until its lifetime ran out. This runs once
+/// when the process that owns the agents starts.
+pub fn withdraw_stale_read_approvals(
+    store: &devd_core::Store,
+    registry: &devd_core::Registry,
+) {
+    let Ok(pending) = store.list_requests(true, None, 1000) else {
+        return;
+    };
+    for r in pending {
+        let read = registry
+            .get(&r.capability)
+            .map(|c| c.tier == Tier::Read)
+            .unwrap_or(false);
+        if !read {
+            continue;
+        }
+        let why = "reading files no longer needs a person's decision";
+        let _ = store.decide_request(&r.id, "cancelled", "devd", None, Some(why));
+        if let Some(approval) = r.approval_id.as_deref() {
+            let _ = store.decline_approval(approval, "devd", Some(why));
+        }
+        if let Some(tid) = r.thread_id.as_deref() {
+            let _ = store.append_event(
+                tid,
+                "notice",
+                &json!({ "text": "Withdrew an old approval for reading files; reads no longer need a decision." }),
+            );
+        }
+    }
 }
 
 /// Every tool call must have a result in the next message. After a crash one may

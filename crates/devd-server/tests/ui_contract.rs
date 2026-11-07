@@ -1435,7 +1435,25 @@ fn secondary_list_controls_wait_for_hover_or_focus() {
 #[test]
 fn a_blocked_run_is_a_contained_card() {
     assert!(CSS.contains(".decision.decision-needs {"), "the needs decision is a card, not a label column");
-    assert!(CSS.contains("border-left: 3px solid var(--color-warning);"), "the warning edge marks it");
+    // It belongs to the notice/banner family: the same hairline, tint and radius,
+    // and no bar down the side.
+    assert!(
+        CSS.contains("border: 1px solid color-mix(in srgb, var(--color-warning) 22%, var(--line));"),
+        "a quiet tone border, like a banner"
+    );
+    assert!(!CSS.contains("border-left: 3px solid var(--color-warning)"), "no warning stripe");
+    assert!(CSS.contains("text-transform: none"), "the label is not shouted in capitals");
+}
+
+#[test]
+fn a_need_carries_its_question_and_detail_to_the_window() {
+    // `question` and `detail` are Rust methods; without writing them into the
+    // JSON the card rendered blank.
+    let needs = include_str!("../../devd-agent/src/needs.rs");
+    assert!(needs.contains("serde::ser::SerializeStruct"), "Needs serialises itself");
+    assert!(needs.contains("st.serialize_field(\"question\""), "the question is in the JSON");
+    assert!(needs.contains("st.serialize_field(\"detail\""), "the detail is in the JSON");
+    assert!(APP.contains("md(n.detail)"), "the report renders as markdown");
 }
 
 #[test]
@@ -1538,6 +1556,7 @@ fn the_rail_reports_live_work_on_every_screen() {
     assert!(APP.contains("live: live.length > 0"), "runs show a live dot while they work");
     assert!(APP.contains("rail-badge-"), "the counts are tinted by state");
     assert!(APP.contains("waiting for you"), "a waiting run says so in its hint");
+    assert!(APP.contains("threadRole(t) === \"devd\""), "specialists count as runs, not conversations");
 }
 
 #[test]
@@ -1547,4 +1566,88 @@ fn the_rail_draws_one_indicator_per_icon() {
     assert!(APP.contains("One indicator, never two"), "the renderer chooses one");
     assert!(APP.contains("? '<span class=\"rail-badge rail-badge-'"), "the badge is the indicated state");
     assert!(CSS.contains(".rail-icon .rail-badge ~ .rail-live"), "CSS refuses a second circle if markup ever allows it");
+}
+
+#[test]
+fn the_tray_can_start_devd_at_login() {
+    let desktop = include_str!("../../devd-desktop/src/lib.rs");
+    assert!(desktop.contains("Start at login"), "the tray offers the setting");
+    assert!(desktop.contains("--start-hidden"), "login starts in the tray, not over the desktop");
+    assert!(desktop.contains("CurrentVersion\\Run"), "the per-user Run key is the mechanism");
+    assert!(desktop.contains("\"Open agent runs\""), "the tray links to the runs view");
+}
+
+#[test]
+fn self_healing_is_visible_in_the_status_panel() {
+    assert!(APP.contains("Self-healing"), "the status panel names the incidents");
+    assert!(APP.contains("stops after three tries"), "it says what the policy is");
+    let health = include_str!("../../devd-agent/src/health.rs");
+    assert!(health.contains("crate::supervisor::incidents()"), "health carries the incidents");
+    let supervisor = include_str!("../../devd-agent/src/supervisor.rs");
+    assert!(supervisor.contains("MAX_ATTEMPTS"), "restarts are bounded");
+    assert!(supervisor.contains("control_allowed"), "an observe decision is respected");
+    assert!(supervisor.contains("toolchain.service"), "a restart goes through the audited capability");
+}
+
+#[test]
+fn quick_share_is_native_and_wired_all_the_way_down() {
+    let sites = include_str!("../../devd-sites/src/caps.rs");
+    assert!(sites.contains("\"share.quick\""), "the panel has a state read");
+    assert!(sites.contains("\"share.ngrok_setup\""), "the agent can be installed");
+    assert!(sites.contains("\"share.ngrok_token_set\""), "the token is stored");
+    assert!(sites.contains("\"share.ngrok_start\""), "a project can be shared");
+    assert!(sites.contains("\"share.ngrok_stop\""), "a share can be closed");
+    assert!(sites.contains("\"share.qr\""), "a QR code is drawn");
+    assert!(sites.contains("fn upstream_for"), "the local service is found, not guessed");
+    let ngrok = include_str!("../../devd-services/src/ngrok.rs");
+    assert!(ngrok.contains("NGROK_AUTHTOKEN"), "the token goes through the environment, not argv");
+    assert!(ngrok.contains("fn find_url"), "the address is read from the agent");
+    assert!(ngrok.contains("fn qr_svg"), "QR codes are drawn locally");
+    assert!(ngrok.contains("MAX_ATTEMPTS") || ngrok.contains("TIMEOUT"), "waiting is bounded");
+    assert!(APP.contains("function quickShareSheet"), "the panel exists");
+    assert!(APP.contains("data-action=\"quick-share\""), "projects and sites have a Share action");
+    assert!(APP.contains("share.ngrok_start"), "the panel starts the tunnel");
+    assert!(APP.contains("data-action=\"qs-copy\""), "the address can be copied");
+    assert!(APP.contains("qs-qr"), "the QR code is shown");
+    let desktop = include_str!("../../devd-desktop/src/lib.rs");
+    assert!(desktop.contains("\"Quick Share\""), "the tray has a Quick Share submenu");
+    assert!(desktop.contains("share.ngrok_start"), "the tray can share a site");
+    assert!(desktop.contains("\"Start All\""), "the tray can start the stack");
+    assert!(desktop.contains("\"Services\""), "the tray lists services");
+}
+
+#[test]
+fn portability_is_detected_and_repairable() {
+    let p = include_str!("../../devd-agent/src/portability.rs");
+    assert!(p.contains("\"portability.status\""), "the home can be checked");
+    assert!(p.contains("\"portability.repair\""), "recorded paths can be moved");
+    assert!(p.contains("fn remap"), "a prefix is matched on a path boundary");
+    assert!(APP.contains("data-action=\"port-check\""), "the diagnostics page offers the check");
+    assert!(APP.contains("data-action=\"port-repair\""), "and the repair");
+    let bootstrap = include_str!("../../devd-bootstrap/src/lib.rs");
+    assert!(bootstrap.contains("portability::register"), "the capabilities are registered");
+}
+
+#[test]
+fn collapsible_content_is_indented_under_its_heading() {
+    assert!(
+        CSS.contains("details > :not(summary) { margin-left: 20px; }"),
+        "every disclosure steps its content to the right"
+    );
+    assert!(
+        CSS.contains(".ui-fold > :not(summary) { margin-top: var(--s3); margin-left: 20px; }"),
+        "the common fold keeps its top gap and gains the indent"
+    );
+}
+
+#[test]
+fn removing_a_project_is_a_danger_action() {
+    assert!(
+        APP.contains("class=\"btn btn-mini btn-danger\" data-action=\"project-forget\""),
+        "Remove uses the danger colour, like Delete"
+    );
+    assert!(
+        APP.contains("class=\"btn btn-mini btn-danger\" data-action=\"project-remove-sites\""),
+        "Remove site uses the danger colour too"
+    );
 }

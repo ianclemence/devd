@@ -1307,6 +1307,20 @@ fn a_team_plans_waits_for_approval_works_and_is_verified_by_evidence() {
     for k in ["started", "plan", "plan_approved", "accepted", "done"] {
         assert!(kinds.contains(&k), "{k} in {kinds:?}");
     }
+    // The orchestrator's global view names the project, the run and the agents,
+    // and counts what finished, without re-reading each run.
+    let overview = call(&e, &e.human, "team.overview", json!({}), Approval::None).unwrap();
+    let projects = overview["projects"].as_object().expect("projects are grouped");
+    assert!(projects.keys().any(|k| k.contains("proj")), "{projects:?}");
+    let agent_states: Vec<&str> = overview["agents"]
+        .as_array()
+        .expect("agents are listed")
+        .iter()
+        .filter_map(|a| a["state"].as_str())
+        .collect();
+    assert!(agent_states.contains(&"done"), "{agent_states:?}");
+    assert!(overview["counts"]["done"].as_i64().unwrap_or(0) >= 1);
+    assert!(overview["runs"].as_array().map(|r| !r.is_empty()).unwrap_or(false));
 }
 
 #[test]

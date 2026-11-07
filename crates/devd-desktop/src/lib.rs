@@ -28,14 +28,15 @@
 //! registry. Everything that happens with the path afterwards goes through the
 //! ordinary capability API, where the permission checks live.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use devd_bootstrap::Bootstrap;
 use devd_core::capability::{Actor, Ctx, Surface};
 use devd_server::{Bound, Options};
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::Wry;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 
@@ -62,8 +63,17 @@ pub fn run() {
     let (claim, client) = match devd_server::attach_or_claim(&boot.paths, "ui") {
         Ok(devd_server::Attach::Client { port, .. }) => (None, Some(port)),
         Ok(devd_server::Attach::Own(claim)) => {
-            boot.agents.resume(&boot.paths);
-            devd_bootstrap::start_ops(&boot.paths, &boot.store, &boot.settings, &boot.events);
+            boot.agents.resume(&boot.paths, &boot.store, &boot.registry);
+            if devd_bootstrap::start_ops(&boot.paths, &boot.store, &boot.settings, &boot.events) {
+                devd_bootstrap::start_reconcile(&boot.paths, &boot.store, &boot.settings, &boot.events);
+                devd_bootstrap::start_supervisor(
+                    &boot.paths,
+                    &boot.store,
+                    &boot.settings,
+                    &boot.events,
+                    &boot.registry,
+                );
+            }
             (Some(claim), None)
         }
         Err(e) => {
@@ -122,6 +132,37 @@ fn run_with(
     // leaving an invisible process.
     let tray_ready = Arc::new(AtomicBool::new(false));
     let data_dir = boot.paths.root().display().to_string();
+
+    // What the tray lists, read once at start: the menu is a snapshot, and the
+    // actions themselves go to the live API.
+    let tray_projects: Vec<(String, String)> = boot
+        .store
+        .list_stack_projects()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| (p.name, p.path))
+        .collect();
+    let tray_sites: Vec<(String, String)> = boot
+        .store
+        .list_sites()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|s| (s.name, s.root))
+        .collect();
+    let tray_services: Vec<String> = devd_services::list(&Ctx {
+        store: boot.store.clone(),
+        paths: Arc::new(boot.paths.clone()),
+        settings: boot.settings.clone(),
+        events: boot.events.clone(),
+        actor: Actor::human(Surface::Gui),
+        run: None,
+        dry_run: false,
+    })
+    .unwrap_or_default()
+    .into_iter()
+    .filter(|s| s.installed)
+    .map(|s| s.name)
+    .collect();
 
     let registry = boot.registry.clone();
     let workspace = boot.workspace.clone();
@@ -192,13 +233,29 @@ fn run_with(
     let shutdown_for_window = shutdown.clone();
     let tray_ready_for_window = tray_ready.clone();
     let data_dir_for_tray = data_dir.clone();
-    let builder = tauri::Builder::default().setup(move |app| {
+    let builder = tauri::Builder::default()
+        // Registered first: a second launch focuses the window that is already
+        // running and exits, so there is one tray icon and one backend.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            show_main(app);
+        }))
+        .setup(move |app| {
         let window = match startup {
             Ok(bound) => {
                 let origin = format!("http://127.0.0.1:{}", bound.port);
                 let url: tauri::Url = origin.parse().expect("the loopback URL is valid");
                 let port = bound.port;
-                match install_tray(app, port, data_dir_for_tray.clone()) {
+                let token = bound.token.clone();
+                BACKEND_PORT.store(port, Ordering::SeqCst);
+                match install_tray(
+                    app,
+                    port,
+                    token,
+                    data_dir_for_tray.clone(),
+                    tray_projects.clone(),
+                    tray_sites.clone(),
+                    tray_services.clone(),
+                ) {
                     Ok(()) => {
                         tray_ready_for_window.store(true, Ordering::SeqCst);
                         startup_log("tray icon ready");
@@ -247,7 +304,11 @@ fn run_with(
                 window
             }
         };
-        let _ = window.show();
+        // Started by the system at login: the tray is the way in, not a window
+        // over whatever the person opened first.
+        if !std::env::args().any(|a| a == "--start-hidden") {
+            let _ = window.show();
+        }
         Ok(())
     });
 
@@ -288,11 +349,99 @@ fn run_with(
 }
 
 /// Put the devd window in front, restoring it from the tray or a minimised state.
+/// The port the backend ended up on, so a window reopened after a restart can
+/// find it again instead of holding an address nothing answers on.
+static BACKEND_PORT: AtomicU16 = AtomicU16::new(0);
+
+/// Call one capability on the local API with the session token. The tray's
+/// actions are the same calls the window makes, so they are checked and audited
+/// the same way.
+fn api_call(port: u16, token: &str, id: &str, args: serde_json::Value) -> Option<serde_json::Value> {
+    if token.is_empty() {
+        return None;
+    }
+    let body = serde_json::json!({ "id": id, "args": args, "dry_run": false }).to_string();
+    let response = ureq::post(&format!("http://127.0.0.1:{port}/api/invoke"))
+        .set("Authorization", &format!("Bearer {token}"))
+        .set("Content-Type", "application/json")
+        .send_string(&body)
+        .ok()?;
+    serde_json::from_str::<serde_json::Value>(&response.into_string().ok()?).ok()
+}
+
 fn show_main(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
+        let port = BACKEND_PORT.load(Ordering::SeqCst);
+        if port > 0 {
+            // If the window is on an old port, go to the live one. If it is on
+            // the right port but showing the browser's network-error page (the
+            // backend had not answered when it was reopened), reload it. A
+            // working conversation is left exactly as it is.
+            let script = format!(
+                "try{{if(location.port&&location.port!=='{port}'&&location.hostname!==''){{location.replace('http://127.0.0.1:{port}/')}}else if(document.body&&/can.t be reached|ERR_CONNECTION|This page isn.t working/i.test(document.body.innerText)){{location.reload()}}}}catch(e){{}}"
+            );
+            let _ = window.eval(&script);
+        }
+    }
+}
+
+/// Whether devd is registered to start when the person signs in.
+fn autostart_on() -> bool {
+    #[cfg(windows)]
+    {
+        let out = std::process::Command::new("reg.exe")
+            .args([
+                "query",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                "/v",
+                "devd",
+            ])
+            .output();
+        matches!(out, Ok(o) if o.status.success())
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+/// Register or unregister devd's start-at-login entry.
+///
+/// Windows reads the per-user Run key; the entry starts the desktop shell with
+/// `--start-hidden`, so signing in puts devd in the tray rather than a window
+/// over the desktop. Other desktops have their own autostart mechanism, so the
+/// menu entry is left off there.
+fn set_autostart(on: bool) {
+    #[cfg(windows)]
+    {
+        let Ok(exe) = std::env::current_exe() else {
+            return;
+        };
+        let key = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+        let mut command = std::process::Command::new("reg.exe");
+        if on {
+            command.args([
+                "add",
+                key,
+                "/v",
+                "devd",
+                "/t",
+                "REG_SZ",
+                "/d",
+                &format!("\"{}\" --start-hidden", exe.display()),
+                "/f",
+            ]);
+        } else {
+            command.args(["delete", key, "/v", "devd", "/f"]);
+        }
+        let _ = command.output();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = on;
     }
 }
 
@@ -302,38 +451,145 @@ fn show_main(app: &tauri::AppHandle) {
 /// the actions a person needs without reopening the app: the window, the same
 /// interface in a browser, the data folder, the desktop log, and the explicit
 /// quit that actually ends the process.
-fn install_tray(app: &tauri::App, port: u16, data_dir: String) -> tauri::Result<()> {
+fn install_tray(
+    app: &tauri::App,
+    port: u16,
+    token: String,
+    data_dir: String,
+    projects: Vec<(String, String)>,
+    sites: Vec<(String, String)>,
+    services: Vec<String>,
+) -> tauri::Result<()> {
     let Some(icon) = app.default_window_icon().cloned() else {
         return Ok(());
     };
+    let base = format!("http://127.0.0.1:{port}");
     // The first row names what is running and where, so the tray never leaves a
     // person guessing which port or version they are looking at.
     let title = MenuItem::with_id(
         app,
         "title",
-        format!(
-            "devd {}  ·  http://127.0.0.1:{port}",
-            env!("CARGO_PKG_VERSION")
-        ),
+        format!("devd {}  ·  {base}", env!("CARGO_PKG_VERSION")),
         false,
         None::<&str>,
     )?;
     let open = MenuItem::with_id(app, "open", "Open devd", true, None::<&str>)?;
     let assistant = MenuItem::with_id(app, "assistant", "Open Assistant", true, None::<&str>)?;
+    let runs = MenuItem::with_id(app, "runs", "Open agent runs", true, None::<&str>)?;
     let browser = MenuItem::with_id(app, "browser", "Open in browser", true, None::<&str>)?;
+
+    // www: the projects devd knows, each opening its folder.
+    let mut www_items = vec![MenuItem::with_id(app, "www:page", "Open projects", true, None::<&str>)?];
+    if projects.is_empty() {
+        www_items.push(MenuItem::with_id(app, "www:none", "No projects yet", false, None::<&str>)?);
+    }
+    for (i, (name, _)) in projects.iter().enumerate() {
+        www_items.push(MenuItem::with_id(app, format!("www:{i}"), name.as_str(), true, None::<&str>)?);
+    }
+    let www_refs: Vec<&dyn IsMenuItem<Wry>> = www_items.iter().map(|i| i as &dyn IsMenuItem<Wry>).collect();
+    let www = Submenu::with_items(app, "www", true, &www_refs)?;
+
+    // Quick Share: a site, one click, public.
+    let mut share_items = vec![MenuItem::with_id(app, "share:page", "Manage sharing", true, None::<&str>)?];
+    if sites.is_empty() {
+        share_items.push(MenuItem::with_id(app, "share:none", "No sites to share", false, None::<&str>)?);
+    }
+    for (i, (name, _)) in sites.iter().enumerate() {
+        share_items.push(MenuItem::with_id(app, format!("share:{i}"), format!("Share {name}"), true, None::<&str>)?);
+    }
+    let share_refs: Vec<&dyn IsMenuItem<Wry>> = share_items.iter().map(|i| i as &dyn IsMenuItem<Wry>).collect();
+    let share = Submenu::with_items(app, "Quick Share", true, &share_refs)?;
+
+    // Services: each one gets Start / Stop / Restart / Logs.
+    let mut service_subs: Vec<Submenu<Wry>> = Vec::new();
+    for name in &services {
+        let mut items = Vec::new();
+        for (action, label) in [("start", "Start"), ("stop", "Stop"), ("restart", "Restart")] {
+            items.push(MenuItem::with_id(
+                app,
+                format!("svc:{name}:{action}"),
+                label,
+                true,
+                None::<&str>,
+            )?);
+        }
+        items.push(MenuItem::with_id(app, format!("svc:{name}:logs"), "Logs", true, None::<&str>)?);
+        let refs: Vec<&dyn IsMenuItem<Wry>> = items.iter().map(|i| i as &dyn IsMenuItem<Wry>).collect();
+        service_subs.push(Submenu::with_items(app, name.as_str(), true, &refs)?);
+    }
+    let mut service_items = vec![MenuItem::with_id(app, "svc:page", "Services", true, None::<&str>)?];
+    if service_subs.is_empty() {
+        service_items.push(MenuItem::with_id(app, "svc:none", "No services installed", false, None::<&str>)?);
+    }
+    let mut service_refs: Vec<&dyn IsMenuItem<Wry>> = service_items.iter().map(|i| i as &dyn IsMenuItem<Wry>).collect();
+    service_refs.extend(service_subs.iter().map(|s| s as &dyn IsMenuItem<Wry>));
+    let services_menu = Submenu::with_items(app, "Services", true, &service_refs)?;
+
+    let start_all = MenuItem::with_id(app, "start-all", "Start All", true, None::<&str>)?;
+    let stop_all = MenuItem::with_id(app, "stop-all", "Stop All", true, None::<&str>)?;
+    let quick_app = MenuItem::with_id(app, "create", "Quick app", true, None::<&str>)?;
+    let terminal = MenuItem::with_id(app, "terminal", "Terminal", true, None::<&str>)?;
+    let prefs = MenuItem::with_id(app, "prefs", "Preferences…", true, None::<&str>)?;
+    let tools = Submenu::with_items(
+        app,
+        "Tools",
+        true,
+        &[
+            &MenuItem::with_id(app, "tools:runtimes", "Runtimes and tools", true, None::<&str>)?,
+            &MenuItem::with_id(app, "tools:models", "Models", true, None::<&str>)?,
+            &MenuItem::with_id(app, "tools:activity", "Activity", true, None::<&str>)?,
+            &MenuItem::with_id(app, "tools:diagnostics", "Diagnostics", true, None::<&str>)?,
+            &MenuItem::with_id(app, "tools:api", "API and capabilities", true, None::<&str>)?,
+        ],
+    )?;
+
     let folder = MenuItem::with_id(app, "folder", "Open devd folder", true, None::<&str>)?;
-    let projects = MenuItem::with_id(app, "projects", "Open projects folder", true, None::<&str>)?;
+    let projects_folder = MenuItem::with_id(app, "projects", "Open projects folder", true, None::<&str>)?;
     let log = MenuItem::with_id(app, "log", "Open desktop log", true, None::<&str>)?;
+    let autostart = CheckMenuItem::with_id(
+        app,
+        "autostart",
+        "Start at login",
+        true,
+        autostart_on(),
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, "quit", "Quit devd", true, None::<&str>)?;
     let above = PredefinedMenuItem::separator(app)?;
     let below = PredefinedMenuItem::separator(app)?;
+    let before_quit = PredefinedMenuItem::separator(app)?;
+    let status_sep = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(
         app,
         &[
-            &title, &open, &assistant, &browser, &above, &folder, &projects, &log, &below, &quit,
+            &title,
+            &open,
+            &assistant,
+            &runs,
+            &browser,
+            &status_sep,
+            &www,
+            &share,
+            &services_menu,
+            &start_all,
+            &stop_all,
+            &quick_app,
+            &tools,
+            &terminal,
+            &prefs,
+            &above,
+            &folder,
+            &projects_folder,
+            &log,
+            &below,
+            &autostart,
+            &before_quit,
+            &quit,
         ],
     )?;
+    let autostart_for_menu = autostart.clone();
     let dir_for_menu = data_dir;
+    let token_for_menu = token;
     TrayIconBuilder::with_id("devd")
         .icon(icon)
         .tooltip(format!(
@@ -343,31 +599,157 @@ fn install_tray(app: &tauri::App, port: u16, data_dir: String) -> tauri::Result<
         .menu(&menu)
         // Right click is the menu; left click restores the window.
         .show_menu_on_left_click(false)
-        .on_menu_event(move |app, event| match event.id.as_ref() {
-            "open" => show_main(app),
-            "assistant" => {
-                let _ = open::that(format!("http://127.0.0.1:{port}/assistant"));
-            }
-            "browser" => {
-                let _ = open::that(format!("http://127.0.0.1:{port}"));
-            }
-            "folder" => {
-                let _ = open::that(&dir_for_menu);
-            }
-            "projects" => {
-                let www = std::path::PathBuf::from(&dir_for_menu).join("www");
-                let _ = open::that(if www.is_dir() { www } else { std::path::PathBuf::from(&dir_for_menu) });
-            }
-            "log" => {
-                let file = std::path::PathBuf::from(&dir_for_menu).join("desktop.log");
-                if file.exists() {
-                    let _ = open::that(file);
-                } else {
+        .on_menu_event(move |app, event| {
+            let id = event.id.as_ref().to_string();
+            match id.as_str() {
+                "open" => show_main(app),
+                "assistant" => {
+                    let _ = open::that(format!("{base}/assistant"));
+                }
+                "runs" => {
+                    let _ = open::that(format!("{base}/agents/runs"));
+                }
+                "browser" => {
+                    let _ = open::that(&base);
+                }
+                "www:page" => {
+                    let _ = open::that(format!("{base}/projects"));
+                }
+                "share:page" => {
+                    let _ = open::that(format!("{base}/sites"));
+                }
+                "svc:page" => {
+                    let _ = open::that(format!("{base}/server/services"));
+                }
+                "create" => {
+                    let _ = open::that(format!("{base}/create"));
+                }
+                "terminal" => {
+                    let _ = open::that(format!("{base}/terminal"));
+                }
+                "prefs" => {
+                    let _ = open::that(format!("{base}/diagnostics"));
+                }
+                "tools:runtimes" => {
+                    let _ = open::that(format!("{base}/server/runtimes"));
+                }
+                "tools:diagnostics" => {
+                    let _ = open::that(format!("{base}/diagnostics"));
+                }
+                "tools:models" => {
+                    let _ = open::that(format!("{base}/models"));
+                }
+                "tools:activity" => {
+                    let _ = open::that(format!("{base}/activity"));
+                }
+                "tools:api" => {
+                    let _ = open::that(format!("{base}/api-tools"));
+                }
+                // A menu handler must return at once; starting services and
+                // tunnels takes seconds, so those calls run on a thread.
+                "start-all" => {
+                    let token = token_for_menu.clone();
+                    std::thread::spawn(move || {
+                        let _ = api_call(port, &token, "stack.start", serde_json::json!({}));
+                    });
+                }
+                "stop-all" => {
+                    let token = token_for_menu.clone();
+                    let names = services.clone();
+                    std::thread::spawn(move || {
+                        for name in names {
+                            let _ = api_call(
+                                port,
+                                &token,
+                                "toolchain.service",
+                                serde_json::json!({ "tool": name, "action": "stop" }),
+                            );
+                        }
+                    });
+                }
+                "folder" => {
                     let _ = open::that(&dir_for_menu);
                 }
+                "projects" => {
+                    let www = std::path::PathBuf::from(&dir_for_menu).join("www");
+                    let _ = open::that(if www.is_dir() {
+                        www
+                    } else {
+                        std::path::PathBuf::from(&dir_for_menu)
+                    });
+                }
+                "log" => {
+                    let file = std::path::PathBuf::from(&dir_for_menu).join("desktop.log");
+                    if file.exists() {
+                        let _ = open::that(file);
+                    } else {
+                        let _ = open::that(&dir_for_menu);
+                    }
+                }
+                // The check box is the setting; the registry entry is what the
+                // operating system reads at sign-in.
+                "autostart" => {
+                    let next = !autostart_for_menu.is_checked().unwrap_or(false);
+                    let _ = autostart_for_menu.set_checked(next);
+                    set_autostart(next);
+                }
+                "quit" => app.exit(0),
+                other => {
+                    if let Some(rest) = other.strip_prefix("www:") {
+                        if let Ok(i) = rest.parse::<usize>() {
+                            if let Some((_, path)) = projects.get(i) {
+                                let _ = open::that(path);
+                            }
+                        }
+                    } else if let Some(rest) = other.strip_prefix("share:") {
+                        if let Ok(i) = rest.parse::<usize>() {
+                            if let Some((_, root)) = sites.get(i) {
+                                let root = root.clone();
+                                let token = token_for_menu.clone();
+                                let sites_url = format!("{base}/sites");
+                                std::thread::spawn(move || {
+                                    let started = api_call(
+                                        port,
+                                        &token,
+                                        "share.ngrok_start",
+                                        serde_json::json!({ "project": root }),
+                                    );
+                                    let url = started
+                                        .as_ref()
+                                        .and_then(|v| v["outcome"]["data"]["url"].as_str())
+                                        .map(|u| u.to_string());
+                                    match url {
+                                        Some(url) => {
+                                            let _ = open::that(url);
+                                        }
+                                        // Setup or a refusal: show the panel that explains it.
+                                        None => {
+                                            let _ = open::that(sites_url);
+                                        }
+                                    }
+                                });
+                            }
+                        }
+                    } else if let Some(rest) = other.strip_prefix("svc:") {
+                        let mut parts = rest.splitn(2, ':');
+                        let name = parts.next().unwrap_or("").to_string();
+                        let action = parts.next().unwrap_or("").to_string();
+                        if action != "logs" && !name.is_empty() {
+                            let token = token_for_menu.clone();
+                            std::thread::spawn(move || {
+                                let _ = api_call(
+                                    port,
+                                    &token,
+                                    "toolchain.service",
+                                    serde_json::json!({ "tool": name, "action": action }),
+                                );
+                            });
+                        } else {
+                            let _ = open::that(format!("{base}/machine"));
+                        }
+                    }
+                }
             }
-            "quit" => app.exit(0),
-            _ => {}
         })
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {

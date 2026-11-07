@@ -1301,6 +1301,179 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             Ok(Outcome::with_data(format!("{} · {} task(s)", run.state, tasks.len()), json!({ "run": run, "run_id": ctx.store.run_for_team_run(&a.run)?.map(|r| r.id), "tasks": tasks, "events": events, "approvals": pending, "needs": needs })))
         },
     )?;
+    reg.define::<NoArgs>("team.overview", "Everything the team is doing, across every project")
+    .description("The orchestration view of the whole machine: every recent run in every project with its state and counts, every specialist with its role, conversation, worktree, dependencies, evidence and last activity, which roles are busy, and the one question each run would ask a person. Read this before planning or assigning so you know who is occupied, what is blocked and what is already done. Read only.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, _| simple("team.overview", "read what the whole team is doing"),
+        |ctx, _| {
+            let runs = ctx.store.list_runs(40)?;
+            let threads = ctx.store.list_threads(300)?;
+            #[derive(Clone, Copy)]
+            struct ThreadInfo<'a> {
+                state: &'a str,
+                updated: &'a str,
+                model: &'a str,
+                input_tokens: i64,
+                output_tokens: i64,
+                cached_tokens: i64,
+                cost_usd: Option<f64>,
+            }
+            let thread_at: std::collections::HashMap<&str, ThreadInfo> = threads
+                .iter()
+                .map(|t| {
+                    (
+                        t.id.as_str(),
+                        ThreadInfo {
+                            state: t.state.as_str(),
+                            updated: t.updated_at.as_str(),
+                            model: t.model.as_deref().unwrap_or(""),
+                            input_tokens: t.input_tokens,
+                            output_tokens: t.output_tokens,
+                            cached_tokens: t.cache_read_tokens,
+                            cost_usd: t.cost_usd,
+                        },
+                    )
+                })
+                .collect();
+            let mut projects: std::collections::BTreeMap<String, Value> = std::collections::BTreeMap::new();
+            let mut roles: std::collections::BTreeMap<String, Value> = std::collections::BTreeMap::new();
+            let mut agents: Vec<Value> = Vec::new();
+            let mut run_rows: Vec<Value> = Vec::new();
+            let mut attention: Vec<Value> = Vec::new();
+            let mut total = json!({ "working": 0, "waiting": 0, "blocked": 0, "queued": 0, "done": 0 });
+            for run in &runs {
+                let tasks = ctx.store.list_tasks_of_run(&run.id)?;
+                let real: Vec<&devd_core::TeamTask> = tasks.iter().filter(|t| t.role != "planner").collect();
+                let (mut done, mut working, mut waiting, mut blocked, mut queued) = (0i64, 0i64, 0i64, 0i64, 0i64);
+                for t in &real {
+                    let info = thread_at
+                        .get(t.thread_id.as_deref().unwrap_or(""))
+                        .copied()
+                        .unwrap_or(ThreadInfo {
+                            state: "",
+                            updated: "",
+                            model: "",
+                            input_tokens: 0,
+                            output_tokens: 0,
+                            cached_tokens: 0,
+                            cost_usd: None,
+                        });
+                    let evidence = t.evidence.as_array().map(|a| a.len()).unwrap_or(0);
+                    let (bucket, state_key) = match t.state.as_str() {
+                        "done" | "skipped" => (&mut done, "done"),
+                        "running" => (&mut working, "working"),
+                        "waiting_approval" => (&mut waiting, "waiting"),
+                        "blocked" | "failed" | "unverified" => (&mut blocked, "blocked"),
+                        _ => (&mut queued, "queued"),
+                    };
+                    *bucket += 1;
+                    total[state_key] = json!(total[state_key].as_i64().unwrap_or(0) + 1);
+                    let role = roles
+                        .entry(t.role.clone())
+                        .or_insert_with(|| json!({ "tasks": 0, "working": 0, "waiting": 0, "blocked": 0 }));
+                    role["tasks"] = json!(role["tasks"].as_i64().unwrap_or(0) + 1);
+                    if state_key != "queued" && state_key != "done" {
+                        role[state_key] = json!(role[state_key].as_i64().unwrap_or(0) + 1);
+                    }
+                    let row = json!({
+                        "task": t.key,
+                        "title": t.title,
+                        "role": t.role,
+                        "state": t.state,
+                        "thread": t.thread_id,
+                        "thread_state": info.state,
+                        "model": info.model,
+                        // What this specialist actually spent, from the
+                        // provider's own usage numbers.
+                        "tokens": {
+                            "in": info.input_tokens,
+                            "out": info.output_tokens,
+                            "cached": info.cached_tokens,
+                        },
+                        "cost_usd": info.cost_usd,
+                        "scope": t.scope,
+                        "run": run.id,
+                        "run_title": run.title,
+                        "run_state": run.state,
+                        "project": run.project,
+                        "workdir": t.workdir,
+                        "branch": t.branch,
+                        "depends_on": t.depends_on,
+                        "attempts": t.attempts,
+                        "evidence": evidence,
+                        "last_activity": t.last_step_at,
+                        "thread_updated_at": info.updated,
+                        "error": t.error,
+                    });
+                    agents.push(row.clone());
+                }
+                let needs = crate::needs::of(run, &tasks);
+                if let Some(n) = &needs {
+                    attention.push(json!({
+                        "run": run.id,
+                        "project": run.project,
+                        "question": n.question(),
+                        "actions": n.actions.iter().map(|a| a.id.clone()).collect::<Vec<_>>(),
+                    }));
+                }
+                run_rows.push(json!({
+                    "id": run.id,
+                    "title": run.title,
+                    "project": run.project,
+                    "state": run.state,
+                    "plan_approved": run.plan_approved,
+                    "created_by": run.created_by,
+                    "updated_at": run.updated_at,
+                    "tasks": real.len(),
+                    "done": done,
+                    "working": working,
+                    "waiting": waiting,
+                    "blocked": blocked,
+                    "queued": queued,
+                    "needs": needs.as_ref().map(|n| n.question()),
+                }));
+                let key = run.project.clone().unwrap_or_else(|| "(no project)".to_string());
+                let p = projects.entry(key).or_insert_with(|| {
+                    json!({ "runs": 0, "open_runs": 0, "tasks": 0, "done": 0, "working": 0, "waiting": 0, "blocked": 0 })
+                });
+                for (k, v) in [
+                    ("runs", 1),
+                    ("tasks", real.len() as i64),
+                    ("done", done),
+                    ("working", working),
+                    ("waiting", waiting),
+                    ("blocked", blocked),
+                ] {
+                    p[k] = json!(p[k].as_i64().unwrap_or(0) + v);
+                }
+                if !matches!(run.state.as_str(), "done" | "failed" | "cancelled") {
+                    p["open_runs"] = json!(p["open_runs"].as_i64().unwrap_or(0) + 1);
+                }
+            }
+            let line = format!(
+                "{} run(s), {} agent(s): {} working, {} waiting, {} blocked",
+                runs.len(),
+                agents.len(),
+                total["working"].as_i64().unwrap_or(0),
+                total["waiting"].as_i64().unwrap_or(0),
+                total["blocked"].as_i64().unwrap_or(0),
+            );
+            Ok(Outcome::with_data(line, json!({
+                "generated_at": util::now(),
+                "counts": total,
+                "projects": projects,
+                "runs": run_rows,
+                "agents": agents,
+                "roles": roles,
+                "attention": attention,
+            })))
+        },
+    )?;
     reg.define::<MemoryProject>("memory.get", "What devd remembers about a project")
     .description("The layered memory devd keeps for a project: the digest it puts in front of a model, the conventions it has learned, the notes each finished run left, and the persona it has of the person. Everything is Markdown under the devd home, so a person can read it and correct it. Read only.")
     .group("memory")

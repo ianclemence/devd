@@ -32,6 +32,8 @@ pub mod caps_autonomy;
 pub mod charter;
 pub mod chat;
 pub mod dictation;
+pub mod portability;
+pub mod supervisor;
 pub mod docs;
 pub mod effects_bridge;
 pub mod environment;

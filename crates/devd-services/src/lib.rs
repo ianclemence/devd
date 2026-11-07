@@ -26,6 +26,7 @@ pub mod extras;
 pub mod mail;
 pub mod mariadb;
 pub mod nginx;
+pub mod ngrok;
 pub mod phpcaps;
 pub mod pinned_install;
 pub mod probe;

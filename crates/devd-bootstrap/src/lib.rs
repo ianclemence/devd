@@ -49,8 +49,10 @@ impl Agents {
     /// Recover the conversations and runs a previous process left half done, if
     /// this process is the one that owns the agents. A one-shot command beside a
     /// running application is not, and leaves the application's work alone.
-    pub fn resume(&self, paths: &Paths) {
+    pub fn resume(&self, paths: &Paths, store: &std::sync::Arc<devd_core::Store>, registry: &std::sync::Arc<devd_core::Registry>) {
         if devd_agent::host::claim(paths) {
+            // Rows an older policy queued for a read are not decisions now.
+            devd_agent::chat::withdraw_stale_read_approvals(store, registry);
             self.hub.reconcile();
             self.team.recover();
             // What devd promised itself, and the rules a project wrote for what
@@ -79,6 +81,33 @@ pub fn start_ops(
         run: None,
         dry_run: false,
     })
+}
+
+/// Keep the services projects need running, in the process that owns the agents.
+///
+/// The loop itself lives in `devd_agent::supervisor`; this builds the context it
+/// runs under and refuses to start it in a process that is only a client of
+/// another devd (claiming again would be a lie about who owns the work).
+pub fn start_supervisor(
+    paths: &Paths,
+    store: &Arc<Store>,
+    settings: &Arc<Settings>,
+    events: &EventBus,
+    registry: &Arc<Registry>,
+) {
+    if !devd_agent::host::claim(paths) {
+        return;
+    }
+    let ctx = devd_core::capability::Ctx {
+        store: store.clone(),
+        paths: Arc::new(paths.clone()),
+        settings: settings.clone(),
+        events: events.clone(),
+        actor: devd_core::capability::Actor::system(),
+        run: None,
+        dry_run: false,
+    };
+    devd_agent::supervisor::spawn(ctx, registry.clone());
 }
 
 /// Watch what sites serve, and keep the web server's configuration in step.
@@ -196,6 +225,7 @@ impl Bootstrap {
         runtime_caps::register(&mut registry)?;
         devd_services::caps::register(&mut registry)?;
         devd_sites::caps::register(&mut registry)?;
+        devd_agent::portability::register(&mut registry)?;
         devd_workspace::caps::register(&mut registry, workspace.clone())?;
         devd_stacks::caps::register(&mut registry)?;
         devd_ops::caps::register(&mut registry)?;

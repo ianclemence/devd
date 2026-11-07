@@ -60,6 +60,16 @@ args! {
     HostsSyncArgs { elevate: Option<bool> }
     /// A site to share, and for how long.
     ShareArgs { name: String, minutes: Option<u64> }
+    /// A project to share through ngrok.
+    NgrokStartArgs { project: String, port: Option<u16>, region: Option<String>, basic_auth: Option<String> }
+    /// A project whose ngrok share to close.
+    NgrokStopArgs { project: String }
+    /// An ngrok authtoken to store.
+    NgrokTokenArgs { token: String }
+    /// A URL to draw as a QR code.
+    QrArgs { url: String }
+    /// Share preferences.
+    ShareSettingsArgs { region: Option<String>, auto_qr: Option<bool>, auto_copy: Option<bool> }
     /// A site to pin to a PHP version.
     SetPhpArgs { name: String, version: Option<String> }
     /// A folder, to find the site it belongs to.
@@ -111,6 +121,41 @@ fn run_privileged(commands: &[Vec<String>]) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The local web service a project is served by: its site on the web server's
+/// port, or a listening development server on a common port.
+fn upstream_for(ctx: &Ctx, project: &str, asked: Option<u16>) -> Result<(u16, Option<String>)> {
+    if let Some(port) = asked {
+        return Ok((port, None));
+    }
+    let project_path = std::path::Path::new(project);
+    let sites = ctx.store.list_sites()?;
+    if let Some(site) = sites.iter().find(|s| {
+        let root = std::path::Path::new(&s.root);
+        project_path == root || project_path.starts_with(root)
+    }) {
+        return Ok((ctx.settings.http_port, Some(site.host.clone())));
+    }
+    let listeners = devd_core::ports::listeners().unwrap_or_default();
+    for port in [3000u16, 5173, 8000, 8080, 4200, 5000, 1234] {
+        if listeners.iter().any(|l| l.port == port) {
+            return Ok((port, None));
+        }
+    }
+    let mut others: Vec<u16> = listeners
+        .iter()
+        .filter(|l| l.port != ctx.settings.http_port && l.port != ctx.settings.https_port && l.port > 1024)
+        .map(|l| l.port)
+        .collect();
+    others.sort_unstable();
+    others.dedup();
+    if let Some(port) = others.first() {
+        return Ok((*port, None));
+    }
+    Err(DevdError::not_found(format!(
+        "{project} has no site and no local server is answering on a known port; start its development server first, or pass a port"
+    )))
 }
 
 pub fn register(reg: &mut Registry) -> Result<()> {
@@ -174,6 +219,174 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             Ok(Outcome::with_data(if was { format!("{} is no longer public", a.name) } else { format!("{} had no open link", a.name) }, json!({ "site": a.name, "was_open": was })))
         },
     )?;
+
+    // ---------------------------------------------------------- quick share
+    {
+        reg.define::<NoArgs>("share.quick", "Quick Share: what is ready and what is public")
+        .description("The share panel's whole state: whether the ngrok agent is installed and where, whether an authtoken is stored (never the token itself), the saved region, the regions that can be chosen, the auto-copy and auto-QR preferences, the sites that can be shared, and every open link. Read only.")
+        .group("share")
+        .tier(Tier::Read)
+        .effect(Effect::Read)
+        .agent_safe()
+        .idempotent()
+        .handlers(
+            |_, _| Ok(Plan::new("share.quick", "read the sharing state")),
+            |ctx, _| {
+                let links = devd_services::ngrok::list(ctx)?;
+                let sites = ctx.store.list_sites()?;
+                let rows: Vec<Value> = sites.iter().map(|s| json!({ "name": s.name, "host": s.host, "root": s.root })).collect();
+                let region = devd_services::ngrok::saved_region(ctx);
+                let auto_qr = ctx.store.get_setting("share.auto_qr").ok().flatten().map(|v| v == "true").unwrap_or(true);
+                let auto_copy = ctx.store.get_setting("share.auto_copy").ok().flatten().map(|v| v == "true").unwrap_or(true);
+                let binary = devd_services::ngrok::installed(ctx);
+                Ok(Outcome::with_data(
+                    if binary.is_some() && devd_services::ngrok::has_token(ctx) { "ready to share".to_string() } else { "ngrok needs setting up".to_string() },
+                    json!({
+                        "installed": binary.is_some(),
+                        "binary": binary.map(|p| p.display().to_string()),
+                        "token": devd_services::ngrok::has_token(ctx),
+                        "region": region,
+                        "regions": devd_services::ngrok::regions(),
+                        "auto_qr": auto_qr,
+                        "auto_copy": auto_copy,
+                        "port": ctx.settings.http_port,
+                        "sites": rows,
+                        "links": links,
+                    }),
+                ))
+            },
+        )?;
+
+        reg.define::<NoArgs>("share.ngrok_setup", "Install the ngrok agent")
+        .description("Downloads the current ngrok agent for this machine into devd's own tools folder and checks that it runs. Small and reversible; the agent is only started when a project is shared. Human only.")
+        .group("share")
+        .tier(Tier::Admin)
+        .effect(Effect::System)
+        .human_only()
+        .dry_run()
+        .handlers(
+            |_, _| Ok(Plan::new("share.ngrok_setup", "install the ngrok agent").step("download the stable build from ngrok's own CDN").step("check that it runs").effect("writes under devd's tools folder")),
+            |ctx, _| {
+                let exe = devd_services::ngrok::install(ctx)?;
+                Ok(Outcome::with_data("The ngrok agent is installed", json!({ "binary": exe.display().to_string() })))
+            },
+        )?;
+
+        reg.define::<NgrokTokenArgs>("share.ngrok_token_set", "Store the ngrok authtoken")
+        .description("Stores the account authtoken in a file only the current user can read. It is passed to the agent as an environment variable, never in a command line, never in the settings file and never returned by any read. Human only.")
+        .group("share")
+        .tier(Tier::Write)
+        .effect(Effect::Config)
+        .human_only()
+        .handlers(
+            |_, _| Ok(Plan::new("share.ngrok_token_set", "store the ngrok authtoken").effect("writes an owner-only file under devd's secrets folder")),
+            |ctx, a| {
+                devd_services::ngrok::set_token(ctx, &a.token)?;
+                Ok(Outcome::with_data("Stored the ngrok authtoken", json!({ "configured": true })))
+            },
+        )?;
+
+        reg.define::<NoArgs>("share.ngrok_token_clear", "Forget the ngrok authtoken")
+        .description("Removes the stored ngrok authtoken. Any open share keeps running; a new one needs a token. Human only.")
+        .group("share")
+        .tier(Tier::Write)
+        .effect(Effect::Config)
+        .human_only()
+        .idempotent()
+        .handlers(
+            |_, _| Ok(Plan::new("share.ngrok_token_clear", "remove the stored authtoken")),
+            |ctx, _| {
+                devd_services::ngrok::clear_token(ctx);
+                Ok(Outcome::with_data("Removed the stored authtoken", json!({ "configured": false })))
+            },
+        )?;
+
+        reg.define::<QrArgs>("share.qr", "Draw a share address as a QR code")
+        .description("Returns an SVG QR code for a public address. Drawn on this machine; the address is never sent to a QR service.")
+        .group("share")
+        .tier(Tier::Read)
+        .effect(Effect::Read)
+        .agent_safe()
+        .idempotent()
+        .handlers(
+            |_, _| Ok(Plan::new("share.qr", "draw the address as a QR code")),
+            |_, a| {
+                let svg = devd_services::ngrok::qr_svg(&a.url)?;
+                Ok(Outcome::with_data("QR code ready", json!({ "url": a.url, "svg": svg })))
+            },
+        )?;
+
+        reg.define::<ShareSettingsArgs>("share.settings_set", "Change sharing preferences")
+        .description("Sets the region a new share connects through (auto, us, eu, ap or au), whether the public address is copied to the clipboard when a share opens, and whether a QR code is drawn automatically. Human only.")
+        .group("share")
+        .tier(Tier::Write)
+        .effect(Effect::Config)
+        .human_only()
+        .handlers(
+            |_, a| {
+                let mut p = Plan::new("share.settings_set", "save sharing preferences");
+                if let Some(r) = &a.region { p = p.step(format!("region {r}")); }
+                if let Some(v) = a.auto_qr { p = p.step(format!("auto QR {v}")); }
+                if let Some(v) = a.auto_copy { p = p.step(format!("auto copy {v}")); }
+                Ok(p)
+            },
+            |ctx, a| {
+                if let Some(r) = &a.region {
+                    if !devd_services::ngrok::region_ok(r) {
+                        return Err(DevdError::invalid("region must be auto, us, eu, ap or au"));
+                    }
+                    ctx.store.set_setting("share.ngrok.region", r)?;
+                }
+                if let Some(v) = a.auto_qr { ctx.store.set_setting("share.auto_qr", if v { "true" } else { "false" })?; }
+                if let Some(v) = a.auto_copy { ctx.store.set_setting("share.auto_copy", if v { "true" } else { "false" })?; }
+                Ok(Outcome::with_data("Saved the sharing preferences", json!({ "saved": true })))
+            },
+        )?;
+
+        reg.define::<NgrokStartArgs>("share.ngrok_start", "Share a project with Quick Share")
+        .description("Opens a verified ngrok tunnel to a project's local web service and returns the real public HTTPS address. It finds the project's site and local port, refuses to point at a port that is not answering, reads the address from the agent's own log, and records the link. Human only: it publishes a project.")
+        .group("share")
+        .tier(Tier::Exec)
+        .effect(Effect::Remote)
+        .human_only()
+        .dry_run()
+        .handlers(
+            |ctx, a| {
+                let (port, host) = upstream_for(ctx, &a.project, a.port)?;
+                let region = a.region.clone().unwrap_or_else(|| devd_services::ngrok::saved_region(ctx));
+                let mut p = Plan::new("share.ngrok_start", format!("share {} at 127.0.0.1:{port} through ngrok", a.project))
+                    .step(format!("connect through the {region} region"))
+                    .step("wait for the agent to report a public address")
+                    .effect("the project becomes reachable from the internet until the share is stopped");
+                if let Some(h) = &host { p = p.step(format!("route to the site host {h}")); }
+                if a.basic_auth.is_some() { p = p.step("require basic authentication"); }
+                Ok(p)
+            },
+            |ctx, a| {
+                let (port, host) = upstream_for(ctx, &a.project, a.port)?;
+                let region = a.region.clone().unwrap_or_else(|| devd_services::ngrok::saved_region(ctx));
+                let link = devd_services::ngrok::start(ctx, &a.project, port, host.as_deref(), &region, a.basic_auth.as_deref())?;
+                let mut outcome = Outcome::with_data(format!("{} is public at {}", a.project, link.url), serde_json::to_value(&link).unwrap_or(Value::Null));
+                if link.protected { outcome = outcome.warn("visitors need the basic-auth username and password you set"); } else { outcome = outcome.warn("anyone with the address can open the project; stop the share when you are done"); }
+                Ok(outcome)
+            },
+        )?;
+
+        reg.define::<NgrokStopArgs>("share.ngrok_stop", "Stop a Quick Share")
+        .description("Closes the ngrok tunnel for a project and ends the agent process. The project keeps serving locally. Idempotent: a project that is not shared is reported as such.")
+        .group("share")
+        .tier(Tier::Write)
+        .effect(Effect::Remote)
+        .agent_safe()
+        .idempotent()
+        .handlers(
+            |_, a| Ok(Plan::new("share.ngrok_stop", format!("stop sharing {}", a.project))),
+            |ctx, a| {
+                let was = devd_services::ngrok::stop(ctx, &a.project)?;
+                Ok(Outcome::with_data(if was { format!("{} is no longer public", a.project) } else { format!("{} was not shared", a.project) }, json!({ "project": a.project, "was_open": was })))
+            },
+        )?;
+    }
 
     reg.define::<NoArgs>("share.list", "List the open public links")
     .description("Lists the sites currently reachable from the internet through a Cloudflare quick tunnel, with each site's address and when the link expires.")

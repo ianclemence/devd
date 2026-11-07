@@ -10,6 +10,71 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.25.5] - 2026-11-07 - The whole machine in one answer
+
+### Added
+
+- **`team.overview` is the Assistant's orchestration view.** One read returns every recent run in
+  every project with its counts, every specialist with its role, conversation, model, worktree,
+  scope, dependencies, attempts, evidence, **tokens spent and cost**, and last activity, which roles
+  are busy, the projects grouped with their open work, and the one question each run would ask a
+  person. The Assistant is told to read it before planning or assigning, and that it is accountable
+  for the outcome whichever specialist does the work — retry, reassign or do it directly instead of
+  forwarding a failure.
+- **The machine heals itself.** A supervisor in the process that owns the agents checks every minute
+  and restarts a service a project needs (or one set to always) through the registry — audited like
+  any other operation, respecting a person's "observe" decision — with three attempts inside fifteen
+  minutes and then a recorded stop instead of a restart loop. `health.status` carries the recent
+  incidents, and the status panel lists them under **Self-healing**.
+- **Token discipline in the agent prompts.** Read narrowly (glob and limit), quote the line rather
+  than the log, and read the task brief and the run's memory before investigating what earlier
+  agents already found. Per-agent input, output and cached tokens and cost are in the overview.
+- **Quick Share through ngrok.** A project's Share button (and the tray's Quick Share submenu) finds
+  the project's site and local port, opens a verified ngrok tunnel, reads the real public HTTPS
+  address from the agent's own log, copies it, and draws a QR code locally. The agent is managed
+  under `tools/ngrok`; the authtoken lives in an owner-only file and reaches the child as
+  `NGROK_AUTHTOKEN`, never in argv; regions are auto/us/eu/ap/au and are remembered. Several
+  projects can be shared at once, each with its own record, and stopping one never touches another.
+- **Portability.** `portability.status` reports where devd is, where it was last seen, whether the
+  home moved, which known project and site paths no longer exist, and how secrets are stored;
+  `portability.repair` rewrites the projects and sites that were inside the old home, and reports
+  anything outside it. The Diagnostics page has a Portability panel for both.
+- **A Laragon-shaped tray.** www (projects), Quick Share (sites), Services (start/stop/restart/logs
+  per service), Start All / Stop All, Quick app, Tools, Terminal, Preferences and Exit — with the
+  actions calling the same local API, and so the same permissions and audit trail, as the window.
+- **Start at login in the tray.** The desktop writes the per-user Run key with `--start-hidden`, so
+  signing in puts devd in the tray instead of a window, and unchecking it removes the entry.
+- **Open agent runs in the tray**, next to Open Assistant and Open in browser.
+
+### Fixed
+
+- **The Assistant and Runs badges no longer double-count.** A specialist conversation is part of a
+  run, so the Assistant badge now counts only the person's own conversations while Runs counts the
+  team; the two agree with what each screen shows.
+- **DeepSeek no longer refuses the assistant's turn.** A tool result whose call had been trimmed
+  from the history was sent as a `tool` message without a preceding `tool_calls`, which
+  OpenAI-compatible servers reject with HTTP 400. The request now emits a result only while its call
+  is still owed, closes an unanswered call with a placeholder before the conversation moves on, and
+  drops orphaned results. Covered by two wire-format tests.
+- **Approvals an older policy queued for a read are withdrawn at startup.** `fs.search` and its
+  siblings are reads now; a pending row from before that change was still offered in the Inbox as
+  an actionable decision. It is cancelled once, with a line in the conversation, instead of waiting
+  out its lifetime.
+- **The Needs-you card is one calm card, not a warning stripe.** The 3px left bar and the
+  all-caps label are gone; it uses the same hairline, tint and radius as banners and notices. The
+  question is the title (with a fallback so it is never blank), the task key is the meta line, and a
+  blocked report renders as markdown instead of one escaped wall. The run view no longer repeats the
+  same question above the card.
+- **The tray cannot be duplicated, and it comes back reachable.** A single-instance plugin makes a
+  second launch focus the running window and exit (one tray icon, one backend). Restoring from the
+  tray reloads the page only when the webview is showing the browser's network-error page, so a
+  hidden window never returns as "could not be reached" while its conversations are left intact.
+- **Collapsible content is indented** under its heading on every screen, and nested disclosures step
+  again.
+- **Remove and Remove site on Projects are danger-coloured**, like every other destructive action.
+
+---
+
 ## [0.25.4] - 2026-11-07 - One bubble
 
 ### Fixed

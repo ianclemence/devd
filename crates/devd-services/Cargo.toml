@@ -18,6 +18,9 @@ zip.workspace = true
 chrono.workspace = true
 ureq.workspace = true
 time = { workspace = true, features = ["formatting"] }
+# A QR code for a share URL, drawn locally; nothing about the address leaves
+# this machine to get it.
+qrcode = { version = "0.14", features = ["svg"] }
 
 [dev-dependencies]
 tempfile.workspace = true

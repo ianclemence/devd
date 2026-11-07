@@ -19,7 +19,7 @@ use devd_core::{TeamRun, TeamTask};
 use crate::roles;
 
 /// The single thing a run cannot continue without.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct Needs {
     /// `run` when the whole run is blocked, `task` when one task is.
     pub scope: String,
@@ -64,6 +64,30 @@ pub struct NeedAction {
     /// Whether it changes something that cannot be undone.
     #[serde(default)]
     pub dangerous: bool,
+}
+
+/// The question and the detail are methods, so they are written into the JSON a
+/// surface receives. The window reads `question`/`detail`; without them it drew
+/// a card with a blank title and no body.
+impl Serialize for Needs {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut st = serializer.serialize_struct("Needs", 13)?;
+        st.serialize_field("scope", &self.scope)?;
+        st.serialize_field("run_id", &self.run_id)?;
+        st.serialize_field("task_id", &self.task_id)?;
+        st.serialize_field("task_key", &self.task_key)?;
+        st.serialize_field("role", &self.role)?;
+        st.serialize_field("title", &self.title)?;
+        st.serialize_field("line", &self.line)?;
+        st.serialize_field("reason", &self.reason)?;
+        st.serialize_field("missing", &self.missing)?;
+        st.serialize_field("actions", &self.actions)?;
+        st.serialize_field("open", &self.open)?;
+        st.serialize_field("question", &self.question())?;
+        st.serialize_field("detail", &self.detail())?;
+        st.end()
+    }
 }
 
 impl Needs {
@@ -461,5 +485,16 @@ mod tests {
         // The Inbox, the run view and the terminal all print these two lines.
         assert_eq!(needs.question(), "\"Add the dark mode toggle\" is blocked: I need the API key to continue");
         assert!(needs.one_line().starts_with(&needs.question()));
+    }
+
+    #[test]
+    fn a_need_carries_its_question_and_detail_in_json() {
+        // The window reads these two fields; they are methods on the struct, so
+        // they have to be written into the JSON explicitly.
+        let (_s, run, t) = run_and_task("blocked", Some("blocked: I need the API key to continue"));
+        let needs = of(&run, &[t]).unwrap();
+        let v = serde_json::to_value(&needs).unwrap();
+        assert_eq!(v["question"], needs.question());
+        assert_eq!(v["detail"], "I need the API key to continue");
     }
 }

@@ -20,13 +20,20 @@ path = "src/main.rs"
 devd-core = { workspace = true }
 devd-bootstrap = { path = "../devd-bootstrap" }
 devd-server = { path = "../devd-server" }
+devd-services = { path = "../devd-services" }
 
 tauri = { version = "2", features = ["tray-icon"] }
+# One window, one tray icon: a second launch hands its arguments to the running
+# instance and exits instead of starting a second app over the same backend.
+tauri-plugin-single-instance = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
 tokio = { workspace = true }
 open = { workspace = true }
+# The tray's service and project actions call the local API with the session
+# token, so the menu is connected to the same code as the window.
+ureq = { workspace = true }
 
 # The native folder picker. On Windows it drives the common item dialog; on
 # Linux it asks the desktop portal, so the shell needs no GTK at build time.

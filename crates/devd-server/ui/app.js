@@ -1767,7 +1767,9 @@
    */
   function rail(force) {
     var attention = (AI.counts.approvals + AI.counts.questions) || 0;
-    var threads = AI.threads || [];
+    // Only the person's own conversations count for the Assistant: a specialist
+    // is part of a run, and counting it in both buttons made the two disagree.
+    var threads = (AI.threads || []).filter(function (t) { return threadRole(t) === "devd"; });
     var working = threads.filter(function (t) { return t.state === "running"; }).length;
     var waitThreads = threads.filter(function (t) { return t.state === "waiting_approval"; }).length;
     var badThreads = threads.filter(function (t) { return t.state === "error"; }).length;
@@ -2954,9 +2956,7 @@
     SITE.name = row.site.name;
     OPS.site = SITE.name;
     var actions = '<button type="button" class="btn" data-action="open-url" data-url="' + attr(row.url) + '">Open</button>' +
-      (row.shared
-        ? '<button type="button" class="btn" data-action="unshare-site" data-name="' + attr(SITE.name) + '">Stop sharing</button>'
-        : '<button type="button" class="btn" data-action="share-site" data-name="' + attr(SITE.name) + '">Share</button>') +
+      '<button type="button" class="btn" data-action="quick-share" data-path="' + attr(row.site.root) + '" data-name="' + attr(SITE.name) + '">Share</button>' +
       '<button type="button" class="btn btn-danger" data-action="remove-site" data-name="' + attr(SITE.name) + '">Remove</button>';
     el("main").innerHTML = page(SITE.name, "", actions, '<div class="site-page">' + siteTabs(row) + siteBody(row) + "</div>");
   }
@@ -5451,11 +5451,12 @@ var TERM_POLL_MS = 250;
           meta: site ? esc(servingLabel(site) || site.site.host || site.site.name) : siteNames.length ? esc(siteNames.join(", ")) : "no address",
           open: 'data-action="open-project" data-path="' + attr(p.path) + '"',
           actions: '<button type="button" class="btn btn-mini btn-primary" data-action="open-project" data-path="' + attr(p.path) + '">Open</button>' +
+            '<button type="button" class="btn btn-mini" data-action="quick-share" data-path="' + attr(p.path) + '" data-name="' + attr(p.name) + '" title="Put this project on a public HTTPS address through ngrok">Share</button>' +
             (site ? '<button type="button" class="btn btn-mini" data-action="open-site" data-name="' + attr(site.site.name) + '">Site</button>' : siteNames.length ? '<button type="button" class="btn btn-mini" data-action="open-site" data-name="' + attr(siteNames[0]) + '">Site</button>' : "") +
             '<button type="button" class="btn btn-mini btn-ghost" data-action="pin-project" data-path="' + attr(p.path) + '" title="' + (isPinned ? "Unpin" : "Pin to the top") + '">' + (isPinned ? "Unpin" : "Pin") + "</button>" +
             (!p.registered && p.source === "site" && (p.sites || []).length
-              ? '<button type="button" class="btn btn-mini btn-ghost" data-action="project-remove-sites" data-path="' + attr(p.path) + '" data-sites="' + attr((p.sites || []).join(",")) + '" title="This folder is listed because a site serves it; removing the site removes it from the list">Remove site' + ((p.sites || []).length > 1 ? "s" : "") + "</button>"
-              : '<button type="button" class="btn btn-mini btn-ghost" data-action="project-forget" data-path="' + attr(p.path) + '" title="Remove it from devd; the folder is kept">Remove</button>'),
+              ? '<button type="button" class="btn btn-mini btn-danger" data-action="project-remove-sites" data-path="' + attr(p.path) + '" data-sites="' + attr((p.sites || []).join(",")) + '" title="This folder is listed because a site serves it; removing the site removes it from the list">Remove site' + ((p.sites || []).length > 1 ? "s" : "") + "</button>"
+              : '<button type="button" class="btn btn-mini btn-danger" data-action="project-forget" data-path="' + attr(p.path) + '" title="Remove it from devd; the folder is kept">Remove</button>'),
           hover: true
         });
       });
@@ -6508,6 +6509,7 @@ var TERM_POLL_MS = 250;
         esc(state.project.error) + "</div>" : "") +
       "</div>" +
       '<div class="page-actions">' +
+      '<button type="button" class="btn" data-action="quick-share" data-path="' + attr(state.project.path) + '" data-name="' + attr(state.project.name) + '" title="Put this project on a public HTTPS address through ngrok">Share</button>' +
       '<button type="button" class="btn" data-action="tab" data-tab="terminal" title="Open a shell in this project, kept in devd so an agent can read the same screen">Terminal</button>' +
       '<button type="button" class="btn btn-ghost" data-action="project-refresh">Refresh</button>' +
       '<div class="more"><button type="button" class="btn btn-ghost btn-icon" data-action="more-toggle" aria-haspopup="menu" aria-expanded="false" aria-label="More actions for this project" title="More">' +
@@ -7019,6 +7021,9 @@ var TERM_POLL_MS = 250;
       '<div class="ui-diag">' + healthBody(false) + "</div>" +
       (reqs.length && AI.requirements.missing ? '<details class="ui-fold" open><summary>Set up (' + AI.requirements.missing + " missing)</summary>" + reqPanel + "</details>" : "") +
       '<details class="ui-fold"><summary>Environment: ' + esc((AI.env && AI.env.mode) || "local") + '</summary><div class="panel"><div class="panel-head"><span>Environment</span><span class="panel-note">' + esc((AI.env && AI.env.mode) || "local") + '</span></div><div class="panel-body"><div class="row-sub">' + ((AI.env && AI.env.mode === "production") ? "Production mode is on. Agents need your approval for every change, plan approval cannot be skipped, and devd never deploys or opens ports by itself." : "Local mode. Agents work freely inside authorised project folders; anything destructive or system-wide still asks you. Turn production mode on for a machine that runs something real.") + '</div><div class="inline" style="margin-top:10px"><button type="button" class="btn ' + ((AI.env && AI.env.mode === "production") ? "" : "btn-danger") + '" data-action="env-toggle">' + ((AI.env && AI.env.mode === "production") ? "Switch to local (asks first)" : "Switch to production mode") + "</button></div></div></div></details>" +
+      '<details class="ui-fold"><summary>Portability</summary><div class="panel"><div class="panel-head"><span>This devd home</span></div>' +
+      '<div class="panel-body" id="port-body"><div class="row-sub" style="margin-bottom:10px">Move the devd folder anywhere, then check here: devd remembers where it was and can move the paths it recorded.</div>' +
+      '<button type="button" class="btn" data-action="port-check">Check this devd home</button></div></div></details>' +
       '<details class="ui-fold"><summary>Raw environment checks</summary><div class="panel"><div class="panel-head"><span>Raw environment checks</span>' +
       '<span class="panel-note">' + (state.doctor && state.doctor.ok ? "no failures" : "see levels") + "</span></div>" +
       '<div class="panel-body flush">' +
@@ -8195,11 +8200,77 @@ var TERM_POLL_MS = 250;
     var tone = h.state === "healthy" ? "notice-ok" : h.state === "critical" || h.state === "degraded" ? "notice-bad" : "notice-warn";
     return '<div class="notice ' + tone + '"><b>' + esc(h.headline) + ".</b> Checked " + esc(ago(h.checked_at) || "just now") + " in " + h.took_ms + " ms." + (healthStale() ? " This is out of date." : "") + (AI.healthError ? " The last re-check failed: " + esc(AI.healthError) : "") + "</div>" +
       (h.attention.length ? '<div class="section-title">Waiting for you</div>' + h.attention.map(function (a) { return '<div class="hrow"><span class="health-dot" style="background:var(--warn)"></span><div class="grow">' + esc(a.label) + '</div><button type="button" class="btn btn-mini" data-action="health-go" data-view="' + attr(a.view) + '">Open</button></div>'; }).join("") : "") +
+      (h.incidents && h.incidents.length ? '<div class="section-title">Self-healing <span class="count">' + h.incidents.length + "</span></div>" +
+        '<div class="row-sub" style="margin-bottom:6px">What devd did on its own: it restarts a service a project needs, verifies it answers, and stops after three tries.</div>' +
+        h.incidents.slice(-6).reverse().map(function (x) {
+          var tone = x.kind === "service.recovered" ? "var(--color-success)" : x.kind === "service.restart_failed" ? "var(--color-error)" : "var(--color-warning)";
+          return '<div class="hrow"><span class="health-dot" style="background:' + tone + '"></span><div class="grow"><b>' + esc(x.service || "") + "</b> " + esc(x.detail || "") +
+            '<div class="row-sub">' + esc(String(x.kind || "").replace(/\\./g, " ")) + " · " + esc(ago(x.at)) + "</div></div></div>";
+        }).join("") : "") +
       rows +
       '<div class="inline" style="margin-top:14px"><button type="button" class="btn" data-action="health-recheck"' + (AI.healthLoading ? " disabled" : "") + ">" + (AI.healthLoading ? "Checking…" : "Check again") + "</button>" + (withClose ? '<button type="button" class="btn btn-ghost" data-action="health-go" data-view="system">Open diagnostics</button>' : "") + "</div>";
   }
 
   function openHealth() { openDrawer("devd status", healthBody(true)); }
+
+  // --------------------------------------------------------------- quick share
+  //
+  // A project on a public HTTPS address through ngrok. Everything the panel
+  // shows comes from the server: whether the agent is installed, whether a
+  // token is stored, the open link and its real address. The address is copied
+  // only after it has been read from the agent, never constructed here.
+  var QS = { project: "", name: "" };
+
+  function loadQr(url) {
+    read("share.qr", { url: url }).then(function (d) {
+      var box = el("qs-qr");
+      if (box && d && d.svg) box.innerHTML = d.svg;
+    }).catch(function () { /* the address is still copyable */ });
+  }
+
+  function quickShareSheet(project, name) {
+    QS = { project: project, name: name || dirName(project) };
+    read("share.quick").then(function (q) {
+      var link = (q.links || []).filter(function (l) { return l.project === project; })[0];
+      var ready = q.installed && q.token;
+      var status = link ? "Sharing" : ready ? "Ready to share" : "Setup needed";
+      var tone = link ? "pill-ok" : ready ? "pill-accent" : "pill-warn";
+      var region = (q.regions || []).map(function (r) {
+        return '<option value="' + attr(r.code) + '"' + (q.region === r.code ? " selected" : "") + ">" + esc(r.label) + "</option>";
+      }).join("");
+      var setup = "";
+      if (!q.installed) {
+        setup = '<div class="notice notice-warn"><b>The ngrok agent is not installed.</b> devd downloads it once, under its own tools folder. ' +
+          '<button type="button" class="btn btn-mini btn-primary" data-action="qs-install">Install ngrok</button></div>';
+      } else if (!q.token) {
+        setup = '<div class="notice notice-warn"><b>An authtoken is needed.</b> Create one at ' +
+          '<a href="https://dashboard.ngrok.com" target="_blank" rel="noopener">dashboard.ngrok.com</a>, then paste it here. ' +
+          "It is stored in a file only you can read and is never shown again." +
+          '<div class="inline" style="margin-top:8px"><input class="input grow" id="qs-token" type="password" placeholder="ngrok authtoken" autocomplete="off">' +
+          '<button type="button" class="btn btn-mini btn-primary" data-action="qs-token">Save token</button></div></div>';
+      }
+      var active = link
+        ? '<div class="field"><label class="field-label">Public address</label><div class="inline">' +
+          '<input class="input grow mono" id="qs-url" readonly value="' + attr(link.url) + '">' +
+          '<button type="button" class="btn btn-mini" data-action="qs-copy">Copy</button>' +
+          '<button type="button" class="btn btn-mini" data-action="qs-open">Open</button></div>' +
+          '<div class="row-sub">127.0.0.1:' + link.port + " · " + esc(link.region) + (link.protected ? " · basic auth" : " · anyone with the link") + "</div></div>" +
+          '<div class="qs-qr" id="qs-qr"></div>' +
+          '<div class="inline" style="margin-top:10px"><button type="button" class="btn" data-action="qs-stop">Stop sharing</button></div>'
+        : '<div class="field"><label class="field-label" for="qs-region">Region</label><select class="input" id="qs-region">' + region + "</select></div>" +
+          '<div class="inline" style="margin-top:10px"><button type="button" class="btn btn-primary" data-action="qs-start"' + (ready ? "" : " disabled") + ">Share this project</button>" +
+          (ready ? '<span class="decision-hint">The address is read from ngrok and copied to the clipboard.</span>' : "") + "</div>";
+      openDrawer("Quick Share · " + (name || dirName(project)),
+        '<div class="ui-sheet qs">' +
+        '<div class="decision-meta"><span class="pill ' + tone + '">' + status + '</span><span class="mono nowrap">' + esc(project) + "</span></div>" +
+        setup +
+        '<div style="margin-top:14px">' + active + "</div>" +
+        '<div class="field" style="margin-top:16px"><label class="check"><input type="checkbox" data-action="qs-pref" data-key="auto_copy"' + (q.auto_copy ? " checked" : "") + "> Copy the address when a share opens</label>" +
+        '<label class="check"><input type="checkbox" data-action="qs-pref" data-key="auto_qr"' + (q.auto_qr ? " checked" : "") + "> Draw a QR code automatically</label></div>" +
+        "</div>");
+      if (link && q.auto_qr) loadQr(link.url);
+    }).catch(function (e) { toast("error", e.message || "The sharing state could not be read."); });
+  }
 
   // -------------------------------------------------------------------- home
 
@@ -10723,7 +10794,9 @@ var TERM_POLL_MS = 250;
       faceHtml("team") +
       '<div class="chat-head-main"><div class="chat-title">' + esc(r.title) + '</div><div class="chat-head-sub">' + esc([r.project ? threadProjectName(r.project) : "No project", "started by " + (by || "devd") + " " + ago(r.created_at)].join(" · ")) + "</div></div>" +
       '<span class="chip ' + (r.state === "failed" ? "chip-bad" : r.state === "done" ? "chip-ok" : r.state === "awaiting_plan" || r.state === "paused" ? "chip-warn" : "chip-live") + '">' + esc(RUN_WORD[r.state] || r.state) + "</span>" + actions + primary + "</div>";
-    var note = r.error ? '<div class="notice notice-warn"><b>' + (runNeedsWork(r) ? "Needs you." : "Stopped.") + "</b> " + esc(r.error) + "</div>" : "";
+    // When a structured need is present, the card below carries the question and
+    // the actions; the run's error line would repeat it word for word.
+    var note = (r.error && !d.needs) ? '<div class="notice notice-warn"><b>' + (runNeedsWork(r) ? "Needs you." : "Stopped.") + "</b> " + md(r.error) + "</div>" : "";
     // The same structured answer the Inbox shows, so the two screens agree about
     // what is wrong and what to do about it. The run's own error line above is
     // the record; this is the question.
@@ -10913,9 +10986,13 @@ var TERM_POLL_MS = 250;
     return '<article class="decision decision-needs" data-kind="needs">' +
       '<div class="decision-kind">Needs you</div>' +
       '<div class="decision-main">' +
-        '<h3 class="decision-title">' + esc(n.question) + "</h3>" +
+        // The question is the title; the task key is the meta line. A need whose
+        // title is empty still says something rather than rendering a blank card.
+        '<h3 class="decision-title">' + esc(n.question || n.line || "This run needs you") + "</h3>" +
         '<div class="decision-meta"><span class="mono">' + esc(n.line) + "</span>" + (n.role ? ' <span class="pill">' + esc(n.role) + "</span>" : "") + "</div>" +
-        (n.detail ? '<div class="decision-body">' + esc(n.detail) + "</div>" : "") +
+        // A blocked report is prose a person has to read: let it keep its
+        // paragraphs, lists and code instead of one escaped wall of text.
+        (n.detail ? '<div class="decision-body md-wrap">' + md(n.detail) + "</div>" : "") +
         (n.open && n.open.length ? '<ul class="decision-steps">' + n.open.map(function (o) { return "<li>" + esc(o) + "</li>"; }).join("") + "</ul>" : "") +
         '<div class="decision-actions">' + actions +
           '<button type="button" class="btn btn-mini btn-ghost" data-action="team-open-from" data-id="' + attr(n.run_id) + '">Open the run</button>' +
@@ -14726,6 +14803,63 @@ var TERM_POLL_MS = 250;
     },
     "share-site": function (node) { act("share.start", { name: node.dataset.name }); },
     "unshare-site": function (node) { act("share.stop", { name: node.dataset.name }); },
+    "quick-share": function (node) { quickShareSheet(node.dataset.path, node.dataset.name); },
+    "qs-install": function () {
+      run("share.ngrok_setup").then(function () { quickShareSheet(QS.project, QS.name); });
+    },
+    "qs-token": function () {
+      var v = (el("qs-token") || {}).value || "";
+      if (!v.trim()) return toast("warn", "Paste the ngrok authtoken first.");
+      run("share.ngrok_token_set", { token: v.trim() }).then(function () { quickShareSheet(QS.project, QS.name); });
+    },
+    "qs-start": function () {
+      var region = (el("qs-region") || {}).value || "auto";
+      run("share.ngrok_start", { project: QS.project, region: region }).then(function (o) {
+        if (!o || !o.data || !o.data.url) return null;
+        var url = o.data.url;
+        read("share.quick").then(function (q) {
+          if (q.auto_copy) copyText(url, function () { toast("ok", "Copied the public address: " + url); });
+          else toast("ok", "The project is public at " + url);
+        }).catch(function () { toast("ok", "The project is public at " + url); });
+        quickShareSheet(QS.project, QS.name);
+      });
+    },
+    "qs-stop": function () {
+      run("share.ngrok_stop", { project: QS.project }).then(function () { quickShareSheet(QS.project, QS.name); });
+    },
+    "qs-copy": function () {
+      var u = (el("qs-url") || {}).value || "";
+      if (u) copyText(u, function () { toast("ok", "Copied the public address."); });
+    },
+    "qs-open": function () {
+      var u = (el("qs-url") || {}).value || "";
+      if (u) window.open(u, "_blank", "noopener");
+    },
+    "port-check": function () {
+      read("portability.status").then(function (s) {
+        var box = el("port-body");
+        if (!box) return;
+        var missing = (s.missing_projects || []).concat(s.missing_sites || []);
+        box.innerHTML = '<dl class="kv">' +
+          "<dt>Home</dt><dd class=\"mono\">" + esc(s.home) + "</dd>" +
+          (s.previous ? "<dt>Last seen</dt><dd class=\"mono\">" + esc(s.previous) + "</dd>" : "") +
+          "<dt>State</dt><dd>" + (s.moved ? "Moved" : "In place") + (s.writable ? ", writable" : ", not writable") + "</dd>" +
+          "<dt>Projects</dt><dd>" + s.projects + (missing.length ? ", " + missing.length + " missing path(s)" : ", all present") + "</dd>" +
+          "<dt>Secrets</dt><dd>" + esc(s.secrets) + "</dd></dl>" +
+          (missing.length ? '<div class="notice notice-warn" style="margin-top:10px">' + missing.map(function (m) {
+            return '<div class="mono">' + esc(m.path || m.root) + "</div>";
+          }).join("") + "</div>" : "") +
+          (s.can_repair ? '<div class="inline" style="margin-top:10px"><button type="button" class="btn btn-primary" data-action="port-repair">Move recorded paths to this home</button></div>' : "");
+      }).catch(function (e) { toast("error", e.message || "The home could not be checked."); });
+    },
+    "port-repair": function () {
+      run("portability.repair").then(function () { ACTIONS["port-check"](); });
+    },
+    "qs-pref": function (node) {
+      var args = {};
+      args[node.dataset.key] = node.checked ? true : false;
+      run("share.settings_set", args).catch(function () { /* the box stays where it was */ });
+    },
 
     "open-url": function (node) {
       post("/api/open-url", { url: node.dataset.url }).then(function (res) {

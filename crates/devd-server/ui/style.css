@@ -3796,7 +3796,11 @@ textarea,
 .ui-fold > summary::before { content: "\25B8"; display: inline-block; width: 1.2em; color: var(--fg-dim); }
 .ui-fold[open] > summary::before { content: "\25BE"; }
 .ui-fold[open] > summary { color: var(--color-base-content); }
-.ui-fold > :not(summary) { margin-top: var(--s3); }
+/* What a disclosure opens sits under its heading and one step to the right, so
+   the summary and the content are not the same column. Nested disclosures step
+   again - the same rule applies to every one, on every screen. */
+details > :not(summary) { margin-left: 20px; }
+.ui-fold > :not(summary) { margin-top: var(--s3); margin-left: 20px; }
 .preset-grid { gap: var(--s3); }
 .preset { background: var(--color-base-200); border: 0; border-radius: var(--radius-lg); padding: var(--s4); }
 .preset:hover { background: var(--color-base-300); }
@@ -5148,28 +5152,32 @@ td .pill-bad, .kv .pill-bad { color: var(--color-error); }
 .decision-effect { color: var(--color-warning); }
 .decision-note { margin-top: var(--s3); color: var(--fg-mute); font-size: var(--text-sm); }
 .decision-body { margin-top: var(--s3); max-width: 70ch; color: var(--fg-mute); font-size: var(--text-sm); line-height: 1.6; }
+/* A report reads as prose: the markdown keeps its paragraphs and lists inside
+   the card, at the card's size and colour. */
+.decision-body .md, .notice .md { font-size: inherit; line-height: inherit; color: inherit; }
+.decision-body .md p, .notice .md p { margin: 0 0 8px; }
+.decision-body .md > :first-child, .notice .md > :first-child { margin-top: 0; }
+.decision-body .md > :last-child, .notice .md > :last-child { margin-bottom: 0; }
 .decision-args summary { margin-top: var(--s3); color: var(--fg-mute); font-size: var(--text-xs); cursor: pointer; }
 .decision-args pre { margin-top: var(--s2); max-height: 220px; overflow: auto; }
 .decision-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s4); }
 .decision-actions .input { max-width: 420px; }
 .decision-hint { margin-left: var(--s2); color: var(--fg-dim); font-size: var(--text-xs); }
-/* A run that cannot continue is the one decision that leads the page, so it is
-   a real card rather than a label column stretched across the content: a warm
-   rule, a tinted surface and the actions together. The person should see one
-   self-contained question, not four pieces floating on the page. */
+/* A run that cannot continue is one self-contained question. It joins the
+   notice/banner family: the same hairline, tint and radius, a small dot for the
+   tone, and no bar down the side. The words and the buttons are the structure. */
 .decision.decision-needs {
   display: block;
-  margin: 10px 0;
-  padding: 14px 16px 14px 15px;
-  border: 1px solid color-mix(in srgb, var(--color-warning) 26%, var(--line));
-  border-left: 3px solid var(--color-warning);
+  margin: 12px 0;
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--color-warning) 22%, var(--line));
   border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--color-warning) 5%, var(--color-base-100));
+  background: color-mix(in srgb, var(--color-warning) 4%, var(--color-base-100));
 }
 .decision-needs .decision-kind {
   display: flex; align-items: center; gap: 7px;
-  color: var(--color-warning); font-size: var(--text-2xs); font-weight: 700;
-  letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--color-warning); font-size: var(--text-xs); font-weight: 600;
+  letter-spacing: 0; text-transform: none;
 }
 .decision-needs .decision-kind::before {
   content: ""; width: 6px; height: 6px; border-radius: 50%;
@@ -7037,6 +7045,10 @@ th, .table th { font-size: var(--text-xs); font-weight: 600; text-transform: non
 /* Healthy stays a sentence: the green check, no box around it. */
 .notice-ok { background: none; border-color: transparent; padding-top: 4px; padding-bottom: 4px; }
 .notice-ok::before { top: 6px; }
+
+/* Quick Share: the code sits on its own light tile so a phone camera reads it. */
+.qs-qr { margin-top: 14px; display: grid; place-items: center; }
+.qs-qr svg { width: 220px; height: 220px; background: #fff; padding: 12px; border-radius: var(--radius-lg); }
 
 /* ---- dialogs ---------------------------------------------------------------- */
 .overlay { background: var(--overlay); backdrop-filter: blur(3px); }

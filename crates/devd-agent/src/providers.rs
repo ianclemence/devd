@@ -1190,6 +1190,21 @@ fn text_of(blocks: &[Value]) -> String {
 
 fn openai_body(p: &Provider, r: &ChatRequest) -> Value {
     let mut msgs = vec![json!({ "role": "system", "content": r.system })];
+    // Tool call ids the last assistant message is still waiting for. An
+    // OpenAI-compatible server rejects a `tool` message whose id is not on the
+    // assistant message directly before it, so a result is emitted only while it
+    // is still owed, and a call with no result gets a placeholder before the
+    // conversation moves on.
+    let mut pending: Vec<String> = Vec::new();
+    fn answer(msgs: &mut Vec<Value>, pending: &mut Vec<String>) {
+        for id in pending.drain(..) {
+            msgs.push(json!({
+                "role": "tool",
+                "tool_call_id": id,
+                "content": "(no result was recorded; the turn was interrupted. Call the tool again if you still need it.)",
+            }));
+        }
+    }
     for m in &r.messages {
         let role = m["role"].as_str().unwrap_or("user");
         let blocks: Vec<Value> = m["content"].as_array().cloned().unwrap_or_default();
@@ -1199,22 +1214,41 @@ fn openai_body(p: &Provider, r: &ChatRequest) -> Value {
                 .filter(|b| b["type"] == "tool_use")
                 .map(|b| json!({ "id": b["id"], "type": "function", "function": { "name": b["name"], "arguments": b["input"].to_string() } }))
                 .collect();
-            let mut msg = json!({ "role": "assistant", "content": text_of(&blocks) });
+            let text = text_of(&blocks);
+            if calls.is_empty() && text.trim().is_empty() {
+                continue;
+            }
+            // A new assistant turn cannot begin while calls are unanswered.
+            answer(&mut msgs, &mut pending);
+            let mut msg = json!({ "role": "assistant", "content": text });
             if !calls.is_empty() {
+                pending = calls
+                    .iter()
+                    .filter_map(|c| c["id"].as_str().map(|s| s.to_string()))
+                    .collect();
                 msg["tool_calls"] = json!(calls);
-                if msg["content"] == "" {
+                if text.trim().is_empty() {
                     msg["content"] = Value::Null;
                 }
             }
             msgs.push(msg);
         } else {
             for b in blocks.iter().filter(|b| b["type"] == "tool_result") {
-                let content = match &b["content"] {
-                    Value::String(s) => s.clone(),
-                    other => other.to_string(),
-                };
-                msgs.push(json!({ "role": "tool", "tool_call_id": b["tool_use_id"], "content": content }));
+                let id = b["tool_use_id"].as_str().unwrap_or("");
+                // A result whose call is not the one still owed is an orphan
+                // (the turn was trimmed or restarted); sending it is the 400.
+                if let Some(pos) = pending.iter().position(|p| p == id) {
+                    pending.remove(pos);
+                    let content = match &b["content"] {
+                        Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    };
+                    msgs.push(json!({ "role": "tool", "tool_call_id": id, "content": content }));
+                }
             }
+            // If the person spoke before every call answered, close them now so
+            // the user message can follow the tool messages.
+            answer(&mut msgs, &mut pending);
             let t = text_of(&blocks);
             let pictures: Vec<Value> = blocks
                 .iter()
@@ -1230,6 +1264,7 @@ fn openai_body(p: &Provider, r: &ChatRequest) -> Value {
             }
         }
     }
+    answer(&mut msgs, &mut pending);
     let mut body = json!({ "model": r.model, "messages": msgs });
     body[if p.kind == "openai" { "max_completion_tokens" } else { "max_tokens" }] = json!(r.max_tokens);
     // Only reasoning-capable OpenAI models accept this, and sending it to the
@@ -1948,6 +1983,62 @@ data: {\"type\":\"message_stop\"}
         let back = parse_openai(&json!({"choices":[{"message":{"content":null,"tool_calls":[{"id":"x","function":{"name":"n","arguments":"{\"a\":1}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":5,"completion_tokens":2}})).unwrap();
         assert_eq!(back.stop_reason, "tool_use");
         assert_eq!(back.content[0]["input"]["a"], 1);
+    }
+
+    #[test]
+    fn an_orphaned_tool_result_never_reaches_an_openai_server() {
+        // DeepSeek refuses the whole turn with "Messages with role 'tool' must be
+        // a response to a preceding message with 'tool_calls'". A result whose
+        // call was trimmed out of the history is dropped here instead.
+        let p = Provider { id: "d".into(), kind: "openai".into(), label: "D".into(), base_url: "https://x".into(), key_env: None, default_model: None, is_default: true, enabled: true, created_at: "".into(), updated_at: "".into() };
+        let req = ChatRequest {
+            model: "m".into(),
+            system: "sys".into(),
+            messages: vec![
+                json!({"role":"user","content":[{"type":"text","text":"go"}]}),
+                json!({"role":"user","content":[{"type":"tool_result","tool_use_id":"gone","content":"done"},{"type":"text","text":"and now?"}]}),
+            ],
+            tools: vec![],
+            tool_choice: None,
+            max_tokens: 100,
+            effort: None,
+        };
+        let b = openai_body(&p, &req);
+        let m = b["messages"].as_array().unwrap();
+        assert!(m.iter().all(|x| x["role"] != "tool"), "an orphan tool message is dropped: {m:?}");
+        assert_eq!(m.last().unwrap()["role"], "user");
+    }
+
+    #[test]
+    fn a_tool_message_always_follows_the_call_it_answers() {
+        let p = Provider { id: "d".into(), kind: "openai".into(), label: "D".into(), base_url: "https://x".into(), key_env: None, default_model: None, is_default: true, enabled: true, created_at: "".into(), updated_at: "".into() };
+        let req = ChatRequest {
+            model: "m".into(),
+            system: "sys".into(),
+            messages: vec![
+                json!({"role":"assistant","content":[{"type":"tool_use","id":"c1","name":"fs.read","input":{}}]}),
+                // The model spoke again before the tool answered (a resumed or
+                // interrupted turn): the call is closed first.
+                json!({"role":"assistant","content":[{"type":"text","text":"checking"}]}),
+                json!({"role":"user","content":[{"type":"tool_result","tool_use_id":"c1","content":"content"}]}),
+            ],
+            tools: vec![],
+            tool_choice: None,
+            max_tokens: 100,
+            effort: None,
+        };
+        let b = openai_body(&p, &req);
+        let m = b["messages"].as_array().unwrap();
+        for (i, msg) in m.iter().enumerate() {
+            if msg["role"] == "tool" {
+                let prev = &m[i - 1];
+                assert!(
+                    prev["role"] == "assistant" || prev["role"] == "tool",
+                    "a tool message follows its call: {m:?}"
+                );
+            }
+        }
+        assert!(m.iter().any(|x| x["role"] == "tool" && x["tool_call_id"] == "c1"));
     }
 
     fn provider(id: &str) -> Provider {
