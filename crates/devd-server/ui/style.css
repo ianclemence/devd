@@ -6783,6 +6783,9 @@ body { letter-spacing: 0; }
   box-shadow: 0 0 0 2px var(--bg-deep);
 }
 .rail-live { background: var(--dot-live); animation: face-pulse 1.6s ease-in-out infinite; }
+/* A count and a live dot on the same icon read as two bubbles. The badge is the
+   indicator; the others are suppressed when one is present. */
+.rail-icon .rail-badge ~ .rail-live, .rail-icon .rail-badge ~ .rail-dot { display: none; }
 .rail-dot-bad { background: var(--dot-bad); }
 .rail-dot-warn { background: var(--dot-warn); }
 @media (prefers-reduced-motion: reduce) { .rail-live { animation: none; } }

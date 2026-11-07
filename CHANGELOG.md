@@ -10,6 +10,17 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.25.4] - 2026-11-07 - One bubble
+
+### Fixed
+
+- **The Assistant and Runs icons show one indicator, not two.** A working conversation drew both
+  the count badge and the small live dot in the same corner, which read as two bubbles. The badge
+  is the indicator (blue working, amber waiting, red stopped); the live dot now appears only where
+  there is no count, and CSS refuses a second circle if the markup ever allows one.
+
+---
+
 ## [0.25.3] - 2026-11-07 - Nothing swallowed, nothing left unsaid
 
 ### Fixed

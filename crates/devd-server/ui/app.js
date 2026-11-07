@@ -1811,8 +1811,16 @@
       return '<button type="button" class="rail-item' + (small ? " rail-small" : "") + (on ? " active" : "") + (i.phone ? " rail-phone" : "") + '" data-action="rail-go" data-view="' + i.view + '"' +
         (on ? ' aria-current="page"' : "") + ' title="' + attr(i.hint || i.label) + '">' +
         '<span class="rail-icon"><svg class="icon" aria-hidden="true"><use href="#' + i.icon + '"></use></svg>' +
-        (i.badge ? '<span class="rail-badge rail-badge-' + attr(i.badgeTone || "live") + '">' + esc(i.badge > 99 ? "99+" : i.badge) + "</span>" : "") +
-        (i.live ? '<span class="rail-live" aria-label="working"></span>' : i.dot ? '<span class="rail-dot rail-dot-' + i.dot + '"></span>' : "") +
+        // One indicator, never two: the count badge already says the state (blue
+        // working, amber waiting, red stopped), so the live dot only appears on
+        // items that have no count. Drawing both put two circles on one icon.
+        (i.badge
+          ? '<span class="rail-badge rail-badge-' + attr(i.badgeTone || "live") + '">' + esc(i.badge > 99 ? "99+" : i.badge) + "</span>"
+          : i.live
+            ? '<span class="rail-live" aria-label="working"></span>'
+            : i.dot
+              ? '<span class="rail-dot rail-dot-' + i.dot + '"></span>'
+              : "") +
         '</span><span class="rail-label">' + esc(i.label) + "</span></button>";
     }
     var html =

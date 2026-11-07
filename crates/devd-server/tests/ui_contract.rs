@@ -1539,3 +1539,12 @@ fn the_rail_reports_live_work_on_every_screen() {
     assert!(APP.contains("rail-badge-"), "the counts are tinted by state");
     assert!(APP.contains("waiting for you"), "a waiting run says so in its hint");
 }
+
+#[test]
+fn the_rail_draws_one_indicator_per_icon() {
+    // A working conversation used to render the count badge and the live dot at
+    // the same corner, which read as two bubbles.
+    assert!(APP.contains("One indicator, never two"), "the renderer chooses one");
+    assert!(APP.contains("? '<span class=\"rail-badge rail-badge-'"), "the badge is the indicated state");
+    assert!(CSS.contains(".rail-icon .rail-badge ~ .rail-live"), "CSS refuses a second circle if markup ever allows it");
+}
