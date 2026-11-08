@@ -235,12 +235,19 @@ open next to it:
 * **Terminal** — the same xterm and the same server-owned shell as the project's
   Terminal tab, opened in the chat's project without leaving the conversation.
 
-Both are opened from the three icon toggles in the conversation header (and from
-the card's Workspace rows). The Browser always takes the wide column, replacing
-the card. The Terminal may sit beside the card at 1600px and above; below that it
-replaces it. When both are open they share one work column, split vertically with
-a draggable divider (58/42 by default). Below 1280px a surface becomes a sheet over
-the conversation; below 700px of height the pair becomes tabs.
+Both are opened from the card's Workspace rows and, below 1440px where the card
+folds into a drawer, from the three icon toggles in the conversation header. The
+Browser always takes the wide column, replacing the card. The Terminal may sit
+beside the card at 1600px and above; below that it replaces it. When both are
+open they share one work column, split vertically with a draggable divider
+(58/42 by default). Below 1280px a surface becomes a sheet over the conversation;
+below 700px of height the pair becomes tabs.
+
+The conversation header has one order: status chips (queued, pull request,
+settled), then context links (Back to request, See the run, Chapters), then the
+actions — the surface toggles, search, Evidence, Continue and the menu. Chips sit
+on the same 28px row as the buttons, and the primary Continue is the last action
+before the menu.
 
 The surfaces belong to the conversation's project. Switching chats re-points the
 browser and leaves an old shell running with a banner saying which project it
