@@ -1834,3 +1834,10 @@ fn a_specialist_subtitle_does_not_repeat_its_heading() {
     assert!(head.contains("var shownTitle = team ? team.task || t.title : t.title"));
     assert!(head.contains("if (runTitle && runTitle !== shownTitle)"));
 }
+
+#[test]
+fn a_new_conversation_has_no_empty_project_card() {
+    // A new chat has no project to show; the placeholder belongs only to an
+    // existing conversation that still has no folder.
+    assert!(APP.contains("if (!t) { box.hidden = true; box.innerHTML = \"\"; return; }"));
+}

@@ -10303,9 +10303,10 @@ var TERM_POLL_MS = 250;
     var path = t && t.project;
     box.hidden = false;
     if (!path) {
-      // Keep the third column occupied so choosing a conversation that has a
-      // project does not make the page jump; the placeholder says why it is
-      // empty and offers the way to give it one.
+      // A new conversation has no project card to show. Leave the space empty
+      // until the conversation is tied to a folder; an existing conversation
+      // without one still explains why and offers the way to give it one.
+      if (!t) { box.hidden = true; box.innerHTML = ""; return; }
       morph(box, '<div class="ws-head"><b class="grow">Conversation</b></div>' +
         '<div class="ws-empty"><b>No project</b>This conversation is not tied to a folder. Open a project to see its branch, outputs, site and a shell here.</div>' +
         '<div class="ws-sep"></div><button type="button" class="ws-row ws-link" data-action="nav" data-view="projects"><svg class="icon" aria-hidden="true"><use href="#i-folder"></use></svg><span class="grow">Open projects</span></button>');

@@ -10,6 +10,16 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.26.3] - 2026-11-08 - A new chat has no empty card
+
+### Changed
+
+- A new conversation no longer shows the empty **Conversation / No project / Open projects** card. The
+  prompt and its starting points stand on their own until the conversation belongs to a folder. An
+  existing conversation that still has no project keeps the explanation and the link.
+
+---
+
 ## [0.26.2] - 2026-11-08 - One hover, one inset
 
 ### Fixed
