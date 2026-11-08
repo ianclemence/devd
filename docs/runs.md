@@ -119,6 +119,33 @@ made but not checked ends `unverified`, with the missing evidence named. A run
 whose check ran and failed ends `unverified` or `failed`; it never reports
 success merely because the process exited.
 
+### The completion verdict
+
+A run's `done` is a decision, not a task state. `completion::check` reads the
+latest independent gatekeeper (reviewer, security engineer or final QA), every
+task, the acceptance criteria and the pending approvals, and returns one verdict:
+`approve`, `changes_needed`, `blocked` or `accepted_by_hand`. `conclude` will not
+set `done` unless that verdict is `approve`, every task is terminal, no approval
+is waiting, and the reviewed commit is the current HEAD. If the tree moved after
+the check read it, the run pauses and asks for a review of the current revision.
+
+A gatekeeper's prose is read only when it did not supply a structured verdict. A
+line naming a failing check (`FAILS`, `3 failed`, `defects remain`) is
+`changes_needed`; a zero-failure count and a plain pass are approvals. The
+structured form (`verdict`, `criteria`, `reviewed_commit` on `team.report`) always
+wins, and it is what the run stores and the scorecard shows.
+
+Before its first task changes anything, a run records `base_commit` and a
+`run_baselines` row: the starting revision and the project's most recent own
+checks, labelled `recent`. A failure is pre-existing only when the command and
+the result match that baseline; otherwise it is new or unknown. The gatekeeper is
+told this in its brief.
+
+A person may accept a check that asked for changes with `team.accept`. The task
+becomes `skipped`, the run's verdict is `accepted_by_hand`, and the summary says
+“Finished by hand”. That is an explicit override, never a machine approval, and
+the paused run asks for exactly that decision.
+
 ## Artifacts
 
 A result up to 24 KB is stored inline on the tool call. A larger result is

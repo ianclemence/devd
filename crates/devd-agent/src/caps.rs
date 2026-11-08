@@ -436,6 +436,21 @@ struct ReportArgs {
     /// you started - it is kept for this role, in this project.
     #[serde(default)]
     lesson: Option<String>,
+    /// A reviewer, security engineer or QA states its conclusion:
+    /// `approve`, `changes_needed` or `blocked`. Required for gatekeepers when
+    /// the work is not plainly approved.
+    #[serde(default)]
+    verdict: Option<String>,
+    /// Acceptance criteria and whether each passed:
+    /// `[{"id":"AC-1","text":"...","status":"passed","reason":null}]`.
+    #[serde(default)]
+    criteria: Option<Value>,
+    /// The commit this report judged, when it is a review or verification.
+    #[serde(default)]
+    reviewed_commit: Option<String>,
+    /// The checks that were run: `[{"name":"test","command":"...","ok":false,"failures":[...]}]`.
+    #[serde(default)]
+    checks: Option<Value>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -533,6 +548,16 @@ struct AssignModels {
     project: Option<String>,
     /// First choice first; later ones are fallbacks. Empty clears the assignment.
     models: Vec<ModelChoice>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct PriceArgs {
+    /// Model id, as the provider writes it.
+    model: String,
+    /// USD per million input tokens.
+    input_price: f64,
+    /// USD per million output tokens.
+    output_price: f64,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -1298,8 +1323,9 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             // One structured answer to "what does this run need from me?", shared
             // with the Inbox and the window so they cannot word it differently.
             let needs = crate::needs::of(&run, &tasks);
+            let baseline = ctx.store.run_baseline(&a.run)?;
             let pending: Vec<Value> = ctx.store.list_requests(true, None, 200)?.into_iter().filter(|r| r.thread_id.as_deref().map(|t| tasks.iter().any(|x| x.thread_id.as_deref() == Some(t))).unwrap_or(false)).map(|r| serde_json::to_value(r).unwrap_or(Value::Null)).collect();
-            Ok(Outcome::with_data(format!("{} · {} task(s)", run.state, tasks.len()), json!({ "run": run, "run_id": ctx.store.run_for_team_run(&a.run)?.map(|r| r.id), "tasks": tasks, "events": events, "approvals": pending, "needs": needs })))
+            Ok(Outcome::with_data(format!("{} · {} task(s)", run.state, tasks.len()), json!({ "run": run, "run_id": ctx.store.run_for_team_run(&a.run)?.map(|r| r.id), "tasks": tasks, "events": events, "approvals": pending, "needs": needs, "baseline": baseline })))
         },
     )?;
     reg.define::<NoArgs>("team.overview", "Everything the team is doing, across every project")
@@ -1747,7 +1773,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
     {
         let t = team.clone();
         reg.define::<ReportArgs>("team.report", "Report on your task")
-    .description("Say whether the task is done or blocked, with what you did and saw. devd checks the evidence in your tool results before accepting it.")
+    .description("Say whether the task is done or blocked, with what you did and saw. devd checks the evidence in your tool results before accepting it. A reviewer, security engineer or QA must pass its conclusion as `verdict` (approve, changes_needed or blocked) and the acceptance criteria it judged. Reporting after the task was already accepted returns the authoritative state instead of an error.")
     .tier(Tier::Read)
     .effect(Effect::Process)
     .agent_safe()
@@ -1755,7 +1781,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
     .idempotent()
     .handlers(
         |_, _| simple("team.report", "report on the task"),
-        move |_, a| Ok(Outcome::with_data("Recorded the report", t.report(&a.task, &a.status, &a.summary, a.lesson.as_deref())?)),
+        move |_, a| Ok(Outcome::with_data("Recorded the report", t.report_full(&a.task, &a.status, &a.summary, a.lesson.as_deref(), a.verdict.as_deref(), a.criteria.as_ref(), a.reviewed_commit.as_deref(), a.checks.as_ref())?)),
     )?;
     }
 
@@ -1955,6 +1981,25 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             Ok(Outcome::ok(if a.models.is_empty() { format!("cleared {}", a.role) } else { format!("{} uses {}", a.role, a.models.iter().map(|m| m.model.clone()).collect::<Vec<_>>().join(" then ")) }))
         },
     )?;
+    reg.define::<PriceArgs>("models.price", "Record a model's price")
+    .description("Records the input and output price per million tokens for one model. devd uses the catalogue price to estimate spend and enforce max_cost_usd; unpriced models are reported as unknown rather than zero. Human only: a made-up price would make every budget wrong.")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .human_only()
+    .dry_run()
+    .handlers(
+        |_, a| simple("models.price", format!("set the price of {}", a.model)),
+        |ctx, a| {
+            if a.input_price < 0.0 || a.output_price < 0.0 {
+                return Err(DevdError::invalid("prices are zero or more USD per million tokens"));
+            }
+            ctx.store.set_model_price(&a.model, a.input_price, a.output_price)?;
+            Ok(Outcome::with_data(
+                format!("{}: ${}/M input, ${}/M output", a.model, a.input_price, a.output_price),
+                json!({ "model": a.model, "input_price": a.input_price, "output_price": a.output_price }),
+            ))
+        },
+    )?;
 
     // ----------------------------------------------------------- providers
     reg.define::<NoArgs>("provider.presets", "Provider presets")
@@ -2028,6 +2073,16 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             ctx.store.upsert_provider(&p)?;
             if let Some(k) = &a.api_key {
                 secrets::save_key(&ctx.paths, &p.id, k)?;
+            }
+            // Make routing explicit the first time a default provider is saved:
+            // the default role names the model it will use, instead of an empty
+            // table that silently means "whatever the provider defaults to".
+            // Specialist roles still fall back to this; choosing a different
+            // model for a role stays a person's decision.
+            if p.is_default && ctx.store.list_role_models()?.is_empty() {
+                if let Some(model) = p.default_model.clone().filter(|m| !m.trim().is_empty()) {
+                    let _ = ctx.store.set_role_models("default", "", &[(p.id.clone(), model)]);
+                }
             }
             Ok(Outcome::with_data(format!("Saved the provider {}", p.label), provider_view(ctx, &p)))
         },

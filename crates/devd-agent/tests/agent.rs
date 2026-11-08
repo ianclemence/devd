@@ -1470,6 +1470,7 @@ fn plans_are_validated_before_they_are_accepted() {
         instructions: "do the thing and prove it works".into(),
         depends_on: deps.iter().map(|s| s.to_string()).collect(),
         scope: vec![],
+        criteria: vec![],
     };
     assert!(validate_plan(&[t("a", "implementer", &[]), t("b", "reviewer", &["a"])]).is_ok());
     assert!(validate_plan(&[]).is_err());
@@ -1843,6 +1844,133 @@ fn production_mode_makes_every_agent_change_wait_for_a_person() {
         .unwrap()
         .iter()
         .any(|c| c["name"] == "environment"));
+}
+
+#[test]
+fn a_failing_final_verification_never_marks_the_run_done() {
+    let e = env();
+    let dir = team_project(&e);
+    let dir_m = dir.clone();
+    let m = mock(move |_, seen| {
+        let dir = dir_m.clone();
+        let role = role_of(seen);
+        let step = step_of(seen);
+        let sys = seen.body["system"]
+            .as_str()
+            .map(str::to_string)
+            .or_else(|| {
+                seen.body["system"].as_array().map(|a| {
+                    a.iter()
+                        .filter_map(|b| b["text"].as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+            })
+            .unwrap_or_default();
+        let workdir = sys
+            .split("Your working directory is ")
+            .nth(1)
+            .and_then(|r| r.split(". ").next())
+            .unwrap_or("")
+            .to_string();
+        let body = match (role.as_str(), step) {
+            ("Planner", 0) => invoke(
+                "p1",
+                "team.plan_submit",
+                json!({ "tasks": [
+                { "key": "alpha", "role": "implementer", "title": "Write alpha", "instructions": "Create alpha.txt and run the test task.", "scope": ["alpha.txt"], "criteria": ["alpha.txt exists and the test task passes"] } ] }),
+            ),
+            ("Implementer", 0) => invoke(
+                "i1",
+                "fs.write",
+                json!({ "path": format!("{workdir}/alpha.txt"), "content": "alpha\n" }),
+            ),
+            ("Implementer", 1) => invoke(
+                "i2",
+                "project.run",
+                json!({ "path": workdir, "task": "test" }),
+            ),
+            ("Implementer", 2) => invoke(
+                "i3",
+                "team.report",
+                json!({ "status": "done", "summary": "wrote alpha.txt and ran the test task" }),
+            ),
+            ("QA", 0) | ("Qa", 0) => invoke(
+                "q1",
+                "project.run",
+                json!({ "path": dir.display().to_string(), "task": "test" }),
+            ),
+            ("QA", 1) | ("Qa", 1) => invoke(
+                "q2",
+                "team.report",
+                json!({
+                    "status": "done",
+                    "summary": "Final verification: the suite FAILS — 1 test failed, 0 passed.",
+                    "verdict": "changes_needed",
+                    "criteria": [{ "id": "AC-1", "text": "the test suite passes", "status": "failed", "reason": "one test failed" }]
+                }),
+            ),
+            _ => anthropic_text("ok"),
+        };
+        (200, body)
+    });
+    add_provider(&e, "anthropic", &m.base);
+    let run = call(&e, &e.human, "team.start", json!({ "goal": "Write alpha", "project": dir.display().to_string(), "auto_approve": true }), Approval::None).unwrap();
+    let id = run["id"].as_str().unwrap().to_string();
+    let v = wait_run(&e, &id, &["done", "paused", "failed"]);
+    assert_eq!(
+        v["run"]["state"],
+        "paused",
+        "a failing final check must never mark the run done: {}",
+        serde_json::to_string_pretty(&v).unwrap()
+    );
+    assert_eq!(v["run"]["verdict"], "changes_needed");
+    assert_eq!(v["needs"]["reason"], "verdict", "the run asks one question: {}", serde_json::to_string_pretty(&v["needs"]).unwrap());
+    assert!(
+        v["needs"]["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["capability"] == "team.accept"),
+        "a person can accept it explicitly"
+    );
+    let reason = v["run"]["error"].as_str().unwrap_or("");
+    assert!(
+        reason.contains("not finished") || reason.contains("changes"),
+        "the pause names the reason: {reason}"
+    );
+
+    // The person may still accept the latest check by hand. That is a visible
+    // override, not a machine approval.
+    let tasks = v["tasks"].as_array().unwrap();
+    let gate = tasks
+        .iter()
+        .filter(|t| {
+            let k = t["key"].as_str().unwrap_or("");
+            k == "final-verify" || k.starts_with("re-review")
+        })
+        .last()
+        .expect("there is a final check");
+    assert_eq!(gate["verdict"], "changes_needed");
+    call(
+        &e,
+        &e.human,
+        "team.accept",
+        json!({ "task": gate["id"] }),
+        Approval::None,
+    )
+    .unwrap();
+    let done = wait_run(&e, &id, &["done", "paused", "failed"]);
+    assert_eq!(done["run"]["state"], "done");
+    assert_eq!(done["run"]["verdict"], "accepted_by_hand");
+    assert!(
+        done["run"]["summary"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Finished by hand"),
+        "the summary says a person accepted it: {}",
+        done["run"]["summary"]
+    );
 }
 
 #[test]

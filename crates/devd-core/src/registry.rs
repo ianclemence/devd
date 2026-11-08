@@ -38,6 +38,42 @@ const PRODUCTION_FREE: &[&str] = &[
     "approval.get",
 ];
 
+/// Reads a person's window repeats on a timer. They are operational telemetry,
+/// not an audit trail: recording them buried every real change under hundreds of
+/// thousands of rows. Agents' reads are still recorded, because an agent reading
+/// a file is part of what a run did.
+const ROUTINE_READS: &[&str] = &[
+    "terminal.list",
+    "terminal.read",
+    "team.list",
+    "team.get",
+    "approval.list",
+    "inbox.list",
+    "health.status",
+    "environment.get",
+    "service.list",
+    "services.inventory",
+    "todo.list",
+    "project.list",
+    "site.list",
+    "runtime.list",
+    "tls.list",
+    "tls.ca.status",
+    "tls.ca.show",
+    "models.catalogue",
+    "provider.list",
+    "chat.list",
+    "chat.get",
+    "stacks.list",
+    "stack.list",
+];
+
+fn is_routine_read(cap: &Capability, ctx: &Ctx) -> bool {
+    cap.tier == crate::capability::Tier::Read
+        && !ctx.actor.is_agent()
+        && ROUTINE_READS.contains(&cap.id.as_str())
+}
+
 impl Registry {
     /// An empty registry.
     pub fn new() -> Self {
@@ -410,6 +446,11 @@ impl Registry {
         if matches!(cap.id.as_str(), "terminal.write" | "terminal.resize") {
             return;
         }
+        // A window refreshing a list is not an event. Mutations, agent calls,
+        // approvals and security-sensitive reads are still recorded.
+        if is_routine_read(cap, ctx) {
+            return;
+        }
         // Anything that changes the machine makes every kept probe answer out of date.
         if cap.effect != crate::capability::Effect::Read && !req.dry_run {
             crate::memo::bump();
@@ -759,6 +800,43 @@ mod tests {
             .build()
             .unwrap();
         assert!(reg.register(dup).is_err());
+    }
+
+    #[test]
+    fn routine_window_reads_are_not_audited_but_agent_reads_and_writes_are() {
+        let mut reg = Registry::new();
+        for id in ["team.get", "demo.write"] {
+            reg.register(
+                Capability::builder(id, "test capability")
+                    .tier(if id == "demo.write" { Tier::Write } else { Tier::Read })
+                    .dry_run(true)
+                    .handler(
+                        |_, _| Ok(Plan::new("x", "plan")),
+                        |_, _| Ok(Outcome::ok("done")),
+                    )
+                    .build()
+                    .unwrap(),
+            )
+            .unwrap();
+        }
+        let human = test_ctx();
+        let req = |id: &str| InvokeRequest {
+            id: id.into(),
+            args: serde_json::json!({}),
+            dry_run: false,
+        };
+        // A person's window refreshing a list is telemetry...
+        reg.dispatch(&human, &req("team.get"), Approval::None).unwrap();
+        // ...a change is an event...
+        reg.dispatch(&human, &req("demo.write"), Approval::None).unwrap();
+        // ...and an agent reading is part of what the run did.
+        let mut agent = human.clone();
+        agent.actor = Actor::agent("assistant");
+        reg.dispatch(&agent, &req("team.get"), Approval::None).unwrap();
+        let rows = human.store.list_audit(20).unwrap();
+        assert_eq!(rows.len(), 2, "the poll is not a row: {rows:?}");
+        assert!(rows.iter().any(|r| r.capability == "demo.write"));
+        assert!(rows.iter().any(|r| r.capability == "team.get" && r.actor.starts_with("agent:")));
     }
 
     #[test]

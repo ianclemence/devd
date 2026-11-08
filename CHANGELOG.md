@@ -10,6 +10,81 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.27.0] - 2026-11-08 - A run finishes only when an independent check approves it
+
+### Completion is a verdict, not a task state
+
+- **Every run now carries a canonical verdict** (`approve`, `changes_needed`, `blocked` or
+  `accepted_by_hand`) with the exact commit it applies to. `conclude` refuses to set a run `done`
+  unless an independent gatekeeper approved that revision, every task is terminal, every acceptance
+  criterion passed and no approval is waiting. Three historical runs that ended `done` with a failing
+  suite would now pause with `changes_needed`.
+- **`team.report` accepts a structured verdict and criteria**, and the prose classifier understands
+  explicit failures (`FAILS`, `3 failed`, `defects remain`) instead of only review phrases. A
+  sentence that names a failing check can never be read as an approval; `0 failed` and `no
+  failures` still pass.
+- **A human override is explicit and visible.** `team.accept` can accept a check that asked for
+  changes; the run finishes as `accepted_by_hand`, the summary says “Finished by hand”, and the
+  override is never presented as machine approval.
+- **A paused non-approving run asks one question**: the final check, the criteria it could not pass,
+  “Read the final check” and a red “Accept the work as it is”. The Inbox and the run page read the
+  same `needs` object.
+- **An approval is for a revision.** If the tree moved after the final check read it, the run pauses
+  and asks for a review of the current commit instead of accepting the old one.
+
+### Verification is baseline- and criterion-aware
+
+- **The run records its starting revision and the project's most recent own checks** before the first
+  task changes anything, as a clearly labelled *recent* baseline. A gatekeeper is told to call a
+  failure pre-existing only when the command and the result match; otherwise it is new or unknown.
+- **Acceptance criteria are first-class.** The planner can submit `criteria` per task; writer tasks
+  without one get an explicit criterion from their title, and the final check receives the run's
+  definition of done. The run scorecard shows the verdict and the reviewed commit.
+- **`models.price`** records a real input/output price per million tokens for an unpriced model, so
+  `max_cost_usd` and the usage estimate are not silently computed from zero.
+
+### Writers are isolated, and a review sees a fixed commit
+
+- **Any writing role, not only `implementer`, now triggers a worktree** when another writer could
+  run; the scheduler also starts at most one non-isolated writer per tick. The content-assistant
+  overlap came from both gaps.
+- **A per-project write lease with fencing** admits one non-isolated writer at a time and survives a
+  crash through expiry; a stale holder is stopped when ownership moves. The lease row is kept across
+  releases so the fencing value never goes backwards, and a lease table test covers it.
+- **A review records the HEAD commit** it started with, and the gatekeeper prompt names that commit
+  and the base revision. A review verdict is attached to the revision it read.
+
+### Execution keeps moving
+
+- **A turn or output limit is a checkpoint, not a wall.** The same task continues in the same
+  conversation with a durable checkpoint (objective, last result, next action) instead of reporting
+  blocked; checkpoints are written when a task starts, is nudged, retried or turn-limited.
+- **Liveness is progressive**: a nudge after ~3 quiet minutes, a stop at the existing threshold, and
+  an unfinished long tool call is treated as work, not as a dead agent. The watchdog no longer
+  nags every tick between the two thresholds.
+- **Failures carry a classification** (`transient`, `policy`, `incomplete`, `environment`,
+  `pre-existing`, `unknown`) on the task, and `team.report` after acceptance is idempotent: it
+  returns the authoritative state instead of “this task is not running”.
+- **A resumed run always gets a driver.** Resuming a just-paused run used to race the old driver's
+  exit and could leave the run running with nobody driving it; the driver restart waits for the old
+  one to leave.
+
+### Tooling and hygiene
+
+- **Pint runs as `php vendor/bin/pint`**, which works on Windows and Unix, instead of launching the
+  PHP script as an executable.
+- **A wrong-capability hint names the right tool**: `git` points at `git.status`/`git.diff`/…,
+  `curl`/`wget` at `web.open`/`docs.fetch`, and a shell at the allow-list or a project task.
+- **Schema errors include a filled-in example** built from the capability's own schema, not invented
+  fields.
+- **Routine window polling is no longer audited.** `terminal.list`, `team.get`, `health.status`,
+  `approval.list` and the other timed reads stop filling the audit table with hundreds of thousands
+  of rows; mutations, agent calls and approvals are still recorded.
+- **The run page has a scorecard**: verdict, verified/total, accepted by hand, retries, stalls and
+  baseline failures, plus the verdict and reviewed commit on each task.
+
+---
+
 ## [0.26.4] - 2026-11-08 - If you told it to, it asks once and does it
 
 ### Changed

@@ -77,8 +77,8 @@ tasks:
   - {id: seed, title: Run database seeders, kind: migrate, risk: mutating, run: [php, artisan, db:seed], requires_file: artisan}
   - {id: routes, title: List routes, kind: other, run: [php, artisan, route:list], requires_file: artisan}
   - {id: queue, title: Run the queue worker, kind: dev, long_running: true, run: [php, artisan, queue:work], requires_file: artisan}
-  - {id: format, title: Format with Pint, kind: format, risk: mutating, run: [vendor/bin/pint], requires_file: vendor/bin/pint}
-  - {id: lint, title: Check style with Pint, kind: lint, run: [vendor/bin/pint, --test], requires_file: vendor/bin/pint}
+  - {id: format, title: Format with Pint, kind: format, risk: mutating, run: [php, vendor/bin/pint], requires_file: vendor/bin/pint}
+  - {id: lint, title: Check style with Pint, kind: lint, run: [php, vendor/bin/pint, --test], requires_file: vendor/bin/pint}
   - {id: install, title: Install PHP dependencies, kind: install, risk: mutating, run: [composer, install], requires_file: composer.json}
   - {id: frontend-install, title: Install JavaScript dependencies, kind: install, risk: mutating, run: [npm, install], requires_file: package.json}
   - {id: frontend-build, title: Build front-end assets, kind: build, run: [npm, run, build], requires_file: package.json}

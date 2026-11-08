@@ -171,10 +171,22 @@ goal -> planner -> [you approve the plan] -> scheduler -> specialists -> final v
   is `unverified`, its dependants do not start, and the run pauses with what is
   needed (retry with a note, or accept by hand — recorded as such).
 * **Final verification.** When every task is done, devd adds a QA task that runs
-  the project's own checks independently. The run's summary is built by devd from the
-  recorded evidence, not from what agents wrote about themselves. The team run
-  mirrors its state into the unified run, so the Evidence sheet on the team run
-  reads the same steps, evidence and approvals the scheduler used.
+  the project's own checks independently. Its report carries a verdict
+  (`approve`, `changes_needed` or `blocked`) and the criteria it judged, and the
+  run only becomes `done` through `completion::check`: an approving gatekeeper, a
+  reviewed commit equal to HEAD, terminal tasks, met criteria and no pending
+  approval. A “changes needed” returns the work for another pass; a failure that
+  the person accepts by hand is recorded as `accepted_by_hand`, and the summary
+  says so. The run's summary is built by devd from the recorded evidence, not from
+  what agents wrote about themselves. The team run mirrors its state into the
+  unified run, so the Evidence sheet on the team run reads the same steps,
+  evidence, verdict and approvals the scheduler used.
+* **Isolation and scorecard.** Any writing role may run in its own worktree; the
+  scheduler never starts two non-isolated writers, and a per-project write lease
+  (with a fencing value and expiry) admits one. A review records the HEAD commit
+  it started with, so its verdict applies to that revision. The run page shows a
+  scorecard: verdict and reviewed commit, verified tasks, accepted by hand,
+  retries, stalls and baseline failures.
 * **Persistence.** `team_runs`, `team_tasks`, `team_events`, mirrored into the
   unified run. On restart, running tasks go back to pending and their conversations
   continue; paused and waiting runs stay as they were.

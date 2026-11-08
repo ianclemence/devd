@@ -1374,7 +1374,32 @@ fn run_task(ctx: &Ctx, a: &RunTask, destructive: bool) -> Result<Outcome> {
     Ok(o)
 }
 
+/// A command that is a dedicated capability, not a program the allow-list
+/// should run. Teaching the correct path at the moment it is needed is more
+/// useful than a bare "not allowed".
+fn wrong_capability(argv: &[String]) -> Option<String> {
+    let raw = argv.first()?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let name = raw
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(raw)
+        .trim_end_matches(".exe")
+        .to_ascii_lowercase();
+    match name.as_str() {
+        "git" => Some("`git` is a capability, not a shell command. Use git.status, git.diff, git.log, git.stage, git.commit, or git.checkout.".into()),
+        "curl" | "wget" => Some("Fetching a URL is a capability. Use web.open for a page (title, headings, links, forms) or docs.fetch for documentation; both refuse private addresses.".into()),
+        "bash" | "sh" | "zsh" | "fish" | "powershell" | "pwsh" | "cmd" => Some("devd never runs a shell. Use project.exec with a program on the stack's allow-list, or a task from project.tasks.".into()),
+        _ => None,
+    }
+}
+
 fn exec_cmd(ctx: &Ctx, a: &ExecArgs, destructive: bool) -> Result<Outcome> {
+    if let Some(hint) = wrong_capability(&a.argv) {
+        return Err(DevdError::denied(hint));
+    }
     let r = stacks(ctx);
     let (dir, c) = detect_ctx(ctx, &r, &a.path, None)?;
     let stack = c.primary.as_deref().and_then(|s| r.stack(s));

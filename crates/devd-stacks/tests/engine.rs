@@ -481,6 +481,27 @@ fn tasks_run_with_evidence_and_destructive_ones_need_a_human() {
     )
     .unwrap();
     assert_eq!(fine["data"]["exit_code"], 0);
+
+    // A command that is a capability names the capability instead of a bare
+    // "not allowed"; a shell is never the answer.
+    let e = dispatch(
+        &reg,
+        &agent,
+        "project.exec",
+        json!({"path": path, "argv": ["git", "status"]}),
+        Approval::None,
+    )
+    .unwrap_err();
+    assert!(e.to_string().contains("git.status"), "{e}");
+    let e = dispatch(
+        &reg,
+        &agent,
+        "project.exec",
+        json!({"path": path, "argv": ["bash", "-c", "echo hi"]}),
+        Approval::None,
+    )
+    .unwrap_err();
+    assert!(e.to_string().contains("never runs a shell"), "{e}");
 }
 
 #[test]

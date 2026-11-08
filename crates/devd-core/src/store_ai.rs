@@ -414,6 +414,29 @@ impl Store {
 
     // -------------------------------------------------------------- threads
 
+    /// Record a price for one model, in USD per million tokens. This is the
+    /// only way an unpriced model gets a cost estimate: a person states it.
+    pub fn set_model_price(&self, model: &str, input_price: f64, output_price: f64) -> Result<()> {
+        let model = model.trim();
+        if model.is_empty() {
+            return Err(crate::error::DevdError::invalid("name a model"));
+        }
+        self.with(|c| {
+            c.execute(
+                "DELETE FROM model_catalogue WHERE model_id=?1 AND source='manual'",
+                params![model],
+            )?;
+            c.execute(
+                "INSERT INTO model_catalogue (source,model_id,display,description,context_window,max_output,input_price,output_price,retirement,url,fetched_at)
+                 VALUES ('manual',?1,?1,'Price set by a person',NULL,NULL,?2,?3,NULL,NULL,?4)",
+                params![model, input_price, output_price, util::now()],
+            )?;
+            Ok(())
+        })
+    }
+
+    // -------------------------------------------------------------- threads
+
     /// Create a thread.
     pub fn create_thread(
         &self,
@@ -1105,4 +1128,24 @@ fn row_inbox(r: &rusqlite::Row) -> rusqlite::Result<InboxMessage> {
         task_id: r.get(11)?,
         kind: r.get(12)?,
     })
+}
+
+#[cfg(test)]
+mod price_tests {
+    use super::*;
+
+    #[test]
+    fn a_person_can_price_an_unpriced_model() {
+        let s = Store::open_in_memory().unwrap();
+        s.set_model_price("deepseek-chat", 0.27, 1.10).unwrap();
+        let rows = s.list_catalogue(Some("manual")).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].input_price, Some(0.27));
+        assert_eq!(rows[0].output_price, Some(1.10));
+        // Setting it again replaces the manual price; it never stacks two.
+        s.set_model_price("deepseek-chat", 0.20, 0.80).unwrap();
+        let rows = s.list_catalogue(Some("manual")).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].input_price, Some(0.20));
+    }
 }

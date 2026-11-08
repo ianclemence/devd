@@ -23,6 +23,9 @@ pub struct NewTask<'a> {
     pub depends_on: &'a [String],
     /// Paths it may change.
     pub scope: &'a [String],
+    /// What the finished work must satisfy. Checked by the gatekeeper and by
+    /// devd's completion invariant, not only described in prose.
+    pub criteria: &'a [String],
     /// Why it may run. Absent means the caller did not say, and the task records
     /// an empty mandate rather than an invented one.
     pub mandate: Option<&'a serde_json::Value>,
@@ -47,6 +50,18 @@ pub struct TaskUpdate<'a> {
     pub thread_id: Option<&'a str>,
     /// Why it may run, when the caller is changing it.
     pub mandate: Option<&'a serde_json::Value>,
+    /// What it must satisfy, when the caller is changing it.
+    pub criteria: Option<&'a serde_json::Value>,
+    /// The gatekeeper's machine-readable verdict.
+    pub verdict: Option<&'a str>,
+    /// The structured completion report.
+    pub verdict_data: Option<&'a serde_json::Value>,
+    /// The exact commit the work was judged against.
+    pub reviewed_commit: Option<&'a str>,
+    /// Durable task checkpoint (objective, done, left, next action).
+    pub checkpoint: Option<&'a serde_json::Value>,
+    /// `transient`, `policy`, `incomplete`, `environment`, `pre-existing`, `unknown`.
+    pub failure_kind: Option<&'a str>,
 }
 
 /// The last check of a provider.
@@ -128,6 +143,19 @@ pub struct TeamRun {
     pub created_at: String,
     /// Updated.
     pub updated_at: String,
+    /// The canonical completion verdict: `approve`, `changes_needed`,
+    /// `blocked` or `accepted_by_hand`.
+    #[serde(default)]
+    pub verdict: Option<String>,
+    /// When the verdict was recorded.
+    #[serde(default)]
+    pub verdict_at: Option<String>,
+    /// The exact commit the final verdict applies to.
+    #[serde(default)]
+    pub reviewed_commit: Option<String>,
+    /// The commit the run started from, for baseline comparisons.
+    #[serde(default)]
+    pub base_commit: Option<String>,
 }
 
 /// What a run must achieve, in the person's words, and how many extra passes devd may take to get there.
@@ -194,6 +222,24 @@ pub struct TeamTask {
     /// How many times the stall watchdog intervened.
     #[serde(default)]
     pub stalls: i64,
+    /// What the finished work must satisfy.
+    #[serde(default)]
+    pub criteria: Vec<String>,
+    /// The gatekeeper's verdict on this task.
+    #[serde(default)]
+    pub verdict: Option<String>,
+    /// The structured completion report behind the verdict.
+    #[serde(default)]
+    pub verdict_data: Option<serde_json::Value>,
+    /// The commit this task's work was judged against.
+    #[serde(default)]
+    pub reviewed_commit: Option<String>,
+    /// Durable checkpoint for continuing the task.
+    #[serde(default)]
+    pub checkpoint: Option<serde_json::Value>,
+    /// The classified failure reason, when it did not finish cleanly.
+    #[serde(default)]
+    pub failure_kind: Option<String>,
 }
 
 /// A line in a run's log.
@@ -213,7 +259,7 @@ pub struct TeamEvent {
     pub at: String,
 }
 
-const RUN_COLS: &str = "id,title,goal,project,state,plan_approved,summary,error,parallel,created_by,created_at,updated_at,thread_id";
+const RUN_COLS: &str = "id,title,goal,project,state,plan_approved,summary,error,parallel,created_by,created_at,updated_at,thread_id,verdict,verdict_at,reviewed_commit,base_commit";
 /// The columns of one task row, for queries that live in other modules.
 /// A conversation that a team specialist works in, and what it belongs to.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -237,7 +283,7 @@ pub struct ThreadTeamLink {
 }
 
 pub(crate) const TASK_COLUMNS: &str =
-    "id,run_id,key,role,title,instructions,depends_on,scope,state,attempts,workdir,branch,thread_id,result,evidence,error,created_at,started_at,finished_at,mandate,last_step_at,stalls";
+    "id,run_id,key,role,title,instructions,depends_on,scope,state,attempts,workdir,branch,thread_id,result,evidence,error,created_at,started_at,finished_at,mandate,last_step_at,stalls,criteria,verdict,verdict_data,reviewed_commit,checkpoint,failure_kind";
 const TASK_COLS: &str = TASK_COLUMNS;
 
 fn row_run(r: &rusqlite::Row) -> rusqlite::Result<TeamRun> {
@@ -255,6 +301,10 @@ fn row_run(r: &rusqlite::Row) -> rusqlite::Result<TeamRun> {
         created_by: r.get(9)?,
         created_at: r.get(10)?,
         updated_at: r.get(11)?,
+        verdict: r.get(13)?,
+        verdict_at: r.get(14)?,
+        reviewed_commit: r.get(15)?,
+        base_commit: r.get(16)?,
     })
 }
 
@@ -284,6 +334,12 @@ fn row_task(r: &rusqlite::Row) -> rusqlite::Result<TeamTask> {
         mandate: serde_json::from_str(&mandate).unwrap_or(serde_json::Value::Null),
         last_step_at: r.get(20)?,
         stalls: r.get(21)?,
+        criteria: list(r.get(22)?),
+        verdict: r.get(23)?,
+        verdict_data: r.get::<_, Option<String>>(24)?.and_then(|s| serde_json::from_str(&s).ok()),
+        reviewed_commit: r.get(25)?,
+        checkpoint: r.get::<_, Option<String>>(26)?.and_then(|s| serde_json::from_str(&s).ok()),
+        failure_kind: r.get(27)?,
     })
 }
 
@@ -452,10 +508,14 @@ impl Store {
             created_by: by.into(),
             created_at: now.clone(),
             updated_at: now,
+            verdict: None,
+            verdict_at: None,
+            reviewed_commit: None,
+            base_commit: None,
         };
         self.with(|c| {
             c.execute(
-                &format!("INSERT INTO team_runs ({RUN_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)"),
+                "INSERT INTO team_runs (id,title,goal,project,state,plan_approved,summary,error,parallel,created_by,created_at,updated_at,thread_id) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
                 params![run.id, run.title, run.goal, run.project, run.state, run.plan_approved as i32, run.summary, run.error, run.parallel, run.created_by, run.created_at, run.updated_at, run.thread_id],
             )?;
             Ok(())
@@ -680,6 +740,169 @@ impl Store {
         self.sync_team_state(id, "running", None)
     }
 
+    /// Record the canonical completion verdict and the exact commit it applies to.
+    pub fn set_run_verdict(
+        &self,
+        id: &str,
+        verdict: &str,
+        reviewed_commit: Option<&str>,
+    ) -> Result<()> {
+        let now = util::now();
+        self.with(|c| {
+            c.execute(
+                "UPDATE team_runs SET verdict=?2, verdict_at=?3, reviewed_commit=COALESCE(?4,reviewed_commit), updated_at=?3 WHERE id=?1",
+                params![id, verdict, now, reviewed_commit],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// The commit the run started from, for telling a pre-existing failure from a new one.
+    pub fn set_run_base_commit(&self, id: &str, commit: &str) -> Result<()> {
+        self.with(|c| {
+            c.execute(
+                "UPDATE team_runs SET base_commit=?2, updated_at=?3 WHERE id=?1",
+                params![id, commit, util::now()],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// How many approvals for a run are still waiting for a person.
+    pub fn pending_approvals_for_run(&self, run_id: &str) -> Result<i64> {
+        self.with(|c| {
+            Ok(c.query_row(
+                "SELECT COUNT(*) FROM approvals WHERE run_id=?1 AND state='pending'",
+                params![run_id],
+                |r| r.get(0),
+            )?)
+        })
+    }
+
+    /// Whether a tool call for the run started and has not finished. A long
+    /// legitimate command (a full test suite, a build) is working, not stalled.
+    pub fn unfinished_tool_calls(&self, run_id: &str) -> Result<i64> {
+        self.with(|c| {
+            Ok(c.query_row(
+                "SELECT COUNT(*) FROM tool_calls WHERE run_id=?1 AND finished_at IS NULL",
+                params![run_id],
+                |r| r.get(0),
+            )?)
+        })
+    }
+
+    /// Capture what the project's checks did before the run changes anything.
+    pub fn set_run_baseline(
+        &self,
+        run_id: &str,
+        project: Option<&str>,
+        commit_sha: Option<&str>,
+        environment: &serde_json::Value,
+        checks: &serde_json::Value,
+    ) -> Result<()> {
+        self.with(|c| {
+            c.execute(
+                "INSERT INTO run_baselines (run_id,project,commit_sha,environment,checks,created_at) VALUES (?1,?2,?3,?4,?5,?6)
+                 ON CONFLICT(run_id) DO UPDATE SET project=?2, commit_sha=?3, environment=?4, checks=?5",
+                params![run_id, project, commit_sha, environment.to_string(), checks.to_string(), util::now()],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// The baseline captured for a run, if one exists.
+    pub fn run_baseline(&self, run_id: &str) -> Result<Option<serde_json::Value>> {
+        self.with(|c| {
+            Ok(c.query_row(
+                "SELECT checks FROM run_baselines WHERE run_id=?1",
+                params![run_id],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?
+            .and_then(|s| serde_json::from_str(&s).ok()))
+        })
+    }
+
+    // ----------------------------------------------------------- write leases
+
+    /// Take the project's write lease, or extend it when this owner already holds it.
+    /// Returns false when another live owner holds it. The fencing value rises on
+    /// every acquisition, so a stale holder can be fenced out rather than trusted.
+    pub fn acquire_write_lease(
+        &self,
+        project: &str,
+        run_id: &str,
+        task_id: &str,
+        owner: &str,
+        ttl_secs: i64,
+    ) -> Result<bool> {
+        let now = util::now();
+        let expires = (chrono::Utc::now() + chrono::Duration::seconds(ttl_secs.clamp(15, 3600)))
+            .to_rfc3339();
+        self.with(|c| {
+            let changed = c.execute(
+                "INSERT INTO write_leases (project,run_id,task_id,owner,fencing,expires_at,updated_at)
+                 VALUES (?1,?2,?3,?4,1,?5,?6)
+                 ON CONFLICT(project) DO UPDATE SET
+                   run_id=excluded.run_id, task_id=excluded.task_id, owner=excluded.owner,
+                   fencing=write_leases.fencing+1, expires_at=excluded.expires_at, updated_at=excluded.updated_at
+                 WHERE write_leases.expires_at < ?6 OR write_leases.owner = ?4 OR write_leases.owner = ''",
+                params![project, run_id, task_id, owner, expires, now],
+            )?;
+            Ok(changed > 0)
+        })
+    }
+
+    /// Keep a lease alive while its task is working.
+    pub fn heartbeat_write_lease(&self, project: &str, owner: &str, ttl_secs: i64) -> Result<bool> {
+        let now = util::now();
+        let expires = (chrono::Utc::now() + chrono::Duration::seconds(ttl_secs.clamp(15, 3600)))
+            .to_rfc3339();
+        self.with(|c| {
+            let changed = c.execute(
+                "UPDATE write_leases SET expires_at=?2, updated_at=?3 WHERE project=?1 AND owner=?4",
+                params![project, expires, now, owner],
+            )?;
+            Ok(changed > 0)
+        })
+    }
+
+    /// Give the lease back when the task stops, so a crashed owner never locks
+    /// the project. The row is kept with an empty owner so the fencing value
+    /// never goes backwards.
+    pub fn release_write_lease(&self, project: &str, owner: &str, task_id: &str) -> Result<()> {
+        self.with(|c| {
+            c.execute(
+                "UPDATE write_leases SET owner='', expires_at='1970-01-01T00:00:00Z', updated_at=?3 WHERE project=?1 AND owner=?2 AND task_id=?4",
+                params![project, owner, util::now(), task_id],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Who, if anyone, currently holds a project's write lease.
+    pub fn write_lease_owner(&self, project: &str) -> Result<Option<(String, String, String, i64)>> {
+        self.with(|c| {
+            Ok(c.query_row(
+                "SELECT run_id,task_id,owner,fencing FROM write_leases WHERE project=?1 AND owner <> '' AND expires_at >= ?2",
+                params![project, util::now()],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .optional()?)
+        })
+    }
+
+    /// Whether the lease held by `owner` is still the live one (fencing check).
+    pub fn holds_write_lease(&self, project: &str, owner: &str, fencing: i64) -> Result<bool> {
+        self.with(|c| {
+            Ok(c.query_row(
+                "SELECT COUNT(*) FROM write_leases WHERE project=?1 AND owner=?2 AND fencing=?3 AND expires_at >= ?4",
+                params![project, owner, fencing, util::now()],
+                |r| r.get::<_, i64>(0),
+            )? > 0)
+        })
+    }
+
     // -------------------------------------------------------------- team tasks
 
     /// Add a task to a run.
@@ -691,6 +914,7 @@ impl Store {
             instructions,
             depends_on,
             scope,
+            criteria,
             mandate,
         } = new;
         let t = TeamTask {
@@ -716,13 +940,23 @@ impl Store {
             mandate: mandate.cloned().unwrap_or(serde_json::Value::Null),
             last_step_at: None,
             stalls: 0,
+            criteria: criteria.to_vec(),
+            verdict: None,
+            verdict_data: None,
+            reviewed_commit: None,
+            checkpoint: None,
+            failure_kind: None,
         };
+        let verdict_data = t.verdict_data.as_ref().map(|v| v.to_string());
+        let checkpoint = t.checkpoint.as_ref().map(|v| v.to_string());
         self.with(|c| {
             c.execute(
-                &format!("INSERT INTO team_tasks ({TASK_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)"),
+                &format!("INSERT INTO team_tasks ({TASK_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28)"),
                 params![t.id, t.run_id, t.key, t.role, t.title, t.instructions, serde_json::to_string(&t.depends_on).unwrap_or_default(), serde_json::to_string(&t.scope).unwrap_or_default(),
                     t.state, t.attempts, t.workdir, t.branch, t.thread_id, t.result, t.evidence.to_string(), t.error, t.created_at, t.started_at, t.finished_at,
-                    t.mandate.to_string(), t.last_step_at, t.stalls],
+                    t.mandate.to_string(), t.last_step_at, t.stalls,
+                    serde_json::to_string(&t.criteria).unwrap_or_else(|_| "[]".into()), t.verdict, verdict_data, t.reviewed_commit,
+                    checkpoint, t.failure_kind],
             )?;
             Ok(())
         })?;
@@ -812,6 +1046,12 @@ impl Store {
             branch,
             thread_id,
             mandate,
+            criteria,
+            verdict,
+            verdict_data,
+            reviewed_commit,
+            checkpoint,
+            failure_kind,
         } = update;
         let now = util::now();
         self.with(|c| {
@@ -819,12 +1059,16 @@ impl Store {
                 "UPDATE team_tasks SET state=?2, result=COALESCE(?3,result), error=?4, evidence=COALESCE(?5,evidence), workdir=COALESCE(?6,workdir),
                    branch=COALESCE(?7,branch), thread_id=COALESCE(?8,thread_id),
                    mandate=COALESCE(?10,mandate),
+                   criteria=COALESCE(?11,criteria), verdict=COALESCE(?12,verdict), verdict_data=COALESCE(?13,verdict_data),
+                   reviewed_commit=COALESCE(?14,reviewed_commit), checkpoint=COALESCE(?15,checkpoint), failure_kind=COALESCE(?16,failure_kind),
                    started_at=CASE WHEN ?2='running' AND started_at IS NULL THEN ?9 ELSE started_at END,
                    last_step_at=CASE WHEN ?2='running' THEN ?9 ELSE last_step_at END,
                    attempts=CASE WHEN ?2='running' THEN attempts+1 ELSE attempts END,
                    finished_at=CASE WHEN ?2 IN ('done','unverified','failed','cancelled','skipped') THEN ?9 ELSE NULL END
                  WHERE id=?1",
-                params![id, state, result, error, evidence.map(|e| e.to_string()), workdir, branch, thread_id, now, mandate.map(|m| m.to_string())],
+                params![id, state, result, error, evidence.map(|e| e.to_string()), workdir, branch, thread_id, now, mandate.map(|m| m.to_string()),
+                    criteria.map(|v| v.to_string()), verdict, verdict_data.map(|v| v.to_string()), reviewed_commit,
+                    checkpoint.map(|v| v.to_string()), failure_kind],
             )?;
             Ok(())
         })
@@ -858,5 +1102,34 @@ impl Store {
             })?;
             Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
         })
+    }
+}
+
+#[cfg(test)]
+mod lease_tests {
+    use super::*;
+
+    #[test]
+    fn one_writer_holds_the_project_and_the_fencing_value_moves() {
+        let s = Store::open_in_memory().unwrap();
+        assert!(s.acquire_write_lease("/p", "run", "a", "a", 60).unwrap());
+        // A second writer may not take a live lease.
+        assert!(!s.acquire_write_lease("/p", "run", "b", "b", 60).unwrap());
+        // The holder may extend its own.
+        assert!(s.acquire_write_lease("/p", "run", "a", "a", 60).unwrap());
+        assert_eq!(s.write_lease_owner("/p").unwrap().unwrap().2, "a");
+        s.release_write_lease("/p", "a", "a").unwrap();
+        assert!(s.acquire_write_lease("/p", "run", "b", "b", 60).unwrap());
+        assert_eq!(s.write_lease_owner("/p").unwrap().unwrap().2, "b");
+        assert!(s.write_lease_owner("/p").unwrap().unwrap().3 >= 2);
+    }
+
+    #[test]
+    fn an_accepted_baseline_is_read_back() {
+        let s = Store::open_in_memory().unwrap();
+        let checks = serde_json::json!([{ "name": "test", "ok": false, "failures": ["A"] }]);
+        s.set_run_baseline("r", Some("/p"), Some("abc"), &serde_json::json!({}), &checks)
+            .unwrap();
+        assert_eq!(s.run_baseline("r").unwrap().unwrap(), checks);
     }
 }

@@ -40,6 +40,12 @@ sentence in a system prompt**. A prompt is a request. The registry is a gate.
 | A capability that needs approval can always explain itself | A test asserts `requires_approval` implies `supports_dry_run` for every capability |
 | A plan cannot contradict itself | `Plan::destructive(true)` also sets `requires_approval` |
 
+Routine window polling is not an audit event. Read-only list/get capabilities
+(`terminal.list`, `team.get`, `approval.list`, `health.status`, `inbox.list`, …)
+are skipped when a person's interface refreshes them on a timer. Mutations, agent
+calls, approvals and security-sensitive reads are still recorded, and
+`audit.retention_days` remains the retention policy for the rest.
+
 An agent's request for a destructive operation outside its project is therefore a
 well-formed request that waits for a person. The approval is the feature, not a
 formality: it shows the exact command or task, and it cannot be reused. The

@@ -105,6 +105,7 @@ impl Needs {
             "approval" => format!("\"{}\" is waiting for your decision.", self.title),
             "plan" => format!("The plan for \"{}\" is ready to read.", self.title),
             "criteria" => format!("\"{}\" finished, but {} requirement(s) of the definition of done may not hold.", self.title, self.open.len()),
+            "verdict" => format!("\"{}\" finished, but the final check did not approve it.", self.title),
             _ => format!("\"{}\" needs you.", self.title),
         }
     }
@@ -335,6 +336,85 @@ pub fn of(run: &TeamRun, tasks: &[TeamTask]) -> Option<Needs> {
         });
     }
     let real: Vec<&TeamTask> = tasks.iter().filter(|t| t.role != "planner").collect();
+    // A run paused because its final check did not approve the work is a
+    // decision for the person: accept it explicitly, or give the team new
+    // direction. It is not a silent failure and not a "done".
+    if run.state == "paused" {
+        if let Some(t) = real
+            .iter()
+            .filter(|t| {
+                devd_core::completion::is_gatekeeper(&t.role)
+                    || t.key == "final-verify"
+                    || t.key.ends_with("-verify")
+            })
+            .max_by_key(|t| t.created_at.clone())
+        {
+            let v = t.verdict.as_deref().unwrap_or("");
+            if !matches!(v, "approve" | "accepted_by_hand") {
+                let criteria: Vec<String> = t
+                    .verdict_data
+                    .as_ref()
+                    .and_then(|d| d.get("criteria"))
+                    .and_then(|c| c.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|c| {
+                                let st = c.get("status").and_then(|s| s.as_str()).unwrap_or("");
+                                if matches!(st, "passed" | "not_applicable" | "skipped") {
+                                    return None;
+                                }
+                                let id = c
+                                    .get("id")
+                                    .and_then(|s| s.as_str())
+                                    .or_else(|| c.get("text").and_then(|s| s.as_str()))
+                                    .unwrap_or("a criterion");
+                                let why = c.get("reason").and_then(|s| s.as_str()).unwrap_or(st);
+                                Some(format!("{id}: {why}"))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let mut missing = criteria.clone();
+                if missing.is_empty() {
+                    missing.push(format!(
+                        "the final check on {} says {}",
+                        t.key,
+                        if v.is_empty() { "it is not approved" } else { v }
+                    ));
+                }
+                return Some(Needs {
+                    scope: "run".into(),
+                    run_id: run.id.clone(),
+                    task_id: Some(t.id.clone()),
+                    task_key: Some(t.key.clone()),
+                    role: Some(t.role.clone()),
+                    title: run.title.clone(),
+                    line: "the final check".into(),
+                    reason: "verdict".into(),
+                    missing,
+                    actions: vec![
+                        NeedAction {
+                            id: "look".into(),
+                            label: "Read the final check".into(),
+                            detail: "Shows the check's own report and the criteria it could not pass.".into(),
+                            capability: None,
+                            args: json!({ "run": run.id }),
+                            dangerous: false,
+                        },
+                        NeedAction {
+                            id: "accept".into(),
+                            label: "Accept the work as it is".into(),
+                            detail: "Finishes the run without the missing proof; the report will say a person accepted it.".into(),
+                            capability: Some("team.accept".into()),
+                            args: json!({ "task": t.id }),
+                            dangerous: true,
+                        },
+                    ],
+                    open: criteria,
+                });
+            }
+        }
+    }
     // One question, not a list: the first task that is stuck is the one to
     // answer. Dependants of it are waiting on the same answer.
     if let Some(n) = real.iter().find_map(|t| task_need(run, t)) {
@@ -386,6 +466,7 @@ mod tests {
                     instructions: "add a toggle to the settings page and prove it with the tests",
                     depends_on: &[],
                     scope: &[],
+                    criteria: &[],
                     mandate: None,
                 },
             )
@@ -440,6 +521,7 @@ mod tests {
                     instructions: "write the docs and stop",
                     depends_on: &[],
                     scope: &[],
+                    criteria: &[],
                     mandate: None,
                 },
             )

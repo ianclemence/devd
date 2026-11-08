@@ -10,6 +10,7 @@
 pub mod archive;
 pub mod browse;
 pub mod capability;
+pub mod completion;
 pub mod config;
 pub mod context;
 pub mod daemon;

@@ -6650,6 +6650,13 @@ body { letter-spacing: 0; }
 .run-col { width: 100%; max-width: var(--chat-col); margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
 .run-section { margin: 18px 0 2px; color: var(--color-base-content); font-size: var(--text-sm); font-weight: 650; }
 .run-section .count { margin-left: 4px; color: var(--fg-dim); font-weight: 500; }
+/* The run's record in one quiet row: its verdict and what the evidence proved. */
+.run-score { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; margin-top: 14px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--color-base-200); color: var(--fg-mute); font-size: var(--text-xs); }
+.run-score-item { display: inline-flex; align-items: baseline; gap: 5px; }
+.run-score-item b { color: var(--color-base-content); font-weight: 650; }
+.run-score-ok b { color: var(--color-success); }
+.run-score-warn b { color: var(--color-warning); }
+.run-score-bad b { color: var(--color-error); }
 /* A run's call to action sits at the bottom of the conversation, above the
    composer: the current need, then the one row of buttons that answers it. */
 .run-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; padding-top: 10px; }

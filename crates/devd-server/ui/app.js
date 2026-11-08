@@ -11144,6 +11144,33 @@ var TERM_POLL_MS = 250;
       "</dl></section>";
   }
 
+  /* A run's actual record, not the model's account of it: the verdict, how much
+   * of the work an independent check proved, and the friction it took. */
+  function runScorecard(d) {
+    var tasks = (d.tasks || []).filter(function (t) { return t.role !== "planner"; });
+    var verified = tasks.filter(function (t) {
+      return (t.evidence || []).some(function (e) { return e.kind === "verify" && e.ok; });
+    }).length;
+    var byHand = tasks.filter(function (t) { return t.state === "skipped"; }).length;
+    var retries = tasks.reduce(function (n, t) { return n + Math.max(0, (t.attempts || 1) - 1); }, 0);
+    var stalls = (d.events || []).filter(function (e) { return e.kind === "stalled"; }).length;
+    var v = (d.run && d.run.verdict) || "";
+    var word = v === "approve" ? "Approved" : v === "accepted_by_hand" ? "Accepted by hand" : v === "changes_needed" ? "Changes needed" : v === "blocked" ? "Blocked" : "No verdict yet";
+    var tone = v === "approve" ? "ok" : v === "accepted_by_hand" ? "warn" : v ? "bad" : "";
+    var items = ['<span class="run-score-item run-score-' + tone + '"><b>' + esc(word) + "</b>" +
+      (d.run && d.run.reviewed_commit ? '<span class="dim mono">' + esc(String(d.run.reviewed_commit).slice(0, 8)) + "</span>" : "") + "</span>",
+      '<span class="run-score-item"><b>' + verified + "/" + tasks.length + "</b>verified</span>"];
+    if (byHand) items.push('<span class="run-score-item run-score-warn"><b>' + byHand + "</b>accepted by hand</span>");
+    if (retries) items.push('<span class="run-score-item"><b>' + retries + "</b>retries</span>");
+    if (stalls) items.push('<span class="run-score-item run-score-warn"><b>' + stalls + "</b>stalls</span>");
+    var base = Array.isArray(d.baseline) ? d.baseline : [];
+    if (base.length) {
+      var baseBad = base.filter(function (c) { return c.ok === false; }).length;
+      items.push('<span class="run-score-item' + (baseBad ? " run-score-warn" : "") + '" title="The project checks recorded before this run"><b>' + baseBad + "/" + base.length + "</b>baseline failing</span>");
+    }
+    return '<div class="run-score" aria-label="Run scorecard">' + items.join("") + "</div>";
+  }
+
   function teamDetail(d) {
     var r = d.run, tasks = d.tasks, events = d.events;
     var planner = tasks.filter(function (t) { return t.role === "planner"; })[0];
@@ -11183,8 +11210,9 @@ var TERM_POLL_MS = 250;
       return '<div class="tcard tstate-' + t.state + '" data-key="k' + attr(t.id) + '"><div class="tcard-head">' + faceHtml(t.role) +
         '<div class="tcard-title"><b>' + esc(t.title) + '</b><span class="dim">' + esc(roleFace(t.role).name) + "</span></div>" +
         '<span class="chip ' + (t.state === "done" || t.state === "skipped" ? "chip-ok" : bad ? "chip-bad" : t.state === "running" ? "chip-live" : t.state === "waiting_approval" ? "chip-warn" : "") + '">' + esc(TASK_WORD[t.state] || t.state) + "</span>" +
+        (t.verdict ? '<span class="chip ' + (t.verdict === "approve" ? "chip-ok" : t.verdict === "accepted_by_hand" ? "chip-warn" : "chip-bad") + '" title="The independent check\'s verdict">' + esc(String(t.verdict).replace(/_/g, " ")) + "</span>" : "") +
         '<button type="button" class="btn btn-mini btn-ghost" data-action="team-toggle" data-id="' + attr(t.id) + '" aria-expanded="' + (open ? "true" : "false") + '">' + (open ? "Hide" : "Details") + "</button></div>" +
-        '<div class="row-sub">' + esc(dep) + (t.attempts > 1 ? " · attempt " + t.attempts : "") + (t.branch ? " · own copy on " + esc(t.branch) : "") + (evidenceLine(t) ? " · " + esc(evidenceLine(t)) : "") + "</div>" +
+        '<div class="row-sub">' + esc(dep) + (t.attempts > 1 ? " · attempt " + t.attempts : "") + (t.branch ? " · own copy on " + esc(t.branch) : "") + (t.reviewed_commit ? " · reviewed " + esc(String(t.reviewed_commit).slice(0, 8)) : "") + (evidenceLine(t) ? " · " + esc(evidenceLine(t)) : "") + "</div>" +
         (t.error && ["unverified", "blocked", "failed"].indexOf(t.state) >= 0 ? '<div class="row-sub warn-text">' + esc(t.error) + "</div>" : "") +
         (open ? '<div class="field-label" style="margin-top:8px">Instructions</div><div class="ask-body">' + md(t.instructions) + (t.result ? '<div class="field-label" style="margin-top:8px">What it reported</div>' + md(t.result) : "") + '<div class="field-label" style="margin-top:8px">Evidence devd recorded</div>' + ((t.evidence || []).length ? '<table class="table"><thead><tr><th>Kind</th><th>Capability</th><th>Summary</th></tr></thead><tbody>' + t.evidence.map(function (f) { return "<tr><td><span class=\"pill " + (f.ok ? "pill-ok" : "pill-bad") + '">' + esc(f.kind) + '</span></td><td title="' + attr(f.capability) + '">' + esc(capLabel(f.capability)) + '</td><td class="cell-mono nowrap">' + esc(f.summary || "") + "</td></tr>"; }).join("") + "</tbody></table>" : '<div class="empty-inline">None yet.</div>') + "</div>" : "") +
         (btns ? '<div class="inline" style="margin-top:8px">' + btns + "</div>" : "") + "</div>";
@@ -11253,7 +11281,7 @@ var TERM_POLL_MS = 250;
         "</div>"
       : "";
     var runActions = (actions || primary) ? '<div class="run-actions">' + actions + primary + "</div>" : "";
-    return head + '<div class="chat-stream run-stream"><div class="run-col">' + runGoal(r) + '<div class="run-track">' + runStages(r, work, events) + "</div>" +
+    return head + '<div class="chat-stream run-stream"><div class="run-col">' + runGoal(r) + '<div class="run-track">' + runStages(r, work, events) + "</div>" + runScorecard(d) +
       '<h3 class="run-section">Who is doing what <span class="count">' + work.length + "</span></h3>" + '<div class="tlist">' + cards + "</div>" +
       '<h3 class="run-section">How it went</h3>' + '<div class="run-feed">' + (log || '<div class="empty-inline">Nothing yet.</div>') + "</div>" +
       summary + approvals + note + "</div></div>" + runActions + say;

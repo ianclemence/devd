@@ -260,6 +260,11 @@ as the buttons, and the primary Continue is the last action before the menu. The
 menu itself reads surfaces first, then the conversation's housekeeping (Rename,
 pull request, settled), then Delete.
 
+The run page adds one quiet scorecard row under the stage strip: the verdict and
+the reviewed commit, verified/total, accepted by hand, retries, stalls and
+baseline failures. It is built from the persisted tasks and events, not from the
+run's prose.
+
 The surfaces belong to the conversation's project. Switching chats re-points the
 browser and leaves an old shell running with a banner saying which project it
 belongs to. Closing a surface never kills a shell. A full reload starts with both

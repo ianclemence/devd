@@ -33,11 +33,53 @@ pub fn validate(schema: &Value, args: &Value) -> Result<()> {
     if errors.is_empty() {
         Ok(())
     } else {
+        // A missing argument is easier to fix with a filled-in shape than with a
+        // list of names. The example is built from the schema itself, so it can
+        // never advertise a field the capability does not accept.
+        let sample = example(schema);
+        let hint = if errors.iter().any(|e| e.contains("required")) {
+            format!(
+                "; example: {}",
+                serde_json::to_string(&sample)
+                    .unwrap_or_default()
+                    .chars()
+                    .take(600)
+                    .collect::<String>()
+            )
+        } else {
+            String::new()
+        };
         Err(DevdError::invalid(format!(
-            "arguments do not match the capability schema: {}",
+            "arguments do not match the capability schema: {}{hint}",
             errors.join("; ")
         )))
     }
+}
+
+/// A syntactically valid value for a schema, using placeholders rather than
+/// invented facts. Only used to show an agent the shape of a correct call.
+fn example(schema: &Value) -> Value {
+    let Some(props) = schema.get("properties").and_then(|p| p.as_object()) else {
+        return serde_json::json!({});
+    };
+    let mut out = serde_json::Map::new();
+    for (key, spec) in props {
+        let value = if let Some(first) = spec.get("enum").and_then(|e| e.as_array()).and_then(|a| a.first()) {
+            first.clone()
+        } else {
+            match spec.get("type").and_then(|t| t.as_str()) {
+                Some("string") => Value::String("<string>".into()),
+                Some("integer") => serde_json::json!(0),
+                Some("number") => serde_json::json!(0.0),
+                Some("boolean") => serde_json::json!(false),
+                Some("array") => serde_json::json!([]),
+                Some("object") => serde_json::json!({}),
+                _ => Value::Null,
+            }
+        };
+        out.insert(key.clone(), value);
+    }
+    Value::Object(out)
 }
 
 fn check(
