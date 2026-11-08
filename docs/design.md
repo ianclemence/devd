@@ -235,6 +235,10 @@ open next to it:
 * **Terminal** — the same xterm and the same server-owned shell as the project's
   Terminal tab, opened in the chat's project without leaving the conversation.
 
+A new conversation has no project card: the prompt and its starting points stand
+on their own until the chat belongs to a folder. An existing conversation with no
+project keeps the card, because there the absence is real.
+
 Both are opened from the card's Workspace rows and, below 1440px where the card
 folds into a drawer, from the three icon toggles in the conversation header. The
 Browser always takes the wide column, replacing the card. The Terminal may sit
