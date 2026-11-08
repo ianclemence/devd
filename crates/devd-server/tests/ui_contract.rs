@@ -1789,3 +1789,15 @@ fn the_run_toggle_is_a_switch_and_stage_folds_match_section_folds() {
     assert!(CSS.contains(".skill-stage { background: none; border: 0; border-radius: 0; }"));
     assert!(CSS.contains(".skill-stage > summary.panel-head {"));
 }
+
+#[test]
+fn list_hover_is_one_rounded_inset_band() {
+    // A hovered row paints the same soft, inset, rounded band as uiRow; the row
+    // itself stays transparent so its old square background cannot show through.
+    assert!(CSS.contains(":is(.row, .svc, .note-row, .file-row, .mail-row, .st-row)::after"));
+    assert!(CSS.contains("inset: 1px -12px"));
+    assert!(CSS.contains(".row:hover, button.svc:hover, .note-row:hover, .file-row:hover, .mail-row:hover, .st-row:hover { background-color: transparent; }"));
+    assert!(CSS.contains(".table tbody tr:hover td:first-child"));
+    // A table directly in a panel keeps the same inset as a panel body.
+    assert!(CSS.contains(".panel > .table-wrap .table > thead > tr > :first-child"));
+}

@@ -7992,7 +7992,7 @@ body {
 
 /* Tables keep a header rule; row lines are a whisper, not a fence. */
 .table td, .mu td, .drift-table td { border-bottom-color: color-mix(in srgb, var(--line) 38%, transparent); }
-.table tbody tr:hover td { background: var(--bg-surface); }
+.table tbody tr:hover td { background: var(--bg-hover); }
 .ui-fold + .ui-fold { border-top: 0; margin-top: 14px; }
 @media (max-width: 1439px) {
   .assistant.env-open .ws-card { top: 52px; }
@@ -8148,3 +8148,35 @@ body {
 /* A wide table on a phone scrolls inside its own frame rather than pushing the
  * page sideways. Everything else keeps wrapping. */
 .table-wrap { overflow-x: auto; scrollbar-width: thin; }
+
+/* A table that sits directly in a panel (the model roles table, a run's table)
+ * keeps the same 16px inset as a panel body. */
+.panel > .table-wrap .table > thead > tr > :first-child,
+.panel > .table-wrap .table > tbody > tr > :first-child { padding-left: 16px; }
+.panel > .table-wrap .table > thead > tr > :last-child,
+.panel > .table-wrap .table > tbody > tr > :last-child { padding-right: 16px; }
+
+/* ---------------------------------------------------- rounded list hover
+ * The same tint and radius as uiRow: the row paints a soft inset band behind
+ * itself without moving any text, so a hovered API row, note, file, mail item
+ * or site reads as one rounded surface instead of a square band edge to edge.
+ */
+:is(.row, .svc, .note-row, .file-row, .mail-row, .st-row) {
+  position: relative;
+  isolation: isolate;
+}
+:is(.row, .svc, .note-row, .file-row, .mail-row, .st-row)::after {
+  content: ""; position: absolute; inset: 1px -12px; z-index: -1;
+  border-radius: var(--radius); background: transparent; pointer-events: none;
+  transition: background-color 120ms ease;
+}
+@media (hover: hover) and (pointer: fine) {
+  :is(.row, .svc, .note-row, .file-row, .mail-row, .st-row):hover::after { background: var(--bg-hover); }
+}
+.row:hover, button.svc:hover, .note-row:hover, .file-row:hover, .mail-row:hover, .st-row:hover { background-color: transparent; }
+.row.selected, .note-row.active, .mail-row.active { background-color: transparent; }
+.row.selected::after, .note-row.active::after, .mail-row.active::after { background: var(--accent-quiet); }
+
+/* Table rows round their first and last cell, so the tint ends in a curve. */
+.table tbody tr:hover td:first-child { border-top-left-radius: var(--radius); border-bottom-left-radius: var(--radius); }
+.table tbody tr:hover td:last-child { border-top-right-radius: var(--radius); border-bottom-right-radius: var(--radius); }

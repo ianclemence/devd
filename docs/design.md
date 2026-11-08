@@ -200,6 +200,10 @@ Key rules:
 * A disclosure is one control everywhere: the same chevron, label size, colour
   and indent on Models, Skills, Diagnostics, a run report and an event's
   arguments. A summary band is a set of readings separated by space, not rules.
+* A hovered list row paints one rounded, inset band a step lighter than its
+  surface (`--bg-hover`). The row itself stays transparent, so text never moves
+  and no square background can show behind the curve. Table rows round their
+  first and last cell.
 * `pill` names a state, `uiDot` marks it, `notice` explains it.
 * `uiEmpty()` is an empty list plus the action that resolves it.
 * `drawer` keeps detail without losing the list's context; `modal` is for a

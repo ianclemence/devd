@@ -10,6 +10,18 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.26.2] - 2026-11-08 - One hover, one inset
+
+### Fixed
+
+- **Every hovered list row uses the same rounded, inset band as a `uiRow`.** The API registry,
+  stack picker, notes, files, mail and sites no longer paint a square band from edge to edge. The
+  row stays transparent and a shared layer behind it supplies the tint, so text never moves.
+- Table rows round their first and last cell, and the model roles table inside the **Which model
+  does which work** fold keeps the same 16px inset as a panel body.
+
+---
+
 ## [0.26.1] - 2026-11-08 - Containers, folds and rules
 
 ### Fixed
