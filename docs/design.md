@@ -194,7 +194,12 @@ Key rules:
 * `uiRow()` is the resource row: state dot, title, one supporting line, one
   trailing fact, and actions on hover (always visible on touch).
 * `summaryBand()` is one surface of labelled facts, not a grid of dashboard cards.
-* `panel` is a genuinely bounded group, never a box around one row.
+* `panel` is a genuinely bounded group, never a box around one row. Its head and
+  body share one inset; a flush body keeps that inset for ordinary content and
+  lets only tables use the card's full width.
+* A disclosure is one control everywhere: the same chevron, label size, colour
+  and indent on Models, Skills, Diagnostics, a run report and an event's
+  arguments. A summary band is a set of readings separated by space, not rules.
 * `pill` names a state, `uiDot` marks it, `notice` explains it.
 * `uiEmpty()` is an empty list plus the action that resolves it.
 * `drawer` keeps detail without losing the list's context; `modal` is for a

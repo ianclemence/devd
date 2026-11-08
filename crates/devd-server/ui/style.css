@@ -8033,3 +8033,118 @@ body {
 .panel > .panel-head + .panel-body { padding-top: 4px; }
 .panel > .panel-head .panel-note { margin-left: 2px; }
 .ws-sec-note { padding: 0 8px 6px; color: var(--fg-dim); font-size: 10.5px; line-height: 1.45; }
+
+/* ---------------------------------------------------------------- containers
+ * One card, one inset. A panel head and its body share the same left and right
+ * edge; the head is a label, not a separate column. A panel never grows wider
+ * than the column that holds it.
+ */
+.panel { box-sizing: border-box; min-width: 0; max-width: 100%; overflow: hidden; }
+.panel > .panel-head { padding: 14px 16px 10px; }
+.panel > .panel-body { padding: 14px 16px; }
+.panel > .panel-head + .panel-body { padding-top: 4px; }
+.panel > .panel-body.flush { padding: 0; }
+.panel > .panel-foot { padding: 12px 16px; }
+.panel .panel > .panel-head,
+.panel .panel > .panel-body { padding-left: 0; padding-right: 0; }
+
+/* Banner and needs cards stay inside the reading column. An implicit grid
+ * column was sized to the longest title and pushed every card past the edge. */
+.home-needs { grid-template-columns: minmax(0, 1fr); }
+.home-need { min-width: 0; }
+
+/* A form inside a card never makes the card wider than the page. */
+.form-grid { min-width: 0; }
+.form-grid > .field { min-width: 0; }
+.form-grid .input, .form-grid .select, .form-grid textarea { max-width: 100%; }
+
+/* A flush body loses only its vertical padding. Its content still shares the
+ * head'"'"'s left edge; tables alone keep the card'"'"'s full width. */
+.panel > .panel-body.flush:not(.files-tree-body) { padding: 0 16px; }
+.panel > .panel-body.flush > .table-wrap { margin-left: -16px; margin-right: -16px; }
+.panel > .panel-body.flush .table > thead > tr > :first-child,
+.panel > .panel-body.flush .table > tbody > tr > :first-child { padding-left: 16px; }
+.panel > .panel-body.flush .table > thead > tr > :last-child,
+.panel > .panel-body.flush .table > tbody > tr > :last-child { padding-right: 16px; }
+.panel > .panel-body.flush > .rows > .row { padding-left: 0; padding-right: 0; }
+.panel > .panel-body.flush > .empty-inline { padding-left: 0; padding-right: 0; }
+.files-view .panel-body.flush { padding: 0; }
+
+/* A summary band is a set of readings, not a table. No rules at all. */
+.summary-band, .summary-band:first-of-type { border: 0; }
+.summary-band .summary-item, .summary-band .summary-item:first-child { border: 0; }
+.summary-band .summary-item { padding: 0 var(--s4); }
+.summary-band .summary-item:first-child { padding-left: 0; }
+
+/* ------------------------------------------------------------- disclosure
+ * One collapsed line everywhere: a small chevron, the same weight, colour and
+ * rhythm, whether it opens a settings section, an agent report, a run log or a
+ * raw event. Open is the same chevron turned a quarter.
+ */
+:is(.ui-fold, .brief-body, .team-note-body, .run-fold, .mail-env, .decision-args, .run-event-data) > summary {
+  display: flex; align-items: center; gap: 7px;
+  margin: 0; padding: 6px 0;
+  list-style: none; cursor: pointer;
+  color: var(--fg-mute); font-size: var(--text-xs); font-weight: 500; line-height: 1.45;
+}
+:is(.ui-fold, .brief-body, .team-note-body, .run-fold, .mail-env, .decision-args, .run-event-data) > summary::-webkit-details-marker { display: none; }
+:is(.ui-fold, .brief-body, .team-note-body, .run-fold, .mail-env, .decision-args, .run-event-data) > summary::before {
+  content: ""; flex: none; width: 6px; height: 6px; margin: 0 1px 2px 2px;
+  border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg); transition: transform var(--fast) var(--ease-out);
+}
+:is(.ui-fold, .brief-body, .team-note-body, .run-fold, .mail-env, .decision-args, .run-event-data)[open] > summary::before { transform: rotate(45deg); }
+:is(.ui-fold, .brief-body, .team-note-body, .run-fold, .mail-env, .decision-args, .run-event-data) > summary:hover { color: var(--color-base-content); }
+:is(.ui-fold, .brief-body, .team-note-body, .run-fold, .mail-env, .decision-args, .run-event-data)[open] > summary { color: var(--color-base-content); }
+:is(.brief-body, .team-note-body, .run-fold) > summary::after { content: none; }
+:is(.brief-body, .team-note-body, .run-fold) > .md { border-top: 0; padding-top: 0; }
+.ui-fold + .ui-fold { border-top: 0; }
+
+/* The same mark on a whole panel that folds. */
+.skill-stage > summary.panel-head::before {
+  content: ""; flex: none; width: 6px; height: 6px; margin: 0 3px 2px 0;
+  border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
+  font-size: 0; transform: rotate(-45deg); transition: transform var(--fast) var(--ease-out);
+}
+.skill-stage[open] > summary.panel-head::before { transform: rotate(45deg); }
+@media (prefers-reduced-motion: reduce) {
+  :is(.ui-fold, .brief-body, .team-note-body, .run-fold, .mail-env, .decision-args, .run-event-data) > summary::before,
+  .skill-stage > summary.panel-head::before { transition: none; }
+}
+
+/* The team room is two readings in one card, separated by space, not a rule. */
+.team-context { border-left: 0; }
+@media (max-width: 900px) { .team-context { border-top: 0; } }
+
+/* The run goal folds with the same chevron as every other disclosure. */
+.run-goal-fold > summary { position: relative; padding-left: 16px; }
+.run-goal-fold > summary::before {
+  content: ""; position: absolute; left: 1px; top: 6px;
+  width: 6px; height: 6px;
+  border-right: 1.5px solid var(--fg-dim); border-bottom: 1.5px solid var(--fg-dim);
+  transform: rotate(-45deg); transition: transform var(--fast) var(--ease-out);
+}
+.run-goal-fold[open] > summary::before { transform: rotate(45deg); }
+
+/* The run toggle is a switch, not a checkbox: its own 36x20 track wins over
+ * the generic checkbox size inside a .check label. */
+.check input.ds-toggle { width: 36px; height: 20px; flex: none; }
+
+/* A stage on Skills folds with the same line every other screen uses. It is
+ * not a card: one chevron, one label size, one indent. */
+.skill-stage { background: none; border: 0; border-radius: 0; }
+.skill-stage > summary.panel-head {
+  display: flex; align-items: center; gap: 7px;
+  min-height: 0; margin: 0; padding: 6px 0;
+  background: none; color: var(--fg-mute);
+  font-size: var(--text-xs); font-weight: 500;
+}
+.skill-stage > summary.panel-head > span:first-child { font-size: var(--text-xs); font-weight: 500; }
+.skill-stage > summary.panel-head .panel-note { color: var(--fg-dim); font-size: var(--text-xs); font-weight: 400; }
+.skill-stage[open] > summary.panel-head { color: var(--color-base-content); }
+.skill-stage > .rows { margin: 4px 0 8px 20px; }
+.skill-stage > summary.panel-head:hover { background: none; color: var(--color-base-content); }
+
+/* A wide table on a phone scrolls inside its own frame rather than pushing the
+ * page sideways. Everything else keeps wrapping. */
+.table-wrap { overflow-x: auto; scrollbar-width: thin; }

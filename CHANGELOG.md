@@ -10,6 +10,27 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.26.1] - 2026-11-08 - Containers, folds and rules
+
+### Fixed
+
+- **Home's needs cards stay in the reading column.** An implicit grid column sized itself to the
+  longest title, so the paused-run banner and service cards ran past the composer and off the page.
+- **One inset for a container.** A panel's head and body now share the same left and right edge.
+  Flush bodies inset ordinary content and let only tables use the full card width. Forms can no
+  longer make a card wider than its page.
+- **The team room reads as one card.** Its head, charter and project context share one edge, and the
+  internal vertical rule between them is gone.
+- **Summary bands carry no rules.** Projects, Sites and every other screen show readings separated
+  by space, not by top, bottom and column lines.
+- **The run toggle is a switch again.** Generic checkbox sizing had shrunk the 36×20 control into a
+  white knob over a tiny ring; the schedule form and MCP dialog now show the real track.
+- **Every collapsed section looks the same.** Models, Skills, Diagnostics, run reports, agent notes,
+  mail setup and event arguments use one chevron, one label size, one colour and one indent.
+- Wide tables scroll inside their own frame on a phone instead of pushing the page sideways.
+
+---
+
 ## [0.26.0] - 2026-11-08 - The workbench, with surfaces
 
 ### Added

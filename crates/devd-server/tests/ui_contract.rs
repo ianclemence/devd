@@ -1758,3 +1758,34 @@ fn outputs_are_history_and_changes_is_the_working_tree() {
     assert!(APP.contains("o.kind === \"edit\" ? \"edited\""), "Outputs names the conversation's edit");
     assert!(APP.contains("return \"i-file\""), "a source file gets a file icon, not the terminal glyph");
 }
+
+#[test]
+fn containers_share_one_inset_and_folds_share_one_chevron() {
+    // A card's head and body start on the same left edge. A flush body keeps the
+    // inset and lets only tables bleed; otherwise a label sits indented above
+    // flush text and the container reads as broken.
+    assert!(CSS.contains(".panel > .panel-head { padding: 14px 16px 10px; }"));
+    assert!(CSS.contains(".panel > .panel-body { padding: 14px 16px; }"));
+    assert!(CSS.contains(".panel > .panel-body.flush:not(.files-tree-body) { padding: 0 16px; }"));
+    // An implicit grid column sized itself to the longest title and pushed the
+    // Home needs cards past the reading column.
+    assert!(CSS.contains(".home-needs { grid-template-columns: minmax(0, 1fr); }"));
+    // A summary band is a set of readings, not a table.
+    assert!(CSS.contains(".summary-band .summary-item, .summary-band .summary-item:first-child { border: 0; }"));
+    // A disclosure is the same control everywhere it appears.
+    assert!(CSS.contains(
+        ":is(.ui-fold, .brief-body, .team-note-body, .run-fold, .mail-env, .decision-args, .run-event-data) > summary"
+    ));
+    assert!(CSS.contains(".run-goal-fold > summary::before"));
+    assert!(CSS.contains(".team-context { border-left: 0; }"));
+}
+
+#[test]
+fn the_run_toggle_is_a_switch_and_stage_folds_match_section_folds() {
+    // .check input sized every checkbox to 14px, which shrank the 36x20 switch
+    // into a white knob over a tiny ring.
+    assert!(CSS.contains(".check input.ds-toggle { width: 36px; height: 20px; flex: none; }"));
+    // Skills groups fold with the same line as Models, not a card.
+    assert!(CSS.contains(".skill-stage { background: none; border: 0; border-radius: 0; }"));
+    assert!(CSS.contains(".skill-stage > summary.panel-head {"));
+}
