@@ -1801,3 +1801,36 @@ fn list_hover_is_one_rounded_inset_band() {
     // A table directly in a panel keeps the same inset as a panel body.
     assert!(CSS.contains(".panel > .table-wrap .table > thead > tr > :first-child"));
 }
+
+#[test]
+fn the_surface_toggles_retire_when_the_project_card_is_open() {
+    // At 1440 and wider the card carries Browser and Terminal and is Environment
+    // itself; repeating the three actions in the header is noise.
+    assert!(CSS.contains("@media (min-width: 1440px)"));
+    assert!(CSS.contains(".surface-toggles { display: none; }"));
+}
+
+#[test]
+fn the_conversation_head_reads_state_links_actions() {
+    let start = APP.find("function chatHeadHtml").unwrap();
+    let end = APP[start..].find("function prLabel").unwrap() + start;
+    let head = &APP[start..end];
+    let at = |needle: &str| head.find(needle).unwrap_or_else(|| panic!("{needle} missing"));
+    // State chips, then context links, then the actions in use order.
+    assert!(at("AI.queued") < at("Back to request"));
+    assert!(at("Back to request") < at("chapters-open"));
+    assert!(at("chapters-open") < at("surface-toggles"));
+    assert!(at("surface-toggles") < at("thread-find"));
+    assert!(at("thread-find") < at("open-run"));
+    assert!(at("open-run") < at("run-retry"));
+    assert!(at("run-retry") < at("more-toggle"));
+}
+
+#[test]
+fn a_specialist_subtitle_does_not_repeat_its_heading() {
+    let start = APP.find("function chatHeadHtml").unwrap();
+    let end = APP[start..].find("function prLabel").unwrap() + start;
+    let head = &APP[start..end];
+    assert!(head.contains("var shownTitle = team ? team.task || t.title : t.title"));
+    assert!(head.contains("if (runTitle && runTitle !== shownTitle)"));
+}

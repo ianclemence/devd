@@ -8180,3 +8180,31 @@ body {
 /* Table rows round their first and last cell, so the tint ends in a curve. */
 .table tbody tr:hover td:first-child { border-top-left-radius: var(--radius); border-bottom-left-radius: var(--radius); }
 .table tbody tr:hover td:last-child { border-top-right-radius: var(--radius); border-bottom-right-radius: var(--radius); }
+
+/* On a large window the project card is open beside the conversation: its
+ * Workspace rows open the Browser and a shell, and Environment is the card
+ * itself. The three header toggles would be the same actions a second time, so
+ * they retire at 1440. Below that the card folds into a drawer and the toggles
+ * are the only way in. */
+@media (min-width: 1440px) {
+  .surface-toggles { display: none; }
+}
+
+/* ----------------------------------------------------- conversation head
+ * One row, three zones: state chips, context links, then actions. Chips keep
+ * the same height as the buttons they sit beside; every item keeps its own
+ * width and its label on one line. The primary action is the last thing before
+ * the menu. */
+.chat-head > .chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 24px; margin-right: 0; flex: none; white-space: nowrap;
+}
+.chat-head > .btn, .chat-head > .surface-toggles, .chat-head > .more {
+  flex: none; white-space: nowrap;
+}
+.chat-head .chip-pr .icon { width: 12px; height: 12px; }
+.chat-head > .btn-primary { margin-left: 2px; }
+@media (max-width: 1100px) {
+  .chat-head { gap: 6px; }
+  .chat-head > .btn-mini { padding-left: 8px; padding-right: 8px; }
+}

@@ -19,6 +19,13 @@ may change capability identifiers where the design was wrong.
   row stays transparent and a shared layer behind it supplies the tint, so text never moves.
 - Table rows round their first and last cell, and the model roles table inside the **Which model
   does which work** fold keeps the same 16px inset as a panel body.
+- **The three workspace toggles retire on a large window.** At 1440 and wider the project card is
+  open beside the conversation and its Workspace rows already open the Browser and a shell, with
+  Environment being the card itself. Below 1440 the card is a drawer, so the header toggles stay.
+- **The conversation header reads state, context, actions.** Status chips come first, then Back to
+  request, See the run and Chapters, then the surfaces, search, Evidence, Continue and the menu.
+  Chips sit on the same 28px row as the buttons, and a specialist's subtitle no longer repeats a run
+  title that is already the heading.
 
 ---
 

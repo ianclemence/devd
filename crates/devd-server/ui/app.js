@@ -10524,8 +10524,15 @@ var TERM_POLL_MS = 250;
     var team = listed.team;
     var word = busy ? (role === "devd" ? "working" : face.name + " is working") : t.state === "waiting_approval" ? "waiting for you" : t.state === "error" ? "stopped with an error" : "";
     var used = (t.input_tokens || 0) + (t.output_tokens || 0);
+    var shownTitle = team ? team.task || t.title : t.title || "New conversation";
+    var runTitle = clip((team && team.run_title) || "", 60);
     var sub = [t.project ? threadProjectName(t.project) : "No project"];
-    if (team) sub.push(face.name + " on " + clip(team.run_title || "a team run", 60));
+    // The specialist and the run, without repeating a run title that is already
+    // the conversation's own title.
+    if (team) {
+      sub.push(face.name);
+      if (runTitle && runTitle !== shownTitle) sub.push(runTitle);
+    }
     if (word) sub.push(word);
     if (t.resume_at) sub.push("paused by a usage limit, resumes " + (Date.parse(t.resume_at) > Date.now() ? "at " + new Date(t.resume_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "now"));
     if (used) sub.push(compactCount(used) + " tokens");
@@ -10533,13 +10540,16 @@ var TERM_POLL_MS = 250;
     // actions that matter sit at its end; the rest are one click away.
     return switcher + faceHtml(role) +
       '<div class="chat-head-main">' +
-      '<div class="chat-title">' + esc(team ? team.task || t.title : t.title || "New conversation") + "</div>" +
+      '<div class="chat-title">' + esc(shownTitle) + "</div>" +
       '<div class="chat-head-sub">' + esc(sub.join(" · ")) + "</div></div>" +
       (AI.queued > 0 ? '<span class="chip chip-warn" title="Messages waiting for the next step">' + AI.queued + " queued</span>" : "") +
-      (team && team.parent ? '<button type="button" class="btn btn-mini btn-ghost" data-action="open-thread" data-id="' + attr(team.parent) + '" title="The conversation that asked for this work">Back to request</button>' : "") +
-      (team ? '<button type="button" class="btn btn-mini btn-ghost" data-action="team-open-from" data-id="' + attr(team.run) + '">See the run</button>' : "") +
       (t.pr_url ? '<button type="button" class="chip chip-pr" data-action="open-url" data-url="' + attr(t.pr_url) + '" title="' + attr(t.pr_url) + '"><svg class="icon" aria-hidden="true"><use href="#i-branch"></use></svg>' + esc(prLabel(t.pr_url)) + "</button>" : "") +
       (t.settled_at ? '<span class="chip chip-ok" title="Settled ' + attr(ago(t.settled_at)) + '">Settled</span>' : "") +
+      // Context links sit together, before the actions: where this conversation
+      // came from, the run behind it, and the chapters inside it.
+      (team && team.parent ? '<button type="button" class="btn btn-mini btn-ghost" data-action="open-thread" data-id="' + attr(team.parent) + '" title="The conversation that asked for this work">Back to request</button>' : "") +
+      (team ? '<button type="button" class="btn btn-mini btn-ghost" data-action="team-open-from" data-id="' + attr(team.run) + '">See the run</button>' : "") +
+      (AI.chapters && AI.chapters.length ? '<button type="button" class="btn btn-mini btn-ghost" data-action="chapters-open">Chapters ' + AI.chapters.length + "</button>" : "") +
       // The surfaces beside the conversation. Pressed state is the open one;
       // each is also reachable from the project card's Workspace rows.
       '<div class="surface-toggles" role="group" aria-label="Workspace surfaces">' +
@@ -10547,8 +10557,8 @@ var TERM_POLL_MS = 250;
       '<button type="button" class="btn btn-mini btn-ghost btn-icon surface-toggle' + (AI.work.browser.open ? " is-on" : "") + '" data-action="work-browser" aria-pressed="' + (AI.work.browser.open ? "true" : "false") + '" title="Browser" aria-label="Browser"><svg class="icon" aria-hidden="true"><use href="#i-globe"></use></svg></button>' +
       '<button type="button" class="btn btn-mini btn-ghost btn-icon surface-toggle' + (AI.work.terminal.open ? " is-on" : "") + '" data-action="work-terminal" aria-pressed="' + (AI.work.terminal.open ? "true" : "false") + '" title="Terminal" aria-label="Terminal"><svg class="icon" aria-hidden="true"><use href="#i-code"></use></svg></button>' +
       "</div>" +
+      // Actions, in the order they are used: find, inspect, act, then the menu.
       '<button type="button" class="btn btn-mini btn-ghost btn-icon" data-action="thread-find" title="Search this conversation (Ctrl F)" aria-label="Search this conversation"><svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg></button>' +
-      (AI.chapters && AI.chapters.length ? '<button type="button" class="btn btn-mini btn-ghost" data-action="chapters-open">Chapters ' + AI.chapters.length + "</button>" : "") +
       (r ? '<button type="button" class="btn btn-mini btn-ghost" data-action="open-run" data-id="' + attr(r.id) + '" title="Steps, capability calls, evidence and the durable timeline">Evidence</button>' : "") +
       (r && !busy && runCanRetry(r.state) ? '<button type="button" class="btn btn-mini btn-primary" data-action="run-retry" data-id="' + attr(r.id) + '">Continue</button>' : "") +
       // The conversation's own housekeeping lives in one menu, so the header keeps to
