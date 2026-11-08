@@ -394,6 +394,14 @@ pub fn of(run: &TeamRun, tasks: &[TeamTask]) -> Option<Needs> {
                     missing,
                     actions: vec![
                         NeedAction {
+                            id: "retry".into(),
+                            label: "Check the current revision again".into(),
+                            detail: "Runs the final check again on the current tree. Fix the work or give the team direction first; this does not accept the findings.".into(),
+                            capability: Some("team.retry".into()),
+                            args: json!({ "task": t.id }),
+                            dangerous: false,
+                        },
+                        NeedAction {
                             id: "look".into(),
                             label: "Read the final check".into(),
                             detail: "Shows the check's own report and the criteria it could not pass.".into(),

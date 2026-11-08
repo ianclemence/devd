@@ -144,7 +144,11 @@ told this in its brief.
 A person may accept a check that asked for changes with `team.accept`. The task
 becomes `skipped`, the run's verdict is `accepted_by_hand`, and the summary says
 “Finished by hand”. That is an explicit override, never a machine approval, and
-the paused run asks for exactly that decision.
+the paused run asks for exactly that decision. A gatekeeper whose verdict is not
+an approval can also be run again with `team.retry` after the work is fixed, so
+the current revision is checked without accepting the old findings. Machine
+completion requires the current HEAD to be the reviewed commit and the working
+tree to be clean; a person's override may cover work they will commit themselves.
 
 ## Artifacts
 

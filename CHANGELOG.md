@@ -10,6 +10,38 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.27.1] - 2026-11-09 - The conversation opens on its current message
+
+### The window
+
+- **Opening a conversation shows its current messages immediately.** `chat.get` returns 500 events
+  per page; the window used to paint only the first page, so a long conversation looked frozen on
+  old history until the next timer tick or a sent message. It now reads every page and paints once.
+- **No Home flash on a linked conversation.** The address is read before the first paint. The
+  capability-summary load no longer repaints the Assistant, and the post-load paint is in place
+  instead of a full rebuild of the screen.
+- **The Workspace section is gone from the project card.** Browser and Terminal live in the
+  conversation menu; the card no longer repeats them.
+
+### Orchestration
+
+- **A structured approval wins over the words around it.** A report that passed `verdict: approve`
+  was still sent back because its prose contained the word "changes" (the live content-assistant run
+  hit exactly this). The explicit verdict is the conclusion; prose is only the fallback.
+- **A final check that asked for changes can be run again.** `team.retry` now reopens a finished
+  gatekeeper whose verdict is not an approval, so fixed work can be re-verified without accepting it
+  by hand. The paused-run need offers “Check the current revision again” before the dangerous accept.
+- **A nudge is not an attempt.** The stall heartbeat no longer increments `attempts`, so a long task
+  cannot exhaust its retry budget by being watched. A task whose last event is a tool call is not
+  nudged or stopped: a running test or build is work.
+- **Machine completion requires the delivered revision.** An approving run now pauses if the tree
+  moved after the check or has uncommitted changes; the verified work must be committed on the branch
+  (never merged). A person's explicit accept is still `accepted_by_hand` and remains visible.
+- **Tests:** the failing-verification/accept test, the structured-approval precedence, the attempts
+  counter, the lease/fencing and baseline store tests, and the updated UI contract.
+
+---
+
 ## [0.27.0] - 2026-11-08 - A run finishes only when an independent check approves it
 
 ### Completion is a verdict, not a task state

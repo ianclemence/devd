@@ -853,6 +853,34 @@ impl Store {
 
     // ---------------------------------------------------------------- inbox
 
+    /// Whether the conversation's last event is a tool call still waiting for
+    /// its result. A long legitimate command looks like silence in the task
+    /// heartbeat, but the log says it is working.
+    pub fn thread_awaits_tool(&self, thread_id: &str) -> Result<bool> {
+        self.with(|c| {
+            let last = c
+                .query_row(
+                    "SELECT kind,data FROM chat_events WHERE thread_id=?1 ORDER BY id DESC LIMIT 1",
+                    params![thread_id],
+                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+                )
+                .optional()?;
+            Ok(match last {
+                Some((kind, data)) if kind == "assistant" => {
+                    serde_json::from_str::<serde_json::Value>(&data)
+                        .ok()
+                        .and_then(|v| {
+                            v["content"].as_array().map(|a| {
+                                a.iter().any(|b| b["type"] == "tool_use")
+                            })
+                        })
+                        .unwrap_or(false)
+                }
+                _ => false,
+            })
+        })
+    }
+
     /// Post a message.
     pub fn post_inbox(
         &self,

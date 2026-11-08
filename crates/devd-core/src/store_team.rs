@@ -62,6 +62,10 @@ pub struct TaskUpdate<'a> {
     pub checkpoint: Option<&'a serde_json::Value>,
     /// `transient`, `policy`, `incomplete`, `environment`, `pre-existing`, `unknown`.
     pub failure_kind: Option<&'a str>,
+    /// A deliberate retry inside the same running task (a rejected report or a
+    /// transient block) is a new attempt even though the state is already
+    /// `running`. A heartbeat or a nudge is not.
+    pub bump_attempt: bool,
 }
 
 /// The last check of a provider.
@@ -1052,6 +1056,7 @@ impl Store {
             reviewed_commit,
             checkpoint,
             failure_kind,
+            bump_attempt,
         } = update;
         let now = util::now();
         self.with(|c| {
@@ -1063,12 +1068,12 @@ impl Store {
                    reviewed_commit=COALESCE(?14,reviewed_commit), checkpoint=COALESCE(?15,checkpoint), failure_kind=COALESCE(?16,failure_kind),
                    started_at=CASE WHEN ?2='running' AND started_at IS NULL THEN ?9 ELSE started_at END,
                    last_step_at=CASE WHEN ?2='running' THEN ?9 ELSE last_step_at END,
-                   attempts=CASE WHEN ?2='running' THEN attempts+1 ELSE attempts END,
+                   attempts=CASE WHEN (?2='running' AND state NOT IN ('running','waiting_approval')) OR ?17 THEN attempts+1 ELSE attempts END,
                    finished_at=CASE WHEN ?2 IN ('done','unverified','failed','cancelled','skipped') THEN ?9 ELSE NULL END
                  WHERE id=?1",
                 params![id, state, result, error, evidence.map(|e| e.to_string()), workdir, branch, thread_id, now, mandate.map(|m| m.to_string()),
                     criteria.map(|v| v.to_string()), verdict, verdict_data.map(|v| v.to_string()), reviewed_commit,
-                    checkpoint.map(|v| v.to_string()), failure_kind],
+                    checkpoint.map(|v| v.to_string()), failure_kind, bump_attempt as i32],
             )?;
             Ok(())
         })
@@ -1131,5 +1136,44 @@ mod lease_tests {
         s.set_run_baseline("r", Some("/p"), Some("abc"), &serde_json::json!({}), &checks)
             .unwrap();
         assert_eq!(s.run_baseline("r").unwrap().unwrap(), checks);
+    }
+}
+
+#[cfg(test)]
+mod attempt_tests {
+    use super::*;
+
+    #[test]
+    fn a_heartbeat_does_not_count_as_another_attempt() {
+        let s = Store::open_in_memory().unwrap();
+        let run = s.create_run("t", "g", None, 2, "human:test").unwrap();
+        let t = s
+            .add_task(
+                &run.id,
+                NewTask {
+                    key: "a",
+                    role: "implementer",
+                    title: "A",
+                    instructions: "do the work and prove it",
+                    depends_on: &[],
+                    scope: &[],
+                    criteria: &[],
+                    mandate: None,
+                },
+            )
+            .unwrap();
+        s.update_team_task(&t.id, TaskUpdate { state: "running", ..Default::default() }).unwrap();
+        assert_eq!(s.get_team_task(&t.id).unwrap().unwrap().attempts, 1);
+        // A stall nudge or heartbeat while already running is the same attempt.
+        s.update_team_task(&t.id, TaskUpdate { state: "running", ..Default::default() }).unwrap();
+        assert_eq!(s.get_team_task(&t.id).unwrap().unwrap().attempts, 1);
+        // A deliberate retry inside the same task (a rejected report) is a new
+        // attempt even though the state was already running.
+        s.update_team_task(&t.id, TaskUpdate { state: "running", bump_attempt: true, ..Default::default() }).unwrap();
+        assert_eq!(s.get_team_task(&t.id).unwrap().unwrap().attempts, 2);
+        // A real retry from a stopped state is also a new attempt.
+        s.update_team_task(&t.id, TaskUpdate { state: "pending", ..Default::default() }).unwrap();
+        s.update_team_task(&t.id, TaskUpdate { state: "running", ..Default::default() }).unwrap();
+        assert_eq!(s.get_team_task(&t.id).unwrap().unwrap().attempts, 3);
     }
 }

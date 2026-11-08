@@ -1726,10 +1726,13 @@ fn the_assistant_has_browser_and_terminal_surfaces() {
     assert!(APP.contains("id=\"work-surface\""), "a work surface exists beside the conversation");
     assert!(APP.contains("class=\"work-pane work-browser\""), "the browser is a surface");
     assert!(APP.contains("class=\"work-pane work-terminal\""), "the terminal is a surface");
-    assert!(APP.contains("data-action=\"work-browser\""), "the card opens the browser in place");
-    assert!(APP.contains("data-action=\"work-terminal\""), "the card opens the terminal in place");
-    assert!(APP.contains("Open browser"), "the card action is named for what it does");
-    assert!(APP.contains("Open terminal"), "the card action is named for what it does");
+    assert!(APP.contains("data-action=\"work-browser\""), "the menu opens the browser in place");
+    assert!(APP.contains("data-action=\"work-terminal\""), "the menu opens the terminal in place");
+    assert!(APP.contains("<span>Browser</span>"), "the menu names the browser");
+    assert!(APP.contains("<span>Terminal</span>"), "the menu names the terminal");
+    assert!(!APP.contains("ws-work-head"), "the project card no longer repeats the workspace actions");
+    assert!(!APP.contains("Open browser"), "the old card row is gone");
+    assert!(!APP.contains("Open terminal"), "the old card row is gone");
     assert!(!APP.contains("No terminal is running in this project"), "the empty Terminals section is gone");
     assert!(!APP.contains(">Terminal here<"), "the old Terminal here row is gone");
     assert!(APP.contains("allow-scripts allow-same-origin"), "the browser reuses the sandboxed preview frame");

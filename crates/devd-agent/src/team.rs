@@ -52,6 +52,18 @@ pub const MAX_ATTEMPTS: i64 = 3;
 /// person is asked to decide.
 pub const MAX_REVIEW_ROUNDS: usize = 2;
 
+/// Whether a gatekeeper's report sends the work back. A structured verdict is
+/// the conclusion; the prose is only a fallback, so an explicit `approve` cannot
+/// be overruled by the word "changes" in an optional follow-up.
+fn report_needs_changes(verdict: Option<Verdict>, role: &str, summary: &str) -> bool {
+    match verdict {
+        Some(Verdict::Approve) => false,
+        Some(Verdict::ChangesNeeded) => true,
+        Some(Verdict::Blocked) => false,
+        None => verdict_needs_changes(role, summary),
+    }
+}
+
 /// Whether a gatekeeper's report says the work is not ready.
 ///
 /// Reviewers, security and QA give a verdict in words. devd's evidence check proves
@@ -772,8 +784,16 @@ impl Team {
                 continue;
             }
             // An unfinished tool call is a legitimate long command, not a dead
-            // agent. Do not nag or stop it; the provider timeout and the task's
-            // own timeout own that.
+            // agent. The log's last event is the tool call; do not nag or stop
+            // it. The provider and the task's own timeout own that.
+            if self
+                .ctx
+                .store
+                .thread_awaits_tool(&tid)
+                .unwrap_or(false)
+            {
+                continue;
+            }
             if self
                 .ctx
                 .store
@@ -1592,7 +1612,20 @@ impl Team {
             ));
         }
         if t.state == "done" {
-            return Err(DevdError::conflict("that task is done"));
+            // A gatekeeper that finished with a non-approving verdict is a
+            // decision waiting to be acted on: after the work is fixed (or the
+            // person gives direction), the same check must be runnable on the
+            // current revision. That is not the same as re-running finished
+            // implementation work, which stays closed.
+            let gate = completion::is_gatekeeper(&t.role)
+                || t.key == "final-verify"
+                || t.key.ends_with("-verify");
+            let derived = completion::derive_verdict(&t.role, t.result.as_deref().unwrap_or(""));
+            let not_approved = t.verdict.as_deref().is_some_and(|v| v != "approve" && v != "accepted_by_hand")
+                || matches!(derived, Some(Verdict::ChangesNeeded) | Some(Verdict::Blocked));
+            if !(gate && not_approved) {
+                return Err(DevdError::conflict("that task is done"));
+            }
         }
         let run = self.run(&t.run_id)?;
         if matches!(run.state.as_str(), "done" | "cancelled") {
@@ -2425,6 +2458,7 @@ impl Team {
                         error: Some("reached the turn limit; continuing the same task"),
                         checkpoint: Some(&checkpoint),
                         failure_kind: Some("incomplete"),
+                        bump_attempt: true,
                         ..Default::default()
                     },
                 )?;
@@ -2489,6 +2523,7 @@ impl Team {
                         result: Some(&summary),
                         error: Some(&why),
                         evidence: Some(&evidence_json),
+                        bump_attempt: true,
                         ..Default::default()
                     },
                 )?;
@@ -2540,6 +2575,7 @@ impl Team {
                         result: Some(&summary),
                         error: Some(&why),
                         evidence: Some(&evidence_json),
+                        bump_attempt: true,
                         ..Default::default()
                     },
                 )?;
@@ -2625,6 +2661,35 @@ impl Team {
                 );
                 return Ok(());
             }
+        } else if role.writes {
+            // A non-isolated writer shares the project tree. Accepting its work
+            // means committing it on the branch now: a final check then reads a
+            // real revision, and the run cannot finish with the deliverable
+            // sitting outside a commit.
+            if let Err(why) = self.commit_task(run, t) {
+                let why = why.to_string();
+                self.ctx.store.update_team_task(
+                    &t.id,
+                    TaskUpdate {
+                        state: "blocked",
+                        result: Some(&summary),
+                        error: Some(&why),
+                        evidence: Some(&evidence_json),
+                        verdict: verdict.map(Verdict::as_str),
+                        verdict_data: verdict_data.as_ref(),
+                        reviewed_commit: reviewed.as_deref(),
+                        failure_kind: Some("environment"),
+                        ..Default::default()
+                    },
+                )?;
+                self.event(
+                    &run.id,
+                    Some(&t.id),
+                    "merge_blocked",
+                    json!({ "task": t.key, "why": why }),
+                );
+                return Ok(());
+            }
         }
         self.ctx.store.update_team_task(
             &t.id,
@@ -2640,8 +2705,11 @@ impl Team {
         )?;
         self.event(&run.id, Some(&t.id), "accepted", json!({ "task": t.key, "role": t.role, "evidence": ev.len(), "verified": ev.iter().filter(|f| f["kind"] == "verify" && f["ok"] == true).count(), "verdict": verdict.map(Verdict::as_str) }));
         // A review is done when it has been read and judged; what it judged decides what
-        // happens next. "Changes needed" is work for the team, not a finished run.
-        if verdict == Some(Verdict::ChangesNeeded) || verdict_needs_changes(&t.role, &summary) {
+        // happens next. A structured approval wins over the words around it: a report
+        // that says `verdict: approve` must not be sent back because its prose happens
+        // to contain the word "changes" while listing optional follow-ups.
+        let needs_changes = report_needs_changes(verdict, &t.role, &summary);
+        if needs_changes {
             self.request_changes(run, t, &summary)?;
         }
         Ok(())
@@ -2721,6 +2789,51 @@ impl Team {
             "changes_requested",
             json!({ "task": t.key, "role": t.role, "round": round, "fix": fix_key, "to": writer }),
         );
+        Ok(())
+    }
+
+    /// Commit the accepted work of a non-isolated writer on the project's own
+    /// branch. A run whose deliverable is uncommitted cannot be reviewed as a
+    /// revision or rebuilt by the person; `git` is the record, not the working
+    /// directory.
+    fn commit_task(&self, run: &TeamRun, t: &TeamTask) -> Result<()> {
+        let Some(project) = run.project.as_deref().map(Path::new) else {
+            return Ok(());
+        };
+        if !project.join(".git").exists() {
+            return Ok(());
+        }
+        let status = self.git_run(project, &["status", "--porcelain"])?;
+        if !status.ok() || status.stdout.trim().is_empty() {
+            return Ok(());
+        }
+        let add = self.git_run(project, &["add", "-A"])?;
+        if !add.ok() {
+            return Err(DevdError::conflict(format!(
+                "could not stage the accepted work: {}",
+                util::truncate(add.stderr.trim(), 300)
+            )));
+        }
+        let message = format!("devd: {} — {}", t.key, t.title);
+        let commit = self.git_run(
+            project,
+            &[
+                "-c",
+                "user.name=devd",
+                "-c",
+                "user.email=devd@localhost",
+                "commit",
+                "-q",
+                "-m",
+                &message,
+            ],
+        )?;
+        if !commit.ok() {
+            return Err(DevdError::conflict(format!(
+                "could not commit the accepted work: {}",
+                util::truncate(commit.stderr.trim(), 300)
+            )));
+        }
         Ok(())
     }
 
@@ -2983,7 +3096,10 @@ impl Team {
         // An approval is for a revision, not for a branch. If the tree moved
         // after the final check read it, the approval does not cover the new
         // revision.
-        if completion.approved() {
+        // A machine approval is for a clean, current revision. A person's
+        // explicit override is a different decision: it is recorded as
+        // `accepted_by_hand` and may cover work they will commit themselves.
+        if completion.approved() && !completion.by_hand {
             if let (Some(reviewed), Some(head)) = (&completion.reviewed_commit, self.head_commit(run)) {
                 if reviewed != &head {
                     let why = format!(
@@ -2994,6 +3110,24 @@ impl Team {
                     self.event(&run.id, None, "needs_person", json!({ "why": why, "reviewed_commit": reviewed, "head": head }));
                     self.tell_requester(run, "paused", &format!("Run paused: {}", run.title), &why, true);
                     return Ok(());
+                }
+            }
+            // A commit is not the deliverable if the working tree still has
+            // changes: the thing a person will build and run includes them, and
+            // the check did not see them. Ask for the work to be committed on the
+            // branch (never merged) before the run is called finished.
+            if let Some(project) = run.project.as_deref().map(Path::new) {
+                if project.join(".git").exists() {
+                    if let Ok(o) = self.git_run(project, &["status", "--porcelain"]) {
+                        if o.ok() && !o.stdout.trim().is_empty() {
+                            let why = "the run finished with uncommitted changes; the final check reviewed a commit that does not contain them. Commit the verified work on the branch (do not merge) and verify that revision.".to_string();
+                            let _ = self.ctx.store.set_run_verdict(&run.id, "changes_needed", completion.reviewed_commit.as_deref());
+                            self.ctx.store.set_run_state(&run.id, "paused", None, Some(&why))?;
+                            self.event(&run.id, None, "needs_person", json!({ "why": why, "uncommitted": o.stdout.lines().take(12).collect::<Vec<_>>() }));
+                            self.tell_requester(run, "paused", &format!("Run paused: {}", run.title), &why, true);
+                            return Ok(());
+                        }
+                    }
                 }
             }
         }
@@ -3246,5 +3380,21 @@ mod verdict_tests {
     fn only_gatekeepers_give_verdicts() {
         assert!(!verdict_needs_changes("implementer", "Changes needed in three files; all done."));
         assert!(!verdict_needs_changes("reviewer", "Verdict: approve. Reads cleanly."));
+    }
+
+    #[test]
+    fn a_structured_approval_wins_over_the_word_changes() {
+        use super::{report_needs_changes, Verdict};
+        assert!(!report_needs_changes(
+            Some(Verdict::Approve),
+            "qa",
+            "Approved. Optional changes noted for later; the suite passes."
+        ));
+        assert!(report_needs_changes(
+            Some(Verdict::ChangesNeeded),
+            "qa",
+            "Verdict: approve"
+        ));
+        assert!(report_needs_changes(None, "qa", "2 failed, 806 passed"));
     }
 }

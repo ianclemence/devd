@@ -9047,7 +9047,7 @@ var TERM_POLL_MS = 250;
     if (node) node.textContent = "devd: " + clip(text, 300);
   }
 
-  function applyThread(d, full) {
+  function applyThread(d, full, quiet) {
       if (full) { AI.events = []; AI.lastId = 0; AI.outputs = []; }
       d.events.forEach(function (e) {
         // Two polls can overlap (the timer and the live channel, or a click and
@@ -9057,7 +9057,7 @@ var TERM_POLL_MS = 250;
         AI.events.push(e);
         AI.lastId = e.id;
         noteOutput(e);
-        if (!full) announceEvent(e);
+        if (!full && !quiet) announceEvent(e);
       });
       AI.thread = d.thread; AI.pending = d.pending || []; AI.running = d.running; AI.chapters = d.chapters || []; AI.run = d.run || null;
       if (d.thread.provider_id) AI.pickProvider = d.thread.provider_id;
@@ -9106,13 +9106,45 @@ var TERM_POLL_MS = 250;
     var at = seq === undefined ? AI.loadSeq : seq;
     // Brief: tool output arrives as a head-and-tail preview (most of a conversation's
     // weight); a step's full output is read when the step is opened.
-    return read("chat.get", { thread: tid, after: full ? 0 : AI.lastId, brief: true }).then(function (d) {
-      // A slower answer for the chat the person just left must not overwrite
-      // the chat they are reading now.
-      if (at !== AI.loadSeq || !AI.thread || AI.thread.id !== tid) return;
-      applyThread(d, full);
-      AI.threadCache[tid] = { at: Date.now(), data: d };
-    });
+    if (!full) {
+      return read("chat.get", { thread: tid, after: AI.lastId, brief: true }).then(function (d) {
+        // A slower answer for the chat the person just left must not overwrite
+        // the chat they are reading now.
+        if (at !== AI.loadSeq || !AI.thread || AI.thread.id !== tid) return;
+        applyThread(d, false, false);
+        AI.threadCache[tid] = { at: Date.now(), data: d, complete: true };
+      });
+    }
+    // A conversation can be longer than the server's page (500 events). Reading
+    // only the first page showed its oldest messages and left the current ones
+    // for a later timer tick; opening a chat looked frozen until a message was
+    // sent. Read every page, then paint once.
+    var acc = null;
+    var pages = 0;
+    function page(after) {
+      return read("chat.get", { thread: tid, after: after, brief: true }).then(function (d) {
+        if (at !== AI.loadSeq || !AI.thread || AI.thread.id !== tid) return;
+        if (!acc) {
+          acc = d;
+        } else {
+          acc.events = (acc.events || []).concat(d.events || []);
+          acc.thread = d.thread;
+          acc.pending = d.pending;
+          acc.running = d.running;
+          acc.chapters = d.chapters;
+          acc.queued = d.queued;
+          acc.run = d.run;
+        }
+        var got = (d.events || []).length;
+        if (got >= 500 && pages++ < 40) {
+          var last = d.events[d.events.length - 1];
+          return page(last ? last.id : after);
+        }
+        applyThread(acc, true, true);
+        AI.threadCache[tid] = { at: Date.now(), data: acc, complete: true };
+      });
+    }
+    return page(0);
   }
 
   function startThreadTimer() {
@@ -10092,9 +10124,9 @@ var TERM_POLL_MS = 250;
     return wsSection("Outputs", list.length, body);
   }
 
-  /* The site that serves a project, for the Browser surface and the card's
-   * Open browser row. One read is shared; the path it was read for is kept so a
-   * different chat re-resolves instead of borrowing another project's site. */
+  /* The site that serves a project, for the Browser surface and the menu
+   * action. One read is shared; the path it was read for is kept so a different
+   * chat re-resolves instead of borrowing another project's site. */
   function ensureWorkSites(path) {
     if (!path || AI.work.sitesFor === path) return;
     AI.work.sitesFor = path;
@@ -10442,10 +10474,6 @@ var TERM_POLL_MS = 250;
       return;
     }
     var st = AI.ws && AI.ws.path === path ? AI.ws.st : null;
-    ensureWorkSites(path);
-    var site = workSiteFor(path);
-    var siteName = site ? (site.site.host || site.site.name) : "";
-    var siteUp = site ? !!(site.server_running || site.upstream_listening) : false;
     var rows = [];
     rows.push('<div class="ws-head"><button type="button" class="ws-project-open grow nowrap" data-action="open-project" data-path="' + attr(path) + '" title="Open this project">' + esc(threadProjectName(path)) + "</button>" +
       '<button type="button" class="btn btn-mini btn-ghost btn-icon ws-env-close" data-action="work-env" aria-label="Close project panel" title="Close project panel"><svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg></button></div>');
@@ -10460,16 +10488,6 @@ var TERM_POLL_MS = 250;
     }
     rows.push('<div class="ws-sep"></div>');
     rows.push(outputsSection());
-    rows.push('<div class="ws-sep"></div>');
-    rows.push('<div class="ws-head ws-work-head"><b class="grow">Workspace</b></div>');
-    rows.push('<button type="button" class="ws-row ws-link ws-action' + (AI.work.browser.open ? " is-on" : "") + '" data-action="work-browser" data-path="' + attr(path) + '" title="Open this project in a browser beside the conversation">' +
-      '<svg class="icon" aria-hidden="true"><use href="#i-globe"></use></svg>' +
-      '<span class="grow">Open browser</span>' +
-      '<span class="ws-item-kind">' + (site ? esc(siteName) + (siteUp ? ' <span class="ws-dot is-live" aria-hidden="true"></span>' : ' <span class="ws-dot is-off" aria-hidden="true"></span>') : "no site") + "</span></button>");
-    rows.push('<button type="button" class="ws-row ws-link ws-action' + (AI.work.terminal.open ? " is-on" : "") + '" data-action="work-terminal" data-path="' + attr(path) + '" title="Open a shell in this project beside the conversation">' +
-      '<svg class="icon" aria-hidden="true"><use href="#i-code"></use></svg>' +
-      '<span class="grow">Open terminal</span>' +
-      '<span class="ws-item-kind">' + (AI.work.terminal.open && AI.work.terminal.project === path ? "running" : "this project") + "</span></button>");
     morph(box, rows.join(""));
   }
 
@@ -14151,13 +14169,19 @@ var TERM_POLL_MS = 250;
       // and refresh behind the reader; otherwise read it and let the list fill
       // in behind (see renderAssistant), so neither waits on the other.
       var cached = AI.threadCache[id];
-      if (cached && Date.now() - cached.at < 120000) {
+      if (cached && cached.complete && Date.now() - cached.at < 120000) {
         applyThread(cached.data, true);
         renderAssistant();
       } else {
         renderAssistant();
       }
-      pollThread(true, seq).then(function () { if (seq === AI.loadSeq) renderAssistant(); });
+      pollThread(true, seq).then(function () {
+        if (seq !== AI.loadSeq) return;
+        // The shell is already on screen; replace the conversation in place
+        // instead of rebuilding the whole assistant screen (which flickered).
+        if (state.view === "assistant" && el("chat-stream")) { paintChat(true); paintThreads(); paintWsCard(); }
+        else renderAssistant();
+      });
     },
     // A rail entry opens its area. Pressed again on a window too narrow for the panel to
     // sit beside the page, it opens the panel over the page instead.
@@ -16687,10 +16711,10 @@ var TERM_POLL_MS = 250;
   }
 
   function boot() {
-    render();
-    // The address is read first: a link to a screen, a bookmark or the back
-    // button all say where the person wants to be.
+    // The address decides the first paint. Painting Home first and then
+    // navigating made a linked conversation flash the wrong screen.
     readRoute();
+    if (!el("main") || !el("main").firstChild) render();
     // Session first, then only the data the current screen needs. The rest of
     // the environment is read beside it and repaints the chrome as it arrives.
     // A doctor run or a health probe must never hold the first screen hostage.
@@ -16705,7 +16729,11 @@ var TERM_POLL_MS = 250;
         if (draft) { AI.askText = AI.askText || draft; AI.composer = AI.composer || draft; }
         // The rail's "waiting for you" count is right from the first screen, whichever it is.
         refreshHomeCounts();
-        loadCapSummaries().then(function () { if (["activity", "home", "assistant", "inbox"].indexOf(state.view) >= 0) render(); });
+        loadCapSummaries().then(function () {
+          // Capability summaries are not what a conversation is made of; a full
+          // repaint here made opening a chat flicker for no visible gain.
+          if (["activity", "home", "inbox"].indexOf(state.view) >= 0) render();
+        });
         var first = refresh();
         if (current !== "home" && current !== "projects" && current !== "project") {
           loadProjects().then(paintChrome).catch(function () {});
@@ -16713,7 +16741,28 @@ var TERM_POLL_MS = 250;
         if (SERVER_VIEWS.indexOf(current) === -1 && current !== "home") {
           loadServer().then(paintChrome).catch(function () {});
         }
-        return first.then(function () { render(); });
+        return first.then(function () {
+          // When a conversation is named in the address, its open paints the
+          // screen; a full render here was one more rebuild before the same
+          // content appeared.
+          if (!state.pendingThread) render();
+          // A conversation named in the address opens now, not after the health
+          // and doctor probes. Waiting for them left a linked chat on its empty
+          // state until the person typed something.
+          var id = state.pendingThread;
+          if (!id) return;
+          state.pendingThread = null;
+          var known = (AI.threads || []).some(function (x) { return x.id === id; });
+          if (known) {
+            ACTIONS["open-thread"]({ dataset: { id: id } });
+          } else {
+            // A conversation can be linked before the list has heard of it (a fork,
+            // a fresh run). Read it by id once; only a real 404 goes home.
+            read("chat.get", { thread: id, brief: true })
+              .then(function () { ACTIONS["open-thread"]({ dataset: { id: id } }); })
+              .catch(function () { navigate("assistant", true); });
+          }
+        });
       })
       .then(function () {
         if (state.session && state.session.pending_approvals) {
@@ -16727,19 +16776,6 @@ var TERM_POLL_MS = 250;
         loadDoctor().then(function () {
           if (state.view === "system" || state.view === "home") render();
         }).catch(function () {});
-      })
-      .then(function () {
-        // A conversation named in the address is opened once its list is in.
-        var id = state.pendingThread;
-        if (!id) return;
-        state.pendingThread = null;
-        var t = (AI.threads || []).filter(function (x) { return x.id === id; })[0];
-        if (t) ACTIONS["open-thread"]({ dataset: { id: id } });
-        // A conversation can be linked before the list has heard of it (a fork,
-        // a fresh run). Read it by id once; only a real 404 goes home.
-        else read("chat.get", { thread: id, brief: true })
-          .then(function () { ACTIONS["open-thread"]({ dataset: { id: id } }); })
-          .catch(function () { navigate("assistant", true); });
       });
   }
 

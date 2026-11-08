@@ -1934,6 +1934,14 @@ fn a_failing_final_verification_never_marks_the_run_done() {
             .any(|a| a["capability"] == "team.accept"),
         "a person can accept it explicitly"
     );
+    assert!(
+        v["needs"]["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["capability"] == "team.retry"),
+        "the check can be run again on the current revision"
+    );
     let reason = v["run"]["error"].as_str().unwrap_or("");
     assert!(
         reason.contains("not finished") || reason.contains("changes"),
