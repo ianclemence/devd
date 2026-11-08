@@ -256,7 +256,26 @@ fn an_agent_cannot_hand_an_interpreter_code_through_the_program_allow_list() {
             err.to_string().contains("interpreter code"),
             "it says why: {err}"
         );
+        assert!(
+            err.to_string().contains("project.exec_destructive"),
+            "it says which capability can do it with approval: {err}"
+        );
     }
+    // The approvable path asks a person instead of refusing outright, so an
+    // instruction the person gave can actually be carried out once they agree.
+    let err = call(
+        &app,
+        &agent,
+        "project.exec_destructive",
+        json!({ "path": path, "argv": ["php", "-r", "echo 1;"] }),
+        false,
+        Approval::None,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, devd_core::DevdError::ApprovalRequired { .. }),
+        "an agent can ask for an approved interpreter: {err:?}"
+    );
     // The plan tells the reader before anything runs, and an ordinary command is not marked.
     let plan = |argv: Value| {
         let r = call(
@@ -270,6 +289,6 @@ fn an_agent_cannot_hand_an_interpreter_code_through_the_program_allow_list() {
         .unwrap();
         serde_json::to_string(&r.plan).unwrap()
     };
-    assert!(plan(json!(["php", "-r", "echo 1;"])).contains("REFUSED for an agent"));
-    assert!(!plan(json!(["php", "artisan", "migrate:status"])).contains("REFUSED"));
+    assert!(plan(json!(["php", "-r", "echo 1;"])).contains("project.exec_destructive"));
+    assert!(!plan(json!(["php", "artisan", "migrate:status"])).contains("project.exec_destructive"));
 }

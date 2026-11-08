@@ -23,7 +23,7 @@
 | `project.init` | exec | Create a project; `dry_run` returns the same plan |
 | `project.detect`, `project.import`, `project.list`, `project.forget` | read / write | Understand and register existing projects |
 | `project.tasks`, `project.run`, `project.exec` | read / exec | Run the project's own workflow commands |
-| `project.run_destructive`, `project.exec_destructive` | destructive, human only | Anything that can destroy data |
+| `project.run_destructive`, `project.exec_destructive` | destructive, approval | Anything that can destroy data, or hand an interpreter code (`php -r`, `tinker`); an agent may ask, a person approves that exact command once |
 | `task.list`, `task.logs`, `task.stop`, `stacks.cancel`, `stacks.log`, `stacks.runs` | read / exec | Background processes, progress, history |
 | `toolchain.list`, `.check`, `.plan`, `.status`, `.logs`, `.devices` | read | Probe tools and services |
 | `toolchain.install`, `.remove`, `.service` | admin | Change the machine; always need approval |
@@ -53,7 +53,7 @@ Every definition records how it was checked (`verified.method`: `cli-help` when 
 
 - **Argv only.** Commands are argument arrays. Values you supply are never interpreted as shell syntax, and `project.exec` refuses shells and privilege tools.
 - **Directories.** Agents work only under the projects root, extra `project_roots` from settings, and projects a person created or imported. People may use any directory except system and home roots. `..` and symlinks are resolved first.
-- **Approval.** Installing or removing software and controlling services are `admin`; destructive tasks and commands are `destructive` and human-only. An agent can ask for a plan and a person approves it in the window, dashboard or CLI.
+- **Approval.** Installing or removing software and controlling services are `admin`; destructive tasks and commands are `destructive` and **approval-gated**, not human-only: an agent that was told to run one queues the turn's exact plan and a person approves it in the window, dashboard or CLI. Interpreter one-liners (`php -r`, `php artisan tinker`, `npx -c`) take the same path because the code cannot be inspected.
 - **Privileges.** Package installs use root or `sudo -n` only. Without either, the plan says so and prints the exact command. Nothing prompts for a password and nothing is piped from the internet into a shell.
 - **Secrets.** Output is redacted (`KEY=value`, bearer tokens, URL credentials, common token formats) before it is logged, stored or sent. `.env` values are never read into project context, only names. devd's own tokens are removed from child environments.
 - **Network exposure.** Service definitions record bind defaults. devd does not open ports or change service configuration; it starts a service only when nothing else holds its port.

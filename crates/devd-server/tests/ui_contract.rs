@@ -1803,11 +1803,19 @@ fn list_hover_is_one_rounded_inset_band() {
 }
 
 #[test]
-fn the_surface_toggles_retire_when_the_project_card_is_open() {
-    // At 1440 and wider the card carries Browser and Terminal and is Environment
-    // itself; repeating the three actions in the header is noise.
-    assert!(CSS.contains("@media (min-width: 1440px)"));
-    assert!(CSS.contains(".surface-toggles { display: none; }"));
+fn the_workspace_surfaces_live_in_the_conversation_menu() {
+    // The header keeps only the actions in use: Browser and Terminal are one
+    // click away in the menu, and the item shows whether the surface is open.
+    let start = APP.find("function chatHeadHtml").unwrap();
+    let end = APP[start..].find("function prLabel").unwrap() + start;
+    let head = &APP[start..end];
+    let more = head.find("more-pop").expect("the menu is in the head");
+    let tail = &head[more..];
+    assert!(tail.contains("data-action=\"work-browser\""), "the browser is in the menu");
+    assert!(tail.contains("data-action=\"work-terminal\""), "the terminal is in the menu");
+    assert!(tail.contains("menuitemcheckbox"), "the surface items show whether they are open");
+    assert!(!head[..more].contains("data-action=\"work-browser\""), "the header itself opens no surface");
+    assert!(!head[..more].contains("data-action=\"work-terminal\""), "the header itself opens no surface");
 }
 
 #[test]
@@ -1819,8 +1827,7 @@ fn the_conversation_head_reads_state_links_actions() {
     // State chips, then context links, then the actions in use order.
     assert!(at("AI.queued") < at("Back to request"));
     assert!(at("Back to request") < at("chapters-open"));
-    assert!(at("chapters-open") < at("surface-toggles"));
-    assert!(at("surface-toggles") < at("thread-find"));
+    assert!(at("chapters-open") < at("thread-find"));
     assert!(at("thread-find") < at("open-run"));
     assert!(at("open-run") < at("run-retry"));
     assert!(at("run-retry") < at("more-toggle"));

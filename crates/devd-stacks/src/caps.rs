@@ -737,10 +737,10 @@ pub fn register(reg: &mut Registry) -> Result<()> {
     )?;
 
     reg.define::<RunTask>("project.run_destructive", "Run a destructive project task")
-    .description("Runs a task classified as destructive (drops or resets data, deploys, force-pushes, migrate:fresh, db:reset...). Always needs a human's approval and is never available to agents.")
+    .description("Runs a task classified as destructive (drops or resets data, deploys, force-pushes, migrate:fresh, db:reset...). An agent may run it when a person approves that exact task in the conversation; the approval covers one run and cannot be reused.")
     .tier(Tier::Destructive)
     .effect(Effect::Data)
-    .human_only()
+    .agent_safe()
     .dry_run()
     .handlers(
         |ctx, a| {
@@ -753,7 +753,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
     )?;
 
     reg.define::<ExecArgs>("project.exec", "Run a framework command")
-    .description("Runs a program from the stack's allow-list (for Laravel: php, composer, vendor/bin/pint...; for Django: python, django-admin...) in the project, with argv - never a shell. Use it for framework commands that are not tasks, such as `php artisan make:model Post` or `python manage.py startapp blog`. Commands containing destructive arguments (migrate:fresh, db:drop, --force...) are refused here.")
+    .description("Runs a program from the stack's allow-list (for Laravel: php, composer, vendor/bin/pint...; for Django: python, django-admin...) in the project, with argv - never a shell. Use it for framework commands that are not tasks, such as `php artisan make:model Post` or `python manage.py startapp blog`. Commands containing destructive arguments (migrate:fresh, db:drop, --force...) and interpreter one-liners (php -r, tinker) are refused here: use project.exec_destructive, which a person approves.")
     .tier(Tier::Exec)
     .effect(Effect::Process)
     .agent_safe()
@@ -764,10 +764,8 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             let (_, c) = detect_ctx(ctx, &r, &a.path, None)?;
             let stack = c.primary.as_deref().and_then(|s| r.stack(s));
             let mut p = Plan::new("project.exec", format!("run `{}`", crate::template::display(&exec::redact_argv(&a.argv)))).step(format!("in {}", a.path));
-            if let Some(m) = tasks::is_destructive(stack, &a.argv) { p = p.effect(format!("DESTRUCTIVE ({m}): refused here; use project.exec_destructive")); }
-            if ctx.actor.is_agent() {
-                if let Some(flag) = tasks::inline_code(&a.argv) { p = p.effect(format!("REFUSED for an agent: `{flag}` gives an interpreter code to run")); }
-            }
+            if let Some(m) = tasks::is_destructive(stack, &a.argv) { p = p.effect(format!("DESTRUCTIVE ({m}): refused here; use project.exec_destructive, which a person approves")); }
+            if let Some(flag) = tasks::inline_code(&a.argv) { p = p.effect(format!("`{flag}` gives an interpreter code to run: refused here; use project.exec_destructive, which a person approves")); }
             Ok(p)
         },
         |ctx, a| exec_cmd(ctx, a, false),
@@ -917,13 +915,17 @@ pub fn register(reg: &mut Registry) -> Result<()> {
     )?;
 
     reg.define::<ExecArgs>("project.exec_destructive", "Run a destructive framework command")
-    .description("Like project.exec for commands that can destroy data. Always needs a human's approval; never available to agents.")
+    .description("Like project.exec for commands that can destroy data, and for interpreter one-liners such as `php -r` or `php artisan tinker` that the safe path refuses. An agent may run it when a person approves that exact command in the conversation; the approval covers one run and cannot be reused.")
     .tier(Tier::Destructive)
     .effect(Effect::Data)
-    .human_only()
+    .agent_safe()
     .dry_run()
     .handlers(
-        |_, a| Ok(Plan::new("project.exec_destructive", format!("run `{}`", crate::template::display(&exec::redact_argv(&a.argv)))).step(format!("in {}", a.path)).effect("can destroy data").destructive(true)),
+        |_, a| {
+            let mut p = Plan::new("project.exec_destructive", format!("run `{}`", crate::template::display(&exec::redact_argv(&a.argv)))).step(format!("in {}", a.path)).effect("can destroy data, or run code devd cannot inspect").destructive(true);
+            if let Some(flag) = tasks::inline_code(&a.argv) { p = p.effect(format!("gives `{flag}` an interpreter code to run")); }
+            Ok(p)
+        },
         |ctx, a| exec_cmd(ctx, a, true),
     )?;
 
@@ -1376,19 +1378,26 @@ fn exec_cmd(ctx: &Ctx, a: &ExecArgs, destructive: bool) -> Result<Outcome> {
     let r = stacks(ctx);
     let (dir, c) = detect_ctx(ctx, &r, &a.path, None)?;
     let stack = c.primary.as_deref().and_then(|s| r.stack(s));
-    if ctx.actor.is_agent() {
-        if let Some(flag) = tasks::inline_code(&a.argv) {
-            return Err(DevdError::denied(format!(
-                "`{flag}` gives an interpreter code to run, which the program allow-list does not cover. An agent can run the project's own scripts and commands; a person can run this one"
-            )));
-        }
-    }
+    // Destructive flags and interpreter one-liners both hand the program code
+    // devd cannot inspect, so both take the approval path. The safe capability
+    // points at the approvable one; the approvable one runs it once a person
+    // has read the exact argv.
     let mark = tasks::is_destructive(stack, &a.argv);
-    if mark.is_some() && !destructive {
-        return Err(DevdError::denied(format!("`{}` contains `{}` and can destroy data. Use project.exec_destructive, which needs a human's approval.", a.argv.join(" "), mark.unwrap_or_default())));
+    let inline = tasks::inline_code(&a.argv);
+    let risky = mark.is_some() || inline.is_some();
+    if risky && !destructive {
+        let why = match (&mark, &inline) {
+            (Some(m), _) => format!("contains `{m}` and can destroy data"),
+            (_, Some(flag)) => format!("uses `{flag}`, which gives an interpreter code to run"),
+            _ => "can change things devd cannot inspect".to_string(),
+        };
+        return Err(DevdError::denied(format!(
+            "`{}` {why}. Use project.exec_destructive, which a person approves.",
+            a.argv.join(" ")
+        )));
     }
-    if mark.is_none() && destructive {
-        return Err(DevdError::invalid("that command is not destructive; use project.exec"));
+    if !risky && destructive {
+        return Err(DevdError::invalid("that command is neither destructive nor inline; use project.exec"));
     }
     let res = tasks::exec_allowed(ctx, &r, stack, c.package_manager.as_deref().unwrap_or(""), &dir, &a.argv, a.timeout_secs.unwrap_or(600))?;
     let display = exec::redact_argv(&a.argv).join(" ");

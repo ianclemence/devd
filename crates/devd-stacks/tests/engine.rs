@@ -407,7 +407,9 @@ fn tasks_run_with_evidence_and_destructive_ones_need_a_human() {
     .unwrap();
     assert_eq!(ok["ok"], true);
 
-    // An agent can run safe tasks but can never reach the destructive capability, approval or not.
+    // An agent can run safe tasks, and reaches a destructive one only with a
+    // person's approval for that exact call. Without the approval it is asked
+    // for one; with it, the task runs. The capability is not human-only.
     let agent = ctx_with(root, Actor::agent("claude-code"));
     let _ = agent.store.upsert_stack_project(&devd_core::StackProject {
         path: path.clone(),
@@ -424,10 +426,19 @@ fn tasks_run_with_evidence_and_destructive_ones_need_a_human() {
         &agent,
         "project.run_destructive",
         json!({"path": path, "task": "wipe"}),
-        Approval::Granted,
+        Approval::None,
     )
     .unwrap_err();
-    assert_eq!(err.code(), "permission_denied");
+    assert_eq!(err.code(), "approval_required", "an agent asks before destroying data");
+    let ok = dispatch(
+        &reg,
+        &agent,
+        "project.run_destructive",
+        json!({"path": path, "task": "wipe"}),
+        Approval::Granted,
+    )
+    .unwrap();
+    assert_eq!(ok["ok"], true, "the task a person approved ran");
     let err = dispatch(
         &reg,
         &agent,

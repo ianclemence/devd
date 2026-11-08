@@ -769,7 +769,8 @@ struct FsWrite {
     path: String,
     /// The complete new content.
     content: String,
-    /// Create missing parent directories.
+    /// Missing parent directories are created inside the project automatically;
+    /// pass false to keep a write strict.
     #[serde(default)]
     create_dirs: Option<bool>,
 }
@@ -1719,9 +1720,10 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
     {
         let t = team.clone();
         reg.define::<SayArgs>("team.say", "Add an instruction to a run")
-    .description("Tell the team something new. Tasks that have not started receive it, running tasks get it when they next stop, and a plan that is still being written takes it into account.")
+    .description("Tell the team something new. Tasks that have not started receive it, running tasks get it when they next stop, and a plan that is still being written takes it into account. The assistant uses it to pass the person's corrections into a run it is watching.")
     .tier(Tier::Write)
     .effect(Effect::Process)
+    .agent_safe()
     .dry_run()
     .handlers(
         |_, a| simple("team.say", format!("add an instruction to run {}", a.run)),
@@ -2984,7 +2986,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
     .dry_run()
     .handlers(
         |_, a| Ok(Plan::new("fs.write", format!("write {} ({} bytes)", a.path, a.content.len())).effect("replaces the file if it exists")),
-        |ctx, a| Ok(Outcome::with_data("Wrote the file", fs::write(ctx, &a.path, &a.content, a.create_dirs.unwrap_or(false))?)),
+        |ctx, a| Ok(Outcome::with_data("Wrote the file", fs::write(ctx, &a.path, &a.content, a.create_dirs.unwrap_or(true))?)),
     )?;
     reg.define::<FsEdit>("fs.edit", "Edit a file")
     .description("Replaces exact text in a file. `old` must match exactly once (include surrounding lines to make it unique) unless replace_all is set. Read the file first so the text is current.")

@@ -10,6 +10,49 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.26.4] - 2026-11-08 - If you told it to, it asks once and does it
+
+### Changed
+
+- **Destructive project operations are approval-gated, not human-only.** `project.run_destructive`
+  and `project.exec_destructive` can now be requested by the assistant: the person sees the exact
+  task or command in the conversation and approves that one run. The approval is single-use, so the
+  plan a person read is the command that runs. A task like `migrate:fresh --seed` no longer ends in
+  "cannot be performed by an agent" with no way forward.
+- **Interpreter one-liners take the same path.** `php -r`, `php artisan tinker` and `npx -c` are
+  refused by `project.exec` with a pointer to `project.exec_destructive`, which a person can approve;
+  the hard "an agent may never run this" wall is gone, and the exact argv is what is approved.
+- **The assistant can steer a running team.** `team.say` is available to agents, so a correction the
+  person gives devd reaches the plan or the tasks instead of being refused as "not available to
+  agents". Pause, resume and retry were already agent-safe.
+- **`fs.write` creates missing parent folders inside the project.** Writing
+  `app/Services/ContentAssistant/Fetch/UrlFetcher.php` no longer costs a turn to learn that
+  `create_dirs` was needed.
+
+### Changed in the window
+
+- **Browser and Terminal moved into the conversation menu.** The header keeps search, Evidence and
+  Continue; the two workspace surfaces are menu items, with a check when one is open. The menu reads
+  surfaces first, then the conversation's housekeeping (Rename, pull request, settled), then Delete.
+- **"Needs you" is the app's banner, at the bottom of the conversation.** The run page states the
+  current need with the same tone icon, title, words and actions as every other banner, after the
+  conversation and before the composer. The run's actions (Evidence, Pause/Resume/Cancel) sit in one
+  row at the bottom, so they stay in reach as the log grows.
+- **A long run title is clipped quietly.** The conversation header no longer appends
+  "… N more characters (full output is in the transcript)" to a title; it ends in an ellipsis.
+- **The Assistant's empty state has no glow.** The atmosphere belongs to the page, not to one block
+  inside it.
+
+### Added
+
+- **Tabs in the workspace surfaces.** Browser and Terminal each carry a Claude-Code-style tab strip:
+  switch tabs, close one with its ×, and open another with +. Terminal tabs are separate server
+  shells in the same project (they keep running) and are named **Terminal 1**, **Terminal 2**; blank
+  browser tabs are **New tab**, **New tab 2**, and a tab that opens a known site takes that site's
+  name. The active tab has no bottom border, so it reads as one surface with the panel beneath it.
+
+---
+
 ## [0.26.3] - 2026-11-08 - A new chat has no empty card
 
 ### Changed
