@@ -2,9 +2,9 @@
 
 `devd tui` is the third projection of the registry, after the CLI and the
 application window. It exists for the two situations the other two do not cover:
-a terminal where no browser can be opened, and a keyboard where reaching for a
-mouse would be slower than reading. It is also the only surface that works over a
-plain SSH session without forwarding anything.
+a terminal where no browser can be opened, and a keyboard-only session where
+reaching for a mouse would be slower than reading. It is also the only surface
+that works over a plain SSH session without forwarding anything.
 
 It is not a second implementation of anything. Every row on screen came out of a
 capability, and every key that changes something goes back through
@@ -33,30 +33,36 @@ surface that cannot do its job, and it is asserted by test.
 
 ## The views
 
-`1`–`9` jump straight to one; `Tab` and `Shift+Tab` cycle. The digit is shown in
-the tab strip, so the strip is also the key map.
+`1`–`9` jump straight to the nine numbered views; `0`, `-`, `=` and `+` open
+Create, Toolchain, Team and Inbox. `Tab` and `Shift+Tab` cycle through all of
+them. The key is shown in the tab strip, so the strip is also the key map.
 
 | Key | View | What it shows |
 | --- | --- | --- |
 | 1 | Dashboard | The environment checks, the selected repository and its state, the project count. |
 | 2 | Projects | Every repository `devd` knows about: name, path, default branch, remote. |
-| 3 | Changes | The working tree, one row per file, grouped by staged, unstaged, untracked, conflicted. |
+| 3 | Changes | The working tree, one row per file, grouped by state: staged, unstaged, untracked and conflicted. |
 | 4 | History | The log: short hash, subject, author. |
 | 5 | Branches | Local branches, the current one marked, upstream and subject. |
 | 6 | Capabilities | The whole registry, filterable, with each capability's tier. |
 | 7 | Activity | The audit trail, newest first. |
 | 8 | Doctor | The same checks as `devd doctor`. |
 | 9 | Help | The key map and the rule about destructive actions. |
+| 0 | Create | The stacks that can become a new project. |
+| - | Toolchain | Installed tools and services, with install, remove, start, stop and logs. |
+| = | Team | Agent team runs, with plan approval, pause and cancel. |
+| + | Inbox | Decisions waiting for a person: approve or decline. |
 
 ## What a frame looks like
 
-This is a real frame, captured from the dashboard pointed at a real repository
-with a staged file, two unstaged files and one untracked file. Trailing padding
-is trimmed.
+This is the shape of a frame, drawn from the dashboard pointed at a real
+repository with a staged file, two unstaged files and one untracked file.
+Trailing padding is trimmed; the version line and the tab strip grow with each
+release.
 
 ```text
- devd 0.4.0  C:\devd  git 2.46.0.windows.1
- 1 Dashboard  2 Projects  3 Changes  4 History  5 Branches  6 Capabilities  7 Activity  8 Doctor  9 Help
+ devd 0.25.6  C:\devd  git 2.46.0.windows.1
+ 1 Dashboard  2 Projects  3 Changes  4 History  5 Branches  6 Capabilities  7 Activity  8 Doctor  9 Help  0 Create  - Toolchain  = Team  + Inbox
  ┌ Changes - main: 1 staged, 2 unstaged, 1 untracked in C:/code/devd ──────────────┐
  │M staged     README.md                                                           │
  │M unstaged   README.md                                                           │
@@ -76,7 +82,8 @@ is one line for the last message and one line for the keys that apply right here
 ## Approvals
 
 `d` discards the selected file. Discarding is `Tier::Destructive`, so the
-dashboard does not discard it. It asks the registry for the plan and shows it:
+dashboard does not run it directly. It asks the registry for the plan and
+shows it:
 
 ```text
  ┌ Confirm a destructive operation ────────────────────────────────────────────────┐
@@ -109,10 +116,10 @@ Four things about that prompt are load-bearing:
   registry refuses and audits. A refused `git.discard` is a row in the Activity
   view, labelled `refused`, exactly like the one the CLI produces.
 * **A switch that would lose work becomes a confirm, not a refusal.** Before
-  offering a branch switch, the dashboard asks `git.switch.check` — the product's
-  own overwrite check, not a second opinion invented for the TUI. If files are at
-  risk, the list of them is turned into a destructive plan and the same prompt
-  appears.
+  offering a branch switch, the dashboard asks `git.switch.check` — the
+  product's own overwrite check, not a second opinion invented for the TUI. If
+  files are at risk, the list of them is turned into a destructive plan and the
+  same prompt appears.
 
 Nothing in the TUI can reach an operation that needs approval without going
 through this prompt, because the prompt *is* how it gets called: the controller
@@ -122,19 +129,23 @@ calls `dispatch` with no approval and reacts to `approval_required`.
 
 | Key | Action |
 | --- | --- |
-| `1`–`9` | Jump to a view |
+| `1`–`9`, `0`, `-`, `=`, `+` | Jump to a view |
 | `Tab` / `Shift+Tab` | Next / previous view |
 | `j` `k` `↑` `↓` | Move the cursor |
 | `PageUp` `PageDown` `Home` `End` | Move faster, or to the ends |
 | `Enter` | Open the row: choose a project, toggle a file in or out of the index, show a commit, switch a branch, describe a capability |
-| `s` / `u` | Stage / unstage the selected file |
-| `d` | Discard the selected file — asks first |
-| `a` | Stage everything |
-| `c` | Commit — asks for the message |
-| `n` | New branch (in Branches) |
-| `t` | Track a repository by path (in Projects) |
+| `s` / `u` | Stage / unstage the selected file (Changes) |
+| `d` | Discard the selected file — asks first (Changes); detect a folder (Projects); decline (Inbox) |
+| `a` | Stage everything (Changes); approve a plan (Team); approve (Inbox) |
+| `c` | Commit — asks for the message (Changes); cancel (Team) |
+| `n` | New branch (Branches) |
+| `t` | Track a repository by path (Projects); stop a service (Toolchain) |
+| `m` | Import a folder as a project (Projects) |
+| `i` | Install the first missing requirement (Dashboard); install a tool (Toolchain) |
+| `x` | Run the selected capability; remove a tool (Toolchain) |
+| `s` / `t` / `l` | Start, stop or read the log of a service (Toolchain) |
+| `p` | Pause or resume a team run (Team) |
 | `/` | Search capabilities |
-| `x` | Run the selected capability, with arguments you type as JSON |
 | `y` / `n` | Approve / decline the operation being asked about |
 | `r` | Reload the current view |
 | `?` | Help |
@@ -150,7 +161,7 @@ prompt and act on the view behind it. `Esc` cancels a prompt without acting, and
   capabilities are typed structs turned into `argv` arrays. However many rows it
   shows, it has no path to a shell.
 * **It never writes repository content to the terminal raw.** A branch name or a
-  path with a control character in it is not text at that point, it is a command
+  path with a control character in it is not text at that point; it is a command
   being sent to the reader's terminal — `ESC [ 2 J` clears the screen. Every
   string that reaches the screen passes through one function that replaces
   control characters, and a test renders a branch named `evil\u{1b}[2Jbranch` and
@@ -169,7 +180,7 @@ a controller over a `Backend` trait, and a render function that is a pure
 function of that state. That makes the parts that matter testable, and the
 tests are the reason to believe the claims above.
 
-* **52 unit tests.** The controller is driven with real keystrokes against a
+* **58 unit tests.** The controller is driven with real keystrokes against a
   fake backend that counts what actually ran. They assert, among other things,
   that a destructive key runs nothing until `y`, that `n` runs nothing *and*
   sends the refusal, that `Esc` on a prompt does not leak the keystroke to the

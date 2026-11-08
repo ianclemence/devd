@@ -161,12 +161,11 @@ part comes up.
 | [`docs/security.md`](docs/security.md) | The threat model and the specific protections. |
 | [`docs/platforms.md`](docs/platforms.md) | Windows, Linux and macOS: what differs and what is verified. |
 | [`docs/limitations.md`](docs/limitations.md) | What carries over from other stacks, what is replaced only with approval, and what devd will not do. |
-| [`docs/app.md`](docs/app.md), [`docs/design.md`](docs/design.md), [`docs/tui.md`](docs/tui.md) | The application window, its design system and API, and the terminal dashboard. |
+| [`docs/app.md`](docs/app.md), [`docs/design.md`](docs/design.md), [`docs/tui.md`](docs/tui.md) | The application window and API, the design system and agent-generated content, and the terminal dashboard. |
 | [`docs/mcp.md`](docs/mcp.md) | The MCP surface: the five tools, the agent actor and approvals. |
 | [`docs/agents.md`](docs/agents.md) | The assistant, the team, skills, models and the runs they record. |
 | [`docs/runs.md`](docs/runs.md) | Runs, evidence, approvals, context, events and recovery. |
 | [`docs/autonomy.md`](docs/autonomy.md) | The rules a feature must keep if it lets devd act without being asked. |
-| [`docs/superagent-notes.md`](docs/superagent-notes.md) | What devd took from DeepSeek's super-agent design, and what it refused. |
 | [`docs/operations.md`](docs/operations.md) | The server operations: env, cron, workers, deploys, backups, servers. |
 | [`docs/workflows.md`](docs/workflows.md) | Reviews, agent memory and instruction files. |
 | [`docs/shared-state.md`](docs/shared-state.md) | Todos, scratchpads and handoff between agents. |
@@ -174,7 +173,7 @@ part comes up.
 | [`docs/devd-yml.md`](docs/devd-yml.md) | Declaring a project's processes. |
 | [`docs/git-cli.md`](docs/git-cli.md) | The Git commands and the capabilities behind them. |
 | [`docs/daemon.md`](docs/daemon.md) | The resident process, service ownership, maintenance, names and signed updates. |
-| [`docs/desktop.md`](docs/desktop.md) | The native window and what it adds to the server. |
+| [`docs/desktop.md`](docs/desktop.md) | The native window, its tray and what it adds to the server. |
 | [`docs/setup.md`](docs/setup.md) | What devd needs on a machine and how each requirement is met. |
 | [`docs/releasing.md`](docs/releasing.md) | How a release is built, signed and published. |
 | [`CHANGELOG.md`](CHANGELOG.md) | Release history. |

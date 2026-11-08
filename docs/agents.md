@@ -69,10 +69,10 @@ cannot use.
 
 Two different questions, two different sources:
 
-* **What exists** - the official list. For Claude, `models.refresh_official` reads
+* **What exists** — the official list. For Claude, `models.refresh_official` reads
   Anthropic's models documentation (id, price, context window, output limit,
   retirement date). No key needed.
-* **What this key may use** - `provider.models` asks the provider's own model list
+* **What this key may use** — `provider.models` asks the provider's own model list
   with your key. A model in the official list but absent from your account's list
   shows as `missing` in the role table; one never checked shows `unverified`.
 
@@ -104,9 +104,9 @@ model known not to take tools is skipped for agent work, with the reason.
 `policy.get` and `policy.set` (human only; an agent cannot loosen the rules it
 runs under) hold three rules, checked before every model call:
 
-* `local_only` - only providers on this machine (loopback) are used;
-* `allow_providers` / `block_providers` - by provider id, block winning;
-* `max_cost_usd` - the most one run may spend. Cost is tokens times the catalogue
+* `local_only` — only providers on this machine (loopback) are used;
+* `allow_providers` / `block_providers` — by provider id, block winning;
+* `max_cost_usd` — the most one run may spend. Cost is tokens times the catalogue
   price, so it is enforced only for models whose price is known; a model with no
   price is not counted, and the run's usage says so by having no `cost_usd`.
 
@@ -158,21 +158,20 @@ goal -> planner -> [you approve the plan] -> scheduler -> specialists -> final v
   coherent (a role that must prove a change may change files, one that must run
   a check may run commands, nobody may use destructive or remote operations).
 * **Evidence.** Every specialist tool call is recorded in the run's `tool_calls`
-  and normalized into `evidence` at the registry boundary, whether the model used
+  and normalised into `evidence` at the registry boundary, whether the model used
   a direct tool name or `devd_invoke`. After a specialist reports, devd reads
   those rows, not the conversation text. An implementer must have changed files
-  *and* had a verification (a `project.run` of test, build, lint, check... exit 0)
-  pass; a reviewer must have read the change; QA must have run checks; infra must
-  have run something that succeeded. `project.exec` and a command that is not a
-  check are `command` evidence, not verification; a file read or a `git diff` is
+  *and* passed a verification (a `project.run` of test, build, lint or check that
+  exited 0); a reviewer must have read the change; QA must have run checks; infra
+  must have run something that succeeded. `project.exec` and a command that is not
+  a check are `command` evidence, not verification; a file read or a `git diff` is
   `read` evidence and cannot satisfy a change requirement. Readiness is read from
   the payload (a service reports `running` and `listening`), not from the call
-  returning. Otherwise the report is rejected
-  twice with the reason, then the task is `unverified`, its dependants do not
-  start, and the run pauses with what is needed (retry with a note, or accept by
-  hand — recorded as such).
-* **Final verification.** When every task is done devd adds a QA task that runs the
-  project's own checks independently. The run's summary is built by devd from the
+  returning. Otherwise the report is rejected twice with the reason, then the task
+  is `unverified`, its dependants do not start, and the run pauses with what is
+  needed (retry with a note, or accept by hand — recorded as such).
+* **Final verification.** When every task is done, devd adds a QA task that runs
+  the project's own checks independently. The run's summary is built by devd from the
   recorded evidence, not from what agents wrote about themselves. The team run
   mirrors its state into the unified run, so the Evidence sheet on the team run
   reads the same steps, evidence and approvals the scheduler used.
@@ -197,9 +196,9 @@ The room has five parts:
 
 | Part | Where it lives | Who can change it |
 |---|---|---|
-| **North star** | `team.charter.set` file for the project | a person only |
-| **Human owner and working agreement** | the same charter | a person only |
-| **Invited proactive roles** | the charter; a record of which roles may suggest the next work | a person only |
+| **North star** | `team.charter.set` file for the project | human only |
+| **Human owner and working agreement** | the same charter | human only |
+| **Invited proactive roles** | the charter; a record of which roles may suggest the next work | human only |
 | **Shared context** | `team.context`: sites and addresses, managed services, installed runtimes, `AGENTS.md`/`CLAUDE.md` knowledge, recent lessons, trust record | read-only, assembled from devd's records |
 | **The record** | team tasks, evidence, acceptances by hand, lessons and missteps in the run summary | devd writes it; a person reads it |
 
@@ -224,8 +223,8 @@ failures, unverified tasks, accepted-by-hand work and repeated attempts to the
 summary and to the context of the next run. A model's reflection is useful, but
 it is not allowed to replace the events the harness observed.
 
-`devd team.roles` remains the roster. The team room does not add another copy of
-it: the roster, the charter and the context are three views of the same project.
+`team.roles` remains the roster. The team room does not add another copy of it:
+the roster, the charter and the context are three views of the same project.
 
 ### A definition of done
 
@@ -247,13 +246,13 @@ to confirm.
 and typed questions and returns a calibrated probability, not prose to parse.
 That is the right tool where devd's own code, not an agent, needs a verdict.
 `judge.configure` stores the key (an owner-only file; `TYPESAFE_API_KEY` overrides
-it; a person only) and `judge.status` reports whether one is set. It is optional.
+it; human only) and `judge.status` reports whether one is set. It is optional.
 
 ### Templates
 
 A run template is a goal written once, with blanks, and the definition of done every
-run of it carries. devd ships five - `spec-to-pr`, `fix-bug`, `add-feature`,
-`security-review`, `release-prep` - and your own in `<devd home>/templates/` join
+run of it carries. devd ships five — `spec-to-pr`, `fix-bug`, `add-feature`,
+`security-review`, `release-prep` — and your own in `<devd home>/templates/` join
 them (same Markdown format; they cannot replace a built-in).
 
 ```bash
@@ -318,8 +317,8 @@ wrong. `team.get` returns a `needs` object:
 `approval`, `plan` or `criteria`. `missing` names the evidence devd actually
 looked for and did not find, in the same words the scheduler rejected the report
 for. The first action is the one that unblocks the work; accepting without proof
-exists, is offered after it, and is marked dangerous because the run's report
-will say a person accepted it by hand.
+is offered after it, and is marked dangerous because the run's report will say a
+person accepted it by hand.
 
 The Inbox, the run view and `team.get` all read this one object, so no two
 screens can phrase the same stuck run differently. A run with nothing waiting has
@@ -339,7 +338,7 @@ Every team task is granted a **mandate** before it runs:
 | `granted_at` | When. |
 
 The mandate is why a resumed task can be re-checked rather than assumed. When a
-task is about to start and the machine has since become production while the
+task is about to start and the machine has since become production, when the
 rules it was accepted under have changed, when its role no longer exists, or when
 its scope names a path outside the project, the run pauses with
 `mandate_revoked` and the reason instead of continuing. A person resuming the run
@@ -347,14 +346,15 @@ grants it again under the current rules, and resets the stall watchdog for its
 tasks.
 
 The mandate is a record, never a permission. Approvals, evidence and the role
-tier still decide what may run; a mandate explains why devd believed it could.
+tier still decide what may run; a mandate explains why devd believed it could
+run.
 
 ### A worker that stops moving
 
 Every model turn and every tool call moves the task's `last_step_at`. If a
-running task moves no heartbeat for **twice the provider's own request timeout**
-(never less than three minutes, so a slow model is never mistaken for a stuck one),
-the scheduler:
+running task's heartbeat does not move for **twice the provider's own request
+timeout** (never less than three minutes, so a slow model is never mistaken for
+a stuck one), the scheduler:
 
 1. writes a `stalled` event and asks the specialist, in its own conversation,
    where it is and to report `blocked` with one sentence if it is stuck;
@@ -441,8 +441,8 @@ failing is visible on the health screen.
 ### What kind of work is this
 
 Before any model is asked, `devd_core::classify` decides the `RunKind` from the
-words (or the caller says so outright: the composer's mode, `chat.send`'s `kind`,
-`devd chat --as team`):
+words (or the caller says so outright: the composer's mode, the `kind` on
+`chat.send`, `devd chat --as team`):
 
 | Kind | Reached by | Model chain |
 |---|---|---|
@@ -479,15 +479,15 @@ run in the terminal.
 ## Skills
 
 Skills are short Markdown instructions agents load with `skills.get` when the work
-calls for them. 68 ship with devd, and each belongs to one stage of the work, so
+calls for them. 70 ship with devd, and each belongs to one stage of the work, so
 an agent finds the right one without reading all of them:
 
 | Stage | What it covers | Skills |
 |---|---|---|
-| **Discover** | understanding the request and the system before acting | `work` (start here), `how`, `why`, `investigate`, `check-the-request`, `sharpen`, `restate`, `choose-by-the-outcome`, `recall`, `catch-up`, `handoff` |
+| **Discover** | understanding the request and the system before acting | `work` (start here), `how`, `why`, `investigate`, `check-the-request`, `sharpen`, `restate`, `choose-by-the-outcome`, `recall`, `catch-up`, `handoff`, `uncover-the-real-structure` |
 | **Design** | deciding a shape | `architect`, `design-from-use`, `weigh-several-shapes`, `re-examine-the-design`, `model-the-domain`, `put-rules-in-the-compiler`, `validate-at-the-edge`, `arena`, `api-design`, `figure-it-out`, `threat-model`, `product-requirements`, `user-stories` |
-| **Build** | writing the change | `interface-contract`, `build-feature`, `fix-bug`, `refactor`, `prototype`, `improve-performance`, `tdd`, `land-one-unit-at-a-time`, `make-the-narrowest-change`, `build-the-tool-if-it-repeats`, `finish-the-migration`, `plant-the-fix-in-the-structure`, `no-comments`, `benchmark-checklist`, `create-verification-skill`, `database-migrations`, `swarm` |
-| **Check** | proving a result and keeping it honest | `prove-it-works`, `test-what-callers-see`, `fix-the-root-cause`, `report-numbers-honestly`, `keep-it-readable` |
+| **Build** | writing the change | `interface-contract`, `build-feature`, `fix-bug`, `refactor`, `prototype`, `improve-performance`, `tdd`, `land-one-unit-at-a-time`, `make-the-narrowest-change`, `build-the-tool-if-it-repeats`, `finish-the-migration`, `plant-the-fix-in-the-structure`, `no-comments`, `benchmark-checklist`, `create-verification-skill`, `database-migrations`, `swarm`, `hyperframes`, `stageshow`, `work-on-a-branch` |
+| **Check** | proving a result and keeping it honest | `prove-it-works`, `test-what-callers-see`, `fix-the-root-cause`, `report-numbers-honestly`, `keep-it-readable`, `agent-browser`, `agent-desktop`, `check-the-mail` |
 | **Review** | reading someone else's change | `interrogate`, `blast-radius`, `secure-coding-review`, `ui-design-review`, `accessibility-check`, `correct`, `reflect` |
 | **Ship** | landing it | `ship`, `decision-log`, `mobile-release-checklist` |
 | **Words** | prose, reports, documentation | `plain-speech`, `unslop`, `technical-writing` |
@@ -521,7 +521,7 @@ as its text, for a page an agent has to act on), `skills.*`,
 toolchain and stack capabilities.
 
 Tools from **other programs' MCP servers** join the same list when a person
-configures one in *Agents → MCP*. They are named `mcp__<server>__<tool>`, they
+configures one in *Team > MCP*. They are named `mcp__<server>__<tool>`, they
 are not devd capabilities, and their output is data rather than instruction. A
 call to a server marked `ask` waits for a person's approval; `allow` means a
 person decided a model may use it without asking; `deny` keeps it out of the
@@ -589,8 +589,8 @@ answer arrives whole and is logged once.
 ## Local and production
 
 `environment.set` marks the machine `production` (a person's decision, with
-approval). In production an agent needs a person's approval for every operation
-above read — writing a file included — plan approval cannot be waived, and the
+approval). In production, an agent needs a person's approval for every operation
+above read — writing a file included — and plan approval cannot be waived; the
 status bar says so. Destructive, remote and admin operations need approval in
 both modes, with one scoped exception: removing files inside the conversation's
 project is ordinary work (the project root, `.git` and secrets files are still
@@ -604,7 +604,7 @@ ports or edit a production database through it.
 facts apart: **installed**, **running** (the port answers and the health check
 passes), **required** (a project you imported says so) and **managed** (what you
 decided). `services.decide` records `adopt`, `observe`, `external` (your own
-instance on a port) or `ignore` - a record only; nothing is installed, stopped or
+instance on a port) or `ignore` — a record only; nothing is installed, stopped or
 changed. `observe` and `external` stop devd controlling the service. devd never
 replaces an installation as a side effect: removal is its own approved,
 destructive step and keeps the data directory.
@@ -621,27 +621,37 @@ Diagnostics page lists every component with what it means and the fix.
 
 ## Deleting conversations, runs and messages
 
-Nothing is deleted on its own; a person decides, and every deletion asks for approval first (agents cannot do it).
+Nothing is deleted on its own; a person decides, and every deletion asks for
+approval first (agents cannot do it).
 
 | What | Window | Command | Capability |
 |---|---|---|---|
-| One conversation | the cross beside it in Assistant, or Delete in its header | `devd chats delete <id>` | `chat.delete` |
+| One conversation | the cross beside it in the Assistant, or Delete in its header | `devd chats delete <id>` | `chat.delete` |
 | Every finished conversation | Clear finished in the Assistant list | `devd chats prune [--days N]` | `chat.prune` |
-| One finished run | the cross beside it, or Delete in its header (Agents > Runs) | `devd team delete <run>` | `team.delete` |
+| One finished run | the cross beside it, or Delete in its header (Runs) | `devd team delete <run>` | `team.delete` |
 | Every finished run | Clear finished in the Runs list | `devd team prune [--days N]` | `team.prune` |
 | One inbox message | Delete in its sheet | `devd call inbox.delete '{"id":"..."}'` | `inbox.delete` |
 | Answered or dismissed messages | Clear under Earlier in the Inbox | `devd chats clear-inbox` | `inbox.clear` |
 
-Deleting a conversation stops it first if it is working, then removes its log and the approval requests it made. Deleting a
-run removes its tasks, its log, the conversations its tasks had, and the Inbox messages and undelivered reports that were about
-it; cancelling a run resolves those messages, so a decision that can no longer be taken stops being offered. A run that is
-still working must be cancelled first, and work already merged stays. `prune` never touches a conversation that is working or waiting for you, and a run that is not
-over. Deleted data cannot be recovered.
+Deleting a conversation stops it first if it is working, then removes its log
+and the approval requests it made. Deleting a run removes its tasks, its log, the
+conversations its tasks had, and the Inbox messages and undelivered reports that
+were about it; cancelling a run resolves those messages, so a decision that can
+no longer be taken stops being offered. A run that is still working must be
+cancelled first, and work already merged stays. `prune` never touches a
+conversation that is working or waiting for you, and a run that is not over.
+Deleted data cannot be recovered.
 
 ## Under a reply: copy, fork, chapters
 
 Every reply in the Assistant has three actions beneath it (shown when you hover it):
 
 * **Copy** puts the reply's text on the clipboard as Markdown.
-* **Fork from here** (`chat.fork`) starts a new conversation containing everything up to and including that reply; the original stays exactly as it is. Approvals that were still waiting are not copied, and the answers to any tool calls that were open at that point are.
-* **Pin as chapter** (`chat.pin`, `chat.unpin`, `chat.chapters`) gives that reply a title. **Chapters** at the top of the conversation lists them and jumps to one. Chapters belong to the conversation they were pinned in; a fork starts without them.
+* **Fork from here** (`chat.fork`) starts a new conversation containing
+  everything up to and including that reply; the original stays exactly as it is.
+  Approvals that were still waiting are not copied, and the answers to any tool
+  calls that were open at that point are.
+* **Pin as chapter** (`chat.pin`, `chat.unpin`, `chat.chapters`) gives that reply
+  a title. **Chapters** at the top of the conversation lists them and jumps to
+  one. Chapters belong to the conversation they were pinned in; a fork starts
+  without them.

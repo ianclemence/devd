@@ -37,13 +37,13 @@ that matter:
 | --- | --- |
 | `id` | Dotted, unique, stable. `git.reset`, not `Reset`. |
 | `group` | Discovery namespace, e.g. `git.changes`. Agents load a group, not a catalogue. |
-| `summary`, `description` | The text a listing, a `--help`, a GUI tooltip and an agent tool description all read. |
+| `summary`, `description` | The text that a listing, `--help` output, a GUI tooltip and an agent tool description all read. |
 | `tier` | The permission requirement. `Read`, `Write`, `Exec`, `Destructive`, `Remote`. |
 | `effect` | `Read` or `Write` — what kind of side effect, orthogonal to risk. |
 | `args_schema` | JSON Schema generated from the Rust argument struct. |
 | `supports_dry_run` | Whether a plan can be produced without touching anything. |
 | `agent_safe` | Whether an agent may invoke it at all. |
-| `human_only` | Whether it is reserved for a human, approval or not. |
+| `human_only` | Whether it is reserved for a human, with or without an approval. |
 | `idempotent` | Whether repeating the call is harmless. |
 | `undo` | The capability that reverses this one, when one exists. |
 | `handler` | The implementation. The only code with side effects. |
@@ -76,8 +76,8 @@ order and refuses before the handler is reached:
 7. **Run the handler**, then record the outcome.
 
 The ordering is the design. Human-only is checked *before* approval so that
-"approve it as an agent" is not a thing that exists. Decline is checked first of
-all so that a decline is final.
+"approve it as an agent" is not a thing that exists. Decline is checked first,
+so that a decline is final.
 
 ## Actors and surfaces
 
@@ -99,12 +99,12 @@ project, a lifecycle state, a plan, steps, tool calls, evidence, artifacts,
 approvals and a sequenced event log. Conversations and team runs keep their own
 tables and link to a run; they do not get a second execution model.
 
-`Registry::dispatch_with` is the normalized entry point. Before a handler runs
+`Registry::dispatch_with` is the normalised entry point. Before a handler runs
 it validates the arguments against the capability's JSON Schema, checks the
 run's cancellation flag and deadline, and returns a previously successful result
 for an idempotent call with the same key. After it runs, it writes the audit
 row, the `tool_calls` row and the evidence derived from the real outcome, carrying
-the provider's call id and the approval that authorized it. A direct alias, an
+the provider's call id and the approval that authorised it. A direct alias, an
 MCP call and an internal call therefore produce the same record. A dry run is a
 plan and produces no evidence.
 
@@ -133,11 +133,12 @@ the log.
 Approval is required by the *tier*, not by the handler, so a new capability of
 the same risk inherits the gate. A handler cannot forget to ask.
 
-The tier says how much a capability can damage what devd manages. It does not say whose code runs. A
-capability whose caller *writes* the code devd will run (a cron command, a deploy script, an artisan command)
-is marked `agent_needs_approval`: an agent's call waits for a person to read it, whatever the tier, and a
-person calling it is not asked. A test walks the shipped registry for any that were missed. See
-[`domain.md`](domain.md#authority).
+The tier says how much a capability can damage what devd manages. It does not
+say whose code runs. A capability whose caller *writes* the code devd will run
+(a cron command, a deploy script, an artisan command) is marked
+`agent_needs_approval`: an agent's call waits for a person to read it, whatever
+the tier, and a person calling it is not asked. A test walks the shipped
+registry for any that were missed. See [`domain.md`](domain.md#authority).
 
 A plan must be able to describe a destructive capability before it runs, so
 "requires approval" implies "supports a dry run". A test asserts that for every
@@ -146,7 +147,7 @@ declares that it requires approval, so the two cannot contradict.
 
 ## The plan
 
-A plan is what a user or an agent sees before approving: a summary, a list of
+A plan is what a person or an agent sees before approving: a summary, a list of
 steps, a list of effects, a destructive flag, an approval flag, and structured
 data — the repository, the branch, the target, the affected files.
 
@@ -229,7 +230,7 @@ must not run until it is approved, and declining must be recorded", and that
 should be provable in a test rather than watched for by hand. A fake backend that
 *counts what ran* makes it a measurement.
 
-The approval flow is arrived at independently from the HTTP API's token and is
+The approval flow was designed independently of the HTTP API's token, and it has
 the same shape, which is the point: the dashboard calls `dispatch` with no
 approval, reacts to `approval_required`, asks the registry for the plan, and
 replays the exact request it already built when the answer is yes. The refusal
@@ -341,29 +342,32 @@ devd-core  ←  devd-runtime  ←  devd-services  ←  devd-sites
                                 php-cgi, TLS)      hosts block)
 ```
 
-* `devd-services` owns the service model, the catalogues, `nginx.conf` rendering,
-  the internal certificate authority and MariaDB. TLS lives here rather than in a
-  `devd-tls` crate because the site pipeline is its only consumer; a crate is
-  split out when a second consumer appears, not in anticipation of one.
-* `devd-sites` owns sites, the managed hosts block, and the calls into services
-  that make a site real. There is no `devd-dns`: with the hosts file as the only
-  resolver, the block is a few hundred lines and belongs where its only caller
-  is.
+* `devd-services` owns the service model, the catalogues, `nginx.conf`
+  rendering, the internal certificate authority and MariaDB. TLS lives here
+  rather than in a `devd-tls` crate because the site pipeline is its only
+  consumer; a crate is split out when a second consumer appears, not in
+  anticipation of one.
+* `devd-sites` owns sites, the managed hosts block, the local DNS answers for
+  site names, and the calls into services that make a site real. The DNS code
+  lives here rather than in a `devd-dns` crate because resolving site names is
+  part of what makes a site real; the hosts file remains the fallback when the
+  system resolver cannot be pointed at devd.
 * **`nginx.conf` is generated output.** The store is the source of truth: the
   renderer reads the site table and writes a complete file, so a hand edit is
   overwritten rather than merged. Config *content* uses forward slashes (nginx
   treats `\` as an escape); `argv` uses native paths, because arguments are
   passed as an array and never through a shell.
 * **`php-cgi` is not downloaded.** It is the `php-cgi.exe` of each installed PHP
-  runtime, turned into a pool of service rows on demand — by `service start php-cgi`,
-  by installing nginx, or by `stack up`. A site is sent to the pool of the version it
-  runs, and **only a site that serves PHP has PHP in its configuration**: what a site
-  serves is decided once, in `devd-core::serving`, and both renderers follow it.
-* **A site is not a project.** A project is a codebase and a site is how part of it is
-  exposed over HTTP, so a project has zero, one or several sites. Finding projects,
-  registering sites, configuring them and activating names are separate steps. The
-  definitions, the precedence rules and who owns each piece of state are in
-  [`domain.md`](domain.md).
+  runtime, turned into a pool of service rows on demand — by
+  `service start php-cgi`, by installing nginx, or by `stack up`. A site is sent
+  to the pool of the version it runs, and **only a site that serves PHP has PHP
+  in its configuration**: what a site serves is decided once, in
+  `devd-core::serving`, and both renderers follow it.
+* **A site is not a project.** A project is a codebase and a site is how part of
+  it is exposed over HTTP, so a project has zero, one or several sites. Finding
+  projects, registering sites, configuring them and activating names are
+  separate steps. The definitions, the precedence rules and who owns each piece
+  of state are in [`domain.md`](domain.md).
 
 ## Skill crates
 
@@ -376,10 +380,10 @@ lives — how to parse `for-each-ref`, that `git stash list` needs `%x1f` while
 The other three follow the same shape and the same pattern of a typed service
 under a thin capability layer: `devd-runtime` (catalogues, digests, PHP
 configuration), `devd-services` (service lifecycle, nginx rendering, TLS, MariaDB)
-and `devd-sites` (site lifecycle, hosts file). They register 34 more
-capabilities, and they appear in the CLI, the dashboard, the application window
-and the agent surface with no new safety decision being made, because all four
-read the same declarations.
+and `devd-sites` (site lifecycle, hosts file, local DNS). Between them they
+register 85 more capabilities, and they appear in the CLI, the dashboard, the
+application window and the agent surface with no new safety decision being made,
+because all four read the same declarations.
 
 ## Downloads and verification
 
@@ -396,7 +400,7 @@ the digest is what decides.
 
 ## Why Git shells out
 
-`devd` drives the user's own `git` executable rather than reimplementing Git.
+`devd` drives the person's own `git` executable rather than reimplementing Git.
 Rebase, bisect, worktrees, submodules, LFS, credential helpers, hooks and the
 index format are only faithful when Git performs them; a partial
 reimplementation would be a subtle source of data loss.
@@ -408,17 +412,17 @@ test has a comment saying why. Three real bugs were found and fixed this way
 during M0 alone: `git branch -b` does not exist, `switch_safety` compared the
 merge base instead of the two commits, and `%1f` is literal in `git stash list`.
 
-## Still to come
+## Extending it
 
 The registry, the tier model and the audit trail were built first so that the
 remaining work is additive: a new skill registers capabilities, and a new surface
-renders them. Apache, Redis, Mailpit, a DNS server and SSH/deploy are still to
-come — and when they land, their capabilities will appear in the CLI, the
-dashboard, the application window and the agent surface without a new safety
-decision being made, because all four read the same declarations.
+renders them. Apache, Redis, Mailpit, the local DNS server and SSH/deploy follow
+that shape today, and their capabilities appear in the CLI, the dashboard, the
+application window and the agent surface without a new safety decision being
+made, because all four read the same declarations.
 
-The desktop application is now a native Tauri 2 window over the same server and
-the same assets, with no privileged IPC and no second interface. `devd ui` still
+The desktop application is a native Tauri 2 window over the same server and the
+same assets, with no privileged IPC and no second interface. `devd ui` still
 serves the browser view for development and for systems where WebView2 is not
 available. See [`desktop.md`](desktop.md) and
 [`../CHANGELOG.md`](../CHANGELOG.md).

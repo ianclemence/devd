@@ -2,8 +2,8 @@
 
 Two things that happen around a change belong in the same capability surface as
 everything else in devd: having it reviewed, and keeping what was learned where
-every agent will read it. A project's **Reviews** and **Agent memory** tabs, the CLI (`devd call ...`), the
-HTTP API and MCP reach the same capabilities.
+every agent will read it. A project's **Reviews** and **Agent memory** tabs, the
+CLI (`devd call ...`), the HTTP API and MCP reach the same capabilities.
 
 | Group | Capabilities |
 |---|---|
@@ -14,10 +14,12 @@ HTTP API and MCP reach the same capabilities.
 | Conflicts | `git.conflicts.list`, `git.conflicts.show`, `git.conflicts.resolve`, `git.conflicts.resolve_with` |
 
 **Background reviews.** `review.run` waits for the reviewer model. `review.start`
-returns at once with an id and runs the same review in the devd process; the
-record shows `state: running`, then `done` or `failed`, and a message is left in
-the inbox (and a `review.done` event is emitted) when it finishes. Closing the
-window does not cancel it; quitting devd does, and it is not restarted.
+returns at once with an id and queues the same review in the durable effect
+queue; the record shows `state: running`, then `done` or `failed`, and a message
+is left in the Inbox (and a `review.done` event is emitted) when it finishes.
+Closing the window does not cancel it, and a review still pending when devd stops
+is tried again when a host starts. A review that keeps failing is reported on the
+health screen rather than vanishing.
 
 **Memory proposals merge.** A proposal is made against the text of `AGENTS.md` as
 it was. When the file has since changed, `memory.apply` merges three ways — the
@@ -26,12 +28,12 @@ to different lines combine, two proposals that each add a list item both survive
 and a collision on the same lines is refused with both versions shown. Nothing is
 guessed.
 
-**Searching by relevance.** `search.query` reads files at query time. `search.index`
-builds a full-text index of a project's text files (SQLite FTS5, a cache under
-`cache/search.db` that can be deleted at any time) and `search.indexed` queries it,
-best match first with a fragment around each. Only files that changed are read
-again. Binaries, files over 1 MB and secrets files are never indexed, and the
-result counts what was skipped.
+**Searching by relevance.** `search.query` reads files at query time.
+`search.index` builds a full-text index of a project's text files (SQLite FTS5, a
+cache under `cache/search.db` that can be deleted at any time) and
+`search.indexed` queries it, best match first with a fragment around each. Only
+files that changed are read again. Binaries, files over 1 MB and secrets files
+are never indexed, and the result counts what was skipped.
 
 **Resolving a merge conflict.** `git.conflicts.resolve` takes one side whole.
 `git.conflicts.resolve_with` writes text an agent merged from both. It is refused
@@ -72,8 +74,9 @@ Deleting a review removes the record, not anything in the project.
 proposal. It writes nothing. `memory.apply` is the only step that writes, and it
 is human-only:
 
-* it refuses if `AGENTS.md` changed since the proposal was made, so the text a
-  person reviewed is the text that lands;
+* it merges with any change made to `AGENTS.md` since the proposal, and refuses a
+  collision on the same lines with both versions shown, so the text a person
+  reviewed is never silently overwritten;
 * it keeps a timestamped copy under `.devd/backups/`;
 * the line goes in a managed `Project memory (devd)` section and every other line
   stays byte for byte as it was;
@@ -86,19 +89,19 @@ An agent may propose. Only a person applies.
 `compat.audit` finds the instruction files agents read in a project (`AGENTS.md`,
 `CLAUDE.md`, `.cursorrules`, `.cursor/rules/*`, `.github/copilot-instructions.md`,
 `.windsurfrules`, `.clinerules`, `GEMINI.md` and others) and reports each file, who
-reads it, contradictions between them with the line that shows each, and a proposed
-`AGENTS.md` built from the project's real check command and top-level folders. It
-writes nothing. `compat.write` creates `AGENTS.md` only when there is none; with one
-present it refuses and points at `memory.propose`. Human only.
+reads it, contradictions between them with the line that shows each, and a
+proposed `AGENTS.md` built from the project's real check command and top-level
+folders. It writes nothing. `compat.write` creates `AGENTS.md` only when there is
+none; with one present it refuses and points at `memory.propose`. Human only.
 
 ## Limits
 
 * A review is a model's opinion about a diff, not a proof; the team's evidence
   rules (a check that really passed) are what accept work.
-* `memory.apply` does not merge concurrent proposals: a second proposal against the
-  same base must be proposed again.
+* `memory.apply` does not merge two proposals made against the same base: apply
+  them one at a time, and re-propose a second one that no longer fits.
 * Contradictions are found from command-shaped lines and explicit statements; a
   conflict in prose that shares no subject is not detected, and only root-level
   instruction files are read.
-* A review blocks the request until the model answers; closing the window does not
-  cancel it.
+* `review.run` blocks the request until the model answers; closing the window
+  does not cancel it.

@@ -6,7 +6,7 @@ choice constrains everything built afterwards.
 ## The decision
 
 `devd` gets **one application**: a local web app served by the `devd` binary on
-loopback, opened as a chrome-less application window.
+loopback, opened in a chrome-less browser window or in the native Tauri shell.
 
 ```
 devd ui
@@ -20,16 +20,16 @@ Inside the same binary, three surfaces over one core:
 | Surface | Transport | Who it is for |
 | --- | --- | --- |
 | `devd` | argv | Scripts, terminals, CI |
-| `devd ui` | HTTP on loopback + a window | A human managing projects |
+| `devd ui` | HTTP on loopback + a window | A person managing projects |
 | MCP | stdio/HTTP | Agents |
 
 All three call the same `Registry::dispatch`. None of them has a rule the others
 lack.
 
-## Why not Tauri first
+## Why the API came before the native shell
 
-Tauri is what the reference implementation uses, and it is the eventual shell.
-It is not the *first* shell, for one concrete reason and one design reason.
+Tauri is the released desktop shell. It was not the *first* shell, for one
+concrete reason and one design reason.
 
 **The concrete reason.** This machine builds for `x86_64-pc-windows-gnu` with a
 Zig-based C toolchain and no MSVC. Tauri's build step embeds a Windows resource
@@ -38,7 +38,7 @@ WebView2/COM bindings that assume the MSVC ABI. That is a real chance of spendin
 hours on a toolchain failure instead of on the product.
 
 **The design reason.** A Tauri app whose UI is a webview cannot be inspected or
-driven by anything except a human with a mouse. An HTTP API over the same core
+driven by anything except a person with a mouse. An HTTP API over the same core
 can be tested in-process, called by `curl`, called by an agent, and wrapped in a
 Tauri window later without touching a line of UI code. Build the API and the UI;
 add the window when the window is the only thing missing.
@@ -46,14 +46,15 @@ add the window when the window is the only thing missing.
 The gap between the two is smaller than it looks. `devd ui` opens the app in a
 chrome-less window using the browser's own application mode, so there is no
 address bar, no tabs and no browser chrome — it reads as an application, not as a
-page. What Tauri adds later is a tray icon, native notifications, and a bundle
-with an installer.
+page. The Tauri shell adds a tray icon and a bundle with an installer; it serves
+the same HTML, CSS and JavaScript and has no privileged bridge. See
+[`desktop.md`](desktop.md).
 
-## Why loopback HTTP is safe here, and what makes it safe
+## Why loopback HTTP is safe
 
 A local HTTP server is reachable by every process on the machine, and — this is
-the part people miss — by any web page the user has open, because a browser will
-happily `POST` to `http://127.0.0.1:PORT/` from a page the user is visiting.
+the part people miss — by any web page the person has open, because a browser will
+happily `POST` to `http://127.0.0.1:PORT/` from a page the person is visiting.
 
 Four defences, all enforced in the server, not in the UI:
 
@@ -133,7 +134,7 @@ product exists to prevent.
 
 ```
 POST /api/invoke { id, args }
-  → { approval_required: true, plan: {…}, token: "…", expires_in_ms: 120000 }
+  → { approval_required: true, plan: {…}, token: "…", expires_in_ms: 600000 }
 
 POST /api/approve { token: "…" }
   → { outcome: {…} }
@@ -165,7 +166,8 @@ handled rather than ignored:
   answers as devd. A port held by an unrelated program is never touched, and a
   record whose process is gone is replaced. See [`daemon.md`](daemon.md);
 * the interface has a **Quit devd** button, which calls `POST /api/shutdown` and
-  stops the server gracefully.
+  stops the server gracefully. The desktop shell also has a tray menu with the
+  same exit.
 
 ## Command palette
 
@@ -178,10 +180,10 @@ risk of what you are about to run.
 
 The window has one primary axis and one permanent context layer. A person
 works on **projects**; their **sites** are the addresses through which that work
-is reached; the **environment** is the stack underneath both. Sites is therefore
-a destination of its own, not a tab inside the environment, and Home shows the
+is reached; the **machine** is the stack underneath both. Sites is therefore a
+destination of its own, not a tab inside the environment, and Home shows the
 state of all three at once. The rail groups what you work on (Home, Projects,
-Sites), who does the thinking (Assistant, Agents, Models), and the machine behind
+Sites), who does the thinking (Assistant, Runs, Team), and the machine behind
 them (Environment, API and tools, Activity, Diagnostics, under Machine).
 
 | Area | Source of truth |
@@ -199,12 +201,12 @@ them (Environment, API and tools, Activity, Diagnostics, under Machine).
 | Conflicts and recovery | `git.conflicts.list`, `git.conflicts.show`, `git.conflicts.resolve`, `git.reflog`, `git.reset`, `git.rebase`, `git.squash`, `git.bisect.*`, `git.op.continue`, `git.op.abort` |
 | Capabilities | the registry |
 | Activity | the audit table |
-| System | the shared doctor checks, paths, settings |
+| Machine | services, runtimes, databases, tools and remote hosts |
 | Project → Reviews / Agent memory | `review.*`, `memory.*`, `compat.*` |
-| Environment (services, runtimes, databases, tools, remote) | the Environment screen, each tab reading its own capability group |
 | Hosts and certificates | tabs of Sites; both are properties of an address |
 | Mail | a tab of Sites; the inbox your apps sent to, read from Mailpit |
 | Models | `provider.list` and the model defaults |
+| Diagnostics | the shared doctor checks, paths and settings |
 
 Every panel reads a real capability. There are no placeholder controls, because a
 switch that does nothing is worse than an honest empty state.
@@ -220,7 +222,7 @@ repository, not asserted from reading the code. `T` is the session token.
 | `GET /api/session` with `Host: evil.example:8790` | `403 forbidden_host` |
 | `GET /api/session` with `Origin: https://evil.example` | `403 forbidden_origin` |
 | `OPTIONS /api/invoke` with a foreign origin | `405 no_cors` |
-| `GET /` | `200`, `X-Devd-App: 0.1.0 (8790)`, token present in the page |
+| `GET /` | `200`, `X-Devd-App: 0.25.6 (8790)`, token present in the page |
 | `POST /api/invoke { id: "git.reset", mode: "hard", rev: "HEAD~1" }` | `approval_required: true`, `HEAD` unchanged |
 | `POST /api/approve` with that token | applied; `HEAD` moved |
 | `POST /api/approve` with the same token again | `403`, `HEAD` unchanged |

@@ -14,9 +14,11 @@ A build that cannot be run is not a release artifact.
 
 ## Version
 
-The version lives in one place, `Cargo.toml`. Every crate inherits it, and
-`devd --version` reads the compiled value. Bump it and add the version's section to `CHANGELOG.md` before building;
-that section is also the release body.
+The version lives in `Cargo.toml`, and every crate inherits it. The desktop
+manifest, `crates/devd-desktop/tauri.conf.json`, carries the same value because
+the window's file version comes from it; a test fails if the two disagree. Bump
+both, add the version's section to `CHANGELOG.md`, then build. That section is
+also the release body.
 
 ## Windows
 
@@ -54,8 +56,9 @@ uninstaller under `%LOCALAPPDATA%\Programs\devd`. NSIS 3 is required; pass
 
 The installer must be exercised, not just built: install it, let the finish page
 run `devd setup`, check the Start Menu shortcut opens the native window, exercise
-Agents, Processes, Shared and a site's Preview tab, then uninstall it. The per-user install and
-its uninstaller are both reversible without administrator rights.
+Agents, Processes, Shared and a site's Preview tab, then uninstall it. The
+per-user install and its uninstaller are both reversible without administrator
+rights.
 
 The binary is built for `x86_64-pc-windows-gnu` with `rust-lld`, as configured in
 `.cargo/config.toml`; it links only Windows system libraries, so it needs no
@@ -95,13 +98,13 @@ git tag v<version>
 git push origin v<version>
 
 gh release create v<version> \
-  --title "v<version> - M<n>: <summary>" \
+  --title "v<version> - <summary>" \
   --notes-file release-notes.md   # the version's section of CHANGELOG.md
 
 gh release upload v<version> dist/*
 ```
 
-Then verify what a user would get:
+Then verify what a person would get:
 
 ```powershell
 curl.exe -LO https://github.com/ianclemence/devd/releases/download/v<version>/devd-setup-<version>.exe
@@ -127,15 +130,16 @@ will read when it exists.
 3. Documentation updated: `README.md`, `docs/security.md`, `docs/platforms.md`
    (what has been run where) and `docs/architecture.md` where the release
    changed what they describe.
-3a. `SHA256SUMS.txt` is signed. Set `DEVD_RELEASE_KEY_FILE` to the maintainer's
+4. `SHA256SUMS.txt` is signed. Set `DEVD_RELEASE_KEY_FILE` to the maintainer's
    key file before `scripts/release-installer.ps1`, which runs
    `devd update sign dist/SHA256SUMS.txt` and writes `SHA256SUMS.txt.sig`. Attach
    both. A release without the signature still installs by hand, but
    `devd update` refuses it. The matching public key is `RELEASE_PUBLIC_KEY` in
-   `crates/devd-core/src/update.rs`; `devd update keygen --out <file>` makes a pair.
-4. `git status` clean after committing, `git push origin main` done.
-5. Artifacts built and executed on each platform being published.
-6. Tag created and pushed, release published, assets uploaded.
-7. The release body is the CHANGELOG section; `gh release edit` after any
+   `crates/devd-core/src/update.rs`; `devd update keygen --out <file>` makes a
+   pair.
+5. `git status` clean after committing, `git push origin main` done.
+6. Artifacts built and executed on each platform being published.
+7. Tag created and pushed, release published, assets uploaded.
+8. The release body is the CHANGELOG section; `gh release edit` after any
    later correction.
-8. The download and checksum steps above were actually performed.
+9. The download and checksum steps above were actually performed.

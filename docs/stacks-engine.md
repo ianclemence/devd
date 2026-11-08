@@ -51,7 +51,7 @@ Every definition records how it was checked (`verified.method`: `cli-help` when 
 
 ## Security model
 
-- **Argv only.** Commands are argument arrays. User values are never interpreted as shell syntax, and `project.exec` refuses shells and privilege tools.
+- **Argv only.** Commands are argument arrays. Values you supply are never interpreted as shell syntax, and `project.exec` refuses shells and privilege tools.
 - **Directories.** Agents work only under the projects root, extra `project_roots` from settings, and projects a person created or imported. People may use any directory except system and home roots. `..` and symlinks are resolved first.
 - **Approval.** Installing or removing software and controlling services are `admin`; destructive tasks and commands are `destructive` and human-only. An agent can ask for a plan and a person approves it in the window, dashboard or CLI.
 - **Privileges.** Package installs use root or `sudo -n` only. Without either, the plan says so and prints the exact command. Nothing prompts for a password and nothing is piped from the internet into a shell.

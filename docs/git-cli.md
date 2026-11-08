@@ -81,7 +81,7 @@ It reads and changes nothing; `git.pull` and `git.push` are the operations.
 | Command | Capability | Notes |
 | --- | --- | --- |
 | `devd git rebase --onto <rev>` | `git.rebase` | **Destructive.** Replays local commits with new hashes. |
-| `devd git rebase --root --autosquash` | `git.rebase` | Replays the whole history; folds `fixup!`/`squash!` commits. Driven by a no-op sequence editor, so it cannot hang waiting for a human. |
+| `devd git rebase --root --autosquash` | `git.rebase` | Replays the whole history; folds `fixup!`/`squash!` commits. Driven by a no-op sequence editor, so it cannot hang waiting for a person. |
 | `devd git squash <count> -m <msg>` | `git.squash` | **Destructive.** Combines the most recent commits; `--root` semantics are handled internally when the whole branch is squashed. |
 | `devd git cherry-pick <rev>` | `git.cherry.pick` | |
 | `devd git revert <rev> [--no-commit]` | `git.revert` | Undoes a commit with a new commit — the safe way to undo shared history. |
@@ -103,7 +103,7 @@ It reads and changes nothing; `git.pull` and `git.push` are the operations.
 | `devd git worktree prune` | `git.worktree.prune` | |
 
 A worktree is how a substantial task is done without disturbing the working
-tree the user is in — the right default for an agent asked to make a risky
+tree a person is in — the right default for an agent asked to make a risky
 change.
 
 ## Tags
@@ -161,5 +161,5 @@ approval. A key that exists to hold a credential — `user.password`, `*.token`,
 | 4 | Not found. |
 | 5 | A conflict. The operation reached a state you must resolve. |
 
-A script that wants to distinguish "the user said no" from "it broke" branches on
+A script that wants to distinguish "the person said no" from "it broke" branches on
 `3` versus `1`.

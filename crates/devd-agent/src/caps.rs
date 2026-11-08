@@ -2434,7 +2434,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
     .handlers(
         |_, _| simple("design.manifest", "read the interface contract"),
         |_, _| {
-            let manifest: serde_json::Value = serde_json::from_str(include_str!("../../../docs/design/manifest.json"))
+            let manifest: serde_json::Value = serde_json::from_str(include_str!("../../../docs/design-manifest.json"))
                 .unwrap_or(serde_json::Value::Null);
             Ok(Outcome::with_data("the interface contract", manifest))
         },

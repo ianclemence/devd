@@ -2,7 +2,7 @@
 
 A project needs an environment editor, cron jobs, queue workers, redirects, logs, deploys and alerts, and a server needs its PHP settings and services. devd has the same things for a local site, so a project behaves here the way it does on the server, and an agent can look after all of it through the same capabilities.
 
-Open **Server > Sites**, choose **Manage** on a site, and use its tabs. The whole-machine screens are **Server > Databases** (users and backups), **Server > Remote** (servers and SSH keys) and **Server > Runtimes** (PHP settings). Everything on these screens is a capability, so it is also `devd call <id>` and an MCP tool, with the same approvals. The old **Server > Operations** screen is still reachable by its route for one release but is no longer in the strip.
+Open **Machine > Sites**, choose **Manage** on a site, and use its tabs. The whole-machine screens are **Machine > Databases** (users and backups), **Machine > Remote** (servers and SSH keys) and **Machine > Runtimes** (PHP settings). Everything on these screens is a capability, so it is also `devd call <id>` and an MCP tool, with the same approvals. The old **Machine > Operations** screen is still reachable by its route for one release but is no longer in the strip.
 
 | Where | What it does | Capabilities |
 | --- | --- | --- |
@@ -14,13 +14,13 @@ Open **Server > Sites**, choose **Manage** on a site, and use its tabs. The whol
 | Site: Deploy | A script per site, history, rollback, repository link, push-to-deploy | `deploy.script`, `deploy.script_set`, `deploy.run`, `deploy.history`, `deploy.status`, `deploy.log`, `deploy.check`, `deploy.rollback`, `repo.status`, `repo.link`, `deploy.hook` |
 | Site: Laravel | Maintenance mode, storage link, caches and Artisan commands | `laravel.status`, `laravel.artisan`, `laravel.down`, `laravel.up`, `laravel.storage_link`, `laravel.clear` |
 | Site: Web server | Per-site nginx directives, validated before they are applied | `nginx.site_set`, `nginx.site_show`, `nginx.site_clear` |
-| Site: Database | The database this site uses and whether a backup is scheduled; read-only | `backup.list` (the full users and backup screens are under Server > Databases) |
+| Site: Database | The database this site uses and whether a backup is scheduled; read-only | `backup.list` (the full users and backup screens are under Machine > Databases) |
 | Site: Preview | Embed the running site, reload it, or open it in the system browser | none (the site's own URL) |
-| Server > Databases | Database users, scheduled dumps and files for the whole machine | `db.users`, `db.user_create`, `db.user_drop`, `backup.add`, `backup.run`, `backup.list`, `backup.files`, `backup.remove`, `db.restore` |
-| Server > Remote | Remote servers and SSH keys | `server.*`, `ssh.*` |
-| Server > Runtimes | PHP limits profile, worker pool and extensions; site defaults and runtime versions | `php.settings`, `php.configure`, `php.extensions`, `php.extension_set`, `php.pool`, `runtime.*` |
-| Server > Overview | Machine CPU, memory and disks; services, sites and pending hostnames or certificates | `monitor.stats`, `service.list`, `site.list`, `hosts.show`, `tls.list` |
-| Server > Diagnostics | Alerts, health checks and the machine's state | `notify.add`, `notify.list`, `notify.test`, `notify.remove`, `health.*`, `monitor.stats` |
+| Machine > Databases | Database users, scheduled dumps and files for the whole machine | `db.users`, `db.user_create`, `db.user_drop`, `backup.add`, `backup.run`, `backup.list`, `backup.files`, `backup.remove`, `db.restore` |
+| Machine > Remote | Remote servers and SSH keys | `server.*`, `ssh.*` |
+| Machine > Runtimes | PHP limits profile, worker pool and extensions; site defaults and runtime versions | `php.settings`, `php.configure`, `php.extensions`, `php.extension_set`, `php.pool`, `runtime.*` |
+| Machine > Overview | Machine CPU, memory and disks; services, sites and pending hostnames or certificates | `monitor.stats`, `service.list`, `site.list`, `hosts.show`, `tls.list` |
+| Machine > Diagnostics | Alerts, health checks and the machine's state | `notify.add`, `notify.list`, `notify.test`, `notify.remove`, `health.*`, `monitor.stats` |
 | Site: Overview | The site's PHP version and per-site limits profile | `php.site_profile`, `site.set_php` |
 
 ## Who may do what
@@ -31,20 +31,20 @@ Reads are free. Changing a project's own files or devd's records is `write`. Any
 
 Secrets get extra care:
 
-* `env.get` never shows a secret: any name containing `PASSWORD`, `SECRET`, `TOKEN`, `KEY` and similar is shown as hidden with its length. `env.reveal` shows them and is for a person only; an agent never reads secrets.
+* `env.get` never shows a secret: any name containing `PASSWORD`, `SECRET`, `TOKEN`, `KEY` and similar is shown as hidden with its length. `env.reveal` shows them and is human only; an agent never reads secrets.
 * The audit trail records the names of the variables `env.set` changes, and hides the values of secret-looking ones.
 
 ## The `.env` file
 
-Changes keep every comment, the order, and every line they do not touch. The previous file stays beside it as `.env.devd-backup-<time>`; the last five are kept. A running app may cache its configuration (`php artisan config:clear`).
+Changes keep every comment, the order, and every line they do not touch. The previous file stays beside it as `.env.devd-backup-<time>`; the last five are kept. A running app may cache its configuration; clear it with `php artisan config:clear`.
 
-`env.diff` compares with a file, for example a copy of the production `.env`. It lists what is only here, only there, and different; secrets are reported as differing without their values. It warns about `APP_DEBUG` on in production, a local `APP_URL` there, and a missing `APP_KEY`.
+`env.diff` compares the `.env` with another file, for example a copy of the production `.env`. It lists what is only here, only there, and different; secrets are reported as differing without their values. It warns about `APP_DEBUG` on in production, a local `APP_URL` there, and a missing `APP_KEY`.
 
 ## Cron jobs
 
 A job is a five-field cron expression (`*/5 * * * *`, `0 3 * * 1`, `@daily`) and one command, run in the site's folder with the site's PHP first on `PATH`, so `php artisan schedule:run` uses the PHP the site is served with. `composer` works too.
 
-Windows has no cron and a laptop sleeps, so devd runs the jobs itself while it is open. A job that was due while devd was closed is skipped, not run late in a burst. One devd process runs the jobs: the first long-lived one (the window, `devd ui`, `devd serve`). Output goes to `logs/cron-<site>-<id>.log`; a failing job tells the alert targets.
+Windows has no cron and a laptop sleeps, so devd runs the jobs itself while it is open. A job that was due while devd was closed is skipped, not run late in a burst. One devd process runs the jobs: the resident `devd daemon` when it is running, otherwise the first long-lived host (the window, `devd ui` or `devd serve`). Output goes to `logs/cron-<site>-<id>.log`; a failing job tells the alert targets.
 
 ## Queue workers
 
@@ -56,7 +56,7 @@ A worker is a devd service named `worker-<site>-<name>`: started with the rest, 
 
 ## Deploys
 
-The script is one command per line, run in the site's folder, stopping at the first failure. `{BRANCH}` and `{SITE_DIRECTORY}` are filled in. Lines that only make sense on a server (`cd` into the site folder, `sudo`, reloading PHP-FPM) are skipped and the log says so, so a script copied from another server runs here unchanged. With no saved script devd uses one chosen from the project: pull, `composer install`, `migrate --force`, `npm ci` and `npm run build`, `optimize`.
+The script is one command per line, run in the site's folder, stopping at the first failure. `{BRANCH}` and `{SITE_DIRECTORY}` are filled in. Lines that only make sense on a server (`cd` into the site folder, `sudo`, reloading PHP-FPM) are skipped and the log says so, so a script copied from another server runs here unchanged. With no saved script, devd uses one chosen from the project: pull, `composer install`, `migrate --force`, `npm ci` and `npm run build`, `optimize`.
 
 `deploy.run` returns at once with a deployment; `deploy.status` and `deploy.log` follow it. It records the commit before and after and tells the alert targets when it ends. `deploy.rollback` checks out the commit a deployment ended on (or the commit before the newest deployment) and runs the script without pulling; it refuses while there are uncommitted changes and leaves a detached `HEAD` (`git switch <branch>` goes back).
 
@@ -77,23 +77,23 @@ The script is one command per line, run in the site's folder, stopping at the fi
 
 `production` is what a typical production server runs, so a limit that would bite there bites here first. Single values (`memory_limit`, `upload_max_filesize`, `post_max_size`, `max_execution_time`, `max_input_time`, `date.timezone`, `display_errors`, `opcache.enable`) can be set on top. The values live in one marked block at the end of `php.ini`, which wins over the rest and is replaced, not stacked.
 
-**Workers.** `php-cgi` answers one request at a time, so a page that makes many requests at once would queue behind itself. devd runs a pool of PHP processes per version (4 by default, 1 to 16 with `php_workers` or `php.configure --workers`) and nginx spreads requests across them. Worker 1 is on the version's own port (9084 for 8.4) and the others are 100 apart. Apache uses a single process per version.
+**Workers.** `php-cgi` answers one request at a time, so a page that makes many requests at once would queue behind itself. devd runs a pool of PHP processes per version (4 by default, 1 to 16 with `php_workers` or `php.configure --workers`) and nginx spreads requests across them. Worker 1 is on the version's own port (9084 for 8.4) and the others are 100 apart.
 
 With the Apache driver the workers are balanced through `mod_proxy_balancer` when its modules are in the Apache build; without them Apache uses a single process per version.
 
-**A profile for one site.** `php.site_profile` serves a site with the other profile whatever the machine's is, so you can try a site against your server's limits while everything else stays generous. It is set on the site's **Overview** tab; the machine-wide profile and extension list are under **Server > Runtimes**. A site whose profile differs from the machine's is served by a second pool of PHP processes started with the other profile's ini (`php.<profile>.ini` beside `php.ini`), 50 ports above the main pool; the pool exists only while some site needs it.
+**A profile for one site.** `php.site_profile` serves a site with the other profile whatever the machine's is, so you can try a site against your server's limits while everything else stays generous. It is set on the site's **Overview** tab; the machine-wide profile and extension list are under **Machine > Runtimes**. A site whose profile differs from the machine's is served by a second pool of PHP processes started with the other profile's ini (`php.<profile>.ini` beside `php.ini`), 50 ports above the main pool; the pool exists only while some site needs it.
 
-**Your server's limits.** Read them from your server's PHP configuration and record them with `server.limits_set`. `deploy.check` then lists every limit that is looser here than there, and `deploy.run` shows the same notes in its plan and in the deployment's log. Until you do, devd assumes a typical production server (the `production` profile) and says it is assuming. The same limits are shown and editable under **Server > Remote > Servers**.
+**Your server's limits.** Read them from your server's PHP configuration and record them with `server.limits_set`. `deploy.check` then lists every limit that is looser here than there, and `deploy.run` shows the same notes in its plan and in the deployment's log. Until you do, devd assumes a typical production server (the `production` profile) and says it is assuming. The same limits are shown and editable under **Machine > Remote > Servers**.
 
 **Extensions.** `php.extensions` lists what the build ships and which are on; `php.extension_set` switches one.
 
 ## `php` and `composer` in a terminal
 
-PHP and Composer that devd installs live under devd's own folder, which is not on your `PATH`, so a terminal (or a tool that shells out to `php`) cannot find them. Putting each PHP version's folder on `PATH` would break the day the default version changes, or the moment one project needs another version. devd puts **one** folder on `PATH` instead, `<devd home>/bin`, and fills it with small launchers.
+PHP and Composer that devd installs live under devd's own folder, which is not on your `PATH`, so a terminal (or a tool that shells out to `php`) cannot find them. Putting each PHP version's folder on `PATH` would break as soon as the default version changes, or the moment one project needs another version. devd puts **one** folder on `PATH` instead, `<devd home>/bin`, and fills it with small launchers.
 
 A launcher does nothing but run `devd shim <command>`, which decides **at that moment** which program to run, from the folder you are standing in:
 
-1. a site whose project folder contains it runs with the PHP that site is served with (`php artisan migrate` in a project behaves as the project does in the browser);
+1. a site whose project folder contains the folder you are in runs with the PHP that site is served with (`php artisan migrate` in a project behaves as the project does in the browser);
 2. else a runtime pin on the folder or one above it (`devd runtime pin`);
 3. else devd's default PHP.
 
@@ -106,9 +106,9 @@ devd path disable        # take it off; every other entry is left alone
 devd composer install    # newest stable Composer, checked against getcomposer.org's published SHA-256
 ```
 
-`devd path enable` is human only, like signing in at start-up, because it changes what every program you start can run. On Windows it edits the user `PATH` in the registry and keeps its type, so entries such as `%USERPROFILE%\bin` still expand; elsewhere it adds a marked block to `~/.profile`. A terminal that is already open does not see the change; a new one does. The Windows installer does this for you, and **Server → Runtimes → Command line** shows the state and does it from the window.
+`devd path enable` is a person's decision, like signing in at start-up, because it changes what every program you start can run. On Windows it edits the user `PATH` in the registry and keeps its type, so entries such as `%USERPROFILE%\bin` still expand; elsewhere it adds a marked block to `~/.profile`. A terminal that is already open does not see the change; a new one does. The Windows installer does this for you, and **Machine > Runtimes > Command line** shows the state and does it from the window.
 
-The launchers follow what is installed: `php` appears when a PHP is installed (never before, so devd cannot put a command on `PATH` that can only fail in front of a PHP you installed another way), `composer` when Composer is, and each is rewritten if devd moves and removed when what it runs is gone. Capabilities: `shell.status`, `shell.resolve` (which program a command would run from a folder, and why), `shell.path_enable`, `shell.path_disable`, `composer.install`.
+The launchers follow what is installed: `php` appears when a PHP is installed (never before, so devd never puts a launcher on `PATH` that can only fail ahead of a PHP you installed another way), `composer` when Composer is, and each is rewritten if devd moves and removed when what it runs is gone. Capabilities: `shell.status`, `shell.resolve` (which program a command would run from a folder, and why), `shell.path_enable`, `shell.path_disable`, `composer.install`.
 
 `devd doctor` and the launchers never create a devd home. If `DEVD_HOME` names a folder that does not exist, `doctor` says so and a launcher fails with the path it looked in.
 
@@ -116,7 +116,7 @@ The launchers follow what is installed: `php` appears when a PHP is installed (n
 
 `devd service install redis` and `devd service install memcached` download Windows builds and check them against the SHA-256 GitHub records for each file (Redis 8 from `redis-windows/redis-windows`, memcached 1.6.8 from `jefyt/memcached-windows`). Neither project is the vendor, so devd says where the build comes from. MariaDB is the MySQL-compatible server; devd does not download MySQL itself because MySQL publishes no SHA-256 for its Windows archives.
 
-On a new machine **Server → Overview → Set up devd** shows what a first run installs, with what each thing is and its size before anything downloads: PHP and nginx always, then MariaDB, Redis, memcached and Mailpit as you choose, the PHP series, and the limits profile (generous or like a typical server). Each step is a capability, so each is audited and asks for approval where it needs it, and something already installed is skipped.
+On a new machine **Machine > Overview > Set up devd** shows what a first run installs, with what each thing is and how large it is before anything downloads: PHP and nginx always, then MariaDB, Redis, memcached and Mailpit as you choose, the PHP series, and the limits profile (generous or like a typical server). Each step is a capability, so each is audited and asks for approval where it needs it, and something already installed is skipped.
 
 `devd setup --services mariadb,redis,memcached,mailpit` (or `--services none`) chooses what a first run installs besides PHP and the web server; `--php 8.4` and `--profile production` set the PHP series and the limits profile.
 
@@ -134,7 +134,7 @@ On a new machine **Server → Overview → Set up devd** shows what a first run 
 
 ## Deploy variables, scheduled deploys, staging
 
-Variables (`deploy.vars_set`, `deploy.vars`) are `{NAME}` in the deploy script and environment variables to every command in it; secret-looking values are masked when shown. `deploy.schedule` runs a deploy at a time (`in 2h`, or an RFC 3339 time) while devd is open; one due while devd was closed is marked missed and the alert targets are told, never run at a time nobody chose. `deploy.staging_create` makes a second working folder of the same Git repository (a worktree) on its own branch, served as `<site>-staging` with its own certificate, the production `.env` with `APP_ENV=staging` and its own `APP_URL`, and a deploy script without the pull. `deploy.staging_promote` merges that branch into the production site's branch (fast-forward only) and deploys; `deploy.staging_remove` removes the site and its folder (refused while tracked files have uncommitted changes).
+Variables (`deploy.vars_set`, `deploy.vars`) replace `{NAME}` in the deploy script and are environment variables for every command in it; secret-looking values are masked when shown. `deploy.schedule` runs a deploy at a time (`in 2h`, or an RFC 3339 time) while devd is open; one due while devd was closed is marked missed and the alert targets are told, never run at a time nobody chose. `deploy.staging_create` makes a second working folder of the same Git repository (a worktree) on its own branch, served as `<site>-staging` with its own certificate, the production `.env` with `APP_ENV=staging` and its own `APP_URL`, and a deploy script without the pull. `deploy.staging_promote` merges that branch into the production site's branch (fast-forward only) and deploys; `deploy.staging_remove` removes the site and its folder (refused while tracked files have uncommitted changes).
 
 ## Health and the machine
 
@@ -142,7 +142,7 @@ Variables (`deploy.vars_set`, `deploy.vars`) are `{NAME}` in the deploy script a
 
 ## SSH keys
 
-`ssh.keys` lists the keys in `~/.ssh` (never the private halves), `ssh.public` shows a public key, `ssh.keygen` makes an ed25519 key, and `ssh.adopt` copies a private key you already have into `~/.ssh` under a name, locks its permissions and writes the public half (a person only). The original is left where it is.
+`ssh.keys` lists the keys in `~/.ssh` (never the private halves), `ssh.public` shows a public key, `ssh.keygen` makes an ed25519 key, and `ssh.adopt` copies a private key you already have into `~/.ssh` under a name, locks its permissions and writes the public half (human only). The original is left where it is.
 
 ## Servers: deploy to any machine you can SSH into
 

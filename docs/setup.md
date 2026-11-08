@@ -36,7 +36,8 @@ through the permission model like anything else that changes the machine.
 **At install time.** The Windows installer checks for the WebView2 runtime
 before it finishes, because without it the devd window cannot open at all. It
 asks first, and installs it only if the answer is yes. Everything else is
-installed by `devd setup`, which the installer runs on first launch.
+installed by `devd setup`, which the installer offers to run from its finish
+page.
 
 **In the command line.** `devd setup` prints the whole list before it changes
 anything, saying which items this run will install and which need you:

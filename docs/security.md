@@ -14,7 +14,7 @@ The thing being defended against is not a stranger on the network. It is:
    reading of that.
 2. **An agent that has been manipulated** — by a file, an issue, a commit
    message or a web page it read, into treating text as an instruction.
-3. **A user in a hurry** — who runs a destructive command from a script without
+3. **A person in a hurry** — who runs a destructive command from a script without
    reading it, and finds out afterwards.
 4. **A tool that leaks** — credentials into a config file, a log, a snapshot, an
    audit row, or a message shown on screen.
@@ -65,12 +65,12 @@ tier, risk, requester, expiry, state, decider, decision time and reason. The
 issued token is 256 random bits; only its SHA-256 hash is stored as the row id,
 so a database read cannot replay a decision. Consumption is one atomic
 `state='pending'` update: two windows presenting the same token cannot both
-succeed. A declined or expired row cannot be consumed, expiry is checked when
-the decision is made, and a changed argument or plan no longer matches the stored
+succeed. A declined or expired row cannot be consumed; expiry is checked when
+the decision is made; a changed argument or plan no longer matches the stored
 hash. Pending legacy `agent_requests` migrate as pending approvals; nothing is
 granted by the migration.
 
-An approval is bound to one operation. It cannot authorize an unrelated
+An approval is bound to one operation. It cannot authorise an unrelated
 capability, and it cannot be reused after the operation consumes it. An agent
 cannot approve its own operation: the decider must be a human actor, and
 `human_only` is checked before approval is considered at all.
@@ -78,10 +78,10 @@ cannot approve its own operation: the decider must be a human actor, and
 ## The local HTTP surface
 
 The application window speaks to a loopback HTTP API, which adds a threat this
-product would not otherwise have: **a web page the user happens to have open can
-send requests to `http://127.0.0.1:<port>`.** It cannot read our responses
-without our cooperation, but it can send. Four defences are enforced in the
-server, in this order:
+product would not otherwise have: **a web page that a person happens to have
+open can send requests to `http://127.0.0.1:<port>`.** It cannot read our
+responses without our cooperation, but it can send. Four defences are enforced
+in the server, in this order:
 
 1. **`Host` allow-list.** Only `127.0.0.1:<port>`, `localhost:<port>` and
    `[::1]:<port>` are accepted. This is the defence against DNS rebinding: a
@@ -89,7 +89,7 @@ server, in this order:
    cannot make the `Host` header it sends be a loopback name. A mismatch is
    `403 forbidden_host`.
 2. **`OPTIONS` is refused with `405`, before anything else.** There is no CORS
-   negotiation, so no cross-origin caller can complete a preflight. Reordering
+   negotiation, so no cross-origin caller can complete a preflight. Putting
    this ahead of the origin check makes the answer deterministic regardless of
    what `Origin` says.
 3. **Foreign `Origin` is refused with `403 forbidden_origin`.**
@@ -114,10 +114,10 @@ Approvals over HTTP are two-step, and this is a security property rather than a
 convenience: `POST /api/invoke` returns a plan and a token and changes nothing;
 `POST /api/approve { token }` replays **the server's own stored arguments**. A
 client cannot assert `approve: true`, and what was displayed cannot differ from
-what executes. A token is single-use, expires after ten minutes, is bounded to
-64 pending decisions, and is bound to the capability, the arguments and the
-actor. A declined operation is dispatched with `Approval::Denied`, so it reaches
-the audit trail rather than vanishing. The token row is the same durable row the
+what executes. A token is single-use, expires after ten minutes, and is bound to
+the capability, the arguments and the actor; the pending queue is capped at 64.
+A declined operation is dispatched with `Approval::Denied`, so it reaches the
+audit trail rather than vanishing. The token row is the same durable row the
 window, the TUI and the assistant use; there is no second queue whose expiry or
 identity could disagree.
 
@@ -191,7 +191,7 @@ These cannot execute without a human approval:
 
 Two decisions are worth stating plainly.
 
-**Force push is a separate capability, not a flag.** `Agit push --force` and a
+**Force push is a separate capability, not a flag.** A `git push --force` and a
 force push being reachable as a boolean on the ordinary push path are very
 different. Here there is no `force` property in `git.push`'s schema at all, so
 no code path — not the CLI, not the GUI, not an agent through MCP — can construct
@@ -273,7 +273,7 @@ An interrupted merge, rebase, cherry-pick or revert is a state, not a failure.
 the previous state.
 
 The property that matters is tested explicitly: **aborting must not remove work
-the user had not committed in files the operation did not touch.** The lifecycle
+the person had not committed in files the operation did not touch.** The lifecycle
 suite makes an uncommitted change, forces a conflict, aborts, and asserts both
 that the conflict is gone and that the unrelated uncommitted file is byte-for-byte
 intact. `devd git undo` prefers to abort rather than to reset, because aborting
@@ -285,16 +285,16 @@ is the reversible option.
 anything from a repository merely because it opened it. Opening, inspecting and
 diffing a repository are `Tier::Read` and execute no repository content.
 
-Hooks that already exist in the repository a user is working in *do* run when
-Git runs them during a commit, because that is Git's own semantics and a user's
-commits are expected to respect their repository's hooks. `devd` disables
+Hooks that already exist in the repository a person is working in *do* run when
+Git runs them during a commit, because that is Git's own semantics and a
+person's commits are expected to respect their repository's hooks. `devd` disables
 Git's *editors* (`GIT_EDITOR`, `GIT_SEQUENCE_EDITOR`) so an unattended command
 cannot hang, but it does not silently bypass verification a repository asks for.
 If you are inspecting a repository you do not trust, use the read-tier
 operations — `status`, `diff`, `log`, `show`, `blame`, `conflicts` — none of
 which execute repository content.
 
-An explicit switch for this, so a user can choose a strict no-hooks mode, is a
+An explicit switch for this, so a person can choose a strict no-hooks mode, is a
 candidate for a later milestone rather than a silent default either way.
 
 ## Git configuration as a code path
@@ -317,9 +317,9 @@ own authority. The protections are about what `devd` writes and who can reach it
   after the digest matches. nginx publishes only a PGP signature, so its install
   reports that it could verify length and not content — the gap is stated in
   the install output itself. PostgreSQL's Windows build publishes no checksum at
-  all and MySQL's only an MD5, so devd pins the digest of the build it ships knowledge of and installs
-  only that one (`pinned_install.rs`); the install result says the guarantee
-  is weaker than a vendor-signed digest.
+  all and MySQL's only an MD5, so devd pins the digest of the build it knows
+  about and installs only that one (`pinned_install.rs`); the install result says
+  the guarantee is weaker than a vendor-signed digest.
 * **Hostnames are validated before they reach a file.** `util::validate_hostname`
   rejects anything that is not a lowercase DNS label sequence, so a site name
   cannot inject a directive into `nginx.conf` or a path into `certs/`.
@@ -346,8 +346,8 @@ own authority. The protections are about what `devd` writes and who can reach it
   write, and the operation is separate from creating a site.
 * **The database password is not stored.** `root` is passwordless and bound to
   loopback by default, and the install says so. If
-  `DEVD_MYSQL_ROOT_PASSWORD` is set it is passed to the one-time bootstrap on its
-  command line and to clients through `MYSQL_PWD`, never written to `my.ini`,
+  `DEVD_MYSQL_ROOT_PASSWORD` is set, it is passed to the one-time bootstrap on
+  its command line and to clients through `MYSQL_PWD`, never written to `my.ini`,
   `settings.toml`, the audit row or a log. A generated password held in the
   operating system's credential store is the next step, not a claim of this one.
 * **A fresh MariaDB data directory has its `test` schema removed.** MariaDB's
@@ -372,7 +372,7 @@ Differences are stated rather than hidden:
   first and then apply that list plus the caller's explicit `env` values, so a
   token or API key in the daemon's environment does not leak into a project.
 * **Isolation and approval are separate.** A Job Object, a process group, a
-  working-directory check and an environment allowlist bound where a process can
+  working-directory check and an environment allowlist limit where a process can
   run and what it inherits. They are not a filesystem sandbox: a project process
   runs as the same user and can read the same files. The approval tier decides
   when a person must say yes; it is not a substitute for isolation, and this
@@ -387,9 +387,9 @@ Differences are stated rather than hidden:
 * Locations differ (`%LOCALAPPDATA%` versus `~/.local/share`), resolved through
   one `Paths` type rather than scattered string building.
 * Line endings are the repository's business, not `devd`'s. `devd` never changes
-  a user's `core.autocrlf`. Parsers trim line-ending artefacts so that output
+  a person's `core.autocrlf`. Parsers trim line-ending artefacts so that output
   from either platform is read the same way.
-* Paths containing spaces are covered by test, because passing each argument as
+* Paths containing spaces are covered by tests, because passing each argument as
   an `argv` element is the whole point.
 * There is no macOS support in this version.
 
@@ -430,7 +430,7 @@ commands.
 
 Commands are argv arrays and never pass through a shell string. Working
 directories must resolve inside the project. Health checks may only address
-loopback. The process environment is explicit: the daemon's own environment -
+loopback. The process environment is explicit: the daemon's own environment —
 which may contain provider keys — is not inherited. Secret-looking declared values
 are redacted from log reads, best-effort.
 
@@ -483,7 +483,7 @@ that does not exist.
 * **A human who is deceived into approving** is out of scope. The gate ensures a
   human decided, not that the human was right.
 * **A compromised `git` executable** on `PATH` defeats every argument validation.
-  `devd` runs the tool the user has installed, deliberately, and reports which
+  `devd` runs the tool the person has installed, deliberately, and reports which
   one via `devd doctor`.
 * **The state database is not encrypted.** It holds audit rows and an index, not
   credentials. If a token somehow reached an argument object, redaction keeps it
@@ -498,5 +498,5 @@ that does not exist.
   nothing on a single-user machine can.
 * **A malicious browser extension** in the window that has been granted access to
   the page can act with the token. The window is opened in application mode
-  without extensions in the recommended launcher, but the fallback is the user's
-  ordinary browser.
+  without extensions in the recommended launcher, but the fallback is the
+  person's ordinary browser.

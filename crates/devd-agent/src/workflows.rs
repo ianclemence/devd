@@ -611,7 +611,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
     )?;
 
     reg.define::<ReviewRun>("review.start", "Review a change in the background")
-    .description("Starts a review and returns at once with its id. The review runs in this process while you do other work; when it finishes the result is stored (read it with review.get, which shows state running, done or failed) and a message is left in the inbox. Closing the window does not cancel it, but quitting devd does: it is not restarted.")
+    .description("Starts a review in the background and returns at once with its id. The review is queued durably and runs in the process that owns the agents; when it finishes the result is stored (read it with review.get, which shows state running, done or failed) and a message is left in the inbox. Closing the window does not cancel it, a pending review is tried again when a host starts, and a review that keeps failing is reported on the health screen.")
     .group("review")
     .tier(Tier::Exec)
     .effect(Effect::Remote)

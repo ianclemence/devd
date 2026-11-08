@@ -2,7 +2,7 @@
 
 A project can declare the processes it needs in a versioned `devd.yml` at its
 root. devd validates the file, shows you the exact commands, and **runs nothing
-until a human approves that exact manifest**. Editing any command invalidates the
+until a person approves that exact manifest**. Editing any command invalidates the
 approval.
 
 ## Example
@@ -126,7 +126,7 @@ invalidates the approval.
 * `on-failure` restarts a non-zero exit; `always` restarts any exit; `never` does
   not restart. At most five restarts.
 * A manifest edited after approval does not restart a process under its new
-  commands; it is marked failed with an explanation until re-approved.
+  commands; the process is marked failed with an explanation until re-approved.
 * `Stop` and `Restart` terminate the **whole process tree** (`taskkill /T /F` on
   Windows, a process group on Linux).
 * Status, pid, exit code, restart count, health and the last failure are durable
@@ -135,7 +135,7 @@ invalidates the approval.
   process reports it as supervised elsewhere and refuses to stop or duplicate it.
   On startup, a row whose owner is gone is reconciled to failed with an honest
   message rather than reported as running.
-* Devd shutdown stops every process it owns gracefully.
+* devd shutdown stops every process it owns gracefully.
 
 ## Platform notes
 

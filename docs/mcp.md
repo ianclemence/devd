@@ -1,19 +1,21 @@
 # The Model Context Protocol, both ways
 
-devd speaks MCP in two directions, and they are deliberately different code paths:
+devd speaks MCP in two directions, and they are deliberately different code
+paths:
 
-* **devd as a server** - `devd mcp` publishes devd's capability registry to an outside agent. That is
-  the rest of this page up to "devd as a client".
-* **devd as a client** - the `mcp.*` capabilities connect the built-in assistant to *other programs'*
-  MCP servers, the way Claude Code uses the servers configured for it. Their tools join the assistant's
-  tool list; they do not become devd capabilities, and they are not trusted like them.
+* **devd as a server** - `devd mcp` publishes devd's capability registry to an
+  outside agent. That is the rest of this page up to "devd as a client".
+* **devd as a client** - the `mcp.*` capabilities connect the built-in assistant
+  to *other programs'* MCP servers, the way Claude Code uses the servers
+  configured for it. Their tools join the assistant's tool list; they do not
+  become devd capabilities, and they are not trusted like them.
 
 ## The MCP server
 
 `devd mcp` serves the Model Context Protocol on stdin/stdout. It is the third
-projection of the same registry, after the CLI and the application window, and it
-makes the product's premise checkable: an agent driving `devd` reaches exactly
-the same functions as a person, with exactly the same permission checks.
+projection of the same registry, after the CLI and the application window, and
+it makes the product's premise checkable: an agent driving `devd` reaches
+exactly the same functions as a person, with exactly the same permission checks.
 
 ```bash
 devd mcp                  # serve on stdio
@@ -37,11 +39,11 @@ A client configuration looks like this:
 ## Five tools, and they do not grow
 
 The obvious design is one MCP tool per capability. That is the design that gets
-worse every time the product gets better: more than 400 capabilities today, across
-Git, runtimes, services, sites, TLS, the database, agents, operations and remote
-servers, would be a tool list hundreds of entries long, loaded into every
-conversation whether or not it is relevant, and regenerated whenever the registry
-changed.
+worse every time the product gets better: more than 400 capabilities today,
+across Git, runtimes, services, sites, TLS, the database, agents, operations and
+remote servers, would be a tool list hundreds of entries long, loaded into every
+conversation whether or not it is relevant, and regenerated whenever the
+registry changes.
 
 `devd` publishes **discovery** tools that read the registry instead:
 
@@ -53,15 +55,15 @@ changed.
 | `devd_invoke` | `id`, `args`, `dry_run` | Run one by id |
 | `devd_doctor` | none | The environment check |
 
-A capability registered tomorrow is discoverable and invocable immediately,
-with no change to this crate. A test asserts that two servers over registries of
+A capability registered tomorrow is discoverable and invocable immediately, with
+no change to this crate. A test asserts that two servers over registries of
 different sizes publish an identical tool list — the surface is a constant, not
 a function of the catalogue.
 
-The intended call sequence is `devd_groups` → `devd_capabilities` → `devd_describe`
-→ `devd_invoke`, and the `next_step` field of each result says so. That is what
-the requirement meant by *discoverable domains rather than a huge always-loaded
-tool list*.
+The intended call sequence is `devd_groups` → `devd_capabilities` →
+`devd_describe` → `devd_invoke`, and the `next_step` field of each result says
+so. That is what the requirement meant by *discoverable domains rather than a
+huge always-loaded tool list*.
 
 ## The agent actor is not negotiable
 
@@ -85,8 +87,8 @@ surface:
 ## What the agent gets instead of a success it did not earn
 
 When an approval-gated operation is refused, the server does not simply fail. It
-asks the registry for the **plan** — which changes nothing and is itself recorded
-as a plan, not as an application — and returns it with the refusal:
+asks the registry for the **plan** — which changes nothing and is itself
+recorded as a plan, not as an application — and returns it with the refusal:
 
 ```json
 {
@@ -132,9 +134,9 @@ file.
 Run against the release binary with a real repository, over a real pipe:
 
 ```
-initialize        → devd 0.17.1, protocol 2025-06-18, 5 tools
+initialize        → devd 0.25.6, protocol 2025-06-18, 5 tools
 tools/list        → devd_groups, devd_capabilities, devd_describe, devd_invoke, devd_doctor
-devd_groups       → 421 capabilities in 12 git groups and 53 others
+devd_groups       → the registry, grouped by domain
 devd_describe     → git.reset: tier destructive, requires_approval true, arguments mode/repo/rev
 devd_invoke       → git.status: ok, branch main, clean true
 devd_invoke       → git.reset mode=hard: isError true, approval_required, plan handed over
@@ -153,8 +155,8 @@ and `HEAD` was unchanged by the attempt.
 
 ## devd as a client: the `mcp.*` capabilities
 
-The assistant can use tools from servers another program provides. The server configuration is
-devd's; the tools are not. That is the whole design:
+The assistant can use tools from servers another program provides. The server
+configuration is devd's; the tools are not. That is the whole design:
 
 | Capability | Tier | Who | What it does |
 | --- | --- | --- | --- |
@@ -169,10 +171,11 @@ devd's; the tools are not. That is the whole design:
 | `mcp.call_trusted` | exec | the assistant | The path used for a server marked `allow`; its handler refuses an agent unless the stored trust is exactly `allow`. |
 | `mcp.import` | write | a person | Read `~/.claude.json`, Claude Desktop's `claude_desktop_config.json`, `~/.cursor/mcp.json` or a project `.mcp.json` and add the servers it finds. |
 
-The assistant sees each tool as `mcp__<server>__<tool>`, with the server's own description and input
-schema. It calls it through `devd_invoke` like every other operation, so the call is validated by the
-registry, recorded in the audit trail with its arguments redacted, and appears in the approval queue
-when it needs a person.
+The assistant sees each tool as `mcp__<server>__<tool>`, with the server's own
+description and input schema. For a server marked `ask` it calls `mcp.call`; for
+one marked `allow` it calls `mcp.call_trusted`. Both go through the registry, so
+the call is validated, recorded in the audit trail with its arguments redacted,
+and appears in the approval queue when it needs a person.
 
 ### Trust is enforced where the call runs
 
@@ -182,64 +185,79 @@ when it needs a person.
 | `allow` | The assistant uses `mcp.call_trusted`, whose handler re-reads the stored trust and refuses anything that is not exactly `allow`. A prompt cannot grant this; only `mcp.trust` can. |
 | `deny` | The tools are not offered, and both call paths refuse an agent. |
 
-A person calling `mcp.call` directly (CLI, window) is not asked: they chose the server and they are the
-one acting. Only the configuration capabilities and `mcp.trust` are human-only, so an agent can never
-add a server for devd to run or widen its own access.
+A person calling `mcp.call` directly (CLI, window) is not asked: they chose the
+server and they are the one acting. Only the configuration capabilities and
+`mcp.trust` are human-only, so an agent can never add a server for devd to run
+or widen its own access.
 
 ### Transports
 
-* **stdio** - devd starts `command` with `args`, speaks newline-delimited JSON-RPC over its pipes, and
-  stops the whole process tree when the connection is dropped or a request times out. `cwd` is optional.
-* **http** - the Streamable HTTP transport: one POST per message, a JSON or `text/event-stream`
-  response, and the `mcp-session-id` the server returns is carried on later requests. Redirects are
-  refused so a credential cannot be forwarded to a third host.
-* **sse** - the older two-endpoint HTTP+SSE transport: a long-lived `GET` event stream announces a `POST`
-  endpoint (which must be on the stream's own origin, or the server is refused) and carries the responses.
-  Add it with `url` and `transport: "sse"`.
-* **Headers.** An http or sse server can need request headers, usually `Authorization`. Name one in `env`
-  as `header:Authorization`; like every `env` value it lives in an owner-only file, never in the database,
-  and is sent only to the server's own origin. A header devd sets itself (`Host`, `Content-Type`,
+* **stdio** - devd starts `command` with `args`, speaks newline-delimited
+  JSON-RPC over its pipes, and stops the whole process tree when the connection
+  is dropped or a request times out. `cwd` is optional.
+* **http** - the Streamable HTTP transport: one POST per message, a JSON or
+  `text/event-stream` response, and the `mcp-session-id` the server returns is
+  carried on later requests. Redirects are refused so a credential cannot be
+  forwarded to a third host.
+* **sse** - the older two-endpoint HTTP+SSE transport: a long-lived `GET` event
+  stream announces a `POST` endpoint (which must be on the stream's own origin,
+  or the server is refused) and carries the responses. Add it with `url` and
+  `transport: "sse"`.
+* **Headers.** An http or sse server can need request headers, usually
+  `Authorization`. Name one in `env` as `header:Authorization`; like every `env`
+  value it lives in an owner-only file, never in the database, and is sent only
+  to the server's own origin. A header devd sets itself (`Host`, `Content-Type`,
   `mcp-session-id`, ...) or one containing a line break is refused.
 
 ### Secrets and the environment
 
-A stdio server is started with a small, named environment (`PATH`, `SystemRoot`, `APPDATA`,
-`USERPROFILE`, `TEMP`, the proxy variables and the platform equivalents) and **not** devd's environment,
-so `.env` values, provider keys and session tokens are not inherited. Anything the server needs is given
-with `env` on `mcp.add`; the values are written to `<devd home>/mcp/<id>.env.json`, readable only by the
-current user, and never stored in the database, the audit trail, logs or API responses. `mcp.list`
-returns their names only.
+A stdio server is started with a small, named environment (`PATH`, `SystemRoot`,
+`APPDATA`, `USERPROFILE`, `TEMP`, the proxy variables and the platform
+equivalents) and **not** devd's environment, so `.env` values, provider keys and
+session tokens are not inherited. Anything the server needs is given with `env`
+on `mcp.add`; the values are written to `<devd home>/mcp/<id>.env.json`,
+readable only by the current user, and never stored in the database, the audit
+trail, logs or API responses. `mcp.list` returns their names only.
 
-Arguments are passed as an argument vector, never through a shell, so a value containing `&`, `;` or a
-quote is not interpreted. Tool output is data: the assistant's prompt says so, and a result the server
-marks `isError` is recorded as a failed tool result, not a successful one.
+Arguments are passed as an argument vector, never through a shell, so a value
+containing `&`, `;` or a quote is not interpreted. Tool output is data: the
+assistant's prompt says so, and a result the server marks `isError` is recorded
+as a failed tool result, not a successful one.
 
 ### Bounds
 
-* A request's timeout is 5-600 seconds (default 120). On timeout the process tree is killed and the
-  error names the method and the server's last standard-error lines.
+* A request's timeout is 5-600 seconds (default 120). On timeout the process
+  tree is killed and the error names the method and the server's last
+  standard-error lines.
 * `tools/list` follows pagination cursors, capped at 50 pages.
-* A result is capped at 200,000 characters before the conversation's own, smaller, cap applies.
-* Connections are pooled per server, keyed on the configuration's `updated_at`; a call is **never**
-  retried after a failure, because a tool may already have had its side effect.
-* Tools are discovered at the start of an assistant run. A server that cannot be reached is reported
-  as a notice in the conversation and recorded on its row (`last_error`); it does not stop the run.
+* A result is capped at 200,000 characters before the conversation's own,
+  smaller, cap applies.
+* Connections are pooled per server, keyed on the configuration's `updated_at`;
+  a call is **never** retried after a failure, because a tool may already have
+  had its side effect.
+* Tools are discovered at the start of an assistant run. A server that cannot be
+  reached is reported as a notice in the conversation and recorded on its row
+  (`last_error`); it does not stop the run.
 
-### Observed
+### Observed with a real server
 
-`devd-mcp/tests/client.rs` starts a real child process (the crate's `fake-mcp` bin), performs the real
-handshake, discovers `echo` and `fail`, calls them, and asserts that the server's `isError` is
-preserved. A second test drives the actual registry: an agent's `mcp.call` on an `ask` server returns
-`ApprovalRequired` without reaching the handler, a person's call succeeds, `mcp.call_trusted` refuses an
-agent for a non-`allow` server and succeeds for an `allow` one, and `deny` refuses both. A third checks
-that external tools are prefixed, and that a denied server is not offered.
+`devd-mcp/tests/client.rs` starts a real child process (the crate's `fake-mcp`
+bin), performs the real handshake, discovers `echo` and `fail`, calls them, and
+asserts that the server's `isError` is preserved. A second test drives the
+actual registry: an agent's `mcp.call` on an `ask` server returns
+`ApprovalRequired` without reaching the handler, a person's call succeeds,
+`mcp.call_trusted` refuses an agent for a non-`allow` server and succeeds for an
+`allow` one, and `deny` refuses both. A third checks that external tools are
+prefixed, and that a denied server is not offered.
 
 ## Testing
 
-`devd-mcp` has 26 unit tests and 4 end-to-end tests (the end-to-end suite runs against a real child process):
+`devd-mcp` has 26 unit tests and 4 end-to-end tests (the end-to-end suite runs
+against a real child process):
 
-* the protocol: `initialize` (including echoing an unknown version), notifications
-  getting no reply, an unknown method, a missing required argument;
+* the protocol: `initialize` (including echoing an unknown version),
+  notifications getting no reply, an unknown method, a missing required
+  argument;
 * the surface: five tools, each with a schema and a real description; and the
   assertion that the list does not grow with the registry;
 * the actor: a human context is discarded;

@@ -283,7 +283,7 @@ install them. Download the build and replace the files by hand.
   (`--radius-selector`, `--radius-field`, `--radius-box`, `--size-selector`, `--size-field`,
   `--border`, `--depth`, `--noise`) join the semantic colours; every existing control uses them.
   A 68-component reference review and the existing-component audit are recorded in
-  `docs/design/components.md`; the principles and token contract are in `docs/design/README.md`.
+  `docs/design.md`; the principles and token contract are in the same document.
 - **An inline chart an agent may produce.** A fenced `chart` block carrying a small JSON object is
   validated (labels, finite non-negative values, at most 12 bars) and drawn with the shared
   stylesheet inside the conversation. Invalid data stays a code block.

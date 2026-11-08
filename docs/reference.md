@@ -1,6 +1,8 @@
 # Command reference, configuration and internals
 
-Everything the README summarises, in full. `devd <command> --help` documents every flag; the typed commands map one-to-one onto capabilities, and `devd call <id>` reaches any capability directly.
+Everything the README summarises, in full. `devd <command> --help` documents
+every flag; the typed commands map one-to-one onto capabilities, and
+`devd call <id>` reaches any capability directly.
 
 ## Runtimes
 
@@ -35,7 +37,8 @@ devd call redirects.add --arg site=shop --arg from=/old --arg to=/new
 devd call deploy.run --arg site=shop
 ```
 
-Environment files, cron jobs, workers, redirects, logs, deploys and alerts are in [`operations.md`](operations.md).
+Environment files, cron jobs, workers, redirects, logs, deploys and alerts are
+in [`operations.md`](operations.md).
 
 ## Services
 
@@ -100,8 +103,8 @@ devd db restore blog ./blog.sql
 devd autostart enable             # run devd stack up when you sign in
 ```
 
-`nginx.conf` and `httpd.conf` are generated. The site table is the source of truth,
-so edits to the generated file are overwritten rather than merged.
+`nginx.conf` and `httpd.conf` are generated. The site table is the source of
+truth, so edits to the generated file are overwritten rather than merged.
 
 ## Stack
 
@@ -201,8 +204,9 @@ devd team list
 devd team resume <run>                         # after a pause
 ```
 
-Reviews, agent memory and instruction-file audits (`review.*`, `memory.*`, `compat.*`) are
-capabilities too, reachable from `devd call`, the HTTP API, MCP and a project's **Reviews** and **Agent memory** tabs. See
+Reviews, agent memory and instruction-file audits (`review.*`, `memory.*`,
+`compat.*`) are capabilities too, reachable from `devd call`, the HTTP API, MCP
+and a project's **Reviews** and **Agent memory** tabs. See
 [`workflows.md`](workflows.md).
 
 ### When a run needs you
@@ -217,7 +221,8 @@ devd call team.get --arg run=<run>          # "needs": null when nothing is wait
 
 ### Proposals
 
-An agent can propose work instead of doing it; nothing runs until a person accepts.
+An agent can propose work instead of doing it; nothing runs until a person
+accepts.
 
 ```bash
 devd call team.suggest  --arg project=. --arg title="Split the parser" --arg why="it is 900 lines and changed four times this month"
@@ -228,8 +233,8 @@ devd call team.dismiss_suggestion --arg id=<id>
 
 ### Rules for starting work on its own
 
-A project writes down which event should make devd think about starting a run.
-A new rule starts in `observe`, which records a proposal and runs nothing.
+A project writes down which event should make devd think about starting a run. A
+new rule starts in `observe`, which records a proposal and runs nothing.
 
 ```bash
 devd call intake.set --arg project=. --arg name=nightly --arg trigger=check.failed \
@@ -246,8 +251,8 @@ approval and never starts one in production. Only a person writes a rule. See
 
 ### Runs
 
-A conversation, a team run, a scheduled job and an API call write the same record:
-steps, capability calls, evidence, approvals and a replayable timeline.
+A conversation, a team run, a scheduled job and an API call write the same
+record: steps, capability calls, evidence, approvals and a replayable timeline.
 
 A run has no capability of its own. It is read over the loopback HTTP API, which
 is what the window's Run sheet uses, and it can only be retried by a person:
@@ -266,7 +271,8 @@ See [`runs.md`](runs.md) for the lifecycle and the evidence rules.
 ## Project processes
 
 A project can declare its dev processes in `devd.yml`. devd validates the file,
-shows the exact commands, and runs nothing until you approve that exact manifest.
+shows the exact commands, and runs nothing until you approve that exact
+manifest.
 
 ```yaml
 version: 1
@@ -286,10 +292,10 @@ processes:
 * **Processes** shows status, health, pid, restarts and the last failure; start,
   stop, restart and follow logs without leaving the window.
 * Commands are argv arrays, never shell strings. Working directories must stay
-  inside the project. Health checks are loopback-only. The process environment is
-  explicit and does not inherit the daemon's credentials.
-* Editing the manifest invalidates the approval. A process will not restart under
-  commands nobody reviewed.
+  inside the project. Health checks are loopback-only. The process environment
+  is explicit and does not inherit the daemon's credentials.
+* Editing the manifest invalidates the approval. A process will not restart
+  under commands nobody reviewed.
 * See [`devd-yml.md`](devd-yml.md).
 
 ## Shared project state
@@ -300,7 +306,8 @@ people and agents use the same capability API.
 
 * Scratchpads have authors, timestamps and revision numbers. A stale edit is a
   conflict, not a silent overwrite.
-* Todos have status, priority, assignee, task association and transition history.
+* Todos have status, priority, assignee, task association and transition
+  history.
 * An agent can append a finding, create a todo for another agent, spawn it, wait
   for the result and update the todo. Deleting a note or todo needs human
   approval.
@@ -309,14 +316,21 @@ people and agents use the same capability API.
 ## Terminal
 
 **Terminal** is a tab on a project and runs a shell in that project's folder,
-inside devd. The tab lists only the shells started in that folder, so a
-terminal always belongs to the project on screen.
+inside devd. The tab lists only the shells started in that folder, so a terminal
+always belongs to the project on screen.
 
-The shell is a real PTY, and it lives in the devd process rather than in the window. That has three consequences worth knowing:
+The shell is a real PTY, and it lives in the devd process rather than in the
+window. That has three consequences worth knowing:
 
-* **It keeps running** while devd does. Closing the window, reloading the page or moving to another screen does not end it; the session is listed until you close it.
-* **An agent can read it.** `terminal.read` returns the same screen the window shows. A person opens the shell; an agent may read a session it was given, and may not open one, because a shell is where anything can happen and an agent typing into one would be `project.exec` with no argument to review.
-* **The sessions belong to the process that opened them.** A `devd call` in a separate process cannot reach them: each command is its own process.
+* **It keeps running** while devd does. Closing the window, reloading the page
+  or moving to another screen does not end it; the session is listed until you
+  close it.
+* **An agent can read it.** `terminal.read` returns the same screen the window
+  shows. A person opens the shell; an agent may read a session it was given, and
+  may not open one, because a shell is where anything can happen and an agent
+  typing into one would be `project.exec` with no argument to review.
+* **The sessions belong to the process that opened them.** A `devd call` in a
+  separate process cannot reach them: each command is its own process.
 
 | Capability | Who | What |
 |---|---|---|
@@ -327,57 +341,101 @@ The shell is a real PTY, and it lives in the devd process rather than in the win
 | `terminal.list` | a person, an agent | Every terminal this process has open, with its owner and folder. |
 | `terminal.close` | a person, approved | End the shell and the processes it started. |
 
-The folder passes the same fence the file tools use, so a shell cannot be opened somewhere an agent could not read.
+The folder passes the same fence the file tools use, so a shell cannot be opened
+somewhere an agent could not read.
 
 ### Why it answers the terminal's questions
 
-A program in a terminal does not only write: it asks, and waits for the answer. Windows' console host asks "where is the cursor?" (`ESC[6n`) as soon as it starts, and a shell that gets no reply **blocks forever** - the screen stays empty and no command runs. devd therefore keeps the small part of a terminal emulator a shell needs (cursor position, device status, device attributes) and replies to it. This was found by building it: the first version hung on its first prompt.
+A program in a terminal does not only write: it asks, and waits for the answer.
+Windows' console host asks "where is the cursor?" (`ESC[6n`) as soon as it
+starts, and a shell that gets no reply **blocks forever** — the screen stays
+empty and no command runs. devd therefore keeps the small part of a terminal
+emulator a shell needs (cursor position, device status, device attributes) and
+replies to it. This was found by building it: the first version hung on its
+first prompt.
 
-The screen is kept as text with the escape sequences removed, so what a person and a model both read is the screen rather than the raw byte stream.
+The screen is kept as text with the escape sequences removed, so what a person
+and a model both read is the screen rather than the raw byte stream.
 
-`portable-pty` (MIT, from wezterm) is the only way to get a terminal across Windows, Linux and macOS, and it is the workspace's one native dependency. devd still downloads and verifies every other binary it uses.
+`portable-pty` (MIT, from wezterm) is the only way to get a terminal across
+Windows, Linux and macOS, and it is the workspace's one native dependency. devd
+still downloads and verifies every other binary it uses.
+
 ## Files
 
 A project's **Files** tab lists its folders and opens its files in the window.
 
-The tree asks devd for **one folder at a time** (`fs.tree`), so a large project costs one request per folder you open rather than one per row you can see. A file is opened with `fs.read`, so a person sees exactly what an agent would see: the same line-numbered text, the same size limit, the same refusals.
+The tree asks devd for **one folder at a time** (`fs.tree`), so a large project
+costs one request per folder you open rather than one per row you can see. A
+file is opened with `fs.read`, so a person sees exactly what an agent would see:
+the same line-numbered text, the same size limit, the same refusals.
 
 What the fence does in the tree, and why:
 
-* a **secrets file** (`.env`, a key, `.npmrc`) is **listed and marked**, not hidden. A person should be able to see that their project has a `.env` and that devd will not open it, rather than wonder why it is missing. Choosing it gives the same refusal `fs.read` gives;
-* a **dependency or build folder** (`node_modules`, `vendor`, `target`, `dist`) is listed and marked as skipped, so a folder's real contents are accounted for;
+* a **secrets file** (`.env`, a key, `.npmrc`) is **listed and marked**, not
+  hidden. A person should be able to see that their project has a `.env` and
+  that devd will not open it, rather than wonder why it is missing. Choosing it
+  gives the same refusal `fs.read` gives;
+* a **dependency or build folder** (`node_modules`, `vendor`, `target`, `dist`)
+  is listed and marked as skipped, so a folder's real contents are accounted
+  for;
 * `.git` is refused: it is managed through the Git capabilities, not browsed.
 
-Folders sort before files, each by name without regard to case. `fs.tree` is `Read`, `agent_safe` and idempotent: it changes nothing.
+Folders sort before files, each by name without regard to case. `fs.tree` is
+`Read`, `agent_safe` and idempotent: it changes nothing.
 
-Open files are syntax-highlighted for the languages devd's own stacks use (PHP, JavaScript and TypeScript, JSON, YAML, TOML, Rust, Python, Ruby, Go, SQL, HTML, CSS, shell and Markdown). Anything else is shown as plain text rather than guessed at. **Copy** puts the file's text on the clipboard without the line numbers, which are a reading aid and would break the file if pasted back.
+Open files are syntax-highlighted for the languages devd's own stacks use (PHP,
+JavaScript and TypeScript, JSON, YAML, TOML, Rust, Python, Ruby, Go, SQL, HTML,
+CSS, shell and Markdown). Anything else is shown as plain text rather than
+guessed at. **Copy** puts the file's text on the clipboard without the line
+numbers, which are a reading aid and would break the file if pasted back.
 
-There is no editing here: an edit is a `Write` capability with an undo snapshot, and a person editing a file is better served by their own editor.
+There is no editing here: an edit is a `Write` capability with an undo snapshot,
+and a person editing a file is better served by their own editor.
 
 ## Preview
 
-**Preview** embeds a page in the window. On a site's page choose the **Preview** tab; the site devd serves is loaded, and you can reload it or open it in the system browser. The certificate authority has to be trusted for an HTTPS site to render without a warning, and the page says so when it is not.
+**Preview** embeds a page in the window. On a site's page choose the **Preview**
+tab; the site devd serves is loaded, and you can reload it or open it in the
+system browser. The certificate authority has to be trusted for an HTTPS site to
+render without a warning, and the page says so when it is not.
 
-**Any address on this machine**, not only a site devd serves: type it in the address bar above the frame. A `php artisan serve` on 8000, a `next dev` on 3000 or a static file server all preview the same way. The address is checked by the server (`POST /api/preview`) before it reaches the frame, because a frame is a place a page can run script:
+**Any address on this machine**, not only a site devd serves: type it in the
+address bar above the frame. A `php artisan serve` on 8000, a `next dev` on 3000
+or a static file server all preview the same way. The address is checked by the
+server (`POST /api/preview`) before it reaches the frame, because a frame is a
+place a page can run script:
 
 * http and https only;
-* a host on this machine: `127.0.0.1`, `::1`, `localhost` or a `*.localhost` name. Another machine on the network and a public address are both refused, because a preview shows work happening here;
-* no credentials in the address, and the fragment is dropped, since it never reaches the server.
+* a host on this machine: `127.0.0.1`, `::1`, `localhost` or a `*.localhost`
+  name. Another machine on the network and a public address are both refused,
+  because a preview shows work happening here;
+* no credentials in the address, and the fragment is dropped, since it never
+  reaches the server.
 
-The rule lives in `devd_core::preview` so the window does not carry a second copy of it.
+The rule lives in `devd_core::preview` so the window does not carry a second
+copy of it.
 
 ## Reading the web
 
-`docs.fetch` reads a public https page and returns its text. `web.open` reads the same page and returns its **structure**: the title, the headings, the links with their text, and the form controls with their name, type and label, alongside the readable text.
+`docs.fetch` reads a public https page and returns its text. `web.open` reads
+the same page and returns its **structure**: the title, the headings, the links
+with their text, and the form controls with their name, type and label,
+alongside the readable text.
 
 ```bash
 devd call web.open  --arg url=https://example.com
 devd call docs.fetch --arg url=https://example.com
 ```
 
-Both refuse private, loopback and metadata addresses, and re-check every redirect, so a public host that redirects to `169.254.169.254` is refused at the redirect rather than at the first request. Neither sends credentials, and both say that a page's content is data rather than an instruction.
+Both refuse private, loopback and metadata addresses, and re-check every
+redirect, so a public host that redirects to `169.254.169.254` is refused at the
+redirect rather than at the first request. Neither sends credentials, and both
+say that a page's content is data rather than an instruction.
 
-There is **no browser automation**: nothing clicks, types or renders a page. An agent that needs to know what a form contains reads it with `web.open`; one that needs to know a page renders is asking a question a fetcher cannot answer.
+There is **no browser automation**: nothing clicks, types or renders a page. An
+agent that needs to know what a form contains reads it with `web.open`; one that
+needs to know a page renders is asking a question a fetcher cannot answer.
 
 ## Configuration
 

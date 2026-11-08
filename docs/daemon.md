@@ -40,7 +40,7 @@ would split the background work between two processes.
 Every 15 seconds: cron jobs, scheduled backups, scheduled deploys, health checks,
 and the queue of work that leaves the process.
 
-Every hour, and once at start:
+Every hour, and once at start-up:
 
 * **Log rotation.** A `.log` file under `logs/` or `etc/` over 10 MB is copied to
   `<name>.log.1` (older copies shift up; five are kept) and emptied in place. It
@@ -51,13 +51,13 @@ Every hour, and once at start:
   (`audit.retention_days`; `0` keeps everything).
 * **Download cache.** Cached downloads unused for 90 days, and then the least
   recently used until the cache fits in 2 GiB, are removed. Stale partial
-  downloads go after a week. Only downloaded archives and installers are touched
-  (`cache.max_age_days`, `cache.max_bytes`).
+  downloads are removed after a week. Only downloaded archives and installers
+  are touched (`cache.max_age_days`, `cache.max_bytes`).
 * **Undo snapshots.** Snapshots older than 30 days, then the oldest beyond 1 GiB,
   are removed (`snapshots.max_age_days`, `snapshots.max_bytes`).
 * **Queue retention.** Rows in the effect queue that finished or were dropped are
   removed after 14 days (`effects.retention_days`; `0` keeps everything). A
-  proposal a person decided about is kept for 90 days
+  proposal a person has decided on is kept for 90 days
   (`suggestions.retention_days`). Open proposals and pending queue rows are never
   touched.
 * **Service reconciliation.** See below.
@@ -115,11 +115,11 @@ everything else. It never forwards a query. `dns.status` reports two different
 facts: whether that server answers, and whether the operating system asks it.
 
 Pointing the system at it changes how the whole machine resolves names and needs
-administrator rights, so `dns.enable` (human only) shows the exact commands and
-runs only those: `/etc/resolver/test` on macOS, `resolvectl` on Linux
+administrator rights, so `dns.enable` (human only) shows the exact commands
+and runs only those: `/etc/resolver/test` on macOS, `resolvectl` on Linux
 (systemd-resolved), a name-resolution policy rule on Windows, which can only send
 a suffix to port 53. If a command is refused, nothing is claimed and the hosts
-file remains how names resolve. `dns.disable` undoes it.
+file remains the way names resolve. `dns.disable` undoes it.
 
 ## Updating devd
 
@@ -140,10 +140,11 @@ unsigned installer, and the signature is what lets devd check its own updates.
 ## Undo
 
 Before `fs.write`, `fs.edit` or `fs.delete` replaces or removes something, and
-before `db.drop` drops a database, what would be lost is saved (a file up to
+before `db.drop` drops a database, devd saves what would be lost (a file up to
 32 MB, a directory up to 5,000 files or 128 MB, a database as a dump) and the
-result carries an `undo` id. `snapshot.list` shows them; `snapshot.restore` (human
-only) puts one back and first saves what it replaces, so an undo can be undone.
-Secrets files are never copied. What is not saved is stated in the result:
+result carries an `undo` id. `snapshot.list` shows them; `snapshot.restore`
+(human only) puts one back and first saves what it replaces, so an undo can
+be undone.
+Secret files are never copied. What is not saved is stated in the result:
 `undo_note` says why. `db.drop` refuses to proceed if its dump cannot be made,
 unless `no_snapshot` says to.

@@ -15,7 +15,7 @@ queues — are also the features that can quietly spend a person's money or trus
    not an intake trigger.
 3. **A proposal is recorded once.** The same title for the same project while it
    is still open is one row. A rule that fires every minute does not fill the
-   inbox, and an agent cannot flood the person with the same idea.
+   Inbox, and an agent cannot flood the person with the same idea.
 4. **Every run of devd's own work is visible afterwards.** A proposal, a rule's
    match, a queue row, a stall and a revoked mandate are all rows with a time. If
    a person cannot read what happened and when, the feature is not done.

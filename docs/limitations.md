@@ -8,15 +8,15 @@ it will not do at all. Nothing on this page happens on its own.
 
 | What | What devd does |
 |---|---|
-| **Apache or nginx** already installed | `service.adopt` records the program you have and uses it. devd asks the package manager who owns the file and whether it is still what was installed, and refuses one that differs. |
-| **MariaDB or MySQL** already running | Detected and reported, never assumed healthy. `services.decide` records whether devd adopts it, only watches it, treats it as an external instance on a port, or ignores it. |
+| **Apache or nginx** already installed | `service.adopt` records the program you have and uses it. devd asks the package manager which package owns the file and whether it is still what was installed, and refuses one that differs. |
+| **MariaDB or MySQL** already running | Detected and reported, never assumed healthy. `services.decide` records whether devd adopts it, watches it only, treats it as an external instance on a port, or ignores it. |
 | **Redis, PostgreSQL, Docker** | The same: detected, shown with the state it reports, and left alone unless you decide otherwise. |
 | **PHP** installed outside devd | Reported, not silently swapped. A site is served through a FastCGI listener devd runs, which is built from a runtime devd downloaded and verified; adopting a foreign PHP is a separate, explicit decision. |
-| **A folder of projects** | `site.park` makes a site of each web project in it. Nothing is written into the folders. |
+| **A folder of projects** | `site.park` makes a site for each web project in it. Nothing is written into the folders. |
 | **An existing database** | `db.copy` brings a database over from another MySQL or MariaDB instance into devd's own, with one command, and says what was and was not carried over. |
-| **Your shell session** | `autostart enable` starts the stack when you sign in, using what each platform gives a user without administrator rights. |
+| **Your shell session** | `autostart enable` starts the stack when you sign in, using what each platform gives an account without administrator rights. |
 
-## What it moves you off, with your approval
+## What it moves you away from, with your approval
 
 Replacing an installation is never a side effect of something else. It is its
 own operation, it is destructive, and it asks first:
@@ -24,7 +24,7 @@ own operation, it is destructive, and it asks first:
 - installing a service where one already answers leaves yours alone and reports
   the conflict;
 - removing anything devd installed keeps the data directory unless you say
-  otherwise, and saves a snapshot before it deletes;
+  otherwise, and saves a snapshot before it deletes anything;
 - switching to a version of PHP, Node.js or Go only changes what devd serves,
   not your `PATH`, unless you run `runtime.use`.
 
@@ -44,9 +44,9 @@ own operation, it is destructive, and it asks first:
 
 ## What does not carry over yet
 
-- A tool that is installed but reports no version is shown as installed with the
-  reason; devd does not guess a version and does not treat it as healthy.
-- A service started outside devd is not health-checked on the schedule devd's own
-  services are. It is watched only if you asked for that.
+- A tool that is installed but reports no version is shown as installed, with
+  the reason; devd does not guess a version and does not treat it as healthy.
+- A service started outside devd is not health-checked on the same schedule as
+  devd's own services. It is watched only if you asked for that.
 - Settings that live inside another stack's own configuration file (an Apache
   `httpd.conf` you keep by hand, for example) are read, never rewritten.

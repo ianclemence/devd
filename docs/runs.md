@@ -14,9 +14,9 @@ rewritten.
 
 Evidence is recorded where a capability returns. A program an agent started, an
 editor, a formatter a test run triggered: none of those pass through the registry
-as a write, yet they changed the project. At the start of a conversation run the
+as a write, yet they changed the project. At the start of a conversation run, the
 project's tracked and untracked (not ignored) files are recorded — path, size,
-modification time and the checked-out commit — and when the run is judged the
+modification time and the checked-out commit — and when the run is judged, the
 project is compared with that. A difference becomes one `change` evidence record
 under the capability `observed.diff`, listing what was added, modified and
 removed. It says *what* differs, never *who* did it, and it counts as an
@@ -57,7 +57,7 @@ same lifecycle and evidence rules; only the driver differs.
 | --- | --- |
 | `runs` | Goal, acceptance criteria, mode, project, state, plan, fingerprint, cancellation, usage, timestamps, parent run, thread and team-run link. |
 | `run_steps` | One stage of work: kind, title, state, detail, plan data, start and finish. |
-| `tool_calls` | One normalized capability call: run and step, provider call id, actor, surface, capability, redacted arguments, argument hash, approval, idempotency key, outcome, error code, exit code, duration, result and timestamps. |
+| `tool_calls` | One normalised capability call: run and step, provider call id, actor, surface, capability, redacted arguments, argument hash, approval, idempotency key, outcome, error code, exit code, duration, result and timestamps. |
 | `evidence` | What was observed: kind, capability, pass/fail, claim, summary, bounded detail, and the tool call or artifact it came from. |
 | `artifacts` | Bounded raw output and produced files, referenced from evidence instead of being copied into every database row. |
 | `approvals` | The durable decision: hashed id, run/task/tool-call links, capability, arguments, argument and plan hashes, scope, tier, risk, actor, expiry, state, decider and reason. |
@@ -81,7 +81,7 @@ kept so two calls can be compared without retaining secret values.
 
 ## Evidence and completion
 
-`evidence_for` normalizes a capability result into one of these kinds:
+`evidence_for` normalises a capability result into one of these kinds:
 
 `change`, `read`, `verify`, `command`, `service`, `http`, `runtime`, `database`,
 `probe`, `structured`.
@@ -117,7 +117,7 @@ pass.
 The model's sentence that it finished is not evidence. A run whose change was
 made but not checked ends `unverified`, with the missing evidence named. A run
 whose check ran and failed ends `unverified` or `failed`; it never reports
-success because a process stopped consuming resources.
+success merely because the process exited.
 
 ## Artifacts
 
@@ -166,9 +166,9 @@ check runs before approval is considered.
   guidance files, marked as project data rather than policy;
 * the goal, acceptance criteria, current plan, run state and pending approvals;
 * notices, errors and approval decisions, which are never silently dropped;
-* recent messages and tool results, with older results summarized and their raw
+* recent messages and tool results, with older results summarised and their raw
   output kept as an artifact;
-* a `ContextManifest` recording what was included, what was summarized, why, and
+* a `ContextManifest` recording what was included, what was summarised, why, and
   the estimated budget.
 
 The estimate is deliberately conservative (`chars / 4`) when an exact tokenizer
@@ -243,5 +243,5 @@ to prevent.
 * Cancellation reaches handlers that check `RunContext` and processes that devd
   supervises. A third-party program that ignores termination is reported as
   still running rather than as stopped.
-* Process isolation is described in `docs/security.md`: an allowlisted
+* Process isolation is described in [`security.md`](security.md): an allowlisted
   environment and, on Windows, a Job Object are not a filesystem sandbox.

@@ -50,20 +50,22 @@ reconfigured.
   directories under its prefix. devd copies the system's two files when it finds
   them and writes standard ones when it does not, and points nginx's temporary
   paths at its own directory, because a package's default (`/var/lib/nginx`)
-  cannot be created by an ordinary user.
-* **MariaDB** is initialised with `mariadb-install-db --auth-root-authentication-method=normal`,
-  so `root` can connect over TCP as the Windows install allows. A `mysqld` that
-  reports itself as MySQL is refused. `DEVD_MYSQL_ROOT_PASSWORD` is **not applied**
-  on these platforms yet (the bootstrap script has no option for it); setup says
-  so rather than pretending.
-* **PHP** is the one the system has. A package manager installs one version at a
-  time, so `runtime install php@8.4` on a machine that has 8.3 fails with that
-  explanation. Per-site PHP versions on Linux and macOS need several versions
-  installed side by side (for example from Ondřej Surý's PPA or `shivammathur/php`
-  on Homebrew); each shows up as the version the system reports.
-* **Ports.** An ordinary user cannot bind below 1024 on Linux, and macOS depends
-  on the release, so everything but Windows starts on 8080/8443. Sites are served
-  at `https://name.test:8443`.
+  cannot be created by an ordinary account.
+* **MariaDB** is initialised with
+  `mariadb-install-db --auth-root-authentication-method=normal`, so `root` can
+  connect over TCP as the Windows installation allows. A `mysqld` that reports
+  itself as MySQL is refused. `DEVD_MYSQL_ROOT_PASSWORD` is **not applied** on
+  these platforms yet (the bootstrap script has no option for it); setup says so
+  rather than pretending.
+* **PHP** is the version the system has. A package manager installs one version
+  at a time, so `runtime install php@8.4` on a machine that has 8.3 fails with
+  that explanation. Per-site PHP versions on Linux and macOS need several
+  versions installed side by side (for example from Ondřej Surý's PPA or
+  `shivammathur/php` on Homebrew); each shows up as the version the system
+  reports.
+* **Ports.** An ordinary account cannot bind below 1024 on Linux; on macOS it
+  depends on the release, so every platform except Windows starts on 8080/8443.
+  Sites are served at `https://name.test:8443`.
 
 ## When Windows has reserved a port
 
@@ -94,9 +96,9 @@ This is a record of what was actually executed, not of what is expected to work.
 | | Windows | Linux | macOS |
 |---|---|---|---|
 | Workspace builds and its tests pass | yes, locally and in CI | yes, in CI | yes, in CI |
-| Package-manager parsing, verification decisions, generated nginx and Apache files, unit-tested on canned output | yes | yes | yes |
+| Package-manager parsing, verification decisions, and generated nginx and Apache files, unit-tested on canned output | yes | yes | yes |
 | Install nginx / MariaDB / PHP and start them | yes (downloaded, digest-checked) | **not run**: written, compiled, unit-tested | **not run** |
-| PostgreSQL and MySQL installed, started, asked in their own protocol, a database created, dropped and restored from its undo snapshot, stopped cleanly | yes (real servers, local) | adopts the system package; **not run** | adopts Homebrew; **not run** |
+| PostgreSQL and MySQL installed, started, queried over their own protocol, a database created, dropped and restored from its undo snapshot, stopped cleanly | yes (real servers, local) | adopts the system package; **not run** | adopts Homebrew; **not run** |
 | The resident daemon: instance record, attach, stop, service ownership by start time | yes (real processes) | the start-time check reads `/proc`; unit-tested, **not run** as a daemon | the check reads `ps`; **not run** |
 | Sign-in start of the daemon | Run value: written; sign-in itself **not exercised** | systemd unit text unit-tested; **not run** | LaunchAgent text unit-tested; **not run** |
 | Local DNS server answers over a real UDP socket | yes | the same code; **not run** there | the same code; **not run** there |

@@ -1315,7 +1315,7 @@ fn an_agent_chart_is_declared_and_drawn_by_the_shared_renderer() {
     assert!(APP.contains("VIZ_NAMES.indexOf(c) >= 0"), "a bar colour is one of the named palette colours, never free text");
     assert!(!APP.contains("spec.html") && !APP.contains("spec.innerHTML"), "chart data never carries markup");
     assert!(CSS.contains(".viz-bar-row") && CSS.contains(".viz-bar-fill"));
-    let manifest = include_str!("../../../docs/design/manifest.json");
+    let manifest = include_str!("../../../docs/design-manifest.json");
     assert!(manifest.contains("\"chart\""), "the agent contract declares the chart block");
 }
 

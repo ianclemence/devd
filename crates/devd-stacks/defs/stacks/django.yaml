@@ -15,7 +15,7 @@ name_hint: A valid Python identifier; Django forbids names that clash with Pytho
 versions:
   - {id: "6.1", label: Django 6.1 (latest), value: "6.1.*", default: true, requires: [{tool: python, min: "3.12", why: "Django 6.1 requires Python 3.12+"}]}
   - {id: "5.2", label: Django 5.2 (LTS), value: "5.2.*", requires: [{tool: python, min: "3.10", why: "Django 5.2 requires Python 3.10+"}]}
-  - {id: "4.2", label: Django 4.2 (LTS, extended support), value: "4.2.*", note: Ends extended support in April 2026., requires: [{tool: python, min: "3.8"}]}
+  - {id: "4.2", label: "Django 4.2 (LTS, extended support)", value: "4.2.*", note: Ends extended support in April 2026., requires: [{tool: python, min: "3.8"}]}
 init:
   creates_dir: true
   install_toggle: false
