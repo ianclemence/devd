@@ -674,8 +674,16 @@ fn the_model_picker_uses_the_provider_selector_pattern() {
 #[test]
 fn chapters_use_a_pin_icon_not_a_layers_icon() {
     assert!(HTML.contains("symbol id=\"i-pin\""), "there is a pin symbol");
-    assert!(APP.contains("href=\"#i-pin\""), "the chapter action uses the pin");
-    assert!(!APP.contains("href=\"#i-layers\""), "the chapter action no longer uses the layers icon");
+    assert!(APP.contains("data-action=\"msg-pin\""), "pinning a reply is a message action");
+    assert!(APP.contains("href=\"#i-pin\""), "the pin action uses the pin");
+    assert!(
+        !APP[APP.find("data-action=\"msg-pin\"").unwrap()..]
+            .split("</button>")
+            .next()
+            .unwrap_or("")
+            .contains("#i-layers"),
+        "the chapter action no longer uses the layers icon"
+    );
 }
 
 #[test]
@@ -696,13 +704,14 @@ fn tools_do_not_show_machine_implementation_metadata() {
 
 #[test]
 fn the_terminal_action_belongs_to_the_project_not_the_develop_page() {
-    // On the project page, and on the project card beside a conversation about it.
+    // On the project page, and as a surface on the conversation's project card.
     assert_eq!(
         APP.matches("data-action=\"open-terminal\"").count(),
-        2,
-        "the terminal action belongs to a project: its page and its card"
+        1,
+        "the project page still opens its own terminal"
     );
-    assert!(APP[APP.find("function paintWsCard()").unwrap()..].contains("data-action=\"open-terminal\""));
+    assert!(APP[APP.find("function paintWsCard()").unwrap()..].contains("data-action=\"work-terminal\""),
+        "the conversation card opens a terminal surface");
     let start = APP.find("function renderProject()").expect("project page");
     let end = start + APP[start..].find("// -------------------------------------------------------------- capabilities").expect("next section");
     assert!(APP[start..end].contains("data-action=\"open-terminal\""), "the project page offers the terminal");
@@ -1475,13 +1484,14 @@ fn the_side_panel_mirrors_the_conversation_list() {
     assert!(CSS.contains("height: 52px; min-height: 52px;"), "the head matches the list's");
     assert!(CSS.contains("border-left: 1px solid var(--line); border-radius: 0;"), "the divider mirrors the left rail");
     assert!(!CSS.contains("margin: 64px 16px 0 0"), "the floating card is gone");
-    // Outputs and terminals are wired to real data.
+    // Outputs and the workspace surfaces are wired to real data.
     assert!(APP.contains("function outputsSection"), "outputs are a section");
-    assert!(APP.contains("function terminalsSection"), "terminals are a section");
+    assert!(APP.contains("function paintWork"), "the workspace surfaces are painted from state");
     assert!(APP.contains("function noteOutput(event)"), "outputs come from the conversation's own tool calls");
     assert!(APP.contains("\"output-open\""), "an output opens its file");
-    assert!(APP.contains("\"term-open\""), "a terminal opens its shell");
-    assert!(APP.contains("read(\"terminal.list\""), "terminals are the same list the Terminal screen reads");
+    assert!(APP.contains("data-action=\"work-browser\""), "the browser is opened in place");
+    assert!(APP.contains("data-action=\"work-terminal\""), "the terminal is opened in place");
+    assert!(!APP.contains("No terminal is running in this project"), "the empty Terminals section is gone");
 }
 
 #[test]
@@ -1709,4 +1719,42 @@ fn removing_a_project_is_a_danger_action() {
         APP.contains("class=\"btn btn-mini btn-danger\" data-action=\"project-remove-sites\""),
         "Remove site uses the danger colour too"
     );
+}
+
+#[test]
+fn the_assistant_has_browser_and_terminal_surfaces() {
+    assert!(APP.contains("id=\"work-surface\""), "a work surface exists beside the conversation");
+    assert!(APP.contains("class=\"work-pane work-browser\""), "the browser is a surface");
+    assert!(APP.contains("class=\"work-pane work-terminal\""), "the terminal is a surface");
+    assert!(APP.contains("data-action=\"work-browser\""), "the card opens the browser in place");
+    assert!(APP.contains("data-action=\"work-terminal\""), "the card opens the terminal in place");
+    assert!(APP.contains("Open browser"), "the card action is named for what it does");
+    assert!(APP.contains("Open terminal"), "the card action is named for what it does");
+    assert!(!APP.contains("No terminal is running in this project"), "the empty Terminals section is gone");
+    assert!(!APP.contains(">Terminal here<"), "the old Terminal here row is gone");
+    assert!(APP.contains("allow-scripts allow-same-origin"), "the browser reuses the sandboxed preview frame");
+    assert!(APP.contains("at !== AI.loadSeq"), "a stale chat response is discarded");
+    assert!(APP.contains("This shell belongs to"), "a shell from another project says which project it belongs to");
+    assert!(APP.contains("data-action=\"work-terminal-new\""), "the person can open a shell in the current project");
+    assert!(APP.contains("AI.work.browser.project !== project"), "the browser follows the open conversation's project");
+}
+
+#[test]
+fn the_mcp_screen_does_not_print_machine_paths() {
+    // The path is a platform detail the backend knows; the screen is the same on
+    // Windows, Linux and macOS and should not look like a Windows registry dump.
+    assert!(!APP.contains("attr(c.config)"), "MCP clients do not print their config path");
+    assert!(!APP.contains("data-file=\"' + attr(c.config)"), "the dialog does not carry the path either");
+    assert!(APP.contains("not found. Open "), "the state still says what to do");
+}
+
+#[test]
+fn outputs_are_history_and_changes_is_the_working_tree() {
+    // "Changes clean" and a long Outputs list are both true: the conversation's
+    // writes are history, the working tree is current. The card says which is which.
+    assert!(APP.contains("Written by this conversation"), "Outputs explains what it records");
+    assert!(APP.contains("is the working tree now"), "Changes is named as the working tree");
+    assert!(!APP.contains("o.kind === \"edit\" ? \"changed\""), "Outputs does not claim a current change");
+    assert!(APP.contains("o.kind === \"edit\" ? \"edited\""), "Outputs names the conversation's edit");
+    assert!(APP.contains("return \"i-file\""), "a source file gets a file icon, not the terminal glyph");
 }

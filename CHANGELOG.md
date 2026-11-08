@@ -10,6 +10,64 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.26.0] - 2026-11-08 - The workbench, with surfaces
+
+### Added
+
+- **Browser and Terminal surfaces in the Assistant.** The conversation header has three toggles —
+  Environment, Browser and Terminal — and the project card's Workspace rows offer **Open browser**
+  and **Open terminal**. The Browser is a sandboxed preview of the project's site with an address
+  bar, reload, open-externally and honest empty, stopped and no-site states. The Terminal is the
+  same server-owned shell and xterm as the project's Terminal tab, opened without leaving the chat.
+- At 1600px the Environment card and Terminal can sit side by side; the Browser takes the wide
+  column. Both surfaces stack in one work column, split 58/42 with a draggable divider. Below
+  1280px they become sheets over the conversation; a full reload starts with them closed.
+- Surfaces belong to the chat's project. Switching chats re-points the browser; a shell from
+  another project says so and offers a shell in the current one.
+- The old **Terminals** section and the “Terminal here” row are gone.
+
+### Changed
+
+- **Graphite, atmosphere, spectral colour, texture, precision.** The palette is true graphite
+  rather than navy; the canvas carries two static radial gradients and a 160px SVG grain tile, with
+  no shader, animation loop or WebGL. Blue is the action colour, cyan the live signal, violet a rare
+  spectral note.
+- A shared component pass: exact-property transitions, pressed buttons, focus rings, tonal panels,
+  quieter menus, precise inputs, one rich-content Markdown scale, refined code and table treatment,
+  and far fewer list borders — rows are separated by space and hover, tables keep a header rule.
+- The Assistant conversation: calmer user bubbles, assistant text as reading text, better heading
+  and list rhythm, code labels and copy, and streaming-safe surfaces.
+- The Inbox groups Needs you, proposals and waiting decisions with a clear kind; Updates and Earlier
+  are compact lists rather than fences of lines. Runs keep the execution record as a timeline and
+  mark Cancel as destructive.
+- Conversation groups now say **3 requests** instead of an unexplained number, with the total
+  conversation count in the tooltip.
+- **MCP no longer prints machine-specific settings paths.** The coding-agent list says what it is and
+  what to do, without a Windows path leaking into a screen used on Linux and macOS too.
+- **Outputs says what it is.** It lists files this conversation wrote or edited, with `edited` and
+  `created`, and explains that Changes above is the working tree now — so a clean tree beside a long
+  Outputs list is no longer a contradiction. Source files use the file mark, not the terminal glyph.
+- Home says things **need a look**, leaving “Needs you” for the actionable Inbox decisions.
+- Selecting a chat paints its row's title and project immediately, clears the previous run and
+  chapters, rejects a late response for a chat the person has left, and opens a deep link by id even
+  when the list has not caught up.
+- Home keeps its composition — greeting, assistant composer, project chips, attention, Your work —
+  and receives the type, surface, spacing and atmosphere refinements rather than a new layout.
+
+### Fixed
+
+- The Assistant work surface fills the content height above the status bar; the both-open split no
+  longer overflows by the divider's height.
+- The work column has one continuous left edge, and its header aligns with the conversation header.
+- The Environment panel is a drawer below 1440px with a visible close action.
+- `docs/design.md` now documents the shipped tokens, atmosphere and workspace surfaces.
+
+### Verified
+
+- Workspace test suites pass, including 103 UI contract tests.
+- Browser screenshots at 1024, 1280, 1440, 1920 and 2560 for Home, Assistant, Inbox, Runs, Projects,
+  Sites, Machine and Diagnostics, plus 390px overflow checks and all four surface states.
+
 ## [0.25.6] - 2026-11-07 - The tray tells the truth
 
 ### Fixed

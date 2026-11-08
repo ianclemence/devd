@@ -98,8 +98,25 @@ the contract test `components_use_the_semantic_colour_names` fails if a
 component rule reaches for the old palette variables directly.
 
 Surfaces are true neutrals. One blue marks the primary action, the current
-location and live work. Status colour appears only beside a word or an icon:
-success, warning, danger, information and neutral are never colour alone.
+location and live work. Cyan is the second signal (live execution, running
+services) and violet appears once at most in a composition, never as a second
+action colour. Status colour appears only beside a word or an icon: success,
+warning, danger, information and neutral are never colour alone.
+
+### Surface and atmosphere
+
+The canvas is graphite rather than black: `--bg #0b0c0e`, with raised surfaces
+at `--bg-surface #121417` and `--bg-raised #181b1f`. Depth comes from tonal
+separation and a hairline, not from a shadow around every panel; the only
+floating surfaces are menus, drawers, dialogs and toasts.
+
+The atmosphere is painted once on `body` with two radial gradients (blue from
+the top left, cyan from the top right, a trace of violet at the bottom) and a
+160px SVG grain tile. It is static, has no animation loop, no canvas and no
+WebGL, and is removed by the grain/gradient tokens. It shows through the
+workspace canvas and is deliberately covered by the reading and terminal
+surfaces. Rich atmosphere belongs to Home and empty states, never behind code,
+logs or a conversation.
 
 ### Shape, size and depth
 
@@ -197,6 +214,29 @@ Key rules:
    variants.
 5. Add a contract assertion if the rule can drift.
 6. Verify at 1600, 1280, 1024, 800 and 390px, and with reduced motion.
+
+## Workspace surfaces
+
+The Assistant is a conversation *and* a workspace. Beside it, a project card
+(Environment) carries the project, branch, Changes and Outputs. Two surfaces can
+open next to it:
+
+* **Browser** — a sandboxed preview of the project's site, with an address bar,
+  reload, open-externally and a real empty/stopped/no-site state.
+* **Terminal** — the same xterm and the same server-owned shell as the project's
+  Terminal tab, opened in the chat's project without leaving the conversation.
+
+Both are opened from the three icon toggles in the conversation header (and from
+the card's Workspace rows). The Browser always takes the wide column, replacing
+the card. The Terminal may sit beside the card at 1600px and above; below that it
+replaces it. When both are open they share one work column, split vertically with
+a draggable divider (58/42 by default). Below 1280px a surface becomes a sheet over
+the conversation; below 700px of height the pair becomes tabs.
+
+The surfaces belong to the conversation's project. Switching chats re-points the
+browser and leaves an old shell running with a banner saying which project it
+belongs to. Closing a surface never kills a shell. A full reload starts with both
+closed.
 
 ## Screen decisions
 

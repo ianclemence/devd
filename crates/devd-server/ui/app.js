@@ -4875,7 +4875,8 @@ var TERM_POLL_MS = 250;
 
   /* True wherever the terminal is drawn: the project tab, or an old /terminal link. */
   function termOnScreen() {
-    return state.view === "terminal" || (state.view === "project" && state.tab === "terminal");
+    return state.view === "terminal" || (state.view === "project" && state.tab === "terminal") ||
+      (state.view === "assistant" && AI.work && AI.work.terminal.open);
   }
 
   /* The terminal renderer.
@@ -4965,6 +4966,7 @@ var TERM_POLL_MS = 250;
       if (d.running === false) {
         termStopPolling();
         termLoadSessions();
+        if (AI.work && AI.work.terminal.open) { AI.work.terminal.ended = true; paintWork(); }
       }
     });
   }
@@ -7959,7 +7961,16 @@ var TERM_POLL_MS = 250;
     // What this conversation made, and the shells running in its project. Both
     // are kept beside the conversation so the side panel can be redrawn without
     // re-reading the whole log.
-    outputs: [], outputsOpen: false, terms: [], termsAt: 0
+    outputs: [], outputsOpen: false,
+    // The workspace surfaces beside the conversation. Environment is the
+    // project card; Browser and Terminal are opened by the header toggles or
+    // the card's Workspace rows. A full reload starts with both closed.
+    loadSeq: 0,
+    work: {
+      project: "", env: true, envOpen: false, split: 58, sites: [], sitesFor: "",
+      browser: { open: false, url: "", project: "", loading: false, error: null, site: null },
+      terminal: { open: false, sessionId: null, project: "", ended: false }
+    }
   };
 
   /* A run is not another destination. It is the durable record behind a
@@ -8637,7 +8648,7 @@ var TERM_POLL_MS = 250;
      same way. */
   function homeLead(needCount, d, setupCount) {
     var working = (d.teamRuns || []).filter(function (t) { return ["planning", "running"].indexOf(t.state) >= 0; });
-    if (needCount) return needCount === 1 ? "One thing needs your attention." : needCount + " things need your attention.";
+    if (needCount) return needCount === 1 ? "One thing needs a look." : needCount + " things need a look.";
     if (setupCount) return "Let's finish setting devd up, then you're free to build.";
     if (working.length) return working.length === 1 ? "The team is on it: " + String(working[0].title || "a goal") + "." : working.length + " goals are in motion. The team has it from here.";
     var h = new Date().getHours();
@@ -9038,6 +9049,16 @@ var TERM_POLL_MS = 250;
       // The plan the agent wrote is project state, not conversation state. Read it when a thread
       // opens and every few seconds after, so it stays true while the person works elsewhere.
       var project = d.thread.project;
+      // A surface belongs to the chat's project, not the last project the
+      // person happened to open. Re-point the browser; leave a shell from
+      // another project running and let the pane say whose it is.
+      if (AI.work.browser.open && project && AI.work.browser.project !== project) {
+        AI.work.browser.project = project;
+        AI.work.browser.site = null;
+        AI.work.browser.url = "";
+        ensureWorkSites(project);
+        paintWork();
+      }
       if (project && (!AI.ws || AI.ws.path !== project || Date.now() - AI.ws.at > 20000)) {
         AI.ws = { path: project, at: Date.now(), st: AI.ws && AI.ws.path === project ? AI.ws.st : null };
         read("git.status", { repo: project }).then(function (st) { if (AI.ws && AI.ws.path === project) { AI.ws.st = st; paintWsCard(); } }).catch(function () {});
@@ -9057,12 +9078,16 @@ var TERM_POLL_MS = 250;
       }
   }
 
-  function pollThread(full) {
+  function pollThread(full, seq) {
     if (!AI.thread) return Promise.resolve();
     var tid = AI.thread.id;
+    var at = seq === undefined ? AI.loadSeq : seq;
     // Brief: tool output arrives as a head-and-tail preview (most of a conversation's
     // weight); a step's full output is read when the step is opened.
     return read("chat.get", { thread: tid, after: full ? 0 : AI.lastId, brief: true }).then(function (d) {
+      // A slower answer for the chat the person just left must not overwrite
+      // the chat they are reading now.
+      if (at !== AI.loadSeq || !AI.thread || AI.thread.id !== tid) return;
       applyThread(d, full);
       AI.threadCache[tid] = { at: Date.now(), data: d };
     });
@@ -10017,8 +10042,8 @@ var TERM_POLL_MS = 250;
     if (/\.(png|jpe?g|gif|webp|svg|ico|bmp|avif|tiff?)$/.test(p)) return "i-image";
     if (/\.(mp4|mov|webm|mkv|avi|mp3|wav|m4a|ogg|flac)$/.test(p)) return "i-play";
     if (/\.(md|mdx|rst|txt|adoc|pdf|docx?|pages)$/.test(p)) return "i-book";
-    if (/\.(json|ya?ml|toml|ini|cfg|conf|lock)$/.test(p)) return "i-sliders";
-    return "i-code";
+    if (/\.(json|ya?ml|toml|ini|cfg|conf|lock)$/.test(p)) return "i-file";
+    return "i-file";
   }
 
   function wsSection(title, count, body) {
@@ -10032,11 +10057,12 @@ var TERM_POLL_MS = 250;
       return wsSection("Outputs", 0, '<div class="ws-empty-line">Nothing created yet. Files the assistant writes or edits appear here.</div>');
     }
     var shown = AI.outputsOpen ? list : list.slice(0, 6);
-    var body = shown.map(function (o) {
+    var body = '<div class="ws-sec-note">Written by this conversation. “Changes” above is the working tree now; it can be clean after this work was committed.</div>';
+    body += shown.map(function (o) {
       return '<button type="button" class="ws-item ws-link" data-action="output-open" data-path="' + attr(o.path) + '" title="' + attr(o.path) + '">' +
         '<svg class="icon" aria-hidden="true"><use href="#' + outputIcon(o.path) + '"></use></svg>' +
         '<span class="grow nowrap">' + esc(baseName(o.path)) + "</span>" +
-        '<span class="ws-item-kind">' + (o.kind === "edit" ? "changed" : "created") + "</span></button>";
+        '<span class="ws-item-kind">' + (o.kind === "edit" ? "edited" : "created") + "</span></button>";
     }).join("");
     if (list.length > 6) {
       body += '<button type="button" class="ws-more" data-action="outputs-more">' + (AI.outputsOpen ? "Show less" : "Show all " + list.length) + "</button>";
@@ -10044,42 +10070,230 @@ var TERM_POLL_MS = 250;
     return wsSection("Outputs", list.length, body);
   }
 
-  /* The shells running in this conversation's project, newest first with the
-     live ones above the ended ones. */
-  function threadTerminals(path) {
-    var root = String(path || "").replace(/[\\/]+$/, "").toLowerCase();
-    if (!root) return [];
-    return (AI.terms || []).filter(function (s) {
-      var cwd = String(s.cwd || "").replace(/[\\/]+$/, "").toLowerCase();
-      return cwd === root || cwd.indexOf(root + "\\") === 0 || cwd.indexOf(root + "/") === 0;
-    }).sort(function (a, b) {
-      return (b.running ? 1 : 0) - (a.running ? 1 : 0) || (a.started || 0) - (b.started || 0);
+  /* The site that serves a project, for the Browser surface and the card's
+   * Open browser row. One read is shared; the path it was read for is kept so a
+   * different chat re-resolves instead of borrowing another project's site. */
+  function ensureWorkSites(path) {
+    if (!path || AI.work.sitesFor === path) return;
+    AI.work.sitesFor = path;
+    read("site.list").then(function (list) {
+      if (AI.work.sitesFor !== path) return;
+      AI.work.sites = Array.isArray(list) ? list : [];
+      paintWsCard(); paintWork();
+    }).catch(function () { AI.work.sites = []; });
+  }
+  function workSiteFor(path) {
+    return (AI.work.sites || []).filter(function (s) {
+      return s && ((s.project || "") === path || (s.site && s.site.root === path));
+    })[0] || null;
+  }
+
+  function paintChatHead() {
+    var head = el("chat-head");
+    if (head && !head.querySelector(".more-pop:not([hidden])")) morph(head, chatHeadHtml());
+  }
+
+  function paintSurfaceChrome() {
+    paintChatHead();
+    paintWsCard();
+    paintWork();
+  }
+
+  function workVisible() {
+    return !!(AI.work.browser.open || AI.work.terminal.open);
+  }
+
+  function workProject() {
+    return (AI.thread && AI.thread.project) || "";
+  }
+
+  /* The Browser is a preview surface, not a second browser engine: it uses the
+   * same sandboxed frame as Preview and the same site records the rest of devd
+   * reads. There is deliberately no address bar history, because an iframe's
+   * cross-origin history is not readable; reload and open-externally are. */
+  function browserSurfaceHtml(path) {
+    var b = AI.work.browser;
+    var site = b.site || workSiteFor(path);
+    var host = site ? (site.site.host || site.site.name) : "";
+    var up = site ? !!(site.server_running || site.upstream_listening) : false;
+    var body;
+    if (!site) {
+      body = '<div class="work-empty"><svg class="icon" aria-hidden="true"><use href="#i-globe"></use></svg>' +
+        '<b>This project has no site</b>' +
+        '<p>devd has not registered an address for this folder. Create one, or open the project to add it.</p>' +
+        '<div class="work-empty-actions"><button type="button" class="btn btn-primary" data-action="work-open-project" data-path="' + attr(path) + '">Open project</button>' +
+        '<button type="button" class="btn" data-action="nav" data-view="sites">Open Sites</button></div></div>';
+    } else if (!up && !b.url) {
+      body = '<div class="work-empty"><svg class="icon" aria-hidden="true"><use href="#i-warn"></use></svg>' +
+        '<b>' + esc(host) + ' is not answering</b>' +
+        '<p>The site exists, but nothing is serving it right now.</p>' +
+        '<div class="work-empty-actions"><button type="button" class="btn btn-primary" data-action="work-site-start" data-path="' + attr(path) + '">Start the server</button>' +
+        '<button type="button" class="btn" data-action="work-browser-anyway">Open anyway</button></div></div>';
+    } else if (!b.url) {
+      body = '<div class="work-empty"><svg class="icon" aria-hidden="true"><use href="#i-globe"></use></svg>' +
+        '<b>Browse this project</b>' +
+        '<p>Type a URL, or open the site devd serves.</p>' +
+        '<div class="work-empty-actions"><button type="button" class="btn btn-primary" data-action="work-browser-site">Open ' + esc(host) + '</button>' +
+        '<button type="button" class="btn" data-action="work-browser-detect">Detect a dev server</button></div></div>';
+    } else {
+      body = '<iframe id="work-browser-frame" class="work-browser-frame" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads allow-modals" src="' + attr(b.url) + '" title="' + attr(host || "Browser") + '"></iframe>';
+    }
+    return '<div class="work-pane work-browser" data-surface="browser">' +
+      '<div class="work-head">' +
+      '<svg class="icon" aria-hidden="true"><use href="#i-globe"></use></svg><b>Browser</b>' +
+      (site ? '<span class="work-sub"><span class="ws-dot ' + (up ? "is-live" : "is-off") + '" aria-hidden="true"></span>' + esc(host) + "</span>" : '<span class="work-sub">No site</span>') +
+      '<span class="grow"></span>' +
+      (b.url ? '<button type="button" class="btn btn-mini btn-ghost" data-action="work-open-external">Open externally</button>' : "") +
+      '<button type="button" class="btn btn-mini btn-ghost btn-icon" data-action="work-close" data-surface="browser" aria-label="Close browser" title="Close browser"><svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg></button>' +
+      "</div>" +
+      '<div class="work-browser-bar">' +
+      '<button type="button" class="btn btn-mini btn-ghost btn-icon" data-action="work-browser-reload" aria-label="Reload" title="Reload"><svg class="icon" aria-hidden="true"><use href="#i-refresh"></use></svg></button>' +
+      '<input id="work-url" class="input work-url mono" type="text" spellcheck="false" value="' + attr(b.url || "") + '" placeholder="https://…" aria-label="Address">' +
+      '<button type="button" class="btn btn-mini" data-action="work-browser-go">Open</button>' +
+      "</div>" +
+      '<div class="work-browser-body">' + body + "</div></div>";
+  }
+
+  function terminalSurfaceHtml(path) {
+    var term = AI.work.terminal;
+    var other = term.project && term.project !== path;
+    var banner = other
+      ? '<div class="work-banner">This shell belongs to <span class="mono">' + esc(term.project) + '</span>.' +
+        '<button type="button" class="btn btn-mini" data-action="work-terminal-new" data-path="' + attr(path) + '">Open a shell here</button></div>'
+      : "";
+    return '<div class="work-pane work-terminal" data-surface="terminal">' +
+      '<div class="work-head">' +
+      '<svg class="icon" aria-hidden="true"><use href="#i-code"></use></svg><b>Terminal</b>' +
+      '<span class="work-sub mono" title="' + attr(term.project || path) + '">' + esc(term.project || path || "No project") + "</span>" +
+      '<span class="grow"></span>' +
+      '<button type="button" class="btn btn-mini btn-ghost btn-icon" data-action="work-terminal-new" data-path="' + attr(path) + '" aria-label="New terminal" title="New terminal"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg></button>' +
+      '<button type="button" class="btn btn-mini btn-ghost btn-icon" data-action="work-close" data-surface="terminal" aria-label="Close terminal" title="Close terminal"><svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg></button>' +
+      "</div>" + banner +
+      '<div class="work-term-body"><div class="term-host" id="term-host"></div>' +
+      (AI.work.terminal.ended ? '<div class="term-ended">This shell has ended. Open another one to keep working.</div>' : "") +
+      "</div></div>";
+  }
+
+  function paintWork() {
+    var box = el("work-surface");
+    var assistant = document.querySelector(".assistant");
+    if (!box) return;
+    var path = workProject();
+    var b = AI.work.browser, term = AI.work.terminal;
+    var open = !!(b.open || term.open);
+    if (assistant) {
+      assistant.classList.toggle("work-open", open);
+      assistant.classList.toggle("work-both", b.open && term.open);
+      assistant.classList.toggle("work-browser-only", b.open && !term.open);
+      assistant.classList.toggle("work-terminal-only", term.open && !b.open);
+      // The Browser needs the wide column, so it takes the Environment card's
+      // place. A terminal may sit beside it on a very wide window (CSS decides).
+      assistant.classList.toggle("env-hidden", b.open);
+      assistant.classList.toggle("env-open", !open && !!AI.work.envOpen && window.innerWidth < 1440);
+      assistant.classList.toggle("has-card", !!path);
+    }
+    box.hidden = !open;
+    if (!open) { box.innerHTML = ""; return; }
+    if (!path) {
+      morph(box, '<div class="work-pane work-empty-pane"><div class="work-head"><b class="grow">Workspace</b>' +
+        '<button type="button" class="btn btn-mini btn-ghost btn-icon" data-action="work-close" data-surface="all" aria-label="Close" title="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg></button></div>' +
+        '<div class="work-empty"><svg class="icon" aria-hidden="true"><use href="#i-folder"></use></svg><b>No project</b>' +
+        '<p>This conversation is not tied to a folder. Choose a project to open its site or a shell.</p>' +
+        '<button type="button" class="btn btn-primary" data-action="nav" data-view="projects">Open projects</button></div></div>');
+      return;
+    }
+    var site = workSiteFor(path);
+    if (b.open && site && !b.url && (site.server_running || site.upstream_listening)) { b.site = site; b.url = site.url; }
+    if (b.open && b.site && b.site.project !== path) { b.site = site; b.url = site ? site.url : ""; }
+    var html = "";
+    if (b.open) html += browserSurfaceHtml(path);
+    if (b.open && term.open) html += '<div class="work-divider" id="work-divider" role="separator" aria-orientation="horizontal" aria-label="Resize browser and terminal" tabindex="0"></div>';
+    if (term.open) html += terminalSurfaceHtml(path);
+    morph(box, html);
+    if (b.open && term.open) {
+      box.style.gridTemplateRows = AI.work.split + "% 1px minmax(0, 1fr)";
+      var divider = el("work-divider");
+      var surface = box;
+      if (divider) {
+        var dragging = false;
+        var setSplit = function (clientY) {
+          var r = surface.getBoundingClientRect();
+          if (!r.height) return;
+          var pct = Math.min(78, Math.max(24, ((clientY - r.top) / r.height) * 100));
+          AI.work.split = pct;
+          surface.style.gridTemplateRows = pct + "% 1px minmax(0, 1fr)";
+        };
+        divider.addEventListener("pointerdown", function (e) {
+          dragging = true;
+          divider.setPointerCapture(e.pointerId);
+          e.preventDefault();
+        });
+        divider.addEventListener("pointermove", function (e) { if (dragging) setSplit(e.clientY); });
+        divider.addEventListener("pointerup", function (e) {
+          dragging = false;
+          try { divider.releasePointerCapture(e.pointerId); } catch (err) {}
+        });
+        divider.addEventListener("dblclick", function () { AI.work.split = 58; surface.style.gridTemplateRows = "58% 1px minmax(0, 1fr)"; });
+        divider.addEventListener("keydown", function (e) {
+          if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+          e.preventDefault();
+          AI.work.split = Math.min(78, Math.max(24, AI.work.split + (e.key === "ArrowDown" ? 2 : -2)));
+          surface.style.gridTemplateRows = AI.work.split + "% 1px minmax(0, 1fr)";
+        });
+      }
+    }
+    if (term.open) {
+      // The xterm subtree lives for the life of the window; moving it here keeps
+      // its scrollback and cursor instead of building a second terminal.
+      var input = el("work-url");
+      if (input) input.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") { e.preventDefault(); ACTIONS["work-browser-go"](); }
+      });
+      if (typeof window.Terminal === "function") { termMount(); termFit(); if (TERM.active) termRefresh(); }
+      else if (!VENDOR.xterm) loadVendor("xterm").then(function () { if (workVisible()) paintWork(); });
+    }
+    ensureWorkSites(path);
+  }
+
+  function openWorkBrowser(path) {
+    if (!path) return toast("warn", "This conversation has no project to open.");
+    AI.work.env = false;
+    AI.work.envOpen = false;
+    AI.work.browser.open = true;
+    AI.work.browser.project = path;
+    AI.work.browser.error = null;
+    var site = workSiteFor(path);
+    AI.work.browser.site = site;
+    AI.work.browser.url = site && (site.server_running || site.upstream_listening) ? site.url : "";
+    ensureWorkSites(path);
+    paintSurfaceChrome();
+  }
+
+  function openWorkTerminal(path, forceNew) {
+    var term = AI.work.terminal;
+    if (!path) return toast("warn", "This conversation has no project to open a shell in.");
+    AI.work.env = false;
+    AI.work.envOpen = false;
+    term.open = true;
+    if (!forceNew && term.project === path && term.sessionId && !term.ended) { paintSurfaceChrome(); return; }
+    term.project = path; term.ended = false;
+    paintSurfaceChrome();
+    run("terminal.open", { path: path, cols: 100, rows: 24 }, { quiet: true }).then(function (o) {
+      if (!o || !o.data || !o.data.id) { term.ended = true; paintWork(); return; }
+      term.sessionId = o.data.id;
+      TERM.active = o.data.id;
+      TERM.screen = "";
+      TERM.sessions = [];
+      paintWork();
+      termStartPolling();
     });
   }
 
-  function terminalsSection(path) {
-    var list = threadTerminals(path);
-    var body = list.slice(0, 6).map(function (s) {
-      var where = String(s.cwd || "").split(/[\\/]/).filter(Boolean).pop() || "";
-      return '<button type="button" class="ws-item ws-link" data-action="term-open" data-id="' + attr(s.id) + '" data-path="' + attr(path) + '" title="' + attr(s.cwd || "") + '">' +
-        '<span class="ws-dot ' + (s.running === false ? "is-off" : "is-live") + '" aria-hidden="true"></span>' +
-        '<span class="grow nowrap">' + esc(s.shell || "shell") + (where ? ' <span class="dim">in ' + esc(where) + "</span>" : "") + "</span>" +
-        '<span class="ws-item-kind">' + (s.running === false ? "ended" : "running") + "</span></button>";
-    }).join("");
-    if (!list.length) body = '<div class="ws-empty-line">No terminal is running in this project.</div>';
-    return wsSection("Terminals", list.length, body);
-  }
-
-  /* Read the terminals when the panel is on screen, at most every few seconds.
-     It is the same `terminal.list` the Terminal screen uses. */
-  function loadThreadTerms(path, box) {
-    if (!path || !box || box.offsetParent === null) return;
-    if (Date.now() - (AI.termsAt || 0) < 4000) return;
-    AI.termsAt = Date.now();
-    read("terminal.list", {}).then(function (d) {
-      AI.terms = (d && d.terminals) || [];
-      if (el("ws-card")) paintWsCard();
-    }).catch(function () { /* the panel still shows the project and outputs */ });
+  function closeWorkSurface(which) {
+    if (which === "browser" || which === "all") AI.work.browser.open = false;
+    if (which === "terminal" || which === "all") AI.work.terminal.open = false;
+    if (!AI.work.browser.open && !AI.work.terminal.open) AI.work.env = true;
+    paintSurfaceChrome();
   }
 
   function paintWsCard() {
@@ -10093,31 +10307,40 @@ var TERM_POLL_MS = 250;
       // project does not make the page jump; the placeholder says why it is
       // empty and offers the way to give it one.
       morph(box, '<div class="ws-head"><b class="grow">Conversation</b></div>' +
-        '<div class="ws-empty"><b>No project</b>This conversation is not tied to a folder. Open a project to see its branch, outputs and terminals here.</div>' +
+        '<div class="ws-empty"><b>No project</b>This conversation is not tied to a folder. Open a project to see its branch, outputs, site and a shell here.</div>' +
         '<div class="ws-sep"></div><button type="button" class="ws-row ws-link" data-action="nav" data-view="projects"><svg class="icon" aria-hidden="true"><use href="#i-folder"></use></svg><span class="grow">Open projects</span></button>');
       return;
     }
     var st = AI.ws && AI.ws.path === path ? AI.ws.st : null;
+    ensureWorkSites(path);
+    var site = workSiteFor(path);
+    var siteName = site ? (site.site.host || site.site.name) : "";
+    var siteUp = site ? !!(site.server_running || site.upstream_listening) : false;
     var rows = [];
-    rows.push('<div class="ws-head"><b class="grow nowrap" title="' + attr(path) + '">' + esc(threadProjectName(path)) + "</b></div>");
+    rows.push('<div class="ws-head"><button type="button" class="ws-project-open grow nowrap" data-action="open-project" data-path="' + attr(path) + '" title="Open this project">' + esc(threadProjectName(path)) + "</button>" +
+      '<button type="button" class="btn btn-mini btn-ghost btn-icon ws-env-close" data-action="work-env" aria-label="Close project panel" title="Close project panel"><svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg></button></div>');
     if (st) {
       var changed = (st.staged || []).length + (st.unstaged || []).length + (st.untracked || []).length;
       rows.push('<div class="ws-row"><svg class="icon" aria-hidden="true"><use href="#i-branch"></use></svg><span class="grow nowrap mono">' + esc(st.branch || "detached") + "</span>" +
         (st.ahead ? '<span class="dim">' + st.ahead + " ahead</span>" : "") + "</div>");
       rows.push('<button type="button" class="ws-row ws-link" data-action="open-project" data-path="' + attr(path) + '" data-tab="changes" title="Open this project\'s Git changes"><svg class="icon" aria-hidden="true"><use href="#i-file"></use></svg><span class="grow">Changes</span>' +
-        (changed ? '<span class="ws-diff">' + changed + " file" + (changed === 1 ? "" : "s") + "</span>" : '<span class="dim">clean</span>') + "</button>");
+        (changed ? '<span class="ws-diff">' + changed + " file" + (changed === 1 ? "" : "s") + "</span>" : '<span class="dim" title="No uncommitted changes in the working tree">clean</span>') + "</button>");
       var badges = diffBadges(AI.ws && AI.ws.diff);
       if (badges) rows.push('<div class="ws-badges">' + badges + "</div>");
     }
     rows.push('<div class="ws-sep"></div>');
     rows.push(outputsSection());
     rows.push('<div class="ws-sep"></div>');
-    rows.push(terminalsSection(path));
-    rows.push('<div class="ws-sep"></div>');
-    rows.push('<button type="button" class="ws-row ws-link" data-action="open-project" data-path="' + attr(path) + '"><svg class="icon" aria-hidden="true"><use href="#i-chevron"></use></svg><span class="grow">Open project</span></button>');
-    rows.push('<button type="button" class="ws-row ws-link" data-action="open-terminal" data-path="' + attr(path) + '"><svg class="icon" aria-hidden="true"><use href="#i-code"></use></svg><span class="grow">Terminal here</span></button>');
+    rows.push('<div class="ws-head ws-work-head"><b class="grow">Workspace</b></div>');
+    rows.push('<button type="button" class="ws-row ws-link ws-action' + (AI.work.browser.open ? " is-on" : "") + '" data-action="work-browser" data-path="' + attr(path) + '" title="Open this project in a browser beside the conversation">' +
+      '<svg class="icon" aria-hidden="true"><use href="#i-globe"></use></svg>' +
+      '<span class="grow">Open browser</span>' +
+      '<span class="ws-item-kind">' + (site ? esc(siteName) + (siteUp ? ' <span class="ws-dot is-live" aria-hidden="true"></span>' : ' <span class="ws-dot is-off" aria-hidden="true"></span>') : "no site") + "</span></button>");
+    rows.push('<button type="button" class="ws-row ws-link ws-action' + (AI.work.terminal.open ? " is-on" : "") + '" data-action="work-terminal" data-path="' + attr(path) + '" title="Open a shell in this project beside the conversation">' +
+      '<svg class="icon" aria-hidden="true"><use href="#i-code"></use></svg>' +
+      '<span class="grow">Open terminal</span>' +
+      '<span class="ws-item-kind">' + (AI.work.terminal.open && AI.work.terminal.project === path ? "running" : "this project") + "</span></button>");
     morph(box, rows.join(""));
-    loadThreadTerms(path, box);
   }
 
   /* Search within one conversation: messages, steps, plans and reports.
@@ -10317,6 +10540,13 @@ var TERM_POLL_MS = 250;
       (team ? '<button type="button" class="btn btn-mini btn-ghost" data-action="team-open-from" data-id="' + attr(team.run) + '">See the run</button>' : "") +
       (t.pr_url ? '<button type="button" class="chip chip-pr" data-action="open-url" data-url="' + attr(t.pr_url) + '" title="' + attr(t.pr_url) + '"><svg class="icon" aria-hidden="true"><use href="#i-branch"></use></svg>' + esc(prLabel(t.pr_url)) + "</button>" : "") +
       (t.settled_at ? '<span class="chip chip-ok" title="Settled ' + attr(ago(t.settled_at)) + '">Settled</span>' : "") +
+      // The surfaces beside the conversation. Pressed state is the open one;
+      // each is also reachable from the project card's Workspace rows.
+      '<div class="surface-toggles" role="group" aria-label="Workspace surfaces">' +
+      '<button type="button" class="btn btn-mini btn-ghost btn-icon surface-toggle' + (AI.work.env && !AI.work.browser.open && !AI.work.terminal.open ? " is-on" : "") + '" data-action="work-env" aria-pressed="' + (AI.work.env ? "true" : "false") + '" title="Environment" aria-label="Environment"><svg class="icon" aria-hidden="true"><use href="#i-layers"></use></svg></button>' +
+      '<button type="button" class="btn btn-mini btn-ghost btn-icon surface-toggle' + (AI.work.browser.open ? " is-on" : "") + '" data-action="work-browser" aria-pressed="' + (AI.work.browser.open ? "true" : "false") + '" title="Browser" aria-label="Browser"><svg class="icon" aria-hidden="true"><use href="#i-globe"></use></svg></button>' +
+      '<button type="button" class="btn btn-mini btn-ghost btn-icon surface-toggle' + (AI.work.terminal.open ? " is-on" : "") + '" data-action="work-terminal" aria-pressed="' + (AI.work.terminal.open ? "true" : "false") + '" title="Terminal" aria-label="Terminal"><svg class="icon" aria-hidden="true"><use href="#i-code"></use></svg></button>' +
+      "</div>" +
       '<button type="button" class="btn btn-mini btn-ghost btn-icon" data-action="thread-find" title="Search this conversation (Ctrl F)" aria-label="Search this conversation"><svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg></button>' +
       (AI.chapters && AI.chapters.length ? '<button type="button" class="btn btn-mini btn-ghost" data-action="chapters-open">Chapters ' + AI.chapters.length + "</button>" : "") +
       (r ? '<button type="button" class="btn btn-mini btn-ghost" data-action="open-run" data-id="' + attr(r.id) + '" title="Steps, capability calls, evidence and the durable timeline">Evidence</button>' : "") +
@@ -10453,6 +10683,7 @@ var TERM_POLL_MS = 250;
         return a._at < b._at ? 1 : -1;
       });
       var closed = !!AI.groupClosed[key];
+      var conversations = g.items.reduce(function (n, t) { return n + (t._kids ? t._kids.length : 0); }, g.items.length);
       var rows = g.items.map(function (t) {
         var head;
         if (t.runGroup) {
@@ -10474,7 +10705,7 @@ var TERM_POLL_MS = 250;
       }).join("");
       return '<div class="thread-group' + (closed ? " is-closed" : "") + '" data-key="p' + attr(key || "none") + '">' +
         '<button type="button" class="thread-group-head" data-action="thread-group" data-id="' + attr(key) + '" aria-expanded="' + (closed ? "false" : "true") + '">' +
-        '<svg class="icon" aria-hidden="true"><use href="#i-chevron-down"></use></svg><span class="grow nowrap">' + esc(threadProjectName(key)) + '</span><span class="thread-count">' + g.items.length + "</span></button>" +
+        '<svg class="icon" aria-hidden="true"><use href="#i-chevron-down"></use></svg><span class="grow nowrap">' + esc(threadProjectName(key)) + '</span><span class="thread-count" title="' + attr(g.items.length + (g.items.length === 1 ? " request" : " requests") + " \u00b7 " + conversations + (conversations === 1 ? " conversation" : " conversations")) + '">' + g.items.length + (g.items.length === 1 ? " request" : " requests") + "</span></button>" +
         (closed ? "" : '<div class="thread-group-body">' + rows + "</div>") + "</div>";
     }).join("");
   }
@@ -10541,8 +10772,10 @@ var TERM_POLL_MS = 250;
       '<div class="chat-stream" id="chat-stream" role="log" aria-live="off" aria-label="Conversation"></div>' +
       composer +
       "</div>" +
-      '</section><aside class="ws-card" id="ws-card" aria-label="This conversation’s project" hidden></aside></div></div>';
-    paintThreads(); paintChat(true); paintWsCard();
+      '</section><aside class="ws-card" id="ws-card" aria-label="This conversation’s project" hidden></aside>' +
+      '<section class="work-surface" id="work-surface" aria-label="Workspace surfaces" hidden></section>' +
+      "</div></div>";
+    paintThreads(); paintChat(true); paintWsCard(); paintWork();
     paintChatPlan();
     paintAttachments("chat");
     fitComposer();
@@ -10784,7 +11017,7 @@ var TERM_POLL_MS = 250;
     if (r.state === "running") primary = '<button type="button" class="btn btn-mini" data-action="team-pause" data-id="' + attr(r.id) + '">Pause</button>';
     if (r.state === "paused") primary = '<button type="button" class="btn btn-mini btn-primary" data-action="team-resume" data-id="' + attr(r.id) + '">Resume</button>';
     var over0 = ["planning", "awaiting_plan", "running", "paused"].indexOf(r.state) < 0;
-    if (!over0) actions += '<button type="button" class="btn btn-mini btn-ghost" data-action="team-cancel" data-id="' + attr(r.id) + '">Cancel run</button>';
+    if (!over0) actions += '<button type="button" class="btn btn-mini btn-danger" data-action="team-cancel" data-id="' + attr(r.id) + '">Cancel run</button>';
     // Evidence first, then the run's own control; deleting a finished run is a quiet icon.
     if (d.run_id) actions = '<button type="button" class="btn btn-mini btn-ghost" data-action="open-run" data-id="' + attr(d.run_id) + '" title="What devd recorded for this run: steps, capability calls, evidence and the durable timeline">Evidence</button>' + actions;
     if (over0) actions += '<button type="button" class="btn btn-mini btn-ghost btn-icon" data-action="team-delete" data-id="' + attr(r.id) + '" title="Delete this run" aria-label="Delete this run"><svg class="icon" aria-hidden="true"><use href="#i-trash"></use></svg></button>';
@@ -11161,10 +11394,10 @@ var TERM_POLL_MS = 250;
         c.added ? "devd is listed, but it points at a different devd" : "not set up yet";
       var act = !c.found && !c.added ? '<button type="button" class="btn btn-mini" disabled>Add devd</button>' :
         (c.added
-          ? (c.current ? "" : '<button type="button" class="btn btn-mini" data-action="agent-client-add" data-id="' + attr(c.id) + '" data-name="' + attr(c.name) + '" data-file="' + attr(c.config) + '">Update</button>') +
-            '<button type="button" class="btn btn-mini btn-ghost" data-action="agent-client-remove" data-id="' + attr(c.id) + '" data-name="' + attr(c.name) + '" data-file="' + attr(c.config) + '">Remove</button>'
-          : '<button type="button" class="btn btn-mini btn-primary" data-action="agent-client-add" data-id="' + attr(c.id) + '" data-name="' + attr(c.name) + '" data-file="' + attr(c.config) + '">Add devd</button>');
-      return uiRow({ dot: state, title: esc(c.name), sub: sub + ' <span class="mono dim" title="' + attr(c.config) + '">' + esc(c.config) + "</span>", actions: act, wrap: true });
+          ? (c.current ? "" : '<button type="button" class="btn btn-mini" data-action="agent-client-add" data-id="' + attr(c.id) + '" data-name="' + attr(c.name) + '">Update</button>') +
+            '<button type="button" class="btn btn-mini btn-ghost" data-action="agent-client-remove" data-id="' + attr(c.id) + '" data-name="' + attr(c.name) + '">Remove</button>'
+          : '<button type="button" class="btn btn-mini btn-primary" data-action="agent-client-add" data-id="' + attr(c.id) + '" data-name="' + attr(c.name) + '">Add devd</button>');
+      return uiRow({ dot: state, title: esc(c.name), sub: sub, actions: act, wrap: true });
     });
     return uiHead("Use devd from your coding agent", null, "") +
       '<p class="dim">Add devd to the tools you already work in, and they can read your sites, mail and logs, and ask before they change anything. devd edits only its own entry in each program\'s settings, keeps a copy of the old file, and never writes to a program that is not installed.</p>' +
@@ -13552,7 +13785,7 @@ var TERM_POLL_MS = 250;
       ACTIONS.tab({ dataset: { tab: TAB_LAST[g.id] || g.tabs[0] } });
     },
     "agent-client-add": function (n) {
-      uiConfirm({ title: "Add devd to " + n.dataset.name + "?", text: "devd adds one entry to " + n.dataset.file + ". Everything else in the file stays as it is, and a copy of the old file is kept beside it. Restart " + n.dataset.name + " afterwards.", confirm: "Add devd" }).then(function (yes) {
+      uiConfirm({ title: "Add devd to " + n.dataset.name + "?", text: "devd adds one entry to this program's settings file. Everything else in the file stays as it is, and a copy of the old file is kept beside it. Restart " + n.dataset.name + " afterwards.", confirm: "Add devd" }).then(function (yes) {
         if (!yes) return;
         run("agent_client.add", { client: n.dataset.id }, { quiet: true }).then(function (o) {
           if (o) toast("ok", "devd is added to " + n.dataset.name + ". Restart it to use devd.");
@@ -13561,7 +13794,7 @@ var TERM_POLL_MS = 250;
       });
     },
     "agent-client-remove": function (n) {
-      uiConfirm({ title: "Take devd out of " + n.dataset.name + "?", text: "Only the devd entry in " + n.dataset.file + " is removed.", confirm: "Remove", danger: true }).then(function (yes) {
+      uiConfirm({ title: "Take devd out of " + n.dataset.name + "?", text: "Only devd's own entry in this program's settings file is removed.", confirm: "Remove", danger: true }).then(function (yes) {
         if (!yes) return;
         run("agent_client.remove", { client: n.dataset.id }, { quiet: true }).then(function () { return loadMcp().then(render); });
       });
@@ -13710,7 +13943,15 @@ var TERM_POLL_MS = 250;
     "open-thread": function (n) {
       if (AI.permission === "bypass") AI.permission = "auto";
       var id = n.dataset.id;
-      AI.thread = { id: id, title: "", state: "idle", input_tokens: 0, output_tokens: 0 }; AI.lastId = 0; AI.events = []; AI.pending = []; AI.todos = []; AI.todosAt = 0; AI.queued = 0;
+      var known = (AI.threads || []).filter(function (x) { return x.id === id; })[0] || null;
+      // Paint the row we already have before the request returns: title,
+      // project and state are in the list, so a switch never shows the previous
+      // chat's header, Evidence or chapters while the new one is in flight.
+      AI.thread = { id: id, title: (known && known.title) || "", state: (known && known.state) || "idle",
+        project: (known && known.project) || "", input_tokens: 0, output_tokens: 0 };
+      AI.lastId = 0; AI.events = []; AI.pending = []; AI.todos = []; AI.todosAt = 0; AI.queued = 0;
+      AI.run = null; AI.chapters = []; AI.outputs = []; AI.outputsOpen = false;
+      var seq = ++AI.loadSeq;
       var shell = document.querySelector(".shell.panel-open");
       if (shell) shell.classList.remove("panel-open");
       if (state.view !== "assistant") { state.view = "assistant"; render(); }
@@ -13722,8 +13963,10 @@ var TERM_POLL_MS = 250;
       if (cached && Date.now() - cached.at < 120000) {
         applyThread(cached.data, true);
         renderAssistant();
+      } else {
+        renderAssistant();
       }
-      pollThread(true).then(function () { renderAssistant(); });
+      pollThread(true, seq).then(function () { if (seq === AI.loadSeq) renderAssistant(); });
     },
     // A rail entry opens its area. Pressed again on a window too narrow for the panel to
     // sit beside the page, it opens the panel over the page instead.
@@ -14207,6 +14450,63 @@ var TERM_POLL_MS = 250;
         termStartPolling();
       });
     },
+    "work-env": function () {
+      if (workVisible()) { closeWorkSurface("all"); AI.work.envOpen = true; AI.work.env = true; }
+      else AI.work.envOpen = !AI.work.envOpen;
+      paintSurfaceChrome();
+    },
+    "work-browser": function (n) {
+      var path = (n && n.dataset && n.dataset.path) || workProject();
+      if (AI.work.browser.open && AI.work.browser.project === path) { closeWorkSurface("browser"); return; }
+      openWorkBrowser(path);
+    },
+    "work-terminal": function (n) {
+      var path = (n && n.dataset && n.dataset.path) || workProject();
+      if (AI.work.terminal.open && AI.work.terminal.project === path) { closeWorkSurface("terminal"); return; }
+      openWorkTerminal(path, false);
+    },
+    "work-close": function (n) { closeWorkSurface((n && n.dataset && n.dataset.surface) || "all"); },
+    "work-terminal-new": function (n) { openWorkTerminal((n && n.dataset && n.dataset.path) || workProject(), true); },
+    "work-open-project": function (n) { openProject(n.dataset.path); },
+    "work-browser-go": function () {
+      var input = el("work-url");
+      var url = input ? String(input.value || "").trim() : "";
+      if (!/^https?:\/\//i.test(url)) url = "https://" + url;
+      try { new URL(url); } catch (e) { toast("warn", "That is not an address."); return; }
+      AI.work.browser.url = url;
+      AI.work.browser.error = null;
+      paintWork();
+    },
+    "work-browser-reload": function () {
+      var frame = el("work-browser-frame");
+      if (frame) frame.src = AI.work.browser.url;
+    },
+    "work-browser-site": function () {
+      var site = workSiteFor(workProject());
+      if (!site) return toast("warn", "This project has no site yet.");
+      AI.work.browser.site = site; AI.work.browser.url = site.url; paintWork();
+    },
+    "work-browser-anyway": function () {
+      var site = workSiteFor(workProject());
+      if (site) { AI.work.browser.url = site.url; paintWork(); }
+      else toast("warn", "This project has no address to open.");
+    },
+    "work-browser-detect": function () {
+      ensureWorkSites(workProject());
+      setTimeout(function () {
+        var site = workSiteFor(workProject());
+        if (site) { AI.work.browser.url = site.url; paintWork(); }
+        else toast("warn", "No site or dev server found for this project.");
+      }, 600);
+    },
+    "work-site-start": function () {
+      var site = workSiteFor(workProject());
+      run("stack.start", {}, { quiet: true }).then(function () {
+        if (site) { AI.work.browser.site = site; AI.work.browser.url = site.url; }
+        paintWork();
+      });
+    },
+    "work-open-external": function () { if (AI.work.browser.url) ACTIONS["open-url"]({ dataset: { url: AI.work.browser.url } }); },
     "open-terminal-external": function (n) { run("project.terminal_external", { path: n.dataset.path }); },
     "open-develop": function (n) { DEV.path = n.dataset.path; DEV.ctx = null; DEV.detect = null; navigate("develop"); },
     "tool-install": function (n) { act("toolchain.install", { tool: n.dataset.id }).then(function () { if (state.view === "create") scheduleValidate(); }); },
@@ -16186,7 +16486,11 @@ var TERM_POLL_MS = 250;
         state.pendingThread = null;
         var t = (AI.threads || []).filter(function (x) { return x.id === id; })[0];
         if (t) ACTIONS["open-thread"]({ dataset: { id: id } });
-        else navigate("assistant", true);
+        // A conversation can be linked before the list has heard of it (a fork,
+        // a fresh run). Read it by id once; only a real 404 goes home.
+        else read("chat.get", { thread: id, brief: true })
+          .then(function () { ACTIONS["open-thread"]({ dataset: { id: id } }); })
+          .catch(function () { navigate("assistant", true); });
       });
   }
 
@@ -16309,31 +16613,31 @@ var TERM_POLL_MS = 250;
         // shapes, a readable line colour - never grey boxes on a grey page.
         themeVariables: {
           darkMode: true,
-          background: "#141416",
+          background: "#0b0c0e",
           fontFamily: "Inter Tight, system-ui, sans-serif",
           fontSize: "14px",
-          primaryColor: "#16233d",
-          primaryTextColor: "#e6eefc",
-          primaryBorderColor: "#4f8ff7",
+          primaryColor: "#17243c",
+          primaryTextColor: "#eef2fa",
+          primaryBorderColor: "#4f8cff",
           secondaryColor: "#10302e",
           secondaryTextColor: "#d9f5f2",
           secondaryBorderColor: "#2fb5a8",
-          tertiaryColor: "#241a3d",
+          tertiaryColor: "#241d3a",
           tertiaryTextColor: "#ece6fd",
-          tertiaryBorderColor: "#9b7bf5",
-          lineColor: "#8ab4ff",
-          textColor: "#d6d6dc",
-          mainBkg: "#16233d",
-          nodeBorder: "#4f8ff7",
-          clusterBkg: "#17171b",
-          clusterBorder: "#33333a",
-          edgeLabelBackground: "#141416",
+          tertiaryBorderColor: "#8f7cf5",
+          lineColor: "#9cbcff",
+          textColor: "#d9dbe0",
+          mainBkg: "#17243c",
+          nodeBorder: "#4f8cff",
+          clusterBkg: "#121417",
+          clusterBorder: "#333941",
+          edgeLabelBackground: "#0b0c0e",
           noteBkgColor: "#2c2510",
           noteBorderColor: "#e9b44c",
           noteTextColor: "#f6e7c4",
-          actorBkg: "#16233d",
-          actorBorder: "#4f8ff7",
-          signalColor: "#8ab4ff",
+          actorBkg: "#17243c",
+          actorBorder: "#4f8cff",
+          signalColor: "#9cbcff",
           git0: "#4f8ff7", git1: "#2fb5a8", git2: "#9b7bf5", git3: "#e9b44c", git4: "#f08fb1", git5: "#3ec27f",
           pie1: "#4f8ff7", pie2: "#2fb5a8", pie3: "#9b7bf5", pie4: "#e9b44c", pie5: "#f08fb1", pie6: "#3ec27f"
         }
