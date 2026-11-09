@@ -7368,7 +7368,10 @@ pre.mermaid svg { max-width: 100%; height: auto; }
 /* A conversation swap is a place change: it fades in from a few pixels below,
  * once, so the eye follows the new content without the page jumping. */
 @keyframes thread-swap { from { opacity: 0; transform: translateY(4px); } }
-#chat-stream.thread-swap, .run-stream.thread-swap { animation: thread-swap 180ms var(--ease-out) both; }
+/* A conversation change is one instant swap. There is no entrance animation:
+ * the old stream is replaced in a single frame, so sending or switching never
+ * fades the conversation out and back in. */
+#chat-stream.thread-swap, .run-stream.thread-swap { animation: none; }
 
 @media (prefers-reduced-motion: reduce) {
   #chat-stream.thread-swap, .run-stream.thread-swap { animation: none; }

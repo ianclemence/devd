@@ -265,6 +265,13 @@ the reviewed commit, verified/total, accepted by hand, retries, stalls and
 baseline failures. It is built from the persisted tasks and events, not from the
 run's prose.
 
+Sending a message to the open conversation patches it in place: the header,
+project card, composer and scroll stay, and the sent message arrives through the
+normal poll. Switching conversations prepares the destination before showing it:
+its events are read in full while the current conversation stays visible, then
+one instant swap replaces the stream. There is no full-page rebuild and no
+entrance animation.
+
 The surfaces belong to the conversation's project. Switching chats re-points the
 browser and leaves an old shell running with a banner saying which project it
 belongs to. Closing a surface never kills a shell. A full reload starts with both

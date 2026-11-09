@@ -10,6 +10,42 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.27.2] - 2026-11-09 - Sending a message never rebuilds the Assistant
+
+### The measured cause
+
+Sending to the open conversation replaced `AI.thread` with a bare object (no project, title or
+team), then called `render()` and, after the poll, `renderAssistant()`. That was **two full
+`#main` rebuilds per send**. Each rebuild removed `#chat-stream[data-thread]`, so `paintChat` took
+the "fresh conversation" branch and replaced the whole stream, then played a 180 ms
+`thread-swap` fade/slide — **twice**. The bare thread also dropped the project card for a frame, so
+the conversation column widened and snapped back. Switching a conversation did one full rebuild and
+one animated stream swap.
+
+### The fix
+
+- **A send to the open conversation patches it in place.** The thread, its project card, its scroll
+  and its composer stay; the sent message and the working state arrive through the normal poll.
+- **A new conversation** takes its id and project and reads its first page without a full render;
+  only a send from another screen crosses to the Assistant.
+- **Switching conversations reads the destination first.** The current conversation stays visible
+  while every page is fetched, then one instant swap paints the new one. The chosen row is marked
+  while it loads. No empty intermediate page, no full rebuild.
+- **The `thread-swap` entrance animation is gone.** A conversation change is one frame, not a fade.
+- **The project card column is reserved for every existing conversation**, so switching between
+  chats cannot change the column width; a chat with no project shows its conversation card.
+- **Composer status, attachments and the send icon are rewritten only when their content changes**,
+  so idle polls no longer blink them.
+
+Measured with a DOM/layout observer on a 23-turn conversation: sending now performs **0 full page
+replacements, 0 stream replacements, 0 layout shifts**; switching performs **0 page replacements,
+1 instant stream swap, a 0.0006 layout shift**. Before: 2 page replacements and 2 animated swaps on
+send, 1 + 1 on switch.
+- A UI contract test now pins the no-rebuild send, the preloaded switch and the removed swap
+  animation.
+
+---
+
 ## [0.27.1] - 2026-11-09 - The conversation opens on its current message
 
 ### The window

@@ -1722,6 +1722,21 @@ fn removing_a_project_is_a_danger_action() {
 }
 
 #[test]
+fn sending_and_switching_do_not_rebuild_the_assistant() {
+    // Measured before this: sending did two full `#main` innerHTML replacements
+    // and two whole-stream swaps (each with a 180 ms entrance animation);
+    // switching a conversation did one full page rebuild and one animated swap.
+    // A send to the open conversation now patches it, and a switch prepares the
+    // conversation before a single instant swap.
+    assert!(APP.contains("function fetchThreadData"), "a conversation is read before it is shown");
+    assert!(APP.contains("AI.pendingThread"), "a switch marks the chosen row while the old conversation stays");
+    assert!(APP.contains("if (AI.thread && AI.thread.id === id)"), "an existing conversation is continued in place");
+    let at = CSS.find("#chat-stream.thread-swap").expect("the swap rule exists");
+    let rule = &CSS[at..(at + 160).min(CSS.len())];
+    assert!(rule.contains("animation: none"), "a conversation swap is not an entrance animation: {rule}");
+}
+
+#[test]
 fn the_assistant_has_browser_and_terminal_surfaces() {
     assert!(APP.contains("id=\"work-surface\""), "a work surface exists beside the conversation");
     assert!(APP.contains("class=\"work-pane work-browser\""), "the browser is a surface");

@@ -9100,6 +9100,39 @@ var TERM_POLL_MS = 250;
       }
   }
 
+  /* Every event of a conversation, page by page (the server returns 500 at a
+   * time), without touching the screen. `pollThread` applies it to the open
+   * conversation; `open-thread` uses it to prepare a conversation before
+   * swapping the visible one, so switching never shows an empty intermediate. */
+  function fetchThreadData(tid, after, seq) {
+    var acc = null;
+    var pages = 0;
+    function page(next) {
+      return read("chat.get", { thread: tid, after: next, brief: true }).then(function (d) {
+        // A slower answer for a conversation the person has left is discarded.
+        if (seq !== undefined && seq !== AI.loadSeq) return null;
+        if (!acc) {
+          acc = d;
+        } else {
+          acc.events = (acc.events || []).concat(d.events || []);
+          acc.thread = d.thread;
+          acc.pending = d.pending;
+          acc.running = d.running;
+          acc.chapters = d.chapters;
+          acc.queued = d.queued;
+          acc.run = d.run;
+        }
+        var got = (d.events || []).length;
+        if (got >= 500 && pages++ < 40) {
+          var last = d.events[d.events.length - 1];
+          return page(last ? last.id : next);
+        }
+        return acc;
+      });
+    }
+    return page(after || 0);
+  }
+
   function pollThread(full, seq) {
     if (!AI.thread) return Promise.resolve();
     var tid = AI.thread.id;
@@ -9115,36 +9148,11 @@ var TERM_POLL_MS = 250;
         AI.threadCache[tid] = { at: Date.now(), data: d, complete: true };
       });
     }
-    // A conversation can be longer than the server's page (500 events). Reading
-    // only the first page showed its oldest messages and left the current ones
-    // for a later timer tick; opening a chat looked frozen until a message was
-    // sent. Read every page, then paint once.
-    var acc = null;
-    var pages = 0;
-    function page(after) {
-      return read("chat.get", { thread: tid, after: after, brief: true }).then(function (d) {
-        if (at !== AI.loadSeq || !AI.thread || AI.thread.id !== tid) return;
-        if (!acc) {
-          acc = d;
-        } else {
-          acc.events = (acc.events || []).concat(d.events || []);
-          acc.thread = d.thread;
-          acc.pending = d.pending;
-          acc.running = d.running;
-          acc.chapters = d.chapters;
-          acc.queued = d.queued;
-          acc.run = d.run;
-        }
-        var got = (d.events || []).length;
-        if (got >= 500 && pages++ < 40) {
-          var last = d.events[d.events.length - 1];
-          return page(last ? last.id : after);
-        }
-        applyThread(acc, true, true);
-        AI.threadCache[tid] = { at: Date.now(), data: acc, complete: true };
-      });
-    }
-    return page(0);
+    return fetchThreadData(tid, 0, at).then(function (acc) {
+      if (!acc || at !== AI.loadSeq || !AI.thread || AI.thread.id !== tid) return;
+      applyThread(acc, true, true);
+      AI.threadCache[tid] = { at: Date.now(), data: acc, complete: true };
+    });
   }
 
   function startThreadTimer() {
@@ -10312,7 +10320,7 @@ var TERM_POLL_MS = 250;
       // place. A terminal may sit beside it on a very wide window (CSS decides).
       assistant.classList.toggle("env-hidden", b.open);
       assistant.classList.toggle("env-open", !open && !!AI.work.envOpen && window.innerWidth < 1440);
-      assistant.classList.toggle("has-card", !!path);
+      assistant.classList.toggle("has-card", !!(path || (AI.thread && AI.thread.id)));
     }
     box.hidden = !open;
     if (!open) { box.innerHTML = ""; return; }
@@ -10591,6 +10599,7 @@ var TERM_POLL_MS = 250;
     var box = el("chat-stream");
     if (!box) return;
     paintComposerStatus();
+    paintComposerThread();
     var key = chatPaintKey();
     if (!force && key === AI.paintKey) return;
     // A text selection lives in the DOM; replacing it just to redraw the same conversation is rude.
@@ -10618,11 +10627,6 @@ var TERM_POLL_MS = 250;
     if (fresh) {
       box.innerHTML = chatHtml();
       box.setAttribute("data-thread", tid);
-      // One short entrance for the new conversation; re-adding the class after
-      // a reflow replays it on the next swap without animating every refresh.
-      box.classList.remove("thread-swap");
-      void box.offsetWidth;
-      box.classList.add("thread-swap");
     } else {
       // Same conversation: patch it, so what the reader has open, loaded or selected stays.
       morph(box, chatHtml());
@@ -10646,7 +10650,10 @@ var TERM_POLL_MS = 250;
     if (send) {
       // The arrow always sends or queues. While it works, the square beside it stops; a message
       // written now is kept for the next step instead of being refused.
-      send.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#i-arrow-up"></use></svg>';
+      if (send.dataset.icon !== "arrow") {
+        send.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#i-arrow-up"></use></svg>';
+        send.dataset.icon = "arrow";
+      }
       send.setAttribute("data-action", "chat-send");
       send.setAttribute("aria-label", busy ? "Queue this message" : "Send");
       send.setAttribute("title", busy ? "Queue this message for the next step" : "Send");
@@ -10761,7 +10768,7 @@ var TERM_POLL_MS = 250;
   /* One row. A request has two lines: its title, then where it stands and when. A
      specialist under it is one line: its face (the role) and its task. */
   function threadRowHtml(t, child) {
-    var active = AI.thread && AI.thread.id === t.id;
+    var active = (AI.thread && AI.thread.id === t.id) || AI.pendingThread === t.id;
     var st = threadState(t);
     var title = t.title || "Conversation";
     var named = !t.team && /^([A-Za-z]+) \u00b7 (.+)$/.exec(title);
@@ -12418,7 +12425,20 @@ var TERM_POLL_MS = 250;
     if (!node) return;
     var s = composerStatus("chat");
     node.title = s.hint;
-    node.innerHTML = '<span class="composer-tab-dot dot-' + attr(s.tone) + '"></span><span>' + esc(s.text) + "</span>";
+    // The status is painted on every poll. Rewriting identical markup rebuilt
+    // the dot and its label each time, which reads as a blink on a quiet screen.
+    var html = '<span class="composer-tab-dot dot-' + attr(s.tone) + '"></span><span>' + esc(s.text) + "</span>";
+    if (node.__lastHtml === html) return;
+    node.__lastHtml = html;
+    node.innerHTML = html;
+  }
+
+  /* The project picker belongs to the new-conversation composer. Once the
+   * conversation exists, its project lives in the header and the card, so the
+   * picker retires without rebuilding the screen. */
+  function paintComposerThread() {
+    var btn = document.querySelector("#main .composer-project");
+    if (btn) btn.hidden = !!(AI.thread && AI.thread.id);
   }
 
   function composerModelButton(prefix) {
@@ -12904,8 +12924,12 @@ var TERM_POLL_MS = 250;
   function paintAttachments(lane) {
     var box = el(lane + "-attachments");
     if (box) {
+      var html = attachmentChips(lane);
+      if (box.__lastHtml !== html) {
+        box.__lastHtml = html;
+        box.innerHTML = html;
+      }
       box.hidden = !ATT[lane].length;
-      box.innerHTML = attachmentChips(lane);
     }
     syncComposerAction();
     saveAttachments();
@@ -14152,35 +14176,64 @@ var TERM_POLL_MS = 250;
     "open-thread": function (n) {
       if (AI.permission === "bypass") AI.permission = "auto";
       var id = n.dataset.id;
-      var known = (AI.threads || []).filter(function (x) { return x.id === id; })[0] || null;
-      // Paint the row we already have before the request returns: title,
-      // project and state are in the list, so a switch never shows the previous
-      // chat's header, Evidence or chapters while the new one is in flight.
-      AI.thread = { id: id, title: (known && known.title) || "", state: (known && known.state) || "idle",
-        project: (known && known.project) || "", input_tokens: 0, output_tokens: 0 };
-      AI.lastId = 0; AI.events = []; AI.pending = []; AI.todos = []; AI.todosAt = 0; AI.queued = 0;
-      AI.run = null; AI.chapters = []; AI.outputs = []; AI.outputsOpen = false;
+      if (AI.thread && AI.thread.id === id) return;
       var seq = ++AI.loadSeq;
+      var same = state.view === "assistant" && !!el("chat-stream");
       var shell = document.querySelector(".shell.panel-open");
       if (shell) shell.classList.remove("panel-open");
-      if (state.view !== "assistant") { state.view = "assistant"; render(); }
-      writeRoute("assistant", false);
-      // Home preloads the rows it shows. If one is already in hand, paint it now
-      // and refresh behind the reader; otherwise read it and let the list fill
-      // in behind (see renderAssistant), so neither waits on the other.
+
+      // Paint the destination only when its whole history is in hand. Until
+      // then the conversation already on screen stays exactly where it is: a
+      // switch is one swap, never an empty intermediate page.
+      function reveal(acc) {
+        if (!acc || seq !== AI.loadSeq) return;
+        applyThread(acc, true, true);
+        AI.threadCache[id] = { at: Date.now(), data: acc, complete: true };
+        AI.pendingThread = null;
+        if (state.view === "assistant" && el("chat-stream")) {
+          paintChat(true);
+          paintThreads();
+          paintWsCard();
+          paintWork();
+          paintComposerThread();
+        } else {
+          state.view = "assistant";
+          renderAssistant();
+        }
+        writeRoute("assistant", false);
+      }
+
       var cached = AI.threadCache[id];
       if (cached && cached.complete && Date.now() - cached.at < 120000) {
-        applyThread(cached.data, true);
-        renderAssistant();
-      } else {
-        renderAssistant();
+        reveal(cached.data);
+        // Refresh behind the reader so a cached conversation cannot go stale
+        // without ever taking the screen away.
+        fetchThreadData(id, 0, seq).then(function (fresh) {
+          if (!fresh || seq !== AI.loadSeq || !AI.thread || AI.thread.id !== id) return;
+          applyThread(fresh, true, true);
+          AI.threadCache[id] = { at: Date.now(), data: fresh, complete: true };
+          if (state.view === "assistant" && el("chat-stream")) {
+            paintChat(true);
+            paintThreads();
+            paintWsCard();
+          }
+        }).catch(function () {});
+        return;
       }
-      pollThread(true, seq).then(function () {
+
+      if (same) {
+        // Mark the row the person chose while the old conversation is still
+        // visible; the timer keeps the old one alive until the swap.
+        AI.pendingThread = id;
+        paintThreads();
+      }
+      // From another screen, leave that screen standing until the new one is
+      // ready rather than flashing an empty Assistant.
+      fetchThreadData(id, 0, seq).then(reveal).catch(function (e) {
         if (seq !== AI.loadSeq) return;
-        // The shell is already on screen; replace the conversation in place
-        // instead of rebuilding the whole assistant screen (which flickered).
-        if (state.view === "assistant" && el("chat-stream")) { paintChat(true); paintThreads(); paintWsCard(); }
-        else renderAssistant();
+        AI.pendingThread = null;
+        paintThreads();
+        toast("error", "Could not open that conversation: " + e.message);
       });
     },
     // A rail entry opens its area. Pressed again on a window too narrow for the panel to
@@ -14342,7 +14395,7 @@ var TERM_POLL_MS = 250;
       var shell = document.querySelector(".shell");
       if (shell) shell.classList.toggle("panel-open");
     },
-    "chat-new": function () { if (AI.permission === "bypass") AI.permission = "auto"; AI.composer = AI.askText || draftLoad(); AI.thread = null; AI.events = []; AI.pending = []; AI.lastId = 0; AI.todos = []; AI.todosAt = 0; AI.queued = 0; writeRoute("assistant", false); renderAssistant(); },
+    "chat-new": function () { if (AI.permission === "bypass") AI.permission = "auto"; AI.composer = AI.askText || draftLoad(); AI.thread = null; AI.events = []; AI.pending = []; AI.lastId = 0; AI.todos = []; AI.todosAt = 0; AI.queued = 0; AI.pendingThread = null; writeRoute("assistant", false); renderAssistant(); },
     "chat-plan": function () {
       var rows = (AI.todos || []).map(function (t) {
         var st = t.status || "open";
@@ -16503,12 +16556,46 @@ var TERM_POLL_MS = 250;
         // It is working; the header's queue count is the acknowledgement. A
         // toast on every message was noise, not information.
         AI.queued = queued;
-        pollThread(false).then(function () { paintChat(); });
+        pollThread(false).then(function () { paintChat(); paintThreads(); });
         return;
       }
-      AI.thread = { id: id, title: "", state: "running", input_tokens: 0, output_tokens: 0 }; AI.lastId = 0; AI.events = []; AI.pending = []; AI.queued = queued;
-      state.view = "assistant"; render();
-      read("chat.list").then(function (t) { AI.threads = t; return pollThread(true); }).then(renderAssistant);
+      // The conversation already on screen is the same one: keep its DOM, its
+      // scroll, its header and its project card. The poll appends the message
+      // and the working state in place; a full render here was a visible break.
+      if (AI.thread && AI.thread.id === id) {
+        AI.thread.state = "running";
+        AI.running = true;
+        AI.queued = queued || 0;
+        pollThread(false).then(function () { paintChat(); paintThreads(); paintWsCard(); paintComposerThread(); });
+        refreshThreadList().catch(function () {});
+        return;
+      }
+      // A new conversation: take its id and project without rebuilding the
+      // screen, then read the first page so the message appears in place.
+      var project = (o.data && o.data.project) || args.project || AI.project || (AI.thread && AI.thread.project) || "";
+      AI.thread = { id: id, title: (o.data && o.data.title) || "", state: "running", project: project, input_tokens: 0, output_tokens: 0 };
+      AI.running = true;
+      AI.lastId = 0; AI.events = []; AI.pending = []; AI.todos = []; AI.todosAt = 0; AI.queued = queued || 0;
+      AI.run = (o.data && o.data.run) || null; AI.chapters = []; AI.outputs = []; AI.outputsOpen = false;
+      AI.pendingThread = null;
+      var sameView = state.view === "assistant" && !!el("chat-stream");
+      if (!sameView) { state.view = "assistant"; render(); }
+      else { paintComposerThread(); paintThreads(); }
+      var seq = AI.loadSeq;
+      read("chat.list").then(function (t) { AI.threads = t || []; paintThreads(); }).catch(function () {});
+      fetchThreadData(id, 0, seq).then(function (acc) {
+        if (!acc || seq !== AI.loadSeq || !AI.thread || AI.thread.id !== id) return;
+        applyThread(acc, true, true);
+        AI.threadCache[id] = { at: Date.now(), data: acc, complete: true };
+        if (state.view === "assistant" && el("chat-stream")) {
+          paintChat(true); paintThreads(); paintWsCard(); paintWork(); paintComposerThread();
+        } else {
+          renderAssistant();
+        }
+      }).catch(function () {
+        // The send succeeded; let the normal poll fill the screen.
+        pollThread(true).then(function () { paintChat(true); });
+      });
     }).catch(function (e) {
       var network = OFFLINE || /cannot reach|can't reach|failed to fetch|network/i.test(e.message || "");
       if (network) {
