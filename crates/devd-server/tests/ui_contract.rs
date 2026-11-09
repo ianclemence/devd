@@ -1865,6 +1865,33 @@ fn the_assistant_has_browser_and_terminal_surfaces() {
 }
 
 #[test]
+fn the_work_surfaces_read_like_a_desktop_browser_and_terminal() {
+    // The browser and the terminal share one compact chrome: a filled active
+    // tab, a closeable tab strip with a surface close at the right, and one
+    // context/address row. The old third row and outlined mini-buttons are gone.
+    assert!(APP.contains("class=\"work-tab-list\""), "tabs live in their own scroller");
+    assert!(APP.contains("class=\"work-strip-actions\""), "the surface actions stay at the right");
+    assert!(APP.contains("class=\"work-address\""), "the browser has one address row");
+    assert!(APP.contains("placeholder=\"Type a URL\""), "the address says what to do");
+    assert!(APP.contains("attr(displayUrl(b.url || \"\"))"), "the field hides the default port");
+    assert!(APP.contains("class=\"work-context\""), "the terminal has one folder row");
+    assert!(APP.contains("data-action=\"work-terminal-copy\""), "the terminal can copy its screen");
+    assert!(APP.contains("class=\"work-empty-icon\""), "the empty state has a quiet glyph");
+    assert!(APP.contains("class=\"work-link is-primary\""), "the empty state uses a text action");
+    assert!(APP.contains("class=\"work-action-text\""), "a wide pane names Open externally");
+    assert!(!APP.contains("work-browser-bar"), "the redundant address row is gone");
+    assert!(!APP.contains("class=\"work-head\""), "the old tall header is gone");
+    assert!(APP.contains("!b.fresh"), "a new tab stays empty instead of reopening the site");
+    let new_tab = APP.find("\"work-browser-tab-new\": function").expect("new tab");
+    assert!(&APP[new_tab..(new_tab + 1200).min(APP.len())].contains("b.fresh = true"), "a new tab is marked fresh");
+    assert!(CSS.contains("@container (max-width: 560px)"), "a narrow pane drops the redundant identity");
+    assert!(CSS.contains("@container (min-width: 720px)"), "a full terminal drops the folder row");
+    assert!(CSS.contains("@container (min-width: 680px)"), "a wide pane names the external action");
+    assert!(CSS.contains(".work-terminal .work-context { display: none; }"));
+    assert!(CSS.contains(".work-dot.is-live"), "the browser says when the site is live");
+}
+
+#[test]
 fn the_mcp_screen_does_not_print_machine_paths() {
     // The path is a platform detail the backend knows; the screen is the same on
     // Windows, Linux and macOS and should not look like a Windows registry dump.

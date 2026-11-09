@@ -10,6 +10,36 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.27.5] - 2026-11-09 - The Browser and Terminal read like a desktop app
+
+### What changed
+
+The Browser and the Terminal were three stacked bars of outlined mini-buttons: a tab strip, a
+title row and a separate address row, with the active tab almost invisible. They now follow the
+Claude Code desktop surfaces:
+
+- **One compact chrome, two rows.** A tab strip with a filled active tab, a close action on every
+  tab, one new-tab button, and the surface actions at the right. Below it, one context/address row.
+  The old title row and the separate "Open" button are gone.
+- **Browser.** Reload, a globe, the `Browser` name, a live/off dot, an address field with the default
+  port hidden (`https://nairobiunwind.test`, not `:443`), and a go arrow. A wide pane names
+  **Open externally**; a narrow pane drops the redundant identity. Empty states are quiet: a glyph,
+  a title, one sentence, and primary/secondary text links instead of heavy buttons.
+- **Terminal.** Tabs, new, copy and close in the strip; one folder row; the xterm palette matches the
+  app, with an amber cursor. Copy strips ANSI escape sequences and copies the selection when there is
+  one, otherwise the screen. A full split terminal drops the folder row because the prompt says where
+  it is.
+- **A new browser tab stays empty** instead of immediately reopening the project's site; the site is
+  one link away.
+- **Responsive at all five widths** (1920, 1440, 1280, 768, 390). Narrow panes get finger-sized
+  controls; the tab strip scrolls horizontally; nothing overflows.
+
+Measured on the installed build at 1920 × 1080, 1440 × 900, 1280 × 800, 768 × 900 and 390 × 844:
+two chrome rows, no horizontal overflow, and the same interactions (new tab, navigate, switch tab,
+close tab, new terminal, copy, close, drag the split) on every size.
+
+---
+
 ## [0.27.4] - 2026-11-09 - The Assistant composer has no status pill
 
 The Assistant's composer carried a `Ready` / `Working` / `Waiting` pill above it. The conversation's

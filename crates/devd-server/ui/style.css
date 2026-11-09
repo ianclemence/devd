@@ -6993,43 +6993,178 @@ th, .table th { font-size: var(--text-xs); font-weight: 600; text-transform: non
 /* The work surfaces: Browser and Terminal, beside the conversation. The
  * Environment card is a column of its own; a terminal may sit beside it on a
  * very wide window, while the Browser always takes the wide column. */
+/* ---- work surfaces: browser and terminal -------------------------------- */
 .work-surface { display: none; min-width: 0; min-height: 0; }
 .work-surface:not([hidden]) { display: flex; flex-direction: column; }
 .work-surface > .work-pane { flex: 1; }
-.work-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--color-base-100); border-left: 1px solid var(--line); }
-.work-head { display: flex; align-items: center; gap: 8px; flex: none; height: 44px; min-height: 44px; padding: 0 10px 0 12px; border-bottom: 1px solid var(--line); background: var(--bg-rail); color: var(--fg-mute); font-size: var(--text-sm); }
-.work-head b { color: var(--color-base-content); font-weight: 600; white-space: nowrap; }
-.work-head .icon { width: 15px; height: 15px; color: var(--fg-dim); flex: none; }
-/* A Claude-Code style tab strip: compact switchable tabs, each with its own
-   close, and one + to open another. It sits at the top of its own pane so the
-   Browser and the Terminal can each carry a different set. */
-.work-tabs { display: flex; align-items: flex-end; gap: 2px; flex: none; min-height: 38px; padding: 6px 8px 0; border-bottom: 1px solid var(--line); background: var(--bg-rail); overflow-x: auto; scrollbar-width: none; }
-.work-tabs::-webkit-scrollbar { display: none; }
-.work-tab { display: inline-flex; align-items: center; gap: 1px; flex: none; min-width: 0; max-width: 230px; height: 30px; margin-bottom: -1px; padding: 0 3px 0 11px; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; color: var(--fg-dim); font-size: var(--text-xs); }
-.work-tab.is-active { position: relative; z-index: 1; background: var(--color-base-200); border-color: var(--line); border-bottom-color: transparent; box-shadow: 0 1px 0 0 var(--bg-rail); color: var(--color-base-content); }
-.work-tab:not(.is-active):hover { border-radius: var(--radius); background: var(--bg-hover); color: var(--color-base-content); }
+.work-pane {
+  display: flex; flex-direction: column; min-width: 0; min-height: 0;
+  background: var(--color-base-100); border-left: 1px solid var(--line);
+  container-type: inline-size;
+}
+
+/* One strip for every tab, browser and terminal alike. The active tab is a
+   filled chip, not a bordered page tab; the close and surface actions sit at
+   the right where they do not move when a tab is added. */
+.work-tabs {
+  display: flex; align-items: center; gap: 6px; flex: none;
+  height: 42px; min-height: 42px; padding: 0 6px;
+  border-bottom: 1px solid var(--line); background: var(--bg-rail);
+}
+.work-tab-list { display: flex; align-items: center; gap: 2px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.work-tab-list::-webkit-scrollbar { display: none; }
+.work-tab {
+  display: inline-flex; align-items: center; gap: 1px; flex: none; min-width: 0;
+  max-width: 210px; height: 30px; padding: 0 3px 0 10px;
+  border: 0; border-radius: var(--radius); background: transparent; color: var(--fg-dim);
+  font-size: var(--text-xs); transition: background-color 120ms ease, color 120ms ease;
+}
+.work-tab.is-active {
+  background: color-mix(in srgb, var(--color-base-content) 9%, var(--bg-rail)); color: var(--color-base-content);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), inset 0 0 0 1px color-mix(in srgb, var(--color-base-content) 8%, transparent);
+}
+@media (hover: hover) and (pointer: fine) {
+  .work-tab:not(.is-active):hover { background: var(--bg-hover); color: var(--fg-mute); }
+}
 .work-tab.is-ended .work-tab-pick { color: var(--fg-dim); text-decoration: line-through; }
-.work-tab-pick { min-width: 0; max-width: 185px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
-.work-tab-pick:hover { color: var(--color-base-content); }
-.work-tab-x, .work-tab-add { display: inline-grid; place-items: center; flex: none; width: 22px; height: 22px; padding: 0; border: 0; border-radius: var(--radius); background: none; color: var(--fg-dim); cursor: pointer; }
-.work-tab-x:hover, .work-tab-add:hover { background: var(--bg-hover); color: var(--color-base-content); }
-.work-tab-x .icon, .work-tab-add .icon { width: 12px; height: 12px; }
-.work-tab-add { align-self: center; margin-left: 2px; }
-.work-sub { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-dim); font-size: var(--text-xs); }
-.work-sub.mono { font-family: var(--mono); }
+.work-tab-pick {
+  min-width: 0; max-width: 174px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.work-tab-pick:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; border-radius: var(--radius-sm); }
+.work-tab-x, .work-tab-add {
+  display: inline-grid; place-items: center; flex: none; width: 20px; height: 20px;
+  padding: 0; border: 0; border-radius: var(--radius-sm); background: none; color: var(--fg-dim); cursor: pointer;
+  opacity: 0.6; transition: background-color 120ms ease, color 120ms ease, opacity 120ms ease;
+}
+.work-tab-x .icon { width: 10px; height: 10px; }
+.work-tab-add { width: 26px; height: 26px; opacity: 0.8; }
+.work-tab-add .icon { width: 13px; height: 13px; }
+@media (hover: hover) and (pointer: fine) {
+  .work-tab-x:hover, .work-tab-add:hover { background: var(--bg-hover); color: var(--color-base-content); opacity: 1; }
+}
+.work-tab.is-active .work-tab-x { opacity: 0.85; }
+.work-tab-x:active, .work-tab-add:active, .work-icon-btn:active, .work-go:active { transform: scale(0.92); }
+.work-strip-actions { display: flex; align-items: center; gap: 2px; flex: none; margin-left: auto; }
+.work-icon-btn, .work-go {
+  display: inline-grid; place-items: center; flex: none; width: 26px; height: 26px;
+  padding: 0; border: 0; border-radius: var(--radius-sm); background: none; color: var(--fg-dim); cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease, transform 120ms ease;
+}
+.work-icon-btn .icon { width: 14px; height: 14px; }
+.work-go { width: 22px; height: 22px; }
+.work-go .icon { width: 12px; height: 12px; }
+.work-action-text { display: none; }
+@media (hover: hover) and (pointer: fine) {
+  .work-icon-btn:hover, .work-go:hover { background: var(--bg-hover); color: var(--color-base-content); }
+}
+@container (min-width: 680px) {
+  .work-icon-btn.work-action { display: inline-flex; align-items: center; gap: 6px; width: auto; padding: 0 9px; font-size: var(--text-xs); font-weight: 500; }
+  .work-action .work-action-text { display: inline; }
+}
+.work-icon-btn:focus-visible, .work-go:focus-visible, .work-tab-x:focus-visible, .work-tab-add:focus-visible {
+  outline: 2px solid var(--accent-strong); outline-offset: 1px;
+}
+
+/* The context row: the address for the browser, the folder for a shell. */
+.work-address, .work-context {
+  display: flex; align-items: center; gap: 7px; flex: none;
+  height: 38px; min-height: 38px; padding: 0 8px;
+  border-bottom: 1px solid var(--line); background: var(--color-base-100);
+  color: var(--fg-mute); font-size: var(--text-xs);
+}
+.work-context { gap: 8px; padding: 0 10px; }
+.work-context .icon { width: 14px; height: 14px; color: var(--fg-dim); flex: none; }
+.work-context b { color: var(--color-base-content); font-size: var(--text-sm); font-weight: 600; white-space: nowrap; }
+.work-globe, .work-label { flex: none; }
+.work-globe { display: inline-grid; place-items: center; width: 14px; height: 14px; color: var(--fg-dim); }
+.work-globe .icon { width: 14px; height: 14px; }
+.work-label { color: var(--color-base-content); font-weight: 600; white-space: nowrap; }
+.work-path {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--fg-dim); font-size: var(--text-2xs);
+}
+.work-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--dot-off); }
+.work-dot.is-live { background: var(--dot-live); box-shadow: 0 0 0 3px color-mix(in srgb, var(--dot-live) 14%, transparent); }
+.work-address-field {
+  display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0;
+  height: 30px; padding: 0 3px 0 9px; border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--color-base-200); transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+.work-address-field:focus-within { border-color: var(--line-strong); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 12%, transparent); }
+.work-url {
+  flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; background: transparent;
+  color: var(--color-base-content); font: inherit; font-size: var(--text-xs);
+}
+.work-url::placeholder { color: var(--fg-dim); }
+.work-url:focus { outline: none; }
 .work-browser-body { flex: 1; min-height: 0; overflow: hidden; background: var(--bg-deep); }
 .work-browser-frame { display: block; width: 100%; height: 100%; border: 0; background: #fff; }
-.work-browser-bar { display: flex; align-items: center; gap: 6px; flex: none; padding: 7px 10px; border-bottom: 1px solid var(--line); background: var(--color-base-100); }
-.work-url { flex: 1; min-width: 0; height: 28px; font-size: var(--text-xs); }
-.work-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; height: 100%; padding: 32px 24px; text-align: center; color: var(--fg-mute); }
-.work-empty .icon { width: 28px; height: 28px; color: var(--fg-dim); }
+.work-empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 7px; height: 100%; padding: 30px 24px; text-align: center; color: var(--fg-mute);
+}
+.work-empty-icon {
+  display: grid; place-items: center; width: 32px; height: 32px; margin-bottom: 6px;
+  color: var(--fg-dim);
+}
+.work-empty-icon .icon { width: 26px; height: 26px; }
 .work-empty b { color: var(--color-base-content); font-size: var(--text-md); font-weight: 600; }
-.work-empty p { max-width: 340px; margin: 0; color: var(--fg-dim); font-size: var(--text-sm); line-height: 1.55; }
-.work-empty-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; margin-top: 4px; }
+.work-empty p { max-width: 310px; margin: 0; color: var(--fg-dim); font-size: var(--text-xs); line-height: 1.55; }
+.work-empty-links {
+  display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 8px;
+  margin-top: 5px; font-size: var(--text-xs);
+}
+.work-link {
+  padding: 0; border: 0; background: none; color: var(--fg-mute); font: inherit; font-size: inherit;
+  cursor: pointer; text-underline-offset: 2px;
+}
+.work-link.is-primary { color: var(--accent-text); font-weight: 500; }
+@media (hover: hover) and (pointer: fine) {
+  .work-link:hover { color: var(--color-base-content); text-decoration: underline; }
+  .work-link.is-primary:hover { color: var(--accent-strong); }
+}
+.work-link-sep { color: var(--fg-dim); }
 .work-term-body { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg-deep); }
-.work-term-body .term-host { flex: 1; min-height: 0; }
-.work-banner { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 12px; border-bottom: 1px solid var(--warn-line); background: var(--warn-quiet); color: var(--fg-mute); font-size: var(--text-xs); }
-.work-divider { flex: none; height: 6px; cursor: row-resize; background: var(--color-base-200); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.work-term-body .term-host { flex: 1; min-height: 0; height: auto; padding: 8px 10px; }
+.work-banner {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex: none;
+  padding: 7px 12px; border-bottom: 1px solid var(--warn-line); background: var(--warn-quiet);
+  color: var(--fg-mute); font-size: var(--text-xs);
+}
+.work-divider { flex: none; height: 1px; cursor: row-resize; background: var(--line); position: relative; }
+.work-divider::before {
+  content: ""; position: absolute; left: 50%; top: -3px; transform: translateX(-50%);
+  width: 28px; height: 5px; border-radius: var(--radius-sm); background: var(--line-strong);
+  opacity: 0; transition: opacity 120ms ease;
+}
+@media (hover: hover) and (pointer: fine) { .work-divider:hover::before { opacity: 1; } }
+.work-divider::after { content: ""; position: absolute; left: 0; right: 0; top: -5px; bottom: -5px; }
+
+/* A full-width terminal needs no folder row: the shell prompt already says
+   where it is. The row stays in a narrow side panel, like Claude's. */
+@container (min-width: 720px) {
+  .work-terminal .work-context { display: none; }
+}
+/* Inside a narrow pane the identity is redundant; the address needs the room,
+   and the controls get a finger-sized target. */
+@container (max-width: 560px) {
+  .work-globe, .work-label { display: none; }
+  .work-tabs { height: 44px; min-height: 44px; }
+  .work-tab { height: 32px; }
+  .work-tab-x { width: 22px; height: 22px; }
+  .work-tab-add, .work-icon-btn { width: 30px; height: 30px; }
+  .work-go { width: 26px; height: 26px; }
+  .work-address, .work-context { height: 40px; min-height: 40px; }
+  .work-address-field { height: 32px; }
+}
+@container (max-width: 450px) {
+  .work-tab { max-width: 150px; padding-left: 8px; }
+  .work-tab-pick { max-width: 118px; }
+  .work-address { gap: 5px; padding: 0 6px; }
+  .work-context { padding: 0 8px; }
+}
+
 .ws-work-head { height: 32px; min-height: 32px; padding: 4px 8px 0; color: var(--fg-dim); font-size: var(--text-xs); font-weight: 600; letter-spacing: .02em; text-transform: uppercase; }
 .ws-action .ws-item-kind { color: var(--fg-dim); font-size: var(--text-xs); margin-left: auto; }
 .ws-action.is-on { color: var(--accent-text); }
@@ -7989,16 +8124,6 @@ body {
 /* One continuous edge for the work column; not a line per pane. */
 .work-surface { border-left: 1px solid var(--line); }
 .work-pane { border-left: 0; }
-.work-head { border-bottom: 1px solid var(--line); }
-.work-browser-bar { border-bottom: 1px solid var(--line); }
-.work-divider {
-  position: relative; flex: none; height: 1px; margin: 0;
-  background: var(--line); border: 0;
-}
-.work-divider::after {
-  content: ""; position: absolute; left: 0; right: 0; top: -4px; bottom: -4px;
-  cursor: row-resize;
-}
 .assistant.work-both .work-surface { grid-template-rows: minmax(0, .58fr) 1px minmax(0, .42fr); }
 
 /* Fewer lines in lists: space and hover do the separating. */
@@ -8011,9 +8136,6 @@ body {
   border-color: transparent;
 }
 .ui-row, .svc, .task-row, .todo-row, .run-approval { transition: background-color 120ms ease; }
-
-/* Align the work surface's top line with the conversation header. */
-.work-head { height: 52px; min-height: 52px; }
 
 /* The jump pill sits above the composer, not on the last message. */
 .workspace-chat .jump-end { bottom: 92px; }
@@ -8034,14 +8156,14 @@ body {
 .dev-list .svc + .svc { box-shadow: none; }
 
 /* No rules under section heads. The head is a tonal label, not a fence. */
-.panel-head, .chat-head, .work-head, .work-browser-bar, .subnav, .tabs,
+.panel-head, .chat-head, .subnav, .tabs,
 .segmented.site-tabs, .st-headrow, .files-view .panel-head,
 .team-detail .chat-head, .modal-head, .drawer-head, .mail-tools, .mail-apps {
   border-bottom: 0;
   border-top: 0;
 }
 .subnav, .tabs, .segmented.site-tabs { padding-bottom: 8px; }
-.panel-head, .chat-head, .work-head { background: transparent; }
+.panel-head, .chat-head { background: transparent; }
 
 /* The stack picker is a list, not a column of outlined cards. */
 .dev-list .svc, .dev-list .svc + .svc {

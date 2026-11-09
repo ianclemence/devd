@@ -4937,15 +4937,15 @@ var TERM_POLL_MS = 250;
       // The window's own palette, so a shell looks like part of devd rather than
       // a block pasted in from another program.
       theme: {
-        background: "#070b14",
-        foreground: "#aab3c7",
-        cursor: "#6cb4ff",
-        selectionBackground: "rgba(10, 132, 255, 0.32)",
-        black: "#0a0f1a", red: "#ff7b7b", green: "#1fc16b", yellow: "#f6b51e",
-        blue: "#0a84ff", magenta: "#d7b6ff", cyan: "#47c2ff", white: "#eef1f8",
-        brightBlack: "#3b4660", brightRed: "#ffb4b4", brightGreen: "#8fe3b4",
-        brightYellow: "#ffd479", brightBlue: "#6cb4ff", brightMagenta: "#e3ccff",
-        brightCyan: "#8fd8ff", brightWhite: "#ffffff"
+        background: "#070809",
+        foreground: "#c6ccd6",
+        cursor: "#e9b44c",
+        selectionBackground: "rgba(79, 140, 255, 0.28)",
+        black: "#0b0c0e", red: "#f06a6a", green: "#3ec27f", yellow: "#e9b44c",
+        blue: "#6b9fff", magenta: "#b99cff", cyan: "#58c7d8", white: "#f1f2f4",
+        brightBlack: "#454a52", brightRed: "#ff9a9a", brightGreen: "#7be0aa",
+        brightYellow: "#ffd479", brightBlue: "#9cbcff", brightMagenta: "#d7c4ff",
+        brightCyan: "#8fdce8", brightWhite: "#ffffff"
       }
     });
     if (window.FitAddon && window.FitAddon.FitAddon) {
@@ -8025,7 +8025,7 @@ var TERM_POLL_MS = 250;
     loadSeq: 0,
     work: {
       project: "", env: true, envOpen: false, split: 58, sites: [], sitesFor: "",
-      browser: { open: false, url: "", project: "", loading: false, error: null, site: null, tabs: [], activeTab: 0 },
+      browser: { open: false, url: "", project: "", loading: false, error: null, site: null, tabs: [], activeTab: 0, fresh: false },
       terminal: { open: false, sessionId: null, project: "", ended: false, tabs: [], active: 0 }
     }
   };
@@ -10265,6 +10265,7 @@ var TERM_POLL_MS = 250;
   function setBrowserUrl(url) {
     var b = AI.work.browser;
     b.url = url || "";
+    if (b.url) b.fresh = false;
     if (!b.tabs || !b.tabs.length) {
       b.tabs = [{ url: b.url, title: browserTitleFor(b.url), name: "New tab" }];
       b.activeTab = 0;
@@ -10274,6 +10275,15 @@ var TERM_POLL_MS = 250;
     b.tabs[i] = { url: b.url, title: browserTitleFor(b.url), name: b.tabs[i].name || "New tab" };
   }
 
+  function workEmptyState(icon, title, text, links) {
+    return '<div class="work-empty">' +
+      '<span class="work-empty-icon" aria-hidden="true"><svg class="icon"><use href="#' + icon + '"></use></svg></span>' +
+      '<b>' + esc(title) + '</b>' +
+      '<p>' + esc(text) + '</p>' +
+      (links ? '<div class="work-empty-links">' + links + '</div>' : "") +
+      "</div>";
+  }
+
   function browserSurfaceHtml(path) {
     var b = AI.work.browser;
     var site = b.site || workSiteFor(path);
@@ -10281,49 +10291,52 @@ var TERM_POLL_MS = 250;
     var up = site ? !!(site.server_running || site.upstream_listening) : false;
     var tabs = b.tabs && b.tabs.length ? b.tabs : [{ url: b.url || "", title: "" }];
     var tabStrip = '<div class="work-tabs" role="tablist" aria-label="Browser tabs">' +
+      '<div class="work-tab-list">' +
       tabs.map(function (t, i) {
         var on = i === b.activeTab;
-        return '<div class="work-tab' + (on ? " is-active" : "") + '">' +
+        return '<div class="work-tab' + (on ? " is-active" : "") + '" data-key="b' + i + '">' +
           '<button type="button" class="work-tab-pick" role="tab" aria-selected="' + (on ? "true" : "false") + '" data-action="work-browser-tab" data-index="' + i + '" title="' + attr(t.url || "New tab") + '">' + esc(browserTabLabel(t)) + "</button>" +
           (tabs.length > 1 ? '<button type="button" class="work-tab-x" data-action="work-browser-tab-close" data-index="' + i + '" aria-label="Close tab" title="Close tab"><svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg></button>' : "") +
           "</div>";
       }).join("") +
-      '<button type="button" class="work-tab-add" data-action="work-browser-tab-new" aria-label="New tab" title="New tab"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg></button></div>';
+      '<button type="button" class="work-tab-add" data-action="work-browser-tab-new" aria-label="New tab" title="New tab"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg></button>' +
+      "</div>" +
+      '<div class="work-strip-actions">' +
+      '<button type="button" class="work-icon-btn work-action" data-action="work-open-external" aria-label="Open externally" title="Open externally"><svg class="icon" aria-hidden="true"><use href="#i-external"></use></svg><span class="work-action-text">Open externally</span></button>' +
+      '<button type="button" class="work-icon-btn" data-action="work-close" data-surface="browser" aria-label="Close browser" title="Close browser"><svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg></button>' +
+      "</div></div>";
+    var address = '<div class="work-address">' +
+      '<button type="button" class="work-icon-btn" data-action="work-browser-reload" aria-label="Reload" title="Reload"><svg class="icon" aria-hidden="true"><use href="#i-refresh"></use></svg></button>' +
+      '<span class="work-globe" aria-hidden="true"><svg class="icon"><use href="#i-globe"></use></svg></span>' +
+      '<span class="work-label">Browser</span>' +
+      (site ? '<span class="work-dot ' + (up ? "is-live" : "is-off") + '" title="' + attr(up ? host + " is running" : host + " is not answering") + '"></span>' : "") +
+      '<div class="work-address-field">' +
+      '<input id="work-url" class="work-url" type="text" spellcheck="false" autocomplete="off" value="' + attr(displayUrl(b.url || "")) + '" placeholder="Type a URL" aria-label="Address">' +
+      '<button type="button" class="work-go" data-action="work-browser-go" aria-label="Open address" title="Open address"><svg class="icon" aria-hidden="true"><use href="#i-arrow-right"></use></svg></button>' +
+      "</div></div>";
     var body;
-    if (!site) {
-      body = '<div class="work-empty"><svg class="icon" aria-hidden="true"><use href="#i-globe"></use></svg>' +
-        '<b>This project has no site</b>' +
-        '<p>devd has not registered an address for this folder. Create one, or open the project to add it.</p>' +
-        '<div class="work-empty-actions"><button type="button" class="btn btn-primary" data-action="work-open-project" data-path="' + attr(path) + '">Open project</button>' +
-        '<button type="button" class="btn" data-action="nav" data-view="sites">Open Sites</button></div></div>';
-    } else if (!up && !b.url) {
-      body = '<div class="work-empty"><svg class="icon" aria-hidden="true"><use href="#i-warn"></use></svg>' +
-        '<b>' + esc(host) + ' is not answering</b>' +
-        '<p>The site exists, but nothing is serving it right now.</p>' +
-        '<div class="work-empty-actions"><button type="button" class="btn btn-primary" data-action="work-site-start" data-path="' + attr(path) + '">Start the server</button>' +
-        '<button type="button" class="btn" data-action="work-browser-anyway">Open anyway</button></div></div>';
-    } else if (!b.url) {
-      body = '<div class="work-empty"><svg class="icon" aria-hidden="true"><use href="#i-globe"></use></svg>' +
-        '<b>Browse this project</b>' +
-        '<p>Type a URL, or open the site devd serves.</p>' +
-        '<div class="work-empty-actions"><button type="button" class="btn btn-primary" data-action="work-browser-site">Open ' + esc(host) + '</button>' +
-        '<button type="button" class="btn" data-action="work-browser-detect">Detect a dev server</button></div></div>';
-    } else {
+    if (b.url) {
       body = '<iframe id="work-browser-frame" class="work-browser-frame" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads allow-modals" src="' + attr(b.url) + '" title="' + attr(host || "Browser") + '"></iframe>';
+    } else if (!site) {
+      body = workEmptyState("i-globe", "This project has no site",
+        "devd has not registered an address for this folder. Type a URL above, create a site, or open the project to add one.",
+        '<button type="button" class="work-link is-primary" data-action="work-open-project" data-path="' + attr(path) + '">Open project</button>' +
+        '<span class="work-link-sep" aria-hidden="true">·</span>' +
+        '<button type="button" class="work-link" data-action="nav" data-view="sites">Open Sites</button>');
+    } else if (!up) {
+      body = workEmptyState("i-warn", host + " is not answering",
+        "The site exists, but nothing is serving it right now.",
+        '<button type="button" class="work-link is-primary" data-action="work-site-start" data-path="' + attr(path) + '">Start the server</button>' +
+        '<span class="work-link-sep" aria-hidden="true">·</span>' +
+        '<button type="button" class="work-link" data-action="work-browser-anyway">Open anyway</button>');
+    } else {
+      body = workEmptyState("i-globe", "Browse this project",
+        "Type a URL above, or open the site devd serves for this folder.",
+        '<button type="button" class="work-link is-primary" data-action="work-browser-site">Open ' + esc(host) + '</button>' +
+        '<span class="work-link-sep" aria-hidden="true">·</span>' +
+        '<button type="button" class="work-link" data-action="work-browser-detect">Detect a dev server</button>');
     }
-    return '<div class="work-pane work-browser" data-surface="browser">' + tabStrip +
-      '<div class="work-head">' +
-      '<svg class="icon" aria-hidden="true"><use href="#i-globe"></use></svg><b>Browser</b>' +
-      (site ? '<span class="work-sub"><span class="ws-dot ' + (up ? "is-live" : "is-off") + '" aria-hidden="true"></span>' + esc(host) + "</span>" : '<span class="work-sub">No site</span>') +
-      '<span class="grow"></span>' +
-      (b.url ? '<button type="button" class="btn btn-mini btn-ghost" data-action="work-open-external">Open externally</button>' : "") +
-      '<button type="button" class="btn btn-mini btn-ghost btn-icon" data-action="work-close" data-surface="browser" aria-label="Close browser" title="Close browser"><svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg></button>' +
-      "</div>" +
-      '<div class="work-browser-bar">' +
-      '<button type="button" class="btn btn-mini btn-ghost btn-icon" data-action="work-browser-reload" aria-label="Reload" title="Reload"><svg class="icon" aria-hidden="true"><use href="#i-refresh"></use></svg></button>' +
-      '<input id="work-url" class="input work-url mono" type="text" spellcheck="false" value="' + attr(b.url || "") + '" placeholder="https://…" aria-label="Address">' +
-      '<button type="button" class="btn btn-mini" data-action="work-browser-go">Open</button>' +
-      "</div>" +
+    return '<div class="work-pane work-browser" data-surface="browser">' + tabStrip + address +
       '<div class="work-browser-body">' + body + "</div></div>";
   }
 
@@ -10331,26 +10344,29 @@ var TERM_POLL_MS = 250;
     var term = AI.work.terminal;
     var tabs = term.tabs || [];
     var strip = tabs.length ? '<div class="work-tabs" role="tablist" aria-label="Terminal tabs">' +
+      '<div class="work-tab-list">' +
       tabs.map(function (t) {
         var on = t.id === term.sessionId;
-        return '<div class="work-tab' + (on ? " is-active" : "") + (t.ended ? " is-ended" : "") + '">' +
+        return '<div class="work-tab' + (on ? " is-active" : "") + (t.ended ? " is-ended" : "") + '" data-key="t' + attr(t.id) + '">' +
           '<button type="button" class="work-tab-pick mono" role="tab" aria-selected="' + (on ? "true" : "false") + '" data-action="work-terminal-pick" data-id="' + attr(t.id) + '" title="' + attr(t.cwd || t.id) + '">' + esc(t.label || (t.cwd || "").split(/[\\/]/).filter(Boolean).pop() || t.id.slice(0, 8)) + "</button>" +
           (tabs.length > 1 ? '<button type="button" class="work-tab-x" data-action="work-terminal-tab-close" data-id="' + attr(t.id) + '" aria-label="Close tab" title="Close tab"><svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg></button>' : "") +
           "</div>";
       }).join("") +
-      '<button type="button" class="work-tab-add" data-action="work-terminal-new" data-path="' + attr(path) + '" aria-label="New terminal" title="New terminal"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg></button></div>' : "";
+      '<button type="button" class="work-tab-add" data-action="work-terminal-new" data-path="' + attr(path) + '" aria-label="New terminal" title="New terminal"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg></button>' +
+      "</div>" +
+      '<div class="work-strip-actions">' +
+      '<button type="button" class="work-icon-btn" data-action="work-terminal-copy" aria-label="Copy terminal" title="Copy terminal"><svg class="icon" aria-hidden="true"><use href="#i-copy"></use></svg></button>' +
+      '<button type="button" class="work-icon-btn" data-action="work-close" data-surface="terminal" aria-label="Close terminal" title="Close terminal"><svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg></button>' +
+      "</div></div>" : "";
     var other = term.project && term.project !== path;
     var banner = other
       ? '<div class="work-banner">This shell belongs to <span class="mono">' + esc(term.project) + '</span>.' +
-        '<button type="button" class="btn btn-mini" data-action="work-terminal-new" data-path="' + attr(path) + '">Open a shell here</button></div>'
+        '<button type="button" class="work-link is-primary" data-action="work-terminal-new" data-path="' + attr(path) + '">Open a shell here</button></div>'
       : "";
     return '<div class="work-pane work-terminal" data-surface="terminal">' + strip +
-      '<div class="work-head">' +
+      '<div class="work-context">' +
       '<svg class="icon" aria-hidden="true"><use href="#i-code"></use></svg><b>Terminal</b>' +
-      '<span class="work-sub mono" title="' + attr(term.project || path) + '">' + esc(term.project || path || "No project") + "</span>" +
-      '<span class="grow"></span>' +
-      '<button type="button" class="btn btn-mini btn-ghost btn-icon" data-action="work-terminal-new" data-path="' + attr(path) + '" aria-label="New terminal" title="New terminal"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg></button>' +
-      '<button type="button" class="btn btn-mini btn-ghost btn-icon" data-action="work-close" data-surface="terminal" aria-label="Close terminal" title="Close terminal"><svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg></button>' +
+      '<span class="work-path mono" title="' + attr(term.project || path) + '">' + esc(term.project || path || "No project") + "</span>" +
       "</div>" + banner +
       '<div class="work-term-body"><div class="term-host" id="term-host"></div>' +
       (AI.work.terminal.ended ? '<div class="term-ended">This shell has ended. Open another one to keep working.</div>' : "") +
@@ -10378,16 +10394,17 @@ var TERM_POLL_MS = 250;
     box.hidden = !open;
     if (!open) { box.innerHTML = ""; return; }
     if (!path) {
-      morph(box, '<div class="work-pane work-empty-pane"><div class="work-head"><b class="grow">Workspace</b>' +
-        '<button type="button" class="btn btn-mini btn-ghost btn-icon" data-action="work-close" data-surface="all" aria-label="Close" title="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg></button></div>' +
-        '<div class="work-empty"><svg class="icon" aria-hidden="true"><use href="#i-folder"></use></svg><b>No project</b>' +
-        '<p>This conversation is not tied to a folder. Choose a project to open its site or a shell.</p>' +
-        '<button type="button" class="btn btn-primary" data-action="nav" data-view="projects">Open projects</button></div></div>');
+      morph(box, '<div class="work-pane work-empty-pane"><div class="work-context">' +
+        '<svg class="icon" aria-hidden="true"><use href="#i-folder"></use></svg><b class="grow">Workspace</b>' +
+        '<button type="button" class="work-icon-btn" data-action="work-close" data-surface="all" aria-label="Close" title="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg></button></div>' +
+        workEmptyState("i-folder", "No project",
+          "This conversation is not tied to a folder. Choose a project to open its site or a shell.",
+          '<button type="button" class="work-link is-primary" data-action="nav" data-view="projects">Open projects</button>') + "</div>");
       return;
     }
     var site = workSiteFor(path);
-    if (b.open && site && !b.url && (site.server_running || site.upstream_listening)) { b.site = site; setBrowserUrl(site.url); }
-    if (b.open && b.site && b.site.project !== path) { b.site = site; setBrowserUrl(site ? site.url : ""); }
+    if (b.open && site && !b.url && !b.fresh && (site.server_running || site.upstream_listening)) { b.site = site; setBrowserUrl(site.url); }
+    if (b.open && b.site && b.site.project !== path) { b.site = site; if (!b.fresh) setBrowserUrl(site ? site.url : ""); }
     var html = "";
     if (b.open) html += browserSurfaceHtml(path);
     if (b.open && term.open) html += '<div class="work-divider" id="work-divider" role="separator" aria-orientation="horizontal" aria-label="Resize browser and terminal" tabindex="0"></div>';
@@ -10433,9 +10450,21 @@ var TERM_POLL_MS = 250;
     }
     if (b.open) {
       var input = el("work-url");
-      if (input) input.addEventListener("keydown", function (e) {
-        if (e.key === "Enter") { e.preventDefault(); ACTIONS["work-browser-go"](); }
-      });
+      if (input) {
+        if (!input.__devdKeyBound) {
+          input.__devdKeyBound = true;
+          input.addEventListener("input", function () { input.__devdDirty = true; });
+          input.addEventListener("blur", function () { input.__devdDirty = false; });
+          input.addEventListener("keydown", function (e) {
+            if (e.key === "Enter") { e.preventDefault(); ACTIONS["work-browser-go"](); }
+          });
+        }
+        // A tab switch, a chosen site or a URL from elsewhere updates the field.
+        // Text the person is still typing is theirs, so it is left alone until
+        // they leave the field or open the address.
+        var want = displayUrl(AI.work.browser.url || "");
+        if (!(input.__devdDirty && document.activeElement === input) && input.value !== want) input.value = want;
+      }
       // A same-origin page can tell us its real title; a cross-origin one cannot,
       // so the tab keeps the site name or the host from `browserTitleFor`.
       var bf = el("work-browser-frame");
@@ -10463,6 +10492,7 @@ var TERM_POLL_MS = 250;
     b.open = true;
     b.project = path;
     b.error = null;
+    b.fresh = false;
     var site = workSiteFor(path);
     b.site = site;
     var url = site && (site.server_running || site.upstream_listening) ? site.url : "";
@@ -14830,13 +14860,26 @@ var TERM_POLL_MS = 250;
         paintWork();
       });
     },
+    "work-terminal-copy": function () {
+      var sel = XTERM.term && XTERM.term.getSelection ? XTERM.term.getSelection() : "";
+      var text = (sel || TERM.screen || "")
+        .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
+        .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+        .replace(/\x1b[@-_]/g, "")
+        .replace(/\r/g, "");
+      if (!text) return toast("warn", "Nothing to copy yet");
+      copyText(text, function () { toast("ok", sel ? "Copied the selection" : "Copied the terminal"); });
+    },
     "work-open-project": function (n) { openProject(n.dataset.path); },
     "work-browser-go": function () {
       var input = el("work-url");
       var url = input ? String(input.value || "").trim() : "";
+      if (!url) { if (input) input.focus(); return; }
       if (!/^https?:\/\//i.test(url)) url = "https://" + url;
       try { new URL(url); } catch (e) { toast("warn", "That is not an address."); return; }
+      if (input) input.__devdDirty = false;
       setBrowserUrl(url);
+      AI.work.browser.fresh = false;
       AI.work.browser.error = null;
       paintWork();
     },
@@ -14845,6 +14888,7 @@ var TERM_POLL_MS = 250;
       var i = parseInt(n.dataset.index, 10);
       if (!b.tabs || !b.tabs[i] || i === b.activeTab) return;
       b.activeTab = i;
+      b.fresh = false;
       setBrowserUrl(b.tabs[i].url || "");
       paintWork();
     },
@@ -14858,6 +14902,7 @@ var TERM_POLL_MS = 250;
       });
       b.tabs.push({ url: "", title: "", name: n <= 1 ? "New tab" : "New tab " + n });
       b.activeTab = b.tabs.length - 1;
+      b.fresh = true;
       setBrowserUrl("");
       paintWork();
       setTimeout(function () { var i = el("work-url"); if (i) i.focus(); }, 60);
@@ -14868,6 +14913,7 @@ var TERM_POLL_MS = 250;
       if (!b.tabs || b.tabs.length <= 1 || !b.tabs[i]) return;
       b.tabs.splice(i, 1);
       if (b.activeTab >= b.tabs.length) b.activeTab = b.tabs.length - 1;
+      b.fresh = false;
       setBrowserUrl((b.tabs[b.activeTab] || {}).url || "");
       paintWork();
     },

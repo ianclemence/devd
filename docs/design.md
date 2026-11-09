@@ -287,6 +287,15 @@ browser and leaves an old shell running with a banner saying which project it
 belongs to. Closing a surface never kills a shell. A full reload starts with both
 closed.
 
+The Browser and Terminal share one compact chrome: a tab strip with a filled
+active tab, a close on each tab and the surface actions at the right, then one
+context or address row. The browser's field hides the default port and carries
+the globe and live dot; its empty states are a quiet glyph, a sentence and text
+links. A new tab stays empty until an address is typed or the project's site is
+chosen. The terminal's folder row disappears when a split gives it the full
+width; its copy action strips ANSI escapes. Narrow panes drop the redundant
+identity and use finger-sized controls, and the tab strip scrolls sideways.
+
 ## Screen decisions
 
 * **Home** is a two-column workbench on wide windows. The environment ledger
