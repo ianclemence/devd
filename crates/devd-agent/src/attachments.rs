@@ -98,6 +98,16 @@ pub fn with_images(messages: &[Value], vision: bool, uploads: &Path) -> Vec<Valu
     out
 }
 
+/// Whether a prepared message list carries actual image blocks.
+pub fn has_images(messages: &[Value]) -> bool {
+    messages.iter().any(|m| {
+        m["content"]
+            .as_array()
+            .map(|blocks| blocks.iter().any(|b| b["type"] == "image"))
+            .unwrap_or(false)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,6 +143,15 @@ mod tests {
         assert_eq!(blocks[0]["type"], "image");
         assert_eq!(blocks[0]["source"]["media_type"], "image/png");
         assert_eq!(blocks[1]["type"], "text", "the words, with the path, stay");
+        assert!(has_images(&out));
+    }
+
+    #[test]
+    fn has_images_is_false_for_a_text_only_turn() {
+        let d = dir("textonly");
+        let p = d.join("notes.txt");
+        std::fs::write(&p, b"hello").unwrap();
+        assert!(!has_images(&with_images(&[message(&[&p])], true, &d)));
     }
 
     #[test]

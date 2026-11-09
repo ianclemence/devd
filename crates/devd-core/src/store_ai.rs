@@ -49,7 +49,7 @@ pub struct Provider {
 }
 
 /// A model in the catalogue.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CatalogueModel {
     /// Where it came from: `anthropic-docs` or `provider:<id>`.
     pub source: String,
@@ -73,6 +73,15 @@ pub struct CatalogueModel {
     pub url: Option<String>,
     /// When it was fetched.
     pub fetched_at: String,
+    /// Whether the provider's own listing says it calls tools.
+    #[serde(default)]
+    pub tools: Option<bool>,
+    /// Whether the provider's own listing says it accepts images.
+    #[serde(default)]
+    pub vision: Option<bool>,
+    /// Whether the provider's own listing says it reasons before answering.
+    #[serde(default)]
+    pub reasoning: Option<bool>,
 }
 
 /// A built-in agent conversation.
@@ -376,9 +385,10 @@ impl Store {
             tx.execute("DELETE FROM model_catalogue WHERE source=?1", params![source])?;
             for m in models {
                 tx.execute(
-                    "INSERT OR REPLACE INTO model_catalogue (source,model_id,display,description,context_window,max_output,input_price,output_price,retirement,url,fetched_at)
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
-                    params![source, m.model_id, m.display, m.description, m.context_window, m.max_output, m.input_price, m.output_price, m.retirement, m.url, m.fetched_at],
+                    "INSERT OR REPLACE INTO model_catalogue (source,model_id,display,description,context_window,max_output,input_price,output_price,retirement,url,fetched_at,tools,vision,reasoning)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+                    params![source, m.model_id, m.display, m.description, m.context_window, m.max_output, m.input_price, m.output_price, m.retirement, m.url, m.fetched_at,
+                        m.tools.map(|v| i64::from(v)), m.vision.map(|v| i64::from(v)), m.reasoning.map(|v| i64::from(v))],
                 )?;
             }
             tx.commit()?;
@@ -390,10 +400,13 @@ impl Store {
     pub fn list_catalogue(&self, source: Option<&str>) -> Result<Vec<CatalogueModel>> {
         self.with(|c| {
             let mut st = c.prepare(
-                "SELECT source,model_id,display,description,context_window,max_output,input_price,output_price,retirement,url,fetched_at
+                "SELECT source,model_id,display,description,context_window,max_output,input_price,output_price,retirement,url,fetched_at,tools,vision,reasoning
                  FROM model_catalogue WHERE (?1 IS NULL OR source=?1) ORDER BY source, rowid",
             )?;
             let rows = st.query_map(params![source], |r| {
+                let flag = |i: usize| -> std::result::Result<Option<bool>, rusqlite::Error> {
+                    Ok(r.get::<_, Option<i64>>(i)?.map(|v| v != 0))
+                };
                 Ok(CatalogueModel {
                     source: r.get(0)?,
                     model_id: r.get(1)?,
@@ -406,6 +419,9 @@ impl Store {
                     retirement: r.get(8)?,
                     url: r.get(9)?,
                     fetched_at: r.get(10)?,
+                    tools: flag(11)?,
+                    vision: flag(12)?,
+                    reasoning: flag(13)?,
                 })
             })?;
             Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)

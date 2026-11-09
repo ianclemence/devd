@@ -1865,6 +1865,16 @@ fn the_assistant_has_browser_and_terminal_surfaces() {
 }
 
 #[test]
+fn the_model_picker_says_which_models_see_images() {
+    // A person can attach a picture to any model. The picker marks the models
+    // that see, and the composer warns before sending a picture to one that
+    // cannot.
+    assert!(APP.contains("This model does not accept images"), "a text-only model is marked");
+    assert!(APP.contains("This model can read attached images"), "a vision model is marked");
+    assert!(APP.contains("This model cannot see images. Choose a vision-capable model"), "the composer warns");
+}
+
+#[test]
 fn the_work_surfaces_read_like_a_desktop_browser_and_terminal() {
     // The browser and the terminal share one compact chrome: a filled active
     // tab, a closeable tab strip with a surface close at the right, and one

@@ -149,6 +149,33 @@ fn family(model: &str) -> Traits {
     // (pattern, tools, vision, reasoning)
     #[allow(clippy::type_complexity)]
     const FAMILIES: &[(&str, Option<bool>, Option<bool>, Option<bool>)] = &[
+        // Explicit multimodal names first: a model id that says it sees must
+        // win over a family guess, and these also cover the smaller vendors.
+        ("pixtral", Some(true), Some(true), None),
+        ("mistral-small-3", Some(true), Some(true), None),
+        ("llava", Some(true), Some(true), None),
+        ("internvl", Some(true), Some(true), None),
+        ("molmo", Some(true), Some(true), None),
+        ("idefics", Some(true), Some(true), None),
+        ("cogvlm", Some(true), Some(true), None),
+        ("moondream", Some(true), Some(true), None),
+        ("minicpm-v", Some(true), Some(true), None),
+        ("qwen3-vl", Some(true), Some(true), None),
+        ("qwen2.5-vl", Some(true), Some(true), None),
+        ("qwen2-vl", Some(true), Some(true), None),
+        ("qwen-vl", Some(true), Some(true), None),
+        ("glm-4.1v", Some(true), Some(true), None),
+        ("glm-4v", Some(true), Some(true), None),
+        ("llama-4", Some(true), Some(true), None),
+        ("gemma-3", Some(true), Some(true), None),
+        ("phi-4-multimodal", Some(true), Some(true), None),
+        ("phi-3.5-vision", Some(true), Some(true), None),
+        ("gpt-4.1", Some(true), Some(true), None),
+        ("gpt-4-turbo", Some(true), Some(true), None),
+        ("-vl", Some(true), Some(true), None),
+        ("vision", Some(true), Some(true), None),
+        ("multimodal", Some(true), Some(true), None),
+        ("omni", Some(true), Some(true), None),
         ("deepseek-reasoner", Some(false), Some(false), Some(true)),
         ("deepseek", Some(true), Some(false), None),
         ("claude", Some(true), Some(true), None),
@@ -186,8 +213,21 @@ pub fn model_caps(store: &Store, provider: &Provider, model: &str) -> ModelCaps 
         .filter(|m| m.model_id == model)
         // A provider's own listing is the best source for that provider.
         .max_by_key(|m| m.source == format!("provider:{}", provider.id));
-    let (tools, vision, reasoning) = family(model);
-    let from_catalogue = entry.is_some();
+    let (family_tools, family_vision, family_reasoning) = family(model);
+    let listed_tools = entry.as_ref().and_then(|m| m.tools);
+    let listed_vision = entry.as_ref().and_then(|m| m.vision);
+    let listed_reasoning = entry.as_ref().and_then(|m| m.reasoning);
+    let tools = listed_tools.or(family_tools);
+    let vision = listed_vision.or(family_vision);
+    let reasoning = listed_reasoning.or(family_reasoning);
+    let from_catalogue = listed_tools.is_some() || listed_vision.is_some() || listed_reasoning.is_some();
+    let source = if from_catalogue || entry.is_some() {
+        "catalogue"
+    } else if tools.is_some() || vision.is_some() || reasoning.is_some() {
+        "family"
+    } else {
+        "unknown"
+    };
     ModelCaps {
         tools,
         vision,
@@ -196,14 +236,7 @@ pub fn model_caps(store: &Store, provider: &Provider, model: &str) -> ModelCaps 
         max_output: entry.as_ref().and_then(|m| m.max_output),
         input_price: entry.as_ref().and_then(|m| m.input_price),
         output_price: entry.as_ref().and_then(|m| m.output_price),
-        source: if from_catalogue {
-            "catalogue"
-        } else if tools.is_some() || vision.is_some() || reasoning.is_some() {
-            "family"
-        } else {
-            "unknown"
-        }
-        .to_string(),
+        source: source.to_string(),
     }
 }
 
@@ -363,6 +396,7 @@ mod tests {
                     retirement: None,
                     url: None,
                     fetched_at: String::new(),
+                    ..Default::default()
                 }],
             )
             .unwrap();
@@ -380,5 +414,53 @@ mod tests {
         assert_eq!(unknown.source, "unknown");
         assert_eq!(unknown.tools, None);
         assert_eq!(cost_usd(&unknown, 10, 10), None);
+    }
+
+    #[test]
+    fn a_provider_listing_can_change_what_the_family_says() {
+        use devd_core::store_ai::CatalogueModel;
+        let store = Store::open_in_memory().unwrap();
+        store.migrate().unwrap();
+        let p = provider("mystery", "https://example.test/v1");
+        store
+            .replace_catalogue(
+                "provider:mystery",
+                &[
+                    CatalogueModel {
+                        source: "provider:mystery".into(),
+                        model_id: "mystery-9".into(),
+                        display: "Mystery 9".into(),
+                        vision: Some(true),
+                        tools: Some(true),
+                        reasoning: Some(false),
+                        ..Default::default()
+                    },
+                    CatalogueModel {
+                        source: "provider:mystery".into(),
+                        model_id: "claude-text-only".into(),
+                        display: "Claude text only".into(),
+                        vision: Some(false),
+                        ..Default::default()
+                    },
+                ],
+            )
+            .unwrap();
+        let caps = model_caps(&store, &p, "mystery-9");
+        assert_eq!(caps.vision, Some(true), "the listing knows what the family does not");
+        assert_eq!(caps.reasoning, Some(false));
+        assert_eq!(caps.source, "catalogue");
+        // An explicit false from the provider beats the family's true.
+        assert_eq!(model_caps(&store, &p, "claude-text-only").vision, Some(false));
+    }
+
+    #[test]
+    fn vision_is_read_from_the_model_name_when_the_provider_is_silent() {
+        // A provider listing cannot describe behaviour for every vendor, so the
+        // family table is the fallback. Unknown vision names must not be blind.
+        assert_eq!(family("qwen2.5-vl-72b").1, Some(true));
+        assert_eq!(family("llama-3.2-11b-vision").1, Some(true));
+        assert_eq!(family("pixtral-large").1, Some(true));
+        assert_eq!(family("deepseek-chat").1, Some(false));
+        assert_eq!(family("some-new-model").1, None);
     }
 }

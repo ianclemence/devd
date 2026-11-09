@@ -671,6 +671,7 @@ fn a_spending_limit_stops_a_run_before_its_next_model_call() {
                 retirement: None,
                 url: None,
                 fetched_at: String::new(),
+                ..Default::default()
             }],
         )
         .unwrap();

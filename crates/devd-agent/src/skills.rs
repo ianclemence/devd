@@ -135,6 +135,143 @@ pub fn find(paths: &Paths, query: &str, role: Option<&str>, kind: Option<&str>) 
         .collect()
 }
 
+/// A skill found on this machine, without its body until it is read.
+#[derive(Debug, Clone, Serialize)]
+pub struct Discovered {
+    /// Name to pass to `skills.get` or `skills.read_external`.
+    pub name: String,
+    /// One line.
+    pub description: String,
+    /// The stage of work.
+    pub kind: String,
+    /// Roles it is for; empty means all.
+    pub roles: Vec<String>,
+    /// `builtin`, `user`, or the other agent's name.
+    pub source: String,
+    /// The file, for a skill that is not installed in devd.
+    pub path: Option<String>,
+    /// Whether `skills.get` can load it.
+    pub installed: bool,
+}
+
+fn matches_skill(name: &str, description: &str, toks: &[String], roles: &[String], role: Option<&str>, kind: &str, want_kind: Option<&str>) -> bool {
+    if let Some(want) = want_kind {
+        if kind != want {
+            return false;
+        }
+    }
+    if let Some(want) = role {
+        if !roles.is_empty() && !roles.iter().any(|r| r == want) {
+            return false;
+        }
+    }
+    toks.iter().all(|t| name.to_lowercase().contains(t) || description.to_lowercase().contains(t))
+}
+
+/// Search devd's skills and the skill folders of other agents on this machine.
+///
+/// A finding is a name, a description and where it lives, never the body: the
+/// agent reads the one it chooses with `skills.get` or `skills.read_external`.
+pub fn discover(paths: &Paths, home: &Path, query: &str, role: Option<&str>, kind: Option<&str>) -> Vec<Discovered> {
+    let toks: Vec<String> = query.split_whitespace().map(|t| t.to_lowercase()).collect();
+    let mut out: Vec<Discovered> = find(paths, query, role, kind)
+        .into_iter()
+        .map(|s| Discovered {
+            name: s.name,
+            description: s.description,
+            kind: s.kind,
+            roles: s.roles,
+            source: s.source,
+            path: None,
+            installed: true,
+        })
+        .collect();
+    for (agent, dir, _) in agent_sources(home) {
+        for f in skill_files(&dir) {
+            let Ok(raw) = std::fs::read_to_string(&f) else { continue };
+            let Some((name, description, k, roles)) = front_matter(&raw) else { continue };
+            if !matches_skill(&name, &description, &toks, &roles, role, &k, kind) {
+                continue;
+            }
+            if out.iter().any(|x| normalise_name(&x.name) == normalise_name(&name)) {
+                continue;
+            }
+            out.push(Discovered {
+                name,
+                description,
+                kind: k,
+                roles,
+                source: agent.clone(),
+                path: Some(f.display().to_string()),
+                installed: false,
+            });
+        }
+    }
+    out
+}
+
+fn body_of(raw: &str) -> String {
+    let raw = raw.replace("\r\n", "\n");
+    raw.split_once("\n---")
+        .map(|(_, rest)| rest.trim_start_matches('-').trim_start_matches('\n').trim().to_string())
+        .unwrap_or_default()
+}
+
+/// Read a skill another agent on this machine already has, without installing
+/// it. The file must be inside the person's home; nothing is executed.
+pub fn read_external(home: &Path, source: &str, name: &str) -> Result<Skill> {
+    let dir = if let Some((_, d, _)) = agent_sources(home)
+        .into_iter()
+        .find(|(n, _, _)| n.eq_ignore_ascii_case(source.trim()))
+    {
+        d
+    } else {
+        let p = PathBuf::from(source.trim());
+        let real_home = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
+        let real = p.canonicalize().ok();
+        match real {
+            Some(r) if r.is_dir() && r.starts_with(&real_home) => r,
+            _ => return Err(DevdError::not_found(format!(
+                "`{source}` is not a known agent and not a skill folder inside your home; skills.sources lists the agents devd can read"
+            ))),
+        }
+    };
+    let real_home = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
+    let want = normalise_name(name);
+    let mut available = Vec::new();
+    for f in skill_files(&dir) {
+        let Ok(raw) = std::fs::read_to_string(&f) else { continue };
+        let Some((n, description, kind, roles)) = front_matter(&raw) else { continue };
+        if normalise_name(&n) != want {
+            available.push(n);
+            continue;
+        }
+        if let Ok(real) = f.canonicalize() {
+            if !real.starts_with(&real_home) {
+                continue;
+            }
+        }
+        let body = body_of(&raw);
+        if body.len() < 20 {
+            return Err(DevdError::invalid(format!("`{n}` has no usable instructions")));
+        }
+        return Ok(Skill {
+            name: n,
+            description,
+            kind,
+            roles,
+            source: format!("{source} (external, not installed)"),
+            body,
+        });
+    }
+    available.sort();
+    available.dedup();
+    Err(DevdError::not_found(format!(
+        "no skill `{name}` in {source}; available: {}",
+        if available.is_empty() { "none".to_string() } else { available.join(", ") }
+    )))
+}
+
 /// Save a person's own skill.
 pub fn save(paths: &Paths, name: &str, description: &str, kind: &str, roles: &[String], body: &str) -> Result<()> {
     if name.is_empty() || name.len() > 60 || !name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
@@ -505,6 +642,43 @@ mod tests {
             descriptions.push(Box::leak(s.description.into_boxed_str()));
         }
         assert!(names.len() > 50, "the built-in set is unexpectedly small");
+    }
+
+    #[test]
+    fn a_missing_skill_is_found_in_another_agents_folder_and_read_without_installing() {
+        let (_p, paths) = temp_paths();
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(".claude/skills/accessibility-audit");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("SKILL.md"),
+            "---\nname: accessibility-audit\ndescription: Check a screen with a keyboard and a screen reader\nkind: check\nroles: designer\n---\n\nStart with the keyboard: tab through every control, then check focus order, labels and contrast. Record what you could not test.\n",
+        )
+        .unwrap();
+        let found = discover(&paths, home.path(), "keyboard accessibility", Some("designer"), None);
+        let external = found.iter().find(|s| s.name == "accessibility-audit").expect("found in Claude Code's folder");
+        assert!(!external.installed);
+        assert_eq!(external.source, "Claude Code");
+        let skill = read_external(home.path(), "Claude Code", "accessibility-audit").unwrap();
+        assert!(skill.body.contains("tab through every control"));
+        assert!(skill.source.contains("not installed"));
+
+        // A folder outside the person's home is not an approved source.
+        let outside = tempfile::tempdir().unwrap();
+        let err = read_external(home.path(), &outside.path().display().to_string(), "x").unwrap_err();
+        assert_eq!(err.code(), "not_found");
+    }
+
+    #[test]
+    fn discovery_does_not_hide_an_installed_skill_behind_an_external_copy() {
+        let (_p, paths) = temp_paths();
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(".claude/skills/work");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("SKILL.md"), "---\nname: work\ndescription: A different work skill\nkind: discover\n---\n\nThis is not devd's work skill; it must not shadow the built-in one.\n").unwrap();
+        let found = discover(&paths, home.path(), "work", None, None);
+        let work = found.iter().find(|s| s.name == "work").unwrap();
+        assert!(work.installed, "the built-in skill wins");
     }
 
     #[test]

@@ -10,6 +10,58 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.27.6] - 2026-11-09 - Agents verify finished work and can really use images
+
+### Completion is independent, not self-reported
+
+The live Nairobi Unwind design run was resumed and observed. It had one designer task, a clean commit
+`84ac57c`, and was paused by a person after acceptance. On resume it went straight to `done /
+approve` with **no gatekeeper and no reviewed commit**: a task that changed files verified its own
+work, and `completion::check` only required an independent check for implementer/docs-like roles.
+That is the failure the completion invariant exists to prevent.
+
+- Any task that recorded a file change now requires an independent final check, whatever its role.
+  A designer, architect or researcher deliverable is no longer approved on its own lint.
+- A read-only answer or research note still does not create a pointless two-agent run.
+- `final-verify` is added for the same rule, so a file-changing run cannot reach `done` without it.
+
+### Image understanding is wired, not claimed
+
+- The model catalogue now stores what a provider listing says about tools, images and reasoning
+  (schema v24), and the provider listing wins over a name guess.
+- More vision model families are recognised (`*-vl`, `*vision`, Pixtral, LLaVA, InternVL, GLM-4V,
+  Qwen-VL, Llama 4, Gemma 3, and others). DeepSeek remains correctly text-only.
+- A model whose image support is unknown is **given the images** rather than silently sent the path.
+  If the provider rejects them, the turn is retried once as text and the person is told which model
+  could not read the picture, instead of losing the turn or pretending.
+- The prompt tells each model exactly what it can see for that turn.
+- The composer marks models `vision` / `no images`, and warns before sending a picture to a
+  text-only model.
+
+### Skills and tools can be discovered without abandoning the task
+
+- `skills.discover` searches devd's skills and the skill folders of other agents installed on this
+  machine (Claude Code, Cursor, Codex, OpenCode, ...).
+- `skills.read_external` reads one of those skills in place, from a folder inside the person's home,
+  without executing it or installing it globally. Installing for future turns remains a human-only
+  `skills.import`.
+- The agent prompt now says to search before claiming a capability is unavailable, and the same rule
+  applies to tools and model capabilities.
+
+### Verification
+
+- Live run `5157aa4f…` resumed with its history intact and completed; the missing-gate case is now a
+  regression test.
+- Image content is asserted at the wire level for Anthropic, OpenAI-compatible and Gemini adapters;
+  provider metadata and family detection have tests.
+- Skill discovery/recovery has tests for a local external skill and for refusing a folder outside the
+  home.
+- Workspace tests pass, including **123** UI contract tests, **178** agent tests and **269** core
+  tests. The Nairobi Unwind Content Assistant suite passes **168** tests, including new poster
+  preview and PDF-document tests.
+
+---
+
 ## [0.27.5] - 2026-11-09 - The Browser and Terminal read like a desktop app
 
 ### What changed

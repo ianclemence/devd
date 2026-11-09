@@ -93,6 +93,7 @@ the person did not mark as trusted waits for their approval, exactly like a devd
 
 ## Skills and the team
 devd has skills: short playbooks, techniques and principles you load only when needed. The index is at the end of this prompt; read one with devd_invoke skills.get {name} (start with `work` when unsure which applies). \
+If a skill you need is not in the index, do not conclude that the capability is missing. Call skills.discover with what the work needs; if another agent installed on this machine has it, read it with skills.read_external and follow it. To keep it for future turns, ask the person once to install it (skills.install is human-only). The same rule applies to a tool or a model: search devd_capabilities and model.capabilities before saying it is unavailable. \
 For a large piece of work that benefits from a planner, parallel implementers and an independent review, hand it to the agent team with team.start; the plan is recorded and the work starts at once. For \
 facts about outside tools or frameworks, read official documentation with docs.fetch rather than relying on memory.
 
@@ -245,6 +246,16 @@ The same common operations are also offered as direct tools (read_file, write_fi
 list_files, search_files, project_info, project_tasks, run_task, git_status, git_diff, todo_list,
 todo_create, todo_complete); call either form, and prefer the direct one when its schema fits.
 "#;
+
+/// Whether a provider error is about the picture it was sent, rather than the
+/// request as a whole. Used only to retry an unknown/incorrectly labelled model
+/// once as text; it never hides a real provider failure.
+fn looks_like_image_rejection(error: &DevdError) -> bool {
+    let text = error.to_string().to_lowercase();
+    ["image", "vision", "multimodal", "unsupported content", "content type", "media_type"]
+        .iter()
+        .any(|needle| text.contains(needle))
+}
 
 /// A message to send.
 #[derive(Debug, Clone, Default)]
@@ -1468,6 +1479,11 @@ impl Hub {
             }
             let mut chosen = None;
             let mut last_err = String::new();
+            // Read the attached pictures once. A turn with no attachments costs
+            // one scan of the text and no file reads.
+            let uploads = self.ctx.paths.root().join("uploads");
+            let pictures = crate::attachments::with_images(&messages, true, &uploads);
+            let has_pictures = crate::attachments::has_images(&pictures);
             for (i, (provider, key, model, why)) in candidates.iter().enumerate() {
                 // Privacy first: a provider the person excluded never sees the
                 // project, whatever the fallback order says.
@@ -1475,12 +1491,10 @@ impl Hub {
                     last_err = e.to_string();
                     continue;
                 }
+                let caps = crate::policy::model_caps(&self.ctx.store, provider, model);
                 // A model known not to call tools cannot do agent work. One
                 // nobody has information about is given the chance to try.
-                if !tools.is_empty()
-                    && crate::policy::model_caps(&self.ctx.store, provider, model).tools
-                        == Some(false)
-                {
+                if !tools.is_empty() && caps.tools == Some(false) {
                     last_err = format!(
                         "{model} does not support tools, so it cannot work as an agent; choose another model"
                     );
@@ -1497,56 +1511,85 @@ impl Hub {
                     );
                     continue;
                 }
-                // A model that can see is given the pictures attached to the conversation,
-                // not only the paths they were stored under.
-                let sees = crate::policy::model_caps(&self.ctx.store, provider, model).vision == Some(true);
+                // A model known not to see is not sent pictures; one whose
+                // support is unknown is given the chance to accept them, and a
+                // provider rejection is retried once as text rather than
+                // failing the turn.
+                let sees = caps.vision != Some(false);
+                let mut model_system = system.clone();
+                if has_pictures {
+                    model_system.push_str(match caps.vision {
+                        Some(true) => "\n\n# Images\nThe person attached one or more images. Their actual content is in the message; read it and use it.",
+                        Some(false) => "\n\n# Images\nThe person attached one or more images, but this model cannot see images. You only have the file path. Do not claim to have seen it; say this model is text-only and offer a vision-capable model.",
+                        None => "\n\n# Images\nThe person attached one or more images. Their actual content is included when the provider accepts it; if the provider rejects it, continue from the text and say so.",
+                    });
+                }
                 let (reasoning_effort, max_tokens) = effort_settings(effort.as_deref());
-                let request = ChatRequest {
+                let mut request = ChatRequest {
                     model: model.clone(),
-                    system: system.clone(),
-                    messages: crate::attachments::with_images(&messages, sees, &self.ctx.paths.root().join("uploads")),
+                    system: model_system,
+                    messages: if sees { pictures.clone() } else { messages.clone() },
                     tools: tools.clone(),
                     tool_choice: None,
                     max_tokens,
                     effort: reasoning_effort,
                 };
                 // The reply is shown as it is written, not after it is finished.
-                // Each model call begins with a `start` so the window drops the
+                // Each attempt begins with a `start` so the window drops the
                 // tail of a previous call or a failed provider instead of
                 // stacking two answers on top of each other. The whole answer is
                 // still logged once, below, which is what the conversation keeps
                 // and what the model is sent next turn.
-                self.ctx.events.emit_with(
-                    "chat.delta",
-                    format!("{tid} is writing"),
-                    json!({ "thread": tid, "start": true }),
-                );
-                let mut pending = String::new();
-                let mut last_emit = Instant::now();
-                let result = {
-                    // Tokens arrive faster than a screen can usefully redraw. A
-                    // short batch keeps the event bus quiet without making the
-                    // text look like it is being typed by a machine in bursts.
+                let attempt = |req: &ChatRequest, pending: &mut String, last_emit: &mut Instant| -> Result<providers::ChatResponse> {
+                    self.ctx.events.emit_with(
+                        "chat.delta",
+                        format!("{tid} is writing"),
+                        json!({ "thread": tid, "start": true }),
+                    );
                     let mut on_piece = |piece: &str| {
+                        // Tokens arrive faster than a screen can usefully
+                        // redraw. A short batch keeps the event bus quiet.
                         pending.push_str(piece);
                         if last_emit.elapsed() >= Duration::from_millis(40) {
-                            let text = std::mem::take(&mut pending);
+                            let text = std::mem::take(pending);
                             self.ctx.events.emit_with(
                                 "chat.delta",
                                 format!("{tid} is writing"),
                                 json!({ "thread": tid, "text": text }),
                             );
-                            last_emit = Instant::now();
+                            *last_emit = Instant::now();
                         }
                     };
-                    providers::chat_stream(provider, key.as_deref(), &request, &mut on_piece)
+                    let response = providers::chat_stream(provider, key.as_deref(), req, &mut on_piece);
+                    if !pending.is_empty() {
+                        let text = std::mem::take(pending);
+                        self.ctx.events.emit_with(
+                            "chat.delta",
+                            format!("{tid} is writing"),
+                            json!({ "thread": tid, "text": text }),
+                        );
+                    }
+                    response
                 };
-                if !pending.is_empty() {
-                    self.ctx.events.emit_with(
-                        "chat.delta",
-                        format!("{tid} is writing"),
-                        json!({ "thread": tid, "text": pending }),
-                    );
+                let mut pending = String::new();
+                let mut last_emit = Instant::now();
+                let mut result = attempt(&request, &mut pending, &mut last_emit);
+                if has_pictures && sees && result.as_ref().err().is_some_and(looks_like_image_rejection) {
+                    // An unknown model (or a provider whose metadata is wrong)
+                    // refused the picture. Keep the turn instead of losing it:
+                    // retry as text, tell the person, and let them pick a model
+                    // that sees. The failed attempt's partial text is replaced
+                    // by the `start` of the retry.
+                    self.log(
+                        tid,
+                        "notice",
+                        json!({ "text": format!("{model} could not read the attached image; retrying this turn as text. Choose a vision-capable model to let the assistant see images.") }),
+                    )?;
+                    request.messages = messages.clone();
+                    request.system = format!("{system}\n\n# Images\nThe attached image was rejected by this provider. Continue from the text and do not claim to have seen it.");
+                    pending.clear();
+                    last_emit = Instant::now();
+                    result = attempt(&request, &mut pending, &mut last_emit);
                 }
                 match result {
                     Ok(r) => {
@@ -2430,6 +2473,14 @@ mod tests {
     }
 
     #[test]
+    fn an_image_rejection_is_recognised_without_hiding_other_failures() {
+        assert!(looks_like_image_rejection(&DevdError::invalid("this model does not support image content")));
+        assert!(looks_like_image_rejection(&DevdError::invalid("multimodal input rejected")));
+        assert!(!looks_like_image_rejection(&DevdError::invalid("rate limit exceeded")));
+        assert!(!looks_like_image_rejection(&DevdError::invalid("invalid API key")));
+    }
+
+    #[test]
     fn a_direct_tool_takes_its_schema_from_the_registered_capability() {
         use devd_core::capability::{Effect, Outcome, Plan, Tier};
         let ctx = test_ctx("schema");
@@ -2537,6 +2588,7 @@ mod tests {
                     retirement: None,
                     url: None,
                     fetched_at: "".into(),
+                    ..Default::default()
                 }],
             )
             .unwrap();

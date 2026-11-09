@@ -12864,6 +12864,8 @@ var TERM_POLL_MS = 250;
       if (m.source === "saved") tags += '<span class="model-tag is-warn" title="Not in the provider’s fetched list">saved</span>';
       var noTools = m.tools === false || (m.tools == null && modelHasTools(m.model_id) === false);
       if (noTools) tags += '<span class="model-tag is-warn" title="This model is known not to call tools; agent work may fail">no tools</span>';
+      if (m.vision === false) tags += '<span class="model-tag is-warn" title="This model does not accept images">no images</span>';
+      else if (m.vision === true) tags += '<span class="model-tag" title="This model can read attached images">vision</span>';
       var title = (m.source === "provider" ? "From the provider's list" : m.source === "custom" ? "Added by hand" : "Saved on the provider card");
       var row = '<div class="model-row' + (active ? " is-active" : "") + (disabled ? " is-disabled" : "") + '"' +
         (disabled ? ' aria-disabled="true"' : ' data-action="composer-model-set" data-provider="' + attr(rail) + '" data-value="' + attr(m.model_id) + '"') +
@@ -12952,6 +12954,21 @@ var TERM_POLL_MS = 250;
     if (list.some(function (a) { return a.state === "uploading"; })) { toast("warn", "A file is still uploading"); return null; }
     if (list.some(function (a) { return a.state === "error"; })) { toast("warn", "A file did not upload. Retry it or remove it first"); return null; }
     if (list.length) {
+      // The person can attach a picture to any model. If the chosen model is
+      // known to be text-only, say so before the message goes: the runtime will
+      // send the path, not the picture, and the assistant must not pretend to
+      // have seen it.
+      var images = list.filter(function (a) {
+        return /^image\//i.test(a.mime || "") || /\.(png|jpe?g|gif|webp|bmp|tiff?)$/i.test(a.name || "");
+      });
+      if (images.length) {
+        var cur = composerProvider();
+        var model = composerModel(cur.id);
+        var hit = modelOptions(cur.id).filter(function (m) { return m.model_id === model; })[0];
+        if (hit && hit.vision === false) {
+          toast("warn", "This model cannot see images. Choose a vision-capable model; the picture will otherwise be sent only as a file path.");
+        }
+      }
       text += (text ? "\n\n" : "") + "Attached files:\n" + list.map(function (a) { return "- " + a.path; }).join("\n");
     }
     clearAttachments(lane);

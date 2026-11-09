@@ -568,6 +568,7 @@ fn catalogue_from_preset(p: &Provider, pre: &Preset, now: &str) -> Vec<Catalogue
             retirement: None,
             url: Some(pre.docs_url.clone()),
             fetched_at: now.to_string(),
+            ..Default::default()
         })
         .collect()
 }
@@ -578,6 +579,40 @@ fn price_of(m: &Value, keys: &[&str]) -> Option<f64> {
         let per_token = v.as_str().and_then(|s| s.parse::<f64>().ok()).or_else(|| v.as_f64())?;
         Some(per_token * 1_000_000.0)
     })
+}
+
+fn params_of(m: &Value) -> Option<&Vec<Value>> {
+    m.get("supported_parameters").and_then(|v| v.as_array())
+}
+
+fn advertised_tools(m: &Value) -> Option<bool> {
+    params_of(m).map(|p| p.iter().any(|x| x.as_str() == Some("tools")))
+}
+
+fn advertised_reasoning(m: &Value) -> Option<bool> {
+    if let Some(v) = m.get("reasoning").and_then(|v| v.as_bool()) {
+        return Some(v);
+    }
+    params_of(m).map(|p| p.iter().any(|x| x.as_str() == Some("reasoning")))
+}
+
+fn advertised_vision(m: &Value) -> Option<bool> {
+    if let Some(v) = m.get("vision").and_then(|v| v.as_bool()) {
+        return Some(v);
+    }
+    if let Some(v) = m.get("supports_vision").and_then(|v| v.as_bool()) {
+        return Some(v);
+    }
+    if let Some(mods) = m.pointer("/architecture/input_modalities").and_then(|v| v.as_array()) {
+        return Some(mods.iter().any(|x| x.as_str() == Some("image")));
+    }
+    if let Some(mods) = m.get("input_modalities").and_then(|v| v.as_array()) {
+        return Some(mods.iter().any(|x| x.as_str() == Some("image")));
+    }
+    if let Some(mods) = m.get("modalities").and_then(|v| v.as_array()) {
+        return Some(mods.iter().any(|x| x.as_str() == Some("image")));
+    }
+    None
 }
 
 fn normalise(p: &Provider, v: &Value, now: &str) -> Vec<CatalogueModel> {
@@ -638,6 +673,9 @@ fn normalise(p: &Provider, v: &Value, now: &str) -> Vec<CatalogueModel> {
                 .map(|s| s.to_string()),
             url: Some(models_url(p)),
             fetched_at: now.to_string(),
+            tools: advertised_tools(m),
+            vision: advertised_vision(m),
+            reasoning: advertised_reasoning(m),
         });
     }
     out.sort_by(|a, b| a.model_id.cmp(&b.model_id));
@@ -685,6 +723,7 @@ fn parse_ollama(p: &Provider, v: &Value, url: &str, now: &str) -> Vec<CatalogueM
                         retirement: None,
                         url: Some(url.to_string()),
                         fetched_at: now.to_string(),
+                        ..Default::default()
                     })
                 })
                 .collect()
@@ -825,6 +864,7 @@ pub fn parse_anthropic_docs(markdown: &str, now: &str) -> Vec<CatalogueModel> {
                 retirement: cell("Retirement"),
                 url: page.or_else(|| Some(ANTHROPIC_MODELS_DOC.trim_end_matches(".md").to_string())),
                 fetched_at: now.to_string(),
+                ..Default::default()
             });
         }
     }
@@ -2206,6 +2246,55 @@ data: {\"type\":\"message_stop\"}
         let o = openai_body(&provider("openai"), &req);
         assert_eq!(o["tool_choice"]["type"], "function");
         assert_eq!(o["tool_choice"]["function"]["name"], "echo");
+    }
+
+    #[test]
+    fn a_provider_listing_carries_vision_and_tool_support() {
+        // OpenRouter (and others) describe input modalities and supported
+        // parameters. devd used to discard those and guess only from the model
+        // name, which is why a vision model could be treated as blind.
+        let v = json!({ "data": [
+            { "id": "mystery-9", "architecture": { "input_modalities": ["text", "image"] }, "supported_parameters": ["tools", "reasoning"] },
+            { "id": "text-only", "architecture": { "input_modalities": ["text"] }, "supported_parameters": ["tools"] }
+        ]});
+        let rows = normalise(&provider("openrouter"), &v, "now");
+        let vision = rows.iter().find(|m| m.model_id == "mystery-9").unwrap();
+        assert_eq!(vision.vision, Some(true));
+        assert_eq!(vision.tools, Some(true));
+        assert_eq!(vision.reasoning, Some(true));
+        let text = rows.iter().find(|m| m.model_id == "text-only").unwrap();
+        assert_eq!(text.vision, Some(false));
+        assert_eq!(text.reasoning, Some(false));
+    }
+
+    #[test]
+    fn a_picture_reaches_each_wire_format_as_content() {
+        let req = ChatRequest {
+            model: "m".into(),
+            system: "s".into(),
+            messages: vec![json!({
+                "role": "user",
+                "content": [
+                    { "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": "AAAA" } },
+                    { "type": "text", "text": "what is this?" }
+                ]
+            })],
+            tools: vec![],
+            tool_choice: None,
+            max_tokens: 16,
+            effort: None,
+        };
+        let openai = openai_body(&provider("openai"), &req);
+        let parts = openai["messages"][1]["content"].as_array().unwrap();
+        assert_eq!(parts[0]["type"], "text");
+        assert_eq!(parts[1]["type"], "image_url");
+        assert_eq!(parts[1]["image_url"]["url"], "data:image/png;base64,AAAA");
+
+        let anthropic = anthropic_body(&req);
+        let blocks = anthropic["messages"][0]["content"].as_array().unwrap();
+        assert_eq!(blocks[0]["type"], "image");
+        assert_eq!(blocks[0]["source"]["media_type"], "image/png");
+        assert_eq!(blocks[0]["source"]["data"], "AAAA");
     }
 
     #[test]

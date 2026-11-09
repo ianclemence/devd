@@ -1948,9 +1948,7 @@ impl Team {
         let real: Vec<&TeamTask> = tasks.iter().filter(|t| t.role != "planner").collect();
         if real.iter().all(|t| is_done(&t.state)) {
             if !real.iter().any(|t| t.key == "final-verify")
-                && real
-                    .iter()
-                    .any(|t| matches!(t.role.as_str(), "implementer" | "docs" | "infra"))
+                && completion::needs_final_verification(&real)
             {
                 let deps: Vec<String> = real.iter().map(|t| t.key.clone()).collect();
                 // The harness adds this step itself: no person asked for it, so

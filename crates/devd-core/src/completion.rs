@@ -216,6 +216,39 @@ fn line_names_failure(line: &str) -> bool {
     .any(|m| l.contains(m))
 }
 
+/// Whether a task recorded a change to the project, whatever its role.
+///
+/// A designer can write the deliverable, an architect can write the decision
+/// record, and a researcher can write the report. Completion must not depend on
+/// the role's name; it depends on whether the work changed anything.
+fn task_changed(t: &TeamTask) -> bool {
+    t.evidence
+        .as_array()
+        .map(|rows| rows.iter().any(|f| f["kind"] == "change" && f["ok"] == true))
+        .unwrap_or(false)
+}
+
+/// Whether finished work needs an independent final check.
+///
+/// Any task that wrote files needs one, and so do the roles whose whole job is
+/// to leave a change. A pure answer or a read-only research note does not.
+pub fn needs_final_verification(real: &[&TeamTask]) -> bool {
+    real.iter().any(|t| {
+        task_changed(t)
+            || matches!(
+                t.role.as_str(),
+                "implementer"
+                    | "backend"
+                    | "frontend"
+                    | "mobile"
+                    | "data"
+                    | "designer"
+                    | "docs"
+                    | "infra"
+            )
+    })
+}
+
 /// Judge a run from its persisted tasks. Pure: the caller supplies the pending
 /// approval count, because approvals live in another store surface.
 pub fn check(run: &TeamRun, tasks: &[TeamTask], pending_approvals: usize) -> Completion {
@@ -255,7 +288,7 @@ pub fn check(run: &TeamRun, tasks: &[TeamTask], pending_approvals: usize) -> Com
         .filter(|t| is_gatekeeper(&t.role) || is_final_check(t))
         .max_by_key(|t| t.created_at.clone());
     let Some(gate) = gatekeeper else {
-        if real.iter().any(|t| t.role == "implementer" || t.role == "backend" || t.role == "frontend" || t.role == "security" || t.role == "docs") {
+        if needs_final_verification(&real) {
             reasons.push("no independent verification was recorded".to_string());
         }
         return Completion {
@@ -465,6 +498,30 @@ mod tests {
         assert!(c.approved());
         assert!(c.by_hand);
         assert_eq!(c.stored_verdict(), Some("accepted_by_hand"));
+    }
+
+    #[test]
+    fn a_designer_deliverable_without_an_independent_check_is_not_approved() {
+        // The live failure: a one-task designer run wrote and committed a
+        // document and verified its own work with lint. With no gatekeeper the
+        // run was marked done. A task that changed files is not its own check.
+        let mut t = task("work", "designer", "done", "wrote and committed the design");
+        t.evidence = serde_json::json!([{ "kind": "change", "ok": true }]);
+        let c = check(&run(), &[t.clone()], 0);
+        assert!(!c.approved());
+        assert!(c.reasons.iter().any(|r| r.contains("independent verification")));
+        assert!(needs_final_verification(&[&t]));
+    }
+
+    #[test]
+    fn a_read_only_answer_does_not_need_a_gatekeeper() {
+        // A research note or an answer changed nothing; making it wait for a
+        // final check would turn every question into a two-agent run.
+        let mut t = task("answer", "researcher", "done", "the answer is 42");
+        t.evidence = serde_json::json!([{ "kind": "read", "ok": true }]);
+        let c = check(&run(), &[t.clone()], 0);
+        assert!(c.approved());
+        assert!(!needs_final_verification(&[&t]));
     }
 
     #[test]

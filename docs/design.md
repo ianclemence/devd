@@ -265,6 +265,16 @@ the reviewed commit, verified/total, accepted by hand, retries, stalls and
 baseline failures. It is built from the persisted tasks and events, not from the
 run's prose.
 
+A run is not finished because its tasks say done. Any task that recorded a file
+change needs an independent final check, whatever its role; a designer or
+architect cannot approve their own deliverable, and the final check records the
+commit it read. A read-only answer or research note does not start a pointless
+check. The model catalogue records what each provider says about tools, images
+and reasoning; a model whose image support is unknown is given the picture and
+the turn falls back to text only if the provider rejects it. Agents can discover
+and read a skill another agent on the machine already has before deciding a
+capability is missing.
+
 Sending a message to the open conversation patches it in place: the header,
 project card, composer and scroll stay, and the sent message arrives through the
 normal poll. Switching conversations prepares the destination before showing it:

@@ -352,6 +352,7 @@ pub fn models(v: &Value, source: &str, now: &str) -> Vec<CatalogueModel> {
             retirement: None,
             url: Some("https://ai.google.dev/gemini-api/docs/models".to_string()),
             fetched_at: now.to_string(),
+            ..Default::default()
         });
     }
     out
@@ -392,6 +393,21 @@ mod tests {
             max_tokens: 1000,
             effort: None,
         }
+    }
+
+    #[test]
+    fn an_image_becomes_inline_data() {
+        let mut r = request();
+        r.messages.push(json!({ "role": "user", "content": [
+            { "type": "image", "source": { "type": "base64", "media_type": "image/jpeg", "data": "BBBB" } },
+            { "type": "text", "text": "describe it" }
+        ]}));
+        let b = body(&r);
+        let contents = b["contents"].as_array().unwrap();
+        let parts = contents.last().unwrap()["parts"].as_array().unwrap();
+        assert_eq!(parts[0]["inlineData"]["mimeType"], "image/jpeg");
+        assert_eq!(parts[0]["inlineData"]["data"], "BBBB");
+        assert_eq!(parts[1]["text"], "describe it");
     }
 
     #[test]
