@@ -10651,7 +10651,6 @@ var TERM_POLL_MS = 250;
   function paintChat(force) {
     var box = el("chat-stream");
     if (!box) return;
-    paintComposerStatus();
     paintComposerThread();
     var key = chatPaintKey();
     if (!force && key === AI.paintKey) return;
@@ -12469,43 +12468,19 @@ var TERM_POLL_MS = 250;
     return !!(p && p.enabled !== false);
   }
 
-  function composerStatus(prefix) {
-    if (prefix === "home") {
-      var team = AI.homeMode === "team";
-      return { tone: team ? "accent" : "ok", text: team ? "Agents" : "Assistant", hint: team ? "The team plans a goal and waits for your go-ahead." : "One request, answered by the assistant." };
-    }
-    var t = AI.thread;
-    if (!t) return { tone: "off", text: "New conversation", hint: "Nothing has been said yet." };
-    if (t.state === "running" || AI.running) return { tone: "live", text: "Working", hint: "The assistant is working. You can queue another message." };
-    if (t.state === "waiting_approval") return { tone: "warn", text: "Waiting for you", hint: "An operation needs your decision." };
-    if (t.state === "error") return { tone: "bad", text: "Stopped with an error", hint: "Read the last notice in the conversation." };
-    return { tone: "ok", text: "Ready", hint: "The assistant is not working." };
+  function composerStatus() {
+    var team = AI.homeMode === "team";
+    return { tone: team ? "accent" : "ok", text: team ? "Agents" : "Assistant", hint: team ? "The team plans a goal and waits for your go-ahead." : "One request, answered by the assistant." };
   }
 
-  function statusTab(prefix) {
-    var s = composerStatus(prefix);
+  function statusTab() {
+    // Only Home has a status tab: it is the Assistant/Agents mode switch. The
+    // Assistant's composer has no status pill — the header and the stop control
+    // already say what the conversation is doing.
+    var s = composerStatus();
     var dot = '<span class="composer-tab-dot dot-' + attr(s.tone) + '"></span>';
-    if (prefix === "home") {
-      return '<button type="button" class="composer-tab" data-action="composer-mode-toggle" title="' + attr(s.hint) + '">' +
-        dot + '<span>' + esc(s.text) + "</span></button>";
-    }
-    return '<span class="composer-tab" id="chat-status" title="' + attr(s.hint) + '">' + dot + "<span>" + esc(s.text) + "</span></span>";
-  }
-
-  /* The small tab above the composer says what the conversation is doing. It
-   * used to be written once, when the screen was built, so a finished reply
-   * left it saying "Working" until something else redrew the page. */
-  function paintComposerStatus() {
-    var node = el("chat-status");
-    if (!node) return;
-    var s = composerStatus("chat");
-    node.title = s.hint;
-    // The status is painted on every poll. Rewriting identical markup rebuilt
-    // the dot and its label each time, which reads as a blink on a quiet screen.
-    var html = '<span class="composer-tab-dot dot-' + attr(s.tone) + '"></span><span>' + esc(s.text) + "</span>";
-    if (node.__lastHtml === html) return;
-    node.__lastHtml = html;
-    node.innerHTML = html;
+    return '<button type="button" class="composer-tab" data-action="composer-mode-toggle" title="' + attr(s.hint) + '">' +
+      dot + '<span>' + esc(s.text) + "</span></button>";
   }
 
   /* The project picker belongs to the new-conversation composer. Once the
@@ -12562,7 +12537,7 @@ var TERM_POLL_MS = 250;
       : '<textarea class="composer-input" id="chat-input" rows="2" placeholder="' + attr(placeholder) + '" aria-label="' + attr(o.label || "Message") + '" aria-autocomplete="list" aria-controls="chat-mentions">' + esc(o.text || "") + "</textarea>";
 
     return '<div class="composer-dock' + (prefix === "home" ? " composer-dock-home" : "") + '">' +
-      statusTab(prefix) +
+      (prefix === "home" ? statusTab() : "") +
       '<div class="composer" role="group" aria-label="' + attr(o.aria || "Tell devd what you are working on") + '">' +
         composerTop(prefix) +
         (prefix === "home"

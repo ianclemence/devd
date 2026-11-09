@@ -10,6 +10,14 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.27.4] - 2026-11-09 - The Assistant composer has no status pill
+
+The Assistant's composer carried a `Ready` / `Working` / `Waiting` pill above it. The conversation's
+header and the stop control already say what it is doing, so the pill is gone. Home keeps its
+Assistant/Agents mode switch, which is a control rather than a status.
+
+---
+
 ## [0.27.3] - 2026-11-09 - Every screen paints once, then patches
 
 ### The measured cause

@@ -1833,6 +1833,17 @@ fn a_conversation_cache_is_always_complete() {
 }
 
 #[test]
+fn the_assistant_composer_has_no_status_pill() {
+    // The Assistant's composer carried a "Ready / Working / Waiting" pill above
+    // it. The header and the stop control already say what the conversation is
+    // doing, so the pill is gone; Home keeps its Assistant/Agents switch.
+    assert!(APP.contains("(prefix === \"home\" ? statusTab() : \"\")"), "only Home draws a composer tab");
+    assert!(!APP.contains("id=\"chat-status\""), "the Assistant status pill is gone");
+    assert!(!APP.contains("paintComposerStatus"), "nothing paints the removed pill");
+    assert!(APP.contains("data-action=\"composer-mode-toggle\""), "Home keeps its mode switch");
+}
+
+#[test]
 fn the_assistant_has_browser_and_terminal_surfaces() {
     assert!(APP.contains("id=\"work-surface\""), "a work surface exists beside the conversation");
     assert!(APP.contains("class=\"work-pane work-browser\""), "the browser is a surface");
