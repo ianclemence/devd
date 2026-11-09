@@ -24,7 +24,7 @@ use crate::chat::{Hub, SendRequest};
 use crate::providers;
 use crate::team::{PlanTask, StartRequest, Team};
 use crate::{
-    dictation, docs, fs, health, judge, requirements, roles, schedule, search, secrets, skills,
+    browser, dictation, docs, fs, health, judge, requirements, roles, schedule, search, secrets, skills,
     templates, web,
 };
 
@@ -70,6 +70,80 @@ struct ModelCapsArgs {
 
 fn simple(id: &str, text: impl Into<String>) -> Result<Plan> {
     Ok(Plan::new(id, text))
+}
+
+// ----------------------------------------------------------------- browser
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct BrowserOpen {
+    /// Page to load. Omit to use the focused tab as it is.
+    #[serde(default)]
+    url: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct BrowserTabsOpen {
+    /// Page to load in the new tab. Omit for about:blank.
+    #[serde(default)]
+    url: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct BrowserTab {
+    /// Tab id from browser.tabs.list. Omit to use the focused tab.
+    #[serde(default)]
+    tab: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct BrowserNavigate {
+    /// Page to load.
+    url: String,
+    /// Tab id from browser.tabs.list. Omit to use the focused tab.
+    #[serde(default)]
+    tab: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct BrowserClick {
+    /// Element ref from this tab's latest browser.snapshot, e.g. `e3`.
+    #[serde(rename = "ref", alias = "reference")]
+    reference: String,
+    /// Tab id from browser.tabs.list. Omit to use the focused tab.
+    #[serde(default)]
+    tab: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct BrowserType {
+    /// Element ref from this tab's latest browser.snapshot, e.g. `e5`.
+    #[serde(rename = "ref", alias = "reference")]
+    reference: String,
+    /// Text to put in the field.
+    text: String,
+    /// Submit the field's form (or press Enter) after typing.
+    #[serde(default)]
+    submit: Option<bool>,
+    /// Tab id from browser.tabs.list. Omit to use the focused tab.
+    #[serde(default)]
+    tab: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct BrowserShot {
+    /// Tab id from browser.tabs.list. Omit to use the focused tab.
+    #[serde(default)]
+    tab: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct BrowserEvaluate {
+    /// JavaScript to run in the page. Prefer snapshot/click/type; use this only
+    /// for something those cannot express.
+    expression: String,
+    /// Tab id from browser.tabs.list. Omit to use the focused tab.
+    #[serde(default)]
+    tab: Option<String>,
 }
 
 // ---------------------------------------------------------------- arguments
@@ -1964,6 +2038,226 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
         |_, a| {
             let v = docs::fetch(&a.url, a.offset.unwrap_or(0), a.limit.unwrap_or(20_000).clamp(1_000, 60_000))?;
             Ok(Outcome::with_data(format!("{} characters", v["total_chars"]), v))
+        },
+    )?;
+
+    // -------------------------------------------------------------- browser
+    //
+    // A real tab an agent and a person share: navigate, read the accessibility
+    // tree, click and type by a ref from that snapshot, screenshot what is on
+    // screen, and read the console/network buffer. The browser is a private
+    // headless Chromium with its own profile, so the person's own browser is
+    // never touched. Pages may be public or a local dev server: that is the
+    // work this exists to do.
+    reg.define::<BrowserOpen>("browser.open", "Open the shared browser")
+    .description("Starts a private headless Chromium (Edge or Chrome) and loads a page in the focused tab. The person sees the same tab in devd's Browser pane. Pages may be public or a local dev server; file: and script: addresses are refused. Use browser.snapshot to read the page, browser.click/type to act on it, browser.screenshot to show it, and browser.tabs.* to manage tabs. This is for acting on a page; use web.open when you only need to read one.")
+    .tier(Tier::Exec)
+    .effect(Effect::Process)
+    .agent_safe()
+    .dry_run()
+    .handlers(
+        |_, a| simple("browser.open", match a.url.as_deref() { Some(u) => format!("open {u} in the shared browser"), None => "open the shared browser".into() }),
+        |ctx, a| {
+            let v = browser::open(ctx.paths.root(), a.url.as_deref())?;
+            Ok(Outcome::with_data(format!("opened {}", v["url"].as_str().unwrap_or("the browser")), v))
+        },
+    )?;
+    reg.define::<NoArgs>("browser.tabs.list", "List the browser's tabs")
+    .description("The tabs the shared browser owns, with their tab ids, URLs and titles, and which one is focused. Every other browser command takes one of these ids or uses the focused tab.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, _| simple("browser.tabs.list", "list the browser tabs"),
+        |ctx, _| {
+            let v = browser::tabs_list(ctx.paths.root())?;
+            let n = v["tabs"].as_array().map(|a| a.len()).unwrap_or(0);
+            Ok(Outcome::with_data(format!("{n} tab(s)"), v))
+        },
+    )?;
+    reg.define::<BrowserTabsOpen>("browser.tabs.open", "Open a tab in the shared browser")
+    .description("Opens a new tab, optionally loading a URL, and focuses it. The id it returns is what browser.navigate, browser.snapshot, browser.click and browser.type take.")
+    .tier(Tier::Exec)
+    .effect(Effect::Process)
+    .agent_safe()
+    .dry_run()
+    .handlers(
+        |_, a| simple("browser.tabs.open", format!("open a tab at {}", a.url.as_deref().unwrap_or("about:blank"))),
+        |ctx, a| {
+            let v = browser::tabs_open(ctx.paths.root(), a.url.as_deref())?;
+            Ok(Outcome::with_data(format!("tab {}", v["tab"].as_str().unwrap_or("")), v))
+        },
+    )?;
+    reg.define::<BrowserTab>("browser.tabs.focus", "Focus a browser tab")
+    .description("Makes one tab the focused tab, so later commands that omit `tab` act on it. Focus changes what the person sees in devd's Browser pane; it does not select a tool target.")
+    .tier(Tier::Exec)
+    .effect(Effect::Process)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, _| simple("browser.tabs.focus", "focus a browser tab"),
+        |_, a| {
+            let v = browser::tabs_focus(a.tab.as_deref().unwrap_or(""))?;
+            Ok(Outcome::with_data(format!("focused {}", v["tab"].as_str().unwrap_or("the tab")), v))
+        },
+    )?;
+    reg.define::<BrowserTab>("browser.tabs.close", "Close a browser tab")
+    .description("Closes one tab and releases its page. The focused tab moves to another open tab.")
+    .tier(Tier::Exec)
+    .effect(Effect::Process)
+    .agent_safe()
+    .handlers(
+        |_, _| simple("browser.tabs.close", "close a browser tab"),
+        |_, a| {
+            let v = browser::tabs_close(a.tab.as_deref().unwrap_or(""))?;
+            Ok(Outcome::with_data("closed the tab", v))
+        },
+    )?;
+    reg.define::<BrowserNavigate>("browser.navigate", "Load a page in the shared browser")
+    .description("Navigates a tab and waits for the document to settle. Element refs from the previous page expire; take a new browser.snapshot. http, https and about:blank only.")
+    .tier(Tier::Exec)
+    .effect(Effect::Remote)
+    .agent_safe()
+    .dry_run()
+    .handlers(
+        |_, a| simple("browser.navigate", format!("load {}", a.url)),
+        |_, a| {
+            let v = browser::navigate(a.tab.as_deref(), &a.url)?;
+            Ok(Outcome::with_data(format!("loaded {}", v["url"].as_str().unwrap_or(&a.url)), v))
+        },
+    )?;
+    reg.define::<BrowserTab>("browser.back", "Go back one page")
+    .description("Uses the tab's own history to go back. Refs expire; take a new snapshot.")
+    .tier(Tier::Exec)
+    .effect(Effect::Remote)
+    .agent_safe()
+    .dry_run()
+    .handlers(
+        |_, _| simple("browser.back", "go back one page"),
+        |_, a| {
+            let v = browser::back(a.tab.as_deref())?;
+            Ok(Outcome::with_data(format!("now on {}", v["url"].as_str().unwrap_or("an earlier page")), v))
+        },
+    )?;
+    reg.define::<BrowserTab>("browser.forward", "Go forward one page")
+    .description("Uses the tab's own history to go forward. Refs expire; take a new snapshot.")
+    .tier(Tier::Exec)
+    .effect(Effect::Remote)
+    .agent_safe()
+    .dry_run()
+    .handlers(
+        |_, _| simple("browser.forward", "go forward one page"),
+        |_, a| {
+            let v = browser::forward(a.tab.as_deref())?;
+            Ok(Outcome::with_data(format!("now on {}", v["url"].as_str().unwrap_or("a later page")), v))
+        },
+    )?;
+    reg.define::<BrowserTab>("browser.reload", "Reload the page")
+    .description("Reloads the tab without its cache. Refs expire; take a new snapshot.")
+    .tier(Tier::Exec)
+    .effect(Effect::Remote)
+    .agent_safe()
+    .dry_run()
+    .handlers(
+        |_, _| simple("browser.reload", "reload the page"),
+        |_, a| {
+            let v = browser::reload(a.tab.as_deref())?;
+            Ok(Outcome::with_data(format!("reloaded {}", v["url"].as_str().unwrap_or("the page")), v))
+        },
+    )?;
+    reg.define::<BrowserTab>("browser.snapshot", "Read the page as an accessibility tree")
+    .description("Returns the page's headings, text and controls as a compact tree. Actionable nodes get a ref (e1, e2, ...) that browser.click and browser.type take. The refs belong to this tab's latest snapshot and stop working after a navigation, so take a new snapshot after the page changes.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .handlers(
+        |_, _| simple("browser.snapshot", "read the page"),
+        |ctx, a| {
+            let v = browser::snapshot_tab(ctx.paths.root(), a.tab.as_deref())?;
+            let n = v["nodes"].as_array().map(|x| x.len()).unwrap_or(0);
+            Ok(Outcome::with_data(format!("{n} node(s)"), v))
+        },
+    )?;
+    reg.define::<BrowserClick>("browser.click", "Click an element by ref")
+    .description("Clicks the element a ref from browser.snapshot names. The click may navigate or submit a form; read the returned URL and take a new snapshot before acting again.")
+    .tier(Tier::Exec)
+    .effect(Effect::Remote)
+    .agent_safe()
+    .handlers(
+        |_, a| simple("browser.click", format!("click {}", a.reference)),
+        |_, a| {
+            let v = browser::click(a.tab.as_deref(), &a.reference)?;
+            Ok(Outcome::with_data(format!("clicked; now on {}", v["url"].as_str().unwrap_or("the page")), v))
+        },
+    )?;
+    reg.define::<BrowserType>("browser.type", "Type into a field by ref")
+    .description("Puts text in the input, textarea or contenteditable element a ref from browser.snapshot names, firing input and change so the page's own script sees it. `submit: true` submits the field's form or presses Enter. Returns the URL the page is on afterwards.")
+    .tier(Tier::Exec)
+    .effect(Effect::Remote)
+    .agent_safe()
+    .handlers(
+        |_, a| simple("browser.type", format!("type into {}", a.reference)),
+        |_, a| {
+            let v = browser::type_text(a.tab.as_deref(), &a.reference, &a.text, a.submit.unwrap_or(false))?;
+            Ok(Outcome::with_data(format!("typed; now on {}", v["url"].as_str().unwrap_or("the page")), v))
+        },
+    )?;
+    reg.define::<BrowserShot>("browser.screenshot", "Screenshot the page")
+    .description("Captures the visible page as a PNG and stores it in devd's uploads, so the person can see exactly what the agent sees. The returned `file` is the stored name; the Browser pane shows it. This is evidence, not a substitute for reading the page: take a snapshot too when you need to act.")
+    .tier(Tier::Exec)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers(
+        |_, _| simple("browser.screenshot", "screenshot the page"),
+        |ctx, a| {
+            let v = browser::screenshot(ctx.paths.root(), a.tab.as_deref())?;
+            Ok(Outcome::with_data(format!("captured {} bytes", v["bytes"]), v))
+        },
+    )?;
+    reg.define::<BrowserTab>("browser.console", "Read console output and requests")
+    .description("Returns the page's recent console lines and the fetch/XHR requests it made (method, URL, status, duration), as recorded in the page. An empty list is reported as `empty`, not as a failure.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, _| simple("browser.console", "read the browser console"),
+        |ctx, a| {
+            let v = browser::console(ctx.paths.root(), a.tab.as_deref())?;
+            let n = v["entries"].as_array().map(|x| x.len()).unwrap_or(0) + v["network"].as_array().map(|x| x.len()).unwrap_or(0);
+            Ok(Outcome::with_data(format!("{n} entry/entries"), v))
+        },
+    )?;
+    reg.define::<BrowserEvaluate>("browser.evaluate", "Run JavaScript in the page")
+    .description("Runs one expression in the page and returns its value. Prefer browser.snapshot, browser.click and browser.type: this is the escape hatch for something they cannot express, and an agent's call waits for the person's approval. It does not run in devd's own window.")
+    .tier(Tier::Exec)
+    .effect(Effect::Process)
+    .agent_safe()
+    .agent_needs_approval()
+    .dry_run()
+    .handlers(
+        |_, a| simple("browser.evaluate", format!("run JavaScript in the page: {}", util::truncate(&a.expression, 120))),
+        |ctx, a| {
+            let v = browser::evaluate(ctx.paths.root(), a.tab.as_deref(), &a.expression)?;
+            Ok(Outcome::with_data("evaluated", v))
+        },
+    )?;
+    reg.define::<NoArgs>("browser.close", "Close the shared browser")
+    .description("Closes every tab and stops the private browser process devd started. The person's own browser is not affected.")
+    .tier(Tier::Exec)
+    .effect(Effect::Process)
+    .agent_safe()
+    .handlers(
+        |_, _| simple("browser.close", "close the shared browser"),
+        |_, _| {
+            let v = browser::close()?;
+            Ok(Outcome::with_data(format!("closed {} tab(s)", v["closed"]), v))
         },
     )?;
 

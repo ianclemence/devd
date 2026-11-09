@@ -81,14 +81,21 @@ On Linux and macOS devd does not download a second copy of nginx or MariaDB. It 
 
 ### Windows
 
-Download and run the installer from the [latest release](https://github.com/ianclemence/devd/releases/latest):
+Download **`devd-setup-<version>.exe`** from the [latest release](https://github.com/ianclemence/devd/releases/latest) and run it. It installs for the current user only, adds `devd` to `PATH` and creates Start Menu entries. Uninstalling keeps your sites and data in `%LOCALAPPDATA%\devd`.
 
-```powershell
-curl.exe -LO https://github.com/ianclemence/devd/releases/download/v0.17.1/devd-setup-0.17.1.exe
-.\devd-setup-0.17.1.exe
-```
+If the release page does not have an installer, use the **portable zip** (`devd-desktop-<version>-x86_64-pc-windows-gnu.zip`). Unzip the whole folder and double-click `launch.vbs`: it runs `devd setup` the first time, then opens the window. Do **not** download `devd-desktop-<version>-...exe` on its own — the window needs `WebView2Loader.dll` beside it, and the standalone file is only useful once that DLL is already installed.
 
-It installs for the current user only, adds `devd` to `PATH` and creates Start Menu entries. Uninstalling keeps your sites and data in `%LOCALAPPDATA%\devd`. The installer is not code-signed, so SmartScreen warns once; `SHA256SUMS.txt` on the release lets you check what you downloaded. A portable `devd.exe` and a portable window are attached to each release as well.
+The installer and the portable files are not code-signed, so SmartScreen warns once; `SHA256SUMS.txt` on the release lets you check what you downloaded.
+
+If the window does not open:
+
+- `%LOCALAPPDATA%\devd\desktop.log` has the startup error.
+- The window needs the Microsoft Edge WebView2 runtime. It ships with current Edge; if it is missing, install it from [Microsoft](https://developer.microsoft.com/microsoft-edge/webview2/).
+- The command line works without the window: `devd ui` serves the same interface at a loopback address.
+
+### Linux and macOS
+
+The server, the web interface and the command line build and run on Linux and macOS; the released installers are currently **Windows x86_64 only**. On Linux, `./scripts/install-linux.sh --binary target/release/devd` installs per user after a `cargo build --release`. On macOS, build from source and run `devd ui`. A signed macOS window and a Linux package are not published yet.
 
 ### From source
 

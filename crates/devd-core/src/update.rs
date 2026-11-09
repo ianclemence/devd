@@ -110,18 +110,39 @@ pub fn is_newer(current: &str, latest: &str) -> bool {
 
 /// The release asset for the running platform's command-line program.
 pub fn asset_name(version: &str) -> Option<String> {
-    let target = if cfg!(all(windows, target_arch = "x86_64")) {
-        "x86_64-pc-windows-gnu.exe"
-    } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
-        "x86_64-unknown-linux-gnu"
-    } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-        "aarch64-apple-darwin"
-    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
-        "x86_64-apple-darwin"
-    } else {
-        return None;
-    };
+    let target = platform_target()?;
     Some(format!("devd-v{version}-{target}"))
+}
+
+/// The release asset for the running platform's desktop window program.
+pub fn desktop_asset_name(version: &str) -> Option<String> {
+    let target = platform_target()?;
+    Some(format!("devd-desktop-v{version}-{target}"))
+}
+
+fn platform_target() -> Option<&'static str> {
+    if cfg!(all(windows, target_arch = "x86_64")) {
+        Some("x86_64-pc-windows-gnu.exe")
+    } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        Some("x86_64-unknown-linux-gnu")
+    } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        Some("aarch64-apple-darwin")
+    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+        Some("x86_64-apple-darwin")
+    } else {
+        None
+    }
+}
+
+/// Whether this process is the desktop window program rather than the command
+/// line one. The desktop embeds the server, so the footer and the updater both
+/// need to know which program a person is looking at.
+pub fn running_desktop() -> bool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| path.file_stem().map(|s| s.to_string_lossy().to_ascii_lowercase()))
+        .map(|stem| stem == "devd-desktop")
+        .unwrap_or(false)
 }
 
 /// A published asset.
@@ -213,20 +234,30 @@ pub struct Check {
     pub signed: bool,
     /// The file an update would install on this platform, when the release has it.
     pub asset: Option<String>,
+    /// `desktop` when devd is running in its window, `command line` otherwise.
+    pub app: String,
+    /// The release page, for an unsigned release the footer may only open.
+    pub url: String,
 }
 
 /// Compare the running version with the latest release.
 pub fn check(url: &str, allow_http: bool) -> Result<Check> {
     let release = latest(url, allow_http)?;
     let current = env!("CARGO_PKG_VERSION").to_string();
-    let wanted = asset_name(&release.version);
+    let desktop = running_desktop();
+    let wanted = if desktop {
+        desktop_asset_name(&release.version)
+    } else {
+        asset_name(&release.version)
+    };
     Ok(Check {
         newer: is_newer(&current, &release.version),
         signed: release.asset(SUMS).is_some() && release.asset(SUMS_SIG).is_some(),
-        asset: wanted
-            .filter(|n| release.asset(n).is_some()),
+        asset: wanted.filter(|n| release.asset(n).is_some()),
+        url: format!("https://github.com/ianclemence/devd/releases/tag/{}", release.tag),
         latest: release.version,
         current,
+        app: if desktop { "desktop" } else { "command line" }.to_string(),
     })
 }
 
@@ -258,15 +289,112 @@ pub struct Applied {
 
 /// Download, verify and install a release.
 pub fn apply(release: &Release, options: &Options<'_>) -> Result<Applied> {
+    let asset_file = asset_name(&release.version)
+        .ok_or_else(|| DevdError::unsupported("no update is published for this platform"))?;
+    let fetched = fetch_verified(release, options, &asset_file, options.smoke_test)?;
+
+    // Replace, keeping the old one. A running program can be renamed on every
+    // platform devd supports, so the new file takes its place without a restart.
+    let previous = PathBuf::from(format!("{}.before-{}", options.target.display(), env!("CARGO_PKG_VERSION")));
+    let _ = std::fs::remove_file(&previous);
+    std::fs::rename(&options.target, &previous)?;
+    if let Err(e) = std::fs::copy(&fetched, &options.target) {
+        // Put the old one back rather than leave nothing installed.
+        let _ = std::fs::rename(&previous, &options.target);
+        return Err(DevdError::Io(std::io::Error::other(format!(
+            "could not install the new program: {e}; the old one was left in place"
+        ))));
+    }
+    make_executable(&options.target)?;
+    Ok(Applied {
+        version: release.version.clone(),
+        previous,
+        installed: options.target.clone(),
+    })
+}
+
+/// Download and verify the desktop window program, then hand the swap to a
+/// small script that runs after this process has exited.
+///
+/// Windows will not let a running program be replaced. The script waits for the
+/// process to go, copies the verified download over the old file, keeps the old
+/// one as `.before-<version>`, and starts the window again. devd returns the
+/// answer to the person before the script kills the process, so the footer can
+/// say what is happening.
+pub fn apply_desktop(release: &Release, options: &Options<'_>, pid: u32) -> Result<Applied> {
+    let asset_file = desktop_asset_name(&release.version)
+        .ok_or_else(|| DevdError::unsupported("no desktop update is published for this platform"))?;
+    let fetched = fetch_verified(release, options, &asset_file, false)?;
+    let target = &options.target;
+    let previous = PathBuf::from(format!("{}.before-{}", target.display(), env!("CARGO_PKG_VERSION")));
+    let staged = PathBuf::from(format!("{}.new", target.display()));
+    std::fs::copy(&fetched, &staged)?;
+    make_executable(&staged)?;
+
+    #[cfg(windows)]
+    {
+        let launcher = target.with_file_name("launch.vbs");
+        let start = if launcher.is_file() {
+            format!("\"{}\"", launcher.display())
+        } else {
+            format!("\"{}\"", target.display())
+        };
+        let script = target.with_file_name(format!("devd-update-{}.cmd", release.version));
+        let body = format!(
+            "@echo off\r\n\
+             setlocal\r\n\
+             timeout /t 2 /nobreak >nul\r\n\
+             taskkill /PID {pid} /F >nul 2>nul\r\n\
+             timeout /t 2 /nobreak >nul\r\n\
+             copy /Y \"{target}\" \"{previous}\" >nul 2>nul\r\n\
+             move /Y \"{staged}\" \"{target}\" >nul\r\n\
+             if errorlevel 1 goto failed\r\n\
+             start \"\" {start}\r\n\
+             del \"%~f0\" >nul 2>nul\r\n\
+             exit /b 0\r\n\
+             :failed\r\n\
+             start \"\" {start}\r\n\
+             exit /b 1\r\n",
+            pid = pid,
+            target = target.display(),
+            previous = previous.display(),
+            staged = staged.display(),
+            start = start,
+        );
+        std::fs::write(&script, body)?;
+        // `start` makes the updater its own process. `taskkill /F` without `/T`
+        // kills only devd, so the script survives to finish the swap.
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", "/b", &script.to_string_lossy()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()?;
+    }
+    #[cfg(not(windows))]
+    {
+        // The desktop is only built for Windows today; the command-line updater
+        // is the one that runs on the other platforms.
+        return Err(DevdError::unsupported("the desktop app updates itself on Windows only"));
+    }
+
+    Ok(Applied {
+        version: release.version.clone(),
+        previous,
+        installed: target.clone(),
+    })
+}
+
+/// Verify the release's signature and checksum, download the named asset and
+/// return the path it was cached at. The signature is checked before anything
+/// else is trusted, and a failed check installs nothing.
+fn fetch_verified(release: &Release, options: &Options<'_>, asset_file: &str, smoke_test: bool) -> Result<PathBuf> {
     let sums = release
         .asset(SUMS)
         .ok_or_else(|| DevdError::invalid(format!("{} has no {SUMS}; it cannot be verified, so it will not be installed", release.tag)))?;
     let sig = release
         .asset(SUMS_SIG)
         .ok_or_else(|| DevdError::invalid(format!("{} is not signed ({SUMS_SIG} is missing); it will not be installed", release.tag)))?;
-    let asset_file = asset_name(&release.version)
-        .ok_or_else(|| DevdError::unsupported("no update is published for this platform"))?;
-    let asset = release.asset(&asset_file).ok_or_else(|| {
+    let asset = release.asset(asset_file).ok_or_else(|| {
         DevdError::not_found(format!("{} has no `{asset_file}` for this platform", release.tag))
     })?;
 
@@ -287,16 +415,18 @@ pub fn apply(release: &Release, options: &Options<'_>) -> Result<Applied> {
     // 2. The program, against the signed checksum.
     let expected = parse_sums(&String::from_utf8_lossy(&sums_bytes))
         .into_iter()
-        .find(|(_, name)| *name == asset_file)
+        .find(|(_, name)| name == asset_file)
         .map(|(hash, _)| hash)
         .ok_or_else(|| DevdError::invalid(format!("the signed checksums do not list `{asset_file}`")))?;
     let artifact = download::Artifact::new(asset.url.clone())
-        .filename(asset_file.clone())
+        .filename(asset_file.to_string())
         .sha256(expected);
     let fetched = download::fetch_with(&artifact, &options.cache, None, options.allow_http)?;
 
-    // 3. The program must run and say it is the version being installed.
-    if options.smoke_test {
+    // 3. The command-line program must run and say it is the version being
+    // installed. The desktop window is not asked: starting it would open a
+    // window, and the signed checksum is the trust here.
+    if smoke_test {
         make_executable(&fetched.path)?;
         let out = util::run(&fetched.path, &["--version".to_string()], None, &[], Some(Duration::from_secs(20)))?;
         if !out.stdout.contains(&release.version) {
@@ -307,25 +437,7 @@ pub fn apply(release: &Release, options: &Options<'_>) -> Result<Applied> {
             )));
         }
     }
-
-    // 4. Replace, keeping the old one. A running program can be renamed on every
-    // platform devd supports, so the new file takes its place without a restart.
-    let previous = PathBuf::from(format!("{}.before-{}", options.target.display(), env!("CARGO_PKG_VERSION")));
-    let _ = std::fs::remove_file(&previous);
-    std::fs::rename(&options.target, &previous)?;
-    if let Err(e) = std::fs::copy(&fetched.path, &options.target) {
-        // Put the old one back rather than leave nothing installed.
-        let _ = std::fs::rename(&previous, &options.target);
-        return Err(DevdError::Io(std::io::Error::other(format!(
-            "could not install the new program: {e}; the old one was left in place"
-        ))));
-    }
-    make_executable(&options.target)?;
-    Ok(Applied {
-        version: release.version.clone(),
-        previous,
-        installed: options.target.clone(),
-    })
+    Ok(fetched.path)
 }
 
 #[cfg(unix)]
@@ -380,6 +492,17 @@ mod tests {
         assert!(!is_newer("0.16.0", "0.16.0"));
         assert!(!is_newer("0.16.0", "0.15.9"));
         assert!(!is_newer("0.16.0", "garbage"));
+    }
+
+    #[test]
+    fn the_desktop_update_is_its_own_asset() {
+        // The window program and the command are separate downloads. A footer
+        // update must fetch the one the person is actually looking at.
+        let command = asset_name("9.9.9").expect("a platform with updates");
+        let desktop = desktop_asset_name("9.9.9").expect("a platform with updates");
+        assert!(command.starts_with("devd-v9.9.9-"), "{command}");
+        assert!(desktop.starts_with("devd-desktop-v9.9.9-"), "{desktop}");
+        assert_ne!(command, desktop);
     }
 
     #[test]

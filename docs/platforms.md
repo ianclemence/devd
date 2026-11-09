@@ -11,6 +11,21 @@ on each, because the people who publish them do.
 | Trust the local CA | `certutil` | p11-kit `trust` | `security add-trusted-cert` |
 | Default ports | 80 / 443 | 8080 / 8443 | 8080 / 8443 |
 
+## Published builds
+
+| | Windows x64 | Linux x64 | macOS |
+|---|---|---|---|
+| Command line | `devd-v...exe` and `devd-setup-...exe` on each release | build from source; `scripts/install-linux.sh` installs per user | build from source |
+| Desktop window | `devd-setup-...exe` or the portable `devd-desktop-...zip` | not published | not published |
+| Web interface | in the installer, the zip, and `devd ui` | `devd ui` | `devd ui` |
+
+The installer and the portable window are Windows x86_64 only today. The server
+and the web interface are the same code on all three platforms, and the Linux
+release scripts build and test there, but a Linux package and a signed macOS app
+are not published yet. A portable window is a folder, not one file:
+`devd-desktop.exe` needs `WebView2Loader.dll` and, for first-run setup,
+`devd.exe` and `launch.vbs` beside it.
+
 ## What "adopted" means
 
 Linux and macOS have no publisher for nginx, MariaDB or PHP that devd could

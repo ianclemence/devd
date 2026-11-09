@@ -1875,6 +1875,9 @@
   }
 
   var STATUS_HTML = null;
+  /* The footer's update control. `checked` is false until the first answer
+     arrives, so an offline machine shows the version and nothing else. */
+  var UPDATE = { checked: false, checking: false, busy: false, current: "", latest: "", newer: false, signed: false, asset: null, app: "", url: "", done: null, error: null };
   function statusbar() {
     var left = [], right = [];
     if (state.project && state.project.status && state.view === "project") {
@@ -1897,12 +1900,60 @@
     var prod = AI.env && AI.env.mode === "production";
     right.push(prod ? '<span class="sb-bad" title="Production mode: agents need your approval for every change">production</span>' : '<span title="devd only changes this machine. Switch to production mode in Diagnostics to require approval for every agent change.">local</span>');
     if (state.session) right.push('<span title="The address agents and scripts use">api :' + esc(state.session.port) + "</span>");
+    var version = state.session && state.session.version;
+    if (version) {
+      if (UPDATE.busy) {
+        right.push('<span class="sb-update is-busy" title="Downloading and verifying the release">Updating…</span>');
+      } else if (UPDATE.done) {
+        right.push('<span class="sb-update is-done" title="The new version is installed">Restarting to ' + esc(UPDATE.done) + "</span>");
+      } else if (UPDATE.newer && UPDATE.signed && UPDATE.asset) {
+        right.push('<button type="button" class="sb-link sb-update" data-action="app-update" title="Install devd ' + attr(UPDATE.latest) + ' now. The release is signed and verified before anything is replaced.">Update to ' + esc(UPDATE.latest) + "</button>");
+      } else if (UPDATE.newer) {
+        right.push('<button type="button" class="sb-link sb-update" data-action="app-download" title="Open the release page. This release is not signed, so it cannot install itself.">Download ' + esc(UPDATE.latest) + "</button>");
+      } else {
+        right.push('<button type="button" class="sb-link sb-version" data-action="app-update-check" title="Check for a newer devd">devd ' + esc(version) + "</button>");
+      }
+    }
     var html = '<div class="sb-left"><button type="button" class="health health-checking" id="health-chip" data-action="health-open" title="System health"></button><span class="sb-sep" aria-hidden="true">·</span>' + (left.join('<span class="sb-sep" aria-hidden="true">·</span>') || "Ready") + '</div><div class="sb-right">' + right.join('<span class="sb-sep" aria-hidden="true">·</span>') + "</div>";
     if (html !== STATUS_HTML) {
       STATUS_HTML = html;
       el("statusbar").innerHTML = html;
     }
     healthChip();
+  }
+
+  /* Ask GitHub for the latest release and paint the footer. A person pressing
+     the version checks again and is told the answer; the quiet check on boot
+     says nothing unless there is something to install. */
+  function updateCheck(manual) {
+    if (UPDATE.checking) return;
+    UPDATE.checking = true;
+    read("update.check", {})
+      .then(function (d) {
+        UPDATE.checked = true;
+        if (d) {
+          UPDATE.current = d.current || "";
+          UPDATE.latest = d.latest || "";
+          UPDATE.newer = !!d.newer;
+          UPDATE.signed = !!d.signed;
+          UPDATE.asset = d.asset || null;
+          UPDATE.app = d.app || "";
+          UPDATE.url = d.url || "";
+        }
+        UPDATE.error = null;
+        if (manual) {
+          if (UPDATE.newer && UPDATE.signed && UPDATE.asset) toast("ok", "devd " + UPDATE.latest + " is available. Use Update in the footer.");
+          else if (UPDATE.newer) toast("warn", "devd " + UPDATE.latest + " is available, but the release is not signed. Download it from the release page.");
+          else toast("ok", "devd " + (UPDATE.current || "is") + " is the latest.");
+        }
+        statusbar();
+      })
+      .catch(function () {
+        // Offline is not a failure worth interrupting anyone for. A manual
+        // check says so once, because the person asked.
+        if (manual) toast("warn", "Could not reach the release feed. devd still works; try again later.");
+      })
+      .then(function () { UPDATE.checking = false; });
   }
 
   // -------------------------------------------------------------------- server
@@ -8025,7 +8076,11 @@ var TERM_POLL_MS = 250;
     loadSeq: 0,
     work: {
       project: "", env: true, envOpen: false, split: 58, sites: [], sitesFor: "",
-      browser: { open: false, url: "", project: "", loading: false, error: null, site: null, tabs: [], activeTab: 0, fresh: false },
+      browser: { open: false, url: "", project: "", loading: false, error: null, site: null, tabs: [], activeTab: 0, fresh: false,
+        // The agent's own browser is different from the preview iframe: it is
+        // a real Chromium tab the agent drives. The pane shows its tabs, a
+        // screenshot of the focused one and the refs it can act on.
+        agent: { tabs: [], active: null, shot: null, shotUrl: null, nodes: [], url: "", title: "", error: null, loading: false } },
       terminal: { open: false, sessionId: null, project: "", ended: false, tabs: [], active: 0 }
     }
   };
@@ -10284,8 +10339,40 @@ var TERM_POLL_MS = 250;
       "</div>";
   }
 
+  /* Read the agent's tabs, screenshot the focused one and keep the refs it can
+     act on. This is the same server state an agent uses; the pane is a view of
+     it, not a second browser. */
+  function agentBrowserRefresh() {
+    var b = AI.work.browser;
+    var a = b.agent || (b.agent = { tabs: [], active: null, shot: null, shotUrl: null, nodes: [], url: "", title: "", error: null, loading: false });
+    if (a.loading) return;
+    a.loading = true;
+    read("browser.tabs.list", {}).then(function (d) {
+      a.tabs = (d && d.tabs) || [];
+      a.active = (d && d.focused) || (a.tabs[0] && a.tabs[0].id) || null;
+      a.error = null;
+      if (!a.active) {
+        a.shot = null; a.shotUrl = null; a.nodes = []; a.url = ""; a.title = "";
+        return null;
+      }
+      return read("browser.screenshot", { tab: a.active }).then(function (s) {
+        a.shot = s && s.file ? s.file : null;
+        a.url = (s && s.url) || "";
+        a.title = (s && s.title) || "";
+        if (a.shot) uploadBlob(a.shot).then(function (url) { a.shotUrl = url; paintWork(); });
+        return read("browser.snapshot", { tab: a.active }).then(function (n) {
+          a.nodes = (n && n.nodes) || [];
+        }).catch(function () { a.nodes = []; });
+      });
+    }).catch(function (e) {
+      a.error = e.message;
+    }).then(function () { a.loading = false; paintWork(); });
+  }
+
   function browserSurfaceHtml(path) {
     var b = AI.work.browser;
+    var agent = b.agent || {};
+    var agentOn = !!b.agentOpen;
     var site = b.site || workSiteFor(path);
     var host = site ? (site.site.host || site.site.name) : "";
     var up = site ? !!(site.server_running || site.upstream_listening) : false;
@@ -10309,11 +10396,35 @@ var TERM_POLL_MS = 250;
       '<button type="button" class="work-icon-btn" data-action="work-browser-reload" aria-label="Reload" title="Reload"><svg class="icon" aria-hidden="true"><use href="#i-refresh"></use></svg></button>' +
       '<span class="work-globe" aria-hidden="true"><svg class="icon"><use href="#i-globe"></use></svg></span>' +
       '<span class="work-label">Browser</span>' +
+      '<button type="button" class="work-agent-toggle' + (agentOn ? " is-on" : "") + '" data-action="work-agent-toggle" aria-pressed="' + (agentOn ? "true" : "false") + '" title="The agent\'s own Chromium tab: tabs, a screenshot, and the refs it can act on"><svg class="icon" aria-hidden="true"><use href="#i-spark"></use></svg><span>Agent' + ((agent.tabs || []).length ? " · " + (agent.tabs || []).length : "") + "</span></button>" +
       (site ? '<span class="work-dot ' + (up ? "is-live" : "is-off") + '" title="' + attr(up ? host + " is running" : host + " is not answering") + '"></span>' : "") +
       '<div class="work-address-field">' +
       '<input id="work-url" class="work-url" type="text" spellcheck="false" autocomplete="off" value="' + attr(displayUrl(b.url || "")) + '" placeholder="Type a URL" aria-label="Address">' +
       '<button type="button" class="work-go" data-action="work-browser-go" aria-label="Open address" title="Open address"><svg class="icon" aria-hidden="true"><use href="#i-arrow-right"></use></svg></button>' +
       "</div></div>";
+    if (agentOn) {
+      var agentTabs = agent.tabs || [];
+      var agentStrip = agentTabs.length ? '<div class="work-agent-tabs" role="tablist" aria-label="Agent browser tabs">' + agentTabs.map(function (t) {
+        var on = t.id === agent.active;
+        return '<button type="button" role="tab" aria-selected="' + (on ? "true" : "false") + '" class="work-agent-tab' + (on ? " is-active" : "") + '" data-action="work-agent-tab" data-id="' + attr(t.id) + '" title="' + attr(t.url || t.id) + '">' + esc(t.title || t.url || "New tab") + "</button>";
+      }).join("") + "</div>" : "";
+      var agentHead = '<div class="work-agent-head">' +
+        '<span class="work-label">Agent browser</span>' +
+        '<span class="work-agent-url mono">' + esc(displayUrl(agent.url || "")) + "</span>" +
+        '<button type="button" class="btn btn-mini" data-action="work-agent-refresh">Refresh</button>' +
+        '<button type="button" class="btn btn-mini btn-ghost" data-action="work-agent-close">Close</button>' +
+        "</div>";
+      var agentShot = agent.shotUrl
+        ? '<img class="work-agent-shot" src="' + attr(agent.shotUrl) + '" alt="What the agent sees in ' + attr(agent.title || "the page") + '">'
+        : '<div class="work-agent-empty">' + (agent.error ? esc(agent.error) : agent.loading ? "Taking a screenshot…" : "The agent's browser is not open. Open it to give the agent a tab the two of you can see.") +
+          (agent.tabs && agent.tabs.length ? "" : '<div class="work-empty-links"><button type="button" class="work-link is-primary" data-action="work-agent-open">Open the agent browser</button></div>') + "</div>";
+      var agentRefs = (agent.nodes || []).filter(function (n) { return n.ref; }).slice(0, 14);
+      var agentRefList = agentRefs.length ? '<div class="work-agent-refs"><b>Refs the agent can act on</b>' + agentRefs.map(function (n) {
+        return '<span class="work-ref"><code>' + esc(n.ref) + "</code> " + esc(n.role) + (n.name ? " · " + esc(n.name) : "") + "</span>";
+      }).join("") + "</div>" : "";
+      return '<div class="work-pane work-browser" data-surface="browser">' + tabStrip + address +
+        '<div class="work-browser-body work-agent-body"><div class="work-agent">' + agentHead + agentStrip + agentShot + agentRefList + "</div></div></div>";
+    }
     var body;
     if (b.url) {
       body = '<iframe id="work-browser-frame" class="work-browser-frame" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads allow-modals" src="' + attr(b.url) + '" title="' + attr(host || "Browser") + '"></iframe>';
@@ -14095,6 +14206,37 @@ var TERM_POLL_MS = 250;
       run("environment.set", { mode: to }).then(function (o) { if (o) return loadHealth().then(function () { return read("environment.get"); }).then(function (e) { AI.env = e; render(); }); });
     },
     // ---- assistant era
+    "app-update-check": function () { updateCheck(true); },
+    "app-download": function () {
+      // An unsigned release cannot replace the program, but the person can
+      // still get it. The release page names the installer and the portable zip.
+      if (UPDATE.url) ACTIONS["open-url"]({ dataset: { url: UPDATE.url } });
+      else updateCheck(true);
+    },
+    "app-update": function () {
+      if (UPDATE.busy) return;
+      UPDATE.busy = true;
+      UPDATE.error = null;
+      UPDATE.done = null;
+      statusbar();
+      run("update.apply", {}, { quiet: true }).then(function (o) {
+        UPDATE.busy = false;
+        if (!o) { statusbar(); return; }
+        var version = (o.data && o.data.version) || UPDATE.latest;
+        if (UPDATE.app === "desktop") {
+          UPDATE.done = version;
+          toast("ok", "devd " + version + " is installed. devd is restarting into the new version.");
+        } else {
+          toast("ok", "devd " + version + " is installed. Restart devd to use it.");
+        }
+        statusbar();
+      }).catch(function (e) {
+        UPDATE.busy = false;
+        UPDATE.error = e.message;
+        statusbar();
+        toast("error", e.message);
+      });
+    },
     "health-open": function () { openHealth(); loadHealth().then(function () { healthChip(); if (!el("drawer").hidden) openHealth(); }); },
     "health-recheck": function () { AI.healthLoading = true; if (!el("drawer").hidden) openHealth(); loadHealth().then(function () { healthChip(); if (!el("drawer").hidden) openHealth(); if (state.view === "home") loadHome().then(render); }); },
     "health-go": function (n) { closeDrawer(); navigate(n.dataset.view); },
@@ -14837,6 +14979,24 @@ var TERM_POLL_MS = 250;
       if (workVisible()) { closeWorkSurface("all"); AI.work.envOpen = true; AI.work.env = true; }
       else AI.work.envOpen = !AI.work.envOpen;
       paintSurfaceChrome();
+    },
+    "work-agent-toggle": function () {
+      AI.work.browser.agentOpen = !AI.work.browser.agentOpen;
+      if (AI.work.browser.agentOpen) agentBrowserRefresh();
+      paintWork();
+    },
+    "work-agent-open": function () {
+      run("browser.open", {}, { quiet: true }).then(function (o) { if (o) agentBrowserRefresh(); });
+    },
+    "work-agent-refresh": function () { agentBrowserRefresh(); },
+    "work-agent-tab": function (n) {
+      run("browser.tabs.focus", { tab: n.dataset.id }, { quiet: true }).then(function (o) { if (o) agentBrowserRefresh(); });
+    },
+    "work-agent-close": function () {
+      run("browser.close", {}, { quiet: true }).then(function () {
+        AI.work.browser.agent = { tabs: [], active: null, shot: null, shotUrl: null, nodes: [], url: "", title: "", error: null, loading: false };
+        paintWork();
+      });
     },
     "work-browser": function (n) {
       closeMoreMenus();
@@ -16942,6 +17102,10 @@ var TERM_POLL_MS = 250;
         // One live channel for the whole window: runs moving on, handoffs and replies
         // repaint whichever screen shows them, without a refresh.
         openLive();
+        // The footer asks GitHub once the first screen is up, then every six
+        // hours. It is a read: nothing is installed until a person presses
+        // Update and approves the plan.
+        setTimeout(function () { updateCheck(false); }, 2500);
         // A message started before the window closed is still there.
         var draft = draftLoad();
         if (draft) { AI.askText = AI.askText || draft; AI.composer = AI.composer || draft; }
@@ -17191,6 +17355,9 @@ var TERM_POLL_MS = 250;
     });
   }
   setTimeout(pollLive, 10000);
+  // Six hours is often enough to notice a release without asking GitHub on
+  // every focus. The manual version button asks immediately.
+  setInterval(function () { updateCheck(false); }, 6 * 60 * 60 * 1000);
 
   // ------------------------------------------------------------------ live sync
   //

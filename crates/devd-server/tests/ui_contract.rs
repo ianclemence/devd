@@ -2010,3 +2010,18 @@ fn a_new_conversation_has_no_empty_project_card() {
     // existing conversation that still has no folder.
     assert!(APP.contains("if (!t) { box.hidden = true; box.innerHTML = \"\"; return; }"));
 }
+
+#[test]
+fn the_footer_offers_a_verified_update_and_names_the_running_version() {
+    // The footer is the status bar. It names the running version, checks for a
+    // newer signed release, and offers Update only when there is an installable
+    // asset. Installation goes through the human-only update.apply capability,
+    // so the button cannot replace the program on its own.
+    assert!(APP.contains("data-action=\"app-update-check\""), "the version is a check button");
+    assert!(APP.contains("data-action=\"app-update\""), "a newer signed release offers Update");
+    assert!(APP.contains("data-action=\"app-download\""), "an unsigned release offers Download");
+    assert!(APP.contains("read(\"update.check\""), "the footer asks for the latest release");
+    assert!(APP.contains("run(\"update.apply\""), "the footer installs through the capability");
+    assert!(APP.contains("devd ' + esc(version)"), "the footer names the running version");
+    assert!(CSS.contains(".sb-update"), "the update control has a style");
+}

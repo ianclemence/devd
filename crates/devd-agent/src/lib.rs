@@ -27,6 +27,7 @@
 //!   the agent is told plainly that it must not claim they happened.
 
 pub mod attachments;
+pub mod browser;
 pub mod caps;
 pub mod caps_autonomy;
 pub mod charter;

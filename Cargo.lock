@@ -1115,7 +1115,7 @@ dependencies = [
 
 [[package]]
 name = "devd-agent"
-version = "0.27.6"
+version = "0.27.7"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -1132,6 +1132,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tungstenite",
  "ureq",
  "walkdir",
  "webpki-roots 0.26.11",
@@ -1139,7 +1140,7 @@ dependencies = [
 
 [[package]]
 name = "devd-bootstrap"
-version = "0.27.6"
+version = "0.27.7"
 dependencies = [
  "devd-agent",
  "devd-core",
@@ -1157,7 +1158,7 @@ dependencies = [
 
 [[package]]
 name = "devd-cli"
-version = "0.27.6"
+version = "0.27.7"
 dependencies = [
  "clap",
  "devd-bootstrap",
@@ -1181,7 +1182,7 @@ dependencies = [
 
 [[package]]
 name = "devd-core"
-version = "0.27.6"
+version = "0.27.7"
 dependencies = [
  "chrono",
  "flate2",
@@ -1210,7 +1211,7 @@ dependencies = [
 
 [[package]]
 name = "devd-desktop"
-version = "0.27.6"
+version = "0.27.7"
 dependencies = [
  "chrono",
  "devd-bootstrap",
@@ -1230,7 +1231,7 @@ dependencies = [
 
 [[package]]
 name = "devd-git"
-version = "0.27.6"
+version = "0.27.7"
 dependencies = [
  "devd-core",
  "schemars 0.8.22",
@@ -1241,7 +1242,7 @@ dependencies = [
 
 [[package]]
 name = "devd-mcp"
-version = "0.27.6"
+version = "0.27.7"
 dependencies = [
  "devd-core",
  "schemars 0.8.22",
@@ -1252,7 +1253,7 @@ dependencies = [
 
 [[package]]
 name = "devd-ops"
-version = "0.27.6"
+version = "0.27.7"
 dependencies = [
  "chrono",
  "devd-core",
@@ -1269,7 +1270,7 @@ dependencies = [
 
 [[package]]
 name = "devd-runtime"
-version = "0.27.6"
+version = "0.27.7"
 dependencies = [
  "devd-core",
  "schemars 0.8.22",
@@ -1280,7 +1281,7 @@ dependencies = [
 
 [[package]]
 name = "devd-server"
-version = "0.27.6"
+version = "0.27.7"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -1304,7 +1305,7 @@ dependencies = [
 
 [[package]]
 name = "devd-services"
-version = "0.27.6"
+version = "0.27.7"
 dependencies = [
  "chrono",
  "devd-core",
@@ -1324,7 +1325,7 @@ dependencies = [
 
 [[package]]
 name = "devd-sites"
-version = "0.27.6"
+version = "0.27.7"
 dependencies = [
  "base64 0.22.1",
  "devd-core",
@@ -1339,7 +1340,7 @@ dependencies = [
 
 [[package]]
 name = "devd-stacks"
-version = "0.27.6"
+version = "0.27.7"
 dependencies = [
  "devd-core",
  "devd-runtime",
@@ -1354,7 +1355,7 @@ dependencies = [
 
 [[package]]
 name = "devd-tui"
-version = "0.27.6"
+version = "0.27.7"
 dependencies = [
  "crossterm",
  "devd-core",
@@ -1365,7 +1366,7 @@ dependencies = [
 
 [[package]]
 name = "devd-workspace"
-version = "0.27.6"
+version = "0.27.7"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -4393,6 +4394,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha1"
+version = "0.10.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a978451301f4db1d02937a4ab3ccce137717b81826e79b7d49ffe3244a13c3b8"
+dependencies = [
+ "cfg-if",
+ "cpufeatures",
+ "digest",
+]
+
+[[package]]
 name = "sha2"
 version = "0.10.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5372,6 +5384,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
+name = "tungstenite"
+version = "0.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "18e5b8366ee7a95b16d32197d0b2604b43a0be89dc5fac9f8e96ccafbaedda8a"
+dependencies = [
+ "byteorder",
+ "bytes",
+ "data-encoding",
+ "http",
+ "httparse",
+ "log",
+ "rand 0.8.8",
+ "sha1",
+ "thiserror 1.0.69",
+ "url",
+ "utf-8",
+]
+
+[[package]]
 name = "typeid"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5486,6 +5517,12 @@ dependencies = [
  "serde",
  "url",
 ]
+
+[[package]]
+name = "utf-8"
+version = "0.7.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09cc8ee72d2a9becf2f2febe0205bbed8fc6615b7cb429ad062dc7b7ddd036a9"
 
 [[package]]
 name = "utf8_iter"

@@ -17,6 +17,9 @@ serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true
 ureq.workspace = true
+# The DevTools Protocol speaks WebSocket. A blocking client is the right shape:
+# a capability call is one command and one reply, not a long-lived server task.
+tungstenite = { version = "0.24", features = ["url"] }
 chrono.workspace = true
 regex = "1"
 walkdir.workspace = true

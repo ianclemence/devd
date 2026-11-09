@@ -10,6 +10,75 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.27.7] - 2026-11-09 - A shared browser, and an Update button in the footer
+
+### The browser is a real tab, not a fetch
+
+`web.open` answers what a page says. This adds what happens when you press
+something, which needs a page both the agent and the person can see:
+
+- `browser.open` starts a private headless Chromium (Edge or Chrome) with its
+  own profile, so the person's own browser, cookies and windows are untouched.
+- `browser.tabs.list/open/focus/close` give every tab a stable id. Every other
+  command names the tab it acts on; there is no ambient "current page" to drift.
+- `browser.snapshot` reads the accessibility tree and assigns `e1`, `e2`, ... to
+  the actionable nodes. A navigation clears them, so a stale ref can never press
+  a different control. `browser.click` and `browser.type` take those refs.
+- `browser.back/forward/reload/navigate`, `browser.screenshot`,
+  `browser.console` (console lines and fetch/XHR requests) and a guarded
+  `browser.evaluate` escape hatch complete the set. Every command returns a typed
+  state (`ok`, `empty`, `unavailable`, `failed`) and a reason.
+- The Assistant's Browser surface has an **Agent** view: the agent's tabs, a
+  screenshot of the focused one, and the refs it can act on. The person sees the
+  same page the agent is using.
+
+Screenshots are stored in the uploads directory and shown through the existing
+token-checked asset route; the model gets the page's structure and the file name,
+never a claim that something "looks right".
+
+### Update from the footer
+
+- The status bar now names the running version. When GitHub has a newer signed
+  release it offers **Update to x.y.z**; when there is none, the version is a
+  button that checks again.
+- `update.check` now chooses the asset for the program that is running: the
+  window program (`devd-desktop-...`) when devd is in its window, the command
+  otherwise. `Check` reports which one it is.
+- `update.apply` verifies the signature and checksum as before. For the window,
+  it stages the verified download and starts a small updater that waits for devd
+  to exit, keeps the old program as `.before-<version>`, swaps in the new one and
+  starts devd again. For the command, it replaces the installed command as before.
+
+### Packaging: the download a person is told to use exists
+
+The README told people to run `devd-setup-<version>.exe`, but the release script
+only built a raw exe and a zip, so the file the instructions named was not on
+the release. The portable zip also carried only the window and its WebView2
+loader: no command, no launcher.
+
+- `release-windows.ps1` now builds the installer when NSIS is present, and says
+  loudly when it is not. The installer is the documented Windows path.
+- The portable zip now carries `devd.exe`, `devd-desktop.exe`,
+  `WebView2Loader.dll`, `launch.vbs` and a portable README. `launch.vbs` runs
+  `devd setup` on the first start, then opens the window.
+- The README and `docs/desktop.md` now name the real files, explain that the
+  window needs `WebView2Loader.dll` beside it, and give the desktop log and
+  `devd ui` fallback. `docs/platforms.md` states plainly that published builds
+  are Windows x86_64 only.
+- An unsigned release (no signed `SHA256SUMS.txt`) is not installed by the
+  footer; it offers **Download x.y.z** and opens the release page instead.
+
+### Verification
+
+- The browser's URL fence, actionability table, result clipping and missing-
+  browser error have unit tests; `cargo test -p devd-agent --lib browser` passes.
+- The updater has a test that the desktop and command assets are different files.
+- The footer has a UI contract test for the version, the check, the update
+  action and the style.
+- Workspace tests pass.
+
+---
+
 ## [0.27.6] - 2026-11-09 - Agents verify finished work and can really use images
 
 ### Completion is independent, not self-reported

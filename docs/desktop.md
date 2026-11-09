@@ -88,6 +88,27 @@ A second launch focuses the running window instead of adding a second icon.
 * The preview continues to use the site's own localhost HTTPS URL. The CA trust
   story is unchanged.
 
+## Getting a working window
+
+A window is not one file. `devd-desktop.exe` loads `WebView2Loader.dll` from the
+folder it lives in, so download the portable **zip** (or the installer), not the
+standalone `devd-desktop-...exe`. The zip also carries `devd.exe` and
+`launch.vbs`; the launcher runs `devd setup` on the first start, then opens the
+window.
+
+The published window is Windows x86_64 only today. The same code builds on
+macOS; on Linux the server and the web interface are the supported path
+(`devd ui`). [`platforms.md`](platforms.md) is the matrix.
+
+If the window does not open:
+
+1. Read `%LOCALAPPDATA%\devd\desktop.log`; the startup error is written there.
+2. The window needs the Microsoft Edge WebView2 runtime. It ships with current
+   Edge; if it is missing, install it from
+   <https://developer.microsoft.com/microsoft-edge/webview2/>.
+3. The command line works without the window: `devd ui` serves the same
+   interface at a loopback address.
+
 ## Building
 
 Requirements:

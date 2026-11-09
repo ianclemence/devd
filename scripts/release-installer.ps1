@@ -33,14 +33,18 @@ $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"' |
 if (-not $version) { throw "could not read the version from Cargo.toml" }
 
 Write-Host "==> cargo build --release" -ForegroundColor Cyan
+if (-not $env:CARGO_TARGET_DIR) {
+    $env:CARGO_TARGET_DIR = "C:\dt"
+}
 cargo build --release -p devd-cli -p devd-desktop
 if ($LASTEXITCODE -ne 0) { throw "the release build failed" }
 
-$source = Join-Path $repo "target\release\devd.exe"
+$targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $repo "target" }
+$source = Join-Path $targetDir "release\devd.exe"
 if (-not (Test-Path $source)) { throw "the build did not produce $source" }
-$desktop = Join-Path $repo "target\release\devd-desktop.exe"
+$desktop = Join-Path $targetDir "release\devd-desktop.exe"
 if (-not (Test-Path $desktop)) { throw "the build did not produce $desktop" }
-$webview2 = Join-Path $repo "target\release\WebView2Loader.dll"
+$webview2 = Join-Path $targetDir "release\WebView2Loader.dll"
 if (-not (Test-Path $webview2)) { throw "the build did not produce $webview2" }
 
 New-Item -ItemType Directory -Force dist | Out-Null
