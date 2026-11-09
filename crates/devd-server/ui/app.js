@@ -231,6 +231,7 @@
     projectCount: 0,
     projectsLoaded: false,
     projectsError: "",
+    roster: null,
     rosterProject: "",
     rosterCharter: null,
     rosterContext: null,
@@ -375,6 +376,10 @@
     }
     var tag = a.tagName;
     var i, name;
+    // A subtree painted by its own routine (a conversation, a run, the
+    // workspace surfaces) belongs to that routine. The frame around it can be
+    // patched without its attributes or children being touched.
+    if (a.getAttribute("data-morph") === "skip") return;
     for (i = a.attributes.length - 1; i >= 0; i--) {
       name = a.attributes[i].name;
       if (tag === "DETAILS" && name === "open") continue;
@@ -1850,7 +1855,10 @@
   }
 
   /* The path above the page, only when it says something the title and the tabs do not: a project is
-   * "Projects / name". A page's own name is already the title, and the tab, and the rail entry. */
+   * "Projects / name". A page's own name is already the title, and the tab, and the rail entry.
+   * It changes only when the screen or the project does; repainting identical
+   * markup on every poll churned the DOM. */
+  var CRUMBS_HTML = null;
   function crumbs() {
     var html = "";
     if (state.view === "project" && state.project) {
@@ -1861,9 +1869,12 @@
       html = '<button type="button" data-action="nav" data-view="sites">Sites</button>' +
         '<span class="sep">/</span><span>' + esc(SITE.name) + "</span>";
     }
+    if (html === CRUMBS_HTML) return;
+    CRUMBS_HTML = html;
     el("crumbs").innerHTML = html;
   }
 
+  var STATUS_HTML = null;
   function statusbar() {
     var left = [], right = [];
     if (state.project && state.project.status && state.view === "project") {
@@ -1886,7 +1897,11 @@
     var prod = AI.env && AI.env.mode === "production";
     right.push(prod ? '<span class="sb-bad" title="Production mode: agents need your approval for every change">production</span>' : '<span title="devd only changes this machine. Switch to production mode in Diagnostics to require approval for every agent change.">local</span>');
     if (state.session) right.push('<span title="The address agents and scripts use">api :' + esc(state.session.port) + "</span>");
-    el("statusbar").innerHTML = '<div class="sb-left"><button type="button" class="health health-checking" id="health-chip" data-action="health-open" title="System health"></button><span class="sb-sep" aria-hidden="true">·</span>' + (left.join('<span class="sb-sep" aria-hidden="true">·</span>') || "Ready") + '</div><div class="sb-right">' + right.join('<span class="sb-sep" aria-hidden="true">·</span>') + "</div>";
+    var html = '<div class="sb-left"><button type="button" class="health health-checking" id="health-chip" data-action="health-open" title="System health"></button><span class="sb-sep" aria-hidden="true">·</span>' + (left.join('<span class="sb-sep" aria-hidden="true">·</span>') || "Ready") + '</div><div class="sb-right">' + right.join('<span class="sb-sep" aria-hidden="true">·</span>') + "</div>";
+    if (html !== STATUS_HTML) {
+      STATUS_HTML = html;
+      el("statusbar").innerHTML = html;
+    }
     healthChip();
   }
 
@@ -2434,6 +2449,7 @@
 
   function openSite(name) {
     if (!name) return;
+    var changed = SITE.name !== name;
     SITE.name = name;
     SITE.tab = "overview";
     OPS.site = name;
@@ -2441,6 +2457,9 @@
     OPS.error = "";
     OPS.errorTab = "";
     navigate("site");
+    // Another site is a new page even though the destination is the same
+    // screen; open it at its top rather than where the last one was left.
+    if (changed) { var sc = document.querySelector(".content"); if (sc) sc.scrollTop = 0; }
   }
 
   function activeOpsTab() {
@@ -3880,12 +3899,15 @@
    * prove, and which skills each carries. Read from team.roles, so this screen
    * cannot disagree with the capability the agents themselves use. */
   function loadRoster() {
-    read("team.stats").then(function (d) { state.teamStats = d; if (state.view === "agents") renderRoster(); }).catch(function () {});
     return Promise.all([
       read("team.roles"),
+      read("team.stats").catch(function () { return null; }),
       state.projects.length ? Promise.resolve() : loadProjects()
     ]).then(function (r) {
+      // The roster and its record are one screen; loading both before the paint
+      // keeps it from appearing in two halves.
       state.roster = r[0] || [];
+      if (r[1]) state.teamStats = r[1];
       var path = state.rosterProject || (state.project && state.project.path) || (state.projects[0] && state.projects[0].path) || "";
       state.rosterProject = path;
       if (!path) return;
@@ -4106,6 +4128,9 @@
 
   function renderRoster() {
     if (state.view !== "agents") return;
+    // The roster arrives from `team.roles`; draw its frame only once, rather
+    // than an empty page that fills in a moment later.
+    if (state.roster === null) return renderLoading();
     var rows = state.roster || [];
     var groups = [];
     rows.forEach(function (r) {
@@ -5519,9 +5544,15 @@ var TERM_POLL_MS = 250;
     state.projectsPending = read("project.list")
       .then(function (rows) {
         var list = Array.isArray(rows) ? rows : [];
+        // A refresh replaces the list, not what it already knows: keeping each
+        // repository's last Git state means a revisit does not blank the facts
+        // for the second the new status takes to arrive.
+        var before = {};
+        (state.projects || []).forEach(function (p) { if (p && p.path) before[p.path] = p; });
         state.projectsLoaded = true;
         state.projectsError = "";
         state.projects = list.map(function (p) {
+          var was = before[p.path];
           return {
             path: p.path,
             name: p.name || dirName(p.path),
@@ -5533,8 +5564,8 @@ var TERM_POLL_MS = 250;
             exists: p.exists,
             sites: p.sites || [],
             updated_at: p.updated_at,
-            status: null,
-            error: null
+            status: was ? was.status : null,
+            error: was ? was.error : null
           };
         });
         state.projectCount = state.projects.length;
@@ -5585,6 +5616,7 @@ var TERM_POLL_MS = 250;
   }
 
   function openProject(path, tab) {
+    var changed = state.view !== "project" || !state.project || state.project.path !== path;
     state.view = "project";
     // Open where the tab strip says the screen begins. `files` is the first tab
     // in TAB_LABELS, so opening a repository on `changes` - the second - put
@@ -5597,6 +5629,9 @@ var TERM_POLL_MS = 250;
     state.files = null;
     writeRoute("project", false);
     render();
+    // Another repository is a new page even though the destination is the
+    // same screen; open it at its top rather than where the last one was left.
+    if (changed) { var sc = document.querySelector(".content"); if (sc) sc.scrollTop = 0; }
     return loadProject()
       .then(function () { return state.tab !== "files" ? loadTab(state.tab) : null; })
       .then(render);
@@ -8200,9 +8235,16 @@ var TERM_POLL_MS = 250;
     else if (st === "stale") { title = "Status is old"; sub = AI.healthError ? "last check failed" : "checked " + Math.round((Date.now() - AI.healthAt) / 60000) + " min ago"; }
     else if (!h) { title = "Cannot check"; sub = AI.healthError; }
     else { title = HEALTH_WORD[h.state] || h.state; sub = h.state === "healthy" ? (h.notes ? h.notes + " optional note" + (h.notes === 1 ? "" : "s") : "") : h.headline; }
-    chip.className = "health health-" + st;
-    chip.innerHTML = '<span class="health-dot" aria-hidden="true"></span><span class="health-text"><span class="health-title">' + esc(title) + '</span>' + (sub ? '<span class="health-sub">' + esc(sub) + "</span>" : "") + "</span>";
-    chip.setAttribute("aria-label", "devd status: " + title + (sub ? ", " + sub : ""));
+    // The chip is repainted with the shell; rewrite it only when it says
+    // something new, so the dot and its label do not blink on every tick.
+    var html = '<span class="health-dot" aria-hidden="true"></span><span class="health-text"><span class="health-title">' + esc(title) + '</span>' + (sub ? '<span class="health-sub">' + esc(sub) + "</span>" : "") + "</span>";
+    var cls = "health health-" + st;
+    var aria = "devd status: " + title + (sub ? ", " + sub : "");
+    if (chip.__lastHtml === html && chip.className === cls && chip.getAttribute("aria-label") === aria) return;
+    chip.__lastHtml = html;
+    chip.className = cls;
+    chip.innerHTML = html;
+    chip.setAttribute("aria-label", aria);
   }
 
   function healthRow(c) {
@@ -9145,7 +9187,18 @@ var TERM_POLL_MS = 250;
         // the chat they are reading now.
         if (at !== AI.loadSeq || !AI.thread || AI.thread.id !== tid) return;
         applyThread(d, false, false);
-        AI.threadCache[tid] = { at: Date.now(), data: d, complete: true };
+        // Keep the complete snapshot complete. An incremental answer carries
+        // only what is new; storing it as the whole conversation made a later
+        // switch show just that delta. Merge it instead, de-duplicated by id.
+        var c = AI.threadCache[tid];
+        if (c && c.complete && c.data) {
+          var last = (c.data.events && c.data.events.length) ? c.data.events[c.data.events.length - 1].id : 0;
+          var add = (d.events || []).filter(function (e) { return e.id > last; });
+          if (add.length) c.data.events = (c.data.events || []).concat(add);
+          c.data.thread = d.thread; c.data.pending = d.pending; c.data.running = d.running;
+          c.data.chapters = d.chapters; c.data.queued = d.queued; c.data.run = d.run;
+          c.at = Date.now();
+        }
       });
     }
     return fetchThreadData(tid, 0, at).then(function (acc) {
@@ -10624,12 +10677,21 @@ var TERM_POLL_MS = 250;
     var fresh = box.getAttribute("data-thread") !== tid;
     var near = fresh || following(box);
     box.setAttribute("aria-busy", busy ? "true" : "false");
+    // A conversation painted whole once is kept as markup. Switching back to it
+    // is then one parse instead of re-rendering every turn, which is the
+    // difference between a noticeable pause and an instant swap on a long chat.
+    var cache = AI.threadCache[tid];
+    var reusable = fresh && !!(cache && cache.complete && cache.html && cache.htmlKey === key);
+    var html = reusable ? cache.html : chatHtml();
     if (fresh) {
-      box.innerHTML = chatHtml();
+      box.innerHTML = html;
       box.setAttribute("data-thread", tid);
+      // Keep the markup only for the snapshot it was drawn from; an incremental
+      // update makes the snapshot newer and the old markup ineligible by key.
+      if (!reusable && cache && cache.complete) { cache.html = html; cache.htmlKey = key; }
     } else {
       // Same conversation: patch it, so what the reader has open, loaded or selected stays.
-      morph(box, chatHtml());
+      morph(box, html);
     }
     // A fresh draw rebuilt the tail element empty; a patch kept it and what it holds.
     if (fresh) AI.streamPainted = "";
@@ -10926,17 +10988,17 @@ var TERM_POLL_MS = 250;
       '<div class="workspace workspace-chat">' +
       '<div class="assistant has-card">' +
       '<section class="chat">' +
-      '<div class="chat-head" id="chat-head"></div>' +
+      '<div class="chat-head" id="chat-head" data-morph="skip"></div>' +
       (!ready ? '<div class="notice notice-warn chat-notice">No usable AI provider yet. <button type="button" class="btn btn-mini btn-primary" data-action="nav" data-view="providers">Set one up</button></div>' : "") +
-      '<div class="chat-plan" id="chat-plan" hidden></div>' +
+      '<div class="chat-plan" id="chat-plan" data-morph="skip" hidden></div>' +
       // The conversation and the box share one column, and the box sits at the
       // bottom of it: the conversation scrolls above, the box never moves.
       '<div class="chat-body">' +
-      '<div class="chat-stream" id="chat-stream" role="log" aria-live="off" aria-label="Conversation"></div>' +
+      '<div class="chat-stream" id="chat-stream" data-morph="skip" role="log" aria-live="off" aria-label="Conversation"></div>' +
       composer +
       "</div>" +
-      '</section><aside class="ws-card" id="ws-card" aria-label="This conversation’s project" hidden></aside>' +
-      '<section class="work-surface" id="work-surface" aria-label="Workspace surfaces" hidden></section>' +
+      '</section><aside class="ws-card" id="ws-card" data-morph="skip" aria-label="This conversation’s project" hidden></aside>' +
+      '<section class="work-surface" id="work-surface" data-morph="skip" aria-label="Workspace surfaces" hidden></section>' +
       "</div></div>";
     paintThreads(); paintChat(true); paintWsCard(); paintWork();
     paintChatPlan();
@@ -10949,7 +11011,7 @@ var TERM_POLL_MS = 250;
 
   // -------------------------------------------------------------------- team
 
-  var TEAM = { runs: null, sel: null, data: null, timer: null, form: { goal: "", done: "", project: "", name: "", parallel: 2 }, say: "", open: {} };
+  var TEAM = { runs: null, sel: null, data: null, timer: null, cache: {}, form: { goal: "", done: "", project: "", name: "", parallel: 2 }, say: "", open: {} };
   var TASK_WORD = { pending: "waiting", ready: "ready", running: "working", waiting_approval: "needs your approval", done: "done", unverified: "not accepted", failed: "failed", cancelled: "cancelled", skipped: "accepted by hand", blocked: "blocked" };
   var RUN_WORD = { planning: "planning", awaiting_plan: "plan needs your approval", running: "working", paused: "paused", done: "done", failed: "failed", cancelled: "cancelled" };
 
@@ -10982,12 +11044,19 @@ var TERM_POLL_MS = 250;
     if (!TEAM.runs) return renderLoading();
     var ready = (AI.providers || []).some(function (p) { return p.enabled && (p.has_key || !p.needs_key); });
     var projOpts = '<option value="">Choose a project…</option>' + state.projects.map(function (p) { return '<option value="' + attr(p.path) + '"' + (TEAM.form.project === p.path ? " selected" : "") + ">" + esc(p.name || dirName(p.path)) + "</option>"; }).join("") + '<option value="__new"' + (TEAM.form.project === "__new" ? " selected" : "") + ">A new project…</option>";
-    el("main").innerHTML =
-      '<div class="workspace workspace-chat">' +
-      '<div class="assistant">' +
-      '<section class="chat"><div id="team-detail" class="team-detail"></div></section></div></div>';
+    // The frame is written once. A repaint, a timer tick or a live step patches
+    // the run inside it; replacing the frame would throw away the reader's
+    // scroll and reload every card on the page.
+    var main = el("main");
+    var frame = main && main.querySelector(".workspace-chat #team-detail");
+    if (!frame) {
+      main.innerHTML =
+        '<div class="workspace workspace-chat">' +
+        '<div class="assistant">' +
+        '<section class="chat"><div id="team-detail" data-morph="skip" class="team-detail"></div></section></div></div>';
+      TEAM.lastHtml = "";
+    }
     TEAM.ready = ready; TEAM.projOpts = projOpts;
-    TEAM.lastHtml = "";
     paintTeam();
     startTeamTimer();
   }
@@ -11028,6 +11097,9 @@ var TERM_POLL_MS = 250;
     paintTeamList();
     var box = el("team-detail");
     if (!box) return;
+    // What is on screen is the newest answer for this run: keep it so returning
+    // to a run paints from memory and refreshes behind the reader.
+    if (TEAM.data && TEAM.data.run) TEAM.cache[TEAM.data.run.id] = { at: Date.now(), data: TEAM.data };
     if (!TEAM.sel || !TEAM.data) {
       // The form is drawn once, when it comes on screen, and again only when something
       // changes what it shows (a template, the project, New). The run timer calls this
@@ -11042,9 +11114,10 @@ var TERM_POLL_MS = 250;
     // scroll position to the top, which is why reading a long conversation
     // felt like being pulled away from it. Keep the position, and do not
     // replace the tree at all when nothing changed.
-    // A different run is drawn whole and opens at its end; the same run is patched in
-    // place, so a card the reader opened stays open, a screenshot stays loaded and the
-    // reader stays where they were. Only a reader already at the end is followed.
+    // A different run is patched into the same frame and opens at its end; the
+    // same run is patched in place, so a card the reader opened stays open, a
+    // screenshot stays loaded and the reader stays where they were. Only a
+    // reader already at the end is followed.
     var scroll = box.querySelector(".chat-stream") || box.querySelector(".team-scroll");
     var hadRun = !!box.getAttribute("data-run");
     var fresh = box.getAttribute("data-run") !== TEAM.data.run.id || !scroll;
@@ -11052,6 +11125,8 @@ var TERM_POLL_MS = 250;
     var follow = fresh || following(scroll);
     var html = teamDetail(TEAM.data);
     if (html !== TEAM.lastHtml) {
+      // A different run is one instant swap; the same run is patched, so a
+      // card the reader opened stays open and a screenshot stays loaded.
       if (fresh || TEAM.lastHtml === "<form>") box.innerHTML = html;
       else morph(box, html);
       box.setAttribute("data-run", TEAM.data.run.id);
@@ -12183,7 +12258,7 @@ var TERM_POLL_MS = 250;
      files that will go with the message. It lives inside the composer, above
      the words, so what is attached is read together with what is asked. */
   function composerTop(prefix) {
-    return '<div class="composer-attachments" id="' + prefix + '-attachments"' + (ATT[prefix].length ? "" : " hidden") + ">" + attachmentChips(prefix) + "</div>" +
+    return '<div class="composer-attachments" id="' + prefix + '-attachments" data-morph="skip"' + (ATT[prefix].length ? "" : " hidden") + ">" + attachmentChips(prefix) + "</div>" +
       '<input type="file" id="' + prefix + '-file" multiple hidden>';
   }
 
@@ -13903,7 +13978,22 @@ var TERM_POLL_MS = 250;
     },
 
     "team-new": function () { TEAM.sel = null; TEAM.data = null; TEAM.lastHtml = ""; paintTeam(); },
-    "team-open": function (n) { var sh = document.querySelector(".shell.panel-open"); if (sh) sh.classList.remove("panel-open"); TEAM.sel = n.dataset.id; read("team.get", { run: TEAM.sel }).then(function (d) { TEAM.data = d; paintTeam(); }); },
+    "team-open": function (n) {
+      var sh = document.querySelector(".shell.panel-open"); if (sh) sh.classList.remove("panel-open");
+      var id = n.dataset.id;
+      if (TEAM.sel === id && TEAM.data && TEAM.data.run && TEAM.data.run.id === id) return;
+      TEAM.sel = id;
+      // Mark the chosen row now. The previous run stays on screen until the
+      // new record is in hand, so the list answers the click immediately and
+      // the detail swaps once, whole.
+      paintTeamList();
+      var cached = TEAM.cache[id];
+      if (cached && Date.now() - cached.at < 120000) { TEAM.data = cached.data; paintTeam(); }
+      read("team.get", { run: id }).then(function (d) {
+        if (TEAM.sel !== id) return;
+        TEAM.data = d; paintTeam();
+      }).catch(function (e) { toast("error", e.message); });
+    },
     "team-toggle": function (n) { TEAM.open[n.dataset.id] = !TEAM.open[n.dataset.id]; paintTeam(); },
     "team-start": function () {
       var f = TEAM.form;
@@ -13926,7 +14016,7 @@ var TERM_POLL_MS = 250;
     "team-retry": function (n) { uiPrompt({ title: "Try this task again", text: "What should it do differently? You can leave this empty.", input: { placeholder: "Optional note for the agent" }, confirm: "Retry" }).then(function (note) { if (note === null) return; run("team.retry", { task: n.dataset.id, note: note || undefined }); }); },
     "team-accept": function (n) { uiConfirm({ title: "Accept without the proof?", text: "devd asked for proof that this task worked and did not get it. The final report will say you accepted it by hand.", confirm: "Accept anyway", danger: true }).then(function (yes) { if (yes) run("team.accept", { task: n.dataset.id }); }); },
     "team-say": function (n) { var i = el("team-say"); if (!i.value.trim()) return; var t = i.value.trim(); i.value = ""; var ts = el("team-say-send"); if (ts) ts.disabled = true; run("team.say", { run: n.dataset.id, text: t }); },
-    "team-open-from": function (n) { closeDrawer(); TEAM.sel = n.dataset.id; TEAM.data = null; navigate("team"); },
+    "team-open-from": function (n) { closeDrawer(); TEAM.sel = n.dataset.id; var c = TEAM.cache[n.dataset.id]; TEAM.data = c ? c.data : null; navigate("team"); },
     "home-team": function () {
       var text = (el("home-ask").value || "").trim(), p = AI.askProject || "";
       var goal = takeAttachments(text, "home");
@@ -14188,7 +14278,11 @@ var TERM_POLL_MS = 250;
       function reveal(acc) {
         if (!acc || seq !== AI.loadSeq) return;
         applyThread(acc, true, true);
-        AI.threadCache[id] = { at: Date.now(), data: acc, complete: true };
+        // The same snapshot already has its painted markup; keep it so the
+        // swap can reuse it. A different snapshot starts a new entry.
+        var c = AI.threadCache[id];
+        if (c && c.complete && c.data === acc) c.at = Date.now();
+        else AI.threadCache[id] = { at: Date.now(), data: acc, complete: true };
         AI.pendingThread = null;
         if (state.view === "assistant" && el("chat-stream")) {
           paintChat(true);
@@ -14206,14 +14300,13 @@ var TERM_POLL_MS = 250;
       var cached = AI.threadCache[id];
       if (cached && cached.complete && Date.now() - cached.at < 120000) {
         reveal(cached.data);
-        // Refresh behind the reader so a cached conversation cannot go stale
-        // without ever taking the screen away.
-        fetchThreadData(id, 0, seq).then(function (fresh) {
-          if (!fresh || seq !== AI.loadSeq || !AI.thread || AI.thread.id !== id) return;
-          applyThread(fresh, true, true);
-          AI.threadCache[id] = { at: Date.now(), data: fresh, complete: true };
+        // The whole conversation is already on screen. Catch up from the last
+        // event only; reading every page again competed with the paint and made
+        // a revisitable conversation feel slow.
+        pollThread(false, seq).then(function () {
+          if (seq !== AI.loadSeq || !AI.thread || AI.thread.id !== id) return;
           if (state.view === "assistant" && el("chat-stream")) {
-            paintChat(true);
+            paintChat();
             paintThreads();
             paintWsCard();
           }
@@ -17153,30 +17246,39 @@ var TERM_POLL_MS = 250;
     }
   }
 
-  // Opening a tab paints the page, then paints it again when its data arrives; the second paint
-  // is usually the same page. Setting identical markup would rebuild every element (and reload
-  // the preview's frame), which shows as a flicker, so on these pages an unchanged page is left alone.
+  // Every screen paints once when it is entered, then updates in place.
+  //
+  // A screen is entered by navigating: the new page is written whole, once. Every
+  // later paint of that same screen (a read that arrives, an independent timer, a
+  // background refresh) is a patch: identical markup is not touched at all, and
+  // changed markup is walked against the live DOM by `morph`, so a row that did
+  // not change stays the same element, a picture does not reload, a field keeps
+  // its text, and the page does not flash. The terminal is the one exception:
+  // xterm owns a live subtree that is lifted out and put back by `termMount`.
   (function () {
     var node = el("main");
     var desc = Object.getOwnPropertyDescriptor(Element.prototype, "innerHTML");
-    var calm = ["projects", "home", "inbox", "mcp", "project", "overview", "services", "sites", "site", "operations", "toolchain", "runtimes", "databases", "remote", "preview", "certificates", "hosts"];
-    var last = null;
     if (!node || !desc) return;
+    var paintedView = null;
+    var lastHtml = null;
     Object.defineProperty(node, "innerHTML", {
       configurable: true,
       get: function () { return desc.get.call(this); },
       set: function (html) {
-        if (calm.indexOf(state.view) >= 0 && html === last) return;
-        // A live refresh may replace a page the person is reading; keep their place when it does.
-        if (calm.indexOf(state.view) >= 0) {
-          var scroller = document.scrollingElement || document.documentElement;
+        var view = state.view;
+        if (view === paintedView && html === lastHtml) return;
+        if (view === paintedView && view !== "terminal") {
+          // A repaint of the screen already showing patches in place and keeps
+          // the reader's place in the page.
+          var scroller = document.querySelector(".content");
           var top = scroller ? scroller.scrollTop : 0;
-          last = html;
-          desc.set.call(this, html);
-          if (scroller) scroller.scrollTop = top;
+          lastHtml = html;
+          morph(this, html);
+          if (scroller && scroller.scrollTop !== top) scroller.scrollTop = top;
           return;
         }
-        last = html;
+        paintedView = view;
+        lastHtml = html;
         desc.set.call(this, html);
       }
     });

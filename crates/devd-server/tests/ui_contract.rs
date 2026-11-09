@@ -1737,6 +1737,102 @@ fn sending_and_switching_do_not_rebuild_the_assistant() {
 }
 
 #[test]
+fn every_screen_paints_once_and_patches_afterwards() {
+    // Measured before this: every screen was written whole 2-3 times on entry
+    // (the first paint, an independent async repaint, then the data-arrival
+    // repaint), and some screens were rebuilt even when they did not change.
+    // A screen is now written once on entry and patched in place afterwards.
+    assert!(APP.contains("var paintedView = null;"), "the screen that is on show is remembered");
+    assert!(APP.contains("view === paintedView && html === lastHtml"), "an identical repaint is not touched");
+    assert!(APP.contains("morph(this, html)"), "a changed repaint patches the live screen");
+    assert!(!APP.contains("calm.indexOf(state.view)"), "no screen is left out of the in-place path");
+    assert!(APP.contains("view !== \"terminal\""), "the terminal keeps its whole-subtree swap");
+    assert!(APP.contains("scroller.scrollTop !== top"), "a patch keeps the reader's place");
+    assert!(APP.contains("Another repository is a new page"), "opening another project starts at its top");
+    assert!(APP.contains("Another site is a new page"), "opening another site starts at its top");
+}
+
+#[test]
+fn live_subtrees_are_owned_by_their_own_painter() {
+    // The conversation, the run detail and the workspace surfaces are painted
+    // by their own routines. The frame around them must not clear them when it
+    // is patched, or a composer change would wipe the conversation.
+    assert!(APP.contains("if (a.getAttribute(\"data-morph\") === \"skip\") return;"), "a morph-owned subtree is left alone");
+    for id in ["chat-stream", "team-detail", "ws-card", "work-surface", "chat-head", "chat-plan"] {
+        assert!(APP.contains(&format!("id=\"{id}\" data-morph=\"skip\"")), "{id} is morph-owned");
+    }
+    assert!(APP.contains("id=\"' + prefix + '-attachments\" data-morph=\"skip\""), "the attachment strip is morph-owned");
+}
+
+#[test]
+fn a_team_run_is_marked_at_once_and_kept_in_memory() {
+    // A run switch painted the previous run until the new record arrived, then
+    // replaced the whole detail. The chosen row now answers immediately, a run
+    // seen in the last two minutes paints from memory, and the frame is written
+    // once rather than on every timer tick.
+    assert!(APP.contains("cache: {}"), "runs are kept in memory");
+    assert!(APP.contains("TEAM.cache[TEAM.data.run.id] = { at: Date.now(), data: TEAM.data }"), "the shown run is cached");
+    let at = APP.find("\"team-open\": function (n)").expect("team-open");
+    let body = &APP[at..(at + 900).min(APP.len())];
+    assert!(body.contains("paintTeamList()"), "the chosen row is marked before the read");
+    assert!(body.contains("TEAM.cache[id]"), "a cached run paints at once");
+    assert!(body.contains("if (TEAM.sel !== id) return;"), "a slower answer for another run is discarded");
+    let frame = APP.find("function renderTeam()").expect("renderTeam");
+    let frame = &APP[frame..(frame + 2200).min(APP.len())];
+    assert!(frame.contains("querySelector(\".workspace-chat #team-detail\")"), "the frame is reused");
+    assert!(frame.contains("if (!frame)"), "the frame is written only when it is absent");
+}
+
+#[test]
+fn project_rows_keep_their_git_facts_while_refreshing() {
+    // A refresh used to reset every status to null, so the facts disappeared
+    // for the second the new git read took and then came back. They are kept.
+    let at = APP.find("function loadProjects(quiet)").expect("loadProjects");
+    let body = &APP[at..(at + 1400).min(APP.len())];
+    assert!(body.contains("var before = {};"), "the previous rows are remembered");
+    assert!(body.contains("status: was ? was.status : null"), "a Git fact survives a refresh");
+    assert!(body.contains("error: was ? was.error : null"), "a Git error survives a refresh");
+}
+
+#[test]
+fn the_team_room_loads_in_one_pass() {
+    // `team.stats` used to paint the roster on its own while `team.roles` was
+    // still loading, so the screen was built twice. Both arrive together.
+    let at = APP.find("function loadRoster()").expect("loadRoster");
+    let body = &APP[at..(at + 1200).min(APP.len())];
+    assert!(body.contains("read(\"team.roles\")"));
+    assert!(body.contains("read(\"team.stats\").catch"), "the record is part of the same read");
+    assert!(!body.contains("if (state.view === \"agents\") renderRoster();"), "the record does not paint on its own");
+    assert!(APP.contains("if (state.roster === null) return renderLoading();"), "the empty frame is not painted first");
+}
+
+#[test]
+fn the_shell_is_not_rewritten_when_it_has_not_changed() {
+    // The crumbs, the statusbar and the health chip were assigned on every
+    // render even when they said the same thing, rebuilding the footer.
+    assert!(APP.contains("var CRUMBS_HTML = null;"));
+    assert!(APP.contains("if (html === CRUMBS_HTML) return;"));
+    assert!(APP.contains("var STATUS_HTML = null;"));
+    assert!(APP.contains("if (html !== STATUS_HTML)"));
+    assert!(APP.contains("chip.__lastHtml === html"), "the health chip is rewritten only when it changes");
+}
+
+#[test]
+fn a_conversation_cache_is_always_complete() {
+    // An incremental poll used to store its delta as if it were the whole
+    // conversation, so a later switch could show only the new events. It now
+    // merges into the complete snapshot, and a switch back reuses the markup
+    // painted from that exact snapshot.
+    let at = APP.find("function pollThread(full, seq)").expect("pollThread");
+    let body = &APP[at..(at + 2400).min(APP.len())];
+    assert!(body.contains("var last = (c.data.events && c.data.events.length)"), "the snapshot's high-water mark is known");
+    assert!(body.contains("c.data.events = (c.data.events || []).concat(add)"), "an incremental answer is merged, not stored alone");
+    assert!(!body.contains("AI.threadCache[tid] = { at: Date.now(), data: d, complete: true }"), "a delta is never the whole cache");
+    assert!(APP.contains("cache.htmlKey === key"), "cached markup is reused only for the snapshot that produced it");
+    assert!(APP.contains("c.data === acc"), "the same snapshot keeps its painted markup");
+}
+
+#[test]
 fn the_assistant_has_browser_and_terminal_surfaces() {
     assert!(APP.contains("id=\"work-surface\""), "a work surface exists beside the conversation");
     assert!(APP.contains("class=\"work-pane work-browser\""), "the browser is a surface");

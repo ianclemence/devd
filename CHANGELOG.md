@@ -10,6 +10,60 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.27.3] - 2026-11-09 - Every screen paints once, then patches
+
+### The measured cause
+
+Navigating to a screen wrote `#main` whole, then a loader or a timer wrote it again when its data
+arrived, and often a third time from an independent read. Measured on the installed app at 1440px:
+Assistant 2 full rebuilds, Team 2 plus a whole run-detail replacement on every revisit, Team room 3,
+Models 3, Diagnostics 3, and every other screen 2. Clicking the screen already showing still rebuilt
+it on Projects and the Machine overview. Team reset `TEAM.lastHtml` on every render, so even the
+1.2 s timer rebuilt the entire run. Projects set every Git status to `null` on refresh, so the facts
+vanished for ~1.5 s and then reappeared. The crumbs, statusbar and health chip were assigned on every
+poll even when they said the same thing.
+
+### The fix
+
+- **One paint per screen entry, a patch afterwards.** A new screen is written whole once. Every later
+  paint of the same screen — a read landing, an independent loader, a live tick — compares the markup:
+  identical markup is not touched; changed markup is walked against the live DOM with `morph`. The
+  terminal keeps its whole-subtree swap because xterm owns it.
+- **Live subtrees are owned by their own painter.** The conversation, the run detail, the header,
+  the project card, the workspace surfaces and the attachment strip are marked `data-morph="skip"`,
+  so patching the frame can never wipe the conversation.
+- **Team reuses its frame and keeps its runs in memory.** The frame is written once; the chosen row
+  is highlighted before the read; a run seen in the last two minutes paints from memory and refreshes
+  behind the reader; a different run is one instant swap, not a morph and not an animation.
+- **The Team room loads in one pass.** `team.stats` joins `team.roles` in the same read instead of
+  painting the roster twice.
+- **Projects keep their Git facts while refreshing.** A refresh replaces the list, not what it
+  already knows.
+- **The conversation cache stays complete.** An incremental poll merges into the complete snapshot
+  instead of storing its delta as the whole conversation; switching back reuses the markup painted
+  from that exact snapshot instead of re-rendering every turn.
+- **Crumbs, statusbar and the health chip are rewritten only when they change.**
+- Opening another project or site starts at its top even though the destination screen is the same.
+
+### Measured after (installed app, 1440px)
+
+| | Before | After |
+|---|---:|---:|
+| Screen entry: full `#main` rebuilds | 2–3 | **1** |
+| Same screen clicked again: rebuilds | 1–3 | **0** |
+| Idle DOM churn (25 s Home, 12 s Sites/Projects, 20 s Team, 8 s Assistant) | periodic | **0** |
+| Team run switch | detail replaced, animated | **1 instant swap, 0 layout shift, 10–160 ms** |
+| Conversation switch, 672-event thread | full rebuild | **first open 365 ms, cached revisit ~150 ms** |
+| Projects status facts on revisit | blanked ~1.5 s | **kept** |
+
+Every route, all 12 project tabs, the site tabs (Overview, Environment, Deploy, Cron, Queue, Logs,
+Redirects, Web server, Database, Mail, Preview), the conversation list, the Models form and the Team
+form were exercised: no stuck loading state, no error dialog, no full `#main` rebuild after entry.
+The one long first load is Tools: `toolchain.list` probes every tool (3.1 s, cached by the server for
+30 s), and the screen says so while it waits.
+
+---
+
 ## [0.27.2] - 2026-11-09 - Sending a message never rebuilds the Assistant
 
 ### The measured cause

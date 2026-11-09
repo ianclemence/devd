@@ -272,6 +272,16 @@ its events are read in full while the current conversation stays visible, then
 one instant swap replaces the stream. There is no full-page rebuild and no
 entrance animation.
 
+Every screen follows the same rule: a screen is written whole once when it is
+entered, and every later paint of that same screen patches the live DOM. Identical
+markup is left alone; changed markup is diffed node by node, so a read landing, a
+live tick or a background refresh does not reload pictures, close opened cards or
+move the reader. A screen that owns a live subtree — the conversation, the run
+detail, the header, the project card, the workspace surfaces — marks it
+`data-morph="skip"` so the frame around it can never wipe it. The Team run list
+marks the chosen row immediately, paints a run seen in the last two minutes from
+memory, and swaps a different run in one frame with no entrance animation.
+
 The surfaces belong to the conversation's project. Switching chats re-points the
 browser and leaves an old shell running with a banner saying which project it
 belongs to. Closing a surface never kills a shell. A full reload starts with both
