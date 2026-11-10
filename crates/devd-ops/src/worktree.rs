@@ -208,7 +208,7 @@ pub fn serve(ctx: &Ctx, parent_name: &str, worktree: &Path, database: Database) 
             tls: parent.tls_mode != "off",
             db: false,
             upstream: None,
-            serving: parent.serving.clone(),
+            serving: parent.serving,
         },
     )?;
 

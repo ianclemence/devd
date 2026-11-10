@@ -900,7 +900,7 @@ pub fn current(ctx: &Ctx, folder: &Path) -> Result<Option<SiteRow>> {
             let dir = row.site.project_dir();
             let dir = dir.canonicalize().unwrap_or(dir);
             let d = lower(&dir);
-            (want_s == d || want_s.starts_with(&format!("{d}/"))).then(|| (d.len(), row))
+            (want_s == d || want_s.starts_with(&format!("{d}/"))).then_some((d.len(), row))
         })
         .max_by_key(|(len, _)| *len);
     Ok(best.map(|(_, row)| row))

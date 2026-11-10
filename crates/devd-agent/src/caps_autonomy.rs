@@ -489,7 +489,7 @@ pub fn register(reg: &mut Registry, team: Arc<Team>) -> Result<()> {
                 } else {
                     ctx.store.list_automations()?.into_iter().find(|x| x.name == name).map(|x| x.token)
                 };
-                let token = a.token.clone().filter(|t| t.trim().len() >= 16).or(kept).unwrap_or_else(|| util::new_id());
+                let token = a.token.clone().filter(|t| t.trim().len() >= 16).or(kept).unwrap_or_else(util::new_id);
                 if token.len() < 16 {
                     return Err(DevdError::invalid("a token is at least 16 characters"));
                 }

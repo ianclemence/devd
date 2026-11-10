@@ -166,8 +166,15 @@ fn links_to(text: &str, host: &str) -> bool {
     false
 }
 
-fn resolved() -> &'static std::sync::Mutex<std::collections::HashMap<String, Option<(String, &'static str)>>> {
-    static CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, Option<(String, &'static str)>>>> = std::sync::OnceLock::new();
+/// A remembered link from one message to the site it names: `None` when the
+/// message links nowhere, so a miss and "no link" are the same answer.
+type SiteLink = Option<(String, &'static str)>;
+
+/// Those links, keyed by message id and the site signature of the moment.
+type SiteLinks = std::collections::HashMap<String, SiteLink>;
+
+fn resolved() -> &'static std::sync::Mutex<SiteLinks> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<SiteLinks>> = std::sync::OnceLock::new();
     CACHE.get_or_init(Default::default)
 }
 
@@ -259,7 +266,7 @@ pub fn list(ui_port: u16, limit: usize, query: Option<&str>, sites: &[SiteName],
         }
     }
     by_site.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    let unassigned = out.iter().filter(|m| m.get("site").map_or(true, Value::is_null)).count();
+    let unassigned = out.iter().filter(|m| match m.get("site") { Some(v) => v.is_null(), None => true }).count();
     Ok(json!({
         "sites": by_site.into_iter().map(|(name, count)| json!({ "name": name, "count": count })).collect::<Vec<_>>(),
         "unassigned": unassigned,

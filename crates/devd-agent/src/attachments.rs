@@ -160,7 +160,7 @@ mod tests {
         let p = d.join("a.png");
         std::fs::write(&p, PNG).unwrap();
         let m = message(&[&p]);
-        assert_eq!(with_images(&[m.clone()], false, &d), vec![m]);
+        assert_eq!(with_images(std::slice::from_ref(&m), false, &d), vec![m]);
     }
 
     #[test]
@@ -170,7 +170,7 @@ mod tests {
         let p = elsewhere.join("secret.png");
         std::fs::write(&p, PNG).unwrap();
         let m = message(&[&p]);
-        assert_eq!(with_images(&[m.clone()], true, &uploads), vec![m], "a path outside uploads stays a path");
+        assert_eq!(with_images(std::slice::from_ref(&m), true, &uploads), vec![m], "a path outside uploads stays a path");
     }
 
     #[test]
@@ -179,7 +179,7 @@ mod tests {
         let p = d.join("not-really.png");
         std::fs::write(&p, b"MZ\x90\0 program").unwrap();
         let m = message(&[&p]);
-        assert_eq!(with_images(&[m.clone()], true, &d), vec![m]);
+        assert_eq!(with_images(std::slice::from_ref(&m), true, &d), vec![m]);
     }
 
     #[test]

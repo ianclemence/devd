@@ -395,7 +395,7 @@ impl McpServer {
             "description": "Every site devd serves, with its address, folder and PHP version.",
             "mimeType": "application/json"
         })];
-        if self.site_context().len() > 0 {
+        if !self.site_context().is_empty() {
             out.push(json!({
                 "uri": "devd://site/current",
                 "name": "The site for this folder",
@@ -723,9 +723,7 @@ impl McpServer {
         // a file snapshot may be restored only where it came from, inside this
         // project. The handler keeps database restores for a person.
         if id == "snapshot.restore" {
-            let Some(sid) = args.get("id").and_then(Value::as_str) else {
-                return None;
-            };
+            let sid = args.get("id").and_then(Value::as_str)?;
             if let Ok(snap) = devd_core::snapshot::get(&self.ctx.paths, sid) {
                 if snap.kind != devd_core::snapshot::Kind::Database {
                     let p = Path::new(&snap.subject);

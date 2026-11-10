@@ -200,7 +200,7 @@ pub fn usage(ctx: &Ctx) -> Result<Value> {
             "cost_usd": cost,
         })));
     }
-    top.sort_by(|a, b| b.0.cmp(&a.0));
+    top.sort_by_key(|x| std::cmp::Reverse(x.0));
     let rows = |m: BTreeMap<String, U>| -> Vec<Value> {
         let mut v: Vec<Value> = m
             .into_iter()

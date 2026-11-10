@@ -1953,11 +1953,10 @@ fn a_failing_final_verification_never_marks_the_run_done() {
     let tasks = v["tasks"].as_array().unwrap();
     let gate = tasks
         .iter()
-        .filter(|t| {
+        .rfind(|t| {
             let k = t["key"].as_str().unwrap_or("");
             k == "final-verify" || k.starts_with("re-review")
         })
-        .last()
         .expect("there is a final check");
     assert_eq!(gate["verdict"], "changes_needed");
     call(

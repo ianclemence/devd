@@ -807,7 +807,7 @@ fn install_tray(
     let base = format!("http://127.0.0.1:{port}");
     let live = Arc::new(Mutex::new(live_from_api(&state)));
     let initial = live.lock().map(|l| l.clone()).unwrap_or_default();
-    let menu = tray_menu(&app.handle(), &state, &initial)?;
+    let menu = tray_menu(app.handle(), &state, &initial)?;
 
     let state_for_menu = state.clone();
     let live_for_menu = live.clone();

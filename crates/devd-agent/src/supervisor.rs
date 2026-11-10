@@ -58,9 +58,7 @@ fn record(ctx: &Ctx, kind: &str, service: &str, detail: &str) {
             v.remove(0);
         }
     }
-    let _ = ctx
-        .events
-        .emit_with(kind, format!("{kind}: {service}"), row);
+    ctx.events.emit_with(kind, format!("{kind}: {service}"), row);
 }
 
 /// Start the loop. Only the process that owns the agents calls this.
