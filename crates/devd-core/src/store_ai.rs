@@ -28,7 +28,7 @@ pub struct QueuedMessage {
 pub struct Provider {
     /// Identifier, e.g. `anthropic`.
     pub id: String,
-    /// `anthropic`, `openai` or `openai-compatible`.
+    /// `anthropic`, `openai`, `gemini` or `openai-compatible`.
     pub kind: String,
     /// Display name.
     pub label: String,
@@ -46,6 +46,59 @@ pub struct Provider {
     pub created_at: String,
     /// Updated.
     pub updated_at: String,
+}
+
+impl Provider {
+    /// Put a provider back on its vendor's official kind and base path.
+    ///
+    /// The live failure was a Gemini provider saved as `openai-compatible`
+    /// against the native `/v1beta` URL: it sent `Authorization: Bearer` where
+    /// Gemini wants `x-goog-api-key`, and the 401 looked like a bad key. The
+    /// same class of mistake is possible for every vendor after a preset or a
+    /// hand edit, so a provider whose host is a known official one is corrected
+    /// here. A custom host (a proxy, a local server, Azure) is left exactly as
+    /// the person configured it.
+    pub fn normalised(mut self) -> Self {
+        let trimmed = self.base_url.trim().trim_end_matches('/').to_string();
+        let Some((scheme, rest)) = trimmed.split_once("://") else {
+            return self;
+        };
+        let authority = rest.split('/').next().unwrap_or("");
+        if authority.is_empty() {
+            return self;
+        }
+        let host = authority
+            .rsplit_once(':')
+            .map(|(h, p)| if p.chars().all(|c| c.is_ascii_digit()) { h } else { authority })
+            .unwrap_or(authority)
+            .to_ascii_lowercase();
+        let path = rest.strip_prefix(authority).unwrap_or("").trim_end_matches('/');
+        let official = match host.as_str() {
+            "api.anthropic.com" => Some(("anthropic", "")),
+            "api.openai.com" => Some(("openai", "/v1")),
+            "generativelanguage.googleapis.com" => {
+                if path == "/v1beta/openai" || path == "/openai" {
+                    Some(("openai-compatible", "/v1beta/openai"))
+                } else {
+                    Some(("gemini", "/v1beta"))
+                }
+            }
+            "api.deepseek.com" => Some(("openai-compatible", "/v1")),
+            "api.moonshot.ai" | "api.moonshot.cn" => Some(("openai-compatible", "/v1")),
+            "api.x.ai" => Some(("openai-compatible", "/v1")),
+            "api.mistral.ai" => Some(("openai-compatible", "/v1")),
+            "api.groq.com" => Some(("openai-compatible", "/openai/v1")),
+            "api.together.xyz" => Some(("openai-compatible", "/v1")),
+            "api.fireworks.ai" => Some(("openai-compatible", "/inference/v1")),
+            "openrouter.ai" => Some(("openai-compatible", "/api/v1")),
+            _ => None,
+        };
+        if let Some((kind, suffix)) = official {
+            self.kind = kind.to_string();
+            self.base_url = format!("{scheme}://{authority}{suffix}");
+        }
+        self
+    }
 }
 
 /// A model in the catalogue.
@@ -262,7 +315,8 @@ fn row_provider(r: &rusqlite::Row) -> rusqlite::Result<Provider> {
         enabled: r.get::<_, i32>(7)? != 0,
         created_at: r.get(8)?,
         updated_at: r.get(9)?,
-    })
+    }
+    .normalised())
 }
 
 const PROVIDER_COLS: &str =
@@ -320,6 +374,9 @@ impl Store {
 
     /// Insert or update a provider (never touches its key).
     pub fn upsert_provider(&self, p: &Provider) -> Result<()> {
+        // Store the corrected kind/URL, not the old one, so the fix survives a
+        // later read and the database stops carrying the broken shape.
+        let p = p.clone().normalised();
         self.with(|c| {
             if p.is_default {
                 c.execute("UPDATE providers SET is_default=0 WHERE id<>?1", params![p.id])?;
@@ -388,7 +445,7 @@ impl Store {
                     "INSERT OR REPLACE INTO model_catalogue (source,model_id,display,description,context_window,max_output,input_price,output_price,retirement,url,fetched_at,tools,vision,reasoning)
                      VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
                     params![source, m.model_id, m.display, m.description, m.context_window, m.max_output, m.input_price, m.output_price, m.retirement, m.url, m.fetched_at,
-                        m.tools.map(|v| i64::from(v)), m.vision.map(|v| i64::from(v)), m.reasoning.map(|v| i64::from(v))],
+                        m.tools.map(i64::from), m.vision.map(i64::from), m.reasoning.map(i64::from)],
                 )?;
             }
             tx.commit()?;
@@ -1191,5 +1248,77 @@ mod price_tests {
         let rows = s.list_catalogue(Some("manual")).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].input_price, Some(0.20));
+    }
+}
+
+#[cfg(test)]
+mod provider_tests {
+    use super::*;
+
+    fn provider(kind: &str, base: &str) -> Provider {
+        Provider {
+            id: "gemini".into(),
+            kind: kind.into(),
+            label: "Google Gemini".into(),
+            base_url: base.into(),
+            key_env: Some("GEMINI_API_KEY".into()),
+            default_model: None,
+            is_default: false,
+            enabled: true,
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn a_gemini_provider_saved_as_openai_compatible_moves_to_the_native_api() {
+        // The live failure: this exact pair sends `Authorization: Bearer` to
+        // the native endpoint, which answers 401 "Expected OAuth 2 access
+        // token" and looks like a bad key.
+        let p = provider("openai-compatible", "https://generativelanguage.googleapis.com/v1beta").normalised();
+        assert_eq!(p.kind, "gemini");
+        assert_eq!(p.base_url, "https://generativelanguage.googleapis.com/v1beta");
+    }
+
+    #[test]
+    fn the_gemini_openai_compatibility_path_is_left_alone() {
+        // `/v1beta/openai` really is the OpenAI-compatible API and does use a
+        // Bearer token; it must not be moved to the native adapter.
+        let p = provider("openai-compatible", "https://generativelanguage.googleapis.com/v1beta/openai/").normalised();
+        assert_eq!(p.kind, "openai-compatible");
+        assert_eq!(p.base_url, "https://generativelanguage.googleapis.com/v1beta/openai");
+    }
+
+    #[test]
+    fn every_official_host_gets_its_official_base_and_kind() {
+        let cases = [
+            ("openai-compatible", "https://api.openai.com", "openai", "https://api.openai.com/v1"),
+            ("openai", "https://api.anthropic.com/v1", "anthropic", "https://api.anthropic.com"),
+            ("openai-compatible", "https://api.groq.com", "openai-compatible", "https://api.groq.com/openai/v1"),
+            ("openai-compatible", "https://openrouter.ai", "openai-compatible", "https://openrouter.ai/api/v1"),
+            ("openai-compatible", "https://api.deepseek.com", "openai-compatible", "https://api.deepseek.com/v1"),
+            ("openai-compatible", "https://api.fireworks.ai", "openai-compatible", "https://api.fireworks.ai/inference/v1"),
+        ];
+        for (kind, base, want_kind, want_base) in cases {
+            let p = provider(kind, base).normalised();
+            assert_eq!(p.kind, want_kind, "{base}");
+            assert_eq!(p.base_url, want_base, "{base}");
+        }
+    }
+
+    #[test]
+    fn a_custom_host_is_left_exactly_as_configured() {
+        let p = provider("openai-compatible", "https://llm.internal.example/v2").normalised();
+        assert_eq!(p.kind, "openai-compatible");
+        assert_eq!(p.base_url, "https://llm.internal.example/v2");
+    }
+
+    #[test]
+    fn saving_a_gemini_provider_persists_the_corrected_kind() {
+        let s = Store::open_in_memory().unwrap();
+        s.migrate().unwrap();
+        s.upsert_provider(&provider("openai-compatible", "https://generativelanguage.googleapis.com/v1beta")).unwrap();
+        let saved = s.get_provider("gemini").unwrap().unwrap();
+        assert_eq!(saved.kind, "gemini");
     }
 }

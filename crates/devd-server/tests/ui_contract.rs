@@ -1883,7 +1883,7 @@ fn the_work_surfaces_read_like_a_desktop_browser_and_terminal() {
     assert!(APP.contains("class=\"work-strip-actions\""), "the surface actions stay at the right");
     assert!(APP.contains("class=\"work-address\""), "the browser has one address row");
     assert!(APP.contains("placeholder=\"Type a URL\""), "the address says what to do");
-    assert!(APP.contains("attr(displayUrl(b.url || \"\"))"), "the field hides the default port");
+    assert!(APP.contains("attr(displayUrl((agentOn && agent.url) ? agent.url : (b.url || \"\")))"), "the field hides the default port and follows the real page");
     assert!(APP.contains("class=\"work-context\""), "the terminal has one folder row");
     assert!(APP.contains("data-action=\"work-terminal-copy\""), "the terminal can copy its screen");
     assert!(APP.contains("class=\"work-empty-icon\""), "the empty state has a quiet glyph");
@@ -2024,4 +2024,17 @@ fn the_footer_offers_a_verified_update_and_names_the_running_version() {
     assert!(APP.contains("run(\"update.apply\""), "the footer installs through the capability");
     assert!(APP.contains("devd ' + esc(version)"), "the footer names the running version");
     assert!(CSS.contains(".sb-update"), "the update control has a style");
+}
+
+#[test]
+fn the_browser_pane_drives_a_real_page_with_its_own_title_and_icon() {
+    // The visible Browser is a real Chromium tab, not an iframe: a click, a
+    // typed key and the wheel go to the page, and the address bar and tab
+    // title/icon follow the page itself.
+    assert!(APP.contains("work-agent-screen"), "the page is a focusable surface");
+    assert!(APP.contains("browser.mouse"), "a click reaches the page");
+    assert!(APP.contains("browser.key"), "typing reaches the page");
+    assert!(APP.contains("browser.scroll"), "the wheel reaches the page");
+    assert!(APP.contains("work-agent-favicon"), "the tab shows the page icon");
+    assert!(APP.contains("work-agent-title"), "the tab shows the page title");
 }

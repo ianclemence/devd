@@ -141,6 +141,8 @@ struct Tab {
     session: String,
     url: String,
     title: String,
+    /// The page's own icon URL, as a real browser tab shows.
+    favicon: Option<String>,
     refs: BTreeMap<String, i64>,
 }
 
@@ -214,15 +216,11 @@ impl Manager {
             if self.tabs.contains_key(&id) {
                 continue;
             }
-            match cdp.call(None, "Target.attachToTarget", json!({ "targetId": id, "flatten": true })) {
-                Ok(v) => {
-                    if let Some(session) = v["sessionId"].as_str() {
-                        let session = session.to_string();
-                        enable(&mut *cdp, &session)?;
-                        self.tabs.insert(id.clone(), Tab { session, url, title, refs: BTreeMap::new() });
-                    }
-                }
-                Err(e) => return Err(e),
+            let v = cdp.call(None, "Target.attachToTarget", json!({ "targetId": id, "flatten": true }))?;
+            if let Some(session) = v["sessionId"].as_str() {
+                let session = session.to_string();
+                enable(&mut *cdp, &session)?;
+                self.tabs.insert(id.clone(), Tab { session, url, title, favicon: None, refs: BTreeMap::new() });
             }
         }
         self.tabs.retain(|id, _| live.contains(id));
@@ -264,6 +262,7 @@ impl Manager {
             session,
             url: "about:blank".into(),
             title: String::new(),
+            favicon: None,
             refs: BTreeMap::new(),
         });
         self.focused = Some(id.clone());
@@ -327,7 +326,7 @@ impl Cdp {
             message["sessionId"] = json!(session);
         }
         self.socket
-            .send(Message::Text(message.to_string().into()))
+            .send(Message::Text(message.to_string()))
             .map_err(|e| DevdError::internal(format!("could not talk to the browser: {e}")))?;
         loop {
             let incoming = self
@@ -388,6 +387,34 @@ fn location(cdp: &mut Cdp, session: &str) -> Result<(String, String)> {
     Ok((
         parsed["url"].as_str().unwrap_or("").to_string(),
         parsed["title"].as_str().unwrap_or("").to_string(),
+    ))
+}
+
+/// The page's own title and icon, the way a real browser tab reads them.
+///
+/// The icon is the URL the page declared, or `/favicon.ico`; the browser tab
+/// fetches it itself. Reading the DOM here is safe because this runs in the
+/// page, not in a cross-origin iframe.
+fn page_meta(cdp: &mut Cdp, session: &str) -> Result<(String, String, Option<String>)> {
+    let expression = r#"(() => {
+        let href = '';
+        try {
+            const icon = document.querySelector('link[rel~="icon"], link[rel="shortcut icon"], link[rel="apple-touch-icon"]');
+            href = icon && icon.href ? icon.href : new URL('/favicon.ico', location.href).href;
+        } catch (e) { href = ''; }
+        return JSON.stringify({ url: location.href, title: document.title, favicon: href || null });
+    })()"#;
+    let value = cdp.call(
+        Some(session),
+        "Runtime.evaluate",
+        json!({ "expression": expression, "returnByValue": true }),
+    )?;
+    let text = value["result"]["value"].as_str().unwrap_or("{}");
+    let parsed: Value = serde_json::from_str(text).unwrap_or_else(|_| json!({}));
+    Ok((
+        parsed["url"].as_str().unwrap_or("").to_string(),
+        parsed["title"].as_str().unwrap_or("").to_string(),
+        parsed["favicon"].as_str().map(str::to_string),
     ))
 }
 
@@ -606,6 +633,9 @@ fn launch(exe: &Path, profile: &Path) -> Result<(Child, String)> {
             "--hide-scrollbars",
             "--mute-audio",
             "--window-size=1440,900",
+            // One CSS pixel is one screenshot pixel, so a click in the pane maps
+            // to the exact point in the page.
+            "--force-device-scale-factor=1",
         ])
         .arg(format!("--user-data-dir={}", profile.display()))
         .arg("about:blank")
@@ -718,15 +748,31 @@ pub fn tabs_list(root: &Path) -> Result<Value> {
     let mut m = lock();
     m.ensure(root)?;
     m.refresh()?;
-    let tabs: Vec<Value> = m
-        .tabs
+    let Manager { cdp, tabs, focused, .. } = &mut *m;
+    let cdp = cdp.as_mut().ok_or_else(|| DevdError::invalid("the browser is not running"))?;
+    // A real browser tab keeps the page's current title and icon. Read them
+    // from each page, not from a cross-origin frame.
+    for tab in tabs.values_mut() {
+        if let Ok((url, title, favicon)) = page_meta(cdp, &tab.session) {
+            tab.url = url;
+            tab.title = title;
+            tab.favicon = favicon;
+        }
+    }
+    let rows: Vec<Value> = tabs
         .iter()
-        .map(|(id, t)| json!({ "id": id, "url": t.url, "title": t.title, "focused": m.focused.as_deref() == Some(id) }))
+        .map(|(id, t)| json!({
+            "id": id,
+            "url": t.url,
+            "title": t.title,
+            "favicon": t.favicon,
+            "focused": focused.as_deref() == Some(id)
+        }))
         .collect();
     Ok(json!({
-        "state": if tabs.is_empty() { "empty" } else { "ok" },
-        "focused": m.focused,
-        "tabs": tabs,
+        "state": if rows.is_empty() { "empty" } else { "ok" },
+        "focused": focused.clone(),
+        "tabs": rows,
     }))
 }
 
@@ -736,8 +782,21 @@ pub fn tabs_focus(tab: &str) -> Result<Value> {
         return Err(DevdError::not_found(format!("there is no tab `{tab}`")));
     }
     m.focused = Some(tab.to_string());
-    let (url, title) = m.current(tab)?;
-    Ok(json!({ "state": "ok", "tab": tab, "url": url, "title": title }))
+    let Manager { cdp, tabs, .. } = &mut *m;
+    let cdp = cdp.as_mut().ok_or_else(|| DevdError::invalid("the browser is not running"))?;
+    let mut favicon = None;
+    if let Some(t) = tabs.get(tab) {
+        if let Ok((url, title, icon)) = page_meta(cdp, &t.session) {
+            if let Some(t) = tabs.get_mut(tab) {
+                t.url = url;
+                t.title = title;
+                t.favicon = icon.clone();
+            }
+            favicon = icon;
+        }
+    }
+    let (url, title) = current_of(tabs, tab)?;
+    Ok(json!({ "state": "ok", "tab": tab, "url": url, "title": title, "favicon": favicon }))
 }
 
 pub fn tabs_close(tab: &str) -> Result<Value> {
@@ -916,6 +975,138 @@ pub fn type_text(tab: Option<&str>, reference: &str, text: &str, submit: bool) -
     Ok(json!({ "state": "ok", "tab": id, "url": url, "title": title, "submitted": submit }))
 }
 
+/// Click at a point in the page. Coordinates are CSS pixels in the screenshot
+/// the person is looking at.
+pub fn mouse(root: &Path, tab: Option<&str>, x: f64, y: f64, button: &str) -> Result<Value> {
+    let mut m = lock();
+    m.ensure(root)?;
+    let id = m.focused_tab(tab)?;
+    let Manager { cdp, tabs, .. } = &mut *m;
+    let cdp = cdp.as_mut().ok_or_else(|| DevdError::invalid("the browser is not running"))?;
+    let session = tabs.get(&id).ok_or_else(|| DevdError::not_found(format!("there is no tab `{id}`")))?.session.clone();
+    let button = if button == "right" { "right" } else { "left" };
+    for (kind, buttons) in [("mousePressed", 1), ("mouseReleased", 0)] {
+        cdp.call(
+            Some(&session),
+            "Input.dispatchMouseEvent",
+            json!({
+                "type": kind,
+                "x": x,
+                "y": y,
+                "button": button,
+                "buttons": buttons,
+                "clickCount": 1,
+                "modifiers": 0
+            }),
+        )?;
+        std::thread::sleep(Duration::from_millis(40));
+    }
+    std::thread::sleep(Duration::from_millis(350));
+    wait_ready(cdp, &session)?;
+    if let Some(t) = tabs.get_mut(&id) {
+        t.refs.clear();
+    }
+    update_seen(tabs, cdp, &id)?;
+    let (url, title) = current_of(tabs, &id)?;
+    Ok(json!({ "state": "ok", "tab": id, "url": url, "title": title, "x": x, "y": y }))
+}
+
+/// Type text into whatever the page has focused, or press one named key.
+pub fn key(root: &Path, tab: Option<&str>, text: Option<&str>, name: Option<&str>) -> Result<Value> {
+    let (text, name) = match (text, name) {
+        (Some(t), _) if !t.is_empty() => (Some(t), None),
+        (_, Some(n)) if !n.is_empty() => (None, Some(n)),
+        _ => return Err(DevdError::invalid("give text to type or a key to press")),
+    };
+    let mut m = lock();
+    m.ensure(root)?;
+    let id = m.focused_tab(tab)?;
+    let Manager { cdp, tabs, .. } = &mut *m;
+    let cdp = cdp.as_mut().ok_or_else(|| DevdError::invalid("the browser is not running"))?;
+    let session = tabs.get(&id).ok_or_else(|| DevdError::not_found(format!("there is no tab `{id}`")))?.session.clone();
+    if let Some(text) = text {
+        cdp.call(Some(&session), "Input.insertText", json!({ "text": text }))?;
+    }
+    if let Some(name) = name {
+        let (code, vk) = key_code(name).ok_or_else(|| DevdError::invalid(format!("`{name}` is not a key devd sends; use text for ordinary characters")))?;
+        let mut down = json!({
+            "type": "keyDown",
+            "key": code,
+            "code": code,
+            "windowsVirtualKeyCode": vk,
+            "nativeVirtualKeyCode": vk
+        });
+        // Enter carries the carriage return Chrome uses to submit a form.
+        if code == "Enter" {
+            down["text"] = json!("\r");
+            down["unmodifiedText"] = json!("\r");
+        }
+        cdp.call(Some(&session), "Input.dispatchKeyEvent", down)?;
+        cdp.call(Some(&session), "Input.dispatchKeyEvent", json!({
+            "type": "keyUp",
+            "key": code,
+            "code": code,
+            "windowsVirtualKeyCode": vk,
+            "nativeVirtualKeyCode": vk
+        }))?;
+    }
+    std::thread::sleep(Duration::from_millis(250));
+    wait_ready(cdp, &session)?;
+    if let Some(t) = tabs.get_mut(&id) {
+        t.refs.clear();
+    }
+    update_seen(tabs, cdp, &id)?;
+    let (url, title) = current_of(tabs, &id)?;
+    Ok(json!({ "state": "ok", "tab": id, "url": url, "title": title }))
+}
+
+fn key_code(name: &str) -> Option<(&'static str, u32)> {
+    Some(match name {
+        "Enter" => ("Enter", 13),
+        "Tab" => ("Tab", 9),
+        "Backspace" => ("Backspace", 8),
+        "Escape" => ("Escape", 27),
+        "ArrowLeft" => ("ArrowLeft", 37),
+        "ArrowUp" => ("ArrowUp", 38),
+        "ArrowRight" => ("ArrowRight", 39),
+        "ArrowDown" => ("ArrowDown", 40),
+        "Delete" => ("Delete", 46),
+        "Home" => ("Home", 36),
+        "End" => ("End", 35),
+        "PageUp" => ("PageUp", 33),
+        "PageDown" => ("PageDown", 34),
+        _ => return None,
+    })
+}
+
+/// Scroll at a point in the page. `delta_y` follows the wheel: positive is down.
+pub fn scroll(root: &Path, tab: Option<&str>, x: f64, y: f64, delta_y: f64) -> Result<Value> {
+    let mut m = lock();
+    m.ensure(root)?;
+    let id = m.focused_tab(tab)?;
+    let Manager { cdp, tabs, .. } = &mut *m;
+    let cdp = cdp.as_mut().ok_or_else(|| DevdError::invalid("the browser is not running"))?;
+    let session = tabs.get(&id).ok_or_else(|| DevdError::not_found(format!("there is no tab `{id}`")))?.session.clone();
+    cdp.call(
+        Some(&session),
+        "Input.dispatchMouseEvent",
+        json!({
+            "type": "mouseWheel",
+            "x": x,
+            "y": y,
+            "deltaX": 0,
+            "deltaY": delta_y,
+            "button": "none",
+            "buttons": 0,
+            "modifiers": 0
+        }),
+    )?;
+    std::thread::sleep(Duration::from_millis(180));
+    update_seen(tabs, cdp, &id)?;
+    let (url, title) = current_of(tabs, &id)?;
+    Ok(json!({ "state": "ok", "tab": id, "url": url, "title": title }))
+}
+
 pub fn screenshot(root: &Path, tab: Option<&str>) -> Result<Value> {
     let mut m = lock();
     m.ensure(root)?;
@@ -928,6 +1119,10 @@ pub fn screenshot(root: &Path, tab: Option<&str>) -> Result<Value> {
         "Page.captureScreenshot",
         json!({ "format": "png", "captureBeyondViewport": false, "fromSurface": true }),
     )?;
+    // The pane needs the page's own pixel size to map a click back to a point.
+    let metrics = cdp.call(Some(&session), "Page.getLayoutMetrics", json!({}))?;
+    let width = metrics["cssLayoutViewport"]["clientWidth"].as_f64().unwrap_or(0.0);
+    let height = metrics["cssLayoutViewport"]["clientHeight"].as_f64().unwrap_or(0.0);
     let encoded = shot["data"]
         .as_str()
         .ok_or_else(|| DevdError::internal("the browser returned no screenshot data"))?;
@@ -940,9 +1135,13 @@ pub fn screenshot(root: &Path, tab: Option<&str>) -> Result<Value> {
     let safe: String = id.chars().filter(|c| c.is_ascii_alphanumeric()).take(12).collect();
     let name = format!("browser-{safe}-{}-{}.png", *seq, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0));
     std::fs::write(uploads.join(&name), &bytes)?;
-    if let Ok((url, _)) = location(cdp, &session) {
+    let mut favicon = None;
+    if let Ok((url, title, icon)) = page_meta(cdp, &session) {
+        favicon = icon.clone();
         if let Some(t) = tabs.get_mut(&id) {
             t.url = url;
+            t.title = title;
+            t.favicon = icon;
         }
     }
     let (url, title) = current_of(tabs, &id)?;
@@ -951,8 +1150,11 @@ pub fn screenshot(root: &Path, tab: Option<&str>) -> Result<Value> {
         "tab": id,
         "url": url,
         "title": title,
+        "favicon": favicon,
         "file": name,
         "bytes": bytes.len(),
+        "width": width,
+        "height": height,
     }))
 }
 
@@ -1074,5 +1276,14 @@ mod tests {
         let err = find_browser().unwrap_err();
         assert!(err.to_string().contains("not a file"));
         std::env::remove_var("DEVD_BROWSER");
+    }
+
+    #[test]
+    fn named_keys_are_the_ones_a_form_uses() {
+        assert_eq!(key_code("Enter"), Some(("Enter", 13)));
+        assert_eq!(key_code("Tab"), Some(("Tab", 9)));
+        assert_eq!(key_code("Backspace"), Some(("Backspace", 8)));
+        assert_eq!(key_code("ArrowDown"), Some(("ArrowDown", 40)));
+        assert!(key_code("F13").is_none());
     }
 }

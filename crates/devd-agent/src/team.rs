@@ -1492,6 +1492,8 @@ impl Team {
             json!({ "by": caller.actor.label() }),
         );
         self.restart_driver(run_id);
+        // Approving the plan answers the "Plan ready" message in the Inbox.
+        let _ = self.ctx.store.resolve_inbox_for_run(run_id, Some(&run.title));
         self.run(run_id)
     }
 
@@ -1590,6 +1592,8 @@ impl Team {
             "resumed",
             json!({ "by": caller.actor.label() }),
         );
+        // Resuming answers the Inbox question that paused the run.
+        let _ = self.ctx.store.resolve_inbox_for_run(run_id, Some(&run.title));
         self.restart_driver(run_id);
         self.run(run_id)
     }
@@ -1660,6 +1664,10 @@ impl Team {
             )?;
         }
         self.restart_driver(&run.id);
+        // The person has acted on this run. The Inbox message that asked for
+        // that action is answered; leaving it open listed the same pause again
+        // after the run had already moved on.
+        let _ = self.ctx.store.resolve_inbox_for_run(&run.id, Some(&run.title));
         Ok(self.ctx.store.get_team_task(task_id)?.expect("exists"))
     }
 
@@ -1706,6 +1714,8 @@ impl Team {
                 .set_run_state(&run.id, "running", None, None)?;
         }
         self.restart_driver(&run.id);
+        // Accepting the task answers the question that was waiting on it.
+        let _ = self.ctx.store.resolve_inbox_for_run(&run.id, Some(&run.title));
         Ok(self.ctx.store.get_team_task(task_id)?.expect("exists"))
     }
 

@@ -493,7 +493,7 @@
   var BRANDS = {
     // Model providers.
     anthropic: "anthropic", openai: "openai", deepseek: "deepseek",
-    moonshot: "moonshot", zhipu: "zhipu", gemini: "gemini", openrouter: "openrouter",
+    moonshot: "moonshot", gemini: "gemini", openrouter: "openrouter",
     ollama: "ollama", "lm-studio": "lmstudio", mistral: "mistral", groq: "groq",
     together: "together", fireworks: "fireworks", xai: "xai", claude: "claude",
     // Services.
@@ -551,7 +551,7 @@
    * wordmark into a square makes it unreadable, so those are given a wider
    * slot of their own - still their own artwork, never stretched.
    */
-  var WIDE_BRANDS = { zhipu: true };
+  var WIDE_BRANDS = {};
 
   /* The mark as a small image. The name is the accessible label, and the
      image is decorative: the text beside it already says what it is. */
@@ -8580,9 +8580,19 @@ var TERM_POLL_MS = 250;
           '<button type="button" class="btn btn-go btn-mini" data-action="req-decide" data-id="' + attr(r.id) + '" data-approve="1">Approve</button>' }));
     });
     d.inbox.filter(function (m) { return m.needs_reply && !aboutARun(m); }).forEach(function (m) {
-      decisions.push(homeNeed({ kicker: "Question", face: String(m.from_actor || "").replace("agent:", "").replace("devd-", ""), title: m.subject, sub: uiSummary(m.body, 160),
+      var runPaused = /^run paused:/i.test(String(m.subject || ""));
+      var runOpen = m.run_id
+        ? '<button type="button" class="btn btn-primary btn-mini" data-action="team-open-from" data-id="' + attr(m.run_id) + '">Open the run</button>'
+        : '<button type="button" class="btn btn-primary btn-mini" data-action="nav" data-view="team">Open Runs</button>';
+      decisions.push(homeNeed({
+        kicker: runPaused ? "Run blocked" : "Question",
+        face: String(m.from_actor || "").replace("agent:", "").replace("devd-", ""),
+        title: runPaused ? String(m.subject || "").replace(/^run paused:\s*/i, "") : m.subject,
+        sub: uiSummary(m.body, 160),
         open: 'data-action="open-message" data-id="' + attr(m.id) + '"',
-        actions: '<button type="button" class="btn btn-primary btn-mini" data-action="open-message" data-id="' + attr(m.id) + '">Answer</button>' }));
+        actions: runPaused ? runOpen
+          : '<button type="button" class="btn btn-primary btn-mini" data-action="open-message" data-id="' + attr(m.id) + '">Answer</button>'
+      }));
     });
     (h.checks || []).filter(function (c) { return c.required && c.state !== "healthy" && c.state !== "starting"; }).forEach(function (c) {
       var f = c.fix || {}, bad = c.state === "critical" || c.state === "unavailable" || c.state === "degraded";
@@ -10344,7 +10354,7 @@ var TERM_POLL_MS = 250;
      it, not a second browser. */
   function agentBrowserRefresh() {
     var b = AI.work.browser;
-    var a = b.agent || (b.agent = { tabs: [], active: null, shot: null, shotUrl: null, nodes: [], url: "", title: "", error: null, loading: false });
+    var a = b.agent || (b.agent = { tabs: [], active: null, shot: null, shotUrl: null, nodes: [], url: "", title: "", favicon: null, error: null, loading: false });
     if (a.loading) return;
     a.loading = true;
     read("browser.tabs.list", {}).then(function (d) {
@@ -10352,13 +10362,21 @@ var TERM_POLL_MS = 250;
       a.active = (d && d.focused) || (a.tabs[0] && a.tabs[0].id) || null;
       a.error = null;
       if (!a.active) {
-        a.shot = null; a.shotUrl = null; a.nodes = []; a.url = ""; a.title = "";
+        a.shot = null; a.shotUrl = null; a.nodes = []; a.url = ""; a.title = ""; a.favicon = null;
         return null;
       }
+      var active = a.tabs.filter(function (t) { return t.id === a.active; })[0];
+      a.favicon = active && active.favicon ? active.favicon : null;
       return read("browser.screenshot", { tab: a.active }).then(function (s) {
         a.shot = s && s.file ? s.file : null;
         a.url = (s && s.url) || "";
         a.title = (s && s.title) || "";
+        if (s && s.favicon) a.favicon = s.favicon;
+        // The tab strip is the page's own title and icon, like a real browser.
+        a.tabs = a.tabs.map(function (t) {
+          if (t.id !== a.active) return t;
+          return Object.assign({}, t, { url: a.url || t.url, title: a.title || t.title, favicon: a.favicon || t.favicon });
+        });
         if (a.shot) uploadBlob(a.shot).then(function (url) { a.shotUrl = url; paintWork(); });
         return read("browser.snapshot", { tab: a.active }).then(function (n) {
           a.nodes = (n && n.nodes) || [];
@@ -10399,23 +10417,27 @@ var TERM_POLL_MS = 250;
       '<button type="button" class="work-agent-toggle' + (agentOn ? " is-on" : "") + '" data-action="work-agent-toggle" aria-pressed="' + (agentOn ? "true" : "false") + '" title="The agent\'s own Chromium tab: tabs, a screenshot, and the refs it can act on"><svg class="icon" aria-hidden="true"><use href="#i-spark"></use></svg><span>Agent' + ((agent.tabs || []).length ? " · " + (agent.tabs || []).length : "") + "</span></button>" +
       (site ? '<span class="work-dot ' + (up ? "is-live" : "is-off") + '" title="' + attr(up ? host + " is running" : host + " is not answering") + '"></span>' : "") +
       '<div class="work-address-field">' +
-      '<input id="work-url" class="work-url" type="text" spellcheck="false" autocomplete="off" value="' + attr(displayUrl(b.url || "")) + '" placeholder="Type a URL" aria-label="Address">' +
+      '<input id="work-url" class="work-url" type="text" spellcheck="false" autocomplete="off" value="' + attr(displayUrl((agentOn && agent.url) ? agent.url : (b.url || ""))) + '" placeholder="Type a URL" aria-label="Address">' +
       '<button type="button" class="work-go" data-action="work-browser-go" aria-label="Open address" title="Open address"><svg class="icon" aria-hidden="true"><use href="#i-arrow-right"></use></svg></button>' +
       "</div></div>";
     if (agentOn) {
       var agentTabs = agent.tabs || [];
+      var agentIcon = agent.favicon
+        ? '<img class="work-agent-favicon" src="' + attr(agent.favicon) + '" alt="" aria-hidden="true">'
+        : '<span class="work-agent-globe" aria-hidden="true"><svg class="icon"><use href="#i-globe"></use></svg></span>';
       var agentStrip = agentTabs.length ? '<div class="work-agent-tabs" role="tablist" aria-label="Agent browser tabs">' + agentTabs.map(function (t) {
         var on = t.id === agent.active;
-        return '<button type="button" role="tab" aria-selected="' + (on ? "true" : "false") + '" class="work-agent-tab' + (on ? " is-active" : "") + '" data-action="work-agent-tab" data-id="' + attr(t.id) + '" title="' + attr(t.url || t.id) + '">' + esc(t.title || t.url || "New tab") + "</button>";
+        var icon = t.favicon ? '<img class="work-agent-favicon" src="' + attr(t.favicon) + '" alt="" aria-hidden="true">' : "";
+        return '<button type="button" role="tab" aria-selected="' + (on ? "true" : "false") + '" class="work-agent-tab' + (on ? " is-active" : "") + '" data-action="work-agent-tab" data-id="' + attr(t.id) + '" title="' + attr(t.url || t.id) + '">' + icon + esc(t.title || t.url || "New tab") + "</button>";
       }).join("") + "</div>" : "";
-      var agentHead = '<div class="work-agent-head">' +
-        '<span class="work-label">Agent browser</span>' +
+      var agentHead = '<div class="work-agent-head">' + agentIcon +
+        '<span class="work-agent-title">' + esc(agent.title || displayUrl(agent.url || "") || "Agent browser") + "</span>" +
         '<span class="work-agent-url mono">' + esc(displayUrl(agent.url || "")) + "</span>" +
         '<button type="button" class="btn btn-mini" data-action="work-agent-refresh">Refresh</button>' +
         '<button type="button" class="btn btn-mini btn-ghost" data-action="work-agent-close">Close</button>' +
         "</div>";
       var agentShot = agent.shotUrl
-        ? '<img class="work-agent-shot" src="' + attr(agent.shotUrl) + '" alt="What the agent sees in ' + attr(agent.title || "the page") + '">'
+        ? '<div class="work-agent-screen" id="work-agent-screen" tabindex="0" role="application" aria-label="The shared browser page. Click to act, type to enter text, scroll with the wheel."><img class="work-agent-shot" src="' + attr(agent.shotUrl) + '" alt="' + attr(agent.title || "the page") + '" draggable="false"></div>'
         : '<div class="work-agent-empty">' + (agent.error ? esc(agent.error) : agent.loading ? "Taking a screenshot…" : "The agent's browser is not open. Open it to give the agent a tab the two of you can see.") +
           (agent.tabs && agent.tabs.length ? "" : '<div class="work-empty-links"><button type="button" class="work-link is-primary" data-action="work-agent-open">Open the agent browser</button></div>') + "</div>";
       var agentRefs = (agent.nodes || []).filter(function (n) { return n.ref; }).slice(0, 14);
@@ -10521,6 +10543,69 @@ var TERM_POLL_MS = 250;
     if (b.open && term.open) html += '<div class="work-divider" id="work-divider" role="separator" aria-orientation="horizontal" aria-label="Resize browser and terminal" tabindex="0"></div>';
     if (term.open) html += terminalSurfaceHtml(path);
     morph(box, html);
+    // The Agent view is a real page, not an iframe: clicks, keys and the wheel
+    // go to the same Chromium tab an agent drives, and the address bar follows
+    // the page's own URL. This is what makes a link or a form work here.
+    var screen = el("work-agent-screen");
+    if (screen && !screen.__devdBound) {
+      screen.__devdBound = true;
+      var activeAgent = function () {
+        var a = AI.work.browser.agent;
+        return a && a.active ? a : null;
+      };
+      var pointIn = function (ev) {
+        var img = screen.querySelector("img");
+        if (!img || !img.naturalWidth) return null;
+        var r = img.getBoundingClientRect();
+        if (!r.width || !r.height) return null;
+        return {
+          x: Math.round((ev.clientX - r.left) * (img.naturalWidth / r.width)),
+          y: Math.round((ev.clientY - r.top) * (img.naturalHeight / r.height))
+        };
+      };
+      screen.addEventListener("click", function (ev) {
+        var a = activeAgent();
+        var p = a && pointIn(ev);
+        if (!a || !p) return;
+        screen.focus();
+        run("browser.mouse", { tab: a.active, x: p.x, y: p.y }, { quiet: true }).then(function (o) { if (o) agentBrowserRefresh(); });
+      });
+      screen.addEventListener("keydown", function (ev) {
+        var a = activeAgent();
+        if (!a) return;
+        var named = { Enter: "Enter", Tab: "Tab", Backspace: "Backspace", Escape: "Escape", ArrowLeft: "ArrowLeft", ArrowUp: "ArrowUp", ArrowRight: "ArrowRight", ArrowDown: "ArrowDown", Delete: "Delete", Home: "Home", End: "End", PageUp: "PageUp", PageDown: "PageDown" }[ev.key];
+        if (named) {
+          ev.preventDefault();
+          run("browser.key", { tab: a.active, key: named }, { quiet: true }).then(function (o) { if (o) agentBrowserRefresh(); });
+        } else if (ev.key && ev.key.length === 1 && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+          ev.preventDefault();
+          run("browser.key", { tab: a.active, text: ev.key }, { quiet: true }).then(function (o) { if (o) agentBrowserRefresh(); });
+        }
+      });
+      screen.addEventListener("paste", function (ev) {
+        var a = activeAgent();
+        var text = ev.clipboardData && ev.clipboardData.getData("text");
+        if (!a || !text) return;
+        ev.preventDefault();
+        run("browser.key", { tab: a.active, text: text }, { quiet: true }).then(function (o) { if (o) agentBrowserRefresh(); });
+      });
+      var wheelAt = 0;
+      screen.addEventListener("wheel", function (ev) {
+        var a = activeAgent();
+        var p = a && pointIn(ev);
+        if (!a || !p) return;
+        ev.preventDefault();
+        var now = Date.now();
+        if (now - wheelAt < 120) return;
+        wheelAt = now;
+        run("browser.scroll", { tab: a.active, x: p.x, y: p.y, delta_y: ev.deltaY }, { quiet: true }).then(function (o) { if (o) agentBrowserRefresh(); });
+      }, { passive: false });
+    }
+    box.querySelectorAll("img.work-agent-favicon").forEach(function (img) {
+      if (img.__devdFaviconBound) return;
+      img.__devdFaviconBound = true;
+      img.addEventListener("error", function () { img.style.display = "none"; });
+    });
     if (b.open && term.open) {
       box.style.gridTemplateRows = AI.work.split + "% 1px minmax(0, 1fr)";
       var divider = el("work-divider");
@@ -10573,7 +10658,9 @@ var TERM_POLL_MS = 250;
         // A tab switch, a chosen site or a URL from elsewhere updates the field.
         // Text the person is still typing is theirs, so it is left alone until
         // they leave the field or open the address.
-        var want = displayUrl(AI.work.browser.url || "");
+        var shown = (AI.work.browser.agentOpen && AI.work.browser.agent && AI.work.browser.agent.url)
+          ? AI.work.browser.agent.url : (AI.work.browser.url || "");
+        var want = displayUrl(shown);
         if (!(input.__devdDirty && document.activeElement === input) && input.value !== want) input.value = want;
       }
       // A same-origin page can tell us its real title; a cross-origin one cannot,
@@ -10614,6 +10701,10 @@ var TERM_POLL_MS = 250;
     } else if (!b.url) {
       setBrowserUrl(url);
     }
+    // The visible Browser is the real CDP tab, not an iframe: links follow,
+    // forms submit, and the address bar and tab title come from the page.
+    b.agentOpen = true;
+    run("browser.open", url ? { url: url } : {}, { quiet: true }).then(function (o) { if (o) agentBrowserRefresh(); });
     ensureWorkSites(path);
     paintSurfaceChrome();
   }
@@ -11714,7 +11805,24 @@ var TERM_POLL_MS = 250;
       // "Plan ready" is a decision about a run, not a question that wants
       // prose. Offering an answer box here asked the person to type an approval.
       var planReady = m.needs_reply && m.run_id && /^plan ready/i.test(String(m.subject || ""));
-      if (planReady) {
+      // A paused run is a blocked run, not a question. It has its own Needs-you
+      // card with retry/accept; sending the person to the run is the answer.
+      var runPaused = m.needs_reply && /^run paused:/i.test(String(m.subject || ""));
+      if (runPaused) {
+        var runOpen = m.run_id
+          ? '<button type="button" class="btn btn-primary" data-action="team-open-from" data-id="' + attr(m.run_id) + '">Open the run</button>'
+          : '<button type="button" class="btn btn-primary" data-action="nav" data-view="team">Open Runs</button>';
+        waiting.push('<article class="decision" data-kind="blocked">' +
+          '<div class="decision-kind">Run blocked</div>' +
+          '<div class="decision-main">' +
+            '<h3 class="decision-title">' + esc(String(m.subject || "").replace(/^run paused:\s*/i, "")) + "</h3>" +
+            '<div class="decision-meta"><span>' + esc(who) + "</span> <span>" + esc(ago(m.created_at)) + "</span></div>" +
+            '<div class="decision-body">' + uiBody(m.body) + "</div>" +
+            '<div class="decision-actions">' + runOpen +
+            '<button type="button" class="btn" data-action="inbox-reply" data-id="' + attr(m.id) + '" data-resolve="1">Dismiss</button>' +
+            '<span class="decision-hint">The run is waiting for a decision. Retry the task or accept it on the run; this is not a question.</span></div>' +
+          "</div></article>");
+      } else if (planReady) {
         waiting.push('<article class="decision" data-kind="plan">' +
           '<div class="decision-kind">Plan</div>' +
           '<div class="decision-main">' +
@@ -14981,8 +15089,12 @@ var TERM_POLL_MS = 250;
       paintSurfaceChrome();
     },
     "work-agent-toggle": function () {
-      AI.work.browser.agentOpen = !AI.work.browser.agentOpen;
-      if (AI.work.browser.agentOpen) agentBrowserRefresh();
+      var b = AI.work.browser;
+      b.agentOpen = !b.agentOpen;
+      if (b.agentOpen) {
+        var target = b.url || (workSiteFor(workProject()) || {}).url || "";
+        run("browser.open", target ? { url: target } : {}, { quiet: true }).then(function (o) { if (o) agentBrowserRefresh(); });
+      }
       paintWork();
     },
     "work-agent-open": function () {
@@ -14994,7 +15106,7 @@ var TERM_POLL_MS = 250;
     },
     "work-agent-close": function () {
       run("browser.close", {}, { quiet: true }).then(function () {
-        AI.work.browser.agent = { tabs: [], active: null, shot: null, shotUrl: null, nodes: [], url: "", title: "", error: null, loading: false };
+        AI.work.browser.agent = { tabs: [], active: null, shot: null, shotUrl: null, nodes: [], url: "", title: "", favicon: null, error: null, loading: false };
         paintWork();
       });
     },
@@ -15055,9 +15167,15 @@ var TERM_POLL_MS = 250;
       if (!/^https?:\/\//i.test(url)) url = "https://" + url;
       try { new URL(url); } catch (e) { toast("warn", "That is not an address."); return; }
       if (input) input.__devdDirty = false;
+      var b = AI.work.browser;
+      if (b.agentOpen) {
+        var a = b.agent;
+        run("browser.navigate", { tab: a && a.active, url: url }, { quiet: true }).then(function (o) { if (o) agentBrowserRefresh(); });
+        return;
+      }
       setBrowserUrl(url);
-      AI.work.browser.fresh = false;
-      AI.work.browser.error = null;
+      b.fresh = false;
+      b.error = null;
       paintWork();
     },
     "work-browser-tab": function (n) {
@@ -16492,7 +16610,7 @@ var TERM_POLL_MS = 250;
     var handler = ACTIONS[action];
     if (handler) {
       event.preventDefault();
-      handler(node);
+      handler(node, event);
     }
   });
 

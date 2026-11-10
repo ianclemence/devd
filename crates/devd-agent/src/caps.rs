@@ -137,6 +137,47 @@ struct BrowserShot {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct BrowserMouse {
+    /// X in CSS pixels, as browser.screenshot reports the page.
+    x: f64,
+    /// Y in CSS pixels, as browser.screenshot reports the page.
+    y: f64,
+    /// `left` (default) or `right`.
+    #[serde(default)]
+    button: Option<String>,
+    /// Tab id from browser.tabs.list. Omit to use the focused tab.
+    #[serde(default)]
+    tab: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct BrowserKey {
+    /// Text to insert into the focused control.
+    #[serde(default)]
+    text: Option<String>,
+    /// A named key: Enter, Tab, Backspace, Escape, ArrowLeft/Up/Right/Down,
+    /// Delete, Home, End, PageUp or PageDown.
+    #[serde(default, rename = "key")]
+    key_name: Option<String>,
+    /// Tab id from browser.tabs.list. Omit to use the focused tab.
+    #[serde(default)]
+    tab: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct BrowserScroll {
+    /// X in CSS pixels.
+    x: f64,
+    /// Y in CSS pixels.
+    y: f64,
+    /// Wheel delta: positive is down.
+    delta_y: f64,
+    /// Tab id from browser.tabs.list. Omit to use the focused tab.
+    #[serde(default)]
+    tab: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct BrowserEvaluate {
     /// JavaScript to run in the page. Prefer snapshot/click/type; use this only
     /// for something those cannot express.
@@ -2206,6 +2247,45 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             Ok(Outcome::with_data(format!("typed; now on {}", v["url"].as_str().unwrap_or("the page")), v))
         },
     )?;
+    reg.define::<BrowserMouse>("browser.mouse", "Click a point in the page")
+    .description("Clicks at `x`/`y` in the visible page. The coordinates are CSS pixels in the screenshot browser.screenshot returns (it includes the page width and height). The person's click in devd's Browser pane uses this; an agent that knows a control's ref should prefer browser.click, which targets the element rather than a point.")
+    .tier(Tier::Exec)
+    .effect(Effect::Remote)
+    .agent_safe()
+    .dry_run()
+    .handlers(
+        |_, a| simple("browser.mouse", format!("click at ({}, {})", a.x, a.y)),
+        |ctx, a| {
+            let v = browser::mouse(ctx.paths.root(), a.tab.as_deref(), a.x, a.y, a.button.as_deref().unwrap_or("left"))?;
+            Ok(Outcome::with_data(format!("clicked; now on {}", v["url"].as_str().unwrap_or("the page")), v))
+        },
+    )?;
+    reg.define::<BrowserKey>("browser.key", "Type text or press a key in the page")
+    .description("Inserts `text` into whatever the page has focused, or presses one named `key` (Enter, Tab, Backspace, Escape, ArrowLeft/Up/Right/Down, Delete, Home, End, PageUp, PageDown). This is what the person's keyboard in devd's Browser pane uses. An agent should use browser.snapshot and browser.type to put text in a named field; use this for Enter after typing or for keys the field API does not cover.")
+    .tier(Tier::Exec)
+    .effect(Effect::Remote)
+    .agent_safe()
+    .dry_run()
+    .handlers(
+        |_, a| simple("browser.key", match a.text.as_deref() { Some(t) => format!("type {} character(s)", t.chars().count()), None => format!("press {}", a.key_name.as_deref().unwrap_or("a key")) }),
+        |ctx, a| {
+            let v = browser::key(ctx.paths.root(), a.tab.as_deref(), a.text.as_deref(), a.key_name.as_deref())?;
+            Ok(Outcome::with_data(format!("now on {}", v["url"].as_str().unwrap_or("the page")), v))
+        },
+    )?;
+    reg.define::<BrowserScroll>("browser.scroll", "Scroll the page")
+    .description("Scrolls the page at `x`/`y` by `delta_y` CSS pixels; positive is down. This is what the wheel does in devd's Browser pane. It does not change the element refs, so a snapshot stays usable.")
+    .tier(Tier::Exec)
+    .effect(Effect::Remote)
+    .agent_safe()
+    .dry_run()
+    .handlers(
+        |_, a| simple("browser.scroll", format!("scroll by {}", a.delta_y)),
+        |ctx, a| {
+            let v = browser::scroll(ctx.paths.root(), a.tab.as_deref(), a.x, a.y, a.delta_y)?;
+            Ok(Outcome::with_data(format!("scrolled; now on {}", v["url"].as_str().unwrap_or("the page")), v))
+        },
+    )?;
     reg.define::<BrowserShot>("browser.screenshot", "Screenshot the page")
     .description("Captures the visible page as a PNG and stores it in devd's uploads, so the person can see exactly what the agent sees. The returned `file` is the stored name; the Browser pane shows it. This is evidence, not a substitute for reading the page: take a snapshot too when you need to act.")
     .tier(Tier::Exec)
@@ -2347,7 +2427,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
 
     // ----------------------------------------------------------- providers
     reg.define::<NoArgs>("provider.presets", "Provider presets")
-    .description("Ready-made configurations, in the order they are most useful here: Anthropic, OpenAI, DeepSeek, Moonshot AI (Kimi), Zhipu AI (GLM), Google Gemini, xAI, Mistral, Groq, Together, Fireworks, OpenRouter, Ollama and LM Studio, plus any OpenAI-compatible endpoint. Each carries where to get a key, the API documentation, how its models are discovered (live list, Ollama's native list, or a maintained catalogue), the tool-calling the vendor documents, and whether it runs locally.")
+    .description("Ready-made configurations, in the order they are most useful here: Anthropic, OpenAI, DeepSeek, Moonshot AI (Kimi), Google Gemini, xAI, Mistral, Groq, Together, Fireworks, OpenRouter, Ollama and LM Studio, plus any OpenAI-compatible endpoint. Each carries where to get a key, the API documentation, how its models are discovered (live list or Ollama's native list), the tool-calling the vendor documents, and whether it runs locally.")
     .tier(Tier::Read)
     .effect(Effect::Read)
     .agent_safe()
@@ -2612,7 +2692,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
     )?;
 
     reg.define::<IdArgs>("provider.models", "Fetch a provider's models")
-    .description("Reads the provider's model list with its key and caches it. Anthropic uses GET /v1/models; OpenAI-compatible providers use GET /models; Ollama falls back to its native GET /api/tags; Zhipu uses devd's maintained list because its chat API has no listing endpoint. This is authoritative for the account: it shows exactly what this key may use.")
+    .description("Reads the provider's model list with its key and caches it. Anthropic uses GET /v1/models; OpenAI-compatible providers use GET /models; Gemini uses GET /models with x-goog-api-key; Ollama falls back to its native GET /api/tags. This is authoritative for the account: it shows exactly what this key may use.")
     .tier(Tier::Exec)
     .effect(Effect::Remote)
     .dry_run()

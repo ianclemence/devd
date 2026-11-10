@@ -7120,6 +7120,12 @@ th, .table th { font-size: var(--text-xs); font-weight: 600; text-transform: non
 .work-agent-tab { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 4px 9px; border-radius: 999px; border: 1px solid var(--line); background: none; color: var(--fg-mute); font: inherit; font-size: var(--text-2xs); cursor: pointer; }
 .work-agent-tab.is-active { background: var(--bg-hover); color: var(--color-base-content); border-color: var(--line-strong); }
 .work-agent-shot { display: block; width: 100%; height: auto; background: #fff; }
+.work-agent-screen { display: block; position: relative; outline: none; cursor: pointer; }
+.work-agent-screen:focus-visible { outline: 2px solid var(--color-primary); outline-offset: -2px; }
+.work-agent-screen .work-agent-shot { pointer-events: none; user-select: none; }
+.work-agent-favicon { width: 14px; height: 14px; border-radius: 3px; object-fit: contain; flex: none; }
+.work-agent-globe .icon { width: 14px; height: 14px; }
+.work-agent-title { min-width: 0; max-width: 42%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--color-base-content); }
 .work-agent-empty { padding: 24px; color: var(--fg-mute); font-size: var(--text-sm); text-align: center; }
 .work-agent-refs { padding: 8px 10px; border-top: 1px solid var(--line); font-size: var(--text-2xs); color: var(--fg-mute); display: flex; flex-wrap: wrap; gap: 5px 10px; }
 .work-agent-refs b { width: 100%; color: var(--fg-dim); font-weight: 500; }

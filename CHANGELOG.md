@@ -68,6 +68,41 @@ loader: no command, no launcher.
 - An unsigned release (no signed `SHA256SUMS.txt`) is not installed by the
   footer; it offers **Download x.y.z** and opens the release page instead.
 
+### The pane can be driven, not just watched
+
+- `browser.mouse` clicks at a point in the page (left or right button),
+  `browser.key` types text or presses a named key, and `browser.scroll` turns the
+  wheel. A link can be followed and a form submitted in the page the person is
+  watching, in the same tab the agent acts on.
+- Chromium runs with `--force-device-scale-factor=1`, so one CSS pixel is one
+  screenshot pixel and a click lands on the point the picture shows.
+- The tab strip carries the page's own title and icon, read from the document the
+  way a browser reads them (`link[rel~=icon]`, falling back to `/favicon.ico`),
+  and the address bar follows the real page rather than the last navigation.
+
+### Providers are put back on their vendor's own protocol
+
+- A provider stored against a known official host is read back on its vendor's
+  kind and base path. The live failure was a Gemini provider saved as
+  `openai-compatible` against the native `/v1beta` URL: it sent
+  `Authorization: Bearer` where Gemini wants `x-goog-api-key`, and the resulting
+  401 read as a bad key. A custom host — a proxy, a local server, Azure — is left
+  exactly as the person configured it.
+- Gemini is a first-class `gemini` kind and its models are listed with
+  `x-goog-api-key`.
+- Zhipu AI (GLM) is removed as a preset and from the window's brand marks.
+- The maintained model catalogue is gone. A preset now only says how it finds
+  models (`anthropic`, `openai`, `ollama`), so a hand-written list can no longer
+  disagree with what the vendor actually serves.
+
+### The Inbox stops asking about a pause that is over
+
+- Approving a plan, resuming a run, accepting a task and deciding the task that
+  paused a run now answer the Inbox message that asked for that action. It used
+  to stay open, so the same pause was listed again after the run had moved on.
+- Home shows a paused run as **Run blocked** with **Open the run**, instead of a
+  generic **Question** whose only action was *Answer*.
+
 ### Verification
 
 - The browser's URL fence, actionability table, result clipping and missing-
@@ -75,6 +110,11 @@ loader: no command, no launcher.
 - The updater has a test that the desktop and command assets are different files.
 - The footer has a UI contract test for the version, the check, the update
   action and the style.
+- The Browser surface has a contract test that the pane drives a real page —
+  click, key and wheel — and shows that page's own title and icon.
+- `clippy -D warnings` had been failing on every push since 6 November: the step
+  aborted at the first crate and hid everything behind it. Those findings are
+  cleared across the workspace, so CI can pass again.
 - Workspace tests pass.
 
 ---

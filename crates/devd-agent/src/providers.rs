@@ -24,22 +24,6 @@ pub const ANTHROPIC_VERSION: &str = "2023-06-01";
 /// The page the Anthropic model table is read from.
 pub const ANTHROPIC_MODELS_DOC: &str = "https://platform.claude.com/docs/en/about-claude/models/overview.md";
 
-/// A model in a preset's maintained catalogue, for providers without a listing
-/// endpoint or before the user has fetched the live list.
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-pub struct PresetModel {
-    /// The id to send to the API.
-    pub id: String,
-    /// Display name.
-    pub display: String,
-    /// Context window in tokens, when the vendor states one.
-    pub context_window: Option<i64>,
-    /// Maximum output tokens, when the vendor states one.
-    pub max_output: Option<i64>,
-    /// One line about the model.
-    pub note: String,
-}
-
 /// A ready-made provider configuration.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct Preset {
@@ -75,11 +59,8 @@ pub struct Preset {
     /// model chosen) or `none`. This is a description of the API, not a claim
     /// that a particular model has passed a probe; `provider.verify` does that.
     pub tools: String,
-    /// How `list_models` finds models: `anthropic`, `openai`, `ollama` or
-    /// `catalog` (the maintained list below).
+    /// How `list_models` finds models: `anthropic`, `openai` or `ollama`.
     pub discovery: String,
-    /// The maintained fallback list. Empty when the provider has a listing API.
-    pub catalog: Vec<PresetModel>,
 }
 
 impl Preset {
@@ -102,20 +83,6 @@ impl Preset {
     fn discovery(mut self, discovery: &str) -> Self {
         self.discovery = discovery.into();
         self
-    }
-    fn catalog(mut self, models: Vec<PresetModel>) -> Self {
-        self.catalog = models;
-        self
-    }
-}
-
-fn model(id: &str, display: &str, context: Option<i64>, max_output: Option<i64>, note: &str) -> PresetModel {
-    PresetModel {
-        id: id.into(),
-        display: display.into(),
-        context_window: context,
-        max_output,
-        note: note.into(),
     }
 }
 
@@ -152,7 +119,6 @@ fn base_preset(id: &str, kind: &str, label: &str, base: &str, key: Key, docs: Do
         suggested_model: None,
         tools: "model".into(),
         discovery: "openai".into(),
-        catalog: Vec::new(),
     }
 }
 
@@ -169,17 +135,7 @@ pub fn presets() -> Vec<Preset> {
             .order(3).tools("documented").suggested("deepseek-chat"),
         base_preset("moonshot", "openai-compatible", "Moonshot AI (Kimi)", "https://api.moonshot.ai/v1", Key { env: Some("MOONSHOT_API_KEY"), required: true, url: Some("https://platform.moonshot.ai/console/api-keys") }, Docs { page: "https://platform.moonshot.ai/docs/api/chat", models_from: "GET /models with the key", notes: "Kimi and Moonshot models over an OpenAI-compatible API with tool calling. The mainland endpoint is api.moonshot.cn." })
             .order(4).tools("documented").suggested("moonshot-v1-8k"),
-        base_preset("zhipu", "openai-compatible", "Zhipu AI (GLM)", "https://open.bigmodel.cn/api/paas/v4", Key { env: Some("ZHIPU_API_KEY"), required: true, url: Some("https://open.bigmodel.cn/usercenter/apikeys") }, Docs { page: "https://open.bigmodel.cn/dev/api", models_from: "maintained list: the chat API has no public model listing endpoint", notes: "GLM models over an OpenAI-compatible chat endpoint with tool calling. Model ids are checked against the maintained list, and a model you type yourself is accepted." })
-            .order(5).tools("documented").discovery("catalog")
-            .catalog(vec![
-                model("glm-4.6", "GLM-4.6", Some(200_000), Some(128_000), "Flagship reasoning and coding"),
-                model("glm-4.5", "GLM-4.5", Some(128_000), Some(96_000), "Previous flagship"),
-                model("glm-4.5-air", "GLM-4.5 Air", Some(128_000), Some(96_000), "Smaller, faster"),
-                model("glm-4-plus", "GLM-4 Plus", Some(128_000), Some(4_096), "General chat"),
-                model("glm-4-flash", "GLM-4 Flash", Some(128_000), Some(4_096), "Cheap, fast"),
-            ])
-            .suggested("glm-4.6"),
-        base_preset("gemini", "gemini", "Google Gemini", "https://generativelanguage.googleapis.com/v1beta", Key { env: Some("GEMINI_API_KEY"), required: true, url: Some("https://aistudio.google.com/apikey") }, Docs { page: "https://ai.google.dev/gemini-api/docs/openai", models_from: "GET /models with the key", notes: "The native Gemini API (generateContent): real token limits from the model list, thought signatures kept with function calls, and function schemas reduced to what Gemini accepts. An older provider saved against the OpenAI-compatibility URL keeps working unchanged." })
+        base_preset("gemini", "gemini", "Google Gemini", "https://generativelanguage.googleapis.com/v1beta", Key { env: Some("GEMINI_API_KEY"), required: true, url: Some("https://aistudio.google.com/apikey") }, Docs { page: "https://ai.google.dev/gemini-api/docs/text-generation", models_from: "GET /models with the key", notes: "The native Gemini API (generateContent): real token limits from the model list, thought signatures kept with function calls, and function schemas reduced to what Gemini accepts. An older provider saved against the OpenAI-compatibility URL keeps working unchanged." })
             .order(6).tools("documented").suggested("gemini-2.5-flash"),
         base_preset("xai", "openai-compatible", "xAI (Grok)", "https://api.x.ai/v1", Key { env: Some("XAI_API_KEY"), required: true, url: Some("https://console.x.ai/team/default/api-keys") }, Docs { page: "https://docs.x.ai/docs/api-reference", models_from: "GET /models with the key", notes: "Grok models over an OpenAI-compatible API with function calling." })
             .order(7).tools("documented"),
@@ -552,27 +508,6 @@ fn is_chat_model(id: &str) -> bool {
     !NOT_CHAT.iter().any(|needle| id.contains(needle))
 }
 
-/// The maintained list a preset carries, in catalogue form.
-fn catalogue_from_preset(p: &Provider, pre: &Preset, now: &str) -> Vec<CatalogueModel> {
-    pre.catalog
-        .iter()
-        .map(|m| CatalogueModel {
-            source: format!("provider:{}", p.id),
-            model_id: m.id.clone(),
-            display: m.display.clone(),
-            description: Some(format!("devd's maintained list: {}", m.note)),
-            context_window: m.context_window,
-            max_output: m.max_output,
-            input_price: None,
-            output_price: None,
-            retirement: None,
-            url: Some(pre.docs_url.clone()),
-            fetched_at: now.to_string(),
-            ..Default::default()
-        })
-        .collect()
-}
-
 fn price_of(m: &Value, keys: &[&str]) -> Option<f64> {
     keys.iter().find_map(|k| {
         let v = m.pointer(&format!("/pricing/{k}"))?;
@@ -736,25 +671,11 @@ fn parse_ollama(p: &Provider, v: &Value, url: &str, now: &str) -> Vec<CatalogueM
 /// List the models an account can use, from the provider's own API.
 ///
 /// Discovery is per provider, not one guess for all: Anthropic has its own
-/// shape, Ollama has two endpoints and may not implement either, Zhipu has no
-/// listing API at all, and everyone else speaks OpenAI's `/models`.
+/// shape, Ollama has two endpoints and may not implement either, and everyone
+/// else speaks OpenAI's `/models`.
 pub fn list_models(p: &Provider, key: Option<&str>) -> Result<Vec<CatalogueModel>> {
     let now = util::now();
-    let pre = preset(&p.id);
     let discovery = discovery_of(p);
-    if discovery == "catalog" {
-        let models = pre
-            .as_ref()
-            .map(|pre| catalogue_from_preset(p, pre, &now))
-            .unwrap_or_default();
-        if models.is_empty() {
-            return Err(DevdError::not_found(format!(
-                "{} has no model listing endpoint and devd has no maintained list for it; type a model id yourself.",
-                p.label
-            )));
-        }
-        return Ok(models);
-    }
 
     if discovery == "ollama" {
         let openai = list_models_openai(p, key, &now);
@@ -776,22 +697,7 @@ pub fn list_models(p: &Provider, key: Option<&str>) -> Result<Vec<CatalogueModel
         };
     }
 
-    match list_models_openai(p, key, &now) {
-        Ok(models) => Ok(models),
-        Err(e) => {
-            // A provider with no listing endpoint can still be configured from
-            // the maintained list, but an auth or rate-limit failure must not be
-            // hidden behind it.
-            let message = e.to_string().to_lowercase();
-            let no_endpoint = message.contains("404") || message.contains("405") || message.contains("501");
-            if no_endpoint {
-                if let Some(pre) = pre.as_ref().filter(|pre| !pre.catalog.is_empty()) {
-                    return Ok(catalogue_from_preset(p, pre, &now));
-                }
-            }
-            Err(e)
-        }
-    }
+    list_models_openai(p, key, &now)
 }
 
 fn list_models_openai(p: &Provider, key: Option<&str>, now: &str) -> Result<Vec<CatalogueModel>> {
@@ -894,8 +800,8 @@ pub fn fetch_docs_from(url: &str) -> Result<Vec<CatalogueModel>> {
 pub struct TestReport {
     /// The endpoint answered and the configuration can be used.
     pub ok: bool,
-    /// Whether the credentials were actually checked. A provider with a
-    /// maintained model list and no listing endpoint cannot check them here.
+    /// Whether the credentials were actually checked. Every shipped provider
+    /// has a listing endpoint, so a successful list is an authentication check.
     pub auth_checked: bool,
     /// How long it took.
     pub latency_ms: u128,
@@ -927,14 +833,12 @@ fn key_required(p: &Provider) -> bool {
 }
 
 /// Check that the base URL is reachable and the key is accepted by asking for
-/// the model list. A provider without a listing endpoint is reported as
-/// configured but not authenticated, rather than as a success.
+/// the model list. A keyless local server is checked by its own list too.
 pub fn test(p: &Provider, key: Option<&str>) -> TestReport {
     let started = Instant::now();
     let endpoint = models_url(p);
     let wire = wire_of(p).to_string();
     let hint = preset(&p.id).and_then(|pre| pre.key_url);
-    let discovery = discovery_of(p);
     if key.is_none() && key_required(p) {
         return TestReport {
             ok: false,
@@ -953,7 +857,7 @@ pub fn test(p: &Provider, key: Option<&str>) -> TestReport {
     }
     match list_models(p, key) {
         Ok(m) => {
-            let auth_checked = discovery != "catalog";
+            let auth_checked = true;
             TestReport {
                 ok: true,
                 auth_checked,
@@ -2102,7 +2006,7 @@ data: {\"type\":\"message_stop\"}
         let all = presets();
         assert!(all.len() >= 14, "{}", all.len());
         let ids: Vec<&str> = all.iter().map(|p| p.id.as_str()).collect();
-        assert_eq!(&ids[..6], &["anthropic", "openai", "deepseek", "moonshot", "zhipu", "gemini"]);
+        assert_eq!(&ids[..6], &["anthropic", "openai", "deepseek", "moonshot", "gemini", "xai"]);
         assert!(ids.contains(&"openrouter"));
         assert!(ids.contains(&"ollama"));
         assert!(ids.contains(&"custom"));
@@ -2131,14 +2035,27 @@ data: {\"type\":\"message_stop\"}
     }
 
     #[test]
-    fn providers_without_a_listing_endpoint_have_a_maintained_catalogue() {
-        let zhipu = preset("zhipu").unwrap();
-        assert_eq!(zhipu.discovery, "catalog");
-        assert!(!zhipu.catalog.is_empty());
-        // Reading a catalogue provider does not touch the network.
-        let models = list_models(&provider("zhipu"), None).unwrap();
-        assert!(models.iter().any(|m| m.model_id == "glm-4.6"));
-        assert!(models.iter().all(|m| m.source == "provider:zhipu" && m.context_window.is_some()));
+    fn every_preset_is_already_on_its_official_configuration() {
+        // If normalising a preset changes anything, the preset drifted from the
+        // vendor's documented base URL or wire format.
+        for pre in presets() {
+            let p = provider(&pre.id);
+            let fixed = p.clone().normalised();
+            assert_eq!(fixed.kind, p.kind, "{}", pre.id);
+            assert_eq!(fixed.base_url, p.base_url, "{}", pre.id);
+        }
+    }
+
+    #[test]
+    fn each_kind_uses_the_header_its_vendor_documents() {
+        let anthropic = auth_headers(&provider("anthropic"), Some("k"));
+        assert!(anthropic.iter().any(|(n, v)| n.as_str() == "x-api-key" && v == "k"));
+        assert!(anthropic.iter().any(|(n, _)| n.as_str() == "anthropic-version"));
+        let gemini = auth_headers(&provider("gemini"), Some("k"));
+        assert!(gemini.iter().any(|(n, v)| n.as_str() == "x-goog-api-key" && v == "k"));
+        assert!(!gemini.iter().any(|(n, _)| n.as_str() == "authorization"));
+        let openai = auth_headers(&provider("openai"), Some("k"));
+        assert!(openai.iter().any(|(n, v)| n.as_str() == "authorization" && v == "Bearer k"));
     }
 
     #[test]
@@ -2317,7 +2234,7 @@ data: {\"type\":\"message_stop\"}
     #[test]
     #[ignore]
     fn live_provider_round_trips() {
-        for id in ["anthropic", "openai", "deepseek", "moonshot", "zhipu", "gemini", "xai", "mistral", "groq", "openrouter"] {
+        for id in ["anthropic", "openai", "deepseek", "moonshot", "gemini", "xai", "mistral", "groq", "openrouter"] {
             let p = provider(id);
             let key = p.key_env.as_deref().and_then(|env| std::env::var(env).ok());
             if key.is_none() {
