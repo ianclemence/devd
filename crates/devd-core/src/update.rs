@@ -373,15 +373,22 @@ pub fn apply_desktop(release: &Release, options: &Options<'_>, pid: u32) -> Resu
     #[cfg(not(windows))]
     {
         // The desktop is only built for Windows today; the command-line updater
-        // is the one that runs on the other platforms.
-        return Err(DevdError::unsupported("the desktop app updates itself on Windows only"));
+        // is the one that runs on the other platforms. `pid` and `previous` are
+        // only used by the Windows branch, so they are named here as well.
+        let _ = (pid, previous);
+        Err(DevdError::unsupported(
+            "the desktop app updates itself on Windows only",
+        ))
     }
 
-    Ok(Applied {
-        version: release.version.clone(),
-        previous,
-        installed: target.clone(),
-    })
+    #[cfg(windows)]
+    {
+        Ok(Applied {
+            version: release.version.clone(),
+            previous,
+            installed: target.clone(),
+        })
+    }
 }
 
 /// Verify the release's signature and checksum, download the named asset and
