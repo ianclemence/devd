@@ -911,9 +911,18 @@ impl PidRecord {
 /// start token, and a holder is live only when both still match - the same
 /// reasoning as the daemon record in `daemon.rs`.
 fn parse_holder(text: &str) -> Option<(u32, Option<String>)> {
-    let mut parts = text.split_whitespace();
+    // The token is the rest of the line, not one word of it: on macOS it comes
+    // from `ps -o lstart=` and reads "Wed Nov 11 04:17:02 2026". Taking a
+    // single word would make every claim the current process writes fail to
+    // match itself, so devd would report its own jobs as unattended.
+    let mut parts = text.trim().splitn(2, char::is_whitespace);
     let pid = parts.next()?.parse::<u32>().ok()?;
-    Some((pid, parts.next().map(str::to_string)))
+    let rest = parts
+        .next()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    Some((pid, rest))
 }
 
 pub fn live_devd_holder(file: &std::path::Path) -> Option<u32> {
@@ -990,6 +999,24 @@ mod tests {
     fn the_start_field_is_counted_from_the_last_parenthesis() {
         let stat = "42 (my (odd) name) S 1 42 42 0 -1 4194560 100 0 0 0 1 2 0 0 20 0 1 0 987654 1000 200";
         assert_eq!(start_ticks_from_stat(stat).as_deref(), Some("987654"));
+    }
+
+    #[test]
+    fn a_holder_token_that_contains_spaces_is_read_back_as_it_was_written() {
+        // macOS records the start time the way `ps -o lstart=` prints it, spaces
+        // and all. Only the pid may be split off: the rest is the token, or the
+        // claim this process writes for itself would never match itself.
+        let (pid, token) = parse_holder("1234 Wed Nov 11 04:17:02 2026").unwrap();
+        assert_eq!(pid, 1234);
+        assert_eq!(token.as_deref(), Some("Wed Nov 11 04:17:02 2026"));
+
+        // A claim from before the token existed still reads, and carries none.
+        let (pid, token) = parse_holder("1234").unwrap();
+        assert_eq!(pid, 1234);
+        assert_eq!(token, None);
+
+        assert!(parse_holder("").is_none());
+        assert!(parse_holder("not a pid").is_none());
     }
 
     fn sleeper_program() -> (PathBuf, Vec<String>) {

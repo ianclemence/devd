@@ -191,7 +191,10 @@ fn state_dir(ctx: &Ctx) -> PathBuf {
 }
 
 fn safe_key(project: &str) -> String {
-    let name = Path::new(project)
+    // The key is the folder's name whichever separator the path used. `Path`
+    // only knows the current platform's, so a Windows path would name the
+    // state file after the whole string when it is read on Linux.
+    let name = Path::new(&project.replace('\\', "/"))
         .file_name()
         .map(|n| n.to_string_lossy().to_ascii_lowercase())
         .unwrap_or_default();
