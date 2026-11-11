@@ -403,6 +403,11 @@ async fn the_shell_delivers_the_token_and_identifies_the_instance() {
         .to_string();
     assert!(csp.contains("default-src 'none'"));
     assert!(csp.contains("connect-src 'self'"));
+    // The Browser pane draws the favicon of the page it is showing, and that
+    // icon comes from the page's own origin. Without these two sources the tab
+    // strip and the agent header show a blank icon for every real site.
+    assert!(csp.contains("img-src 'self' data: blob: http: https:"));
+    assert!(csp.contains("frame-src http: https:"));
 
     let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
         .await

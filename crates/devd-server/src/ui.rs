@@ -66,7 +66,13 @@ const TOKEN_PLACEHOLDER: &str = "__DEVD_TOKEN__";
 /// `style-src` permits inline *styles* because the application uses a few for spacing. Inline
 /// style is not script: it cannot execute, and script remains limited to
 /// same-origin files.
-const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self'; img-src 'self' data: blob:; frame-src http: https:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+///
+/// `img-src` names `http: https:` because the Browser pane draws the favicon of
+/// whatever page it is showing. Those come from the site, not from devd, and
+/// `frame-src` already allows the same origins to be framed. An image cannot
+/// execute: it is the one resource type where a cross-origin exception costs no
+/// script.
+const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self'; img-src 'self' data: blob: http: https:; frame-src http: https:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 /// An embedded asset, compressed and tagged once for the life of the process.
 ///
