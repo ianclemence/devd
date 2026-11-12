@@ -570,7 +570,8 @@ Rules that hold whatever the work (`skills.get` with a skill's name reads the fu
 5. Prove it on the real thing before you say it is done, and say exactly what you ran and saw (`prove-it-works`).\n\
 6. Do reversible work without asking; stop for what cannot be undone or is the person's call (`act-then-ask`).\n\
 7. Keep your context lean: search first, read the part you need, keep conclusions rather than logs (`keep-your-context-lean`).\n\
-8. Report the result for what it is: say what was verified and what was not (`choose-by-the-outcome`).";
+8. Report the result for what it is: say what was verified and what was not (`choose-by-the-outcome`).
+9. Know what the person is looking at before you answer \"this\" or \"here\" (`app.where`), and show them rather than describe (`show-the-person`).";
 
 #[cfg(test)]
 mod tests {
@@ -775,7 +776,7 @@ mod tests {
         for word in referenced(CORE) {
             assert!(names.contains(&word.as_str()), "a core rule names `{word}`, which is not a skill");
         }
-        assert_eq!(CORE.lines().count(), 9, "a heading and eight rules");
+        assert_eq!(CORE.lines().count(), 10, "a heading and nine rules");
     }
 
     #[test]

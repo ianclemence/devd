@@ -561,16 +561,16 @@ impl Engine {
 /// These are the edges the event's own name does not show.
 pub fn related(domain: &str) -> &'static [&'static str] {
     match domain {
-        "hosts" | "tls" | "dns" => &["site", "health"],
-        "site" => &["hosts", "tls", "health", "project"],
+        "hosts" | "tls" | "dns" => &["site", "health", "activity"],
+        "site" => &["hosts", "tls", "health", "project", "activity"],
         "service" | "toolchain" | "php" | "web" => &["services", "health", "site"],
         "runtime" => &["site", "health", "project"],
-        "chat" => &["team", "inbox", "approval", "todo"],
-        "team" => &["chat", "inbox", "approval", "runs"],
+        "chat" => &["team", "inbox", "approval", "todo", "activity"],
+        "team" => &["chat", "inbox", "approval", "runs", "activity"],
         "approval" => &["inbox", "chat", "team"],
         "inbox" => &["approval"],
-        "git" => &["project", "review"],
-        "project" | "stack" => &["git", "site", "todo"],
+        "git" => &["project", "review", "activity"],
+        "project" | "stack" => &["git", "site", "todo", "activity"],
         "provider" | "models" | "model" => &["provider", "models", "health"],
         "environment" | "settings" => &["health", "session"],
         _ => &[],

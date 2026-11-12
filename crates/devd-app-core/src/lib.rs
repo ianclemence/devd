@@ -16,6 +16,7 @@
 //! | [`nav`] | Where the window is, as text a link or an agent can name |
 //! | [`order`] | The arithmetic of drag and drop |
 //! | [`toolname`] | What an agent did, in a person's words instead of a capability id |
+//! | [`spell`] | Finding and correcting slips in what the person types |
 //! | [`status`] | What a state means: its colour, its word, whether it needs the person |
 //!
 //! The split is the same rule the rest of devd follows: one place decides, and
@@ -29,6 +30,7 @@ pub mod motion;
 pub mod nav;
 pub mod order;
 pub mod presence;
+pub mod spell;
 pub mod status;
 pub mod sync;
 pub mod toolname;

@@ -152,7 +152,11 @@ pub struct Shell {
 impl Shell {
     /// The frame, opened on Home.
     pub fn new(start: Route, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let composer = cx.new(|cx| TextInput::new("Ask devd, or give it work…", cx));
+        // The words this window spell-checks against: its own, any fuller dictionary
+        // on this machine, and the person's, one word per line, in devd's data folder.
+        let personal = std::env::var_os("DEVD_HOME").map(std::path::PathBuf::from).unwrap_or_default().join("dictionary.txt");
+        let dictionary = std::sync::Arc::new(devd_app_core::spell::Dictionary::for_this_machine(&personal));
+        let composer = cx.new(|cx| TextInput::new("Ask devd, or give it work…", cx).multiline(8).spelling(dictionary));
         let watch = cx.subscribe_in(&composer, window, |this, _, event: &InputEvent, window, cx| {
             if *event == InputEvent::Submitted {
                 this.send(window, cx);
@@ -186,6 +190,8 @@ impl Shell {
         let route = self.history.current().clone();
         let place = Place { screen: Some(route.path()), thread: matches!(route, Route::Assistant(_)).then(|| route.selection().map(str::to_string)).flatten(), ..Place::default() };
         cx.global_mut::<Devd>().room.seen("you", Presence { who: Who::You, place, doing: Doing::Viewing }, std::time::Instant::now());
+        // So an agent asking "what is the person looking at?" gets an answer.
+        devd(cx).sync.mutate(Mutation::new("app.report", json!({ "route": route.path() })));
     }
 
     /// Run a command by id. The rail, the keys, the menu and an agent all end here.
@@ -772,6 +778,11 @@ impl Shell {
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // An agent asked to show the person something.
+        if let Some(route) = cx.global_mut::<Devd>().pending_go.take().and_then(|r| Route::parse(&r)) {
+            self.history.go(route);
+            self.present(cx);
+        }
         let t = theme(cx).clone();
         let screen = match self.history.current().clone() {
             Route::Home => screens::home::render(self, window, cx),
@@ -783,7 +794,8 @@ impl Render for Shell {
             Route::Server => screens::lists::server(self, cx),
             Route::Intelligence => screens::intelligence::render(self, cx),
             Route::Team => screens::lists::team(self, cx),
-            Route::Activity | Route::Settings => screens::lists::later(self, cx),
+            Route::Activity => screens::activity::activity(self, cx),
+            Route::Settings => screens::activity::settings(self, cx),
         };
         let go = |n: usize| move |this: &mut Self, window: &mut Window, cx: &mut Context<Self>| {
             let id = format!("go.{}", Route::primary()[n].segment());

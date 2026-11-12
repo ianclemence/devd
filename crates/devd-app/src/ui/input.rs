@@ -1,4 +1,4 @@
-//! A single-line text field.
+//! A text field: one line, or several for a message.
 //!
 //! gpui draws text and delivers keystrokes, but ships no text field: an
 //! application brings its own. This one is adapted from the `input` example in
@@ -8,9 +8,14 @@
 //!
 //! What was added for devd: colours from the theme, events (changed, submitted,
 //! cancelled) so a parent can react without polling, word-wise movement and
-//! deletion, and a constructor.
+//! deletion, and a constructor, then, for the message box: several lines (Shift+Enter
+//! starts one; Enter sends), and spelling slips underlined, with Ctrl+. to correct one.
 
+use std::cell::RefCell;
 use std::ops::Range;
+use std::sync::Arc;
+
+use devd_app_core::spell::Dictionary;
 
 use gpui::{
     actions, div, fill, point, prelude::*, px, relative, size, App, Bounds, ClipboardItem, Context, CursorStyle, ElementId,
@@ -43,6 +48,10 @@ actions!(
         DeleteWordLeft,
         Submit,
         Cancel,
+        Newline,
+        Up,
+        Down,
+        FixSpelling,
     ]
 );
 
@@ -82,12 +91,17 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-backspace", DeleteWordLeft, context),
         KeyBinding::new("alt-backspace", DeleteWordLeft, context),
         KeyBinding::new("enter", Submit, context),
+        KeyBinding::new("shift-enter", Newline, context),
+        KeyBinding::new("alt-enter", Newline, context),
+        KeyBinding::new("up", Up, context),
+        KeyBinding::new("down", Down, context),
+        KeyBinding::new("secondary-.", FixSpelling, context),
         KeyBinding::new("escape", Cancel, context),
         KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, context),
     ]);
 }
 
-/// A single-line text field.
+/// A text field.
 pub struct TextInput {
     focus_handle: FocusHandle,
     content: SharedString,
@@ -95,8 +109,15 @@ pub struct TextInput {
     selected_range: Range<usize>,
     selection_reversed: bool,
     marked_range: Option<Range<usize>>,
-    last_layout: Option<ShapedLine>,
+    /// The lines as last drawn, each with where it starts in the text.
+    lines: Vec<(usize, ShapedLine)>,
     last_bounds: Option<Bounds<Pixels>>,
+    /// The most lines shown at once, when Shift+Enter may start another.
+    multiline: Option<usize>,
+    /// What to check spelling against, when it is checked.
+    dictionary: Option<Arc<Dictionary>>,
+    /// The text last checked and the slips found in it.
+    checked: RefCell<Option<(SharedString, Vec<Range<usize>>)>>,
     is_selecting: bool,
     secret: bool,
 }
@@ -111,8 +132,11 @@ impl TextInput {
             selected_range: 0..0,
             selection_reversed: false,
             marked_range: None,
-            last_layout: None,
+            lines: Vec::new(),
             last_bounds: None,
+            multiline: None,
+            dictionary: None,
+            checked: RefCell::new(None),
             is_selecting: false,
             secret: false,
         }
@@ -123,6 +147,28 @@ impl TextInput {
     pub fn secret(mut self) -> Self {
         self.secret = true;
         self
+    }
+
+    /// Allow several lines, showing up to `most` before it scrolls.
+    pub fn multiline(mut self, most: usize) -> Self {
+        self.multiline = Some(most.max(2));
+        self
+    }
+
+    /// Underline words that look misspelt, and let Ctrl+. correct one.
+    pub fn spelling(mut self, dictionary: Arc<Dictionary>) -> Self {
+        self.dictionary = Some(dictionary);
+        self
+    }
+
+    /// The slips in the text now, by byte range. Checked once per change.
+    fn slips(&self) -> Vec<Range<usize>> {
+        let Some(dictionary) = &self.dictionary else { return Vec::new() };
+        let mut checked = self.checked.borrow_mut();
+        if checked.as_ref().is_none_or(|(text, _)| *text != self.content) {
+            *checked = Some((self.content.clone(), dictionary.check(&self.content)));
+        }
+        checked.as_ref().map(|(_, slips)| slips.clone()).unwrap_or_default()
     }
 
     /// What has been typed.
@@ -152,6 +198,47 @@ impl TextInput {
 
     fn cancel(&mut self, _: &Cancel, _: &mut Window, cx: &mut Context<Self>) {
         cx.emit(InputEvent::Cancelled);
+    }
+
+    fn newline(&mut self, _: &Newline, window: &mut Window, cx: &mut Context<Self>) {
+        if self.multiline.is_some() {
+            self.replace_text_in_range(None, "\n", window, cx);
+        }
+    }
+
+    /// Move to the same place on the line above or below, or to the ends of the
+    /// text when there is no such line.
+    fn vertical(&mut self, up: bool, cx: &mut Context<Self>) {
+        let cursor = self.cursor_offset();
+        let at = self.lines.iter().rposition(|(start, _)| *start <= cursor);
+        let Some(at) = at else { return self.move_to(if up { 0 } else { self.content.len() }, cx) };
+        let x = self.lines[at].1.x_for_index(cursor - self.lines[at].0);
+        let target = if up { at.checked_sub(1) } else { Some(at + 1).filter(|n| *n < self.lines.len()) };
+        match target {
+            Some(n) => {
+                let (start, line) = &self.lines[n];
+                let offset = start + line.closest_index_for_x(x);
+                self.move_to(offset, cx);
+            }
+            None => self.move_to(if up { 0 } else { self.content.len() }, cx),
+        }
+    }
+
+    fn up(&mut self, _: &Up, _: &mut Window, cx: &mut Context<Self>) {
+        self.vertical(true, cx);
+    }
+
+    fn down(&mut self, _: &Down, _: &mut Window, cx: &mut Context<Self>) {
+        self.vertical(false, cx);
+    }
+
+    /// Correct the misspelt word at the cursor with the nearest known word.
+    fn fix_spelling(&mut self, _: &FixSpelling, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(dictionary), cursor) = (self.dictionary.clone(), self.cursor_offset()) else { return };
+        let Some(slip) = self.slips().into_iter().find(|r| r.start <= cursor && cursor <= r.end) else { return };
+        let Some(better) = dictionary.suggest(&self.content[slip.clone()], 1).into_iter().next() else { return };
+        let utf16 = self.range_to_utf16(&slip);
+        self.replace_text_in_range(Some(utf16), &better, window, cx);
     }
 
     fn word_left(&mut self, _: &WordLeft, _: &mut Window, cx: &mut Context<Self>) {
@@ -270,7 +357,8 @@ impl TextInput {
 
     fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            self.replace_text_in_range(None, &text.replace("\n", " "), window, cx);
+            let text = if self.multiline.is_some() { text.replace("\r\n", "\n") } else { text.replace(['\r', '\n'], " ") };
+            self.replace_text_in_range(None, &text, window, cx);
         }
     }
 
@@ -308,17 +396,17 @@ impl TextInput {
             return 0;
         }
 
-        let (Some(bounds), Some(line)) = (self.last_bounds.as_ref(), self.last_layout.as_ref())
-        else {
-            return 0;
-        };
-        if position.y < bounds.top() {
+        let Some(bounds) = self.last_bounds.as_ref() else { return 0 };
+        if self.lines.is_empty() || position.y < bounds.top() {
             return 0;
         }
         if position.y > bounds.bottom() {
             return self.content.len();
         }
-        line.closest_index_for_x(position.x - bounds.left())
+        let height = (bounds.bottom() - bounds.top()) / self.lines.len() as f32;
+        let at = (((position.y - bounds.top()) / height) as usize).min(self.lines.len() - 1);
+        let (start, line) = &self.lines[at];
+        start + line.closest_index_for_x(position.x - bounds.left())
     }
 
     fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
@@ -487,17 +575,14 @@ impl EntityInputHandler for TextInput {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
-        let last_layout = self.last_layout.as_ref()?;
         let range = self.range_from_utf16(&range_utf16);
+        let at = self.lines.iter().rposition(|(start, _)| *start <= range.start)?;
+        let (start, line) = &self.lines[at];
+        let height = (bounds.bottom() - bounds.top()) / self.lines.len() as f32;
+        let top = bounds.top() + height * at as f32;
         Some(Bounds::from_corners(
-            point(
-                bounds.left() + last_layout.x_for_index(range.start),
-                bounds.top(),
-            ),
-            point(
-                bounds.left() + last_layout.x_for_index(range.end),
-                bounds.bottom(),
-            ),
+            point(bounds.left() + line.x_for_index(range.start - start), top),
+            point(bounds.left() + line.x_for_index(range.end.max(range.start).saturating_sub(*start).min(line.len())), top + height),
         ))
     }
 
@@ -507,11 +592,15 @@ impl EntityInputHandler for TextInput {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
-        let line_point = self.last_bounds?.localize(&point)?;
-        let last_layout = self.last_layout.as_ref()?;
-
-        debug_assert_eq!(last_layout.text.len(), self.content.len());
-        let utf8_index = last_layout.index_for_x(point.x - line_point.x)?;
+        let bounds = self.last_bounds?;
+        let line_point = bounds.localize(&point)?;
+        if self.lines.is_empty() {
+            return None;
+        }
+        let height = (bounds.bottom() - bounds.top()) / self.lines.len() as f32;
+        let at = ((line_point.y / height) as usize).min(self.lines.len() - 1);
+        let (start, line) = &self.lines[at];
+        let utf8_index = start + line.index_for_x(point.x - bounds.left())?;
         Some(self.offset_to_utf16(utf8_index))
     }
 }
@@ -521,9 +610,31 @@ struct TextElement {
 }
 
 struct PrepaintState {
-    line: Option<ShapedLine>,
+    lines: Vec<(usize, ShapedLine)>,
     cursor: Option<PaintQuad>,
-    selection: Option<PaintQuad>,
+    selection: Vec<PaintQuad>,
+}
+
+/// The runs for one line: the base run, underlined wherever `marks` say.
+fn line_runs(base: &TextRun, line: Range<usize>, marks: &[(Range<usize>, UnderlineStyle)]) -> Vec<TextRun> {
+    let mut edges = vec![line.start, line.end];
+    for (range, _) in marks {
+        for edge in [range.start, range.end] {
+            if edge > line.start && edge < line.end {
+                edges.push(edge);
+            }
+        }
+    }
+    edges.sort_unstable();
+    edges.dedup();
+    edges
+        .windows(2)
+        .map(|pair| {
+            let underline = marks.iter().find(|(range, _)| range.start <= pair[0] && pair[1] <= range.end).map(|(_, style)| *style);
+            TextRun { len: pair[1] - pair[0], underline, ..base.clone() }
+        })
+        .filter(|run| run.len > 0)
+        .collect()
 }
 
 impl IntoElement for TextElement {
@@ -555,7 +666,13 @@ impl Element for TextElement {
     ) -> (LayoutId, Self::RequestLayoutState) {
         let mut style = Style::default();
         style.size.width = relative(1.).into();
-        style.size.height = window.line_height().into();
+        // As many lines as the text has, up to the most this field shows.
+        let input = self.input.read(cx);
+        let shown = match input.multiline {
+            Some(most) => input.content.split('\n').count().clamp(1, most),
+            None => 1,
+        };
+        style.size.height = (window.line_height() * shown as f32).into();
         (window.request_layout(style, [], cx), ())
     }
 
@@ -592,73 +709,57 @@ impl Element for TextElement {
             underline: None,
             strikethrough: None,
         };
-        let runs = if let Some(marked_range) = input.marked_range.as_ref() {
-            vec![
-                TextRun {
-                    len: marked_range.start,
-                    ..run.clone()
-                },
-                TextRun {
-                    len: marked_range.end - marked_range.start,
-                    underline: Some(UnderlineStyle {
-                        color: Some(run.color),
-                        thickness: px(1.0),
-                        wavy: false,
-                    }),
-                    ..run.clone()
-                },
-                TextRun {
-                    len: display_text.len() - marked_range.end,
-                    ..run
-                },
-            ]
-            .into_iter()
-            .filter(|run| run.len > 0)
-            .collect()
-        } else {
-            vec![run]
-        };
+        // What is underlined: the text being composed, and probable slips.
+        let mut marks: Vec<(Range<usize>, UnderlineStyle)> = Vec::new();
+        if let Some(marked) = input.marked_range.as_ref() {
+            marks.push((marked.clone(), UnderlineStyle { color: Some(run.color), thickness: px(1.0), wavy: false }));
+        }
+        if !input.secret && !input.content.is_empty() {
+            let squiggle = UnderlineStyle { color: Some(theme(cx).danger), thickness: px(1.0), wavy: true };
+            marks.extend(input.slips().into_iter().map(|range| (range, squiggle)));
+        }
 
         let font_size = style.font_size.to_pixels(window.rem_size());
-        let line = window
-            .text_system()
-            .shape_line(display_text, font_size, &runs, None);
+        let line_height = window.line_height();
+        let mut lines: Vec<(usize, ShapedLine)> = Vec::new();
+        let mut start = 0usize;
+        for text in display_text.split('\n') {
+            let end = start + text.len();
+            let runs = if text.is_empty() { Vec::new() } else { line_runs(&run, start..end, &marks) };
+            // `line_runs` gives offsets in the whole text; a line's runs only need their lengths.
+            let shaped = window.text_system().shape_line(SharedString::from(text.to_string()), font_size, &runs, None);
+            lines.push((start, shaped));
+            start = end + 1;
+        }
 
-        let cursor_pos = line.x_for_index(cursor);
+        // The line a byte offset is on: a line owns the offset at its end, where the cursor sits before a newline.
+        let line_of = |offset: usize| -> usize { lines.iter().position(|(s, l)| offset >= *s && offset <= *s + l.len()).unwrap_or(lines.len() - 1) };
+        let at = line_of(cursor);
+        let x_of = |index: usize, lines: &[(usize, ShapedLine)], at: usize| lines[at].1.x_for_index(index.saturating_sub(lines[at].0).min(lines[at].1.len()));
         let (selection, cursor) = if selected_range.is_empty() {
+            let top = bounds.top() + line_height * at as f32;
             (
-                None,
-                Some(fill(
-                    Bounds::new(
-                        point(bounds.left() + cursor_pos, bounds.top()),
-                        size(px(2.), bounds.bottom() - bounds.top()),
-                    ),
-                    theme(cx).accent,
-                )),
+                Vec::new(),
+                Some(fill(Bounds::new(point(bounds.left() + x_of(cursor, &lines, at), top), size(px(2.), line_height)), theme(cx).accent)),
             )
         } else {
-            (
-                Some(fill(
-                    Bounds::from_corners(
-                        point(
-                            bounds.left() + line.x_for_index(selected_range.start),
-                            bounds.top(),
-                        ),
-                        point(
-                            bounds.left() + line.x_for_index(selected_range.end),
-                            bounds.bottom(),
-                        ),
-                    ),
-                    theme(cx).selection,
-                )),
-                None,
-            )
+            let (first, last) = (line_of(selected_range.start), line_of(selected_range.end));
+            let quads = (first..=last)
+                .map(|n| {
+                    let (line_start, line) = &lines[n];
+                    let from = if n == first { selected_range.start - line_start } else { 0 };
+                    // A selection that crosses a line break shows the break as a little extra width.
+                    let (to, extra) = if n == last { (selected_range.end - line_start, px(0.)) } else { (line.len(), px(6.)) };
+                    let top = bounds.top() + line_height * n as f32;
+                    fill(
+                        Bounds::from_corners(point(bounds.left() + line.x_for_index(from), top), point(bounds.left() + line.x_for_index(to) + extra, top + line_height)),
+                        theme(cx).selection,
+                    )
+                })
+                .collect();
+            (quads, None)
         };
-        PrepaintState {
-            line: Some(line),
-            cursor,
-            selection,
-        }
+        PrepaintState { lines, cursor, selection }
     }
 
     fn paint(
@@ -677,12 +778,15 @@ impl Element for TextElement {
             ElementInputHandler::new(bounds, self.input.clone()),
             cx,
         );
-        if let Some(selection) = prepaint.selection.take() {
-            window.paint_quad(selection)
+        for quad in prepaint.selection.drain(..) {
+            window.paint_quad(quad)
         }
-        let line = prepaint.line.take().unwrap();
-        line.paint(bounds.origin, window.line_height(), window, cx)
-            .unwrap();
+        let line_height = window.line_height();
+        let lines = std::mem::take(&mut prepaint.lines);
+        for (n, (_, line)) in lines.iter().enumerate() {
+            let origin = point(bounds.origin.x, bounds.origin.y + line_height * n as f32);
+            line.paint(origin, line_height, window, cx).unwrap();
+        }
 
         if focus_handle.is_focused(window)
             && let Some(cursor) = prepaint.cursor.take()
@@ -691,7 +795,7 @@ impl Element for TextElement {
         }
 
         self.input.update(cx, |input, _cx| {
-            input.last_layout = Some(line);
+            input.lines = lines;
             input.last_bounds = Some(bounds);
         });
     }
@@ -720,6 +824,10 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::delete_word_left))
             .on_action(cx.listener(Self::submit))
             .on_action(cx.listener(Self::cancel))
+            .on_action(cx.listener(Self::newline))
+            .on_action(cx.listener(Self::up))
+            .on_action(cx.listener(Self::down))
+            .on_action(cx.listener(Self::fix_spelling))
             .on_action(cx.listener(Self::show_character_palette))
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::cut))

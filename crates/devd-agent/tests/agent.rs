@@ -2311,3 +2311,42 @@ fn a_conversation_recorded_without_a_cost_is_priced_from_the_catalogue_with_its_
     let flash = models.iter().find(|m| m["model_id"] == "deepseek-flash").expect("from the catalogue");
     assert!(flash["input_price"].as_f64().is_some() && flash["output_price"].as_f64().is_some(), "{flash}");
 }
+
+#[test]
+fn an_agent_can_see_and_steer_the_window_but_cannot_pretend_to_be_it() {
+    let e = env();
+    let mut rx = e.events.subscribe();
+    // No window has said anything yet.
+    let none = call(&e, &e.agent, "app.where", json!({}), Approval::None).unwrap();
+    assert_eq!(none["open"], false);
+    // A place that is not a screen is refused, with the list of screens.
+    let bad = call(&e, &e.agent, "app.go", json!({ "route": "../../etc/passwd" }), Approval::None).unwrap_err().to_string();
+    assert!(bad.contains("not a place in the window") && bad.contains("intelligence"), "{bad}");
+    // The window reports; only a person's surface may.
+    assert!(call(&e, &e.agent, "app.report", json!({ "route": "settings" }), Approval::None).is_err(), "an agent cannot say where the person is");
+    call(&e, &e.human, "app.report", json!({ "route": "runs/abc" }), Approval::None).unwrap();
+    let seen = call(&e, &e.agent, "app.where", json!({}), Approval::None).unwrap();
+    assert_eq!((seen["open"].as_bool(), seen["route"].as_str()), (Some(true), Some("runs/abc")));
+    // Steering the window is an event the window follows.
+    let went = call(&e, &e.agent, "app.go", json!({ "route": "/assistant/t1/" }), Approval::None).unwrap();
+    assert_eq!(went["route"], "assistant/t1");
+    let mut heard = None;
+    while let Ok(event) = rx.try_recv() {
+        if event.kind == "app.go" {
+            heard = Some(event.data["route"].as_str().unwrap_or_default().to_string());
+        }
+    }
+    assert_eq!(heard.as_deref(), Some("assistant/t1"));
+}
+
+#[test]
+fn the_activity_record_can_be_read_and_filtered_by_an_agent() {
+    let e = env();
+    call(&e, &e.human, "app.report", json!({ "route": "home" }), Approval::None).unwrap();
+    let all = call(&e, &e.agent, "activity.list", json!({ "limit": 50 }), Approval::None).unwrap();
+    assert!(all["items"].as_array().is_some_and(|i| i.iter().any(|r| r["capability"] == "app.report")), "{all}");
+    let agents = call(&e, &e.agent, "activity.list", json!({ "actor": "agent" }), Approval::None).unwrap();
+    assert!(agents["items"].as_array().unwrap().iter().all(|r| r["actor"].as_str().unwrap().starts_with("agent:")));
+    let failed = call(&e, &e.agent, "activity.list", json!({ "failed_only": true }), Approval::None).unwrap();
+    assert!(failed["items"].as_array().unwrap().iter().all(|r| r["ok"] == false));
+}

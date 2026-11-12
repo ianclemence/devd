@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+# The native window (devd-app) is built in its own job below: it needs a GPU
+# toolkit's system libraries on Linux and a shader compiler on Windows and macOS,
+# none of which the rest of the workspace should wait for.
+#
 # Builds and tests on every platform devd targets. A warning fails the build (the
 # workspace lints in Cargo.toml deny unused code), so nothing here needs a flag.
 # RUSTFLAGS is deliberately not set: it would replace the linker settings in
@@ -35,16 +39,64 @@ jobs:
           rustc -vV
       - uses: Swatinem/rust-cache@v2
       - name: Build
-        run: cargo build --workspace --exclude devd-desktop --all-targets
+        run: cargo build --workspace --exclude devd-desktop --exclude devd-app --all-targets
       - name: Clippy
-        run: cargo clippy --workspace --exclude devd-desktop --all-targets -- -D warnings
+        run: cargo clippy --workspace --exclude devd-desktop --exclude devd-app --all-targets -- -D warnings
       - name: Test
         # Report every failing test on every crate, not just the first one to
         # fail: a broken Windows-only test in one crate used to hide a broken
         # Unix-only test in another.
-        run: cargo test --workspace --exclude devd-desktop --no-fail-fast
+        run: cargo test --workspace --exclude devd-desktop --exclude devd-app --no-fail-fast
       # The desktop shell links each platform's web view, so it is built only
       # where the project ships it.
       - name: Build the desktop shell
         if: runner.os == 'Windows'
         run: cargo build -p devd-desktop
+
+  # The native window. `continue-on-error` is deliberate until this job has
+  # passed once on all three systems: it was written on Windows, and Linux and
+  # macOS have not run it. A red mark here is information, not a blocked merge;
+  # remove the line once it is green.
+  native:
+    name: native window (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            toolchain: stable-x86_64-pc-windows-gnu
+          - os: ubuntu-latest
+            toolchain: stable
+          - os: macos-latest
+            toolchain: stable
+    steps:
+      - uses: actions/checkout@v4
+      - name: System libraries (Linux)
+        if: runner.os == 'Linux'
+        # What gpui links against: a font service, both display protocols, the
+        # keyboard layer and Vulkan.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libxcb1-dev libx11-xcb-dev \
+            libfontconfig-dev libvulkan-dev libasound2-dev libssl-dev pkg-config
+      - name: Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install "${{ matrix.toolchain }}" --profile minimal --component clippy
+          rustup default "${{ matrix.toolchain }}"
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build -p devd-app -p devd-app-core --all-targets
+      - name: Clippy
+        run: cargo clippy -p devd-app -p devd-app-core --all-targets -- -D warnings
+      - name: Test
+        run: cargo test -p devd-app -p devd-app-core --no-fail-fast
+      # A release build compiles the shaders ahead of time, which needs fxc.exe
+      # from the Windows SDK (debug builds compile them when the window starts).
+      # GitHub's Windows runners have the SDK; a machine without it cannot make
+      # this build, and says so in gpui's own error.
+      - name: Release build
+        run: cargo build -p devd-app --release

@@ -83,6 +83,7 @@ Paths are absolute, or relative to the working directory named under Context.
 - todo_create {"project":"<dir>","title":"..."} ; todo_complete {"id":"...","expected_revision":N}
 - devd_invoke {"id":"team.overview","args":{}} ; team.get {"run":"<id>"} ; team.assign {"member":"<role>","instructions":"...","project":"<dir>"}
 - devd_invoke {"id":"browser.open","args":{"url":"https://site.test"}}, then browser.snapshot before any browser.click or browser.type: refs come from the latest snapshot
+- devd_invoke {"id":"app.where","args":{}} says which screen the person has open (use it to answer "this" or "here"); app.go {"route":"runs/<id>"} shows them something; activity.list {"limit":50} is who did what
 Any capability not listed here: devd_capabilities to find it, devd_describe for its schema, then devd_invoke.
 "#;
 
@@ -1263,6 +1264,8 @@ impl Hub {
                 .first()
                 .map(|c| c.2.clone())
                 .unwrap_or_else(|| thread.model.clone().unwrap_or_default());
+            // What this family of model, specifically, tends to get wrong.
+            let system = format!("{system}{}", crate::modelhints::addendum(&model_hint));
             let budget = ContextBudget::for_model(
                 &model_hint,
                 catalogue_context_window(&self.ctx.store, &model_hint),

@@ -58,6 +58,7 @@ const KINDS: &[&str] = &[
     "settings.*",
     "health.*",
     "reconcile",
+    "app.*",
 ];
 
 fn allowed(kind: &str) -> bool {

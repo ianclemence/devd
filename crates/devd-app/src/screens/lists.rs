@@ -564,22 +564,3 @@ pub fn team(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
     }
     ui::page("team", 980.0, column).into_any_element()
 }
-
-/// A screen whose native version is not built yet. It says so and offers the
-/// way to do the same thing today, instead of an empty page.
-pub fn later(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
-    let route = shell.history.current().clone();
-    let base = devd(cx).conn.base.clone();
-    let column = div()
-        .flex()
-        .flex_col()
-        .items_center()
-        .child(ui::empty(
-            ui::screen_icon(&route),
-            format!("{} is not in the native window yet", route.title()),
-            "It works in devd's browser interface, which this window's devd is serving right now.",
-            cx,
-        ))
-        .child(Button::new("later.open", "Open it in the browser").icon("external").on_click(move |_, _, cx| cx.open_url(&base)));
-    ui::page("later", 720.0, column).into_any_element()
-}

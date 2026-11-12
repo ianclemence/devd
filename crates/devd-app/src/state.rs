@@ -35,6 +35,8 @@ pub struct Devd {
     pub online: bool,
     /// A conversation devd just created for a first message, to be opened.
     pub opened_thread: Option<String>,
+    /// A place an agent asked the window to show, waiting for the window to go there.
+    pub pending_go: Option<String>,
     /// Where the slow pulse of every "happening now" mark is, 0 to 3.
     pub beat: u8,
     /// Whether such a mark was drawn since the last beat. Only then is the
@@ -101,7 +103,7 @@ pub fn start(conn: Arc<Connection>, cx: &mut App) {
 
     let mut room = Room::new();
     room.seen("you", Presence { who: Who::You, place: Place::default(), doing: Doing::Viewing }, Instant::now());
-    cx.set_global(Devd { conn, sync, room, writing: HashMap::new(), toasts: Vec::new(), decisions: Vec::new(), online: false, opened_thread: None, beat: 0, live_seen: std::cell::Cell::new(false) });
+    cx.set_global(Devd { conn, sync, room, writing: HashMap::new(), toasts: Vec::new(), decisions: Vec::new(), online: false, opened_thread: None, pending_go: None, beat: 0, live_seen: std::cell::Cell::new(false) });
 
     // One task on the window's thread turns signals into redraws. A burst of
     // signals becomes one redraw: everything waiting is taken before drawing.
@@ -200,6 +202,7 @@ fn apply(signal: Signal, cx: &mut App) {
             let data = &payload["data"];
             let thread = data["thread"].as_str().unwrap_or_default().to_string();
             match kind.as_str() {
+                "app.go" => state.pending_go = data["route"].as_str().map(str::to_string),
                 "chat.delta" if !thread.is_empty() => {
                     let text = state.writing.entry(thread.clone()).or_default();
                     if data["start"] == json!(true) {
@@ -314,6 +317,16 @@ pub mod q {
     /// The providers devd knows how to set up.
     pub fn presets() -> QueryKey {
         QueryKey::bare("provider.presets")
+    }
+
+    /// What was done on this machine, and by whom.
+    pub fn activity() -> QueryKey {
+        QueryKey::new("activity.list", json!({ "limit": 150 }))
+    }
+
+    /// The privacy and spend rules agents run under.
+    pub fn policy() -> QueryKey {
+        QueryKey::bare("policy.get")
     }
 
     /// The team's roles: what each is for and what it must prove.

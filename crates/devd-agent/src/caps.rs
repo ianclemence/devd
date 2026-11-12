@@ -710,6 +710,45 @@ struct ProviderModelArgs {
     model: String,
 }
 
+/// Where to take the person's window.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct AppGo {
+    /// A place in the window: `home`, `inbox`, `assistant`, `assistant/<conversation id>`, `runs`, `runs/<run id>`, `team`, `intelligence`, `projects`, `sites`, `server`, `activity` or `settings`.
+    route: String,
+}
+
+/// What the window is showing, as the window itself reports it.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct AppReport {
+    /// The place, in the same form `app.go` takes.
+    route: String,
+}
+
+/// The place the person's window last said it was showing, and when.
+static WINDOW_AT: std::sync::Mutex<Option<(String, std::time::Instant)>> = std::sync::Mutex::new(None);
+
+/// The screens a route may name.
+const APP_SCREENS: &[&str] = &["home", "inbox", "assistant", "runs", "team", "intelligence", "projects", "sites", "server", "activity", "settings"];
+
+fn valid_route(route: &str) -> bool {
+    let route = route.trim().trim_matches('/');
+    let screen = route.split('/').next().unwrap_or("");
+    APP_SCREENS.contains(&screen) && route.len() <= 300 && !route.contains(char::is_control)
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct ActivityArgs {
+    /// How many of the most recent entries (default 100, at most 500).
+    #[serde(default)]
+    limit: Option<i64>,
+    /// Only entries by this kind of actor: `human`, `agent` or `system`.
+    #[serde(default)]
+    actor: Option<String>,
+    /// Only entries that failed or were refused.
+    #[serde(default)]
+    failed_only: Option<bool>,
+}
+
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct CatalogueArgs {
     /// `anthropic-docs` or `provider:<id>`; omit for everything.
@@ -2875,6 +2914,82 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             let models = providers::fetch_anthropic_docs()?;
             ctx.store.replace_catalogue("anthropic-docs", &models)?;
             Ok(Outcome::with_data(format!("{} official Claude model(s)", models.len()), serde_json::to_value(&models)?))
+        },
+    )?;
+
+    reg.define::<AppGo>("app.go", "Take the person's window to a screen")
+    .description("Moves the native devd window to a screen, so you can show the person what you are talking about: a run you just started, the conversation a task is in, the page where a key is added. It changes only what the window shows; nothing is done to the machine. If no window is open, nothing happens and the result says so. Use `app.where` first to see what they are looking at, and do not move them away from something they are in the middle of.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .handlers(
+        |_, a| simple("app.go", format!("show `{}` in the window", a.route)),
+        |ctx, a| {
+            if !valid_route(&a.route) {
+                return Err(DevdError::invalid(format!("`{}` is not a place in the window; the screens are {}", a.route, APP_SCREENS.join(", "))));
+            }
+            let route = a.route.trim().trim_matches('/').to_string();
+            let open = WINDOW_AT.lock().ok().and_then(|w| w.clone()).is_some_and(|(_, at)| at.elapsed() < std::time::Duration::from_secs(120));
+            ctx.events.emit_with("app.go", format!("show {route}"), json!({ "route": route }));
+            Ok(Outcome::with_data(if open { format!("Showing {route}") } else { format!("Asked the window to show {route}, but no window has reported in recently") }, json!({ "route": route, "window_open": open })))
+        },
+    )?;
+
+    reg.define::<AppReport>("app.report", "The window says where it is")
+    .description("Called by the native window each time the person moves, so that `app.where` can answer. Human only: an agent cannot claim what the person is looking at.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .human_only()
+    .handlers(
+        |_, a| simple("app.report", format!("the window shows `{}`", a.route)),
+        |_, a| {
+            if let Ok(mut w) = WINDOW_AT.lock() {
+                *w = Some((a.route.trim().trim_matches('/').to_string(), std::time::Instant::now()));
+            }
+            Ok(Outcome::ok("noted"))
+        },
+    )?;
+
+    reg.define::<NoArgs>("app.where", "What the person is looking at")
+    .description("The screen the person's native window is showing, such as `assistant/<conversation id>` or `runs/<run id>`, and how long ago the window said so. Use it to answer \"this\" and \"here\" (\"why is this failing?\") about what they have open, and before `app.go` so you do not pull them away from their work. Says so if no window is open.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, _| simple("app.where", "read what the window is showing"),
+        |_, _| {
+            let seen = WINDOW_AT.lock().ok().and_then(|w| w.clone());
+            Ok(match seen {
+                Some((route, at)) if at.elapsed() < std::time::Duration::from_secs(120) => Outcome::with_data(format!("The window is showing {route}"), json!({ "open": true, "route": route, "seconds_ago": at.elapsed().as_secs() })),
+                _ => Outcome::with_data("No window is open", json!({ "open": false })),
+            })
+        },
+    )?;
+
+    reg.define::<ActivityArgs>("activity.list", "What was done, by whom")
+    .description("The audit trail: the most recent capability attempts, newest first, each with who made it (a person, an agent, or devd itself), through which surface, whether it worked, and the redacted arguments and outcome. Use it to see what changed on this machine and who changed it before changing it again.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, _| simple("activity.list", "read the audit trail"),
+        |ctx, a| {
+            let limit = a.limit.unwrap_or(100).clamp(1, 500);
+            let kind = a.actor.as_deref().map(|k| format!("{k}:"));
+            // Filtering happens after the read, so ask for more than is wanted when filtering.
+            let rows = ctx.store.list_audit(if kind.is_some() || a.failed_only == Some(true) { 500 } else { limit as u32 })?;
+            let items: Vec<_> = rows
+                .into_iter()
+                .filter(|r| kind.as_deref().is_none_or(|k| r.actor.starts_with(k)))
+                .filter(|r| a.failed_only != Some(true) || !r.ok)
+                .take(limit as usize)
+                .collect();
+            Ok(Outcome::with_data(format!("{} entr{}", items.len(), if items.len() == 1 { "y" } else { "ies" }), json!({ "items": items })))
         },
     )?;
 
