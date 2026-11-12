@@ -400,11 +400,39 @@ fn save_custom_in(dir: &Path, draft: &Draft, roster: &[Role]) -> Result<Role, St
     if draft.instructions.trim().chars().count() < 40 {
         return Err("give the role instructions: what it does, what it reads first, how it proves its work".to_string());
     }
+    write_custom(dir, id, &draft.markdown(), roster)
+}
+
+/// Save a role from its Markdown file, checked as a file in the folder is: a pack brings roles this way.
+pub fn save_custom_markdown(dir: &Path, markdown: &str) -> Result<Role, String> {
+    let role = save_custom_markdown_in(dir, markdown, all())?;
+    follow(dir);
+    reload();
+    Ok(get(role.id).copied().unwrap_or(role))
+}
+
+/// The id a role file declares, read without loading it.
+pub fn declared_id(markdown: &str) -> Option<String> {
+    let rest = markdown.trim_start().strip_prefix("---")?;
+    let head = rest.split("\n---").next()?;
+    head.lines().find_map(|l| l.strip_prefix("id:")).map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+}
+
+fn save_custom_markdown_in(dir: &Path, markdown: &str, roster: &[Role]) -> Result<Role, String> {
+    let id = declared_id(markdown).ok_or_else(|| "the role file has no `id:` in its front matter".to_string())?;
+    if is_built_in(&id) {
+        return Err(format!("{id} is one of devd's own roles and cannot be replaced; choose another id"));
+    }
+    write_custom(dir, &id, markdown, roster)
+}
+
+/// Check a role file exactly as a start would, and write it only if it loads.
+fn write_custom(dir: &Path, id: &str, markdown: &str, roster: &[Role]) -> Result<Role, String> {
     // Checked in a folder of its own inside the roles folder, so the check is exactly what a start would do.
     let scratch = dir.join(".check");
     let _ = std::fs::remove_dir_all(&scratch);
     std::fs::create_dir_all(&scratch).map_err(|e| format!("could not check the role: {e}"))?;
-    std::fs::write(scratch.join(format!("{id}.md")), draft.markdown()).map_err(|e| format!("could not check the role: {e}"))?;
+    std::fs::write(scratch.join(format!("{id}.md")), markdown).map_err(|e| format!("could not check the role: {e}"))?;
     // The roster without this role, so saving it again is a change and not a clash.
     let others: Vec<Role> = roster.iter().filter(|r| r.id != id).copied().collect();
     let (loaded, errors) = load_custom(&scratch, &others);
@@ -415,7 +443,7 @@ fn save_custom_in(dir: &Path, draft: &Draft, roster: &[Role]) -> Result<Role, St
     let Some(role) = loaded.into_iter().next() else { return Err("the role did not load".to_string()) };
     std::fs::create_dir_all(dir).map_err(|e| format!("could not save the role: {e}"))?;
     let tmp = dir.join(format!(".{id}.tmp"));
-    std::fs::write(&tmp, draft.markdown()).map_err(|e| format!("could not save the role: {e}"))?;
+    std::fs::write(&tmp, markdown).map_err(|e| format!("could not save the role: {e}"))?;
     std::fs::rename(&tmp, dir.join(format!("{id}.md"))).map_err(|e| format!("could not save the role: {e}"))?;
     Ok(role)
 }

@@ -22,7 +22,7 @@ use serde_json::{json, Value};
 use crate::shell::Shell;
 use crate::state::{devd, q};
 use crate::theme::{mono, size, theme, Tone};
-use crate::ui::{self, eyebrow, icon, live_dot, markdown as md, pill, Button, ButtonKind};
+use crate::ui::{self, eyebrow, icon, live_dot, markdown as md, pill, Button};
 
 /// One thing a person reads in a conversation.
 #[derive(Debug, Clone, PartialEq)]
@@ -50,6 +50,11 @@ pub fn fold(events: &[Value], pending: &[&str]) -> Vec<Item> {
     for event in events {
         let data = &event["data"];
         match event["kind"].as_str().unwrap_or_default() {
+            // devd's own reminder before it lets a turn end is not something the person said.
+            "user" if data["gate"] == json!(true) => {
+                let n = data["objections"].as_u64().unwrap_or(1);
+                items.push(Item::Notice(format!("devd sent it back to finish: {n} thing{} still open", if n == 1 { " was" } else { "s were" })));
+            }
             "user" => items.push(Item::You { text: data["text"].as_str().unwrap_or_default().to_string(), pending: data["pending"] == json!(true) }),
             "assistant" => {
                 let model = data["model"].as_str().unwrap_or_default().to_string();
@@ -216,7 +221,7 @@ fn sidebar(current: Option<&str>, cx: &mut Context<Shell>) -> impl IntoElement {
             ui::row(gpui::ElementId::Name(format!("thread.{id}").into()), current == Some(id.as_str()), cx)
                 .h(px(34.0))
                 .child(marker)
-                .child(div().flex_1().min_w_0().truncate().child(thread["title"].as_str().unwrap_or("Conversation").to_string()))
+                .child(div().flex_1().min_w_0().child(ui::Clip::new(thread["title"].as_str().unwrap_or("Conversation").to_string())))
                 .child(div().flex_none().text_size(px(size::TEXT_XS)).text_color(t.faint).child(ui::ago(thread["updated_at"].as_str().unwrap_or_default())))
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.go(Route::Assistant(Some(go.clone())), cx))),
         );
@@ -243,36 +248,9 @@ fn sidebar(current: Option<&str>, cx: &mut Context<Shell>) -> impl IntoElement {
         .child(div().id("threads").flex_1().overflow_y_scroll().child(column))
 }
 
-/// The message box: one line, Enter sends.
-fn composer(shell: &Shell, hint: &'static str, cx: &mut Context<Shell>) -> impl IntoElement {
-    let t = theme(cx).clone();
-    div()
-        .w_full()
-        .max_w(px(size::READING))
-        .mx_auto()
-        .flex()
-        .flex_col()
-        .gap(px(6.0))
-        .child(
-            div()
-                .min_h(px(46.0))
-                .px(px(14.0))
-                .flex()
-                .items_center()
-                .gap(px(10.0))
-                .rounded(px(size::RADIUS_L))
-                .border_1()
-                .border_color(t.line_strong)
-                .bg(t.raised)
-                .text_size(px(size::TEXT_MD))
-                .line_height(px(22.0))
-                .child(shell.composer.clone())
-                .child(Button::icon_only("composer.send", "arrow-up").kind(ButtonKind::Primary).on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                    this.composer.update(cx, |_, cx| cx.emit(crate::ui::input::InputEvent::Submitted));
-                    let _ = window;
-                }))),
-        )
-        .child(div().px(px(4.0)).text_size(px(size::TEXT_XS)).text_color(t.faint).child(hint))
+/// The message box, with its menus: see [`super::compose`].
+fn composer(shell: &Shell, hint: &'static str, running: bool, cx: &mut Context<Shell>) -> AnyElement {
+    super::compose::view(shell, hint, running, size::READING, cx)
 }
 
 /// No conversation open: the box, and where to begin.
@@ -284,6 +262,7 @@ fn start(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
         cx.notify();
     }
     div()
+        .relative()
         .flex_1()
         .min_w_0()
         .h_full()
@@ -292,6 +271,7 @@ fn start(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
         .justify_center()
         .gap(px(22.0))
         .px(px(32.0))
+        .child(ui::art(cx))
         .child(
             div()
                 .w_full()
@@ -303,7 +283,7 @@ fn start(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                 .child(div().text_size(px(size::TEXT_DISPLAY)).font_weight(FontWeight::SEMIBOLD).child("What are we working on?"))
                 .child(div().text_size(px(size::TEXT_MD)).text_color(t.muted).child("Ask a question, describe a change, or hand the team a goal. devd reads the project before it answers.")),
         )
-        .child(composer(shell, "Enter to send. The first message starts a conversation.", cx))
+        .child(composer(shell, "Enter sends · Shift+Enter adds a line", false, cx))
         .into_any_element()
 }
 
@@ -326,6 +306,8 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
     let thread = &data["thread"];
     let running = data["running"] == json!(true);
     let tokens = thread["input_tokens"].as_u64().unwrap_or(0) + thread["output_tokens"].as_u64().unwrap_or(0);
+    // Relative paths in this conversation's replies are read against its project.
+    cx.global_mut::<crate::state::Devd>().link_root = thread["project"].as_str().map(std::path::PathBuf::from);
     let project = thread["project"].as_str().map(|p| ui::leaf(p).to_string());
     let mut head = div()
         .h(px(44.0))
@@ -336,7 +318,7 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
         .gap(px(10.0))
         .border_b_1()
         .border_color(t.line)
-        .child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::MEDIUM).child(thread["title"].as_str().unwrap_or("Conversation").to_string()));
+        .child(div().flex_1().min_w_0().font_weight(FontWeight::MEDIUM).child(ui::Clip::new(thread["title"].as_str().unwrap_or("Conversation").to_string())));
     if let Some(project) = project {
         head = head.child(div().flex().items_center().gap(px(5.0)).text_size(px(size::TEXT_SM)).text_color(t.muted).child(icon("folder", 13.0, t.faint)).child(project));
     }
@@ -351,7 +333,7 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
                 devd(cx).sync.mutate(Mutation::new("chat.stop", json!({ "thread": stop })));
             }));
     } else if let Some(error) = thread["error"].as_str() {
-        head = head.child(pill("stopped on an error", Tone::Danger, cx)).child(div().max_w(px(320.0)).truncate().text_size(px(size::TEXT_SM)).text_color(t.muted).child(error.to_string()));
+        head = head.child(pill("stopped on an error", Tone::Danger, cx)).child(div().max_w(px(320.0)).text_size(px(size::TEXT_SM)).text_color(t.muted).child(ui::Clip::new(error.to_string())));
     }
 
     let items = shell.transcript.items.clone();
@@ -379,10 +361,27 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
         .child(div().flex_1().min_h_0().child(body))
         .child(div().flex_none().px(px(24.0)).pb(px(14.0)).pt(px(8.0)).child(composer(
             shell,
-            if running { "devd is working. A message sent now is delivered at its next step." } else { "Enter to send." },
+            if running { "A message now is read at its next step" } else { "Enter sends · Shift+Enter adds a line" },
+            running,
             cx,
         )))
         .into_any_element()
+}
+
+thread_local! {
+    /// When each running tool call was first drawn, so a long one can say how long.
+    static RUNNING_SINCE: std::cell::RefCell<HashMap<(String, usize), std::time::Instant>> = std::cell::RefCell::new(HashMap::new());
+}
+
+/// Seconds a tool call has been seen running.
+fn running_for(thread: &str, index: usize) -> Option<u64> {
+    RUNNING_SINCE.with(|m| Some(m.borrow_mut().entry((thread.to_string(), index)).or_insert_with(std::time::Instant::now).elapsed().as_secs()))
+}
+
+/// The call is no longer running: stop counting it.
+fn forget_running(thread: &str, index: usize) -> Option<u64> {
+    RUNNING_SINCE.with(|m| m.borrow_mut().remove(&(thread.to_string(), index)));
+    None
 }
 
 fn draw(thread: &str, index: usize, item: &Item, cx: &App) -> AnyElement {
@@ -403,7 +402,7 @@ fn draw(thread: &str, index: usize, item: &Item, cx: &App) -> AnyElement {
                     .text_size(px(size::TEXT_MD))
                     .line_height(px(21.0))
                     .opacity(if *pending { 0.6 } else { 1.0 })
-                    .child(text.clone()),
+                    .child(md::linked(&format!("{thread}.{index}.you"), text, cx)),
             )
             .into_any_element(),
         Item::Devd { blocks, model } => devd_writes(&format!("{thread}.{index}"), blocks, model, false, cx),
@@ -414,6 +413,10 @@ fn draw(thread: &str, index: usize, item: &Item, cx: &App) -> AnyElement {
                 None => Phase::Running,
             };
             let said = toolname::describe(name, input, phase);
+            // What only looked recedes; what changed something, and what failed, is read at full strength.
+            let quiet = phase == Phase::Done && toolname::only_looks(name, input);
+            // A call still running says how long: silence is the one thing a feed must not do.
+            let waiting = if phase == Phase::Running { running_for(thread, index) } else { forget_running(thread, index) };
             let glyph = match said.kind {
                 "file" => "file",
                 "search" => "search",
@@ -438,10 +441,36 @@ fn draw(thread: &str, index: usize, item: &Item, cx: &App) -> AnyElement {
                 .pl(px(2.0))
                 .text_size(px(size::TEXT))
                 .child(div().w(px(16.0)).flex().flex_none().justify_center().child(mark))
-                .child(div().flex_none().text_color(if phase == Phase::Failed { t.danger } else { t.muted }).child(said.action))
-                .child(div().min_w_0().truncate().font_family(mono()).text_size(px(size::TEXT_SM)).text_color(t.text).child(said.object));
+                .child(div().flex_none().text_color(if phase == Phase::Failed { t.danger } else if quiet { t.faint } else { t.muted }).child(said.action))
+                .child({
+                    let object = div().min_w_0().font_family(mono()).text_size(px(size::TEXT_SM)).text_color(t.text);
+                    // A file the agent touched opens on a click. The path it was given is used, not the
+                    // shortened name shown, so a file in a subfolder is found.
+                    let root = ui::links::root(cx);
+                    let target = if said.kind == "file" {
+                        ["path", "file", "from", "to"].iter().filter_map(|k| input[*k].as_str()).chain(std::iter::once(said.object.as_str())).find_map(|p| ui::links::resolve_token(p, root.as_deref()))
+                    } else {
+                        None
+                    };
+                    match target {
+                        Some(link) => {
+                            let hover = t.info;
+                            object
+                                .id(ui::nid("tool.open", index))
+                                .cursor_pointer()
+                                .hover(move |s| s.text_color(hover))
+                                .on_click(move |_, _, cx| ui::links::open(&link, cx))
+                                .child(ui::Clip::new(said.object))
+                                .into_any_element()
+                        }
+                        None => object.child(ui::Clip::new(said.object)).into_any_element(),
+                    }
+                });
             if phase == Phase::Failed && !detail.is_empty() {
-                line = line.child(div().flex_1().min_w_0().truncate().text_size(px(size::TEXT_SM)).text_color(t.faint).child(detail.clone()));
+                line = line.child(div().flex_1().min_w_0().text_size(px(size::TEXT_SM)).text_color(t.faint).child(ui::Clip::new(detail.clone())));
+            }
+            if let Some(took) = waiting.filter(|s| *s >= 15) {
+                line = line.child(div().flex_none().font_family(mono()).text_size(px(size::TEXT_XS)).text_color(if took >= 120 { t.warn } else { t.faint }).child(format!("still running · {}", ui::age(took))));
             }
             line.into_any_element()
         }
@@ -464,7 +493,7 @@ fn draw(thread: &str, index: usize, item: &Item, cx: &App) -> AnyElement {
             .border_color(ui::tint(t.danger, 0.35))
             .bg(ui::tint(t.danger, 0.08))
             .child(icon("alert", 15.0, t.danger))
-            .child(div().flex_1().text_size(px(size::TEXT)).child(text.clone()))
+            .child(div().flex_1().min_w_0().text_size(px(size::TEXT)).line_height(px(20.0)).child(md::linked(&format!("{thread}.{index}.failed"), text, cx)))
             .into_any_element(),
         Item::Waiting { capability, summary } => div()
             .p(px(12.0))
@@ -476,7 +505,7 @@ fn draw(thread: &str, index: usize, item: &Item, cx: &App) -> AnyElement {
             .border_color(ui::tint(t.warn, 0.35))
             .bg(ui::tint(t.warn, 0.07))
             .child(icon("lock", 15.0, t.warn))
-            .child(div().flex_1().min_w_0().truncate().text_size(px(size::TEXT)).child(if summary.is_empty() { format!("Waiting for your approval: {capability}") } else { summary.clone() }))
+            .child(div().flex_1().min_w_0().text_size(px(size::TEXT)).child(ui::Clip::new(if summary.is_empty() { format!("Waiting for your approval: {capability}") } else { summary.clone() })))
             .child(pill(capability.clone(), Tone::Warn, cx))
             .into_any_element(),
     }

@@ -64,6 +64,10 @@ pub enum InputEvent {
     Submitted,
     /// Escape was pressed.
     Cancelled,
+    /// The up arrow was pressed while the field is steered by a menu.
+    Up,
+    /// The down arrow was pressed while the field is steered by a menu.
+    Down,
 }
 
 impl EventEmitter<InputEvent> for TextInput {}
@@ -120,6 +124,10 @@ pub struct TextInput {
     checked: RefCell<Option<(SharedString, Vec<Range<usize>>)>>,
     is_selecting: bool,
     secret: bool,
+    /// A menu is open over the field and wants the arrows.
+    steered: bool,
+    /// Files and addresses in the text are underlined and open on Ctrl+click.
+    linking: bool,
 }
 
 impl TextInput {
@@ -139,7 +147,20 @@ impl TextInput {
             checked: RefCell::new(None),
             is_selecting: false,
             secret: false,
+            steered: false,
+            linking: false,
         }
+    }
+
+    /// Underline the files and addresses typed or pasted here; Ctrl+click (Cmd on a Mac) opens one.
+    pub fn linking(mut self) -> Self {
+        self.linking = true;
+        self
+    }
+
+    /// Hand the up and down arrows to a parent's menu, or take them back.
+    pub fn steer(&mut self, on: bool) {
+        self.steered = on;
     }
 
     /// Draw every character as a dot and refuse to copy the text out: a field
@@ -225,10 +246,16 @@ impl TextInput {
     }
 
     fn up(&mut self, _: &Up, _: &mut Window, cx: &mut Context<Self>) {
+        if self.steered {
+            return cx.emit(InputEvent::Up);
+        }
         self.vertical(true, cx);
     }
 
     fn down(&mut self, _: &Down, _: &mut Window, cx: &mut Context<Self>) {
+        if self.steered {
+            return cx.emit(InputEvent::Down);
+        }
         self.vertical(false, cx);
     }
 
@@ -327,6 +354,15 @@ impl TextInput {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Ctrl+click on a link opens it instead of moving the cursor.
+        if self.linking && event.modifiers.secondary() {
+            let at = self.index_for_mouse_position(event.position);
+            let root = super::links::root(cx);
+            if let Some((_, link)) = super::links::resolve(&self.content, root.as_deref()).into_iter().find(|(r, _)| r.start <= at && at <= r.end) {
+                super::links::open(&link, cx);
+                return;
+            }
+        }
         self.is_selecting = true;
 
         if event.modifiers.shift {
@@ -713,6 +749,11 @@ impl Element for TextElement {
         let mut marks: Vec<(Range<usize>, UnderlineStyle)> = Vec::new();
         if let Some(marked) = input.marked_range.as_ref() {
             marks.push((marked.clone(), UnderlineStyle { color: Some(run.color), thickness: px(1.0), wavy: false }));
+        }
+        if input.linking && !input.content.is_empty() {
+            let info = theme(cx).info;
+            let underline = UnderlineStyle { color: Some(info), thickness: px(1.0), wavy: false };
+            marks.extend(super::links::resolve(&input.content, super::links::root(cx).as_deref()).into_iter().map(|(range, _)| (range, underline)));
         }
         if !input.secret && !input.content.is_empty() {
             let squiggle = UnderlineStyle { color: Some(theme(cx).danger), thickness: px(1.0), wavy: true };

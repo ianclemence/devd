@@ -10,6 +10,56 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.28.0] - 2026-11-12 - The native window, and an assistant that checks itself
+
+This release replaces the web-view window with a native one, drawn on the GPU and with no browser inside it, and adds packages for macOS and Linux for the first time. The assistant is also held to account before it stops, and the record of what it did can show whether it was changed.
+
+### The native window
+
+- **Every screen is native**: Home, Inbox, Assistant, Runs, Team, Projects, Sites, Server, Intelligence, Activity and Settings, with a command menu (Ctrl+K), keyboard navigation, light and dark themes, and a cache that is kept true by events, so screens open with what they already know and then catch up.
+- **A new message box.** Type `/` for the skills devd can load and `@` for a member of the team (including ones you added); `+` attaches files and folders; the row underneath shows the model (with its vendor's mark), the effort and how much the assistant may do without asking. It grows with what you write and underlines slips as you type.
+- **Files and addresses are clickable** in replies, in your own messages and in the message box: a path opens if the file exists, a web address opens in the browser, and `devd://runs/ID`, `devd://projects/DIR`, `devd://assistant/ID` and `devd://sites/NAME` open that place in devd as a chip. A click never starts a program: a script or executable is shown in its folder instead.
+- Text that is too long for its place now ends in an ellipsis instead of being cut mid-letter, and a path keeps its end. A network failure is explained by its cause ("api.deepseek.com closed the connection before it answered. This is usually the network, a VPN or a firewall, not your key") instead of an operating-system message.
+- Activity hides what only looked and shows what changed. A refresh that failed says what is on screen may be out of date; a tool that runs for a while says how long.
+- A new logo and a faint dotted background.
+
+### The assistant
+
+- **It cannot end a turn on a promise.** Before a turn ends, devd checks the assistant's own plan for open items, checks that the run's policy has the proof it asks for, and asks any tool server you allowed (`_Stop`) whether it objects. It sends the assistant back to finish up to three times per prompt, says when it is on the last reminder, and tells you if it still ended with things open. `agent.end_gate` and `agent.stop_budget` switch it.
+- **Private data is held at the door.** A conversation that read an `.env`, a key or devd's own secrets cannot send a secret to a tool server, a push, a public address or a network command without your approval, for that exact call. The label is rebuilt from the record every time, so a restart cannot clear it. It matches the secret itself, so reading an `.env` does not make every later call suspect. `agent.flow_guard` switches it. It does not sandbox arbitrary code and cannot see a secret that has been rewritten before it is sent.
+- **Packs.** `devd call packs.install --arg source=owner/name` (or a folder path) installs roles, skills and tool servers together from a `devd-pack.json`; `packs.list` and `packs.remove` show and take them out. Nothing in a pack runs: a tool server is saved disabled. A name that is built in, yours or another pack's is a refusal. Removal takes out exactly what the pack added.
+- **Lifecycle hooks** (`_Stop`, `_PostCompact`) on external MCP servers, off unless you list the servers in `mcp.hook_servers` or `DEVD_MCP_HOOK_SERVERS`.
+- A team of 21 roles with a hand-off flow and roles of your own, a motion designer with built-in render tools and the Remotion skills, and every built-in skill rewritten to one standard that a test enforces. A new skill, `defects-that-keep-coming-back`, gives the reviewer, QA and implementer the ten defects that reviews find over and over.
+- Spend is priced with prompt-cache prices, context is shortened in steps that keep a provider's cache valid, and the model catalogue comes from models.dev.
+
+### Trust
+
+- **The audit record is a hash chain.** Each entry carries the hash of the one before it, and the newest is also saved apart, so editing, removing, reordering or cutting off the end of the log is found. `devd call audit.verify` checks it, and Activity shows "record intact" or where it broke. Entries from before this version are counted, not blamed, and pruning leaves an anchor so a pruned log still verifies.
+- **Feature flags**: `devd call flags.list` and `flags.set`, with `DEVD_FEATURE_*` in the environment taking priority for one run. A value that does not read is passed over and reported, never silently wrong.
+
+### Automation
+
+- `devd run --task task.json` runs one prepared task with the assistant and exits, for a script or a CI job: strict input (unknown, duplicate and extra fields are refused), one JSON line on standard output, and an exit code that says how it ended (0 completed, 1 failed, 2 invalid, 3 needs a person, 4 timed out, 5 finished but unproven). It does not retry, and it stops rather than wait for an approval nobody can give.
+- Commands that create a run, a conversation or a project print a `devd://` link. `devd-app --register-links` makes the operating system open `devd://` links with devd.
+
+### Providers
+
+- A rejected key (401), an unpaid balance (402), a refusal (403) and a quota that is used up are no longer retried; overload and rate limits are, with a little jitter.
+- OpenRouter: the model's reasoning is handed back between turns, effort is sent the way OpenRouter reads it, and `anthropic/*` models get prompt-cache markers.
+
+### Installing
+
+- Windows: a per-user installer (no administrator prompt) and a portable zip. macOS: a disk image for Apple silicon and one for Intel. Linux: a `.deb` that apt installs with its dependencies, and a `.tar.gz`.
+
+### Not in this release
+
+- The macOS app is signed ad hoc, not with an Apple Developer ID, so the first launch needs right-click, Open. The Windows installer is not code-signed, so SmartScreen may ask you to confirm.
+- OpenAI's Responses API is not used; OpenAI models are reached through Chat Completions as before.
+- Dragging files into the window is not supported yet; use the `+` menu.
+- The macOS and Linux packages were built and checked on CI machines, and have not been run by hand on every distribution or Mac.
+
+---
+
 ## [0.27.7] - 2026-11-09 - A shared browser, and an Update button in the footer
 
 ### The browser is a real tab, not a fetch

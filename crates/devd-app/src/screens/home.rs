@@ -81,8 +81,8 @@ pub fn render(shell: &mut Shell, _window: &mut Window, cx: &mut Context<Shell>) 
                             .flex()
                             .flex_col()
                             .gap(px(2.0))
-                            .child(div().truncate().font_weight(FontWeight::MEDIUM).child(message["subject"].as_str().unwrap_or_default().to_string()))
-                            .child(div().truncate().text_size(px(size::TEXT_SM)).text_color(t.muted).child(message["body"].as_str().unwrap_or_default().lines().next().unwrap_or_default().to_string())),
+                            .child(div().font_weight(FontWeight::MEDIUM).child(ui::Clip::new(message["subject"].as_str().unwrap_or_default().to_string())))
+                            .child(div().text_size(px(size::TEXT_SM)).text_color(t.muted).child(ui::Clip::new(message["body"].as_str().unwrap_or_default().lines().next().unwrap_or_default().to_string()))),
                     )
                     .child(pill(kind.to_string(), tone, cx))
                     .child(div().text_size(px(size::TEXT_XS)).text_color(t.faint).child(ui::ago(message["created_at"].as_str().unwrap_or_default())))
@@ -97,23 +97,7 @@ pub fn render(shell: &mut Shell, _window: &mut Window, cx: &mut Context<Shell>) 
     }
 
     // Ask.
-    column = column.child(
-        div()
-            .min_h(px(48.0))
-            .px(px(14.0))
-            .flex()
-            .items_center()
-            .gap(px(10.0))
-            .rounded(px(size::RADIUS_L))
-            .border_1()
-            .border_color(t.line_strong)
-            .bg(t.raised)
-            .text_size(px(size::TEXT_MD))
-            .line_height(px(22.0))
-            .child(icon("assistant", 16.0, t.accent))
-            .child(shell.composer.clone())
-            .child(ui::kbd("enter", cx)),
-    );
+    column = column.child(super::compose::view(shell, "Enter to send", false, 100_000.0, cx));
 
     // Recent work and the machine, side by side.
     let mut recent = div().flex().flex_col().gap(px(1.0));
@@ -132,13 +116,13 @@ pub fn render(shell: &mut Shell, _window: &mut Window, cx: &mut Context<Shell>) 
         let go = id.clone();
         let mut line = ui::row(gpui::ElementId::Name(format!("home.thread.{id}").into()), false, cx)
             .child(ui::dot(tone, cx))
-            .child(div().flex_1().min_w_0().truncate().child(thread["title"].as_str().unwrap_or("Conversation").to_string()))
+            .child(div().flex_1().min_w_0().child(ui::Clip::new(thread["title"].as_str().unwrap_or("Conversation").to_string())))
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.go(Route::Assistant(Some(go.clone())), cx)));
         if !word.is_empty() {
             line = line.child(div().text_size(px(size::TEXT_SM)).text_color(t.tone(tone)).child(word));
         }
         recent = recent.child(
-            line.child(div().w(px(110.0)).flex_none().truncate().text_size(px(size::TEXT_SM)).text_color(t.faint).child(thread["project"].as_str().map(|p| ui::leaf(p).to_string()).unwrap_or_default()))
+            line.child(div().w(px(110.0)).flex_none().text_size(px(size::TEXT_SM)).text_color(t.faint).child(ui::Clip::new(thread["project"].as_str().map(|p| ui::leaf(p).to_string()).unwrap_or_default())))
                 .child(div().w(px(30.0)).flex_none().flex().justify_end().text_size(px(size::TEXT_XS)).text_color(t.faint).child(ui::ago(thread["updated_at"].as_str().unwrap_or_default()))),
         );
     }
@@ -182,7 +166,7 @@ pub fn render(shell: &mut Shell, _window: &mut Window, cx: &mut Context<Shell>) 
                 .justify_between()
                 .gap(px(10.0))
                 // The folder can be long; it gives way to the button, keeping its end.
-                .child(div().flex_1().min_w_0().truncate().font_family(mono()).text_size(px(size::TEXT_XS)).text_color(t.faint).child(ui::tail(&devd(cx).conn.home, 24)))
+                .child(div().flex_1().min_w_0().font_family(mono()).text_size(px(size::TEXT_XS)).text_color(t.faint).child(ui::Clip::tail(devd(cx).conn.home.clone())))
                 .child(ui::Button::new("home.server", "Open Server").on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.go(Route::Server, cx)))),
         );
 
@@ -195,5 +179,5 @@ pub fn render(shell: &mut Shell, _window: &mut Window, cx: &mut Context<Shell>) 
             .child(div().w(px(320.0)).flex_none().flex().flex_col().gap(px(8.0)).child(eyebrow("THE SERVER", cx)).child(machine)),
     );
 
-    ui::page("home", 980.0, column).into_any_element()
+    div().relative().size_full().child(ui::art(cx)).child(ui::page("home", 980.0, column)).into_any_element()
 }

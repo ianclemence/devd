@@ -13,6 +13,7 @@
 
 mod assets;
 mod backend;
+mod scheme;
 mod screens;
 mod shell;
 mod state;
@@ -22,6 +23,18 @@ mod ui;
 use gpui::{px, size, App, AppContext, Application, Bounds, TitlebarOptions, WindowBounds, WindowOptions};
 
 fn main() {
+    // `devd-app --register-links` makes the operating system open devd:// links with this program.
+    if std::env::args().nth(1).as_deref() == Some("--register-links") {
+        let result = std::env::current_exe().map_err(|e| e.to_string()).and_then(|exe| scheme::register(&exe));
+        match result {
+            Ok(done) => println!("{done}"),
+            Err(why) => {
+                eprintln!("{why}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     let conn = match backend::connect() {
         Ok(conn) => conn,
         Err(message) => {

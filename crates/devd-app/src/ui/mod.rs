@@ -5,8 +5,11 @@
 //! under the pointer everywhere. A screen composes these; it does not restyle
 //! them.
 
+pub mod clip;
+pub mod dither;
 pub mod diff;
 pub mod input;
+pub mod links;
 pub mod markdown;
 
 use std::time::Duration;
@@ -17,6 +20,8 @@ use gpui::{
     div, img, prelude::*, px, svg, Animation, AnimationExt, AnyElement, App, ClickEvent, Div, ElementId, FontWeight, Hsla,
     SharedString, Stateful, Svg, Window,
 };
+
+pub use clip::Clip;
 
 use crate::theme::{mono, size, theme, Tone};
 
@@ -370,6 +375,40 @@ pub fn row(id: impl Into<ElementId>, selected: bool, cx: &App) -> Stateful<Div> 
     }
 }
 
+/// How long something has been going on: "45s", "2m 05s", "1h 02m".
+pub fn age(secs: u64) -> String {
+    match secs {
+        0..=59 => format!("{secs}s"),
+        60..=3599 => format!("{}m {:02}s", secs / 60, secs % 60),
+        _ => format!("{}h {:02}m", secs / 3600, secs % 3600 / 60),
+    }
+}
+
+/// A strip that says what is on screen may be old: the last refresh failed, and what is shown is
+/// what was known before. Never shown as if it were current, and never as "offline" or "stopped":
+/// a failed read says nothing about the thing itself.
+pub fn stale(snapshot: &devd_app_core::sync::Snapshot, cx: &App) -> Option<Div> {
+    let failure = snapshot.error.as_ref().filter(|_| snapshot.data.is_some())?;
+    let t = theme(cx);
+    Some(
+        div()
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .px(px(12.0))
+            .py(px(8.0))
+            .mb(px(14.0))
+            .rounded(px(size::RADIUS))
+            .border_1()
+            .border_color(tint(t.warn, 0.35))
+            .bg(tint(t.warn, 0.08))
+            .text_size(px(size::TEXT_SM))
+            .text_color(t.text)
+            .child(icon("alert", 14.0, t.warn))
+            .child(div().flex_1().min_w_0().child(Clip::new(format!("Could not refresh just now: {}. What you see may be out of date.", failure.message)))),
+    )
+}
+
 /// A bounded group: a hairline box with a step of tone, for content that
 /// belongs together. Never a box around a single row.
 pub fn card(cx: &App) -> Div {
@@ -441,6 +480,21 @@ pub fn page_head(title: impl Into<SharedString>, detail: impl Into<SharedString>
         .child(actions)
 }
 
+/// The dotted art behind a screen's top corner. Faint, behind everything, and never
+/// under dense content: it belongs to the screens that open on a greeting or a question.
+pub fn art(cx: &App) -> Div {
+    let t = theme(cx);
+    let (file, opacity) = if t.dark { ("art/dither-dark.png", 0.16) } else { ("art/dither-light.png", 0.12) };
+    div()
+        .absolute()
+        .top(px(0.0))
+        .right(px(0.0))
+        .w(px(dither::WIDTH as f32))
+        .h(px(dither::HEIGHT as f32))
+        .opacity(opacity)
+        .child(img(SharedString::from(file)).w(px(dither::WIDTH as f32)).h(px(dither::HEIGHT as f32)).object_fit(gpui::ObjectFit::Fill))
+}
+
 /// A scrolling column, centred, no wider than is comfortable to read across.
 pub fn page(id: impl Into<ElementId>, max_width: f32, content: impl IntoElement) -> Stateful<Div> {
     div()
@@ -453,19 +507,6 @@ pub fn page(id: impl Into<ElementId>, max_width: f32, content: impl IntoElement)
 /// The last part of a path, which is how a project is named in a list.
 pub fn leaf(path: &str) -> &str {
     path.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or(path)
-}
-
-/// A long path cut from the front, because the end is what tells folders apart:
-/// `C:\Users\User\AppData\Local\Temp\project\home` becomes `…\Temp\project\home`.
-pub fn tail(path: &str, most: usize) -> String {
-    let chars: Vec<char> = path.chars().collect();
-    if chars.len() <= most {
-        return path.to_string();
-    }
-    let kept: String = chars[chars.len() - (most - 1)..].iter().collect();
-    // Start at a whole folder when one begins soon, rather than half a name.
-    let from = kept.find(['\\', '/']).filter(|i| *i < most / 3).unwrap_or(0);
-    format!("…{}", &kept[from..])
 }
 
 /// "3m", "2h", "5d": how long ago an RFC 3339 time was.
@@ -520,13 +561,8 @@ mod tests {
     }
 
     #[test]
-    fn a_long_path_keeps_its_end_and_starts_at_a_whole_folder() {
-        assert_eq!(tail(r"D:\devd", 30), r"D:\devd", "a short path is left alone");
-        let long = r"C:\Users\User\AppData\Local\Temp\claude\415f63c55b6fe1b8\scratchpad\home";
-        let short = tail(long, 32);
-        assert!(short.starts_with('…') && short.ends_with(r"scratchpad\home"), "{short}");
-        assert!(short.chars().count() <= 32, "{short}");
-        assert_eq!(tail("/srv/www/shop/very/deep/folder/name", 20), "…/deep/folder/name");
+    fn a_wait_is_said_in_the_largest_sensible_unit() {
+        assert_eq!((age(7), age(59), age(60), age(125), age(3600), age(3725)), ("7s".to_string(), "59s".to_string(), "1m 00s".to_string(), "2m 05s".to_string(), "1h 00m".to_string(), "1h 02m".to_string()));
     }
 
     #[test]

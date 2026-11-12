@@ -2054,6 +2054,7 @@ name = "devd-cli"
 version = "0.27.7"
 dependencies = [
  "clap",
+ "devd-agent",
  "devd-bootstrap",
  "devd-core",
  "devd-git",

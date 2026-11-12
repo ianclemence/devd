@@ -399,6 +399,30 @@ struct SkillInstall {
     skill: Option<String>,
 }
 
+/// Set or clear a feature flag.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct FlagSet {
+    /// The flag's key, as `flags.list` shows it.
+    key: String,
+    /// `on`, `off`, or a number for a numeric flag. Leave out to go back to the default.
+    #[serde(default)]
+    value: Option<String>,
+}
+
+/// Install a pack of roles, skills and tool servers.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct PackSource {
+    /// A folder on this machine, or a GitHub repository: `owner/name`, or `owner/name/path`.
+    source: String,
+}
+
+/// A pack by id.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct PackId {
+    /// The pack's id, as `packs.list` shows it.
+    id: String,
+}
+
 /// Import skills from another agent on this machine.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct SkillImport {
@@ -1556,7 +1580,8 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                 if let Some(thread) = a.thread.as_deref().filter(|t| !t.is_empty()) {
                     let _ = ctx.store.set_run_thread(&run.id, thread);
                 }
-                Ok(Outcome::with_data("The planner is working; the team starts as soon as the plan is ready", serde_json::to_value(&run)?))
+                let data = devd_core::deeplink::with_link(serde_json::to_value(&run)?, devd_core::deeplink::run(&run.id));
+                Ok(Outcome::with_data("The planner is working; the team starts as soon as the plan is ready", data))
             },
     )?;
         let t = team.clone();
@@ -1596,6 +1621,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                             .filter(|t| matches!(t.state.as_str(), "done" | "skipped"))
                             .count();
                         let mut v = serde_json::to_value(r).unwrap_or(Value::Null);
+                        v = devd_core::deeplink::with_link(v, devd_core::deeplink::run(&r.id));
                         v["tasks_total"] =
                             json!(tasks.iter().filter(|t| t.role != "planner").count());
                         v["tasks_done"] = json!(done);
@@ -2226,6 +2252,84 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                 o = o.warn(s);
             }
             Ok(o)
+        },
+    )?;
+    reg.define::<NoArgs>("flags.list", "The feature flags and their values")
+    .description("Every feature flag with its value, where the value came from (the default, a setting saved on this machine, or the environment of this process), the default, and any value that was set but did not read and was passed over. A flag's environment variable is DEVD_FEATURE_ followed by its key in capitals with dots as underscores.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, _| simple("flags.list", "list the feature flags"),
+        |ctx, _| {
+            let all = devd_core::flags::all(&ctx.store);
+            Ok(Outcome::with_data(format!("{} flag(s)", all.len()), serde_json::to_value(&all)?))
+        },
+    )?;
+    reg.define::<FlagSet>("flags.set", "Turn a feature flag on or off")
+    .description("Saves a flag's value on this machine, or clears it so the default applies again. A flag in the environment of the process still wins over what is saved here. Human only, because a flag can switch off a check that protects the person.")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .human_only()
+    .dry_run()
+    .handlers(
+        |_, a| simple("flags.set", format!("set the flag {} to {}", a.key, a.value.as_deref().unwrap_or("its default"))),
+        |ctx, a| {
+            let r = devd_core::flags::set(&ctx.store, &a.key, a.value.as_deref())?;
+            Ok(Outcome::with_data(format!("{} is {}", r.key, r.value), serde_json::to_value(&r)?))
+        },
+    )?;
+    reg.define::<PackSource>("packs.install", "Install a pack of roles, skills and tool servers")
+    .description("Installs a pack: a folder or GitHub repository with a devd-pack.json that lists role files, skill files and tool servers. All of it is checked before anything is written, and if a write fails what was written is taken back. Nothing in a pack is executed: roles and skills are Markdown, and a tool server is saved disabled and asking, so you read its command before it can start. A name that is built in, that you made, or that another pack installed is a refusal, not an overwrite. Installing a newer version of the same pack replaces what that pack added and nothing else. Human only, because a pack changes how every agent works.")
+    .tier(Tier::Write)
+    .effect(Effect::Remote)
+    .human_only()
+    .dry_run()
+    .handlers(
+        |_, a| simple("packs.install", format!("install the pack from {}", a.source)),
+        |ctx, a| {
+            let (root, scratch) = crate::packs::fetch(&ctx.paths, &a.source)?;
+            let loaded = crate::packs::load(&root);
+            let installed = loaded.and_then(|l| crate::packs::install(&ctx.paths, &ctx.store, &l, &a.source));
+            if scratch {
+                // A fetched copy is somebody's repository, not something to keep.
+                let _ = std::fs::remove_dir_all(root.ancestors().find(|p| p.parent().is_some_and(|q| q.ends_with("cache"))).unwrap_or(&root));
+            }
+            let r = installed?;
+            let mut o = Outcome::with_data(format!("Installed the pack {} {}: {} role(s), {} skill(s), {} tool server(s)", r.id, r.version, r.roles.len(), r.skills.len(), r.mcp.len()), serde_json::to_value(&r)?);
+            if !r.mcp.is_empty() {
+                o = o.warn(format!("The tool server(s) {} were saved disabled. Read the command in Settings, then turn them on.", r.mcp.join(", ")));
+            }
+            Ok(o)
+        },
+    )?;
+    reg.define::<NoArgs>("packs.list", "The packs that are installed")
+    .description("Every installed pack with its version, where it came from, and the roles, skills and tool servers it added. Read this before packs.remove.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, _| simple("packs.list", "list installed packs"),
+        |ctx, _| {
+            let all = crate::packs::installed(&ctx.paths);
+            Ok(Outcome::with_data(format!("{} pack(s)", all.len()), serde_json::to_value(&all)?))
+        },
+    )?;
+    reg.define::<PackId>("packs.remove", "Remove an installed pack")
+    .description("Removes an installed pack and exactly what it added: its roles, its skills with their pages and its tool servers. Everything you made, and everything another pack added, is left alone. Human only.")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .human_only()
+    .dry_run()
+    .handlers(
+        |_, a| simple("packs.remove", format!("remove the pack {}", a.id)),
+        |ctx, a| {
+            let r = crate::packs::remove(&ctx.paths, &ctx.store, &a.id)?;
+            Ok(Outcome::with_data(format!("Removed the pack {}", r.id), serde_json::to_value(&r)?))
         },
     )?;
     reg.define::<SkillImport>("skills.import", "Import skills from another agent")
@@ -3193,6 +3297,27 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
         },
     )?;
 
+    reg.define::<NoArgs>("audit.verify", "Check that the audit trail was not changed")
+    .description("Checks the audit trail's hash chain. Every entry carries the hash of the one before it, so an entry that was edited, removed from the middle or reordered, or an end that was cut off, makes the check fail at the first row it can no longer vouch for. Entries from before chaining are counted, not blamed. Returns whether it is intact, how many entries were checked, the first break if there is one, and the newest hash, which you can note elsewhere to catch tampering this machine could hide. This detects tampering; it cannot prove who did it or undo it.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, _| simple("audit.verify", "check the audit trail's chain"),
+        |ctx, _| {
+            let v = ctx.store.verify_audit()?;
+            let message = match (&v.first_break, v.intact) {
+                (None, true) if v.checked == 0 => "Nothing has been recorded under the chain yet".to_string(),
+                (None, true) => format!("The audit trail is intact: {} entries checked{}", v.checked, if v.unchained > 0 { format!(", {} older ones predate the chain", v.unchained) } else { String::new() }),
+                (Some(b), _) => format!("The audit trail was changed: it stops matching at entry {} ({})", b.id, b.why),
+                (None, false) => "The audit trail does not match".to_string(),
+            };
+            Ok(Outcome::with_data(message, serde_json::to_value(&v)?))
+        },
+    )?;
+
     reg.define::<NoArgs>("models.refresh", "Update the model catalogue")
     .description("Fetches the open model catalogue from models.dev: every provider's models with their prices (including prompt-cache prices), context windows and abilities. devd ships with a copy, so this is only needed to learn about models released since. Needs no API key and sends nothing about this machine. A download that does not read as a catalogue is refused and the current one is kept.")
     .tier(Tier::Write)
@@ -3254,7 +3379,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
         move |ctx, a| {
                 let t = hub.send(ctx, SendRequest { thread_id: a.thread.clone(), message: a.message.clone(), project: a.project.clone(), provider: a.provider.clone(), model: a.model.clone(), permission: a.permission.clone(), effort: a.effort.clone(), kind: a.kind.as_deref().map(devd_core::RunKind::parse), client_id: a.client_id.clone() })?;
                 let queued = ctx.store.queued_count(&t.id)?;
-                let mut data = serde_json::to_value(&t)?;
+                let mut data = devd_core::deeplink::with_link(serde_json::to_value(&t)?, devd_core::deeplink::conversation(&t.id));
                 if let Some(obj) = data.as_object_mut() {
                     obj.insert("queued".into(), json!(queued));
                 }

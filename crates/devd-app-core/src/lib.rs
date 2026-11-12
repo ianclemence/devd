@@ -9,6 +9,7 @@
 //! | [`sync`] | The cache of what devd has told the window, kept true by events, with optimistic writes |
 //! | [`command`] | Every action the window has, declared once for the menu, the keymap and agents |
 //! | [`fuzzy`] | Matching and ranking for the command menu and filter boxes |
+//! | [`links`] | The web addresses and files in a text that can be clicked |
 //! | [`markdown`] | Agent replies, parsed into blocks the window draws itself |
 //! | [`diff`] | Git's diffs and before/after comparisons, down to the changed word |
 //! | [`motion`] | Springs and curves that can be interrupted mid-flight |
@@ -25,6 +26,7 @@
 pub mod command;
 pub mod diff;
 pub mod fuzzy;
+pub mod links;
 pub mod markdown;
 pub mod motion;
 pub mod nav;

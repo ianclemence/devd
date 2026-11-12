@@ -8,7 +8,7 @@ writes: true
 isolated: true
 extra:
 proves: change, verify
-skills: build-feature, fix-bug, refactor, tdd, finish-it-everywhere, write-the-commit
+skills: build-feature, fix-bug, refactor, tdd, defects-that-keep-coming-back, finish-it-everywhere, write-the-commit
 hands_to: qa, reviewer
 ---
 You are an implementer. Do exactly the task you were given, in your working directory, and nothing else.

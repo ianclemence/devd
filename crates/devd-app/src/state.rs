@@ -42,6 +42,8 @@ pub struct Devd {
     /// Whether such a mark was drawn since the last beat. Only then is the
     /// window redrawn for the next one.
     pub live_seen: std::cell::Cell<bool>,
+    /// The folder the open conversation is about: relative paths in its replies are read against it.
+    pub link_root: Option<std::path::PathBuf>,
 }
 
 impl Global for Devd {}
@@ -60,8 +62,21 @@ pub struct Toast {
 /// How often the pulse of a live mark steps.
 pub const BEAT: Duration = Duration::from_millis(420);
 
-/// How long a toast stays.
+/// How long a toast stays, when it is good news. A failure has to be read, and often
+/// acted on, so it stays longer: see [`Toast::stays`].
 pub const TOAST_FOR: Duration = Duration::from_secs(5);
+
+impl Toast {
+    /// How long this one stays.
+    pub fn stays(&self) -> Duration {
+        if self.failed {
+            // Time to read a sentence or two, and then some.
+            Duration::from_secs(12).max(Duration::from_millis(self.text.chars().count() as u64 * 70))
+        } else {
+            TOAST_FOR
+        }
+    }
+}
 
 /// An operation that changes nothing until the person approves its plan.
 #[derive(Debug, Clone)]
@@ -103,7 +118,7 @@ pub fn start(conn: Arc<Connection>, cx: &mut App) {
 
     let mut room = Room::new();
     room.seen("you", Presence { who: Who::You, place: Place::default(), doing: Doing::Viewing }, Instant::now());
-    cx.set_global(Devd { conn, sync, room, writing: HashMap::new(), toasts: Vec::new(), decisions: Vec::new(), online: false, opened_thread: None, pending_go: None, beat: 0, live_seen: std::cell::Cell::new(false) });
+    cx.set_global(Devd { conn, sync, room, writing: HashMap::new(), toasts: Vec::new(), decisions: Vec::new(), online: false, opened_thread: None, pending_go: None, beat: 0, live_seen: std::cell::Cell::new(false), link_root: None });
 
     // One task on the window's thread turns signals into redraws. A burst of
     // signals becomes one redraw: everything waiting is taken before drawing.
@@ -139,7 +154,7 @@ pub fn start(conn: Arc<Connection>, cx: &mut App) {
             let now = Instant::now();
             let state = cx.global_mut::<Devd>();
             let before = state.toasts.len();
-            state.toasts.retain(|t| now.duration_since(t.at) < TOAST_FOR);
+            state.toasts.retain(|t| now.duration_since(t.at) < t.stays());
             state.beat = (state.beat + 1) % 4;
             let pulsing = state.live_seen.replace(false);
             let changed = state.room.sweep(now) || state.toasts.len() != before || pulsing;
@@ -324,9 +339,19 @@ pub mod q {
         QueryKey::new("activity.list", json!({ "limit": 150 }))
     }
 
+    /// Whether the audit trail's hash chain still holds.
+    pub fn audit() -> QueryKey {
+        QueryKey::bare("audit.verify")
+    }
+
     /// The privacy and spend rules agents run under.
     pub fn policy() -> QueryKey {
         QueryKey::bare("policy.get")
+    }
+
+    /// The skills an agent can load, for the `/` menu.
+    pub fn skills() -> QueryKey {
+        QueryKey::bare("skills.list")
     }
 
     /// The team's roles: what each is for and what it must prove.

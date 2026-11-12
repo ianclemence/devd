@@ -70,6 +70,23 @@ impl AssetSource for Assets {
         if let Some(file) = path.strip_prefix("brands/") {
             return Ok(devd_server::ui::brand_bytes(file).map(Cow::Borrowed));
         }
+        // The application's own logo: the one file the installer, the taskbar and the web page also use.
+        if path == "brand/devd-logo-rail.png" {
+            return Ok(Some(Cow::Borrowed(include_bytes!("../../../assets/devd-logo-rail.png").as_slice())));
+        }
+        if path == "brand/devd-logo.png" {
+            return Ok(Some(Cow::Borrowed(include_bytes!("../../../assets/devd-logo.png").as_slice())));
+        }
+        // The dotted background art, drawn when first asked for and kept.
+        if let Some(art) = path.strip_prefix("art/") {
+            static DARK: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+            static LIGHT: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+            return Ok(match art {
+                "dither-dark.png" => Some(Cow::Borrowed(DARK.get_or_init(|| crate::ui::dither::png([0xd9, 0xd6, 0xcc])).as_slice())),
+                "dither-light.png" => Some(Cow::Borrowed(LIGHT.get_or_init(|| crate::ui::dither::png([0x3a, 0x38, 0x30])).as_slice())),
+                _ => None,
+            });
+        }
         let name = path.strip_prefix("icons/").and_then(|p| p.strip_suffix(".svg"));
         Ok(name
             .and_then(|name| ICONS.iter().find(|(known, _)| *known == name))

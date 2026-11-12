@@ -102,7 +102,7 @@ pub fn inbox(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                                 .flex()
                                 .items_center()
                                 .gap(px(8.0))
-                                .child(div().min_w_0().truncate().font_weight(FontWeight::MEDIUM).child(message["subject"].as_str().unwrap_or_default().to_string()))
+                                .child(div().min_w_0().font_weight(FontWeight::MEDIUM).child(ui::Clip::new(message["subject"].as_str().unwrap_or_default().to_string())))
                                 .child(pill(said.label.clone(), tone, cx)),
                         )
                         // The opening paragraph says what happened; the rest is on the run.
@@ -149,7 +149,7 @@ pub fn runs(_shell: &mut Shell, selected: Option<String>, cx: &mut Context<Shell
                         .min_w_0()
                         .flex()
                         .flex_col()
-                        .child(div().truncate().child(run["title"].as_str().unwrap_or("Run").to_string()))
+                        .child(div().child(ui::Clip::new(run["title"].as_str().unwrap_or("Run").to_string())))
                         .child(
                             div().flex().gap(px(8.0)).text_size(px(size::TEXT_XS)).text_color(t.faint).child(run["project"].as_str().map(|p| ui::leaf(p).to_string()).unwrap_or_default()).child(said.label.clone()).child(ui::ago(run["updated_at"].as_str().unwrap_or_default())),
                         ),
@@ -242,8 +242,8 @@ fn run_detail(id: &str, cx: &mut Context<Shell>) -> AnyElement {
             .items_center()
             .gap(px(12.0))
             .child(marker)
-            .child(div().w(px(104.0)).flex_none().truncate().text_size(px(size::TEXT_SM)).text_color(t.muted).child(task["role"].as_str().unwrap_or_default().to_string()))
-            .child(div().flex_1().min_w_0().truncate().child(task["title"].as_str().unwrap_or_default().to_string()))
+            .child(div().w(px(104.0)).flex_none().text_size(px(size::TEXT_SM)).text_color(t.muted).child(ui::Clip::new(task["role"].as_str().unwrap_or_default().to_string())))
+            .child(div().flex_1().min_w_0().child(ui::Clip::new(task["title"].as_str().unwrap_or_default().to_string())))
             .child(div().text_size(px(size::TEXT_SM)).text_color(t.tone(tone)).child(word));
         if let Some(thread) = thread {
             let hover = t.hover;
@@ -265,7 +265,7 @@ fn run_detail(id: &str, cx: &mut Context<Shell>) -> AnyElement {
 pub fn projects(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
     let t = theme(cx).clone();
     let snap = devd(cx).sync.watch(&q::projects());
-    let mut column = div().flex().flex_col().child(page_head("Projects", format!("{} folders devd knows about.", snap.list("").len()), div(), cx));
+    let mut column = div().flex().flex_col().child(page_head("Projects", format!("{} folders devd knows about.", snap.list("").len()), div(), cx)).children(ui::stale(&snap, cx));
     if let Some(shown) = placeholder(&snap, "projects", "folder", "No projects yet", "Add a folder, or park a directory and every project in it appears here.", cx) {
         return ui::page("projects", 980.0, column.child(shown)).into_any_element();
     }
@@ -283,8 +283,8 @@ pub fn projects(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                     .min_w_0()
                     .flex()
                     .flex_col()
-                    .child(div().truncate().child(project["name"].as_str().unwrap_or(ui::leaf(&path)).to_string()))
-                    .child(div().truncate().font_family(mono()).text_size(px(size::TEXT_XS)).text_color(t.faint).child(path.clone())),
+                    .child(div().child(ui::Clip::new(project["name"].as_str().unwrap_or(ui::leaf(&path)).to_string())))
+                    .child(div().font_family(mono()).text_size(px(size::TEXT_XS)).text_color(t.faint).child(ui::Clip::tail(path.clone()))),
             );
         for presence in room.in_project(&path).into_iter().take(3) {
             line = line.child(ui::face(presence.who.initials(), Tone::Info, presence.doing.active(), cx));
@@ -317,7 +317,7 @@ pub fn sites(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
     } else {
         div()
     };
-    let column = div().flex().flex_col().child(page_head("Sites", format!("{} addresses on this machine.", all.len()), actions, cx));
+    let column = div().flex().flex_col().child(page_head("Sites", format!("{} addresses on this machine.", all.len()), actions, cx)).children(ui::stale(&snap, cx));
     if let Some(shown) = placeholder(&snap, "sites", "globe", "No sites yet", "Create a site and it gets a .test name and a certificate.", cx) {
         return ui::page("sites", 980.0, column.child(shown)).into_any_element();
     }
@@ -337,10 +337,10 @@ pub fn sites(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                     .min_w_0()
                     .flex()
                     .flex_col()
-                    .child(div().truncate().child(site["site"]["host"].as_str().unwrap_or(&name).to_string()))
-                    .child(div().truncate().text_size(px(size::TEXT_XS)).text_color(t.faint).child(site["detected"].as_str().unwrap_or_default().to_string())),
+                    .child(div().child(ui::Clip::new(site["site"]["host"].as_str().unwrap_or(&name).to_string())))
+                    .child(div().text_size(px(size::TEXT_XS)).text_color(t.faint).child(ui::Clip::new(site["detected"].as_str().unwrap_or_default().to_string()))),
             )
-            .child(pill(serving.to_string(), Tone::Neutral, cx));
+            .child(pill(match serving { "no_entry" => "no entry point".to_string(), other => other.replace('_', " ") }, Tone::Neutral, cx));
         if let Some(php) = site["php_effective"].as_str() {
             line = line.child(pill(format!("PHP {php}"), Tone::Neutral, cx));
         }
@@ -348,7 +348,8 @@ pub fn sites(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
             line = line.child(pill("not in hosts", Tone::Warn, cx));
         }
         if site["certificate"] == json!(false) {
-            line = line.child(pill("no certificate", Tone::Warn, cx));
+            // Every .test site has this until HTTPS is set up, so it is said quietly.
+            line = line.child(pill("no certificate", Tone::Neutral, cx));
         }
         if !present {
             line = line.child(pill("folder missing", Tone::Warn, cx));
@@ -366,7 +367,7 @@ pub fn server(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
     let health = devd(cx).sync.watch(&q::health());
     let headline = health.data.as_deref().and_then(|d| d["headline"].as_str()).unwrap_or("Reading the machine…").to_string();
     let actions = div().child(Button::new("server.start", "Start what is needed").icon("play").on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.run("server.start", window, cx))));
-    let mut column = div().flex().flex_col().gap(px(22.0)).child(page_head("Server", headline, actions, cx));
+    let mut column = div().flex().flex_col().gap(px(22.0)).child(page_head("Server", headline, actions, cx)).children(ui::stale(&services, cx)).children(ui::stale(&health, cx));
 
     let mut list = card(cx).flex().flex_col().overflow_hidden();
     if let Some(shown) = placeholder(&services, "services", "machine", "No services", "Install a web server or a database and it is listed here.", cx) {
@@ -401,7 +402,7 @@ pub fn server(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
         let title = version.as_ref().map(|v| format!("PHP {v}")).unwrap_or_else(|| name.clone());
         let detail = match &version {
             Some(version) => format!("{} of {} workers answering FastCGI", answering(version), workers(version)),
-            None => service["ready_detail"].as_str().or(service["message"].as_str()).unwrap_or_default().to_string(),
+            None => service["ready_detail"].as_str().or(service["message"].as_str()).unwrap_or_default().replace('`', ""),
         };
         let starting = service["starting"] == json!(true);
         let (tone, word) = match (running, ready, starting) {
@@ -428,7 +429,7 @@ pub fn server(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                         .flex()
                         .flex_col()
                         .child(div().flex().items_center().gap(px(8.0)).child(div().font_weight(FontWeight::MEDIUM).child(title)).child(div().font_family(mono()).text_size(px(size::TEXT_XS)).text_color(t.faint).child(service["version"].as_str().unwrap_or_default().to_string())))
-                        .child(div().truncate().text_size(px(size::TEXT_XS)).text_color(t.faint).child(detail)),
+                        .child(div().text_size(px(size::TEXT_XS)).text_color(t.faint).child(ui::Clip::new(detail))),
                 )
                 .child(div().text_size(px(size::TEXT_SM)).text_color(t.tone(tone)).child(word))
                 .child(div().w(px(64.0)).flex_none().flex().justify_end().font_family(mono()).text_size(px(size::TEXT_SM)).text_color(t.muted).child(service["port"].as_u64().map(|p| format!(":{p}")).unwrap_or_default()))
@@ -459,8 +460,12 @@ pub fn server(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                     .items_center()
                     .gap(px(12.0))
                     .child(ui::dot(tone, cx))
-                    .child(div().w(px(200.0)).flex_none().truncate().child(check["label"].as_str().unwrap_or_default().to_string()))
-                    .child(div().flex_1().min_w_0().truncate().text_size(px(size::TEXT_SM)).text_color(t.muted).child(check["detail"].as_str().unwrap_or_default().to_string())),
+                    .child(div().w(px(200.0)).flex_none().child(ui::Clip::new(check["label"].as_str().unwrap_or_default().to_string())))
+                    .child(div().flex_1().min_w_0().text_size(px(size::TEXT_SM)).text_color(t.muted).child({
+                        let detail = check["detail"].as_str().unwrap_or_default().to_string();
+                        // A line about a folder is told apart by its end; a sentence by its start.
+                        if detail.contains(":\\") || detail.starts_with('/') { ui::Clip::tail(detail) } else { ui::Clip::new(detail) }
+                    })),
             );
         }
         column = column.child(div().flex().flex_col().gap(px(8.0)).child(eyebrow("CHECKS", cx)).child(checks));
@@ -485,7 +490,7 @@ pub fn team(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
         this.role_form.open = !this.role_form.open;
         cx.notify();
     })));
-    let mut column = div().flex().flex_col().gap(px(22.0)).child(page_head("Team", detail, add, cx));
+    let mut column = div().flex().flex_col().gap(px(22.0)).child(page_head("Team", detail, add, cx)).children(ui::stale(&roles, cx));
     if let Some(form) = screens_roles::render(shell, cx) {
         column = column.child(form);
     }
@@ -530,10 +535,17 @@ pub fn team(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                 .filter(|(key, _)| role["must_prove"][*key] == json!(true))
                 .map(|(_, word)| *word)
                 .collect();
-            let model = role["models"].as_array().and_then(|m| m.first()).and_then(|m| m["model"].as_str()).unwrap_or("the default model").to_string();
+            let model = role["models"].as_array().and_then(|m| m.first()).and_then(|m| m["model"].as_str()).map(str::to_string);
             let mut facts = div().flex().flex_none().items_center().gap(px(6.0));
-            if role["writes_files"] == json!(true) {
-                facts = facts.child(pill("edits files", Tone::Neutral, cx));
+            // The most it may do, in words. Nearly every role changes files, so that is not worth a pill; a role that cannot, or can run commands, is.
+            let may = match role["max_tier"].as_str().unwrap_or_default() {
+                "read" => Some("reads only"),
+                "exec" => Some("runs commands"),
+                t if t.starts_with("admin") => Some("asks first"),
+                _ => None,
+            };
+            if let Some(may) = may {
+                facts = facts.child(pill(may, Tone::Neutral, cx));
             }
             if role["works_in_own_copy"] == json!(true) {
                 facts = facts.child(pill("own copy", Tone::Neutral, cx));
@@ -541,7 +553,10 @@ pub fn team(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
             if role["built_in"] == json!(false) {
                 facts = facts.child(screens_roles::yours(id, n, cx));
             }
-            let mut second = div().flex().gap(px(10.0)).text_size(px(size::TEXT_XS)).text_color(t.faint).child(div().font_family(mono()).child(model));
+            let mut second = div().flex().gap(px(10.0)).text_size(px(size::TEXT_XS)).text_color(t.faint);
+            if let Some(model) = model {
+                second = second.child(div().font_family(mono()).child(model));
+            }
             let next: Vec<&str> = role["hands_to"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
             if !next.is_empty() {
                 second = second.child(format!("hands to {}", next.join(", ")));

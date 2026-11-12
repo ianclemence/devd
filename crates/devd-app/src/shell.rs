@@ -143,12 +143,16 @@ pub struct Shell {
     palette: Option<Palette>,
     /// The message box, shared by Home and the Assistant.
     pub composer: Entity<TextInput>,
+    /// What the message box has chosen besides its text.
+    pub compose: screens::compose::Compose,
     /// The conversation on screen, prepared for drawing.
     pub transcript: screens::assistant::Transcript,
     /// What the Intelligence screen has open.
     pub intel: screens::intelligence::View,
     /// The form for adding a member of the team.
     pub role_form: screens::roles::Form,
+    /// Whether Activity also lists what only looked at things.
+    pub activity_reads: bool,
     _watch: Subscription,
 }
 
@@ -159,11 +163,18 @@ impl Shell {
         // on this machine, and the person's, one word per line, in devd's data folder.
         let personal = std::env::var_os("DEVD_HOME").map(std::path::PathBuf::from).unwrap_or_default().join("dictionary.txt");
         let dictionary = std::sync::Arc::new(devd_app_core::spell::Dictionary::for_this_machine(&personal));
-        let composer = cx.new(|cx| TextInput::new("Ask devd, or give it work…", cx).multiline(8).spelling(dictionary));
-        let watch = cx.subscribe_in(&composer, window, |this, _, event: &InputEvent, window, cx| {
-            if *event == InputEvent::Submitted {
-                this.send(window, cx);
+        let composer = cx.new(|cx| TextInput::new("Ask devd anything. / for skills, @ for a teammate", cx).multiline(8).spelling(dictionary).linking());
+        let watch = cx.subscribe_in(&composer, window, |this, _, event: &InputEvent, window, cx| match event {
+            // Enter takes the highlighted skill or member when a menu is showing, and sends otherwise.
+            InputEvent::Submitted => {
+                if !this.compose_pick(cx) {
+                    this.send(window, cx);
+                }
             }
+            InputEvent::Changed => this.compose_changed(cx),
+            InputEvent::Up => this.compose_step(-1, cx),
+            InputEvent::Down => this.compose_step(1, cx),
+            InputEvent::Cancelled => this.compose_cancel(cx),
         });
         let focus = cx.focus_handle();
         window.focus(&focus);
@@ -172,11 +183,13 @@ impl Shell {
         Self {
             intel,
             role_form,
+            activity_reads: false,
             history: History::new(start),
             focus,
             commands: commands(),
             palette: None,
             composer,
+            compose: Default::default(),
             transcript: screens::assistant::Transcript::new(),
             _watch: watch,
         }
@@ -255,7 +268,7 @@ impl Shell {
     }
 
     /// Send what is in the message box: to the open conversation, or as a new one.
-    fn send(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn send(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let text = self.composer.read(cx).text().trim().to_string();
         if text.is_empty() {
             return;
@@ -264,7 +277,19 @@ impl Shell {
             Route::Assistant(Some(id)) => Some(id.clone()),
             _ => None,
         };
+        let text = screens::compose::with_files(&text, &self.compose.files);
         let mut args = json!({ "message": text });
+        // Only what was chosen is sent; the rest stays as the conversation has it.
+        if let Some(mode) = self.compose.mode {
+            args["permission"] = json!(mode);
+        }
+        if let Some(effort) = self.compose.effort {
+            args["effort"] = json!(effort);
+        }
+        if let Some((provider, model)) = &self.compose.model {
+            args["provider"] = json!(provider);
+            args["model"] = json!(model);
+        }
         let mut mutation = Mutation::new("chat.send", json!({}));
         if let Some(id) = &thread {
             args["thread"] = json!(id);
@@ -277,6 +302,7 @@ impl Shell {
         }
         mutation.args = args;
         devd(cx).sync.mutate(mutation);
+        self.compose.files.clear();
         self.composer.update(cx, |input, cx| input.clear(cx));
         if thread.is_none() {
             self.history.go(Route::Assistant(None));
@@ -298,6 +324,7 @@ impl Shell {
             }
             InputEvent::Submitted => this.choose(None, window, cx),
             InputEvent::Cancelled => this.close_palette(window, cx),
+            InputEvent::Up | InputEvent::Down => {}
         });
         window.focus(&input.focus_handle(cx));
         self.palette = Some(Palette { input, selected: 0, _watch: watch });
@@ -405,21 +432,9 @@ impl Shell {
             .bg(t.surface)
             .border_r_1()
             .border_color(t.line);
-        // The mark: one square of the signal colour, and the only decoration in the window.
-        rail = rail.child(
-            div()
-                .mb(px(10.0))
-                .size(px(26.0))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(7.0))
-                .bg(t.accent)
-                .text_size(px(13.0))
-                .font_weight(FontWeight::BOLD)
-                .text_color(t.on_accent)
-                .child("d"),
-        );
+        // The mark: the same artwork the installed application carries, so the window
+        // and the app on the taskbar are one thing.
+        rail = rail.child(gpui::img(gpui::SharedString::from("brand/devd-logo-rail.png")).mb(px(10.0)).size(px(28.0)).flex_none().rounded(px(7.0)));
         let item = |route: Route, badge: usize, cx: &mut Context<Self>| {
             let selected = current.same_screen(&route);
             let color = if selected { t.text } else { t.faint };
@@ -493,7 +508,7 @@ impl Shell {
         if let Some(selection) = route.selection() {
             crumbs = crumbs
                 .child(icon("chevron-right", 11.0, t.faint))
-                .child(div().max_w(px(360.0)).truncate().text_color(t.muted).child(self.selection_label(&route, selection, cx)));
+                .child(div().max_w(px(360.0)).text_color(t.muted).child(ui::Clip::new(self.selection_label(&route, selection, cx))));
         }
         let hover = t.hover;
         let search = div()
@@ -621,7 +636,7 @@ impl Shell {
             let mut line = ui::row(gpui::ElementId::Name(format!("palette.{n}").into()), selected, cx)
                 .child(icon(entry.icon, 15.0, if selected { t.accent } else { t.faint }))
                 .child(div().flex_none().whitespace_nowrap().child(title))
-                .child(div().flex_1().min_w_0().truncate().text_size(px(size::TEXT_SM)).text_color(t.faint).child(entry.detail.clone()))
+                .child(div().flex_1().min_w_0().text_size(px(size::TEXT_SM)).text_color(t.faint).child(ui::Clip::new(entry.detail.clone())))
                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.choose(Some(n), window, cx)));
             if let Some(key) = &entry.key {
                 line = line.child(kbd(key, cx));
@@ -766,10 +781,17 @@ impl Shell {
         for toast in toasts.iter().rev().take(3) {
             column = column.child(
                 div()
-                    .w(px(360.0))
+                    .id(ui::nid("toast", toast.at.elapsed().as_millis() as usize))
+                    .w(px(420.0))
                     .p(px(12.0))
                     .flex()
                     .items_start()
+                    .cursor_pointer()
+                    // A click puts it away: a failure stays long enough to read, not forever.
+                    .on_click(|_, _, cx| {
+                        cx.global_mut::<Devd>().toasts.clear();
+                        cx.refresh_windows();
+                    })
                     .gap(px(9.0))
                     .rounded(px(size::RADIUS_L))
                     .border_1()
@@ -777,7 +799,7 @@ impl Shell {
                     .bg(t.raised)
                     .shadow_md()
                     .child(icon(if toast.failed { "alert" } else { "check" }, 15.0, if toast.failed { t.danger } else { t.ok }))
-                    .child(div().flex_1().text_size(px(size::TEXT)).text_color(t.text).child(toast.text.clone())),
+                    .child(div().flex_1().min_w_0().text_size(px(size::TEXT)).line_height(px(19.0)).text_color(t.text).child(toast.text.clone())),
             );
         }
         Some(column.into_any_element())

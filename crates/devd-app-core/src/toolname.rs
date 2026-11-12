@@ -144,6 +144,7 @@ const KNOWN: &[(&str, &str, &str, &str)] = &[
     ("motion.render", "Rendering", "Rendered", "browser"),
     ("app.where", "Checking what you are looking at", "Checked what you are looking at", "lookup"),
     ("activity.list", "Checking the activity record", "Checked the activity record", "lookup"),
+    ("audit.verify", "Checking the record was not changed", "Checked the record was not changed", "lookup"),
     ("devd_groups", "Looking up what devd can do", "Looked up what devd can do", "lookup"),
     ("devd_capabilities", "Looking up how to", "Looked up how to", "lookup"),
     ("devd_describe", "Checking how to use", "Checked how to use", "lookup"),
@@ -201,6 +202,22 @@ pub fn describe(name: &str, input: &Value, phase: Phase) -> Described {
         Phase::Failed => format!("Could not {}", infinitive(&running)),
     };
     Described { action, object, kind }
+}
+
+/// Whether a call only looked at things: it read, listed, searched or checked, and changed nothing.
+///
+/// A feed is read to decide whether to step in, so what changed something is loud and what only
+/// looked is quiet. This goes by the capability's own name, which says it: a call that cannot be
+/// told is not quiet, because a quiet change is the one that would be missed.
+pub fn only_looks(name: &str, input: &Value) -> bool {
+    let id = match name {
+        "devd_invoke" => input["id"].as_str().unwrap_or(name),
+        other => other,
+    };
+    let id = DIRECT.iter().find(|(tool, _)| *tool == id).map(|(_, cap)| *cap).unwrap_or(id);
+    const WORDS: &[&str] = &["get", "list", "read", "search", "tree", "status", "diff", "log", "describe", "verify", "snapshot", "inventory", "catalogue", "overview", "roles", "flow", "capabilities"];
+    let last = id.rsplit(['.', '_']).next().unwrap_or(id);
+    !id.starts_with("mcp__") && WORDS.contains(&last)
 }
 
 /// A phrase for a capability nobody wrote one for, read from its id.
@@ -335,6 +352,17 @@ fn object_of(id: &str, args: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_call_that_looks_is_quiet() {
+        assert!(only_looks("devd_invoke", &json!({ "id": "fs.read" })));
+        assert!(only_looks("git_status", &json!({})));
+        assert!(only_looks("devd_invoke", &json!({ "id": "audit.verify" })));
+        assert!(!only_looks("devd_invoke", &json!({ "id": "fs.write" })));
+        assert!(!only_looks("devd_invoke", &json!({ "id": "service.start" })));
+        assert!(!only_looks("mcp__github__list_issues", &json!({})), "an outside tool is never assumed harmless");
+        assert!(!only_looks("devd_invoke", &json!({})), "a call that cannot be told is loud");
+    }
     use serde_json::json;
 
     fn said(name: &str, input: Value, phase: Phase) -> String {

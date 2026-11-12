@@ -24,6 +24,7 @@ pub const BUILTIN: &[(&str, &str)] = &[
     ("database-migrations", include_str!("../skills/database-migrations.md")),
     ("decide-who-owns-the-state", include_str!("../skills/decide-who-owns-the-state.md")),
     ("decision-log", include_str!("../skills/decision-log.md")),
+    ("defects-that-keep-coming-back", include_str!("../skills/defects-that-keep-coming-back.md")),
     ("design-from-use", include_str!("../skills/design-from-use.md")),
     ("figure-it-out", include_str!("../skills/figure-it-out.md")),
     ("finish-it-everywhere", include_str!("../skills/finish-it-everywhere.md")),

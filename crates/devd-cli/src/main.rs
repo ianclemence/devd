@@ -19,6 +19,7 @@ mod app;
 mod daemon;
 mod devcat;
 mod gitcat;
+mod runner;
 mod runtimecat;
 mod setup;
 mod stackcat;
@@ -205,6 +206,8 @@ pub(crate) enum Command {
     },
     /// Talk to devd's built-in agent, which can use every capability devd has.
     Chat(ChatArgs),
+    /// Run one prepared task with the agent and exit: one JSON line out, an exit code that says how it ended.
+    Run(RunArgs),
     /// List, delete and clear conversations.
     Chats {
         #[command(subcommand)]
@@ -493,6 +496,16 @@ pub(crate) enum ChatsCommand {
     },
     /// Delete the inbox messages that were answered or dismissed. Asks for approval.
     ClearInbox,
+}
+
+#[derive(clap::Args, Debug)]
+pub(crate) struct RunArgs {
+    /// The task document (version 1), or `-` for standard input.
+    #[arg(long)]
+    pub task: String,
+    /// Check the document and stop: nothing runs.
+    #[arg(long)]
+    pub check: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -1963,6 +1976,10 @@ fn run(cli: Cli) -> Result<i32> {
             app.resume_agents();
             aicat::chat(&app, a)?;
             Ok(0)
+        }
+        Command::Run(a) => {
+            app.resume_agents();
+            Ok(runner::run(&app, &a.task, a.check))
         }
         Command::Chats { cmd } => {
             aicat::chats(&app, cmd)?;

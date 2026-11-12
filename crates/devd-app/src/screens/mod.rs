@@ -3,6 +3,7 @@
 
 pub mod activity;
 pub mod assistant;
+pub mod compose;
 pub mod home;
 pub mod intelligence;
 pub mod lists;

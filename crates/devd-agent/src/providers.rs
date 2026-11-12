@@ -320,11 +320,35 @@ fn send(method: &str, url: &str, headers: &[(String, String)], body: Option<&str
             let retry_after = r.header("retry-after").and_then(|v| v.parse::<u64>().ok());
             Ok(Reply { status: code, retry_after, body: r.into_string().unwrap_or_default() })
         }
-        Err(e) => Err(DevdError::Io(std::io::Error::new(
-            std::io::ErrorKind::ConnectionAborted,
-            format!("could not reach {}: {e}", host_of(url)),
-        ))),
+        Err(e) => Err(reach_failed(url, &e.to_string())),
     }
+}
+
+/// What went wrong reaching a provider, in words a person can act on.
+///
+/// The transport's own message is for a log: "An existing connection was
+/// forcibly closed by the remote host (os error 10054)" tells nobody whether to
+/// check the key, the network or the vendor. The cause is read from it, named
+/// plainly, and the next step is said. Only a cause that is not recognised
+/// falls back to the transport's words.
+pub fn reach_failed(url: &str, detail: &str) -> DevdError {
+    let host = host_of(url);
+    let d = detail.to_ascii_lowercase();
+    let has = |needles: &[&str]| needles.iter().any(|n| d.contains(n));
+    let what = if has(&["forcibly closed", "connection reset", "10054", "broken pipe", "unexpected eof", "connection closed", "closed before"]) {
+        format!("{host} closed the connection before it answered. This is usually the network, a VPN or a firewall, not your key.")
+    } else if has(&["timed out", "timeout", "deadline"]) {
+        format!("{host} did not answer in time. The network may be slow, or the service busy.")
+    } else if has(&["dns", "lookup", "resolve", "no such host", "name or service", "11001", "nodename"]) {
+        format!("devd could not find {host}. Check the address and that you are online.")
+    } else if has(&["certificate", "tls", "ssl", "handshake", "revocation"]) {
+        format!("devd could not make a secure connection to {host}. A proxy or antivirus that inspects HTTPS is a common cause.")
+    } else if has(&["refused", "10061"]) {
+        format!("{host} refused the connection. If this is a local server, it may not be running.")
+    } else {
+        format!("devd could not reach {host} ({}).", detail.trim().trim_end_matches('.'))
+    };
+    DevdError::Io(std::io::Error::new(std::io::ErrorKind::ConnectionAborted, format!("{what} Nothing was lost: send it again when the connection is back.")))
 }
 
 /// Fetch a public document as text: no key, no body, a short wait.
@@ -334,7 +358,7 @@ fn send(method: &str, url: &str, headers: &[(String, String)], body: Option<&str
 pub fn fetch_text(url: &str) -> Result<String> {
     let reply = quick_agent(url).get(url).set("accept", "application/json").call().map_err(|e| match e {
         ureq::Error::Status(code, _) => DevdError::internal(format!("{} answered {code}", host_of(url))),
-        other => DevdError::Io(std::io::Error::new(std::io::ErrorKind::ConnectionAborted, format!("could not reach {}: {other}", host_of(url)))),
+        other => reach_failed(url, &other.to_string()),
     })?;
     reply.into_string().map_err(|e| DevdError::internal(format!("could not read the response from {}: {e}", host_of(url))))
 }
@@ -401,10 +425,7 @@ fn send_live(url: &str, headers: &[(String, String)], body: &str) -> Result<Live
                 answer: Answer::Whole(r.into_string().unwrap_or_default()),
             })
         }
-        Err(e) => Err(DevdError::Io(std::io::Error::new(
-            std::io::ErrorKind::ConnectionAborted,
-            format!("could not reach {}: {e}", host_of(url)),
-        ))),
+        Err(e) => Err(reach_failed(url, &e.to_string())),
     }
 }
 
@@ -1223,6 +1244,8 @@ fn mark_cacheable(messages: &mut [Value]) {
 
 fn anthropic_body(r: &ChatRequest) -> Value {
     let mut messages = r.messages.clone();
+    // A reasoning payload another vendor wrote is not Anthropic's to read: it would be refused as an unknown block.
+    without_private_blocks(&mut messages);
     mark_cacheable(&mut messages);
     let mut body = json!({
         "model": r.model,
@@ -1277,6 +1300,13 @@ fn openai_body(p: &Provider, r: &ChatRequest) -> Value {
             // A new assistant turn cannot begin while calls are unanswered.
             answer(&mut msgs, &mut pending);
             let mut msg = json!({ "role": "assistant", "content": text });
+            // OpenRouter asks for the model's reasoning to be handed back unchanged, so a tool-using
+            // conversation keeps its chain of thought. Only OpenRouter's own payload goes back to it.
+            if is_openrouter(p) {
+                if let Some(details) = blocks.iter().find(|b| b["type"] == REASONING_BLOCK).map(|b| b["details"].clone()).filter(|d| d.is_array()) {
+                    msg["reasoning_details"] = details;
+                }
+            }
             if !calls.is_empty() {
                 pending = calls
                     .iter()
@@ -1326,6 +1356,12 @@ fn openai_body(p: &Provider, r: &ChatRequest) -> Value {
     // Only reasoning-capable OpenAI models accept this, and sending it to the
     // others is an error rather than a no-op.
     if let Some(effort) = &r.effort {
+        // OpenRouter takes the effort as an object, and no filter that would route only to endpoints
+        // advertising the parameter: that turns an effort setting into a hard 404 on a valid model,
+        // and a model that cannot reason simply answers without reasoning.
+        if is_openrouter(p) {
+            body["reasoning"] = json!({ "effort": effort });
+        }
         let reasoning = p.kind == "openai"
             && (r.model.starts_with("o1")
                 || r.model.starts_with("o3")
@@ -1334,6 +1370,11 @@ fn openai_body(p: &Provider, r: &ChatRequest) -> Value {
                 || r.model.contains("reasoning"));
         if reasoning {
             body["reasoning_effort"] = json!(effort);
+        }
+    }
+    if is_openrouter(p) && r.model.starts_with("anthropic/") {
+        if let Some(list) = body["messages"].as_array_mut() {
+            cache_breakpoints(list);
         }
     }
     if !r.tools.is_empty() {
@@ -1367,6 +1408,9 @@ fn parse_openai(v: &Value) -> Result<ChatResponse> {
     if let Some(t) = msg["content"].as_str().filter(|t| !t.is_empty()) {
         content.push(json!({ "type": "text", "text": t }));
     }
+    if let Some(details) = msg["reasoning_details"].as_array().filter(|d| !d.is_empty()) {
+        content.insert(0, json!({ "type": REASONING_BLOCK, "details": details }));
+    }
     let mut has_calls = false;
     for c in msg["tool_calls"].as_array().cloned().unwrap_or_default() {
         has_calls = true;
@@ -1393,6 +1437,65 @@ fn parse_openai(v: &Value) -> Result<ChatResponse> {
             .unwrap_or(0),
         cache_write_tokens: 0,
     })
+}
+
+/// Whether a failed request is worth sending again.
+///
+/// Overload and rate limits pass. A rejected key (401), an unpaid balance (402), a refusal (403)
+/// and a malformed request (400) do not: sending them again cannot change the answer, only delay
+/// it and spend another call. A 429 that says the quota or balance is used up will not pass in a
+/// few seconds either, so it is not retried; a 429 that is only a rate limit is.
+pub fn is_transient(status: u16, body: &str) -> bool {
+    match status {
+        500 | 502 | 503 | 504 | 529 => true,
+        429 => {
+            let lower = body.to_ascii_lowercase();
+            !["insufficient", "quota", "billing", "balance", "credit", "exceeded your current"].iter().any(|w| lower.contains(w))
+        }
+        _ => false,
+    }
+}
+
+/// Up to half a second, from the clock: enough to spread a crowd, with nothing to configure.
+fn jitter_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| u64::from(d.subsec_nanos()) / 1_000_000 % 500).unwrap_or(0)
+}
+
+/// Whether this provider is OpenRouter, which has its own ways of asking for reasoning and of caching.
+fn is_openrouter(p: &Provider) -> bool {
+    p.base_url.contains("openrouter.ai")
+}
+
+/// The block that carries OpenRouter's reasoning payload from one turn to the next.
+pub const REASONING_BLOCK: &str = "x_reasoning_details";
+
+/// Blocks only devd's own log keeps, never sent to a provider that did not write them.
+fn without_private_blocks(messages: &mut [Value]) {
+    for m in messages {
+        if let Some(blocks) = m["content"].as_array_mut() {
+            blocks.retain(|b| !b["type"].as_str().is_some_and(|t| t.starts_with("x_")));
+        }
+    }
+}
+
+/// Mark the stable parts of an OpenAI-format request for Anthropic's prompt cache, as OpenRouter
+/// passes `cache_control` through for `anthropic/*` models: the system prompt, and the last two
+/// user messages (the most recent turn and the one before it, which the next request repeats).
+fn cache_breakpoints(msgs: &mut [Value]) {
+    fn mark(msg: &mut Value) {
+        let text = match &msg["content"] {
+            Value::String(s) if !s.is_empty() => s.clone(),
+            _ => return,
+        };
+        msg["content"] = json!([{ "type": "text", "text": text, "cache_control": { "type": "ephemeral" } }]);
+    }
+    if let Some(first) = msgs.first_mut().filter(|m| m["role"] == "system") {
+        mark(first);
+    }
+    let users: Vec<usize> = msgs.iter().enumerate().rev().filter(|(_, m)| m["role"] == "user").map(|(i, _)| i).take(2).collect();
+    for i in users {
+        mark(&mut msgs[i]);
+    }
 }
 
 /// Send one request, retrying transient failures (rate limits, overload).
@@ -1514,13 +1617,14 @@ fn chat_with(
             body,
             retry_after: r.retry_after,
         };
-        let transient = matches!(reply.status, 429 | 500 | 502 | 503 | 504 | 529);
+        let transient = is_transient(reply.status, &reply.body);
         let err = status_error(p, &reply);
         if !transient || attempt == 2 {
             return Err(err);
         }
         let wait = reply.retry_after.unwrap_or(1u64 << attempt).min(20);
-        std::thread::sleep(Duration::from_secs(wait));
+        // A little jitter, so many clients told to wait the same time do not all return in the same instant.
+        std::thread::sleep(Duration::from_secs(wait) + Duration::from_millis(jitter_ms()));
         last = Some(err);
     }
     Err(last.unwrap_or_else(|| DevdError::internal("request failed")))
@@ -1702,6 +1806,7 @@ fn parse_openai_stream(reader: impl BufRead, on: &mut dyn FnMut(&str)) -> Result
     let mut finish = String::new();
     let (mut input_tokens, mut output_tokens) = (0i64, 0i64);
     let mut cache_read_tokens = 0i64;
+    let mut reasoning: Vec<Value> = Vec::new();
     let mut feed = |payload: &str| -> Result<()> {
         if payload.trim() == "[DONE]" {
             return Ok(());
@@ -1726,6 +1831,10 @@ fn parse_openai_stream(reader: impl BufRead, on: &mut dyn FnMut(&str)) -> Result
                 text.push_str(piece);
                 on(piece);
             }
+        }
+        // The reasoning payload arrives in pieces; the whole list is what is handed back.
+        if let Some(more) = choice.pointer("/delta/reasoning_details").and_then(|d| d.as_array()) {
+            reasoning.extend(more.iter().cloned());
         }
         for c in choice
             .pointer("/delta/tool_calls")
@@ -1759,6 +1868,9 @@ fn parse_openai_stream(reader: impl BufRead, on: &mut dyn FnMut(&str)) -> Result
     };
     for_each_event(reader, &mut feed)?;
     let mut content = Vec::new();
+    if !reasoning.is_empty() {
+        content.push(json!({ "type": REASONING_BLOCK, "details": reasoning }));
+    }
     if !text.is_empty() {
         content.push(json!({ "type": "text", "text": text }));
     }
@@ -1796,6 +1908,83 @@ fn parse_openai_stream(reader: impl BufRead, on: &mut dyn FnMut(&str)) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_failure_that_can_pass_is_retried() {
+        for status in [500, 502, 503, 504, 529] {
+            assert!(is_transient(status, ""), "{status}");
+        }
+        assert!(is_transient(429, r#"{"error":{"message":"Rate limit reached, retry in 2s"}}"#));
+        for status in [400, 401, 402, 403, 404, 422] {
+            assert!(!is_transient(status, ""), "{status} cannot be changed by asking again");
+        }
+        assert!(!is_transient(429, r#"{"error":{"message":"You exceeded your current quota"}}"#), "a used-up quota does not pass in seconds");
+        assert!(!is_transient(429, "Insufficient balance"));
+    }
+
+    fn request(model: &str, messages: Vec<Value>, effort: Option<&str>) -> ChatRequest {
+        ChatRequest { model: model.into(), system: "Be exact.".into(), messages, tools: vec![], max_tokens: 1000, tool_choice: None, effort: effort.map(str::to_string) }
+    }
+
+    fn openrouter() -> Provider {
+        provider("openrouter")
+    }
+
+    #[test]
+    fn openrouter_gets_its_reasoning_back_unchanged_and_no_one_else_does() {
+        let details = json!([{ "type": "reasoning.encrypted", "data": "abc" }]);
+        let turn = vec![
+            json!({ "role": "user", "content": [{ "type": "text", "text": "go" }] }),
+            json!({ "role": "assistant", "content": [{ "type": REASONING_BLOCK, "details": details }, { "type": "text", "text": "ok" }] }),
+            json!({ "role": "user", "content": [{ "type": "text", "text": "and?" }] }),
+        ];
+        let body = openai_body(&openrouter(), &request("some/model", turn.clone(), None));
+        let assistant = body["messages"].as_array().unwrap().iter().find(|m| m["role"] == "assistant").unwrap();
+        assert_eq!(assistant["reasoning_details"], details);
+        assert_eq!(assistant["content"], "ok", "the private block is not text");
+        // Another OpenAI-compatible provider is never handed another vendor's payload.
+        let other = openai_body(&provider("deepseek"), &request("deepseek-chat", turn.clone(), None));
+        assert!(other["messages"].as_array().unwrap().iter().all(|m| m.get("reasoning_details").is_none()));
+        // Nor is Anthropic, which would refuse the unknown block.
+        let a = anthropic_body(&request("claude", turn, None));
+        assert!(!a.to_string().contains(REASONING_BLOCK));
+    }
+
+    #[test]
+    fn openrouter_takes_effort_as_an_object_and_is_not_told_to_require_it() {
+        let body = openai_body(&openrouter(), &request("some/model", vec![json!({ "role": "user", "content": [{ "type": "text", "text": "x" }] })], Some("high")));
+        assert_eq!(body["reasoning"], json!({ "effort": "high" }));
+        assert!(body.get("provider").is_none(), "no filter that routes only to endpoints advertising the parameter");
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn anthropic_models_through_openrouter_get_cache_markers_where_they_pay() {
+        let msgs = vec![
+            json!({ "role": "user", "content": [{ "type": "text", "text": "one" }] }),
+            json!({ "role": "assistant", "content": [{ "type": "text", "text": "a" }] }),
+            json!({ "role": "user", "content": [{ "type": "text", "text": "two" }] }),
+            json!({ "role": "assistant", "content": [{ "type": "text", "text": "b" }] }),
+            json!({ "role": "user", "content": [{ "type": "text", "text": "three" }] }),
+        ];
+        let body = openai_body(&openrouter(), &request("anthropic/claude-sonnet", msgs.clone(), None));
+        let list = body["messages"].as_array().unwrap();
+        let marked = |m: &Value| m["content"].as_array().is_some_and(|c| c.iter().any(|p| p.get("cache_control").is_some()));
+        assert!(marked(&list[0]), "the system prompt");
+        let users: Vec<&Value> = list.iter().filter(|m| m["role"] == "user").collect();
+        assert!(!marked(users[0]) && marked(users[1]) && marked(users[2]), "the last two user messages, not the first");
+        let plain = openai_body(&openrouter(), &request("openai/gpt-x", msgs, None));
+        assert!(plain["messages"].as_array().unwrap().iter().all(|m| !marked(m)), "other vendors get no marker");
+    }
+
+    #[test]
+    fn a_streamed_reasoning_payload_is_collected_and_kept_ahead_of_the_answer() {
+        let sse = "data: {\"choices\":[{\"delta\":{\"reasoning_details\":[{\"i\":1}]}}]}\n\ndata: {\"choices\":[{\"delta\":{\"reasoning_details\":[{\"i\":2}],\"content\":\"hi\"}}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+        let got = parse_openai_stream(std::io::Cursor::new(sse), &mut |_| {}).unwrap();
+        assert_eq!(got.content[0]["type"], REASONING_BLOCK);
+        assert_eq!(got.content[0]["details"], json!([{ "i": 1 }, { "i": 2 }]));
+        assert_eq!(got.content[1]["text"], "hi");
+    }
 
     const TABLE: &str = "\
 | Feature | [Claude Fable 5.1](https://x/fable) | Claude Haiku 5.5 |
@@ -2086,6 +2275,22 @@ data: {\"type\":\"message_stop\"}
         assert_eq!(body.to_string().matches("cache_control").count(), 3);
         assert_eq!(req.messages[4]["content"][1].get("cache_control"), None, "the log's messages are not changed");
         assert!(!openai_body(&provider("openai"), &req).to_string().contains("cache_control"));
+    }
+
+    #[test]
+    fn a_network_failure_is_named_by_its_cause_and_says_what_to_do() {
+        let url = "https://api.deepseek.com/v1/chat/completions";
+        let said = |detail: &str| reach_failed(url, detail).to_string();
+        let closed = said("https://api.deepseek.com/v1/chat/completions: Network Error: An existing connection was forcibly closed by the remote host. (os error 10054)");
+        assert!(closed.starts_with("api.deepseek.com closed the connection before it answered"), "{closed}");
+        assert!(closed.contains("not your key") && closed.contains("send it again"), "{closed}");
+        assert!(!closed.contains("os error") && !closed.contains("io error"), "the transport's words are not shown: {closed}");
+        assert!(said("operation timed out").contains("did not answer in time"));
+        assert!(said("failed to lookup address information: No such host is known").contains("could not find api.deepseek.com"));
+        assert!(said("invalid peer certificate: UnknownIssuer").contains("secure connection"));
+        assert!(said("Connection refused (os error 10061)").contains("refused the connection"));
+        // A cause nobody recognised keeps the transport's words, so nothing is hidden.
+        assert!(said("something entirely new").contains("(something entirely new)"));
     }
 
     #[test]

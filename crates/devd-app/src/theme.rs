@@ -77,20 +77,20 @@ pub struct Theme {
 impl Global for Theme {}
 
 impl Theme {
-    /// The dark palette: graphite, with volt.
+    /// The dark palette: smooth stone, with volt.
     pub fn dark() -> Self {
         Self {
             dark: true,
-            bg: rgb(0x0c0c0e).into(),
-            surface: rgb(0x121214).into(),
-            raised: rgb(0x19191c).into(),
+            bg: rgb(0x0e0e0d).into(),
+            surface: rgb(0x141413).into(),
+            raised: rgb(0x1b1b19).into(),
             hover: rgba(0xffffff0b).into(),
             active: rgba(0xffffff14).into(),
             line: rgba(0xffffff12).into(),
             line_strong: rgba(0xffffff24).into(),
-            text: rgb(0xededf0).into(),
-            muted: rgb(0xa3a3ad).into(),
-            faint: rgb(0x6c6c76).into(),
+            text: rgb(0xeeede9).into(),
+            muted: rgb(0xa5a39d).into(),
+            faint: rgb(0x6e6c66).into(),
             accent: rgb(0xd4f24a).into(),
             on_accent: rgb(0x10130a).into(),
             accent_soft: rgba(0xd4f24a1c).into(),
@@ -100,7 +100,7 @@ impl Theme {
             info: rgb(0x6aa6ff).into(),
             selection: rgba(0xd4f24a3d).into(),
             scrim: rgba(0x000000a6).into(),
-            code: rgb(0x151518).into(),
+            code: rgb(0x161615).into(),
             diff_added: rgba(0x3fcf8e1a).into(),
             diff_added_word: rgba(0x3fcf8e52).into(),
             diff_removed: rgba(0xf2555a1a).into(),
@@ -108,20 +108,20 @@ impl Theme {
         }
     }
 
-    /// The light palette: paper, with the same signal darkened to stay legible.
+    /// The light palette: warm paper, with the same signal darkened to stay legible.
     pub fn light() -> Self {
         Self {
             dark: false,
-            bg: rgb(0xfbfbfa).into(),
-            surface: rgb(0xf4f4f2).into(),
+            bg: rgb(0xfaf9f6).into(),
+            surface: rgb(0xf3f1ec).into(),
             raised: rgb(0xffffff).into(),
             hover: rgba(0x0000000a).into(),
             active: rgba(0x00000012).into(),
             line: rgba(0x00000014).into(),
             line_strong: rgba(0x00000029).into(),
-            text: rgb(0x16161a).into(),
-            muted: rgb(0x55555e).into(),
-            faint: rgb(0x8a8a93).into(),
+            text: rgb(0x1a1917).into(),
+            muted: rgb(0x5a5852).into(),
+            faint: rgb(0x8c8982).into(),
             accent: rgb(0x4d6a00).into(),
             on_accent: rgb(0xffffff).into(),
             accent_soft: rgba(0x4d6a0017).into(),
@@ -131,7 +131,7 @@ impl Theme {
             info: rgb(0x2463c9).into(),
             selection: rgba(0x4d6a0033).into(),
             scrim: rgba(0x0000004d).into(),
-            code: rgb(0xf0f0ee).into(),
+            code: rgb(0xefede7).into(),
             diff_added: rgba(0x0f8a5517).into(),
             diff_added_word: rgba(0x0f8a5547).into(),
             diff_removed: rgba(0xc9353b14).into(),

@@ -39,6 +39,7 @@ impl View {
         let watch = cx.subscribe_in(&key, window, |this, _, event: &InputEvent, _, cx| match event {
             InputEvent::Submitted => save_key(this, cx),
             InputEvent::Cancelled => stop_adding(this, cx),
+            InputEvent::Up | InputEvent::Down => {}
             _ => {}
         });
         Self { open: None, adding: None, key, _watch: watch }
@@ -107,7 +108,7 @@ fn stat(label: &'static str, value: String, detail: String, cx: &Context<Shell>)
         .gap(px(3.0))
         .child(div().text_size(px(size::TEXT_XS)).text_color(t.faint).child(label))
         .child(div().text_size(px(size::TEXT_XL)).font_weight(FontWeight::SEMIBOLD).text_color(t.text).child(value))
-        .child(div().truncate().text_size(px(size::TEXT_XS)).text_color(t.muted).child(detail))
+        .child(div().text_size(px(size::TEXT_XS)).text_color(t.muted).child(ui::Clip::new(detail)))
 }
 
 /// What the work has cost, and how much of it the prompt cache paid for.
@@ -158,7 +159,7 @@ fn spend(usage: &Value, cx: &Context<Shell>) -> Div {
                 .flex()
                 .items_center()
                 .gap(px(14.0))
-                .child(div().w(px(220.0)).flex_none().truncate().font_family(mono()).text_size(px(size::TEXT_SM)).child(model["name"].as_str().unwrap_or_default().to_string()))
+                .child(div().w(px(220.0)).flex_none().font_family(mono()).text_size(px(size::TEXT_SM)).child(ui::Clip::new(model["name"].as_str().unwrap_or_default().to_string())))
                 // The bar is the share of the busiest model, so the eye finds where the tokens went.
                 .child(div().flex_1().h(px(4.0)).rounded_full().bg(t.hover).child(div().h_full().w(gpui::relative(share.max(0.01))).rounded_full().bg(t.muted)))
                 .child(div().w(px(76.0)).flex_none().flex().justify_end().text_size(px(size::TEXT_SM)).text_color(t.muted).child(ui::compact(tokens(model))))
@@ -243,9 +244,9 @@ fn models(provider: &Value, cx: &mut Context<Shell>) -> Div {
         };
         let (provider_id, pick) = (id.clone(), model_id.clone());
         let hover = t.hover;
-        let mut name = div().flex_1().min_w_0().flex().items_center().gap(px(8.0)).child(div().truncate().child(model["display"].as_str().unwrap_or(&model_id).to_string()));
+        let mut name = div().flex_1().min_w_0().flex().items_center().gap(px(8.0)).child(div().child(ui::Clip::new(model["display"].as_str().unwrap_or(&model_id).to_string())));
         if model["display"].as_str() != Some(model_id.as_str()) {
-            name = name.child(div().min_w_0().truncate().font_family(mono()).text_size(px(size::TEXT_XS)).text_color(t.faint).child(model_id.clone()));
+            name = name.child(div().min_w_0().font_family(mono()).text_size(px(size::TEXT_XS)).text_color(t.faint).child(ui::Clip::new(model_id.clone())));
         }
         if is_chosen {
             name = name.child(pill("in use", Tone::Accent, cx));
@@ -396,9 +397,9 @@ pub fn render(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                             .gap(px(1.0))
                             .child(title)
                             .child(if failing {
-                                div().truncate().text_size(px(size::TEXT_XS)).text_color(t.danger).child(second)
+                                div().text_size(px(size::TEXT_XS)).text_color(t.danger).child(ui::Clip::new(second))
                             } else {
-                                div().truncate().font_family(mono()).text_size(px(size::TEXT_XS)).text_color(t.faint).child(second)
+                                div().font_family(mono()).text_size(px(size::TEXT_XS)).text_color(t.faint).child(ui::Clip::new(second))
                             }),
                     )
                     .child(div().w(px(84.0)).flex_none().flex().justify_end().text_size(px(size::TEXT_SM)).text_color(t.muted).child(if count == 0 { String::new() } else { format!("{count} model{}", if count == 1 { "" } else { "s" }) }))
@@ -448,7 +449,7 @@ pub fn render(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
             grid = grid.child(
                 div()
                     .id(ui::nid("intel.preset", n))
-                    .w(px(222.0))
+                    .w(gpui::relative(0.24))
                     .h(px(52.0))
                     .px(px(11.0))
                     .flex()
@@ -461,7 +462,7 @@ pub fn render(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                     .cursor_pointer()
                     .hover(move |s| s.bg(hover))
                     .child(ui::brand(&id, &label, 28.0, cx))
-                    .child(div().flex_1().min_w_0().flex().flex_col().child(div().truncate().font_weight(FontWeight::MEDIUM).child(label)).child(div().truncate().text_size(px(size::TEXT_XS)).text_color(t.faint).child(kind)))
+                    .child(div().flex_1().min_w_0().flex().flex_col().child(div().font_weight(FontWeight::MEDIUM).child(ui::Clip::new(label))).child(div().text_size(px(size::TEXT_XS)).text_color(t.faint).child(ui::Clip::new(kind))))
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                         if needs_key {
                             this.intel.adding = Some(target.clone());

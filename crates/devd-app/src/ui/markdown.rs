@@ -8,11 +8,12 @@ use std::ops::Range;
 
 use devd_app_core::markdown::{spans, Align, Block, Inline, Item, WidgetKind};
 use gpui::{
-    div, prelude::*, px, App, Div, ElementId, FontStyle, FontWeight, HighlightStyle, InteractiveText, SharedString,
+    div, prelude::*, px, App, Div, ElementId, FontStyle, FontWeight, HighlightStyle, InteractiveText, MouseButton, SharedString,
     StrikethroughStyle, StyledText, UnderlineStyle,
 };
 use serde_json::Value;
 
+use super::links::Link;
 use super::{icon, tint};
 use crate::theme::{mono, size, theme, Tone};
 
@@ -70,15 +71,26 @@ fn draw(id: &str, block: &Block, cx: &App) -> Div {
     }
 }
 
+/// Plain text (what a person wrote, not markdown) with its files and addresses clickable.
+pub fn linked(id: &str, source: &str, cx: &App) -> gpui::AnyElement {
+    let inlines = [Inline::Text(source.to_string())];
+    text(id, &inlines, cx).into_any_element()
+}
+
 /// A run of inline content as one wrapped text element, with its links live.
 fn text(id: &str, inlines: &[Inline], cx: &App) -> impl IntoElement {
     let t = theme(cx);
     let mut content = String::new();
     let mut styles: Vec<(Range<usize>, HighlightStyle)> = Vec::new();
-    let mut links: Vec<(Range<usize>, String)> = Vec::new();
+    let mut links: Vec<(Range<usize>, Link)> = Vec::new();
+    let root = super::links::root(cx);
+    // A file or address the agent mentioned is a link even when it was not written as one.
+    let mut found: Vec<(Range<usize>, Link)> = Vec::new();
     for span in spans(inlines) {
-        let range = content.len()..content.len() + span.text.len();
-        content.push_str(&span.text);
+        // What a person wrote or an agent said can hold a devd:// address: it is drawn as a chip.
+        let (shown, inside_links) = if span.link.is_none() && !span.code { super::links::present(&span.text, root.as_deref()) } else { (span.text.clone(), Vec::new()) };
+        let range = content.len()..content.len() + shown.len();
+        content.push_str(&shown);
         let mut style = HighlightStyle::default();
         let mut styled = false;
         if span.strong {
@@ -102,21 +114,77 @@ fn text(id: &str, inlines: &[Inline], cx: &App) -> impl IntoElement {
         if let Some(url) = span.link {
             style.color = Some(t.info);
             style.underline = Some(UnderlineStyle { thickness: px(1.0), color: Some(tint(t.info, 0.5)), wavy: false });
-            links.push((range.clone(), url));
+            links.push((range.clone(), Link::Url(url)));
             styled = true;
+        } else if span.code {
+            // `src/main.rs` is a file; `cargo test` is not.
+            if let Some(link) = super::links::resolve_token(&span.text, root.as_deref()) {
+                found.push((range.clone(), link));
+            }
+        } else {
+            for (inside, link) in inside_links {
+                found.push((range.start + inside.start..range.start + inside.end, link));
+            }
         }
         if styled && !range.is_empty() {
             styles.push((range, style));
         }
     }
+    let link_style = HighlightStyle {
+        color: Some(t.info),
+        underline: Some(UnderlineStyle { thickness: px(1.0), color: Some(tint(t.info, 0.5)), wavy: false }),
+        ..HighlightStyle::default()
+    };
+    for (range, link) in found {
+        // The link's colour and underline go over the span's own style (a code span keeps its tint).
+        let mut style = styles.iter().find(|(r, _)| r.start <= range.start && range.end <= r.end).map(|(_, s)| *s).unwrap_or_default();
+        style.color = link_style.color;
+        style.underline = link_style.underline;
+        // A place in devd is a chip: tinted, so it reads as something to press.
+        if matches!(link, Link::Route(_)) {
+            style.background_color = Some(tint(t.info, 0.14));
+            style.underline = None;
+        }
+        styles.push((range.clone(), style));
+        links.push((range, link));
+    }
+    // Highlights must be in order and must not overlap: where a link sits inside a styled span, the link's wins.
+    styles.sort_by_key(|(r, _)| (r.start, r.end));
+    let mut clean: Vec<(Range<usize>, HighlightStyle)> = Vec::new();
+    for (range, style) in styles {
+        match clean.last_mut() {
+            Some((last, _)) if range.start < last.end => {
+                // Overlap: the earlier, wider style is cut where the narrower one begins.
+                if range.start > last.start {
+                    last.end = range.start;
+                    clean.push((range, style));
+                } else {
+                    clean.pop();
+                    clean.push((range, style));
+                }
+            }
+            _ => clean.push((range, style)),
+        }
+    }
+    let styles = clean;
+    links.sort_by_key(|(r, _)| r.start);
     let styled = StyledText::new(SharedString::from(content)).with_highlights(styles);
+    let layout = styled.layout().clone();
     let ranges: Vec<Range<usize>> = links.iter().map(|(range, _)| range.clone()).collect();
-    let urls: Vec<String> = links.into_iter().map(|(_, url)| url).collect();
-    InteractiveText::new(ElementId::Name(id.to_string().into()), styled).on_click(ranges, move |index, _window, cx| {
-        if let Some(url) = urls.get(index) {
-            cx.open_url(url);
+    let targets: Vec<Link> = links.into_iter().map(|(_, link)| link).collect();
+    // gpui's own click on text listens for the release only from the frame after the press,
+    // so a quick click on a slow frame is lost. The release is handled here, against the
+    // text's layout; the element inside is kept for its pointing-hand cursor over a link.
+    let hit = ranges.clone();
+    let pointer = InteractiveText::new(ElementId::Name(id.to_string().into()), styled).on_click(ranges.clone(), |_, _, _| {});
+    div().min_w_0().on_mouse_up(MouseButton::Left, move |event, _window, cx| {
+        if let Ok(at) = layout.index_for_position(event.position)
+            && let Some(n) = hit.iter().position(|range| range.contains(&at))
+        {
+            super::links::open(&targets[n], cx);
         }
     })
+    .child(pointer)
 }
 
 fn code(id: &str, lang: &str, source: &str, cx: &App) -> Div {
