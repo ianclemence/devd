@@ -251,6 +251,15 @@ mod tests {
     }
 
     #[test]
+    fn a_model_whose_name_was_not_recorded_is_shown_but_not_ranked() {
+        let stats = json!({ "models": [role("not recorded", 10, 7, 0.7, 0.2, 0.8)] });
+        let rows = models(&stats, &json!({}));
+        assert_eq!(rows[0].rank, None);
+        assert_eq!(rows[0].score, None);
+        assert_eq!(rows[0].note(), "model not recorded");
+    }
+
+    #[test]
     fn cost_is_shown_per_accepted_task_and_a_model_without_price_has_no_figure() {
         let stats = json!({ "models": [role("deepseek-chat", 4, 3, 0.75, 0.3, 0.8)] });
         let usage = json!({ "by_model": [
