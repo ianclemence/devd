@@ -118,6 +118,9 @@ pub fn commands() -> Commands {
     table.add(Command::new("intelligence.fetch", "Fetch every provider's models", "Ask each provider what its key may use", Section::Machine).keywords(&["models", "list", "refresh"]));
     table.add(Command::new("view.palette", "Command menu", "Search every action and place", Section::View).key("secondary-k"));
     table.add(Command::new("view.theme", "Switch light and dark", "Change the window's palette", Section::View).key("secondary-shift-l").keywords(&["appearance", "colour"]));
+    table.add(Command::new("view.theme.stone", "Use the Stone theme", "The graphite workbench, with volt", Section::View).keywords(&["appearance", "colour", "dither"]));
+    table.add(Command::new("view.theme.shepherd", "Use the Shepherd theme", "Wool, olive and dawn", Section::View).keywords(&["appearance", "colour", "dither"]));
+    table.add(Command::new("view.theme.harp", "Use the Harp theme", "Indigo and gold", Section::View).keywords(&["appearance", "colour", "dither"]));
     table.add(Command::new("view.refresh", "Refresh this screen", "Ask devd again for what this screen shows", Section::View).key("secondary-r").keywords(&["reload"]));
     table
 }
@@ -301,7 +304,9 @@ impl Shell {
                 devd(cx).sync.mutate(Mutation::new("hosts.sync", json!({ "elevate": true })).invalidating("site"));
             }
             other => {
-                if let Some(route) = other.strip_prefix("go.").and_then(Route::parse) {
+                if let Some(theme) = other.strip_prefix("view.theme.") {
+                    self.choose_theme(theme, cx);
+                } else if let Some(route) = other.strip_prefix("go.").and_then(Route::parse) {
                     self.history.go(route);
                 }
             }
