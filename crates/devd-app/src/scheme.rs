@@ -84,7 +84,7 @@ mod tests {
         assert_eq!(open[3], "/d");
         assert_eq!(open[4], r#""C:\Program Files\devd\devd-app.exe" "%1""#, "a path with a space stays one program, the link one argument");
         let protocol = cmds.iter().find(|c| c.contains(&"URL Protocol".to_string())).unwrap();
-        assert_eq!(protocol[4], "");
+        assert_eq!(protocol[5], "", "the value follows /d");
     }
 
     #[test]
