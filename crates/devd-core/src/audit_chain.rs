@@ -173,9 +173,12 @@ impl<'a> Checker<'a> {
         if self.saved_head.is_some_and(|(id, _)| *id == r.id) {
             self.head_seen = Some(self.saved_head.is_some_and(|(_, h)| *h == r.hash));
         }
-        // A row without a hash after one with a hash is a row someone blanked to hide an edit.
+        // A row without a hash among chained ones was written by an older devd that was still running
+        // (a window left open across an upgrade, a background daemon): it cannot add to the chain. It is
+        // counted, not blamed. Blanking a hash to hide an edit does not escape the check: the next
+        // chained row still points at the hash that was blanked, so the link after it breaks.
         if r.hash.is_empty() {
-            self.fail(r.id, "a row in the middle of the chain has no hash");
+            self.out.unchained += 1;
             return;
         }
         self.out.checked += 1;
@@ -356,10 +359,34 @@ mod tests {
     }
 
     #[test]
-    fn a_blanked_hash_in_the_middle_is_a_break() {
+    fn a_blanked_hash_does_not_hide_an_edit_because_the_next_link_still_points_at_it() {
         let mut rows = chain(4);
-        rows[2].hash.clear();
-        assert!(!verify(&rows, None, None).intact);
+        rows[1].message = "edited".into();
+        rows[1].hash.clear();
+        let v = verify(&rows, None, None);
+        assert!(!v.intact, "{v:?}");
+        assert_eq!(v.first_break.unwrap().id, 3, "row 3 follows a hash that is no longer there");
+    }
+
+    #[test]
+    fn a_blanked_last_row_is_found_by_the_saved_head() {
+        let mut rows = chain(4);
+        let saved = head(&rows);
+        rows[3].hash.clear();
+        let v = verify(&rows, None, Some(&saved));
+        assert!(!v.intact, "{v:?}");
+    }
+
+    #[test]
+    fn rows_an_older_devd_wrote_in_the_middle_are_counted_and_the_chain_continues_past_them() {
+        let mut rows = chain(2);
+        let mut older = row(3, "", "written by an older devd");
+        older.hash.clear();
+        rows.push(older);
+        let prev = rows[1].hash.clone();
+        rows.push(row(4, &prev, "chained again"));
+        let v = verify(&rows, None, None);
+        assert!(v.intact && v.checked == 3 && v.unchained == 1, "{v:?}");
     }
 
     #[test]

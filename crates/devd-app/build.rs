@@ -13,6 +13,7 @@
 use std::{env, fs, path::PathBuf, process::Command};
 
 fn main() {
+    embed_icon();
     println!("cargo:rerun-if-env-changed=DEVD_KTMW32_LIB");
     let windows_gnu = env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
         && env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("gnu");
@@ -33,5 +34,26 @@ fn main() {
     let out = PathBuf::from(env::var_os("OUT_DIR").expect("cargo sets OUT_DIR"));
     if fs::copy(&lib, out.join("libktmw32.a")).is_ok() {
         println!("cargo:rustc-link-search=native={}", out.display());
+    }
+}
+
+/// Put the devd icon in the executable, so the window's title bar, the taskbar and Explorer show it
+/// instead of the default application icon. Windows only, and only when a resource compiler is
+/// on the machine: a build must never depend on one, so without it the icon is simply missing.
+fn embed_icon() {
+    println!("cargo:rerun-if-changed=../devd-desktop/icons/icon.ico");
+    println!("cargo:rerun-if-changed=devd.rc");
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+        return;
+    }
+    let found = env::var_os("PATH").is_some_and(|paths| {
+        env::split_paths(&paths).any(|dir| ["llvm-rc.exe", "windres.exe", "rc.exe"].iter().any(|n| dir.join(n).is_file()))
+    });
+    if !found {
+        println!("cargo:warning=no resource compiler (llvm-rc, windres or rc.exe) was found; devd-app.exe keeps the default icon");
+        return;
+    }
+    if let Err(e) = embed_resource::compile("devd.rc", embed_resource::NONE).manifest_optional() {
+        println!("cargo:warning=the devd icon could not be embedded: {e}");
     }
 }
