@@ -8,8 +8,8 @@
 //! models" reports, and they are why every conversation recorded a cost of
 //! nothing: the price was never known.
 //!
-//! So devd reads the open catalogue at <https://models.dev>, the same source
-//! opencode and T3 Code use, and uses it in three layers:
+//! So devd reads the open catalogue at <https://models.dev>, which several
+//! agent tools share, and uses it in three layers:
 //!
 //! 1. **A copy compiled into devd.** It is always there: offline, before any
 //!    key, on first start.

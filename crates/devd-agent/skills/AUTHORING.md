@@ -2,7 +2,7 @@
 
 A skill is a file an agent reads in full when it starts a kind of work. Every skill's one-line description is in every prompt; its body is read only when it is called. These rules keep the first cheap and the second worth reading. A test (`every_built_in_skill_meets_the_authoring_standard` in `src/skills.rs`) enforces the ones that can be checked.
 
-The format and the standards below follow what works in other agent projects: Hermes Agent's hardline authoring standards (short descriptions, a fixed section order, native tool names, helper scripts rather than inline code), T3 Code's skills (explicit boundaries, fallbacks, the exact failure state, references loaded on demand), and the Agent Skills convention (a name, a description that says when to use it, a body that explains why).
+The format and the standards below follow what works in agent skills generally: short descriptions, a fixed section order, native tool names, helper scripts rather than inline code, explicit boundaries and fallbacks, the exact failure state, references loaded on demand, and the Agent Skills convention (a name, a description that says when to use it, a body that explains why).
 
 ## File
 
