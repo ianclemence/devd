@@ -645,6 +645,38 @@ mod tests {
         assert!(names.len() > 50, "the built-in set is unexpectedly small");
     }
 
+    /// The standard in `skills/AUTHORING.md`, enforced so it cannot drift.
+    ///
+    /// The index of every skill is in each prompt, so a description is paid for
+    /// on every turn; the body is paid for whenever the skill is read, so it is
+    /// kept to what changes what an agent does.
+    #[test]
+    fn every_built_in_skill_meets_the_authoring_standard() {
+        // Utilities devd has a tool for. A skill names the tool, which is also the one that is permitted.
+        const SHELL: &[&str] = &["grep", "cat", "head", "tail", "sed", "awk", "find", "ls", "rm", "curl", "kill", "pkill"];
+        const MARKETING: &[&str] = &["powerful", "comprehensive", "seamless", "advanced", "robust", "cutting-edge", "leverage", "game-changing"];
+        for (file, raw) in BUILTIN {
+            let s = parse(raw, "builtin").unwrap();
+            let who = format!("skills/{file}.md");
+            assert!(s.description.chars().count() <= 90, "{who}: the description is {} characters; it is in every prompt, so keep it to 90", s.description.chars().count());
+            assert!(known_kind(&s.kind), "{who}: `{}` is not a kind devd names", s.kind);
+            assert!(!s.roles.is_empty(), "{who}: no roles, so no role would ever be offered it");
+            assert!(s.body.starts_with("# "), "{who}: the body starts with a title");
+            for heading in ["## When to use", "## Pitfalls", "## Verification"] {
+                assert!(s.body.contains(&format!("\n{heading}\n")), "{who}: missing `{heading}`");
+            }
+            assert!(s.body.lines().count() <= 100, "{who}: {} lines; a skill is read in full, so keep it to 100", s.body.lines().count());
+            assert!(s.body.chars().count() <= 6_000, "{who}: {} characters; keep it to 6,000", s.body.chars().count());
+            let lower = format!("{} {}", s.description, s.body).to_lowercase();
+            for word in MARKETING {
+                assert!(!lower.split(|c: char| !c.is_alphanumeric() && c != '-').any(|w| w == *word), "{who}: `{word}` says nothing a reader can act on");
+            }
+            for tool in SHELL {
+                assert!(!s.body.contains(&format!("`{tool}`")), "{who}: names the shell utility `{tool}`; name the devd capability that does it (search_files, read_file, project.exec)");
+            }
+        }
+    }
+
     #[test]
     fn a_missing_skill_is_found_in_another_agents_folder_and_read_without_installing() {
         let (_p, paths) = temp_paths();

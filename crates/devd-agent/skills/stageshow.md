@@ -1,33 +1,33 @@
 ---
 name: stageshow
-description: Compose faux product stills, short UI animations and bento layouts for a walkthrough
+description: Compose product stills, short UI animations and bento layouts
 kind: build
 roles: designer,frontend,docs,implementer,researcher
 ---
 
 # Stageshow
 
-A stage is a frame that explains a product moment. Compose the real interface,
-not a mock of it, and frame it so one idea is legible.
+A stage is a frame that explains one product moment. It composes the real interface, not a mock of it, and frames it so one idea is legible.
 
-## Work
+## When to use
 
-1. Pick the moment: the decision, the proof, the handoff. One moment per frame.
-2. Build the frame from the product's own surfaces, spacing and type. If the
-   product has a component, use it; do not redraw a button.
-3. Give the frame a clear focal point: one panel, one row or one number. Crop
-   rather than shrink.
-4. For a bento, each cell earns its place by answering a different question.
-   Keep the grid on the same gap as the app.
-5. Animate only the change the frame is about: a row arriving, a value settling,
-   a panel opening. Nothing loops.
-6. Inspect at 1600 and 800 wide. Text must not be below 12 px, and nothing may
-   overflow its cell.
+A walkthrough, a launch still, a bento of features, a short animation of one change.
 
-## Rules
+## Procedure
 
-- Real data or clearly marked sample data; never a number that looks measured
-  but is invented.
-- No unrelated logos, gradients, glass or stock imagery.
-- A still must be readable without the animation, and the animation must add
-  understanding rather than decoration.
+1. Pick the moment: the decision, the proof, the handoff. One per frame.
+2. Build the frame from the product's own surfaces, spacing and type. Use its components; do not redraw a button.
+3. Give the frame a focal point: one panel, row or number. Crop rather than shrink.
+4. For a bento, each cell answers a different question, on the same gap as the app.
+5. Animate only the change the frame is about: a row arriving, a value settling. Nothing loops.
+6. Check at 1600 and 800 wide (`browser.screenshot`). Text no smaller than 12 px; nothing overflows its cell.
+
+## Pitfalls
+
+- A number that looks measured and is invented. Use real data or clearly marked sample data.
+- Unrelated logos, gradients, glass or stock imagery.
+- An animation that is needed to understand the still.
+
+## Verification
+
+Each still reads without its animation, and every number can be traced to a source.

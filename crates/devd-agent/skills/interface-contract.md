@@ -1,81 +1,36 @@
 ---
 name: interface-contract
-description: Write a result as Markdown the window renders, using the shared tables, code, diffs and status words
+description: Write results as Markdown the window renders, using shared tables and visuals
 kind: build
 roles: planner,architect,researcher,implementer,qa,reviewer,frontend,backend,mobile,data,designer,docs,infra,security
 ---
 
 # The interface contract
 
-A conversation turn is rendered by devd, not by a browser. You choose the
-content; the window chooses the form. Call `design.manifest` when you need the
-exact list.
+A conversation turn is rendered by devd, not by a browser. You choose the content; the window chooses the form. Call `design.manifest` for the exact list. Nothing here lets an agent draw a control or run script: output is data, and the application keeps the authority to act.
 
-## What you may write
+## When to use
 
-- headings, paragraphs, ordered and unordered lists
-- Markdown tables with a header row
-- fenced code with a language name (`php`, `rust`, `ts`, `sh`, ...)
-- fenced `diff` for a patch you applied or read
-- blockquotes
-- public `http` and `https` links, inline code, strong and emphasis
-- maths as `$...$` inline and `$$...$$` on its own lines
-- a fenced `mermaid` diagram for a flow or a structure
-- declared visuals: a fenced block named `chart`, `metrics`, `steps`, `timeline`
-  or `details` holding JSON. The window checks the data and draws it; data that
-  does not check stays a code block.
+Writing any answer, report or summary that a person will read in the window.
 
-Everything else is escaped as text. There is no HTML path.
+## Procedure
 
-## Declared visuals
+1. **Allowed.** Headings, paragraphs, lists; Markdown tables with a header row; fenced code with a language; fenced `diff` for a patch; blockquotes; public `http` and `https` links; inline code, strong, emphasis; maths as `$...$` and `$$...$$`; a fenced `mermaid` diagram.
+2. **Declared visuals.** A fenced block named `chart`, `metrics`, `steps`, `timeline` or `details` holding JSON. The window checks the data and draws it; data that does not check stays a code block.
+   - `chart`: `{"title","subtitle?","unit?","bars":[{"label","note?","value","color?"}],"takeaway?","source?"}`
+   - `metrics`: `{"items":[{"label","value","unit?","delta?","detail?","color?"}],"lower_is_better?"}`; a delta starting with + is green and - is red (reversed when lower is better).
+   - `steps`: `{"title?","items":["Plan","Build","Test"],"current":1}`
+   - `timeline`: `{"items":[{"at?","text","detail?","tone?"}]}`
+   - `details`: `{"title","hint?","body":"Markdown"}`, folded until opened.
+3. **Colour** is one of red, orange, yellow, green, teal, blue, violet, pink, or a tone (success, warning, error, info). Give it a meaning and keep it: green better, red worse, one colour per series.
+4. **Choose the shape.** Numbers to compare: a `chart` with a takeaway. A few headline numbers: `metrics`. Where a process stands: `steps`. What happened, in order: `timeline`. Named columns: a table. A command, file or patch: a code block. A long report: the answer first, and the window folds the rest.
 
-```chart
-{"title":"Time to set up a worktree","subtitle":"median of 42 runs","unit":"s",
- "bars":[{"label":"macOS","note":"before","value":38.6,"color":"red"},
-         {"label":"Linux","note":"after the cache fix","value":3.8,"color":"green"}],
- "takeaway":"Linux is 10x faster","source":"pnpm install, fresh worktree"}
-```
+## Pitfalls
 
-- `metrics`: `{"items":[{"label","value","unit?","delta?","detail?","color?"}],"lower_is_better?"}`;
-  a delta starting with + is green and with - is red (the other way round when
-  lower is better). For one number where lower is better in a mixed strip, set
-  `"delta_tone": "success"` or `"error"` on that item.
-- `steps`: `{"title?","items":["Plan","Build","Test"],"current":1}`.
-- `timeline`: `{"items":[{"at?","text","detail?","tone?"}]}`.
-- `details`: `{"title","hint?","body":"Markdown"}`, folded until opened.
+- Raw HTML, script, style, iframe, form controls, canvas, external widgets, `javascript:` or `data:` URLs, or your own CSS. All are escaped as text.
+- Inventing buttons. A decision is asked through the approval or inbox capability and the window draws the real control.
+- A status carried by colour alone. Say "the check failed" or "all 72 tests passed"; the dot is decoration.
 
-A colour is one of red, orange, yellow, green, teal, blue, violet, pink, or a
-tone: success, warning, error, info. Give it a meaning and keep it: green is
-better, red is worse, one colour per series.
+## Verification
 
-## Choose the shape
-
-| You have | Write |
-|---|---|
-| numbers to compare | a `chart` with a takeaway |
-| a few headline numbers | `metrics` |
-| where a process stands | `steps` |
-| what happened, in order | `timeline` |
-| named columns | a table |
-| a command, file or patch | a fenced code block |
-| a sequence | an ordered list |
-| a decision that changes the work | one sentence, then the detail |
-| a long report | the answer first; the window folds the rest |
-
-## Never
-
-Do not emit raw HTML, script, style, iframe, form controls, canvas, external
-widgets, `javascript:` or `data:` URLs, or your own CSS. Do not invent buttons:
-a decision is asked through the approval or inbox capability, and the window
-draws the real control.
-
-## Words before colour
-
-Say "the check failed" or "all 72 tests passed". A status is a word; the dot
-beside it is decoration. Never make a colour the only signal.
-
-## What this protects
-
-Generated controls would bypass the permission, approval, evidence and audit
-model. The renderer keeps an agent's output data, and the application keeps the
-authority to act.
+Every visual block parses as JSON with the fields above, and the answer is understandable with the visuals removed.

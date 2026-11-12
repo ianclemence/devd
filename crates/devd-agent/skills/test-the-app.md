@@ -1,34 +1,34 @@
 ---
 name: test-the-app
-description: Use before saying a visible change works: run the real app against a copy of real data, never the live install, and watch the affected flow end to end
+description: Run the real app on a copy of real data and watch the changed flow
 kind: check
 roles: implementer,frontend,qa,reviewer,designer
 ---
 
 # Test the app
 
-A change that type-checks and passes its tests can still be wrong on screen. Once, after the tests pass, look at the real thing.
+A change that type-checks and passes its tests can still be wrong on screen. Once the tests pass, this looks at the real thing, against a copy of real data and never the live install.
 
-## Never test on the live install
+## When to use
 
-The person's running devd, database and sites are theirs, and in use while you work. Reading or copying from them is fine and is the best source of test data. Writing to them, starting a second server against them, or cleaning them up is not. Run your copy with its own data folder: `DEVD_HOME` pointing at a copy of `state.db` (copy `state.db`, `state.db-wal` and `state.db-shm` together, with the live server idle or read-only). Copy in; never symlink, and never copy back.
+Any visible change, and any change to behaviour a person relies on.
 
-An empty database is a bad test. A conversation with 800 events, a paused run, a provider with no key: these are what real use looks like, and they are what breaks.
+## Procedure
 
-## Ports and processes
+1. **Copy, never share.** The person's running devd, database and sites are in use. Point your own copy at its own data folder (`DEVD_HOME`) holding a copy of `state.db`, `state.db-wal` and `state.db-shm` together. Copy in; never symlink, never copy back.
+2. **Use meaningful data.** A conversation with 800 events, a paused run, a provider with no key. An empty database is a bad test.
+3. **Own your processes** (`touch-only-what-you-started`). Pick a port, read the real one from the server's output, and stop only the process id you captured.
+4. **Do not spend what you do not need to.** Use a recorded conversation, or the cheapest model that exercises the behaviour. Use a provider's real behaviour only when the change depends on it.
+5. **Exercise the flow** the change touched, then the neighbours: empty, error, a long name, a narrow window, light and dark. Open it from every way in: a link, the command menu, a key (`agent-browser`).
+6. Capture proof that survives: a screenshot in the project, and the console and network clean or explained.
 
-- Use a port you chose, and read the real one from the server's own output.
-- Stop only what you started, by the process id you captured when you started it. Never end a process by matching a name or path: your own agent has that path in its command line, and this machine is running other servers.
-- An assistant turn ending is not teardown. Leave the server and the page up while the person looks, and say what is running.
+## Pitfalls
 
-## Do not spend what you do not need to
+- Starting a second server against the live database.
+- Stopping a process by name or path.
+- "It feels fine" for motion or timing. Say what you measured.
+- Tearing everything down when your turn ends. Leave the server and page up while the person looks, and say what is running.
 
-Real model turns cost money. To watch a turn render, use a recorded conversation, or the cheapest model that exercises the behaviour. Use a provider's real behaviour only when the change depends on it.
+## Verification
 
-## What to look at
-
-Exercise the flow the change touched, then the neighbours: the empty state, the error state, a long name, a narrow window, light and dark. Open it from every way in (a link, the command menu, a key), because a change that works from one entry point and not another is the commonest defect there is.
-
-Capture proof that survives: a screenshot saved in the project, the console and the network log clean or explained. For motion or timing, say what you measured, not that it "feels fine".
-
-Report what you ran, what you saw, and what you did not check.
+The report lists what you ran, what you saw, and what you did not check.
