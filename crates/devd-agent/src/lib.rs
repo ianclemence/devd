@@ -47,6 +47,7 @@ pub mod policy;
 pub mod host;
 pub mod judge;
 pub mod memory;
+pub mod modelsdev;
 pub mod needs;
 pub mod prompts;
 pub mod providers;

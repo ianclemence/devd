@@ -496,6 +496,9 @@
     moonshot: "moonshot", gemini: "gemini", openrouter: "openrouter",
     ollama: "ollama", "lm-studio": "lmstudio", mistral: "mistral", groq: "groq",
     together: "together", fireworks: "fireworks", xai: "xai", claude: "claude",
+    cerebras: "cerebras", perplexity: "perplexity", zai: "zai", cohere: "cohere",
+    sambanova: "sambanova", nvidia: "nvidia", deepinfra: "deepinfra",
+    huggingface: "huggingface", "ollama-cloud": "ollama-cloud",
     // Services.
     mysql: "mysql", mariadb: "mariadb", postgresql: "postgresql", mongodb: "mongodb",
     redis: "redis", valkey: "valkey", typesense: "typesense", sqlite: "sqlite",
@@ -1293,7 +1296,7 @@
     ["toolchain", "Tools", "CLI tools and package managers"], ["runtimes", "Runtimes", "language versions and PHP settings"],
     ["databases", "Databases", "database users and backups"], ["remote", "Remote", "servers and SSH keys"],
     ["certificates", "Certificates", "local HTTPS"], ["hosts", "Hosts", "hostname entries"],
-    ["providers", "Models", "AI providers, keys and models"], ["activity", "Activity", "what was done, by whom"],
+    ["providers", "Intelligence", "AI providers, keys and models"], ["activity", "Activity", "what was done, by whom"],
     ["system", "Diagnostics", "health checks and fixes"], ["capabilities", "API and tools", "every capability, for scripts and agents"]
   ];
 
@@ -1480,7 +1483,7 @@
     server: [["overview", "Overview"], ["services", "Services"], ["runtimes", "Runtimes"], ["databases", "Databases"], ["toolchain", "Tools"], ["remote", "Remote"]]
   };
   var AREA_HOME = { assistant: "assistant", runs: "team", projects: "projects", sites: "sites", agents: "agents", server: "overview" };
-  var AREA_NAME = { assistant: "Assistant", runs: "Agent runs", projects: "Projects", sites: "Sites", agents: "Team", server: "Machine" };
+  var AREA_NAME = { assistant: "Assistant", runs: "Agent runs", projects: "Projects", sites: "Sites", agents: "Team", server: "Server" };
 
   function areaOf(view) { return AREA[view] || view; }
 
@@ -1809,13 +1812,13 @@
       { view: "assistant", area: "assistant", label: "Assistant", icon: "i-spark", live: working > 0, badge: asstBadge, badgeTone: asstTone, hint: asstHint, phone: true },
       { view: "team", area: "runs", label: "Runs", icon: "i-layers", live: live.length > 0, badge: runsBadge, badgeTone: runsTone, hint: runsHint, phone: true },
       { view: "agents", area: "agents", label: "Team", icon: "i-team" },
+      { view: "providers", area: "providers", label: "Intelligence", icon: "i-sliders" },
       { sep: true },
       { view: "projects", area: "projects", label: "Projects", icon: "i-folder" },
       { view: "sites", area: "sites", label: "Sites", icon: "i-globe" },
-      { view: "overview", area: "server", label: "Machine", icon: "i-server" }
+      { view: "overview", area: "server", label: "Server", icon: "i-server" }
     ];
     var foot = [
-      { view: "providers", area: "providers", label: "Models", icon: "i-sliders" },
       { view: "activity", area: "activity", label: "Activity", icon: "i-clock" },
       { view: "capabilities", area: "capabilities", label: "API", icon: "i-code" },
       { view: "system", area: "system", label: "Diagnostics", icon: "i-gauge", dot: health === "critical" || health === "unavailable" ? "bad" : health === "degraded" || health === "setup_incomplete" ? "warn" : "" }
@@ -2218,7 +2221,7 @@
       servicesLine()
     ].filter(Boolean);
     var disks = (m.disks || []).map(function (x) { return esc(x.mount) + " " + esc(String(x.free_gb)) + " GB free of " + esc(String(x.total_gb)) + " GB"; }).join(" \u00b7 ");
-    return uiHead("Machine", null, "") + uiList([
+    return uiHead("Server", null, "") + uiList([
       uiRow({ dot: "off", title: "This machine", sub: esc(parts.join(" \u00b7 ")), wrap: true }),
       disks ? uiRow({ dot: "off", title: "Disks", sub: disks, wrap: true }) : ""
     ].filter(Boolean));
@@ -3454,7 +3457,7 @@
         actions: '<button type="button" class="btn btn-mini" data-action="ops-health-check" data-site="' + attr(c.site) + '">Ask now</button><button type="button" class="btn btn-mini btn-danger" data-action="ops-health-remove" data-site="' + attr(c.site) + '">Stop</button>'
       });
     });
-    return uiHead("Machine", null, "") + machine +
+    return uiHead("Server", null, "") + machine +
       uiHead("Site health", checks.length, '<button type="button" class="btn btn-mini btn-primary" data-action="ops-health-add">Watch a site</button>') +
       (rows.length ? uiList(rows) : uiEmpty("No sites are watched", "devd asks the site for its front page every minute while it is open and tells the alert targets when it goes down and when it is back.")) ;
   }
@@ -6939,7 +6942,7 @@ var TERM_POLL_MS = 250;
     var map = [
       [/^(service|stack|web)\./, "services", "Services"], [/^(site|tls|hosts|dns|share)\./, "sites", "Sites"],
       [/^(team|run|schedule)\./, "team", "Agents"], [/^(project|git|fs|review|memory)\./, "projects", "Projects"],
-      [/^(provider|models)\./, "providers", "Models"], [/^(runtime|php|toolchain)\./, "runtimes", "Runtimes"],
+      [/^(provider|models)\./, "providers", "Intelligence"], [/^(runtime|php|toolchain)\./, "runtimes", "Runtimes"],
       [/^(approval|inbox)\./, "inbox", "Inbox"], [/^(mcp|capability|tools)\./, "capabilities", "API and tools"]
     ];
     for (var i = 0; i < map.length; i++) if (map[i][0].test(c)) return { view: map[i][1], label: map[i][2] };
@@ -6986,10 +6989,9 @@ var TERM_POLL_MS = 250;
     var words = activityWords(id);
     if (words) return words;
     if (CAP_SUMMARY[id]) return CAP_SUMMARY[id];
-    var parts = String(id || "").replace(/^mcp__[^_]+__/, "").split(/[._]/).filter(Boolean);
-    if (!parts.length) return "an operation";
-    var text = parts.join(" ");
-    return text.charAt(0).toUpperCase() + text.slice(1);
+    if (!id) return "an operation";
+    // The same words a conversation uses for the same capability.
+    return toolWords(id);
   }
 
   function activityWho(actor) {
@@ -9109,7 +9111,7 @@ var TERM_POLL_MS = 250;
       AI.usageLoading = true;
       read("models.usage").then(function (u) { AI.usage = u; AI.usageLoading = false; if (state.view === "providers") renderProviders(); }).catch(function () { AI.usageLoading = false; });
     }
-    el("main").innerHTML = page("Models", "",
+    el("main").innerHTML = page("Intelligence", "",
       '<button type="button" class="btn" data-action="prov-discover">Find local servers</button>',
       (AI.providers.length ? modelsInUse() : "") + usageHtml(AI.usage) +
       (cards ? uiHead("Providers", AI.providers.length) + '<div class="provider-list">' + cards + "</div>" : empty) +
@@ -9511,9 +9513,9 @@ var TERM_POLL_MS = 250;
     if (b.name === "devd_invoke") {
       var id = i.id || "invoke";
       var a = i.args || {};
-      return { title: capabilityName(id), detail: callDetail(id, a) || id };
+      return { title: capabilityName(id), detail: callDetail(id, a) };
     }
-    if (b.name === "devd_describe") return { title: "Describe", detail: i.id || "" };
+    if (b.name === "devd_describe") return { title: "Describe", detail: "" };
     if (b.name === "devd_capabilities") {
       var q = [i.group, i.query].filter(Boolean).join(" ");
       return { title: "Search capabilities", detail: q ? "for " + q : "" };
@@ -9540,10 +9542,9 @@ var TERM_POLL_MS = 250;
     if (a.name) return String(a.name);
     var keys = Object.keys(a);
     if (!keys.length) return "";
-    return keys
-      .slice(0, 2)
-      .map(function (k) { return k + "=" + JSON.stringify(a[k]); })
-      .join(" ");
+    // The first thing said in words; an argument list is for the expanded view.
+    for (var n = 0; n < keys.length; n++) if (typeof a[keys[n]] === "string" && a[keys[n]]) return a[keys[n]];
+    return "";
   }
 
   /* Token counts are context, not arithmetic: 192497 is read as 192k. */
@@ -9619,9 +9620,30 @@ var TERM_POLL_MS = 250;
   function capabilityName(id) {
     if (!id) return "Tool";
     if (CAPABILITY_NAME[id]) return CAPABILITY_NAME[id];
-    var tail = String(id).split(".").pop() || String(id);
-    tail = tail.replace(/_/g, " ");
-    return tail.charAt(0).toUpperCase() + tail.slice(1);
+    return toolWords(id);
+  }
+
+  /* What a call did, in a person's words, for any capability at all.
+   *
+   * The phrases come from the table devd's native window uses (served as
+   * /toolnames.js), so the two interfaces cannot disagree. A capability
+   * nobody wrote a phrase for is read from its own id, verb first:
+   * "git.branch.create" is "Git: Create branch". A dotted id is never shown. */
+  function toolWords(id) {
+    var table = window.DEVD_TOOLS || {};
+    id = String(id || "");
+    if (table.direct && table.direct[id]) id = table.direct[id];
+    if (table.known && table.known[id]) return table.known[id].done;
+    var sentence = function (t) { return t.charAt(0).toUpperCase() + t.slice(1); };
+    var words = function (t) { return String(t).replace(/[_-]/g, " "); };
+    var mcp = /^mcp__(.*?)__(.*)$/.exec(id);
+    if (mcp) return sentence(words(mcp[2])) + " (" + words(mcp[1]) + ")";
+    var parts = id.split(".");
+    var domain = parts.length > 1 ? parts.shift() : "";
+    var phrase = sentence(parts.reverse().map(words).join(" "));
+    if (!domain) return phrase || "Tool";
+    var name = /^(tls|php|dns|mcp|ssh)$/.test(domain) ? domain.toUpperCase() : sentence(words(domain));
+    return name + ": " + phrase;
   }
 
   /* What kind of work a call did, for the one-line summary of a run.
@@ -9783,7 +9805,7 @@ var TERM_POLL_MS = 250;
       case "search": return t0.query ? "Searched for “" + cut(t0.query, 40) + "”" + (items.length > 1 ? " and " + (items.length - 1) + " more" : "") : "Searched the code";
       case "searchcaps": return "Looked up devd's tools" + (t0.query ? " for " + cut(t0.query, 40) : "");
       case "list": return "Looked through " + listNames(names.map(function (n) { return n ? n + "/" : ""; }), "folder");
-      case "describe": return "Checked how " + listNames(items.map(function (t) { return t.args && t.args.id ? t.args.id : (t.id === "devd_describe" ? ((t.args || {}).id || "") : ""); }), "tool") + " works";
+      case "describe": return "Checked how to use " + listNames(items.map(function (t) { var id = (t.args || {}).id || ""; return id ? toolWords(id).toLowerCase() : ""; }), "tool");
       case "domains": return "Listed devd's tool areas";
       case "skill": return "Read the " + listNames(items.map(function (t) { return (t.args && t.args.name) || ""; }), "skill") + (items.length === 1 ? " skill" : " skills");
       case "plan": return "Updated the plan";
@@ -9795,13 +9817,13 @@ var TERM_POLL_MS = 250;
       case "inbox": return "Checked the inbox";
       case "projects": return "Listed projects";
       default:
-        if (STEP_WORDS[t0.id]) return STEP_WORDS[t0.id] + (t0.args && t0.args.url ? " " + cut(t0.args.url, 50) : "");
-        // An unknown capability still reads as an action on a thing: "team.get" is
-        // "Checked team", not "Get".
-        var parts = String(t0.id || "").split(".");
-        var verb = { get: "Checked", list: "Listed", status: "Checked", show: "Checked", read: "Read", create: "Created", add: "Added", update: "Updated", set: "Set", start: "Started", stop: "Stopped", run: "Ran", delete: "Removed", remove: "Removed", post: "Posted", fetch: "Fetched" }[parts[1]];
-        if (parts.length === 2 && verb) return verb + " " + parts[0].replace(/_/g, " ") + (t0.name || t0.query ? " " + cut(t0.name || t0.query, 40) : "");
-        return (CAP_SUMMARY[t0.id] || capLabel(t0.id)) + (t0.cmd || t0.name || t0.query ? " · " + cut(t0.cmd || t0.name || t0.query, 50) : "");
+        // The shared table first, so this reads as the native window does; then
+        // the phrases only this interface has; then the id itself, as words.
+        var known = (window.DEVD_TOOLS || {}).known || {};
+        var said = known[t0.id] ? known[t0.id].done : (STEP_WORDS[t0.id] || toolWords(t0.id));
+        var a0 = t0.args || {};
+        var what = a0.url || t0.cmd || t0.name || t0.query || a0.branch || a0.name || "";
+        return said + (what ? " " + cut(what, 60) : "");
     }
   }
   /* A command that reports failed tests is a failed result even though the tool
@@ -12619,10 +12641,10 @@ var TERM_POLL_MS = 250;
     var p = typeof id === "string" ? providerById(id) : id;
     if (!p) return { key: "missing", tone: "off", label: "missing", detail: "This provider no longer exists." };
     if (p.enabled === false) {
-      return { key: "disabled", tone: "off", label: "disabled", detail: "Enable it on its card in Models." };
+      return { key: "disabled", tone: "off", label: "disabled", detail: "Enable it on its card in Intelligence." };
     }
     if (!providerConfigured(p)) {
-      return { key: "unconfigured", tone: "warn", label: "needs a key", detail: "Add a key on its card in Models." };
+      return { key: "unconfigured", tone: "warn", label: "needs a key", detail: "Add a key on its card in Intelligence." };
     }
     if (p.check_ok === false) {
       return { key: "error", tone: "bad", label: "not answering", detail: p.fetch_error || p.check_message || "The last check failed." };
@@ -13066,9 +13088,9 @@ var TERM_POLL_MS = 250;
     var state = provider ? providerState(provider) : null;
     var disabled = !!(provider && provider.enabled === false);
     if (disabled) {
-      notes.push('<div class="popover-note is-warn">This provider is disabled. Enable it on its card in Models.</div>');
+      notes.push('<div class="popover-note is-warn">This provider is disabled. Enable it on its card in Intelligence.</div>');
     } else if (state && state.key === "unconfigured") {
-      notes.push('<div class="popover-note is-warn">No key for ' + esc(provider.label) + ". Add one in Models.</div>");
+      notes.push('<div class="popover-note is-warn">No key for ' + esc(provider.label) + ". Add one in Intelligence.</div>");
     }
     if (AI.modelBusy[rail]) {
       notes.push('<div class="popover-note">Refreshing ' + esc(provider ? provider.label : "the provider") + "’s models…</div>");
@@ -13088,13 +13110,13 @@ var TERM_POLL_MS = 250;
       var title = (m.source === "provider" ? "From the provider's list" : m.source === "custom" ? "Added by hand" : "Saved on the provider card");
       var row = '<div class="model-row' + (active ? " is-active" : "") + (disabled ? " is-disabled" : "") + '"' +
         (disabled ? ' aria-disabled="true"' : ' data-action="composer-model-set" data-provider="' + attr(rail) + '" data-value="' + attr(m.model_id) + '"') +
-        ' role="option" aria-selected="' + (active ? "true" : "false") + '" title="' + attr(disabled ? "Enable this provider in Models first" : title) + '">' +
+        ' role="option" aria-selected="' + (active ? "true" : "false") + '" title="' + attr(disabled ? "Enable this provider in Intelligence first" : title) + '">' +
         brandImg(rail, "model-brand") +
         '<span class="model-row-name">' + esc(label) + "</span>" +
         tags +
         '<span class="model-radio" aria-hidden="true"></span></div>';
       return row;
-    }).join("") || '<div class="popover-note">' + (q ? "No model matches." : "No models listed. Refresh, or add one in Models.") + "</div>";
+    }).join("") || '<div class="popover-note">' + (q ? "No model matches." : "No models listed. Refresh, or add one in Intelligence.") + "</div>";
     var exact = models.some(function (m) { return m.model_id === q; });
     var custom = q && !models.length && !exact && !disabled
       ? '<button type="button" class="model-row model-row-custom" data-action="composer-custom-model" data-value="' + attr(q) + '">' +

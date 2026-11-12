@@ -475,41 +475,61 @@ pub fn write(ctx: &Ctx, path: &str, content: &str, create_dirs: bool) -> Result<
     ))
 }
 
+/// One replacement: the exact text to find, what to put there, and whether
+/// every occurrence is meant.
+pub type Replacement<'a> = (&'a str, &'a str, bool);
+
 /// Replace text in a file. The old text must match exactly once unless
 /// `replace_all` is set.
 pub fn edit(ctx: &Ctx, path: &str, old: &str, new: &str, replace_all: bool) -> Result<Value> {
+    edit_many(ctx, path, &[(old, new, replace_all)])
+}
+
+/// Make several replacements in one file, in order, as one change.
+///
+/// Each is applied to the text the one before it left, exactly as separate
+/// edits would be, but the file is written once and only if every one of them
+/// applies. A change that needs three edits to a file used to be three calls,
+/// and each call sends the whole conversation to the model again; half-applied,
+/// it also left the file in a state nobody had asked for.
+pub fn edit_many(ctx: &Ctx, path: &str, edits: &[Replacement]) -> Result<Value> {
     let p = authorize(ctx, path, true)?;
-    if old.is_empty() {
-        return Err(DevdError::invalid(
-            "`old` must not be empty; use fs.write to create or replace a whole file",
-        ));
+    if edits.is_empty() {
+        return Err(DevdError::invalid("give `old` and `new`, or a list of `edits`"));
     }
-    if old == new {
-        return Err(DevdError::invalid("`old` and `new` are identical"));
-    }
-    let text = std::fs::read_to_string(&p).map_err(|_| {
+    let mut text = std::fs::read_to_string(&p).map_err(|_| {
         DevdError::not_found(format!("{} does not exist or is not text", p.display()))
     })?;
-    let count = text.matches(old).count();
-    if count == 0 {
-        return Err(DevdError::conflict("`old` was not found. The file may have changed; read it again with fs.read and copy the text exactly, including whitespace."));
+    // With one edit the message is the one agents already know; with several,
+    // it says which, so the model fixes that one and resends the rest unchanged.
+    let which = |n: usize| if edits.len() == 1 { String::new() } else { format!("Edit {} of {}: ", n + 1, edits.len()) };
+    let mut replacements = 0usize;
+    for (n, (old, new, replace_all)) in edits.iter().enumerate() {
+        if old.is_empty() {
+            return Err(DevdError::invalid(format!(
+                "{}`old` must not be empty; use fs.write to create or replace a whole file",
+                which(n)
+            )));
+        }
+        if old == new {
+            return Err(DevdError::invalid(format!("{}`old` and `new` are identical", which(n))));
+        }
+        let count = text.matches(old).count();
+        if count == 0 {
+            return Err(DevdError::conflict(format!("{}`old` was not found. The file may have changed; read it again with fs.read and copy the text exactly, including whitespace.{}", which(n), if edits.len() > 1 { " Nothing was written." } else { "" })));
+        }
+        if count > 1 && !replace_all {
+            return Err(DevdError::conflict(format!("{}`old` matches {count} places. Include more surrounding lines to make it unique, or pass replace_all.{}", which(n), if edits.len() > 1 { " Nothing was written." } else { "" })));
+        }
+        text = if *replace_all { text.replace(old, new) } else { text.replacen(old, new, 1) };
+        replacements += if *replace_all { count } else { 1 };
     }
-    if count > 1 && !replace_all {
-        return Err(DevdError::conflict(format!("`old` matches {count} places. Include more surrounding lines to make it unique, or pass replace_all.")));
-    }
-    let updated = if replace_all {
-        text.replace(old, new)
-    } else {
-        text.replacen(old, new, 1)
-    };
-    if updated.len() > MAX_WRITE_BYTES {
+    if text.len() > MAX_WRITE_BYTES {
         return Err(DevdError::invalid("the result would be larger than 2 MB"));
     }
     let undo = save_before(ctx, &p, "fs.edit");
-    devd_core::util::atomic_write(&p, &updated)?;
-    Ok(undo.attach(
-        json!({ "path": p.display().to_string(), "replacements": if replace_all { count } else { 1 } }),
-    ))
+    devd_core::util::atomic_write(&p, &text)?;
+    Ok(undo.attach(json!({ "path": p.display().to_string(), "replacements": replacements, "edits": edits.len() })))
 }
 
 /// Move or rename a file or directory. Never overwrites.
@@ -777,6 +797,39 @@ mod tests {
             "permission_denied",
             "the home's own files stay fenced"
         );
+    }
+
+    #[test]
+    fn several_edits_to_one_file_are_one_change_or_no_change() {
+        let d = tempfile::tempdir().unwrap();
+        let file = d.path().join("www/proj/app.rs");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let before = "fn a() { one(); }
+fn b() { two(); }
+fn c() { three(); }
+";
+        std::fs::write(&file, before).unwrap();
+        let c = ctx(d.path(), Actor::human(Surface::Cli));
+        let path = file.to_str().unwrap();
+
+        // The second edit does not apply, so the first is not written either.
+        let error = edit_many(&c, path, &[("one()", "uno()", false), ("four()", "cuatro()", false)]).unwrap_err().to_string();
+        assert!(error.contains("Edit 2 of 2") && error.contains("Nothing was written"), "{error}");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
+
+        // Each edit sees what the one before it left.
+        let done = edit_many(&c, path, &[("one()", "two()", false), ("two()", "2()", true), ("three()", "3()", false)]).unwrap();
+        assert_eq!(done["edits"], 3);
+        assert_eq!(done["replacements"], 4);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "fn a() { 2(); }
+fn b() { 2(); }
+fn c() { 3(); }
+");
+
+        // One edit reads exactly as it always did.
+        let single = edit(&c, path, "missing", "x", false).unwrap_err().to_string();
+        assert!(single.starts_with("conflict") || single.contains("`old` was not found"), "{single}");
+        assert!(!single.contains("Edit 1 of"), "{single}");
     }
 
     #[test]

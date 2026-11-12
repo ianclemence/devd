@@ -940,6 +940,24 @@ struct FsWrite {
 struct FsEdit {
     /// Absolute file path.
     path: String,
+    /// Exact text to replace (must be unique unless replace_all). Omit when giving `edits`.
+    #[serde(default)]
+    old: Option<String>,
+    /// Replacement text. Omit when giving `edits`.
+    #[serde(default)]
+    new: Option<String>,
+    /// Replace every occurrence.
+    #[serde(default)]
+    replace_all: Option<bool>,
+    /// Several replacements to make in this file as one change, in order. Use
+    /// this instead of calling fs.edit repeatedly on the same file.
+    #[serde(default)]
+    edits: Option<Vec<FsEditOne>>,
+}
+
+/// One replacement in a list of edits.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct FsEditOne {
     /// Exact text to replace (must be unique unless replace_all).
     old: String,
     /// Replacement text.
@@ -1056,6 +1074,36 @@ fn model_inventory(ctx: &Ctx) -> Result<Value> {
                 "retirement": m.retirement,
                 "fetched_at": m.fetched_at,
             }));
+        }
+
+        // Before a key exists, and when the provider's own list cannot be
+        // reached, the open catalogue still says what the provider offers. These
+        // are marked as such: they are what the vendor sells, not what this key
+        // has been shown to reach.
+        if api_count == 0 {
+            for m in crate::modelsdev::current().rows_for(&p, "") {
+                if seen.iter().any(|id| id == &m.model_id) {
+                    continue;
+                }
+                seen.push(m.model_id.clone());
+                models.push(json!({
+                    "provider_id": p.id,
+                    "model_id": m.model_id,
+                    "display": m.display,
+                    "source": "catalogue",
+                    "status": if configured { "listed" } else { "needs_key" },
+                    "context_window": m.context_window,
+                    "max_output": m.max_output,
+                    "input_price": m.input_price,
+                    "output_price": m.output_price,
+                    "tools": m.tools,
+                    "vision": m.vision,
+                    "reasoning": m.reasoning,
+                    "capability_source": "models.dev",
+                    "retirement": Value::Null,
+                    "fetched_at": Value::Null,
+                }));
+            }
         }
 
         let mut last_fetched = catalogue
@@ -2701,13 +2749,16 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
         |ctx, a| {
             let p = find_provider(ctx, &a.id)?;
             let key = secrets::read_key(&ctx.paths, &p);
-            let models = match providers::list_models(&p, key.as_deref()) {
+            let mut models = match providers::list_models(&p, key.as_deref()) {
                 Ok(m) => m,
                 Err(e) => {
                     let _ = ctx.store.set_provider_check(&p.id, false, &e.to_string(), None);
                     return Err(e);
                 }
             };
+            // Most vendors list ids and nothing else. The open catalogue supplies
+            // the prices, windows and abilities their list leaves out.
+            crate::modelsdev::enrich(&crate::modelsdev::current(), &p, &mut models);
             let _ = ctx.store.set_provider_check(&p.id, true, &format!("{} model(s) listed", models.len()), Some(models.len() as i64));
             ctx.store.replace_catalogue(&format!("provider:{}", p.id), &models)?;
             Ok(Outcome::with_data(format!("{} model(s) from {}", models.len(), p.label), serde_json::to_value(&models)?))
@@ -2824,6 +2875,23 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             let models = providers::fetch_anthropic_docs()?;
             ctx.store.replace_catalogue("anthropic-docs", &models)?;
             Ok(Outcome::with_data(format!("{} official Claude model(s)", models.len()), serde_json::to_value(&models)?))
+        },
+    )?;
+
+    reg.define::<NoArgs>("models.refresh", "Update the model catalogue")
+    .description("Fetches the open model catalogue from models.dev: every provider's models with their prices (including prompt-cache prices), context windows and abilities. devd ships with a copy, so this is only needed to learn about models released since. Needs no API key and sends nothing about this machine. A download that does not read as a catalogue is refused and the current one is kept.")
+    .tier(Tier::Write)
+    .effect(Effect::Remote)
+    .agent_safe()
+    .dry_run()
+    .handlers(
+        |_, _| simple("models.refresh", format!("fetch {}", crate::modelsdev::SOURCE_URL)),
+        |ctx, _| {
+            let r = crate::modelsdev::refresh(&ctx.paths)?;
+            Ok(Outcome::with_data(
+                format!("{} model(s) from {} provider(s){}", r.models, r.providers, if r.changed { "" } else { "; nothing new" }),
+                serde_json::to_value(&r)?,
+            ))
         },
     )?;
 
@@ -3469,14 +3537,21 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
         |ctx, a| Ok(Outcome::with_data("Wrote the file", fs::write(ctx, &a.path, &a.content, a.create_dirs.unwrap_or(true))?)),
     )?;
     reg.define::<FsEdit>("fs.edit", "Edit a file")
-    .description("Replaces exact text in a file. `old` must match exactly once (include surrounding lines to make it unique) unless replace_all is set. Read the file first so the text is current.")
+    .description("Replaces exact text in a file. `old` must match exactly once (include surrounding lines to make it unique) unless replace_all is set. Read the file first so the text is current. To change several places in one file, pass `edits`: a list of {old, new} applied in order and written once, only if every one applies. One call with three edits is cheaper and safer than three calls.")
     .tier(Tier::Write)
     .effect(Effect::Write)
     .agent_safe()
     .dry_run()
     .handlers(
         |_, a| simple("fs.edit", format!("edit {}", a.path)),
-        |ctx, a| Ok(Outcome::with_data("Edited the file", fs::edit(ctx, &a.path, &a.old, &a.new, a.replace_all.unwrap_or(false))?)),
+        |ctx, a| {
+            let mut all: Vec<fs::Replacement> = Vec::new();
+            if let (Some(old), Some(new)) = (&a.old, &a.new) {
+                all.push((old, new, a.replace_all.unwrap_or(false)));
+            }
+            all.extend(a.edits.iter().flatten().map(|e| (e.old.as_str(), e.new.as_str(), e.replace_all.unwrap_or(false))));
+            Ok(Outcome::with_data("Edited the file", fs::edit_many(ctx, &a.path, &all)?))
+        },
     )?;
     reg.define::<FsMove>("fs.move", "Move or rename")
         .description("Moves a file or directory. Never overwrites an existing path.")

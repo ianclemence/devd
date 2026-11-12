@@ -12,7 +12,7 @@
 //! returns a manifest saying what was included, summarized or cleared, so the
 //! choice is inspectable rather than hidden.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -33,6 +33,25 @@ pub const RESERVED_TOOLS: usize = 8_000;
 /// Never plan to send less than this; a tiny window is a reason to compact more,
 /// not a reason to send an unusable prompt.
 pub const MIN_INPUT: usize = 6_000;
+
+/// The size, in estimated tokens, a conversation is allowed to reach before its
+/// older tool output is put away.
+///
+/// A model's window is how much it *can* read, not how much it should be sent.
+/// Every call pays for the whole conversation again, so one that is left to
+/// fill a million-token window costs, on each of its later calls, many times
+/// what the same work costs at a sensible size, and a model reading half a
+/// million tokens of old command output works worse, not better.
+pub const SETTLE_HIGH: usize = 120_000;
+
+/// What putting older output away brings a conversation back down to. The gap
+/// to [`SETTLE_HIGH`] is deliberate: see [`settle`].
+pub const SETTLE_LOW: usize = 60_000;
+
+/// What stands in for a result that was put away.
+const SETTLED: &str = "[older tool result put away to keep the conversation small. Call the tool again if you need it.]";
+/// What stands in for a result the same call later replaced.
+const SUPERSEDED: &str = "[superseded: the same call was made again later, and its newer result is further down.]";
 
 /// A model's usable context budget.
 #[derive(Debug, Clone, Serialize)]
@@ -122,6 +141,8 @@ pub struct ContextManifest {
     pub results_in_full: usize,
     /// Tool results replaced by an artifact/short reference.
     pub results_cleared: usize,
+    /// Long arguments of old tool calls (a written file's text) put away.
+    pub inputs_cleared: usize,
     /// Messages summarized.
     pub summarized: usize,
     /// Messages dropped from the middle.
@@ -300,6 +321,17 @@ pub fn build_working_set(
     budget: &ContextBudget,
     extra_system: &str,
 ) -> WorkingSet {
+    let (mut msgs, goal) = assemble(events);
+    let manifest = compact(&mut msgs, budget, goal.as_ref(), extra_system);
+    WorkingSet {
+        messages: msgs,
+        manifest,
+    }
+}
+
+/// The conversation as it was recorded, as provider-valid messages, with
+/// nothing put away: what compaction starts from.
+fn assemble(events: &[ChatEvent]) -> (Vec<Value>, Option<Value>) {
     let mut msgs: Vec<Value> = Vec::new();
     let mut pending_control: Vec<Value> = Vec::new();
 
@@ -345,12 +377,7 @@ pub fn build_working_set(
     }
     flush_control(&mut msgs, &mut pending_control);
     repair(&mut msgs);
-
-    let manifest = compact(&mut msgs, budget, goal.as_ref(), extra_system);
-    WorkingSet {
-        messages: msgs,
-        manifest,
-    }
+    (msgs, goal)
 }
 
 fn control_message(kind: &str, data: &Value) -> Value {
@@ -425,6 +452,133 @@ pub fn repair(msgs: &mut Vec<Value>) {
     }
 }
 
+/// The calls whose answer describes how things are right now, so that asking
+/// again makes the earlier answer redundant rather than history.
+const REPEATABLE: &[&str] = &[
+    "read_file", "fs.read", "list_files", "fs.list", "fs.tree", "git_status", "git.status", "git_diff", "git.diff", "git.log",
+    "todo_list", "todo.list", "project_tasks", "project.tasks", "project_info", "project.detect", "team.get", "team.list",
+    "team.overview", "team.roles", "team.context", "devd_capabilities", "devd_describe", "devd_groups", "skills.get",
+    "skills.list", "service.list", "health.status", "site.list", "inbox.list", "approval.list", "models.inventory",
+];
+
+/// What identifies a repeatable call: the capability and its exact arguments.
+fn repeatable_key(call: &Value) -> Option<String> {
+    let (id, args) = match call["name"].as_str()? {
+        "devd_invoke" => (call["input"]["id"].as_str()?, &call["input"]["args"]),
+        name => (name, &call["input"]),
+    };
+    REPEATABLE.contains(&id).then(|| format!("{id} {args}"))
+}
+
+/// Keep a long conversation at a working size without throwing its prompt
+/// cache away.
+///
+/// The obvious way to shrink a conversation, clearing a little more old output
+/// on every turn, is the expensive way: a provider caches a conversation by its
+/// prefix, so changing anything near the start makes it read everything after
+/// that point again at full price, every turn. A cached token costs about a
+/// tenth of an uncached one, so a careless compaction costs more than it saves.
+///
+/// So the conversation is compacted in steps. It grows untouched to
+/// [`SETTLE_HIGH`]; then the oldest tool output is put away in one go, bringing
+/// it to about [`SETTLE_LOW`]; then it grows untouched again. What is put away
+/// depends only on how long the conversation has become, in whole steps, so
+/// every turn between two steps sends the same prefix and reads it from the
+/// cache. The price of a step is one uncached read of a small conversation.
+///
+/// Within a step, two things go:
+///
+/// * tool results in the oldest part of the conversation, whatever they were;
+/// * in the part after that, a result the model later asked for again with the
+///   same arguments (a file read twice, a status checked again). The newer
+///   answer is the true one and is still there.
+///
+/// Calls keep their place and their arguments, so the model still sees what it
+/// did, and each result is replaced by a line saying how to get it back. The
+/// most recent stretch, at least [`SETTLE_LOW`] tokens, is never touched.
+fn settle(msgs: &mut [Value], budget: &ContextBudget, manifest: &mut ContextManifest) {
+    let high = SETTLE_HIGH.min(budget.available);
+    let low = SETTLE_LOW.min(high / 2);
+    let step = high - low;
+    // Where each message starts in the conversation as it was recorded. These
+    // are read before anything is changed, so they are the same on every turn.
+    let mut starts = Vec::with_capacity(msgs.len());
+    let mut total = 0usize;
+    for m in msgs.iter() {
+        starts.push(total);
+        total += message_tokens(m);
+    }
+    if step == 0 || total <= high {
+        return;
+    }
+    let steps = (total - low) / step;
+    // Everything before `old` is put away. Everything from `settled` on is as
+    // it was recorded. Both move only when another whole step has been added.
+    let old = steps * step;
+    let settled = low + steps * step;
+
+    let is_result = |b: &Value| b["type"] == "tool_result";
+    let mut newest: HashMap<String, usize> = HashMap::new();
+    let mut key_of: HashMap<String, String> = HashMap::new();
+    for (i, m) in msgs.iter().enumerate().take_while(|(i, _)| starts[*i] < settled) {
+        for call in m["content"].as_array().into_iter().flatten().filter(|b| b["type"] == "tool_use") {
+            if let (Some(key), Some(id)) = (repeatable_key(call), call["id"].as_str()) {
+                newest.insert(key.clone(), i);
+                key_of.insert(id.to_string(), key);
+            }
+        }
+    }
+    // The last few results are what the turn in hand is reasoning about.
+    let results: usize = msgs.iter().map(|m| m["content"].as_array().map(|c| c.iter().filter(|b| is_result(b)).count()).unwrap_or(0)).sum();
+    let untouchable = results.saturating_sub(8);
+    let mut seen = 0usize;
+    for (i, m) in msgs.iter_mut().enumerate() {
+        if starts[i] >= settled {
+            break;
+        }
+        // What an old call was given goes the same way as what it returned: a
+        // file the agent wrote two hundred calls ago is on disk, and its whole
+        // text in every later request is the largest thing left once results
+        // are gone. The call, its target and its short arguments stay.
+        if starts[i] < old {
+            for call in m["content"].as_array_mut().into_iter().flatten().filter(|b| b["type"] == "tool_use") {
+                manifest.inputs_cleared += put_away_long_text(&mut call["input"]);
+            }
+        }
+        for b in m["content"].as_array_mut().into_iter().flatten().filter(|b| is_result(b)) {
+            seen += 1;
+            if seen > untouchable || b["content"].as_str().map(|t| t.chars().count()).unwrap_or(0) <= 240 {
+                continue;
+            }
+            let asked_again = b["tool_use_id"].as_str().and_then(|id| key_of.get(id)).and_then(|key| newest.get(key)).is_some_and(|at| *at > i);
+            if starts[i] < old {
+                b["content"] = json!(SETTLED);
+                manifest.results_cleared += 1;
+            } else if asked_again {
+                b["content"] = json!(SUPERSEDED);
+                manifest.results_cleared += 1;
+            }
+        }
+    }
+    if manifest.results_cleared > 0 {
+        manifest.notes.push(format!("the conversation passed {high} tokens, so its oldest tool output was put away (step {steps})"));
+    }
+}
+
+/// Replace every long string inside a call's arguments with a note of its
+/// length. Returns how many were replaced.
+fn put_away_long_text(value: &mut Value) -> usize {
+    match value {
+        Value::String(text) if text.chars().count() > 400 => {
+            *text = format!("[{} characters, put away to keep the conversation small. The file on disk has the current text.]", text.chars().count());
+            1
+        }
+        Value::Array(items) => items.iter_mut().map(put_away_long_text).sum(),
+        Value::Object(fields) => fields.values_mut().map(put_away_long_text).sum(),
+        _ => 0,
+    }
+}
+
 fn compact(
     msgs: &mut Vec<Value>,
     budget: &ContextBudget,
@@ -439,6 +593,7 @@ fn compact(
         messages: msgs.len(),
         results_in_full: 0,
         results_cleared: 0,
+        inputs_cleared: 0,
         summarized: 0,
         dropped: 0,
         control_events: 0,
@@ -454,6 +609,11 @@ fn compact(
     if fixed >= budget.available {
         manifest.notes.push("the system prompt alone is near the model's window; tool schemas and history were reduced to the minimum".into());
     }
+
+    // 0. Keep the conversation at a working size, in steps the prompt cache
+    //    survives. What follows is only for a conversation that is still over
+    //    the model's window after this.
+    settle(msgs, budget, &mut manifest);
 
     // 1. Replace old tool result bodies with the artifact reference, if one is
     //    recorded, or a short factual note. This keeps every tool_use paired.
@@ -511,23 +671,29 @@ fn compact(
                 .push("older tool results were compacted to fit the model's window".into());
         }
     } else {
-        manifest.results_in_full = total_results;
+        manifest.results_in_full = total_results.saturating_sub(manifest.results_cleared);
     }
 
-    // 2. Summarize old assistant prose that has no tool call. A message with a
+    // 2. Shorten old assistant prose that has no tool call. A message with a
     //    tool call must keep its blocks so the result still matches.
+    //
+    //    Only when the conversation is still over the window, and only what is
+    //    older than the latest exchange. This used to run on every turn and on
+    //    the *newest* eight messages: the agent's own last answers were cut to
+    //    400 characters, so a follow-up about the report it had just written was
+    //    answered from its first paragraph, and each answer changed again as it
+    //    aged out of those eight, which made the provider re-read everything
+    //    after it at full price.
     let recent = 8usize;
-    for (kept, i) in (0..msgs.len()).rev().enumerate() {
-        if kept >= recent {
-            break;
-        }
-        if msgs[i]["role"] == "assistant"
-            && msgs[i]["content"]
+    let older = if over(msgs, fixed) { msgs.len().saturating_sub(recent) } else { 0 };
+    for msg in msgs.iter_mut().take(older) {
+        if msg["role"] == "assistant"
+            && msg["content"]
                 .as_array()
                 .map(|c| c.iter().all(|b| b["type"] != "tool_use"))
                 .unwrap_or(false)
         {
-            if let Some(blocks) = msgs[i]["content"].as_array_mut() {
+            if let Some(blocks) = msg["content"].as_array_mut() {
                 for b in blocks.iter_mut().filter(|b| b["type"] == "text") {
                     if let Some(t) = b["text"].as_str() {
                         if t.chars().count() > 400 {
@@ -702,6 +868,157 @@ mod tests {
         }
         let set = build_working_set(&events, &ContextBudget::tight("tiny", 4_000), "");
         assert!(set.manifest.summarized > 0, "{}", set.manifest.summary());
+    }
+
+    /// A conversation of `turns` tool calls, each returning `chars` of output.
+    fn long_run(turns: usize, chars: usize) -> Vec<ChatEvent> {
+        let mut events = vec![ev(1, "user", json!({"text": "build the feature"}))];
+        for i in 0..turns as i64 {
+            events.push(ev(10 + i * 2, "assistant", json!({"content": [{"type":"tool_use","id": format!("t{i}"),"name":"devd_invoke","input":{"id":"project.exec","args":{"argv":["step", i]}}}]})));
+            events.push(ev(11 + i * 2, "tool_result", json!({"tool_use_id": format!("t{i}"), "content": format!("{i} {}", "x".repeat(chars)), "is_error": false})));
+        }
+        events
+    }
+
+    fn sent(events: &[ChatEvent]) -> WorkingSet {
+        build_working_set(events, &ContextBudget::for_model("big", Some(1_000_000)), "")
+    }
+
+    #[test]
+    fn a_long_conversation_is_kept_at_a_working_size_however_large_the_window() {
+        // 300 calls of ~2,000 tokens: 600,000 tokens recorded, on a model that could take them all.
+        let set = sent(&long_run(300, 8_000));
+        assert!(set.manifest.estimated_tokens <= SETTLE_HIGH + 4_000, "{}", set.manifest.summary());
+        assert!(set.manifest.estimated_tokens >= SETTLE_LOW, "the recent stretch is whole: {}", set.manifest.summary());
+        assert!(set.manifest.results_cleared > 200);
+        assert_eq!(set.manifest.dropped, 0, "no turn is removed; the model still sees everything it did");
+        // The last calls are untouched, and every call still has its result.
+        let text = serde_json::to_string(&set.messages).unwrap();
+        assert!(text.contains(&format!("299 {}", "x".repeat(100))));
+        assert_eq!(text.matches("\"tool_use\"").count(), text.matches("\"tool_result\"").count());
+    }
+
+    #[test]
+    fn a_short_conversation_is_sent_exactly_as_recorded() {
+        let set = sent(&long_run(40, 8_000));
+        assert_eq!(set.manifest.results_cleared, 0, "{}", set.manifest.summary());
+        assert!(set.manifest.estimated_tokens < SETTLE_HIGH);
+    }
+
+    #[test]
+    fn the_prefix_is_identical_from_turn_to_turn_so_the_provider_can_cache_it() {
+        // Between two steps, each turn must send what the last one sent, plus
+        // the new messages. Count how often that fails across 250 turns.
+        let events = long_run(300, 8_000);
+        let mut rewrites = 0;
+        let mut previous: Vec<Value> = Vec::new();
+        for turn in 150..300 {
+            let now = sent(&events[..1 + turn * 2]).messages;
+            if !previous.is_empty() && now[..previous.len()] != previous[..] {
+                rewrites += 1;
+            }
+            previous = now;
+        }
+        // 150 turns add 300,000 tokens; a step is 60,000. Clearing on every
+        // turn would be 150 rewrites.
+        assert!((4..=6).contains(&rewrites), "{rewrites} rewrites of the cached prefix");
+    }
+
+    #[test]
+    fn a_file_read_again_replaces_the_earlier_read_and_a_command_does_not() {
+        let mut events = vec![ev(1, "user", json!({"text": "go"}))];
+        let mut id = 10;
+        let mut call = |events: &mut Vec<ChatEvent>, name: &str, input: Value, body: String| {
+            id += 2;
+            events.push(ev(id, "assistant", json!({"content": [{"type":"tool_use","id": format!("c{id}"),"name": name,"input": input}]})));
+            events.push(ev(id + 1, "tool_result", json!({"tool_use_id": format!("c{id}"), "content": body, "is_error": false})));
+        };
+        // Filler that will be the "old" part once the conversation is long.
+        for i in 0..20 {
+            call(&mut events, "devd_invoke", json!({"id":"project.exec","args":{"argv":["old", i]}}), format!("old {}", "o".repeat(12_000)));
+        }
+        // In the part that stays: one file read twice, one command run twice.
+        call(&mut events, "read_file", json!({"path":"app.rs"}), format!("FIRST READ {}", "a".repeat(4_000)));
+        call(&mut events, "devd_invoke", json!({"id":"project.exec","args":{"argv":["cargo","test"]}}), format!("FIRST RUN {}", "b".repeat(4_000)));
+        call(&mut events, "read_file", json!({"path":"app.rs"}), format!("SECOND READ {}", "a".repeat(4_000)));
+        call(&mut events, "devd_invoke", json!({"id":"project.exec","args":{"argv":["cargo","test"]}}), format!("SECOND RUN {}", "b".repeat(4_000)));
+        for i in 0..30 {
+            call(&mut events, "devd_invoke", json!({"id":"project.exec","args":{"argv":["new", i]}}), format!("new {}", "n".repeat(8_000)));
+        }
+        let set = sent(&events);
+        let text = serde_json::to_string(&set.messages).unwrap();
+        assert!(set.manifest.results_cleared > 0, "{}", set.manifest.summary());
+        assert!(!text.contains("FIRST READ") && text.contains("SECOND READ"), "the newer read is the true one");
+        assert_eq!(set.manifest.inputs_cleared, 0, "short arguments are left as they were");
+        assert!(text.contains("superseded"));
+        // Two runs of a command are two events, both history.
+        assert!(text.contains("FIRST RUN") && text.contains("SECOND RUN"));
+    }
+
+    #[test]
+    fn an_old_written_file_keeps_its_call_and_loses_its_text() {
+        let mut events = vec![ev(1, "user", json!({"text": "go"}))];
+        events.push(ev(2, "assistant", json!({"content": [{"type":"tool_use","id":"w","name":"write_file","input":{"path":"src/big.rs","content": "fn old() {}
+".repeat(2_000),"create_dirs":true}}]})));
+        events.push(ev(3, "tool_result", json!({"tool_use_id":"w","content":"ok","is_error":false})));
+        events.extend(long_run(80, 8_000).into_iter().skip(1));
+        events.push(ev(900, "assistant", json!({"content": [{"type":"tool_use","id":"w2","name":"write_file","input":{"path":"src/new.rs","content": "fn new() {}
+".repeat(200)}}]})));
+        events.push(ev(901, "tool_result", json!({"tool_use_id":"w2","content":"ok","is_error":false})));
+        let set = sent(&events);
+        let text = serde_json::to_string(&set.messages).unwrap();
+        assert_eq!(set.manifest.inputs_cleared, 1);
+        assert!(text.contains("src/big.rs") && text.contains("create_dirs"), "the call still says what was written, and where");
+        assert!(!text.contains("fn old()"), "its text is on disk, not in every later request");
+        assert!(text.contains("fn new()"), "a recent write is whole");
+    }
+
+    #[test]
+    fn the_agents_latest_answer_is_never_cut() {
+        let report = format!("REPORT START {} REPORT END", "detail ".repeat(600));
+        let events = vec![
+            ev(1, "user", json!({"text": "write the report"})),
+            ev(2, "assistant", json!({"content": [{"type":"text","text": report}]})),
+            ev(3, "user", json!({"text": "what was the last line?"})),
+        ];
+        let set = build_working_set(&events, &ContextBudget::for_model("test", Some(128_000)), "");
+        let text = serde_json::to_string(&set.messages).unwrap();
+        assert!(text.contains("REPORT END"), "the answer it just gave was shortened");
+        assert_eq!(set.manifest.summarized, 0);
+    }
+
+    /// Measure the working set on a real conversation: what each model call
+    /// would be sent now, against sending the log whole.
+    ///
+    /// `DEVD_REPLAY_DB=<copy of state.db> DEVD_REPLAY_THREAD=<id> cargo test -p devd-core replay -- --ignored --nocapture`
+    ///
+    /// Use a copy: never the database a running devd has open.
+    #[test]
+    #[ignore = "needs a database to replay; see the comment"]
+    fn replay_a_recorded_conversation() {
+        let (Ok(db), Ok(thread)) = (std::env::var("DEVD_REPLAY_DB"), std::env::var("DEVD_REPLAY_THREAD")) else { return };
+        let store = crate::state::Store::open_read_only(Path::new(&db)).unwrap();
+        let events = store.list_events(&thread, 0, 1_000_000).unwrap();
+        let budget = ContextBudget::for_model("replay", Some(1_000_000));
+        let (mut whole, mut sent, mut uncached, mut calls, mut peak, mut previous) = (0usize, 0usize, 0usize, 0usize, 0usize, Vec::<Value>::new());
+        for (n, e) in events.iter().enumerate() {
+            // Each assistant event is the answer to one call made with everything before it.
+            if e.kind != "assistant" || n == 0 {
+                continue;
+            }
+            let before = &events[..n];
+            let set = build_working_set(before, &budget, "");
+            let raw: usize = assemble(before).0.iter().map(message_tokens).sum();
+            // What a prefix cache could not serve: everything from the first message that differs.
+            let same = set.messages.iter().zip(previous.iter()).take_while(|(a, b)| a == b).count();
+            uncached += set.messages[same..].iter().map(message_tokens).sum::<usize>();
+            whole += raw;
+            sent += set.manifest.estimated_tokens;
+            peak = peak.max(set.manifest.estimated_tokens);
+            calls += 1;
+            previous = set.messages;
+        }
+        println!("{calls} calls; whole log: {whole} tokens; working set: {sent} ({}%); largest call {peak}; not servable from cache: {uncached} ({}% of sent)", sent * 100 / whole.max(1), uncached * 100 / sent.max(1));
     }
 
     #[test]

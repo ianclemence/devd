@@ -133,13 +133,12 @@ pub fn usage(ctx: &Ctx) -> Result<Value> {
     // Spend is an estimate, not a provider invoice: it uses the catalogue's
     // current price for a model against the tokens that model actually reported.
     // A model with no known price stays unpriced and is counted as such.
-    let price: BTreeMap<String, (f64, f64)> = ctx
-        .store
-        .list_catalogue(None)
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|m| Some((m.model_id.to_lowercase(), (m.input_price?, m.output_price?))))
-        .collect();
+    // The price comes from the same place a live call takes it: the provider's
+    // own listing, then the open catalogue, cache prices included. It is looked
+    // up once per provider and model, not once per conversation.
+    let providers: BTreeMap<String, devd_core::Provider> = ctx.store.list_providers().unwrap_or_default().into_iter().map(|p| (p.id.clone(), p)).collect();
+    let fallback = providers.values().find(|p| p.is_default).or_else(|| providers.values().next()).cloned();
+    let mut priced: BTreeMap<(String, String), crate::policy::ModelCaps> = BTreeMap::new();
 
     #[derive(Default)]
     struct U {
@@ -149,6 +148,7 @@ pub fn usage(ctx: &Ctx) -> Result<Value> {
         cache_read: i64,
         cache_write: i64,
         cost: f64,
+        saved: f64,
         priced: i64,
         unpriced: i64,
     }
@@ -171,13 +171,28 @@ pub fn usage(ctx: &Ctx) -> Result<Value> {
             .model
             .clone()
             .or_else(|| t.provider_id.as_ref().and_then(|id| default_model_of.get(id)).cloned())
+            // A conversation that named neither ran on the default provider's model.
+            .or_else(|| fallback.as_ref().and_then(|p| p.default_model.clone()))
             .unwrap_or_else(|| "default model".into());
         let who = role_of.get(&t.id).cloned().unwrap_or_else(|| "assistant".into());
-        let rate = price.get(&model.to_lowercase()).copied();
         // Prefer what was recorded when the call was made; fall back to the
-        // catalogue price for conversations recorded before per-call cost.
-        let cost = t.cost_usd.or_else(|| {
-            rate.map(|(i, o)| (i * t.input_tokens as f64 + o * t.output_tokens as f64) / 1_000_000.0)
+        // catalogue price for conversations recorded before per-call cost. A
+        // recorded cost of nothing against real tokens is such a conversation.
+        let recorded = t.cost_usd.filter(|c| *c > 0.0 || t.input_tokens + t.output_tokens == 0);
+        let cost = recorded.or_else(|| {
+            let provider = t.provider_id.as_ref().and_then(|id| providers.get(id)).or(fallback.as_ref())?;
+            let caps = priced
+                .entry((provider.id.clone(), model.clone()))
+                .or_insert_with(|| crate::policy::model_caps(&ctx.store, provider, &model));
+            let kind = if provider.base_url.contains("deepseek") { "deepseek" } else { provider.kind.as_str() };
+            crate::policy::cost_usd_cached(caps, kind, t.input_tokens, t.output_tokens, t.cache_read_tokens, t.cache_write_tokens)
+        });
+        // What the prompt cache saved: the same tokens at the full input price.
+        let saved = cost.and_then(|c| {
+            let provider = t.provider_id.as_ref().and_then(|id| providers.get(id)).or(fallback.as_ref())?;
+            let caps = priced.get(&(provider.id.clone(), model.clone()))?;
+            let full = crate::policy::cost_usd(caps, t.input_tokens, t.output_tokens)?;
+            Some((full - c).max(0.0))
         });
         for (map, key) in [(&mut by_model, model.clone()), (&mut by_who, who.clone())] {
             let u = map.entry(key).or_default();
@@ -189,6 +204,7 @@ pub fn usage(ctx: &Ctx) -> Result<Value> {
             match cost {
                 Some(c) => {
                     u.cost += c;
+                    u.saved += saved.unwrap_or(0.0);
                     u.priced += 1;
                 }
                 None => u.unpriced += 1,
@@ -212,6 +228,9 @@ pub fn usage(ctx: &Ctx) -> Result<Value> {
                 "cache_read": u.cache_read,
                 "cache_write": u.cache_write,
                 "cost_usd": if u.priced > 0 { Some(u.cost) } else { None },
+                "cache_saved_usd": if u.priced > 0 { Some(u.saved) } else { None },
+                // The share of input that was read from the cache instead of paid for in full.
+                "cache_hit_rate": if u.input > 0 { Some(u.cache_read as f64 / u.input as f64) } else { None },
                 "priced_conversations": u.priced,
                 "unpriced_conversations": u.unpriced,
             }))
@@ -220,6 +239,8 @@ pub fn usage(ctx: &Ctx) -> Result<Value> {
         v
     };
     let known: Vec<f64> = by_model.values().filter(|u| u.priced > 0).map(|u| u.cost).collect();
+    let saved_total: f64 = by_model.values().map(|u| u.saved).sum();
+    let (all_input, all_output, all_read): (i64, i64, i64) = by_model.values().fold((0, 0, 0), |a, u| (a.0 + u.input, a.1 + u.output, a.2 + u.cache_read));
     let unpriced: i64 = by_model.values().map(|u| u.unpriced).sum();
     Ok(json!({
         "by_model": rows(by_model),
@@ -227,6 +248,11 @@ pub fn usage(ctx: &Ctx) -> Result<Value> {
         "heaviest": top.into_iter().take(8).map(|(_, v)| v).collect::<Vec<_>>(),
         "total_cost_usd": if known.is_empty() { None } else { Some(known.iter().sum::<f64>()) },
         "unpriced_conversations": unpriced,
-        "note": "Tokens and cache use as each provider reported them. Spend is what was recorded per call from the price in force; a conversation recorded before that shows the catalogue estimate. It remains an estimate of the provider's bill, not the invoice.",
+        "cache_saved_usd": if known.is_empty() { None } else { Some(saved_total) },
+        "input_tokens": all_input,
+        "output_tokens": all_output,
+        "cache_read_tokens": all_read,
+        "cache_hit_rate": if all_input > 0 { Some(all_read as f64 / all_input as f64) } else { None },
+        "note": "Tokens and cache use as each provider reported them. Spend is what was recorded per call from the price in force; a conversation recorded before that is priced from the model catalogue, cache discounts included. It remains an estimate of the provider's bill, not the invoice.",
     }))
 }

@@ -1,0 +1,34 @@
+[package]
+name = "devd-app"
+description = "The native devd application: a GPU-rendered window over the capability registry, with no webview."
+version.workspace = true
+# gpui's text field example uses let-chains, which need the 2024 edition.
+edition = "2024"
+# gpui uses let-chains and other features newer than the workspace floor.
+rust-version = "1.88"
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "devd-app"
+path = "src/main.rs"
+
+[dependencies]
+devd-core = { workspace = true }
+devd-bootstrap = { path = "../devd-bootstrap" }
+devd-server = { path = "../devd-server" }
+devd-app-core = { path = "../devd-app-core" }
+
+gpui = "0.2.2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+chrono = { workspace = true }
+open = { workspace = true }
+ureq = { workspace = true, features = ["json"] }
+futures = "0.3"
+unicode-segmentation = "1"
+
+[lints]
+workspace = true

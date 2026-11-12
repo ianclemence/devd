@@ -444,7 +444,7 @@ fn the_agent_loop_calls_tools_and_finishes() {
     assert!(first["system"][0]["text"]
         .as_str()
         .unwrap()
-        .contains("built-in engineer"));
+        .contains("the engineer built into"));
     let names: Vec<&str> = first["tools"]
         .as_array()
         .unwrap()
@@ -2283,4 +2283,31 @@ fn a_template_fills_its_blanks_and_starts_the_team_with_its_definition_of_done()
     // A template run starts at once too, whoever starts it: the plan is
     // recorded and the team gets to work.
     call(&e, &e.agent, "template.run", json!({ "id": "security-review", "project": dir.display().to_string() }), Approval::None).unwrap();
+}
+
+#[test]
+fn a_conversation_recorded_without_a_cost_is_priced_from_the_catalogue_with_its_cache_discount() {
+    let e = env();
+    // DeepSeek by preset: nothing listed, no price recorded, exactly as the
+    // conversations that showed a spend of nothing were.
+    call(&e, &e.human, "provider.save", json!({ "id": "deepseek", "preset": "deepseek", "api_key": "sk-test-0123456789abcdef", "default_model": "deepseek-flash" }), Approval::None).unwrap();
+    // It named neither a provider nor a model, so it ran on the default.
+    let thread = e.human.store.create_thread("Old work", None, None, None).unwrap();
+    e.human.store.add_thread_usage_full(&thread.id, 10_000_000, 100_000, 9_000_000, 0, None).unwrap();
+
+    let usage = call(&e, &e.human, "models.usage", json!({}), Approval::None).unwrap();
+    let row = &usage["by_model"][0];
+    assert_eq!(row["name"], "deepseek-flash", "the model is named, not called `default model`: {usage}");
+    let cost = usage["total_cost_usd"].as_f64().expect("the catalogue knows the price");
+    let saved = usage["cache_saved_usd"].as_f64().unwrap();
+    assert!(cost > 0.0 && saved > 0.0, "cost {cost}, saved {saved}");
+    assert_eq!(usage["unpriced_conversations"], 0);
+    assert!((usage["cache_hit_rate"].as_f64().unwrap() - 0.9).abs() < 1e-9);
+    assert_eq!(usage["input_tokens"], 10_000_000);
+
+    // And the inventory offers the vendor's models before anything was fetched.
+    let inventory = call(&e, &e.human, "models.inventory", json!({}), Approval::None).unwrap();
+    let models = inventory["providers"][0]["models"].as_array().unwrap();
+    let flash = models.iter().find(|m| m["model_id"] == "deepseek-flash").expect("from the catalogue");
+    assert!(flash["input_price"].as_f64().is_some() && flash["output_price"].as_f64().is_some(), "{flash}");
 }

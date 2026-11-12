@@ -59,7 +59,8 @@ pub struct Preset {
     /// model chosen) or `none`. This is a description of the API, not a claim
     /// that a particular model has passed a probe; `provider.verify` does that.
     pub tools: String,
-    /// How `list_models` finds models: `anthropic`, `openai` or `ollama`.
+    /// How `list_models` finds models: `anthropic`, `openai`, `ollama`, or
+    /// `catalogue` for a vendor that publishes no list endpoint.
     pub discovery: String,
 }
 
@@ -128,15 +129,15 @@ fn base_preset(id: &str, kind: &str, label: &str, base: &str, key: Key, docs: Do
 pub fn presets() -> Vec<Preset> {
     vec![
         base_preset("anthropic", "anthropic", "Anthropic (Claude)", "https://api.anthropic.com", Key { env: Some("ANTHROPIC_API_KEY"), required: true, url: Some("https://platform.claude.com/settings/keys") }, Docs { page: "https://platform.claude.com/docs/en/api/overview", models_from: "GET /v1/models with the key; the documentation table needs no key", notes: "Messages API with tool use and prompt caching. Requests send x-api-key and anthropic-version: 2023-06-01. This is the wire format the built-in agent is tuned for." })
-            .order(1).discovery("anthropic").tools("documented").suggested("claude-sonnet-4-5"),
+            .order(1).discovery("anthropic").tools("documented").suggested("claude-sonnet-5-5"),
         base_preset("openai", "openai", "OpenAI", "https://api.openai.com/v1", Key { env: Some("OPENAI_API_KEY"), required: true, url: Some("https://platform.openai.com/api-keys") }, Docs { page: "https://platform.openai.com/docs/api-reference/chat", models_from: "GET /v1/models with the key", notes: "Chat Completions with function tools. Reasoning models are billed and limited differently; devd sends max_completion_tokens for this provider." })
             .order(2).tools("documented"),
         base_preset("deepseek", "openai-compatible", "DeepSeek", "https://api.deepseek.com/v1", Key { env: Some("DEEPSEEK_API_KEY"), required: true, url: Some("https://platform.deepseek.com/api_keys") }, Docs { page: "https://api-docs.deepseek.com/", models_from: "GET /models with the key", notes: "OpenAI-compatible chat with function calling on the chat models. The reasoning model streams its thinking and may reject tools; choose a chat model for agent work." })
-            .order(3).tools("documented").suggested("deepseek-chat"),
+            .order(3).tools("documented").suggested("deepseek-flash"),
         base_preset("moonshot", "openai-compatible", "Moonshot AI (Kimi)", "https://api.moonshot.ai/v1", Key { env: Some("MOONSHOT_API_KEY"), required: true, url: Some("https://platform.moonshot.ai/console/api-keys") }, Docs { page: "https://platform.moonshot.ai/docs/api/chat", models_from: "GET /models with the key", notes: "Kimi and Moonshot models over an OpenAI-compatible API with tool calling. The mainland endpoint is api.moonshot.cn." })
-            .order(4).tools("documented").suggested("moonshot-v1-8k"),
+            .order(4).tools("documented").suggested("kimi-k3"),
         base_preset("gemini", "gemini", "Google Gemini", "https://generativelanguage.googleapis.com/v1beta", Key { env: Some("GEMINI_API_KEY"), required: true, url: Some("https://aistudio.google.com/apikey") }, Docs { page: "https://ai.google.dev/gemini-api/docs/text-generation", models_from: "GET /models with the key", notes: "The native Gemini API (generateContent): real token limits from the model list, thought signatures kept with function calls, and function schemas reduced to what Gemini accepts. An older provider saved against the OpenAI-compatibility URL keeps working unchanged." })
-            .order(6).tools("documented").suggested("gemini-2.5-flash"),
+            .order(6).tools("documented").suggested("gemini-3.8-flash"),
         base_preset("xai", "openai-compatible", "xAI (Grok)", "https://api.x.ai/v1", Key { env: Some("XAI_API_KEY"), required: true, url: Some("https://console.x.ai/team/default/api-keys") }, Docs { page: "https://docs.x.ai/docs/api-reference", models_from: "GET /models with the key", notes: "Grok models over an OpenAI-compatible API with function calling." })
             .order(7).tools("documented"),
         base_preset("mistral", "openai-compatible", "Mistral AI", "https://api.mistral.ai/v1", Key { env: Some("MISTRAL_API_KEY"), required: true, url: Some("https://console.mistral.ai/api-keys") }, Docs { page: "https://docs.mistral.ai/api/", models_from: "GET /models with the key", notes: "Mistral models over an OpenAI-compatible API with function calling." })
@@ -147,8 +148,26 @@ pub fn presets() -> Vec<Preset> {
             .order(10).tools("model"),
         base_preset("fireworks", "openai-compatible", "Fireworks AI", "https://api.fireworks.ai/inference/v1", Key { env: Some("FIREWORKS_API_KEY"), required: true, url: Some("https://fireworks.ai/account/api-keys") }, Docs { page: "https://docs.fireworks.ai/api-reference/introduction", models_from: "GET /models with the key", notes: "Open models with an OpenAI-compatible API; tool support depends on the model." })
             .order(11).tools("model"),
+        base_preset("cerebras", "openai-compatible", "Cerebras", "https://api.cerebras.ai/v1", Key { env: Some("CEREBRAS_API_KEY"), required: true, url: Some("https://cloud.cerebras.ai/platform/apikeys") }, Docs { page: "https://inference-docs.cerebras.ai/api-reference/chat-completions", models_from: "GET /models with the key", notes: "Open models served very fast over an OpenAI-compatible API; tool support depends on the model." })
+            .order(12).tools("model"),
+        base_preset("zai", "openai-compatible", "Z.AI (GLM)", "https://api.z.ai/api/paas/v4", Key { env: Some("ZHIPU_API_KEY"), required: true, url: Some("https://z.ai/manage-apikey/apikey-list") }, Docs { page: "https://docs.z.ai/api-reference/llm/chat-completion", models_from: "GET /models with the key", notes: "GLM models over an OpenAI-compatible API with function calling. The path is /api/paas/v4, not /v1." })
+            .order(13).tools("documented"),
+        base_preset("cohere", "openai-compatible", "Cohere", "https://api.cohere.ai/compatibility/v1", Key { env: Some("COHERE_API_KEY"), required: true, url: Some("https://dashboard.cohere.com/api-keys") }, Docs { page: "https://docs.cohere.com/docs/compatibility-api", models_from: "GET /models with the key", notes: "Command models through Cohere's OpenAI-compatibility API, with function calling." })
+            .order(14).tools("documented"),
+        base_preset("perplexity", "openai-compatible", "Perplexity", "https://api.perplexity.ai", Key { env: Some("PERPLEXITY_API_KEY"), required: true, url: Some("https://www.perplexity.ai/account/api/keys") }, Docs { page: "https://docs.perplexity.ai/api-reference/chat-completions-post", models_from: "the open catalogue at models.dev; Perplexity publishes no model list endpoint", notes: "Sonar models answer from a live web search. They do not call tools, so they suit research questions and not agent work. The API has no /v1 prefix and no model list of its own." })
+            .order(15).tools("none").discovery("catalogue"),
+        base_preset("sambanova", "openai-compatible", "SambaNova", "https://api.sambanova.ai/v1", Key { env: Some("SAMBANOVA_API_KEY"), required: true, url: Some("https://cloud.sambanova.ai/apis") }, Docs { page: "https://docs.sambanova.ai/cloud/api-reference/endpoints/chat", models_from: "GET /models with the key", notes: "Open models over an OpenAI-compatible API; tool support depends on the model." })
+            .order(16).tools("model"),
         base_preset("openrouter", "openai-compatible", "OpenRouter", "https://openrouter.ai/api/v1", Key { env: Some("OPENROUTER_API_KEY"), required: true, url: Some("https://openrouter.ai/keys") }, Docs { page: "https://openrouter.ai/docs/api-reference/overview", models_from: "GET /models (public list with prices and supported parameters)", notes: "One key for many vendors. Model ids look like `vendor/model`, and each model advertises whether it supports tools in the public list." })
             .order(20).category("aggregator").tools("model"),
+        base_preset("nvidia", "openai-compatible", "NVIDIA NIM", "https://integrate.api.nvidia.com/v1", Key { env: Some("NVIDIA_API_KEY"), required: true, url: Some("https://build.nvidia.com/settings/api-keys") }, Docs { page: "https://docs.api.nvidia.com/nim/reference/llm-apis", models_from: "GET /models with the key", notes: "Many vendors' open models hosted by NVIDIA behind one OpenAI-compatible API. Model ids look like `vendor/model`." })
+            .order(21).tools("model").category("aggregator"),
+        base_preset("deepinfra", "openai-compatible", "DeepInfra", "https://api.deepinfra.com/v1/openai", Key { env: Some("DEEPINFRA_API_KEY"), required: true, url: Some("https://deepinfra.com/dash/api_keys") }, Docs { page: "https://deepinfra.com/docs/openai_api", models_from: "GET /models with the key", notes: "Many open models behind one OpenAI-compatible API. Model ids look like `vendor/Model`." })
+            .order(22).tools("model").category("aggregator"),
+        base_preset("huggingface", "openai-compatible", "Hugging Face", "https://router.huggingface.co/v1", Key { env: Some("HF_TOKEN"), required: true, url: Some("https://huggingface.co/settings/tokens") }, Docs { page: "https://huggingface.co/docs/inference-providers/index", models_from: "GET /models with the token", notes: "Inference Providers: one token routed to whichever host serves the model. Model ids look like `org/Model`." })
+            .order(23).tools("model").category("aggregator"),
+        base_preset("ollama-cloud", "openai-compatible", "Ollama Cloud", "https://ollama.com/v1", Key { env: Some("OLLAMA_API_KEY"), required: true, url: Some("https://ollama.com/settings/keys") }, Docs { page: "https://docs.ollama.com/cloud", models_from: "GET /models with the key", notes: "Ollama's hosted models over the same OpenAI-compatible API as the local server. Unlike local Ollama, the project leaves this machine." })
+            .order(24).tools("model"),
         base_preset("ollama", "openai-compatible", "Ollama (local)", "http://localhost:11434/v1", Key { env: None, required: false, url: None }, Docs { page: "https://github.com/ollama/ollama/blob/main/docs/openai.md", models_from: "GET /v1/models, falling back to GET /api/tags", notes: "Runs on this machine; nothing leaves it. devd finds a running instance automatically. Tool calling depends on the model you pulled." })
             .order(30).category("local").tools("model").discovery("ollama"),
         base_preset("lm-studio", "openai-compatible", "LM Studio (local)", "http://localhost:1234/v1", Key { env: None, required: false, url: None }, Docs { page: "https://lmstudio.ai/docs/app/api/endpoints/openai", models_from: "GET /v1/models (local, no key)", notes: "Start the local server in LM Studio first. Tool calling depends on the model and the server's prompt template." })
@@ -308,6 +327,18 @@ fn send(method: &str, url: &str, headers: &[(String, String)], body: Option<&str
     }
 }
 
+/// Fetch a public document as text: no key, no body, a short wait.
+///
+/// Used for the model catalogue, which is a file on a website and not a
+/// provider's API.
+pub fn fetch_text(url: &str) -> Result<String> {
+    let reply = quick_agent(url).get(url).set("accept", "application/json").call().map_err(|e| match e {
+        ureq::Error::Status(code, _) => DevdError::internal(format!("{} answered {code}", host_of(url))),
+        other => DevdError::Io(std::io::Error::new(std::io::ErrorKind::ConnectionAborted, format!("could not reach {}: {other}", host_of(url)))),
+    })?;
+    reply.into_string().map_err(|e| DevdError::internal(format!("could not read the response from {}: {e}", host_of(url))))
+}
+
 /// A response body that may arrive a piece at a time.
 enum Answer {
     /// An ordinary JSON body, read in full before it is parsed.
@@ -388,8 +419,8 @@ fn error_message(body: &str) -> String {
 
 fn key_hint(p: &Provider) -> String {
     match p.key_env.as_deref() {
-        Some(env) => format!(" Paste a new key in Models, or set {env}."),
-        None => " Paste a new key in Models.".to_string(),
+        Some(env) => format!(" Paste a new key in Intelligence, or set {env}."),
+        None => " Paste a new key in Intelligence.".to_string(),
     }
 }
 
@@ -465,13 +496,49 @@ fn auth_headers(p: &Provider, key: Option<&str>) -> Vec<(String, String)> {
     h
 }
 
+/// The address requests are built on, whatever form of it was saved.
+///
+/// People paste what the vendor's page shows them, and that is not always the
+/// prefix devd appends to. Three forms account for nearly every "cannot fetch
+/// models" report, and each is unambiguous, so each is corrected here instead
+/// of being answered with a 404:
+///
+/// * an endpoint instead of its prefix (`…/v1/chat/completions`, `…/v1/models`);
+/// * Anthropic's address with `/v1` on the end, which devd adds itself;
+/// * an OpenAI-compatible host with no path at all (`https://api.openai.com`),
+///   when nearly every such server answers under `/v1`. The exception is a
+///   vendor whose documented address is itself a bare host (Perplexity): that
+///   address is left exactly as it is.
+pub fn api_base(p: &Provider) -> String {
+    let mut base = p.base_url.trim().trim_end_matches('/').to_string();
+    for endpoint in ["/chat/completions", "/completions", "/responses", "/messages", "/models", "/embeddings"] {
+        if let Some(stripped) = base.strip_suffix(endpoint) {
+            base = stripped.trim_end_matches('/').to_string();
+            break;
+        }
+    }
+    match p.kind.as_str() {
+        "anthropic" => base.strip_suffix("/v1").map(str::to_string).unwrap_or(base),
+        "gemini" => base,
+        _ => {
+            let path = base.split_once("://").and_then(|(_, rest)| rest.split_once('/')).map(|(_, path)| path).unwrap_or("");
+            let documented_bare = presets().iter().any(|known| known.base_url.trim_end_matches('/').eq_ignore_ascii_case(&base));
+            if path.is_empty() && !documented_bare {
+                format!("{base}/v1")
+            } else {
+                base
+            }
+        }
+    }
+}
+
 fn models_url(p: &Provider) -> String {
     if p.kind == "anthropic" {
-        format!("{}/v1/models?limit=1000", p.base_url.trim_end_matches('/'))
+        format!("{}/v1/models?limit=1000", api_base(p))
     } else if p.kind == "gemini" {
-        format!("{}/models?pageSize=1000", p.base_url.trim_end_matches('/'))
+        format!("{}/models?pageSize=1000", api_base(p))
     } else {
-        format!("{}/models", p.base_url.trim_end_matches('/'))
+        format!("{}/models", api_base(p))
     }
 }
 
@@ -674,8 +741,31 @@ fn parse_ollama(p: &Provider, v: &Value, url: &str, now: &str) -> Vec<CatalogueM
 /// shape, Ollama has two endpoints and may not implement either, and everyone
 /// else speaks OpenAI's `/models`.
 pub fn list_models(p: &Provider, key: Option<&str>) -> Result<Vec<CatalogueModel>> {
+    // Asking without a key gets a 401 that reads as "your key was rejected",
+    // which is not what happened and sends a person looking for a typo.
+    if key.is_none() && key_required(p) {
+        return Err(DevdError::denied(format!(
+            "No API key is set for {}, so its models cannot be listed. Paste one in Intelligence{}.",
+            p.label,
+            p.key_env.as_deref().map(|e| format!(", or set {e} and restart devd")).unwrap_or_default()
+        )));
+    }
     let now = util::now();
     let discovery = discovery_of(p);
+
+    // A vendor with no list endpoint is answered from the open catalogue: asking
+    // it anyway is a 404 that reads as though the key or the address were wrong.
+    if discovery == "catalogue" {
+        let mut models = crate::modelsdev::current().rows_for(p, &now);
+        for model in &mut models {
+            model.source = format!("provider:{}", p.id);
+        }
+        return if models.is_empty() {
+            Err(DevdError::not_found(format!("{} publishes no model list and the model catalogue has none for it. Add a model id by hand in Intelligence.", p.label)))
+        } else {
+            Ok(models)
+        };
+    }
 
     if discovery == "ollama" {
         let openai = list_models_openai(p, key, &now);
@@ -849,7 +939,7 @@ pub fn test(p: &Provider, key: Option<&str>) -> TestReport {
             endpoint,
             hint,
             message: format!(
-                "No API key is set for {}. Paste one in Models{}.",
+                "No API key is set for {}. Paste one in Intelligence{}.",
                 p.label,
                 p.key_env.as_deref().map(|e| format!(" or set {e}")).unwrap_or_default()
             ),
@@ -857,7 +947,8 @@ pub fn test(p: &Provider, key: Option<&str>) -> TestReport {
     }
     match list_models(p, key) {
         Ok(m) => {
-            let auth_checked = true;
+            // A list read from the catalogue contacted nobody, so it proves nothing about the key.
+            let auth_checked = discovery_of(p) != "catalogue";
             TestReport {
                 ok: true,
                 auth_checked,
@@ -1111,13 +1202,34 @@ pub struct ChatResponse {
     pub cache_write_tokens: i64,
 }
 
+/// Mark where Anthropic may cache the conversation.
+///
+/// Anthropic caches only up to a marked block, and the system prompt was the
+/// only one marked: the conversation itself, which is nearly all of a long
+/// run's input, was paid for in full on every turn. The end of the latest
+/// message is marked so this turn is written to the cache, and the end of the
+/// user message before it so the entry the previous turn wrote is found.
+fn mark_cacheable(messages: &mut [Value]) {
+    let ends: Vec<usize> = messages.iter().enumerate().rev().filter(|(_, m)| m["role"] == "user").map(|(i, _)| i).take(2).collect();
+    for i in ends {
+        let Some(last) = messages[i]["content"].as_array_mut().and_then(|blocks| blocks.last_mut()) else { continue };
+        // An empty text block cannot carry a marker.
+        if last["type"] == "text" && last["text"].as_str().is_some_and(str::is_empty) {
+            continue;
+        }
+        last["cache_control"] = json!({ "type": "ephemeral" });
+    }
+}
+
 fn anthropic_body(r: &ChatRequest) -> Value {
+    let mut messages = r.messages.clone();
+    mark_cacheable(&mut messages);
     let mut body = json!({
         "model": r.model,
         "max_tokens": r.max_tokens,
         // The system prompt is stable across turns, so mark it cacheable.
         "system": [{ "type": "text", "text": r.system, "cache_control": { "type": "ephemeral" } }],
-        "messages": r.messages,
+        "messages": messages,
     });
     if !r.tools.is_empty() {
         body["tools"] = json!(r.tools.iter().map(|t| json!({ "name": t.name, "description": t.description, "input_schema": t.schema })).collect::<Vec<_>>());
@@ -1313,19 +1425,19 @@ fn chat_with(
         (
             format!(
                 "{}/models/{}:streamGenerateContent?alt=sse",
-                p.base_url.trim_end_matches('/'),
+                api_base(p),
                 req.model
             ),
             crate::gemini::body(req),
         )
     } else if p.kind == "anthropic" {
         (
-            format!("{}/v1/messages", p.base_url.trim_end_matches('/')),
+            format!("{}/v1/messages", api_base(p)),
             anthropic_body(req),
         )
     } else {
         (
-            format!("{}/chat/completions", p.base_url.trim_end_matches('/')),
+            format!("{}/chat/completions", api_base(p)),
             openai_body(p, req),
         )
     };
@@ -1886,6 +1998,102 @@ data: {\"type\":\"message_stop\"}
         assert_eq!(m[1].input_price, Some(0.10));
         assert_eq!(m[1].context_window, Some(200_000));
         assert!(m[0].url.as_deref().unwrap().contains("fable-5-1"));
+    }
+
+    fn sample_provider() -> Provider {
+        Provider {
+            id: "sample".into(),
+            kind: "openai-compatible".into(),
+            label: "Sample".into(),
+            base_url: "https://api.example.test/v1".into(),
+            key_env: None,
+            default_model: None,
+            is_default: false,
+            enabled: true,
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn a_pasted_address_is_brought_back_to_its_prefix() {
+        let with = |kind: &str, base: &str| Provider { kind: kind.into(), base_url: base.into(), ..sample_provider() };
+        // An endpoint copied from the vendor's page.
+        assert_eq!(api_base(&with("openai", "https://api.openai.com/v1/chat/completions")), "https://api.openai.com/v1");
+        assert_eq!(api_base(&with("openai-compatible", "https://api.deepseek.com/v1/models/")), "https://api.deepseek.com/v1");
+        // Anthropic with the version devd adds itself.
+        assert_eq!(api_base(&with("anthropic", "https://api.anthropic.com/v1")), "https://api.anthropic.com");
+        assert_eq!(models_url(&with("anthropic", "https://api.anthropic.com/v1/")), "https://api.anthropic.com/v1/models?limit=1000");
+        // A bare host.
+        assert_eq!(api_base(&with("openai-compatible", "https://api.groq.example")), "https://api.groq.example/v1");
+        assert_eq!(api_base(&with("openai-compatible", "http://localhost:11434")), "http://localhost:11434/v1");
+        // Unless the vendor's documented address is the bare host.
+        assert_eq!(api_base(&with("openai-compatible", "https://api.perplexity.ai/")), "https://api.perplexity.ai");
+        assert_eq!(api_base(&with("openai-compatible", "https://api.perplexity.ai/chat/completions")), "https://api.perplexity.ai");
+        // A longer prefix is the person's to choose and is left alone.
+        assert_eq!(api_base(&with("openai-compatible", "https://api.groq.com/openai/v1")), "https://api.groq.com/openai/v1");
+        assert_eq!(api_base(&with("gemini", "https://generativelanguage.googleapis.com/v1beta")), "https://generativelanguage.googleapis.com/v1beta");
+    }
+
+    #[test]
+    fn a_vendor_with_no_list_endpoint_is_answered_from_the_catalogue_without_claiming_the_key_works() {
+        let pre = preset("perplexity").unwrap();
+        let p = Provider { id: pre.id, label: pre.label, base_url: pre.base_url, key_env: pre.key_env, ..sample_provider() };
+        let models = list_models(&p, Some("pplx-test")).expect("the catalogue lists Sonar");
+        assert!(models.iter().any(|m| m.model_id == "sonar"));
+        assert!(models.iter().all(|m| m.source == "provider:perplexity"));
+        let report = test(&p, Some("pplx-test"));
+        assert!(report.ok && !report.auth_checked, "{}", report.message);
+        assert!(report.message.contains("Verify"), "{}", report.message);
+    }
+
+    #[test]
+    fn every_preset_has_a_secure_address_and_a_place_to_get_a_key() {
+        let all = presets();
+        let mut ids: Vec<&str> = all.iter().map(|p| p.id.as_str()).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), all.len(), "preset ids are unique");
+        for p in all.iter().filter(|p| p.id != "custom") {
+            assert!(validate_base_url(&p.base_url).is_ok(), "{}", p.id);
+            assert_eq!(p.requires_key, p.key_url.is_some() && p.key_env.is_some(), "{}", p.id);
+        }
+    }
+
+    #[test]
+    fn an_anthropic_conversation_is_cacheable_to_its_end_and_nobody_elses_is_marked() {
+        let req = ChatRequest {
+            model: "m".into(),
+            system: "s".into(),
+            messages: vec![
+                json!({"role":"user","content":[{"type":"text","text":"build it"}]}),
+                json!({"role":"assistant","content":[{"type":"tool_use","id":"a","name":"read_file","input":{}}]}),
+                json!({"role":"user","content":[{"type":"tool_result","tool_use_id":"a","content":"one"}]}),
+                json!({"role":"assistant","content":[{"type":"tool_use","id":"b","name":"read_file","input":{}}]}),
+                json!({"role":"user","content":[{"type":"tool_result","tool_use_id":"b","content":"two"},{"type":"tool_result","tool_use_id":"c","content":"three"}]}),
+            ],
+            tools: Vec::new(),
+            tool_choice: None,
+            max_tokens: 16,
+            effort: None,
+        };
+        let body = anthropic_body(&req);
+        let marked = |m: usize, b: usize| body["messages"][m]["content"][b]["cache_control"]["type"] == "ephemeral";
+        assert!(marked(4, 1), "the end of the conversation");
+        assert!(marked(2, 0), "the end of the turn before, which the last call wrote");
+        assert!(!marked(4, 0) && !marked(0, 0) && !marked(1, 0) && !marked(3, 0));
+        // Four markers is Anthropic's limit; the system prompt has one.
+        assert_eq!(body.to_string().matches("cache_control").count(), 3);
+        assert_eq!(req.messages[4]["content"][1].get("cache_control"), None, "the log's messages are not changed");
+        assert!(!openai_body(&provider("openai"), &req).to_string().contains("cache_control"));
+    }
+
+    #[test]
+    fn listing_without_a_required_key_says_so() {
+        let p = Provider { kind: "openai".into(), label: "OpenAI".into(), key_env: Some("OPENAI_API_KEY".into()), ..sample_provider() };
+        let error = list_models(&p, None).unwrap_err().to_string();
+        assert!(error.contains("No API key is set for OpenAI"), "{error}");
+        assert!(error.contains("OPENAI_API_KEY"), "{error}");
     }
 
     #[test]
