@@ -57,6 +57,8 @@ const ICONS: &[(&str, &str)] = &[
     ("command", icon!(r#"<path d="M6 6h4v4H6ZM6 6V4.500A1.500 1.500 0 1 0 4.500 6H6ZM10 6V4.500A1.500 1.500 0 1 1 11.500 6H10ZM6 10v1.500A1.500 1.500 0 1 1 4.500 10H6ZM10 10v1.500a1.500 1.500 0 1 0 1.500-1.500H10Z"/>"#)),
     ("lock", icon!(r#"<rect x="3.500" y="7.200" width="9" height="6.300" rx="1.200"/><path d="M5.500 7.200V5.300a2.500 2.500 0 0 1 5 0v1.900"/>"#)),
     ("database", icon!(r#"<ellipse cx="8" cy="4.200" rx="5" ry="1.900"/><path d="M3 4.200v7.600c0 1 2.200 1.900 5 1.900s5-.9 5-1.900V4.200M3 8c0 1 2.200 1.900 5 1.900S13 9 13 8"/>"#)),
+    ("clock", icon!(r#"<circle cx="8" cy="8" r="5.500"/><path d="M8 5v3.200l2 1.300"/>"#)),
+    ("wrench", icon!(r#"<path d="M10.500 2.500a3 3 0 0 0-2.800 4L2.800 11.400a1.200 1.200 0 0 0 1.700 1.700l4.900-4.800a3 3 0 0 0 4-2.800l-1.800 1.800-1.700-.4-.4-1.700 1.800-1.800Z"/>"#)),
     ("bolt", icon!(r#"<path d="M9 2 3.500 9h4L7 14l5.500-7h-4Z"/>"#)),
     ("more", icon!(r#"<path d="M3.500 8h.01M8 8h.01M12.500 8h.01"/>"#)),
     ("sun", icon!(r#"<circle cx="8" cy="8" r="2.800"/><path d="M8 1.800v1.400M8 12.800v1.400M1.800 8h1.400M12.800 8h1.400M3.600 3.600l1 1M11.400 11.400l1 1M3.600 12.400l1-1M11.400 4.600l1-1"/>"#)),
@@ -77,15 +79,40 @@ impl AssetSource for Assets {
         if path == "brand/devd-logo.png" {
             return Ok(Some(Cow::Borrowed(include_bytes!("../../../assets/devd-logo.png").as_slice())));
         }
-        // The dotted background art, drawn when first asked for and kept.
+        // The dotted background art. There is one picture per theme and
+        // lightness, made the first time it is asked for and kept.
         if let Some(art) = path.strip_prefix("art/") {
-            static DARK: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
-            static LIGHT: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
-            return Ok(match art {
-                "dither-dark.png" => Some(Cow::Borrowed(DARK.get_or_init(|| crate::ui::dither::png([0xd9, 0xd6, 0xcc])).as_slice())),
-                "dither-light.png" => Some(Cow::Borrowed(LIGHT.get_or_init(|| crate::ui::dither::png([0x3a, 0x38, 0x30])).as_slice())),
-                _ => None,
+            let Some(art) = art.strip_suffix(".png") else { return Ok(None) };
+            let Some((id, dark)) = art.rsplit_once('-') else { return Ok(None) };
+            let dark = match dark {
+                "dark" => true,
+                "light" => false,
+                _ => return Ok(None),
+            };
+            if !matches!(id, "stone" | "shepherd" | "harp") {
+                return Ok(None);
+            }
+            static PICTURES: [std::sync::OnceLock<Vec<u8>>; 6] = [
+                std::sync::OnceLock::new(),
+                std::sync::OnceLock::new(),
+                std::sync::OnceLock::new(),
+                std::sync::OnceLock::new(),
+                std::sync::OnceLock::new(),
+                std::sync::OnceLock::new(),
+            ];
+            let slot = match (id, dark) {
+                ("stone", true) => 0,
+                ("stone", false) => 1,
+                ("shepherd", true) => 2,
+                ("shepherd", false) => 3,
+                ("harp", true) => 4,
+                _ => 5,
+            };
+            let bytes = PICTURES[slot].get_or_init(|| {
+                let theme = crate::theme::Theme::by_id(id, dark);
+                crate::ui::dither::png_as(theme.art_rgb(), theme.pattern)
             });
+            return Ok(Some(Cow::Borrowed(bytes.as_slice())));
         }
         let name = path.strip_prefix("icons/").and_then(|p| p.strip_suffix(".svg"));
         Ok(name
@@ -130,6 +157,17 @@ mod tests {
     fn the_rail_has_an_icon_for_every_screen() {
         for route in devd_app_core::nav::Route::primary() {
             assert!(has_icon(crate::ui::screen_icon(&route)), "{}", route.title());
+        }
+    }
+
+    #[test]
+    fn every_theme_has_a_background_in_both_lightnesses() {
+        for (id, _) in crate::theme::Theme::ALL {
+            for lightness in ["dark", "light"] {
+                let path = format!("art/{id}-{lightness}.png");
+                let bytes = Assets.load(&path).unwrap().unwrap_or_else(|| panic!("{path} is not served"));
+                assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n", "{path}");
+            }
         }
     }
 }

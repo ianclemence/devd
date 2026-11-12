@@ -18,6 +18,8 @@ mod screens;
 mod shell;
 mod state;
 mod theme;
+#[cfg(test)]
+mod truth;
 mod ui;
 
 use gpui::{px, size, App, AppContext, Application, Bounds, TitlebarOptions, WindowBounds, WindowOptions};
@@ -46,9 +48,10 @@ fn main() {
     // `devd-app /sites/blog` opens on that place: the same text a link or an
     // agent uses to name it.
     let start = std::env::args().nth(1).and_then(|arg| devd_app_core::nav::Route::parse(&arg)).unwrap_or(devd_app_core::nav::Route::Home);
+    let start_theme = theme::load(std::path::Path::new(&conn.home));
     let closing = conn.clone();
     Application::new().with_assets(assets::Assets).run(move |cx: &mut App| {
-        cx.set_global(theme::Theme::dark());
+        cx.set_global(start_theme);
         ui::input::bind_keys(cx);
         shell::bind_keys(cx);
         state::start(conn.clone(), cx);

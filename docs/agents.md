@@ -570,6 +570,24 @@ command that exits immediately (`devd call team.start`) has no host driving it
 until the next host starts, which resumes it. Use `devd team start` to follow a
 run in the terminal.
 
+## The scorecard
+
+`team.stats` measures the work devd actually recorded: tasks accepted on proof,
+tasks rejected or abandoned, extra attempts, review changes requested, checks that
+passed, and median time. `models.usage` adds tokens, estimated spend and
+conversation errors. The Intelligence screen puts them together.
+
+A member is ranked from **55% accepted on proof, 25% checks passed, 20% low
+rework, minus up to 10% for review changes**. A member needs three settled tasks
+to be ranked; below that the record is shown and says "too new to rank". Cost and
+cost per accepted task are reported beside the rank, never folded into it, so a
+cheap model is not called good and an expensive one is not called bad.
+
+A model with no recorded model on older tasks is one row, "Model not recorded",
+not a guess. A model that has done work but no finished team task is shown with
+its conversations, tokens and errors, unranked. The bars are the comparison; the
+window does not invent a time series it does not have.
+
 ## Skills
 
 Skills are short Markdown instructions agents load with `skills.get` when the work

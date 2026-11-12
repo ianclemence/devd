@@ -179,5 +179,5 @@ pub fn render(shell: &mut Shell, _window: &mut Window, cx: &mut Context<Shell>) 
             .child(div().w(px(320.0)).flex_none().flex().flex_col().gap(px(8.0)).child(eyebrow("THE SERVER", cx)).child(machine)),
     );
 
-    div().relative().size_full().child(ui::art(cx)).child(ui::page("home", 980.0, column)).into_any_element()
+    ui::page("home", 980.0, column).into_any_element()
 }

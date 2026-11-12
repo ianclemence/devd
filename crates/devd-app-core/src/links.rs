@@ -212,6 +212,7 @@ pub fn chip_label(route_path: &str) -> String {
         Route::Intelligence => "Intelligence".to_string(),
         Route::Activity => "Activity".to_string(),
         Route::Settings => "Settings".to_string(),
+        Route::Page(_) => route.title().to_string(),
     }
 }
 

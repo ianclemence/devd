@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use devd_app_core::presence::{Doing, Place, Presence, Room, Who};
-use devd_app_core::sync::{Engine, LogSpec, Outcome, QueryKey, Settled};
+use devd_app_core::sync::{Engine, LogSpec, Mutation, MutationId, Outcome, QueryKey, Settled};
 use futures::channel::mpsc::{unbounded, UnboundedSender};
 use futures::StreamExt;
 use gpui::{App, Global};
@@ -29,6 +29,9 @@ pub struct Devd {
     pub writing: HashMap<String, String>,
     /// Things to tell the person once: a write that failed, one that worked.
     pub toasts: Vec<Toast>,
+    /// Work that is still running, named while it runs. A scaffold can take a
+    /// minute, and a closed dialog must not look like nothing happened.
+    pub running: Vec<Running>,
     /// Writes that returned a plan and wait for the person's decision.
     pub decisions: Vec<Decision>,
     /// Whether the event stream is connected.
@@ -48,6 +51,16 @@ pub struct Devd {
     pub chat_running: std::cell::Cell<bool>,
     /// The folder the open conversation is about: relative paths in its replies are read against it.
     pub link_root: Option<std::path::PathBuf>,
+    /// Projects whose tasks are shown. A project with many tasks would otherwise
+    /// turn the page into a wall of commands.
+    pub open_projects: std::collections::HashSet<String>,
+    /// Capability groups whose rows are shown on the API and tools page.
+    pub open_groups: std::collections::HashSet<String>,
+    /// Whether the window may close even while a scaffold runs. Set once the
+    /// person has answered the warning.
+    pub allow_close: std::cell::Cell<bool>,
+    /// Whether the close button was pressed and the warning is owed.
+    pub close_asked: std::cell::Cell<bool>,
 }
 
 impl Global for Devd {}
@@ -61,6 +74,31 @@ pub struct Toast {
     pub failed: bool,
     /// When it was shown.
     pub at: Instant,
+    /// A place to open when the toast is clicked, when there is somewhere to look.
+    pub go: Option<String>,
+}
+
+impl Toast {
+    /// Good news, or a note that is not a failure.
+    pub fn new(text: impl Into<String>, failed: bool) -> Self {
+        Self { text: text.into(), failed, at: Instant::now(), go: None }
+    }
+
+    /// A message that opens a screen when clicked.
+    pub fn opening(text: impl Into<String>, go: impl Into<String>) -> Self {
+        Self { go: Some(go.into()), ..Self::new(text, false) }
+    }
+}
+
+/// A write that has not answered yet, and what to call it while it runs.
+#[derive(Debug, Clone)]
+pub struct Running {
+    /// Which write.
+    pub id: MutationId,
+    /// What it is doing, in the person's words.
+    pub text: String,
+    /// The stack run it started, when it can be followed or cancelled.
+    pub run_id: Option<String>,
 }
 
 /// How often the pulse of a live mark steps.
@@ -76,6 +114,9 @@ impl Toast {
         if self.failed {
             // Time to read a sentence or two, and then some.
             Duration::from_secs(12).max(Duration::from_millis(self.text.chars().count() as u64 * 70))
+        } else if self.go.is_some() {
+            // It invites a click; give the person time to reach it.
+            Duration::from_secs(12)
         } else {
             TOAST_FOR
         }
@@ -122,7 +163,7 @@ pub fn start(conn: Arc<Connection>, cx: &mut App) {
 
     let mut room = Room::new();
     room.seen("you", Presence { who: Who::You, place: Place::default(), doing: Doing::Viewing }, Instant::now());
-    cx.set_global(Devd { conn, sync, room, writing: HashMap::new(), toasts: Vec::new(), decisions: Vec::new(), online: false, opened_thread: None, pending_go: None, beat: 0, live_seen: std::cell::Cell::new(false), link_root: None, chat_running: std::cell::Cell::new(false) });
+    cx.set_global(Devd { conn, sync, room, writing: HashMap::new(), toasts: Vec::new(), running: Vec::new(), decisions: Vec::new(), online: false, opened_thread: None, pending_go: None, beat: 0, live_seen: std::cell::Cell::new(false), link_root: None, chat_running: std::cell::Cell::new(false), open_projects: std::collections::HashSet::new(), open_groups: std::collections::HashSet::new(), allow_close: std::cell::Cell::new(false), close_asked: std::cell::Cell::new(false) });
 
     // One task on the window's thread turns signals into redraws. A burst of
     // signals becomes one redraw: everything waiting is taken before drawing.
@@ -245,6 +286,20 @@ fn apply(signal: Signal, cx: &mut App) {
     }
 }
 
+/// Start a write and, when it is long enough to notice, name it while it runs.
+pub fn start_write(cx: &mut App, mutation: Mutation, text: Option<String>, run_id: Option<String>) -> MutationId {
+    let id = devd(cx).sync.mutate(mutation);
+    if let Some(text) = text {
+        cx.global_mut::<Devd>().running.push(Running { id, text, run_id });
+    }
+    id
+}
+
+/// A project was created and registered, so the toast can open the list.
+fn log_created_project(capability: &str, value: &Value) -> bool {
+    matches!(capability, "project.init" | "project.create") && value["status"].as_str() == Some("ok")
+}
+
 /// Report the writes that finished: a toast for a failure, a decision for a plan.
 fn settle_writes(cx: &mut App) {
     let outcomes: Vec<Outcome> = devd(cx).sync.take_outcomes();
@@ -253,20 +308,30 @@ fn settle_writes(cx: &mut App) {
     }
     let state = cx.global_mut::<Devd>();
     for outcome in outcomes {
+        // A write that was named while it ran stops being named now.
+        state.running.retain(|run| run.id != outcome.id);
         match outcome.settled {
             Settled::Done(value) => {
                 // A write whose result is not otherwise visible says that it worked.
                 if let Some(text) = devd_app_core::status::confirmation(&outcome.capability, &value) {
                     // A check that ran and found a problem is a result, not a success.
-                    let failed = value["ok"] == json!(false);
-                    state.toasts.push(Toast { text, failed, at: Instant::now() });
+                    let failed = value["ok"] == json!(false) && value["status"].as_str() != Some("cancelled");
+                    let toast = if log_created_project(&outcome.capability, &value) {
+                        Toast::opening(text, "/projects")
+                    } else {
+                        Toast::new(text, failed)
+                    };
+                    state.toasts.push(toast);
                 }
                 if outcome.capability == "chat.send" {
                     let id = value["id"].as_str().or(value["thread"]["id"].as_str()).or(value["thread"].as_str());
                     state.opened_thread = id.map(str::to_string);
                 }
             }
-            Settled::Failed(failure) => state.toasts.push(Toast { text: failure.message, failed: true, at: Instant::now() }),
+            Settled::Failed(failure) => {
+                let text = devd_app_core::status::failure(&failure.message);
+                state.toasts.push(Toast::new(text, true));
+            }
             Settled::NeedsApproval { token, plan } => state.decisions.push(Decision { capability: outcome.capability, token, plan }),
         }
     }
@@ -370,5 +435,10 @@ pub mod q {
     /// What every specialist is doing right now, across projects.
     pub fn overview() -> QueryKey {
         QueryKey::bare("team.overview")
+    }
+
+    /// The team's record: acceptance, rework, checks and time, by role and model.
+    pub fn team_stats() -> QueryKey {
+        QueryKey::bare("team.stats")
     }
 }

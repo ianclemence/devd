@@ -10,9 +10,10 @@
 //! stands in the way, and the model list is the provider's own, completed
 //! from the open catalogue where the provider is silent.
 
+use devd_app_core::scorecard::{self, Scorecard};
 use devd_app_core::status;
 use devd_app_core::sync::Mutation;
-use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, Div, Entity, Focusable, FontWeight, Subscription, Window};
+use gpui::{div, prelude::*, px, AnyElement, App, ClickEvent, Context, Div, Entity, Focusable, FontWeight, Subscription, Window};
 use serde_json::{json, Value};
 
 use crate::shell::Shell;
@@ -281,11 +282,201 @@ fn models(provider: &Value, cx: &mut Context<Shell>) -> Div {
     list.child(rule(cx)).child(div().px(px(54.0)).py(px(7.0)).text_size(px(size::TEXT_XS)).text_color(t.faint).child("Prices are US dollars per million tokens, input / output."))
 }
 
+fn percent(v: Option<f64>) -> String {
+    v.map(|v| format!("{:.0}%", v * 100.0)).unwrap_or_else(|| "—".to_string())
+}
+
+fn duration(seconds: Option<i64>) -> String {
+    match seconds {
+        None => "—".to_string(),
+        Some(s) if s < 60 => format!("{s}s"),
+        Some(s) if s < 3600 => format!("{}m", s / 60),
+        Some(s) => format!("{}h", s / 3600),
+    }
+}
+
+/// A role id as a person reads it: `motion` stays one word, `qa` stays short.
+fn role_name(id: &str) -> String {
+    id.split(['-', '_']).map(|part| {
+        let mut chars = part.chars();
+        match chars.next() {
+            Some(first) => first.to_uppercase().chain(chars).collect::<String>(),
+            None => String::new(),
+        }
+    }).collect::<Vec<_>>().join(" ")
+}
+
+fn score_tone(score: Option<f64>) -> Tone {
+    match score.unwrap_or(0.0) {
+        s if s >= 80.0 => Tone::Ok,
+        s if s >= 60.0 => Tone::Info,
+        _ => Tone::Warn,
+    }
+}
+
+/// A small bar for a 0–100 score. A table row is not a chart; this is the one
+/// comparison that is easier to see than to read.
+fn score_bar(score: Option<f64>, cx: &App) -> Div {
+    let t = theme(cx);
+    let share = (score.unwrap_or(0.0) / 100.0).clamp(0.0, 1.0) as f32;
+    div()
+        .w(px(56.0))
+        .flex_none()
+        .h(px(4.0))
+        .rounded_full()
+        .bg(t.hover)
+        .child(div().h_full().w(gpui::relative(share.max(if score.is_some() { 0.02 } else { 0.0 }))).rounded_full().bg(t.tone(score_tone(score))))
+}
+
+fn cell(width: f32, text: String, tone: Tone, cx: &App) -> Div {
+    div()
+        .w(px(width))
+        .flex_none()
+        .flex()
+        .justify_end()
+        .text_size(px(size::TEXT_SM))
+        .text_color(theme(cx).tone(tone))
+        .child(text)
+}
+
+/// The models, with the work they were accepted for and what that work cost.
+fn model_performance(rows: &[Scorecard], cx: &App) -> Div {
+    let t = theme(cx).clone();
+    let mut list = card(cx).flex().flex_col().overflow_hidden();
+    list = list.child(
+        div()
+            .px(px(14.0))
+            .h(px(30.0))
+            .flex()
+            .items_center()
+            .gap(px(12.0))
+            .text_size(px(size::TEXT_XS))
+            .text_color(t.faint)
+            .child(div().w(px(26.0)).flex_none().child("#"))
+            .child(div().flex_1().child("MODEL"))
+            .child(div().w(px(56.0)).flex_none())
+            .child(div().w(px(70.0)).flex_none().flex().justify_end().child("ACCEPTED"))
+            .child(div().w(px(72.0)).flex_none().flex().justify_end().child("COST"))
+            .child(div().w(px(92.0)).flex_none().flex().justify_end().child("PER ACCEPTED"))
+            .child(div().w(px(60.0)).flex_none().flex().justify_end().child("CACHE")),
+    );
+    for row in rows {
+        let rank = row.rank.map(|n| format!("#{n}")).unwrap_or_else(|| "—".to_string());
+        let label = if row.name == "not recorded" { "Model not recorded".to_string() } else { row.name.clone() };
+        let mut sub = if row.tasks == 0 {
+            format!("{} conversations · {} tokens · {} ended in an error", row.conversations, ui::compact(row.tokens), row.errors)
+        } else {
+            format!("{} tokens · {} tasks", ui::compact(row.tokens), row.tasks)
+        };
+        if row.tasks > 0 {
+            if let Some(score) = row.score {
+                sub.push_str(&format!(" · score {score:.0}"));
+            }
+            if !row.note().is_empty() {
+                sub.push_str(" · ");
+                sub.push_str(row.note());
+            }
+        }
+        list = list
+            .child(rule(cx))
+            .child(
+                div()
+                    .px(px(14.0))
+                    .h(px(48.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(12.0))
+                    .child(div().w(px(26.0)).flex_none().text_size(px(size::TEXT_SM)).text_color(if row.rank.is_some() { t.accent } else { t.faint }).child(rank))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .child(div().font_family(if row.name == "not recorded" { crate::theme::SANS } else { mono() }).text_size(px(size::TEXT_SM)).child(ui::Clip::new(label)))
+                            .child(div().text_size(px(size::TEXT_XS)).text_color(t.faint).child(ui::Clip::new(sub))),
+                    )
+                    .child(score_bar(row.score, cx))
+                    .child(cell(70.0, format!("{} / {}", row.accepted, row.settled), Tone::Neutral, cx))
+                    .child(cell(72.0, row.cost_usd.map(money).unwrap_or_else(|| "no price".to_string()), Tone::Neutral, cx))
+                    .child(cell(92.0, row.cost_per_accepted.map(money).unwrap_or_else(|| "—".to_string()), Tone::Neutral, cx))
+                    .child(cell(60.0, percent(row.cache_hit_rate), Tone::Neutral, cx)),
+            );
+    }
+    list
+}
+
+/// The team, ranked on the record devd kept. The formula is in the subtitle so
+/// a rank can be checked rather than trusted.
+fn agent_performance(rows: &[Scorecard], cx: &App) -> Div {
+    let t = theme(cx).clone();
+    let mut list = card(cx).flex().flex_col().overflow_hidden();
+    list = list.child(
+        div()
+            .px(px(14.0))
+            .h(px(30.0))
+            .flex()
+            .items_center()
+            .gap(px(12.0))
+            .text_size(px(size::TEXT_XS))
+            .text_color(t.faint)
+            .child(div().w(px(26.0)).flex_none().child("#"))
+            .child(div().flex_1().child("MEMBER"))
+            .child(div().w(px(56.0)).flex_none())
+            .child(div().w(px(66.0)).flex_none().flex().justify_end().child("ACCEPTED"))
+            .child(div().w(px(60.0)).flex_none().flex().justify_end().child("REWORK"))
+            .child(div().w(px(60.0)).flex_none().flex().justify_end().child("CHECKS"))
+            .child(div().w(px(60.0)).flex_none().flex().justify_end().child("MEDIAN"))
+            .child(div().w(px(76.0)).flex_none().flex().justify_end().child("COST"))
+            .child(div().w(px(90.0)).flex_none().flex().justify_end().child("PER ACCEPTED")),
+    );
+    for row in rows {
+        let rank = row.rank.map(|n| format!("#{n}")).unwrap_or_else(|| "—".to_string());
+        let mut sub = format!("{} tasks", row.tasks);
+        if let Some(score) = row.score {
+            sub.push_str(&format!(" · score {score:.0}"));
+        }
+        if !row.note().is_empty() {
+            sub.push_str(" · ");
+            sub.push_str(row.note());
+        }
+        list = list
+            .child(rule(cx))
+            .child(
+                div()
+                    .px(px(14.0))
+                    .h(px(48.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(12.0))
+                    .child(div().w(px(26.0)).flex_none().text_size(px(size::TEXT_SM)).text_color(if row.rank.is_some() { t.accent } else { t.faint }).child(rank))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .child(div().font_weight(FontWeight::MEDIUM).child(ui::Clip::new(role_name(&row.name))))
+                            .child(div().text_size(px(size::TEXT_XS)).text_color(t.faint).child(ui::Clip::new(sub))),
+                    )
+                    .child(score_bar(row.score, cx))
+                    .child(cell(66.0, percent(row.acceptance_rate), Tone::Neutral, cx))
+                    .child(cell(60.0, row.rework_per_task.map(|r| format!("{r:.1}")).unwrap_or_else(|| "—".to_string()), Tone::Neutral, cx))
+                    .child(cell(60.0, percent(row.verification_pass_rate), Tone::Neutral, cx))
+                    .child(cell(60.0, duration(row.median_seconds), Tone::Neutral, cx))
+                    .child(cell(76.0, row.cost_usd.map(money).unwrap_or_else(|| "—".to_string()), Tone::Neutral, cx))
+                    .child(cell(90.0, row.cost_per_accepted.map(money).unwrap_or_else(|| "—".to_string()), Tone::Neutral, cx)),
+            );
+    }
+    list
+}
+
 /// The screen.
 pub fn render(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
     let t = theme(cx).clone();
     let inventory = devd(cx).sync.watch(&q::inventory());
     let usage = devd(cx).sync.watch(&q::usage());
+    let stats = devd(cx).sync.watch(&q::team_stats());
     let presets = devd(cx).sync.watch(&q::presets());
     let providers: Vec<Value> = inventory.list("/providers").to_vec();
 
@@ -306,17 +497,47 @@ pub fn render(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
         .flex()
         .gap(px(8.0))
         .child(Button::new("intel.catalogue", "Update catalogue").icon("refresh").kind(ButtonKind::Ghost).on_click(|_, _, cx| {
-            devd(cx).sync.mutate(Mutation::new("models.refresh", json!({})).invalidating("models"));
+            crate::state::start_write(cx, Mutation::new("models.refresh", json!({})).invalidating("models"), Some("Updating the model catalogue…".to_string()), None);
         }))
         .child(Button::new("intel.fetch", "Fetch models").icon("refresh").disabled(fetchable.is_empty()).on_click(move |_, _, cx| {
             for id in &fetchable {
-                devd(cx).sync.mutate(Mutation::new("provider.models", json!({ "id": id })));
+                crate::state::start_write(cx, Mutation::new("provider.models", json!({ "id": id })), Some(format!("Fetching models from {id}…")), None);
             }
         }));
     let mut column = div().flex().flex_col().gap(px(22.0)).child(page_head("Intelligence", headline, actions, cx));
 
     if let Some(data) = usage.data.as_deref() {
         column = column.child(div().flex().flex_col().gap(px(8.0)).child(eyebrow("SPEND", cx)).child(spend(data, cx)));
+    }
+
+    // What the work bought, by model and by member. Cost is shown beside the
+    // record; it is not folded into the rank, so a cheap model is not called
+    // good and an expensive one is not called bad.
+    let usage_data = usage.data.as_deref().unwrap_or(&Value::Null);
+    let stats_data = stats.data.as_deref().unwrap_or(&Value::Null);
+    let model_rows = scorecard::models(stats_data, usage_data);
+    if !model_rows.is_empty() {
+        column = column.child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .child(eyebrow("MODEL PERFORMANCE", cx))
+                .child(div().text_size(px(size::TEXT_XS)).text_color(t.faint).child("Accepted on proof, checks passed, work redone and what it cost. Three finished tasks make a model rankable; below that the record is shown but not ranked."))
+                .child(model_performance(&model_rows, cx)),
+        );
+    }
+    let agent_rows = scorecard::agents(stats_data, usage_data);
+    if !agent_rows.is_empty() {
+        column = column.child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .child(eyebrow("AGENT PERFORMANCE", cx))
+                .child(div().text_size(px(size::TEXT_XS)).text_color(t.faint).child("Ranked from the record: accepted on proof, checks that passed, and work that had to be redone. Cost and cost per accepted task are reported beside the rank, not inside it."))
+                .child(agent_performance(&agent_rows, cx)),
+        );
     }
 
     // Providers.
@@ -363,10 +584,10 @@ pub fn render(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                 let (test, fetch) = (id.clone(), id.clone());
                 buttons = buttons
                     .child(Button::new(ui::nid("intel.test", n), "Test").kind(ButtonKind::Ghost).on_click(move |_, _, cx| {
-                        devd(cx).sync.mutate(Mutation::new("provider.test", json!({ "id": test })).invalidating("models"));
+                        crate::state::start_write(cx, Mutation::new("provider.test", json!({ "id": test })).invalidating("models"), Some("Checking the provider…".to_string()), None);
                     }))
                     .child(Button::new(ui::nid("intel.models", n), "Fetch").icon("refresh").kind(ButtonKind::Ghost).on_click(move |_, _, cx| {
-                        devd(cx).sync.mutate(Mutation::new("provider.models", json!({ "id": fetch })));
+                        crate::state::start_write(cx, Mutation::new("provider.models", json!({ "id": fetch })), Some("Fetching models…".to_string()), None);
                     }));
                 if provider["is_default"] != json!(true) && state.level != status::Level::Danger {
                     let make = id.clone();
@@ -417,11 +638,21 @@ pub fn render(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
             }
             if open {
                 let remove = id.clone();
+                let name = label.clone();
                 list = list.child(models(provider, cx)).child(rule(cx)).child(
                     div().px(px(14.0)).py(px(9.0)).flex().items_center().justify_end().bg(t.bg).child(
-                        Button::new(ui::nid("intel.remove", n), format!("Remove {label}")).kind(ButtonKind::Danger).on_click(move |_, _, cx| {
-                            devd(cx).sync.mutate(Mutation::new("provider.remove", json!({ "id": remove })).invalidating("models"));
-                        }),
+                        Button::new(ui::nid("intel.remove", n), format!("Remove {label}")).kind(ButtonKind::Danger).on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                            let mutation = Mutation::new("provider.remove", json!({ "id": remove })).invalidating("models");
+                            this.confirm(
+                                format!("Remove {name}?"),
+                                format!("Its key and model list are removed from devd. Your account with {name} is untouched."),
+                                "Remove provider",
+                                true,
+                                mutation,
+                                window,
+                                cx,
+                            );
+                        })),
                     ),
                 );
             }

@@ -132,6 +132,33 @@ struct PathArgs {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct BlankArgs {
+    /// Project name, which is also the folder name.
+    name: String,
+    /// Directory that will contain the project; defaults to the projects root.
+    #[serde(default)]
+    destination: Option<String>,
+    /// Initialise a git repository (default true).
+    #[serde(default)]
+    git: Option<bool>,
+}
+
+/// A name a folder can safely take: letters, digits, dots, dashes and underscores,
+/// starting with a letter or digit, and never `.` or `..`.
+fn valid_project_name(name: &str) -> bool {
+    let name = name.trim();
+    if name.is_empty() || name == "." || name == ".." || name.len() > 100 {
+        return false;
+    }
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else { return false };
+    if !first.is_ascii_alphanumeric() {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct ImportArgs {
     /// Absolute project directory (an existing checkout).
     path: String,
@@ -541,6 +568,83 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             let mut o = Outcome::with_data(format!("Imported {} as a project", dir.display()), serde_json::to_value(&c)?);
             if c.ambiguous { o = o.warn(c.ambiguity.clone().unwrap_or_default()); }
             for m in &c.missing { o = o.warn(format!("{}: {} - {}", m.tool, m.why, m.fix)); }
+            Ok(o)
+        },
+    )?;
+
+    reg.define::<BlankArgs>("project.create", "Create an empty project")
+    .description("Creates a folder with a README and, by default, a git repository, then registers it with devd. No framework or package manager is involved. Use it when the work does not start from a stack. The folder must not already contain files.")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers(
+        |ctx, a| {
+            if !valid_project_name(&a.name) {
+                return Err(DevdError::invalid("a project name uses letters, digits, dots, dashes and underscores, and starts with a letter or digit"));
+            }
+            let parent = match &a.destination {
+                Some(d) if !d.trim().is_empty() => PathBuf::from(d),
+                _ => ctx.settings.effective_www_root(&ctx.paths.www()),
+            };
+            let parent = authz::authorize_dir(ctx, &parent)?;
+            let dir = parent.join(a.name.trim());
+            if dir.exists() && dir.read_dir().map(|mut d| d.next().is_some()).unwrap_or(false) {
+                return Err(DevdError::conflict(format!("A project folder already exists at {}. Choose another name or folder.", dir.display())));
+            }
+            Ok(Plan::new("project.create", format!("create an empty project {} in {}", a.name.trim(), parent.display()))
+                .step("make the folder and a README")
+                .step(if a.git.unwrap_or(true) { "initialise a git repository" } else { "leave git alone" })
+                .effect("writes files on this machine"))
+        },
+        |ctx, a| {
+            let parent = match &a.destination {
+                Some(d) if !d.trim().is_empty() => PathBuf::from(d),
+                _ => ctx.settings.effective_www_root(&ctx.paths.www()),
+            };
+            let parent = authz::authorize_dir(ctx, &parent)?;
+            let dir = parent.join(a.name.trim());
+            if dir.exists() && dir.read_dir().map(|mut d| d.next().is_some()).unwrap_or(false) {
+                return Err(DevdError::conflict(format!("A project folder already exists at {}. Choose another name or folder.", dir.display())));
+            }
+            std::fs::create_dir_all(&dir)?;
+            let readme = dir.join("README.md");
+            if !readme.exists() {
+                std::fs::write(&readme, format!("# {}\n", a.name.trim()))?;
+            }
+            let mut warnings = Vec::new();
+            let mut git_initialised = dir.join(".git").exists();
+            if a.git.unwrap_or(true) && !git_initialised {
+                let run_id = format!("blank-{}", devd_core::util::new_id());
+                let cancel = exec::runs::register(&run_id);
+                let result = exec::run_streaming(
+                    &exec::RunSpec { argv: vec!["git".into(), "init".into(), "-q".into()], cwd: dir.clone(), env: vec![], extra_path: vec![], timeout: Some(std::time::Duration::from_secs(60)) },
+                    &cancel,
+                    None,
+                    &mut |_| {},
+                );
+                exec::runs::finish(&run_id);
+                match result {
+                    Ok(r) if r.ok => git_initialised = true,
+                    Ok(_) => warnings.push("git could not initialise a repository here".to_string()),
+                    Err(e) => warnings.push(format!("git could not initialise a repository here: {e}")),
+                }
+            }
+            let r = stacks(ctx);
+            let context = crate::detect::detect(ctx, &r, &dir, None).ok();
+            let now = devd_core::util::now();
+            ctx.store.upsert_stack_project(&devd_core::StackProject {
+                path: authz::normalise(&dir).display().to_string(),
+                name: a.name.trim().to_string(),
+                stack_id: context.as_ref().and_then(|c| c.primary.clone()),
+                package_manager: context.as_ref().and_then(|c| c.package_manager.clone()),
+                source: "init".into(),
+                context: context.map(|c| serde_json::to_string(&c).unwrap_or_default()).unwrap_or_default(),
+                created_at: now.clone(),
+                updated_at: now,
+            })?;
+            let mut o = Outcome::with_data(format!("created {}", dir.display()), json!({ "status": "ok", "project_dir": dir.display().to_string(), "name": a.name.trim(), "git_initialised": git_initialised, "ok": true }));
+            for w in warnings { o = o.warn(w); }
             Ok(o)
         },
     )?;
@@ -1435,4 +1539,19 @@ fn exec_cmd(ctx: &Ctx, a: &ExecArgs, destructive: bool) -> Result<Outcome> {
     );
     o.ok = ok;
     Ok(o)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::valid_project_name;
+
+    #[test]
+    fn an_empty_project_name_is_a_folder_name_and_nothing_else() {
+        for good in ["shop", "my-shop", "shop_2", "v1.2"] {
+            assert!(valid_project_name(good), "{good}");
+        }
+        for bad in ["", " ", ".", "..", "../up", "a/b", "a\\b", "-shop", "_shop", "shop!"] {
+            assert!(!valid_project_name(bad), "{bad}");
+        }
+    }
 }

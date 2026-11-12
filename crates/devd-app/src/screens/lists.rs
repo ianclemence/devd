@@ -263,47 +263,9 @@ fn run_detail(id: &str, cx: &mut Context<Shell>) -> AnyElement {
 
 /// Every project devd knows.
 pub fn projects(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
-    let t = theme(cx).clone();
-    let snap = devd(cx).sync.watch(&q::projects());
-    let mut column = div().flex().flex_col().child(page_head("Projects", format!("{} folders devd knows about.", snap.list("").len()), div(), cx)).children(ui::stale(&snap, cx));
-    if let Some(shown) = placeholder(&snap, "projects", "folder", "No projects yet", "Add a folder, or park a directory and every project in it appears here.", cx) {
-        return ui::page("projects", 980.0, column.child(shown)).into_any_element();
-    }
-    let room = &devd(cx).room;
-    let mut list = div().flex().flex_col().gap(px(1.0));
-    for project in snap.list("") {
-        let path = project["path"].as_str().unwrap_or_default().to_string();
-        let present = project["present"] != json!(false);
-        let mut line = ui::row(gpui::ElementId::Name(format!("project.{path}").into()), false, cx)
-            .h(px(46.0))
-            .child(icon("folder", 15.0, if present { t.muted } else { t.faint }))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .child(div().child(ui::Clip::new(project["name"].as_str().unwrap_or(ui::leaf(&path)).to_string())))
-                    .child(div().font_family(mono()).text_size(px(size::TEXT_XS)).text_color(t.faint).child(ui::Clip::tail(path.clone()))),
-            );
-        for presence in room.in_project(&path).into_iter().take(3) {
-            line = line.child(ui::face(presence.who.initials(), Tone::Info, presence.doing.active(), cx));
-        }
-        if let Some(stack) = project["stack_id"].as_str().or(project["stack"].as_str()) {
-            line = line.child(pill(stack.to_string(), Tone::Neutral, cx));
-        }
-        if !present {
-            line = line.child(pill("folder missing", Tone::Warn, cx));
-        }
-        let ask = path.clone();
-        line = line.child(Button::new(gpui::ElementId::Name(format!("project.ask.{path}").into()), "Ask devd").kind(ButtonKind::Ghost).icon("assistant").on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-            this.composer.update(cx, |input, cx| input.set_text(format!("In {}: ", ui::leaf(&ask)), cx));
-            this.run("conversation.new", window, cx);
-        })));
-        list = list.child(line);
-    }
-    column = column.child(list);
-    ui::page("projects", 980.0, column).into_any_element()
+    // The project hub lives with the other pages so it can share their rows,
+    // dialogs and task buttons. This screen is the area's first tab.
+    super::pages::projects_hub(cx)
 }
 
 /// Addresses, and what answers at each.
@@ -317,7 +279,7 @@ pub fn sites(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
     } else {
         div()
     };
-    let column = div().flex().flex_col().child(page_head("Sites", format!("{} addresses on this machine.", all.len()), actions, cx)).children(ui::stale(&snap, cx));
+    let column = div().flex().flex_col().child(page_head("Sites", format!("{} addresses on this machine.", all.len()), actions, cx)).children(super::pages::tab_strip(&Route::Sites(None), cx)).children(ui::stale(&snap, cx));
     if let Some(shown) = placeholder(&snap, "sites", "globe", "No sites yet", "Create a site and it gets a .test name and a certificate.", cx) {
         return ui::page("sites", 980.0, column.child(shown)).into_any_element();
     }
@@ -367,7 +329,7 @@ pub fn server(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
     let health = devd(cx).sync.watch(&q::health());
     let headline = health.data.as_deref().and_then(|d| d["headline"].as_str()).unwrap_or("Reading the machine…").to_string();
     let actions = div().child(Button::new("server.start", "Start what is needed").icon("play").on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.run("server.start", window, cx))));
-    let mut column = div().flex().flex_col().gap(px(22.0)).child(page_head("Server", headline, actions, cx)).children(ui::stale(&services, cx)).children(ui::stale(&health, cx));
+    let mut column = div().flex().flex_col().gap(px(22.0)).child(page_head("Server", headline, actions, cx)).children(super::pages::tab_strip(&Route::Server, cx)).children(ui::stale(&services, cx)).children(ui::stale(&health, cx));
 
     let mut list = card(cx).flex().flex_col().overflow_hidden();
     if let Some(shown) = placeholder(&services, "services", "machine", "No services", "Install a web server or a database and it is listed here.", cx) {
@@ -490,7 +452,7 @@ pub fn team(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
         this.role_form.open = !this.role_form.open;
         cx.notify();
     })));
-    let mut column = div().flex().flex_col().gap(px(22.0)).child(page_head("Team", detail, add, cx)).children(ui::stale(&roles, cx));
+    let mut column = div().flex().flex_col().gap(px(22.0)).child(page_head("Team", detail, add, cx)).children(super::pages::tab_strip(&Route::Team, cx)).children(ui::stale(&roles, cx));
     if let Some(form) = screens_roles::render(shell, cx) {
         column = column.child(form);
     }

@@ -33,6 +33,8 @@ pub enum Route {
     Activity,
     /// Preferences and diagnostics.
     Settings,
+    /// One of the pages behind a screen: a site's hosts, the server's runtimes. See [`crate::pages`].
+    Page(String),
 }
 
 impl Route {
@@ -69,6 +71,7 @@ impl Route {
             Self::Intelligence => "Intelligence",
             Self::Activity => "Activity",
             Self::Settings => "Settings",
+            Self::Page(id) => crate::pages::find(id).map(|p| p.title).unwrap_or("Page"),
         }
     }
 
@@ -86,6 +89,7 @@ impl Route {
             Self::Intelligence => "intelligence",
             Self::Activity => "activity",
             Self::Settings => "settings",
+            Self::Page(id) => crate::pages::find(id).map(|p| p.id).unwrap_or("page"),
         }
     }
 
@@ -100,6 +104,14 @@ impl Route {
     /// Whether two routes are the same screen, whatever is selected on it.
     pub fn same_screen(&self, other: &Route) -> bool {
         self.segment() == other.segment()
+    }
+
+    /// Whether this route is lit on the rail for `item`: the screen itself, or a page in its area.
+    pub fn on_rail(&self, item: &Route) -> bool {
+        match crate::pages::area_of(self) {
+            Some(area) => area.home().same_screen(item),
+            None => self.same_screen(item),
+        }
     }
 
     /// The route as text: `/sites/blog`.
@@ -129,8 +141,8 @@ impl Route {
             "server" | "machine" | "environment" => Route::Server,
             "intelligence" | "models" | "providers" => Route::Intelligence,
             "activity" => Route::Activity,
-            "settings" | "diagnostics" => Route::Settings,
-            _ => return None,
+            "settings" => Route::Settings,
+            other => Route::Page(crate::pages::find(other)?.id.to_string()),
         })
     }
 }

@@ -13,8 +13,8 @@ use serde_json::{json, Value};
 
 use crate::shell::Shell;
 use crate::state::{devd, q};
-use crate::theme::{mono, size, theme, Tone};
-use crate::ui::{self, card, eyebrow, page_head, pill, rule, Button};
+use crate::theme::{mono, size, theme, Theme, Tone};
+use crate::ui::{self, card, eyebrow, page_head, pill, rule, Button, ButtonKind};
 
 /// Who made a call, as a person would say it.
 pub fn who(actor: &str) -> (String, Tone) {
@@ -136,20 +136,23 @@ pub fn settings(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
     };
     let text = |s: String| div().child(ui::Clip::new(s)).into_any_element();
     let open_base = base.clone();
-    let appearance = card(cx).flex().flex_col().overflow_hidden().child(row(
-        "Appearance",
-        div()
-            .flex()
-            .items_center()
-            .gap(px(10.0))
-            .child(div().child(if t.dark { "Dark" } else { "Light" }))
-            .child(
-                Button::new("settings.theme", if t.dark { "Switch to light" } else { "Switch to dark" })
-                    .icon("sun")
-                    .on_click(cx.listener(|this, _: &ClickEvent, window: &mut Window, cx| this.run("view.theme", window, cx))),
-            )
-            .into_any_element(),
-    ));
+    let mut themes = div().flex().items_center().gap(px(6.0));
+    for (id, name) in Theme::ALL {
+        themes = themes.child(
+            Button::new(gpui::ElementId::Name(format!("settings.theme.{id}").into()), name)
+                .kind(if t.id == id { ButtonKind::Primary } else { ButtonKind::Ghost })
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.choose_theme(id, cx))),
+        );
+    }
+    themes = themes
+        .child(div().w(px(8.0)))
+        .child(div().text_size(px(size::TEXT_SM)).text_color(t.muted).child(if t.dark { "Dark" } else { "Light" }))
+        .child(
+            Button::new("settings.theme.lightness", if t.dark { "Switch to light" } else { "Switch to dark" })
+                .icon("sun")
+                .on_click(cx.listener(|this, _: &ClickEvent, window: &mut Window, cx| this.run("view.theme", window, cx))),
+        );
+    let appearance = card(cx).flex().flex_col().overflow_hidden().child(row("Theme", themes.into_any_element()));
     let server = card(cx)
         .flex()
         .flex_col()
@@ -172,6 +175,7 @@ pub fn settings(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
         .flex_col()
         .gap(px(22.0))
         .child(page_head("Settings", "How this window looks and which devd it talks to.", div(), cx))
+        .children(super::pages::tab_strip(&devd_app_core::nav::Route::Settings, cx))
         .child(div().flex().flex_col().gap(px(8.0)).child(eyebrow("APPEARANCE", cx)).child(appearance))
         .child(div().flex().flex_col().gap(px(8.0)).child(eyebrow("SERVER", cx)).child(server))
         .child(div().flex().flex_col().gap(px(8.0)).child(eyebrow("POLICY", cx)).child(rules));

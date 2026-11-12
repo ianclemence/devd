@@ -134,7 +134,8 @@ impl TextInput {
     /// An empty field showing `placeholder` until something is typed.
     pub fn new(placeholder: impl Into<SharedString>, cx: &mut Context<Self>) -> Self {
         Self {
-            focus_handle: cx.focus_handle(),
+            // A tab stop, so Tab moves from one form field to the next.
+            focus_handle: cx.focus_handle().tab_stop(true),
             content: "".into(),
             placeholder: placeholder.into(),
             selected_range: 0..0,
@@ -564,10 +565,9 @@ impl EntityInputHandler for TextInput {
             .or(self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
 
-        self.content =
-            (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..])
-                .into();
-        self.selected_range = range.start + new_text.len()..range.start + new_text.len();
+        let (content, caret) = insert(&self.content, range, new_text);
+        self.content = content.into();
+        self.selected_range = caret;
         self.marked_range.take();
         cx.emit(InputEvent::Changed);
         cx.notify();
@@ -671,6 +671,22 @@ fn line_runs(base: &TextRun, line: Range<usize>, marks: &[(Range<usize>, Underli
         })
         .filter(|run| run.len > 0)
         .collect()
+}
+
+/// Put `new_text` over `range` and say where the caret goes.
+///
+/// It takes the whole text and returns the whole text so a burst of input — a
+/// paste, or several characters the system delivers in one frame — is applied
+/// to the latest text every time, never to a stale copy.
+fn insert(content: &str, range: Range<usize>, new_text: &str) -> (String, Range<usize>) {
+    let start = range.start.min(content.len());
+    let end = range.end.min(content.len()).max(start);
+    let mut next = String::with_capacity(content.len() + new_text.len());
+    next.push_str(&content[..start]);
+    next.push_str(new_text);
+    next.push_str(&content[end..]);
+    let caret = start + new_text.len();
+    (next, caret..caret)
 }
 
 impl IntoElement for TextElement {
@@ -884,5 +900,44 @@ impl Render for TextInput {
 impl Focusable for TextInput {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_burst_of_characters_never_loses_one() {
+        // What a fast keyboard or an automation tool delivers between frames:
+        // each character replaces the caret from the previous one.
+        let mut text = String::new();
+        let mut caret = 0..0;
+        for ch in "gotest".chars() {
+            let (next, after) = insert(&text, caret, &ch.to_string());
+            text = next;
+            caret = after;
+        }
+        assert_eq!(text, "gotest");
+        assert_eq!(caret, 6..6);
+    }
+
+    #[test]
+    fn a_paste_replaces_the_selection_and_keeps_the_rest() {
+        let (text, caret) = insert("hello world", 6..11, "devd");
+        assert_eq!(text, "hello devd");
+        assert_eq!(caret, 10..10);
+        let (text, caret) = insert("shop", 2..2, "🛒");
+        assert_eq!(text, "sh🛒op");
+        assert_eq!(caret, 6..6, "the caret is after the four bytes of the emoji");
+    }
+
+    #[test]
+    #[allow(clippy::reversed_empty_ranges)] // the defensive case itself
+    fn a_range_from_an_older_frame_cannot_cut_a_character() {
+        let (text, _) = insert("shop", 99..120, "!");
+        assert_eq!(text, "shop!");
+        let (text, _) = insert("shop", 2..1, "-");
+        assert_eq!(text, "sh-op");
     }
 }

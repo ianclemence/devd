@@ -152,6 +152,11 @@ pub fn provider(row: &Value) -> Status {
     }
 }
 
+/// The last part of a path: `D:\devd\www\shop` is `shop`.
+fn leaf(path: &str) -> &str {
+    path.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or(path)
+}
+
 /// What to tell the person when a write worked, if it is worth telling.
 ///
 /// Most writes show their own result: a service's row changes, a message
@@ -159,6 +164,7 @@ pub fn provider(row: &Value) -> Status {
 /// silence after pressing a button reads as "nothing happened".
 pub fn confirmation(capability: &str, data: &Value) -> Option<String> {
     let count = |v: &Value| v.as_array().map(Vec::len).or_else(|| v.as_u64().map(|n| n as usize));
+    let task = || data["task"].as_str().or(data["command"].as_str()).unwrap_or("The task").to_string();
     Some(match capability {
         "provider.test" | "provider.verify" => data["message"].as_str()?.to_string(),
         "provider.models" => format!("{} models listed", count(data)?),
@@ -168,6 +174,7 @@ pub fn confirmation(capability: &str, data: &Value) -> Option<String> {
         "roles.save" => format!("{} joined the team", data["title"].as_str().unwrap_or("A new member")),
         "roles.delete" => "Member removed".to_string(),
         "skills.install" => format!("Installed {} skills", count(&data["installed"])?),
+        "skills.delete" => "Skill deleted.".to_string(),
         "models.refresh" => {
             let models = data["models"].as_u64()?;
             if data["changed"] == Value::Bool(false) {
@@ -179,8 +186,125 @@ pub fn confirmation(capability: &str, data: &Value) -> Option<String> {
         "models.assign" => "Model assignment saved".to_string(),
         "hosts.sync" => "Site names written to the hosts file".to_string(),
         "inbox.clear" => "Answered messages cleared".to_string(),
+        // A scaffold is the one write whose result is a whole new folder, so say
+        // what it made and what state it is in. Partial and cancelled are not
+        // successes even though the folder may exist.
+        "project.init" | "project.create" => {
+            let name = data["project_dir"].as_str().map(leaf).unwrap_or("the project").to_string();
+            match data["status"].as_str().unwrap_or("") {
+                "ok" => format!("Created {name}. Open Projects to find it."),
+                "partial" => format!("Created {name}, but one of its checks did not pass. Open Projects to look."),
+                "cancelled" => format!("Stopped creating {name}. The files it made are still in the folder."),
+                _ => format!("Could not create {name}: {}", data["error"].as_str().unwrap_or("the scaffold did not finish")),
+            }
+        }
+        "project.import" => format!("Added {} to devd", data["name"].as_str().unwrap_or("the project")),
+        "project.run" | "project.run_destructive" => {
+            if data["mode"].as_str() == Some("background") {
+                format!("{} is running in the background.", task())
+            } else if data["ok"] == Value::Bool(true) {
+                format!("{} finished.", task())
+            } else if data["cancelled"] == Value::Bool(true) {
+                format!("{} was stopped.", task())
+            } else if data["timed_out"] == Value::Bool(true) {
+                format!("{} took too long and was stopped.", task())
+            } else {
+                format!("{} did not finish.", task())
+            }
+        }
+        "project.forget" => "Removed the project from devd. Its files are untouched.".to_string(),
+        // The work it stopped reports its own end; a second toast is noise.
+        "stacks.cancel" => return None,
+        "runtime.use" => "That runtime is now the one new sites use.".to_string(),
+        "runtime.install" => format!("Installed {}.", data["version"].as_str().or(data["kind"].as_str()).unwrap_or("the runtime")),
+        "runtime.remove" => "Runtime removed.".to_string(),
+        "db.create" => format!("Created the database {}.", data["database"].as_str().or(data["name"].as_str()).unwrap_or("")),
+        "db.drop" => "Database removed.".to_string(),
+        "db.dump" => format!("Saved a backup to {}.", data["file"].as_str().unwrap_or("the backups folder")),
+        "db.user_create" => format!("Created the database user {}.", data["user"].as_str().unwrap_or("")),
+        "db.user_drop" => "Database user removed.".to_string(),
+        "backup.add" => format!("Backups are scheduled for {}.", data["database"].as_str().unwrap_or("the database")),
+        "backup.run" => format!("Backup written to {}.", data["file"].as_str().unwrap_or("the backups folder")),
+        "backup.remove" => "Backup schedule removed. The copies already taken are kept.".to_string(),
+        "tls.issue" => format!("Issued a certificate for {}.", data["host"].as_str().unwrap_or("")),
+        "tls.trust" => "This machine now trusts devd's certificate authority.".to_string(),
+        "tls.untrust" => "This machine no longer trusts devd's certificate authority.".to_string(),
+        "schedule.create" => format!("Scheduled {}.", data["name"].as_str().unwrap_or("the work")),
+        "schedule.run_now" => "Started the schedule now.".to_string(),
+        // A pause or resume shows in the row itself; a toast would have to guess
+        // which way it went, because the reply carries no state.
+        "schedule.enable" => return None,
+        "schedule.delete" => "Schedule deleted.".to_string(),
+        "cron.add" => "Added the cron job.".to_string(),
+        "cron.run" => "Ran the cron job now.".to_string(),
+        "cron.enable" => return None,
+        "cron.remove" => "Cron job removed. Its log is kept.".to_string(),
+        "automation.delete" => "Automation deleted.".to_string(),
+        "mcp.add" => format!("Added {}. It starts turned off.", data["name"].as_str().unwrap_or("the tool server")),
+        "mcp.test" => format!("{} published {}.", data["server"].as_str().unwrap_or("The tool server"), if count(&data["tools"])? == 1 { "1 tool".to_string() } else { format!("{} tools", count(&data["tools"])?) }),
+        "mcp.enable" => return None,
+        "mcp.remove" => "Tool server removed.".to_string(),
+        "share.start" => format!("The link for {} is public at {}.", data["site"].as_str().unwrap_or("the site"), data["url"].as_str().unwrap_or("")),
+        "share.stop" => format!("{} is no longer public.", data["site"].as_str().unwrap_or("The site")),
+        "memory.apply" => "Kept the note in AGENTS.md.".to_string(),
+        "agent_client.add" => format!("{} can use devd now. Restart it to pick up the change.", data["client"].as_str().unwrap_or("The agent")),
+        "agent_client.remove" => format!("{} can no longer use devd.", data["client"].as_str().unwrap_or("The agent")),
+        "flags.set" => "Flag saved.".to_string(),
+        "autostart.enable" => "devd will start when you sign in.".to_string(),
+        "autostart.disable" => "devd will no longer start when you sign in.".to_string(),
+        "update.apply" => "The update is installed. devd restarts itself.".to_string(),
+        "toolchain.install" => format!("Installed {}.", data["tool"].as_str().or(data["name"].as_str()).unwrap_or("the tool")),
+        "toolchain.remove" => "Tool removed.".to_string(),
+        "mail.delete" => "Message deleted.".to_string(),
+        "mail.clear" => "All caught mail deleted.".to_string(),
+        "project.rename" => format!("Renamed the project to {}.", data["name"].as_str().unwrap_or("")),
         _ => return None,
     })
+}
+
+/// A server's refusal, in a sentence a person can act on.
+///
+/// Most are already readable. The ones that are not are the validator's raw
+/// output: a full path, a parenthesised field name, or a machine verb. This
+/// keeps the meaning and drops the plumbing.
+pub fn failure(message: &str) -> String {
+    let text = message.trim();
+    // Service errors name the capability to run. A person in the window needs
+    // the page to fix it on, not a command line.
+    if text.contains("no database server is installed") || text.contains("MariaDB is not installed") {
+        return "MariaDB is not installed in this devd. Add it from the Tools page.".to_string();
+    }
+    // `the request is not valid: <path> already exists and is not empty; choose
+    // another name or destination (name)`.
+    if let Some(rest) = text.strip_prefix("the request is not valid: ") {
+        if let Some(path) = rest.strip_suffix(" already exists and is not empty; choose another name or destination (name)") {
+            return format!("A project folder already exists at {path}. Choose another name or folder.");
+        }
+        // Any other validation issue: drop a trailing `(field)`.
+        let clean = rest.rsplit_once(" (").map(|(before, after)| if after.ends_with(')') { before } else { rest }).unwrap_or(rest);
+        return capitalise(clean);
+    }
+    if let Some(rest) = text.strip_prefix("prerequisites are not met: ") {
+        return format!("This stack needs something that is not installed: {rest} Install it on the Tools page, then try again.");
+    }
+    if text.starts_with("not found: no capability") || text.starts_with("no capability") {
+        return "devd does not know that action. It may belong to a newer devd; update and try again.".to_string();
+    }
+    if let Some(rest) = text.strip_prefix("not found: ") {
+        return capitalise(rest);
+    }
+    if let Some(rest) = text.strip_prefix("invalid input: ") {
+        return capitalise(rest);
+    }
+    capitalise(text)
+}
+
+fn capitalise(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
 }
 
 #[cfg(test)]
@@ -254,5 +378,41 @@ mod tests {
         assert_eq!(confirmation("provider.test", &json!({ "message": "DeepSeek answered in 210 ms" })).as_deref(), Some("DeepSeek answered in 210 ms"));
         assert_eq!(confirmation("service.start", &json!({})), None, "the row itself changes");
         assert_eq!(confirmation("chat.send", &json!({})), None);
+    }
+
+    #[test]
+    fn a_scaffold_says_which_project_and_how_it_ended() {
+        let ok = json!({ "status": "ok", "project_dir": "D:\\devd\\www\\gotest", "error": null });
+        assert_eq!(confirmation("project.init", &ok).as_deref(), Some("Created gotest. Open Projects to find it."));
+        let partial = json!({ "status": "partial", "project_dir": "/srv/shop", "error": null });
+        assert_eq!(confirmation("project.init", &partial).as_deref(), Some("Created shop, but one of its checks did not pass. Open Projects to look."));
+        let cancelled = json!({ "status": "cancelled", "project_dir": "/srv/shop", "error": "cancelled" });
+        assert_eq!(confirmation("project.init", &cancelled).as_deref(), Some("Stopped creating shop. The files it made are still in the folder."));
+        let failed = json!({ "status": "failed", "project_dir": "/srv/shop", "error": "npm could not reach the registry" });
+        assert_eq!(confirmation("project.init", &failed).as_deref(), Some("Could not create shop: npm could not reach the registry"));
+    }
+
+    #[test]
+    fn a_task_says_whether_it_finished_started_or_stopped() {
+        let done = json!({ "task": "build", "ok": true, "cancelled": false, "timed_out": false });
+        assert_eq!(confirmation("project.run", &done).as_deref(), Some("build finished."));
+        let background = json!({ "task": "dev", "mode": "background", "ok": true });
+        assert_eq!(confirmation("project.run", &background).as_deref(), Some("dev is running in the background."));
+        let stopped = json!({ "task": "test", "ok": false, "cancelled": true, "timed_out": false });
+        assert_eq!(confirmation("project.run", &stopped).as_deref(), Some("test was stopped."));
+        let failed = json!({ "task": "test", "ok": false, "cancelled": false, "timed_out": false });
+        assert_eq!(confirmation("project.run", &failed).as_deref(), Some("test did not finish."));
+    }
+
+    #[test]
+    fn a_validator_message_is_turned_into_a_sentence() {
+        let raw = r"the request is not valid: D:\devd\www\GOTEST already exists and is not empty; choose another name or destination (name)";
+        assert_eq!(failure(raw), r"A project folder already exists at D:\devd\www\GOTEST. Choose another name or folder.");
+        assert_eq!(failure("the request is not valid: `X` is not a valid Go project name (name)"), "`X` is not a valid Go project name");
+        assert_eq!(failure("prerequisites are not met: uv (missing). Use toolchain.install to fix them."), "This stack needs something that is not installed: uv (missing). Use toolchain.install to fix them. Install it on the Tools page, then try again.");
+        assert_eq!(failure("no capability 'stack.list'"), "devd does not know that action. It may belong to a newer devd; update and try again.");
+        assert_eq!(failure("not found: MariaDB is not installed; `devd service install mariadb` adds it"), "MariaDB is not installed in this devd. Add it from the Tools page.");
+        assert_eq!(failure("not found: no log for run 123"), "No log for run 123");
+        assert_eq!(failure("the folder is in use"), "The folder is in use");
     }
 }

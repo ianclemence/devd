@@ -28,27 +28,60 @@ const BAYER: [[u8; 8]; 8] = [
     [63, 31, 55, 23, 61, 29, 53, 21],
 ];
 
-/// How dense the dots are at a point, from 0 (none) to 1: full at the top-right
-/// corner, falling away toward the opposite one.
-fn density(x: u32, y: u32) -> f32 {
-    let (dx, dy) = ((WIDTH - x) as f32 / WIDTH as f32, y as f32 / HEIGHT as f32);
-    let d = (dx * dx + dy * dy).sqrt() / std::f32::consts::SQRT_2;
-    (1.0 - d * 1.35).clamp(0.0, 1.0).powf(1.6)
+/// The shape of the field. Each theme gets its own, so the background says
+/// which theme is in use even before a colour is read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pattern {
+    /// Dense at the top-right corner, thinning toward the bottom-left. Stone.
+    Corner,
+    /// A diagonal weave, like cloth. Shepherd.
+    Woven,
+    /// Vertical bands, like the strings of an instrument. Harp.
+    Strings,
+}
+
+/// How dense the dots are at a point, from 0 (none) to 1.
+fn density(x: u32, y: u32, pattern: Pattern) -> f32 {
+    match pattern {
+        Pattern::Corner => {
+            let (dx, dy) = ((WIDTH - x) as f32 / WIDTH as f32, y as f32 / HEIGHT as f32);
+            let d = (dx * dx + dy * dy).sqrt() / std::f32::consts::SQRT_2;
+            (1.0 - d * 1.35).clamp(0.0, 1.0).powf(1.6)
+        }
+        Pattern::Woven => {
+            let (dx, dy) = ((WIDTH - x) as f32 / WIDTH as f32, (HEIGHT - y) as f32 / HEIGHT as f32);
+            let d = (dx * dx + dy * dy).sqrt() / std::f32::consts::SQRT_2;
+            let base = (1.0 - d * 1.25).clamp(0.0, 1.0);
+            let weave = 0.58 + 0.42 * (0.5 + 0.5 * ((x + y) as f32 / 24.0).sin());
+            (base * weave).powf(1.35)
+        }
+        Pattern::Strings => {
+            let base = (1.0 - (y as f32 / HEIGHT as f32) * 1.15).clamp(0.0, 1.0);
+            let strings = 0.38 + 0.62 * (0.5 + 0.5 * (x as f32 / 10.0).sin());
+            (base * strings).powf(1.45)
+        }
+    }
 }
 
 /// Whether a dot is drawn at this pixel.
-fn dot(x: u32, y: u32) -> bool {
+fn dot(x: u32, y: u32, pattern: Pattern) -> bool {
     let (cx, cy) = (x / CELL, y / CELL);
-    density(cx * CELL, cy * CELL) > (BAYER[(cy % 8) as usize][(cx % 8) as usize] as f32 + 0.5) / 64.0
+    density(cx * CELL, cy * CELL, pattern) > (BAYER[(cy % 8) as usize][(cx % 8) as usize] as f32 + 0.5) / 64.0
 }
 
 /// The picture as a PNG: dots in `rgb`, everything else transparent.
+#[cfg(test)]
 pub fn png(rgb: [u8; 3]) -> Vec<u8> {
+    png_as(rgb, Pattern::Corner)
+}
+
+/// The picture for one theme's pattern.
+pub fn png_as(rgb: [u8; 3], pattern: Pattern) -> Vec<u8> {
     let mut raw = Vec::with_capacity((HEIGHT * (WIDTH * 4 + 1)) as usize);
     for y in 0..HEIGHT {
         raw.push(0); // no filter on this row
         for x in 0..WIDTH {
-            if dot(x, y) {
+            if dot(x, y, pattern) {
                 raw.extend_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
             } else {
                 raw.extend_from_slice(&[0, 0, 0, 0]);
@@ -127,11 +160,24 @@ mod tests {
 
     #[test]
     fn the_dots_gather_at_the_corner_and_thin_out() {
-        let count = |x0: u32, y0: u32| (0..60).flat_map(|y| (0..60).map(move |x| (x0 + x, y0 + y))).filter(|&(x, y)| dot(x, y)).count();
-        let corner = count(WIDTH - 60, 0);
-        let far = count(0, HEIGHT - 60);
+        let count = |x0: u32, y0: u32, pattern| (0..60).flat_map(|y| (0..60).map(move |x| (x0 + x, y0 + y))).filter(|&(x, y)| dot(x, y, pattern)).count();
+        let corner = count(WIDTH - 60, 0, Pattern::Corner);
+        let far = count(0, HEIGHT - 60, Pattern::Corner);
         assert!(corner > 1_000, "{corner}");
         assert_eq!(far, 0, "nothing reaches the far corner");
+    }
+
+    #[test]
+    fn every_pattern_draws_its_own_field() {
+        for pattern in [Pattern::Corner, Pattern::Woven, Pattern::Strings] {
+            let bytes = png_as([200, 200, 190], pattern);
+            assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
+            assert!(bytes.len() > 100, "{pattern:?}");
+        }
+        let dots = |pattern| (0..120).flat_map(|y| (0..120).map(move |x| (x, y))).filter(|&(x, y)| dot(x, y, pattern)).count();
+        let (corner, woven, strings) = (dots(Pattern::Corner), dots(Pattern::Woven), dots(Pattern::Strings));
+        assert!(corner > 0 && woven > 0 && strings > 0, "{corner} {woven} {strings}");
+        assert_ne!(woven, strings, "the two new fields are not the same picture");
     }
 
     #[test]

@@ -271,7 +271,6 @@ fn start(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
         .justify_center()
         .gap(px(22.0))
         .px(px(32.0))
-        .child(ui::art(cx))
         .child(
             div()
                 .w_full()
@@ -500,7 +499,7 @@ fn draw(thread: &str, index: usize, item: &Item, cx: &App) -> AnyElement {
             .child(icon("alert", 15.0, t.danger))
             .child(div().flex_1().min_w_0().text_size(px(size::TEXT)).line_height(px(20.0)).child(md::linked(&format!("{thread}.{index}.failed"), text, cx)))
             .into_any_element(),
-        Item::Waiting { capability, summary } => div()
+        Item::Waiting { summary, .. } => div()
             .p(px(12.0))
             .flex()
             .items_center()
@@ -510,8 +509,8 @@ fn draw(thread: &str, index: usize, item: &Item, cx: &App) -> AnyElement {
             .border_color(ui::tint(t.warn, 0.35))
             .bg(ui::tint(t.warn, 0.07))
             .child(icon("lock", 15.0, t.warn))
-            .child(div().flex_1().min_w_0().text_size(px(size::TEXT)).child(ui::Clip::new(if summary.is_empty() { format!("Waiting for your approval: {capability}") } else { summary.clone() })))
-            .child(pill(capability.clone(), Tone::Warn, cx))
+            .child(div().flex_1().min_w_0().text_size(px(size::TEXT)).child(ui::Clip::new(if summary.is_empty() { "Waiting for your approval".to_string() } else { summary.clone() })))
+            .child(pill("needs you", Tone::Warn, cx))
             .into_any_element(),
     }
 }

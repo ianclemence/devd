@@ -226,8 +226,27 @@ impl Connection {
     }
 }
 
+impl Connection {
+    /// Read one of the server's own listings that is not a capability.
+    fn get(&self, path: &str) -> Result<Value, Failure> {
+        let response = ureq::get(&format!("{}{path}", self.base)).timeout(Duration::from_secs(60)).set("Authorization", &format!("Bearer {}", self.token)).call();
+        match response {
+            Ok(response) => response.into_json::<Value>().map_err(|e| Failure::new("invalid_reply", format!("devd answered with something unreadable: {e}"))),
+            Err(ureq::Error::Status(status, _)) => Err(Failure::new(format!("http_{status}"), format!("devd answered HTTP {status}"))),
+            Err(e) => Err(Failure::new("unreachable", format!("devd is not answering: {e}"))),
+        }
+    }
+}
+
 impl Backend for Connection {
     fn invoke(&self, capability: &str, args: &Value) -> Result<Reply, Failure> {
+        // Everything devd can do, as a list. It is the server's own description, not a capability, so it is
+        // asked for here and reaches the screens like any other query.
+        if capability == "api.capabilities" {
+            // The server pages this list; the page shows all of it, so ask for
+            // the largest page it serves rather than its default hundred.
+            return self.get("/api/capabilities?limit=500").map(Reply::Done);
+        }
         let reply = self.post("/api/invoke", &json!({ "id": capability, "args": args }))?;
         if reply["approval_required"] == json!(true) {
             let token = reply["token"].as_str().unwrap_or_default().to_string();

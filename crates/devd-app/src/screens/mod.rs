@@ -7,4 +7,6 @@ pub mod compose;
 pub mod home;
 pub mod intelligence;
 pub mod lists;
+pub mod modal;
+pub mod pages;
 pub mod roles;

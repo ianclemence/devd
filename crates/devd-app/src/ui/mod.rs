@@ -54,6 +54,13 @@ pub fn screen_icon(route: &Route) -> &'static str {
         Route::Intelligence => "models",
         Route::Activity => "activity",
         Route::Settings => "settings",
+        Route::Page(id) => match devd_app_core::pages::find(id).map(|p| p.area) {
+            Some(devd_app_core::pages::Area::Projects) => "folder",
+            Some(devd_app_core::pages::Area::Sites) => "globe",
+            Some(devd_app_core::pages::Area::Team) => "team",
+            Some(devd_app_core::pages::Area::Server) => "machine",
+            _ => "settings",
+        },
     }
 }
 
@@ -347,7 +354,12 @@ impl RenderOnce for Button {
         }
         el = el.cursor_pointer().hover(move |s| s.bg(hover)).active(|s| s.opacity(0.82));
         match self.on_click {
-            Some(on_click) => el.on_click(on_click),
+            Some(on_click) => el.on_click(move |event, window, cx| {
+                // A button inside a clickable row is a button, not the row:
+                // pressing Delete must not also open the row's detail.
+                cx.stop_propagation();
+                on_click(event, window, cx)
+            }),
             None => el,
         }
     }
@@ -484,7 +496,8 @@ pub fn page_head(title: impl Into<SharedString>, detail: impl Into<SharedString>
 /// under dense content: it belongs to the screens that open on a greeting or a question.
 pub fn art(cx: &App) -> Div {
     let t = theme(cx);
-    let (file, opacity) = if t.dark { ("art/dither-dark.png", 0.16) } else { ("art/dither-light.png", 0.12) };
+    let file = format!("art/{}-{}.png", t.id, if t.dark { "dark" } else { "light" });
+    let opacity = if t.dark { 0.09 } else { 0.07 };
     div()
         .absolute()
         .top(px(0.0))
@@ -507,6 +520,32 @@ pub fn page(id: impl Into<ElementId>, max_width: f32, content: impl IntoElement)
 /// The last part of a path, which is how a project is named in a list.
 pub fn leaf(path: &str) -> &str {
     path.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or(path)
+}
+
+/// "3m", "2h", "5d": how long until an RFC 3339 time is.
+///
+/// The counterpart of [`ago`](#method.ago): a timetable's next run is in the
+/// future, and reading it as "now" was wrong.
+pub fn until(rfc3339: &str) -> String {
+    let Ok(then) = chrono::DateTime::parse_from_rfc3339(rfc3339) else { return String::new() };
+    let secs = (then.with_timezone(&chrono::Utc) - chrono::Utc::now()).num_seconds();
+    if secs <= 0 {
+        return "now".into();
+    }
+    // Round up: a timetable three minutes away should not read as "2m".
+    match secs {
+        0..=59 => "less than a minute".into(),
+        60..=3599 => format!("{}m", (secs + 59) / 60),
+        3600..=86_399 => format!("{}h", (secs + 3599) / 3600),
+        86_400..=2_591_999 => format!("{}d", (secs + 86_399) / 86_400),
+        _ => format!("{}mo", (secs + 2_591_999) / 2_592_000),
+    }
+}
+
+/// A future time in words: "in 3m", or "due now" when it has passed.
+pub fn in_time(rfc3339: &str) -> String {
+    let left = until(rfc3339);
+    if left == "now" { "due now".to_string() } else { format!("in {left}") }
 }
 
 /// "3m", "2h", "5d": how long ago an RFC 3339 time was.
@@ -541,6 +580,17 @@ mod tests {
         assert_eq!(leaf(r"D:\devd\www\nairobiunwind"), "nairobiunwind");
         assert_eq!(leaf("/srv/www/shop/"), "shop");
         assert_eq!(leaf("shop"), "shop");
+    }
+
+    #[test]
+    fn a_future_time_reads_as_in_three_minutes_not_three_minutes_ago() {
+        let soon = (chrono::Utc::now() + chrono::Duration::minutes(3)).to_rfc3339();
+        assert_eq!(until(&soon), "3m");
+        assert_eq!(in_time(&soon), "in 3m");
+        let past = (chrono::Utc::now() - chrono::Duration::minutes(3)).to_rfc3339();
+        assert_eq!(until(&past), "now");
+        assert_eq!(in_time(&past), "due now");
+        assert_eq!(until("not a time"), "");
     }
 
     #[test]

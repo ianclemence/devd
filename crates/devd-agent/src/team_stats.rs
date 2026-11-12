@@ -75,6 +75,7 @@ fn report(name: &str, mut t: Tally) -> Value {
     json!({
         "name": name,
         "tasks": t.tasks,
+        "settled": settled,
         "accepted": t.accepted,
         "rejected": t.rejected,
         "abandoned": t.abandoned,
@@ -101,14 +102,33 @@ pub fn stats(ctx: &Ctx) -> Result<Value> {
         .map(|r| (r.id.clone(), r.project.clone().unwrap_or_default()))
         .collect();
 
+    // Which model each conversation ran on, so the same task record can say
+    // whether a model's work was accepted and what it cost to get there.
+    let thread_model: BTreeMap<String, String> = ctx
+        .store
+        .list_threads(100_000)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|t| (t.id.clone(), t.model.clone().unwrap_or_else(|| "default model".into())))
+        .collect();
+
     let mut all = Tally::default();
     let mut roles: BTreeMap<String, Tally> = BTreeMap::new();
     let mut projects: BTreeMap<String, Tally> = BTreeMap::new();
+    let mut models: BTreeMap<String, Tally> = BTreeMap::new();
     for t in tasks.iter().filter(|t| t.role != "planner") {
         tally(t, &by_task, &mut all);
         tally(t, &by_task, roles.entry(t.role.clone()).or_default());
         let project = project_of.get(&t.run_id).cloned().unwrap_or_default();
         tally(t, &by_task, projects.entry(project).or_default());
+        let model = t.thread_id.as_ref().and_then(|id| thread_model.get(id)).cloned().unwrap_or_default();
+        // Older conversations did not record the model. Say that once, instead
+        // of splitting the same fact between "default model" and "unknown".
+        let model = match model.as_str() {
+            "" | "default model" | "default_model" | "unknown" => "not recorded".to_string(),
+            other => other.to_string(),
+        };
+        tally(t, &by_task, models.entry(model).or_default());
     }
     let run_states: BTreeMap<String, i64> = runs.iter().fold(BTreeMap::new(), |mut m, r| {
         *m.entry(r.state.clone()).or_insert(0) += 1;
@@ -117,6 +137,7 @@ pub fn stats(ctx: &Ctx) -> Result<Value> {
     Ok(json!({
         "team": report("team", all),
         "roles": roles.into_iter().map(|(k, v)| report(&k, v)).collect::<Vec<_>>(),
+        "models": models.into_iter().map(|(k, v)| report(&k, v)).collect::<Vec<_>>(),
         "projects": projects.into_iter().map(|(k, v)| report(&k, v)).collect::<Vec<_>>(),
         "runs": run_states,
     }))
@@ -151,6 +172,7 @@ pub fn usage(ctx: &Ctx) -> Result<Value> {
         saved: f64,
         priced: i64,
         unpriced: i64,
+        errors: i64,
     }
     // A conversation that did not name a model used its provider's default. Name
     // that model here so the row can be priced and read, instead of every such
@@ -201,6 +223,9 @@ pub fn usage(ctx: &Ctx) -> Result<Value> {
             u.output += t.output_tokens;
             u.cache_read += t.cache_read_tokens;
             u.cache_write += t.cache_write_tokens;
+            if t.state == "error" {
+                u.errors += 1;
+            }
             match cost {
                 Some(c) => {
                     u.cost += c;
@@ -231,6 +256,8 @@ pub fn usage(ctx: &Ctx) -> Result<Value> {
                 "cache_saved_usd": if u.priced > 0 { Some(u.saved) } else { None },
                 // The share of input that was read from the cache instead of paid for in full.
                 "cache_hit_rate": if u.input > 0 { Some(u.cache_read as f64 / u.input as f64) } else { None },
+                "errors": u.errors,
+                "error_rate": if u.conversations > 0 { Some(u.errors as f64 / u.conversations as f64) } else { None },
                 "priced_conversations": u.priced,
                 "unpriced_conversations": u.unpriced,
             }))

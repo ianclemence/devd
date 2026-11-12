@@ -46,6 +46,10 @@ actions!(
         PaletteUp,
         PaletteDown,
         Refresh,
+        CloseModal,
+        AcceptModal,
+        FocusNext,
+        FocusPrev,
     ]
 );
 
@@ -69,6 +73,12 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-7", Go7, None),
         KeyBinding::new("secondary-8", Go8, None),
         KeyBinding::new("secondary-9", Go9, None),
+        // A dialog is put away by Escape and answered by Enter. A text field has its own Enter and Escape, which win while it has the focus.
+        KeyBinding::new("escape", CloseModal, Some("Shell")),
+        KeyBinding::new("enter", AcceptModal, Some("Shell")),
+        // Tab moves between the fields of a dialog, as every dialog should.
+        KeyBinding::new("tab", FocusNext, Some("Shell")),
+        KeyBinding::new("shift-tab", FocusPrev, Some("Shell")),
         KeyBinding::new("up", PaletteUp, Some("Palette")),
         KeyBinding::new("down", PaletteDown, Some("Palette")),
     ]);
@@ -95,6 +105,9 @@ pub fn commands() -> Commands {
     }
     table.add(Command::new("go.activity", "Activity", "Everything that ran, and who approved it", Section::Navigate).keywords(&["audit", "log", "history"]));
     table.add(Command::new("go.settings", "Settings", "Preferences and diagnostics", Section::Navigate).keywords(&["preferences", "doctor"]));
+    for page in devd_app_core::pages::PAGES {
+        table.add(Command::new(&format!("go.{}", page.id), page.title, page.summary, Section::Navigate).keywords(&[page.id]));
+    }
     table.add(Command::new("go.back", "Back", "Return to where you were", Section::Navigate).key("secondary-["));
     table.add(Command::new("go.forward", "Forward", "Undo Back", Section::Navigate).key("secondary-]"));
     table.add(Command::new("conversation.new", "New conversation", "Ask devd something, or give it work", Section::Create).key("secondary-n").keywords(&["chat", "ask", "prompt"]));
@@ -153,6 +166,8 @@ pub struct Shell {
     pub role_form: screens::roles::Form,
     /// Whether Activity also lists what only looked at things.
     pub activity_reads: bool,
+    /// The dialog on screen: a confirmation, a form, or one thing in full.
+    pub modal: Option<screens::modal::Modal>,
     _watch: Subscription,
 }
 
@@ -178,12 +193,24 @@ impl Shell {
         });
         let focus = cx.focus_handle();
         window.focus(&focus);
+        // A scaffold belongs to this process when the window owns devd. Closing
+        // then would kill it before it can register the project, so ask first.
+        window.on_window_should_close(cx, |_window, cx| {
+            let state = cx.global::<Devd>();
+            if state.allow_close.get() || !state.running.iter().any(|run| run.run_id.is_some()) {
+                return true;
+            }
+            state.close_asked.set(true);
+            cx.refresh_windows();
+            false
+        });
         let intel = screens::intelligence::View::new(window, cx);
         let role_form = screens::roles::Form::new(cx);
         Self {
             intel,
             role_form,
             activity_reads: false,
+            modal: None,
             history: History::new(start),
             focus,
             commands: commands(),
@@ -193,6 +220,20 @@ impl Shell {
             transcript: screens::assistant::Transcript::new(),
             _watch: watch,
         }
+    }
+
+    /// The frame's focus, which a dialog hands back to when it closes so Escape and Enter keep reaching it.
+    pub fn focus_handle(&self) -> FocusHandle {
+        self.focus.clone()
+    }
+
+    /// Switch theme, keeping the current light or dark choice, and remember it.
+    pub fn choose_theme(&mut self, id: &str, cx: &mut Context<Self>) {
+        let current = theme(cx).clone();
+        let next = Theme::by_id(id, current.dark);
+        let _ = crate::theme::save(std::path::Path::new(&devd(cx).conn.home), &next);
+        cx.set_global(next);
+        cx.refresh_windows();
     }
 
     /// Go to a place.
@@ -228,7 +269,9 @@ impl Shell {
             }
             "view.palette" => return self.open_palette(window, cx),
             "view.theme" => {
-                let next = if theme(cx).dark { Theme::light() } else { Theme::dark() };
+                let current = theme(cx).clone();
+                let next = Theme::by_id(current.id, !current.dark);
+                let _ = crate::theme::save(std::path::Path::new(&devd(cx).conn.home), &next);
                 cx.set_global(next);
                 cx.refresh_windows();
             }
@@ -255,7 +298,7 @@ impl Shell {
                 }
             }
             "server.hosts" => {
-                devd(cx).sync.mutate(Mutation::new("hosts.sync", json!({})).invalidating("site"));
+                devd(cx).sync.mutate(Mutation::new("hosts.sync", json!({ "elevate": true })).invalidating("site"));
             }
             other => {
                 if let Some(route) = other.strip_prefix("go.").and_then(Route::parse) {
@@ -436,7 +479,7 @@ impl Shell {
         // and the app on the taskbar are one thing.
         rail = rail.child(gpui::img(gpui::SharedString::from("brand/devd-logo-rail.png")).mb(px(10.0)).size(px(28.0)).flex_none().rounded(px(7.0)));
         let item = |route: Route, badge: usize, cx: &mut Context<Self>| {
-            let selected = current.same_screen(&route);
+            let selected = current.on_rail(&route);
             let color = if selected { t.text } else { t.faint };
             let hover = t.hover;
             let id = format!("go.{}", route.segment());
@@ -605,7 +648,9 @@ impl Shell {
                 div().flex().items_center().gap(px(6.0)).child(live_dot("status.working", Tone::Info, cx)).child(format!("{working} agent{} working", if working == 1 { "" } else { "s" })),
             );
         }
-        if pending > 0 {
+        if let Some(run) = state.running.first() {
+            strip = strip.child(div().flex().items_center().gap(px(6.0)).child(live_dot("status.saving", Tone::Info, cx)).child(div().text_color(t.muted).child(run.text.clone())));
+        } else if pending > 0 {
             strip = strip.child(div().text_color(t.muted).child(format!("saving {pending}…")));
         }
         if !state.online {
@@ -773,33 +818,75 @@ impl Shell {
 
     fn toasts(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let t = theme(cx).clone();
-        let toasts = &devd(cx).toasts;
-        if toasts.is_empty() {
+        let (running, toasts) = {
+            let state = devd(cx);
+            (state.running.clone(), state.toasts.clone())
+        };
+        if toasts.is_empty() && running.is_empty() {
             return None;
         }
         let mut column = div().absolute().bottom(px(size::STATUS + 14.0)).right(px(16.0)).flex().flex_col().gap(px(8.0));
+        // Work that has not answered yet. It stays until the write settles, so a
+        // scaffold that takes a minute never looks like nothing happened.
+        for (n, run) in running.iter().rev().take(3).enumerate() {
+            let mut row = div()
+                .id(ui::nid("running", n))
+                .w(px(420.0))
+                .p(px(12.0))
+                .flex()
+                .items_center()
+                .gap(px(9.0))
+                .rounded(px(size::RADIUS_L))
+                .border_1()
+                .border_color(t.line_strong)
+                .bg(t.raised)
+                .shadow_md()
+                .child(ui::live_dot(ui::nid("running.dot", n), Tone::Info, cx))
+                .child(div().flex_1().min_w_0().text_size(px(size::TEXT)).line_height(px(19.0)).text_color(t.text).child(run.text.clone()));
+            if let Some(run_id) = &run.run_id {
+                let id = run_id.clone();
+                row = row.child(
+                    Button::new(ui::nid("running.stop", n), "Stop")
+                        .kind(ButtonKind::Ghost)
+                        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                            let act = crate::screens::pages::Act::new("Stop", "stacks.cancel", serde_json::json!({ "run_id": id.clone() }))
+                                .ask("Stop creating this project?", "The files it has made so far stay in the folder for you to inspect. This cannot be undone.", "Stop creating");
+                            this.run_act(act, window, cx);
+                        })),
+                );
+            }
+            column = column.child(row);
+        }
         for toast in toasts.iter().rev().take(3) {
+            let go = toast.go.clone();
+            let failed = toast.failed;
+            let text = toast.text.clone();
+            let at = toast.at.elapsed().as_millis() as usize;
             column = column.child(
                 div()
-                    .id(ui::nid("toast", toast.at.elapsed().as_millis() as usize))
+                    .id(ui::nid("toast", at))
                     .w(px(420.0))
                     .p(px(12.0))
                     .flex()
                     .items_start()
                     .cursor_pointer()
-                    // A click puts it away: a failure stays long enough to read, not forever.
-                    .on_click(|_, _, cx| {
+                    // A click opens what it is about, when it names a place, and
+                    // puts it away. A failure stays long enough to read, not forever.
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        if let Some(route) = go.as_deref().and_then(Route::parse) {
+                            this.go(route, cx);
+                        }
                         cx.global_mut::<Devd>().toasts.clear();
                         cx.refresh_windows();
-                    })
+                    }))
                     .gap(px(9.0))
                     .rounded(px(size::RADIUS_L))
                     .border_1()
-                    .border_color(if toast.failed { tint(t.danger, 0.4) } else { t.line_strong })
+                    .border_color(if failed { tint(t.danger, 0.4) } else { t.line_strong })
                     .bg(t.raised)
                     .shadow_md()
-                    .child(icon(if toast.failed { "alert" } else { "check" }, 15.0, if toast.failed { t.danger } else { t.ok }))
-                    .child(div().flex_1().min_w_0().text_size(px(size::TEXT)).line_height(px(19.0)).text_color(t.text).child(toast.text.clone())),
+                    .child(icon(if failed { "alert" } else { "check" }, 15.0, if failed { t.danger } else { t.ok }))
+                    .child(div().flex_1().min_w_0().text_size(px(size::TEXT)).line_height(px(19.0)).text_color(t.text).child(text)),
             );
         }
         Some(column.into_any_element())
@@ -808,6 +895,13 @@ impl Shell {
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The close button was pressed while a scaffold ran: ask before losing it.
+        if devd(cx).close_asked.replace(false) {
+            let run_ids: Vec<String> = devd(cx).running.iter().filter_map(|run| run.run_id.clone()).collect();
+            if !run_ids.is_empty() && self.modal.is_none() {
+                self.warn_before_closing(run_ids, window, cx);
+            }
+        }
         // An agent asked to show the person something.
         if let Some(route) = cx.global_mut::<Devd>().pending_go.take().and_then(|r| Route::parse(&r)) {
             self.history.go(route);
@@ -826,6 +920,7 @@ impl Render for Shell {
             Route::Team => screens::lists::team(self, cx),
             Route::Activity => screens::activity::activity(self, cx),
             Route::Settings => screens::activity::settings(self, cx),
+            Route::Page(id) => screens::pages::render(self, &id, cx),
         };
         let go = |n: usize| move |this: &mut Self, window: &mut Window, cx: &mut Context<Self>| {
             let id = format!("go.{}", Route::primary()[n].segment());
@@ -841,6 +936,10 @@ impl Render for Shell {
             .font_family(crate::theme::SANS)
             .key_context("Shell")
             .track_focus(&self.focus)
+            .on_action(cx.listener(|this, _: &CloseModal, window, cx| this.close_modal(window, cx)))
+            .on_action(cx.listener(|this, _: &AcceptModal, window, cx| this.accept_modal(window, cx)))
+            .on_action(cx.listener(|_, _: &FocusNext, window, _| window.focus_next()))
+            .on_action(cx.listener(|_, _: &FocusPrev, window, _| window.focus_prev()))
             .on_action(cx.listener(|this, _: &OpenPalette, window, cx| this.open_palette(window, cx)))
             .on_action(cx.listener(|this, _: &NewConversation, window, cx| this.run("conversation.new", window, cx)))
             .on_action(cx.listener(|this, _: &ToggleTheme, window, cx| this.run("view.theme", window, cx)))
@@ -856,6 +955,8 @@ impl Render for Shell {
             .on_action(cx.listener({ let f = go(6); move |this, _: &Go7, window, cx| f(this, window, cx) }))
             .on_action(cx.listener({ let f = go(7); move |this, _: &Go8, window, cx| f(this, window, cx) }))
             .on_action(cx.listener({ let f = go(8); move |this, _: &Go9, window, cx| f(this, window, cx) }))
+            // One field behind every screen, in the current theme's pattern.
+            .child(ui::art(cx))
             .child(self.rail(cx))
             .child(
                 div()
@@ -869,6 +970,7 @@ impl Render for Shell {
                     .child(self.status(cx)),
             )
             .children(self.toasts(cx))
+            .children(self.modal_overlay(cx))
             .children(self.decision_overlay(cx))
             .children(self.palette_overlay(cx))
     }
