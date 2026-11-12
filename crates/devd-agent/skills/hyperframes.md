@@ -1,32 +1,33 @@
 ---
 name: hyperframes
-description: Make a video from HTML and CSS, preview it, and render an MP4
+description: Make a film from HTML and CSS with devd's built-in renderer
 kind: build
-roles: planner,designer,frontend,docs,implementer,researcher
+roles: motion,planner,designer,frontend,docs,implementer,researcher,content
 ---
 
 # HyperFrames
 
-A film is a page on a timeline. Write HTML and CSS, preview it in a browser, then render frames. For a launch film, a pull-request walkthrough, captions or a short chart sequence; not for a screen recording of a window.
+A film is a page that is a pure function of time. devd carries the runtime, the scaffold and the renderer, so nothing is installed: `motion.new` starts a composition and `motion.render` photographs it frame by frame in devd's own browser. For React, 3D, maps or captions use `remotion-film`. For what makes a film good use `motion-design`.
 
 ## When to use
 
-A short explanatory video built from the product's own surfaces.
+A launch film, a walkthrough, a chart sequence or a UI animation that can be written as markup and CSS.
 
 ## Procedure
 
-1. Decide the running time and the beats before writing markup. One idea per beat; the cut is the sentence break.
-2. Write one HTML file with a fixed frame size (1600x1000 for desktop). Use the product's real surfaces and type; do not invent a brand.
-3. Keep transitions in CSS, and drive frame-dependent movement from the timeline the tool provides.
-4. Preview at the real size with `browser.navigate` and `browser.screenshot`. Check the first frame, the middle and the last. Nothing may be left hovered or focused in a still.
-5. Render the MP4 and open it once.
+1. `motion.new` with an absolute folder, the title, the size and length. It writes `index.html` and `devd-motion.js` and never overwrites a film.
+2. Write the scene as a function of time: `Motion.draw(t => ...)` sets the page to exactly its state at second `t`. Helpers: `Motion.progress(t, from, to, easing)`, `Motion.stagger`, `Motion.typed`, `Motion.count`, `Motion.ease.settle`, `Motion.seeded` for randomness that is the same every render.
+3. Preview by serving the folder: it loops, Space pauses, the arrows step a frame.
+4. Look before you render: `motion.render` with `at: [0, 1.5, ...]` makes stills in `out/stills`. Check the first frame, each scene, the last, and every cue.
+5. Render the film: `motion.render` writes `out/frames` and, with ffmpeg on the machine, `out/film.mp4`. Pass `audio` to put a sound file under it.
 
 ## Pitfalls
 
-- Third-party music, footage or logos. Only the product's own screens.
-- A faked cursor, unless the beat is about clicking, and then it shows the real state change.
-- A number on screen that came from an estimate. It must come from the run's record.
+- CSS animations, timers, `requestAnimationFrame` loops or `Math.random` in the composition. Anything that runs on its own clock is caught half way. Compute it from `t`.
+- Remote fonts and images. Put them in the folder: the render has no reason to wait for a network.
+- A video that is not made because ffmpeg is missing. The frames are still delivered: tell the person, and do not claim a video.
+- Rendering the whole film to find a typo. Render stills first.
 
 ## Verification
 
-Report the duration, the file size and every line of text that appears. Do not say a render passed without opening the file.
+Two renders of the same composition give identical frames. Report the frame count, size, frame rate, the video path or the reason there is none, and every line of text that appears.

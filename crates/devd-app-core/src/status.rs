@@ -165,6 +165,9 @@ pub fn confirmation(capability: &str, data: &Value) -> Option<String> {
         "provider.save" => format!("Saved {}", data["label"].as_str().unwrap_or("the provider")),
         "provider.default" => format!("{} is now the default", data["label"].as_str().or(data["id"].as_str())?),
         "provider.remove" => "Provider removed".to_string(),
+        "roles.save" => format!("{} joined the team", data["title"].as_str().unwrap_or("A new member")),
+        "roles.delete" => "Member removed".to_string(),
+        "skills.install" => format!("Installed {} skills", count(&data["installed"])?),
         "models.refresh" => {
             let models = data["models"].as_u64()?;
             if data["changed"] == Value::Bool(false) {

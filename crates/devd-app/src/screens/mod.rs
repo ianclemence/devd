@@ -6,3 +6,4 @@ pub mod assistant;
 pub mod home;
 pub mod intelligence;
 pub mod lists;
+pub mod roles;

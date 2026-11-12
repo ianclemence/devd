@@ -303,6 +303,15 @@ pub fn evidence(events: &[ChatEvent]) -> Vec<Value> {
                             .unwrap_or(args["pattern"].as_str().unwrap_or(""))
                             .to_string(),
                     )),
+                    // A composition written is a change; a render that ran is the check
+                    // that every frame of it can be made.
+                    "motion.new" => out.push(fact("change", cap, outcome_ok, args["dir"].as_str().unwrap_or("").to_string())),
+                    "motion.render" => out.push(fact(
+                        "verify",
+                        cap,
+                        outcome_ok && data["state"].as_str() == Some("ok"),
+                        args["dir"].as_str().unwrap_or("").to_string(),
+                    )),
                     "project.init" => out.push(fact(
                         "change",
                         cap,

@@ -49,6 +49,7 @@ pub mod judge;
 pub mod memory;
 pub mod modelhints;
 pub mod modelsdev;
+pub mod motion;
 pub mod needs;
 pub mod prompts;
 pub mod providers;

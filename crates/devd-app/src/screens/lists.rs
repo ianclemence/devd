@@ -11,6 +11,7 @@ use devd_app_core::sync::{Mutation, Patch, Snapshot};
 use gpui::{div, prelude::*, px, AnyElement, App, ClickEvent, Context, Div, FontWeight};
 use serde_json::{json, Value};
 
+use crate::screens::roles as screens_roles;
 use crate::shell::Shell;
 use crate::state::{devd, q};
 use crate::theme::{mono, size, theme, Tone};
@@ -469,7 +470,7 @@ pub fn server(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
 
 /// The team: every specialist, what it is for, what it must prove, and
 /// whether it is busy right now.
-pub fn team(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
+pub fn team(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
     let t = theme(cx).clone();
     let roles = devd(cx).sync.watch(&q::roles());
     let overview = devd(cx).sync.watch(&q::overview());
@@ -480,7 +481,14 @@ pub fn team(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
         (n, 0) => format!("{n} specialists. Nobody is working right now."),
         (n, w) => format!("{n} specialists · {w} working now"),
     };
-    let column = div().flex().flex_col().gap(px(22.0)).child(page_head("Team", detail, div(), cx));
+    let add = div().child(Button::new("team.add", "Add a member").icon("plus").on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+        this.role_form.open = !this.role_form.open;
+        cx.notify();
+    })));
+    let mut column = div().flex().flex_col().gap(px(22.0)).child(page_head("Team", detail, add, cx));
+    if let Some(form) = screens_roles::render(shell, cx) {
+        column = column.child(form);
+    }
     if let Some(shown) = placeholder(&roles, "team", "team", "No roles", "The team's roles could not be read.", cx) {
         return ui::page("team", 980.0, column.child(shown)).into_any_element();
     }
@@ -531,9 +539,13 @@ pub fn team(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                 facts = facts.child(pill("own copy", Tone::Neutral, cx));
             }
             if role["built_in"] == json!(false) {
-                facts = facts.child(pill("yours", Tone::Accent, cx));
+                facts = facts.child(screens_roles::yours(id, n, cx));
             }
             let mut second = div().flex().gap(px(10.0)).text_size(px(size::TEXT_XS)).text_color(t.faint).child(div().font_family(mono()).child(model));
+            let next: Vec<&str> = role["hands_to"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+            if !next.is_empty() {
+                second = second.child(format!("hands to {}", next.join(", ")));
+            }
             if !proofs.is_empty() {
                 second = second.child(format!("must show {}", proofs.join(", ")));
             }

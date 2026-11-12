@@ -2350,3 +2350,41 @@ fn the_activity_record_can_be_read_and_filtered_by_an_agent() {
     let failed = call(&e, &e.agent, "activity.list", json!({ "failed_only": true }), Approval::None).unwrap();
     assert!(failed["items"].as_array().unwrap().iter().all(|r| r["ok"] == false));
 }
+
+#[test]
+fn a_person_adds_their_own_agent_and_it_joins_the_flow_without_a_restart() {
+    let e = env();
+    devd_agent::roles::use_custom_dir(&e.human.paths.root().join("roles"));
+    let role = |id: &str, hands_to: &[&str]| json!({
+        "id": id, "title": "Support engineer", "team": "operations",
+        "summary": "Answers a customer's report with a reproduction and a fix",
+        "tier": "exec", "writes": true, "isolated": true, "proves": ["change", "verify"],
+        "skills": ["fix-bug", "plain-speech"], "hands_to": hands_to,
+        "instructions": "You are the support engineer. Reproduce what the customer reports before you change anything, fix the cause, and prove it."
+    });
+    // An agent cannot make a role: it decides what agents may do.
+    assert!(call(&e, &e.agent, "roles.save", role("support", &["qa"]), Approval::None).is_err());
+    // A role that would not load is refused with the reason, and the team is unchanged.
+    let bad = call(&e, &e.human, "roles.save", role("support", &["ghost"]), Approval::None).unwrap_err().to_string();
+    assert!(bad.contains("ghost"), "{bad}");
+    let before = call(&e, &e.agent, "team.flow", json!({}), Approval::None).unwrap();
+    assert!(before["roles"].as_array().unwrap().iter().all(|r| r["id"] != "support"));
+    // A good one is on the team at once, in the roster the planner reads and in the flow.
+    call(&e, &e.human, "roles.save", role("support", &["qa", "reviewer"]), Approval::None).unwrap();
+    let flow = call(&e, &e.agent, "team.flow", json!({}), Approval::None).unwrap();
+    let find = |id: &str| flow["roles"].as_array().unwrap().iter().find(|r| r["id"] == id).cloned().unwrap_or_else(|| panic!("{id} is not in {flow}"));
+    assert_eq!(find("support")["built_in"], false);
+    assert!(find("qa")["receives_from"].as_array().unwrap().iter().any(|r| r == "support"));
+    assert!(find("implementer")["hands_to"].as_array().unwrap().iter().any(|r| r == "qa"));
+    let roster = call(&e, &e.agent, "team.roles", json!({}), Approval::None).unwrap();
+    assert!(roster.as_array().unwrap().iter().any(|r| r["id"] == "support"));
+    // The new members are there too, with their skills.
+    for id in ["motion", "hardware", "ml", "sre", "release", "content"] {
+        assert!(roster.as_array().unwrap().iter().any(|r| r["id"] == id), "{id}");
+    }
+    // It leaves when asked, and devd's own cannot.
+    assert!(call(&e, &e.human, "roles.delete", json!({ "id": "planner" }), Approval::None).is_err());
+    call(&e, &e.human, "roles.delete", json!({ "id": "support" }), Approval::None).unwrap();
+    let after = call(&e, &e.agent, "team.flow", json!({}), Approval::None).unwrap();
+    assert!(after["roles"].as_array().unwrap().iter().all(|r| r["id"] != "support"));
+}

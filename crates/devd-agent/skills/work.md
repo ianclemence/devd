@@ -30,6 +30,12 @@ Match the request:
 | many independent pieces at once | `swarm` |
 | a finished change that needs reviewing | `review-the-diff`, or `interrogate` if risky |
 | a page, flow or visible change to check | `agent-browser`, `test-the-app` |
+| a film, animation or motion | `motion-design`, then `hyperframes` or `remotion-film` |
+| firmware, a board or a device | `hardware-bringup` |
+| a model, training run or data experiment | `ml-experiments` |
+| something down, slow or wrong right now | `incident-response` |
+| cutting a release | `cut-a-release` |
+| an announcement, release notes or landing copy | `write-for-launch` |
 | landing a change | `ship`, then `write-the-commit` |
 | an open pull request | `babysit-the-pull-request` |
 | work that is large, unusual or unattended | `figure-it-out` |

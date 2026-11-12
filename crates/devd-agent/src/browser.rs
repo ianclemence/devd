@@ -1207,6 +1207,92 @@ pub fn evaluate(root: &Path, tab: Option<&str>, expression: &str) -> Result<Valu
     }))
 }
 
+/// Whether a Chromium-based browser is installed for devd to drive.
+pub fn available() -> bool {
+    find_browser().is_ok()
+}
+
+/// A tab opened to photograph a page at chosen moments, closed again when the
+/// work is done. It holds no lock between calls, so the person's Browser pane
+/// keeps working while a long render runs.
+pub struct Capture {
+    tab: String,
+}
+
+fn with_session<T>(id: &str, f: impl FnOnce(&mut Cdp, &str) -> Result<T>) -> Result<T> {
+    let mut m = lock();
+    let Manager { cdp, tabs, .. } = &mut *m;
+    let cdp = cdp.as_mut().ok_or_else(|| DevdError::invalid("the browser is not running"))?;
+    let session = tabs.get(id).ok_or_else(|| DevdError::not_found(format!("there is no tab `{id}`")))?.session.clone();
+    f(cdp, &session)
+}
+
+impl Capture {
+    /// What the composition says about itself, once its runtime has loaded.
+    pub fn info(&self) -> Result<Value> {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            let said = with_session(&self.tab, |cdp, session| {
+                let v = cdp.call(
+                    Some(session),
+                    "Runtime.evaluate",
+                    json!({ "expression": "(typeof window.__motion === 'object') ? JSON.stringify(window.__motion.info()) : ''", "returnByValue": true }),
+                )?;
+                Ok(v["result"]["value"].as_str().unwrap_or("").to_string())
+            })?;
+            if let Ok(info) = serde_json::from_str::<Value>(&said) {
+                return Ok(info);
+            }
+            if Instant::now() > deadline {
+                return Err(DevdError::invalid("the page never defined window.__motion. A composition loads devd-motion.js and calls Motion.config and Motion.draw; see motion.new."));
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    /// Make the page exactly this size, as a film frame.
+    pub fn resize(&self, width: u32, height: u32) -> Result<()> {
+        with_session(&self.tab, |cdp, session| {
+            cdp.call(
+                Some(session),
+                "Emulation.setDeviceMetricsOverride",
+                json!({ "width": width, "height": height, "deviceScaleFactor": 1, "mobile": false }),
+            )?;
+            Ok(())
+        })
+    }
+
+    /// The page at second `t`, as PNG bytes, once it has been painted.
+    pub fn frame(&self, t: f64) -> Result<Vec<u8>> {
+        with_session(&self.tab, |cdp, session| {
+            let seek = cdp.call(
+                Some(session),
+                "Runtime.evaluate",
+                json!({ "expression": format!("window.__motion.seek({t})"), "returnByValue": true, "awaitPromise": true }),
+            )?;
+            if let Some(why) = seek["exceptionDetails"]["exception"]["description"].as_str().or(seek["exceptionDetails"]["text"].as_str()) {
+                return Err(DevdError::invalid(format!("the composition failed at {t}s: {why}")));
+            }
+            let shot = cdp.call(Some(session), "Page.captureScreenshot", json!({ "format": "png", "captureBeyondViewport": false, "fromSurface": true }))?;
+            let encoded = shot["data"].as_str().ok_or_else(|| DevdError::internal("the browser returned no frame"))?;
+            base64::engine::general_purpose::STANDARD.decode(encoded).map_err(|e| DevdError::internal(format!("a frame was not valid base64: {e}")))
+        })
+    }
+}
+
+/// Open `url` in a tab of its own, run `work` with it, and close the tab.
+pub fn with_capture<T>(root: &Path, url: &str, work: impl FnOnce(&Capture) -> Result<T>) -> Result<T> {
+    let id = {
+        let mut m = lock();
+        m.ensure(root)?;
+        m.open_tab(Some(url))?
+    };
+    let capture = Capture { tab: id.clone() };
+    let result = work(&capture);
+    let _ = tabs_close(&id);
+    result
+}
+
 pub fn close() -> Result<Value> {
     let mut m = lock();
     let Manager { cdp, tabs, focused, child, .. } = &mut *m;

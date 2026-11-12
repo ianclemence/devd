@@ -140,11 +140,19 @@ goal -> planner -> [you approve the plan] -> scheduler -> specialists -> final v
   | Part of the company | Members |
   |---|---|
   | Leadership | planner, product manager |
-  | Design | designer |
-  | Engineering | architect, implementer, frontend, backend, mobile, data |
+  | Design | designer, motion designer |
+  | Engineering | architect, implementer, frontend, backend, mobile, data, ML, hardware |
   | Quality and security | QA, reviewer, security engineer |
-  | Operations | infrastructure |
-  | Knowledge | researcher, docs |
+  | Operations | infrastructure, reliability (SRE), release manager |
+  | Knowledge | researcher, docs, content writer |
+
+  The roster is laid out the way a small technology company is: someone decides
+  what to build (leadership), someone makes it feel right (design, including
+  motion), engineers of each kind build it, quality and security check it,
+  operations keep it running and get it out, and knowledge people explain it.
+  Hardware sits with engineering because firmware is code that has to meet a
+  real board; the ML engineer is there because a model change is an experiment
+  with a baseline, not an edit.
 
   Planner, product, architect and researcher plan or write documents and change
   no code; the reviewer and the security engineer read and run checks but write
@@ -296,13 +304,85 @@ approve each plan unless `--yes-plan` was given when it was made (never in
 production mode). Only a person creates, changes or deletes schedules; an agent
 can list them and start one now.
 
+### How the team hands work on
+
+Every role says who usually receives its work next (`hands_to` in its file). The
+planner reads those hand-offs on the roster, so the dependencies it writes follow
+the flow: an author's task is followed by the QA and review tasks that depend on
+it, a film by its review, a release by its notes. `team.flow` returns the same
+graph (each member, who it hands to, who hands to it) for agents and for the
+Team screen. A hand-off may go back as well as forward (a reviewer hands a
+finding back to the author), so the graph is not required to be acyclic; it is
+required to name real roles.
+
+| Flow | Hands to |
+|---|---|
+| researcher, product | planner, designer, architect |
+| architect | the engineers (implementer, frontend, backend, mobile, data, ML, hardware) |
+| designer | frontend, motion designer, reviewer |
+| engineers | QA, reviewer (mobile hands to QA and release) |
+| motion designer | reviewer, content writer |
+| QA | reviewer, release |
+| reviewer, security | back to the author, on to release |
+| infrastructure, reliability | each other, release |
+| release | docs, content writer |
+
 ### Your own roles
 
-Put a Markdown file in `<devd home>/roles/`, in the same format as the built-in
-roles, and it joins the team. A role of your own may use up to the exec tier, may
-not name extra capabilities, cannot take a built-in's name, and may only carry
-skills that exist. A file that does not load is reported by `team.roles` with the
-reason; the rest of the team is unaffected.
+A role of your own is a Markdown file in `<devd home>/roles/`, in the same
+format as the built-in roles, and it joins the team. Three ways to make one, all
+checked the same way:
+
+* **In the window.** Team, then "Add a member": a name, a one-line summary, what
+  it may do (read only, change files, or change files and run commands), the
+  skills it carries, who it hands work to, and its instructions. What it must
+  prove to count as done follows from what it may do.
+* **By capability.** `roles.save` and `roles.delete` (human only, because a role
+  decides what an agent may do). `team.flow` shows where the new member sits.
+* **As a file**, in the folder above.
+
+A role of your own may use up to the exec tier, may not name extra capabilities,
+cannot take a built-in's name, may only carry skills that exist, and may hand work
+only to roles that exist. One that does not pass is refused with the reason and
+nothing is written (or, for a file, reported by `team.roles` while the rest of
+the team is unaffected). It joins the team **at once**, with no restart: the
+roster is read again after every save or removal. A role cannot be removed while
+another still hands work to it.
+
+This keeps the end-to-end flow intact because a role of your own is not a second
+kind of agent. It runs through the same loop, the same permission tiers, the same
+worktree boundary and the same evidence check as devd's own: its task is accepted
+when devd's record shows what its `proves` says, not when it says it is done.
+
+### The motion designer
+
+Makes films, animations and product motion. It carries `motion-design` (how a film
+is planned: one idea, three documents, real material, restraint, looking at the
+frames), `hyperframes` and `remotion-film`.
+
+Two ways to render, and what each needs:
+
+| | Built into devd | Remotion |
+|---|---|---|
+| Tools | `motion.new`, `motion.render` | `npx remotion ...` through `project.exec` |
+| Install | none | Node, `create-video`, and a browser it downloads |
+| Good for | markup and CSS films, UI motion, chart sequences | React components, 3D, maps, captions |
+| Output | PNG frames always; an MP4 when ffmpeg is on the machine | MP4 through its own bundled encoder |
+
+A built-in composition is a page that is a pure function of time. devd serves the
+folder on a loopback port, opens it in its own browser at the composition's size,
+asks for each frame's time in turn and photographs the page, so two renders are
+byte-identical. The one thing devd does not carry is a video encoder: it uses an
+`ffmpeg` it finds (or the path in `DEVD_FFMPEG`), and when there is none it says
+so and still delivers the frames. `motion.render` with `at` makes stills of chosen
+moments first, so a film is looked at before it is rendered.
+
+Remotion's official skills (`remotion-dev/skills`) are not bundled: they are
+versioned with each Remotion release and published without a license file, so
+devd fetches them from their repository when a person asks (the command menu has
+"Install the Remotion skills"; it is `skills.install` with that source). A skill
+installed from outside keeps its reference pages: `skills.get` lists them as
+`files` and reads one with `file`, so a router skill's pointers lead somewhere.
 
 ### What a run needs from you
 

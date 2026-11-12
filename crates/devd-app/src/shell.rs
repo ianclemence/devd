@@ -100,6 +100,7 @@ pub fn commands() -> Commands {
     table.add(Command::new("conversation.new", "New conversation", "Ask devd something, or give it work", Section::Create).key("secondary-n").keywords(&["chat", "ask", "prompt"]));
     table.add(Command::new("server.start", "Start what is needed", "Start every service a project needs", Section::Machine).keywords(&["services", "nginx", "boot", "machine"]));
     table.add(Command::new("server.hosts", "Publish hostnames", "Write the .test names to the hosts file (asks first)", Section::Machine).keywords(&["hosts", "dns", "sync"]).consequential());
+    table.add(Command::new("skills.remotion", "Install the Remotion skills", "Fetch Remotion's official agent skills for the motion designer", Section::Machine).keywords(&["video", "film", "animation", "motion", "remotion"]));
     table.add(Command::new("intelligence.catalogue", "Update the model catalogue", "Fetch current models and prices from models.dev", Section::Machine).keywords(&["models", "prices", "refresh", "providers"]));
     table.add(Command::new("intelligence.fetch", "Fetch every provider's models", "Ask each provider what its key may use", Section::Machine).keywords(&["models", "list", "refresh"]));
     table.add(Command::new("view.palette", "Command menu", "Search every action and place", Section::View).key("secondary-k"));
@@ -146,6 +147,8 @@ pub struct Shell {
     pub transcript: screens::assistant::Transcript,
     /// What the Intelligence screen has open.
     pub intel: screens::intelligence::View,
+    /// The form for adding a member of the team.
+    pub role_form: screens::roles::Form,
     _watch: Subscription,
 }
 
@@ -165,8 +168,10 @@ impl Shell {
         let focus = cx.focus_handle();
         window.focus(&focus);
         let intel = screens::intelligence::View::new(window, cx);
+        let role_form = screens::roles::Form::new(cx);
         Self {
             intel,
+            role_form,
             history: History::new(start),
             focus,
             commands: commands(),
@@ -222,6 +227,9 @@ impl Shell {
             }
             "server.start" => {
                 devd(cx).sync.mutate(Mutation::new("stack.start", json!({})).invalidating("service"));
+            }
+            "skills.remotion" => {
+                devd(cx).sync.mutate(Mutation::new("skills.install", json!({ "source": "remotion-dev/skills" })));
             }
             "intelligence.catalogue" => {
                 devd(cx).sync.mutate(Mutation::new("models.refresh", json!({})).invalidating("models"));

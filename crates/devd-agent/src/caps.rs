@@ -21,6 +21,7 @@ use devd_core::{browse, util, CatalogueModel, DevdError, Provider, Registry, Res
 
 use crate::charter;
 use crate::chat::{Hub, SendRequest};
+use crate::motion;
 use crate::providers;
 use crate::team::{PlanTask, StartRequest, Team};
 use crate::{
@@ -629,6 +630,10 @@ struct SkillExternal {
 struct SkillName {
     /// Skill name.
     name: String,
+    /// A reference page of the skill, by a path from its `files`. Omit to read
+    /// the skill itself.
+    #[serde(default)]
+    file: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -708,6 +713,83 @@ struct ProviderModelArgs {
     id: String,
     /// The model id exactly as the provider expects it.
     model: String,
+}
+
+/// A new motion composition.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct MotionNew {
+    /// An absolute folder to create the composition in. It must not already hold one.
+    dir: String,
+    /// The film's name and its first words on screen.
+    #[serde(default)]
+    title: Option<String>,
+    /// Frame width in pixels (default 1920).
+    #[serde(default)]
+    width: Option<u32>,
+    /// Frame height in pixels (default 1080).
+    #[serde(default)]
+    height: Option<u32>,
+    /// Frames a second (default 30).
+    #[serde(default)]
+    fps: Option<u32>,
+    /// Length in seconds (default 6).
+    #[serde(default)]
+    seconds: Option<f64>,
+}
+
+/// Render a motion composition.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct MotionRender {
+    /// The composition's folder (the one holding index.html).
+    dir: String,
+    /// Only these moments, in seconds, as still images. Use this to look at a
+    /// film without waiting for all of it. Omit to render every frame.
+    #[serde(default)]
+    at: Option<Vec<f64>>,
+    /// Frames a second; the composition's own when omitted.
+    #[serde(default)]
+    fps: Option<u32>,
+    /// The video file to write, relative to the folder (default out/film.mp4).
+    #[serde(default)]
+    out: Option<String>,
+    /// A sound file in the folder to put under the picture.
+    #[serde(default)]
+    audio: Option<String>,
+    /// H.264 quality, lower is better (default 18).
+    #[serde(default)]
+    crf: Option<u32>,
+}
+
+/// A role of the person's own.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct RoleSave {
+    /// Lower-case letters and hyphens. Becomes the file name, and the id a plan uses.
+    id: String,
+    /// The name on the roster.
+    title: String,
+    /// The part of the company it sits in: leadership, design, engineering, quality, operations or knowledge.
+    team: String,
+    /// One line for the roster: what this member is for.
+    summary: String,
+    /// The most it may do: `read`, `write` or `exec`. A role of your own never goes higher.
+    tier: String,
+    /// May change files in its own copy of the project.
+    #[serde(default)]
+    writes: bool,
+    /// Works in its own copy of the project (when it is a git repository).
+    #[serde(default)]
+    isolated: bool,
+    /// What devd must find in the record before its task counts as done: `change`, `verify`, `read`, `command`.
+    #[serde(default)]
+    proves: Vec<String>,
+    /// Skills it carries, by name (see skills.list).
+    #[serde(default)]
+    skills: Vec<String>,
+    /// Roles that usually receive its work next. They must exist.
+    #[serde(default)]
+    hands_to: Vec<String>,
+    /// Its instructions: what it does, what it reads first, how it proves its work.
+    instructions: String,
 }
 
 /// Where to take the person's window.
@@ -1803,6 +1885,55 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             Ok(Outcome::with_data(if added { "remembered" } else { "already known" }, serde_json::json!({ "added": added })))
         },
     )?;
+    reg.define::<RoleSave>("roles.save", "Add or change a role of your own")
+    .description("Adds a member to the team, or changes one you added. It is checked exactly as a file in your roles folder is checked, so one that would not load is refused now, with the reason, and nothing is written: your own roles may use up to the exec tier and no extra capabilities, must carry skills that exist and hand work only to roles that exist. It joins the team at once, with no restart: the planner sees it on the roster and `team.flow` draws it. devd's own roles cannot be replaced. Human only, because a role decides what an agent may do.")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .human_only()
+    .dry_run()
+    .handlers(
+        |_, a| simple("roles.save", format!("save the role `{}`", a.id)),
+        |ctx, a| {
+            let dir = ctx.paths.root().join("roles");
+            let draft = roles::Draft { id: a.id.clone(), title: a.title.clone(), team: a.team.clone(), summary: a.summary.clone(), tier: a.tier.clone(), writes: a.writes, isolated: a.isolated, proves: a.proves.clone(), skills: a.skills.clone(), hands_to: a.hands_to.clone(), instructions: a.instructions.clone() };
+            let role = roles::save_custom(&dir, &draft).map_err(DevdError::invalid)?;
+            Ok(Outcome::with_data(format!("{} joined the team", role.title), json!({ "id": role.id, "title": role.title, "hands_to": role.hands_to })))
+        },
+    )?;
+
+    reg.define::<IdArgs>("roles.delete", "Remove a role of your own")
+    .description("Removes a member you added. A role another still hands work to cannot be removed until that one is changed. devd's own roles cannot be removed. Human only.")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .human_only()
+    .dry_run()
+    .handlers(
+        |_, a| simple("roles.delete", format!("remove the role `{}`", a.id)),
+        |ctx, a| {
+            roles::delete_custom(&ctx.paths.root().join("roles"), &a.id).map_err(DevdError::invalid)?;
+            Ok(Outcome::ok(format!("Removed the role {}", a.id)))
+        },
+    )?;
+
+    reg.define::<NoArgs>("team.flow", "How the team's work moves between members")
+    .description("The team as a graph: each member, who it usually hands its work to and who usually hands work to it. The planner reads the same hand-offs when it lays out a plan, so the dependencies it writes follow the flow (an author's task is followed by the QA and review tasks that depend on it). Includes the roles you added. Read only.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, _| simple("team.flow", "read how work moves between members"),
+        |_, _| {
+            let rows: Vec<Value> = roles::flow()
+                .into_iter()
+                .map(|(r, from)| json!({ "id": r.id, "title": r.title, "team": r.team, "built_in": roles::is_built_in(r.id), "hands_to": r.hands_to, "receives_from": from }))
+                .collect();
+            let starts: Vec<&str> = roles::flow().into_iter().filter(|(_, from)| from.is_empty()).map(|(r, _)| r.id).collect();
+            Ok(Outcome::with_data(format!("{} members", rows.len()), json!({ "roles": rows, "starts": starts })))
+        },
+    )?;
+
     reg.define::<NoArgs>("team.roles", "The team's specialists")
     .description("Each role, what it is for, what it may do, what must be proven before its work is accepted, and the model it would use now.")
     .tier(Tier::Read)
@@ -1816,7 +1947,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             let assigned = ctx.store.list_role_models()?;
             let rows: Vec<Value> = roles::all().iter().map(|r| {
                 let m: Vec<Value> = assigned.iter().filter(|a| a.scope.is_empty() && (a.role == r.id)).map(|a| json!({ "provider": a.provider_id, "model": a.model })).collect();
-                json!({ "id": r.id, "title": r.title, "team": r.team, "team_title": roles::TEAMS.iter().find(|t| t.0 == r.team).map(|t| t.1).unwrap_or(r.team), "summary": r.summary, "built_in": roles::is_built_in(r.id), "skills": r.skills, "writes_files": r.writes, "max_tier": match r.max_rank { 0 => "read", 1 => "write", 2 => "exec", _ => "admin (approval)" },
+                json!({ "id": r.id, "title": r.title, "team": r.team, "hands_to": r.hands_to, "team_title": roles::TEAMS.iter().find(|t| t.0 == r.team).map(|t| t.1).unwrap_or(r.team), "summary": r.summary, "built_in": roles::is_built_in(r.id), "skills": r.skills, "writes_files": r.writes, "max_tier": match r.max_rank { 0 => "read", 1 => "write", 2 => "exec", _ => "admin (approval)" },
                     "works_in_own_copy": r.isolated,
                     "must_prove": { "change": r.needs.change, "verify": r.needs.verify, "read": r.needs.read, "command": r.needs.command },
                     "models": m })
@@ -2024,15 +2155,22 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
         },
     )?;
     reg.define::<SkillName>("skills.get", "Read a skill")
-    .description("The full instructions of one skill. Load the matching skill before starting the kind of work it covers; start with `work` when unsure.")
+    .description("The full instructions of one skill. Load the matching skill before starting the kind of work it covers; start with `work` when unsure. A skill installed from outside may come with reference pages, listed in `files`; its instructions say when to read one, and you read it by passing its path as `file`.")
     .tier(Tier::Read)
     .effect(Effect::Read)
     .agent_safe()
     .dry_run()
     .idempotent()
     .handlers(
-        |_, a| simple("skills.get", format!("read skill {}", a.name)),
-        |ctx, a| { let s = skills::get(&ctx.paths, &a.name)?; Ok(Outcome::with_data(s.description.clone(), serde_json::to_value(&s)?)) },
+        |_, a| simple("skills.get", match &a.file { Some(f) => format!("read page {f} of skill {}", a.name), None => format!("read skill {}", a.name) }),
+        |ctx, a| {
+            if let Some(file) = &a.file {
+                let text = skills::read_resource(&ctx.paths, &a.name, file)?;
+                return Ok(Outcome::with_data(format!("{} / {file}", a.name), json!({ "name": a.name, "file": file, "content": text })));
+            }
+            let s = skills::get(&ctx.paths, &a.name)?;
+            Ok(Outcome::with_data(s.description.clone(), serde_json::to_value(&s)?))
+        },
     )?;
     reg.define::<SkillSave>("skills.save", "Add or update your own skill")
     .description("Saves a Markdown skill in devd's skills folder. It can add to the built-in set but never replace a built-in skill. Human only, because a skill changes how every agent works.")
@@ -2914,6 +3052,53 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             let models = providers::fetch_anthropic_docs()?;
             ctx.store.replace_catalogue("anthropic-docs", &models)?;
             Ok(Outcome::with_data(format!("{} official Claude model(s)", models.len()), serde_json::to_value(&models)?))
+        },
+    )?;
+
+    reg.define::<MotionNew>("motion.new", "Start a motion composition")
+    .description("Creates a folder holding a motion composition: index.html and devd-motion.js, the runtime it loads. A composition is a page that is a pure function of time: Motion.draw(t => ...) puts the page in exactly the state it has at second t, with no timers and no animation of its own. Open index.html in the browser (browser.open on a served address, or motion.render with `at`) to see it; opened plainly it loops, Space pauses, arrows step a frame. Refuses to overwrite an existing composition. Nothing needs installing.")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers(
+        |_, a| simple("motion.new", format!("start a composition in {}", a.dir)),
+        |ctx, a| {
+            let dir = fs::authorize(ctx, &a.dir, true)?;
+            let d = motion::Spec::default();
+            let spec = motion::Spec { title: a.title.clone().unwrap_or(d.title), width: a.width.unwrap_or(d.width), height: a.height.unwrap_or(d.height), fps: a.fps.unwrap_or(d.fps), seconds: a.seconds.unwrap_or(d.seconds) };
+            let v = motion::scaffold(&dir, &spec)?;
+            Ok(Outcome::with_data(format!("Started a composition: {} frames at {} fps", v["frames"], spec.fps), v))
+        },
+    )?;
+
+    reg.define::<MotionRender>("motion.render", "Render a motion composition to frames and a video")
+    .description("Renders a composition made with motion.new, with nothing to install. devd serves the folder on a loopback port, opens it in its own browser at the composition's size, asks for each frame's time in turn and photographs the page, so the same composition makes the same film every time. Writes out/frames/frame_00001.png onward and, when ffmpeg is on this machine (or DEVD_FFMPEG names it), an H.264 video, with `audio` under it. With `at` (seconds) it renders only those moments as stills to out/stills: look at them before rendering the whole film. Without ffmpeg the frames are still delivered and the result says how to encode them. Long films take minutes; progress is reported as motion.progress events.")
+    .tier(Tier::Exec)
+    .effect(Effect::Process)
+    .agent_safe()
+    .dry_run()
+    .handlers(
+        |_, a| simple("motion.render", match &a.at { Some(at) => format!("render {} still(s) of {}", at.len(), a.dir), None => format!("render the film in {}", a.dir) }),
+        |ctx, a| {
+            let dir = fs::authorize(ctx, &a.dir, true)?;
+            let options = motion::Render { fps: a.fps, at: a.at.clone().unwrap_or_default(), out: a.out.clone(), audio: a.audio.clone(), crf: a.crf };
+            let events = ctx.events.clone();
+            let name = a.dir.clone();
+            let mut last = 0usize;
+            let v = motion::render(ctx.paths.root(), &dir, &options, &mut |done, total| {
+                // A line every few seconds of work, not one per frame.
+                if done == total || done >= last + 30 {
+                    last = done;
+                    events.emit_with("motion.progress", format!("{done} of {total} frames"), json!({ "dir": name, "done": done, "total": total }));
+                }
+            })?;
+            let message = match (v["stills"].as_u64(), v["video"].as_str()) {
+                (Some(n), _) => format!("Rendered {n} still(s)"),
+                (None, Some(path)) => format!("Rendered {} frames to {path}", v["frames"]),
+                (None, None) => format!("Rendered {} frames; no ffmpeg to encode them", v["frames"]),
+            };
+            Ok(Outcome::with_data(message, v))
         },
     )?;
 
