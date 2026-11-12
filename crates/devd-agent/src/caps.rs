@@ -1915,6 +1915,21 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
         },
     )?;
 
+    reg.define::<RunRef>("team.trace", "A run's tool calls in order, by specialist")
+    .description("Every tool call a team run's specialists made, in the order they happened: when (seconds from the first), who, which task, which capability, whether it worked. Arguments and results are left out: this is the shape of the work. Use it to tell a person what really happened in a run, and to draw it in a film from real data instead of a mock-up. Capped at 2,000 rows (`total` and `truncated` say when).")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, a| simple("team.trace", format!("read the tool calls of run {}", a.run)),
+        |ctx, a| {
+            let v = crate::team::trace(ctx, &a.run, 2000)?;
+            Ok(Outcome::with_data(format!("{} tool calls", v["total"]), v))
+        },
+    )?;
+
     reg.define::<NoArgs>("team.flow", "How the team's work moves between members")
     .description("The team as a graph: each member, who it usually hands its work to and who usually hands work to it. The planner reads the same hand-offs when it lays out a plan, so the dependencies it writes follow the flow (an author's task is followed by the QA and review tasks that depend on it). Includes the roles you added. Read only.")
     .tier(Tier::Read)

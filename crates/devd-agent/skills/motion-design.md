@@ -18,7 +18,7 @@ Any request to make something that moves and will be watched.
 1. **One idea.** State what the film argues in a sentence, and the one question each act answers. If a scene does not answer one, cut it.
 2. **Write three documents beside the composition** before building: `DESIGN.md` (the idea, a palette taken from the product, the rules), `SCRIPT.md` (every word that appears), `STORYBOARD.md` (acts, scenes, frame ranges, what is on screen). A stranger should be able to say what the film is from them alone.
 3. **Fix the clock.** Pick the frame rate and a tempo (120 BPM at 30 fps makes a beat 15 frames). Keep cue frames in one file the picture and the sound both read, so they cannot drift.
-4. **Use real things.** Build from the product's own screens, tokens and, where possible, real data captured from a real run. A mock that only looks real is the first thing a viewer distrusts.
+4. **Use real things.** Build from the product's own screens, tokens and real data from a real run: `team.trace` gives a run's tool calls in order, by specialist, with timings, ready to draw. A mock that only looks real is the first thing a viewer distrusts.
 5. **Restraint.** One subject per frame. Colour means a state (ok, waiting, fault), never decoration. A near-black ground, one soft light, fine grain; no boxes, grids or ghost numbers behind the subject.
 6. **Move with purpose.** Ease in and out; stagger arrivals; hold long enough to read (a line is on screen for as long as it takes to read it twice). Animate only the change the frame is about.
 7. **Sound.** Soft and tactile: ticks, clicks, a held chord. No risers, whooshes or stabs. Original or none; no third-party music.

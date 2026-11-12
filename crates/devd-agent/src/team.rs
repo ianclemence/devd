@@ -358,6 +358,69 @@ pub fn evidence(events: &[ChatEvent]) -> Vec<Value> {
     out
 }
 
+/// A run's tool calls in the order they happened, by specialist: what a film
+/// about the run draws from, and what a person reads to see what really
+/// happened. Read from each task's conversation, the record devd itself keeps.
+///
+/// Each row is `{ t, role, task, capability, ok }`, with `t` in seconds from the
+/// first call. Arguments and results are left out on purpose: this is the
+/// shape of the work, and a result may hold anything a tool returned.
+pub fn trace(ctx: &Ctx, run_id: &str, limit: usize) -> Result<Value> {
+    let tasks = ctx.store.list_tasks_of_run(run_id)?;
+    // (timestamp, role, task key, capability, ok), then sorted: tasks ran side by side.
+    let mut rows: Vec<(String, String, String, String, bool)> = Vec::new();
+    for task in &tasks {
+        let Some(thread) = &task.thread_id else { continue };
+        let events = ctx.store.list_events(thread, 0, 100_000)?;
+        let mut open: HashMap<String, (String, String)> = HashMap::new();
+        for e in &events {
+            match e.kind.as_str() {
+                "assistant" => {
+                    for b in e.data["content"].as_array().cloned().unwrap_or_default() {
+                        if b["type"] != "tool_use" {
+                            continue;
+                        }
+                        let name = b["name"].as_str().unwrap_or("");
+                        let capability = if name == "devd_invoke" { b["input"]["id"].as_str().unwrap_or("devd_invoke") } else { name };
+                        open.insert(b["id"].as_str().unwrap_or("").to_string(), (e.created_at.clone(), capability.to_string()));
+                    }
+                }
+                "tool_result" => {
+                    if let Some((at, capability)) = open.remove(e.data["tool_use_id"].as_str().unwrap_or("")) {
+                        rows.push((at, task.role.clone(), task.key.clone(), capability, !e.data["is_error"].as_bool().unwrap_or(false)));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    rows.sort_by(|a, b| a.0.cmp(&b.0));
+    let seconds = |at: &str, start: &str| -> f64 {
+        let parse = |s: &str| chrono::DateTime::parse_from_rfc3339(s).map(|d| d.timestamp_millis()).unwrap_or(0);
+        (parse(at) - parse(start)).max(0) as f64 / 1000.0
+    };
+    let start = rows.first().map(|r| r.0.clone()).unwrap_or_default();
+    let total = rows.len();
+    let calls: Vec<Value> = rows
+        .iter()
+        .take(limit)
+        .map(|(at, role, task, capability, ok)| json!({ "t": seconds(at, &start), "role": role, "task": task, "capability": capability, "ok": ok }))
+        .collect();
+    let by_role = tasks.iter().fold(serde_json::Map::new(), |mut m, t| {
+        let n = rows.iter().filter(|r| r.2 == t.key).count() as u64;
+        *m.entry(t.role.clone()).or_insert(json!(0)) = json!(m.get(&t.role).and_then(Value::as_u64).unwrap_or(0) + n);
+        m
+    });
+    Ok(json!({
+        "run": run_id,
+        "calls": calls,
+        "total": total,
+        "truncated": total > limit,
+        "seconds": rows.last().map(|r| seconds(&r.0, &start)).unwrap_or(0.0),
+        "by_role": by_role,
+    }))
+}
+
 /// Whether the evidence satisfies what the role must prove. The missing parts, if not.
 pub fn missing(role: &Role, ev: &[Value]) -> Vec<String> {
     let has = |kind: &str, pass: bool| {

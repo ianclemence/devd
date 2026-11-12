@@ -135,6 +135,7 @@ const KNOWN: &[(&str, &str, &str, &str)] = &[
     ("toolchain.service", "Managing", "Managed", "server"),
     ("php.pool", "Managing PHP workers", "Managed PHP workers", "server"),
     ("app.go", "Showing you", "Showed you", "other"),
+    ("team.trace", "Reading what the team did", "Read what the team did", "team"),
     ("roles.save", "Saving a role", "Saved a role", "team"),
     ("roles.delete", "Removing a role", "Removed a role", "team"),
     ("team.flow", "Checking how the team hands work on", "Checked how the team hands work on", "team"),

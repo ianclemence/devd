@@ -377,6 +377,8 @@ byte-identical. The one thing devd does not carry is a video encoder: it uses an
 so and still delivers the frames. `motion.render` with `at` makes stills of chosen
 moments first, so a film is looked at before it is rendered.
 
+A film about the team is drawn from real data: `team.trace` returns a run's tool calls in order, by specialist, with timings (arguments and results left out), which is how the launch film's 238-call run was shown rather than imitated.
+
 Remotion's official skills (`remotion-dev/skills`) are not bundled: they are
 versioned with each Remotion release and published without a license file, so
 devd fetches them from their repository when a person asks (the command menu has

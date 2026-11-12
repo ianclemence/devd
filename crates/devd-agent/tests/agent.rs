@@ -1321,6 +1321,17 @@ fn a_team_plans_waits_for_approval_works_and_is_verified_by_evidence() {
     assert!(agent_states.contains(&"done"), "{agent_states:?}");
     assert!(overview["counts"]["done"].as_i64().unwrap_or(0) >= 1);
     assert!(overview["runs"].as_array().map(|r| !r.is_empty()).unwrap_or(false));
+
+    // The run's real tool calls, in order and by specialist: what a film or a
+    // person draws from instead of a mock-up.
+    let trace = call(&e, &e.agent, "team.trace", json!({ "run": id }), Approval::None).unwrap();
+    let calls = trace["calls"].as_array().unwrap();
+    assert!(!calls.is_empty() && trace["total"].as_u64() == Some(calls.len() as u64), "{trace}");
+    assert!(calls.iter().all(|c| c["capability"].as_str().is_some_and(|s| !s.is_empty()) && c["role"].as_str().is_some()), "{trace}");
+    let times: Vec<f64> = calls.iter().map(|c| c["t"].as_f64().unwrap()).collect();
+    assert!(times.windows(2).all(|w| w[0] <= w[1]) && times[0] == 0.0, "in order, from zero: {times:?}");
+    assert!(calls.iter().any(|c| c["role"] == "implementer" || c["role"] == "qa"), "{trace}");
+    assert!(trace.to_string().find("content").is_none(), "no arguments or results leak into a trace");
 }
 
 #[test]
