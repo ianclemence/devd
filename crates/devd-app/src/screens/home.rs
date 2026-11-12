@@ -175,9 +175,16 @@ pub fn render(shell: &mut Shell, _window: &mut Window, cx: &mut Context<Shell>) 
             if unpublished > 0 { Tone::Warn } else { Tone::Ok },
         ))
         .child(rule(cx))
-        .child(div().flex().items_center().justify_between().child(div().font_family(mono()).text_size(px(size::TEXT_XS)).text_color(t.faint).child(devd(cx).conn.home.clone())).child(
-            ui::Button::new("home.server", "Open Server").on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.go(Route::Server, cx))),
-        ));
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(10.0))
+                // The folder can be long; it gives way to the button, keeping its end.
+                .child(div().flex_1().min_w_0().truncate().font_family(mono()).text_size(px(size::TEXT_XS)).text_color(t.faint).child(ui::tail(&devd(cx).conn.home, 24)))
+                .child(ui::Button::new("home.server", "Open Server").on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.go(Route::Server, cx)))),
+        );
 
     column = column.child(
         div()

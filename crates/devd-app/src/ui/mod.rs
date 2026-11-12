@@ -455,6 +455,19 @@ pub fn leaf(path: &str) -> &str {
     path.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or(path)
 }
 
+/// A long path cut from the front, because the end is what tells folders apart:
+/// `C:\Users\User\AppData\Local\Temp\project\home` becomes `…\Temp\project\home`.
+pub fn tail(path: &str, most: usize) -> String {
+    let chars: Vec<char> = path.chars().collect();
+    if chars.len() <= most {
+        return path.to_string();
+    }
+    let kept: String = chars[chars.len() - (most - 1)..].iter().collect();
+    // Start at a whole folder when one begins soon, rather than half a name.
+    let from = kept.find(['\\', '/']).filter(|i| *i < most / 3).unwrap_or(0);
+    format!("…{}", &kept[from..])
+}
+
 /// "3m", "2h", "5d": how long ago an RFC 3339 time was.
 pub fn ago(rfc3339: &str) -> String {
     let Ok(then) = chrono::DateTime::parse_from_rfc3339(rfc3339) else { return String::new() };
@@ -504,6 +517,16 @@ mod tests {
         assert_eq!(brand_file("ollama").map(|b| b.0), Some("ollama.svg"));
         assert_eq!(brand_file("openai-compatible-gateway"), None);
         assert_eq!(brand_file("work-gateway"), None);
+    }
+
+    #[test]
+    fn a_long_path_keeps_its_end_and_starts_at_a_whole_folder() {
+        assert_eq!(tail(r"D:\devd", 30), r"D:\devd", "a short path is left alone");
+        let long = r"C:\Users\User\AppData\Local\Temp\claude\415f63c55b6fe1b8\scratchpad\home";
+        let short = tail(long, 32);
+        assert!(short.starts_with('…') && short.ends_with(r"scratchpad\home"), "{short}");
+        assert!(short.chars().count() <= 32, "{short}");
+        assert_eq!(tail("/srv/www/shop/very/deep/folder/name", 20), "…/deep/folder/name");
     }
 
     #[test]
