@@ -304,7 +304,12 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
     shell.transcript.update(id, events, &pending, writing.as_deref());
 
     let thread = &data["thread"];
-    let running = data["running"] == json!(true);
+    // Running in this window's server, or in another process (a terminal, a script, CI) that writes to the
+    // same record: the record says so, and is what to believe.
+    let running = data["running"] == json!(true) || thread["state"].as_str() == Some("running");
+    if running {
+        devd(cx).chat_running.set(true);
+    }
     let tokens = thread["input_tokens"].as_u64().unwrap_or(0) + thread["output_tokens"].as_u64().unwrap_or(0);
     // Relative paths in this conversation's replies are read against its project.
     cx.global_mut::<crate::state::Devd>().link_root = thread["project"].as_str().map(std::path::PathBuf::from);

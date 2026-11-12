@@ -42,6 +42,10 @@ pub struct Devd {
     /// Whether such a mark was drawn since the last beat. Only then is the
     /// window redrawn for the next one.
     pub live_seen: std::cell::Cell<bool>,
+    /// Whether the conversation on screen is running, as of the last draw. A run started from a terminal,
+    /// a script or CI lives in another process, so this window's own server never hears its events: while
+    /// this is set, the conversation is read again on every beat instead of waiting to be told.
+    pub chat_running: std::cell::Cell<bool>,
     /// The folder the open conversation is about: relative paths in its replies are read against it.
     pub link_root: Option<std::path::PathBuf>,
 }
@@ -118,7 +122,7 @@ pub fn start(conn: Arc<Connection>, cx: &mut App) {
 
     let mut room = Room::new();
     room.seen("you", Presence { who: Who::You, place: Place::default(), doing: Doing::Viewing }, Instant::now());
-    cx.set_global(Devd { conn, sync, room, writing: HashMap::new(), toasts: Vec::new(), decisions: Vec::new(), online: false, opened_thread: None, pending_go: None, beat: 0, live_seen: std::cell::Cell::new(false), link_root: None });
+    cx.set_global(Devd { conn, sync, room, writing: HashMap::new(), toasts: Vec::new(), decisions: Vec::new(), online: false, opened_thread: None, pending_go: None, beat: 0, live_seen: std::cell::Cell::new(false), link_root: None, chat_running: std::cell::Cell::new(false) });
 
     // One task on the window's thread turns signals into redraws. A burst of
     // signals becomes one redraw: everything waiting is taken before drawing.
@@ -157,6 +161,10 @@ pub fn start(conn: Arc<Connection>, cx: &mut App) {
             state.toasts.retain(|t| now.duration_since(t.at) < t.stays());
             state.beat = (state.beat + 1) % 4;
             let pulsing = state.live_seen.replace(false);
+            // A conversation that is running may be running somewhere else: ask again, not wait.
+            if state.chat_running.replace(false) {
+                state.sync.invalidate("chat");
+            }
             let changed = state.room.sweep(now) || state.toasts.len() != before || pulsing;
             if changed {
                 cx.refresh_windows();
