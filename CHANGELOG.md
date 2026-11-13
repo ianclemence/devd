@@ -12,6 +12,11 @@ may change capability identifiers where the design was wrong.
 
 ## [Unreleased]
 
+## [0.29.1] - 2026-11-13 - Removing a site, and a project that only a site keeps listed
+
+- **Sites can be removed from the Sites screen**, with a confirmation that says the folder is not touched. There was no way to do it from the window.
+- **Remove on a project that is listed only because a site serves its folder** (a deleted worktree, for example) removes the site instead of failing with a conflict about `site.remove`.
+
 ## [0.29.0] - 2026-11-13 - A page for every project, a terminal and a browser beside the assistant
 
 ### Projects

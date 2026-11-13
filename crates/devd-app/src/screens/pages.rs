@@ -1269,12 +1269,22 @@ pub fn projects_hub(cx: &mut Context<Shell>) -> AnyElement {
         }
         if !present {
             let p = path.clone();
-            head_line = head_line.child(Button::new(ui::nid("projects.forget", n), "Remove").kind(ButtonKind::Ghost).on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                this.run_act(
-                    Act::new("Remove", "project.forget", json!({ "path": p })).ask("Remove this project from devd?", "Its folder is missing. This forgets devd's record only; no files are touched.", "Remove project"),
-                    window,
-                    cx,
-                )
+            // A folder that is listed only because a site serves it (a worktree that was deleted, say) was never
+            // registered as a project, so there is nothing to forget: what keeps it listed is the site.
+            let sites_here: Vec<String> = project["sites"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
+            let only_a_site = project["registered"] != json!(true) && !sites_here.is_empty();
+            head_line = head_line.child(Button::new(ui::nid("projects.forget", n), if only_a_site { "Remove site" } else { "Remove" }).kind(ButtonKind::Ghost).on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                let act = if only_a_site {
+                    let first = sites_here[0].clone();
+                    Act::new("Remove site", "site.remove", json!({ "name": first })).ask(
+                        format!("Remove the site {first}?"),
+                        "This folder is listed only because that site serves it, and the folder is gone. Removing the site deletes its record, certificate and web server entry. No files are touched.",
+                        "Remove site",
+                    )
+                } else {
+                    Act::new("Remove", "project.forget", json!({ "path": p })).ask("Remove this project from devd?", "Its folder is missing. This forgets devd's record only; no files are touched.", "Remove project")
+                };
+                this.run_act(act, window, cx)
             })));
         }
         let mut card_el = card(cx).flex().flex_col().overflow_hidden().child(div().px(px(14.0)).py(px(10.0)).child(head_line));

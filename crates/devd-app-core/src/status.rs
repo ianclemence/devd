@@ -252,6 +252,7 @@ pub fn confirmation(capability: &str, data: &Value) -> Option<String> {
         "flags.set" => "Flag saved.".to_string(),
         "autostart.enable" => "devd will start when you sign in.".to_string(),
         "autostart.disable" => "devd will no longer start when you sign in.".to_string(),
+        "site.remove" => "The site is removed. Its folder is untouched.".to_string(),
         "update.apply" => "The update is installed. devd restarts itself.".to_string(),
         "toolchain.install" => format!("Installed {}.", data["tool"].as_str().or(data["name"].as_str()).unwrap_or("the tool")),
         "toolchain.remove" => "Tool removed.".to_string(),

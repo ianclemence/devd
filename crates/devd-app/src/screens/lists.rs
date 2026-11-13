@@ -317,6 +317,18 @@ pub fn sites(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
             line = line.child(pill("folder missing", Tone::Warn, cx));
         }
         line = line.child(Button::icon_only(gpui::ElementId::Name(format!("site.open.{name}").into()), "external").on_click(move |_, _, cx| cx.open_url(&url)));
+        let gone = name.clone();
+        line = line.child(Button::new(gpui::ElementId::Name(format!("site.remove.{name}").into()), "Remove").kind(ButtonKind::Ghost).on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+            this.run_act(
+                super::pages::Act::new("Remove", "site.remove", json!({ "name": gone })).busy(format!("Removing {gone}…")).ask(
+                    format!("Remove the site {gone}?"),
+                    "devd deletes the site's record, its certificate and its web server entry. The project's folder and files are not touched.",
+                    "Remove site",
+                ),
+                window,
+                cx,
+            )
+        })));
         list = list.child(line);
     }
     ui::page("sites", 980.0, column.child(list)).into_any_element()
