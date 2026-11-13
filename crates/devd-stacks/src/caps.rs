@@ -979,7 +979,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
     // open it on. It is also the wrong act now that devd has a terminal of its
     // own: the shell should be the one a person can see, and the one an agent can
     // read, rather than a window devd cannot see into.
-    reg.define::<PathArgs>("project.terminal", "Open a terminal in a project")
+    reg.define::<TerminalOpen>("project.terminal", "Open a terminal in a project")
     .description("Starts a shell in a real terminal inside devd, in the project folder, with the runtimes the project is pinned to (and the devd command) first on PATH. Returns the terminal session id, which terminal.read, terminal.write, terminal.resize and terminal.close take. Human only: it hands a person an interactive shell.")
     .tier(Tier::Exec)
     .effect(Effect::Process)
@@ -994,9 +994,9 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             let s = devd_core::terminal_session::registry().open(
                 &ctx.actor.label(),
                 &dir.display().to_string(),
-                None,
-                100,
-                30,
+                a.shell.as_deref(),
+                a.cols.unwrap_or(100),
+                a.rows.unwrap_or(30),
             )?;
             Ok(Outcome::with_data(format!("Opened terminal {}", s.id), s.describe()))
         },

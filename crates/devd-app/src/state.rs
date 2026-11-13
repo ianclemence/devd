@@ -40,6 +40,8 @@ pub struct Devd {
     pub opened_thread: Option<String>,
     /// A place an agent asked the window to show, waiting for the window to go there.
     pub pending_go: Option<String>,
+    /// Buttons the assistant drew that were pressed, waiting for the shell to carry them out or ask.
+    pub pending_ui: Vec<crate::ui::genui::Act>,
     /// Where the slow pulse of every "happening now" mark is, 0 to 3.
     pub beat: u8,
     /// Whether such a mark was drawn since the last beat. Only then is the
@@ -61,6 +63,26 @@ pub struct Devd {
     pub allow_close: std::cell::Cell<bool>,
     /// Whether the close button was pressed and the warning is owed.
     pub close_asked: std::cell::Cell<bool>,
+    /// Whether a terminal was drawn since the last quick look. Only then are the terminals read again, so a
+    /// screen nobody is looking at costs nothing.
+    pub terminal_seen: std::cell::Cell<bool>,
+    /// The same for the browser's tabs.
+    pub browser_seen: std::cell::Cell<bool>,
+    /// The latest picture of the shared browser's page, and where it was taken.
+    pub shot: Option<Shot>,
+}
+
+/// A picture of the shared browser's page.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Shot {
+    /// The file, in devd's uploads.
+    pub file: String,
+    /// The page's width in its own pixels.
+    pub width: f32,
+    /// The page's height in its own pixels.
+    pub height: f32,
+    /// The address it was taken at.
+    pub url: String,
 }
 
 impl Global for Devd {}
@@ -163,7 +185,7 @@ pub fn start(conn: Arc<Connection>, cx: &mut App) {
 
     let mut room = Room::new();
     room.seen("you", Presence { who: Who::You, place: Place::default(), doing: Doing::Viewing }, Instant::now());
-    cx.set_global(Devd { conn, sync, room, writing: HashMap::new(), toasts: Vec::new(), running: Vec::new(), decisions: Vec::new(), online: false, opened_thread: None, pending_go: None, beat: 0, live_seen: std::cell::Cell::new(false), link_root: None, chat_running: std::cell::Cell::new(false), open_projects: std::collections::HashSet::new(), open_groups: std::collections::HashSet::new(), allow_close: std::cell::Cell::new(false), close_asked: std::cell::Cell::new(false) });
+    cx.set_global(Devd { conn, sync, room, writing: HashMap::new(), toasts: Vec::new(), running: Vec::new(), decisions: Vec::new(), online: false, opened_thread: None, pending_go: None, pending_ui: Vec::new(), beat: 0, live_seen: std::cell::Cell::new(false), link_root: None, chat_running: std::cell::Cell::new(false), open_projects: std::collections::HashSet::new(), open_groups: std::collections::HashSet::new(), allow_close: std::cell::Cell::new(false), close_asked: std::cell::Cell::new(false), terminal_seen: std::cell::Cell::new(false), browser_seen: std::cell::Cell::new(false), shot: None });
 
     // One task on the window's thread turns signals into redraws. A burst of
     // signals becomes one redraw: everything waiting is taken before drawing.
@@ -183,6 +205,35 @@ pub fn start(conn: Arc<Connection>, cx: &mut App) {
             if alive.is_err() {
                 break;
             }
+        }
+    })
+    .detach();
+
+    // A shell and a browser tab change whenever their programs do, and nothing tells the window: so while one is
+    // on screen it is read again, several times a second. Off screen, not at all.
+    cx.spawn(async move |cx| loop {
+        cx.background_executor().timer(Duration::from_millis(160)).await;
+        let alive = cx.update(|cx| {
+            let state = devd(cx);
+            if state.terminal_seen.replace(false) {
+                state.sync.invalidate("terminal");
+            }
+        });
+        if alive.is_err() {
+            break;
+        }
+    })
+    .detach();
+    cx.spawn(async move |cx| loop {
+        cx.background_executor().timer(Duration::from_millis(900)).await;
+        let alive = cx.update(|cx| {
+            let state = devd(cx);
+            if state.browser_seen.replace(false) {
+                state.sync.invalidate("browser");
+            }
+        });
+        if alive.is_err() {
+            break;
         }
     })
     .detach();
@@ -323,6 +374,11 @@ fn settle_writes(cx: &mut App) {
                     };
                     state.toasts.push(toast);
                 }
+                if outcome.capability == "browser.screenshot"
+                    && let Some(file) = value["file"].as_str()
+                {
+                    state.shot = Some(Shot { file: file.to_string(), width: value["width"].as_f64().unwrap_or(0.0) as f32, height: value["height"].as_f64().unwrap_or(0.0) as f32, url: value["url"].as_str().unwrap_or_default().to_string() });
+                }
                 if outcome.capability == "chat.send" {
                     let id = value["id"].as_str().or(value["thread"]["id"].as_str()).or(value["thread"].as_str());
                     state.opened_thread = id.map(str::to_string);
@@ -441,4 +497,34 @@ pub mod q {
     pub fn team_stats() -> QueryKey {
         QueryKey::bare("team.stats")
     }
+}
+
+
+/// Type into a shell. Keys go in the order they were pressed, on one thread, and do not wake the screens
+/// that depend on the folder: a keystroke has changed nothing yet, and the shell's own screen is read on
+/// its own clock.
+pub fn send_keys(cx: &App, id: &str, data: String) {
+    send_call(cx, "terminal.write", json!({ "id": id, "data": data }));
+}
+
+/// Make a call in order with the others sent this way, without waiting for it: what is typed arrives as typed.
+pub fn send_call(cx: &App, capability: &'static str, args: Value) {
+    use std::sync::mpsc::{channel, Sender};
+    use std::sync::OnceLock;
+    static LINE: OnceLock<Sender<(Arc<Connection>, &'static str, Value)>> = OnceLock::new();
+    let line = LINE.get_or_init(|| {
+        let (tx, rx) = channel::<(Arc<Connection>, &'static str, Value)>();
+        let _ = std::thread::Builder::new().name("devd-keys".into()).spawn(move || {
+            while let Ok((conn, capability, args)) = rx.recv() {
+                let _ = devd_app_core::sync::Backend::invoke(&*conn, capability, &args);
+            }
+        });
+        tx
+    });
+    let _ = line.send((devd(cx).conn.clone(), capability, args));
+}
+
+/// Tell the person something once.
+pub fn push_toast(cx: &mut App, text: &str) {
+    cx.global_mut::<Devd>().toasts.push(Toast::new(text, false));
 }

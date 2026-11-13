@@ -21,8 +21,10 @@ pub enum Route {
     Runs(Option<String>),
     /// The team: roster, charter, schedules, skills.
     Team,
-    /// Projects, on one project (by directory) or the list.
+    /// Projects, on one project (by directory) or the list. A selected project opens on its overview.
     Projects(Option<String>),
+    /// One project, on a tab other than its overview: its files, its git, what it runs. See [`crate::project`].
+    Project(String, crate::project::ProjectTab),
     /// Sites, on one site (by name) or the list.
     Sites(Option<String>),
     /// The server on this machine: services, runtimes, databases and tools.
@@ -65,7 +67,7 @@ impl Route {
             Self::Assistant(_) => "Assistant",
             Self::Runs(_) => "Runs",
             Self::Team => "Team",
-            Self::Projects(_) => "Projects",
+            Self::Projects(_) | Self::Project(..) => "Projects",
             Self::Sites(_) => "Sites",
             Self::Server => "Server",
             Self::Intelligence => "Intelligence",
@@ -83,7 +85,7 @@ impl Route {
             Self::Assistant(_) => "assistant",
             Self::Runs(_) => "runs",
             Self::Team => "team",
-            Self::Projects(_) => "projects",
+            Self::Projects(_) | Self::Project(..) => "projects",
             Self::Sites(_) => "sites",
             Self::Server => "server",
             Self::Intelligence => "intelligence",
@@ -97,6 +99,22 @@ impl Route {
     pub fn selection(&self) -> Option<&str> {
         match self {
             Self::Assistant(id) | Self::Runs(id) | Self::Projects(id) | Self::Sites(id) => id.as_deref(),
+            Self::Project(dir, _) => Some(dir),
+            _ => None,
+        }
+    }
+
+    /// One project on a tab. The overview is the project itself, with no tab in its path.
+    pub fn project(dir: impl Into<String>, tab: crate::project::ProjectTab) -> Route {
+        let dir = dir.into();
+        if tab == crate::project::ProjectTab::Overview { Route::Projects(Some(dir)) } else { Route::Project(dir, tab) }
+    }
+
+    /// The tab of a project's page this route is on, when it is one.
+    pub fn project_tab(&self) -> Option<crate::project::ProjectTab> {
+        match self {
+            Route::Projects(Some(_)) => Some(crate::project::ProjectTab::Overview),
+            Route::Project(_, tab) => Some(*tab),
             _ => None,
         }
     }
@@ -116,15 +134,24 @@ impl Route {
 
     /// The route as text: `/sites/blog`.
     pub fn path(&self) -> String {
-        match self.selection() {
-            Some(id) => format!("/{}/{}", self.segment(), encode(id)),
-            None => format!("/{}", self.segment()),
+        match (self, self.selection()) {
+            (Route::Project(dir, tab), _) => format!("/projects/{}/{}", encode(dir), tab.id()),
+            (_, Some(id)) => format!("/{}/{}", self.segment(), encode(id)),
+            (_, None) => format!("/{}", self.segment()),
         }
     }
 
     /// Read a route from text. Unknown text is `None`, never a guess.
     pub fn parse(path: &str) -> Option<Route> {
         let trimmed = path.trim().trim_start_matches("devd://").trim_matches('/');
+        // A project's tab follows its folder: `projects/<encoded folder>/<tab>`. The folder is encoded, so it has no slash.
+        if let Some(rest) = trimmed.strip_prefix("projects/") {
+            if let Some((dir, tab)) = rest.split_once('/') {
+                let tab = crate::project::ProjectTab::from_id(tab.trim_matches('/'))?;
+                let dir = decode(dir);
+                return (!dir.is_empty()).then(|| Route::project(dir, tab));
+            }
+        }
         let (segment, rest) = match trimmed.split_once('/') {
             Some((segment, rest)) => (segment, Some(decode(rest)).filter(|r| !r.is_empty())),
             None => (trimmed, None),
@@ -132,7 +159,7 @@ impl Route {
         Some(match segment {
             "" | "home" => Route::Home,
             "inbox" => Route::Inbox,
-            "assistant" | "chat" => Route::Assistant(rest),
+            "assistant" | "chat" | "browser" | "terminal" => Route::Assistant(rest),
             "runs" => Route::Runs(rest),
             "team" => Route::Team,
             "projects" => Route::Projects(rest),
@@ -327,6 +354,28 @@ mod tests {
         for (i, a) in rail.iter().enumerate() {
             assert!(rail[i + 1..].iter().all(|b| !a.same_screen(b)));
             assert_eq!(Route::parse(&a.path()).as_ref(), Some(a));
+        }
+    }
+
+    #[test]
+    fn a_project_tab_has_its_own_path_and_the_overview_has_none() {
+        use crate::project::ProjectTab;
+        let dir = r"D:\www\shop & co";
+        let overview = Route::project(dir, ProjectTab::Overview);
+        assert_eq!(overview, Route::Projects(Some(dir.to_string())), "the overview is the project itself");
+        let git = Route::project(dir, ProjectTab::Changes);
+        assert_eq!(git.path(), "/projects/D%3A%5Cwww%5Cshop%20%26%20co/changes");
+        assert_eq!(Route::parse(&git.path()), Some(git.clone()), "a path reads back as the route that made it");
+        assert_eq!(Route::parse(&overview.path()), Some(overview));
+        assert_eq!(git.selection(), Some(dir));
+        assert_eq!(git.project_tab(), Some(ProjectTab::Changes));
+        assert_eq!(git.title(), "Projects");
+        assert!(git.same_screen(&Route::Projects(None)), "it lights the projects place on the rail");
+        assert!(git.on_rail(&Route::Projects(None)));
+        assert_eq!(Route::parse("devd://projects/x/nonsense"), None, "an unknown tab is not a guess");
+        for tab in ProjectTab::ALL {
+            let route = Route::project(dir, tab);
+            assert_eq!(Route::parse(&route.path()), Some(route), "{tab:?}");
         }
     }
 }

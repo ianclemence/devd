@@ -80,11 +80,9 @@ impl Act {
     }
 }
 
-impl Shell {
-    /// Run what a button stands for, asking first when it removes something.
-    pub fn run_act(&mut self, act: Act, window: &mut Window, cx: &mut Context<Self>) {
-        let domain = act.cap.split('.').next().unwrap_or("");
-        let domain: &'static str = match domain {
+/// The part of what devd shows that a capability changes, so the right lists are read again.
+pub fn domain_of(capability: &str) -> &'static str {
+    match capability.split('.').next().unwrap_or("") {
             "runtime" => "runtime",
             "db" => "db",
             "backup" => "backup",
@@ -105,9 +103,20 @@ impl Shell {
             "update" => "update",
             "project" => "project",
             "service" => "service",
+            "git" => "git",
+            "fs" => "fs",
+            "terminal" => "terminal",
+            "todo" => "todo",
+            "review" => "review",
             "stacks" | "stack" => "stacks",
             _ => "site",
-        };
+            }
+}
+
+impl Shell {
+    /// Run what a button stands for, asking first when it removes something.
+    pub fn run_act(&mut self, act: Act, window: &mut Window, cx: &mut Context<Self>) {
+        let domain = domain_of(act.cap);
         let mut mutation = Mutation::new(act.cap, act.args).invalidating(domain);
         if matches!(act.cap, "project.run" | "project.run_destructive") {
             // Starting a background task changes the list of what is running.
@@ -141,6 +150,8 @@ pub struct Row {
     pub side: String,
     /// What can be done to it.
     pub acts: Vec<Act>,
+    /// The id of the tool, runtime, service or stack the row is about, whose own mark is drawn before its name.
+    pub mark: Option<String>,
     /// A form this row opens, shown as a button.
     pub form: Option<FormSpec>,
     /// What that button says. Empty means "Start one".
@@ -166,7 +177,11 @@ fn rows_card(rows: Vec<Row>, key: &'static str, cx: &mut Context<Shell>) -> Div 
         let sub = if row.sub_is_path { ui::Clip::tail(row.sub.clone()).into_any_element() } else { ui::Clip::new(row.sub.clone()).into_any_element() };
         let text = div().flex_1().min_w_0().flex().flex_col().child(title).child(div().min_w_0().text_size(px(size::TEXT_XS)).text_color(t.faint).child(sub));
         let hover = t.hover;
-        let mut line = div().id(ui::nid(key, n)).px(px(14.0)).min_h(px(52.0)).py(px(7.0)).flex().items_center().gap(px(12.0)).hover(move |s| s.bg(hover)).child(ui::dot(tone, cx)).child(text);
+        let mut line = div().id(ui::nid(key, n)).px(px(14.0)).min_h(px(52.0)).py(px(7.0)).flex().items_center().gap(px(12.0)).hover(move |s| s.bg(hover)).child(ui::dot(tone, cx));
+        if let Some(mark) = &row.mark {
+            line = line.child(ui::tool_mark(mark, &row.title, 28.0, cx));
+        }
+        let mut line = line.child(text);
         if let Some((kind, query, heading)) = row.open.clone() {
             line = line.cursor_pointer().on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.open_detail(kind, query.clone(), heading.clone(), window, cx)));
         }
@@ -194,7 +209,7 @@ fn rows_card(rows: Vec<Row>, key: &'static str, cx: &mut Context<Shell>) -> Div 
 }
 
 /// A button for an act.
-fn act_button(id: ElementId, act: Act, kind: ButtonKind, cx: &mut Context<Shell>) -> AnyElement {
+pub(super) fn act_button(id: ElementId, act: Act, kind: ButtonKind, cx: &mut Context<Shell>) -> AnyElement {
     let mut button = Button::new(id, act.label).kind(kind);
     if let Some(name) = act.icon {
         button = button.icon(name);
@@ -203,7 +218,7 @@ fn act_button(id: ElementId, act: Act, kind: ButtonKind, cx: &mut Context<Shell>
 }
 
 /// A button that opens a form.
-fn form_button(id: &'static str, label: &'static str, name: &'static str, spec: FormSpec, kind: ButtonKind, cx: &mut Context<Shell>) -> AnyElement {
+pub(super) fn form_button(id: &'static str, label: &'static str, name: &'static str, spec: FormSpec, kind: ButtonKind, cx: &mut Context<Shell>) -> AnyElement {
     Button::new(id, label).icon(name).kind(kind).on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.open_form(spec.clone(), window, cx))).into_any_element()
 }
 
@@ -223,12 +238,12 @@ fn waiting(snap: &Snapshot, rows: usize, icon_name: &'static str, title: &'stati
 }
 
 /// A titled section.
-fn section(title: impl Into<SharedString>, body: Div, cx: &App) -> Div {
+pub(super) fn section(title: impl Into<SharedString>, body: Div, cx: &App) -> Div {
     div().flex().flex_col().gap(px(8.0)).child(eyebrow(title, cx)).child(body)
 }
 
 /// A list's card, or its waiting or empty state.
-fn list_or(snap: &Snapshot, rows: Vec<Row>, key: &'static str, icon_name: &'static str, title: &'static str, detail: &'static str, cx: &mut Context<Shell>) -> Div {
+pub(super) fn list_or(snap: &Snapshot, rows: Vec<Row>, key: &'static str, icon_name: &'static str, title: &'static str, detail: &'static str, cx: &mut Context<Shell>) -> Div {
     match waiting(snap, rows.len(), icon_name, title, detail, cx) {
         Some(state) => card(cx).child(div().px(px(16.0)).child(state)),
         None => rows_card(rows, key, cx),
@@ -243,7 +258,12 @@ fn read_with(cx: &App, capability: &str, args: Value) -> Snapshot {
     devd(cx).sync.watch(&QueryKey::new(capability, args))
 }
 
-fn text(v: &Value, key: &str) -> String {
+/// A call, read through the sync engine.
+pub(super) fn read_call(cx: &App, call: &devd_app_core::surface::Call) -> Snapshot {
+    devd(cx).sync.watch(&call.query())
+}
+
+pub(super) fn text(v: &Value, key: &str) -> String {
     v[key].as_str().unwrap_or_default().to_string()
 }
 
@@ -280,7 +300,7 @@ fn frame(id: &'static str, detail: impl Into<SharedString>, actions: Div, snaps:
 }
 
 #[allow(clippy::too_many_arguments)]
-fn frame_at(id: &'static str, page: &'static str, route: Route, detail: impl Into<SharedString>, actions: Div, snaps: &[&Snapshot], body: Vec<AnyElement>, cx: &mut Context<Shell>) -> AnyElement {
+pub(super) fn frame_at(id: &'static str, page: &'static str, route: Route, detail: impl Into<SharedString>, actions: Div, snaps: &[&Snapshot], body: Vec<AnyElement>, cx: &mut Context<Shell>) -> AnyElement {
     let mut column = div().flex().flex_col().gap(px(22.0)).child(div().child(page_head(page, detail, actions, cx)).children(tab_strip(&route, cx)));
     for snap in snaps {
         column = column.children(ui::stale(snap, cx));
@@ -356,6 +376,7 @@ fn runtimes(cx: &mut Context<Shell>) -> AnyElement {
             ));
         }
         rows.push(Row {
+            mark: Some(kind.clone()),
             title: name,
             sub: item["executable"].as_str().unwrap_or(r["path"].as_str().unwrap_or_default()).to_string(),
             sub_is_path: true,
@@ -400,6 +421,7 @@ fn databases(cx: &mut Context<Shell>) -> AnyElement {
     for name in dbs.data.as_deref().and_then(|d| d["databases"].as_array()).map(Vec::as_slice).unwrap_or(&[]) {
         let name = name.as_str().unwrap_or_default().to_string();
         rows.push(Row {
+            mark: Some("mariadb".into()),
             title: name.clone(),
             sub: format!("MariaDB, port {port}"),
             side: String::new(),
@@ -521,6 +543,7 @@ fn tools(cx: &mut Context<Shell>) -> AnyElement {
             ));
         }
         rows.push(Row {
+            mark: Some(id.clone()),
             title: name,
             tag: text(status, "version"),
             sub: text(tool, "purpose"),
@@ -1057,6 +1080,7 @@ fn new_project(cx: &mut Context<Shell>) -> AnyElement {
         let rows: Vec<Row> = popular
             .iter()
             .map(|s| Row {
+                mark: Some(text(s, "id")),
                 title: text(s, "name"),
                 tag: text(s, "language"),
                 sub: text(s, "summary"),
@@ -1203,7 +1227,16 @@ pub fn projects_hub(cx: &mut Context<Shell>) -> AnyElement {
         let sites = project["sites"].as_array().map(Vec::len).unwrap_or(0);
         let open = devd(cx).open_projects.contains(&path);
         let tasks = if open && stack.is_some() && present { Some(read_with(cx, "project.tasks", json!({ "path": path }))) } else { None };
-        let mut head = div().flex().items_center().gap(px(10.0)).child(div().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().font_weight(FontWeight::MEDIUM).child(name));
+        let title = div().id(ui::nid("projects.name", n)).min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().font_weight(FontWeight::MEDIUM).child(name);
+        // The name opens the project.
+        let title = if present {
+            let go = path.clone();
+            let accent = t.accent;
+            title.cursor_pointer().hover(move |s| s.text_color(accent)).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.go(Route::Projects(Some(go.clone())), cx)))
+        } else {
+            title
+        };
+        let mut head = div().flex().items_center().gap(px(10.0)).child(title);
         head = if !present {
             head.child(pill("folder missing", Tone::Warn, cx))
         } else {
@@ -1236,7 +1269,7 @@ pub fn projects_hub(cx: &mut Context<Shell>) -> AnyElement {
         }
         if present {
             let folder = path.clone();
-            head_line = head_line.child(Button::new(ui::nid("projects.open", n), "Open").icon("external").kind(ButtonKind::Ghost).on_click(cx.listener(move |_this, _: &ClickEvent, _, cx| {
+            head_line = head_line.child(Button::new(ui::nid("projects.open", n), "Open folder").icon("external").kind(ButtonKind::Ghost).on_click(cx.listener(move |_this, _: &ClickEvent, _, cx| {
                 if let Err(why) = open::that(&folder) {
                     cx.global_mut::<crate::state::Devd>().toasts.push(crate::state::Toast::new(format!("Could not open {folder}: {why}"), true));
                     cx.refresh_windows();
@@ -1495,7 +1528,7 @@ fn connect(cx: &mut Context<Shell>) -> AnyElement {
             } else {
                 ((Tone::Neutral, "not installed".to_string()), vec![])
             };
-            Row { title: name, sub: c["problem"].as_str().map(str::to_string).unwrap_or_else(|| text(c, "config")), sub_is_path: c["problem"].is_null(), state: Some(state), acts, ..Row::default() }
+            Row { mark: Some(id.clone()), title: name, sub: c["problem"].as_str().map(str::to_string).unwrap_or_else(|| text(c, "config")), sub_is_path: c["problem"].is_null(), state: Some(state), acts, ..Row::default() }
         })
         .collect();
     let detail = if snap.is_first_load() { "Looking for coding agents…".to_string() } else { format!("devd is connected to {connected} of {} coding agents on this machine.", clients.len()) };

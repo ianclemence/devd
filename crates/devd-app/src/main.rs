@@ -78,6 +78,10 @@ fn main() {
         let closing = closing.clone();
         cx.on_window_closed(move |cx| {
             if cx.windows().is_empty() {
+                // The browser this instance started must not outlive it: it would hold its profile.
+                if closing.owner {
+                    let _ = devd_agent::browser::close();
+                }
                 closing.close();
                 cx.quit();
             }

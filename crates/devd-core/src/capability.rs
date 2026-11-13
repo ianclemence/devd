@@ -166,7 +166,7 @@ pub struct Actor {
     pub kind: String,
     /// Interface the call arrived through.
     pub surface: Surface,
-    /// Client identifier, e.g. `claude-code` or `cli`.
+    /// Client identifier, e.g. `assistant` or `cli`.
     pub name: String,
 }
 
@@ -676,8 +676,8 @@ mod tests {
 
     #[test]
     fn actor_kinds() {
-        assert!(Actor::agent("claude-code").is_agent());
-        assert!(!Actor::agent("claude-code").is_human());
+        assert!(Actor::agent("assistant").is_agent());
+        assert!(!Actor::agent("assistant").is_human());
         assert!(Actor::human(Surface::Cli).is_human());
         assert_eq!(Actor::human(Surface::Cli).label(), "human:cli");
     }

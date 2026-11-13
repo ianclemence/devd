@@ -81,7 +81,7 @@ pub struct AuditEntry {
     pub id: i64,
     /// RFC 3339 timestamp.
     pub at: String,
-    /// `human:cli`, `agent:claude-code`, `system:daemon`.
+    /// `human:cli`, `agent:assistant`, `system:daemon`.
     pub actor: String,
     /// Interface the call arrived through.
     pub surface: String,

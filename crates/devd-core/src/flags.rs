@@ -52,6 +52,9 @@ pub struct Flag {
 pub const ALL: &[Flag] = &[
     Flag { key: "agent.end_gate", summary: "Before the assistant ends a turn, check its plan and proof and send it back to finish", kind: Kind::Bool(true) },
     Flag { key: "agent.stop_budget", summary: "How many times one prompt may be sent back to finish (0 turns the gate off)", kind: Kind::Int { default: 3, min: 0, max: 10 } },
+    Flag { key: "agent.draw", summary: "Let the assistant draw tables, charts and buttons in the window instead of describing them", kind: Kind::Bool(true) },
+    Flag { key: "agent.draw_fixes", summary: "How many times a drawing that does not check is sent back to be written again (0 never sends it back)", kind: Kind::Int { default: 2, min: 0, max: 4 } },
+    Flag { key: "ui.site_icons", summary: "Show a site's own icon before each web link in an answer, fetched from the site when the link is on screen", kind: Kind::Bool(true) },
     Flag { key: "agent.flow_guard", summary: "Hold anything that would send private data to a wider audience until a person approves it", kind: Kind::Bool(true) },
     Flag { key: "audit.chain", summary: "Show whether the audit record's hash chain still holds", kind: Kind::Bool(true) },
 ];

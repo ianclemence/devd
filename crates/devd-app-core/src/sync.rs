@@ -569,7 +569,10 @@ pub fn related(domain: &str) -> &'static [&'static str] {
         "team" => &["chat", "inbox", "approval", "runs", "activity"],
         "approval" => &["inbox", "chat", "team"],
         "inbox" => &["approval"],
-        "git" => &["project", "review", "activity"],
+        // A write to a file changes what git says; a git command changes the files. A shell can change either.
+        "fs" => &["git", "project", "activity"],
+        "git" => &["fs", "project", "review", "activity"],
+        "terminal" => &["fs", "git", "project"],
         "project" | "stack" => &["git", "site", "todo", "activity"],
         "provider" | "models" | "model" => &["provider", "models", "health"],
         "environment" | "settings" => &["health", "session"],

@@ -18,7 +18,9 @@ path = "src/main.rs"
 devd-core = { workspace = true }
 devd-bootstrap = { path = "../devd-bootstrap" }
 devd-server = { path = "../devd-server" }
+devd-agent = { path = "../devd-agent" }
 devd-app-core = { path = "../devd-app-core" }
+devd-genui = { path = "../devd-genui" }
 
 gpui = "0.2.2"
 serde = { workspace = true }

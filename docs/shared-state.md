@@ -35,7 +35,7 @@ conflict and asks the person to reload and merge.
 right operation for an agent recording a finding; a simultaneous human edit still
 produces a conflict rather than a merge.
 
-Writes record the author (`human:http`, `agent:claude-code`, …) and update the
+Writes record the author (`human:http`, `agent:assistant`, …) and update the
 timestamp. There is no hidden authorship.
 
 ## Todos

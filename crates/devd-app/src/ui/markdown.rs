@@ -8,7 +8,7 @@ use std::ops::Range;
 
 use devd_app_core::markdown::{spans, Align, Block, Inline, Item, WidgetKind};
 use gpui::{
-    div, prelude::*, px, App, Div, ElementId, FontStyle, FontWeight, HighlightStyle, InteractiveText, MouseButton, SharedString,
+    canvas, div, prelude::*, px, App, Div, ElementId, FontStyle, FontWeight, HighlightStyle, InteractiveText, MouseButton, SharedString,
     StrikethroughStyle, StyledText, UnderlineStyle,
 };
 use serde_json::Value;
@@ -68,6 +68,7 @@ fn draw(id: &str, block: &Block, cx: &App) -> Div {
         Block::List { ordered, start, items } => list(id, *ordered, *start, items, cx),
         Block::Table { head, align, rows } => table(id, head, align, rows, cx),
         Block::Widget { kind, data } => widget(id, *kind, data, cx),
+        Block::Ui { tree, state } => super::genui::draw(id, tree.as_ref(), state, cx),
     }
 }
 
@@ -166,8 +167,41 @@ fn text(id: &str, inlines: &[Inline], cx: &App) -> impl IntoElement {
             _ => clean.push((range, style)),
         }
     }
-    let styles = clean;
+    let mut styles = clean;
     links.sort_by_key(|(r, _)| r.start);
+    // A web link gets the site's icon before it. Room for the icon is made in the text itself, and every
+    // range after it moves along; the link's own colour and underline start after the room.
+    let mut icons: Vec<(usize, String)> = Vec::new();
+    if super::favicon::enabled(cx) {
+        let mut points: Vec<(usize, String)> = links.iter().filter_map(|(r, l)| if let Link::Url(url) = l { super::favicon::host_of(url).map(|h| (r.start, h)) } else { None }).collect();
+        points.dedup_by_key(|(at, _)| *at);
+        if !points.is_empty() {
+            let link_ranges: Vec<Range<usize>> = links.iter().map(|(r, _)| r.clone()).collect();
+            let room = super::favicon::ROOM.len();
+            let before = |i: usize, inclusive: bool| points.iter().filter(|(p, _)| *p < i || (inclusive && *p == i)).count() * room;
+            let mut widened = String::with_capacity(content.len() + points.len() * room);
+            let mut last = 0;
+            for (at, host) in &points {
+                widened.push_str(&content[last..*at]);
+                widened.push_str(super::favicon::ROOM);
+                // Where the link's own text begins: the icon is painted just before it, wherever the line broke.
+                icons.push((widened.len(), host.clone()));
+                last = *at;
+            }
+            widened.push_str(&content[last..]);
+            let remap = |r: &Range<usize>| {
+                let is_link = link_ranges.contains(r);
+                r.start + before(r.start, is_link)..r.end + before(r.end, false)
+            };
+            for (r, _) in styles.iter_mut() {
+                *r = remap(r);
+            }
+            for (r, _) in links.iter_mut() {
+                *r = remap(r);
+            }
+            content = widened;
+        }
+    }
     let styled = StyledText::new(SharedString::from(content)).with_highlights(styles);
     let layout = styled.layout().clone();
     let ranges: Vec<Range<usize>> = links.iter().map(|(range, _)| range.clone()).collect();
@@ -177,7 +211,35 @@ fn text(id: &str, inlines: &[Inline], cx: &App) -> impl IntoElement {
     // text's layout; the element inside is kept for its pointing-hand cursor over a link.
     let hit = ranges.clone();
     let pointer = InteractiveText::new(ElementId::Name(id.to_string().into()), styled).on_click(ranges.clone(), |_, _, _| {});
-    div().min_w_0().on_mouse_up(MouseButton::Left, move |event, _window, cx| {
+    // Start the lookups now, so an icon is on its way even if the text has not been laid out yet.
+    for (_, host) in &icons {
+        let _ = super::favicon::lookup(host, cx);
+    }
+    // The icons are painted over the room made for them, once the text engine has said where that is.
+    let place = layout.clone();
+    let icon_layer = canvas(
+        move |_bounds, window, cx| {
+            let line = place.line_height();
+            let size = px(super::favicon::SIZE);
+            let mut tiles = Vec::new();
+            for (at, host) in &icons {
+                if let Some(pos) = place.position_for_index(*at) {
+                    let mut el = super::favicon::tile(host, cx).into_any_element();
+                    el.prepaint_as_root(gpui::point(pos.x - size - px(2.0), pos.y + (line - size) / 2.0), gpui::size(size, size).into(), window, cx);
+                    tiles.push(el);
+                }
+            }
+            tiles
+        },
+        |_bounds, mut tiles, window, cx| {
+            for tile in tiles.iter_mut() {
+                tile.paint(window, cx);
+            }
+        },
+    )
+    .absolute()
+    .size_full();
+    div().min_w_0().relative().on_mouse_up(MouseButton::Left, move |event, _window, cx| {
         if let Ok(at) = layout.index_for_position(event.position)
             && let Some(n) = hit.iter().position(|range| range.contains(&at))
         {
@@ -185,6 +247,7 @@ fn text(id: &str, inlines: &[Inline], cx: &App) -> impl IntoElement {
         }
     })
     .child(pointer)
+    .child(icon_layer)
 }
 
 fn code(id: &str, lang: &str, source: &str, cx: &App) -> Div {
@@ -250,8 +313,9 @@ fn table(id: &str, head: &[Vec<Inline>], align: &[Align], rows: &[Vec<Vec<Inline
     let cell = |inner: Div, column: usize| {
         let inner = inner.flex_1().min_w_0().px(px(10.0)).py(px(6.0));
         match align.get(column) {
-            Some(Align::End) => inner.flex().justify_end(),
-            Some(Align::Center) => inner.flex().justify_center(),
+            // Alignment is of the text, not of a box around it: a box that is itself a row squeezes a narrow column to nothing.
+            Some(Align::End) => inner.text_right(),
+            Some(Align::Center) => inner.text_center(),
             _ => inner,
         }
     };
@@ -277,12 +341,18 @@ fn table(id: &str, head: &[Vec<Inline>], align: &[Align], rows: &[Vec<Vec<Inline
 fn named(color: Option<&str>, cx: &App) -> gpui::Hsla {
     let t = theme(cx);
     match color.unwrap_or_default() {
-        "green" | "success" | "teal" => t.ok,
-        "red" | "error" | "pink" => t.danger,
-        "orange" | "yellow" | "warning" => t.warn,
+        "green" | "success" | "teal" | "ok" => t.ok,
+        "red" | "error" | "pink" | "danger" => t.danger,
+        "orange" | "yellow" | "warning" | "warn" => t.warn,
         "blue" | "info" | "violet" => t.info,
+        "muted" | "neutral" => t.muted,
         _ => t.accent,
     }
+}
+
+/// One of the declared visuals, for the components that share its drawing.
+pub(super) fn widget_node(id: &str, kind: WidgetKind, data: &Value, cx: &App) -> Div {
+    widget(id, kind, data, cx)
 }
 
 fn widget(id: &str, kind: WidgetKind, data: &Value, cx: &App) -> Div {

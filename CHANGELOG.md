@@ -10,6 +10,49 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [Unreleased]
+
+## [0.29.0] - 2026-11-13 - A page for every project, a terminal and a browser beside the assistant
+
+### Projects
+
+- **A project has its own page**, with a tab for everything you do in it: Overview, Files, Git (changes, history, branches, stashes, tags, remotes, worktrees, recovery), Run, Terminal and Team. Every control is a capability call, the same ones the assistant uses, so a change either of you makes shows on the other's screen at once.
+- **Files opens and edits.** A tree that opens folders as you ask, a viewer with line numbers, Markdown drawn as a document (with a Source toggle), and an editor with Tab and Shift+Tab, automatic indentation, a gutter, Ctrl+S, and an Unsaved/Saved mark. Saving keeps a file's line endings and final newline exactly; a file with mixed line endings is shown but not opened for editing, and says why.
+- New file, rename and delete from the tree. Delete asks first.
+- Staging, committing, discarding, switching branches, stashing, fetching, pulling and pushing from the window, with diffs.
+
+### The assistant's panels
+
+- **A browser and a terminal beside the conversation.** A strip at the edge of the assistant opens each; both can be open, the browser above the terminal. Each has its own tabs, a button for another, and a way to close it.
+- **The terminal is a real shell inside devd.** Open as many as you like, type into them, paste, and leave and come back: they stay open. The assistant can read what a terminal shows but only you can type into one. The Terminal tab of a project shows the same shells.
+- **The browser is the one the assistant uses.** A page it opens appears here (the panel opens by itself); you can load an address, go back and forward, reload, click, scroll and type on the page, and see the console, the requests and the page as the assistant reads it. It starts only when asked for.
+- `browser.status` says whether the browser is running without starting it. A browser left behind by an earlier devd no longer stops the next one from opening, and closing the window closes the browser it started.
+- `project.terminal` takes a size, so a shell opens as wide as the panel that shows it.
+
+### Looks
+
+- The Intelligence screen has a brain icon.
+- Tools, runtimes, databases, services and stacks show their own marks (PHP, Node.js, Go, MariaDB, Redis, nginx, Composer and many more) on the Server, Runtimes, Tools, new-project and connect pages; one with no mark gets its initial.
+- Hub pages gain "Open project" and "Open folder".
+
+### The assistant can draw
+
+- **Answers can contain real tables, charts, metrics, steps, timelines, notices and buttons** instead of describing them, in the same way Vercel's json-render lets an agent write a spec the chat renders. The assistant writes a fenced `devd-ui` block; the window draws it from a fixed catalog (`devd-genui`), as it arrives, in every theme. See [docs/generative-ui.md](docs/generative-ui.md).
+- **A drawing that does not check is sent back** to the model with each problem, once or twice, so it writes it again; the transcript says so. Part of a finished spec that still cannot be drawn is left out with a short note, and the rest is shown.
+- **Buttons the assistant draws never act on their own.** A button can reply, open a devd page or file, or run a real capability; running shows what will run, with its kind and arguments, and asks first unless it only reads.
+- Right-aligned Markdown table columns no longer collapse to a sliver (a numeric column's header wrapped one letter per line).
+- Flags `agent.draw`, `agent.draw_fixes` and `ui.site_icons`.
+
+### Site icons before links
+
+- A web link in an answer starts with the site's own icon, fetched from the site through devd's guarded fetch rather than a third-party icon service, kept on disk, and shown as a letter tile until it arrives or when a site has none. Local and private addresses get a globe and are never looked up.
+- `docs.fetch` and `web.open` followed no redirects at all (the HTTP library hands a `307` back as a response, not an error, so an empty body was accepted). Redirects are now followed, each hop re-checked as before.
+
+### Themes
+
+- **Five themes, each with its own name and its own background scene**, replacing three themes in two forms: Sling, Dawn and Psalm for the evening, Sharon and Daybreak for the day. Each background is a noise-driven dither that fades at its edges (ripples, dawn over hills, folds of silk, a rose-tinted map, rays of morning light). Settings shows each as a small window in its own colours. A choice saved by an earlier window opens the matching theme.
+- The + menu in the message box starts each row with an icon, a `/` or an `@`, and opens below the box on Home.
+
 ## [0.28.0] - 2026-11-12 - The native window, and an assistant that checks itself
 
 This release replaces the web-view window with a native one, drawn on the GPU and with no browser inside it, and adds packages for macOS and Linux for the first time. The assistant is also held to account before it stops, and the record of what it did can show whether it was changed.

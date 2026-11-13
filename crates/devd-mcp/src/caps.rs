@@ -456,7 +456,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         )?;
 
     reg.define::<AddArgs>("mcp.add", "Connect to another program's MCP server")
-        .description("Adds a Model Context Protocol server for the assistant to use, the way Claude Code connects to the servers configured for it. A stdio server is a program devd starts and speaks JSON-RPC to; an http server is a Streamable HTTP endpoint. The environment is stored in an owner-only file, never in the database; a secret belongs in `env`, not in `args` (arguments are stored in the database and are redacted, not hidden, in the list). `trust` decides what agents may do with its tools: ask (default) makes every agent call wait for a person, allow lets them run, deny hides them. Human only: this decides which programs devd runs.")
+        .description("Adds a Model Context Protocol server for the assistant to use, the way an MCP client connects to the servers configured for it. A stdio server is a program devd starts and speaks JSON-RPC to; an http server is a Streamable HTTP endpoint. The environment is stored in an owner-only file, never in the database; a secret belongs in `env`, not in `args` (arguments are stored in the database and are redacted, not hidden, in the list). `trust` decides what agents may do with its tools: ask (default) makes every agent call wait for a person, allow lets them run, deny hides them. Human only: this decides which programs devd runs.")
         .group("mcp")
         .tier(Tier::Write)
         .effect(Effect::Config)

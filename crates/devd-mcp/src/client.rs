@@ -2,7 +2,7 @@
 //!
 //! The server side of MCP (this crate's [`crate::McpServer`]) lets an outside agent drive devd. This
 //! module is the other direction, and it is the feature the product asked for: the assistant can use
-//! the tools of an MCP server configured here, the way Claude Code uses the servers configured for it.
+//! the tools of an MCP server configured here, the way any MCP client uses the servers configured for it.
 //!
 //! # What is trusted, and what is not
 //!

@@ -93,7 +93,7 @@ pub fn find(id: &str) -> Option<&'static Page> {
 /// The area a route is in, when it has pages behind it.
 pub fn area_of(route: &Route) -> Option<Area> {
     match route {
-        Route::Projects(_) => Some(Area::Projects),
+        Route::Projects(_) | Route::Project(..) => Some(Area::Projects),
         Route::Sites(_) => Some(Area::Sites),
         Route::Team => Some(Area::Team),
         Route::Server => Some(Area::Server),

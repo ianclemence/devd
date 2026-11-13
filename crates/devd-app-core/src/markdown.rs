@@ -37,6 +37,19 @@ pub enum Block {
     Rule,
     /// A structured block the window draws as a visual.
     Widget { kind: WidgetKind, data: Value },
+    /// A spec the assistant wrote, drawn from the catalog in `devd-genui`.
+    Ui { tree: Option<devd_genui::Node>, state: UiState },
+}
+
+/// How far a `devd-ui` block has got.
+#[derive(Debug, Clone, PartialEq)]
+pub enum UiState {
+    /// Still being written: what has arrived is drawn, and the rest is on its way.
+    Writing,
+    /// Finished and valid.
+    Done,
+    /// Finished but wrong. What could be drawn is drawn, and the problems are kept.
+    Broken(Vec<devd_genui::Issue>),
 }
 
 /// One entry of a list.
@@ -172,8 +185,9 @@ fn blocks(lines: &[&str]) -> Vec<Block> {
                 body.push(strip_indent(lines[i], indent));
                 i += 1;
             }
+            let closed = i < lines.len();
             i += 1; // the closing fence, or the end of what has arrived
-            out.push(code_or_widget(lang, body.join("\n")));
+            out.push(code_or_widget(lang, body.join("\n"), closed));
             continue;
         }
         // Heading.
@@ -283,7 +297,10 @@ fn strip_indent(line: &str, indent: usize) -> &str {
     &line[leading.min(indent)..]
 }
 
-fn code_or_widget(lang: &str, text: String) -> Block {
+fn code_or_widget(lang: &str, text: String, closed: bool) -> Block {
+    if lang == devd_genui::FENCE {
+        return ui_block(lang, text, closed);
+    }
     let kind = match lang {
         "chart" => Some(WidgetKind::Chart),
         "metrics" => Some(WidgetKind::Metrics),
@@ -300,6 +317,22 @@ fn code_or_widget(lang: &str, text: String) -> Block {
         }
     }
     Block::Code { lang: lang.to_string(), text }
+}
+
+/// A `devd-ui` block: drawn from the catalog, as far as it has arrived and checks. A finished block that
+/// is not JSON at all is shown as the code it is, so bad output is seen rather than lost.
+fn ui_block(lang: &str, text: String, closed: bool) -> Block {
+    if !closed {
+        let tree = devd_genui::parse_partial(&text).and_then(|v| devd_genui::draft(&v));
+        return Block::Ui { tree, state: UiState::Writing };
+    }
+    let Ok(value) = serde_json::from_str::<Value>(&text) else {
+        return Block::Code { lang: lang.to_string(), text };
+    };
+    match devd_genui::check(&value) {
+        Ok(tree) => Block::Ui { tree: Some(tree), state: UiState::Done },
+        Err(issues) => Block::Ui { tree: devd_genui::draft(&value), state: UiState::Broken(issues) },
+    }
 }
 
 fn heading(trimmed: &str) -> Option<(u8, &str)> {
@@ -836,5 +869,45 @@ mod tests {
     fn hard_breaks() {
         let doc = parse("one  \ntwo\\\nthree");
         assert_eq!(doc[0], Block::Paragraph(vec![text("one"), Inline::Break, text("two"), Inline::Break, text("three")]));
+    }
+
+    #[test]
+    fn a_devd_ui_block_is_drawn_as_far_as_it_has_arrived() {
+        let whole = r#"{"type":"Card","props":{"title":"T"},"children":[{"type":"Text","props":{"text":"hello"}}]}"#;
+        // Finished and valid.
+        let done = parse(&format!("before
+
+```devd-ui
+{whole}
+```
+
+after"));
+        assert!(matches!(&done[1], Block::Ui { tree: Some(t), state: UiState::Done } if t.children.len() == 1), "{done:?}");
+        assert_eq!(done.len(), 3, "the text around it is still there");
+        // Still being written: what has arrived is drawn.
+        let writing = parse(&format!("```devd-ui
+{}", &whole[..whole.len() - 20]));
+        assert!(matches!(&writing[0], Block::Ui { tree: Some(_), state: UiState::Writing }), "{writing:?}");
+        // Not even a root yet.
+        assert!(matches!(&parse("```devd-ui
+{\"ty")[0], Block::Ui { tree: None, state: UiState::Writing }));
+    }
+
+    #[test]
+    fn a_wrong_devd_ui_block_keeps_what_can_be_drawn_and_says_what_is_wrong() {
+        let wrong = r#"{"type":"Card","props":{"title":"T"},"children":[{"type":"Text","props":{"text":"ok"}},{"type":"Gauge"}]}"#;
+        match &parse(&format!("```devd-ui
+{wrong}
+```"))[0] {
+            Block::Ui { tree: Some(tree), state: UiState::Broken(issues) } => {
+                assert_eq!(tree.children.len(), 1, "the good part is drawn");
+                assert!(issues[0].message.contains("not a component"));
+            }
+            other => panic!("{other:?}"),
+        }
+        // Not JSON at all: shown as the code it is.
+        assert!(matches!(&parse("```devd-ui
+not json
+```")[0], Block::Code { .. }));
     }
 }

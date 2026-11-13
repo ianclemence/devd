@@ -164,6 +164,9 @@ impl Manager {
         };
         let profile = root.join("browser").join("profile");
         std::fs::create_dir_all(&profile)?;
+        // A browser a crashed or killed devd left behind still holds the profile, and a second one on the same
+        // profile never opens its own DevTools port.
+        kill_orphans(&profile);
         let (mut child, websocket) = launch(&exe, &profile)?;
         // Prove the port answers before the WebSocket handshake, so a failure
         // names the address rather than a generic "connection closed".
@@ -616,6 +619,30 @@ fn find_browser() -> Result<PathBuf> {    if let Ok(explicit) = std::env::var("D
         })
 }
 
+/// Stop any browser still running on this profile from an earlier devd.
+fn kill_orphans(profile: &Path) {
+    let marker = format!("--user-data-dir={}", profile.display());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let script = format!(
+            "Get-CimInstance Win32_Process | Where-Object {{ $_.CommandLine -and $_.CommandLine.Contains('{}') }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}",
+            marker.replace('\'', "''")
+        );
+        let _ = Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .creation_flags(0x0800_0000)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = Command::new("pkill").args(["-f", &marker]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status();
+    }
+}
+
 fn launch(exe: &Path, profile: &Path) -> Result<(Child, String)> {
     let mut command = Command::new(exe);
     command
@@ -742,6 +769,19 @@ pub fn tabs_open(root: &Path, url: Option<&str>) -> Result<Value> {
     let id = m.open_tab(url)?;
     let (url, title) = m.current(&id)?;
     Ok(json!({ "state": "ok", "tab": id, "url": url, "title": title, "focused": m.focused }))
+}
+
+/// Whether the browser is running and which tabs it holds, without starting it or touching a page.
+///
+/// The window shows this before anything else: asking `tabs_list` would launch Chromium just to say it was empty.
+pub fn status() -> Value {
+    let m = lock();
+    let tabs: Vec<Value> = m
+        .tabs
+        .iter()
+        .map(|(id, t)| json!({ "id": id, "url": t.url, "title": t.title, "favicon": t.favicon, "focused": m.focused.as_deref() == Some(id) }))
+        .collect();
+    json!({ "running": m.cdp.is_some(), "focused": m.focused, "tabs": tabs })
 }
 
 pub fn tabs_list(root: &Path) -> Result<Value> {

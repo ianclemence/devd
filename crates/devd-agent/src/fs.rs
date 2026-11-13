@@ -24,6 +24,8 @@ use devd_core::{DevdError, Result};
 use devd_stacks::authz;
 
 const MAX_READ_BYTES: u64 = 2_000_000;
+/// The largest file an editor opens whole.
+const MAX_EDIT_BYTES: u64 = 1_000_000;
 const MAX_WRITE_BYTES: usize = 2_000_000;
 pub(crate) const SKIP_DIRS: &[&str] = &[
     ".git",
@@ -340,6 +342,44 @@ pub fn read(ctx: &Ctx, path: &str, offset: usize, limit: usize) -> Result<Value>
         "to_line": end,
         "truncated": end < lines.len(),
         "content": body.join("\n"),
+    }))
+}
+
+/// A file's text exactly as it is on disk, for an editor: no line numbers, no cut, and the facts a faithful save
+/// needs, the style of its line endings and whether it ends with one.
+///
+/// Anything an editor could not give back unchanged is refused rather than approximated: a file that is not valid
+/// UTF-8 (reading it as text would replace bytes), a binary file, and one over the size a person edits by hand.
+/// A secrets file is refused as it is by [`read`].
+pub fn read_exact(ctx: &Ctx, path: &str) -> Result<Value> {
+    let p = authorize(ctx, path, false)?;
+    let meta = std::fs::metadata(&p).map_err(|_| DevdError::not_found(format!("{} does not exist", p.display())))?;
+    if !meta.is_file() {
+        return Err(DevdError::invalid(format!("{} is not a file; use fs.list", p.display())));
+    }
+    if meta.len() > MAX_EDIT_BYTES {
+        return Err(DevdError::invalid(format!("{} is {} bytes, more than the {} an editor opens. Read a part of it with offset and limit.", p.display(), meta.len(), MAX_EDIT_BYTES)));
+    }
+    let bytes = std::fs::read(&p)?;
+    if looks_binary(&bytes) {
+        return Err(DevdError::invalid(format!("{} looks like a binary file", p.display())));
+    }
+    let text = String::from_utf8(bytes).map_err(|_| DevdError::invalid(format!("{} is not valid UTF-8 text, so it cannot be edited here without changing it", p.display())))?;
+    let crlf = text.matches("\r\n").count();
+    let lf = text.matches('\n').count() - crlf;
+    let eol = match (crlf, lf) {
+        (0, 0) => "none",
+        (_, 0) => "crlf",
+        (0, _) => "lf",
+        _ => "mixed",
+    };
+    Ok(json!({
+        "path": p.display().to_string(),
+        "text": text,
+        "bytes": text.len(),
+        "lines": text.lines().count(),
+        "eol": eol,
+        "final_newline": text.ends_with('\n'),
     }))
 }
 
@@ -951,5 +991,41 @@ fn c() { 3(); }
         // line behind that refusal.
         let secret = proj.join(".env").display().to_string();
         assert_eq!(write(&c, &secret, "API_KEY=2", false).unwrap_err().code(), "permission_denied");
+    }
+
+    #[test]
+    fn an_exact_read_gives_back_what_is_on_disk_so_a_save_changes_nothing_else() {
+        let d = tempfile::tempdir().unwrap();
+        let proj = d.path().join("www/proj");
+        std::fs::create_dir_all(&proj).unwrap();
+        let c = ctx(d.path(), Actor::human(Surface::Cli));
+        for (name, text, eol, final_newline) in [("lf.txt", "one\ntwo\n", "lf", true), ("crlf.txt", "one\r\ntwo\r\n", "crlf", true), ("nonl.txt", "one\ntwo", "lf", false), ("mixed.txt", "a\r\nb\nc", "mixed", false), ("one.txt", "single", "none", false), ("empty.txt", "", "none", false), ("utf8.txt", "caf\u{e9} \u{1f600}\n", "lf", true)] {
+            let file = proj.join(name);
+            std::fs::write(&file, text).unwrap();
+            let got = read_exact(&c, file.to_str().unwrap()).unwrap();
+            assert_eq!(got["text"], text, "{name}");
+            assert_eq!(got["eol"], eol, "{name}");
+            assert_eq!(got["final_newline"], final_newline, "{name}");
+            // Writing the text back is a no-op on disk.
+            write(&c, file.to_str().unwrap(), got["text"].as_str().unwrap(), false).unwrap();
+            assert_eq!(std::fs::read(&file).unwrap(), text.as_bytes(), "{name} changed when it was saved unedited");
+        }
+    }
+
+    #[test]
+    fn an_exact_read_refuses_what_an_editor_could_not_give_back_unchanged() {
+        let d = tempfile::tempdir().unwrap();
+        let proj = d.path().join("www/proj");
+        std::fs::create_dir_all(&proj).unwrap();
+        let c = ctx(d.path(), Actor::human(Surface::Cli));
+        std::fs::write(proj.join("latin1.txt"), [b'c', b'a', b'f', 0xe9]).unwrap();
+        std::fs::write(proj.join("bin.dat"), [1u8, 0, 2, 3]).unwrap();
+        std::fs::write(proj.join(".env"), "KEY=1").unwrap();
+        std::fs::write(proj.join("big.txt"), vec![b'x'; (MAX_EDIT_BYTES + 1) as usize]).unwrap();
+        for name in ["latin1.txt", "bin.dat", ".env", "big.txt", "missing.txt"] {
+            assert!(read_exact(&c, proj.join(name).to_str().unwrap()).is_err(), "{name} was read");
+        }
+        assert!(read_exact(&c, proj.to_str().unwrap()).is_err(), "a folder is not a file");
+        assert!(format!("{}", read_exact(&c, proj.join("latin1.txt").to_str().unwrap()).unwrap_err()).contains("not valid UTF-8"));
     }
 }

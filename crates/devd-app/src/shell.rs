@@ -79,6 +79,17 @@ pub fn bind_keys(cx: &mut App) {
         // Tab moves between the fields of a dialog, as every dialog should.
         KeyBinding::new("tab", FocusNext, Some("Shell")),
         KeyBinding::new("shift-tab", FocusPrev, Some("Shell")),
+        // A shell is typed into: the keys the frame would take for itself belong to the program in it.
+        KeyBinding::new("tab", gpui::NoAction, Some("Terminal")),
+        KeyBinding::new("shift-tab", gpui::NoAction, Some("Terminal")),
+        KeyBinding::new("enter", gpui::NoAction, Some("Terminal")),
+        KeyBinding::new("escape", gpui::NoAction, Some("Terminal")),
+        KeyBinding::new("secondary-k", gpui::NoAction, Some("Terminal")),
+        KeyBinding::new("secondary-p", gpui::NoAction, Some("Terminal")),
+        KeyBinding::new("secondary-n", gpui::NoAction, Some("Terminal")),
+        KeyBinding::new("secondary-r", gpui::NoAction, Some("Terminal")),
+        KeyBinding::new("secondary-[", gpui::NoAction, Some("Terminal")),
+        KeyBinding::new("secondary-]", gpui::NoAction, Some("Terminal")),
         KeyBinding::new("up", PaletteUp, Some("Palette")),
         KeyBinding::new("down", PaletteDown, Some("Palette")),
     ]);
@@ -94,7 +105,8 @@ pub fn commands() -> Commands {
             Route::Inbox => "Approvals, questions and proposals waiting for a decision",
             Route::Assistant(_) => "Conversations with devd",
             Route::Runs(_) => "Team runs: plans, tasks and evidence",
-            Route::Projects(_) => "Every project devd knows",
+            Route::Projects(None) => "Every project devd knows",
+            Route::Projects(Some(_)) | Route::Project(..) => "One project: its files, its git, what it runs",
             Route::Sites(_) => "Addresses, HTTPS and what serves them",
             Route::Team => "The roster: who does what, and what each must prove",
             Route::Server => "Services, runtimes and health",
@@ -171,6 +183,12 @@ pub struct Shell {
     pub activity_reads: bool,
     /// The dialog on screen: a confirmation, a form, or one thing in full.
     pub modal: Option<screens::modal::Modal>,
+    /// What the page of the project on screen remembers.
+    pub project_ui: screens::project::ProjectUi,
+    /// The shared browser page.
+    pub browser_ui: screens::browser::BrowserUi,
+    /// The assistant's side pane: shells and the browser.
+    pub pane: screens::pane::PaneUi,
     _watch: Subscription,
 }
 
@@ -193,6 +211,7 @@ impl Shell {
             InputEvent::Up => this.compose_step(-1, cx),
             InputEvent::Down => this.compose_step(1, cx),
             InputEvent::Cancelled => this.compose_cancel(cx),
+            InputEvent::Saved => {}
         });
         let focus = cx.focus_handle();
         window.focus(&focus);
@@ -214,6 +233,9 @@ impl Shell {
             role_form,
             activity_reads: false,
             modal: None,
+            project_ui: screens::project::ProjectUi::default(),
+            browser_ui: screens::browser::BrowserUi::default(),
+            pane: screens::pane::PaneUi::default(),
             history: History::new(start),
             focus,
             commands: commands(),
@@ -246,13 +268,31 @@ impl Shell {
     }
 
     /// Tell the room where the person is, so agents can know what they are looking at.
-    fn present(&self, cx: &mut Context<Self>) {
+    pub(crate) fn present(&self, cx: &mut Context<Self>) {
         use devd_app_core::presence::{Doing, Place, Presence, Who};
         let route = self.history.current().clone();
-        let place = Place { screen: Some(route.path()), thread: matches!(route, Route::Assistant(_)).then(|| route.selection().map(str::to_string)).flatten(), ..Place::default() };
+        // On a project's page, which project and which file, change or commit has been picked.
+        let (project, file, detail) = self.project_ui.looking_at(&route);
+        // What is open beside the conversation is part of what the person is looking at.
+        let mut panels = Vec::new();
+        if self.pane.browser {
+            panels.push(match self.browser_ui.looking_at() {
+                Some(url) => format!("the browser panel is open on {url}"),
+                None => "the browser panel is open".to_string(),
+            });
+        }
+        if self.pane.terminal {
+            panels.push("the terminal panel is open (terminal.list and terminal.read show it)".to_string());
+        }
+        let detail = match (detail, panels.is_empty()) {
+            (d, true) => d,
+            (Some(d), false) => Some(format!("{d}; {}", panels.join("; "))),
+            (None, false) => Some(panels.join("; ")),
+        };
+        let place = Place { screen: Some(route.path()), thread: matches!(route, Route::Assistant(_)).then(|| route.selection().map(str::to_string)).flatten(), project, file, ..Place::default() };
         cx.global_mut::<Devd>().room.seen("you", Presence { who: Who::You, place, doing: Doing::Viewing }, std::time::Instant::now());
         // So an agent asking "what is the person looking at?" gets an answer.
-        devd(cx).sync.mutate(Mutation::new("app.report", json!({ "route": route.path() })));
+        devd(cx).sync.mutate(Mutation::new("app.report", json!({ "route": route.path(), "detail": detail })));
     }
 
     /// Run a command by id. The rail, the keys, the menu and an agent all end here.
@@ -370,6 +410,7 @@ impl Shell {
             }
             InputEvent::Submitted => this.choose(None, window, cx),
             InputEvent::Cancelled => this.close_palette(window, cx),
+            InputEvent::Saved => {}
             InputEvent::Up | InputEvent::Down => {}
         });
         window.focus(&input.focus_handle(cx));
@@ -608,7 +649,7 @@ impl Shell {
                 .peek(&q::runs())
                 .and_then(|s| s.list("").iter().find(|r| r["id"] == json!(selection)).and_then(|r| r["title"].as_str().map(str::to_string)))
                 .unwrap_or_else(|| "Run".into()),
-            Route::Projects(_) => ui::leaf(selection).to_string(),
+            Route::Projects(_) | Route::Project(..) => ui::leaf(selection).to_string(),
             _ => selection.to_string(),
         }
     }
@@ -906,9 +947,21 @@ impl Render for Shell {
             }
         }
         // An agent asked to show the person something.
-        if let Some(route) = cx.global_mut::<Devd>().pending_go.take().and_then(|r| Route::parse(&r)) {
-            self.history.go(route);
+        if let Some(wanted) = cx.global_mut::<Devd>().pending_go.take() {
+            // The browser and the terminal are panes of the assistant's screen.
+            match wanted.trim_matches('/') {
+                "browser" => self.pane.show(screens::pane::Tab::Browser),
+                "terminal" => self.pane.show(screens::pane::Tab::Terminal),
+                _ => {}
+            }
+            if let Some(route) = Route::parse(&wanted) {
+                self.history.go(route);
+            }
             self.present(cx);
+        }
+        // A button the assistant drew was pressed.
+        for act in std::mem::take(&mut cx.global_mut::<Devd>().pending_ui) {
+            self.ui_action(act, window, cx);
         }
         let t = theme(cx).clone();
         let screen = match self.history.current().clone() {
@@ -916,7 +969,9 @@ impl Render for Shell {
             Route::Assistant(thread) => screens::assistant::render(self, thread, window, cx),
             Route::Inbox => screens::lists::inbox(self, cx),
             Route::Runs(run) => screens::lists::runs(self, run, cx),
-            Route::Projects(_) => screens::lists::projects(self, cx),
+            Route::Projects(None) => screens::lists::projects(self, cx),
+            Route::Projects(Some(dir)) => screens::project::render(self, dir, devd_app_core::project::ProjectTab::Overview, cx),
+            Route::Project(dir, tab) => screens::project::render(self, dir, tab, cx),
             Route::Sites(_) => screens::lists::sites(self, cx),
             Route::Server => screens::lists::server(self, cx),
             Route::Intelligence => screens::intelligence::render(self, cx),

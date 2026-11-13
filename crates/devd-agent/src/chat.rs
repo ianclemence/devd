@@ -1162,8 +1162,11 @@ impl Hub {
         } else {
             format!("\n## What devd remembers\n{remembered}\n")
         };
+        // How to draw a table, a chart or a choice instead of describing it. Generated from the same
+        // catalog the window draws and checks against, so what the model is told cannot drift from it.
+        let drawing = if devd_core::flags::on(&self.ctx.store, "agent.draw") { format!("\n\n{}", devd_genui::prompt()) } else { String::new() };
         format!(
-            "{PROMPT}\n{COMMON_CALLS}\n\n{}\n\n## Skills\n{}\n## Context\nToday is {}.\n{}\n{}{}",
+            "{PROMPT}\n{COMMON_CALLS}\n\n{}{drawing}\n\n## Skills\n{}\n## Context\nToday is {}.\n{}\n{}{}",
             crate::skills::CORE,
             crate::skills::index_for(&self.ctx.paths, None),
             &util::now()[..10],
@@ -1214,6 +1217,7 @@ impl Hub {
         let mut continuing = false;
         // End-of-turn objections made for this prompt: see `gate`.
         let mut objections_used = 0usize;
+        let mut drawings_sent_back = 0usize;
         for turn in 0..MAX_TURNS {
             let durable_stop = self
                 .ctx
@@ -1564,6 +1568,10 @@ impl Hub {
                     continue;
                 }
                 let _ = self.ctx.store.finish_step(&step.id, "completed", None);
+                // A drawing that cannot be drawn is sent back once or twice with what is wrong with it.
+                if self.fix_drawings(tid, &response.content, &mut drawings_sent_back)? {
+                    continue;
+                }
                 // The model saying it is done is not evidence either: ask before letting the turn end.
                 if self.end_gate(tid, &run_id, &mut objections_used, &hooks)? {
                     continue;
@@ -1950,6 +1958,29 @@ impl Hub {
         crate::flow::sink(cap, args)?;
         let events = self.ctx.store.list_events(tid, 0, 100_000).ok()?;
         crate::flow::check(&crate::flow::Flow::replay(&events), cap, args)
+    }
+
+    /// Check the drawings in what the model just wrote. True when it was sent back to write them again.
+    ///
+    /// A `devd-ui` block that does not check is shown as far as it can be, with a line saying part of it was left
+    /// out. Before that happens the model is told each problem, in the words of `devd_genui::correction`, and
+    /// writes the answer again: the same loop Vercel's chat SDK runs when a spec throws `CardSpecError`.
+    fn fix_drawings(&self, tid: &str, content: &[Value], used: &mut usize) -> Result<bool> {
+        if !devd_core::flags::on(&self.ctx.store, "agent.draw") {
+            return Ok(false);
+        }
+        let text: String = content.iter().filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join("\n");
+        let issues = devd_genui::problems(&text);
+        if issues.is_empty() {
+            return Ok(false);
+        }
+        let budget = devd_core::flags::number(&self.ctx.store, "agent.draw_fixes").max(0) as usize;
+        if *used >= budget {
+            return Ok(false);
+        }
+        *used += 1;
+        self.log(tid, "user", json!({ "text": devd_genui::correction(&issues), "from": "devd", "drawing": true, "problems": issues.len() }))?;
+        Ok(true)
     }
 
     /// How many times a turn may be sent back: the flags `agent.end_gate` and `agent.stop_budget`.

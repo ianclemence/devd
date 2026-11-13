@@ -4530,7 +4530,7 @@
         ? '<div class="panel"><div class="panel-body stack">' +
           '<div class="inline"><input class="input grow" id="todo-title" placeholder="What needs doing?">' +
           '<select class="select" id="todo-priority"><option value="normal">normal</option><option value="high">high</option><option value="urgent">urgent</option><option value="low">low</option></select></div>' +
-          '<input class="input" id="todo-assignee" placeholder="Assignee (optional, e.g. agent:opencode)">' +
+          '<input class="input" id="todo-assignee" placeholder="Assignee (optional, e.g. agent:reviewer)">' +
           '<div class="inline"><button type="button" class="btn btn-primary" data-action="todo-create">Create todo</button>' +
           '<button type="button" class="btn btn-ghost" data-action="todo-cancel">Cancel</button></div></div></div>'
         : "";

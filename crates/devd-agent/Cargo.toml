@@ -7,6 +7,7 @@ description = "devd's built-in agent: model providers, the official model catalo
 
 [dependencies]
 devd-core = { path = "../devd-core" }
+devd-genui = { path = "../devd-genui" }
 devd-mcp = { path = "../devd-mcp" }
 devd-stacks = { path = "../devd-stacks" }
 devd-git = { path = "../devd-git" }

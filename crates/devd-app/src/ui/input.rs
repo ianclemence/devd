@@ -20,7 +20,7 @@ use devd_app_core::spell::Dictionary;
 use gpui::{
     actions, div, fill, point, prelude::*, px, relative, size, App, Bounds, ClipboardItem, Context, CursorStyle, ElementId,
     ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, KeyBinding,
-    LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ShapedLine, SharedString,
+    LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ScrollHandle, ShapedLine, SharedString,
     Style, TextRun, UTF16Selection, UnderlineStyle, Window,
 };
 use unicode_segmentation::*;
@@ -52,6 +52,9 @@ actions!(
         Up,
         Down,
         FixSpelling,
+        Indent,
+        Outdent,
+        Save,
     ]
 );
 
@@ -64,6 +67,8 @@ pub enum InputEvent {
     Submitted,
     /// Escape was pressed.
     Cancelled,
+    /// Ctrl+S (Cmd+S on a Mac) was pressed in a code field.
+    Saved,
     /// The up arrow was pressed while the field is steered by a menu.
     Up,
     /// The down arrow was pressed while the field is steered by a menu.
@@ -103,6 +108,9 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("escape", Cancel, context),
         KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, context),
     ]);
+    // Only a field made with `.code()` answers to these: elsewhere Tab still moves to the next field.
+    let code = Some("CodeInput");
+    cx.bind_keys([KeyBinding::new("tab", Indent, code), KeyBinding::new("shift-tab", Outdent, code), KeyBinding::new("secondary-s", Save, code)]);
 }
 
 /// A text field.
@@ -128,6 +136,12 @@ pub struct TextInput {
     steered: bool,
     /// Files and addresses in the text are underlined and open on Ctrl+click.
     linking: bool,
+    /// An editor for code: Enter keeps the indentation, Tab indents, nothing is clipped, and the view follows the cursor.
+    code: bool,
+    /// What scrolls the field, so it can bring the cursor into view.
+    scroller: Option<ScrollHandle>,
+    /// Where the cursor was when the view was last brought to it, so a person who scrolls away is left there.
+    viewed_cursor: Option<usize>,
 }
 
 impl TextInput {
@@ -150,7 +164,39 @@ impl TextInput {
             secret: false,
             steered: false,
             linking: false,
+            code: false,
+            scroller: None,
+            viewed_cursor: None,
         }
+    }
+
+    /// Make this an editor for code, scrolled by `scroller`. It shows every line (the parent scrolls it), Enter starts a line
+    /// at the indentation of the one above, Tab and Shift+Tab indent and outdent, and Ctrl+S says it was saved.
+    pub fn code(mut self, scroller: ScrollHandle) -> Self {
+        self.code = true;
+        self.multiline = Some(usize::MAX / 4);
+        self.scroller = Some(scroller);
+        self
+    }
+
+    /// Replace the text and put the cursor at its start, as when a file is opened.
+    pub fn load(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
+        self.content = text.into();
+        self.selected_range = 0..0;
+        self.selection_reversed = false;
+        self.marked_range = None;
+        self.viewed_cursor = None;
+        cx.notify();
+    }
+
+    /// The text's widest line in characters, for a field that must be as wide as its text.
+    pub fn widest_line(&self) -> usize {
+        self.content.split('\n').map(|l| l.chars().count()).max().unwrap_or(0)
+    }
+
+    /// How many lines the text has.
+    pub fn line_count(&self) -> usize {
+        self.content.split('\n').count()
     }
 
     /// Underline the files and addresses typed or pasted here; Ctrl+click (Cmd on a Mac) opens one.
@@ -214,8 +260,73 @@ impl TextInput {
         self.set_text("", cx);
     }
 
-    fn submit(&mut self, _: &Submit, _: &mut Window, cx: &mut Context<Self>) {
+    fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
+        if self.code {
+            // A new line, as indented as the one it follows.
+            let cursor = self.cursor_offset();
+            let line_start = self.content[..cursor].rfind('\n').map(|i| i + 1).unwrap_or(0);
+            let indent: String = self.content[line_start..cursor].chars().take_while(|c| *c == ' ' || *c == '\t').collect();
+            return self.replace_text_in_range(None, &format!("\n{indent}"), window, cx);
+        }
         cx.emit(InputEvent::Submitted);
+    }
+
+    /// Tab in a code field: four spaces at the cursor, or at the start of every line a selection touches.
+    fn indent(&mut self, _: &Indent, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.code {
+            return cx.propagate();
+        }
+        let range = self.selected_range.clone();
+        if range.is_empty() || !self.content[range.clone()].contains('\n') {
+            return self.replace_text_in_range(None, "    ", window, cx);
+        }
+        let start = self.content[..range.start].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        let block = &self.content[start..range.end];
+        let indented: String = block.split('\n').map(|l| if l.is_empty() { l.to_string() } else { format!("    {l}") }).collect::<Vec<_>>().join("\n");
+        let added = indented.len() - block.len();
+        let mut next = String::with_capacity(self.content.len() + added);
+        next.push_str(&self.content[..start]);
+        next.push_str(&indented);
+        next.push_str(&self.content[range.end..]);
+        self.content = next.into();
+        self.selected_range = range.start + 4..range.end + added;
+        self.marked_range = None;
+        cx.emit(InputEvent::Changed);
+        cx.notify();
+    }
+
+    /// Shift+Tab in a code field: up to four spaces off the start of the line, or of every line a selection touches.
+    fn outdent(&mut self, _: &Outdent, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.code {
+            return cx.propagate();
+        }
+        let range = self.selected_range.clone();
+        let start = self.content[..range.start].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        let block = self.content[start..range.end].to_string();
+        let outdented: Vec<String> = block.split('\n').map(|l| { let n = l.chars().take(4).take_while(|c| *c == ' ').count(); l[n..].to_string() }).collect();
+        let outdented = outdented.join("\n");
+        let removed = block.len() - outdented.len();
+        if removed == 0 {
+            return;
+        }
+        let mut next = String::with_capacity(self.content.len());
+        next.push_str(&self.content[..start]);
+        next.push_str(&outdented);
+        next.push_str(&self.content[range.end..]);
+        self.content = next.into();
+        let first_line_removed = block.split('\n').next().map(|l| l.chars().take(4).take_while(|c| *c == ' ').count()).unwrap_or(0);
+        self.selected_range = range.start.saturating_sub(first_line_removed).max(start)..range.end - removed;
+        self.marked_range = None;
+        cx.emit(InputEvent::Changed);
+        cx.notify();
+    }
+
+    fn save(&mut self, _: &Save, _: &mut Window, cx: &mut Context<Self>) {
+        if self.code {
+            cx.emit(InputEvent::Saved);
+        } else {
+            cx.propagate();
+        }
     }
 
     fn cancel(&mut self, _: &Cancel, _: &mut Window, cx: &mut Context<Self>) {
@@ -845,6 +956,34 @@ impl Element for TextElement {
             line.paint(origin, line_height, window, cx).unwrap();
         }
 
+        // A code field scrolls with its parent; when the cursor has moved, the view moves to it.
+        let (scroller, seen, here) = {
+            let input = self.input.read(cx);
+            (input.scroller.clone(), input.viewed_cursor, input.cursor_offset())
+        };
+        if let (Some(scroller), Some(quad)) = (&scroller, &prepaint.cursor)
+            && seen != Some(here)
+        {
+            let (view, caret) = (scroller.bounds(), quad.bounds);
+            let mut offset = scroller.offset();
+            let margin = px(24.0);
+            if caret.top() < view.top() + margin {
+                offset.y += view.top() + margin - caret.top();
+            } else if caret.bottom() > view.bottom() - margin {
+                offset.y -= caret.bottom() - (view.bottom() - margin);
+            }
+            if caret.left() < view.left() + margin + px(56.0) {
+                offset.x += view.left() + margin + px(56.0) - caret.left();
+            } else if caret.right() > view.right() - margin {
+                offset.x -= caret.right() - (view.right() - margin);
+            }
+            offset.x = offset.x.min(px(0.0));
+            if offset != scroller.offset() {
+                scroller.set_offset(offset);
+                window.refresh();
+            }
+        }
+
         if focus_handle.is_focused(window)
             && let Some(cursor) = prepaint.cursor.take()
         {
@@ -854,17 +993,23 @@ impl Element for TextElement {
         self.input.update(cx, |input, _cx| {
             input.lines = lines;
             input.last_bounds = Some(bounds);
+            input.viewed_cursor = Some(here);
         });
     }
 }
 
 impl Render for TextInput {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // A code field is as wide as its widest line, so its parent can scroll sideways instead of clipping.
+        let code_width = self.code.then(|| {
+            let size = window.text_style().font_size.to_pixels(window.rem_size());
+            size * 0.62 * (self.widest_line() as f32 + 4.0)
+        });
         div()
             .flex()
             .flex_1()
             .min_w_0()
-            .key_context("TextInput")
+            .key_context(if self.code { "TextInput CodeInput" } else { "TextInput" })
             .track_focus(&self.focus_handle(cx))
             .cursor(CursorStyle::IBeam)
             .on_action(cx.listener(Self::backspace))
@@ -885,6 +1030,9 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::up))
             .on_action(cx.listener(Self::down))
             .on_action(cx.listener(Self::fix_spelling))
+            .on_action(cx.listener(Self::indent))
+            .on_action(cx.listener(Self::outdent))
+            .on_action(cx.listener(Self::save))
             .on_action(cx.listener(Self::show_character_palette))
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::cut))
@@ -893,7 +1041,10 @@ impl Render for TextInput {
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
-            .child(div().w_full().overflow_hidden().child(TextElement { input: cx.entity() }))
+            .child(match code_width {
+                Some(width) => div().min_w(width).w_full().child(TextElement { input: cx.entity() }),
+                None => div().w_full().overflow_hidden().child(TextElement { input: cx.entity() }),
+            })
     }
 }
 

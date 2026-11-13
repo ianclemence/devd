@@ -55,6 +55,11 @@ pub fn fold(events: &[Value], pending: &[&str]) -> Vec<Item> {
                 let n = data["objections"].as_u64().unwrap_or(1);
                 items.push(Item::Notice(format!("devd sent it back to finish: {n} thing{} still open", if n == 1 { " was" } else { "s were" })));
             }
+            // The same for a drawing devd sent back because it could not be drawn.
+            "user" if data["drawing"] == json!(true) => {
+                let n = data["problems"].as_u64().unwrap_or(1);
+                items.push(Item::Notice(format!("devd asked it to draw that again: {n} problem{} with the drawing", if n == 1 { "" } else { "s" })));
+            }
             "user" => items.push(Item::You { text: data["text"].as_str().unwrap_or_default().to_string(), pending: data["pending"] == json!(true) }),
             "assistant" => {
                 let model = data["model"].as_str().unwrap_or_default().to_string();
@@ -177,14 +182,20 @@ impl Default for Transcript {
 /// The screen.
 pub fn render(shell: &mut Shell, thread: Option<String>, _window: &mut Window, cx: &mut Context<Shell>) -> AnyElement {
     let t = theme(cx).clone();
+    // The strip first: it opens the pane when the assistant has just started the browser.
+    let strip = super::pane::strip(shell, cx);
+    let current = thread.clone();
+    let main = match thread {
+        Some(id) => conversation(shell, &id, cx),
+        None => start(shell, cx),
+    };
     div()
         .size_full()
         .flex()
-        .child(sidebar(thread.as_deref(), cx))
-        .child(match thread {
-            Some(id) => conversation(shell, &id, cx),
-            None => start(shell, cx),
-        })
+        .child(sidebar(current.as_deref(), cx))
+        .child(main)
+        .children(super::pane::pane(shell, cx))
+        .child(strip)
         .bg(t.bg)
         .into_any_element()
 }
@@ -203,10 +214,13 @@ fn sidebar(current: Option<&str>, cx: &mut Context<Shell>) -> impl IntoElement {
     let mut last_project: Option<String> = None;
     for thread in own {
         let id = thread["id"].as_str().unwrap_or_default().to_string();
-        let project = thread["project"].as_str().map(|p| ui::leaf(p).to_string()).unwrap_or_else(|| "No project".into());
-        if last_project.as_ref() != Some(&project) {
-            column = column.child(div().px(px(10.0)).pt(px(12.0)).pb(px(4.0)).child(eyebrow(project.to_uppercase(), cx)));
-            last_project = Some(project);
+        // A conversation with no project is listed without a heading; a heading says which project the ones under it are about.
+        let project = thread["project"].as_str().map(|p| ui::leaf(p).to_string());
+        if project != last_project {
+            if let Some(name) = &project {
+                column = column.child(div().px(px(10.0)).pt(px(12.0)).pb(px(4.0)).child(eyebrow(name.to_uppercase(), cx)));
+            }
+            last_project = project;
         }
         let state = thread["state"].as_str().unwrap_or_default();
         let said = devd_app_core::status::of(state);

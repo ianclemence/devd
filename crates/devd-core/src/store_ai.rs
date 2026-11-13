@@ -271,7 +271,7 @@ pub struct InboxMessage {
 pub struct AgentRequest {
     /// Identifier.
     pub id: String,
-    /// The agent, e.g. `agent:claude-code`.
+    /// The agent, e.g. `agent:assistant`.
     pub actor: String,
     /// Capability.
     pub capability: String,

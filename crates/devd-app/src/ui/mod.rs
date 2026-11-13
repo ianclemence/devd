@@ -9,6 +9,8 @@ pub mod clip;
 pub mod dither;
 pub mod diff;
 pub mod input;
+pub mod favicon;
+pub mod genui;
 pub mod links;
 pub mod markdown;
 
@@ -48,10 +50,10 @@ pub fn screen_icon(route: &Route) -> &'static str {
         Route::Assistant(_) => "assistant",
         Route::Runs(_) => "runs",
         Route::Team => "team",
-        Route::Projects(_) => "folder",
+        Route::Projects(_) | Route::Project(..) => "folder",
         Route::Sites(_) => "globe",
         Route::Server => "machine",
-        Route::Intelligence => "models",
+        Route::Intelligence => "brain",
         Route::Activity => "activity",
         Route::Settings => "settings",
         Route::Page(id) => match devd_app_core::pages::find(id).map(|p| p.area) {
@@ -127,6 +129,44 @@ const BRANDS: &[(&str, &str, bool)] = &[
     ("deepinfra", "deepinfra.svg", false),
     ("huggingface", "huggingface.svg", false),
 ];
+
+/// The marks of the tools, runtimes, services and stacks devd looks after, by the id devd knows each by: the file. Every
+/// one carries its owner's own colours and is never recoloured or redrawn.
+const TOOL_MARKS: &[(&str, &str)] = &[
+    ("php", "php.svg"), ("node", "node.svg"), ("nodejs", "node.svg"), ("go", "go.svg"), ("python", "python.svg"), ("ruby", "ruby.svg"), ("rust", "rust.svg"),
+    ("java", "java.svg"), ("dotnet", "dotnet.svg"), ("aspnet-core", "dotnet.svg"), ("kotlin", "kotlin.svg"), ("swift", "swift.svg"), ("dart", "dart.svg"),
+    ("flutter", "flutter.svg"), ("javascript", "javascript.svg"), ("typescript", "typescript.svg"),
+    ("mariadb", "mariadb.svg"), ("mysql", "mysql.svg"), ("postgresql", "postgresql.svg"), ("postgres", "postgresql.svg"), ("redis", "redis.svg"), ("valkey", "valkey.png"),
+    ("sqlite", "sqlite.svg"), ("elasticsearch", "elasticsearch.svg"), ("meilisearch", "meilisearch.svg"), ("typesense", "typesense.png"), ("minio", "minio.svg"),
+    ("nginx", "nginx.svg"), ("mailpit", "mailpit.svg"), ("phpmyadmin", "phpmyadmin.svg"), ("xdebug", "xdebug.png"), ("docker", "docker.svg"),
+    ("git", "git.svg"), ("gh", "gh.svg"), ("gitlab", "gitlab.svg"), ("composer", "composer.svg"), ("npm", "npm.svg"), ("pnpm", "pnpm.svg"), ("yarn", "yarn.svg"),
+    ("bun", "bun.svg"), ("uv", "uv.svg"), ("poetry", "poetry.svg"), ("bundler", "bundler.svg"), ("maven", "maven.svg"), ("gradle", "gradle.svg"), ("vite", "vite.svg"),
+    ("android-sdk", "android.svg"), ("adb", "android.svg"), ("android", "android.svg"), ("build-tools", "build-tools.svg"), ("expo", "expo.svg"), ("eas-cli", "eascli.svg"),
+    ("react-native", "react-native.svg"), ("react-vite", "react-vite.svg"), ("nextjs", "nextjs.svg"), ("astro", "astro.svg"), ("vue", "vue.svg"), ("sveltekit", "sveltekit.svg"),
+    ("express", "express.svg"), ("fastapi", "fastapi.svg"), ("flask", "flask.svg"), ("django", "django.svg"), ("rails", "rails.svg"), ("laravel", "laravel.svg"),
+    ("slim", "slim.svg"), ("cakephp", "cakephp.svg"), ("spring-boot", "spring-boot.svg"), ("tailwind", "tailwind.svg"),
+    // The coding agents devd can connect to.
+    ("claude", "claude.svg"), ("claude-code", "claude.svg"), ("claude-desktop", "claude.svg"), ("cursor", "cursor.svg"), ("vscode", "vscode.png"), ("codex", "openai.svg"), ("opencode", "opencode.svg"),
+];
+
+/// The mark for a tool, runtime, service or stack. An exact id first; otherwise its first word, so `php-cgi-8.4-2` is PHP.
+/// Nothing is guessed beyond that: a name with no mark gets none.
+fn tool_mark_file(name: &str) -> Option<&'static str> {
+    let name = name.to_ascii_lowercase();
+    let find = |key: &str| TOOL_MARKS.iter().find(|(k, _)| *k == key).map(|(_, f)| *f);
+    find(&name).or_else(|| name.split(['-', '_', '.', ' ']).next().and_then(find))
+}
+
+/// A tool's, runtime's, service's or stack's own mark on a small pale tile, which keeps a dark mark readable on a dark theme.
+/// One with no mark gets its initial, never something made up.
+pub fn tool_mark(name: &str, label: &str, box_px: f32, cx: &App) -> Div {
+    let t = theme(cx);
+    let tile = div().size(px(box_px)).flex().flex_none().items_center().justify_center().rounded(px(size::RADIUS));
+    match tool_mark_file(name) {
+        Some(file) => tile.bg(gpui::rgba(0xfffffff0)).child(img(SharedString::from(format!("brands/{file}"))).size(px(box_px * 0.66))),
+        None => tile.bg(t.hover).child(div().text_size(px(size::TEXT_SM)).font_weight(FontWeight::SEMIBOLD).text_color(t.muted).child(label.chars().find(|c| c.is_alphanumeric()).map(|c| c.to_uppercase().to_string()).unwrap_or_default())),
+    }
+}
 
 /// The mark for a name, or nothing.
 ///
@@ -627,5 +667,18 @@ mod tests {
     fn a_time_that_cannot_be_read_is_blank_not_wrong() {
         assert_eq!(ago("yesterday"), "");
         assert_eq!(ago(&chrono::Utc::now().to_rfc3339()), "now");
+    }
+
+    #[test]
+    fn every_mark_a_tool_may_have_is_in_the_binary_and_a_service_pool_shares_its_runtimes() {
+        for (name, file) in TOOL_MARKS {
+            assert!(devd_server::ui::brand_bytes(file).is_some(), "{name} names {file}, which is not in the binary");
+        }
+        assert_eq!(tool_mark_file("php-cgi-8.4-2"), Some("php.svg"));
+        assert_eq!(tool_mark_file("PHP"), Some("php.svg"));
+        assert_eq!(tool_mark_file("aspnet-core"), Some("dotnet.svg"));
+        assert_eq!(tool_mark_file("mariadb"), Some("mariadb.svg"));
+        assert_eq!(tool_mark_file("imagemagick"), None, "a tool devd has no artwork for has none");
+        assert_eq!(tool_mark_file("nuxt"), None);
     }
 }

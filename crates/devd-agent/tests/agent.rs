@@ -155,7 +155,7 @@ fn env() -> Env {
             events.clone(),
             Actor::human(Surface::Http),
         ),
-        agent: ctx_for(&root, store, events.clone(), Actor::agent("claude-code")),
+        agent: ctx_for(&root, store, events.clone(), Actor::agent("assistant")),
         events,
         _dir: dir,
         root,
@@ -858,7 +858,7 @@ fn the_inbox_is_a_two_way_channel_between_agents_and_the_person() {
     )
     .unwrap();
     assert_eq!(all[0]["reply"], "Postgres");
-    assert_eq!(all[0]["from_actor"], "agent:claude-code");
+    assert_eq!(all[0]["from_actor"], "agent:assistant");
     let health = call(&e, &e.human, "health.status", json!({}), Approval::None).unwrap();
     assert!(
         health["attention"]
@@ -878,11 +878,11 @@ fn mcp_agents_get_their_approvals_queued() {
     let store = e.agent.store.clone();
     let queue: devd_mcp::ApprovalQueue = Arc::new(move |cap, args, plan, run_id| {
         store
-            .create_request("agent:claude-code", cap, args, plan, None, run_id, None)
+            .create_request("agent:assistant", cap, args, plan, None, run_id, None)
             .ok()
             .map(|r| r.id)
     });
-    let server = devd_mcp::McpServer::new(e.reg.clone(), e.agent.clone(), "claude-code")
+    let server = devd_mcp::McpServer::new(e.reg.clone(), e.agent.clone(), "assistant")
         .with_approval_queue(queue);
     let (is_err, text) = server.call(
         "devd_invoke",
@@ -2398,4 +2398,96 @@ fn a_person_adds_their_own_agent_and_it_joins_the_flow_without_a_restart() {
     call(&e, &e.human, "roles.delete", json!({ "id": "support" }), Approval::None).unwrap();
     let after = call(&e, &e.agent, "team.flow", json!({}), Approval::None).unwrap();
     assert!(after["roles"].as_array().unwrap().iter().all(|r| r["id"] != "support"));
+}
+
+// ---------------------------------------------------------------------------------------- drawing
+
+fn drawn(spec: &Value) -> String {
+    format!("Here it is.\n\n```devd-ui\n{spec}\n```\n")
+}
+
+fn good_spec() -> Value {
+    json!({ "type": "Card", "props": { "title": "Sites" }, "children": [{ "type": "Table", "props": { "columns": ["Site", "State"], "rows": [["shop.test", "up"]] } }] })
+}
+
+fn bad_spec() -> Value {
+    json!({ "type": "Card", "props": { "title": "Sites" }, "children": [{ "type": "Gauge" }] })
+}
+
+fn ask(e: &Env, text: &str) -> Value {
+    let sent = call(e, &e.human, "chat.send", json!({ "message": text, "project": e.root.join("www/proj").display().to_string() }), Approval::None).unwrap();
+    wait_for(e, sent["id"].as_str().unwrap(), &["idle", "error"])
+}
+
+fn kinds(v: &Value) -> Vec<String> {
+    v["events"].as_array().unwrap().iter().map(|x| x["kind"].as_str().unwrap().to_string()).collect()
+}
+
+#[test]
+fn the_assistant_is_taught_the_catalog_and_the_flag_turns_that_off() {
+    let e = env();
+    let m = mock(|_, _| (200, anthropic_text("Fine.")));
+    add_provider(&e, "anthropic", &m.base);
+    ask(&e, "hello");
+    let system = m.seen.lock().unwrap()[0].body["system"][0]["text"].as_str().unwrap().to_string();
+    assert!(system.contains("Drawing with components") && system.contains("devd-ui"), "the catalog is in the prompt");
+    for c in devd_genui::CATALOG {
+        assert!(system.contains(&format!("**{}**", c.name)), "{} is missing from what the model is told", c.name);
+    }
+
+    let e = env();
+    let m = mock(|_, _| (200, anthropic_text("Fine.")));
+    add_provider(&e, "anthropic", &m.base);
+    call(&e, &e.human, "flags.set", json!({ "key": "agent.draw", "value": "off" }), Approval::None).unwrap();
+    ask(&e, "hello");
+    let system = m.seen.lock().unwrap()[0].body["system"][0]["text"].as_str().unwrap().to_string();
+    assert!(!system.contains("Drawing with components"), "the flag removes it");
+}
+
+#[test]
+fn a_drawing_that_does_not_check_is_sent_back_with_each_problem_and_then_accepted() {
+    let e = env();
+    let m = mock(|n, _| match n {
+        0 => (200, anthropic_text(&drawn(&bad_spec()))),
+        _ => (200, anthropic_text(&drawn(&good_spec()))),
+    });
+    add_provider(&e, "anthropic", &m.base);
+    let v = ask(&e, "show my sites");
+    assert_eq!(v["thread"]["state"], "idle", "{v}");
+    assert_eq!(kinds(&v), ["user", "assistant", "user", "assistant"], "{v}");
+    let note = &v["events"][2]["data"];
+    assert_eq!(note["drawing"], true);
+    assert_eq!(note["from"], "devd");
+    assert!(note["text"].as_str().unwrap().contains("\"Gauge\" is not a component"), "{note}");
+    // The second request carried that note to the model.
+    let seen = m.seen.lock().unwrap().clone();
+    assert_eq!(seen.len(), 2);
+    let last = seen[1].body["messages"].as_array().unwrap().last().unwrap().to_string();
+    assert!(last.contains("[devd]") && last.contains("Gauge"), "{last}");
+}
+
+#[test]
+fn a_good_drawing_is_never_sent_back_and_a_bad_one_is_sent_back_only_as_often_as_allowed() {
+    let e = env();
+    let m = mock(|_, _| (200, anthropic_text(&drawn(&good_spec()))));
+    add_provider(&e, "anthropic", &m.base);
+    let v = ask(&e, "show my sites");
+    assert_eq!(kinds(&v), ["user", "assistant"], "{v}");
+    assert_eq!(m.seen.lock().unwrap().len(), 1);
+
+    // A model that never gets it right is asked twice (the default) and then left as it is.
+    let e = env();
+    let m = mock(|_, _| (200, anthropic_text(&drawn(&bad_spec()))));
+    add_provider(&e, "anthropic", &m.base);
+    let v = ask(&e, "show my sites");
+    assert_eq!(v["thread"]["state"], "idle", "{v}");
+    assert_eq!(kinds(&v), ["user", "assistant", "user", "assistant", "user", "assistant"], "{v}");
+
+    // With the allowance at zero it is never sent back.
+    let e = env();
+    let m = mock(|_, _| (200, anthropic_text(&drawn(&bad_spec()))));
+    add_provider(&e, "anthropic", &m.base);
+    call(&e, &e.human, "flags.set", json!({ "key": "agent.draw_fixes", "value": "0" }), Approval::None).unwrap();
+    let v = ask(&e, "show my sites");
+    assert_eq!(kinds(&v), ["user", "assistant"], "{v}");
 }

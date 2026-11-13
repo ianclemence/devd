@@ -1328,9 +1328,9 @@ mod tests {
             run: None,
             dry_run: false,
         };
-        let server = McpServer::new(Arc::new(Registry::new()), ctx, "claude-code");
+        let server = McpServer::new(Arc::new(Registry::new()), ctx, "assistant");
         assert!(server.ctx.actor.is_agent());
-        assert_eq!(server.ctx.actor.name, "claude-code");
+        assert_eq!(server.ctx.actor.name, "assistant");
         assert_eq!(server.ctx.actor.surface.as_str(), "mcp");
     }
 

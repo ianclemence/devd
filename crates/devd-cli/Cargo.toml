@@ -38,5 +38,8 @@ open = { workspace = true }
 # default application icon in Explorer or on the taskbar.
 embed-resource = "3"
 
+[dev-dependencies]
+devd-app-core = { path = "../devd-app-core" }
+
 [lints]
 workspace = true

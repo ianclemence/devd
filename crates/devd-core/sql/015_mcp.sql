@@ -1,7 +1,7 @@
 -- Model Context Protocol servers that devd connects to as a client.
 --
 -- These are other programs' MCP servers: devd's assistant uses their tools the
--- way Claude Code uses the servers configured for it. The row is configuration,
+-- way any MCP client uses the servers configured for it. The row is configuration,
 -- not state: `enabled` and `trust` are a person's decisions, `tools` and
 -- `last_error` are the observed result of the last connection and are replaced
 -- every time.

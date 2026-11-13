@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS inbox (
 
 CREATE TABLE IF NOT EXISTS agent_requests (
     id          TEXT PRIMARY KEY,
-    actor       TEXT NOT NULL,             -- e.g. agent:claude-code
+    actor       TEXT NOT NULL,             -- e.g. agent:assistant
     capability  TEXT NOT NULL,
     args        TEXT NOT NULL,
     plan        TEXT,

@@ -197,6 +197,7 @@ impl Shell {
             watch.push(cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| match event {
                 InputEvent::Submitted => this.submit_form(window, cx),
                 InputEvent::Cancelled => this.close_modal(window, cx),
+                InputEvent::Saved => {}
                 InputEvent::Changed => {
                     if let Some(Modal::Form(form)) = this.modal.as_mut() {
                         form.error = None;

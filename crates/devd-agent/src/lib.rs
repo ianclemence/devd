@@ -1,7 +1,6 @@
 //! The built-in agent.
 //!
-//! devd already lets outside agents (Claude Code, OpenCode, anything speaking
-//! MCP) drive it. This crate adds the other half: an agent that lives inside
+//! devd already lets outside agents (anything speaking MCP) drive it. This crate adds the other half: an agent that lives inside
 //! devd, with the same permission model, so the server is useful without any
 //! other tool installed.
 //!
@@ -22,7 +21,7 @@
 //! * **Context engineering**: tool results are size-capped, old results are
 //!   cleared from the working context while staying in the log, and the project
 //!   brief is a short summary, not a dump.
-//! * **Human approval where it matters** ("Claude Code auto mode", "sandboxing"):
+//! * **Human approval where it matters** ("auto mode", "sandboxing"):
 //!   operations above the agent tier are queued for a person with their plan, and
 //!   the agent is told plainly that it must not claim they happened.
 
@@ -37,6 +36,7 @@ pub mod portability;
 pub mod supervisor;
 pub mod task;
 pub mod docs;
+pub mod favicon;
 pub mod effects_bridge;
 pub mod environment;
 pub mod flow;

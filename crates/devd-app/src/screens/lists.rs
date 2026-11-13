@@ -384,6 +384,7 @@ pub fn server(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                 .items_center()
                 .gap(px(12.0))
                 .child(marker)
+                .child(ui::tool_mark(&name, &title, 28.0, cx))
                 .child(
                     div()
                         .flex_1()

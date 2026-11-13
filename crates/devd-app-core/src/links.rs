@@ -199,6 +199,7 @@ pub fn chip_label(route_path: &str) -> String {
     match &route {
         Route::Runs(Some(id)) => format!("Run {}", short(id)),
         Route::Assistant(Some(id)) => format!("Conversation {}", short(id)),
+        Route::Project(dir, tab) => format!("Project {} {}", dir.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or(dir), tab.label().to_lowercase()),
         Route::Projects(Some(dir)) => format!("Project {}", dir.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or(dir)),
         Route::Sites(Some(name)) => format!("Site {name}"),
         Route::Runs(None) => "Runs".to_string(),
