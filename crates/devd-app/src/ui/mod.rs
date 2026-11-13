@@ -496,16 +496,10 @@ pub fn page_head(title: impl Into<SharedString>, detail: impl Into<SharedString>
 /// under dense content: it belongs to the screens that open on a greeting or a question.
 pub fn art(cx: &App) -> Div {
     let t = theme(cx);
-    let file = format!("art/{}-{}.png", t.id, if t.dark { "dark" } else { "light" });
-    let opacity = if t.dark { 0.09 } else { 0.07 };
-    div()
-        .absolute()
-        .top(px(0.0))
-        .right(px(0.0))
-        .w(px(dither::WIDTH as f32))
-        .h(px(dither::HEIGHT as f32))
-        .opacity(opacity)
-        .child(img(SharedString::from(file)).w(px(dither::WIDTH as f32)).h(px(dither::HEIGHT as f32)).object_fit(gpui::ObjectFit::Fill))
+    let file = format!("art/{}.png", t.id);
+    let el = div().absolute().right(px(0.0)).w(px(dither::WIDTH as f32)).h(px(dither::HEIGHT as f32)).opacity(t.pattern.strength(t.dark));
+    let el = if t.pattern.stands_on_the_bottom() { el.bottom(px(0.0)) } else { el.top(px(0.0)) };
+    el.child(img(SharedString::from(file)).w(px(dither::WIDTH as f32)).h(px(dither::HEIGHT as f32)).object_fit(gpui::ObjectFit::Fill))
 }
 
 /// A scrolling column, centred, no wider than is comfortable to read across.

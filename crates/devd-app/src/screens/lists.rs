@@ -329,7 +329,7 @@ pub fn server(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
     let health = devd(cx).sync.watch(&q::health());
     let headline = health.data.as_deref().and_then(|d| d["headline"].as_str()).unwrap_or("Reading the machine…").to_string();
     let actions = div().child(Button::new("server.start", "Start what is needed").icon("play").on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.run("server.start", window, cx))));
-    let mut column = div().flex().flex_col().gap(px(22.0)).child(page_head("Server", headline, actions, cx)).children(super::pages::tab_strip(&Route::Server, cx)).children(ui::stale(&services, cx)).children(ui::stale(&health, cx));
+    let mut column = div().flex().flex_col().gap(px(22.0)).child(div().child(page_head("Server", headline, actions, cx)).children(super::pages::tab_strip(&Route::Server, cx))).children(ui::stale(&services, cx)).children(ui::stale(&health, cx));
 
     let mut list = card(cx).flex().flex_col().overflow_hidden();
     if let Some(shown) = placeholder(&services, "services", "machine", "No services", "Install a web server or a database and it is listed here.", cx) {
@@ -452,7 +452,7 @@ pub fn team(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
         this.role_form.open = !this.role_form.open;
         cx.notify();
     })));
-    let mut column = div().flex().flex_col().gap(px(22.0)).child(page_head("Team", detail, add, cx)).children(super::pages::tab_strip(&Route::Team, cx)).children(ui::stale(&roles, cx));
+    let mut column = div().flex().flex_col().gap(px(22.0)).child(div().child(page_head("Team", detail, add, cx)).children(super::pages::tab_strip(&Route::Team, cx))).children(ui::stale(&roles, cx));
     if let Some(form) = screens_roles::render(shell, cx) {
         column = column.child(form);
     }

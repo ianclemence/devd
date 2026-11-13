@@ -79,38 +79,20 @@ impl AssetSource for Assets {
         if path == "brand/devd-logo.png" {
             return Ok(Some(Cow::Borrowed(include_bytes!("../../../assets/devd-logo.png").as_slice())));
         }
-        // The dotted background art. There is one picture per theme and
-        // lightness, made the first time it is asked for and kept.
-        if let Some(art) = path.strip_prefix("art/") {
-            let Some(art) = art.strip_suffix(".png") else { return Ok(None) };
-            let Some((id, dark)) = art.rsplit_once('-') else { return Ok(None) };
-            let dark = match dark {
-                "dark" => true,
-                "light" => false,
-                _ => return Ok(None),
-            };
-            if !matches!(id, "stone" | "shepherd" | "harp") {
-                return Ok(None);
-            }
-            static PICTURES: [std::sync::OnceLock<Vec<u8>>; 6] = [
-                std::sync::OnceLock::new(),
+        // The background art. There is one picture per theme, made the first time it is
+        // asked for and kept.
+        if let Some(id) = path.strip_prefix("art/").and_then(|p| p.strip_suffix(".png")) {
+            static PICTURES: [std::sync::OnceLock<Vec<u8>>; 5] = [
                 std::sync::OnceLock::new(),
                 std::sync::OnceLock::new(),
                 std::sync::OnceLock::new(),
                 std::sync::OnceLock::new(),
                 std::sync::OnceLock::new(),
             ];
-            let slot = match (id, dark) {
-                ("stone", true) => 0,
-                ("stone", false) => 1,
-                ("shepherd", true) => 2,
-                ("shepherd", false) => 3,
-                ("harp", true) => 4,
-                _ => 5,
-            };
+            let Some(slot) = crate::theme::Theme::ORDER.iter().position(|known| *known == id) else { return Ok(None) };
             let bytes = PICTURES[slot].get_or_init(|| {
-                let theme = crate::theme::Theme::by_id(id, dark);
-                crate::ui::dither::png_as(theme.art_rgb(), theme.pattern)
+                let theme = crate::theme::Theme::by_id(id);
+                crate::ui::dither::png_as(theme.art_rgb(), theme.art_glint_rgb(), theme.pattern)
             });
             return Ok(Some(Cow::Borrowed(bytes.as_slice())));
         }
@@ -161,13 +143,15 @@ mod tests {
     }
 
     #[test]
-    fn every_theme_has_a_background_in_both_lightnesses() {
-        for (id, _) in crate::theme::Theme::ALL {
-            for lightness in ["dark", "light"] {
-                let path = format!("art/{id}-{lightness}.png");
-                let bytes = Assets.load(&path).unwrap().unwrap_or_else(|| panic!("{path} is not served"));
-                assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n", "{path}");
-            }
+    fn every_theme_has_a_background_of_its_own() {
+        let mut seen = Vec::new();
+        for id in crate::theme::Theme::ORDER {
+            let path = format!("art/{id}.png");
+            let bytes = Assets.load(&path).unwrap().unwrap_or_else(|| panic!("{path} is not served"));
+            assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n", "{path}");
+            assert!(!seen.contains(&bytes.to_vec()), "{id} has the same background as another theme");
+            seen.push(bytes.to_vec());
         }
+        assert!(Assets.load("art/nope.png").unwrap().is_none());
     }
 }

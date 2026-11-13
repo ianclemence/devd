@@ -190,13 +190,37 @@ fn option_with(id: gpui::ElementId, mark: Option<gpui::Div>, title: &str, detail
         .child(div().flex_1().min_w_0().text_size(px(size::TEXT_SM)).text_color(t.muted).child(ui::Clip::new(detail.to_string())))
 }
 
-fn popover(cx: &gpui::App) -> gpui::Div {
+/// What stands before a row's name: a picture, or the symbol that calls it up.
+enum Lead {
+    /// An icon from the table.
+    Icon(&'static str),
+    /// A character typed to reach this: `/` for a skill, `@` for a teammate.
+    Symbol(char),
+}
+
+/// A row of the attach menu or of the `/` and `@` menu. Its first element is a small tile holding the
+/// icon or symbol, so every row reads the same way: what it is, then its name, then a word about it.
+fn menu_row(id: gpui::ElementId, lead: Lead, title: &str, detail: &str, on: bool, cx: &gpui::App) -> gpui::Stateful<gpui::Div> {
     let t = theme(cx);
-    div()
-        .absolute()
-        .left(px(0.0))
-        .bottom(relative(1.0))
-        .mb(px(8.0))
+    let tile = div().size(px(24.0)).flex_none().flex().items_center().justify_center().rounded(px(size::RADIUS)).bg(t.hover).border_1().border_color(t.line);
+    let tile = match lead {
+        Lead::Icon(name) => tile.child(icon(name, 14.0, t.muted)),
+        Lead::Symbol(mark) => tile.child(div().font_family(crate::theme::mono()).text_size(px(size::TEXT)).font_weight(FontWeight::SEMIBOLD).text_color(t.accent).child(mark.to_string())),
+    };
+    ui::row(id, on, cx)
+        .min_h(px(38.0))
+        .gap(px(10.0))
+        .child(tile)
+        .child(div().flex_none().text_size(px(size::TEXT)).font_weight(FontWeight::MEDIUM).child(title.to_string()))
+        .child(div().flex_1().min_w_0().text_size(px(size::TEXT_SM)).text_color(t.muted).child(ui::Clip::new(detail.to_string())))
+}
+
+/// A floating list tied to the message box. It opens above the box, or below it where the box sits too
+/// near the top of the window to leave room, as it does on Home.
+fn popover(cx: &gpui::App, below: bool) -> gpui::Div {
+    let t = theme(cx);
+    let at = div().absolute().left(px(0.0));
+    (if below { at.top(relative(1.0)).mt(px(8.0)) } else { at.bottom(relative(1.0)).mb(px(8.0)) })
         .p(px(5.0))
         .flex()
         .flex_col()
@@ -217,20 +241,21 @@ pub fn view(shell: &Shell, hint: &'static str, running: bool, widest: f32, cx: &
     let inventory = devd(cx).sync.watch(&q::inventory());
     let providers: Vec<Value> = inventory.list("/providers").to_vec();
     let sendable = !text.trim().is_empty();
+    let below = matches!(shell.history.current(), devd_app_core::nav::Route::Home);
 
     let mut root = div().relative().w_full().max_w(px(widest)).mx_auto().flex().flex_col().gap(px(6.0));
 
     // What `/` or `@` offers, above the box.
     if let Some((trig, found)) = completion(&text, cx) {
         let at = compose.selected.min(found.len() - 1);
-        let mut menu = popover(cx).w_full();
+        let mut menu = popover(cx, below).w_full();
         menu = menu.child(div().px(px(10.0)).py(px(4.0)).child(ui::eyebrow(if trig.mark == '/' { "SKILLS" } else { "THE TEAM" }, cx)));
         for (n, entry) in found.iter().take(8).enumerate() {
             let (insert, from) = (entry.insert.clone(), trig.clone());
             menu = menu.child(
                 div()
                     .child(
-                        option(ui::nid(if trig.mark == '/' { "compose.skill" } else { "compose.member" }, n), &entry.insert, &entry.detail, false, n == at, cx)
+                        menu_row(ui::nid(if trig.mark == '/' { "compose.skill" } else { "compose.member" }, n), Lead::Symbol(trig.mark), entry.insert.trim_start_matches(trig.mark), &entry.detail, n == at, cx)
                             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                                 let now = this.composer.read(cx).text().to_string();
                                 let text = accept(&now, &from, &insert);
@@ -245,16 +270,17 @@ pub fn view(shell: &Shell, hint: &'static str, running: bool, widest: f32, cx: &
 
     match compose.open {
         Open::Plus => {
-            let menu = popover(cx)
-                .w(px(260.0))
-                .child(option("compose.add.files".into(), "Add files", "", false, false, cx).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.attach(false, cx))))
-                .child(option("compose.add.folder".into(), "Add a folder", "", false, false, cx).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.attach(true, cx))))
-                .child(option("compose.add.skill".into(), "Use a skill", "/", false, false, cx).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.start_word("/", cx))))
-                .child(option("compose.add.member".into(), "Ask a team member", "@", false, false, cx).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.start_word("@", cx))));
+            let menu = popover(cx, below)
+                .w(px(330.0))
+                .child(menu_row("compose.add.files".into(), Lead::Icon("file"), "Add files", "Attach them to this message", false, cx).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.attach(false, cx))))
+                .child(menu_row("compose.add.folder".into(), Lead::Icon("folder"), "Add a folder", "Give it everything inside", false, cx).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.attach(true, cx))))
+                .child(div().h(px(1.0)).mx(px(8.0)).my(px(3.0)).bg(t.line))
+                .child(menu_row("compose.add.skill".into(), Lead::Symbol('/'), "Use a skill", "Load its instructions first", false, cx).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.start_word("/", cx))))
+                .child(menu_row("compose.add.member".into(), Lead::Symbol('@'), "Ask a team member", "Hand it to one teammate", false, cx).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.start_word("@", cx))));
             root = root.child(deferred(menu).with_priority(10));
         }
         Open::Model => {
-            let mut menu = popover(cx).w(px(340.0));
+            let mut menu = popover(cx, below).w(px(340.0));
             menu = menu.child(div().px(px(10.0)).py(px(4.0)).child(ui::eyebrow("MODEL", cx)));
             let current = model_label(shell, &providers);
             let mut shown = 0;
@@ -307,7 +333,7 @@ pub fn view(shell: &Shell, hint: &'static str, running: bool, widest: f32, cx: &
             root = root.child(deferred(menu.child(div().h(px(1.0)).mx(px(8.0)).my(px(4.0)).bg(t.line)).child(efforts)).with_priority(10));
         }
         Open::Mode => {
-            let mut menu = popover(cx).w(px(340.0));
+            let mut menu = popover(cx, below).w(px(340.0));
             menu = menu.child(div().px(px(10.0)).py(px(4.0)).child(ui::eyebrow("WHAT IT MAY DO", cx)));
             for (n, (id, label, detail)) in MODES.iter().enumerate() {
                 let pick = *id;

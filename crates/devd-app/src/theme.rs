@@ -85,29 +85,45 @@ pub struct Theme {
 impl Global for Theme {}
 
 impl Theme {
-    /// Every theme, by id and the name a person reads.
-    pub const ALL: [(&'static str, &'static str); 3] = [("stone", "Stone"), ("shepherd", "Shepherd"), ("harp", "Harp")];
+    /// Every theme, in the order the picker shows them: three for the evening, then two for the day.
+    pub const ORDER: [&'static str; 5] = ["sling", "dawn", "psalm", "sharon", "daybreak"];
 
-    /// A theme by id, in its dark or light form. An unknown id is Stone.
-    pub fn by_id(id: &str, dark: bool) -> Self {
+    /// A theme by id. An unknown id is Sling.
+    pub fn by_id(id: &str) -> Self {
         match id {
-            "shepherd" => Self::shepherd(dark),
-            "harp" => Self::harp(dark),
-            _ => Self::stone(dark),
+            "dawn" => Self::shepherd(true),
+            "psalm" => Self::harp(true),
+            "sharon" | "parchment" => Self::shepherd(false),
+            "daybreak" | "linen" => Self::harp(false),
+            _ => Self::dark(),
         }
     }
 
-    /// The current palette, when a caller asks without naming it.
-    pub fn stone(dark: bool) -> Self {
-        if dark { Self::dark() } else { Self::light() }
+    /// A choice saved before every look had a name of its own: a family and a lightness.
+    pub fn from_saved(id: &str, dark: bool) -> Self {
+        match (id, dark) {
+            ("stone", true) => Self::by_id("sling"),
+            ("stone", false) => Self::by_id("daybreak"),
+            ("shepherd", true) => Self::by_id("dawn"),
+            ("shepherd", false) => Self::by_id("sharon"),
+            ("harp", true) => Self::by_id("psalm"),
+            ("harp", false) => Self::by_id("daybreak"),
+            _ => Self::by_id(id),
+        }
     }
 
-    /// The dark palette: smooth stone, with volt.
-    pub fn dark() -> Self {
+    /// The theme after this one, going round the picker's order.
+    pub fn next(&self) -> Self {
+        let at = Self::ORDER.iter().position(|id| *id == self.id).unwrap_or(0);
+        Self::by_id(Self::ORDER[(at + 1) % Self::ORDER.len()])
+    }
+
+    /// Sling: graphite with volt, a stone in still water.
+    fn dark() -> Self {
         Self {
-            id: "stone",
-            name: "Stone",
-            pattern: Pattern::Corner,
+            id: "sling",
+            name: "Sling",
+            pattern: Pattern::Ripples,
             dark: true,
             bg: rgb(0x0e0e0d).into(),
             surface: rgb(0x141413).into(),
@@ -136,47 +152,13 @@ impl Theme {
         }
     }
 
-    /// The light palette: warm paper, with the same signal darkened to stay legible.
-    pub fn light() -> Self {
-        Self {
-            id: "stone",
-            name: "Stone",
-            pattern: Pattern::Corner,
-            dark: false,
-            bg: rgb(0xfaf9f6).into(),
-            surface: rgb(0xf3f1ec).into(),
-            raised: rgb(0xffffff).into(),
-            hover: rgba(0x00000010).into(),
-            active: rgba(0x0000001a).into(),
-            line: rgba(0x00000014).into(),
-            line_strong: rgba(0x00000029).into(),
-            text: rgb(0x1a1917).into(),
-            muted: rgb(0x5a5852).into(),
-            faint: rgb(0x8c8982).into(),
-            accent: rgb(0x4d6a00).into(),
-            on_accent: rgb(0xffffff).into(),
-            accent_soft: rgba(0x4d6a0017).into(),
-            ok: rgb(0x0f8a55).into(),
-            warn: rgb(0xb26a00).into(),
-            danger: rgb(0xc9353b).into(),
-            info: rgb(0x2463c9).into(),
-            selection: rgba(0x4d6a0033).into(),
-            scrim: rgba(0x0000004d).into(),
-            code: rgb(0xefede7).into(),
-            diff_added: rgba(0x0f8a5517).into(),
-            diff_added_word: rgba(0x0f8a5547).into(),
-            diff_removed: rgba(0xc9353b14).into(),
-            diff_removed_word: rgba(0xc9353b42).into(),
-        }
-    }
-
-    /// Wool, olive and the light of a field at dawn.
-    pub fn shepherd(dark: bool) -> Self {
+    /// Dawn over the pasture (dark) and Sharon, a rose-tinted map (light).
+    fn shepherd(dark: bool) -> Self {
         if dark {
             Self {
-                id: "shepherd",
-                name: "Shepherd",
-                pattern: Pattern::Woven,
+                id: "dawn",
+                name: "Dawn",
+                pattern: Pattern::Pasture,
                 dark: true,
                 bg: rgb(0x12110d).into(),
                 surface: rgb(0x191710).into(),
@@ -205,30 +187,30 @@ impl Theme {
             }
         } else {
             Self {
-                id: "shepherd",
-                name: "Shepherd",
-                pattern: Pattern::Woven,
+                id: "sharon",
+                name: "Sharon",
+                pattern: Pattern::Contours,
                 dark: false,
-                bg: rgb(0xf6f1e4).into(),
-                surface: rgb(0xefe8d7).into(),
-                raised: rgb(0xfffdf7).into(),
-                hover: rgba(0x6b5b2e10).into(),
-                active: rgba(0x6b5b2e1c).into(),
-                line: rgba(0x6b5b2e16).into(),
-                line_strong: rgba(0x6b5b2e2b).into(),
-                text: rgb(0x2b261c).into(),
-                muted: rgb(0x6b6252).into(),
-                faint: rgb(0x9a907c).into(),
-                accent: rgb(0x8a5a00).into(),
+                bg: rgb(0xf9eef0).into(),
+                surface: rgb(0xf3e1e5).into(),
+                raised: rgb(0xfffafb).into(),
+                hover: rgba(0x8c3b5210).into(),
+                active: rgba(0x8c3b521c).into(),
+                line: rgba(0x8c3b5216).into(),
+                line_strong: rgba(0x8c3b522b).into(),
+                text: rgb(0x2c1820).into(),
+                muted: rgb(0x735661).into(),
+                faint: rgb(0xa4868f).into(),
+                accent: rgb(0xb02a58).into(),
                 on_accent: rgb(0xffffff).into(),
-                accent_soft: rgba(0x8a5a0018).into(),
-                ok: rgb(0x3f7d43).into(),
+                accent_soft: rgba(0xb02a5818).into(),
+                ok: rgb(0x2f7d55).into(),
                 warn: rgb(0xa86b00).into(),
                 danger: rgb(0xb23a32).into(),
-                info: rgb(0x356d93).into(),
-                selection: rgba(0x8a5a0033).into(),
-                scrim: rgba(0x241c0b4d).into(),
-                code: rgb(0xf0eadb).into(),
+                info: rgb(0x3b6a9a).into(),
+                selection: rgba(0xb02a5833).into(),
+                scrim: rgba(0x2a10184d).into(),
+                code: rgb(0xf6e6ea).into(),
                 diff_added: rgba(0x3f7d4317).into(),
                 diff_added_word: rgba(0x3f7d4347).into(),
                 diff_removed: rgba(0xb23a3214).into(),
@@ -237,13 +219,13 @@ impl Theme {
         }
     }
 
-    /// Indigo and gold, the strings of an instrument in a quiet room.
-    pub fn harp(dark: bool) -> Self {
+    /// Psalm, silk and gold in the dark (dark), and Daybreak, rays of morning light (light).
+    fn harp(dark: bool) -> Self {
         if dark {
             Self {
-                id: "harp",
-                name: "Harp",
-                pattern: Pattern::Strings,
+                id: "psalm",
+                name: "Psalm",
+                pattern: Pattern::Silk,
                 dark: true,
                 bg: rgb(0x0d0f16).into(),
                 surface: rgb(0x121520).into(),
@@ -272,9 +254,9 @@ impl Theme {
             }
         } else {
             Self {
-                id: "harp",
-                name: "Harp",
-                pattern: Pattern::Strings,
+                id: "daybreak",
+                name: "Daybreak",
+                pattern: Pattern::Rays,
                 dark: false,
                 bg: rgb(0xf6f3ea).into(),
                 surface: rgb(0xeee9dd).into(),
@@ -304,15 +286,25 @@ impl Theme {
         }
     }
 
+    /// The brighter tone scattered through the background art: the theme's signal colour.
+    pub fn art_glint_rgb(&self) -> [u8; 3] {
+        match self.id {
+            "dawn" => [0xe9, 0xb8, 0x5c],
+            "sharon" => [0xb0, 0x2a, 0x58],
+            "psalm" => [0xf0, 0xc4, 0x6e],
+            "daybreak" => [0x86, 0x58, 0x00],
+            _ => [0xd4, 0xf2, 0x4a],
+        }
+    }
+
     /// The colour of this theme's background dots.
     pub fn art_rgb(&self) -> [u8; 3] {
-        match (self.id, self.dark) {
-            ("shepherd", true) => [0xd9, 0xc9, 0x9a],
-            ("shepherd", false) => [0x6b, 0x5b, 0x2e],
-            ("harp", true) => [0xc9, 0xb8, 0xd9],
-            ("harp", false) => [0x3a, 0x31, 0x5a],
-            (_, true) => [0xd9, 0xd6, 0xcc],
-            _ => [0x3a, 0x38, 0x30],
+        match self.id {
+            "dawn" => [0xd9, 0xc9, 0x9a],
+            "sharon" => [0x8c, 0x3b, 0x52],
+            "psalm" => [0xc9, 0xb8, 0xd9],
+            "daybreak" => [0x3a, 0x31, 0x5a],
+            _ => [0xd9, 0xd6, 0xcc],
         }
     }
 
@@ -400,9 +392,9 @@ pub fn theme(cx: &App) -> &Theme {
 pub fn load(home: &std::path::Path) -> Theme {
     let text = std::fs::read_to_string(home.join("window-theme")).unwrap_or_default();
     let mut parts = text.split_whitespace();
-    let id = parts.next().unwrap_or("stone");
+    let id = parts.next().unwrap_or("sling");
     let dark = parts.next() != Some("light");
-    Theme::by_id(id, dark)
+    Theme::from_saved(id, dark)
 }
 
 /// Remember the choice for the next window.
@@ -470,37 +462,45 @@ pub fn mono() -> &'static str {
 mod tests {
     use super::*;
 
-    fn variants() -> Vec<Theme> {
-        Theme::ALL.iter().flat_map(|(id, _)| [Theme::by_id(id, true), Theme::by_id(id, false)]).collect()
+    fn all() -> Vec<Theme> {
+        Theme::ORDER.iter().map(|id| Theme::by_id(id)).collect()
     }
 
     #[test]
     fn every_theme_has_every_colour_token() {
-        for theme in variants() {
-            assert!(matches!(theme.id, "stone" | "shepherd" | "harp"), "{}", theme.id);
+        for theme in all() {
             for (name, colour) in theme.colour_tokens() {
                 assert!(colour.a > 0.0, "{} has no {}", theme.id, name);
                 assert!(colour.a <= 1.0 && colour.l >= 0.0 && colour.l <= 1.0, "{} {name} is out of range", theme.id);
             }
-            // Text has to be readable on the window; a theme where they are the
-            // same colour is not a theme.
+            // Text has to be readable on the window; a theme where they are the same colour is not a theme.
             assert_ne!(theme.text.l, theme.bg.l, "{}", theme.id);
         }
     }
 
     #[test]
-    fn each_theme_has_its_own_pattern_and_its_own_background() {
-        let patterns: Vec<Pattern> = variants().iter().map(|t| t.pattern).collect();
-        assert!(patterns.contains(&Pattern::Corner));
-        assert!(patterns.contains(&Pattern::Woven));
-        assert!(patterns.contains(&Pattern::Strings));
-        let stone = Theme::by_id("stone", true);
-        let shepherd = Theme::by_id("shepherd", true);
-        let harp = Theme::by_id("harp", true);
-        assert_ne!(stone.bg, shepherd.bg);
-        assert_ne!(shepherd.bg, harp.bg);
-        assert_ne!(stone.art_rgb(), shepherd.art_rgb());
-        assert_ne!(shepherd.art_rgb(), harp.art_rgb());
+    fn six_themes_each_with_its_own_name_scene_and_colours() {
+        let themes = all();
+        for (i, a) in themes.iter().enumerate() {
+            assert_eq!(a.id, Theme::ORDER[i], "the order and the themes agree");
+            for b in &themes[i + 1..] {
+                assert_ne!(a.id, b.id);
+                assert_ne!(a.name, b.name);
+                assert_ne!(a.pattern, b.pattern, "{} and {} share a scene", a.id, b.id);
+                assert_ne!(a.bg, b.bg, "{} and {} share a background", a.id, b.id);
+                assert_ne!(a.art_rgb(), b.art_rgb(), "{} and {} share a dot colour", a.id, b.id);
+            }
+        }
+        assert_eq!(themes.iter().filter(|t| t.dark).count(), 3);
+        assert_eq!(themes.iter().filter(|t| !t.dark).count(), 2, "two for the day, not three");
+    }
+
+    #[test]
+    fn the_words_light_and_dark_do_not_name_a_theme() {
+        for theme in all() {
+            let name = theme.name.to_lowercase();
+            assert!(!name.contains("light") && !name.contains("dark"), "{}", theme.name);
+        }
     }
 
     #[test]
@@ -508,18 +508,37 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("devd-theme-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let chosen = Theme::by_id("harp", false);
-        save(&dir, &chosen).unwrap();
-        assert_eq!(load(&dir), chosen);
+        for id in Theme::ORDER {
+            let chosen = Theme::by_id(id);
+            save(&dir, &chosen).unwrap();
+            assert_eq!(load(&dir), chosen, "{id}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
-        assert_eq!(load(&dir), Theme::dark(), "a missing file is the default, not a failure");
+        assert_eq!(load(&dir), Theme::by_id("sling"), "a missing file is the default, not a failure");
     }
 
     #[test]
-    fn an_unknown_theme_falls_back_to_stone_and_light_is_separate() {
-        assert_eq!(Theme::by_id("nope", true), Theme::dark());
-        assert_eq!(Theme::by_id("nope", false), Theme::light());
-        assert!(!Theme::by_id("harp", false).dark);
-        assert!(Theme::by_id("harp", true).dark);
+    fn a_choice_saved_by_an_earlier_window_still_opens_the_matching_theme() {
+        let dir = std::env::temp_dir().join(format!("devd-theme-old-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for (saved, expected) in [("stone dark", "sling"), ("stone light", "daybreak"), ("shepherd dark", "dawn"), ("shepherd light", "sharon"), ("harp dark", "psalm"), ("harp light", "daybreak"), ("linen dark", "daybreak"), ("parchment dark", "sharon")] {
+            std::fs::write(dir.join("window-theme"), saved).unwrap();
+            assert_eq!(load(&dir).id, expected, "{saved}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_unknown_theme_falls_back_to_sling_and_next_goes_round_the_order() {
+        assert_eq!(Theme::by_id("nope"), Theme::by_id("sling"));
+        let mut theme = Theme::by_id("sling");
+        let mut seen = Vec::new();
+        for _ in 0..5 {
+            seen.push(theme.id);
+            theme = theme.next();
+        }
+        assert_eq!(seen, Theme::ORDER);
+        assert_eq!(theme.id, "sling", "after the last comes the first");
     }
 }

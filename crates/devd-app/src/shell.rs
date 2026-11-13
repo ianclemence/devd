@@ -117,7 +117,7 @@ pub fn commands() -> Commands {
     table.add(Command::new("intelligence.catalogue", "Update the model catalogue", "Fetch current models and prices from models.dev", Section::Machine).keywords(&["models", "prices", "refresh", "providers"]));
     table.add(Command::new("intelligence.fetch", "Fetch every provider's models", "Ask each provider what its key may use", Section::Machine).keywords(&["models", "list", "refresh"]));
     table.add(Command::new("view.palette", "Command menu", "Search every action and place", Section::View).key("secondary-k"));
-    table.add(Command::new("view.theme", "Switch light and dark", "Change the window's palette", Section::View).key("secondary-shift-l").keywords(&["appearance", "colour"]));
+    table.add(Command::new("view.theme", "Next theme", "Change how the whole window looks", Section::View).key("secondary-shift-l").keywords(&["appearance", "colour"]));
     table.add(Command::new("view.theme.stone", "Use the Stone theme", "The graphite workbench, with volt", Section::View).keywords(&["appearance", "colour", "dither"]));
     table.add(Command::new("view.theme.shepherd", "Use the Shepherd theme", "Wool, olive and dawn", Section::View).keywords(&["appearance", "colour", "dither"]));
     table.add(Command::new("view.theme.harp", "Use the Harp theme", "Indigo and gold", Section::View).keywords(&["appearance", "colour", "dither"]));
@@ -232,8 +232,7 @@ impl Shell {
 
     /// Switch theme, keeping the current light or dark choice, and remember it.
     pub fn choose_theme(&mut self, id: &str, cx: &mut Context<Self>) {
-        let current = theme(cx).clone();
-        let next = Theme::by_id(id, current.dark);
+        let next = Theme::by_id(id);
         let _ = crate::theme::save(std::path::Path::new(&devd(cx).conn.home), &next);
         cx.set_global(next);
         cx.refresh_windows();
@@ -272,8 +271,7 @@ impl Shell {
             }
             "view.palette" => return self.open_palette(window, cx),
             "view.theme" => {
-                let current = theme(cx).clone();
-                let next = Theme::by_id(current.id, !current.dark);
+                let next = theme(cx).next();
                 let _ = crate::theme::save(std::path::Path::new(&devd(cx).conn.home), &next);
                 cx.set_global(next);
                 cx.refresh_windows();

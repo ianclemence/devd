@@ -6,6 +6,7 @@ pub mod assistant;
 pub mod compose;
 pub mod home;
 pub mod intelligence;
+pub mod appearance;
 pub mod lists;
 pub mod modal;
 pub mod pages;
