@@ -27,6 +27,7 @@
 
 pub mod attachments;
 pub mod browser;
+pub mod budget;
 pub mod caps;
 pub mod caps_autonomy;
 pub mod charter;
@@ -43,6 +44,7 @@ pub mod flow;
 pub mod fs;
 pub mod gate;
 pub mod guardian;
+pub mod handoff;
 pub mod health;
 pub mod gemini;
 pub mod intake;
@@ -59,6 +61,7 @@ pub mod prompts;
 pub mod providers;
 pub mod requirements;
 pub mod roles;
+pub mod runview;
 pub mod schedule;
 pub mod search;
 pub mod secrets;

@@ -6,6 +6,7 @@ license.workspace = true
 description = "devd's built-in agent: model providers, the official model catalogue, conversations, the inbox, approvals and file tools."
 
 [dependencies]
+devd-runline = { path = "../devd-runline" }
 devd-core = { path = "../devd-core" }
 devd-genui = { path = "../devd-genui" }
 devd-mcp = { path = "../devd-mcp" }

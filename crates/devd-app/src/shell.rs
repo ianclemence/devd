@@ -265,6 +265,15 @@ pub fn commands() -> Commands {
     );
     table.add(
         Command::new(
+            "app.stop_background",
+            "Quit devd completely",
+            "Stop devd in the background too. Running team work pauses until devd is opened again.",
+            Section::View,
+        )
+        .keywords(&["stop", "daemon", "background", "exit", "quit"]),
+    );
+    table.add(
+        Command::new(
             "view.refresh",
             "Refresh this screen",
             "Ask devd again for what this screen shows",
@@ -305,6 +314,10 @@ struct Palette {
 pub struct Shell {
     /// Where the window is, and has been.
     pub history: History,
+    /// Which runs the Runs list shows.
+    pub runs_filter: screens::runs::Filter,
+    /// The agent shown beside a run's page: the run, and the task's key.
+    pub run_focus: Option<(String, String)>,
     focus: FocusHandle,
     commands: Commands,
     palette: Option<Palette>,
@@ -393,6 +406,8 @@ impl Shell {
             pane: screens::pane::PaneUi::default(),
             chain_collapsed: false,
             history: History::new(start),
+            runs_filter: Default::default(),
+            run_focus: None,
             focus,
             commands: commands(),
             palette: None,
@@ -487,6 +502,13 @@ impl Shell {
                 window.focus(&self.composer.focus_handle(cx));
             }
             "view.palette" => return self.open_palette(window, cx),
+            "app.stop_background" => {
+                let home = devd(cx).conn.home.clone();
+                crate::backend::stop_resident(&home);
+                devd(cx).allow_close.set(true);
+                cx.quit();
+                return;
+            }
             "view.theme" => {
                 let next = theme(cx).next();
                 let _ = crate::theme::save(std::path::Path::new(&devd(cx).conn.home), &next);
@@ -1699,7 +1721,7 @@ impl Render for Shell {
             Route::Home => screens::home::render(self, window, cx),
             Route::Assistant(thread) => screens::assistant::render(self, thread, window, cx),
             Route::Inbox => screens::lists::inbox(self, cx),
-            Route::Runs(run) => screens::lists::runs(self, run, cx),
+            Route::Runs(run) => screens::runs::render(self, run, cx),
             Route::Projects(None) => screens::lists::projects(self, cx),
             Route::Projects(Some(dir)) => screens::project::render(
                 self,

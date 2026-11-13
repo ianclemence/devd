@@ -202,6 +202,10 @@ pub struct StartRequest {
     pub done_when: Vec<String>,
     /// Extra passes allowed to meet them.
     pub max_rounds: i64,
+    /// The most the run may spend, in US dollars. `None` is no ceiling.
+    pub budget_usd: Option<f64>,
+    /// The most model turns its agents may take together. `None` is no ceiling.
+    pub max_turns: Option<i64>,
 }
 
 /// Commands that count as verification when run through `project.run`.
@@ -305,7 +309,12 @@ pub fn evidence(events: &[ChatEvent]) -> Vec<Value> {
                     )),
                     // A composition written is a change; a render that ran is the check
                     // that every frame of it can be made.
-                    "motion.new" => out.push(fact("change", cap, outcome_ok, args["dir"].as_str().unwrap_or("").to_string())),
+                    "motion.new" => out.push(fact(
+                        "change",
+                        cap,
+                        outcome_ok,
+                        args["dir"].as_str().unwrap_or("").to_string(),
+                    )),
                     "motion.render" => out.push(fact(
                         "verify",
                         cap,
@@ -317,6 +326,17 @@ pub fn evidence(events: &[ChatEvent]) -> Vec<Value> {
                         cap,
                         outcome_ok && data["status"].as_str().map(|s| s == "ok").unwrap_or(true),
                         format!("created {}", args["name"].as_str().unwrap_or("")),
+                    )),
+                    // Every check the project has, run in one call: the proof, with each check's own result.
+                    "project.verify" => out.push(fact(
+                        "verify",
+                        cap,
+                        outcome_ok && data["ok"].as_bool().unwrap_or(false),
+                        format!(
+                            "{} of {} checks passed",
+                            data["passed"].as_u64().unwrap_or(0),
+                            data["total"].as_u64().unwrap_or(0)
+                        ),
                     )),
                     "project.run" | "project.exec" | "project.exec_destructive" => {
                         let task = args["task"].as_str().unwrap_or("");
@@ -370,7 +390,9 @@ pub fn trace(ctx: &Ctx, run_id: &str, limit: usize) -> Result<Value> {
     // (timestamp, role, task key, capability, ok), then sorted: tasks ran side by side.
     let mut rows: Vec<(String, String, String, String, bool)> = Vec::new();
     for task in &tasks {
-        let Some(thread) = &task.thread_id else { continue };
+        let Some(thread) = &task.thread_id else {
+            continue;
+        };
         let events = ctx.store.list_events(thread, 0, 100_000)?;
         let mut open: HashMap<String, (String, String)> = HashMap::new();
         for e in &events {
@@ -381,13 +403,28 @@ pub fn trace(ctx: &Ctx, run_id: &str, limit: usize) -> Result<Value> {
                             continue;
                         }
                         let name = b["name"].as_str().unwrap_or("");
-                        let capability = if name == "devd_invoke" { b["input"]["id"].as_str().unwrap_or("devd_invoke") } else { name };
-                        open.insert(b["id"].as_str().unwrap_or("").to_string(), (e.created_at.clone(), capability.to_string()));
+                        let capability = if name == "devd_invoke" {
+                            b["input"]["id"].as_str().unwrap_or("devd_invoke")
+                        } else {
+                            name
+                        };
+                        open.insert(
+                            b["id"].as_str().unwrap_or("").to_string(),
+                            (e.created_at.clone(), capability.to_string()),
+                        );
                     }
                 }
                 "tool_result" => {
-                    if let Some((at, capability)) = open.remove(e.data["tool_use_id"].as_str().unwrap_or("")) {
-                        rows.push((at, task.role.clone(), task.key.clone(), capability, !e.data["is_error"].as_bool().unwrap_or(false)));
+                    if let Some((at, capability)) =
+                        open.remove(e.data["tool_use_id"].as_str().unwrap_or(""))
+                    {
+                        rows.push((
+                            at,
+                            task.role.clone(),
+                            task.key.clone(),
+                            capability,
+                            !e.data["is_error"].as_bool().unwrap_or(false),
+                        ));
                     }
                 }
                 _ => {}
@@ -396,7 +433,11 @@ pub fn trace(ctx: &Ctx, run_id: &str, limit: usize) -> Result<Value> {
     }
     rows.sort_by(|a, b| a.0.cmp(&b.0));
     let seconds = |at: &str, start: &str| -> f64 {
-        let parse = |s: &str| chrono::DateTime::parse_from_rfc3339(s).map(|d| d.timestamp_millis()).unwrap_or(0);
+        let parse = |s: &str| {
+            chrono::DateTime::parse_from_rfc3339(s)
+                .map(|d| d.timestamp_millis())
+                .unwrap_or(0)
+        };
         (parse(at) - parse(start)).max(0) as f64 / 1000.0
     };
     let start = rows.first().map(|r| r.0.clone()).unwrap_or_default();
@@ -408,7 +449,8 @@ pub fn trace(ctx: &Ctx, run_id: &str, limit: usize) -> Result<Value> {
         .collect();
     let by_role = tasks.iter().fold(serde_json::Map::new(), |mut m, t| {
         let n = rows.iter().filter(|r| r.2 == t.key).count() as u64;
-        *m.entry(t.role.clone()).or_insert(json!(0)) = json!(m.get(&t.role).and_then(Value::as_u64).unwrap_or(0) + n);
+        *m.entry(t.role.clone()).or_insert(json!(0)) =
+            json!(m.get(&t.role).and_then(Value::as_u64).unwrap_or(0) + n);
         m
     });
     Ok(json!({
@@ -517,17 +559,39 @@ fn task_brief(
     let mut deps = String::new();
     for k in &t.depends_on {
         if let Some(d) = tasks.iter().find(|x| &x.key == k) {
+            // What the task handed on, in the shape it was kept in; the report cut short only for one from before that existed.
+            let said = match store
+                .handoff(&d.id)
+                .ok()
+                .flatten()
+                .and_then(|v| serde_json::from_value::<crate::handoff::Handoff>(v).ok())
+            {
+                Some(h) => crate::handoff::render(&h, 1500),
+                None => util::truncate(d.result.as_deref().unwrap_or("(no report)"), 1500),
+            };
             deps.push_str(&format!(
-                "- {} ({}), {}: {}\n",
-                d.title,
-                d.role,
-                d.state,
-                util::truncate(d.result.as_deref().unwrap_or("(no report)"), 1500)
+                "## {} ({}), {}\n{}\n\n",
+                d.title, d.role, d.state, said
             ));
         }
     }
     if !deps.is_empty() {
-        s.push_str(&format!("\n# What the tasks before yours reported\n{deps}"));
+        s.push_str(&format!(
+            "\n# What the tasks before yours handed on\n{deps}"
+        ));
+    }
+    // Where the team has got to, from the progress file the harness keeps: what exists, what was decided, what is open.
+    if let Some(project) = run.project.as_deref() {
+        if let Ok(progress) =
+            std::fs::read_to_string(Path::new(project).join(".devd").join("progress.md"))
+        {
+            let recent = crate::handoff::tail(&progress, 3500);
+            if !recent.is_empty() {
+                s.push_str(&format!(
+                    "\n# Where the team has got to (the progress file; do not redo it)\n{recent}\n"
+                ));
+            }
+        }
     }
     let directions: Vec<String> = store
         .list_team_events(&run.id, 0, 500)
@@ -563,7 +627,7 @@ fn task_brief(
         // told which test database to use.
         s.push_str(&crate::souls::Souls::at(home).section(project, &t.role));
     }
-        // What this teammate has learned here. Separate from the project memory
+    // What this teammate has learned here. Separate from the project memory
     s.push_str("\nStart now. When finished, call team.report.");
     s
 }
@@ -577,6 +641,10 @@ pub struct Team {
     registry: OnceLock<Arc<Registry>>,
     drivers: Mutex<HashSet<String>>,
     stop: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// Tasks already asked to wrap up, so one conversation is asked once.
+    wrapped: Mutex<HashSet<String>>,
+    /// Runs already told they are near a ceiling, so it is said once.
+    warned: Mutex<HashSet<String>>,
 }
 
 fn is_done(state: &str) -> bool {
@@ -624,7 +692,14 @@ impl Team {
     ///
     /// This is why the inbox and Home no longer both show a paused run: the run
     /// speaks once, to the place that asked.
-    fn tell_requester(&self, run: &TeamRun, kind: &str, subject: &str, body: &str, needs_reply: bool) {
+    fn tell_requester(
+        &self,
+        run: &TeamRun,
+        kind: &str,
+        subject: &str,
+        body: &str,
+        needs_reply: bool,
+    ) {
         match run.thread_id.as_deref() {
             Some(thread) => {
                 // The report is for the assistant, not for the person directly.
@@ -697,6 +772,8 @@ impl Team {
             registry: OnceLock::new(),
             drivers: Mutex::new(HashSet::new()),
             stop: Mutex::new(HashMap::new()),
+            wrapped: Mutex::new(HashSet::new()),
+            warned: Mutex::new(HashSet::new()),
         })
     }
 
@@ -777,7 +854,15 @@ impl Team {
     }
 
     /// Grant `role` the right to do `key` on this run.
-    fn mandate(&self, run: &TeamRun, key: &str, role: &str, scope: &[String], basis: &str, origin: &str) -> Value {
+    fn mandate(
+        &self,
+        run: &TeamRun,
+        key: &str,
+        role: &str,
+        scope: &[String],
+        basis: &str,
+        origin: &str,
+    ) -> Value {
         let _ = key;
         serde_json::to_value(devd_core::Mandate::new(
             basis,
@@ -810,7 +895,10 @@ impl Team {
             ));
         }
         if roles::get(&t.role).is_none() {
-            return Err(format!("the {} role no longer exists, so nothing can do this work", t.role));
+            return Err(format!(
+                "the {} role no longer exists, so nothing can do this work",
+                t.role
+            ));
         }
         if t.scope.iter().any(|s| s.is_empty() || s.starts_with("..")) && !t.scope.is_empty() {
             return Err("this task's scope names a path outside the project".into());
@@ -822,7 +910,9 @@ impl Team {
 
     /// How long a task may do nothing before the watchdog treats it as stuck.
     fn stall_after(&self) -> Duration {
-        Duration::from_secs((providers::READ_TIMEOUT_SECS * STALL_FACTOR as u64).max(STALL_FLOOR.as_secs()))
+        Duration::from_secs(
+            (providers::READ_TIMEOUT_SECS * STALL_FACTOR as u64).max(STALL_FLOOR.as_secs()),
+        )
     }
 
     /// Find running tasks that have stopped moving, and do something about them.
@@ -858,27 +948,16 @@ impl Team {
             // An unfinished tool call is a legitimate long command, not a dead
             // agent. The log's last event is the tool call; do not nag or stop
             // it. The provider and the task's own timeout own that.
-            if self
-                .ctx
-                .store
-                .thread_awaits_tool(&tid)
-                .unwrap_or(false)
-            {
+            if self.ctx.store.thread_awaits_tool(&tid).unwrap_or(false) {
                 continue;
             }
-            if self
-                .ctx
-                .store
-                .unfinished_tool_calls(&t.run_id)
-                .unwrap_or(0)
-                > 0
-            {
+            if self.ctx.store.unfinished_tool_calls(&t.run_id).unwrap_or(0) > 0 {
                 continue;
             }
             let minutes = quiet.num_minutes().max(1);
             let stalls = self.ctx.store.bump_stall(&t.id).unwrap_or(1);
-            let past_stop = quiet
-                >= chrono::Duration::from_std(self.stall_after()).unwrap_or_default();
+            let past_stop =
+                quiet >= chrono::Duration::from_std(self.stall_after()).unwrap_or_default();
             // Before the stop threshold, only the first observation nudges.
             // After it, a task that has already been asked and still has not
             // moved is stopped.
@@ -938,6 +1017,153 @@ impl Team {
         }
     }
 
+    /// Pause a run that has used what it was given, and say so once when it is nearing it. Returns whether it was paused.
+    fn enforce_budget(&self, run: &TeamRun) -> bool {
+        let (Ok(budget), Ok(usage)) = (
+            self.ctx.store.run_budget(&run.id),
+            self.ctx.store.run_usage(&run.id),
+        ) else {
+            return false;
+        };
+        match crate::budget::standing(budget, usage) {
+            crate::budget::Standing::Within => false,
+            crate::budget::Standing::Near(words) => {
+                let first = self
+                    .warned
+                    .lock()
+                    .map(|mut w| w.insert(run.id.clone()))
+                    .unwrap_or(false);
+                if first {
+                    self.event(&run.id, None, "budget_near", json!({ "words": words, "spent_usd": usage.cost_usd, "turns": usage.turns }));
+                    self.say_in_requester(run, &format!("Budget: {words}. The run will pause when it is used up; raise it with team.budget to go on."));
+                }
+                false
+            }
+            crate::budget::Standing::Reached(words) => {
+                let why = format!("Budget reached: {words}. The work so far is kept. Raise the budget (team.budget) and resume to continue.");
+                let _ = self
+                    .ctx
+                    .store
+                    .set_run_state(&run.id, "paused", None, Some(&why));
+                self.event(
+                    &run.id,
+                    None,
+                    "budget_reached",
+                    json!({ "words": words, "spent_usd": usage.cost_usd, "turns": usage.turns }),
+                );
+                self.say_in_requester(run, &why);
+                true
+            }
+        }
+    }
+
+    /// Ask a task whose conversation has grown past what one conversation should hold to finish cleanly and hand over.
+    fn wrap_up_long_tasks(&self, tasks: &[TeamTask]) {
+        for t in tasks.iter().filter(|t| is_active(&t.state)) {
+            let Some(tid) = t.thread_id.as_deref() else {
+                continue;
+            };
+            let Ok(Some(thread)) = self.ctx.store.get_thread(tid) else {
+                continue;
+            };
+            if !crate::budget::task_over(thread.input_tokens, thread.output_tokens) {
+                continue;
+            }
+            let first = self
+                .wrapped
+                .lock()
+                .map(|mut w| w.insert(t.id.clone()))
+                .unwrap_or(false);
+            if !first {
+                continue;
+            }
+            let _ = self.hub.follow_up(
+                tid,
+                &crate::budget::wrap_up_message(thread.input_tokens, thread.output_tokens),
+            );
+            self.event(&t.run_id, Some(&t.id), "wrap_up", json!({ "task": t.key, "input_tokens": thread.input_tokens, "output_tokens": thread.output_tokens }));
+        }
+    }
+
+    /// A plain line in the conversation that asked for the run, when one did.
+    fn say_in_requester(&self, run: &TeamRun, text: &str) {
+        if let Some(thread) = run.thread_id.as_deref() {
+            self.hub.note(thread, text);
+        }
+    }
+
+    /// Whether this process is carrying the run: a driver is running for it.
+    pub fn driving(&self, run_id: &str) -> bool {
+        self.drivers
+            .lock()
+            .map(|d| d.contains(run_id))
+            .unwrap_or(false)
+    }
+
+    /// Make sure something is carrying a run that is waiting to be carried. For a run with no driver in this process (its
+    /// owner closed, or it was started from a terminal that has gone), this is the one call that puts it back to work.
+    pub fn drive_run(self: &Arc<Self>, run_id: &str) -> Result<bool> {
+        let run = self.run(run_id)?;
+        if !matches!(run.state.as_str(), "planning" | "running") {
+            return Err(DevdError::conflict(format!(
+                "the run is {}; only a run that is planning or running is carried",
+                run.state
+            )));
+        }
+        let already = self.driving(run_id);
+        if !already {
+            self.event(run_id, None, "note", json!({ "text": "Nothing was carrying this run; it is being carried again from where it stopped." }));
+            self.ensure_driver(run_id);
+        }
+        Ok(!already)
+    }
+
+    /// Set what a run may spend and how many turns its agents may take, and carry on a run that was paused for reaching them.
+    pub fn set_budget(
+        self: &Arc<Self>,
+        run_id: &str,
+        usd: Option<f64>,
+        turns: Option<i64>,
+    ) -> Result<Value> {
+        let run = self.run(run_id)?;
+        self.ctx.store.set_run_budget(
+            run_id,
+            usd.filter(|b| *b > 0.0),
+            turns.filter(|t| *t > 0),
+        )?;
+        if let Ok(mut w) = self.warned.lock() {
+            w.remove(run_id);
+        }
+        let was_budget = run.state == "paused"
+            && run
+                .error
+                .as_deref()
+                .is_some_and(|e| e.starts_with("Budget reached"));
+        if was_budget
+            && matches!(
+                crate::budget::standing(
+                    self.ctx.store.run_budget(run_id)?,
+                    self.ctx.store.run_usage(run_id)?
+                ),
+                crate::budget::Standing::Within | crate::budget::Standing::Near(_)
+            )
+        {
+            self.ctx
+                .store
+                .set_run_state(run_id, "running", None, None)?;
+            self.restart_driver(run_id);
+        }
+        self.event(
+            run_id,
+            None,
+            "budget_set",
+            json!({ "usd": usd, "turns": turns }),
+        );
+        Ok(
+            json!({ "budget": self.ctx.store.run_budget(run_id)?, "usage": self.ctx.store.run_usage(run_id)?, "resumed": was_budget }),
+        )
+    }
+
     fn git(&self) -> PathBuf {
         self.ctx
             .settings
@@ -982,7 +1208,14 @@ impl Team {
     /// did last, labelled as such, so a failure can be named pre-existing only
     /// when the command and result actually match.
     fn capture_baseline(&self, run: &TeamRun) {
-        if self.ctx.store.run_baseline(&run.id).ok().flatten().is_some() {
+        if self
+            .ctx
+            .store
+            .run_baseline(&run.id)
+            .ok()
+            .flatten()
+            .is_some()
+        {
             return;
         }
         let Some(project) = run.project.as_deref() else {
@@ -992,7 +1225,11 @@ impl Team {
         if let Some(sha) = &commit {
             let _ = self.ctx.store.set_run_base_commit(&run.id, sha);
         }
-        let recent = self.ctx.store.list_stack_runs(Some(project), 20).unwrap_or_default();
+        let recent = self
+            .ctx
+            .store
+            .list_stack_runs(Some(project), 20)
+            .unwrap_or_default();
         let checks: Vec<Value> = recent
             .iter()
             .filter(|r| r.kind == "task" || r.kind == "exec")
@@ -1030,6 +1267,8 @@ impl Team {
             auto_approve,
             done_when,
             max_rounds,
+            budget_usd,
+            max_turns,
         } = req;
         let (parallel, auto_approve) = (*parallel, *auto_approve);
         let goal = goal.trim();
@@ -1111,6 +1350,13 @@ impl Team {
         self.ctx
             .store
             .set_goal_loop(&run.id, &criteria, *max_rounds)?;
+        if budget_usd.is_some() || max_turns.is_some() {
+            self.ctx.store.set_run_budget(
+                &run.id,
+                budget_usd.filter(|b| *b > 0.0),
+                max_turns.filter(|t| *t > 0),
+            )?;
+        }
         if let Some(note) = imported {
             self.event(&run.id, None, "note", json!({ "text": note }));
         }
@@ -1184,7 +1430,8 @@ impl Team {
         self.ensure_driver(run_id);
     }
 
-    fn ensure_driver(self: &Arc<Self>, run_id: &str) {        {
+    fn ensure_driver(self: &Arc<Self>, run_id: &str) {
+        {
             let Ok(mut d) = self.drivers.lock() else {
                 return;
             };
@@ -1342,7 +1589,13 @@ impl Team {
     /// believed twice: the conversation is ended here and the scheduler judges
     /// the claim against its evidence at once, rather than the model spending
     /// another few hundred steps saying the same thing.
-    pub fn report(&self, task_id: &str, status: &str, summary: &str, lesson: Option<&str>) -> Result<Value> {
+    pub fn report(
+        &self,
+        task_id: &str,
+        status: &str,
+        summary: &str,
+        lesson: Option<&str>,
+    ) -> Result<Value> {
         self.report_full(task_id, status, summary, lesson, None, None, None, None)
     }
 
@@ -1506,7 +1759,11 @@ impl Team {
         let key = format!("work-{}", &run.id[..6.min(run.id.len())]);
         // A person wrote this work item, so its authority is explicit; an agent
         // that handed the work over carries the inferred basis.
-        let basis = if caller.actor.is_agent() { "inferred" } else { "explicit" };
+        let basis = if caller.actor.is_agent() {
+            "inferred"
+        } else {
+            "explicit"
+        };
         let mandate = self.mandate(&run, &key, r.id, &[], basis, &caller.actor.label());
         self.ctx.store.add_task(
             &run.id,
@@ -1565,7 +1822,10 @@ impl Team {
         );
         self.restart_driver(run_id);
         // Approving the plan answers the "Plan ready" message in the Inbox.
-        let _ = self.ctx.store.resolve_inbox_for_run(run_id, Some(&run.title));
+        let _ = self
+            .ctx
+            .store
+            .resolve_inbox_for_run(run_id, Some(&run.title));
         self.run(run_id)
     }
 
@@ -1665,7 +1925,10 @@ impl Team {
             json!({ "by": caller.actor.label() }),
         );
         // Resuming answers the Inbox question that paused the run.
-        let _ = self.ctx.store.resolve_inbox_for_run(run_id, Some(&run.title));
+        let _ = self
+            .ctx
+            .store
+            .resolve_inbox_for_run(run_id, Some(&run.title));
         self.restart_driver(run_id);
         self.run(run_id)
     }
@@ -1697,8 +1960,14 @@ impl Team {
                 || t.key == "final-verify"
                 || t.key.ends_with("-verify");
             let derived = completion::derive_verdict(&t.role, t.result.as_deref().unwrap_or(""));
-            let not_approved = t.verdict.as_deref().is_some_and(|v| v != "approve" && v != "accepted_by_hand")
-                || matches!(derived, Some(Verdict::ChangesNeeded) | Some(Verdict::Blocked));
+            let not_approved = t
+                .verdict
+                .as_deref()
+                .is_some_and(|v| v != "approve" && v != "accepted_by_hand")
+                || matches!(
+                    derived,
+                    Some(Verdict::ChangesNeeded) | Some(Verdict::Blocked)
+                );
             if !(gate && not_approved) {
                 return Err(DevdError::conflict("that task is done"));
             }
@@ -1739,7 +2008,10 @@ impl Team {
         // The person has acted on this run. The Inbox message that asked for
         // that action is answered; leaving it open listed the same pause again
         // after the run had already moved on.
-        let _ = self.ctx.store.resolve_inbox_for_run(&run.id, Some(&run.title));
+        let _ = self
+            .ctx
+            .store
+            .resolve_inbox_for_run(&run.id, Some(&run.title));
         Ok(self.ctx.store.get_team_task(task_id)?.expect("exists"))
     }
 
@@ -1755,7 +2027,10 @@ impl Team {
         let overridable = matches!(t.state.as_str(), "unverified" | "blocked" | "failed")
             || (t.state == "done"
                 && (t.verdict.as_deref().is_some_and(|v| v != "approve")
-                    || matches!(derived, Some(Verdict::ChangesNeeded) | Some(Verdict::Blocked))));
+                    || matches!(
+                        derived,
+                        Some(Verdict::ChangesNeeded) | Some(Verdict::Blocked)
+                    )));
         if !overridable {
             return Err(DevdError::conflict(
                 "only work that was not accepted, or a check that asked for changes, can be accepted by hand",
@@ -1784,7 +2059,12 @@ impl Team {
         // left uncommitted it blocks every later merge into that tree ("the project has uncommitted changes").
         if roles::get(&t.role).map(|r| r.writes).unwrap_or(false) && t.branch.is_none() {
             if let Err(why) = self.commit_task(&run, &t) {
-                self.event(&run.id, Some(&t.id), "merge_blocked", json!({ "task": t.key, "why": why.to_string() }));
+                self.event(
+                    &run.id,
+                    Some(&t.id),
+                    "merge_blocked",
+                    json!({ "task": t.key, "why": why.to_string() }),
+                );
             }
         }
         if run.state == "paused" {
@@ -1794,7 +2074,10 @@ impl Team {
         }
         self.restart_driver(&run.id);
         // Accepting the task answers the question that was waiting on it.
-        let _ = self.ctx.store.resolve_inbox_for_run(&run.id, Some(&run.title));
+        let _ = self
+            .ctx
+            .store
+            .resolve_inbox_for_run(&run.id, Some(&run.title));
         Ok(self.ctx.store.get_team_task(task_id)?.expect("exists"))
     }
 
@@ -1892,7 +2175,11 @@ impl Team {
             Some(p) => p.clone(),
             None => {
                 // The planner has the authority of the run itself.
-                let basis = if run.created_by.starts_with("agent:") { "inferred" } else { "explicit" };
+                let basis = if run.created_by.starts_with("agent:") {
+                    "inferred"
+                } else {
+                    "explicit"
+                };
                 let mandate = self.mandate(run, "plan", "planner", &[], basis, &run.created_by);
                 self.ctx.store.add_task(
                     &run.id,
@@ -1943,6 +2230,11 @@ impl Team {
         // What is alive but not progressing is found before the scheduler decides
         // what to start, so a stalled worker does not hold its slot forever.
         self.watch(&run.id, &tasks);
+        // A run that has used what it was given stops here, kept, until the person raises the ceiling.
+        if run.state == "running" && self.enforce_budget(run) {
+            return Ok(true);
+        }
+        self.wrap_up_long_tasks(&tasks);
         for t in tasks.iter().filter(|t| is_active(&t.state)) {
             if let Some(project) = &run.project {
                 if roles::get(&t.role).map(|r| r.writes).unwrap_or(false) && t.branch.is_none() {
@@ -2000,9 +2292,19 @@ impl Team {
             // pauses with the reason instead, so a change of mode or policy
             // stops work deliberately rather than silently.
             if let Err(why) = self.mandate_holds(t) {
-                let msg = format!("{} ({}): its authority no longer holds: {why}", t.key, t.role);
-                self.ctx.store.set_run_state(&run.id, "paused", None, Some(&msg))?;
-                self.event(&run.id, Some(&t.id), "mandate_revoked", json!({ "task": t.key, "why": why }));
+                let msg = format!(
+                    "{} ({}): its authority no longer holds: {why}",
+                    t.key, t.role
+                );
+                self.ctx
+                    .store
+                    .set_run_state(&run.id, "paused", None, Some(&msg))?;
+                self.event(
+                    &run.id,
+                    Some(&t.id),
+                    "mandate_revoked",
+                    json!({ "task": t.key, "why": why }),
+                );
                 self.tell_requester(
                     run,
                     "paused",
@@ -2042,7 +2344,8 @@ impl Team {
                 let deps: Vec<String> = real.iter().map(|t| t.key.clone()).collect();
                 // The harness adds this step itself: no person asked for it, so
                 // its mandate says so rather than borrowing the plan's.
-                let mandate = self.mandate(run, "final-verify", "qa", &[], "system", "devd:harness");
+                let mandate =
+                    self.mandate(run, "final-verify", "qa", &[], "system", "devd:harness");
                 let goal = self.ctx.store.goal_loop(&run.id).unwrap_or_default();
                 let criteria = goal.done_when.clone();
                 self.ctx.store.add_task(&run.id, NewTask { key: "final-verify", role: "qa", title: "Verify the finished result", instructions: "Everything has been implemented and merged. Independently verify the result in the project directory: run the project's own test, lint and build tasks (project.detect shows which exist) and report exactly what passed and what failed. If the project has no checks, say so and exercise the main behaviour by running it. Do not change application code. End with `verdict: approve`, `verdict: changes needed` or `verdict: blocked`, and pass the same value as the `verdict` field of team.report, with the acceptance criteria you checked in `criteria`. When a check fails, say whether it also failed at the run's base commit; if you cannot establish that, say the baseline is unknown instead of calling it pre-existing.", criteria: &criteria, depends_on: &deps, mandate: Some(&mandate), ..Default::default() })?;
@@ -2075,7 +2378,12 @@ impl Team {
             self.ctx
                 .store
                 .set_run_state(&run.id, "paused", None, Some(&msg))?;
-            self.event(&run.id, None, "needs_person", json!({ "tasks": blocked, "needs": needs }));
+            self.event(
+                &run.id,
+                None,
+                "needs_person",
+                json!({ "tasks": blocked, "needs": needs }),
+            );
             let body = match &needs {
                 Some(n) => format!(
                     "{}\n\n{}\n\n{}",
@@ -2087,7 +2395,9 @@ impl Team {
                         .collect::<Vec<_>>()
                         .join("\n")
                 ),
-                None => format!("{msg}\n\nRetry the task with a note, accept it by hand, or cancel the run."),
+                None => format!(
+                    "{msg}\n\nRetry the task with a note, accept it by hand, or cancel the run."
+                ),
             };
             self.tell_requester(
                 run,
@@ -2124,7 +2434,12 @@ impl Team {
         })
     }
 
-    fn start_task(self: &Arc<Self>, run: &TeamRun, t: &TeamTask, tasks: &[TeamTask]) -> Result<bool> {
+    fn start_task(
+        self: &Arc<Self>,
+        run: &TeamRun,
+        t: &TeamTask,
+        tasks: &[TeamTask],
+    ) -> Result<bool> {
         let project = PathBuf::from(run.project.clone().unwrap_or_default());
         let role = roles::get(&t.role).ok_or_else(|| DevdError::internal("unknown role"))?;
         // The baseline is the revision and the checks the run started from. It
@@ -2791,6 +3106,7 @@ impl Team {
             },
         )?;
         self.event(&run.id, Some(&t.id), "accepted", json!({ "task": t.key, "role": t.role, "evidence": ev.len(), "verified": ev.iter().filter(|f| f["kind"] == "verify" && f["ok"] == true).count(), "verdict": verdict.map(Verdict::as_str) }));
+        self.record_handoff(run, t, &summary, &ev);
         // A review is done when it has been read and judged; what it judged decides what
         // happens next. A structured approval wins over the words around it: a report
         // that says `verdict: approve` must not be sent back because its prose happens
@@ -2802,25 +3118,87 @@ impl Team {
         Ok(())
     }
 
+    /// What a task that was accepted leaves for the ones after it: its handoff, kept; a line in the team's progress file; and
+    /// a notice in the conversation that asked for the run, so the person is told without anyone asking.
+    fn record_handoff(&self, run: &TeamRun, t: &TeamTask, summary: &str, evidence: &[Value]) {
+        let root = run.project.clone().unwrap_or_default();
+        let handoff = crate::handoff::build(summary, evidence, &root);
+        if let Ok(value) = serde_json::to_value(&handoff) {
+            let _ = self.ctx.store.set_handoff(&t.id, &value);
+        }
+        if let Some(project) = run.project.as_deref().map(Path::new).filter(|p| p.exists()) {
+            let dir = project.join(".devd");
+            if std::fs::create_dir_all(&dir).is_ok() {
+                self.exclude_devd(project);
+                let entry = crate::handoff::progress_entry(
+                    &t.key,
+                    &t.role,
+                    &t.title,
+                    &handoff,
+                    &util::now(),
+                );
+                let file = dir.join("progress.md");
+                let mut text = std::fs::read_to_string(&file).unwrap_or_else(|_| format!("# Progress on: {}\n\nWhat each finished task did, decided and left open. Written by devd; read it before you start.\n\n", util::truncate(&run.title, 120)));
+                text.push_str(&entry);
+                let _ = std::fs::write(&file, text);
+            }
+        }
+        if let Some(thread) = run.thread_id.as_deref() {
+            let tasks = self
+                .ctx
+                .store
+                .list_tasks_of_run(&run.id)
+                .unwrap_or_default();
+            let work: Vec<&TeamTask> = tasks.iter().filter(|x| x.role != "planner").collect();
+            let done = work
+                .iter()
+                .filter(|x| matches!(x.state.as_str(), "done" | "skipped"))
+                .count();
+            self.hub.note(
+                thread,
+                &format!(
+                    "{} finished: {} ({done} of {} tasks done)",
+                    t.key,
+                    util::truncate(handoff.summary.lines().next().unwrap_or(""), 140),
+                    work.len()
+                ),
+            );
+        }
+    }
+
     /// A gatekeeper asked for changes: hand the findings back to the member who wrote
     /// the code, then have the same gatekeeper look again. Bounded, so a disagreement
     /// that the team cannot settle becomes one question for the person instead of a loop.
     fn request_changes(&self, run: &TeamRun, t: &TeamTask, findings: &str) -> Result<()> {
         let tasks = self.ctx.store.list_tasks_of_run(&run.id)?;
-        let round = tasks.iter().filter(|x| x.key.starts_with("fix-review-")).count() + 1;
-        let who = roles::get(&t.role).map(|r| r.title.to_string()).unwrap_or_else(|| t.role.clone());
+        let round = tasks
+            .iter()
+            .filter(|x| x.key.starts_with("fix-review-"))
+            .count()
+            + 1;
+        let who = roles::get(&t.role)
+            .map(|r| r.title.to_string())
+            .unwrap_or_else(|| t.role.clone());
         if round > MAX_REVIEW_ROUNDS {
             let why = format!(
                 "the {} still asks for changes after {} rounds of fixes; decide whether to accept the work as it is or to give the team new direction",
                 who.to_lowercase(),
                 MAX_REVIEW_ROUNDS
             );
-            let _ = self
-                .ctx
+            let _ = self.ctx.store.set_run_verdict(
+                &run.id,
+                "changes_needed",
+                t.reviewed_commit.as_deref(),
+            );
+            self.ctx
                 .store
-                .set_run_verdict(&run.id, "changes_needed", t.reviewed_commit.as_deref());
-            self.ctx.store.set_run_state(&run.id, "paused", None, Some(&why))?;
-            self.event(&run.id, Some(&t.id), "needs_person", json!({ "task": t.key, "why": why }));
+                .set_run_state(&run.id, "paused", None, Some(&why))?;
+            self.event(
+                &run.id,
+                Some(&t.id),
+                "needs_person",
+                json!({ "task": t.key, "why": why }),
+            );
             return Ok(());
         }
         // The fix goes to whoever wrote what was reviewed; an implementer when that is unclear.
@@ -3178,7 +3556,11 @@ impl Team {
                     .join("\n")
             )
         };
-        let pending = self.ctx.store.pending_approvals_for_run(&run.id).unwrap_or(0);
+        let pending = self
+            .ctx
+            .store
+            .pending_approvals_for_run(&run.id)
+            .unwrap_or(0);
         let completion = completion::check(run, tasks, pending as usize);
         // An approval is for a revision, not for a branch. If the tree moved
         // after the final check read it, the approval does not cover the new
@@ -3187,15 +3569,33 @@ impl Team {
         // explicit override is a different decision: it is recorded as
         // `accepted_by_hand` and may cover work they will commit themselves.
         if completion.approved() && !completion.by_hand {
-            if let (Some(reviewed), Some(head)) = (&completion.reviewed_commit, self.head_commit(run)) {
+            if let (Some(reviewed), Some(head)) =
+                (&completion.reviewed_commit, self.head_commit(run))
+            {
                 if reviewed != &head {
                     let why = format!(
                         "the code changed after the final check: it reviewed `{reviewed}`, the tree is at `{head}`. Review the current revision before accepting the work."
                     );
-                    let _ = self.ctx.store.set_run_verdict(&run.id, "changes_needed", Some(reviewed));
-                    self.ctx.store.set_run_state(&run.id, "paused", None, Some(&why))?;
-                    self.event(&run.id, None, "needs_person", json!({ "why": why, "reviewed_commit": reviewed, "head": head }));
-                    self.tell_requester(run, "paused", &format!("Run paused: {}", run.title), &why, true);
+                    let _ =
+                        self.ctx
+                            .store
+                            .set_run_verdict(&run.id, "changes_needed", Some(reviewed));
+                    self.ctx
+                        .store
+                        .set_run_state(&run.id, "paused", None, Some(&why))?;
+                    self.event(
+                        &run.id,
+                        None,
+                        "needs_person",
+                        json!({ "why": why, "reviewed_commit": reviewed, "head": head }),
+                    );
+                    self.tell_requester(
+                        run,
+                        "paused",
+                        &format!("Run paused: {}", run.title),
+                        &why,
+                        true,
+                    );
                     return Ok(());
                 }
             }
@@ -3208,10 +3608,22 @@ impl Team {
                     if let Ok(o) = self.git_run(project, &["status", "--porcelain"]) {
                         if o.ok() && !o.stdout.trim().is_empty() {
                             let why = "the run finished with uncommitted changes; the final check reviewed a commit that does not contain them. Commit the verified work on the branch (do not merge) and verify that revision.".to_string();
-                            let _ = self.ctx.store.set_run_verdict(&run.id, "changes_needed", completion.reviewed_commit.as_deref());
-                            self.ctx.store.set_run_state(&run.id, "paused", None, Some(&why))?;
+                            let _ = self.ctx.store.set_run_verdict(
+                                &run.id,
+                                "changes_needed",
+                                completion.reviewed_commit.as_deref(),
+                            );
+                            self.ctx
+                                .store
+                                .set_run_state(&run.id, "paused", None, Some(&why))?;
                             self.event(&run.id, None, "needs_person", json!({ "why": why, "uncommitted": o.stdout.lines().take(12).collect::<Vec<_>>() }));
-                            self.tell_requester(run, "paused", &format!("Run paused: {}", run.title), &why, true);
+                            self.tell_requester(
+                                run,
+                                "paused",
+                                &format!("Run paused: {}", run.title),
+                                &why,
+                                true,
+                            );
                             return Ok(());
                         }
                     }
@@ -3351,6 +3763,62 @@ fn scopes_overlap(a: &[String], b: &[String]) -> bool {
     })
 }
 
+/// The first command a piece of text asks to be run, when it asks for one: a test runner, a build, a linter, or a
+/// command written out between backticks after the word "run". `None` for prose that only describes code.
+fn commands_asked_for(text: &str) -> Option<String> {
+    let lower = text.to_ascii_lowercase();
+    const COMMANDS: &[&str] = &[
+        "go test",
+        "go vet",
+        "go build",
+        "go run",
+        "gofmt",
+        "cargo test",
+        "cargo build",
+        "cargo check",
+        "cargo clippy",
+        "npm test",
+        "npm run",
+        "npm install",
+        "npx ",
+        "yarn ",
+        "pnpm ",
+        "pytest",
+        "phpunit",
+        "composer install",
+        "composer test",
+        "make test",
+        "make build",
+        "tsc ",
+        "eslint",
+        "ruff ",
+        "mypy",
+    ];
+    if let Some(found) = COMMANDS.iter().find(|c| lower.contains(**c)) {
+        // Mentioning the command is not asking for it to be run: the tasks that read, design or write about tests say it too.
+        let near_run = [
+            "run ",
+            "running ",
+            "execute",
+            "verify",
+            "check that",
+            "must pass",
+            "passes",
+            "passing",
+            "green",
+        ]
+        .iter()
+        .any(|w| lower.contains(w));
+        if near_run {
+            return Some(found.trim().to_string());
+        }
+    }
+    let at = lower.find("run `")?;
+    let rest = &text[at + 5..];
+    let end = rest.find('`')?;
+    Some(rest[..end].trim().to_string()).filter(|c| !c.is_empty())
+}
+
 /// Check a submitted plan: known roles, unique keys, real and acyclic dependencies.
 pub fn validate_plan(tasks: &[PlanTask]) -> Result<()> {
     if tasks.is_empty() {
@@ -3394,6 +3862,23 @@ pub fn validate_plan(tasks: &[PlanTask]) -> Result<()> {
                 "task `{}` needs instructions concrete enough to check",
                 t.key
             )));
+        }
+        // A task is checked against its role before any work is paid for. A role that cannot run commands is not given
+        // steps that need one: it would do what it can, report that it could not run them, and be blocked, costing a
+        // whole loop to learn what the plan could have been told.
+        if let Some(r) = roles::get(&t.role) {
+            if r.max_rank < roles::rank(devd_core::capability::Tier::Exec) {
+                let asked = commands_asked_for(&t.instructions)
+                    .or_else(|| t.criteria.iter().find_map(|c| commands_asked_for(c)));
+                if let Some(command) = asked {
+                    return Err(DevdError::invalid(format!(
+                        "task `{}` is given to {}, which cannot run commands, but its steps need `{command}` to be run. Give the steps that run commands to a role that can ({}), or take them out of this task.",
+                        t.key,
+                        r.title,
+                        ["implementer", "backend", "frontend", "qa", "infra"].into_iter().filter(|id| roles::get(id).is_some_and(|x| x.max_rank >= roles::rank(devd_core::capability::Tier::Exec))).collect::<Vec<_>>().join(", ")
+                    )));
+                }
+            }
         }
     }
     for t in tasks {
@@ -3465,8 +3950,14 @@ mod verdict_tests {
 
     #[test]
     fn only_gatekeepers_give_verdicts() {
-        assert!(!verdict_needs_changes("implementer", "Changes needed in three files; all done."));
-        assert!(!verdict_needs_changes("reviewer", "Verdict: approve. Reads cleanly."));
+        assert!(!verdict_needs_changes(
+            "implementer",
+            "Changes needed in three files; all done."
+        ));
+        assert!(!verdict_needs_changes(
+            "reviewer",
+            "Verdict: approve. Reads cleanly."
+        ));
     }
 
     #[test]
@@ -3483,5 +3974,51 @@ mod verdict_tests {
             "Verdict: approve"
         ));
         assert!(report_needs_changes(None, "qa", "2 failed, 806 passed"));
+    }
+}
+
+#[cfg(test)]
+mod plan_rules {
+    use super::*;
+
+    fn task(key: &str, role: &str, instructions: &str) -> PlanTask {
+        PlanTask {
+            key: key.into(),
+            role: role.into(),
+            title: key.into(),
+            instructions: instructions.into(),
+            depends_on: Vec::new(),
+            scope: Vec::new(),
+            criteria: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_plan_is_refused_when_a_role_that_cannot_run_commands_is_given_steps_that_need_one() {
+        // The architect reads and writes documents; it has no command to run a test with. This is the plan that cost a whole
+        // loop to find out.
+        let plan = vec![task("design", "architect", "Create go.mod, then run `go vet ./...` and go test -race ./... to prove the skeleton compiles.")];
+        let why = validate_plan(&plan).unwrap_err().to_string();
+        assert!(
+            why.to_lowercase().contains("architect") && why.contains("cannot run commands"),
+            "{why}"
+        );
+        assert!(why.contains("implementer"), "it names who can: {why}");
+    }
+
+    #[test]
+    fn a_role_that_can_run_commands_may_be_asked_to_and_prose_about_tests_is_not_a_request_to_run_them(
+    ) {
+        let runs = vec![task(
+            "cron",
+            "implementer",
+            "Write package cron, then run `go test -race ./cron/...` until it passes.",
+        )];
+        assert!(validate_plan(&runs).is_ok());
+        let prose = vec![task("design", "architect", "Write docs/design.md recording how the tests are laid out: table-driven go test files beside the code, one fuzz target per parser.")];
+        assert!(
+            validate_plan(&prose).is_ok(),
+            "describing tests is not running them"
+        );
     }
 }

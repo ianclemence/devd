@@ -565,57 +565,52 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
     // Relative paths in this conversation's replies are read against its project.
     cx.global_mut::<crate::state::Devd>().link_root =
         thread["project"].as_str().map(std::path::PathBuf::from);
-    let project = thread["project"].as_str().map(|p| ui::leaf(p).to_string());
-    let mut head = div()
-        .h(px(44.0))
-        .px(px(20.0))
-        .flex()
-        .flex_none()
-        .items_center()
-        .gap(px(10.0))
-        .border_b_1()
-        .border_color(t.line)
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .font_weight(FontWeight::MEDIUM)
-                .child(ui::Clip::new(
-                    thread["title"]
-                        .as_str()
-                        .unwrap_or("Conversation")
-                        .to_string(),
-                )),
-        );
+    let project = thread["project"].as_str().map(project_name);
+    let title = thread["title"]
+        .as_str()
+        .unwrap_or("Conversation")
+        .to_string();
+
+    // The heading: the title, then one quiet line of facts, then the actions. Facts are words in the page's secondary colour
+    // separated by a middle dot, not badges; an error is not squeezed in here but given its own line below.
+    let mut facts: Vec<String> = Vec::new();
     if let Some(project) = project {
-        head = head.child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(5.0))
-                .text_size(px(size::TEXT_SM))
-                .text_color(t.muted)
-                .child(icon("folder", 13.0, t.faint))
-                .child(project),
-        );
+        facts.push(project);
     }
     if tokens > 0 {
-        head = head.child(
-            div()
-                .font_family(mono())
-                .text_size(px(size::TEXT_XS))
-                .text_color(t.faint)
-                .child(format!("{} tokens", ui::compact(tokens))),
-        );
+        facts.push(format!("{} tokens", ui::compact(tokens)));
     }
-    let (doomed, doomed_title) = (
-        id.to_string(),
-        thread["title"]
-            .as_str()
-            .unwrap_or("this conversation")
-            .to_string(),
-    );
-    head = head.child(
+    let mut actions = div().flex().items_center().gap(px(2.0));
+    if running {
+        let stop = id.to_string();
+        actions = actions
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .pr(px(6.0))
+                    .child(live_dot("conversation.live", Tone::Info, cx))
+                    .child(
+                        div()
+                            .text_size(px(size::TEXT_SM))
+                            .text_color(t.muted)
+                            .child("Working"),
+                    ),
+            )
+            .child(
+                Button::new("conversation.stop", "Stop")
+                    .icon("stop")
+                    .kind(ButtonKind::Ghost)
+                    .on_click(move |_, _, cx| {
+                        devd(cx)
+                            .sync
+                            .mutate(Mutation::new("chat.stop", json!({ "thread": stop })));
+                    }),
+            );
+    }
+    let (doomed, doomed_title) = (id.to_string(), title.clone());
+    actions = actions.child(
         div()
             .id("conversation.delete.wrap")
             .tooltip(ui::tip("Delete conversation"))
@@ -633,42 +628,78 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
                 )),
             ),
     );
-    if running {
-        let stop = id.to_string();
-        head = head
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .child(live_dot("conversation.live", Tone::Info, cx))
-                    .child(
-                        div()
-                            .text_size(px(size::TEXT_SM))
-                            .text_color(t.info)
-                            .child("working"),
-                    ),
-            )
-            .child(
-                Button::new("conversation.stop", "Stop")
-                    .icon("stop")
-                    .on_click(move |_, _, cx| {
-                        devd(cx)
-                            .sync
-                            .mutate(Mutation::new("chat.stop", json!({ "thread": stop })));
-                    }),
-            );
-    } else if let Some(error) = thread["error"].as_str() {
-        head = head
-            .child(pill("stopped on an error", Tone::Danger, cx))
-            .child(
-                div()
-                    .max_w(px(320.0))
-                    .text_size(px(size::TEXT_SM))
-                    .text_color(t.muted)
-                    .child(ui::Clip::new(error.to_string())),
-            );
-    }
+    let head = div()
+        .h(px(48.0))
+        .px(px(20.0))
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(16.0))
+        .border_b_1()
+        .border_color(t.line)
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .items_baseline()
+                .gap(px(10.0))
+                .child(
+                    div()
+                        .min_w_0()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(t.text)
+                        .child(ui::Clip::new(title)),
+                )
+                .children((!facts.is_empty()).then(|| {
+                    div()
+                        .flex_none()
+                        .text_size(px(size::TEXT_SM))
+                        .text_color(t.faint)
+                        .child(facts.join("  ·  "))
+                })),
+        )
+        .child(actions);
+
+    // A conversation that stopped on an error says so on a line of its own, in full, where it can be read.
+    let stopped = (!running)
+        .then(|| thread["error"].as_str().map(str::to_string))
+        .flatten()
+        .map(|error| {
+            div()
+                .flex_none()
+                .flex()
+                .items_start()
+                .gap(px(10.0))
+                .px(px(20.0))
+                .py(px(10.0))
+                .border_b_1()
+                .border_color(t.line)
+                .bg(ui::tint(t.danger, 0.06))
+                .child(
+                    div()
+                        .h(px(20.0))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .child(icon("alert", 14.0, t.danger)),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(px(size::TEXT_SM))
+                        .line_height(px(20.0))
+                        .text_color(t.muted)
+                        .child(
+                            div()
+                                .text_color(t.text)
+                                .font_weight(FontWeight::MEDIUM)
+                                .child("This conversation stopped."),
+                        )
+                        .child(div().line_clamp(3).child(error)),
+                )
+        });
 
     let items = shell.transcript.items.clone();
     let live = shell
@@ -704,6 +735,7 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
         .flex()
         .flex_col()
         .child(head)
+        .children(stopped)
         .children(chain)
         .child(div().flex_1().min_h_0().child(body))
         .child(
@@ -1218,5 +1250,33 @@ mod tests {
                 },
             ]
         );
+    }
+}
+
+/// The name of the project a folder belongs to. A team member works in a copy of the project kept under
+/// `<project>/.devd/worktrees/`; its conversation belongs to the project, not to the copy's generated name.
+fn project_name(path: &str) -> String {
+    let normal = path.replace('\\', "/");
+    match normal.find("/.devd/worktrees/") {
+        Some(at) => ui::leaf(&normal[..at]).to_string(),
+        None => ui::leaf(path).to_string(),
+    }
+}
+
+#[cfg(test)]
+mod project_name_tests {
+    use super::project_name;
+
+    #[test]
+    fn a_copy_of_a_project_is_named_as_the_project() {
+        assert_eq!(
+            project_name(r"D:\devd\www\welcome\cadence\.devd\worktrees\6548ec1b-cron"),
+            "cadence"
+        );
+        assert_eq!(
+            project_name("/home/me/shop/.devd/worktrees/abc-api"),
+            "shop"
+        );
+        assert_eq!(project_name(r"D:\devd\www\shop"), "shop");
     }
 }

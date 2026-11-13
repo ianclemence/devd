@@ -25,8 +25,8 @@ use crate::motion;
 use crate::providers;
 use crate::team::{PlanTask, StartRequest, Team};
 use crate::{
-    browser, dictation, docs, favicon, fs, health, judge, requirements, roles, schedule, search, secrets, skills,
-    templates, web,
+    browser, dictation, docs, favicon, fs, health, judge, requirements, roles, schedule, search,
+    secrets, skills, templates, web,
 };
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -302,6 +302,25 @@ struct TeamStart {
     /// Extra passes devd may take to meet the definition of done (0-5, default 2).
     #[serde(default)]
     max_rounds: Option<i64>,
+    /// The most the run may spend, in US dollars. It pauses, with its work kept, when this is used up. Omit for no ceiling.
+    #[serde(default)]
+    budget_usd: Option<f64>,
+    /// The most model turns the run's agents may take together. Omit for no ceiling.
+    #[serde(default)]
+    max_turns: Option<i64>,
+}
+
+/// A run and the ceilings to give it.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct TeamBudget {
+    /// The run.
+    run: String,
+    /// The most it may spend, in US dollars. Omit for no ceiling.
+    #[serde(default)]
+    budget_usd: Option<f64>,
+    /// The most model turns its agents may take together. Omit for no ceiling.
+    #[serde(default)]
+    max_turns: Option<i64>,
 }
 
 /// Store or remove the Jev key.
@@ -576,6 +595,12 @@ struct ReportArgs {
     /// you started - it is kept for this role, in this project.
     #[serde(default)]
     lesson: Option<String>,
+    /// What you decided and why, one line each. The next task is given these, so it does not undo or redo them.
+    #[serde(default)]
+    decisions: Option<Vec<String>>,
+    /// What you left open, one line each: a question for the person or for a later task.
+    #[serde(default)]
+    open_questions: Option<Vec<String>>,
     /// A reviewer, security engineer or QA states its conclusion:
     /// `approve`, `changes_needed` or `blocked`. Required for gatekeepers when
     /// the work is not plainly approved.
@@ -689,7 +714,9 @@ impl favicon::Web for GuardedWeb {
         docs::fetch_raw(url).ok().map(|f| f.body)
     }
     fn file(&self, url: &str) -> Option<Vec<u8>> {
-        docs::fetch_bytes(url, favicon::MAX_BYTES).ok().map(|(_, bytes)| bytes)
+        docs::fetch_bytes(url, favicon::MAX_BYTES)
+            .ok()
+            .map(|(_, bytes)| bytes)
     }
 }
 
@@ -852,10 +879,23 @@ struct AppReport {
 }
 
 /// The place the person's window last said it was showing, and when.
-static WINDOW_AT: std::sync::Mutex<Option<(String, Option<String>, std::time::Instant)>> = std::sync::Mutex::new(None);
+static WINDOW_AT: std::sync::Mutex<Option<(String, Option<String>, std::time::Instant)>> =
+    std::sync::Mutex::new(None);
 
 /// The screens a route may name.
-const APP_SCREENS: &[&str] = &["home", "inbox", "assistant", "runs", "team", "intelligence", "projects", "sites", "server", "activity", "settings"];
+const APP_SCREENS: &[&str] = &[
+    "home",
+    "inbox",
+    "assistant",
+    "runs",
+    "team",
+    "intelligence",
+    "projects",
+    "sites",
+    "server",
+    "activity",
+    "settings",
+];
 
 fn valid_route(route: &str) -> bool {
     let route = route.trim().trim_matches('/');
@@ -1217,8 +1257,18 @@ fn model_inventory(ctx: &Ctx) -> Result<Value> {
         let mut models = Vec::new();
         let mut api_count = 0i64;
         let mut ordered: Vec<(&CatalogueModel, bool)> = Vec::new();
-        ordered.extend(catalogue.iter().filter(|m| m.source == api_source).map(|m| (m, false)));
-        ordered.extend(catalogue.iter().filter(|m| m.source == manual_source).map(|m| (m, true)));
+        ordered.extend(
+            catalogue
+                .iter()
+                .filter(|m| m.source == api_source)
+                .map(|m| (m, false)),
+        );
+        ordered.extend(
+            catalogue
+                .iter()
+                .filter(|m| m.source == manual_source)
+                .map(|m| (m, true)),
+        );
         for (m, custom) in ordered {
             if seen.iter().any(|id| id == &m.model_id) {
                 continue;
@@ -1601,6 +1651,8 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                     auto_approve,
                     done_when: a.done_when.clone().unwrap_or_default(),
                     max_rounds: a.max_rounds.unwrap_or(2),
+                    budget_usd: a.budget_usd,
+                    max_turns: a.max_turns,
                 })?;
                 // The run answers into the conversation that asked for it.
                 if let Some(thread) = a.thread.as_deref().filter(|t| !t.is_empty()) {
@@ -1664,6 +1716,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                 ))
             },
         )?;
+    let t_get = team.clone();
     reg.define::<RunRef>("team.get", "Read a team run")
     .description("The run, every task with its state, role, dependencies, evidence, result and the mandate that allowed it, the event log after a sequence number (poll with the last id you saw), and `needs`: the one question the run is waiting on, with the actions that resolve it. `needs` is null when nothing is waiting for a person.")
     .tier(Tier::Read)
@@ -1673,7 +1726,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
     .idempotent()
     .handlers(
         |_, a| simple("team.get", format!("read run {}", a.run)),
-        |ctx, a| {
+        move |ctx, a| {
             let run = ctx.store.get_run(&a.run)?.ok_or_else(|| DevdError::not_found(format!("no run `{}`", a.run)))?;
             let tasks = ctx.store.list_tasks_of_run(&a.run)?;
             let events = ctx.store.list_team_events(&a.run, a.after.unwrap_or(0), 500)?;
@@ -1682,8 +1735,117 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             let needs = crate::needs::of(&run, &tasks);
             let baseline = ctx.store.run_baseline(&a.run)?;
             let pending: Vec<Value> = ctx.store.list_requests(true, None, 200)?.into_iter().filter(|r| r.thread_id.as_deref().map(|t| tasks.iter().any(|x| x.thread_id.as_deref() == Some(t))).unwrap_or(false)).map(|r| serde_json::to_value(r).unwrap_or(Value::Null)).collect();
-            Ok(Outcome::with_data(format!("{} · {} task(s)", run.state, tasks.len()), json!({ "run": run, "run_id": ctx.store.run_for_team_run(&a.run)?.map(|r| r.id), "tasks": tasks, "events": events, "approvals": pending, "needs": needs, "baseline": baseline })))
+            let budget = ctx.store.run_budget(&a.run)?;
+            let usage = ctx.store.run_usage(&a.run)?;
+            // Whether anything in this devd is carrying the run. A run that is planning or running with nobody carrying it is
+            // waiting for something to start; the window says so and offers to.
+            let live = matches!(run.state.as_str(), "planning" | "running");
+            let driver = if !live { "idle" } else if t_get.driving(&a.run) { "running" } else { "none" };
+            let done_when = ctx.store.goal_loop(&a.run).map(|g| g.done_when).unwrap_or_default();
+            let mut handoffs = serde_json::Map::new();
+            for t in &tasks {
+                if let Ok(Some(h)) = ctx.store.handoff(&t.id) {
+                    handoffs.insert(t.key.clone(), h);
+                }
+            }
+            Ok(Outcome::with_data(format!("{} · {} task(s)", run.state, tasks.len()), json!({ "run": run, "run_id": ctx.store.run_for_team_run(&a.run)?.map(|r| r.id), "tasks": tasks, "events": events, "approvals": pending, "needs": needs, "baseline": baseline, "budget": budget, "usage": usage, "driver": driver, "done_when": done_when, "handoffs": handoffs })))
         },
+    )?;
+    let t_status = team.clone();
+    reg.define::<RunRef>("team.status", "How a run is going, in a sentence")
+    .description("The answer to \"how is it going?\" for one run: a sentence saying who is working and since when, what is ready to start, what is waiting and what needs the person; how many tasks are done of how many; what the run has spent against its ceiling; and whether anything is carrying it. It is the same sentence the window shows, so the two never disagree. Read this instead of reading the whole run when someone asks for progress.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, a| simple("team.status", format!("say how run {} is going", a.run)),
+        move |ctx, a| {
+            let run = ctx.store.get_run(&a.run)?.ok_or_else(|| DevdError::not_found(format!("no run `{}`", a.run)))?;
+            let tasks = ctx.store.list_tasks_of_run(&a.run)?;
+            let now = chrono::Utc::now();
+            let lines: Vec<devd_runline::Task> = tasks
+                .iter()
+                .map(|t| devd_runline::Task {
+                    key: t.key.clone(),
+                    role: t.role.clone(),
+                    state: t.state.clone(),
+                    depends_on: t.depends_on.clone(),
+                    quiet_secs: (t.state == "running").then(|| t.last_step_at.as_deref().and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok()).map(|at| (now - at.with_timezone(&chrono::Utc)).num_seconds().max(0) as u64)).flatten(),
+                })
+                .collect();
+            let sentence = devd_runline::status_line(&run.state, &lines);
+            let (done, total) = devd_runline::progress(&lines);
+            let usage = ctx.store.run_usage(&a.run)?;
+            let budget = ctx.store.run_budget(&a.run)?;
+            let live = matches!(run.state.as_str(), "planning" | "running");
+            let driver = if !live { "idle" } else if t_status.driving(&a.run) { "running" } else { "none" };
+            let mut words = sentence.clone();
+            if driver == "none" {
+                words.push_str(" Nothing is carrying the run right now: team.drive starts it again.");
+            }
+            Ok(Outcome::with_data(words.clone(), json!({ "sentence": words, "state": run.state, "done": done, "total": total, "usage": usage, "budget": budget, "driver": driver, "needs": crate::needs::of(&run, &tasks) })))
+        },
+    )?;
+    let t_trace = team.clone();
+    reg.define::<RunRef>("team.timeline", "What each agent in a run spent its time on")
+    .description("The run as it unfolded: for each task, the stretches its agent spent on model turns, tool calls and checks, in seconds from the start of the run, with what happened to it along the way (sent back, retried, waiting on the provider, held, asked to wrap up). Derived from the logs devd already keeps. Use it to see where a run's time went; team.trace lists the individual tool calls.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, a| simple("team.timeline", format!("lay out the time of run {}", a.run)),
+        move |ctx, a| {
+            let _ = &t_trace;
+            let run = ctx.store.get_run(&a.run)?.ok_or_else(|| DevdError::not_found(format!("no run `{}`", a.run)))?;
+            let tasks = ctx.store.list_tasks_of_run(&a.run)?;
+            let team_events = ctx.store.list_team_events(&a.run, 0, 2000)?;
+            let logs: Vec<Vec<devd_core::store_ai::ChatEvent>> = tasks.iter().map(|t| t.thread_id.as_deref().map(|id| ctx.store.list_events(id, 0, 5000).unwrap_or_default()).unwrap_or_default()).collect();
+            let rows: Vec<crate::runview::TaskTrace> = tasks
+                .iter()
+                .zip(logs.iter())
+                .map(|(t, log)| crate::runview::TaskTrace {
+                    key: &t.key,
+                    role: &t.role,
+                    state: &t.state,
+                    started: t.started_at.as_deref(),
+                    finished: t.finished_at.as_deref(),
+                    events: log,
+                    team: team_events.iter().filter(|e| e.task_id.as_deref() == Some(t.id.as_str())).collect(),
+                })
+                .collect();
+            let v = crate::runview::trace(&rows, &run.created_at, chrono::Utc::now());
+            Ok(Outcome::with_data(format!("{} task(s) traced", tasks.len()), v))
+        },
+    )?;
+    let t_drive = team.clone();
+    reg.define::<RunRef>("team.drive", "Put a run back to work")
+    .description("Makes sure something in this devd is carrying a run that is planning or running. A run is carried by threads in the devd process that owns the agents: when that process was closed, or the run was started from a terminal that has gone, the run sits with nobody working on it and team.get says `driver: none`. This starts it again from where it stopped. It changes nothing for a run that is already being carried.")
+    .tier(Tier::Exec)
+    .effect(Effect::Process)
+    .agent_safe()
+    .dry_run()
+    .handlers(
+        |_, a| simple("team.drive", format!("carry run {} on", a.run)),
+        move |_, a| {
+            let started = t_drive.drive_run(&a.run)?;
+            Ok(Outcome::with_data(if started { "The run is being carried again" } else { "The run was already being carried" }, json!({ "run": a.run, "started": started })))
+        },
+    )?;
+    let t_budget = team.clone();
+    reg.define::<TeamBudget>("team.budget", "Set what a run may spend")
+    .description("Gives a run a ceiling on what it spends (US dollars) and on how many model turns its agents take together, or removes either by leaving it out. A run that reaches a ceiling pauses with its work kept; raising the ceiling here carries it on. Human only, because it is permission to spend.")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .human_only()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, a| simple("team.budget", format!("set the budget of run {}", a.run)),
+        move |_, a| Ok(Outcome::with_data("Budget set", t_budget.set_budget(&a.run, a.budget_usd, a.max_turns)?)),
     )?;
     reg.define::<NoArgs>("team.overview", "Everything the team is doing, across every project")
     .description("The orchestration view of the whole machine: every recent run in every project with its state and counts, every specialist with its role, conversation, worktree, dependencies, evidence and last activity, which roles are busy, and the one question each run would ask a person. Read this before planning or assigning so you know who is occupied, what is blocked and what is already done. Read only.")
@@ -1909,19 +2071,30 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
     )?;
 
     reg.define::<PersonaLine>("memory.persona_drop", "Drop a proposed line")
-    .description("Removes a proposal without taking it. Human only.")
-    .group("memory")
-    .tier(Tier::Write)
-    .effect(Effect::Data)
-    .human_only()
-    .handlers(
-        |_, a| Ok(Plan::new("memory.persona_drop", format!("forget the proposal: {}", crate::memory::clip_for_plan(&a.line)))),
-        |ctx, a| {
-            let m = crate::memory::Memory::at(ctx.paths.root());
-            let dropped = m.drop_proposal(&a.line)?;
-            Ok(Outcome::with_data(if dropped { "dropped" } else { "not found" }, serde_json::json!({ "dropped": dropped })))
-        },
-    )?;
+        .description("Removes a proposal without taking it. Human only.")
+        .group("memory")
+        .tier(Tier::Write)
+        .effect(Effect::Data)
+        .human_only()
+        .handlers(
+            |_, a| {
+                Ok(Plan::new(
+                    "memory.persona_drop",
+                    format!(
+                        "forget the proposal: {}",
+                        crate::memory::clip_for_plan(&a.line)
+                    ),
+                ))
+            },
+            |ctx, a| {
+                let m = crate::memory::Memory::at(ctx.paths.root());
+                let dropped = m.drop_proposal(&a.line)?;
+                Ok(Outcome::with_data(
+                    if dropped { "dropped" } else { "not found" },
+                    serde_json::json!({ "dropped": dropped }),
+                ))
+            },
+        )?;
     reg.define::<MemoryNote>("memory.note", "Write down something the team learned")
     .description("Adds one short fact to a project's memory: a convention, a command that works, a trap to avoid. The digest is rebuilt from it. A fact already known is not added twice. Human only: an agent may report a lesson through its run, but it may not write itself into the memory a person is judged against.")
     .group("memory")
@@ -2202,7 +2375,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
     .idempotent()
     .handlers(
         |_, _| simple("team.report", "report on the task"),
-        move |_, a| Ok(Outcome::with_data("Recorded the report", t.report_full(&a.task, &a.status, &a.summary, a.lesson.as_deref(), a.verdict.as_deref(), a.criteria.as_ref(), a.reviewed_commit.as_deref(), a.checks.as_ref())?)),
+        move |_, a| Ok(Outcome::with_data("Recorded the report", t.report_full(&a.task, &a.status, &crate::handoff::with_sections(&a.summary, a.decisions.as_deref().unwrap_or(&[]), a.open_questions.as_deref().unwrap_or(&[])), a.lesson.as_deref(), a.verdict.as_deref(), a.criteria.as_ref(), a.reviewed_commit.as_deref(), a.checks.as_ref())?)),
     )?;
     }
 
@@ -2546,17 +2719,19 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
         },
     )?;
     reg.define::<BrowserTab>("browser.tabs.close", "Close a browser tab")
-    .description("Closes one tab and releases its page. The focused tab moves to another open tab.")
-    .tier(Tier::Exec)
-    .effect(Effect::Process)
-    .agent_safe()
-    .handlers(
-        |_, _| simple("browser.tabs.close", "close a browser tab"),
-        |_, a| {
-            let v = browser::tabs_close(a.tab.as_deref().unwrap_or(""))?;
-            Ok(Outcome::with_data("closed the tab", v))
-        },
-    )?;
+        .description(
+            "Closes one tab and releases its page. The focused tab moves to another open tab.",
+        )
+        .tier(Tier::Exec)
+        .effect(Effect::Process)
+        .agent_safe()
+        .handlers(
+            |_, _| simple("browser.tabs.close", "close a browser tab"),
+            |_, a| {
+                let v = browser::tabs_close(a.tab.as_deref().unwrap_or(""))?;
+                Ok(Outcome::with_data("closed the tab", v))
+            },
+        )?;
     reg.define::<BrowserNavigate>("browser.navigate", "Load a page in the shared browser")
     .description("Navigates a tab and waits for the document to settle. Element refs from the previous page expire; take a new browser.snapshot. http, https and about:blank only.")
     .tier(Tier::Exec)
@@ -2571,44 +2746,53 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
         },
     )?;
     reg.define::<BrowserTab>("browser.back", "Go back one page")
-    .description("Uses the tab's own history to go back. Refs expire; take a new snapshot.")
-    .tier(Tier::Exec)
-    .effect(Effect::Remote)
-    .agent_safe()
-    .dry_run()
-    .handlers(
-        |_, _| simple("browser.back", "go back one page"),
-        |_, a| {
-            let v = browser::back(a.tab.as_deref())?;
-            Ok(Outcome::with_data(format!("now on {}", v["url"].as_str().unwrap_or("an earlier page")), v))
-        },
-    )?;
+        .description("Uses the tab's own history to go back. Refs expire; take a new snapshot.")
+        .tier(Tier::Exec)
+        .effect(Effect::Remote)
+        .agent_safe()
+        .dry_run()
+        .handlers(
+            |_, _| simple("browser.back", "go back one page"),
+            |_, a| {
+                let v = browser::back(a.tab.as_deref())?;
+                Ok(Outcome::with_data(
+                    format!("now on {}", v["url"].as_str().unwrap_or("an earlier page")),
+                    v,
+                ))
+            },
+        )?;
     reg.define::<BrowserTab>("browser.forward", "Go forward one page")
-    .description("Uses the tab's own history to go forward. Refs expire; take a new snapshot.")
-    .tier(Tier::Exec)
-    .effect(Effect::Remote)
-    .agent_safe()
-    .dry_run()
-    .handlers(
-        |_, _| simple("browser.forward", "go forward one page"),
-        |_, a| {
-            let v = browser::forward(a.tab.as_deref())?;
-            Ok(Outcome::with_data(format!("now on {}", v["url"].as_str().unwrap_or("a later page")), v))
-        },
-    )?;
+        .description("Uses the tab's own history to go forward. Refs expire; take a new snapshot.")
+        .tier(Tier::Exec)
+        .effect(Effect::Remote)
+        .agent_safe()
+        .dry_run()
+        .handlers(
+            |_, _| simple("browser.forward", "go forward one page"),
+            |_, a| {
+                let v = browser::forward(a.tab.as_deref())?;
+                Ok(Outcome::with_data(
+                    format!("now on {}", v["url"].as_str().unwrap_or("a later page")),
+                    v,
+                ))
+            },
+        )?;
     reg.define::<BrowserTab>("browser.reload", "Reload the page")
-    .description("Reloads the tab without its cache. Refs expire; take a new snapshot.")
-    .tier(Tier::Exec)
-    .effect(Effect::Remote)
-    .agent_safe()
-    .dry_run()
-    .handlers(
-        |_, _| simple("browser.reload", "reload the page"),
-        |_, a| {
-            let v = browser::reload(a.tab.as_deref())?;
-            Ok(Outcome::with_data(format!("reloaded {}", v["url"].as_str().unwrap_or("the page")), v))
-        },
-    )?;
+        .description("Reloads the tab without its cache. Refs expire; take a new snapshot.")
+        .tier(Tier::Exec)
+        .effect(Effect::Remote)
+        .agent_safe()
+        .dry_run()
+        .handlers(
+            |_, _| simple("browser.reload", "reload the page"),
+            |_, a| {
+                let v = browser::reload(a.tab.as_deref())?;
+                Ok(Outcome::with_data(
+                    format!("reloaded {}", v["url"].as_str().unwrap_or("the page")),
+                    v,
+                ))
+            },
+        )?;
     reg.define::<BrowserTab>("browser.snapshot", "Read the page as an accessibility tree")
     .description("Returns the page's headings, text and controls as a compact tree. Actionable nodes get a ref (e1, e2, ...) that browser.click and browser.type take. The refs belong to this tab's latest snapshot and stop working after a navigation, so take a new snapshot after the page changes.")
     .tier(Tier::Read)
@@ -3815,7 +3999,10 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                 if !ctx.store.delete_inbox(&a.id)? {
                     return Err(DevdError::not_found("no such message"));
                 }
-                Ok(Outcome::with_data("Deleted the message", json!({ "deleted": 1 })))
+                Ok(Outcome::with_data(
+                    "Deleted the message",
+                    json!({ "deleted": 1 }),
+                ))
             },
         )?;
     reg.define::<NoArgs>("inbox.clear", "Clear answered inbox messages")
@@ -4065,7 +4252,12 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
         .dry_run()
         .handlers(
             |_, a| simple("fs.move", format!("move {} to {}", a.from, a.to)),
-            |ctx, a| Ok(Outcome::with_data("Moved the file", fs::mv(ctx, &a.from, &a.to)?)),
+            |ctx, a| {
+                Ok(Outcome::with_data(
+                    "Moved the file",
+                    fs::mv(ctx, &a.from, &a.to)?,
+                ))
+            },
         )?;
     reg.define::<FsDelete>("fs.delete", "Delete a file or directory")
     .description("Deletes a file, or a directory (recursive for a non-empty one). A person's approval is required, except when an agent deletes inside the conversation's project: there it is ordinary work. The project root, `.git` and secrets files are refused.")
@@ -4170,6 +4362,8 @@ fn register_automation(reg: &mut Registry, team: Arc<Team>) -> Result<()> {
                     auto_approve,
                     done_when,
                     max_rounds: 2,
+                    budget_usd: None,
+                    max_turns: None,
                 })?;
                 Ok(Outcome::with_data("the planner is working; the team starts as soon as the plan is ready", serde_json::to_value(&run)?))
             },

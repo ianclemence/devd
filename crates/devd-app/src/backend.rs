@@ -16,7 +16,7 @@
 use std::io::{BufRead, BufReader};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use devd_app_core::sync::{Backend, Failure, Reply};
 use devd_bootstrap::Bootstrap;
@@ -47,6 +47,10 @@ pub fn connect() -> Result<Arc<Connection>, String> {
     let boot = Bootstrap::discover().map_err(|e| format!("devd could not start: {e}"))?;
     let home = boot.paths.root().display().to_string();
     let version = env!("CARGO_PKG_VERSION").to_string();
+    // The team's work belongs to a process that stays up, not to this window: start devd in the background (or use the one
+    // already running) and attach to it, so closing the window does not stop a run half way. Only when that cannot be done
+    // does the window carry the work itself, as it always has.
+    ensure_resident(&boot.paths, &version);
     match devd_server::attach_or_claim(&boot.paths, "ui")
         .map_err(|e| format!("devd could not start: {e}"))?
     {
@@ -74,6 +78,88 @@ pub fn connect() -> Result<Arc<Connection>, String> {
                 shutdown: Mutex::new(Some(shutdown)),
             }))
         }
+    }
+}
+
+/// Make sure devd is running in the background, the same version as this window.
+///
+/// `DEVD_RESIDENT=0` turns this off, for a window that must own everything itself (a test with a throwaway data folder).
+fn ensure_resident(paths: &devd_core::Paths, version: &str) {
+    if std::env::var("DEVD_RESIDENT").as_deref() == Ok("0") {
+        return;
+    }
+    if let Some(held) = devd_core::daemon::current(paths) {
+        // A background devd from before an update would serve this window an older devd: replace it. A window that owns
+        // the instance is left alone; it is the other window, and this one will attach to it.
+        if held.role == "daemon" && held.version != version {
+            devd_core::process::kill_tree(held.pid);
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while held.is_live() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            let _ = std::fs::remove_file(paths.root().join("instance.json"));
+        } else {
+            return;
+        }
+    }
+    let Some(cli) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| {
+            exe.parent()
+                .map(|dir| dir.join(if cfg!(windows) { "devd.exe" } else { "devd" }))
+        })
+        .filter(|p| p.is_file())
+    else {
+        return;
+    };
+    let Ok(out) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(paths.root().join("daemon.log"))
+    else {
+        return;
+    };
+    let Ok(err) = out.try_clone() else { return };
+    let mut command = std::process::Command::new(cli);
+    command
+        .args(["daemon", "run"])
+        .env("DEVD_HOME", paths.root())
+        .stdin(std::process::Stdio::null())
+        .stdout(out)
+        .stderr(err);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // No console, its own process group, and it outlives this window.
+        command.creation_flags(0x0000_0008 | 0x0000_0200 | 0x0800_0000);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    if command.spawn().is_err() {
+        return;
+    }
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < deadline {
+        if devd_core::daemon::current(paths).is_some_and(|held| held.port != 0) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+}
+
+/// Stop devd running in the background, when it is: the work of every run stops with it until devd is opened again.
+pub fn stop_resident(home: &str) -> bool {
+    let paths = devd_core::Paths::rooted(std::path::Path::new(home));
+    match devd_core::daemon::current(&paths) {
+        Some(held) if held.role == "daemon" => {
+            devd_core::process::kill_tree(held.pid);
+            let _ = std::fs::remove_file(paths.root().join("instance.json"));
+            true
+        }
+        _ => false,
     }
 }
 

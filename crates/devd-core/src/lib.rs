@@ -91,7 +91,7 @@ pub use store_runs::{
 pub use store_schedule::Schedule;
 pub use store_stacks::{StackProject, StackRun};
 pub use store_team::{
-    GoalLoop, ProviderCheck, RoleModel, ServiceDecision, TeamEvent, TeamRun, TeamTask,
+    GoalLoop, ProviderCheck, RoleModel, RunBudget, RunUsage, ServiceDecision, TeamEvent, TeamRun, TeamTask,
 };
 pub use store_work::{ProjectProcess, Scratchpad, Todo, TodoEvent};
 

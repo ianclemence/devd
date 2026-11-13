@@ -580,6 +580,11 @@ impl Hub {
         }
     }
 
+    /// A line from devd itself in a conversation, written without a model: what happened, where the person will see it.
+    pub fn note(&self, tid: &str, text: &str) {
+        let _ = self.log(tid, "notice", json!({ "text": text }));
+    }
+
     fn log(&self, tid: &str, kind: &str, data: Value) -> Result<i64> {
         let id = self.ctx.store.append_event(tid, kind, &data)?;
         self.ctx.events.emit_with(

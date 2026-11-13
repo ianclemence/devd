@@ -1990,6 +1990,7 @@ dependencies = [
  "devd-git",
  "devd-mcp",
  "devd-ops",
+ "devd-runline",
  "devd-runtime",
  "devd-services",
  "devd-sites",
@@ -2032,6 +2033,7 @@ name = "devd-app-core"
 version = "0.30.0"
 dependencies = [
  "devd-genui",
+ "devd-runline",
  "serde",
  "serde_json",
 ]
@@ -2174,6 +2176,10 @@ dependencies = [
  "tempfile",
  "ureq",
 ]
+
+[[package]]
+name = "devd-runline"
+version = "0.30.0"
 
 [[package]]
 name = "devd-runtime"

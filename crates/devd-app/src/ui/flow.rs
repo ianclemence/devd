@@ -1,28 +1,36 @@
-//! A team run drawn as a chain: each task a card, each dependency a line from the task that finishes first to the one
+//! A team run drawn as a chain: each task a node, each dependency a line from the task that finishes first to the one
 //! that waits for it.
 //!
-//! The arithmetic (which column, which row, where each line bends) is `devd_app_core::flow`. This draws it: the lines
-//! as smooth curves on a canvas beneath the cards, and the cards as ordinary elements, so a card can be clicked to open
-//! the conversation of the agent working on it. A line says what it carries by how it is drawn: solid and green where
-//! work has been handed on, bright where it is being handed on now, amber where the work upstream has stopped, and
-//! dashed and quiet where nothing has passed yet.
+//! The arithmetic (which column, which row, where each line bends) is `devd_app_core::flow`. This draws it, and draws it
+//! quietly. A node is a title and one line of facts, with a single glyph for where it stands: a check when finished, a
+//! breathing dot while working, an empty ring while waiting, a warning when it has stopped. Lines are hairlines in the
+//! colours of the page; the only colour in the picture is the hand-over happening now, and amber where work is held up.
+//! Nothing is decorated: no stripes, no badges, no frames around the picture.
 
-use devd_app_core::flow::{self, Flow, Metrics, Task};
-use devd_app_core::nav::Route;
-use devd_app_core::status;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+use devd_app_core::flow::{self, Flow, Metrics, Task};
+use devd_app_core::nav::Route;
 use gpui::{
-    AnyElement, App, ClickEvent, Context, FontWeight, Hsla, PathBuilder, Pixels, Point,
-    ScrollHandle, canvas, div, point, prelude::*, px,
+    AnyElement, ClickEvent, Context, FontWeight, Hsla, PathBuilder, Pixels, Point, ScrollHandle,
+    canvas, div, point, prelude::*, px,
 };
 use serde_json::Value;
 
 use crate::shell::Shell;
 use crate::state::devd;
-use crate::theme::{size, theme};
-use crate::ui::{self, Clip, role_color, state_mark, tint};
+use crate::theme::{Tone, size, theme};
+use crate::ui::{self, Clip, tint};
+
+/// The size of a node and the room between them.
+const METRICS: Metrics = Metrics {
+    node_w: 188.0,
+    node_h: 46.0,
+    gap_x: 44.0,
+    gap_y: 10.0,
+    margin: 4.0,
+};
 
 /// The tasks of a run, as the graph wants them.
 pub fn tasks_of(tasks: &[Value]) -> Vec<Task> {
@@ -59,7 +67,7 @@ pub fn tasks_of(tasks: &[Value]) -> Vec<Task> {
         .collect()
 }
 
-/// One line, ready to paint: its points, its colour, its weight and whether it is dashed.
+/// One line, ready to paint.
 struct Stroke {
     points: Vec<(f32, f32)>,
     color: Hsla,
@@ -81,15 +89,65 @@ fn frontier(tasks: &[Task]) -> Option<usize> {
         .or_else(|| tasks.iter().rposition(|t| flow::is_done(&t.state)))
 }
 
-/// The graph of a run. `here` is the conversation on screen, whose card is marked; `id` keeps two graphs apart.
+/// What choosing a node does.
+#[derive(Clone)]
+enum Pick {
+    /// Open the agent's conversation; the node of the conversation on screen is marked.
+    Conversation(Option<String>),
+    /// Show the agent beside the run's page; the chosen node is marked.
+    Agent { run: String, chosen: Option<String> },
+}
+
+/// The graph of a run. `here` is the conversation on screen, whose node is marked; `id` keeps two graphs apart.
 pub fn graph(
     id: &'static str,
     tasks: &[Value],
     here: Option<&str>,
     cx: &mut Context<Shell>,
 ) -> AnyElement {
+    draw(id, tasks, Pick::Conversation(here.map(str::to_string)), cx)
+}
+
+/// The graph on a run's own page: choosing a node shows that agent beside the page, and `chosen` is marked.
+pub fn graph_selectable(
+    id: &'static str,
+    tasks: &[Value],
+    chosen: Option<&str>,
+    run: &str,
+    cx: &mut Context<Shell>,
+) -> AnyElement {
+    draw(
+        id,
+        tasks,
+        Pick::Agent {
+            run: run.to_string(),
+            chosen: chosen.map(str::to_string),
+        },
+        cx,
+    )
+}
+
+/// Where a task stands, as the chain shows it, for a list beside the chain.
+pub fn task_glyph(state: &str, n: usize, cx: &mut Context<Shell>) -> AnyElement {
+    let task = Task {
+        key: String::new(),
+        role: String::new(),
+        title: String::new(),
+        state: state.to_string(),
+        thread: None,
+        depends_on: Vec::new(),
+        quiet_secs: None,
+        attempts: 1,
+    };
+    glyph(&task, n + 10_000, cx)
+}
+
+fn draw(id: &'static str, tasks: &[Value], pick: Pick, cx: &mut Context<Shell>) -> AnyElement {
     let t = theme(cx).clone();
     let tasks = tasks_of(tasks);
+    if tasks.is_empty() {
+        return div().into_any_element();
+    }
     // A chain that is still changing is read again as it changes, whoever is driving the run.
     if tasks
         .iter()
@@ -97,23 +155,19 @@ pub fn graph(
     {
         devd(cx).run_seen.set(true);
     }
-    let m = Metrics::default();
-    let layout = flow::layout(&tasks, m);
-    if tasks.is_empty() {
-        return div().into_any_element();
-    }
+    let layout = flow::layout(&tasks, METRICS);
 
-    // What each line is drawn as.
-    let strokes: Vec<Stroke> = layout
+    // Hairlines in the page's own colours; colour only where something is being handed on, or held up.
+    let mut strokes: Vec<Stroke> = layout
         .edges
         .iter()
         .map(|e| {
-            let (from, to) = (&tasks[e.from], &tasks[e.to]);
-            let (color, width, dashed) = match flow::flow(&from.state, &to.state) {
-                Flow::Settled => (tint(t.ok, 0.7), 1.75, false),
-                Flow::Live => (t.accent, 2.5, false),
-                Flow::Held => (t.warn, 2.0, false),
-                Flow::Waiting => (t.line_strong, 1.5, true),
+            let (color, width, dashed) = match flow::flow(&tasks[e.from].state, &tasks[e.to].state)
+            {
+                Flow::Settled => (t.line_strong, 1.25, false),
+                Flow::Live => (t.accent, 1.5, false),
+                Flow::Held => (tint(t.warn, 0.8), 1.25, false),
+                Flow::Waiting => (t.line, 1.25, true),
             };
             Stroke {
                 points: e.points.clone(),
@@ -123,9 +177,12 @@ pub fn graph(
             }
         })
         .collect();
-    // The lines that are alive are painted last, so they lie over the quiet ones where they meet.
-    let mut strokes = strokes;
-    strokes.sort_by_key(|s| s.width as i32);
+    // What is alive is painted last, so it lies over the quiet lines where they meet.
+    strokes.sort_by(|a, b| {
+        a.width
+            .partial_cmp(&b.width)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let lines = canvas(
         |_, _, _| (),
@@ -136,13 +193,12 @@ pub fn graph(
             for stroke in &strokes {
                 let mut path = PathBuilder::stroke(px(stroke.width));
                 if stroke.dashed {
-                    path = path.dash_array(&[px(4.0), px(4.0)]);
+                    path = path.dash_array(&[px(3.0), px(4.0)]);
                 }
-                let first = stroke.points[0];
-                path.move_to(at(first));
+                path.move_to(at(stroke.points[0]));
                 for (n, pair) in stroke.points.windows(2).enumerate() {
                     let (a, b) = (pair[0], pair[1]);
-                    // Between a card and a lane the line bends; along a lane it runs level.
+                    // Between a node and a lane the line bends; along a lane it runs level.
                     if n % 2 == 0 {
                         let reach = (b.0 - a.0) * 0.5;
                         path.cubic_bezier_to(at(b), at((a.0 + reach, a.1)), at((b.0 - reach, b.1)));
@@ -153,33 +209,19 @@ pub fn graph(
                 if let Ok(built) = path.build() {
                     window.paint_path(built, stroke.color);
                 }
-                // The head: a small triangle where the line meets the task that waits.
-                let end = *stroke.points.last().unwrap_or(&first);
-                let mut head = PathBuilder::fill();
-                head.move_to(at(end));
-                head.line_to(at((end.0 - 7.0, end.1 - 3.8)));
-                head.line_to(at((end.0 - 7.0, end.1 + 3.8)));
-                head.close();
-                if let Ok(built) = head.build() {
-                    window.paint_path(built, stroke.color);
-                }
             }
         },
     )
     .absolute()
     .size_full();
 
-    let mut cards: Vec<AnyElement> = Vec::new();
-    for (n, node) in layout.nodes.iter().enumerate() {
-        cards.push(card(&tasks[n], n, node.center, m, here, cx));
-    }
-
-    // A long chain is wider than its place. Bring the part that matters into view when it changes: the task that is
-    // working now, or, in a conversation, the agent whose conversation this is. A person who scrolls away is left alone.
-    let focus = tasks
-        .iter()
-        .position(|t| here.is_some() && t.thread.as_deref() == here)
-        .or_else(|| frontier(&tasks));
+    // A long chain is wider than its place. Bring the part that matters into view when it changes: the task working now,
+    // or, in a conversation, the agent whose conversation this is. A person who scrolls away is left alone.
+    let marked = |task: &Task| match &pick {
+        Pick::Conversation(here) => here.is_some() && task.thread.as_deref() == here.as_deref(),
+        Pick::Agent { chosen, .. } => chosen.as_deref() == Some(task.key.as_str()),
+    };
+    let focus = tasks.iter().position(&marked).or_else(|| frontier(&tasks));
     let handle = VIEWS.with(|views| {
         let mut views = views.borrow_mut();
         let (handle, last) = views
@@ -208,6 +250,13 @@ pub fn graph(
         }
         handle.clone()
     });
+
+    let nodes: Vec<AnyElement> = layout
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(n, node)| task_node(&tasks[n], n, node.center, marked(&tasks[n]), &pick, cx))
+        .collect();
     let inner = div()
         .id(id)
         .relative()
@@ -215,158 +264,151 @@ pub fn graph(
         .w(px(layout.width))
         .h(px(layout.height))
         .child(lines)
-        .children(cards);
+        .children(nodes);
     div()
         .id(ui::nid(id, 1))
         .w_full()
         .overflow_x_scroll()
         .track_scroll(&handle)
-        .rounded(px(size::RADIUS_L))
-        .border_1()
-        .border_color(t.line)
-        .bg(tint(t.surface, 0.55))
         .child(inner)
         .into_any_element()
 }
 
+/// Where a task stands, as one small glyph.
+fn glyph(task: &Task, n: usize, cx: &mut Context<Shell>) -> AnyElement {
+    let t = theme(cx).clone();
+    let frame = || {
+        div()
+            .size(px(14.0))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+    };
+    match task.state.as_str() {
+        "running" => frame()
+            .child(ui::live_dot(ui::nid("flow.live", n), Tone::Accent, cx))
+            .into_any_element(),
+        s if flow::is_done(s) => frame()
+            .child(ui::icon("check", 13.0, t.ok))
+            .into_any_element(),
+        s if flow::is_stuck(s) => frame()
+            .child(ui::icon("alert", 13.0, t.warn))
+            .into_any_element(),
+        _ => frame()
+            .child(
+                div()
+                    .size(px(9.0))
+                    .rounded_full()
+                    .border_1()
+                    .border_color(t.faint),
+            )
+            .into_any_element(),
+    }
+}
+
+/// The facts under a task's title: its role and where it stands, in words.
+fn facts(task: &Task) -> String {
+    let role = task.role.replace(['-', '_'], " ");
+    let state = match task.state.as_str() {
+        "running" => match task.quiet_secs {
+            Some(s) if s >= flow::QUIET_AFTER => format!("quiet for {}", flow::span(s)),
+            Some(s) if s >= 20 => format!("working, {} ago", flow::span(s)),
+            _ => "working".to_string(),
+        },
+        "pending" => "waiting".to_string(),
+        "skipped" => "accepted".to_string(),
+        other => other.replace('_', " "),
+    };
+    let attempt = if task.attempts > 1 && !flow::is_done(&task.state) {
+        format!(" · try {}", task.attempts)
+    } else {
+        String::new()
+    };
+    format!("{role} · {state}{attempt}")
+}
+
 /// One task.
-fn card(
+fn task_node(
     task: &Task,
     n: usize,
     center: (f32, f32),
-    m: Metrics,
-    here: Option<&str>,
+    mine: bool,
+    pick: &Pick,
     cx: &mut Context<Shell>,
 ) -> AnyElement {
     let t = theme(cx).clone();
-    let said = status::of(&task.state);
-    let tone: crate::theme::Tone = said.level.into();
-    let accent = if flow::is_stuck(&task.state) {
-        t.tone(tone)
-    } else if task.state == "running" {
-        t.accent
-    } else if flow::is_done(&task.state) {
-        tint(t.ok, 0.9)
-    } else {
-        t.line_strong
-    };
-    let mine = here.is_some() && task.thread.as_deref() == here;
-    let role = role_color(&task.role, cx);
+    let stuck = flow::is_stuck(&task.state);
+    let quiet = task.state == "running" && task.quiet_secs.is_some_and(|s| s >= flow::QUIET_AFTER);
     let hover = t.hover;
-    let words: String = task.role.replace(['-', '_'], " ");
-    let letter = words
-        .chars()
-        .next()
-        .map(|c| c.to_uppercase().to_string())
-        .unwrap_or_default();
-    let mut card = div()
-        .id(ui::nid("flow.card", n))
+    let mut node = div()
+        .id(ui::nid("flow.node", n))
         .absolute()
-        .left(px(center.0 - m.node_w / 2.0))
-        .top(px(center.1 - m.node_h / 2.0))
-        .w(px(m.node_w))
-        .h(px(m.node_h))
+        .left(px(center.0 - METRICS.node_w / 2.0))
+        .top(px(center.1 - METRICS.node_h / 2.0))
+        .w(px(METRICS.node_w))
+        .h(px(METRICS.node_h))
         .flex()
         .items_center()
         .gap(px(9.0))
-        .pl(px(11.0))
-        .pr(px(9.0))
+        .px(px(10.0))
         .rounded(px(size::RADIUS_L))
         .border_1()
-        .border_color(if mine {
-            t.accent
-        } else if task.state == "running" {
-            tint(t.accent, 0.55)
-        } else {
-            t.line
-        })
-        .bg(if task.state == "running" {
-            t.raised
-        } else {
-            t.surface
-        })
-        .overflow_hidden()
-        // A strip down the left edge says where the task stands.
-        .child(
-            div()
-                .absolute()
-                .left(px(0.0))
-                .top(px(0.0))
-                .bottom(px(0.0))
-                .w(px(3.0))
-                .bg(accent),
-        )
-        .child(
-            div()
-                .size(px(26.0))
-                .flex_none()
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded_full()
-                .bg(tint(role, 0.16))
-                .text_size(px(11.0))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(role)
-                .child(letter),
-        )
+        .border_color(if mine { tint(t.accent, 0.7) } else { t.line })
+        .bg(t.surface)
+        .child(glyph(task, n, cx))
         .child(
             div()
                 .flex_1()
                 .min_w_0()
                 .flex()
                 .flex_col()
-                .gap(px(1.0))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(5.0))
-                        .text_size(px(size::TEXT_XS))
-                        .text_color(t.faint)
-                        .child(Clip::new(words.clone()))
-                        // A working task says how long it has been quiet, and that it has been tried before, so a stall shows
-                        // on its card and not only to whoever asks.
-                        .children(match (task.state.as_str(), task.quiet_secs) {
-                            ("running", Some(s)) if s >= flow::QUIET_AFTER => Some(
-                                div()
-                                    .text_color(t.warn)
-                                    .child(format!("quiet {}", flow::span(s))),
-                            ),
-                            ("running", Some(s)) if s >= 20 => {
-                                Some(div().child(format!("{} ago", flow::span(s))))
-                            }
-                            _ => None,
-                        })
-                        .children((task.attempts > 1 && !flow::is_done(&task.state)).then(|| {
-                            div()
-                                .text_color(t.warn)
-                                .child(format!("try {}", task.attempts))
-                        })),
-                )
                 .child(
                     div()
                         .text_size(px(size::TEXT_SM))
+                        .font_weight(FontWeight::MEDIUM)
                         .text_color(t.text)
                         .child(Clip::new(task.title.clone())),
+                )
+                .child(
+                    div()
+                        .text_size(px(size::TEXT_XS))
+                        .text_color(if stuck || quiet { t.warn } else { t.faint })
+                        .child(Clip::new(facts(task))),
                 ),
         )
-        .child(state_mark(ui::nid("flow.mark", n), &said, cx))
-        .tooltip(ui::tip(format!(
-            "{} · {} · {}",
-            task.role.replace(['-', '_'], " "),
-            said.label,
-            task.title
-        )));
-    if let Some(thread) = task.thread.clone() {
-        card = card
-            .cursor_pointer()
-            .hover(move |s| s.bg(hover))
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                this.go(Route::Assistant(Some(thread.clone())), cx)
-            }));
+        .tooltip(ui::tip(format!("{} — {}", task.title, facts(task))));
+    match pick {
+        Pick::Conversation(_) => {
+            if let Some(thread) = task.thread.clone() {
+                node = node
+                    .cursor_pointer()
+                    .hover(move |s| s.bg(hover))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.go(Route::Assistant(Some(thread.clone())), cx)
+                    }));
+            }
+        }
+        Pick::Agent { run, .. } => {
+            let (run, key) = (run.clone(), task.key.clone());
+            node = node
+                .cursor_pointer()
+                .hover(move |s| s.bg(hover))
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.run_focus = if this
+                        .run_focus
+                        .as_ref()
+                        .is_some_and(|(r, k)| r == &run && k == &key)
+                    {
+                        None
+                    } else {
+                        Some((run.clone(), key.clone()))
+                    };
+                    cx.notify();
+                }));
+        }
     }
-    card.into_any_element()
+    node.into_any_element()
 }
 
 /// What is happening in a run, as one sentence, from the run's state and its tasks.
@@ -392,5 +434,48 @@ pub fn summary(tasks: &[Value]) -> String {
     out
 }
 
-#[allow(dead_code)]
-fn _app(_: &App) {}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn task(state: &str, quiet: Option<u64>, attempts: u32) -> Task {
+        Task {
+            key: "cron".into(),
+            role: "implementer".into(),
+            title: "Cron".into(),
+            state: state.into(),
+            thread: None,
+            depends_on: Vec::new(),
+            quiet_secs: quiet,
+            attempts,
+        }
+    }
+
+    #[test]
+    fn the_line_under_a_title_says_the_role_and_where_it_stands_in_words() {
+        assert_eq!(facts(&task("running", Some(5), 1)), "implementer · working");
+        assert_eq!(
+            facts(&task("running", Some(120), 1)),
+            "implementer · working, 2 minutes ago"
+        );
+        assert_eq!(
+            facts(&task("running", Some(9 * 60), 1)),
+            "implementer · quiet for 9 minutes"
+        );
+        assert_eq!(facts(&task("pending", None, 1)), "implementer · waiting");
+        assert_eq!(
+            facts(&task("skipped", None, 1)),
+            "implementer · accepted",
+            "work accepted by hand reads as accepted, not skipped"
+        );
+        assert_eq!(
+            facts(&task("unverified", None, 2)),
+            "implementer · unverified · try 2"
+        );
+        assert_eq!(
+            facts(&task("done", None, 3)),
+            "implementer · done",
+            "a finished task does not boast its retries"
+        );
+    }
+}

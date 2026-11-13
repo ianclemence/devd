@@ -15,4 +15,5 @@ pub mod pages;
 pub mod pane;
 pub mod project;
 pub mod roles;
+pub mod runs;
 pub mod term;

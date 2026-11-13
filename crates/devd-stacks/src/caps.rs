@@ -151,7 +151,9 @@ fn valid_project_name(name: &str) -> bool {
         return false;
     }
     let mut chars = name.chars();
-    let Some(first) = chars.next() else { return false };
+    let Some(first) = chars.next() else {
+        return false;
+    };
     if !first.is_ascii_alphanumeric() {
         return false;
     }
@@ -270,7 +272,10 @@ fn read_plan(id: &str, summary: impl Into<String>) -> Result<Plan> {
 fn dir_arg(ctx: &Ctx, path: &str) -> Result<PathBuf> {
     let p = authz::authorize_dir(ctx, Path::new(path))?;
     if !p.is_dir() {
-        return Err(DevdError::not_found(format!("{} is not a directory", p.display())));
+        return Err(DevdError::not_found(format!(
+            "{} is not a directory",
+            p.display()
+        )));
     }
     Ok(p)
 }
@@ -299,8 +304,12 @@ pub fn options_schema(s: &crate::model::StackDef) -> Value {
                 }
                 t
             }
-            Select => json!({"type": "string", "enum": o.choices.iter().map(|c| c.value.clone()).collect::<Vec<_>>()}),
-            Multi => json!({"type": "array", "items": {"type": "string", "enum": o.choices.iter().map(|c| c.value.clone()).collect::<Vec<_>>()}, "uniqueItems": true}),
+            Select => {
+                json!({"type": "string", "enum": o.choices.iter().map(|c| c.value.clone()).collect::<Vec<_>>()})
+            }
+            Multi => {
+                json!({"type": "array", "items": {"type": "string", "enum": o.choices.iter().map(|c| c.value.clone()).collect::<Vec<_>>()}, "uniqueItems": true})
+            }
         };
         p["title"] = json!(o.label);
         p["description"] = json!(o.help);
@@ -322,7 +331,9 @@ pub fn options_schema(s: &crate::model::StackDef) -> Value {
 }
 
 fn describe(reg: &StackRegistry, id: &str) -> Result<Value> {
-    let s = reg.stack(id).ok_or_else(|| DevdError::not_found(format!("no stack `{id}`; see stacks.list")))?;
+    let s = reg
+        .stack(id)
+        .ok_or_else(|| DevdError::not_found(format!("no stack `{id}`; see stacks.list")))?;
     Ok(json!({
         "stack": s,
         "options_schema": options_schema(s),
@@ -336,7 +347,12 @@ fn describe(reg: &StackRegistry, id: &str) -> Result<Value> {
     }))
 }
 
-fn detect_ctx(ctx: &Ctx, reg: &StackRegistry, path: &str, stack: Option<&str>) -> Result<(PathBuf, ProjectContext)> {
+fn detect_ctx(
+    ctx: &Ctx,
+    reg: &StackRegistry,
+    path: &str,
+    stack: Option<&str>,
+) -> Result<(PathBuf, ProjectContext)> {
     let dir = dir_arg(ctx, path)?;
     let c = detect::detect(ctx, reg, &dir, stack)?;
     Ok((dir, c))
@@ -346,7 +362,11 @@ fn pick_task<'a>(c: &'a ProjectContext, id: &str) -> Result<&'a TaskInfo> {
     c.tasks.iter().find(|t| t.id == id).ok_or_else(|| {
         DevdError::not_found(format!(
             "this project has no task `{id}`. Available: {}",
-            c.tasks.iter().map(|t| t.id.as_str()).collect::<Vec<_>>().join(", ")
+            c.tasks
+                .iter()
+                .map(|t| t.id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
         ))
     })
 }
@@ -840,6 +860,29 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         |ctx, a| run_task(ctx, a, false),
     )?;
 
+    reg.define::<VerifyArgs>("project.verify", "Run every check the project has")
+    .description("Runs the project's own checks in one call: formatting, lint, type check, build and tests, whichever it has, each as its own task from project.tasks, none of them destructive. Returns whether everything passed and, for each check, its command, exit code and the end of its output. Use it before reporting a task done: one call is the proof, and what it returns is recorded as the evidence. A project with no checks says so rather than passing.")
+    .tier(Tier::Exec)
+    .effect(Effect::Process)
+    .agent_safe()
+    .dry_run()
+    .handlers(
+        |ctx, a| {
+            let r = stacks(ctx);
+            let (_, c) = detect_ctx(ctx, &r, &a.path, None)?;
+            let chosen = checks_of(&c.tasks, a.only.as_deref());
+            let mut p = Plan::new("project.verify", format!("run {} check(s) in {}", chosen.len(), a.path));
+            for t in &chosen {
+                p = p.step(format!("`{}`", t.command));
+            }
+            if chosen.is_empty() {
+                p = p.effect("this project has no checks devd can run");
+            }
+            Ok(p)
+        },
+        verify,
+    )?;
+
     reg.define::<RunTask>("project.run_destructive", "Run a destructive project task")
     .description("Runs a task classified as destructive (drops or resets data, deploys, force-pushes, migrate:fresh, db:reset...). An agent may run it when a person approves that exact task in the conversation; the approval covers one run and cannot be reused.")
     .tier(Tier::Destructive)
@@ -1034,52 +1077,66 @@ pub fn register(reg: &mut Registry) -> Result<()> {
     )?;
 
     reg.define::<NoArgs>("task.list", "List background tasks")
-    .description("Dev servers and other long-running tasks devd started, with pid, state and log path.")
-    .tier(Tier::Read)
-    .effect(Effect::Read)
-    .agent_safe()
-    .dry_run()
-    .idempotent()
-    .handlers(
-        |_, _| read_plan("task.list", "list background tasks"),
-        |_, _| {
-            let v = tasks::background();
-            Ok(Outcome::with_data(format!("{} background task(s)", v.len()), json!(v)))
-        },
-    )?;
+        .description(
+            "Dev servers and other long-running tasks devd started, with pid, state and log path.",
+        )
+        .tier(Tier::Read)
+        .effect(Effect::Read)
+        .agent_safe()
+        .dry_run()
+        .idempotent()
+        .handlers(
+            |_, _| read_plan("task.list", "list background tasks"),
+            |_, _| {
+                let v = tasks::background();
+                Ok(Outcome::with_data(
+                    format!("{} background task(s)", v.len()),
+                    json!(v),
+                ))
+            },
+        )?;
 
     reg.define::<ProcArgs>("task.stop", "Stop a background task")
-    .description("Stops a background task and everything it started.")
-    .tier(Tier::Exec)
-    .effect(Effect::Process)
-    .agent_safe()
-    .dry_run()
-    .idempotent()
-    .handlers(
-        |_, a| Ok(Plan::new("task.stop", format!("stop {}", a.name))),
-        |_, a| {
-            let r = tasks::stop(&a.name)?;
-            Ok(Outcome::ok(match r { Some(_) => format!("stopped {}", a.name), None => format!("{} was not running", a.name) }))
-        },
-    )?;
+        .description("Stops a background task and everything it started.")
+        .tier(Tier::Exec)
+        .effect(Effect::Process)
+        .agent_safe()
+        .dry_run()
+        .idempotent()
+        .handlers(
+            |_, a| Ok(Plan::new("task.stop", format!("stop {}", a.name))),
+            |_, a| {
+                let r = tasks::stop(&a.name)?;
+                Ok(Outcome::ok(match r {
+                    Some(_) => format!("stopped {}", a.name),
+                    None => format!("{} was not running", a.name),
+                }))
+            },
+        )?;
 
     reg.define::<ProcArgs>("task.logs", "Read a background task's log")
-    .description("The last lines of a background task's output, with secrets removed.")
-    .tier(Tier::Read)
-    .effect(Effect::Read)
-    .agent_safe()
-    .dry_run()
-    .idempotent()
-    .handlers(
-        |_, a| read_plan("task.logs", format!("read the log of {}", a.name)),
-        |_, a| {
-            let procs = devd_core::process::shared().list();
-            let p = procs.iter().find(|p| p.name == a.name).ok_or_else(|| DevdError::not_found(format!("no background task `{}`", a.name)))?;
-            let lines = devd_core::process::shared().tail_log(Path::new(&p.log_path), a.lines.unwrap_or(200).min(2000))?;
-            let lines: Vec<String> = lines.iter().map(|l| exec::redact_line(l)).collect();
-            Ok(Outcome::with_data(format!("{} line(s)", lines.len()), json!({"running": p.running, "exit_code": p.exit_code, "lines": lines})))
-        },
-    )?;
+        .description("The last lines of a background task's output, with secrets removed.")
+        .tier(Tier::Read)
+        .effect(Effect::Read)
+        .agent_safe()
+        .dry_run()
+        .idempotent()
+        .handlers(
+            |_, a| read_plan("task.logs", format!("read the log of {}", a.name)),
+            |_, a| {
+                let procs = devd_core::process::shared().list();
+                let p = procs.iter().find(|p| p.name == a.name).ok_or_else(|| {
+                    DevdError::not_found(format!("no background task `{}`", a.name))
+                })?;
+                let lines = devd_core::process::shared()
+                    .tail_log(Path::new(&p.log_path), a.lines.unwrap_or(200).min(2000))?;
+                let lines: Vec<String> = lines.iter().map(|l| exec::redact_line(l)).collect();
+                Ok(Outcome::with_data(
+                    format!("{} line(s)", lines.len()),
+                    json!({"running": p.running, "exit_code": p.exit_code, "lines": lines}),
+                ))
+            },
+        )?;
 
     reg.define::<RunIdArgs>("stacks.cancel", "Cancel a running operation")
     .description("Stops a project.init, project.run or toolchain operation that is in progress, killing the whole process tree.")
@@ -1197,55 +1254,94 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         },
     )?;
 
-    for (id, action, summary) in [("toolchain.install", "install", "Install a tool"), ("toolchain.remove", "remove", "Remove a tool")] {
+    for (id, action, summary) in [
+        ("toolchain.install", "install", "Install a tool"),
+        ("toolchain.remove", "remove", "Remove a tool"),
+    ] {
         let desc = if action == "install" {
             "Installs a tool through the host's package manager or a digest-verified devd runtime download. Already-installed tools are not reinstalled. The result is verified by running the tool, not by trusting an exit code. Needs approval; privileged installs run through `sudo -n` or root only, and are refused with the exact command when neither is available."
         } else {
             "Removes a tool through the package manager that installs it. Data directories (databases!) are never deleted. Needs approval."
         };
         reg.define::<ToolArgs>(id, summary)
-    .description(desc)
-    .tier(Tier::Admin)
-    .effect(Effect::System)
-    .agent_safe()
-    .dry_run()
-    .handlers(
-        move |ctx, a| {
-                let r = stacks(ctx);
-                let p = toolchain::plan(ctx, &r, &a.tool, action)?;
-                let mut plan = Plan::new(if action == "install" { "toolchain.install" } else { "toolchain.remove" }, format!("{action} {}", a.tool));
-                for d in &p.display { plan = plan.step(d.clone()); }
-                if p.privileged { plan = plan.effect("needs administrator rights"); }
-                if cfg!(windows) && p.manager.as_deref() == Some("winget") {
-                    plan = plan.effect("Windows may ask for administrator approval (UAC)");
-                }
-                if let Some(v) = &p.already_installed { plan = plan.effect(format!("already installed ({v}); nothing will change")); }
-                for b in &p.blockers { plan = plan.effect(format!("BLOCKED: {b}")); }
-                plan = plan.effect(format!("source: {}", p.trust)).approval(true);
-                Ok(plan.data(serde_json::to_value(&p)?))
-            },
-        move |ctx, a| {
-                let r = stacks(ctx);
-                let p = toolchain::plan(ctx, &r, &a.tool, action)?;
-                if action == "install" {
-                    if let Some(v) = &p.already_installed {
-                        return Ok(Outcome::with_data(format!("Already installed: {} ({v})", a.tool), serde_json::to_value(&p)?));
+            .description(desc)
+            .tier(Tier::Admin)
+            .effect(Effect::System)
+            .agent_safe()
+            .dry_run()
+            .handlers(
+                move |ctx, a| {
+                    let r = stacks(ctx);
+                    let p = toolchain::plan(ctx, &r, &a.tool, action)?;
+                    let mut plan = Plan::new(
+                        if action == "install" {
+                            "toolchain.install"
+                        } else {
+                            "toolchain.remove"
+                        },
+                        format!("{action} {}", a.tool),
+                    );
+                    for d in &p.display {
+                        plan = plan.step(d.clone());
                     }
-                }
-                let run_id = devd_core::util::new_id();
-                let cancel = runs::register(&run_id);
-                let res = toolchain::apply(ctx, &r, &p, &cancel);
-                runs::finish(&run_id);
-                let change = res?;
-                let mut o = Outcome::with_data(
-                    if change.verified { format!("{action}ed {} (verified: {})", a.tool, change.after.version.clone().unwrap_or_else(|| "present".into())).replace("removeed", "removed") } else { format!("{action} finished but {} is not in the expected state", a.tool) },
-                    serde_json::to_value(&change)?,
-                );
-                o.ok = change.verified;
-                for n in &change.notes { o = o.warn(n.clone()); }
-                Ok(o)
-            },
-    )?;
+                    if p.privileged {
+                        plan = plan.effect("needs administrator rights");
+                    }
+                    if cfg!(windows) && p.manager.as_deref() == Some("winget") {
+                        plan = plan.effect("Windows may ask for administrator approval (UAC)");
+                    }
+                    if let Some(v) = &p.already_installed {
+                        plan = plan.effect(format!("already installed ({v}); nothing will change"));
+                    }
+                    for b in &p.blockers {
+                        plan = plan.effect(format!("BLOCKED: {b}"));
+                    }
+                    plan = plan.effect(format!("source: {}", p.trust)).approval(true);
+                    Ok(plan.data(serde_json::to_value(&p)?))
+                },
+                move |ctx, a| {
+                    let r = stacks(ctx);
+                    let p = toolchain::plan(ctx, &r, &a.tool, action)?;
+                    if action == "install" {
+                        if let Some(v) = &p.already_installed {
+                            return Ok(Outcome::with_data(
+                                format!("Already installed: {} ({v})", a.tool),
+                                serde_json::to_value(&p)?,
+                            ));
+                        }
+                    }
+                    let run_id = devd_core::util::new_id();
+                    let cancel = runs::register(&run_id);
+                    let res = toolchain::apply(ctx, &r, &p, &cancel);
+                    runs::finish(&run_id);
+                    let change = res?;
+                    let mut o = Outcome::with_data(
+                        if change.verified {
+                            format!(
+                                "{action}ed {} (verified: {})",
+                                a.tool,
+                                change
+                                    .after
+                                    .version
+                                    .clone()
+                                    .unwrap_or_else(|| "present".into())
+                            )
+                            .replace("removeed", "removed")
+                        } else {
+                            format!(
+                                "{action} finished but {} is not in the expected state",
+                                a.tool
+                            )
+                        },
+                        serde_json::to_value(&change)?,
+                    );
+                    o.ok = change.verified;
+                    for n in &change.notes {
+                        o = o.warn(n.clone());
+                    }
+                    Ok(o)
+                },
+            )?;
     }
 
     reg.define::<NoArgs>("services.inventory", "Services found on this machine")
@@ -1354,20 +1450,23 @@ pub fn register(reg: &mut Registry) -> Result<()> {
     )?;
 
     reg.define::<ToolArgs>("toolchain.logs", "Service logs")
-    .description("Recent log lines for a service, where the host's journal can provide them.")
-    .tier(Tier::Read)
-    .effect(Effect::Read)
-    .agent_safe()
-    .dry_run()
-    .idempotent()
-    .handlers(
-        |_, a| read_plan("toolchain.logs", format!("read logs of {}", a.tool)),
-        |ctx, a| {
-            let r = stacks(ctx);
-            let lines: Vec<String> = toolchain::service_logs(ctx, &r, &a.tool)?;
-            Ok(Outcome::with_data(format!("{} line(s)", lines.len()), json!({"lines": lines})))
-        },
-    )?;
+        .description("Recent log lines for a service, where the host's journal can provide them.")
+        .tier(Tier::Read)
+        .effect(Effect::Read)
+        .agent_safe()
+        .dry_run()
+        .idempotent()
+        .handlers(
+            |_, a| read_plan("toolchain.logs", format!("read logs of {}", a.tool)),
+            |ctx, a| {
+                let r = stacks(ctx);
+                let lines: Vec<String> = toolchain::service_logs(ctx, &r, &a.tool)?;
+                Ok(Outcome::with_data(
+                    format!("{} line(s)", lines.len()),
+                    json!({"lines": lines}),
+                ))
+            },
+        )?;
 
     reg.define::<NoArgs>("toolchain.devices", "Connected Android devices")
     .description("Devices and emulators visible to adb, with their state. Starts the adb server if needed.")
@@ -1454,10 +1553,15 @@ fn run_task(ctx: &Ctx, a: &RunTask, destructive: bool) -> Result<Outcome> {
     let (dir, c) = detect_ctx(ctx, &r, &a.path, None)?;
     let t = pick_task(&c, &a.task)?;
     if t.risk == Risk::Destructive && !destructive {
-        return Err(DevdError::denied(format!("`{}` can destroy data. Use project.run_destructive, which needs a human's approval.", t.command)));
+        return Err(DevdError::denied(format!(
+            "`{}` can destroy data. Use project.run_destructive, which needs a human's approval.",
+            t.command
+        )));
     }
     if t.risk != Risk::Destructive && destructive {
-        return Err(DevdError::invalid("that task is not destructive; use project.run"));
+        return Err(DevdError::invalid(
+            "that task is not destructive; use project.run",
+        ));
     }
     let v = tasks::run(ctx, &dir, t, &a.args, a)?;
     let mut o;
@@ -1467,14 +1571,140 @@ fn run_task(ctx: &Ctx, a: &RunTask, destructive: bool) -> Result<Outcome> {
         let ok = v.get("ok").and_then(|x| x.as_bool()).unwrap_or(false);
         let code = v.get("exit_code").cloned().unwrap_or(Value::Null);
         o = Outcome::with_data(
-            if ok { format!("`{}` succeeded", t.command) } else if v["timed_out"].as_bool() == Some(true) { format!("`{}` timed out", t.command) } else if v["cancelled"].as_bool() == Some(true) { format!("`{}` was cancelled", t.command) } else { format!("`{}` failed with exit code {}", t.command, code) },
+            if ok {
+                format!("`{}` succeeded", t.command)
+            } else if v["timed_out"].as_bool() == Some(true) {
+                format!("`{}` timed out", t.command)
+            } else if v["cancelled"].as_bool() == Some(true) {
+                format!("`{}` was cancelled", t.command)
+            } else {
+                format!("`{}` failed with exit code {}", t.command, code)
+            },
             v,
         );
         o.ok = ok;
         if !ok {
-            if let Some(h) = install_hint(&dir) { o = o.warn(h); }
+            if let Some(h) = install_hint(&dir) {
+                o = o.warn(h);
+            }
         }
     }
+    Ok(o)
+}
+
+/// Arguments to `project.verify`.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct VerifyArgs {
+    /// Project directory.
+    pub path: String,
+    /// Only these checks, by task id (`test`, `lint`). Omit to run every check the project has.
+    #[serde(default)]
+    pub only: Option<Vec<String>>,
+    /// Seconds each check may take (default 600).
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
+}
+
+/// The order checks run in: cheap and fast first, so a typo does not wait for the whole test suite.
+const CHECK_ORDER: &[&str] = &[
+    "format-check",
+    "fmt-check",
+    "lint",
+    "typecheck",
+    "check",
+    "compile",
+    "build",
+    "test",
+    "tests",
+    "verify",
+    "ci",
+];
+
+/// The checks among a project's tasks: safe, finite and runnable now, in the order they should run, one per kind.
+fn checks_of(tasks: &[tasks::TaskInfo], only: Option<&[String]>) -> Vec<tasks::TaskInfo> {
+    let wanted = |id: &str| {
+        only.map(|o| o.iter().any(|w| w.eq_ignore_ascii_case(id)))
+            .unwrap_or(true)
+    };
+    let mut out: Vec<tasks::TaskInfo> = Vec::new();
+    for id in CHECK_ORDER {
+        let Some(t) = tasks.iter().find(|t| t.id.eq_ignore_ascii_case(id)) else {
+            continue;
+        };
+        if t.risk != Risk::Safe || t.long_running || !t.available || !wanted(&t.id) {
+            continue;
+        }
+        // `test` and `tests`, `fmt-check` and `format-check` are one check under two names.
+        if out.iter().any(|x| x.command == t.command) {
+            continue;
+        }
+        out.push(t.clone());
+    }
+    out
+}
+
+fn verify(ctx: &Ctx, a: &VerifyArgs) -> Result<Outcome> {
+    let r = stacks(ctx);
+    let (dir, c) = detect_ctx(ctx, &r, &a.path, None)?;
+    let chosen = checks_of(&c.tasks, a.only.as_deref());
+    if chosen.is_empty() {
+        let mut o = Outcome::with_data(
+            "this project has no checks devd can run".to_string(),
+            json!({ "ok": false, "passed": 0, "total": 0, "results": [], "why": "no format, lint, type, build or test task was found. Add one (a `test` task in the stack, or a script the project defines), or ask for one to be written." }),
+        );
+        o.ok = false;
+        return Ok(o);
+    }
+    let mut results = Vec::new();
+    for t in &chosen {
+        let req = RunTask {
+            path: a.path.clone(),
+            task: t.id.clone(),
+            args: Vec::new(),
+            background: None,
+            timeout_secs: a.timeout_secs,
+            run_id: None,
+        };
+        let v = tasks::run(ctx, &dir, t, &[], &req)?;
+        let ok = v.get("ok").and_then(|x| x.as_bool()).unwrap_or(false);
+        results.push(json!({
+            "task": t.id,
+            "command": t.command,
+            "ok": ok,
+            "exit_code": v.get("exit_code").cloned().unwrap_or(Value::Null),
+            "timed_out": v.get("timed_out").cloned().unwrap_or(json!(false)),
+            "output_tail": v.get("output_tail").cloned().unwrap_or(Value::Null),
+        }));
+    }
+    let passed = results.iter().filter(|r| r["ok"] == json!(true)).count();
+    let all = passed == results.len();
+    let words: Vec<String> = results
+        .iter()
+        .map(|r| {
+            format!(
+                "{} {}",
+                r["task"].as_str().unwrap_or(""),
+                if r["ok"] == json!(true) {
+                    "passed"
+                } else {
+                    "FAILED"
+                }
+            )
+        })
+        .collect();
+    let mut o = Outcome::with_data(
+        if all {
+            format!("all {} checks passed ({})", results.len(), words.join(", "))
+        } else {
+            format!(
+                "{passed} of {} checks passed: {}",
+                results.len(),
+                words.join(", ")
+            )
+        },
+        json!({ "ok": all, "passed": passed, "total": results.len(), "results": results }),
+    );
+    o.ok = all;
     Ok(o)
 }
 
@@ -1526,15 +1756,46 @@ fn exec_cmd(ctx: &Ctx, a: &ExecArgs, destructive: bool) -> Result<Outcome> {
         )));
     }
     if !risky && destructive {
-        return Err(DevdError::invalid("that command is neither destructive nor inline; use project.exec"));
+        return Err(DevdError::invalid(
+            "that command is neither destructive nor inline; use project.exec",
+        ));
     }
-    let res = tasks::exec_allowed(ctx, &r, stack, c.package_manager.as_deref().unwrap_or(""), &dir, &a.argv, a.timeout_secs.unwrap_or(600))?;
+    let res = tasks::exec_allowed(
+        ctx,
+        &r,
+        stack,
+        c.package_manager.as_deref().unwrap_or(""),
+        &dir,
+        &a.argv,
+        a.timeout_secs.unwrap_or(600),
+    )?;
     let display = exec::redact_argv(&a.argv).join(" ");
-    let _ = ctx.store.begin_stack_run("exec", &dir.display().to_string(), "project.exec", &display, &ctx.actor.label(), None)
-        .and_then(|id| ctx.store.finish_stack_run(&id, res.code, res.ok, res.duration_ms as i64));
+    let _ = ctx
+        .store
+        .begin_stack_run(
+            "exec",
+            &dir.display().to_string(),
+            "project.exec",
+            &display,
+            &ctx.actor.label(),
+            None,
+        )
+        .and_then(|id| {
+            ctx.store
+                .finish_stack_run(&id, res.code, res.ok, res.duration_ms as i64)
+        });
     let ok = res.ok;
     let mut o = Outcome::with_data(
-        if ok { format!("`{display}` succeeded") } else { format!("`{display}` failed with exit code {}", res.code.map(|c| c.to_string()).unwrap_or_else(|| "none".into())) },
+        if ok {
+            format!("`{display}` succeeded")
+        } else {
+            format!(
+                "`{display}` failed with exit code {}",
+                res.code
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "none".into())
+            )
+        },
         json!({"command": display, "exit_code": res.code, "ok": res.ok, "timed_out": res.timed_out, "duration_ms": res.duration_ms, "output_tail": res.tail, "safe_to_retry": false}),
     );
     o.ok = ok;
@@ -1550,8 +1811,67 @@ mod tests {
         for good in ["shop", "my-shop", "shop_2", "v1.2"] {
             assert!(valid_project_name(good), "{good}");
         }
-        for bad in ["", " ", ".", "..", "../up", "a/b", "a\\b", "-shop", "_shop", "shop!"] {
+        for bad in [
+            "", " ", ".", "..", "../up", "a/b", "a\\b", "-shop", "_shop", "shop!",
+        ] {
             assert!(!valid_project_name(bad), "{bad}");
         }
+    }
+}
+
+#[cfg(test)]
+mod verify_tests {
+    use super::*;
+
+    fn task(id: &str, command: &str, risk: Risk, long: bool, available: bool) -> TaskInfo {
+        TaskInfo {
+            id: id.into(),
+            title: id.into(),
+            kind: id.into(),
+            risk,
+            long_running: long,
+            command: command.into(),
+            argv: command.split(' ').map(str::to_string).collect(),
+            port: None,
+            available,
+            unavailable_reason: None,
+            origin: "stack".into(),
+            help: String::new(),
+        }
+    }
+
+    #[test]
+    fn the_checks_are_the_safe_finite_runnable_ones_cheapest_first_and_each_command_once() {
+        let tasks = vec![
+            task("test", "go test ./...", Risk::Safe, false, true),
+            task("dev", "go run .", Risk::Safe, true, true),
+            task("build", "go build ./...", Risk::Safe, false, true),
+            task("lint", "go vet ./...", Risk::Safe, false, true),
+            task("tests", "go test ./...", Risk::Safe, false, true),
+            task(
+                "migrate",
+                "go run ./migrate",
+                Risk::Destructive,
+                false,
+                true,
+            ),
+            task("check", "go list ./...", Risk::Safe, false, false),
+        ];
+        let ids: Vec<String> = checks_of(&tasks, None).into_iter().map(|t| t.id).collect();
+        assert_eq!(ids, vec!["lint", "build", "test"], "a server, a destructive task and one that cannot run are not checks; test and tests are one");
+    }
+
+    #[test]
+    fn a_caller_may_ask_for_some_of_them_only() {
+        let tasks = vec![
+            task("lint", "go vet ./...", Risk::Safe, false, true),
+            task("test", "go test ./...", Risk::Safe, false, true),
+        ];
+        let only = vec!["TEST".to_string()];
+        assert_eq!(checks_of(&tasks, Some(&only)).len(), 1);
+        assert!(
+            checks_of(&[], None).is_empty(),
+            "a project with no checks has none to run, and says so rather than passing"
+        );
     }
 }

@@ -162,6 +162,28 @@ pub struct TeamRun {
     pub base_commit: Option<String>,
 }
 
+/// The bounds on a run.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct RunBudget {
+    /// The most it may spend, in US dollars.
+    pub usd: Option<f64>,
+    /// The most model turns its agents may take together.
+    pub turns: Option<i64>,
+}
+
+/// What a run has used.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct RunUsage {
+    /// What its agents' conversations have cost, in US dollars.
+    pub cost_usd: f64,
+    /// Tokens read.
+    pub input_tokens: i64,
+    /// Tokens written.
+    pub output_tokens: i64,
+    /// Model turns taken.
+    pub turns: i64,
+}
+
 /// What a run must achieve, in the person's words, and how many extra passes devd may take to get there.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GoalLoop {
@@ -340,9 +362,13 @@ fn row_task(r: &rusqlite::Row) -> rusqlite::Result<TeamTask> {
         stalls: r.get(21)?,
         criteria: list(r.get(22)?),
         verdict: r.get(23)?,
-        verdict_data: r.get::<_, Option<String>>(24)?.and_then(|s| serde_json::from_str(&s).ok()),
+        verdict_data: r
+            .get::<_, Option<String>>(24)?
+            .and_then(|s| serde_json::from_str(&s).ok()),
         reviewed_commit: r.get(25)?,
-        checkpoint: r.get::<_, Option<String>>(26)?.and_then(|s| serde_json::from_str(&s).ok()),
+        checkpoint: r
+            .get::<_, Option<String>>(26)?
+            .and_then(|s| serde_json::from_str(&s).ok()),
         failure_kind: r.get(27)?,
     })
 }
@@ -535,7 +561,9 @@ impl Store {
     /// Every task the team has ever been given, for measuring how the team works.
     pub fn all_team_tasks(&self) -> Result<Vec<TeamTask>> {
         self.with(|c| {
-            let mut st = c.prepare(&format!("SELECT {TASK_COLS} FROM team_tasks ORDER BY created_at"))?;
+            let mut st = c.prepare(&format!(
+                "SELECT {TASK_COLS} FROM team_tasks ORDER BY created_at"
+            ))?;
             let rows = st.query_map([], row_task)?;
             Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
         })
@@ -587,7 +615,10 @@ impl Store {
     /// already and only the assistant-driven one has a conversation to give.
     pub fn set_run_thread(&self, run_id: &str, thread_id: &str) -> Result<()> {
         self.with(|c| {
-            c.execute("UPDATE team_runs SET thread_id=?1 WHERE id=?2", params![thread_id, run_id])?;
+            c.execute(
+                "UPDATE team_runs SET thread_id=?1 WHERE id=?2",
+                params![thread_id, run_id],
+            )?;
             Ok(())
         })
     }
@@ -597,12 +628,20 @@ impl Store {
         self.with(|c| {
             let mut st = c.prepare("SELECT thread_id FROM team_runs WHERE id=?1")?;
             let mut rows = st.query(params![run_id])?;
-            Ok(rows.next()?.and_then(|r| r.get::<_, Option<String>>(0).ok().flatten()))
+            Ok(rows
+                .next()?
+                .and_then(|r| r.get::<_, Option<String>>(0).ok().flatten()))
         })
     }
 
     /// Record a report for a conversation to pick up.
-    pub fn queue_report(&self, run_id: &str, thread_id: &str, kind: &str, body: &str) -> Result<()> {
+    pub fn queue_report(
+        &self,
+        run_id: &str,
+        thread_id: &str,
+        kind: &str,
+        body: &str,
+    ) -> Result<()> {
         self.with(|c| {
             c.execute(
                 "INSERT INTO team_reports (id,run_id,thread_id,kind,body,delivered,created_at) VALUES (?1,?2,?3,?4,?5,0,?6)",
@@ -613,7 +652,10 @@ impl Store {
     }
 
     /// Reports a conversation has not received yet, oldest first.
-    pub fn pending_reports(&self, thread_id: &str) -> Result<Vec<(String, String, String, String)>> {
+    pub fn pending_reports(
+        &self,
+        thread_id: &str,
+    ) -> Result<Vec<(String, String, String, String)>> {
         self.with(|c| {
             let mut st = c.prepare("SELECT id,run_id,kind,body FROM team_reports WHERE thread_id=?1 AND delivered=0 ORDER BY created_at")?;
             let rows = st.query_map(params![thread_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
@@ -625,7 +667,10 @@ impl Store {
     pub fn mark_reports_delivered(&self, ids: &[String]) -> Result<()> {
         self.with(|c| {
             for id in ids {
-                c.execute("UPDATE team_reports SET delivered=1 WHERE id=?1", params![id])?;
+                c.execute(
+                    "UPDATE team_reports SET delivered=1 WHERE id=?1",
+                    params![id],
+                )?;
             }
             Ok(())
         })
@@ -677,6 +722,81 @@ impl Store {
                     })
                 },
             )?)
+        })
+    }
+
+    /// Bound a run: the most it may spend and the most model turns its agents may take together. `None` leaves that unbounded.
+    pub fn set_run_budget(
+        &self,
+        run_id: &str,
+        budget_usd: Option<f64>,
+        max_turns: Option<i64>,
+    ) -> Result<()> {
+        self.with(|c| {
+            c.execute(
+                "UPDATE team_runs SET budget_usd=?2, max_turns=?3 WHERE id=?1",
+                params![run_id, budget_usd, max_turns],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// A run's bounds.
+    pub fn run_budget(&self, run_id: &str) -> Result<RunBudget> {
+        self.with(|c| {
+            Ok(c.query_row(
+                "SELECT budget_usd,max_turns FROM team_runs WHERE id=?1",
+                params![run_id],
+                |r| {
+                    Ok(RunBudget {
+                        usd: r.get(0)?,
+                        turns: r.get(1)?,
+                    })
+                },
+            )?)
+        })
+    }
+
+    /// What a run has used so far: the money and tokens its agents' conversations cost, and how many model turns they took.
+    pub fn run_usage(&self, run_id: &str) -> Result<RunUsage> {
+        self.with(|c| {
+            let (cost, input, output): (f64, i64, i64) = c.query_row(
+                "SELECT COALESCE(SUM(t.cost_usd),0), COALESCE(SUM(t.input_tokens),0), COALESCE(SUM(t.output_tokens),0)
+                 FROM chat_threads t WHERE t.id IN (SELECT thread_id FROM team_tasks WHERE run_id=?1 AND thread_id IS NOT NULL)",
+                params![run_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )?;
+            let turns: i64 = c.query_row(
+                "SELECT COUNT(*) FROM chat_events e WHERE e.kind='assistant' AND e.thread_id IN (SELECT thread_id FROM team_tasks WHERE run_id=?1 AND thread_id IS NOT NULL)",
+                params![run_id],
+                |r| r.get(0),
+            )?;
+            Ok(RunUsage { cost_usd: cost, input_tokens: input, output_tokens: output, turns })
+        })
+    }
+
+    /// Keep what a task passes on.
+    pub fn set_handoff(&self, task_id: &str, data: &serde_json::Value) -> Result<()> {
+        self.with(|c| {
+            c.execute(
+                "INSERT INTO team_handoffs (task_id,data,created_at) VALUES (?1,?2,?3) ON CONFLICT(task_id) DO UPDATE SET data=excluded.data, created_at=excluded.created_at",
+                params![task_id, serde_json::to_string(data)?, util::now()],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// What a task passed on, when it did.
+    pub fn handoff(&self, task_id: &str) -> Result<Option<serde_json::Value>> {
+        self.with(|c| {
+            let text: Option<String> = c
+                .query_row(
+                    "SELECT data FROM team_handoffs WHERE task_id=?1",
+                    params![task_id],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            Ok(text.and_then(|t| serde_json::from_str(&t).ok()))
         })
     }
 
@@ -841,8 +961,8 @@ impl Store {
         ttl_secs: i64,
     ) -> Result<bool> {
         let now = util::now();
-        let expires = (chrono::Utc::now() + chrono::Duration::seconds(ttl_secs.clamp(15, 3600)))
-            .to_rfc3339();
+        let expires =
+            (chrono::Utc::now() + chrono::Duration::seconds(ttl_secs.clamp(15, 3600))).to_rfc3339();
         self.with(|c| {
             let changed = c.execute(
                 "INSERT INTO write_leases (project,run_id,task_id,owner,fencing,expires_at,updated_at)
@@ -860,8 +980,8 @@ impl Store {
     /// Keep a lease alive while its task is working.
     pub fn heartbeat_write_lease(&self, project: &str, owner: &str, ttl_secs: i64) -> Result<bool> {
         let now = util::now();
-        let expires = (chrono::Utc::now() + chrono::Duration::seconds(ttl_secs.clamp(15, 3600)))
-            .to_rfc3339();
+        let expires =
+            (chrono::Utc::now() + chrono::Duration::seconds(ttl_secs.clamp(15, 3600))).to_rfc3339();
         self.with(|c| {
             let changed = c.execute(
                 "UPDATE write_leases SET expires_at=?2, updated_at=?3 WHERE project=?1 AND owner=?4",
@@ -885,7 +1005,10 @@ impl Store {
     }
 
     /// Who, if anyone, currently holds a project's write lease.
-    pub fn write_lease_owner(&self, project: &str) -> Result<Option<(String, String, String, i64)>> {
+    pub fn write_lease_owner(
+        &self,
+        project: &str,
+    ) -> Result<Option<(String, String, String, i64)>> {
         self.with(|c| {
             Ok(c.query_row(
                 "SELECT run_id,task_id,owner,fencing FROM write_leases WHERE project=?1 AND owner <> '' AND expires_at >= ?2",
@@ -1133,8 +1256,14 @@ mod lease_tests {
     fn an_accepted_baseline_is_read_back() {
         let s = Store::open_in_memory().unwrap();
         let checks = serde_json::json!([{ "name": "test", "ok": false, "failures": ["A"] }]);
-        s.set_run_baseline("r", Some("/p"), Some("abc"), &serde_json::json!({}), &checks)
-            .unwrap();
+        s.set_run_baseline(
+            "r",
+            Some("/p"),
+            Some("abc"),
+            &serde_json::json!({}),
+            &checks,
+        )
+        .unwrap();
         assert_eq!(s.run_baseline("r").unwrap().unwrap(), checks);
     }
 }
@@ -1162,18 +1291,102 @@ mod attempt_tests {
                 },
             )
             .unwrap();
-        s.update_team_task(&t.id, TaskUpdate { state: "running", ..Default::default() }).unwrap();
+        s.update_team_task(
+            &t.id,
+            TaskUpdate {
+                state: "running",
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(s.get_team_task(&t.id).unwrap().unwrap().attempts, 1);
         // A stall nudge or heartbeat while already running is the same attempt.
-        s.update_team_task(&t.id, TaskUpdate { state: "running", ..Default::default() }).unwrap();
+        s.update_team_task(
+            &t.id,
+            TaskUpdate {
+                state: "running",
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(s.get_team_task(&t.id).unwrap().unwrap().attempts, 1);
         // A deliberate retry inside the same task (a rejected report) is a new
         // attempt even though the state was already running.
-        s.update_team_task(&t.id, TaskUpdate { state: "running", bump_attempt: true, ..Default::default() }).unwrap();
+        s.update_team_task(
+            &t.id,
+            TaskUpdate {
+                state: "running",
+                bump_attempt: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(s.get_team_task(&t.id).unwrap().unwrap().attempts, 2);
         // A real retry from a stopped state is also a new attempt.
-        s.update_team_task(&t.id, TaskUpdate { state: "pending", ..Default::default() }).unwrap();
-        s.update_team_task(&t.id, TaskUpdate { state: "running", ..Default::default() }).unwrap();
+        s.update_team_task(
+            &t.id,
+            TaskUpdate {
+                state: "pending",
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        s.update_team_task(
+            &t.id,
+            TaskUpdate {
+                state: "running",
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(s.get_team_task(&t.id).unwrap().unwrap().attempts, 3);
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    #[test]
+    fn a_run_keeps_its_bounds_and_a_new_one_has_none() {
+        let s = Store::open_in_memory().unwrap();
+        let run = s.create_run("t", "goal", None, 2, "human:test").unwrap();
+        assert_eq!(
+            s.run_budget(&run.id).unwrap(),
+            RunBudget {
+                usd: None,
+                turns: None
+            },
+            "no bound unless one was set"
+        );
+        s.set_run_budget(&run.id, Some(2.5), Some(60)).unwrap();
+        assert_eq!(
+            s.run_budget(&run.id).unwrap(),
+            RunBudget {
+                usd: Some(2.5),
+                turns: Some(60)
+            }
+        );
+    }
+
+    #[test]
+    fn what_a_task_passes_on_is_read_back_and_replaced_not_duplicated() {
+        let s = Store::open_in_memory().unwrap();
+        s.set_handoff("t1", &serde_json::json!({ "summary": "first" }))
+            .unwrap();
+        s.set_handoff(
+            "t1",
+            &serde_json::json!({ "summary": "second", "files": ["a.go"] }),
+        )
+        .unwrap();
+        assert_eq!(s.handoff("t1").unwrap().unwrap()["summary"], "second");
+        assert!(s.handoff("nope").unwrap().is_none());
+    }
+
+    #[test]
+    fn a_run_with_no_conversations_has_used_nothing() {
+        let s = Store::open_in_memory().unwrap();
+        let run = s.create_run("t", "goal", None, 2, "human:test").unwrap();
+        assert_eq!(s.run_usage(&run.id).unwrap(), RunUsage::default());
     }
 }

@@ -262,6 +262,8 @@ pub fn register(reg: &mut Registry, team: Arc<Team>) -> Result<()> {
                     format!("{}\n\nWhat prompted it: {}\n\nSteps devd would take:\n{}", s.title.clone(), s.why, s.plan.iter().map(|p| format!("- {p}")).collect::<Vec<_>>().join("\n"))
                 };
                 let run = t.start(ctx, &StartRequest {
+                    budget_usd: None,
+                    max_turns: None,
                     goal,
                     project: Some(project.to_string()),
                     new_project: None,

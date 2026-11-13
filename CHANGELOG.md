@@ -12,6 +12,44 @@ may change capability identifiers where the design was wrong.
 
 ## [Unreleased]
 
+### The team keeps working, and says how it is going
+
+- **Runs no longer stop when the window closes.** The window starts devd in the background, or attaches to the one already running, and the team works there. "Quit devd completely" in the command menu stops it too.
+- **A run that nothing is carrying says so**, and `team.drive` (or the button on its page) puts it back to work from where it stopped. `team.get` reports whether anything is carrying the run.
+- **`devd team show` and the other reads no longer take the agents.** With no devd running they used to become the owner, restart half-finished work and exit a moment later.
+- **`team.status`** answers "how is it going?" in the same sentence the window shows: who is working and since when, what is ready, what is waiting, what needs you, and what the run has spent. The assistant is told to use it.
+- **`team.timeline`** lays out where each agent's time went: model turns, tool calls and checks, with what happened along the way (sent back, retried, waiting on the provider, held, asked to wrap up).
+- When a task is accepted, a line goes into the conversation that asked for the run ("cron finished: … (3 of 11 tasks done)"), without asking a model to write it.
+
+### Runs that are bounded
+
+- **A run can be given a ceiling** on what it spends and on how many model turns its agents take (`budget_usd`, `max_turns` when starting it, `team.budget` afterwards; raising it is for a person). devd says when a run nears its ceiling and pauses it, with its work kept, when it reaches it.
+- **One task cannot grow without limit in one conversation.** Past a large share of what a conversation usefully holds, its agent is asked to commit what works and hand over what remains, so a fresh agent continues from its notes.
+
+### Work handed on, not lost
+
+- **What a finished task hands on is kept in a shape**: what it did, the files it changed (from the changes it made, not from its claim), what it decided and what it left open. The next task is given that instead of a report cut off at a character count. `team.report` takes `decisions` and `open_questions`.
+- **A progress file** (`.devd/progress.md` in the project, outside version control) records every accepted task, and every agent is given its latest entries before it starts.
+- **`project.verify`** runs every check the project has (format, lint, type check, build, tests) in one call and is recorded as the proof. The engineering roles are told to use it before they report.
+- **A plan is checked against its roles before any work is paid for.** A task that asks a role which cannot run commands to run one is sent back to the planner with the reason. The planner is also told to split large pieces into tasks an agent can finish in one sitting.
+
+### A run's page, rebuilt
+
+- **The list is grouped by project** and narrows to the runs that need you, the ones working and the ones done, with how many of each. A row says where the run stands, how many of its tasks are done and when it last moved.
+- **The heading says what the run has cost**: its state, project, tasks done, money spent against its ceiling, model turns and when it started, in one line.
+- **A run that nothing is carrying says so on its page**, with "Carry it on". An error has a line of its own.
+- **"Done when"** lists what the run was asked to meet, each line marked with what the final check found or "not checked yet".
+- **Time**: one line per agent showing where its time went (thinking, tools, checks) and where it was sent back or held up.
+- **Choosing an agent**, in the chain or in the task list, shows it beside the page: its brief, what it may change, the files it changed, the checks it ran, what it decided and left open, its report and what it cost, with "Open its conversation", "Try again" and "Accept as it is".
+- **A finished run leads with its result**: the final check's verdict, how many checks passed and the report. The goal comes last.
+
+### Quieter screens
+
+- The chain of a run is drawn without decoration: one glyph per task for where it stands, a title and one line of facts, hairline connections, and colour only for the hand-over happening now and for work held up.
+- A conversation's heading is its title, one line of facts and its actions. An error is no longer squeezed into it: it has a line of its own below, in full.
+- The sentence for what a run is doing now sits level with its mark and has no box around it.
+- `docs/design/rules.md` and `docs/design/inventory.md`: the rules every screen follows, and the list of every surface and state a review walks.
+
 ## [0.30.0] - 2026-11-13 - See the team work, delete what you are done with, and nothing forced on you
 
 ### The team, in view
