@@ -52,6 +52,10 @@ may change capability identifiers where the design was wrong.
 - The sentence for what a run is doing now sits level with its mark and has no box around it.
 - `docs/design/rules.md` and `docs/design/inventory.md`: the rules every screen follows, and the list of every surface and state a review walks.
 
+### Fixed
+
+- **The browser panel starts again after a browser was left behind.** When Edge restarted itself on launch, the copy it started held devd's browser profile, devd could not find it to stop it, and every later start failed with "the browser did not open its DevTools port". devd now finds a leftover browser however its command line is written, reads the port from the profile when the first process hands over to another, and stops the restarted copy when the panel closes.
+
 ## [0.30.0] - 2026-11-13 - See the team work, delete what you are done with, and nothing forced on you
 
 ### The team, in view
