@@ -29,6 +29,10 @@ may change capability identifiers where the design was wrong.
 - `browser.status` says whether the browser is running without starting it. A browser left behind by an earlier devd no longer stops the next one from opening, and closing the window closes the browser it started.
 - `project.terminal` takes a size, so a shell opens as wide as the panel that shows it.
 
+### Updates
+
+- **The footer says when a newer devd is out** and installs it from there: one click, a confirmation, then devd verifies the release's signature with the key built into the program, replaces itself and restarts. A release that is not signed is not installed from here; the footer opens its page instead.
+
 ### Looks
 
 - The Intelligence screen has a brain icon.

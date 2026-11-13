@@ -700,6 +700,45 @@ impl Shell {
         if !state.online {
             strip = strip.child(div().text_color(t.warn).child("live updates paused, reconnecting"));
         }
+        // A newer release: say so here, where it can always be seen, and install it from the same place.
+        let found = state.sync.watch(&devd_app_core::sync::QueryKey::bare("update.check")).data.as_deref().cloned().unwrap_or(serde_json::Value::Null);
+        if found["newer"] == json!(true) {
+            let latest = found["latest"].as_str().unwrap_or("a newer version").to_string();
+            // An update is installed only from a release whose checksum is signed; any other is fetched by hand.
+            let signed = found["signed"] == json!(true) && found["asset"].is_string();
+            let accent = t.accent;
+            strip = strip.child(
+                div()
+                    .id("status.update")
+                    .flex()
+                    .items_center()
+                    .gap(px(5.0))
+                    .px(px(8.0))
+                    .py(px(2.0))
+                    .rounded(px(4.0))
+                    .cursor_pointer()
+                    .bg(t.accent_soft)
+                    .text_color(accent)
+                    .hover(move |s| s.opacity(0.8))
+                    .child(ui::icon("arrow-down", 11.0, accent))
+                    .child(if signed { format!("Update to {latest}") } else { format!("{latest} is available") })
+                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        if signed {
+                            this.run_act(
+                                screens::pages::Act::new("Update", "update.apply", json!({})).busy("Updating devd…").ask(
+                                    format!("Update devd to {latest}?"),
+                                    "devd downloads the new version, checks its signature against the key built into this program, and restarts itself. Your sites and data are kept.",
+                                    "Update devd",
+                                ),
+                                window,
+                                cx,
+                            );
+                        } else {
+                            cx.open_url("https://github.com/ianclemence/devd/releases/latest");
+                        }
+                    })),
+            );
+        }
         strip
             .child(div().flex_1())
             .child(if state.conn.owner { "this window runs devd" } else { "attached to a running devd" })
