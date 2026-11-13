@@ -12,6 +12,8 @@ may change capability identifiers where the design was wrong.
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-11-14 - Runs that keep going, stay bounded, hand work on, and show how they are going
+
 ### The team keeps working, and says how it is going
 
 - **Runs no longer stop when the window closes.** The window starts devd in the background, or attaches to the one already running, and the team works there. "Quit devd completely" in the command menu stops it too.
