@@ -168,7 +168,6 @@ pub fn render(shell: &mut Shell, dir: String, tab: ProjectTab, cx: &mut Context<
         None => ui::leaf(&dir).to_string(),
     };
 
-    let folder = dir.clone();
     let about = {
         let (n, d) = (name.clone(), dir.clone());
         move |this: &mut Shell, cx: &mut Context<Shell>| this.ask_about(format!("About the project {n} ({d}): "), cx)
@@ -176,12 +175,7 @@ pub fn render(shell: &mut Shell, dir: String, tab: ProjectTab, cx: &mut Context<
     let actions = div()
         .flex()
         .gap(px(8.0))
-        .child(Button::new("project.ask", "Ask the assistant").icon("assistant").on_click(cx.listener(move |this, _: &ClickEvent, _, cx| about(this, cx))))
-        .child(Button::new("project.folder", "Open folder").icon("folder").kind(ButtonKind::Ghost).on_click(cx.listener(move |_this, _: &ClickEvent, _, cx| {
-            if let Err(why) = open::that(&folder) {
-                cx.global_mut::<crate::state::Devd>().toasts.push(crate::state::Toast::new(format!("Could not open {folder}: {why}"), true));
-            }
-        })));
+        .child(Button::new("project.ask", "Ask the assistant").icon("assistant").on_click(cx.listener(move |this, _: &ClickEvent, _, cx| about(this, cx))));
 
     let mut column = div().flex().flex_col().gap(px(18.0)).child(div().child(page_head(name.clone(), detail, actions, cx)).child(group_row(&dir, tab, cx)));
     if tab.group() == Group::Git {

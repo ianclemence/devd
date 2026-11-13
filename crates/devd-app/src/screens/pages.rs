@@ -1267,15 +1267,7 @@ pub fn projects_hub(cx: &mut Context<Shell>) -> AnyElement {
                 cx.notify();
             })));
         }
-        if present {
-            let folder = path.clone();
-            head_line = head_line.child(Button::new(ui::nid("projects.open", n), "Open folder").icon("external").kind(ButtonKind::Ghost).on_click(cx.listener(move |_this, _: &ClickEvent, _, cx| {
-                if let Err(why) = open::that(&folder) {
-                    cx.global_mut::<crate::state::Devd>().toasts.push(crate::state::Toast::new(format!("Could not open {folder}: {why}"), true));
-                    cx.refresh_windows();
-                }
-            })));
-        } else {
+        if !present {
             let p = path.clone();
             head_line = head_line.child(Button::new(ui::nid("projects.forget", n), "Remove").kind(ButtonKind::Ghost).on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                 this.run_act(
