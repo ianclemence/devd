@@ -29,7 +29,7 @@ use crate::tools::{satisfies, ToolStatus};
 /// A request to create a project.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
 pub struct InitRequest {
-    /// Stack id, from `stack.list`.
+    /// Stack id, from `stacks.list`.
     pub stack: String,
     /// Project name (also the directory name).
     pub name: String,

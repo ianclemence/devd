@@ -108,7 +108,7 @@ pub struct Scratchpad {
     pub content: String,
     /// Optimistic-concurrency revision.
     pub revision: i64,
-    /// Last author (`human:http`, `agent:claude-code`, ...).
+    /// Last author (`human:http`, `agent:assistant`, ...).
     pub author: String,
     /// Creation timestamp.
     pub created_at: String,
@@ -133,7 +133,7 @@ pub struct Todo {
     pub status: String,
     /// `low`, `normal`, `high` or `urgent`.
     pub priority: String,
-    /// Optional assignee (`agent:opencode`, a person, ...).
+    /// Optional assignee (`agent:reviewer`, a person, ...).
     pub assignee: Option<String>,
     /// Who created it.
     pub origin: Option<String>,

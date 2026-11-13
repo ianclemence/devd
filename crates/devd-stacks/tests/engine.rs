@@ -196,7 +196,7 @@ fn a_failing_step_is_reported_as_failed_never_as_success() {
 fn agents_are_confined_to_the_projects_root() {
     let d = tempfile::tempdir().unwrap();
     let reg = registry_with_fixture(d.path());
-    let agent = ctx_with(d.path(), Actor::agent("claude-code"));
+    let agent = ctx_with(d.path(), Actor::agent("assistant"));
     let mut req = init::InitRequest {
         stack: "fixture".into(),
         name: "demo".into(),
@@ -410,7 +410,7 @@ fn tasks_run_with_evidence_and_destructive_ones_need_a_human() {
     // An agent can run safe tasks, and reaches a destructive one only with a
     // person's approval for that exact call. Without the approval it is asked
     // for one; with it, the task runs. The capability is not human-only.
-    let agent = ctx_with(root, Actor::agent("claude-code"));
+    let agent = ctx_with(root, Actor::agent("assistant"));
     let _ = agent.store.upsert_stack_project(&devd_core::StackProject {
         path: path.clone(),
         name: "proj".into(),
@@ -516,7 +516,7 @@ fn every_surface_gets_the_same_answer() {
         let out = dispatch(&reg, &ctx, "stacks.validate", args.clone(), Approval::None).unwrap();
         seen.push(out["data"].clone());
     }
-    let mcp = ctx_with(d.path(), Actor::agent("claude-code"));
+    let mcp = ctx_with(d.path(), Actor::agent("assistant"));
     seen.push(
         dispatch(&reg, &mcp, "stacks.validate", args, Approval::None).unwrap()["data"].clone(),
     );

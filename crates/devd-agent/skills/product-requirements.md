@@ -1,19 +1,32 @@
 ---
 name: product-requirements
-description: Write a one-page requirements document an engineer can build from without asking what was meant
+description: Write a one-page requirements document an engineer can build from
 kind: design
 roles: product,planner
 ---
 
 # Product requirements
 
-Use when an idea has to become buildable work.
+Turns an idea into buildable work: a page an engineer can build from without asking what was meant. It invents no users, numbers or dates.
 
-1. **Problem.** Who has it, what they do today, and why that is not good enough. One paragraph, no solution in it.
-2. **Scope.** What the first useful version does, and a separate list of what it explicitly does not. Anything not needed for a first version moves to the second list.
-3. **Stories.** `As <who>, I can <do what>, so that <why>`, each with acceptance criteria a person or a test can answer yes or no to.
+## When to use
+
+An idea, request or complaint that has to become work.
+
+## Procedure
+
+1. **Problem.** Who has it, what they do today, why that is not good enough. One paragraph, no solution in it.
+2. **Scope.** What the first useful version does, and a separate list of what it does not.
+3. **Stories** (`user-stories`). `As <who>, I can <do what>, so that <why>`, each with acceptance criteria that can be answered yes or no.
 4. **Constraints.** Platforms, data that must not be lost, anything that must keep working as it does.
-5. **Open questions.** Each with who can answer it and what changes depending on the answer.
-6. **Order.** The sequence to build in, with the reason for it.
+5. **Open questions.** Each with who can answer it and what changes with the answer.
+6. **Order.** The sequence to build in, with the reason.
 
-Mark every assumption as an assumption. Do not invent users, numbers or dates. A requirement that cannot be checked is not finished: rewrite it until it can.
+## Pitfalls
+
+- A requirement that cannot be checked. Rewrite it until it can.
+- Unmarked assumptions. Mark every one.
+
+## Verification
+
+Each story has a criterion a person or a test can answer, and each open question has an owner.

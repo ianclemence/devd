@@ -27,6 +27,7 @@ been tampered with, and works offline.
 | `zhipu` | https://zhipuai.cn/logo.svg |
 | `xai` | The mark on https://x.ai/, as published on their own site |
 | `groq` | https://groq.com/favicon.svg |
+| `cerebras`, `cohere`, `deepinfra`, `huggingface`, `nvidia`, `ollama-cloud`, `perplexity`, `sambanova`, `zai` | The provider logo set of [models.dev](https://models.dev) (`/logos/<provider>.svg`), the open catalogue devd also reads model facts from. These are single-colour marks drawn with `currentColor`. |
 | `together` | https://www.together.ai/, from their own content delivery network |
 | `fireworks` | https://fireworks.ai/icon0.svg |
 | `typesense` | https://typesense.org/typesense-logo.svg, reduced to 128×128 |

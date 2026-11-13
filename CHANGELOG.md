@@ -10,6 +10,187 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [Unreleased]
+
+## [0.31.0] - 2026-11-14 - Runs that keep going, stay bounded, hand work on, and show how they are going
+
+### The team keeps working, and says how it is going
+
+- **Runs no longer stop when the window closes.** The window starts devd in the background, or attaches to the one already running, and the team works there. "Quit devd completely" in the command menu stops it too.
+- **A run that nothing is carrying says so**, and `team.drive` (or the button on its page) puts it back to work from where it stopped. `team.get` reports whether anything is carrying the run.
+- **`devd team show` and the other reads no longer take the agents.** With no devd running they used to become the owner, restart half-finished work and exit a moment later.
+- **`team.status`** answers "how is it going?" in the same sentence the window shows: who is working and since when, what is ready, what is waiting, what needs you, and what the run has spent. The assistant is told to use it.
+- **`team.timeline`** lays out where each agent's time went: model turns, tool calls and checks, with what happened along the way (sent back, retried, waiting on the provider, held, asked to wrap up).
+- When a task is accepted, a line goes into the conversation that asked for the run ("cron finished: … (3 of 11 tasks done)"), without asking a model to write it.
+
+### Runs that are bounded
+
+- **A run can be given a ceiling** on what it spends and on how many model turns its agents take (`budget_usd`, `max_turns` when starting it, `team.budget` afterwards; raising it is for a person). devd says when a run nears its ceiling and pauses it, with its work kept, when it reaches it.
+- **One task cannot grow without limit in one conversation.** Past a large share of what a conversation usefully holds, its agent is asked to commit what works and hand over what remains, so a fresh agent continues from its notes.
+
+### Work handed on, not lost
+
+- **What a finished task hands on is kept in a shape**: what it did, the files it changed (from the changes it made, not from its claim), what it decided and what it left open. The next task is given that instead of a report cut off at a character count. `team.report` takes `decisions` and `open_questions`.
+- **A progress file** (`.devd/progress.md` in the project, outside version control) records every accepted task, and every agent is given its latest entries before it starts.
+- **`project.verify`** runs every check the project has (format, lint, type check, build, tests) in one call and is recorded as the proof. The engineering roles are told to use it before they report.
+- **A plan is checked against its roles before any work is paid for.** A task that asks a role which cannot run commands to run one is sent back to the planner with the reason. The planner is also told to split large pieces into tasks an agent can finish in one sitting.
+
+### A run's page, rebuilt
+
+- **The list is grouped by project** and narrows to the runs that need you, the ones working and the ones done, with how many of each. A row says where the run stands, how many of its tasks are done and when it last moved.
+- **The heading says what the run has cost**: its state, project, tasks done, money spent against its ceiling, model turns and when it started, in one line.
+- **A run that nothing is carrying says so on its page**, with "Carry it on". An error has a line of its own.
+- **"Done when"** lists what the run was asked to meet, each line marked with what the final check found or "not checked yet".
+- **Time**: one line per agent showing where its time went (thinking, tools, checks) and where it was sent back or held up.
+- **Choosing an agent**, in the chain or in the task list, shows it beside the page: its brief, what it may change, the files it changed, the checks it ran, what it decided and left open, its report and what it cost, with "Open its conversation", "Try again" and "Accept as it is".
+- **A finished run leads with its result**: the final check's verdict, how many checks passed and the report. The goal comes last.
+
+### Quieter screens
+
+- The chain of a run is drawn without decoration: one glyph per task for where it stands, a title and one line of facts, hairline connections, and colour only for the hand-over happening now and for work held up.
+- A conversation's heading is its title, one line of facts and its actions. An error is no longer squeezed into it: it has a line of its own below, in full.
+- The sentence for what a run is doing now sits level with its mark and has no box around it.
+- `docs/design/rules.md` and `docs/design/inventory.md`: the rules every screen follows, and the list of every surface and state a review walks.
+
+### Fixed
+
+- **The browser panel starts again after a browser was left behind.** When Edge restarted itself on launch, the copy it started held devd's browser profile, devd could not find it to stop it, and every later start failed with "the browser did not open its DevTools port". devd now finds a leftover browser however its command line is written, reads the port from the profile when the first process hands over to another, and stops the restarted copy when the panel closes.
+
+## [0.30.0] - 2026-11-13 - See the team work, delete what you are done with, and nothing forced on you
+
+### The team, in view
+
+- **A run is drawn as a chain**: a card for each agent, a line for each thing one waits for. Lines say what they carry (settled, handed on now, held up, not yet), a card says how long its agent has been quiet and whether it is on another try, and the chain opens scrolled to whatever is working. It sits under the conversation a run belongs to, and at the top of the run's page, where a sentence says what is happening right now: who is working and since when, what is ready to start, what needs you.
+- **Every agent has a colour of its own** wherever it appears. The faces in the top bar show who is working, say so when the pointer rests on one, and open what that agent is doing when pressed.
+- **One count of progress.** A run read "2 of 12" in one place and "4 of 12" in another because two rules disagreed about the planner and about work accepted by hand. The planner is not counted and accepted work is, everywhere, as the server counts them.
+- A run that is still going is read again every couple of seconds, whoever is driving it, instead of waiting to be told.
+
+### Delete and clear
+
+- **Conversations and runs can be deleted**, from the list (an icon that appears when the pointer is on a row) and from the conversation or run itself, each after a confirmation that says what goes and what stays. "Clear finished" removes every finished one. A run still going is paused or cancelled from its own page first. A conversation deleted elsewhere says so and offers a new one.
+
+### Nothing forced on you
+
+- **`devd setup` installs the web server and nothing else.** PHP, databases and the other runtimes come when asked for (`--php 8.4`, `--services mariadb`), here, in the app or from the assistant. The first site is a plain page when there is no PHP. A fresh Home asks "What do you work with?" and offers PHP, Node.js, Go, MariaDB and Redis, one click each.
+- PHP is a requirement only when a PHP site exists, so a machine without PHP is no longer told its setup is unfinished. The installer says what it will and will not install.
+- **The health line names every problem**, not only the first ("2 problems to fix: nginx and PHP 8.4").
+
+### Runs that stalled
+
+- `devd team show` and the other reads no longer take over the agents. With no devd running, a read became the owner, restarted whatever was half done and exited, so a run was restarted every time anyone looked at it. Commands that start a run and return now say that nothing will carry it on until devd is running.
+- Work accepted by hand is committed like work accepted any other way. Left uncommitted it blocked every later merge into the project.
+
+### Smaller things
+
+- Popovers in the message box close when you press anywhere outside them, on Home and in the Assistant.
+- Screens, popovers, dialogs, the command menu, toasts and the side panels now fade and settle into place with Tailwind's own ease-out and ease-in-out curves.
+- The command menu opens on your latest conversations and projects, then the screens in the order of the rail, not on whichever command you used last.
+- Updating the model catalogue gave "Internal error: could not read the response from models.dev" on a slow connection: it was given two seconds. It now waits as long as a file that size needs, tries three times, and says what happened in plain words.
+- Removing a project that was only listed because a site served its folder removes the site.
+
+## [0.29.1] - 2026-11-13 - Removing a site, and a project that only a site keeps listed
+
+- **Sites can be removed from the Sites screen**, with a confirmation that says the folder is not touched. There was no way to do it from the window.
+- **Remove on a project that is listed only because a site serves its folder** (a deleted worktree, for example) removes the site instead of failing with a conflict about `site.remove`.
+
+## [0.29.0] - 2026-11-13 - A page for every project, a terminal and a browser beside the assistant
+
+### Projects
+
+- **A project has its own page**, with a tab for everything you do in it: Overview, Files, Git (changes, history, branches, stashes, tags, remotes, worktrees, recovery), Run, Terminal and Team. Every control is a capability call, the same ones the assistant uses, so a change either of you makes shows on the other's screen at once.
+- **Files opens and edits.** A tree that opens folders as you ask, a viewer with line numbers, Markdown drawn as a document (with a Source toggle), and an editor with Tab and Shift+Tab, automatic indentation, a gutter, Ctrl+S, and an Unsaved/Saved mark. Saving keeps a file's line endings and final newline exactly; a file with mixed line endings is shown but not opened for editing, and says why.
+- New file, rename and delete from the tree. Delete asks first.
+- Staging, committing, discarding, switching branches, stashing, fetching, pulling and pushing from the window, with diffs.
+
+### The assistant's panels
+
+- **A browser and a terminal beside the conversation.** A strip at the edge of the assistant opens each; both can be open, the browser above the terminal. Each has its own tabs, a button for another, and a way to close it.
+- **The terminal is a real shell inside devd.** Open as many as you like, type into them, paste, and leave and come back: they stay open. The assistant can read what a terminal shows but only you can type into one. The Terminal tab of a project shows the same shells.
+- **The browser is the one the assistant uses.** A page it opens appears here (the panel opens by itself); you can load an address, go back and forward, reload, click, scroll and type on the page, and see the console, the requests and the page as the assistant reads it. It starts only when asked for.
+- `browser.status` says whether the browser is running without starting it. A browser left behind by an earlier devd no longer stops the next one from opening, and closing the window closes the browser it started.
+- `project.terminal` takes a size, so a shell opens as wide as the panel that shows it.
+
+### Updates
+
+- **The footer says when a newer devd is out** and installs it from there: one click, a confirmation, then devd verifies the release's signature with the key built into the program, replaces itself and restarts. A release that is not signed is not installed from here; the footer opens its page instead.
+
+### Looks
+
+- The Intelligence screen has a brain icon.
+- Tools, runtimes, databases, services and stacks show their own marks (PHP, Node.js, Go, MariaDB, Redis, nginx, Composer and many more) on the Server, Runtimes, Tools, new-project and connect pages; one with no mark gets its initial.
+- Hub pages gain "Open project" and "Open folder".
+
+### The assistant can draw
+
+- **Answers can contain real tables, charts, metrics, steps, timelines, notices and buttons** instead of describing them, in the same way Vercel's json-render lets an agent write a spec the chat renders. The assistant writes a fenced `devd-ui` block; the window draws it from a fixed catalog (`devd-genui`), as it arrives, in every theme. See [docs/generative-ui.md](docs/generative-ui.md).
+- **A drawing that does not check is sent back** to the model with each problem, once or twice, so it writes it again; the transcript says so. Part of a finished spec that still cannot be drawn is left out with a short note, and the rest is shown.
+- **Buttons the assistant draws never act on their own.** A button can reply, open a devd page or file, or run a real capability; running shows what will run, with its kind and arguments, and asks first unless it only reads.
+- Right-aligned Markdown table columns no longer collapse to a sliver (a numeric column's header wrapped one letter per line).
+- Flags `agent.draw`, `agent.draw_fixes` and `ui.site_icons`.
+
+### Site icons before links
+
+- A web link in an answer starts with the site's own icon, fetched from the site through devd's guarded fetch rather than a third-party icon service, kept on disk, and shown as a letter tile until it arrives or when a site has none. Local and private addresses get a globe and are never looked up.
+- `docs.fetch` and `web.open` followed no redirects at all (the HTTP library hands a `307` back as a response, not an error, so an empty body was accepted). Redirects are now followed, each hop re-checked as before.
+
+### Themes
+
+- **Five themes, each with its own name and its own background scene**, replacing three themes in two forms: Sling, Dawn and Psalm for the evening, Sharon and Daybreak for the day. Each background is a noise-driven dither that fades at its edges (ripples, dawn over hills, folds of silk, a rose-tinted map, rays of morning light). Settings shows each as a small window in its own colours. A choice saved by an earlier window opens the matching theme.
+- The + menu in the message box starts each row with an icon, a `/` or an `@`, and opens below the box on Home.
+
+## [0.28.0] - 2026-11-12 - The native window, and an assistant that checks itself
+
+This release replaces the web-view window with a native one, drawn on the GPU and with no browser inside it, and adds packages for macOS and Linux for the first time. The assistant is also held to account before it stops, and the record of what it did can show whether it was changed.
+
+### The native window
+
+- **Every screen is native**: Home, Inbox, Assistant, Runs, Team, Projects, Sites, Server, Intelligence, Activity and Settings, with a command menu (Ctrl+K), keyboard navigation, light and dark themes, and a cache that is kept true by events, so screens open with what they already know and then catch up. The 18 pages behind the areas are restored: Hosts, Certificates, Mail, Schedules, Automations, Skills, MCP servers, Notes, Runtimes, Databases, Tools, Remote, New project, Stacks, Diagnostics, API and tools, Connect agents and Flags.
+- **Projects are project-first.** The Projects screen lists your projects with their stack and tasks; each project's tasks fold away until you ask. New project offers three ways to begin — a stack, an empty folder with git, or a folder you already have — instead of assuming every project starts from a template. Stacks is the catalogue, with each stack's versions and what it makes.
+- **Intelligence shows performance, not just price.** Per model: tokens, estimated spend, conversations, errors, cache use, accepted tasks and cost per accepted task. Per member: acceptance on proof, rework, checks, median time and cost per accepted task, with a rank that says how it is calculated and refuses to rank fewer than three settled tasks. A model or member whose model was not recorded says so rather than guessing.
+- **Three themes, each with its own background.** Stone (the workbench), Shepherd (wool, olive and dawn) and Harp (indigo and gold), each in light and dark, with a distinct dithered field behind every screen. Settings switches and remembers the choice.
+- **A new message box.** Type `/` for the skills devd can load and `@` for a member of the team (including ones you added); `+` attaches files and folders; the row underneath shows the model (with its vendor's mark), the effort and how much the assistant may do without asking. It grows with what you write and underlines slips as you type.
+- **Files and addresses are clickable** in replies, in your own messages and in the message box: a path opens if the file exists, a web address opens in the browser, and `devd://runs/ID`, `devd://projects/DIR`, `devd://assistant/ID` and `devd://sites/NAME` open that place in devd as a chip. A click never starts a program: a script or executable is shown in its folder instead.
+- Text that is too long for its place now ends in an ellipsis instead of being cut mid-letter, and a path keeps its end. A network failure is explained by its cause ("api.deepseek.com closed the connection before it answered. This is usually the network, a VPN or a firewall, not your key") instead of an operating-system message.
+- Activity hides what only looked and shows what changed. A refresh that failed says what is on screen may be out of date; a tool that runs for a while says how long.
+- A new logo and a faint dotted background.
+
+### The assistant
+
+- **It cannot end a turn on a promise.** Before a turn ends, devd checks the assistant's own plan for open items, checks that the run's policy has the proof it asks for, and asks any tool server you allowed (`_Stop`) whether it objects. It sends the assistant back to finish up to three times per prompt, says when it is on the last reminder, and tells you if it still ended with things open. `agent.end_gate` and `agent.stop_budget` switch it.
+- **Private data is held at the door.** A conversation that read an `.env`, a key or devd's own secrets cannot send a secret to a tool server, a push, a public address or a network command without your approval, for that exact call. The label is rebuilt from the record every time, so a restart cannot clear it. It matches the secret itself, so reading an `.env` does not make every later call suspect. `agent.flow_guard` switches it. It does not sandbox arbitrary code and cannot see a secret that has been rewritten before it is sent.
+- **Packs.** `devd call packs.install --arg source=owner/name` (or a folder path) installs roles, skills and tool servers together from a `devd-pack.json`; `packs.list` and `packs.remove` show and take them out. Nothing in a pack runs: a tool server is saved disabled. A name that is built in, yours or another pack's is a refusal. Removal takes out exactly what the pack added.
+- **Lifecycle hooks** (`_Stop`, `_PostCompact`) on external MCP servers, off unless you list the servers in `mcp.hook_servers` or `DEVD_MCP_HOOK_SERVERS`.
+- A team of 21 roles with a hand-off flow and roles of your own, a motion designer with built-in render tools and the Remotion skills, and every built-in skill rewritten to one standard that a test enforces. A new skill, `defects-that-keep-coming-back`, gives the reviewer, QA and implementer the ten defects that reviews find over and over.
+- Spend is priced with prompt-cache prices, context is shortened in steps that keep a provider's cache valid, and the model catalogue comes from models.dev.
+
+### Trust
+
+- **The audit record is a hash chain.** Each entry carries the hash of the one before it, and the newest is also saved apart, so editing, removing, reordering or cutting off the end of the log is found. `devd call audit.verify` checks it, and Activity shows "record intact" or where it broke. Entries from before this version are counted, not blamed, and pruning leaves an anchor so a pruned log still verifies.
+- **Feature flags**: `devd call flags.list` and `flags.set`, with `DEVD_FEATURE_*` in the environment taking priority for one run. A value that does not read is passed over and reported, never silently wrong.
+
+### Automation
+
+- `devd run --task task.json` runs one prepared task with the assistant and exits, for a script or a CI job: strict input (unknown, duplicate and extra fields are refused), one JSON line on standard output, and an exit code that says how it ended (0 completed, 1 failed, 2 invalid, 3 needs a person, 4 timed out, 5 finished but unproven). It does not retry, and it stops rather than wait for an approval nobody can give.
+- Commands that create a run, a conversation or a project print a `devd://` link. `devd-app --register-links` makes the operating system open `devd://` links with devd.
+
+### Providers
+
+- A rejected key (401), an unpaid balance (402), a refusal (403) and a quota that is used up are no longer retried; overload and rate limits are, with a little jitter.
+- OpenRouter: the model's reasoning is handed back between turns, effort is sent the way OpenRouter reads it, and `anthropic/*` models get prompt-cache markers.
+
+### Installing
+
+- Windows: a per-user installer (no administrator prompt) and a portable zip. macOS: a disk image for Apple silicon and one for Intel. Linux: a `.deb` that apt installs with its dependencies, and a `.tar.gz`.
+
+### Not in this release
+
+- The macOS app is signed ad hoc, not with an Apple Developer ID, so the first launch needs right-click, Open. The Windows installer is not code-signed, so SmartScreen may ask you to confirm.
+- OpenAI's Responses API is not used; OpenAI models are reached through Chat Completions as before.
+- Dragging files into the window is not supported yet; use the `+` menu.
+- The macOS and Linux packages were built and checked on CI machines, and have not been run by hand on every distribution or Mac.
+
+---
+
 ## [0.27.7] - 2026-11-09 - A shared browser, and an Update button in the footer
 
 ### The browser is a real tab, not a fetch

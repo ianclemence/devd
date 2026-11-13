@@ -25,6 +25,7 @@ devd-tui = { path = "../devd-tui" }
 devd-workspace = { path = "../devd-workspace" }
 devd-stacks = { path = "../devd-stacks" }
 devd-ops = { path = "../devd-ops" }
+devd-agent = { path = "../devd-agent" }
 
 clap = { workspace = true }
 serde = { workspace = true }
@@ -36,6 +37,9 @@ open = { workspace = true }
 # Embeds the devd icon in the executable on Windows, so it does not show the
 # default application icon in Explorer or on the taskbar.
 embed-resource = "3"
+
+[dev-dependencies]
+devd-app-core = { path = "../devd-app-core" }
 
 [lints]
 workspace = true

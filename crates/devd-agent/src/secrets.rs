@@ -30,12 +30,46 @@ pub fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 40 && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') && !id.starts_with('-')
 }
 
+/// A key as the vendor issued it, without what tends to arrive around it.
+///
+/// A key reaches devd by being copied: from a web page, a password manager, a
+/// `.env` line, a `curl` example. What comes along is predictable, and each
+/// piece turns a good key into a rejected one with nothing on screen to show
+/// why:
+///
+/// * a byte-order mark, when the key file was saved from a Windows editor;
+/// * zero-width characters and non-breaking spaces from a web page;
+/// * quotes, from `KEY="sk-…"`;
+/// * the name and equals sign, from pasting the whole `.env` line;
+/// * `Bearer `, from pasting the header instead of the key;
+/// * a second line, from a trailing newline or a comment under the key.
+pub fn clean_key(raw: &str) -> String {
+    let invisible = |c: char| matches!(c, '\u{feff}' | '\u{200b}' | '\u{200c}' | '\u{200d}' | '\u{2060}' | '\u{00a0}');
+    let line = raw
+        .lines()
+        .map(|l| l.trim_matches(|c: char| c.is_whitespace() || invisible(c)))
+        .find(|l| !l.is_empty() && !l.starts_with('#'))
+        .unwrap_or("");
+    let mut key: String = line.chars().filter(|c| !invisible(*c)).collect();
+    // `OPENAI_API_KEY=sk-…` or `export OPENAI_API_KEY=sk-…`.
+    if let Some((name, value)) = key.split_once('=') {
+        let name = name.trim().trim_start_matches("export ").trim();
+        if !name.is_empty() && name.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_') {
+            key = value.trim().to_string();
+        }
+    }
+    let unquoted = key.trim_matches(|c| c == '"' || c == '\'' || c == '`');
+    let key = unquoted.strip_prefix("Bearer ").or_else(|| unquoted.strip_prefix("bearer ")).unwrap_or(unquoted);
+    key.trim().to_string()
+}
+
 /// Store a key with owner-only permissions.
 pub fn save_key(paths: &Paths, id: &str, key: &str) -> Result<()> {
     if !valid_id(id) {
         return Err(DevdError::invalid("invalid provider id"));
     }
-    let key = key.trim();
+    let key = clean_key(key);
+    let key = key.as_str();
     if key.len() < 8 || key.len() > 512 || key.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return Err(DevdError::invalid("that does not look like an API key (8-512 characters, no spaces or line breaks)"));
     }
@@ -68,25 +102,35 @@ pub fn delete_key(paths: &Paths, id: &str) {
     }
 }
 
-/// The key for a provider, if there is one. Environment wins over the file so a
-/// deployment can override what a person typed.
+/// The key for a provider, if there is one.
+///
+/// A key a person saved in devd for this provider comes first; the environment
+/// variable the provider names is used when there is none. It used to be the
+/// other way round, and the result was the most common "my key is not being
+/// used" report: an old `OPENAI_API_KEY` left in the environment silently beat
+/// the new key just pasted into the window, and the provider kept answering 401.
+/// The key somebody typed for this provider, here, is the more specific
+/// instruction. To make the environment decide, remove the saved key.
+///
+/// Either source is cleaned the same way (see [`clean_key`]).
 pub fn read_key(paths: &Paths, p: &Provider) -> Option<String> {
-    if let Some(var) = &p.key_env {
-        if let Ok(v) = std::env::var(var) {
-            if !v.trim().is_empty() {
-                return Some(v.trim().to_string());
-            }
-        }
-    }
-    std::fs::read_to_string(key_path(paths, &p.id)).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    let saved = std::fs::read_to_string(key_path(paths, &p.id)).ok().map(|s| clean_key(&s)).filter(|s| !s.is_empty());
+    saved.or_else(|| env_key(p))
 }
 
-/// Where the key comes from, without reading it out.
+/// The key in the environment variable the provider names, when it holds one.
+fn env_key(p: &Provider) -> Option<String> {
+    let var = p.key_env.as_deref()?;
+    std::env::var(var).ok().map(|v| clean_key(&v)).filter(|v| !v.is_empty())
+}
+
+/// Where the key comes from, without reading it out. Agrees with [`read_key`].
 pub fn key_source(paths: &Paths, p: &Provider) -> KeySource {
-    if p.key_env.as_ref().map(|v| std::env::var(v).map(|x| !x.trim().is_empty()).unwrap_or(false)).unwrap_or(false) {
-        KeySource::Env
-    } else if key_path(paths, &p.id).is_file() {
+    let saved = std::fs::read_to_string(key_path(paths, &p.id)).map(|s| !clean_key(&s).is_empty()).unwrap_or(false);
+    if saved {
         KeySource::File
+    } else if env_key(p).is_some() {
+        KeySource::Env
     } else {
         KeySource::None
     }
@@ -122,6 +166,74 @@ mod tests {
         }
         delete_key(&paths, "anthropic");
         assert_eq!(key_source(&paths, &p), KeySource::None);
+    }
+
+    fn provider(id: &str, key_env: Option<&str>) -> Provider {
+        Provider {
+            id: id.into(),
+            kind: "openai".into(),
+            label: id.into(),
+            base_url: "https://x/v1".into(),
+            key_env: key_env.map(str::to_string),
+            default_model: None,
+            is_default: false,
+            enabled: true,
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn a_key_is_recovered_from_what_it_was_pasted_with() {
+        let key = "sk-live-abcdef1234567890";
+        for pasted in [
+            format!("\u{feff}{key}\r\n"),
+            format!("  {key}  "),
+            format!("\"{key}\""),
+            format!("'{key}'"),
+            format!("Bearer {key}"),
+            format!("OPENAI_API_KEY={key}"),
+            format!("export OPENAI_API_KEY=\"{key}\"\n"),
+            format!("# my key\n{key}\nsecond line"),
+            format!("{key}\u{200b}"),
+            format!("\u{00a0}{key}"),
+        ] {
+            assert_eq!(clean_key(&pasted), key, "{pasted:?}");
+        }
+        // A key that happens to contain `=` is not mistaken for a `.env` line.
+        assert_eq!(clean_key("abc=def=ghij"), "abc=def=ghij");
+        assert_eq!(clean_key("\n\n"), "");
+    }
+
+    #[test]
+    fn a_saved_key_wins_over_a_stale_environment_variable() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::rooted(dir.path());
+        let var = "DEVD_TEST_STALE_PROVIDER_KEY";
+        std::env::set_var(var, "old-key-from-the-environment");
+        let p = provider("stale", Some(var));
+        // With nothing saved, the environment is used.
+        assert_eq!(read_key(&paths, &p).as_deref(), Some("old-key-from-the-environment"));
+        assert_eq!(key_source(&paths, &p), KeySource::Env);
+        // A key typed for this provider is the one that is sent.
+        save_key(&paths, "stale", "the-key-just-pasted").unwrap();
+        assert_eq!(read_key(&paths, &p).as_deref(), Some("the-key-just-pasted"));
+        assert_eq!(key_source(&paths, &p), KeySource::File);
+        // Removing it hands the decision back to the environment.
+        delete_key(&paths, "stale");
+        assert_eq!(key_source(&paths, &p), KeySource::Env);
+        std::env::remove_var(var);
+        assert_eq!(key_source(&paths, &p), KeySource::None);
+    }
+
+    #[test]
+    fn a_key_file_saved_by_a_windows_editor_is_still_a_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::rooted(dir.path());
+        let path = key_path(&paths, "bom");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "\u{feff}sk-from-notepad-123456\r\n").unwrap();
+        assert_eq!(read_key(&paths, &provider("bom", None)).as_deref(), Some("sk-from-notepad-123456"));
     }
 
     #[test]

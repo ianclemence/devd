@@ -76,6 +76,11 @@ pub struct Skill {
     pub source: String,
     /// The instructions.
     pub body: String,
+    /// Reference pages that came with the skill, by path inside it. They are
+    /// not in the prompt and not in `body`: an agent reads one with
+    /// `skills.get` and `file` when the body points at it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<String>,
 }
 
 fn parse(raw: &str, source: &str) -> Option<Skill> {
@@ -94,12 +99,92 @@ fn parse(raw: &str, source: &str) -> Option<Skill> {
         roles: field("roles").map(|r| r.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()).unwrap_or_default(),
         source: source.into(),
         body: body.trim().to_string(),
+        files: Vec::new(),
     })
 }
 
 /// The directory for a person's own skills.
 pub fn user_dir(paths: &Paths) -> PathBuf {
     paths.root().join("skills")
+}
+
+/// Where a skill's reference pages are kept.
+pub fn resource_dir(paths: &Paths, name: &str) -> PathBuf {
+    user_dir(paths).join(name)
+}
+
+/// The most reference pages one skill may carry, and the most text in them.
+/// Published skills run to dozens of pages; this stops a runaway, not a library.
+pub const MAX_RESOURCES: usize = 400;
+/// See [`MAX_RESOURCES`].
+pub const MAX_RESOURCE_BYTES: usize = 3_000_000;
+
+/// Every reference page under a skill's folder, as paths inside it with `/`.
+pub fn list_resources(dir: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        for entry in rd.filter_map(|e| e.ok()) {
+            let p = entry.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if let Ok(rel) = p.strip_prefix(dir) {
+                out.push(rel.components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect::<Vec<_>>().join("/"));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// A reference path that stays inside the skill's folder: relative, no `..`, no drive.
+fn resource_path(dir: &Path, rel: &str) -> Result<PathBuf> {
+    let p = Path::new(rel);
+    if rel.is_empty() || rel.contains('\\') || p.is_absolute() || p.components().any(|c| !matches!(c, std::path::Component::Normal(_))) {
+        return Err(DevdError::invalid(format!("`{rel}` is not a page inside the skill; use a path from its `files`")));
+    }
+    Ok(dir.join(p))
+}
+
+/// Read one reference page of a skill.
+pub fn read_resource(paths: &Paths, name: &str, rel: &str) -> Result<String> {
+    // A built-in skill has no pages; say that instead of "not found".
+    if BUILTIN.iter().any(|(n, _)| *n == name) {
+        return Err(DevdError::not_found(format!("`{name}` is a built-in skill and has no reference pages; its whole text is `body`")));
+    }
+    let dir = resource_dir(paths, name);
+    let file = resource_path(&dir, rel)?;
+    let text = std::fs::read_to_string(&file).map_err(|_| {
+        let known = list_resources(&dir);
+        DevdError::not_found(format!("`{name}` has no page `{rel}`; it has: {}", if known.is_empty() { "none".to_string() } else { known.join(", ") }))
+    })?;
+    Ok(text)
+}
+
+/// Replace a skill's reference pages. Only Markdown is kept: a page is read as
+/// text, and nothing a skill ships is ever run.
+pub fn save_resources(paths: &Paths, name: &str, pages: &[(String, String)]) -> Result<usize> {
+    let dir = resource_dir(paths, name);
+    let _ = std::fs::remove_dir_all(&dir);
+    if pages.is_empty() {
+        return Ok(0);
+    }
+    let mut total = 0usize;
+    let mut kept = 0usize;
+    for (rel, text) in pages {
+        if !rel.to_ascii_lowercase().ends_with(".md") || kept >= MAX_RESOURCES || total + text.len() > MAX_RESOURCE_BYTES {
+            continue;
+        }
+        let file = resource_path(&dir, rel)?;
+        if let Some(parent) = file.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&file, text)?;
+        total += text.len();
+        kept += 1;
+    }
+    Ok(kept)
 }
 
 /// Every skill: built-ins first, then the person's.
@@ -109,8 +194,9 @@ pub fn all(paths: &Paths) -> Vec<Skill> {
         let mut files: Vec<_> = rd.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.extension().map(|e| e == "md").unwrap_or(false)).collect();
         files.sort();
         for f in files {
-            if let Some(s) = std::fs::read_to_string(&f).ok().and_then(|t| parse(&t, "user")) {
+            if let Some(mut s) = std::fs::read_to_string(&f).ok().and_then(|t| parse(&t, "user")) {
                 if !out.iter().any(|x| x.name == s.name) {
+                    s.files = list_resources(&resource_dir(paths, &s.name));
                     out.push(s);
                 }
             }
@@ -262,6 +348,7 @@ pub fn read_external(home: &Path, source: &str, name: &str) -> Result<Skill> {
             roles,
             source: format!("{source} (external, not installed)"),
             body,
+            files: Vec::new(),
         });
     }
     available.sort();
@@ -315,6 +402,8 @@ pub fn delete(paths: &Paths, name: &str) -> Result<()> {
         return Err(DevdError::not_found(format!("no user skill `{name}`")));
     }
     std::fs::remove_file(f)?;
+    // Its reference pages go with it.
+    let _ = std::fs::remove_dir_all(resource_dir(paths, name));
     Ok(())
 }
 
@@ -570,7 +659,8 @@ Rules that hold whatever the work (`skills.get` with a skill's name reads the fu
 5. Prove it on the real thing before you say it is done, and say exactly what you ran and saw (`prove-it-works`).\n\
 6. Do reversible work without asking; stop for what cannot be undone or is the person's call (`act-then-ask`).\n\
 7. Keep your context lean: search first, read the part you need, keep conclusions rather than logs (`keep-your-context-lean`).\n\
-8. Report the result for what it is: say what was verified and what was not (`choose-by-the-outcome`).";
+8. Report the result for what it is: say what was verified and what was not (`choose-by-the-outcome`).
+9. Know what the person is looking at before you answer \"this\" or \"here\" (`app.where`), and show them rather than describe (`show-the-person`).";
 
 #[cfg(test)]
 mod tests {
@@ -642,6 +732,76 @@ mod tests {
             descriptions.push(Box::leak(s.description.into_boxed_str()));
         }
         assert!(names.len() > 50, "the built-in set is unexpectedly small");
+    }
+
+    /// The standard in `skills/AUTHORING.md`, enforced so it cannot drift.
+    ///
+    /// The index of every skill is in each prompt, so a description is paid for
+    /// on every turn; the body is paid for whenever the skill is read, so it is
+    /// kept to what changes what an agent does.
+    #[test]
+    fn every_built_in_skill_meets_the_authoring_standard() {
+        // Utilities devd has a tool for. A skill names the tool, which is also the one that is permitted.
+        const SHELL: &[&str] = &["grep", "cat", "head", "tail", "sed", "awk", "find", "ls", "rm", "curl", "kill", "pkill"];
+        const MARKETING: &[&str] = &["powerful", "comprehensive", "seamless", "advanced", "robust", "cutting-edge", "leverage", "game-changing"];
+        for (file, raw) in BUILTIN {
+            let s = parse(raw, "builtin").unwrap();
+            let who = format!("skills/{file}.md");
+            assert!(s.description.chars().count() <= 90, "{who}: the description is {} characters; it is in every prompt, so keep it to 90", s.description.chars().count());
+            assert!(known_kind(&s.kind), "{who}: `{}` is not a kind devd names", s.kind);
+            assert!(!s.roles.is_empty(), "{who}: no roles, so no role would ever be offered it");
+            assert!(s.body.starts_with("# "), "{who}: the body starts with a title");
+            for heading in ["## When to use", "## Pitfalls", "## Verification"] {
+                assert!(s.body.contains(&format!("\n{heading}\n")), "{who}: missing `{heading}`");
+            }
+            assert!(s.body.lines().count() <= 100, "{who}: {} lines; a skill is read in full, so keep it to 100", s.body.lines().count());
+            assert!(s.body.chars().count() <= 6_000, "{who}: {} characters; keep it to 6,000", s.body.chars().count());
+            let lower = format!("{} {}", s.description, s.body).to_lowercase();
+            for word in MARKETING {
+                assert!(!lower.split(|c: char| !c.is_alphanumeric() && c != '-').any(|w| w == *word), "{who}: `{word}` says nothing a reader can act on");
+            }
+            for tool in SHELL {
+                assert!(!s.body.contains(&format!("`{tool}`")), "{who}: names the shell utility `{tool}`; name the devd capability that does it (search_files, read_file, project.exec)");
+            }
+        }
+    }
+
+    #[test]
+    fn a_skills_reference_pages_are_kept_listed_read_on_demand_and_removed_with_it() {
+        let (_d, p) = temp_paths();
+        save(&p, "remotion-markup", "Write Remotion markup", "build", &["implementer".into()], "Read the page for the topic: 3d.md, effects/glow.md.").unwrap();
+        let pages = vec![
+            ("3d.md".to_string(), "# 3D\nUse ThreeCanvas.".to_string()),
+            ("effects/glow.md".to_string(), "# Glow".to_string()),
+            ("assets/logo.svg".to_string(), "<svg/>".to_string()),
+            ("scripts/run.sh".to_string(), "rm -rf /".to_string()),
+        ];
+        assert_eq!(save_resources(&p, "remotion-markup", &pages).unwrap(), 2, "only Markdown is kept, and nothing is ever run");
+        let skill = get(&p, "remotion-markup").unwrap();
+        assert_eq!(skill.files, ["3d.md", "effects/glow.md"]);
+        assert!(read_resource(&p, "remotion-markup", "effects/glow.md").unwrap().contains("Glow"));
+        // A page outside the skill's folder cannot be asked for.
+        for bad in ["../remotion-markup.md", "/etc/passwd", "..\\x.md", "effects/../../secret.md", "", "C:/x.md"] {
+            assert!(read_resource(&p, "remotion-markup", bad).is_err(), "{bad}");
+        }
+        let missing = read_resource(&p, "remotion-markup", "nope.md").unwrap_err().to_string();
+        assert!(missing.contains("3d.md"), "the error names the pages there are: {missing}");
+        assert!(read_resource(&p, "work", "x.md").unwrap_err().to_string().contains("built-in"));
+        // Saving again replaces the pages; deleting the skill removes them.
+        save_resources(&p, "remotion-markup", &pages[..1]).unwrap();
+        assert_eq!(get(&p, "remotion-markup").unwrap().files, ["3d.md"]);
+        delete(&p, "remotion-markup").unwrap();
+        assert!(!resource_dir(&p, "remotion-markup").exists());
+    }
+
+    #[test]
+    fn a_runaway_skill_cannot_fill_the_disk() {
+        let (_d, p) = temp_paths();
+        save(&p, "big", "A big skill", "build", &[], "A body that is long enough to be saved.").unwrap();
+        let many: Vec<(String, String)> = (0..MAX_RESOURCES + 50).map(|i| (format!("p{i}.md"), "x".repeat(100))).collect();
+        assert_eq!(save_resources(&p, "big", &many).unwrap(), MAX_RESOURCES);
+        let heavy: Vec<(String, String)> = (0..5).map(|i| (format!("h{i}.md"), "x".repeat(MAX_RESOURCE_BYTES / 2))).collect();
+        assert_eq!(save_resources(&p, "big", &heavy).unwrap(), 2);
     }
 
     #[test]
@@ -775,7 +935,7 @@ mod tests {
         for word in referenced(CORE) {
             assert!(names.contains(&word.as_str()), "a core rule names `{word}`, which is not a skill");
         }
-        assert_eq!(CORE.lines().count(), 9, "a heading and eight rules");
+        assert_eq!(CORE.lines().count(), 10, "a heading and nine rules");
     }
 
     #[test]

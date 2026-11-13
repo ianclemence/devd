@@ -155,7 +155,7 @@ fn env() -> Env {
             events.clone(),
             Actor::human(Surface::Http),
         ),
-        agent: ctx_for(&root, store, events.clone(), Actor::agent("claude-code")),
+        agent: ctx_for(&root, store, events.clone(), Actor::agent("assistant")),
         events,
         _dir: dir,
         root,
@@ -444,7 +444,7 @@ fn the_agent_loop_calls_tools_and_finishes() {
     assert!(first["system"][0]["text"]
         .as_str()
         .unwrap()
-        .contains("built-in engineer"));
+        .contains("the engineer built into"));
     let names: Vec<&str> = first["tools"]
         .as_array()
         .unwrap()
@@ -858,7 +858,7 @@ fn the_inbox_is_a_two_way_channel_between_agents_and_the_person() {
     )
     .unwrap();
     assert_eq!(all[0]["reply"], "Postgres");
-    assert_eq!(all[0]["from_actor"], "agent:claude-code");
+    assert_eq!(all[0]["from_actor"], "agent:assistant");
     let health = call(&e, &e.human, "health.status", json!({}), Approval::None).unwrap();
     assert!(
         health["attention"]
@@ -878,11 +878,11 @@ fn mcp_agents_get_their_approvals_queued() {
     let store = e.agent.store.clone();
     let queue: devd_mcp::ApprovalQueue = Arc::new(move |cap, args, plan, run_id| {
         store
-            .create_request("agent:claude-code", cap, args, plan, None, run_id, None)
+            .create_request("agent:assistant", cap, args, plan, None, run_id, None)
             .ok()
             .map(|r| r.id)
     });
-    let server = devd_mcp::McpServer::new(e.reg.clone(), e.agent.clone(), "claude-code")
+    let server = devd_mcp::McpServer::new(e.reg.clone(), e.agent.clone(), "assistant")
         .with_approval_queue(queue);
     let (is_err, text) = server.call(
         "devd_invoke",
@@ -1321,6 +1321,17 @@ fn a_team_plans_waits_for_approval_works_and_is_verified_by_evidence() {
     assert!(agent_states.contains(&"done"), "{agent_states:?}");
     assert!(overview["counts"]["done"].as_i64().unwrap_or(0) >= 1);
     assert!(overview["runs"].as_array().map(|r| !r.is_empty()).unwrap_or(false));
+
+    // The run's real tool calls, in order and by specialist: what a film or a
+    // person draws from instead of a mock-up.
+    let trace = call(&e, &e.agent, "team.trace", json!({ "run": id }), Approval::None).unwrap();
+    let calls = trace["calls"].as_array().unwrap();
+    assert!(!calls.is_empty() && trace["total"].as_u64() == Some(calls.len() as u64), "{trace}");
+    assert!(calls.iter().all(|c| c["capability"].as_str().is_some_and(|s| !s.is_empty()) && c["role"].as_str().is_some()), "{trace}");
+    let times: Vec<f64> = calls.iter().map(|c| c["t"].as_f64().unwrap()).collect();
+    assert!(times.windows(2).all(|w| w[0] <= w[1]) && times[0] == 0.0, "in order, from zero: {times:?}");
+    assert!(calls.iter().any(|c| c["role"] == "implementer" || c["role"] == "qa"), "{trace}");
+    assert!(trace.to_string().find("content").is_none(), "no arguments or results leak into a trace");
 }
 
 #[test]
@@ -2283,4 +2294,200 @@ fn a_template_fills_its_blanks_and_starts_the_team_with_its_definition_of_done()
     // A template run starts at once too, whoever starts it: the plan is
     // recorded and the team gets to work.
     call(&e, &e.agent, "template.run", json!({ "id": "security-review", "project": dir.display().to_string() }), Approval::None).unwrap();
+}
+
+#[test]
+fn a_conversation_recorded_without_a_cost_is_priced_from_the_catalogue_with_its_cache_discount() {
+    let e = env();
+    // DeepSeek by preset: nothing listed, no price recorded, exactly as the
+    // conversations that showed a spend of nothing were.
+    call(&e, &e.human, "provider.save", json!({ "id": "deepseek", "preset": "deepseek", "api_key": "sk-test-0123456789abcdef", "default_model": "deepseek-flash" }), Approval::None).unwrap();
+    // It named neither a provider nor a model, so it ran on the default.
+    let thread = e.human.store.create_thread("Old work", None, None, None).unwrap();
+    e.human.store.add_thread_usage_full(&thread.id, 10_000_000, 100_000, 9_000_000, 0, None).unwrap();
+
+    let usage = call(&e, &e.human, "models.usage", json!({}), Approval::None).unwrap();
+    let row = &usage["by_model"][0];
+    assert_eq!(row["name"], "deepseek-flash", "the model is named, not called `default model`: {usage}");
+    let cost = usage["total_cost_usd"].as_f64().expect("the catalogue knows the price");
+    let saved = usage["cache_saved_usd"].as_f64().unwrap();
+    assert!(cost > 0.0 && saved > 0.0, "cost {cost}, saved {saved}");
+    assert_eq!(usage["unpriced_conversations"], 0);
+    assert!((usage["cache_hit_rate"].as_f64().unwrap() - 0.9).abs() < 1e-9);
+    assert_eq!(usage["input_tokens"], 10_000_000);
+
+    // And the inventory offers the vendor's models before anything was fetched.
+    let inventory = call(&e, &e.human, "models.inventory", json!({}), Approval::None).unwrap();
+    let models = inventory["providers"][0]["models"].as_array().unwrap();
+    let flash = models.iter().find(|m| m["model_id"] == "deepseek-flash").expect("from the catalogue");
+    assert!(flash["input_price"].as_f64().is_some() && flash["output_price"].as_f64().is_some(), "{flash}");
+}
+
+#[test]
+fn an_agent_can_see_and_steer_the_window_but_cannot_pretend_to_be_it() {
+    let e = env();
+    let mut rx = e.events.subscribe();
+    // No window has said anything yet.
+    let none = call(&e, &e.agent, "app.where", json!({}), Approval::None).unwrap();
+    assert_eq!(none["open"], false);
+    // A place that is not a screen is refused, with the list of screens.
+    let bad = call(&e, &e.agent, "app.go", json!({ "route": "../../etc/passwd" }), Approval::None).unwrap_err().to_string();
+    assert!(bad.contains("not a place in the window") && bad.contains("intelligence"), "{bad}");
+    // The window reports; only a person's surface may.
+    assert!(call(&e, &e.agent, "app.report", json!({ "route": "settings" }), Approval::None).is_err(), "an agent cannot say where the person is");
+    call(&e, &e.human, "app.report", json!({ "route": "runs/abc" }), Approval::None).unwrap();
+    let seen = call(&e, &e.agent, "app.where", json!({}), Approval::None).unwrap();
+    assert_eq!((seen["open"].as_bool(), seen["route"].as_str()), (Some(true), Some("runs/abc")));
+    // Steering the window is an event the window follows.
+    let went = call(&e, &e.agent, "app.go", json!({ "route": "/assistant/t1/" }), Approval::None).unwrap();
+    assert_eq!(went["route"], "assistant/t1");
+    let mut heard = None;
+    while let Ok(event) = rx.try_recv() {
+        if event.kind == "app.go" {
+            heard = Some(event.data["route"].as_str().unwrap_or_default().to_string());
+        }
+    }
+    assert_eq!(heard.as_deref(), Some("assistant/t1"));
+}
+
+#[test]
+fn the_activity_record_can_be_read_and_filtered_by_an_agent() {
+    let e = env();
+    call(&e, &e.human, "app.report", json!({ "route": "home" }), Approval::None).unwrap();
+    let all = call(&e, &e.agent, "activity.list", json!({ "limit": 50 }), Approval::None).unwrap();
+    assert!(all["items"].as_array().is_some_and(|i| i.iter().any(|r| r["capability"] == "app.report")), "{all}");
+    let agents = call(&e, &e.agent, "activity.list", json!({ "actor": "agent" }), Approval::None).unwrap();
+    assert!(agents["items"].as_array().unwrap().iter().all(|r| r["actor"].as_str().unwrap().starts_with("agent:")));
+    let failed = call(&e, &e.agent, "activity.list", json!({ "failed_only": true }), Approval::None).unwrap();
+    assert!(failed["items"].as_array().unwrap().iter().all(|r| r["ok"] == false));
+}
+
+#[test]
+fn a_person_adds_their_own_agent_and_it_joins_the_flow_without_a_restart() {
+    let e = env();
+    devd_agent::roles::use_custom_dir(&e.human.paths.root().join("roles"));
+    let role = |id: &str, hands_to: &[&str]| json!({
+        "id": id, "title": "Support engineer", "team": "operations",
+        "summary": "Answers a customer's report with a reproduction and a fix",
+        "tier": "exec", "writes": true, "isolated": true, "proves": ["change", "verify"],
+        "skills": ["fix-bug", "plain-speech"], "hands_to": hands_to,
+        "instructions": "You are the support engineer. Reproduce what the customer reports before you change anything, fix the cause, and prove it."
+    });
+    // An agent cannot make a role: it decides what agents may do.
+    assert!(call(&e, &e.agent, "roles.save", role("support", &["qa"]), Approval::None).is_err());
+    // A role that would not load is refused with the reason, and the team is unchanged.
+    let bad = call(&e, &e.human, "roles.save", role("support", &["ghost"]), Approval::None).unwrap_err().to_string();
+    assert!(bad.contains("ghost"), "{bad}");
+    let before = call(&e, &e.agent, "team.flow", json!({}), Approval::None).unwrap();
+    assert!(before["roles"].as_array().unwrap().iter().all(|r| r["id"] != "support"));
+    // A good one is on the team at once, in the roster the planner reads and in the flow.
+    call(&e, &e.human, "roles.save", role("support", &["qa", "reviewer"]), Approval::None).unwrap();
+    let flow = call(&e, &e.agent, "team.flow", json!({}), Approval::None).unwrap();
+    let find = |id: &str| flow["roles"].as_array().unwrap().iter().find(|r| r["id"] == id).cloned().unwrap_or_else(|| panic!("{id} is not in {flow}"));
+    assert_eq!(find("support")["built_in"], false);
+    assert!(find("qa")["receives_from"].as_array().unwrap().iter().any(|r| r == "support"));
+    assert!(find("implementer")["hands_to"].as_array().unwrap().iter().any(|r| r == "qa"));
+    let roster = call(&e, &e.agent, "team.roles", json!({}), Approval::None).unwrap();
+    assert!(roster.as_array().unwrap().iter().any(|r| r["id"] == "support"));
+    // The new members are there too, with their skills.
+    for id in ["motion", "hardware", "ml", "sre", "release", "content"] {
+        assert!(roster.as_array().unwrap().iter().any(|r| r["id"] == id), "{id}");
+    }
+    // It leaves when asked, and devd's own cannot.
+    assert!(call(&e, &e.human, "roles.delete", json!({ "id": "planner" }), Approval::None).is_err());
+    call(&e, &e.human, "roles.delete", json!({ "id": "support" }), Approval::None).unwrap();
+    let after = call(&e, &e.agent, "team.flow", json!({}), Approval::None).unwrap();
+    assert!(after["roles"].as_array().unwrap().iter().all(|r| r["id"] != "support"));
+}
+
+// ---------------------------------------------------------------------------------------- drawing
+
+fn drawn(spec: &Value) -> String {
+    format!("Here it is.\n\n```devd-ui\n{spec}\n```\n")
+}
+
+fn good_spec() -> Value {
+    json!({ "type": "Card", "props": { "title": "Sites" }, "children": [{ "type": "Table", "props": { "columns": ["Site", "State"], "rows": [["shop.test", "up"]] } }] })
+}
+
+fn bad_spec() -> Value {
+    json!({ "type": "Card", "props": { "title": "Sites" }, "children": [{ "type": "Gauge" }] })
+}
+
+fn ask(e: &Env, text: &str) -> Value {
+    let sent = call(e, &e.human, "chat.send", json!({ "message": text, "project": e.root.join("www/proj").display().to_string() }), Approval::None).unwrap();
+    wait_for(e, sent["id"].as_str().unwrap(), &["idle", "error"])
+}
+
+fn kinds(v: &Value) -> Vec<String> {
+    v["events"].as_array().unwrap().iter().map(|x| x["kind"].as_str().unwrap().to_string()).collect()
+}
+
+#[test]
+fn the_assistant_is_taught_the_catalog_and_the_flag_turns_that_off() {
+    let e = env();
+    let m = mock(|_, _| (200, anthropic_text("Fine.")));
+    add_provider(&e, "anthropic", &m.base);
+    ask(&e, "hello");
+    let system = m.seen.lock().unwrap()[0].body["system"][0]["text"].as_str().unwrap().to_string();
+    assert!(system.contains("Drawing with components") && system.contains("devd-ui"), "the catalog is in the prompt");
+    for c in devd_genui::CATALOG {
+        assert!(system.contains(&format!("**{}**", c.name)), "{} is missing from what the model is told", c.name);
+    }
+
+    let e = env();
+    let m = mock(|_, _| (200, anthropic_text("Fine.")));
+    add_provider(&e, "anthropic", &m.base);
+    call(&e, &e.human, "flags.set", json!({ "key": "agent.draw", "value": "off" }), Approval::None).unwrap();
+    ask(&e, "hello");
+    let system = m.seen.lock().unwrap()[0].body["system"][0]["text"].as_str().unwrap().to_string();
+    assert!(!system.contains("Drawing with components"), "the flag removes it");
+}
+
+#[test]
+fn a_drawing_that_does_not_check_is_sent_back_with_each_problem_and_then_accepted() {
+    let e = env();
+    let m = mock(|n, _| match n {
+        0 => (200, anthropic_text(&drawn(&bad_spec()))),
+        _ => (200, anthropic_text(&drawn(&good_spec()))),
+    });
+    add_provider(&e, "anthropic", &m.base);
+    let v = ask(&e, "show my sites");
+    assert_eq!(v["thread"]["state"], "idle", "{v}");
+    assert_eq!(kinds(&v), ["user", "assistant", "user", "assistant"], "{v}");
+    let note = &v["events"][2]["data"];
+    assert_eq!(note["drawing"], true);
+    assert_eq!(note["from"], "devd");
+    assert!(note["text"].as_str().unwrap().contains("\"Gauge\" is not a component"), "{note}");
+    // The second request carried that note to the model.
+    let seen = m.seen.lock().unwrap().clone();
+    assert_eq!(seen.len(), 2);
+    let last = seen[1].body["messages"].as_array().unwrap().last().unwrap().to_string();
+    assert!(last.contains("[devd]") && last.contains("Gauge"), "{last}");
+}
+
+#[test]
+fn a_good_drawing_is_never_sent_back_and_a_bad_one_is_sent_back_only_as_often_as_allowed() {
+    let e = env();
+    let m = mock(|_, _| (200, anthropic_text(&drawn(&good_spec()))));
+    add_provider(&e, "anthropic", &m.base);
+    let v = ask(&e, "show my sites");
+    assert_eq!(kinds(&v), ["user", "assistant"], "{v}");
+    assert_eq!(m.seen.lock().unwrap().len(), 1);
+
+    // A model that never gets it right is asked twice (the default) and then left as it is.
+    let e = env();
+    let m = mock(|_, _| (200, anthropic_text(&drawn(&bad_spec()))));
+    add_provider(&e, "anthropic", &m.base);
+    let v = ask(&e, "show my sites");
+    assert_eq!(v["thread"]["state"], "idle", "{v}");
+    assert_eq!(kinds(&v), ["user", "assistant", "user", "assistant", "user", "assistant"], "{v}");
+
+    // With the allowance at zero it is never sent back.
+    let e = env();
+    let m = mock(|_, _| (200, anthropic_text(&drawn(&bad_spec()))));
+    add_provider(&e, "anthropic", &m.base);
+    call(&e, &e.human, "flags.set", json!({ "key": "agent.draw_fixes", "value": "0" }), Approval::None).unwrap();
+    let v = ask(&e, "show my sites");
+    assert_eq!(kinds(&v), ["user", "assistant"], "{v}");
 }

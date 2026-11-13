@@ -412,7 +412,7 @@ pub fn status(ctx: &Ctx) -> Result<Value> {
             } else {
                 format!("{} things are", bad.len())
             },
-            bad.first().map(|c| c.label.clone()).unwrap_or_default()
+            names(&bad)
         ),
         "degraded" => format!(
             "Working, with {} to fix: {}",
@@ -421,7 +421,7 @@ pub fn status(ctx: &Ctx) -> Result<Value> {
             } else {
                 format!("{} problems", bad.len())
             },
-            bad.first().map(|c| c.label.clone()).unwrap_or_default()
+            names(&bad)
         ),
         "starting" => "Starting up".to_string(),
         "unknown" => "Could not check everything".to_string(),
@@ -590,6 +590,20 @@ mod tests {
     }
 }
 
+/// Every component that is not well, in a sentence: "nginx", "nginx and PHP 8.4", "nginx, PHP 8.4 and MariaDB",
+/// or the first two and a count when there are more. A headline that says "2 problems" and names one leaves the
+/// other for the person to hunt for.
+fn names(bad: &[&&Component]) -> String {
+    let labels: Vec<&str> = bad.iter().map(|c| c.label.as_str()).collect();
+    match labels.as_slice() {
+        [] => String::new(),
+        [one] => (*one).to_string(),
+        [a, b] => format!("{a} and {b}"),
+        [a, b, c] => format!("{a}, {b} and {c}"),
+        [a, b, rest @ ..] => format!("{a}, {b} and {} more", rest.len()),
+    }
+}
+
 #[cfg(test)]
 mod boot_tests {
     use super::*;
@@ -599,5 +613,18 @@ mod boot_tests {
         assert_eq!(absent_state(true), "starting");
         assert_eq!(absent_state(false), "degraded");
         assert!(BOOT_GRACE.as_secs() <= 120, "a real crash is not excused for long");
+    }
+
+    #[test]
+    fn a_headline_names_every_thing_that_is_wrong_not_only_the_first() {
+        let a = Component::new("service.nginx", "nginx", "server", "starting", true, String::new());
+        let b = Component::new("service.php@8.4", "PHP 8.4", "server", "starting", true, String::new());
+        let c = Component::new("service.mariadb", "MariaDB", "server", "starting", true, String::new());
+        let d = Component::new("service.redis", "Redis", "server", "starting", true, String::new());
+        let (ra, rb, rc, rd) = (&a, &b, &c, &d);
+        assert_eq!(names(&[&ra]), "nginx");
+        assert_eq!(names(&[&ra, &rb]), "nginx and PHP 8.4");
+        assert_eq!(names(&[&ra, &rb, &rc]), "nginx, PHP 8.4 and MariaDB");
+        assert_eq!(names(&[&ra, &rb, &rc, &rd]), "nginx, PHP 8.4 and 2 more");
     }
 }

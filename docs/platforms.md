@@ -13,18 +13,15 @@ on each, because the people who publish them do.
 
 ## Published builds
 
-| | Windows x64 | Linux x64 | macOS |
+| | Windows x64 | macOS | Linux x64 |
 |---|---|---|---|
-| Command line | `devd-v...exe` and `devd-setup-...exe` on each release | build from source; `scripts/install-linux.sh` installs per user | build from source |
-| Desktop window | `devd-setup-...exe` or the portable `devd-desktop-...zip` | not published | not published |
-| Web interface | in the installer, the zip, and `devd ui` | `devd ui` | `devd ui` |
+| Native window and command line | `devd-<version>-windows-x64-setup.exe`, or the portable `.zip` | `devd-<version>-macos-arm64.dmg` (Apple silicon) and `-x86_64.dmg` (Intel) | `devd_<version>_amd64.deb`, or the `.tar.gz` |
+| How it is installed | per user, no administrator prompt | drag to Applications | `apt install ./devd_<version>_amd64.deb` |
+| Signed | no (SmartScreen asks once) | ad hoc, not an Apple Developer ID (right-click, Open) | no |
 
-The installer and the portable window are Windows x86_64 only today. The server
-and the web interface are the same code on all three platforms, and the Linux
-release scripts build and test there, but a Linux package and a signed macOS app
-are not published yet. A portable window is a folder, not one file:
-`devd-desktop.exe` needs `WebView2Loader.dll` and, for first-run setup,
-`devd.exe` and `launch.vbs` beside it.
+They are built by `.github/workflows/release.yml` on a machine of each kind, and each build runs `devd --version` before it is packaged (the Intel macOS build is made on an Apple-silicon machine and is run only if Rosetta is present). The window needs a graphics driver: Direct3D 11, Metal, or Vulkan on Linux. The packages have not been run by hand on every distribution or macOS version, and the macOS and Linux windows were first built in CI for this release.
+
+The web interface and the command line are the same code on all three platforms, and `devd ui` serves the interface in a browser where no window can open.
 
 ## What "adopted" means
 

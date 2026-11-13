@@ -1,10 +1,30 @@
 ---
 name: model-the-domain
-description: Make the code's types and names match the concepts of the problem it solves
+description: Make types and names match the concepts of the problem
 kind: design
 roles: architect,implementer
 ---
 
-Name things as the domain does. Make illegal states unrepresentable. One concept, one type, one owner. Do not let storage or transport shapes stand in for domain ideas.
+# Model the domain
 
-The failure this prevents: strings and booleans where a small type would make misuse impossible.
+Names things as the domain does and makes illegal states unrepresentable, so misuse does not compile.
+
+## When to use
+
+Designing new types, or when strings and booleans stand in for concepts.
+
+## Procedure
+
+1. List the concepts as the people who use the thing name them.
+2. One concept, one type, one owner (`decide-who-owns-the-state`).
+3. Make illegal states unrepresentable (`put-rules-in-the-compiler`).
+4. Do not let storage or transport shapes stand in for domain ideas.
+
+## Pitfalls
+
+- `status: string` with five valid values.
+- A boolean pair that allows an impossible combination.
+
+## Verification
+
+A wrong state cannot be written in the new types, and the names read like the domain's own words.

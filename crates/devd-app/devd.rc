@@ -1,0 +1,5 @@
+/* The devd icon, in the window program: the title bar, the taskbar and Explorer show it.
+ *
+ * The path is relative to this file, which is the crate root. Id 1 is the icon the window class loads.
+ */
+1 ICON "../devd-desktop/icons/icon.ico"

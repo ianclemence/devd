@@ -8,16 +8,19 @@
 //! [`Registry::dispatch`].
 
 pub mod archive;
+pub mod audit_chain;
 pub mod browse;
 pub mod capability;
 pub mod completion;
 pub mod config;
 pub mod context;
 pub mod daemon;
+pub mod deeplink;
 pub mod define;
 pub mod doctor;
 pub mod download;
 pub mod events;
+pub mod flags;
 pub mod health;
 pub mod observe;
 pub mod paths;
@@ -88,7 +91,7 @@ pub use store_runs::{
 pub use store_schedule::Schedule;
 pub use store_stacks::{StackProject, StackRun};
 pub use store_team::{
-    GoalLoop, ProviderCheck, RoleModel, ServiceDecision, TeamEvent, TeamRun, TeamTask,
+    GoalLoop, ProviderCheck, RoleModel, RunBudget, RunUsage, ServiceDecision, TeamEvent, TeamRun, TeamTask,
 };
 pub use store_work::{ProjectProcess, Scratchpad, Todo, TodoEvent};
 
@@ -99,7 +102,7 @@ pub mod error {
     /// failures to structured responses without string matching.
     #[derive(Debug, thiserror::Error)]
     pub enum DevdError {
-        #[error("io error: {0}")]
+        #[error("{0}")]
         Io(#[from] std::io::Error),
         #[error("json error: {0}")]
         Json(#[from] serde_json::Error),

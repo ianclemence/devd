@@ -1,10 +1,29 @@
 ---
 name: design-from-use
-description: Shape an interface from what its callers or users will do with it, errors included
+description: Shape an interface from what its callers will do with it, errors included
 kind: design
 roles: planner,implementer,architect
 ---
 
-Start from the interaction: what they type or click, what they get back, what happens when it goes wrong. Write that usage first, then build whatever it needs. Error messages are part of the product: say what happened, why, and what to do next.
+# Design from use
 
-The failure this prevents: an API shaped by the implementation instead of by its callers.
+Starts from the interaction: what callers type or click, what they get back, and what happens when it goes wrong. Write that usage first, then build whatever it needs.
+
+## When to use
+
+Before any new interface: a function, a command, an endpoint, a screen.
+
+## Procedure
+
+1. Write the calls as the caller would write them, including a failing one.
+2. Write the error messages: what happened, why, and what to do next. They are part of the product.
+3. Build the least that makes those calls work.
+
+## Pitfalls
+
+- An API shaped by the implementation instead of by its callers.
+- An error message that names an internal function.
+
+## Verification
+
+The usage you wrote first runs unchanged against the finished code.

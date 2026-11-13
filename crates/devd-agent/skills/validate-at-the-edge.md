@@ -5,6 +5,26 @@ kind: design
 roles: architect,implementer,reviewer
 ---
 
-Parse and validate untrusted input once, where it enters (arguments, files, network, APIs), into domain types. Inside, trust the types and pass errors up. Keep business logic in pure functions and make the framework wiring thin. Do not leak wire or storage types through your public surface.
+# Validate at the edge
 
-The failure this prevents: the same null check at every layer; business logic inside a request handler.
+Parses and validates untrusted input once, where it enters, into domain types. Inside, trust the types and pass errors up.
+
+## When to use
+
+Anything that reads arguments, files, the network or an API.
+
+## Procedure
+
+1. Find the one place input enters.
+2. Parse it there into domain types, rejecting what does not fit.
+3. Keep business logic in pure functions and the framework wiring thin.
+4. Do not leak wire or storage types through your public surface.
+
+## Pitfalls
+
+- The same null check at every layer.
+- Business logic inside a request handler.
+
+## Verification
+
+A bad input is refused at the edge with a clear error, and nothing deeper checks it again.

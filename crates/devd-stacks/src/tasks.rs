@@ -607,10 +607,19 @@ pub fn exec_allowed(
         .unwrap_or(program)
         .trim_end_matches(".exe")
         .to_string();
-    let mut allowed: Vec<String> = vec![
-        "git".into(), // read-only subcommands are policed below
-    ];
-    allowed.clear();
+    // A shell is refused before the allow-list is consulted, with the route that
+    // works. Refusing it as "not in this stack's list" taught an agent nothing:
+    // the recorded conversations show the same `powershell` call retried dozens
+    // of times, each one reading as a missing permission instead of a rule.
+    if matches!(
+        base.to_ascii_lowercase().trim_end_matches(".cmd").trim_end_matches(".bat"),
+        "sh" | "bash" | "zsh" | "fish" | "cmd" | "powershell" | "pwsh" | "sudo" | "su" | "doas"
+    ) {
+        return Err(DevdError::denied(format!(
+            "`{program}` is a shell or privilege tool, and project.exec never runs one, on any stack; retrying will not change that.              Pass the program itself as argv with each argument separate, for example {{\"argv\":[\"php\",\"artisan\",\"migrate\"]}}.              Pipes, redirects, `&&` and environment prefixes are shell syntax: run each command as its own call and read its output from the result.              To read or search files use fs.read and fs.search; for a project script use project.run with a task from project.tasks."
+        )));
+    }
+    let mut allowed: Vec<String> = Vec::new();
     if let Some(s) = stack {
         allowed.extend(s.exec.programs.iter().cloned());
     }
@@ -642,17 +651,9 @@ pub fn exec_allowed(
     });
     if !ok {
         return Err(DevdError::denied(format!(
-            "`{program}` is not an allowed command for this project's stack. Allowed: {}. For other tools use a task from project.tasks.",
+            "`{program}` is not an allowed command for this project's stack. Allowed: {}. This is a rule about the program, so the same call will be refused again: use one of the allowed programs, or a task from project.tasks with project.run.",
             if allowed.is_empty() { "none (the stack could not be determined)".to_string() } else { allowed.join(", ") }
         )));
-    }
-    if matches!(
-        base.as_str(),
-        "sh" | "bash" | "zsh" | "cmd" | "powershell" | "pwsh" | "sudo" | "su"
-    ) {
-        return Err(DevdError::denied(
-            "shells and privilege tools are never allowed",
-        ));
     }
     let dirs = toolchain::managed_dirs_for(ctx, dir);
     let cancel = AtomicBool::new(false);

@@ -6961,7 +6961,7 @@ body { letter-spacing: 0; }
 th, .table th { font-size: var(--text-xs); font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--fg-mute); }
 .mono, code, kbd, .cell-mono { font-family: var(--mono); letter-spacing: 0; }
 
-/* ---- the conversation, after T3 Code's good ideas ------------------------------ */
+/* ---- the conversation ------------------------------------------------------------ */
 /* Scrolled up to read: the way back to the end, centred above the box. */
 .chat-body, .team-detail { position: relative; }
 .jump-end {

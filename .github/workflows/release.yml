@@ -1,0 +1,210 @@
+name: release
+
+# Builds the native devd window and the command line for Windows, macOS and Linux, and packages
+# each the way people install apps there:
+#
+#   Windows  devd-<version>-windows-x64-setup.exe   (per-user installer, no administrator prompt)
+#            devd-<version>-windows-x64.zip         (portable)
+#   macOS    devd-<version>-macos-arm64.dmg         (Apple silicon)
+#            devd-<version>-macos-x86_64.dmg        (Intel)
+#   Linux    devd_<version>_amd64.deb               (apt installs it with its dependencies)
+#            devd-<version>-linux-x86_64.tar.gz
+#
+# A push to the branch only builds and uploads the packages, so a problem shows up before a release.
+# A tag `v<version>` also creates a DRAFT release with these files and SHA256SUMS.txt; a person
+# reads it and publishes it. SHA256SUMS.txt is signed on the maintainer's machine, not here: the
+# signing key is never given to CI.
+
+on:
+  push:
+    branches: [gpui-native]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    name: windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal
+          rustup default stable-x86_64-pc-windows-gnu
+          rustc -vV
+      - uses: Swatinem/rust-cache@v2
+      - name: Find the shader compiler (fxc.exe)
+        # A release build compiles the window's shaders ahead of time, which needs fxc.exe from the
+        # Windows SDK. The runner has the SDK but not on PATH.
+        shell: pwsh
+        run: |
+          $fxc = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter fxc.exe -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match "\\x64\\" } | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $fxc) { throw "fxc.exe was not found in the Windows SDK" }
+          Write-Host "fxc: $($fxc.FullName)"
+          Add-Content $env:GITHUB_PATH $fxc.DirectoryName
+      - name: Build
+        run: cargo build --release -p devd-cli -p devd-app
+      - name: Run what was built
+        shell: bash
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          out=$(target/release/devd.exe --version)
+          echo "$out"
+          echo "$out" | grep -q "$version"
+          test -f target/release/devd-app.exe
+      - name: Installer and portable zip
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          choco install nsis -y --no-progress | Out-Null
+          $nsis = (Get-Command makensis -ErrorAction SilentlyContinue).Source
+          if (-not $nsis) { $nsis = "C:\Program Files (x86)\NSIS\makensis.exe" }
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $setup = Join-Path $PWD "dist\devd-$version-windows-x64-setup.exe"
+          & $nsis "/DVERSION=$version" "/DSOURCE=$PWD\target\release\devd.exe" "/DDESKTOP=$PWD\target\release\devd-app.exe" "/DOUTFILE=$setup" "/DROOT=$PWD" "installer\devd-app.nsi"
+          if ($LASTEXITCODE -ne 0) { throw "makensis failed" }
+          $stage = "dist\zip\devd-$version-windows-x64"
+          New-Item -ItemType Directory -Force $stage | Out-Null
+          Copy-Item target\release\devd.exe, target\release\devd-app.exe, LICENSE, README.md $stage
+          Compress-Archive -Path $stage -DestinationPath "dist\devd-$version-windows-x64.zip" -Force
+          Get-ChildItem dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            dist/*.exe
+            dist/*.zip
+          if-no-files-found: error
+
+  macos:
+    name: macos (${{ matrix.arch }})
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            arch: arm64
+          - target: x86_64-apple-darwin
+            arch: x86_64
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }} -p devd-cli -p devd-app
+      - name: Run what was built
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          file target/${{ matrix.target }}/release/devd-app target/${{ matrix.target }}/release/devd
+          # The Intel build is made on an Apple-silicon machine, which runs it through Rosetta when it is installed.
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            target/${{ matrix.target }}/release/devd --version | tee /dev/stderr | grep -q "$version"
+          else
+            arch -x86_64 target/${{ matrix.target }}/release/devd --version | tee /dev/stderr | grep -q "$version" || echo "Rosetta is not available here; the Intel binary was built but not run"
+          fi
+      - name: Package
+        run: sh scripts/package-macos.sh ${{ matrix.target }} ${{ matrix.arch }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: dist/*.dmg
+          if-no-files-found: error
+
+  linux:
+    name: linux
+    # The oldest runner still supported: a program built against an older C library runs on newer ones.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: System libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libxcb1-dev libx11-xcb-dev \
+            libfontconfig-dev libvulkan-dev libasound2-dev libssl-dev pkg-config dpkg-dev
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release -p devd-cli -p devd-app
+      - name: Run what was built
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          target/release/devd --version | tee /dev/stderr | grep -q "$version"
+          # Every library the window needs must be one the package declares.
+          ldd target/release/devd-app | tee /dev/stderr
+          ! ldd target/release/devd-app | grep -q "not found"
+      - name: Package
+        run: sh scripts/package-linux.sh
+      - name: Check the package
+        run: |
+          dpkg-deb --info dist/devd_*_amd64.deb
+          dpkg-deb --contents dist/devd_*_amd64.deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            dist/*.deb
+            dist/*.tar.gz
+          if-no-files-found: error
+
+  draft:
+    name: draft release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, macos, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Checksums and notes
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          cd artifacts
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          cd ..
+          # The release body is this version's section of the changelog, then how to install it.
+          awk -v v="$version" '/^## \[/ { if (p) exit; if (index($0, "[" v "]")) p = 1 } p' CHANGELOG.md | sed '1d' > notes.md
+          cat >> notes.md <<'NOTES'
+
+          ## Install
+
+          | | |
+          | --- | --- |
+          | **Windows** | Run `devd-<version>-windows-x64-setup.exe`. It installs for you alone, with no administrator password. |
+          | **macOS** | Open the `.dmg` for your Mac (`arm64` is Apple silicon, `x86_64` is Intel) and drag devd to Applications. The app is not signed with an Apple Developer ID, so the first time, right-click it and choose Open. |
+          | **Debian, Ubuntu** | `sudo apt install ./devd_<version>_amd64.deb` installs devd and what it needs. The window needs a Vulkan driver (`mesa-vulkan-drivers` is recommended and installed with it where available). |
+          | **Other Linux** | Unpack `devd-<version>-linux-x86_64.tar.gz` and follow `INSTALL.txt`. |
+
+          Check a download against `SHA256SUMS.txt`.
+          NOTES
+          sed -i "s/<version>/${version}/g" notes.md
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          gh release create "$tag" --draft --verify-tag --title "devd ${tag#v}" --notes-file notes.md artifacts/*

@@ -188,6 +188,16 @@ pub async fn script(headers: HeaderMap) -> Response {
     )
 }
 
+/// What each tool call is called in a conversation, as a script the page loads
+/// before its own. The table is the native window's (`devd_app_core::toolname`),
+/// so both interfaces say "Stashed changes" and neither says `git.stash.push`.
+pub async fn toolnames(headers: HeaderMap) -> Response {
+    static BODY: OnceLock<String> = OnceLock::new();
+    static PACKED: OnceLock<Packed> = OnceLock::new();
+    let body = BODY.get_or_init(|| format!("window.DEVD_TOOLS={};", devd_app_core::toolname::table()));
+    asset("text/javascript; charset=utf-8", body.as_bytes(), &PACKED, &headers)
+}
+
 /// The stylesheet.
 pub async fn style(headers: HeaderMap) -> Response {
     asset(
@@ -313,11 +323,7 @@ pub async fn brand(Path(file): Path<String>) -> Response {
     {
         return missing();
     }
-    let Ok(bytes) = std::fs::read(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("ui/brands")
-            .join(&file),
-    ) else {
+    let Some(bytes) = brand_bytes(&file) else {
         return missing();
     };
     let content_type = if extension == "svg" {
@@ -326,6 +332,14 @@ pub async fn brand(Path(file): Path<String>) -> Response {
         "image/png"
     };
     build(content_type, Body::from(bytes), None)
+}
+
+include!(concat!(env!("OUT_DIR"), "/brands.rs"));
+
+/// A brand mark by file name (`anthropic.svg`), from the table compiled into
+/// the binary. `None` for a name devd has no mark for.
+pub fn brand_bytes(file: &str) -> Option<&'static [u8]> {
+    BRANDS.iter().find(|(name, _)| *name == file).map(|(_, bytes)| *bytes)
 }
 
 /// A brand mark that does not exist.
@@ -404,6 +418,8 @@ mod tests {
             "inline handler would be blocked by CSP"
         );
         assert!(lower.contains("src=\"/app.js\""));
+        // The phrases for tool calls load first, so the page never draws a capability id.
+        assert!(lower.find("src=\"/toolnames.js\"").unwrap() < lower.find("src=\"/app.js\"").unwrap());
         assert!(lower.contains("href=\"/style.css\""));
     }
 }

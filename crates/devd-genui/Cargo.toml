@@ -1,0 +1,15 @@
+[package]
+name = "devd-genui"
+description = "Generative interface for chat: the catalog of components an assistant may draw, the spec it writes, and the checks that spec must pass."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

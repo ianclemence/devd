@@ -935,7 +935,7 @@ mod tests {
         .unwrap();
 
         let mut ctx = test_ctx();
-        ctx.actor = Actor::agent("claude-code");
+        ctx.actor = Actor::agent("assistant");
         let req = InvokeRequest {
             id: "tls.trust_install".into(),
             args: serde_json::json!({}),

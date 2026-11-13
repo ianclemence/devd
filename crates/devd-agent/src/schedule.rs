@@ -57,6 +57,8 @@ pub fn start_run(team: &Arc<Team>, schedule: &Schedule) -> Result<TeamRun> {
     team.start(
         ctx,
         &StartRequest {
+            budget_usd: None,
+            max_turns: None,
             goal,
             project: Some(schedule.project.clone()),
             new_project: None,

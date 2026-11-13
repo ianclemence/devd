@@ -6,7 +6,7 @@ paths:
 * **devd as a server** - `devd mcp` publishes devd's capability registry to an
   outside agent. That is the rest of this page up to "devd as a client".
 * **devd as a client** - the `mcp.*` capabilities connect the built-in assistant
-  to *other programs'* MCP servers, the way Claude Code uses the servers
+  to *other programs'* MCP servers, the way any MCP client uses the servers
   configured for it. Their tools join the assistant's tool list; they do not
   become devd capabilities, and they are not trusted like them.
 
@@ -19,7 +19,7 @@ exactly the same functions as a person, with exactly the same permission checks.
 
 ```bash
 devd mcp                  # serve on stdio
-devd mcp --client claude-code   # name the caller in the audit trail
+devd mcp --client assistant   # name the caller in the audit trail
 devd mcp --list           # print the tool list and exit
 ```
 
@@ -30,7 +30,7 @@ A client configuration looks like this:
   "mcpServers": {
     "devd": {
       "command": "devd",
-      "args": ["mcp", "--client", "claude-code"]
+      "args": ["mcp", "--client", "assistant"]
     }
   }
 }
@@ -146,9 +146,9 @@ devd_doctor       → ok, 8 checks including git 2.46.0
 The audit trail after that session:
 
 ```
-agent:claude-code  git.status   read         ok
-agent:claude-code  git.reset    destructive  FAILED     <- the refusal
-agent:claude-code  git.reset    destructive  ok         <- the plan, dry run
+agent:assistant  git.status   read         ok
+agent:assistant  git.reset    destructive  FAILED     <- the refusal
+agent:assistant  git.reset    destructive  ok         <- the plan, dry run
 ```
 
 and `HEAD` was unchanged by the attempt.

@@ -268,6 +268,7 @@ pub fn router(state: Arc<AppState>) -> Router {
     let pages = Router::new()
         .route("/", get(ui::index))
         .route("/app.js", get(ui::script))
+        .route("/toolnames.js", get(ui::toolnames))
         .route("/style.css", get(ui::style))
         .route("/favicon.svg", get(ui::favicon))
         .route("/brands/:file", get(ui::brand))

@@ -133,7 +133,11 @@ pub struct ModelCaps {
     pub input_price: Option<f64>,
     /// US dollars per million output tokens.
     pub output_price: Option<f64>,
-    /// Where the answer came from: `catalogue`, `family` or `unknown`.
+    /// US dollars per million tokens read from the prompt cache, when published.
+    pub cache_read_price: Option<f64>,
+    /// US dollars per million tokens written to the prompt cache, when published.
+    pub cache_write_price: Option<f64>,
+    /// Where the answer came from: `catalogue`, `models.dev`, `family` or `unknown`.
     pub source: String,
 }
 
@@ -203,8 +207,10 @@ fn family(model: &str) -> Traits {
 
 /// What is known about `model` as served by `provider`.
 ///
-/// The catalogue entry the provider's own listing produced wins for windows and
-/// prices; the family table supplies behaviour the listing does not.
+/// Three sources, most particular first: the entry the provider's own listing
+/// produced (and a price a person set by hand), then the open catalogue at
+/// models.dev, then the family table for behaviour neither states. A fact is
+/// taken from the first source that has one, field by field.
 pub fn model_caps(store: &Store, provider: &Provider, model: &str) -> ModelCaps {
     let entry = store
         .list_catalogue(None)
@@ -213,16 +219,20 @@ pub fn model_caps(store: &Store, provider: &Provider, model: &str) -> ModelCaps 
         .filter(|m| m.model_id == model)
         // A provider's own listing is the best source for that provider.
         .max_by_key(|m| m.source == format!("provider:{}", provider.id));
+    let open = crate::modelsdev::current();
+    let known = open.find(provider, model);
     let (family_tools, family_vision, family_reasoning) = family(model);
     let listed_tools = entry.as_ref().and_then(|m| m.tools);
     let listed_vision = entry.as_ref().and_then(|m| m.vision);
     let listed_reasoning = entry.as_ref().and_then(|m| m.reasoning);
-    let tools = listed_tools.or(family_tools);
-    let vision = listed_vision.or(family_vision);
-    let reasoning = listed_reasoning.or(family_reasoning);
+    let tools = listed_tools.or(known.and_then(|k| k.tools)).or(family_tools);
+    let vision = listed_vision.or(known.and_then(|k| k.vision)).or(family_vision);
+    let reasoning = listed_reasoning.or(known.and_then(|k| k.reasoning)).or(family_reasoning);
     let from_catalogue = listed_tools.is_some() || listed_vision.is_some() || listed_reasoning.is_some();
     let source = if from_catalogue || entry.is_some() {
         "catalogue"
+    } else if known.is_some() {
+        "models.dev"
     } else if tools.is_some() || vision.is_some() || reasoning.is_some() {
         "family"
     } else {
@@ -232,10 +242,12 @@ pub fn model_caps(store: &Store, provider: &Provider, model: &str) -> ModelCaps 
         tools,
         vision,
         reasoning,
-        context_window: entry.as_ref().and_then(|m| m.context_window),
-        max_output: entry.as_ref().and_then(|m| m.max_output),
-        input_price: entry.as_ref().and_then(|m| m.input_price),
-        output_price: entry.as_ref().and_then(|m| m.output_price),
+        context_window: entry.as_ref().and_then(|m| m.context_window).or(known.and_then(|k| k.context)),
+        max_output: entry.as_ref().and_then(|m| m.max_output).or(known.and_then(|k| k.output)),
+        input_price: entry.as_ref().and_then(|m| m.input_price).or(known.and_then(|k| k.input_price)),
+        output_price: entry.as_ref().and_then(|m| m.output_price).or(known.and_then(|k| k.output_price)),
+        cache_read_price: known.and_then(|k| k.cache_read_price),
+        cache_write_price: known.and_then(|k| k.cache_write_price),
         source: source.to_string(),
     }
 }
@@ -250,9 +262,10 @@ pub fn cost_usd(caps: &ModelCaps, input_tokens: i64, output_tokens: i64) -> Opti
 /// What a call cost, with prompt-cache tokens priced as the provider bills them.
 ///
 /// The provider's list price is for ordinary input. A cache read is cheaper and
-/// a cache write is dearer; the multipliers below are the vendors' published
-/// ratios and are applied only when the provider reported those tokens. `input`
-/// already includes them, so the uncached part is the remainder.
+/// a cache write is dearer. The model's own published cache prices are used when
+/// the catalogue has them; otherwise the vendor's published ratio to the input
+/// price stands in. Either applies only to tokens the provider reported as
+/// cached. `input` already includes them, so the uncached part is the remainder.
 pub fn cost_usd_cached(
     caps: &ModelCaps,
     provider_kind: &str,
@@ -276,13 +289,9 @@ pub fn cost_usd_cached(
     };
     let cached = (cache_read + cache_write).min(input_tokens.max(0));
     let uncached = (input_tokens - cached).max(0);
-    Some(
-        (input * uncached as f64
-            + input * read_mult * cache_read as f64
-            + input * write_mult * cache_write as f64
-            + output * output_tokens as f64)
-            / 1_000_000.0,
-    )
+    let read = caps.cache_read_price.unwrap_or(input * read_mult);
+    let write = caps.cache_write_price.unwrap_or(input * write_mult);
+    Some((input * uncached as f64 + read * cache_read as f64 + write * cache_write as f64 + output * output_tokens as f64) / 1_000_000.0)
 }
 
 #[cfg(test)]

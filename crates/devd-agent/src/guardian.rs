@@ -244,6 +244,8 @@ pub fn evaluate_intake(ctx: &Ctx, team: &Arc<Team>) -> Result<usize> {
                         match team.start(
                             ctx,
                             &StartRequest {
+                                budget_usd: None,
+                                max_turns: None,
                                 goal: rule.goal.clone(),
                                 project: Some(rule.project.clone()),
                                 new_project: None,

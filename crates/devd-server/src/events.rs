@@ -30,12 +30,36 @@ use crate::AppState;
 
 /// Non-durable kinds forwarded from the live bus. Durable run events are read
 /// from the database instead, so nothing here can be silently lost.
+///
+/// The agent kinds are what a conversation needs to stay live. The rest name a
+/// change to the machine: a window that keeps what it was told (the native
+/// application does) uses them to know which of the things it is showing went
+/// out of date, instead of asking for everything again on a timer. They carry
+/// what the screens already show, and none of them is high-frequency.
 const KINDS: &[&str] = &[
     "chat.delta",
     "chat.event",
     "approval.*",
     "inbox.*",
     "team.*",
+    "todo.*",
+    "site.*",
+    "hosts.*",
+    "tls.*",
+    "dns",
+    "service.*",
+    "runtime.*",
+    "toolchain.*",
+    "project.*",
+    "git.*",
+    "provider.*",
+    "models.*",
+    "environment.*",
+    "settings.*",
+    "health.*",
+    "reconcile",
+    "app.*",
+    "motion.*",
 ];
 
 fn allowed(kind: &str) -> bool {
@@ -224,7 +248,12 @@ mod tests {
         assert!(allowed("approval.pending"));
         assert!(allowed("team.run"));
         assert!(!allowed("stack.output"));
-        assert!(!allowed("service.nginx.installed"));
+        // A change to the machine is forwarded so a window can refresh what it
+        // shows; a task's output, which arrives line by line, is not.
+        assert!(allowed("service.nginx.installed"));
+        assert!(allowed("site.created"));
+        assert!(!allowed("stack.progress"));
+        assert!(!allowed("terminal.output"));
     }
 
     #[test]

@@ -12,18 +12,24 @@
 //! | leadership | planner      | no               | no               | a plan was submitted              |
 //! | leadership | product      | yes (one doc)    | no               | the requirements file was written |
 //! | design     | designer     | yes (UI)         | yes              | files changed and a check passed  |
+//! | design     | motion       | yes (own copy)   | yes              | a composition written, a render ran |
 //! | engineering| architect    | yes (task copy)  | no               | a report, after reading the code  |
 //! | engineering| implementer  | yes (own copy)   | yes              | files changed and a check passed  |
 //! | engineering| frontend     | yes (own copy)   | yes              | files changed and a check passed  |
 //! | engineering| backend      | yes (own copy)   | yes              | files changed and a check passed  |
 //! | engineering| mobile       | yes (own copy)   | yes              | files changed and a check passed  |
 //! | engineering| data         | yes (own copy)   | yes              | files changed and a check passed  |
+//! | engineering| ml           | yes (own copy)   | yes              | files changed and a check passed  |
+//! | engineering| hardware     | yes (own copy)   | yes              | files changed and a check passed  |
 //! | quality    | qa           | yes (tests)      | yes              | tests were run, results reported  |
 //! | quality    | reviewer     | yes (task copy)  | yes              | the change was read, a verdict    |
 //! | quality    | security     | yes (task copy)  | yes              | the code was read, findings       |
 //! | operations | infra        | yes (task copy)  | yes (+ approval) | the operation ran, state checked  |
+//! | operations | sre          | yes (config)     | yes              | a command ran and the check passed |
+//! | operations | release      | yes (notes)      | yes              | the checks ran on the final commit |
 //! | knowledge  | researcher   | yes (task copy)  | docs.fetch only  | a report with sources             |
 //! | knowledge  | docs         | yes (docs)       | no               | files changed, a report           |
+//! | knowledge  | content      | yes (docs)       | no               | files changed, claims sourced     |
 //!
 //! "Done" is never the member's word. The harness checks the evidence in the
 //! conversation's tool results (see [`crate::team::evidence`]).
@@ -33,7 +39,7 @@
 //! reloads them.
 
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::RwLock;
 
 use devd_core::capability::{Capability, Tier};
 
@@ -74,6 +80,11 @@ pub struct Role {
     /// The skills the member carries, by name. Only their names and one-line
     /// descriptions go into the prompt; the member reads one when it applies.
     pub skills: &'static [&'static str],
+    /// Who usually receives this member's work next. It is the team's flow:
+    /// the planner reads it when it lays out a plan, and `team.flow` draws it.
+    /// A role may hand back as well as forward (a reviewer to the author), so
+    /// the graph is not required to be acyclic; it is required to name real roles.
+    pub hands_to: &'static [&'static str],
     /// The role's instructions.
     pub prompt: &'static str,
 }
@@ -108,18 +119,24 @@ const FILES: &[(&str, &str)] = &[
     ("planner", include_str!("../roles/planner.md")),
     ("product", include_str!("../roles/product.md")),
     ("designer", include_str!("../roles/designer.md")),
+    ("motion", include_str!("../roles/motion.md")),
     ("architect", include_str!("../roles/architect.md")),
     ("implementer", include_str!("../roles/implementer.md")),
     ("frontend", include_str!("../roles/frontend.md")),
     ("backend", include_str!("../roles/backend.md")),
     ("mobile", include_str!("../roles/mobile.md")),
     ("data", include_str!("../roles/data.md")),
+    ("ml", include_str!("../roles/ml.md")),
+    ("hardware", include_str!("../roles/hardware.md")),
     ("qa", include_str!("../roles/qa.md")),
     ("reviewer", include_str!("../roles/reviewer.md")),
     ("security", include_str!("../roles/security.md")),
     ("infra", include_str!("../roles/infra.md")),
+    ("sre", include_str!("../roles/sre.md")),
+    ("release", include_str!("../roles/release.md")),
     ("researcher", include_str!("../roles/researcher.md")),
     ("docs", include_str!("../roles/docs.md")),
+    ("content", include_str!("../roles/content.md")),
 ];
 
 fn leak(s: String) -> &'static str {
@@ -193,23 +210,49 @@ fn parse(file: &str, raw: &str) -> Result<Role, String> {
         isolated: flag("isolated")?,
         needs,
         skills: leak_list(list("skills")),
+        hands_to: leak_list(list("hands_to")),
         prompt: leak(body.to_string()),
     })
 }
 
-static CUSTOM_DIR: OnceLock<PathBuf> = OnceLock::new();
-static CUSTOM_ERRORS: OnceLock<Vec<String>> = OnceLock::new();
+static CUSTOM_DIR: RwLock<Option<PathBuf>> = RwLock::new(None);
 
-/// Name the folder a person keeps their own roles in. Call it once, before the
-/// first role is looked up; later calls are ignored because the roster is read once.
+/// The roster as last read: every role and why some files were not loaded.
+type Roster = (&'static [Role], &'static [String]);
+static ROSTER: RwLock<Option<Roster>> = RwLock::new(None);
+
+/// Name the folder a person keeps their own roles in. The first call wins:
+/// the roster is read once, and a later caller must not move it.
 pub fn use_custom_dir(dir: &Path) {
-    let _ = CUSTOM_DIR.set(dir.to_path_buf());
+    let mut slot = CUSTOM_DIR.write().unwrap_or_else(|e| e.into_inner());
+    if slot.is_none() {
+        *slot = Some(dir.to_path_buf());
+    }
+}
+
+/// Make `dir` the folder in use, because a role was just saved to it or removed from it.
+fn follow(dir: &Path) {
+    *CUSTOM_DIR.write().unwrap_or_else(|e| e.into_inner()) = Some(dir.to_path_buf());
 }
 
 /// Why a role file in the custom folder was not loaded, one line each.
 pub fn custom_errors() -> &'static [String] {
-    all();
-    CUSTOM_ERRORS.get().map(Vec::as_slice).unwrap_or(&[])
+    current().1
+}
+
+/// Roles whose `hands_to` names a role that does not exist, or themselves.
+fn flow_errors(roles: &[Role]) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for r in roles {
+        for to in r.hands_to {
+            if *to == r.id {
+                out.push((r.id.to_string(), format!("roles/{}.md: `hands_to` names the role itself", r.id)));
+            } else if !roles.iter().any(|x| x.id == *to) {
+                out.push((r.id.to_string(), format!("roles/{}.md: `hands_to` names {to}, which is not a role", r.id)));
+            }
+        }
+    }
+    out
 }
 
 /// The roles in a folder: every `*.md` that parses, and a message for each that
@@ -239,24 +282,205 @@ fn load_custom(dir: &Path, taken: &[Role]) -> (Vec<Role>, Vec<String>) {
             },
         }
     }
+    // Hand-offs are checked once every role is known, so two of a person's own
+    // roles can name each other. A role that points nowhere is not loaded.
+    let everyone: Vec<Role> = taken.iter().chain(roles.iter()).copied().collect();
+    for (id, why) in flow_errors(&everyone) {
+        if roles.iter().any(|r| r.id == id) {
+            roles.retain(|r| r.id != id);
+            errors.push(why);
+        }
+    }
     (roles, errors)
+}
+
+fn build() -> Roster {
+    let mut roles: Vec<Role> = FILES
+        .iter()
+        .map(|(id, raw)| parse(id, raw).unwrap_or_else(|e| panic!("a built-in role is malformed: {e}")))
+        .collect();
+    let mut errors = Vec::new();
+    let dir = CUSTOM_DIR.read().unwrap_or_else(|e| e.into_inner()).clone();
+    if let Some(dir) = dir {
+        let (custom, found) = load_custom(&dir, &roles);
+        roles.extend(custom);
+        errors = found;
+    }
+    (Box::leak(roles.into_boxed_slice()), Box::leak(errors.into_boxed_slice()))
+}
+
+fn current() -> Roster {
+    if let Some(r) = *ROSTER.read().unwrap_or_else(|e| e.into_inner()) {
+        return r;
+    }
+    let built = build();
+    let mut slot = ROSTER.write().unwrap_or_else(|e| e.into_inner());
+    *slot.get_or_insert(built)
+}
+
+/// Read the roles again, after a person added, changed or removed one. Callers
+/// that already hold the old roster keep it until they ask again; the few
+/// hundred bytes it leaves behind are the price of never taking a lock to read a role.
+pub fn reload() {
+    *ROSTER.write().unwrap_or_else(|e| e.into_inner()) = Some(build());
 }
 
 /// Every role, in roster order: the built-in team, then the person's own.
 pub fn all() -> &'static [Role] {
-    static ROLES: OnceLock<Vec<Role>> = OnceLock::new();
-    ROLES.get_or_init(|| {
-        let mut roles: Vec<Role> = FILES
-            .iter()
-            .map(|(id, raw)| parse(id, raw).unwrap_or_else(|e| panic!("a built-in role is malformed: {e}")))
-            .collect();
-        if let Some(dir) = CUSTOM_DIR.get() {
-            let (custom, errors) = load_custom(dir, &roles);
-            roles.extend(custom);
-            let _ = CUSTOM_ERRORS.set(errors);
-        }
-        roles
-    })
+    current().0
+}
+
+/// What a person may say about a role of their own.
+#[derive(Debug, Clone)]
+pub struct Draft {
+    /// The id: lower-case letters and hyphens, and the file name.
+    pub id: String,
+    /// The name shown on the roster.
+    pub title: String,
+    /// The part of the company it sits in (a key of [`TEAMS`]).
+    pub team: String,
+    /// One line for the roster.
+    pub summary: String,
+    /// `read`, `write` or `exec`. A role of a person's own never goes higher.
+    pub tier: String,
+    /// May it change files in its own copy of the project.
+    pub writes: bool,
+    /// Works in its own copy of the project.
+    pub isolated: bool,
+    /// What it must leave behind: `change`, `verify`, `read`, `command`.
+    pub proves: Vec<String>,
+    /// Skills it carries.
+    pub skills: Vec<String>,
+    /// Who usually receives its work next.
+    pub hands_to: Vec<String>,
+    /// Its instructions.
+    pub instructions: String,
+}
+
+impl Draft {
+    /// The role file this draft is.
+    pub fn markdown(&self) -> String {
+        let one_line = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+        format!(
+            "---\nid: {}\ntitle: {}\nteam: {}\nsummary: {}\ntier: {}\nwrites: {}\nisolated: {}\nextra:\nproves: {}\nskills: {}\nhands_to: {}\n---\n{}\n",
+            self.id.trim(),
+            one_line(&self.title),
+            self.team.trim(),
+            one_line(&self.summary),
+            self.tier.trim(),
+            self.writes,
+            self.isolated,
+            self.proves.join(", "),
+            self.skills.join(", "),
+            self.hands_to.join(", "),
+            self.instructions.trim()
+        )
+    }
+}
+
+/// Save a role of a person's own, check it the way a file in the folder is
+/// checked, and make it part of the team at once.
+///
+/// It is written only if it loads: a role that would be refused at the next
+/// start is refused now, with the reason, and nothing changes. A built-in role
+/// cannot be replaced; one of the person's own can be changed by saving it again.
+pub fn save_custom(dir: &Path, draft: &Draft) -> Result<Role, String> {
+    let role = save_custom_in(dir, draft, all())?;
+    follow(dir);
+    reload();
+    Ok(get(role.id).copied().unwrap_or(role))
+}
+
+/// [`save_custom`] against a given roster, without touching the one in use.
+fn save_custom_in(dir: &Path, draft: &Draft, roster: &[Role]) -> Result<Role, String> {
+    let id = draft.id.trim();
+    if is_built_in(id) {
+        return Err(format!("{id} is one of devd's own roles and cannot be replaced; choose another id"));
+    }
+    if draft.instructions.trim().chars().count() < 40 {
+        return Err("give the role instructions: what it does, what it reads first, how it proves its work".to_string());
+    }
+    write_custom(dir, id, &draft.markdown(), roster)
+}
+
+/// Save a role from its Markdown file, checked as a file in the folder is: a pack brings roles this way.
+pub fn save_custom_markdown(dir: &Path, markdown: &str) -> Result<Role, String> {
+    let role = save_custom_markdown_in(dir, markdown, all())?;
+    follow(dir);
+    reload();
+    Ok(get(role.id).copied().unwrap_or(role))
+}
+
+/// The id a role file declares, read without loading it.
+pub fn declared_id(markdown: &str) -> Option<String> {
+    let rest = markdown.trim_start().strip_prefix("---")?;
+    let head = rest.split("\n---").next()?;
+    head.lines().find_map(|l| l.strip_prefix("id:")).map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+}
+
+fn save_custom_markdown_in(dir: &Path, markdown: &str, roster: &[Role]) -> Result<Role, String> {
+    let id = declared_id(markdown).ok_or_else(|| "the role file has no `id:` in its front matter".to_string())?;
+    if is_built_in(&id) {
+        return Err(format!("{id} is one of devd's own roles and cannot be replaced; choose another id"));
+    }
+    write_custom(dir, &id, markdown, roster)
+}
+
+/// Check a role file exactly as a start would, and write it only if it loads.
+fn write_custom(dir: &Path, id: &str, markdown: &str, roster: &[Role]) -> Result<Role, String> {
+    // Checked in a folder of its own inside the roles folder, so the check is exactly what a start would do.
+    let scratch = dir.join(".check");
+    let _ = std::fs::remove_dir_all(&scratch);
+    std::fs::create_dir_all(&scratch).map_err(|e| format!("could not check the role: {e}"))?;
+    std::fs::write(scratch.join(format!("{id}.md")), markdown).map_err(|e| format!("could not check the role: {e}"))?;
+    // The roster without this role, so saving it again is a change and not a clash.
+    let others: Vec<Role> = roster.iter().filter(|r| r.id != id).copied().collect();
+    let (loaded, errors) = load_custom(&scratch, &others);
+    let _ = std::fs::remove_dir_all(&scratch);
+    if let Some(why) = errors.into_iter().next() {
+        return Err(why);
+    }
+    let Some(role) = loaded.into_iter().next() else { return Err("the role did not load".to_string()) };
+    std::fs::create_dir_all(dir).map_err(|e| format!("could not save the role: {e}"))?;
+    let tmp = dir.join(format!(".{id}.tmp"));
+    std::fs::write(&tmp, markdown).map_err(|e| format!("could not save the role: {e}"))?;
+    std::fs::rename(&tmp, dir.join(format!("{id}.md"))).map_err(|e| format!("could not save the role: {e}"))?;
+    Ok(role)
+}
+
+/// Remove a role of a person's own.
+///
+/// A role that another still hands work to is refused: removing it would leave
+/// a hand-off that points nowhere. Change those roles first.
+pub fn delete_custom(dir: &Path, id: &str) -> Result<(), String> {
+    delete_custom_in(dir, id, all())?;
+    follow(dir);
+    reload();
+    Ok(())
+}
+
+/// [`delete_custom`] against a given roster, without touching the one in use.
+fn delete_custom_in(dir: &Path, id: &str, roster: &[Role]) -> Result<(), String> {
+    if is_built_in(id) {
+        return Err(format!("{id} is one of devd's own roles and cannot be removed"));
+    }
+    let file = dir.join(format!("{id}.md"));
+    if !file.is_file() {
+        return Err(format!("you have no role named {id}"));
+    }
+    if let Some(r) = roster.iter().find(|r| r.id != id && r.hands_to.contains(&id)) {
+        return Err(format!("{} still hands work to {id}; change that role first", r.id));
+    }
+    std::fs::remove_file(&file).map_err(|e| format!("could not remove the role: {e}"))?;
+    Ok(())
+}
+
+/// The team's flow as a graph: each role with who it hands work to and who hands work to it.
+pub fn flow() -> Vec<(&'static Role, Vec<&'static str>)> {
+    all()
+        .iter()
+        .map(|r| (r, all().iter().filter(|x| x.hands_to.contains(&r.id)).map(|x| x.id).collect()))
+        .collect()
 }
 
 /// Whether a role ships with devd, as opposed to being one a person wrote.
@@ -276,7 +500,10 @@ pub fn roster_text() -> String {
     // build or fix, whatever its usual emphasis.
     all()
         .iter()
-        .map(|r| format!("- {} ({}): {}", r.id, r.title, r.summary))
+        .map(|r| {
+            let next = if r.hands_to.is_empty() { String::new() } else { format!(" Hands to: {}.", r.hands_to.join(", ")) };
+            format!("- {} ({}): {}{next}", r.id, r.title, r.summary)
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -333,6 +560,79 @@ mod tests {
     }
 
     #[test]
+    fn every_hand_off_names_a_real_role_and_every_role_is_reachable() {
+        let team: Vec<Role> = all().iter().filter(|r| is_built_in(r.id)).copied().collect();
+        assert!(flow_errors(&team).is_empty(), "{:?}", flow_errors(&team));
+        for role in &team {
+            let from: Vec<&str> = team.iter().filter(|x| x.hands_to.contains(&role.id)).map(|x| x.id).collect();
+            // Only the planner starts work; every other role receives some, so none is orphaned.
+            assert!(role.id == "planner" || !from.is_empty() || role.id == "researcher" || role.id == "product", "{} is never handed anything", role.id);
+        }
+        let planner = roster_text();
+        assert!(planner.contains("- implementer (") && planner.contains("Hands to: qa, reviewer."), "{planner}");
+    }
+
+    #[test]
+    fn a_hand_off_to_nobody_is_refused_for_a_persons_own_role() {
+        let d = tempfile::tempdir().unwrap();
+        let role = |id: &str, to: &str| format!("---\nid: {id}\ntitle: T\nteam: knowledge\nsummary: S\ntier: read\nwrites: true\nisolated: false\nproves: change\nskills: plain-speech\nhands_to: {to}\n---\nYou write short, plain copy for the product.\n");
+        std::fs::write(d.path().join("scribe.md"), role("scribe", "reviewer, nobody")).unwrap();
+        std::fs::write(d.path().join("loop.md"), role("loop", "loop")).unwrap();
+        std::fs::write(d.path().join("fine.md"), role("fine", "reviewer, qa")).unwrap();
+        let (roles, errors) = load_custom(d.path(), all());
+        assert_eq!(roles.iter().map(|r| r.id).collect::<Vec<_>>(), vec!["fine"]);
+        assert!(errors.iter().any(|e| e.contains("nobody") && e.contains("not a role")), "{errors:?}");
+        assert!(errors.iter().any(|e| e.contains("the role itself")), "{errors:?}");
+    }
+
+    #[test]
+    fn a_role_saved_is_checked_first_and_cannot_be_removed_from_under_one_that_hands_to_it() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().join("roles");
+        let draft = |id: &str, to: &[&str]| Draft {
+            id: id.into(),
+            title: "Support engineer".into(),
+            team: "operations".into(),
+            summary: "Answers a customer's report with a reproduction and a fix".into(),
+            tier: "exec".into(),
+            writes: true,
+            isolated: true,
+            proves: vec!["change".into(), "verify".into()],
+            skills: vec!["fix-bug".into(), "plain-speech".into()],
+            hands_to: to.iter().map(|s| s.to_string()).collect(),
+            instructions: "You are the support engineer. Reproduce what the customer reports before you change anything, fix the cause, and prove it.".into(),
+        };
+        // The team as a start would read it: the built-ins, then what is in the folder.
+        let builtin: Vec<Role> = all().iter().filter(|r| is_built_in(r.id)).copied().collect();
+        let team = |dir: &Path| -> Vec<Role> {
+            let (own, _) = load_custom(dir, &builtin);
+            builtin.iter().copied().chain(own).collect()
+        };
+        // A built-in cannot be replaced; a bad tier, skill, hand-off or text is refused with the reason, and nothing is written.
+        assert!(save_custom_in(&dir, &draft("planner", &[]), &builtin).unwrap_err().contains("devd's own"));
+        assert!(save_custom_in(&dir, &Draft { tier: "admin".into(), ..draft("support", &[]) }, &builtin).unwrap_err().contains("exec tier"));
+        assert!(save_custom_in(&dir, &Draft { skills: vec!["no-such-skill".into()], ..draft("support", &[]) }, &builtin).unwrap_err().contains("no-such-skill"));
+        assert!(save_custom_in(&dir, &draft("support", &["ghost"]), &builtin).unwrap_err().contains("not a role"));
+        assert!(save_custom_in(&dir, &Draft { instructions: "short".into(), ..draft("support", &[]) }, &builtin).unwrap_err().contains("instructions"));
+        assert!(!dir.join("support.md").exists(), "a refused role writes nothing");
+        assert!(!dir.join(".check").exists(), "and leaves no scratch folder behind");
+        // A good one is written, and is a member of the team that is read from the folder.
+        save_custom_in(&dir, &draft("support", &["qa", "reviewer"]), &team(&dir)).unwrap();
+        assert!(team(&dir).iter().any(|r| r.id == "support"));
+        // Saving again changes it rather than clashing with itself.
+        save_custom_in(&dir, &Draft { summary: "Changed".into(), ..draft("support", &["qa"]) }, &team(&dir)).unwrap();
+        assert_eq!(team(&dir).iter().find(|r| r.id == "support").unwrap().summary, "Changed");
+        // Another of the person's roles may hand work to it; then it cannot be removed from under that one.
+        save_custom_in(&dir, &draft("triage", &["support"]), &team(&dir)).unwrap();
+        assert!(delete_custom_in(&dir, "support", &team(&dir)).unwrap_err().contains("triage still hands work to support"));
+        delete_custom_in(&dir, "triage", &team(&dir)).unwrap();
+        delete_custom_in(&dir, "support", &team(&dir)).unwrap();
+        assert!(team(&dir).iter().all(|r| is_built_in(r.id)));
+        assert!(delete_custom_in(&dir, "support", &team(&dir)).unwrap_err().contains("no role named"));
+        assert!(delete_custom_in(&dir, "planner", &team(&dir)).unwrap_err().contains("devd's own"));
+    }
+
+    #[test]
     fn a_role_with_windows_line_endings_parses() {
         let raw = include_str!("../roles/planner.md").replace('\n', "\r\n");
         let role = parse("planner", &raw).expect("a CRLF role parses");
@@ -342,7 +642,7 @@ mod tests {
 
     #[test]
     fn every_built_in_role_parses_and_matches_its_file() {
-        let roles = all();
+        let roles: Vec<Role> = all().iter().filter(|r| is_built_in(r.id)).copied().collect();
         assert_eq!(roles.len(), FILES.len());
         for (role, (id, _)) in roles.iter().zip(FILES) {
             assert_eq!(role.id, *id);

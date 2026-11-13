@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>__TITLE__</title>
+<style>
+  /* One ground, one subject, one accent. Replace these with the product's own tokens. */
+  :root { --ground: #0c0c0e; --text: #ededef; --mute: #a8a8b1; --accent: #d4f24a; --w: __WIDTH__px; --h: __HEIGHT__px; }
+  html, body { margin: 0; background: #000; }
+  #stage { position: relative; width: var(--w); height: var(--h); overflow: hidden; background: var(--ground); color: var(--text);
+           font: 400 44px/1.25 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  #line1 { position: absolute; left: 160px; top: 380px; font-size: 96px; font-weight: 600; letter-spacing: -0.02em; }
+  #line2 { position: absolute; left: 160px; top: 520px; color: var(--mute); }
+  #rule  { position: absolute; left: 160px; top: 340px; height: 4px; background: var(--accent); }
+  /* A preview that fits the window. A render ignores this: it sets the page size itself. */
+  @media screen { body { display: grid; place-items: center; min-height: 100vh; } }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="rule"></div>
+  <div id="line1">__TITLE__</div>
+  <div id="line2"></div>
+</div>
+<script src="devd-motion.js"></script>
+<script>
+  Motion.config({ width: __WIDTH__, height: __HEIGHT__, fps: __FPS__, seconds: __SECONDS__ });
+  var rule = document.getElementById("rule"), one = document.getElementById("line1"), two = document.getElementById("line2");
+  var words = "Say what it is, plainly.";
+
+  /* A pure function of time: the page at second t, and nothing else. */
+  Motion.draw(function (t) {
+    rule.style.width = Motion.progress(t, 0.2, 1.0, Motion.ease.inOut) * 240 + "px";
+    one.style.opacity = Motion.progress(t, 0.5, 1.1);
+    one.style.transform = "translateY(" + (1 - Motion.progress(t, 0.5, 1.1, Motion.ease.settle)) * 24 + "px)";
+    two.textContent = Motion.typed(words, t, 1.4, 22);
+  });
+</script>
+</body>
+</html>

@@ -110,6 +110,27 @@ pub struct Fetched {
     pub body: String,
 }
 
+/// Where a redirect points, as a full address: absolute, protocol-relative, a path on the same host, or a
+/// path relative to the one just fetched.
+pub fn redirect_target(current: &str, host: &str, location: &str) -> String {
+    let location = location.trim();
+    if location.starts_with("http://") || location.starts_with("https://") {
+        location.to_string()
+    } else if let Some(rest) = location.strip_prefix("//") {
+        format!("https://{rest}")
+    } else if location.starts_with('/') {
+        format!("https://{host}{location}")
+    } else {
+        // Relative to the directory of the address just fetched.
+        let path_start = current.find("://").map(|i| i + 3).and_then(|i| current[i..].find('/').map(|j| i + j));
+        let dir = match path_start {
+            Some(at) => current[..at + current[at..].rfind('/').unwrap_or(0) + 1].to_string(),
+            None => format!("{current}/"),
+        };
+        format!("{dir}{location}")
+    }
+}
+
 /// Fetch a page's raw body, following checked redirects.
 ///
 /// This is the one fetch in devd, shared by `docs.fetch` and `web.open` so the
@@ -122,6 +143,10 @@ pub fn fetch_raw(url: &str) -> Result<Fetched> {
         check_url(&current)?;
         let req = crate::providers::agent_no_redirect(&current).get(&current).set("Accept", "text/html,text/plain,application/json;q=0.9,*/*;q=0.5");
         match req.call() {
+            Ok(resp) if (300..400).contains(&resp.status()) => {
+                let loc = resp.header("location").ok_or_else(|| DevdError::internal("redirect without a location"))?;
+                current = redirect_target(&current, &check_url(&current)?, loc);
+            }
             Ok(resp) => {
                 let content_type = resp.content_type().to_string();
                 if !(content_type.starts_with("text/") || content_type.contains("json") || content_type.contains("xml") || content_type.is_empty()) {
@@ -133,7 +158,40 @@ pub fn fetch_raw(url: &str) -> Result<Fetched> {
             }
             Err(ureq::Error::Status(code, resp)) if (300..400).contains(&code) => {
                 let loc = resp.header("location").ok_or_else(|| DevdError::internal("redirect without a location"))?;
-                current = if loc.starts_with("http") { loc.to_string() } else { format!("https://{}{}", check_url(&current)?, loc) };
+                current = redirect_target(&current, &check_url(&current)?, loc);
+            }
+            Err(ureq::Error::Status(code, _)) => return Err(DevdError::internal(format!("{current} answered HTTP {code}"))),
+            Err(e) => return Err(DevdError::internal(format!("could not reach {current}: {e}"))),
+        }
+    }
+    Err(DevdError::internal("too many redirects"))
+}
+
+/// Fetch a small binary file (an icon) under the same rules as a page: https only, public hosts only,
+/// every redirect re-checked, no credentials, and at most `max` bytes. A larger file is refused, not cut,
+/// because half of an image is not an image.
+pub fn fetch_bytes(url: &str, max: usize) -> Result<(String, Vec<u8>)> {
+    let mut current = url.to_string();
+    for _ in 0..=MAX_REDIRECTS {
+        check_url(&current)?;
+        let req = crate::providers::agent_no_redirect(&current).get(&current).set("Accept", "image/*,*/*;q=0.5");
+        match req.call() {
+            Ok(resp) if (300..400).contains(&resp.status()) => {
+                let loc = resp.header("location").ok_or_else(|| DevdError::internal("redirect without a location"))?;
+                current = redirect_target(&current, &check_url(&current)?, loc);
+            }
+            Ok(resp) => {
+                let content_type = resp.content_type().to_string();
+                let mut body = Vec::new();
+                resp.into_reader().take(max as u64 + 1).read_to_end(&mut body).map_err(|e| DevdError::internal(format!("could not read the file: {e}")))?;
+                if body.len() > max {
+                    return Err(DevdError::unsupported(format!("{current} is larger than {max} bytes")));
+                }
+                return Ok((content_type, body));
+            }
+            Err(ureq::Error::Status(code, resp)) if (300..400).contains(&code) => {
+                let loc = resp.header("location").ok_or_else(|| DevdError::internal("redirect without a location"))?;
+                current = redirect_target(&current, &check_url(&current)?, loc);
             }
             Err(ureq::Error::Status(code, _)) => return Err(DevdError::internal(format!("{current} answered HTTP {code}"))),
             Err(e) => return Err(DevdError::internal(format!("could not reach {current}: {e}"))),
@@ -173,6 +231,19 @@ mod tests {
             assert!(check_url(bad).is_err(), "{bad}");
         }
         assert!(check_url("https://93.184.216.34/").is_ok());
+    }
+
+    #[test]
+    fn a_redirect_target_is_made_a_full_address_whatever_form_it_arrives_in() {
+        let from = "https://docs.rs/favicon.ico";
+        assert_eq!(redirect_target(from, "docs.rs", "/-/static/v/1/favicon.ico"), "https://docs.rs/-/static/v/1/favicon.ico");
+        assert_eq!(redirect_target(from, "docs.rs", "https://cdn.example.com/x.ico"), "https://cdn.example.com/x.ico");
+        assert_eq!(redirect_target(from, "docs.rs", "//cdn.example.com/x.ico"), "https://cdn.example.com/x.ico");
+        assert_eq!(redirect_target("https://a.com/dir/page", "a.com", "other"), "https://a.com/dir/other");
+        assert_eq!(redirect_target("https://a.com", "a.com", "other"), "https://a.com/other");
+        // A hop to a private address is still refused, because every hop is checked before it is fetched.
+        assert!(check_url(&redirect_target(from, "docs.rs", "https://169.254.169.254/latest")).is_err());
+        assert!(check_url(&redirect_target(from, "docs.rs", "http://example.com/x")).is_err(), "http is not followed");
     }
 
     #[test]

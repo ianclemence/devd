@@ -1,0 +1,12 @@
+[package]
+name = "devd-runline"
+description = "How a team run reads: the one rule for what is finished, how far along it is, and the sentence that says what is happening, shared by the agent and the window."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true

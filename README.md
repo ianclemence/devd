@@ -70,32 +70,39 @@ On Linux and macOS devd does not download a second copy of nginx or MariaDB. It 
 
 ## Requirements
 
-- **Windows 10/11 x64** (supported), **Linux x64** or **macOS** (see above).
-- The Windows installer needs nothing else: no Rust and no administrator rights. The window uses the WebView2 runtime that ships with current Edge.
-- Git on your `PATH`, for the Git features.
-- To build from source: Rust 1.77 or newer and a C compiler for the bundled SQLite.
+- **Windows 10/11 x64**, **macOS 11 or newer** (Apple silicon or Intel), or **Linux x86_64** (Debian 12, Ubuntu 22.04 or newer; other distributions use the `.tar.gz`).
+- The window is drawn on the GPU, so the machine needs a graphics driver that supports it: Direct3D 11 on Windows, Metal on macOS, **Vulkan** on Linux (`mesa-vulkan-drivers` on most distributions, or the vendor's own). There is no browser or WebView inside it.
+- No Rust and no administrator rights are needed to install a release. Git on your `PATH`, for the Git features.
+- To build from source: Rust 1.88 or newer and a C compiler for the bundled SQLite.
 
 ---
 
 ## Install
 
+Download the file for your system from the [latest release](https://github.com/ianclemence/devd/releases/latest). Each release lists `SHA256SUMS.txt`, so you can check what you downloaded.
+
 ### Windows
 
-Download **`devd-setup-<version>.exe`** from the [latest release](https://github.com/ianclemence/devd/releases/latest) and run it. It installs for the current user only, adds `devd` to `PATH` and creates Start Menu entries. Uninstalling keeps your sites and data in `%LOCALAPPDATA%\devd`.
+Run **`devd-<version>-windows-x64-setup.exe`**. It installs for the current user only, adds `devd` to `PATH`, registers `devd://` links and creates Start Menu entries. Uninstalling keeps your sites and data in `%LOCALAPPDATA%\devd`. A portable **`devd-<version>-windows-x64.zip`** holds the same two programs.
 
-If the release page does not have an installer, use the **portable zip** (`devd-desktop-<version>-x86_64-pc-windows-gnu.zip`). Unzip the whole folder and double-click `launch.vbs`: it runs `devd setup` the first time, then opens the window. Do **not** download `devd-desktop-<version>-...exe` on its own — the window needs `WebView2Loader.dll` beside it, and the standalone file is only useful once that DLL is already installed.
+The installer is not code-signed, so SmartScreen warns once: choose More info, then Run anyway.
 
-The installer and the portable files are not code-signed, so SmartScreen warns once; `SHA256SUMS.txt` on the release lets you check what you downloaded.
+### macOS
 
-If the window does not open:
+Open **`devd-<version>-macos-arm64.dmg`** (Apple silicon) or **`devd-<version>-macos-x86_64.dmg`** (Intel) and drag devd to Applications. The app is signed ad hoc and not with an Apple Developer ID, so the first time, right-click devd and choose Open. The command line is inside the app, at `devd.app/Contents/MacOS/devd`.
 
-- `%LOCALAPPDATA%\devd\desktop.log` has the startup error.
-- The window needs the Microsoft Edge WebView2 runtime. It ships with current Edge; if it is missing, install it from [Microsoft](https://developer.microsoft.com/microsoft-edge/webview2/).
+### Linux
+
+On Debian or Ubuntu: `sudo apt install ./devd_<version>_amd64.deb`. It installs `devd` and `devd-app`, a menu entry, and the libraries they need. On other distributions, unpack `devd-<version>-linux-x86_64.tar.gz` and follow `INSTALL.txt`.
+
+### Updating
+
+devd tells you in its footer when a newer release is out. On a release whose checksums are signed, one click downloads it, checks its signature against the key built into your copy, replaces itself and restarts, keeping your sites and data. A release that is not signed is not installed from inside devd; the footer opens its page and you install it as above, over the old one. `devd update check` and `devd update apply` do the same from a terminal.
+
+### If the window does not open
+
+- Run `devd-app` from a terminal: the first line it prints says what stopped it (no graphics driver, or no running devd it can start).
 - The command line works without the window: `devd ui` serves the same interface at a loopback address.
-
-### Linux and macOS
-
-The server, the web interface and the command line build and run on Linux and macOS; the released installers are currently **Windows x86_64 only**. On Linux, `./scripts/install-linux.sh --binary target/release/devd` installs per user after a `cargo build --release`. On macOS, build from source and run `devd ui`. A signed macOS window and a Linux package are not published yet.
 
 ### From source
 

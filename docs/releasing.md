@@ -5,6 +5,16 @@ workspace on Windows, Linux and macOS, but there is no automatic release or
 publication: a release is a deliberate sequence of local commands, and an
 artifact is only attached after it has run on the platform it targets.
 
+## What builds a release
+
+Packages for all three platforms are built by `.github/workflows/release.yml`:
+
+- A push to `gpui-native` (or a manual run) builds and uploads the packages as workflow artifacts, so a problem shows up before a release.
+- A tag `v<version>` builds them again and creates a **draft** release with the packages and `SHA256SUMS.txt`. The body is the version's section of `CHANGELOG.md` and a short install table.
+- A person reads the draft, signs the checksum file on their own machine (`devd update sign SHA256SUMS.txt`, with `DEVD_RELEASE_KEY_FILE` set), attaches `SHA256SUMS.txt.sig`, and publishes. The signing key is never given to CI. A release without the signature installs by hand, but `devd update` refuses it.
+
+Packaging is in `installer/devd-app.nsi` (Windows), `scripts/package-macos.sh` and `scripts/package-linux.sh`. The older local scripts below still build the previous web-view window's installer.
+
 ## The rule
 
 A binary is published only if it has been executed on that platform. The release

@@ -1,33 +1,42 @@
 ---
 name: agent-browser
-description: Drive a real browser to check a web app works - open pages, click, fill forms, read the page, take screenshots - with the agent-browser CLI
+description: Drive devd's shared browser to see a page, form or flow actually work
 kind: check
 roles: implementer,frontend,qa,reviewer,designer
 ---
 
 # Agent browser
 
-Use this when the work has to be seen in a browser to be believed: a page that should render, a form that should submit, a flow a person will click through, a screenshot for the report. Reading the code is not proof that a page works; loading it is.
+Loads a page in devd's own browser, acts on it and reports what it showed. Reading code is not proof that a page works; loading it is. This is the same browser the person sees in the Browser pane: private, its own profile, able to reach `localhost` and `.test` sites, and nothing to install.
 
-Adapted for devd from the agent-browser skill by Vercel Labs (github.com/vercel-labs/agent-browser, Apache License 2.0).
+## When to use
 
-## Set up once
+- A page should render, a form should submit, a flow should complete.
+- You need a screenshot for the report, or the console output of a page.
+- Not for a desktop app (`agent-desktop`) and not when you only need to read a page's text (`web.open`).
 
-1. Check it is there: run `agent-browser --version` with `project.exec`.
-2. If it is missing, ask for it with `toolchain.install` and the tool `agent-browser` (a person approves installs). After it installs, run `agent-browser install` once to fetch its browser.
+## Procedure
 
-## Load the real guide from the CLI
+1. `browser.open` once, then `browser.navigate` to the project's own address from `site.list`, never a guess. If it reports no Chromium-based browser, see the last section.
+2. `browser.snapshot`: the page as a tree, with a ref (`e1`, `e2`) on everything you can act on.
+3. Act on a ref with `browser.click`, `browser.type`, `browser.key` or `browser.scroll`. Use `browser.mouse` only for a target with no ref, such as a canvas.
+4. `browser.snapshot` again. The second snapshot is the proof the action did what you meant.
+5. `browser.console` after anything that should have worked: it lists the errors and failed requests the page hid.
+6. `browser.screenshot` for the report. It is written to a file and shown in the Browser pane; name the path.
 
-This file only points the way. The CLI serves the usage guide that matches its own version, so load it before the first command:
+## Pitfalls
 
-- `agent-browser skills get core` - the loop, waiting, common tasks and troubleshooting. Start here.
-- `agent-browser skills get dogfood` - exploratory testing and bug hunts.
-- `agent-browser skills get electron` - Electron desktop apps.
+- A ref belongs to the snapshot that gave it, and any navigation voids it. Snapshot again before acting on a changed page.
+- Passing no tab id. Use one tab id per task, on every call.
+- Sleeping instead of waiting. Snapshot until the element you expect is there.
+- `browser.evaluate` to click or fill. It skips what a real click goes through. Use it to read a value the tree does not show.
+- Testing only the happy path. Check empty, error, loading, a long name and a narrow window.
+- Typing real credentials, or finishing a sign-in the task did not name. Use the project's seed accounts and ask for anything else.
 
-## How to use it in devd
+## Verification
 
-- Open the project's own address (the site's `https://<name>.test` from `site.list`), not a guess.
-- Work in the loop the guide describes: snapshot the page, act on an element by its ref, snapshot again, and check the result you expected is on the page.
-- Save screenshots inside the project (for example `storage/screenshots/` or the project's test output folder) and name the path in your report, so the person can open it.
-- Report what you saw: the page, the action, the result, and the screenshot path. A failed step is evidence too; report it as it happened.
-- Never type real credentials. Use the project's seed or test accounts, and stop to ask when a page wants anything else.
+The report names the page, the action, what the second snapshot showed and the screenshot path. A failed step is reported as it happened, with the console line that explains it. "It works" with no snapshot behind it is not a result.
+
+## No built-in browser
+
+If the machine has no Chromium-based browser, the `agent-browser` CLI does the same loop from a shell. Check `agent-browser --version` with `project.exec`; if missing, ask for it with `toolchain.install`, then run `agent-browser install` once. Its own guide is the source of truth: `agent-browser skills get core`.

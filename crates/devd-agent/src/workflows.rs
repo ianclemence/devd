@@ -165,12 +165,12 @@ fn pick_model(ctx: &Ctx, role: &str) -> Result<(Provider, String)> {
         .iter()
         .find(|p| usable(p) && p.is_default)
         .or_else(|| providers.iter().find(|p| usable(p)))
-        .ok_or_else(|| DevdError::invalid("no model provider is configured; add one in Models first"))?;
+        .ok_or_else(|| DevdError::invalid("no model provider is configured; add one in Intelligence first"))?;
     let model = p
         .default_model
         .clone()
         .filter(|m| !m.trim().is_empty())
-        .ok_or_else(|| DevdError::invalid(format!("provider `{}` has no default model; choose one in Models", p.label)))?;
+        .ok_or_else(|| DevdError::invalid(format!("provider `{}` has no default model; choose one in Intelligence", p.label)))?;
     Ok((p.clone(), model))
 }
 

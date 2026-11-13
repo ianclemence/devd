@@ -24,6 +24,8 @@ use devd_core::{DevdError, Result};
 use devd_stacks::authz;
 
 const MAX_READ_BYTES: u64 = 2_000_000;
+/// The largest file an editor opens whole.
+const MAX_EDIT_BYTES: u64 = 1_000_000;
 const MAX_WRITE_BYTES: usize = 2_000_000;
 pub(crate) const SKIP_DIRS: &[&str] = &[
     ".git",
@@ -343,6 +345,44 @@ pub fn read(ctx: &Ctx, path: &str, offset: usize, limit: usize) -> Result<Value>
     }))
 }
 
+/// A file's text exactly as it is on disk, for an editor: no line numbers, no cut, and the facts a faithful save
+/// needs, the style of its line endings and whether it ends with one.
+///
+/// Anything an editor could not give back unchanged is refused rather than approximated: a file that is not valid
+/// UTF-8 (reading it as text would replace bytes), a binary file, and one over the size a person edits by hand.
+/// A secrets file is refused as it is by [`read`].
+pub fn read_exact(ctx: &Ctx, path: &str) -> Result<Value> {
+    let p = authorize(ctx, path, false)?;
+    let meta = std::fs::metadata(&p).map_err(|_| DevdError::not_found(format!("{} does not exist", p.display())))?;
+    if !meta.is_file() {
+        return Err(DevdError::invalid(format!("{} is not a file; use fs.list", p.display())));
+    }
+    if meta.len() > MAX_EDIT_BYTES {
+        return Err(DevdError::invalid(format!("{} is {} bytes, more than the {} an editor opens. Read a part of it with offset and limit.", p.display(), meta.len(), MAX_EDIT_BYTES)));
+    }
+    let bytes = std::fs::read(&p)?;
+    if looks_binary(&bytes) {
+        return Err(DevdError::invalid(format!("{} looks like a binary file", p.display())));
+    }
+    let text = String::from_utf8(bytes).map_err(|_| DevdError::invalid(format!("{} is not valid UTF-8 text, so it cannot be edited here without changing it", p.display())))?;
+    let crlf = text.matches("\r\n").count();
+    let lf = text.matches('\n').count() - crlf;
+    let eol = match (crlf, lf) {
+        (0, 0) => "none",
+        (_, 0) => "crlf",
+        (0, _) => "lf",
+        _ => "mixed",
+    };
+    Ok(json!({
+        "path": p.display().to_string(),
+        "text": text,
+        "bytes": text.len(),
+        "lines": text.lines().count(),
+        "eol": eol,
+        "final_newline": text.ends_with('\n'),
+    }))
+}
+
 /// Search file contents with a regular expression.
 pub fn search(
     ctx: &Ctx,
@@ -475,41 +515,61 @@ pub fn write(ctx: &Ctx, path: &str, content: &str, create_dirs: bool) -> Result<
     ))
 }
 
+/// One replacement: the exact text to find, what to put there, and whether
+/// every occurrence is meant.
+pub type Replacement<'a> = (&'a str, &'a str, bool);
+
 /// Replace text in a file. The old text must match exactly once unless
 /// `replace_all` is set.
 pub fn edit(ctx: &Ctx, path: &str, old: &str, new: &str, replace_all: bool) -> Result<Value> {
+    edit_many(ctx, path, &[(old, new, replace_all)])
+}
+
+/// Make several replacements in one file, in order, as one change.
+///
+/// Each is applied to the text the one before it left, exactly as separate
+/// edits would be, but the file is written once and only if every one of them
+/// applies. A change that needs three edits to a file used to be three calls,
+/// and each call sends the whole conversation to the model again; half-applied,
+/// it also left the file in a state nobody had asked for.
+pub fn edit_many(ctx: &Ctx, path: &str, edits: &[Replacement]) -> Result<Value> {
     let p = authorize(ctx, path, true)?;
-    if old.is_empty() {
-        return Err(DevdError::invalid(
-            "`old` must not be empty; use fs.write to create or replace a whole file",
-        ));
+    if edits.is_empty() {
+        return Err(DevdError::invalid("give `old` and `new`, or a list of `edits`"));
     }
-    if old == new {
-        return Err(DevdError::invalid("`old` and `new` are identical"));
-    }
-    let text = std::fs::read_to_string(&p).map_err(|_| {
+    let mut text = std::fs::read_to_string(&p).map_err(|_| {
         DevdError::not_found(format!("{} does not exist or is not text", p.display()))
     })?;
-    let count = text.matches(old).count();
-    if count == 0 {
-        return Err(DevdError::conflict("`old` was not found. The file may have changed; read it again with fs.read and copy the text exactly, including whitespace."));
+    // With one edit the message is the one agents already know; with several,
+    // it says which, so the model fixes that one and resends the rest unchanged.
+    let which = |n: usize| if edits.len() == 1 { String::new() } else { format!("Edit {} of {}: ", n + 1, edits.len()) };
+    let mut replacements = 0usize;
+    for (n, (old, new, replace_all)) in edits.iter().enumerate() {
+        if old.is_empty() {
+            return Err(DevdError::invalid(format!(
+                "{}`old` must not be empty; use fs.write to create or replace a whole file",
+                which(n)
+            )));
+        }
+        if old == new {
+            return Err(DevdError::invalid(format!("{}`old` and `new` are identical", which(n))));
+        }
+        let count = text.matches(old).count();
+        if count == 0 {
+            return Err(DevdError::conflict(format!("{}`old` was not found. The file may have changed; read it again with fs.read and copy the text exactly, including whitespace.{}", which(n), if edits.len() > 1 { " Nothing was written." } else { "" })));
+        }
+        if count > 1 && !replace_all {
+            return Err(DevdError::conflict(format!("{}`old` matches {count} places. Include more surrounding lines to make it unique, or pass replace_all.{}", which(n), if edits.len() > 1 { " Nothing was written." } else { "" })));
+        }
+        text = if *replace_all { text.replace(old, new) } else { text.replacen(old, new, 1) };
+        replacements += if *replace_all { count } else { 1 };
     }
-    if count > 1 && !replace_all {
-        return Err(DevdError::conflict(format!("`old` matches {count} places. Include more surrounding lines to make it unique, or pass replace_all.")));
-    }
-    let updated = if replace_all {
-        text.replace(old, new)
-    } else {
-        text.replacen(old, new, 1)
-    };
-    if updated.len() > MAX_WRITE_BYTES {
+    if text.len() > MAX_WRITE_BYTES {
         return Err(DevdError::invalid("the result would be larger than 2 MB"));
     }
     let undo = save_before(ctx, &p, "fs.edit");
-    devd_core::util::atomic_write(&p, &updated)?;
-    Ok(undo.attach(
-        json!({ "path": p.display().to_string(), "replacements": if replace_all { count } else { 1 } }),
-    ))
+    devd_core::util::atomic_write(&p, &text)?;
+    Ok(undo.attach(json!({ "path": p.display().to_string(), "replacements": replacements, "edits": edits.len() })))
 }
 
 /// Move or rename a file or directory. Never overwrites.
@@ -780,6 +840,39 @@ mod tests {
     }
 
     #[test]
+    fn several_edits_to_one_file_are_one_change_or_no_change() {
+        let d = tempfile::tempdir().unwrap();
+        let file = d.path().join("www/proj/app.rs");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let before = "fn a() { one(); }
+fn b() { two(); }
+fn c() { three(); }
+";
+        std::fs::write(&file, before).unwrap();
+        let c = ctx(d.path(), Actor::human(Surface::Cli));
+        let path = file.to_str().unwrap();
+
+        // The second edit does not apply, so the first is not written either.
+        let error = edit_many(&c, path, &[("one()", "uno()", false), ("four()", "cuatro()", false)]).unwrap_err().to_string();
+        assert!(error.contains("Edit 2 of 2") && error.contains("Nothing was written"), "{error}");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
+
+        // Each edit sees what the one before it left.
+        let done = edit_many(&c, path, &[("one()", "two()", false), ("two()", "2()", true), ("three()", "3()", false)]).unwrap();
+        assert_eq!(done["edits"], 3);
+        assert_eq!(done["replacements"], 4);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "fn a() { 2(); }
+fn b() { 2(); }
+fn c() { 3(); }
+");
+
+        // One edit reads exactly as it always did.
+        let single = edit(&c, path, "missing", "x", false).unwrap_err().to_string();
+        assert!(single.starts_with("conflict") || single.contains("`old` was not found"), "{single}");
+        assert!(!single.contains("Edit 1 of"), "{single}");
+    }
+
+    #[test]
     fn edit_requires_an_unambiguous_exact_match() {
         let d = tempfile::tempdir().unwrap();
         let c = ctx(d.path(), Actor::agent("t"));
@@ -898,5 +991,41 @@ mod tests {
         // line behind that refusal.
         let secret = proj.join(".env").display().to_string();
         assert_eq!(write(&c, &secret, "API_KEY=2", false).unwrap_err().code(), "permission_denied");
+    }
+
+    #[test]
+    fn an_exact_read_gives_back_what_is_on_disk_so_a_save_changes_nothing_else() {
+        let d = tempfile::tempdir().unwrap();
+        let proj = d.path().join("www/proj");
+        std::fs::create_dir_all(&proj).unwrap();
+        let c = ctx(d.path(), Actor::human(Surface::Cli));
+        for (name, text, eol, final_newline) in [("lf.txt", "one\ntwo\n", "lf", true), ("crlf.txt", "one\r\ntwo\r\n", "crlf", true), ("nonl.txt", "one\ntwo", "lf", false), ("mixed.txt", "a\r\nb\nc", "mixed", false), ("one.txt", "single", "none", false), ("empty.txt", "", "none", false), ("utf8.txt", "caf\u{e9} \u{1f600}\n", "lf", true)] {
+            let file = proj.join(name);
+            std::fs::write(&file, text).unwrap();
+            let got = read_exact(&c, file.to_str().unwrap()).unwrap();
+            assert_eq!(got["text"], text, "{name}");
+            assert_eq!(got["eol"], eol, "{name}");
+            assert_eq!(got["final_newline"], final_newline, "{name}");
+            // Writing the text back is a no-op on disk.
+            write(&c, file.to_str().unwrap(), got["text"].as_str().unwrap(), false).unwrap();
+            assert_eq!(std::fs::read(&file).unwrap(), text.as_bytes(), "{name} changed when it was saved unedited");
+        }
+    }
+
+    #[test]
+    fn an_exact_read_refuses_what_an_editor_could_not_give_back_unchanged() {
+        let d = tempfile::tempdir().unwrap();
+        let proj = d.path().join("www/proj");
+        std::fs::create_dir_all(&proj).unwrap();
+        let c = ctx(d.path(), Actor::human(Surface::Cli));
+        std::fs::write(proj.join("latin1.txt"), [b'c', b'a', b'f', 0xe9]).unwrap();
+        std::fs::write(proj.join("bin.dat"), [1u8, 0, 2, 3]).unwrap();
+        std::fs::write(proj.join(".env"), "KEY=1").unwrap();
+        std::fs::write(proj.join("big.txt"), vec![b'x'; (MAX_EDIT_BYTES + 1) as usize]).unwrap();
+        for name in ["latin1.txt", "bin.dat", ".env", "big.txt", "missing.txt"] {
+            assert!(read_exact(&c, proj.join(name).to_str().unwrap()).is_err(), "{name} was read");
+        }
+        assert!(read_exact(&c, proj.to_str().unwrap()).is_err(), "a folder is not a file");
+        assert!(format!("{}", read_exact(&c, proj.join("latin1.txt").to_str().unwrap()).unwrap_err()).contains("not valid UTF-8"));
     }
 }

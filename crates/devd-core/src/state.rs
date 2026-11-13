@@ -44,6 +44,8 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (22, include_str!("../sql/022_chat_reliability.sql")),
     (23, include_str!("../sql/023_completion.sql")),
     (24, include_str!("../sql/024_model_capabilities.sql")),
+    (25, include_str!("../sql/025_audit_chain.sql")),
+    (26, include_str!("../sql/026_run_budget_handoff.sql")),
 ];
 
 /// The newest schema this build knows. A database below it is migrated the first time devd
@@ -80,7 +82,7 @@ pub struct AuditEntry {
     pub id: i64,
     /// RFC 3339 timestamp.
     pub at: String,
-    /// `human:cli`, `agent:claude-code`, `system:daemon`.
+    /// `human:cli`, `agent:assistant`, `system:daemon`.
     pub actor: String,
     /// Interface the call arrived through.
     pub surface: String,
@@ -451,24 +453,90 @@ impl Store {
             message,
         } = entry;
         self.with(|conn| {
-            conn.execute(
-                "INSERT INTO audit_log
-                 (at, actor, surface, capability, tier, effect, dry_run, ok, args, message)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-                params![
-                    util::now(),
-                    actor,
-                    surface,
-                    capability,
-                    tier,
-                    effect,
-                    dry_run as i32,
-                    ok as i32,
-                    args,
-                    util::truncate(message, 2000)
-                ],
-            )?;
-            Ok(conn.last_insert_rowid())
+            // The row after this one will need this row's hash, so reading the last hash and writing
+            // the new row are one step another process cannot slip into.
+            conn.execute_batch("BEGIN IMMEDIATE")?;
+            let written = (|| -> Result<i64> {
+                // The newest hash; when pruning removed every row, the one it stopped at.
+                let prev: String = conn
+                    .query_row("SELECT hash FROM audit_log WHERE hash != '' ORDER BY id DESC LIMIT 1", [], |row| row.get(0))
+                    .or_else(|_| conn.query_row("SELECT value FROM settings WHERE key = 'audit.anchor'", [], |row| row.get::<_, String>(0)).map(|v| v.split_once(':').map(|(_, h)| h.to_string()).unwrap_or_default()))
+                    .unwrap_or_default();
+                let at = util::now();
+                let message = util::truncate(message, 2000);
+                let hash = crate::audit_chain::link(
+                    &prev,
+                    &crate::audit_chain::Fields { at: &at, actor, surface, capability, tier, effect, dry_run, ok, args, message: &message },
+                );
+                conn.execute(
+                    "INSERT INTO audit_log
+                     (at, actor, surface, capability, tier, effect, dry_run, ok, args, message, prev_hash, hash)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                    params![at, actor, surface, capability, tier, effect, dry_run as i32, ok as i32, args, message, prev, hash],
+                )?;
+                let id = conn.last_insert_rowid();
+                // Kept apart from the table: cutting the end off the log leaves this pointing at a row that is gone.
+                conn.execute(
+                    "INSERT INTO settings (key, value) VALUES ('audit.head', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    params![format!("{id}:{hash}")],
+                )?;
+                Ok(id)
+            })();
+            match written {
+                Ok(id) => {
+                    conn.execute_batch("COMMIT")?;
+                    Ok(id)
+                }
+                Err(e) => {
+                    let _ = conn.execute_batch("ROLLBACK");
+                    Err(e)
+                }
+            }
+        })
+    }
+
+    /// Check the audit log's chain. See [`crate::audit_chain`].
+    pub fn verify_audit(&self) -> Result<crate::audit_chain::Verification> {
+        let mark = |value: Option<String>| -> Option<crate::audit_chain::Mark> {
+            let v = value?;
+            let (id, hash) = v.split_once(':')?;
+            Some((id.parse().ok()?, hash.to_string()))
+        };
+        let anchor = mark(self.get_setting("audit.anchor")?);
+        let head = mark(self.get_setting("audit.head")?);
+        self.with(|conn| {
+            // Rows from before chaining come first and are only counted. The rest are read once, in
+            // order, and checked as they arrive: a log of millions of rows is never held in memory.
+            let first_chained: Option<i64> = conn.query_row("SELECT MIN(id) FROM audit_log WHERE hash != ''", [], |r| r.get(0)).unwrap_or(None);
+            let unchained: i64 = match first_chained {
+                Some(id) => conn.query_row("SELECT COUNT(*) FROM audit_log WHERE id < ?1", params![id], |r| r.get(0))?,
+                None => conn.query_row("SELECT COUNT(*) FROM audit_log", [], |r| r.get(0))?,
+            };
+            let mut checker = crate::audit_chain::Checker::new(anchor.as_ref(), head.as_ref(), unchained as usize);
+            if let Some(first) = first_chained {
+                let mut stmt = conn.prepare(
+                    "SELECT id, prev_hash, hash, at, actor, surface, capability, tier, effect, dry_run, ok, args, message FROM audit_log WHERE id >= ?1 ORDER BY id ASC",
+                )?;
+                let mut rows = stmt.query(params![first])?;
+                while let Some(r) = rows.next()? {
+                    checker.feed(&crate::audit_chain::Row {
+                        id: r.get(0)?,
+                        prev_hash: r.get(1)?,
+                        hash: r.get(2)?,
+                        at: r.get(3)?,
+                        actor: r.get(4)?,
+                        surface: r.get(5)?,
+                        capability: r.get(6)?,
+                        tier: r.get(7)?,
+                        effect: r.get(8)?,
+                        dry_run: r.get::<_, i32>(9)? != 0,
+                        ok: r.get::<_, i32>(10)? != 0,
+                        args: r.get(11)?,
+                        message: r.get(12)?,
+                    });
+                }
+            }
+            Ok(checker.finish())
         })
     }
 
@@ -478,6 +546,16 @@ impl Store {
     /// written by [`util::now`] in one fixed format.
     pub fn prune_audit_before(&self, cutoff: &str) -> Result<usize> {
         self.with(|conn| {
+            // Remember where the log now begins: the first row kept must link to the last one removed.
+            let last: Option<(i64, String)> = conn
+                .query_row("SELECT id, hash FROM audit_log WHERE at < ?1 AND hash != '' ORDER BY id DESC LIMIT 1", params![cutoff], |row| Ok((row.get(0)?, row.get(1)?)))
+                .ok();
+            if let Some((id, hash)) = last {
+                conn.execute(
+                    "INSERT INTO settings (key, value) VALUES ('audit.anchor', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    params![format!("{id}:{hash}")],
+                )?;
+            }
             Ok(conn.execute("DELETE FROM audit_log WHERE at < ?1", params![cutoff])?)
         })
     }
@@ -1579,6 +1657,79 @@ mod tests {
         assert_eq!(s.list_audit(10).unwrap().len(), 2);
         assert_eq!(s.prune_audit_before("2999-01-01T00:00:00Z").unwrap(), 2);
         assert!(s.list_audit(10).unwrap().is_empty());
+    }
+
+    fn audit_n(s: &Store, n: usize) {
+        for i in 0..n {
+            s.record_audit(AuditRecord {
+                actor: "human:cli",
+                surface: "cli",
+                capability: "demo",
+                tier: "write",
+                effect: "write",
+                dry_run: false,
+                ok: true,
+                args: "{}",
+                message: &format!("step {i}"),
+            })
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn the_audit_log_is_a_chain_that_notices_being_changed() {
+        let s = store();
+        audit_n(&s, 5);
+        let v = s.verify_audit().unwrap();
+        assert!(v.intact && v.checked == 5 && v.unchained == 0, "{v:?}");
+
+        // Rewriting what happened is found, at the row it happened to.
+        s.with(|c| Ok(c.execute("UPDATE audit_log SET message = 'nothing happened' WHERE id = 3", [])?)).unwrap();
+        let v = s.verify_audit().unwrap();
+        assert!(!v.intact);
+        assert_eq!(v.first_break.unwrap().id, 3);
+    }
+
+    #[test]
+    fn a_deleted_row_and_a_cut_off_end_are_both_found() {
+        let s = store();
+        audit_n(&s, 5);
+        s.with(|c| Ok(c.execute("DELETE FROM audit_log WHERE id = 2", [])?)).unwrap();
+        assert!(!s.verify_audit().unwrap().intact);
+
+        let s = store();
+        audit_n(&s, 5);
+        s.with(|c| Ok(c.execute("DELETE FROM audit_log WHERE id > 3", [])?)).unwrap();
+        let v = s.verify_audit().unwrap();
+        assert!(!v.intact, "the saved head points at rows that are gone");
+        assert!(v.first_break.unwrap().why.contains("end of the log was removed"));
+    }
+
+    #[test]
+    fn pruning_leaves_a_log_that_still_verifies_and_still_catches_edits() {
+        let s = store();
+        audit_n(&s, 4);
+        assert_eq!(s.prune_audit_before("2999-01-01T00:00:00Z").unwrap(), 4);
+        // Everything was pruned: the log is empty and still intact.
+        assert!(s.verify_audit().unwrap().intact);
+        audit_n(&s, 3);
+        let v = s.verify_audit().unwrap();
+        assert!(v.intact && v.anchored && v.checked == 3, "{v:?}");
+        s.with(|c| Ok(c.execute("UPDATE audit_log SET ok = 0 WHERE id = (SELECT MIN(id) FROM audit_log)", [])?)).unwrap();
+        assert!(!s.verify_audit().unwrap().intact);
+    }
+
+    #[test]
+    fn rows_from_before_the_chain_existed_are_counted_not_blamed() {
+        let s = store();
+        s.with(|c| {
+            c.execute("INSERT INTO audit_log (at,actor,surface,capability,tier,effect,dry_run,ok,args,message) VALUES ('2026-01-01','human:x','cli','old','read','read',0,1,'{}','ok')", [])?;
+            Ok(())
+        })
+        .unwrap();
+        audit_n(&s, 2);
+        let v = s.verify_audit().unwrap();
+        assert!(v.intact && v.unchained == 1 && v.checked == 2, "{v:?}");
     }
 
     #[test]

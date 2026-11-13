@@ -164,6 +164,9 @@ impl Manager {
         };
         let profile = root.join("browser").join("profile");
         std::fs::create_dir_all(&profile)?;
+        // A browser a crashed or killed devd left behind still holds the profile, and a second one on the same
+        // profile never opens its own DevTools port.
+        kill_orphans(&profile);
         let (mut child, websocket) = launch(&exe, &profile)?;
         // Prove the port answers before the WebSocket handshake, so a failure
         // names the address rather than a generic "connection closed".
@@ -306,6 +309,10 @@ impl Drop for Manager {
             {
                 let _ = child.kill();
             }
+        }
+        // Edge sometimes restarts itself on launch; the copy it starts is not under our child, so it is found by profile.
+        if let Some(root) = &self.root {
+            kill_orphans(&root.join("browser").join("profile"));
         }
     }
 }
@@ -616,7 +623,48 @@ fn find_browser() -> Result<PathBuf> {    if let Ok(explicit) = std::env::var("D
         })
 }
 
+/// Stop any browser still running on this profile from an earlier devd.
+///
+/// The profile is matched as a path, not as the exact flag devd passed: a browser that restarts itself writes the flag
+/// again its own way (quoted), and a copy missed here keeps the profile and makes every later start fail.
+fn kill_orphans(profile: &Path) {
+    let marker = profile.display().to_string();
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // Compared with forward slashes and in lower case, however the command line spells the path.
+        let marker = marker.replace('\\', "/").to_lowercase();
+        let script = format!(
+            "Get-CimInstance Win32_Process | Where-Object {{ $_.CommandLine -and $_.CommandLine.Replace([char]92, [char]47).ToLower().Contains('{}') }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}",
+            marker.replace('\'', "''")
+        );
+        let _ = Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .creation_flags(0x0800_0000)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = Command::new("pkill").args(["-f", &marker]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status();
+    }
+}
+
+/// The DevTools address in a profile's `DevToolsActivePort` file: the port on the first line, the browser's path on the
+/// second.
+fn active_port(text: &str) -> Option<String> {
+    let mut lines = text.lines().map(str::trim);
+    let port: u16 = lines.next()?.parse().ok()?;
+    let path = lines.next().filter(|p| p.starts_with("/devtools/browser/"))?;
+    Some(format!("ws://127.0.0.1:{port}{path}"))
+}
+
 fn launch(exe: &Path, profile: &Path) -> Result<(Child, String)> {
+    // The browser writes where it listens into the profile. One left from an earlier browser would name a dead port.
+    let port_file = profile.join("DevToolsActivePort");
+    let _ = std::fs::remove_file(&port_file);
     let mut command = Command::new(exe);
     command
         .args([
@@ -656,6 +704,9 @@ fn launch(exe: &Path, profile: &Path) -> Result<(Child, String)> {
         .take()
         .ok_or_else(|| DevdError::internal("the browser started without a stderr pipe"))?;
     let (tx, rx) = mpsc::channel();
+    // What the browser said before it was ready, kept to explain a start that fails.
+    let said: std::sync::Arc<Mutex<Vec<String>>> = std::sync::Arc::default();
+    let heard = said.clone();
     std::thread::spawn(move || {
         for line in BufReader::new(stderr).lines().map_while(std::result::Result::ok) {
             if let Some(at) = line.find("DevTools listening on ") {
@@ -663,16 +714,47 @@ fn launch(exe: &Path, profile: &Path) -> Result<(Child, String)> {
                 let _ = tx.send(url);
                 return;
             }
+            if let Ok(mut lines) = heard.lock() {
+                lines.push(line);
+            }
         }
     });
-    match rx.recv_timeout(Duration::from_secs(25)) {
-        Ok(url) => Ok((child, url)),
-        Err(_) => {
-            let _ = child.kill();
-            Err(DevdError::internal(
-                "the browser did not open its DevTools port. Check that the browser is not blocked by policy.",
-            ))
+    // The address is announced on stderr. Edge sometimes restarts itself on launch, and then the copy that listens is
+    // not the one whose stderr devd reads; it still writes the port into the profile, so that is read too. A first
+    // process that has exited is given a few seconds for such a copy before the start counts as failed.
+    let started = std::time::Instant::now();
+    let mut exited: Option<std::time::Instant> = None;
+    while started.elapsed() < Duration::from_secs(25) && exited.is_none_or(|at| at.elapsed() < Duration::from_secs(5)) {
+        if let Ok(url) = rx.recv_timeout(Duration::from_millis(150)) {
+            return Ok((child, url));
         }
+        if let Some(url) = std::fs::read_to_string(&port_file).ok().as_deref().and_then(active_port) {
+            return Ok((child, url));
+        }
+        if exited.is_none() && matches!(child.try_wait(), Ok(Some(_))) {
+            exited = Some(std::time::Instant::now());
+        }
+    }
+    let _ = kill_tree(&mut child);
+    kill_orphans(profile);
+    let lines = said.lock().map(|l| l.clone()).unwrap_or_default();
+    Err(DevdError::internal(start_failure(exited.is_some(), &lines)))
+}
+
+/// Why the browser did not start, in words, with the last thing it said about it.
+fn start_failure(exited: bool, said: &[String]) -> String {
+    let what = if exited { "the browser stopped before it was ready" } else { "the browser did not start within 25 seconds" };
+    // Its last error lines, without the bracketed prefix of process ids and source files.
+    let reason: Vec<String> = said
+        .iter()
+        .map(|l| l.rsplit_once("] ").map(|(_, rest)| rest).unwrap_or(l).trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    let reason = reason.iter().rev().take(2).rev().cloned().collect::<Vec<_>>().join(" ");
+    if reason.is_empty() {
+        format!("{what}. Close the browser panel and open it again; if it still fails, check that Microsoft Edge or Google Chrome opens on this computer.")
+    } else {
+        format!("{what}: {}. Close the browser panel and open it again; if it still fails, check that Microsoft Edge or Google Chrome opens on this computer.", clip(&reason, 300))
     }
 }
 
@@ -742,6 +824,19 @@ pub fn tabs_open(root: &Path, url: Option<&str>) -> Result<Value> {
     let id = m.open_tab(url)?;
     let (url, title) = m.current(&id)?;
     Ok(json!({ "state": "ok", "tab": id, "url": url, "title": title, "focused": m.focused }))
+}
+
+/// Whether the browser is running and which tabs it holds, without starting it or touching a page.
+///
+/// The window shows this before anything else: asking `tabs_list` would launch Chromium just to say it was empty.
+pub fn status() -> Value {
+    let m = lock();
+    let tabs: Vec<Value> = m
+        .tabs
+        .iter()
+        .map(|(id, t)| json!({ "id": id, "url": t.url, "title": t.title, "favicon": t.favicon, "focused": m.focused.as_deref() == Some(id) }))
+        .collect();
+    json!({ "running": m.cdp.is_some(), "focused": m.focused, "tabs": tabs })
 }
 
 pub fn tabs_list(root: &Path) -> Result<Value> {
@@ -1207,9 +1302,95 @@ pub fn evaluate(root: &Path, tab: Option<&str>, expression: &str) -> Result<Valu
     }))
 }
 
+/// Whether a Chromium-based browser is installed for devd to drive.
+pub fn available() -> bool {
+    find_browser().is_ok()
+}
+
+/// A tab opened to photograph a page at chosen moments, closed again when the
+/// work is done. It holds no lock between calls, so the person's Browser pane
+/// keeps working while a long render runs.
+pub struct Capture {
+    tab: String,
+}
+
+fn with_session<T>(id: &str, f: impl FnOnce(&mut Cdp, &str) -> Result<T>) -> Result<T> {
+    let mut m = lock();
+    let Manager { cdp, tabs, .. } = &mut *m;
+    let cdp = cdp.as_mut().ok_or_else(|| DevdError::invalid("the browser is not running"))?;
+    let session = tabs.get(id).ok_or_else(|| DevdError::not_found(format!("there is no tab `{id}`")))?.session.clone();
+    f(cdp, &session)
+}
+
+impl Capture {
+    /// What the composition says about itself, once its runtime has loaded.
+    pub fn info(&self) -> Result<Value> {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            let said = with_session(&self.tab, |cdp, session| {
+                let v = cdp.call(
+                    Some(session),
+                    "Runtime.evaluate",
+                    json!({ "expression": "(typeof window.__motion === 'object') ? JSON.stringify(window.__motion.info()) : ''", "returnByValue": true }),
+                )?;
+                Ok(v["result"]["value"].as_str().unwrap_or("").to_string())
+            })?;
+            if let Ok(info) = serde_json::from_str::<Value>(&said) {
+                return Ok(info);
+            }
+            if Instant::now() > deadline {
+                return Err(DevdError::invalid("the page never defined window.__motion. A composition loads devd-motion.js and calls Motion.config and Motion.draw; see motion.new."));
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    /// Make the page exactly this size, as a film frame.
+    pub fn resize(&self, width: u32, height: u32) -> Result<()> {
+        with_session(&self.tab, |cdp, session| {
+            cdp.call(
+                Some(session),
+                "Emulation.setDeviceMetricsOverride",
+                json!({ "width": width, "height": height, "deviceScaleFactor": 1, "mobile": false }),
+            )?;
+            Ok(())
+        })
+    }
+
+    /// The page at second `t`, as PNG bytes, once it has been painted.
+    pub fn frame(&self, t: f64) -> Result<Vec<u8>> {
+        with_session(&self.tab, |cdp, session| {
+            let seek = cdp.call(
+                Some(session),
+                "Runtime.evaluate",
+                json!({ "expression": format!("window.__motion.seek({t})"), "returnByValue": true, "awaitPromise": true }),
+            )?;
+            if let Some(why) = seek["exceptionDetails"]["exception"]["description"].as_str().or(seek["exceptionDetails"]["text"].as_str()) {
+                return Err(DevdError::invalid(format!("the composition failed at {t}s: {why}")));
+            }
+            let shot = cdp.call(Some(session), "Page.captureScreenshot", json!({ "format": "png", "captureBeyondViewport": false, "fromSurface": true }))?;
+            let encoded = shot["data"].as_str().ok_or_else(|| DevdError::internal("the browser returned no frame"))?;
+            base64::engine::general_purpose::STANDARD.decode(encoded).map_err(|e| DevdError::internal(format!("a frame was not valid base64: {e}")))
+        })
+    }
+}
+
+/// Open `url` in a tab of its own, run `work` with it, and close the tab.
+pub fn with_capture<T>(root: &Path, url: &str, work: impl FnOnce(&Capture) -> Result<T>) -> Result<T> {
+    let id = {
+        let mut m = lock();
+        m.ensure(root)?;
+        m.open_tab(Some(url))?
+    };
+    let capture = Capture { tab: id.clone() };
+    let result = work(&capture);
+    let _ = tabs_close(&id);
+    result
+}
+
 pub fn close() -> Result<Value> {
     let mut m = lock();
-    let Manager { cdp, tabs, focused, child, .. } = &mut *m;
+    let Manager { cdp, tabs, focused, child, root, .. } = &mut *m;
     let count = tabs.len();
     if let Some(connection) = cdp.as_mut() {
         for id in tabs.keys() {
@@ -1234,12 +1415,36 @@ pub fn close() -> Result<Value> {
         }
         let _ = process.wait();
     }
+    if let Some(root) = root.as_ref() {
+        kill_orphans(&root.join("browser").join("profile"));
+    }
     Ok(json!({ "state": "ok", "closed": count }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_port_a_browser_writes_into_its_profile_is_read_as_an_address() {
+        assert_eq!(active_port("64323\n/devtools/browser/dc7a\n").as_deref(), Some("ws://127.0.0.1:64323/devtools/browser/dc7a"));
+        assert_eq!(active_port("64323\r\n/devtools/browser/x\r\n").as_deref(), Some("ws://127.0.0.1:64323/devtools/browser/x"), "Windows line endings");
+        assert_eq!(active_port(""), None, "a file still being written is not an address yet");
+        assert_eq!(active_port("64323\n"), None);
+        assert_eq!(active_port("not a port\n/devtools/browser/x"), None);
+    }
+
+    #[test]
+    fn a_browser_that_will_not_start_says_why() {
+        let said = vec![
+            "[8391:8391:1113/193011.27:ERROR:zygote_host_impl_linux.cc(127)] No usable sandbox!".to_string(),
+            String::new(),
+        ];
+        let why = start_failure(true, &said);
+        assert!(why.starts_with("the browser stopped before it was ready: No usable sandbox!"), "{why}");
+        assert!(!why.contains("zygote_host"), "the source-file prefix is dropped: {why}");
+        assert!(start_failure(false, &[]).starts_with("the browser did not start within 25 seconds. Close"));
+    }
 
     #[test]
     fn only_web_addresses_are_navigated_to() {

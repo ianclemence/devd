@@ -75,6 +75,7 @@ fn report(name: &str, mut t: Tally) -> Value {
     json!({
         "name": name,
         "tasks": t.tasks,
+        "settled": settled,
         "accepted": t.accepted,
         "rejected": t.rejected,
         "abandoned": t.abandoned,
@@ -101,14 +102,33 @@ pub fn stats(ctx: &Ctx) -> Result<Value> {
         .map(|r| (r.id.clone(), r.project.clone().unwrap_or_default()))
         .collect();
 
+    // Which model each conversation ran on, so the same task record can say
+    // whether a model's work was accepted and what it cost to get there.
+    let thread_model: BTreeMap<String, String> = ctx
+        .store
+        .list_threads(100_000)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|t| (t.id.clone(), t.model.clone().unwrap_or_else(|| "default model".into())))
+        .collect();
+
     let mut all = Tally::default();
     let mut roles: BTreeMap<String, Tally> = BTreeMap::new();
     let mut projects: BTreeMap<String, Tally> = BTreeMap::new();
+    let mut models: BTreeMap<String, Tally> = BTreeMap::new();
     for t in tasks.iter().filter(|t| t.role != "planner") {
         tally(t, &by_task, &mut all);
         tally(t, &by_task, roles.entry(t.role.clone()).or_default());
         let project = project_of.get(&t.run_id).cloned().unwrap_or_default();
         tally(t, &by_task, projects.entry(project).or_default());
+        let model = t.thread_id.as_ref().and_then(|id| thread_model.get(id)).cloned().unwrap_or_default();
+        // Older conversations did not record the model. Say that once, instead
+        // of splitting the same fact between "default model" and "unknown".
+        let model = match model.as_str() {
+            "" | "default model" | "default_model" | "unknown" => "not recorded".to_string(),
+            other => other.to_string(),
+        };
+        tally(t, &by_task, models.entry(model).or_default());
     }
     let run_states: BTreeMap<String, i64> = runs.iter().fold(BTreeMap::new(), |mut m, r| {
         *m.entry(r.state.clone()).or_insert(0) += 1;
@@ -117,6 +137,7 @@ pub fn stats(ctx: &Ctx) -> Result<Value> {
     Ok(json!({
         "team": report("team", all),
         "roles": roles.into_iter().map(|(k, v)| report(&k, v)).collect::<Vec<_>>(),
+        "models": models.into_iter().map(|(k, v)| report(&k, v)).collect::<Vec<_>>(),
         "projects": projects.into_iter().map(|(k, v)| report(&k, v)).collect::<Vec<_>>(),
         "runs": run_states,
     }))
@@ -133,13 +154,12 @@ pub fn usage(ctx: &Ctx) -> Result<Value> {
     // Spend is an estimate, not a provider invoice: it uses the catalogue's
     // current price for a model against the tokens that model actually reported.
     // A model with no known price stays unpriced and is counted as such.
-    let price: BTreeMap<String, (f64, f64)> = ctx
-        .store
-        .list_catalogue(None)
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|m| Some((m.model_id.to_lowercase(), (m.input_price?, m.output_price?))))
-        .collect();
+    // The price comes from the same place a live call takes it: the provider's
+    // own listing, then the open catalogue, cache prices included. It is looked
+    // up once per provider and model, not once per conversation.
+    let providers: BTreeMap<String, devd_core::Provider> = ctx.store.list_providers().unwrap_or_default().into_iter().map(|p| (p.id.clone(), p)).collect();
+    let fallback = providers.values().find(|p| p.is_default).or_else(|| providers.values().next()).cloned();
+    let mut priced: BTreeMap<(String, String), crate::policy::ModelCaps> = BTreeMap::new();
 
     #[derive(Default)]
     struct U {
@@ -149,8 +169,10 @@ pub fn usage(ctx: &Ctx) -> Result<Value> {
         cache_read: i64,
         cache_write: i64,
         cost: f64,
+        saved: f64,
         priced: i64,
         unpriced: i64,
+        errors: i64,
     }
     // A conversation that did not name a model used its provider's default. Name
     // that model here so the row can be priced and read, instead of every such
@@ -171,13 +193,28 @@ pub fn usage(ctx: &Ctx) -> Result<Value> {
             .model
             .clone()
             .or_else(|| t.provider_id.as_ref().and_then(|id| default_model_of.get(id)).cloned())
+            // A conversation that named neither ran on the default provider's model.
+            .or_else(|| fallback.as_ref().and_then(|p| p.default_model.clone()))
             .unwrap_or_else(|| "default model".into());
         let who = role_of.get(&t.id).cloned().unwrap_or_else(|| "assistant".into());
-        let rate = price.get(&model.to_lowercase()).copied();
         // Prefer what was recorded when the call was made; fall back to the
-        // catalogue price for conversations recorded before per-call cost.
-        let cost = t.cost_usd.or_else(|| {
-            rate.map(|(i, o)| (i * t.input_tokens as f64 + o * t.output_tokens as f64) / 1_000_000.0)
+        // catalogue price for conversations recorded before per-call cost. A
+        // recorded cost of nothing against real tokens is such a conversation.
+        let recorded = t.cost_usd.filter(|c| *c > 0.0 || t.input_tokens + t.output_tokens == 0);
+        let cost = recorded.or_else(|| {
+            let provider = t.provider_id.as_ref().and_then(|id| providers.get(id)).or(fallback.as_ref())?;
+            let caps = priced
+                .entry((provider.id.clone(), model.clone()))
+                .or_insert_with(|| crate::policy::model_caps(&ctx.store, provider, &model));
+            let kind = if provider.base_url.contains("deepseek") { "deepseek" } else { provider.kind.as_str() };
+            crate::policy::cost_usd_cached(caps, kind, t.input_tokens, t.output_tokens, t.cache_read_tokens, t.cache_write_tokens)
+        });
+        // What the prompt cache saved: the same tokens at the full input price.
+        let saved = cost.and_then(|c| {
+            let provider = t.provider_id.as_ref().and_then(|id| providers.get(id)).or(fallback.as_ref())?;
+            let caps = priced.get(&(provider.id.clone(), model.clone()))?;
+            let full = crate::policy::cost_usd(caps, t.input_tokens, t.output_tokens)?;
+            Some((full - c).max(0.0))
         });
         for (map, key) in [(&mut by_model, model.clone()), (&mut by_who, who.clone())] {
             let u = map.entry(key).or_default();
@@ -186,9 +223,13 @@ pub fn usage(ctx: &Ctx) -> Result<Value> {
             u.output += t.output_tokens;
             u.cache_read += t.cache_read_tokens;
             u.cache_write += t.cache_write_tokens;
+            if t.state == "error" {
+                u.errors += 1;
+            }
             match cost {
                 Some(c) => {
                     u.cost += c;
+                    u.saved += saved.unwrap_or(0.0);
                     u.priced += 1;
                 }
                 None => u.unpriced += 1,
@@ -212,6 +253,11 @@ pub fn usage(ctx: &Ctx) -> Result<Value> {
                 "cache_read": u.cache_read,
                 "cache_write": u.cache_write,
                 "cost_usd": if u.priced > 0 { Some(u.cost) } else { None },
+                "cache_saved_usd": if u.priced > 0 { Some(u.saved) } else { None },
+                // The share of input that was read from the cache instead of paid for in full.
+                "cache_hit_rate": if u.input > 0 { Some(u.cache_read as f64 / u.input as f64) } else { None },
+                "errors": u.errors,
+                "error_rate": if u.conversations > 0 { Some(u.errors as f64 / u.conversations as f64) } else { None },
                 "priced_conversations": u.priced,
                 "unpriced_conversations": u.unpriced,
             }))
@@ -220,6 +266,8 @@ pub fn usage(ctx: &Ctx) -> Result<Value> {
         v
     };
     let known: Vec<f64> = by_model.values().filter(|u| u.priced > 0).map(|u| u.cost).collect();
+    let saved_total: f64 = by_model.values().map(|u| u.saved).sum();
+    let (all_input, all_output, all_read): (i64, i64, i64) = by_model.values().fold((0, 0, 0), |a, u| (a.0 + u.input, a.1 + u.output, a.2 + u.cache_read));
     let unpriced: i64 = by_model.values().map(|u| u.unpriced).sum();
     Ok(json!({
         "by_model": rows(by_model),
@@ -227,6 +275,11 @@ pub fn usage(ctx: &Ctx) -> Result<Value> {
         "heaviest": top.into_iter().take(8).map(|(_, v)| v).collect::<Vec<_>>(),
         "total_cost_usd": if known.is_empty() { None } else { Some(known.iter().sum::<f64>()) },
         "unpriced_conversations": unpriced,
-        "note": "Tokens and cache use as each provider reported them. Spend is what was recorded per call from the price in force; a conversation recorded before that shows the catalogue estimate. It remains an estimate of the provider's bill, not the invoice.",
+        "cache_saved_usd": if known.is_empty() { None } else { Some(saved_total) },
+        "input_tokens": all_input,
+        "output_tokens": all_output,
+        "cache_read_tokens": all_read,
+        "cache_hit_rate": if all_input > 0 { Some(all_read as f64 / all_input as f64) } else { None },
+        "note": "Tokens and cache use as each provider reported them. Spend is what was recorded per call from the price in force; a conversation recorded before that is priced from the model catalogue, cache discounts included. It remains an estimate of the provider's bill, not the invoice.",
     }))
 }

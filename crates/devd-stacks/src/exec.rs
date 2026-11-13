@@ -115,9 +115,13 @@ pub fn resolve_program(
 ) -> Result<(PathBuf, Vec<String>)> {
     let path = if program.contains('/') || program.contains('\\') {
         let p = cwd.join(program.trim_start_matches("./"));
-        let found = if p.is_file() {
-            Some(p)
-        } else if cfg!(windows) {
+        // On Windows a package manager writes two files for one tool: the
+        // script itself with no extension (`vendor/bin/pint`, which starts with
+        // `#!/usr/bin/env php`) and a shim beside it (`pint.bat`, `pint.cmd`).
+        // The script is a file, so taking it first handed Windows something it
+        // cannot start ("%1 is not a valid Win32 application"). A name without
+        // an extension therefore looks for its shim first.
+        let shim = if cfg!(windows) && p.extension().is_none() {
             ["cmd", "bat", "exe"]
                 .iter()
                 .map(|e| p.with_extension(e))
@@ -125,6 +129,7 @@ pub fn resolve_program(
         } else {
             None
         };
+        let found = shim.or_else(|| p.is_file().then_some(p));
         found.ok_or_else(|| {
             DevdError::not_found(format!("`{program}` does not exist in {}", cwd.display()))
         })?
@@ -139,12 +144,59 @@ pub fn resolve_program(
         .map(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat"))
         .unwrap_or(false);
     if is_batch {
-        Ok((
+        return Ok((
             PathBuf::from("cmd.exe"),
             vec!["/C".into(), path.display().to_string()],
-        ))
+        ));
+    }
+    // A script with no shim beside it. Unix starts it from its `#!` line;
+    // Windows does not read that line, so devd does: the interpreter it names
+    // is found on PATH and given the script.
+    if cfg!(windows) && path.extension().is_none() {
+        if let Some(interpreter) = shebang_interpreter(&path) {
+            if let Some((exe, _)) = which_in(&interpreter, extra) {
+                let (exe, mut lead) = resolve_program_path(exe);
+                lead.push(path.display().to_string());
+                return Ok((exe, lead));
+            }
+            return Err(DevdError::not_found(format!(
+                "`{program}` is a `{interpreter}` script, and `{interpreter}` was not found on PATH"
+            )));
+        }
+    }
+    Ok((path, Vec::new()))
+}
+
+/// A found executable as something `Command` can start: a batch file goes through `cmd.exe`.
+fn resolve_program_path(path: PathBuf) -> (PathBuf, Vec<String>) {
+    let batch = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat"))
+        .unwrap_or(false);
+    if batch {
+        (PathBuf::from("cmd.exe"), vec!["/C".into(), path.display().to_string()])
     } else {
-        Ok((path, Vec::new()))
+        (path, Vec::new())
+    }
+}
+
+/// The interpreter a script's first line names: `php` for `#!/usr/bin/env php`
+/// and for `#!/usr/bin/php`. `None` when the file does not start with `#!`.
+pub fn shebang_interpreter(path: &Path) -> Option<String> {
+    use std::io::Read;
+    let mut head = [0u8; 256];
+    let n = std::fs::File::open(path).ok()?.read(&mut head).ok()?;
+    let text = std::str::from_utf8(&head[..n]).ok()?;
+    let line = text.lines().next()?.strip_prefix("#!")?.trim();
+    let mut words = line.split_whitespace();
+    let first = words.next()?;
+    let name = |w: &str| w.rsplit(['/', '\\']).next().unwrap_or(w).to_string();
+    if name(first) == "env" {
+        // `env -S php -d memory_limit=-1`: skip env's own flags.
+        words.find(|w| !w.starts_with('-')).map(name)
+    } else {
+        Some(name(first))
     }
 }
 
@@ -327,6 +379,38 @@ pub fn run_streaming(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_script_names_its_interpreter_on_its_first_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = dir.path().join("pint");
+        std::fs::write(&env, "#!/usr/bin/env php\n<?php echo 1;").unwrap();
+        assert_eq!(shebang_interpreter(&env).as_deref(), Some("php"));
+        let direct = dir.path().join("tool");
+        std::fs::write(&direct, "#!/usr/bin/python3 -u\nprint(1)").unwrap();
+        assert_eq!(shebang_interpreter(&direct).as_deref(), Some("python3"));
+        let split = dir.path().join("split");
+        std::fs::write(&split, "#!/usr/bin/env -S node --no-warnings\n").unwrap();
+        assert_eq!(shebang_interpreter(&split).as_deref(), Some("node"));
+        let plain = dir.path().join("notes");
+        std::fs::write(&plain, "just text").unwrap();
+        assert_eq!(shebang_interpreter(&plain), None);
+    }
+
+    /// `vendor/bin/pint` on Windows is two files: the PHP script and `pint.bat`.
+    /// The script is not something Windows can start, so the shim wins.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_shim_is_preferred_to_the_script_beside_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("vendor").join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("pint"), "#!/usr/bin/env php\n<?php").unwrap();
+        std::fs::write(bin.join("pint.bat"), "@echo off\r\n").unwrap();
+        let (exe, lead) = resolve_program("vendor/bin/pint", dir.path(), &[]).unwrap();
+        assert_eq!(exe, PathBuf::from("cmd.exe"));
+        assert!(lead[1].ends_with("pint.bat"), "{lead:?}");
+    }
 
     #[test]
     fn secrets_are_removed_from_output() {
