@@ -158,7 +158,7 @@ pub mod git {
             args(&[
                 ("repo", some(repo)),
                 ("path", path.map(Value::from)),
-                ("staged", staged.then(|| json!(true))),
+                ("staged", staged.then_some(json!(true))),
             ]),
         )
     }
@@ -344,7 +344,7 @@ pub mod project {
             args(&[
                 ("path", some(path)),
                 ("task", some(task)),
-                ("background", background.then(|| json!(true))),
+                ("background", background.then_some(json!(true))),
             ]),
         )
     }
