@@ -22,7 +22,10 @@ fn main() {
     }
     let from_env = env::var_os("DEVD_KTMW32_LIB").map(PathBuf::from);
     let from_gcc = || {
-        let out = Command::new("gcc").arg("-print-file-name=libktmw32.a").output().ok()?;
+        let out = Command::new("gcc")
+            .arg("-print-file-name=libktmw32.a")
+            .output()
+            .ok()?;
         Some(PathBuf::from(String::from_utf8_lossy(&out.stdout).trim()))
     };
     let Some(lib) = from_env.or_else(from_gcc).filter(|p| p.is_file()) else {
@@ -47,10 +50,16 @@ fn embed_icon() {
         return;
     }
     let found = env::var_os("PATH").is_some_and(|paths| {
-        env::split_paths(&paths).any(|dir| ["llvm-rc.exe", "windres.exe", "rc.exe"].iter().any(|n| dir.join(n).is_file()))
+        env::split_paths(&paths).any(|dir| {
+            ["llvm-rc.exe", "windres.exe", "rc.exe"]
+                .iter()
+                .any(|n| dir.join(n).is_file())
+        })
     });
     if !found {
-        println!("cargo:warning=no resource compiler (llvm-rc, windres or rc.exe) was found; devd-app.exe keeps the default icon");
+        println!(
+            "cargo:warning=no resource compiler (llvm-rc, windres or rc.exe) was found; devd-app.exe keeps the default icon"
+        );
         return;
     }
     if let Err(e) = embed_resource::compile("devd.rc", embed_resource::NONE).manifest_optional() {

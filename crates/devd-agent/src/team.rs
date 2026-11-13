@@ -1780,6 +1780,13 @@ impl Team {
             json!({ "task": t.key, "by": caller.actor.label(), "was": t.state, "error": t.error }),
         );
         let run = self.run(&t.run_id)?;
+        // Accepted by hand is accepted all the same: a non-isolated writer's work lives in the project's own tree, and
+        // left uncommitted it blocks every later merge into that tree ("the project has uncommitted changes").
+        if roles::get(&t.role).map(|r| r.writes).unwrap_or(false) && t.branch.is_none() {
+            if let Err(why) = self.commit_task(&run, &t) {
+                self.event(&run.id, Some(&t.id), "merge_blocked", json!({ "task": t.key, "why": why.to_string() }));
+            }
+        }
         if run.state == "paused" {
             self.ctx
                 .store

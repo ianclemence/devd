@@ -14,7 +14,7 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use devd_app_core::links::{find, path_ref, would_run, PathRef, Target};
+use devd_app_core::links::{PathRef, Target, find, path_ref, would_run};
 use gpui::App;
 
 use crate::state::Devd;
@@ -51,13 +51,20 @@ pub fn root(cx: &App) -> Option<PathBuf> {
 }
 
 fn home() -> Option<PathBuf> {
-    std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from)
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
 }
 
 /// The file a written path is, when there is one.
 fn locate(p: &PathRef, root: Option<&Path>) -> Option<PathBuf> {
     let key = (root.map(Path::to_path_buf), p.path.clone());
-    let cached = SEEN.with(|seen| seen.borrow().get(&key).filter(|(at, _)| at.elapsed() < FRESH).map(|(_, found)| found.clone()));
+    let cached = SEEN.with(|seen| {
+        seen.borrow()
+            .get(&key)
+            .filter(|(at, _)| at.elapsed() < FRESH)
+            .map(|(_, found)| found.clone())
+    });
     if let Some(found) = cached {
         return found;
     }
@@ -74,7 +81,10 @@ fn locate(p: &PathRef, root: Option<&Path>) -> Option<PathBuf> {
 
 fn candidate(p: &PathRef, root: Option<&Path>) -> Option<PathBuf> {
     let written = p.path.as_str();
-    if let Some(rest) = written.strip_prefix("~/").or_else(|| written.strip_prefix("~\\")) {
+    if let Some(rest) = written
+        .strip_prefix("~/")
+        .or_else(|| written.strip_prefix("~\\"))
+    {
         return home().map(|h| h.join(rest));
     }
     let path = Path::new(written);
@@ -100,7 +110,9 @@ pub fn resolve(text: &str, root: Option<&Path>) -> Vec<(Range<usize>, Link)> {
         .filter_map(|found| match found.target {
             Target::Url(url) => Some((found.range, Link::Url(url))),
             Target::Devd(route) => Some((found.range, Link::Route(route))),
-            Target::Path(p) => locate(&p, root).map(|path| (found.range, Link::File { path, line: p.line })),
+            Target::Path(p) => {
+                locate(&p, root).map(|path| (found.range, Link::File { path, line: p.line }))
+            }
         })
         .collect()
 }
@@ -170,7 +182,9 @@ mod tests {
         let links = resolve(text, Some(&root));
         assert_eq!(links.len(), 1, "{links:?}");
         assert_eq!(&text[links[0].0.clone()], "src/main.rs:3");
-        assert!(matches!(&links[0].1, Link::File { path, line: Some(3) } if path.ends_with("main.rs")));
+        assert!(
+            matches!(&links[0].1, Link::File { path, line: Some(3) } if path.ends_with("main.rs"))
+        );
         std::fs::remove_dir_all(root).ok();
     }
 
@@ -178,7 +192,10 @@ mod tests {
     fn a_devd_address_is_shown_as_a_chip_and_the_rest_of_the_text_is_untouched() {
         let text = "Started devd://runs/9f3a21c4d5e6 for devd://projects/D%3A%5Cwww%5Cluna, see https://x.dev now.";
         let (shown, links) = present(text, None);
-        assert_eq!(shown, "Started Run 9f3a21c4 for Project luna, see https://x.dev now.");
+        assert_eq!(
+            shown,
+            "Started Run 9f3a21c4 for Project luna, see https://x.dev now."
+        );
         assert_eq!(links.len(), 3);
         assert_eq!(&shown[links[0].0.clone()], "Run 9f3a21c4");
         assert!(matches!(&links[0].1, Link::Route(r) if r == "/runs/9f3a21c4d5e6"));
@@ -189,7 +206,9 @@ mod tests {
 
     #[test]
     fn inline_code_can_be_a_devd_address() {
-        assert!(matches!(resolve_token("devd://inbox", None), Some(Link::Route(r)) if r == "/inbox"));
+        assert!(
+            matches!(resolve_token("devd://inbox", None), Some(Link::Route(r)) if r == "/inbox")
+        );
         assert!(resolve_token("devd://nowhere", None).is_none());
     }
 

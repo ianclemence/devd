@@ -46,7 +46,9 @@ pub struct Found {
 }
 
 const OPENERS: &[char] = &['(', '[', '{', '<', '"', '\'', '`', '*', '_'];
-const CLOSERS: &[char] = &[')', ']', '}', '>', '"', '\'', '`', '*', '_', '.', ',', ';', ':', '!', '?'];
+const CLOSERS: &[char] = &[
+    ')', ']', '}', '>', '"', '\'', '`', '*', '_', '.', ',', ';', ':', '!', '?',
+];
 
 /// Every web address and path-like word in `text`, in order.
 pub fn find(text: &str) -> Vec<Found> {
@@ -116,14 +118,24 @@ fn balanced(token: &str) -> bool {
 /// Also what a piece of inline code is checked with: `` `src/main.rs` `` is a path,
 /// `` `cargo test` `` is not.
 pub fn path_ref(token: &str) -> Option<PathRef> {
-    if token.is_empty() || token.contains("://") || token.contains('@') || token.chars().any(|c| c.is_control() || matches!(c, '<' | '>' | '|' | '*' | '?' | '"' | '=' | ',' | ';')) {
+    if token.is_empty()
+        || token.contains("://")
+        || token.contains('@')
+        || token.chars().any(|c| {
+            c.is_control() || matches!(c, '<' | '>' | '|' | '*' | '?' | '"' | '=' | ',' | ';')
+        })
+    {
         return None;
     }
     let (core, line, col) = position(token);
     if core.is_empty() || !looks_like_path(core) {
         return None;
     }
-    Some(PathRef { path: core.to_string(), line, col })
+    Some(PathRef {
+        path: core.to_string(),
+        line,
+        col,
+    })
 }
 
 /// The path with a trailing `:42`, `:42:7` or `#L42` taken off.
@@ -155,7 +167,10 @@ fn position(token: &str) -> (&str, Option<u32>, Option<u32>) {
 
 fn looks_like_path(p: &str) -> bool {
     let b = p.as_bytes();
-    let drive = b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/');
+    let drive = b.len() >= 3
+        && b[0].is_ascii_alphabetic()
+        && b[1] == b':'
+        && (b[2] == b'\\' || b[2] == b'/');
     if drive {
         return true;
     }
@@ -169,7 +184,11 @@ fn looks_like_path(p: &str) -> bool {
     }
     if has_sep {
         // "and/or": needs something file-like or a real folder; the caller checks the disk.
-        let last = p.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or("");
+        let last = p
+            .trim_end_matches(['/', '\\'])
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or("");
         return !last.is_empty() && p.chars().all(is_path_char) && !p.starts_with('-');
     }
     // A bare name needs an extension of two letters at least: "e.g." and "i.e." are not files.
@@ -177,14 +196,37 @@ fn looks_like_path(p: &str) -> bool {
 }
 
 fn is_path_char(c: char) -> bool {
-    c.is_alphanumeric() || matches!(c, '.' | '_' | '-' | '/' | '\\' | '~' | '+' | '@' | '%' | '[' | ']' | '(' | ')' | '$' | '#')
+    c.is_alphanumeric()
+        || matches!(
+            c,
+            '.' | '_'
+                | '-'
+                | '/'
+                | '\\'
+                | '~'
+                | '+'
+                | '@'
+                | '%'
+                | '['
+                | ']'
+                | '('
+                | ')'
+                | '$'
+                | '#'
+        )
 }
 
 /// A name ending in `.ext` where the extension starts with a letter: `main.rs`, `README.md`, not `v1.2`.
 fn has_extension(p: &str) -> bool {
     let name = p.rsplit(['/', '\\']).next().unwrap_or("");
     match name.rsplit_once('.') {
-        Some((stem, ext)) => !stem.is_empty() && !ext.is_empty() && ext.len() <= 10 && ext.starts_with(|c: char| c.is_ascii_alphabetic()) && ext.chars().all(|c| c.is_ascii_alphanumeric()),
+        Some((stem, ext)) => {
+            !stem.is_empty()
+                && !ext.is_empty()
+                && ext.len() <= 10
+                && ext.starts_with(|c: char| c.is_ascii_alphabetic())
+                && ext.chars().all(|c| c.is_ascii_alphanumeric())
+        }
         None => false,
     }
 }
@@ -193,14 +235,29 @@ fn has_extension(p: &str) -> bool {
 ///
 /// The id is shortened, not hidden: it is what two things with the same name are told apart by.
 pub fn chip_label(route_path: &str) -> String {
-    let Some(route) = crate::nav::Route::parse(route_path) else { return route_path.to_string() };
+    let Some(route) = crate::nav::Route::parse(route_path) else {
+        return route_path.to_string();
+    };
     use crate::nav::Route;
     let short = |id: &str| id.chars().take(8).collect::<String>();
     match &route {
         Route::Runs(Some(id)) => format!("Run {}", short(id)),
         Route::Assistant(Some(id)) => format!("Conversation {}", short(id)),
-        Route::Project(dir, tab) => format!("Project {} {}", dir.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or(dir), tab.label().to_lowercase()),
-        Route::Projects(Some(dir)) => format!("Project {}", dir.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or(dir)),
+        Route::Project(dir, tab) => format!(
+            "Project {} {}",
+            dir.trim_end_matches(['/', '\\'])
+                .rsplit(['/', '\\'])
+                .next()
+                .unwrap_or(dir),
+            tab.label().to_lowercase()
+        ),
+        Route::Projects(Some(dir)) => format!(
+            "Project {}",
+            dir.trim_end_matches(['/', '\\'])
+                .rsplit(['/', '\\'])
+                .next()
+                .unwrap_or(dir)
+        ),
         Route::Sites(Some(name)) => format!("Site {name}"),
         Route::Runs(None) => "Runs".to_string(),
         Route::Assistant(None) => "Assistant".to_string(),
@@ -221,9 +278,15 @@ pub fn chip_label(route_path: &str) -> String {
 /// folder instead: a reply can name a file, and a click must not start a program.
 pub fn would_run(path: &str) -> bool {
     const RUNS: &[&str] = &[
-        "exe", "bat", "cmd", "com", "scr", "msi", "msp", "ps1", "psm1", "vbs", "vbe", "js", "jse", "wsf", "wsh", "hta", "lnk", "url", "reg", "cpl", "jar", "sh", "bash", "zsh", "command", "app", "dmg", "pkg", "appimage", "desktop", "run", "bin", "py", "pl", "rb",
+        "exe", "bat", "cmd", "com", "scr", "msi", "msp", "ps1", "psm1", "vbs", "vbe", "js", "jse",
+        "wsf", "wsh", "hta", "lnk", "url", "reg", "cpl", "jar", "sh", "bash", "zsh", "command",
+        "app", "dmg", "pkg", "appimage", "desktop", "run", "bin", "py", "pl", "rb",
     ];
-    let name = path.rsplit(['/', '\\']).next().unwrap_or("").to_ascii_lowercase();
+    let name = path
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
     match name.rsplit_once('.') {
         Some((_, ext)) => RUNS.contains(&ext),
         // No extension on a Unix file is often an executable.
@@ -263,7 +326,10 @@ mod tests {
     #[test]
     fn a_line_and_column_are_read_and_a_drive_colon_is_not_a_position() {
         let p = path_ref("crates/a/b.rs:12:5").unwrap();
-        assert_eq!((p.path.as_str(), p.line, p.col), ("crates/a/b.rs", Some(12), Some(5)));
+        assert_eq!(
+            (p.path.as_str(), p.line, p.col),
+            ("crates/a/b.rs", Some(12), Some(5))
+        );
         let d = path_ref("D:\\x\\y.txt").unwrap();
         assert_eq!((d.path.as_str(), d.line), ("D:\\x\\y.txt", None));
     }
@@ -271,7 +337,16 @@ mod tests {
     #[test]
     fn urls_lose_the_punctuation_around_them_but_keep_their_own_brackets() {
         let found = find("See https://example.com/a_(b), or (https://devd.test/x). Done.");
-        let urls: Vec<String> = found.into_iter().filter_map(|f| if let Target::Url(u) = f.target { Some(u) } else { None }).collect();
+        let urls: Vec<String> = found
+            .into_iter()
+            .filter_map(|f| {
+                if let Target::Url(u) = f.target {
+                    Some(u)
+                } else {
+                    None
+                }
+            })
+            .collect();
         assert_eq!(urls, ["https://example.com/a_(b)", "https://devd.test/x"]);
     }
 
@@ -284,7 +359,16 @@ mod tests {
 
     #[test]
     fn skills_sentences_versions_and_commands_are_not_paths() {
-        for text in ["/recall please", "run cargo test now", "version 1.2 and 3.14", "e.g. this", "me@example.com", "a == b", "// a comment", "Done."] {
+        for text in [
+            "/recall please",
+            "run cargo test now",
+            "version 1.2 and 3.14",
+            "e.g. this",
+            "me@example.com",
+            "a == b",
+            "// a comment",
+            "Done.",
+        ] {
             assert!(paths(text).is_empty(), "{text}: {:?}", paths(text));
         }
     }
@@ -299,8 +383,20 @@ mod tests {
     #[test]
     fn a_devd_address_is_a_link_only_when_it_names_a_place_the_window_has() {
         let text = "See devd://runs/abc123, then (devd://projects/D%3A%5Cwww%5Cluna) and devd://nowhere/x or devd://inbox.";
-        let places: Vec<String> = find(text).into_iter().filter_map(|f| if let Target::Devd(p) = f.target { Some(p) } else { None }).collect();
-        assert_eq!(places, ["/runs/abc123", "/projects/D%3A%5Cwww%5Cluna", "/inbox"]);
+        let places: Vec<String> = find(text)
+            .into_iter()
+            .filter_map(|f| {
+                if let Target::Devd(p) = f.target {
+                    Some(p)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            places,
+            ["/runs/abc123", "/projects/D%3A%5Cwww%5Cluna", "/inbox"]
+        );
     }
 
     #[test]
@@ -314,10 +410,24 @@ mod tests {
 
     #[test]
     fn a_click_never_starts_a_program() {
-        for p in ["a/setup.exe", "run.BAT", "x.ps1", "deploy.sh", "tool", "link.lnk", "page.js"] {
+        for p in [
+            "a/setup.exe",
+            "run.BAT",
+            "x.ps1",
+            "deploy.sh",
+            "tool",
+            "link.lnk",
+            "page.js",
+        ] {
             assert!(would_run(p), "{p}");
         }
-        for p in ["notes.md", "src/main.rs", "photo.png", "data.json", "doc.pdf"] {
+        for p in [
+            "notes.md",
+            "src/main.rs",
+            "photo.png",
+            "data.json",
+            "doc.pdf",
+        ] {
             assert!(!would_run(p), "{p}");
         }
     }

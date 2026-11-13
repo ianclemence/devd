@@ -13,14 +13,17 @@
 //! same path as a button, so a capability that needs the person's approval still asks for it.
 
 use devd_app_core::sync::{Backend, Mutation, QueryKey};
-use gpui::{div, prelude::*, px, AnyElement, App, ClickEvent, Context, Entity, Focusable, FontWeight, MouseButton, SharedString, Subscription, Window};
-use serde_json::{json, Map, Value};
+use gpui::{
+    AnyElement, App, ClickEvent, Context, Entity, Focusable, FontWeight, MouseButton, SharedString,
+    Subscription, Window, div, prelude::*, px,
+};
+use serde_json::{Map, Value, json};
 
 use crate::shell::Shell;
 use crate::state::devd;
-use crate::theme::{size, theme, Tone};
+use crate::theme::{Tone, size, theme};
 use crate::ui::input::{InputEvent, TextInput};
-use crate::ui::{self, icon, Button, ButtonKind};
+use crate::ui::{self, Button, ButtonKind, icon};
 
 /// What kind of value a field holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,17 +54,35 @@ pub struct Field {
 impl Field {
     /// A required text field.
     pub const fn text(key: &'static str, label: &'static str, hint: &'static str) -> Self {
-        Self { key, label, hint, kind: Kind::Text, required: true }
+        Self {
+            key,
+            label,
+            hint,
+            kind: Kind::Text,
+            required: true,
+        }
     }
 
     /// An optional text field.
     pub const fn optional(key: &'static str, label: &'static str, hint: &'static str) -> Self {
-        Self { key, label, hint, kind: Kind::Text, required: false }
+        Self {
+            key,
+            label,
+            hint,
+            kind: Kind::Text,
+            required: false,
+        }
     }
 
     /// An optional whole number.
     pub const fn number(key: &'static str, label: &'static str, hint: &'static str) -> Self {
-        Self { key, label, hint, kind: Kind::Number, required: false }
+        Self {
+            key,
+            label,
+            hint,
+            kind: Kind::Number,
+            required: false,
+        }
     }
 }
 
@@ -86,7 +107,6 @@ pub struct FormSpec {
     /// is replaced with the first field's text.
     pub busy: Option<&'static str>,
 }
-
 
 /// A form being filled in.
 pub struct Form {
@@ -141,7 +161,10 @@ pub enum Modal {
 /// A run id for a scaffold: letters, digits and dashes, unique enough that two
 /// windows cannot cancel each other's work.
 fn new_run_id() -> String {
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
     format!("ui-{:x}-{:x}", std::process::id(), nanos)
 }
 
@@ -172,8 +195,23 @@ pub fn build_args(spec: &FormSpec, typed: &[String]) -> Result<Value, String> {
 impl Shell {
     /// Ask before running `then`.
     #[allow(clippy::too_many_arguments)]
-    pub fn confirm(&mut self, title: impl Into<String>, body: impl Into<String>, verb: impl Into<String>, danger: bool, then: Mutation, window: &mut Window, cx: &mut Context<Self>) {
-        self.modal = Some(Modal::Confirm { title: title.into(), body: body.into(), verb: verb.into(), danger, then });
+    pub fn confirm(
+        &mut self,
+        title: impl Into<String>,
+        body: impl Into<String>,
+        verb: impl Into<String>,
+        danger: bool,
+        then: Mutation,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.modal = Some(Modal::Confirm {
+            title: title.into(),
+            body: body.into(),
+            verb: verb.into(),
+            danger,
+            then,
+        });
         // Focus the frame, so Enter and Escape reach the dialog.
         window.focus(&self.focus_handle());
         cx.notify();
@@ -188,36 +226,52 @@ impl Shell {
             let secret = field.kind == Kind::Secret;
             let input = cx.new(|cx| {
                 let input = TextInput::new(hint, cx);
-                if secret {
-                    input.secret()
-                } else {
-                    input
-                }
+                if secret { input.secret() } else { input }
             });
-            watch.push(cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| match event {
-                InputEvent::Submitted => this.submit_form(window, cx),
-                InputEvent::Cancelled => this.close_modal(window, cx),
-                InputEvent::Saved => {}
-                InputEvent::Changed => {
-                    if let Some(Modal::Form(form)) = this.modal.as_mut() {
-                        form.error = None;
+            watch.push(cx.subscribe_in(
+                &input,
+                window,
+                |this, _, event: &InputEvent, window, cx| match event {
+                    InputEvent::Submitted => this.submit_form(window, cx),
+                    InputEvent::Cancelled => this.close_modal(window, cx),
+                    InputEvent::Saved => {}
+                    InputEvent::Changed => {
+                        if let Some(Modal::Form(form)) = this.modal.as_mut() {
+                            form.error = None;
+                        }
+                        cx.notify();
                     }
-                    cx.notify();
-                }
-                InputEvent::Up | InputEvent::Down => {}
-            }));
+                    InputEvent::Up | InputEvent::Down => {}
+                },
+            ));
             inputs.push(input);
         }
         if let Some(first) = inputs.first() {
             window.focus(&first.focus_handle(cx));
         }
-        self.modal = Some(Modal::Form(Form { spec, inputs, error: None, _watch: watch }));
+        self.modal = Some(Modal::Form(Form {
+            spec,
+            inputs,
+            error: None,
+            _watch: watch,
+        }));
         cx.notify();
     }
 
     /// Show one thing in full.
-    pub fn open_detail(&mut self, kind: Detail, key: QueryKey, title: impl Into<String>, window: &mut Window, cx: &mut Context<Self>) {
-        self.modal = Some(Modal::Detail { kind, key, title: title.into() });
+    pub fn open_detail(
+        &mut self,
+        kind: Detail,
+        key: QueryKey,
+        title: impl Into<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.modal = Some(Modal::Detail {
+            kind,
+            key,
+            title: title.into(),
+        });
         window.focus(&self.focus_handle());
         cx.notify();
     }
@@ -231,7 +285,12 @@ impl Shell {
     }
 
     /// Ask before the window closes while a scaffold is still running.
-    pub fn warn_before_closing(&mut self, run_ids: Vec<String>, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn warn_before_closing(
+        &mut self,
+        run_ids: Vec<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.modal = Some(Modal::Closing { run_ids });
         window.focus(&self.focus_handle());
         cx.notify();
@@ -269,8 +328,14 @@ impl Shell {
 
     /// Send the form, if it is whole.
     pub fn submit_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(Modal::Form(form)) = self.modal.as_mut() else { return };
-        let typed: Vec<String> = form.inputs.iter().map(|i| i.read(cx).text().to_string()).collect();
+        let Some(Modal::Form(form)) = self.modal.as_mut() else {
+            return;
+        };
+        let typed: Vec<String> = form
+            .inputs
+            .iter()
+            .map(|i| i.read(cx).text().to_string())
+            .collect();
         match build_args(&form.spec, &typed) {
             Err(why) => {
                 form.error = Some(why);
@@ -285,10 +350,15 @@ impl Shell {
                     args["run_id"] = json!(id);
                 }
                 let note = form.spec.busy.map(|text| {
-                    let name = typed.first().map(|s| s.trim()).filter(|s| !s.is_empty()).unwrap_or("the project");
+                    let name = typed
+                        .first()
+                        .map(|s| s.trim())
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or("the project");
                     text.replace("{name}", name)
                 });
-                let mut mutation = Mutation::new(form.spec.capability, args).invalidating(form.spec.domain);
+                let mut mutation =
+                    Mutation::new(form.spec.capability, args).invalidating(form.spec.domain);
                 if scaffolding {
                     // The New project page's run history belongs to the `stacks` domain.
                     mutation = mutation.invalidating("stacks");
@@ -428,42 +498,137 @@ impl Shell {
                 .bg(t.scrim)
                 .occlude()
                 // A click outside puts the dialog away, as the command menu's does.
-                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| this.close_modal(window, cx)))
-                .child(panel)
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, window, cx| this.close_modal(window, cx)),
+                )
+                .child(crate::ui::motion::rise(
+                    panel.id("modal.panel"),
+                    "modal.enter",
+                    8.0,
+                    crate::ui::motion::BASE,
+                ))
                 .into_any_element(),
         )
     }
 }
 
 /// The inside of a detail dialog.
-fn detail_body(kind: Detail, title: &str, snap: &devd_app_core::sync::Snapshot, cx: &App) -> AnyElement {
+fn detail_body(
+    kind: Detail,
+    title: &str,
+    snap: &devd_app_core::sync::Snapshot,
+    cx: &App,
+) -> AnyElement {
     let t = theme(cx).clone();
-    let heading = |text: String| div().text_size(px(size::TEXT_LG)).font_weight(FontWeight::SEMIBOLD).text_color(t.text).child(text);
+    let heading = |text: String| {
+        div()
+            .text_size(px(size::TEXT_LG))
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(t.text)
+            .child(text)
+    };
     if snap.is_first_load() {
-        return div().flex().flex_col().gap(px(12.0)).child(heading(title.to_string())).child(ui::skeleton("modal.detail.a", 420.0, cx)).child(ui::skeleton("modal.detail.b", 300.0, cx)).into_any_element();
+        return div()
+            .flex()
+            .flex_col()
+            .gap(px(12.0))
+            .child(heading(title.to_string()))
+            .child(ui::skeleton("modal.detail.a", 420.0, cx))
+            .child(ui::skeleton("modal.detail.b", 300.0, cx))
+            .into_any_element();
     }
     let Some(data) = snap.data.as_deref() else {
-        let why = snap.error.as_ref().map(|f| f.message.clone()).unwrap_or_else(|| "devd did not answer.".to_string());
-        return div().flex().flex_col().gap(px(10.0)).child(heading(title.to_string())).child(div().text_color(t.danger).child(why)).into_any_element();
+        let why = snap
+            .error
+            .as_ref()
+            .map(|f| f.message.clone())
+            .unwrap_or_else(|| "devd did not answer.".to_string());
+        return div()
+            .flex()
+            .flex_col()
+            .gap(px(10.0))
+            .child(heading(title.to_string()))
+            .child(div().text_color(t.danger).child(why))
+            .into_any_element();
     };
     match kind {
         Detail::Mail => {
-            let text = |p: &str| data.pointer(p).and_then(Value::as_str).unwrap_or_default().to_string();
-            let to = data["to"].as_array().map(|a| a.iter().filter_map(|x| x["Address"].as_str().or(x.as_str())).collect::<Vec<_>>().join(", ")).unwrap_or_default();
+            let text = |p: &str| {
+                data.pointer(p)
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string()
+            };
+            let to = data["to"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x["Address"].as_str().or(x.as_str()))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
             let body = {
                 let plain = text("/text");
-                if plain.trim().is_empty() { text("/html") } else { plain }
+                if plain.trim().is_empty() {
+                    text("/html")
+                } else {
+                    plain
+                }
             };
-            let row = |label: &'static str, value: String| div().flex().gap(px(10.0)).text_size(px(size::TEXT_SM)).child(div().w(px(48.0)).flex_none().text_color(t.faint).child(label)).child(div().flex_1().min_w_0().text_color(t.text).child(ui::Clip::new(value)));
+            let row = |label: &'static str, value: String| {
+                div()
+                    .flex()
+                    .gap(px(10.0))
+                    .text_size(px(size::TEXT_SM))
+                    .child(
+                        div()
+                            .w(px(48.0))
+                            .flex_none()
+                            .text_color(t.faint)
+                            .child(label),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_color(t.text)
+                            .child(ui::Clip::new(value)),
+                    )
+            };
             div()
                 .flex()
                 .flex_col()
                 .gap(px(10.0))
                 .min_h_0()
                 .child(heading(text("/subject")))
-                .child(div().flex().flex_col().gap(px(4.0)).child(row("From", text("/from"))).child(row("To", to)).child(row("When", ui::ago(&text("/created")))))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(4.0))
+                        .child(row("From", text("/from")))
+                        .child(row("To", to))
+                        .child(row("When", ui::ago(&text("/created")))),
+                )
                 .child(ui::rule(cx))
-                .child(div().id("modal.mail.body").flex_1().min_h_0().max_h(px(380.0)).overflow_y_scroll().text_size(px(size::TEXT)).line_height(px(21.0)).text_color(t.text).child(SharedString::from(if body.trim().is_empty() { "This message has no text.".to_string() } else { body })))
+                .child(
+                    div()
+                        .id("modal.mail.body")
+                        .flex_1()
+                        .min_h_0()
+                        .max_h(px(380.0))
+                        .overflow_y_scroll()
+                        .text_size(px(size::TEXT))
+                        .line_height(px(21.0))
+                        .text_color(t.text)
+                        .child(SharedString::from(if body.trim().is_empty() {
+                            "This message has no text.".to_string()
+                        } else {
+                            body
+                        })),
+                )
                 .into_any_element()
         }
         Detail::Skill => {
@@ -476,10 +641,36 @@ fn detail_body(kind: Detail, title: &str, snap: &devd_app_core::sync::Snapshot, 
                 .flex_col()
                 .gap(px(8.0))
                 .min_h_0()
-                .child(div().flex().items_center().gap(px(8.0)).child(heading(name)).child(ui::pill(data["kind"].as_str().unwrap_or("skill").to_string(), Tone::Neutral, cx)))
-                .child(div().text_size(px(size::TEXT)).text_color(t.muted).child(description))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .child(heading(name))
+                        .child(ui::pill(
+                            data["kind"].as_str().unwrap_or("skill").to_string(),
+                            Tone::Neutral,
+                            cx,
+                        )),
+                )
+                .child(
+                    div()
+                        .text_size(px(size::TEXT))
+                        .text_color(t.muted)
+                        .child(description),
+                )
                 .child(ui::rule(cx))
-                .child(div().id("modal.skill.body").flex_1().min_h_0().max_h(px(400.0)).overflow_y_scroll().text_size(px(size::TEXT)).line_height(px(21.0)).child(ui::markdown::document("modal.skill", &blocks, cx)))
+                .child(
+                    div()
+                        .id("modal.skill.body")
+                        .flex_1()
+                        .min_h_0()
+                        .max_h(px(400.0))
+                        .overflow_y_scroll()
+                        .text_size(px(size::TEXT))
+                        .line_height(px(21.0))
+                        .child(ui::markdown::document("modal.skill", &blocks, cx)),
+                )
                 .into_any_element()
         }
     }
@@ -498,7 +689,12 @@ mod tests {
             capability: "runtime.install",
             domain: "runtime",
             fixed: json!({ "force": false }),
-            fields: vec![Field::text("kind", "Runtime", "php"), Field::text("version", "Version", "8.4"), Field::number("port", "Port", "3306"), Field::optional("note", "Note", "")],
+            fields: vec![
+                Field::text("kind", "Runtime", "php"),
+                Field::text("version", "Version", "8.4"),
+                Field::number("port", "Port", "3306"),
+                Field::optional("note", "Note", ""),
+            ],
             busy: None,
         }
     }
@@ -510,18 +706,34 @@ mod tests {
     #[test]
     fn a_whole_form_becomes_the_arguments_with_the_fixed_ones_kept() {
         let args = build_args(&spec(), &typed(" php ", "8.4", "3306", "")).unwrap();
-        assert_eq!(args, json!({ "force": false, "kind": "php", "version": "8.4", "port": 3306 }), "words are trimmed, the number is a number, an empty optional field is left out");
+        assert_eq!(
+            args,
+            json!({ "force": false, "kind": "php", "version": "8.4", "port": 3306 }),
+            "words are trimmed, the number is a number, an empty optional field is left out"
+        );
     }
 
     #[test]
     fn a_missing_required_field_is_named_and_nothing_is_built() {
-        assert_eq!(build_args(&spec(), &typed("php", "  ", "", "")).unwrap_err(), "Version is needed.");
-        assert_eq!(build_args(&spec(), &typed("", "8.4", "", "")).unwrap_err(), "Runtime is needed.");
+        assert_eq!(
+            build_args(&spec(), &typed("php", "  ", "", "")).unwrap_err(),
+            "Version is needed."
+        );
+        assert_eq!(
+            build_args(&spec(), &typed("", "8.4", "", "")).unwrap_err(),
+            "Runtime is needed."
+        );
     }
 
     #[test]
     fn a_number_that_is_not_a_number_is_refused_in_words() {
-        assert_eq!(build_args(&spec(), &typed("php", "8.4", "three", "")).unwrap_err(), "Port has to be a whole number.");
-        assert!(build_args(&spec(), &typed("php", "8.4", "-1", "")).is_ok(), "a negative whole number is still a whole number");
+        assert_eq!(
+            build_args(&spec(), &typed("php", "8.4", "three", "")).unwrap_err(),
+            "Port has to be a whole number."
+        );
+        assert!(
+            build_args(&spec(), &typed("php", "8.4", "-1", "")).is_ok(),
+            "a negative whole number is still a whole number"
+        );
     }
 }

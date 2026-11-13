@@ -69,27 +69,54 @@ pub mod files {
 
     /// A file's text, optionally a window of its lines.
     pub fn read(path: &str, offset: Option<usize>, limit: Option<usize>) -> Call {
-        Call::new("fs.read", args(&[("path", some(path)), ("offset", offset.map(Value::from)), ("limit", limit.map(Value::from))]))
+        Call::new(
+            "fs.read",
+            args(&[
+                ("path", some(path)),
+                ("offset", offset.map(Value::from)),
+                ("limit", limit.map(Value::from)),
+            ]),
+        )
     }
 
     /// A file's text exactly as it is on disk, with its line endings: what an editor opens.
     pub fn read_exact(path: &str) -> Call {
-        Call::new("fs.read", args(&[("path", some(path)), ("raw", some(true))]))
+        Call::new(
+            "fs.read",
+            args(&[("path", some(path)), ("raw", some(true))]),
+        )
     }
 
     /// Make an empty file, and any folders on the way to it.
     pub fn create(path: &str) -> Call {
-        Call::new("fs.write", args(&[("path", some(path)), ("content", some("")), ("create_dirs", some(true))]))
+        Call::new(
+            "fs.write",
+            args(&[
+                ("path", some(path)),
+                ("content", some("")),
+                ("create_dirs", some(true)),
+            ]),
+        )
     }
 
     /// Replace a file's whole text.
     pub fn write(path: &str, content: &str) -> Call {
-        Call::new("fs.write", args(&[("path", some(path)), ("content", some(content))]))
+        Call::new(
+            "fs.write",
+            args(&[("path", some(path)), ("content", some(content))]),
+        )
     }
 
     /// Search file contents under a folder.
     pub fn search(path: &str, pattern: &str, limit: usize) -> Call {
-        Call::new("fs.search", args(&[("path", some(path)), ("pattern", some(pattern)), ("limit", some(limit))]))
+        Call::new(
+            "fs.search",
+            args(&[
+                ("path", some(path)),
+                ("pattern", some(pattern)),
+                ("limit", some(limit)),
+            ]),
+        )
     }
 
     /// Move or rename.
@@ -114,37 +141,66 @@ pub mod git {
 
     /// The most recent commits, optionally of one path.
     pub fn log(repo: &str, limit: usize, path: Option<&str>) -> Call {
-        Call::new("git.log", args(&[("repo", some(repo)), ("limit", some(limit)), ("path", path.map(Value::from))]))
+        Call::new(
+            "git.log",
+            args(&[
+                ("repo", some(repo)),
+                ("limit", some(limit)),
+                ("path", path.map(Value::from)),
+            ]),
+        )
     }
 
     /// A diff: the working tree, the staged changes, or a revision; optionally of one path.
     pub fn diff(repo: &str, path: Option<&str>, staged: bool) -> Call {
-        Call::new("git.diff", args(&[("repo", some(repo)), ("path", path.map(Value::from)), ("staged", staged.then(|| json!(true)))]))
+        Call::new(
+            "git.diff",
+            args(&[
+                ("repo", some(repo)),
+                ("path", path.map(Value::from)),
+                ("staged", staged.then(|| json!(true))),
+            ]),
+        )
     }
 
     /// One commit with its changes.
     pub fn show(repo: &str, rev: &str) -> Call {
-        Call::new("git.show", args(&[("repo", some(repo)), ("rev", some(rev))]))
+        Call::new(
+            "git.show",
+            args(&[("repo", some(repo)), ("rev", some(rev))]),
+        )
     }
 
     /// Stage files.
     pub fn stage(repo: &str, paths: &[String]) -> Call {
-        Call::new("git.stage", args(&[("repo", some(repo)), ("paths", some(paths.to_vec()))]))
+        Call::new(
+            "git.stage",
+            args(&[("repo", some(repo)), ("paths", some(paths.to_vec()))]),
+        )
     }
 
     /// Unstage files.
     pub fn unstage(repo: &str, paths: &[String]) -> Call {
-        Call::new("git.unstage", args(&[("repo", some(repo)), ("paths", some(paths.to_vec()))]))
+        Call::new(
+            "git.unstage",
+            args(&[("repo", some(repo)), ("paths", some(paths.to_vec()))]),
+        )
     }
 
     /// Throw away changes to files. Destructive; asks first.
     pub fn discard(repo: &str, paths: &[String]) -> Call {
-        Call::new("git.discard", args(&[("repo", some(repo)), ("paths", some(paths.to_vec()))]))
+        Call::new(
+            "git.discard",
+            args(&[("repo", some(repo)), ("paths", some(paths.to_vec()))]),
+        )
     }
 
     /// Commit what is staged.
     pub fn commit(repo: &str, message: &str) -> Call {
-        Call::new("git.commit", args(&[("repo", some(repo)), ("message", some(message))]))
+        Call::new(
+            "git.commit",
+            args(&[("repo", some(repo)), ("message", some(message))]),
+        )
     }
 
     /// Branches, with the current one marked.
@@ -154,17 +210,30 @@ pub mod git {
 
     /// Move to a branch.
     pub fn switch(repo: &str, name: &str) -> Call {
-        Call::new("git.switch", args(&[("repo", some(repo)), ("name", some(name))]))
+        Call::new(
+            "git.switch",
+            args(&[("repo", some(repo)), ("name", some(name))]),
+        )
     }
 
     /// Make a branch, and move to it.
     pub fn branch_create(repo: &str, name: &str) -> Call {
-        Call::new("git.branch.create", args(&[("repo", some(repo)), ("name", some(name)), ("checkout", some(true))]))
+        Call::new(
+            "git.branch.create",
+            args(&[
+                ("repo", some(repo)),
+                ("name", some(name)),
+                ("checkout", some(true)),
+            ]),
+        )
     }
 
     /// Delete a branch.
     pub fn branch_delete(repo: &str, name: &str) -> Call {
-        Call::new("git.branch.delete", args(&[("repo", some(repo)), ("name", some(name))]))
+        Call::new(
+            "git.branch.delete",
+            args(&[("repo", some(repo)), ("name", some(name))]),
+        )
     }
 
     /// Fetch from the remote.
@@ -189,17 +258,34 @@ pub mod git {
 
     /// Put the working changes aside.
     pub fn stash_push(repo: &str, message: Option<&str>) -> Call {
-        Call::new("git.stash.push", args(&[("repo", some(repo)), ("message", message.map(Value::from)), ("include_untracked", some(true))]))
+        Call::new(
+            "git.stash.push",
+            args(&[
+                ("repo", some(repo)),
+                ("message", message.map(Value::from)),
+                ("include_untracked", some(true)),
+            ]),
+        )
     }
 
     /// Bring a stash back, and drop it.
     pub fn stash_pop(repo: &str, reference: &str) -> Call {
-        Call::new("git.stash.apply", args(&[("repo", some(repo)), ("reference", some(reference)), ("pop", some(true))]))
+        Call::new(
+            "git.stash.apply",
+            args(&[
+                ("repo", some(repo)),
+                ("reference", some(reference)),
+                ("pop", some(true)),
+            ]),
+        )
     }
 
     /// Drop a stash.
     pub fn stash_drop(repo: &str, reference: &str) -> Call {
-        Call::new("git.stash.drop", args(&[("repo", some(repo)), ("reference", some(reference))]))
+        Call::new(
+            "git.stash.drop",
+            args(&[("repo", some(repo)), ("reference", some(reference))]),
+        )
     }
 
     /// Tags.
@@ -219,17 +305,26 @@ pub mod git {
 
     /// Where HEAD has been: the way back from a mistake.
     pub fn reflog(repo: &str, limit: usize) -> Call {
-        Call::new("git.reflog", args(&[("repo", some(repo)), ("limit", some(limit))]))
+        Call::new(
+            "git.reflog",
+            args(&[("repo", some(repo)), ("limit", some(limit))]),
+        )
     }
 
     /// Undo a commit with a new commit.
     pub fn revert(repo: &str, rev: &str) -> Call {
-        Call::new("git.revert", args(&[("repo", some(repo)), ("rev", some(rev))]))
+        Call::new(
+            "git.revert",
+            args(&[("repo", some(repo)), ("rev", some(rev))]),
+        )
     }
 
     /// Who last changed each line of a file.
     pub fn blame(repo: &str, path: &str) -> Call {
-        Call::new("git.blame", args(&[("repo", some(repo)), ("path", some(path))]))
+        Call::new(
+            "git.blame",
+            args(&[("repo", some(repo)), ("path", some(path))]),
+        )
     }
 }
 
@@ -244,7 +339,14 @@ pub mod project {
 
     /// Run a task by id.
     pub fn run(path: &str, task: &str, background: bool) -> Call {
-        Call::new("project.run", args(&[("path", some(path)), ("task", some(task)), ("background", background.then(|| json!(true)))]))
+        Call::new(
+            "project.run",
+            args(&[
+                ("path", some(path)),
+                ("task", some(task)),
+                ("background", background.then(|| json!(true))),
+            ]),
+        )
     }
 
     /// What devd detected: stack, package manager, scripts.
@@ -259,17 +361,30 @@ pub mod project {
 
     /// Start a declared process.
     pub fn start(project: &str, name: &str) -> Call {
-        Call::new("project.start", args(&[("project", some(project)), ("name", some(name))]))
+        Call::new(
+            "project.start",
+            args(&[("project", some(project)), ("name", some(name))]),
+        )
     }
 
     /// Stop a declared process.
     pub fn stop(project: &str, name: &str) -> Call {
-        Call::new("project.stop", args(&[("project", some(project)), ("name", some(name))]))
+        Call::new(
+            "project.stop",
+            args(&[("project", some(project)), ("name", some(name))]),
+        )
     }
 
     /// A process's output.
     pub fn logs(project: &str, name: &str, lines: usize) -> Call {
-        Call::new("project.logs", args(&[("project", some(project)), ("name", some(name)), ("lines", some(lines))]))
+        Call::new(
+            "project.logs",
+            args(&[
+                ("project", some(project)),
+                ("name", some(name)),
+                ("lines", some(lines)),
+            ]),
+        )
     }
 }
 
@@ -284,12 +399,18 @@ pub mod team {
 
     /// Add a to-do.
     pub fn todo_create(project: &str, title: &str) -> Call {
-        Call::new("todo.create", args(&[("project", some(project)), ("title", some(title))]))
+        Call::new(
+            "todo.create",
+            args(&[("project", some(project)), ("title", some(title))]),
+        )
     }
 
     /// Mark a to-do done. `revision` is the one the list showed, so a change made meanwhile is not overwritten.
     pub fn todo_complete(id: &str, revision: u64) -> Call {
-        Call::new("todo.complete", args(&[("id", some(id)), ("expected_revision", some(revision))]))
+        Call::new(
+            "todo.complete",
+            args(&[("id", some(id)), ("expected_revision", some(revision))]),
+        )
     }
 
     /// Reviews of the project's work.
@@ -319,7 +440,14 @@ pub mod terminal {
 
     /// Open a shell in a folder, on the runtimes the project is pinned to.
     pub fn open(path: &str, cols: u16, rows: u16) -> Call {
-        Call::new("project.terminal", args(&[("path", some(path)), ("cols", some(cols)), ("rows", some(rows))]))
+        Call::new(
+            "project.terminal",
+            args(&[
+                ("path", some(path)),
+                ("cols", some(cols)),
+                ("rows", some(rows)),
+            ]),
+        )
     }
 
     /// The shells that are open.
@@ -329,17 +457,26 @@ pub mod terminal {
 
     /// Tell a shell how big its window is.
     pub fn resize(id: &str, cols: u16, rows: u16) -> Call {
-        Call::new("terminal.resize", args(&[("id", some(id)), ("cols", some(cols)), ("rows", some(rows))]))
+        Call::new(
+            "terminal.resize",
+            args(&[("id", some(id)), ("cols", some(cols)), ("rows", some(rows))]),
+        )
     }
 
     /// What a shell has printed lately.
     pub fn read(id: &str, lines: usize) -> Call {
-        Call::new("terminal.read", args(&[("id", some(id)), ("lines", some(lines))]))
+        Call::new(
+            "terminal.read",
+            args(&[("id", some(id)), ("lines", some(lines))]),
+        )
     }
 
     /// Type into a shell.
     pub fn write(id: &str, data: &str) -> Call {
-        Call::new("terminal.write", args(&[("id", some(id)), ("data", some(data))]))
+        Call::new(
+            "terminal.write",
+            args(&[("id", some(id)), ("data", some(data))]),
+        )
     }
 
     /// Close a shell.
@@ -384,11 +521,14 @@ pub mod browser {
 
     /// Back, forward or reload, by the capability's name.
     pub fn history(which: &str) -> Call {
-        Call::new(match which {
-            "back" => "browser.back",
-            "forward" => "browser.forward",
-            _ => "browser.reload",
-        }, args(&[]))
+        Call::new(
+            match which {
+                "back" => "browser.back",
+                "forward" => "browser.forward",
+                _ => "browser.reload",
+            },
+            args(&[]),
+        )
     }
 
     /// Click a point, in the page's own pixels.
@@ -398,7 +538,10 @@ pub mod browser {
 
     /// Scroll the page at a point.
     pub fn scroll(x: f64, y: f64, delta_y: f64) -> Call {
-        Call::new("browser.scroll", args(&[("x", some(x)), ("y", some(y)), ("delta_y", some(delta_y))]))
+        Call::new(
+            "browser.scroll",
+            args(&[("x", some(x)), ("y", some(y)), ("delta_y", some(delta_y))]),
+        )
     }
 
     /// Type text into whatever has focus.
@@ -529,7 +672,10 @@ mod tests {
         assert_eq!(call.args, json!({ "repo": "D:/x", "limit": 10 }));
         let with = git::log("D:/x", 10, Some("a.rs"));
         assert_eq!(with.args["path"], "a.rs");
-        assert_eq!(git::diff("D:/x", None, false).args, json!({ "repo": "D:/x" }));
+        assert_eq!(
+            git::diff("D:/x", None, false).args,
+            json!({ "repo": "D:/x" })
+        );
         assert_eq!(git::diff("D:/x", None, true).args["staged"], true);
     }
 
@@ -551,7 +697,16 @@ mod tests {
         }
         // Every builder is sampled: the capability ids sampled are the ones the module can make.
         let ids: std::collections::BTreeSet<&str> = samples.iter().map(|c| c.cap).collect();
-        for expected in ["fs.tree", "fs.read", "git.status", "git.commit", "git.stash.apply", "project.run", "todo.list", "project.terminal"] {
+        for expected in [
+            "fs.tree",
+            "fs.read",
+            "git.status",
+            "git.commit",
+            "git.stash.apply",
+            "project.run",
+            "todo.list",
+            "project.terminal",
+        ] {
             assert!(ids.contains(expected), "{expected} is not sampled");
         }
     }

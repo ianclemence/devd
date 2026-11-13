@@ -98,7 +98,9 @@ impl Route {
     /// The thing selected on the screen, when one is.
     pub fn selection(&self) -> Option<&str> {
         match self {
-            Self::Assistant(id) | Self::Runs(id) | Self::Projects(id) | Self::Sites(id) => id.as_deref(),
+            Self::Assistant(id) | Self::Runs(id) | Self::Projects(id) | Self::Sites(id) => {
+                id.as_deref()
+            }
             Self::Project(dir, _) => Some(dir),
             _ => None,
         }
@@ -107,7 +109,11 @@ impl Route {
     /// One project on a tab. The overview is the project itself, with no tab in its path.
     pub fn project(dir: impl Into<String>, tab: crate::project::ProjectTab) -> Route {
         let dir = dir.into();
-        if tab == crate::project::ProjectTab::Overview { Route::Projects(Some(dir)) } else { Route::Project(dir, tab) }
+        if tab == crate::project::ProjectTab::Overview {
+            Route::Projects(Some(dir))
+        } else {
+            Route::Project(dir, tab)
+        }
     }
 
     /// The tab of a project's page this route is on, when it is one.
@@ -179,7 +185,9 @@ fn encode(id: &str) -> String {
     let mut out = String::with_capacity(id.len());
     for byte in id.bytes() {
         match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(byte as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char)
+            }
             other => out.push_str(&format!("%{other:02X}")),
         }
     }
@@ -191,7 +199,9 @@ fn decode(text: &str) -> String {
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        let hex = (bytes[i] == b'%' && i + 2 < bytes.len()).then(|| text.get(i + 1..i + 3)).flatten();
+        let hex = (bytes[i] == b'%' && i + 2 < bytes.len())
+            .then(|| text.get(i + 1..i + 3))
+            .flatten();
         match hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
             Some(byte) => {
                 out.push(byte);
@@ -219,7 +229,10 @@ const DEPTH: usize = 100;
 impl History {
     /// A history that starts at `route`.
     pub fn new(route: Route) -> Self {
-        Self { entries: vec![route], at: 0 }
+        Self {
+            entries: vec![route],
+            at: 0,
+        }
     }
 
     /// Where the window is.
@@ -302,7 +315,12 @@ mod tests {
             Route::Settings,
         ];
         for route in routes {
-            assert_eq!(Route::parse(&route.path()).as_ref(), Some(&route), "{}", route.path());
+            assert_eq!(
+                Route::parse(&route.path()).as_ref(),
+                Some(&route),
+                "{}",
+                route.path()
+            );
         }
     }
 
@@ -314,9 +332,20 @@ mod tests {
 
     #[test]
     fn links_and_old_names_are_understood_and_nonsense_is_not() {
-        assert_eq!(Route::parse("devd://sites/blog"), Some(Route::Sites(Some("blog".into()))));
-        assert_eq!(Route::parse("/machine"), Some(Route::Server), "it was called Machine");
-        assert_eq!(Route::parse("/models"), Some(Route::Intelligence), "it was called Models");
+        assert_eq!(
+            Route::parse("devd://sites/blog"),
+            Some(Route::Sites(Some("blog".into())))
+        );
+        assert_eq!(
+            Route::parse("/machine"),
+            Some(Route::Server),
+            "it was called Machine"
+        );
+        assert_eq!(
+            Route::parse("/models"),
+            Some(Route::Intelligence),
+            "it was called Models"
+        );
         assert_eq!(Route::parse(""), Some(Route::Home));
         assert_eq!(Route::parse("/nowhere"), None);
     }
@@ -362,17 +391,32 @@ mod tests {
         use crate::project::ProjectTab;
         let dir = r"D:\www\shop & co";
         let overview = Route::project(dir, ProjectTab::Overview);
-        assert_eq!(overview, Route::Projects(Some(dir.to_string())), "the overview is the project itself");
+        assert_eq!(
+            overview,
+            Route::Projects(Some(dir.to_string())),
+            "the overview is the project itself"
+        );
         let git = Route::project(dir, ProjectTab::Changes);
         assert_eq!(git.path(), "/projects/D%3A%5Cwww%5Cshop%20%26%20co/changes");
-        assert_eq!(Route::parse(&git.path()), Some(git.clone()), "a path reads back as the route that made it");
+        assert_eq!(
+            Route::parse(&git.path()),
+            Some(git.clone()),
+            "a path reads back as the route that made it"
+        );
         assert_eq!(Route::parse(&overview.path()), Some(overview));
         assert_eq!(git.selection(), Some(dir));
         assert_eq!(git.project_tab(), Some(ProjectTab::Changes));
         assert_eq!(git.title(), "Projects");
-        assert!(git.same_screen(&Route::Projects(None)), "it lights the projects place on the rail");
+        assert!(
+            git.same_screen(&Route::Projects(None)),
+            "it lights the projects place on the rail"
+        );
         assert!(git.on_rail(&Route::Projects(None)));
-        assert_eq!(Route::parse("devd://projects/x/nonsense"), None, "an unknown tab is not a guess");
+        assert_eq!(
+            Route::parse("devd://projects/x/nonsense"),
+            None,
+            "an unknown tab is not a guess"
+        );
         for tab in ProjectTab::ALL {
             let route = Route::project(dir, tab);
             assert_eq!(Route::parse(&route.path()), Some(route), "{tab:?}");

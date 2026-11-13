@@ -18,10 +18,11 @@ use std::sync::Arc;
 use devd_app_core::spell::Dictionary;
 
 use gpui::{
-    actions, div, fill, point, prelude::*, px, relative, size, App, Bounds, ClipboardItem, Context, CursorStyle, ElementId,
-    ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, KeyBinding,
-    LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ScrollHandle, ShapedLine, SharedString,
-    Style, TextRun, UTF16Selection, UnderlineStyle, Window,
+    App, Bounds, ClipboardItem, Context, CursorStyle, ElementId, ElementInputHandler, Entity,
+    EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, KeyBinding,
+    LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point,
+    ScrollHandle, ShapedLine, SharedString, Style, TextRun, UTF16Selection, UnderlineStyle, Window,
+    actions, div, fill, point, prelude::*, px, relative, size,
 };
 use unicode_segmentation::*;
 
@@ -110,7 +111,11 @@ pub fn bind_keys(cx: &mut App) {
     ]);
     // Only a field made with `.code()` answers to these: elsewhere Tab still moves to the next field.
     let code = Some("CodeInput");
-    cx.bind_keys([KeyBinding::new("tab", Indent, code), KeyBinding::new("shift-tab", Outdent, code), KeyBinding::new("secondary-s", Save, code)]);
+    cx.bind_keys([
+        KeyBinding::new("tab", Indent, code),
+        KeyBinding::new("shift-tab", Outdent, code),
+        KeyBinding::new("secondary-s", Save, code),
+    ]);
 }
 
 /// A text field.
@@ -191,7 +196,11 @@ impl TextInput {
 
     /// The text's widest line in characters, for a field that must be as wide as its text.
     pub fn widest_line(&self) -> usize {
-        self.content.split('\n').map(|l| l.chars().count()).max().unwrap_or(0)
+        self.content
+            .split('\n')
+            .map(|l| l.chars().count())
+            .max()
+            .unwrap_or(0)
     }
 
     /// How many lines the text has.
@@ -231,12 +240,20 @@ impl TextInput {
 
     /// The slips in the text now, by byte range. Checked once per change.
     fn slips(&self) -> Vec<Range<usize>> {
-        let Some(dictionary) = &self.dictionary else { return Vec::new() };
+        let Some(dictionary) = &self.dictionary else {
+            return Vec::new();
+        };
         let mut checked = self.checked.borrow_mut();
-        if checked.as_ref().is_none_or(|(text, _)| *text != self.content) {
+        if checked
+            .as_ref()
+            .is_none_or(|(text, _)| *text != self.content)
+        {
             *checked = Some((self.content.clone(), dictionary.check(&self.content)));
         }
-        checked.as_ref().map(|(_, slips)| slips.clone()).unwrap_or_default()
+        checked
+            .as_ref()
+            .map(|(_, slips)| slips.clone())
+            .unwrap_or_default()
     }
 
     /// What has been typed.
@@ -264,8 +281,14 @@ impl TextInput {
         if self.code {
             // A new line, as indented as the one it follows.
             let cursor = self.cursor_offset();
-            let line_start = self.content[..cursor].rfind('\n').map(|i| i + 1).unwrap_or(0);
-            let indent: String = self.content[line_start..cursor].chars().take_while(|c| *c == ' ' || *c == '\t').collect();
+            let line_start = self.content[..cursor]
+                .rfind('\n')
+                .map(|i| i + 1)
+                .unwrap_or(0);
+            let indent: String = self.content[line_start..cursor]
+                .chars()
+                .take_while(|c| *c == ' ' || *c == '\t')
+                .collect();
             return self.replace_text_in_range(None, &format!("\n{indent}"), window, cx);
         }
         cx.emit(InputEvent::Submitted);
@@ -280,9 +303,22 @@ impl TextInput {
         if range.is_empty() || !self.content[range.clone()].contains('\n') {
             return self.replace_text_in_range(None, "    ", window, cx);
         }
-        let start = self.content[..range.start].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        let start = self.content[..range.start]
+            .rfind('\n')
+            .map(|i| i + 1)
+            .unwrap_or(0);
         let block = &self.content[start..range.end];
-        let indented: String = block.split('\n').map(|l| if l.is_empty() { l.to_string() } else { format!("    {l}") }).collect::<Vec<_>>().join("\n");
+        let indented: String = block
+            .split('\n')
+            .map(|l| {
+                if l.is_empty() {
+                    l.to_string()
+                } else {
+                    format!("    {l}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
         let added = indented.len() - block.len();
         let mut next = String::with_capacity(self.content.len() + added);
         next.push_str(&self.content[..start]);
@@ -301,9 +337,18 @@ impl TextInput {
             return cx.propagate();
         }
         let range = self.selected_range.clone();
-        let start = self.content[..range.start].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        let start = self.content[..range.start]
+            .rfind('\n')
+            .map(|i| i + 1)
+            .unwrap_or(0);
         let block = self.content[start..range.end].to_string();
-        let outdented: Vec<String> = block.split('\n').map(|l| { let n = l.chars().take(4).take_while(|c| *c == ' ').count(); l[n..].to_string() }).collect();
+        let outdented: Vec<String> = block
+            .split('\n')
+            .map(|l| {
+                let n = l.chars().take(4).take_while(|c| *c == ' ').count();
+                l[n..].to_string()
+            })
+            .collect();
         let outdented = outdented.join("\n");
         let removed = block.len() - outdented.len();
         if removed == 0 {
@@ -314,8 +359,13 @@ impl TextInput {
         next.push_str(&outdented);
         next.push_str(&self.content[range.end..]);
         self.content = next.into();
-        let first_line_removed = block.split('\n').next().map(|l| l.chars().take(4).take_while(|c| *c == ' ').count()).unwrap_or(0);
-        self.selected_range = range.start.saturating_sub(first_line_removed).max(start)..range.end - removed;
+        let first_line_removed = block
+            .split('\n')
+            .next()
+            .map(|l| l.chars().take(4).take_while(|c| *c == ' ').count())
+            .unwrap_or(0);
+        self.selected_range =
+            range.start.saturating_sub(first_line_removed).max(start)..range.end - removed;
         self.marked_range = None;
         cx.emit(InputEvent::Changed);
         cx.notify();
@@ -344,9 +394,15 @@ impl TextInput {
     fn vertical(&mut self, up: bool, cx: &mut Context<Self>) {
         let cursor = self.cursor_offset();
         let at = self.lines.iter().rposition(|(start, _)| *start <= cursor);
-        let Some(at) = at else { return self.move_to(if up { 0 } else { self.content.len() }, cx) };
+        let Some(at) = at else {
+            return self.move_to(if up { 0 } else { self.content.len() }, cx);
+        };
         let x = self.lines[at].1.x_for_index(cursor - self.lines[at].0);
-        let target = if up { at.checked_sub(1) } else { Some(at + 1).filter(|n| *n < self.lines.len()) };
+        let target = if up {
+            at.checked_sub(1)
+        } else {
+            Some(at + 1).filter(|n| *n < self.lines.len())
+        };
         match target {
             Some(n) => {
                 let (start, line) = &self.lines[n];
@@ -373,9 +429,23 @@ impl TextInput {
 
     /// Correct the misspelt word at the cursor with the nearest known word.
     fn fix_spelling(&mut self, _: &FixSpelling, window: &mut Window, cx: &mut Context<Self>) {
-        let (Some(dictionary), cursor) = (self.dictionary.clone(), self.cursor_offset()) else { return };
-        let Some(slip) = self.slips().into_iter().find(|r| r.start <= cursor && cursor <= r.end) else { return };
-        let Some(better) = dictionary.suggest(&self.content[slip.clone()], 1).into_iter().next() else { return };
+        let (Some(dictionary), cursor) = (self.dictionary.clone(), self.cursor_offset()) else {
+            return;
+        };
+        let Some(slip) = self
+            .slips()
+            .into_iter()
+            .find(|r| r.start <= cursor && cursor <= r.end)
+        else {
+            return;
+        };
+        let Some(better) = dictionary
+            .suggest(&self.content[slip.clone()], 1)
+            .into_iter()
+            .next()
+        else {
+            return;
+        };
         let utf16 = self.range_to_utf16(&slip);
         self.replace_text_in_range(Some(utf16), &better, window, cx);
     }
@@ -388,7 +458,12 @@ impl TextInput {
         self.move_to(self.next_word(self.cursor_offset()), cx);
     }
 
-    fn delete_word_left(&mut self, _: &DeleteWordLeft, window: &mut Window, cx: &mut Context<Self>) {
+    fn delete_word_left(
+        &mut self,
+        _: &DeleteWordLeft,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.selected_range.is_empty() {
             self.select_to(self.previous_word(self.cursor_offset()), cx)
         }
@@ -397,7 +472,11 @@ impl TextInput {
 
     /// The start of the word before `offset`.
     fn previous_word(&self, offset: usize) -> usize {
-        self.content[..offset].unicode_word_indices().next_back().map(|(index, _)| index).unwrap_or(0)
+        self.content[..offset]
+            .unicode_word_indices()
+            .next_back()
+            .map(|(index, _)| index)
+            .unwrap_or(0)
     }
 
     /// The end of the word after `offset`.
@@ -470,7 +549,10 @@ impl TextInput {
         if self.linking && event.modifiers.secondary() {
             let at = self.index_for_mouse_position(event.position);
             let root = super::links::root(cx);
-            if let Some((_, link)) = super::links::resolve(&self.content, root.as_deref()).into_iter().find(|(r, _)| r.start <= at && at <= r.end) {
+            if let Some((_, link)) = super::links::resolve(&self.content, root.as_deref())
+                .into_iter()
+                .find(|(r, _)| r.start <= at && at <= r.end)
+            {
                 super::links::open(&link, cx);
                 return;
             }
@@ -505,7 +587,11 @@ impl TextInput {
 
     fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            let text = if self.multiline.is_some() { text.replace("\r\n", "\n") } else { text.replace(['\r', '\n'], " ") };
+            let text = if self.multiline.is_some() {
+                text.replace("\r\n", "\n")
+            } else {
+                text.replace(['\r', '\n'], " ")
+            };
             self.replace_text_in_range(None, &text, window, cx);
         }
     }
@@ -544,7 +630,9 @@ impl TextInput {
             return 0;
         }
 
-        let Some(bounds) = self.last_bounds.as_ref() else { return 0 };
+        let Some(bounds) = self.last_bounds.as_ref() else {
+            return 0;
+        };
         if self.lines.is_empty() || position.y < bounds.top() {
             return 0;
         }
@@ -723,13 +811,26 @@ impl EntityInputHandler for TextInput {
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
         let range = self.range_from_utf16(&range_utf16);
-        let at = self.lines.iter().rposition(|(start, _)| *start <= range.start)?;
+        let at = self
+            .lines
+            .iter()
+            .rposition(|(start, _)| *start <= range.start)?;
         let (start, line) = &self.lines[at];
         let height = (bounds.bottom() - bounds.top()) / self.lines.len() as f32;
         let top = bounds.top() + height * at as f32;
         Some(Bounds::from_corners(
             point(bounds.left() + line.x_for_index(range.start - start), top),
-            point(bounds.left() + line.x_for_index(range.end.max(range.start).saturating_sub(*start).min(line.len())), top + height),
+            point(
+                bounds.left()
+                    + line.x_for_index(
+                        range
+                            .end
+                            .max(range.start)
+                            .saturating_sub(*start)
+                            .min(line.len()),
+                    ),
+                top + height,
+            ),
         ))
     }
 
@@ -763,7 +864,11 @@ struct PrepaintState {
 }
 
 /// The runs for one line: the base run, underlined wherever `marks` say.
-fn line_runs(base: &TextRun, line: Range<usize>, marks: &[(Range<usize>, UnderlineStyle)]) -> Vec<TextRun> {
+fn line_runs(
+    base: &TextRun,
+    line: Range<usize>,
+    marks: &[(Range<usize>, UnderlineStyle)],
+) -> Vec<TextRun> {
     let mut edges = vec![line.start, line.end];
     for (range, _) in marks {
         for edge in [range.start, range.end] {
@@ -777,8 +882,15 @@ fn line_runs(base: &TextRun, line: Range<usize>, marks: &[(Range<usize>, Underli
     edges
         .windows(2)
         .map(|pair| {
-            let underline = marks.iter().find(|(range, _)| range.start <= pair[0] && pair[1] <= range.end).map(|(_, style)| *style);
-            TextRun { len: pair[1] - pair[0], underline, ..base.clone() }
+            let underline = marks
+                .iter()
+                .find(|(range, _)| range.start <= pair[0] && pair[1] <= range.end)
+                .map(|(_, style)| *style);
+            TextRun {
+                len: pair[1] - pair[0],
+                underline,
+                ..base.clone()
+            }
         })
         .filter(|run| run.len > 0)
         .collect()
@@ -875,15 +987,34 @@ impl Element for TextElement {
         // What is underlined: the text being composed, and probable slips.
         let mut marks: Vec<(Range<usize>, UnderlineStyle)> = Vec::new();
         if let Some(marked) = input.marked_range.as_ref() {
-            marks.push((marked.clone(), UnderlineStyle { color: Some(run.color), thickness: px(1.0), wavy: false }));
+            marks.push((
+                marked.clone(),
+                UnderlineStyle {
+                    color: Some(run.color),
+                    thickness: px(1.0),
+                    wavy: false,
+                },
+            ));
         }
         if input.linking && !input.content.is_empty() {
             let info = theme(cx).info;
-            let underline = UnderlineStyle { color: Some(info), thickness: px(1.0), wavy: false };
-            marks.extend(super::links::resolve(&input.content, super::links::root(cx).as_deref()).into_iter().map(|(range, _)| (range, underline)));
+            let underline = UnderlineStyle {
+                color: Some(info),
+                thickness: px(1.0),
+                wavy: false,
+            };
+            marks.extend(
+                super::links::resolve(&input.content, super::links::root(cx).as_deref())
+                    .into_iter()
+                    .map(|(range, _)| (range, underline)),
+            );
         }
         if !input.secret && !input.content.is_empty() {
-            let squiggle = UnderlineStyle { color: Some(theme(cx).danger), thickness: px(1.0), wavy: true };
+            let squiggle = UnderlineStyle {
+                color: Some(theme(cx).danger),
+                thickness: px(1.0),
+                wavy: true,
+            };
             marks.extend(input.slips().into_iter().map(|range| (range, squiggle)));
         }
 
@@ -893,41 +1024,83 @@ impl Element for TextElement {
         let mut start = 0usize;
         for text in display_text.split('\n') {
             let end = start + text.len();
-            let runs = if text.is_empty() { Vec::new() } else { line_runs(&run, start..end, &marks) };
+            let runs = if text.is_empty() {
+                Vec::new()
+            } else {
+                line_runs(&run, start..end, &marks)
+            };
             // `line_runs` gives offsets in the whole text; a line's runs only need their lengths.
-            let shaped = window.text_system().shape_line(SharedString::from(text.to_string()), font_size, &runs, None);
+            let shaped = window.text_system().shape_line(
+                SharedString::from(text.to_string()),
+                font_size,
+                &runs,
+                None,
+            );
             lines.push((start, shaped));
             start = end + 1;
         }
 
         // The line a byte offset is on: a line owns the offset at its end, where the cursor sits before a newline.
-        let line_of = |offset: usize| -> usize { lines.iter().position(|(s, l)| offset >= *s && offset <= *s + l.len()).unwrap_or(lines.len() - 1) };
+        let line_of = |offset: usize| -> usize {
+            lines
+                .iter()
+                .position(|(s, l)| offset >= *s && offset <= *s + l.len())
+                .unwrap_or(lines.len() - 1)
+        };
         let at = line_of(cursor);
-        let x_of = |index: usize, lines: &[(usize, ShapedLine)], at: usize| lines[at].1.x_for_index(index.saturating_sub(lines[at].0).min(lines[at].1.len()));
+        let x_of = |index: usize, lines: &[(usize, ShapedLine)], at: usize| {
+            lines[at]
+                .1
+                .x_for_index(index.saturating_sub(lines[at].0).min(lines[at].1.len()))
+        };
         let (selection, cursor) = if selected_range.is_empty() {
             let top = bounds.top() + line_height * at as f32;
             (
                 Vec::new(),
-                Some(fill(Bounds::new(point(bounds.left() + x_of(cursor, &lines, at), top), size(px(2.), line_height)), theme(cx).accent)),
+                Some(fill(
+                    Bounds::new(
+                        point(bounds.left() + x_of(cursor, &lines, at), top),
+                        size(px(2.), line_height),
+                    ),
+                    theme(cx).accent,
+                )),
             )
         } else {
             let (first, last) = (line_of(selected_range.start), line_of(selected_range.end));
             let quads = (first..=last)
                 .map(|n| {
                     let (line_start, line) = &lines[n];
-                    let from = if n == first { selected_range.start - line_start } else { 0 };
+                    let from = if n == first {
+                        selected_range.start - line_start
+                    } else {
+                        0
+                    };
                     // A selection that crosses a line break shows the break as a little extra width.
-                    let (to, extra) = if n == last { (selected_range.end - line_start, px(0.)) } else { (line.len(), px(6.)) };
+                    let (to, extra) = if n == last {
+                        (selected_range.end - line_start, px(0.))
+                    } else {
+                        (line.len(), px(6.))
+                    };
                     let top = bounds.top() + line_height * n as f32;
                     fill(
-                        Bounds::from_corners(point(bounds.left() + line.x_for_index(from), top), point(bounds.left() + line.x_for_index(to) + extra, top + line_height)),
+                        Bounds::from_corners(
+                            point(bounds.left() + line.x_for_index(from), top),
+                            point(
+                                bounds.left() + line.x_for_index(to) + extra,
+                                top + line_height,
+                            ),
+                        ),
                         theme(cx).selection,
                     )
                 })
                 .collect();
             (quads, None)
         };
-        PrepaintState { lines, cursor, selection }
+        PrepaintState {
+            lines,
+            cursor,
+            selection,
+        }
     }
 
     fn paint(
@@ -959,7 +1132,11 @@ impl Element for TextElement {
         // A code field scrolls with its parent; when the cursor has moved, the view moves to it.
         let (scroller, seen, here) = {
             let input = self.input.read(cx);
-            (input.scroller.clone(), input.viewed_cursor, input.cursor_offset())
+            (
+                input.scroller.clone(),
+                input.viewed_cursor,
+                input.cursor_offset(),
+            )
         };
         if let (Some(scroller), Some(quad)) = (&scroller, &prepaint.cursor)
             && seen != Some(here)
@@ -1009,7 +1186,11 @@ impl Render for TextInput {
             .flex()
             .flex_1()
             .min_w_0()
-            .key_context(if self.code { "TextInput CodeInput" } else { "TextInput" })
+            .key_context(if self.code {
+                "TextInput CodeInput"
+            } else {
+                "TextInput"
+            })
             .track_focus(&self.focus_handle(cx))
             .cursor(CursorStyle::IBeam)
             .on_action(cx.listener(Self::backspace))
@@ -1042,8 +1223,14 @@ impl Render for TextInput {
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .child(match code_width {
-                Some(width) => div().min_w(width).w_full().child(TextElement { input: cx.entity() }),
-                None => div().w_full().overflow_hidden().child(TextElement { input: cx.entity() }),
+                Some(width) => div()
+                    .min_w(width)
+                    .w_full()
+                    .child(TextElement { input: cx.entity() }),
+                None => div()
+                    .w_full()
+                    .overflow_hidden()
+                    .child(TextElement { input: cx.entity() }),
             })
     }
 }
@@ -1080,7 +1267,11 @@ mod tests {
         assert_eq!(caret, 10..10);
         let (text, caret) = insert("shop", 2..2, "🛒");
         assert_eq!(text, "sh🛒op");
-        assert_eq!(caret, 6..6, "the caret is after the four bytes of the emoji");
+        assert_eq!(
+            caret,
+            6..6,
+            "the caret is after the four bytes of the emoji"
+        );
     }
 
     #[test]

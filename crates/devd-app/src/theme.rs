@@ -17,7 +17,7 @@
 //! beside a word or an icon. Emerald for "ok" is deliberately bluer than volt,
 //! so "running" is never mistaken for "selected".
 
-use gpui::{rgb, rgba, App, Global, Hsla};
+use gpui::{App, Global, Hsla, rgb, rgba};
 
 use crate::ui::dither::Pattern;
 
@@ -114,7 +114,10 @@ impl Theme {
 
     /// The theme after this one, going round the picker's order.
     pub fn next(&self) -> Self {
-        let at = Self::ORDER.iter().position(|id| *id == self.id).unwrap_or(0);
+        let at = Self::ORDER
+            .iter()
+            .position(|id| *id == self.id)
+            .unwrap_or(0);
         Self::by_id(Self::ORDER[(at + 1) % Self::ORDER.len()])
     }
 
@@ -399,7 +402,14 @@ pub fn load(home: &std::path::Path) -> Theme {
 
 /// Remember the choice for the next window.
 pub fn save(home: &std::path::Path, theme: &Theme) -> std::io::Result<()> {
-    std::fs::write(home.join("window-theme"), format!("{} {}\n", theme.id, if theme.dark { "dark" } else { "light" }))
+    std::fs::write(
+        home.join("window-theme"),
+        format!(
+            "{} {}\n",
+            theme.id,
+            if theme.dark { "dark" } else { "light" }
+        ),
+    )
 }
 
 /// Sizes, in logical pixels. One scale for the whole window.
@@ -471,7 +481,11 @@ mod tests {
         for theme in all() {
             for (name, colour) in theme.colour_tokens() {
                 assert!(colour.a > 0.0, "{} has no {}", theme.id, name);
-                assert!(colour.a <= 1.0 && colour.l >= 0.0 && colour.l <= 1.0, "{} {name} is out of range", theme.id);
+                assert!(
+                    colour.a <= 1.0 && colour.l >= 0.0 && colour.l <= 1.0,
+                    "{} {name} is out of range",
+                    theme.id
+                );
             }
             // Text has to be readable on the window; a theme where they are the same colour is not a theme.
             assert_ne!(theme.text.l, theme.bg.l, "{}", theme.id);
@@ -488,18 +502,32 @@ mod tests {
                 assert_ne!(a.name, b.name);
                 assert_ne!(a.pattern, b.pattern, "{} and {} share a scene", a.id, b.id);
                 assert_ne!(a.bg, b.bg, "{} and {} share a background", a.id, b.id);
-                assert_ne!(a.art_rgb(), b.art_rgb(), "{} and {} share a dot colour", a.id, b.id);
+                assert_ne!(
+                    a.art_rgb(),
+                    b.art_rgb(),
+                    "{} and {} share a dot colour",
+                    a.id,
+                    b.id
+                );
             }
         }
         assert_eq!(themes.iter().filter(|t| t.dark).count(), 3);
-        assert_eq!(themes.iter().filter(|t| !t.dark).count(), 2, "two for the day, not three");
+        assert_eq!(
+            themes.iter().filter(|t| !t.dark).count(),
+            2,
+            "two for the day, not three"
+        );
     }
 
     #[test]
     fn the_words_light_and_dark_do_not_name_a_theme() {
         for theme in all() {
             let name = theme.name.to_lowercase();
-            assert!(!name.contains("light") && !name.contains("dark"), "{}", theme.name);
+            assert!(
+                !name.contains("light") && !name.contains("dark"),
+                "{}",
+                theme.name
+            );
         }
     }
 
@@ -514,7 +542,11 @@ mod tests {
             assert_eq!(load(&dir), chosen, "{id}");
         }
         let _ = std::fs::remove_dir_all(&dir);
-        assert_eq!(load(&dir), Theme::by_id("sling"), "a missing file is the default, not a failure");
+        assert_eq!(
+            load(&dir),
+            Theme::by_id("sling"),
+            "a missing file is the default, not a failure"
+        );
     }
 
     #[test]
@@ -522,7 +554,16 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("devd-theme-old-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        for (saved, expected) in [("stone dark", "sling"), ("stone light", "daybreak"), ("shepherd dark", "dawn"), ("shepherd light", "sharon"), ("harp dark", "psalm"), ("harp light", "daybreak"), ("linen dark", "daybreak"), ("parchment dark", "sharon")] {
+        for (saved, expected) in [
+            ("stone dark", "sling"),
+            ("stone light", "daybreak"),
+            ("shepherd dark", "dawn"),
+            ("shepherd light", "sharon"),
+            ("harp dark", "psalm"),
+            ("harp light", "daybreak"),
+            ("linen dark", "daybreak"),
+            ("parchment dark", "sharon"),
+        ] {
             std::fs::write(dir.join("window-theme"), saved).unwrap();
             assert_eq!(load(&dir).id, expected, "{saved}");
         }

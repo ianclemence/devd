@@ -81,15 +81,26 @@ fn tokens(row: &Value) -> u64 {
 /// The quality part of the score, 0–100. Every part is a fact devd recorded:
 /// accepted on proof, checks passed, and work that had to be redone. Output
 /// volume is not in it.
-fn quality(acceptance: Option<f64>, verification: Option<f64>, rework: Option<f64>, changes: i64, tasks: i64) -> f64 {
+fn quality(
+    acceptance: Option<f64>,
+    verification: Option<f64>,
+    rework: Option<f64>,
+    changes: i64,
+    tasks: i64,
+) -> f64 {
     let acceptance = acceptance.unwrap_or(0.0).clamp(0.0, 1.0);
     // With no check recorded, acceptance is the only proof there is; do not
     // reward a missing check as if it were a pass.
     let verification = verification.unwrap_or(acceptance).clamp(0.0, 1.0);
     let rework = rework.unwrap_or(0.0).max(0.0);
     let rework_part = 1.0 - (rework / 2.0).clamp(0.0, 1.0);
-    let changes_part = if tasks > 0 { (changes as f64 / tasks as f64).clamp(0.0, 1.0) } else { 0.0 };
-    (acceptance * 55.0 + verification * 25.0 + rework_part * 20.0 - changes_part * 10.0).clamp(0.0, 100.0)
+    let changes_part = if tasks > 0 {
+        (changes as f64 / tasks as f64).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    (acceptance * 55.0 + verification * 25.0 + rework_part * 20.0 - changes_part * 10.0)
+        .clamp(0.0, 100.0)
 }
 
 fn from_row(row: &Value, usage: Option<&Value>) -> Scorecard {
@@ -100,9 +111,12 @@ fn from_row(row: &Value, usage: Option<&Value>) -> Scorecard {
     let verification = rate(row, "verification_pass_rate");
     let rework = rate(row, "rework_per_task");
     let changes = number(row, "changes_requested");
-    let cost = usage.and_then(|u| u["cost_usd"].as_f64()).or_else(|| row["cost_usd"].as_f64());
+    let cost = usage
+        .and_then(|u| u["cost_usd"].as_f64())
+        .or_else(|| row["cost_usd"].as_f64());
     // A row that says the model was not recorded has no model to rank.
-    let score = (settled >= 3 && row["name"].as_str() != Some("not recorded")).then(|| quality(acceptance, verification, rework, changes, tasks));
+    let score = (settled >= 3 && row["name"].as_str() != Some("not recorded"))
+        .then(|| quality(acceptance, verification, rework, changes, tasks));
     Scorecard {
         name: row["name"].as_str().unwrap_or_default().to_string(),
         tasks,
@@ -149,7 +163,10 @@ fn place(mut rows: Vec<Scorecard>) -> Vec<Scorecard> {
 }
 
 fn usage_row<'a>(usage: &'a Value, pointer: &str, name: &str) -> Option<&'a Value> {
-    usage[pointer].as_array()?.iter().find(|row| row["name"].as_str() == Some(name))
+    usage[pointer]
+        .as_array()?
+        .iter()
+        .find(|row| row["name"].as_str() == Some(name))
 }
 
 /// Agents, from `team.stats.roles` and `models.usage.by_who`.
@@ -182,7 +199,11 @@ pub fn models(stats: &Value, usage: &Value) -> Vec<Scorecard> {
             from_row(row, usage_row(usage, "by_model", name))
         })
         .collect();
-    for row in usage["by_model"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
+    for row in usage["by_model"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+    {
         let name = row["name"].as_str().unwrap_or_default();
         if rows.iter().any(|known| known.name == name) {
             continue;
@@ -217,7 +238,14 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn role(name: &str, tasks: i64, accepted: i64, acceptance: f64, rework: f64, verify: f64) -> Value {
+    fn role(
+        name: &str,
+        tasks: i64,
+        accepted: i64,
+        acceptance: f64,
+        rework: f64,
+        verify: f64,
+    ) -> Value {
         json!({
             "name": name, "tasks": tasks, "settled": tasks, "accepted": accepted, "open": 0,
             "acceptance_rate": acceptance, "rework_per_task": rework,

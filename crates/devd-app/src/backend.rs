@@ -22,7 +22,7 @@ use devd_app_core::sync::{Backend, Failure, Reply};
 use devd_bootstrap::Bootstrap;
 use devd_core::capability::{Actor, Ctx, Surface};
 use devd_server::{Attach, Bound, Options};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// A running devd this window talks to.
 pub struct Connection {
@@ -47,7 +47,9 @@ pub fn connect() -> Result<Arc<Connection>, String> {
     let boot = Bootstrap::discover().map_err(|e| format!("devd could not start: {e}"))?;
     let home = boot.paths.root().display().to_string();
     let version = env!("CARGO_PKG_VERSION").to_string();
-    match devd_server::attach_or_claim(&boot.paths, "ui").map_err(|e| format!("devd could not start: {e}"))? {
+    match devd_server::attach_or_claim(&boot.paths, "ui")
+        .map_err(|e| format!("devd could not start: {e}"))?
+    {
         Attach::Client { port, .. } => {
             let token = session_token(port)?;
             Ok(Arc::new(Connection {
@@ -76,11 +78,20 @@ pub fn connect() -> Result<Arc<Connection>, String> {
 }
 
 /// Become the instance: resume the agents, start background work and serve the API.
-fn serve(boot: Bootstrap, claim: devd_core::daemon::Claim) -> Result<(Bound, tokio::sync::watch::Sender<bool>), String> {
+fn serve(
+    boot: Bootstrap,
+    claim: devd_core::daemon::Claim,
+) -> Result<(Bound, tokio::sync::watch::Sender<bool>), String> {
     boot.agents.resume(&boot.paths, &boot.store, &boot.registry);
     if devd_bootstrap::start_ops(&boot.paths, &boot.store, &boot.settings, &boot.events) {
         devd_bootstrap::start_reconcile(&boot.paths, &boot.store, &boot.settings, &boot.events);
-        devd_bootstrap::start_supervisor(&boot.paths, &boot.store, &boot.settings, &boot.events, &boot.registry);
+        devd_bootstrap::start_supervisor(
+            &boot.paths,
+            &boot.store,
+            &boot.settings,
+            &boot.events,
+            &boot.registry,
+        );
     }
     let ctx = Ctx {
         store: boot.store.clone(),
@@ -99,7 +110,10 @@ fn serve(boot: Bootstrap, claim: devd_core::daemon::Claim) -> Result<(Bound, tok
     std::thread::Builder::new()
         .name("devd-server".into())
         .spawn(move || {
-            let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+            let runtime = match tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+            {
                 Ok(runtime) => runtime,
                 Err(e) => {
                     let _ = ready_tx.send(Err(format!("cannot start the async runtime: {e}")));
@@ -107,15 +121,26 @@ fn serve(boot: Bootstrap, claim: devd_core::daemon::Claim) -> Result<(Bound, tok
                 }
             };
             let tx = ready_tx.clone();
-            let options = Options { port: 0, extra_checks: Vec::new(), workspace: Some(workspace), shutdown: Some(shutdown_rx), picker: None };
-            let result = runtime.block_on(devd_server::serve_with(registry, ctx, options, move |bound| {
-                // The instance record carries the port, so `devd ui` and the
-                // tray find this window instead of starting a second server.
-                if let Ok(mut claim) = claim.lock() {
-                    let _ = claim.set_port(bound.port);
-                }
-                let _ = tx.send(Ok(bound.clone()));
-            }));
+            let options = Options {
+                port: 0,
+                extra_checks: Vec::new(),
+                workspace: Some(workspace),
+                shutdown: Some(shutdown_rx),
+                picker: None,
+            };
+            let result = runtime.block_on(devd_server::serve_with(
+                registry,
+                ctx,
+                options,
+                move |bound| {
+                    // The instance record carries the port, so `devd ui` and the
+                    // tray find this window instead of starting a second server.
+                    if let Ok(mut claim) = claim.lock() {
+                        let _ = claim.set_port(bound.port);
+                    }
+                    let _ = tx.send(Ok(bound.clone()));
+                },
+            ));
             if let Err(e) = result {
                 let _ = ready_tx.send(Err(format!("the devd backend stopped: {e}")));
             }
@@ -139,7 +164,8 @@ fn session_token(port: u16) -> Result<String, String> {
         .map_err(|e| format!("devd is running on port {port} but did not answer: {e}"))?
         .into_string()
         .map_err(|e| format!("devd's page could not be read: {e}"))?;
-    token_in(&page).ok_or_else(|| format!("the devd on port {port} served a page with no session token"))
+    token_in(&page)
+        .ok_or_else(|| format!("the devd on port {port} served a page with no session token"))
 }
 
 /// The token in the served page's `<meta name="devd-token" content="…">`.
@@ -160,14 +186,28 @@ impl Connection {
             .set("Content-Type", "application/json")
             .send_string(&body.to_string());
         match response {
-            Ok(response) => response.into_json::<Value>().map_err(|e| Failure::new("invalid_reply", format!("devd answered with something unreadable: {e}"))),
+            Ok(response) => response.into_json::<Value>().map_err(|e| {
+                Failure::new(
+                    "invalid_reply",
+                    format!("devd answered with something unreadable: {e}"),
+                )
+            }),
             Err(ureq::Error::Status(status, response)) => {
                 let body: Value = response.into_json().unwrap_or(Value::Null);
-                let code = body["error"]["code"].as_str().map(str::to_string).unwrap_or_else(|| format!("http_{status}"));
-                let message = body["error"]["message"].as_str().map(str::to_string).unwrap_or_else(|| format!("devd answered HTTP {status}"));
+                let code = body["error"]["code"]
+                    .as_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| format!("http_{status}"));
+                let message = body["error"]["message"]
+                    .as_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| format!("devd answered HTTP {status}"));
                 Err(Failure::new(code, message))
             }
-            Err(e) => Err(Failure::new("unreachable", format!("devd is not answering: {e}"))),
+            Err(e) => Err(Failure::new(
+                "unreachable",
+                format!("devd is not answering: {e}"),
+            )),
         }
     }
 
@@ -191,8 +231,13 @@ impl Connection {
 
     /// Follow devd's event stream, calling `on_event` with each event's kind and
     /// payload. Returns only when the connection ends; the caller reconnects.
-    pub fn follow(&self, last_id: &mut Option<String>, mut on_event: impl FnMut(&str, &Value)) -> Result<(), String> {
-        let mut request = ureq::get(&format!("{}/api/events", self.base)).set("Accept", "text/event-stream");
+    pub fn follow(
+        &self,
+        last_id: &mut Option<String>,
+        mut on_event: impl FnMut(&str, &Value),
+    ) -> Result<(), String> {
+        let mut request =
+            ureq::get(&format!("{}/api/events", self.base)).set("Accept", "text/event-stream");
         if let Some(id) = last_id.as_deref() {
             // What the server replays from, so nothing is missed across a reconnect.
             request = request.set("Last-Event-ID", id);
@@ -229,11 +274,25 @@ impl Connection {
 impl Connection {
     /// Read one of the server's own listings that is not a capability.
     fn get(&self, path: &str) -> Result<Value, Failure> {
-        let response = ureq::get(&format!("{}{path}", self.base)).timeout(Duration::from_secs(60)).set("Authorization", &format!("Bearer {}", self.token)).call();
+        let response = ureq::get(&format!("{}{path}", self.base))
+            .timeout(Duration::from_secs(60))
+            .set("Authorization", &format!("Bearer {}", self.token))
+            .call();
         match response {
-            Ok(response) => response.into_json::<Value>().map_err(|e| Failure::new("invalid_reply", format!("devd answered with something unreadable: {e}"))),
-            Err(ureq::Error::Status(status, _)) => Err(Failure::new(format!("http_{status}"), format!("devd answered HTTP {status}"))),
-            Err(e) => Err(Failure::new("unreachable", format!("devd is not answering: {e}"))),
+            Ok(response) => response.into_json::<Value>().map_err(|e| {
+                Failure::new(
+                    "invalid_reply",
+                    format!("devd answered with something unreadable: {e}"),
+                )
+            }),
+            Err(ureq::Error::Status(status, _)) => Err(Failure::new(
+                format!("http_{status}"),
+                format!("devd answered HTTP {status}"),
+            )),
+            Err(e) => Err(Failure::new(
+                "unreachable",
+                format!("devd is not answering: {e}"),
+            )),
         }
     }
 }
@@ -263,14 +322,25 @@ mod tests {
     #[test]
     fn the_token_is_read_from_the_served_page() {
         let token = "a".repeat(64);
-        let page = format!("<head><meta charset=\"utf-8\"><meta name=\"devd-token\" content=\"{token}\"></head>");
+        let page = format!(
+            "<head><meta charset=\"utf-8\"><meta name=\"devd-token\" content=\"{token}\"></head>"
+        );
         assert_eq!(token_in(&page), Some(token));
     }
 
     #[test]
     fn a_page_without_a_real_token_is_refused() {
-        assert_eq!(token_in("<meta name=\"devd-token\" content=\"__DEVD_TOKEN__\">"), None);
+        assert_eq!(
+            token_in("<meta name=\"devd-token\" content=\"__DEVD_TOKEN__\">"),
+            None
+        );
         assert_eq!(token_in("<html></html>"), None);
-        assert_eq!(token_in(&format!("<meta name=\"devd-token\" content=\"{}\">", "z".repeat(64))), None);
+        assert_eq!(
+            token_in(&format!(
+                "<meta name=\"devd-token\" content=\"{}\">",
+                "z".repeat(64)
+            )),
+            None
+        );
     }
 }

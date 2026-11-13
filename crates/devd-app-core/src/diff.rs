@@ -81,7 +81,11 @@ pub enum Kind {
 impl FileDiff {
     /// The path to show: the new one, or the old one for a deleted file.
     pub fn path(&self) -> &str {
-        if self.new_path.is_empty() { &self.old_path } else { &self.new_path }
+        if self.new_path.is_empty() {
+            &self.old_path
+        } else {
+            &self.new_path
+        }
     }
 
     /// Lines added and removed, the `+12 −3` beside a file's name.
@@ -103,14 +107,20 @@ pub fn parse(text: &str) -> Vec<FileDiff> {
     for raw in text.lines() {
         if let Some(rest) = raw.strip_prefix("diff --git ") {
             let (a, b) = split_git_paths(rest);
-            files.push(FileDiff { old_path: a, new_path: b, ..FileDiff::default() });
+            files.push(FileDiff {
+                old_path: a,
+                new_path: b,
+                ..FileDiff::default()
+            });
             continue;
         }
         // A diff with no `diff --git` header (plain `diff -u`) starts at `---`.
         if raw.starts_with("--- ") && files.last().map_or(true, |f| !f.hunks.is_empty()) {
             files.push(FileDiff::default());
         }
-        let Some(file) = files.last_mut() else { continue };
+        let Some(file) = files.last_mut() else {
+            continue;
+        };
         if file.hunks.is_empty() {
             if let Some(path) = raw.strip_prefix("--- ") {
                 file.old_path = header_path(path);
@@ -152,10 +162,17 @@ pub fn parse(text: &str) -> Vec<FileDiff> {
         if let Some((o, n, context)) = hunk_header(raw) {
             old_no = o;
             new_no = n;
-            file.hunks.push(Hunk { old_start: o, new_start: n, context, lines: Vec::new() });
+            file.hunks.push(Hunk {
+                old_start: o,
+                new_start: n,
+                context,
+                lines: Vec::new(),
+            });
             continue;
         }
-        let Some(hunk) = file.hunks.last_mut() else { continue };
+        let Some(hunk) = file.hunks.last_mut() else {
+            continue;
+        };
         let (kind, body) = match raw.as_bytes().first() {
             Some(b'+') => (Kind::Added, &raw[1..]),
             Some(b'-') => (Kind::Removed, &raw[1..]),
@@ -169,16 +186,34 @@ pub fn parse(text: &str) -> Vec<FileDiff> {
         let line = match kind {
             Kind::Added => {
                 new_no += 1;
-                Line { kind, old_no: None, new_no: Some(new_no - 1), text: body.to_string(), changed: Vec::new() }
+                Line {
+                    kind,
+                    old_no: None,
+                    new_no: Some(new_no - 1),
+                    text: body.to_string(),
+                    changed: Vec::new(),
+                }
             }
             Kind::Removed => {
                 old_no += 1;
-                Line { kind, old_no: Some(old_no - 1), new_no: None, text: body.to_string(), changed: Vec::new() }
+                Line {
+                    kind,
+                    old_no: Some(old_no - 1),
+                    new_no: None,
+                    text: body.to_string(),
+                    changed: Vec::new(),
+                }
             }
             Kind::Context => {
                 old_no += 1;
                 new_no += 1;
-                Line { kind, old_no: Some(old_no - 1), new_no: Some(new_no - 1), text: body.to_string(), changed: Vec::new() }
+                Line {
+                    kind,
+                    old_no: Some(old_no - 1),
+                    new_no: Some(new_no - 1),
+                    text: body.to_string(),
+                    changed: Vec::new(),
+                }
             }
         };
         hunk.lines.push(line);
@@ -202,21 +237,35 @@ fn split_git_paths(rest: &str) -> (String, String) {
     let unquote = |s: &str| s.trim_matches('"').to_string();
     let strip = |s: String, prefix: &str| s.strip_prefix(prefix).map(str::to_string).unwrap_or(s);
     if let Some(mid) = rest.find(" b/") {
-        return (strip(unquote(&rest[..mid]), "a/"), strip(unquote(&rest[mid + 1..]), "b/"));
+        return (
+            strip(unquote(&rest[..mid]), "a/"),
+            strip(unquote(&rest[mid + 1..]), "b/"),
+        );
     }
     if let Some(mid) = rest.find("\" \"") {
-        return (strip(unquote(&rest[..=mid]), "a/"), strip(unquote(&rest[mid + 2..]), "b/"));
+        return (
+            strip(unquote(&rest[..=mid]), "a/"),
+            strip(unquote(&rest[mid + 2..]), "b/"),
+        );
     }
     (String::new(), String::new())
 }
 
 fn header_path(path: &str) -> String {
     // A timestamp may follow a tab in plain `diff -u` output.
-    let path = path.split('\t').next().unwrap_or(path).trim().trim_matches('"');
+    let path = path
+        .split('\t')
+        .next()
+        .unwrap_or(path)
+        .trim()
+        .trim_matches('"');
     if path == "/dev/null" {
         return String::new();
     }
-    path.strip_prefix("a/").or_else(|| path.strip_prefix("b/")).unwrap_or(path).to_string()
+    path.strip_prefix("a/")
+        .or_else(|| path.strip_prefix("b/"))
+        .unwrap_or(path)
+        .to_string()
 }
 
 /// `@@ -12,7 +12,9 @@ fn name()` as (old start, new start, context).
@@ -237,15 +286,22 @@ fn mark_changes(lines: &mut [Line]) {
             i += 1;
             continue;
         }
-        let removed_end = (i..lines.len()).find(|j| lines[*j].kind != Kind::Removed).unwrap_or(lines.len());
-        let added_end = (removed_end..lines.len()).find(|j| lines[*j].kind != Kind::Added).unwrap_or(lines.len());
+        let removed_end = (i..lines.len())
+            .find(|j| lines[*j].kind != Kind::Removed)
+            .unwrap_or(lines.len());
+        let added_end = (removed_end..lines.len())
+            .find(|j| lines[*j].kind != Kind::Added)
+            .unwrap_or(lines.len());
         let removed = removed_end - i;
         let added = added_end - removed_end;
         // Only a like-for-like replacement is paired. Three lines replaced by
         // seven is a rewrite, and marking words in it would be noise.
         if removed == added {
             for k in 0..removed {
-                let (old, new) = (lines[i + k].text.clone(), lines[removed_end + k].text.clone());
+                let (old, new) = (
+                    lines[i + k].text.clone(),
+                    lines[removed_end + k].text.clone(),
+                );
                 if let Some((old_ranges, new_ranges)) = inline_change(&old, &new) {
                     lines[i + k].changed = old_ranges;
                     lines[removed_end + k].changed = new_ranges;
@@ -267,7 +323,17 @@ pub fn inline_change(old: &str, new: &str) -> Option<(Ranges, Ranges)> {
     let a = words(old);
     let b = words(new);
     let ops = lcs(&a, &b, |x, y| old[x.0..x.1] == new[y.0..y.1]);
-    let kept: usize = ops.iter().filter(|op| matches!(op, Op::Keep(..))).map(|op| if let Op::Keep(i, _) = op { a[*i].1 - a[*i].0 } else { 0 }).sum();
+    let kept: usize = ops
+        .iter()
+        .filter(|op| matches!(op, Op::Keep(..)))
+        .map(|op| {
+            if let Op::Keep(i, _) = op {
+                a[*i].1 - a[*i].0
+            } else {
+                0
+            }
+        })
+        .sum();
     let longest = old.len().max(new.len());
     if longest == 0 || kept * 3 < longest {
         return None;
@@ -334,7 +400,10 @@ fn lcs<T>(a: &[T], b: &[T], same: impl Fn(&T, &T) -> bool) -> Vec<Op> {
         prefix += 1;
     }
     let mut suffix = 0;
-    while suffix < a.len() - prefix && suffix < b.len() - prefix && same(&a[a.len() - 1 - suffix], &b[b.len() - 1 - suffix]) {
+    while suffix < a.len() - prefix
+        && suffix < b.len() - prefix
+        && same(&a[a.len() - 1 - suffix], &b[b.len() - 1 - suffix])
+    {
         suffix += 1;
     }
     let (am, bm) = (&a[prefix..a.len() - suffix], &b[prefix..b.len() - suffix]);
@@ -381,10 +450,23 @@ pub fn between(path: &str, old: &str, new: &str, context: usize) -> FileDiff {
     let a: Vec<&str> = old.lines().collect();
     let b: Vec<&str> = new.lines().collect();
     let ops = lcs(&a, &b, |x, y| x == y);
-    let changed: Vec<usize> = ops.iter().enumerate().filter(|(_, op)| !matches!(op, Op::Keep(..))).map(|(i, _)| i).collect();
+    let changed: Vec<usize> = ops
+        .iter()
+        .enumerate()
+        .filter(|(_, op)| !matches!(op, Op::Keep(..)))
+        .map(|(i, _)| i)
+        .collect();
     let mut file = FileDiff {
-        old_path: if old.is_empty() { String::new() } else { path.to_string() },
-        new_path: if new.is_empty() && !old.is_empty() { String::new() } else { path.to_string() },
+        old_path: if old.is_empty() {
+            String::new()
+        } else {
+            path.to_string()
+        },
+        new_path: if new.is_empty() && !old.is_empty() {
+            String::new()
+        } else {
+            path.to_string()
+        },
         status: match (old.is_empty(), new.is_empty()) {
             (true, false) => Status::Added,
             (false, true) => Status::Deleted,
@@ -403,24 +485,53 @@ pub fn between(path: &str, old: &str, new: &str, context: usize) -> FileDiff {
     for (first, last) in groups {
         let from = first.saturating_sub(context);
         let to = (last + context + 1).min(ops.len());
-        let mut old_no = 1 + ops[..from].iter().filter(|op| !matches!(op, Op::Add(_))).count() as u32;
-        let mut new_no = 1 + ops[..from].iter().filter(|op| !matches!(op, Op::Remove(_))).count() as u32;
-        let mut hunk = Hunk { old_start: old_no, new_start: new_no, context: String::new(), lines: Vec::new() };
+        let mut old_no = 1 + ops[..from]
+            .iter()
+            .filter(|op| !matches!(op, Op::Add(_)))
+            .count() as u32;
+        let mut new_no = 1 + ops[..from]
+            .iter()
+            .filter(|op| !matches!(op, Op::Remove(_)))
+            .count() as u32;
+        let mut hunk = Hunk {
+            old_start: old_no,
+            new_start: new_no,
+            context: String::new(),
+            lines: Vec::new(),
+        };
         for op in &ops[from..to] {
             hunk.lines.push(match *op {
                 Op::Keep(i, _) => {
-                    let line = Line { kind: Kind::Context, old_no: Some(old_no), new_no: Some(new_no), text: a[i].to_string(), changed: Vec::new() };
+                    let line = Line {
+                        kind: Kind::Context,
+                        old_no: Some(old_no),
+                        new_no: Some(new_no),
+                        text: a[i].to_string(),
+                        changed: Vec::new(),
+                    };
                     old_no += 1;
                     new_no += 1;
                     line
                 }
                 Op::Remove(i) => {
-                    let line = Line { kind: Kind::Removed, old_no: Some(old_no), new_no: None, text: a[i].to_string(), changed: Vec::new() };
+                    let line = Line {
+                        kind: Kind::Removed,
+                        old_no: Some(old_no),
+                        new_no: None,
+                        text: a[i].to_string(),
+                        changed: Vec::new(),
+                    };
                     old_no += 1;
                     line
                 }
                 Op::Add(j) => {
-                    let line = Line { kind: Kind::Added, old_no: None, new_no: Some(new_no), text: b[j].to_string(), changed: Vec::new() };
+                    let line = Line {
+                        kind: Kind::Added,
+                        old_no: None,
+                        new_no: Some(new_no),
+                        text: b[j].to_string(),
+                        changed: Vec::new(),
+                    };
                     new_no += 1;
                     line
                 }
@@ -449,19 +560,32 @@ pub fn side_by_side(hunk: &Hunk) -> Vec<Row<'_>> {
     while i < lines.len() {
         match lines[i].kind {
             Kind::Context => {
-                rows.push(Row { left: Some(&lines[i]), right: Some(&lines[i]) });
+                rows.push(Row {
+                    left: Some(&lines[i]),
+                    right: Some(&lines[i]),
+                });
                 i += 1;
             }
             Kind::Added => {
-                rows.push(Row { left: None, right: Some(&lines[i]) });
+                rows.push(Row {
+                    left: None,
+                    right: Some(&lines[i]),
+                });
                 i += 1;
             }
             Kind::Removed => {
-                let removed_end = (i..lines.len()).find(|j| lines[*j].kind != Kind::Removed).unwrap_or(lines.len());
-                let added_end = (removed_end..lines.len()).find(|j| lines[*j].kind != Kind::Added).unwrap_or(lines.len());
+                let removed_end = (i..lines.len())
+                    .find(|j| lines[*j].kind != Kind::Removed)
+                    .unwrap_or(lines.len());
+                let added_end = (removed_end..lines.len())
+                    .find(|j| lines[*j].kind != Kind::Added)
+                    .unwrap_or(lines.len());
                 let (removed, added) = (&lines[i..removed_end], &lines[removed_end..added_end]);
                 for k in 0..removed.len().max(added.len()) {
-                    rows.push(Row { left: removed.get(k), right: added.get(k) });
+                    rows.push(Row {
+                        left: removed.get(k),
+                        right: added.get(k),
+                    });
                 }
                 i = added_end;
             }
@@ -509,22 +633,41 @@ deleted file mode 100644
         assert_eq!((lib.path(), lib.status), ("src/lib.rs", Status::Modified));
         assert_eq!(lib.counts(), (2, 1));
         let hunk = &lib.hunks[0];
-        assert_eq!((hunk.old_start, hunk.new_start, hunk.context.as_str()), (10, 10, "fn main() {"));
+        assert_eq!(
+            (hunk.old_start, hunk.new_start, hunk.context.as_str()),
+            (10, 10, "fn main() {")
+        );
         let numbers: Vec<_> = hunk.lines.iter().map(|l| (l.old_no, l.new_no)).collect();
-        assert_eq!(numbers, [(Some(10), Some(10)), (Some(11), None), (None, Some(11)), (None, Some(12)), (Some(12), Some(13))]);
+        assert_eq!(
+            numbers,
+            [
+                (Some(10), Some(10)),
+                (Some(11), None),
+                (None, Some(11)),
+                (None, Some(12)),
+                (Some(12), Some(13))
+            ]
+        );
     }
 
     #[test]
     fn renames_binaries_and_deletions_are_recognised() {
         let files = parse(GIT);
-        assert_eq!((files[1].status, files[1].old_path.as_str(), files[1].path()), (Status::Renamed, "old name.txt", "new name.txt"));
+        assert_eq!(
+            (files[1].status, files[1].old_path.as_str(), files[1].path()),
+            (Status::Renamed, "old name.txt", "new name.txt")
+        );
         assert!(files[2].binary && files[2].status == Status::Added && files[2].hunks.is_empty());
-        assert_eq!((files[3].status, files[3].path(), files[3].counts()), (Status::Deleted, "gone.rs", (0, 2)));
+        assert_eq!(
+            (files[3].status, files[3].path(), files[3].counts()),
+            (Status::Deleted, "gone.rs", (0, 2))
+        );
     }
 
     #[test]
     fn a_replaced_line_marks_only_what_changed_in_it() {
-        let (old, new) = inline_change("    let total = count + 1;", "    let total = count + 2;").unwrap();
+        let (old, new) =
+            inline_change("    let total = count + 1;", "    let total = count + 2;").unwrap();
         assert_eq!(&"    let total = count + 1;"[old[0].0..old[0].1], "1");
         assert_eq!(&"    let total = count + 2;"[new[0].0..new[0].1], "2");
         assert_eq!((old.len(), new.len()), (1, 1));
@@ -532,7 +675,13 @@ deleted file mode 100644
 
     #[test]
     fn unrelated_lines_are_not_marked_word_by_word() {
-        assert_eq!(inline_change("fn alpha(x: u8) -> bool {", "struct Totally { different: String }"), None);
+        assert_eq!(
+            inline_change(
+                "fn alpha(x: u8) -> bool {",
+                "struct Totally { different: String }"
+            ),
+            None
+        );
     }
 
     #[test]
@@ -546,11 +695,18 @@ deleted file mode 100644
 
     #[test]
     fn two_texts_are_compared_with_context_around_each_change() {
-        let old = (1..=20).map(|n| format!("line {n}")).collect::<Vec<_>>().join("\n");
+        let old = (1..=20)
+            .map(|n| format!("line {n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let new = old.replace("line 5", "line five").replace("line 16\n", "");
         let file = between("notes.txt", &old, &new, 2);
         assert_eq!(file.status, Status::Modified);
-        assert_eq!(file.hunks.len(), 2, "changes eleven lines apart are separate hunks");
+        assert_eq!(
+            file.hunks.len(),
+            2,
+            "changes eleven lines apart are separate hunks"
+        );
         assert_eq!((file.hunks[0].old_start, file.hunks[0].new_start), (3, 3));
         assert_eq!(file.hunks[0].lines.len(), 6);
         assert_eq!((file.hunks[1].old_start, file.hunks[1].new_start), (14, 14));
@@ -562,7 +718,10 @@ deleted file mode 100644
         let added = between("a.txt", "", "one\ntwo", 3);
         assert_eq!((added.status, added.counts()), (Status::Added, (2, 0)));
         let removed = between("a.txt", "one\ntwo", "", 3);
-        assert_eq!((removed.status, removed.path(), removed.counts()), (Status::Deleted, "a.txt", (0, 2)));
+        assert_eq!(
+            (removed.status, removed.path(), removed.counts()),
+            (Status::Deleted, "a.txt", (0, 2))
+        );
         assert!(between("a.txt", "same", "same", 3).hunks.is_empty());
     }
 

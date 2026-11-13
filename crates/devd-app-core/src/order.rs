@@ -28,7 +28,9 @@ impl Extent {
 /// person expects it: half a row of movement is enough to swap with a
 /// neighbour, whatever the rows' heights.
 pub fn drop_slot(rows: &[Extent], pointer_y: f32) -> usize {
-    rows.iter().take_while(|row| pointer_y > row.middle()).count()
+    rows.iter()
+        .take_while(|row| pointer_y > row.middle())
+        .count()
 }
 
 /// The order after moving the row at `from` into gap `slot`.

@@ -74,7 +74,10 @@ pub struct Failure {
 impl Failure {
     /// A failure with a code and a message.
     pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
-        Self { code: code.into(), message: message.into() }
+        Self {
+            code: code.into(),
+            message: message.into(),
+        }
     }
 }
 
@@ -91,7 +94,10 @@ pub struct QueryKey {
 impl QueryKey {
     /// A query with arguments.
     pub fn new(capability: impl Into<String>, args: Value) -> Self {
-        Self { capability: capability.into(), args: canonical(&args) }
+        Self {
+            capability: capability.into(),
+            args: canonical(&args),
+        }
     }
 
     /// A query that takes no arguments.
@@ -106,7 +112,10 @@ impl QueryKey {
 
     /// The domain a capability belongs to: `site` for `site.list`.
     pub fn domain(&self) -> &str {
-        self.capability.split('.').next().unwrap_or(&self.capability)
+        self.capability
+            .split('.')
+            .next()
+            .unwrap_or(&self.capability)
     }
 }
 
@@ -115,7 +124,8 @@ fn canonical(v: &Value) -> String {
     fn sorted(v: &Value) -> Value {
         match v {
             Value::Object(m) => {
-                let ordered: BTreeMap<&String, Value> = m.iter().map(|(k, v)| (k, sorted(v))).collect();
+                let ordered: BTreeMap<&String, Value> =
+                    m.iter().map(|(k, v)| (k, sorted(v))).collect();
                 Value::Object(ordered.into_iter().map(|(k, v)| (k.clone(), v)).collect())
             }
             Value::Array(a) => Value::Array(a.iter().map(sorted).collect()),
@@ -172,7 +182,13 @@ impl Snapshot {
     pub fn list(&self, pointer: &str) -> &[Value] {
         self.data
             .as_deref()
-            .and_then(|v| if pointer.is_empty() { Some(v) } else { v.pointer(pointer) })
+            .and_then(|v| {
+                if pointer.is_empty() {
+                    Some(v)
+                } else {
+                    v.pointer(pointer)
+                }
+            })
             .and_then(Value::as_array)
             .map(Vec::as_slice)
             .unwrap_or(&[])
@@ -194,7 +210,10 @@ pub struct Patch {
 impl Patch {
     /// Any change, as a function over the cached value.
     pub fn new(key: QueryKey, apply: impl Fn(&mut Value) + Send + Sync + 'static) -> Self {
-        Self { key, apply: Arc::new(apply) }
+        Self {
+            key,
+            apply: Arc::new(apply),
+        }
     }
 
     /// Set the value at a JSON pointer inside the cached value.
@@ -207,7 +226,12 @@ impl Patch {
     }
 
     /// Remove the row whose `field` equals `id` from the list at `pointer`.
-    pub fn remove_row(key: QueryKey, pointer: &'static str, field: &'static str, id: Value) -> Self {
+    pub fn remove_row(
+        key: QueryKey,
+        pointer: &'static str,
+        field: &'static str,
+        id: Value,
+    ) -> Self {
         Self::new(key, move |root| {
             if let Some(rows) = list_mut(root, pointer) {
                 rows.retain(|row| row.get(field) != Some(&id));
@@ -216,10 +240,20 @@ impl Patch {
     }
 
     /// Merge `fields` into the row whose `field` equals `id`.
-    pub fn update_row(key: QueryKey, pointer: &'static str, field: &'static str, id: Value, fields: Value) -> Self {
+    pub fn update_row(
+        key: QueryKey,
+        pointer: &'static str,
+        field: &'static str,
+        id: Value,
+        fields: Value,
+    ) -> Self {
         Self::new(key, move |root| {
-            let Some(rows) = list_mut(root, pointer) else { return };
-            let Some(row) = rows.iter_mut().find(|row| row.get(field) == Some(&id)) else { return };
+            let Some(rows) = list_mut(root, pointer) else {
+                return;
+            };
+            let Some(row) = rows.iter_mut().find(|row| row.get(field) == Some(&id)) else {
+                return;
+            };
             if let (Some(row), Some(fields)) = (row.as_object_mut(), fields.as_object()) {
                 for (k, v) in fields {
                     row.insert(k.clone(), v.clone());
@@ -248,7 +282,11 @@ impl Patch {
 }
 
 fn list_mut<'a>(root: &'a mut Value, pointer: &str) -> Option<&'a mut Vec<Value>> {
-    let slot = if pointer.is_empty() { Some(root) } else { root.pointer_mut(pointer) };
+    let slot = if pointer.is_empty() {
+        Some(root)
+    } else {
+        root.pointer_mut(pointer)
+    };
     slot.and_then(Value::as_array_mut)
 }
 
@@ -269,7 +307,12 @@ pub struct Mutation {
 impl Mutation {
     /// A write with no optimistic change: the screens update when it is confirmed.
     pub fn new(capability: impl Into<String>, args: Value) -> Self {
-        Self { capability: capability.into(), args, patches: Vec::new(), also_invalidates: Vec::new() }
+        Self {
+            capability: capability.into(),
+            args,
+            patches: Vec::new(),
+            also_invalidates: Vec::new(),
+        }
     }
 
     /// Show this change at once.
@@ -332,7 +375,16 @@ struct Entry {
 
 impl Entry {
     fn new(log: Option<LogSpec>) -> Self {
-        Self { base: None, composed: None, stale: true, fetching: false, refetch: false, error: None, last_watched: None, log }
+        Self {
+            base: None,
+            composed: None,
+            stale: true,
+            fetching: false,
+            refetch: false,
+            error: None,
+            last_watched: None,
+            log,
+        }
     }
 }
 
@@ -398,7 +450,9 @@ impl Engine {
         });
         for n in 0..workers.max(1) {
             let inner = inner.clone();
-            let _ = std::thread::Builder::new().name(format!("devd-sync-{n}")).spawn(move || worker(&inner));
+            let _ = std::thread::Builder::new()
+                .name(format!("devd-sync-{n}"))
+                .spawn(move || worker(&inner));
         }
         Self { inner }
     }
@@ -427,7 +481,10 @@ impl Engine {
 
     fn watch_as(&self, key: &QueryKey, log: Option<LogSpec>) -> Snapshot {
         let mut st = self.inner.state.lock().expect("sync state");
-        let entry = st.entries.entry(key.clone()).or_insert_with(|| Entry::new(log));
+        let entry = st
+            .entries
+            .entry(key.clone())
+            .or_insert_with(|| Entry::new(log));
         entry.last_watched = Some(Instant::now());
         let start = entry.stale && !entry.fetching && entry.error.is_none();
         if start {
@@ -447,7 +504,10 @@ impl Engine {
     /// Fetch a query again now, including one whose last fetch failed.
     pub fn refresh(&self, key: &QueryKey) {
         let mut st = self.inner.state.lock().expect("sync state");
-        let entry = st.entries.entry(key.clone()).or_insert_with(|| Entry::new(None));
+        let entry = st
+            .entries
+            .entry(key.clone())
+            .or_insert_with(|| Entry::new(None));
         entry.error = None;
         entry.stale = true;
         if entry.fetching {
@@ -484,7 +544,10 @@ impl Engine {
         let id = st.next_mutation;
         st.next_mutation += 1;
         if !mutation.patches.is_empty() {
-            st.overlays.push(Overlay { id, patches: mutation.patches.clone() });
+            st.overlays.push(Overlay {
+                id,
+                patches: mutation.patches.clone(),
+            });
             st.revision += 1;
         }
         st.queue.push_back(Job::Mutate(id, mutation));
@@ -500,7 +563,11 @@ impl Engine {
     /// How many writes have not been answered yet.
     pub fn pending_mutations(&self) -> usize {
         let st = self.inner.state.lock().expect("sync state");
-        st.overlays.len() + st.queue.iter().filter(|j| matches!(j, Job::Mutate(..))).count()
+        st.overlays.len()
+            + st.queue
+                .iter()
+                .filter(|j| matches!(j, Job::Mutate(..)))
+                .count()
     }
 
     /// Wait until nothing is queued or running. For tests and for shutdown.
@@ -532,8 +599,14 @@ impl Engine {
             return;
         }
         let mut st = self.inner.state.lock().expect("sync state");
-        for row in saved["queries"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
-            let Some(capability) = row["capability"].as_str() else { continue };
+        for row in saved["queries"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+        {
+            let Some(capability) = row["capability"].as_str() else {
+                continue;
+            };
             let key = QueryKey::new(capability, row["args"].clone());
             let entry = st.entries.entry(key).or_insert_with(|| Entry::new(None));
             if entry.base.is_none() {
@@ -589,7 +662,9 @@ fn invalidate_locked(inner: &Inner, st: &mut State, domains: &[&str]) {
         }
         entry.stale = true;
         entry.error = None;
-        let on_screen = entry.last_watched.is_some_and(|t| now.duration_since(t) < ON_SCREEN);
+        let on_screen = entry
+            .last_watched
+            .is_some_and(|t| now.duration_since(t) < ON_SCREEN);
         if entry.fetching {
             entry.refetch = true;
         } else if on_screen {
@@ -641,7 +716,13 @@ fn snapshot(st: &mut State, key: &QueryKey) -> Snapshot {
     } else {
         Freshness::Fresh
     };
-    Snapshot { data, freshness, error: entry.error.clone(), optimistic: !ids.is_empty(), fetching: entry.fetching }
+    Snapshot {
+        data,
+        freshness,
+        error: entry.error.clone(),
+        optimistic: !ids.is_empty(),
+        fetching: entry.fetching,
+    }
 }
 
 fn worker(inner: &Inner) {
@@ -685,7 +766,11 @@ fn fetch(inner: &Inner, key: &QueryKey) {
         let log = entry.and_then(|e| e.log.clone());
         let mut args = key.args();
         if let (Some(spec), Some(base)) = (&log, entry.and_then(|e| e.base.as_ref())) {
-            let last = base.pointer(spec.rows).and_then(Value::as_array).and_then(|rows| rows.last()).map(|row| row[spec.id].clone());
+            let last = base
+                .pointer(spec.rows)
+                .and_then(Value::as_array)
+                .and_then(|rows| rows.last())
+                .map(|row| row[spec.id].clone());
             if let (Some(last), Some(map)) = (last, args.as_object_mut()) {
                 map.insert(spec.cursor_arg.to_string(), last);
             }
@@ -694,13 +779,18 @@ fn fetch(inner: &Inner, key: &QueryKey) {
     };
     let result = inner.backend.invoke(&key.capability, &args);
     let mut st = inner.state.lock().expect("sync state");
-    let Some(entry) = st.entries.get_mut(key) else { return };
+    let Some(entry) = st.entries.get_mut(key) else {
+        return;
+    };
     entry.fetching = false;
     match result {
         Ok(Reply::Done(value)) => {
             // A full page is not the end of the log.
             if let Some(spec) = &log {
-                let rows = value.pointer(spec.rows).and_then(Value::as_array).map_or(0, Vec::len);
+                let rows = value
+                    .pointer(spec.rows)
+                    .and_then(Value::as_array)
+                    .map_or(0, Vec::len);
                 if spec.page > 0 && rows >= spec.page {
                     entry.refetch = true;
                 }
@@ -714,7 +804,10 @@ fn fetch(inner: &Inner, key: &QueryKey) {
             entry.error = None;
         }
         Ok(Reply::NeedsApproval { .. }) => {
-            entry.error = Some(Failure::new("approval_required", "this needs a person's approval and cannot be read as a query"));
+            entry.error = Some(Failure::new(
+                "approval_required",
+                "this needs a person's approval and cannot be read as a query",
+            ));
         }
         Err(failure) => entry.error = Some(failure),
     }
@@ -730,8 +823,16 @@ fn fetch(inner: &Inner, key: &QueryKey) {
 /// The old log with the new reply's rows added. Everything else in the reply
 /// (the thread's state, its title) replaces what was there.
 fn append_rows(old: &Value, mut new: Value, spec: &LogSpec) -> Value {
-    let mut rows = old.pointer(spec.rows).and_then(Value::as_array).cloned().unwrap_or_default();
-    let fresh = new.pointer(spec.rows).and_then(Value::as_array).cloned().unwrap_or_default();
+    let mut rows = old
+        .pointer(spec.rows)
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let fresh = new
+        .pointer(spec.rows)
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     let last = rows.last().map(|row| row[spec.id].clone());
     for row in fresh {
         // A reply that ignored the cursor repeats rows; keep each once.
@@ -759,7 +860,12 @@ fn mutate(inner: &Inner, id: u64, mutation: Mutation) {
     }
     let settled = match result {
         Ok(Reply::Done(value)) => {
-            let own = mutation.capability.split('.').next().unwrap_or("").to_string();
+            let own = mutation
+                .capability
+                .split('.')
+                .next()
+                .unwrap_or("")
+                .to_string();
             let mut domains: Vec<&str> = vec![own.as_str()];
             domains.extend(related(&own));
             domains.extend(mutation.also_invalidates.iter().copied());
@@ -769,7 +875,11 @@ fn mutate(inner: &Inner, id: u64, mutation: Mutation) {
         Ok(Reply::NeedsApproval { token, plan }) => Settled::NeedsApproval { token, plan },
         Err(failure) => Settled::Failed(failure),
     };
-    st.outcomes.push(Outcome { id: MutationId(id), capability: mutation.capability, settled });
+    st.outcomes.push(Outcome {
+        id: MutationId(id),
+        capability: mutation.capability,
+        settled,
+    });
 }
 
 #[cfg(test)]
@@ -799,26 +909,42 @@ mod tests {
     impl Backend for Fake {
         fn invoke(&self, capability: &str, args: &Value) -> Result<Reply, Failure> {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            self.seen.lock().unwrap().push((capability.to_string(), args.clone()));
+            self.seen
+                .lock()
+                .unwrap()
+                .push((capability.to_string(), args.clone()));
             match capability {
                 "site.list" => Ok(Reply::Done(json!({ "sites": *self.sites.lock().unwrap() }))),
                 "site.remove" => {
                     if let Some(f) = self.fail_writes.lock().unwrap().clone() {
                         return Err(f);
                     }
-                    self.sites.lock().unwrap().retain(|s| s["name"] != args["name"]);
+                    self.sites
+                        .lock()
+                        .unwrap()
+                        .retain(|s| s["name"] != args["name"]);
                     Ok(Reply::Done(json!({})))
                 }
-                "git.reset" => Ok(Reply::NeedsApproval { token: "t1".into(), plan: json!({"summary": "reset"}) }),
+                "git.reset" => Ok(Reply::NeedsApproval {
+                    token: "t1".into(),
+                    plan: json!({"summary": "reset"}),
+                }),
                 "chat.events" => {
                     let after = args["after"].as_i64().unwrap_or(0);
-                    let rows: Vec<Value> = (1..=3).filter(|n| *n > after).map(|n| json!({"id": n})).collect();
+                    let rows: Vec<Value> = (1..=3)
+                        .filter(|n| *n > after)
+                        .map(|n| json!({"id": n}))
+                        .collect();
                     Ok(Reply::Done(json!({ "state": "idle", "events": rows })))
                 }
                 "run.events" => {
                     // Seven rows, served two at a time.
                     let after = args["after"].as_i64().unwrap_or(0);
-                    let rows: Vec<Value> = (1..=7).filter(|n| *n > after).take(2).map(|n| json!({"id": n})).collect();
+                    let rows: Vec<Value> = (1..=7)
+                        .filter(|n| *n > after)
+                        .take(2)
+                        .map(|n| json!({"id": n}))
+                        .collect();
                     Ok(Reply::Done(json!({ "events": rows })))
                 }
                 other => Err(Failure::new("not_found", format!("no capability {other}"))),
@@ -827,7 +953,10 @@ mod tests {
     }
 
     fn names(snap: &Snapshot) -> Vec<String> {
-        snap.list("/sites").iter().map(|s| s["name"].as_str().unwrap().to_string()).collect()
+        snap.list("/sites")
+            .iter()
+            .map(|s| s["name"].as_str().unwrap().to_string())
+            .collect()
     }
 
     #[test]
@@ -853,7 +982,11 @@ mod tests {
             assert_eq!(names(&snap), ["blog", "shop"]);
         }
         engine.settle();
-        assert_eq!(fake.calls.load(Ordering::SeqCst), 1, "a fresh value is not fetched again");
+        assert_eq!(
+            fake.calls.load(Ordering::SeqCst),
+            1,
+            "a fresh value is not fetched again"
+        );
     }
 
     #[test]
@@ -880,10 +1013,18 @@ mod tests {
         engine.settle();
         engine.on_event("hosts.synced");
         engine.settle();
-        assert_eq!(fake.calls.load(Ordering::SeqCst), 2, "publishing hostnames changes a site's row");
+        assert_eq!(
+            fake.calls.load(Ordering::SeqCst),
+            2,
+            "publishing hostnames changes a site's row"
+        );
         engine.on_event("mail.received");
         engine.settle();
-        assert_eq!(fake.calls.load(Ordering::SeqCst), 2, "an unrelated event fetches nothing");
+        assert_eq!(
+            fake.calls.load(Ordering::SeqCst),
+            2,
+            "an unrelated event fetches nothing"
+        );
     }
 
     #[test]
@@ -894,8 +1035,12 @@ mod tests {
         engine.watch(&key);
         engine.settle();
         engine.mutate(
-            Mutation::new("site.remove", json!({"name": "blog"}))
-                .optimistic(Patch::remove_row(key.clone(), "/sites", "name", json!("blog"))),
+            Mutation::new("site.remove", json!({"name": "blog"})).optimistic(Patch::remove_row(
+                key.clone(),
+                "/sites",
+                "name",
+                json!("blog"),
+            )),
         );
         // No waiting: the row is gone from the very next read.
         let shown = engine.peek(&key).unwrap();
@@ -904,27 +1049,42 @@ mod tests {
         let after = engine.watch(&key);
         assert_eq!(names(&after), ["shop"]);
         assert!(!after.optimistic);
-        assert!(matches!(engine.take_outcomes()[0].settled, Settled::Done(_)));
+        assert!(matches!(
+            engine.take_outcomes()[0].settled,
+            Settled::Done(_)
+        ));
     }
 
     #[test]
     fn a_refused_write_is_taken_back_and_reported() {
         let fake = Fake::new();
-        *fake.fail_writes.lock().unwrap() = Some(Failure::new("conflict", "the site is serving a request"));
+        *fake.fail_writes.lock().unwrap() =
+            Some(Failure::new("conflict", "the site is serving a request"));
         let engine = Engine::new(fake.clone(), 1);
         let key = QueryKey::bare("site.list");
         engine.watch(&key);
         engine.settle();
         engine.mutate(
-            Mutation::new("site.remove", json!({"name": "blog"}))
-                .optimistic(Patch::remove_row(key.clone(), "/sites", "name", json!("blog"))),
+            Mutation::new("site.remove", json!({"name": "blog"})).optimistic(Patch::remove_row(
+                key.clone(),
+                "/sites",
+                "name",
+                json!("blog"),
+            )),
         );
         engine.settle();
-        assert_eq!(names(&engine.watch(&key)), ["blog", "shop"], "the row comes back");
+        assert_eq!(
+            names(&engine.watch(&key)),
+            ["blog", "shop"],
+            "the row comes back"
+        );
         let outcomes = engine.take_outcomes();
         assert_eq!(outcomes.len(), 1);
         assert!(matches!(&outcomes[0].settled, Settled::Failed(f) if f.code == "conflict"));
-        assert!(engine.take_outcomes().is_empty(), "an outcome is reported once");
+        assert!(
+            engine.take_outcomes().is_empty(),
+            "an outcome is reported once"
+        );
     }
 
     #[test]
@@ -933,7 +1093,9 @@ mod tests {
         engine.mutate(Mutation::new("git.reset", json!({"mode": "hard"})));
         engine.settle();
         let outcomes = engine.take_outcomes();
-        assert!(matches!(&outcomes[0].settled, Settled::NeedsApproval { token, .. } if token == "t1"));
+        assert!(
+            matches!(&outcomes[0].settled, Settled::NeedsApproval { token, .. } if token == "t1")
+        );
     }
 
     #[test]
@@ -941,15 +1103,28 @@ mod tests {
         let fake = Fake::new();
         let engine = Engine::new(fake.clone(), 1);
         let key = QueryKey::new("chat.events", json!({"thread": "t"}));
-        let spec = LogSpec { cursor_arg: "after", rows: "/events", id: "id", page: 0 };
+        let spec = LogSpec {
+            cursor_arg: "after",
+            rows: "/events",
+            id: "id",
+            page: 0,
+        };
         engine.watch_log(&key, spec.clone());
         engine.settle();
         assert_eq!(engine.peek(&key).unwrap().list("/events").len(), 3);
         engine.on_event("chat.event");
         engine.settle();
         let second = fake.seen.lock().unwrap().last().cloned().unwrap();
-        assert_eq!(second.1["after"], json!(3), "the second read starts after row 3");
-        assert_eq!(engine.watch_log(&key, spec).list("/events").len(), 3, "nothing is duplicated");
+        assert_eq!(
+            second.1["after"],
+            json!(3),
+            "the second read starts after row 3"
+        );
+        assert_eq!(
+            engine.watch_log(&key, spec).list("/events").len(),
+            3,
+            "nothing is duplicated"
+        );
     }
 
     #[test]
@@ -957,11 +1132,29 @@ mod tests {
         let fake = Fake::new();
         let engine = Engine::new(fake.clone(), 1);
         let key = QueryKey::new("run.events", json!({"run": "r"}));
-        engine.watch_log(&key, LogSpec { cursor_arg: "after", rows: "/events", id: "id", page: 2 });
+        engine.watch_log(
+            &key,
+            LogSpec {
+                cursor_arg: "after",
+                rows: "/events",
+                id: "id",
+                page: 2,
+            },
+        );
         engine.settle();
-        let ids: Vec<i64> = engine.peek(&key).unwrap().list("/events").iter().map(|e| e["id"].as_i64().unwrap()).collect();
+        let ids: Vec<i64> = engine
+            .peek(&key)
+            .unwrap()
+            .list("/events")
+            .iter()
+            .map(|e| e["id"].as_i64().unwrap())
+            .collect();
         assert_eq!(ids, [1, 2, 3, 4, 5, 6, 7]);
-        assert_eq!(fake.calls.load(Ordering::SeqCst), 4, "three full pages and the short one that ends it");
+        assert_eq!(
+            fake.calls.load(Ordering::SeqCst),
+            4,
+            "three full pages and the short one that ends it"
+        );
     }
 
     #[test]
@@ -977,10 +1170,17 @@ mod tests {
         let second = Engine::new(fake.clone(), 1);
         second.import(&saved);
         let cold = second.watch(&key);
-        assert_eq!(names(&cold), ["blog", "shop"], "the last session's value is drawn immediately");
+        assert_eq!(
+            names(&cold),
+            ["blog", "shop"],
+            "the last session's value is drawn immediately"
+        );
         assert_eq!(cold.freshness, Freshness::Stale);
         second.settle();
-        assert!(second.watch(&key).list("/sites").is_empty(), "and replaced by the truth");
+        assert!(
+            second.watch(&key).list("/sites").is_empty(),
+            "and replaced by the truth"
+        );
     }
 
     #[test]

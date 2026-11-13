@@ -84,6 +84,9 @@ pub fn list(ctx: &Ctx) -> Result<Value> {
     // is already on the machine is real and it is usable, but devd cannot
     // manage it - so it is named, not hidden: the person must be able to see
     // that a PHP exists and still be told why devd wants its own.
+    // Only a site that is served by PHP makes PHP a requirement. A person who never writes PHP is not told their setup is
+    // unfinished for want of it: it is listed, as an option, with the means to install it.
+    let php_needed = ctx.store.list_sites().unwrap_or_default().iter().any(|site| devd_core::serving::effective(site).serving.uses_php());
     let runtimes = devd_runtime::list(ctx).unwrap_or_default();
     let managed_php = runtimes
         .iter()
@@ -113,9 +116,9 @@ pub fn list(ctx: &Ctx) -> Result<Value> {
                 None => "PHP".into(),
             },
             kind: "runtime",
-            why,
+            why: if php_needed { why } else { format!("Optional: only for PHP projects. {why}") },
             state: "missing",
-            required: true,
+            required: php_needed,
             detail,
             fix: Some(json!({
                 "label": "Install PHP",
@@ -141,8 +144,8 @@ pub fn list(ctx: &Ctx) -> Result<Value> {
                 false,
             ),
             "php-cgi" => (
-                "The listener that runs PHP for your sites.".to_string(),
-                true,
+                if php_needed { "The listener that runs PHP for your sites.".to_string() } else { "Optional: the listener that runs PHP, for PHP projects.".to_string() },
+                php_needed,
             ),
             _ => (format!("The {} service devd manages.", s.name), false),
         };

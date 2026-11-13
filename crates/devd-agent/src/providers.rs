@@ -314,7 +314,7 @@ fn send(method: &str, url: &str, headers: &[(String, String)], body: Option<&str
     match res {
         Ok(r) => {
             let status = r.status();
-            Ok(Reply { status, retry_after: None, body: r.into_string().map_err(|e| DevdError::internal(format!("could not read the response from {}: {e}", host_of(url))))? })
+            Ok(Reply { status, retry_after: None, body: r.into_string().map_err(|e| reach_failed(url, &e.to_string()))? })
         }
         Err(ureq::Error::Status(code, r)) => {
             let retry_after = r.header("retry-after").and_then(|v| v.parse::<u64>().ok());
@@ -337,7 +337,7 @@ pub fn reach_failed(url: &str, detail: &str) -> DevdError {
     let has = |needles: &[&str]| needles.iter().any(|n| d.contains(n));
     let what = if has(&["forcibly closed", "connection reset", "10054", "broken pipe", "unexpected eof", "connection closed", "closed before"]) {
         format!("{host} closed the connection before it answered. This is usually the network, a VPN or a firewall, not your key.")
-    } else if has(&["timed out", "timeout", "deadline"]) {
+    } else if has(&["timed out", "timeout", "deadline", "10060", "did not properly respond", "failed to respond"]) {
         format!("{host} did not answer in time. The network may be slow, or the service busy.")
     } else if has(&["dns", "lookup", "resolve", "no such host", "name or service", "11001", "nodename"]) {
         format!("devd could not find {host}. Check the address and that you are online.")
@@ -351,16 +351,29 @@ pub fn reach_failed(url: &str, detail: &str) -> DevdError {
     DevdError::Io(std::io::Error::new(std::io::ErrorKind::ConnectionAborted, format!("{what} Nothing was lost: send it again when the connection is back.")))
 }
 
-/// Fetch a public document as text: no key, no body, a short wait.
+/// Fetch a public document as text: no key and no body.
 ///
-/// Used for the model catalogue, which is a file on a website and not a
-/// provider's API.
+/// Used for the model catalogue, which is a file of a few megabytes on a website and not a provider's API. It
+/// is given the time a file that size needs on a slow connection (the two seconds a local probe gets are what
+/// made "update the catalogue" fail with a timeout), and a failure to connect is tried twice more, since
+/// asking again for a public file changes nothing.
 pub fn fetch_text(url: &str) -> Result<String> {
-    let reply = quick_agent(url).get(url).set("accept", "application/json").call().map_err(|e| match e {
-        ureq::Error::Status(code, _) => DevdError::internal(format!("{} answered {code}", host_of(url))),
-        other => reach_failed(url, &other.to_string()),
-    })?;
-    reply.into_string().map_err(|e| DevdError::internal(format!("could not read the response from {}: {e}", host_of(url))))
+    let mut last = None;
+    for attempt in 0..3u32 {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_secs(u64::from(attempt) * 2));
+        }
+        let agent = build_agent_with(url, true, 15, 90);
+        match agent.get(url).set("accept", "application/json").call() {
+            Ok(reply) => match reply.into_string() {
+                Ok(text) => return Ok(text),
+                Err(e) => last = Some(reach_failed(url, &e.to_string())),
+            },
+            Err(ureq::Error::Status(code, _)) => return Err(DevdError::internal(format!("{} answered {code}", host_of(url)))),
+            Err(other) => last = Some(reach_failed(url, &other.to_string())),
+        }
+    }
+    Err(last.unwrap_or_else(|| DevdError::internal(format!("could not read {url}"))))
 }
 
 /// A response body that may arrive a piece at a time.
@@ -404,12 +417,7 @@ fn send_live(url: &str, headers: &[(String, String)], body: &str) -> Result<Live
                     answer: Answer::Events(BufReader::new(r.into_reader())),
                 })
             } else {
-                let text = r.into_string().map_err(|e| {
-                    DevdError::internal(format!(
-                        "could not read the response from {}: {e}",
-                        host_of(url)
-                    ))
-                })?;
+                let text = r.into_string().map_err(|e| reach_failed(url, &e.to_string()))?;
                 Ok(LiveReply {
                     status,
                     retry_after,

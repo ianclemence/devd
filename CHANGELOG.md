@@ -12,6 +12,38 @@ may change capability identifiers where the design was wrong.
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-11-13 - See the team work, delete what you are done with, and nothing forced on you
+
+### The team, in view
+
+- **A run is drawn as a chain**: a card for each agent, a line for each thing one waits for. Lines say what they carry (settled, handed on now, held up, not yet), a card says how long its agent has been quiet and whether it is on another try, and the chain opens scrolled to whatever is working. It sits under the conversation a run belongs to, and at the top of the run's page, where a sentence says what is happening right now: who is working and since when, what is ready to start, what needs you.
+- **Every agent has a colour of its own** wherever it appears. The faces in the top bar show who is working, say so when the pointer rests on one, and open what that agent is doing when pressed.
+- **One count of progress.** A run read "2 of 12" in one place and "4 of 12" in another because two rules disagreed about the planner and about work accepted by hand. The planner is not counted and accepted work is, everywhere, as the server counts them.
+- A run that is still going is read again every couple of seconds, whoever is driving it, instead of waiting to be told.
+
+### Delete and clear
+
+- **Conversations and runs can be deleted**, from the list (an icon that appears when the pointer is on a row) and from the conversation or run itself, each after a confirmation that says what goes and what stays. "Clear finished" removes every finished one. A run still going is paused or cancelled from its own page first. A conversation deleted elsewhere says so and offers a new one.
+
+### Nothing forced on you
+
+- **`devd setup` installs the web server and nothing else.** PHP, databases and the other runtimes come when asked for (`--php 8.4`, `--services mariadb`), here, in the app or from the assistant. The first site is a plain page when there is no PHP. A fresh Home asks "What do you work with?" and offers PHP, Node.js, Go, MariaDB and Redis, one click each.
+- PHP is a requirement only when a PHP site exists, so a machine without PHP is no longer told its setup is unfinished. The installer says what it will and will not install.
+- **The health line names every problem**, not only the first ("2 problems to fix: nginx and PHP 8.4").
+
+### Runs that stalled
+
+- `devd team show` and the other reads no longer take over the agents. With no devd running, a read became the owner, restarted whatever was half done and exited, so a run was restarted every time anyone looked at it. Commands that start a run and return now say that nothing will carry it on until devd is running.
+- Work accepted by hand is committed like work accepted any other way. Left uncommitted it blocked every later merge into the project.
+
+### Smaller things
+
+- Popovers in the message box close when you press anywhere outside them, on Home and in the Assistant.
+- Screens, popovers, dialogs, the command menu, toasts and the side panels now fade and settle into place with Tailwind's own ease-out and ease-in-out curves.
+- The command menu opens on your latest conversations and projects, then the screens in the order of the rail, not on whichever command you used last.
+- Updating the model catalogue gave "Internal error: could not read the response from models.dev" on a slow connection: it was given two seconds. It now waits as long as a file that size needs, tries three times, and says what happened in plain words.
+- Removing a project that was only listed because a site served its folder removes the site.
+
 ## [0.29.1] - 2026-11-13 - Removing a site, and a project that only a site keeps listed
 
 - **Sites can be removed from the Sites screen**, with a confirmation that says the folder is not touched. There was no way to do it from the window.

@@ -56,7 +56,11 @@ impl Who {
         let mut words = label.split_whitespace();
         let first = words.next().and_then(|w| w.chars().next());
         let second = words.next().and_then(|w| w.chars().next());
-        first.into_iter().chain(second).flat_map(char::to_uppercase).collect()
+        first
+            .into_iter()
+            .chain(second)
+            .flat_map(char::to_uppercase)
+            .collect()
     }
 }
 
@@ -73,6 +77,18 @@ pub struct Place {
     pub file: Option<String>,
     /// The screen of the window, for the person.
     pub screen: Option<String>,
+}
+
+impl Place {
+    /// Where in the window to go to see what this actor is doing: its conversation, else its run, else its project.
+    pub fn route(&self) -> Option<crate::nav::Route> {
+        use crate::nav::Route;
+        self.thread
+            .clone()
+            .map(|t| Route::Assistant(Some(t)))
+            .or_else(|| self.run.clone().map(|r| Route::Runs(Some(r))))
+            .or_else(|| self.project.clone().map(|p| Route::Projects(Some(p))))
+    }
 }
 
 /// What somebody is doing.
@@ -147,7 +163,8 @@ impl Room {
     pub fn sweep(&mut self, now: Instant) -> bool {
         let before = self.present.len();
         // The person is present for as long as the window is open.
-        self.present.retain(|_, (p, at)| p.who == Who::You || now.duration_since(*at) < STALE_AFTER);
+        self.present
+            .retain(|_, (p, at)| p.who == Who::You || now.duration_since(*at) < STALE_AFTER);
         self.present.len() != before
     }
 
@@ -162,25 +179,41 @@ impl Room {
     pub fn in_project(&self, project: &str) -> Vec<&Presence> {
         self.everyone()
             .into_iter()
-            .filter(|p| p.who != Who::You && p.place.project.as_deref().is_some_and(|dir| same_project(dir, project)))
+            .filter(|p| {
+                p.who != Who::You
+                    && p.place
+                        .project
+                        .as_deref()
+                        .is_some_and(|dir| same_project(dir, project))
+            })
             .collect()
     }
 
     /// Who is in a conversation, other than the person.
     pub fn in_thread(&self, thread: &str) -> Vec<&Presence> {
-        self.everyone().into_iter().filter(|p| p.who != Who::You && p.place.thread.as_deref() == Some(thread)).collect()
+        self.everyone()
+            .into_iter()
+            .filter(|p| p.who != Who::You && p.place.thread.as_deref() == Some(thread))
+            .collect()
     }
 
     /// How many agents are doing something right now.
     pub fn working(&self) -> usize {
-        self.present.values().filter(|(p, _)| p.who != Who::You && p.doing.active()).count()
+        self.present
+            .values()
+            .filter(|(p, _)| p.who != Who::You && p.doing.active())
+            .count()
     }
 }
 
 /// Whether `dir` is `project` or inside it. A team member works in a worktree
 /// under the project (`<project>/.devd/worktrees/…`), which is still that project.
 fn same_project(dir: &str, project: &str) -> bool {
-    let norm = |s: &str| s.replace('\\', "/").trim_end_matches('/').to_ascii_lowercase();
+    let norm = |s: &str| {
+        s.replace('\\', "/")
+            .trim_end_matches('/')
+            .to_ascii_lowercase()
+    };
     let (dir, project) = (norm(dir), norm(project));
     dir == project || dir.starts_with(&format!("{project}/"))
 }
@@ -190,12 +223,22 @@ mod tests {
     use super::*;
 
     fn at(who: Who, project: &str, doing: Doing) -> Presence {
-        Presence { who, place: Place { project: Some(project.into()), ..Place::default() }, doing }
+        Presence {
+            who,
+            place: Place {
+                project: Some(project.into()),
+                ..Place::default()
+            },
+            doing,
+        }
     }
 
     #[test]
     fn faces_have_names_and_initials() {
-        assert_eq!(Who::Member("security-engineer".into()).label(), "Security engineer");
+        assert_eq!(
+            Who::Member("security-engineer".into()).label(),
+            "Security engineer"
+        );
         assert_eq!(Who::Member("security-engineer".into()).initials(), "SE");
         assert_eq!(Who::Assistant.initials(), "D");
         assert_eq!(Who::You.label(), "You");
@@ -205,8 +248,24 @@ mod tests {
     fn a_worktree_is_inside_its_project() {
         let mut room = Room::new();
         let now = Instant::now();
-        room.seen("t1", at(Who::Member("frontend".into()), r"D:\www\shop\.devd\worktrees\a1-shell", Doing::Calling("fs.edit".into())), now);
-        room.seen("t2", at(Who::Member("qa".into()), "D:/www/shopfront", Doing::Thinking), now);
+        room.seen(
+            "t1",
+            at(
+                Who::Member("frontend".into()),
+                r"D:\www\shop\.devd\worktrees\a1-shell",
+                Doing::Calling("fs.edit".into()),
+            ),
+            now,
+        );
+        room.seen(
+            "t2",
+            at(
+                Who::Member("qa".into()),
+                "D:/www/shopfront",
+                Doing::Thinking,
+            ),
+            now,
+        );
         let in_shop = room.in_project("D:/www/shop");
         assert_eq!(in_shop.len(), 1, "shopfront is a different project");
         assert_eq!(in_shop[0].who, Who::Member("frontend".into()));
@@ -218,7 +277,11 @@ mod tests {
         let mut room = Room::new();
         let start = Instant::now();
         room.seen("me", at(Who::You, "D:/www/shop", Doing::Viewing), start);
-        room.seen("t1", at(Who::Member("qa".into()), "D:/www/shop", Doing::Thinking), start);
+        room.seen(
+            "t1",
+            at(Who::Member("qa".into()), "D:/www/shop", Doing::Thinking),
+            start,
+        );
         assert!(!room.sweep(start + Duration::from_secs(30)));
         assert_eq!(room.working(), 1);
         assert!(room.sweep(start + STALE_AFTER + Duration::from_secs(1)));
@@ -229,9 +292,21 @@ mod tests {
     #[test]
     fn waiting_is_present_but_not_working() {
         let mut room = Room::new();
-        room.seen("t1", at(Who::Assistant, "D:/www/shop", Doing::Waiting("approval".into())), Instant::now());
+        room.seen(
+            "t1",
+            at(
+                Who::Assistant,
+                "D:/www/shop",
+                Doing::Waiting("approval".into()),
+            ),
+            Instant::now(),
+        );
         assert_eq!(room.working(), 0);
-        assert_eq!(room.in_project("d:\\www\\shop\\").len(), 1, "paths compare whatever their slashes and case");
+        assert_eq!(
+            room.in_project("d:\\www\\shop\\").len(),
+            1,
+            "paths compare whatever their slashes and case"
+        );
         room.left("t1");
         assert!(room.everyone().is_empty());
     }
@@ -245,5 +320,26 @@ mod tests {
         room.seen("me", at(Who::You, "p", Doing::Viewing), now);
         let names: Vec<String> = room.everyone().iter().map(|p| p.who.label()).collect();
         assert_eq!(names, ["You", "Qa", "devd"]);
+    }
+
+    #[test]
+    fn a_face_leads_to_the_conversation_then_the_run_then_the_project_of_who_it_is() {
+        use crate::nav::Route;
+        let mut place = Place {
+            project: Some("D:/work/shop".into()),
+            run: Some("r1".into()),
+            thread: Some("t1".into()),
+            ..Place::default()
+        };
+        assert_eq!(place.route(), Some(Route::Assistant(Some("t1".into()))));
+        place.thread = None;
+        assert_eq!(place.route(), Some(Route::Runs(Some("r1".into()))));
+        place.run = None;
+        assert_eq!(
+            place.route(),
+            Some(Route::Projects(Some("D:/work/shop".into())))
+        );
+        place.project = None;
+        assert_eq!(place.route(), None, "someone with no place leads nowhere");
     }
 }

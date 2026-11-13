@@ -57,7 +57,7 @@ BrandingText "devd ${VERSION}"
 
 ; Four pages: welcome, where, installing, done. Nothing else to answer.
 !define MUI_WELCOMEPAGE_TITLE "Welcome to devd"
-!define MUI_WELCOMEPAGE_TEXT "Your sites, services, runtimes and agents in one place.$\r$\n$\r$\nThis takes a minute. It installs for you alone, so no administrator password is needed, and it adds devd to your PATH and the Start menu.$\r$\n$\r$\nPHP, nginx and MariaDB are not bundled: devd downloads them from their publishers the first time it starts, and checks each one before it runs it."
+!define MUI_WELCOMEPAGE_TEXT "Your sites, services, runtimes and agents in one place.$\r$\n$\r$\nThis takes a minute. It installs for you alone, so no administrator password is needed, and it adds devd to your PATH and the Start menu.$\r$\n$\r$\ndevd downloads its web server the first time it starts and checks it before it runs it. PHP, Node.js, Go and databases are not installed for you: you choose them, in the app or by asking the assistant, when a project needs them."
 !insertmacro MUI_PAGE_WELCOME
 
 !define MUI_DIRECTORYPAGE_TEXT_TOP "Choose the folder to install devd in. Click Browse to pick another one, then click Install.$\r$\n$\r$\nYour projects, databases and certificates are kept in $LOCALAPPDATA\devd whichever folder you choose, so they survive an upgrade or a reinstall."
@@ -69,7 +69,7 @@ BrandingText "devd ${VERSION}"
 !define MUI_FINISHPAGE_TITLE "devd is ready"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\launch.vbs"
 !define MUI_FINISHPAGE_RUN_TEXT "Set up devd and open it now"
-!define MUI_FINISHPAGE_TEXT "devd is installed.$\r$\n$\r$\nThe first start sets everything up and shows what it is doing: it checks what your machine needs, downloads PHP, nginx and MariaDB (about 140 MB), starts them and creates your first site. It takes a few minutes, and devd opens when it is done.$\r$\n$\r$\nYou can run devd from the Start menu or the desktop at any time."
+!define MUI_FINISHPAGE_TEXT "devd is installed.$\r$\n$\r$\nThe first start sets up the web server, which is a small download, and opens devd when it is done. Then choose what you work with: PHP, Node.js, Go, a database. Nothing is installed that you did not ask for.$\r$\n$\r$\nYou can run devd from the Start menu or the desktop at any time."
 !insertmacro MUI_PAGE_FINISH
 
 !insertmacro MUI_UNPAGE_CONFIRM

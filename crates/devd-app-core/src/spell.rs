@@ -23,7 +23,11 @@ use std::path::{Path, PathBuf};
 
 /// What the window ships with: the common words of ordinary writing, and the
 /// vocabulary of devd's own documentation.
-const BUNDLED: &str = concat!(include_str!("../data/common.txt"), "\n", include_str!("../data/words.txt"));
+const BUNDLED: &str = concat!(
+    include_str!("../data/common.txt"),
+    "\n",
+    include_str!("../data/words.txt")
+);
 
 /// A set of known words.
 #[derive(Debug, Clone, Default)]
@@ -103,12 +107,21 @@ impl Dictionary {
         // A contraction is its parts: it's, don't, we'll, they're.
         if let Some((head, tail)) = lower.split_once('\'') {
             let joined = format!("{head}{tail}");
-            if matches!(tail, "s" | "t" | "re" | "ve" | "ll" | "d" | "m") && (self.words.contains(head) || self.words.contains(&joined)) {
+            if matches!(tail, "s" | "t" | "re" | "ve" | "ll" | "d" | "m")
+                && (self.words.contains(head) || self.words.contains(&joined))
+            {
                 return true;
             }
         }
-        let stem = lower.strip_suffix("'s").or_else(|| lower.strip_suffix('s')).or_else(|| lower.strip_suffix("ed")).or_else(|| lower.strip_suffix("ing"));
-        stem.is_some_and(|stem| stem.chars().count() >= 3 && (self.words.contains(stem) || self.words.contains(&format!("{stem}e"))))
+        let stem = lower
+            .strip_suffix("'s")
+            .or_else(|| lower.strip_suffix('s'))
+            .or_else(|| lower.strip_suffix("ed"))
+            .or_else(|| lower.strip_suffix("ing"));
+        stem.is_some_and(|stem| {
+            stem.chars().count() >= 3
+                && (self.words.contains(stem) || self.words.contains(&format!("{stem}e")))
+        })
     }
 
     /// Known words one slip away from `word`, nearest first.
@@ -161,7 +174,10 @@ impl Dictionary {
                     s.to_uppercase()
                 } else if first_upper {
                     let mut chars = s.chars();
-                    chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
+                    chars
+                        .next()
+                        .map(|c| c.to_uppercase().chain(chars).collect())
+                        .unwrap_or_default()
                 } else {
                     s
                 }
@@ -195,7 +211,11 @@ fn system_dictionaries() -> Vec<PathBuf> {
     found.extend(fixed.iter().map(PathBuf::from).filter(|p| p.is_file()));
     if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
         let home = PathBuf::from(home);
-        for relative in ["Library/Spelling/en_US.dic", ".config/enchant/en_US.dic", ".local/share/hunspell/en_US.dic"] {
+        for relative in [
+            "Library/Spelling/en_US.dic",
+            ".config/enchant/en_US.dic",
+            ".local/share/hunspell/en_US.dic",
+        ] {
             let path = home.join(relative);
             if path.is_file() {
                 found.push(path);
@@ -237,7 +257,12 @@ pub fn words_in(text: &str) -> Vec<(Range<usize>, String)> {
             if n.is_alphabetic() {
                 end = i + n.len_utf8();
                 iter.next();
-            } else if n == '\'' && text[i + 1..].chars().next().is_some_and(char::is_alphabetic) {
+            } else if n == '\''
+                && text[i + 1..]
+                    .chars()
+                    .next()
+                    .is_some_and(char::is_alphabetic)
+            {
                 end = i + 1;
                 iter.next();
             } else if n.is_ascii_digit() || n == '_' {
@@ -253,7 +278,14 @@ pub fn words_in(text: &str) -> Vec<(Range<usize>, String)> {
         let after = text[end..].chars().next();
         // A capital in the middle of a sentence is a name: Theo, Nairobi, Laravel.
         // One that opens a sentence is just a word that happens to be capitalised.
-        let opens_sentence = text[..start].trim_end().chars().next_back().map_or(true, |p| matches!(p, '.' | '!' | '?' | ':' | '\n' | '#' | '*' | '-' | '>')) || text[..start].ends_with('\n');
+        let opens_sentence = text[..start]
+            .trim_end()
+            .chars()
+            .next_back()
+            .map_or(true, |p| {
+                matches!(p, '.' | '!' | '?' | ':' | '\n' | '#' | '*' | '-' | '>')
+            })
+            || text[..start].ends_with('\n');
         let is_name = c.is_uppercase() && !opens_sentence;
         let skip = glued
             || is_name
@@ -282,9 +314,20 @@ mod tests {
     #[test]
     fn a_slip_of_the_hands_is_flagged_and_corrected() {
         let d = small();
-        for (typed, meant) in [("teh", "the"), ("projct", "project"), ("becuase", "because"), ("recieve", "receive"), ("databse", "database"), ("howver", "however")] {
+        for (typed, meant) in [
+            ("teh", "the"),
+            ("projct", "project"),
+            ("becuase", "because"),
+            ("recieve", "receive"),
+            ("databse", "database"),
+            ("howver", "however"),
+        ] {
             assert_eq!(d.check(typed), vec![0..typed.len()], "{typed} is flagged");
-            assert_eq!(d.suggest(typed, 3).first().map(String::as_str), Some(meant), "{typed}");
+            assert_eq!(
+                d.suggest(typed, 3).first().map(String::as_str),
+                Some(meant),
+                "{typed}"
+            );
         }
     }
 
@@ -292,14 +335,19 @@ mod tests {
     fn a_word_the_dictionary_has_not_met_is_left_alone() {
         let d = small();
         for text in ["kubectl", "devd", "Nairobi", "ocean", "gpui", "ask Theo"] {
-            assert!(d.check(text).is_empty(), "{text} is not a slip of anything known");
+            assert!(
+                d.check(text).is_empty(),
+                "{text} is not a slip of anything known"
+            );
         }
     }
 
     #[test]
     fn plurals_possessives_and_case_are_not_mistakes() {
         let d = small();
-        assert!(d.check("Projects project's PROJECT The databases").is_empty());
+        assert!(d
+            .check("Projects project's PROJECT The databases")
+            .is_empty());
         assert_eq!(d.suggest("Teh", 1), ["The"], "a capital stays");
         assert_eq!(d.suggest("TEH", 1), ["THE"]);
     }
@@ -308,7 +356,12 @@ mod tests {
     fn code_paths_addresses_and_identifiers_are_never_checked() {
         let d = small();
         let text = "run `teh` plus see src/projct/teh.rs and https://projct.test/teh or @teh #teh --teh camelTeh projct_2 TEH snake_projct ```\nteh projct\n```";
-        assert_eq!(d.check(text), Vec::<Range<usize>>::new(), "{:?}", words_in(text));
+        assert_eq!(
+            d.check(text),
+            Vec::<Range<usize>>::new(),
+            "{:?}",
+            words_in(text)
+        );
         // …and prose beside them still is.
         let beside = "see `code` but teh rest";
         let flagged = d.check(beside);
@@ -321,7 +374,10 @@ mod tests {
         let d = small();
         let text = "café ☕ teh näive teh";
         let flagged = d.check(text);
-        assert_eq!(flagged.iter().map(|r| &text[r.clone()]).collect::<Vec<_>>(), ["teh", "teh"]);
+        assert_eq!(
+            flagged.iter().map(|r| &text[r.clone()]).collect::<Vec<_>>(),
+            ["teh", "teh"]
+        );
     }
 
     #[test]
@@ -339,9 +395,20 @@ mod tests {
         let d = Dictionary::bundled();
         assert!(d.len() > 2_500, "{}", d.len());
         let fine = "Please check the project and tell me whether the database migration finished, because the tests failed yesterday. It's the Laravel app, not the kubectl one.";
-        assert_eq!(d.check(fine).iter().map(|r| &fine[r.clone()]).collect::<Vec<_>>(), Vec::<&str>::new());
+        assert_eq!(
+            d.check(fine)
+                .iter()
+                .map(|r| &fine[r.clone()])
+                .collect::<Vec<_>>(),
+            Vec::<&str>::new()
+        );
         let slips = "I recieve teh message becuase of an eror";
         let flagged: Vec<&str> = d.check(slips).iter().map(|r| &slips[r.clone()]).collect();
-        assert!(flagged.contains(&"recieve") && flagged.contains(&"teh") && flagged.contains(&"becuase"), "{flagged:?}");
+        assert!(
+            flagged.contains(&"recieve")
+                && flagged.contains(&"teh")
+                && flagged.contains(&"becuase"),
+            "{flagged:?}"
+        );
     }
 }

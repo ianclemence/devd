@@ -83,7 +83,9 @@ impl Pattern {
 
 /// A repeatable number in 0..1 for a point and a seed.
 fn hash2(x: i32, y: i32, seed: u32) -> f32 {
-    let mut h = (x as u32).wrapping_mul(0x85eb_ca6b) ^ (y as u32).wrapping_mul(0xc2b2_ae35) ^ seed.wrapping_mul(0x27d4_eb2f);
+    let mut h = (x as u32).wrapping_mul(0x85eb_ca6b)
+        ^ (y as u32).wrapping_mul(0xc2b2_ae35)
+        ^ seed.wrapping_mul(0x27d4_eb2f);
     h ^= h >> 15;
     h = h.wrapping_mul(0x2c1b_3c6d);
     h ^= h >> 12;
@@ -152,31 +154,53 @@ fn scene(pattern: Pattern, u: f32, v: f32) -> (f32, f32) {
             // The sky: a low sun with a wide glow, and stars that have not gone yet.
             let (sx, sy) = (px - 0.70 * ASPECT, py - 0.34);
             let sun_dist = (sx * sx + sy * sy).sqrt();
-            let disc = step(0.105, 0.092, sun_dist) * (0.70 + 0.30 * (1.0 - sun_dist / 0.105).clamp(0.0, 1.0) + 0.10 * fbm(px * 40.0, py * 40.0, 8));
+            let disc = step(0.105, 0.092, sun_dist)
+                * (0.70
+                    + 0.30 * (1.0 - sun_dist / 0.105).clamp(0.0, 1.0)
+                    + 0.10 * fbm(px * 40.0, py * 40.0, 8));
             let glow = (-(sun_dist / 0.30).powi(2)).exp() * 0.55;
             let haze = fbm(px * 1.1, py * 5.5, 5) * 0.14 * step(0.20, 0.55, v);
             let mut ink = (glow + disc + haze).min(1.0);
             let mut bright = disc + glow * 0.6;
             // Hills, far to near. Each one hides what is behind it.
-            const HILLS: [(f32, f32, f32); 5] = [(0.56, 0.060, 1.7), (0.64, 0.070, 2.4), (0.72, 0.070, 3.3), (0.81, 0.060, 4.6), (0.91, 0.045, 6.4)];
+            const HILLS: [(f32, f32, f32); 5] = [
+                (0.56, 0.060, 1.7),
+                (0.64, 0.070, 2.4),
+                (0.72, 0.070, 3.3),
+                (0.81, 0.060, 4.6),
+                (0.91, 0.045, 6.4),
+            ];
             for (k, (base, amp, freq)) in HILLS.iter().enumerate() {
-                let ridge = base + amp * (fbm(px * freq + k as f32 * 7.3, 3.0 + k as f32, 40 + k as u32) - 0.5) * 2.0;
+                let ridge = base
+                    + amp
+                        * (fbm(px * freq + k as f32 * 7.3, 3.0 + k as f32, 40 + k as u32) - 0.5)
+                        * 2.0;
                 if v >= ridge {
                     let depth = v - ridge;
                     let body = (1.0 - depth / 0.20).clamp(0.0, 1.0).powf(1.5);
                     let rim = if depth < 0.0065 { 1.0 } else { 0.0 };
                     // Ploughed rows on the nearest hills.
-                    let rows = if k >= 3 { 0.82 + 0.18 * (0.5 + 0.5 * (py * 120.0 + fbm(px * 3.0, py * 2.0, 70) * 14.0).sin()) } else { 1.0 };
+                    let rows = if k >= 3 {
+                        0.82 + 0.18
+                            * (0.5 + 0.5 * (py * 120.0 + fbm(px * 3.0, py * 2.0, 70) * 14.0).sin())
+                    } else {
+                        1.0
+                    };
                     ink = ((0.07 + 0.045 * k as f32 + 0.40 * body) * rows + rim * 0.55).min(1.0);
                     bright = if rim > 0.0 && k % 2 == 0 { 0.7 } else { 0.0 };
                 }
             }
             // Stars, only in open sky.
-            if v < 0.50 && hash2((u * CELLS_W as f32) as i32, (v * CELLS_H as f32) as i32, 9) < 0.0035 {
+            if v < 0.50
+                && hash2((u * CELLS_W as f32) as i32, (v * CELLS_H as f32) as i32, 9) < 0.0035
+            {
                 ink = 1.0;
                 bright = 1.0;
             }
-            (ink * step(0.0, 0.30, u) * step(0.0, 0.22, v), bright.clamp(0.0, 1.0))
+            (
+                ink * step(0.0, 0.30, u) * step(0.0, 0.22, v),
+                bright.clamp(0.0, 1.0),
+            )
         }
         Pattern::Silk => {
             // Long lines that flow across the window and fold over themselves. Each line is one value of a phase
@@ -187,25 +211,35 @@ fn scene(pattern: Pattern, u: f32, v: f32) -> (f32, f32) {
             let wave = phase * PI;
             // Where the cloth is gathered: brightest in the upper right, falling away toward the left and bottom.
             let (dx, dy) = (px - 0.88 * ASPECT, py - 0.10);
-            let reach = (1.0 - (dx * dx + dy * dy).sqrt() / 1.45).clamp(0.0, 1.0).powf(1.05);
+            let reach = (1.0 - (dx * dx + dy * dy).sqrt() / 1.45)
+                .clamp(0.0, 1.0)
+                .powf(1.05);
             // The sheen of satin: broad soft bands that follow the folds, with a thin bright line on each crest.
             let sheen = (0.5 + 0.5 * wave.sin()).powf(2.2);
             let crest = (1.0 - wave.sin().abs()).powf(7.0);
-            let ink = reach * (0.05 + 0.50 * sheen) + reach * 0.85 * crest * step(0.15, 0.45, reach);
+            let ink =
+                reach * (0.05 + 0.50 * sheen) + reach * 0.85 * crest * step(0.15, 0.45, reach);
             // Gold runs along the crests where the cloth catches the light.
-            let bright = if crest > 0.30 { (crest * 1.2).min(1.0) * step(0.2, 0.6, reach) } else { 0.0 };
+            let bright = if crest > 0.30 {
+                (crest * 1.2).min(1.0) * step(0.2, 0.6, reach)
+            } else {
+                0.0
+            };
             (ink * step(0.10, 0.34, u) * step(1.0, 0.62, v), bright)
         }
         Pattern::Contours => {
             // The height of the land, and a line at every step of it; every fifth line is an index line.
-            let height = fbm(px * 1.7 + 0.4, py * 1.7, 61) * 0.78 + 0.22 * fbm(px * 4.2, py * 4.2, 62);
+            let height =
+                fbm(px * 1.7 + 0.4, py * 1.7, 61) * 0.78 + 0.22 * fbm(px * 4.2, py * 4.2, 62);
             let band = height * 24.0;
             let frac = band - band.floor();
             let near = frac.min(1.0 - frac) * 2.0;
             let line = (1.0 - near * 4.5).clamp(0.0, 1.0);
             let index = (band.floor() as i32).rem_euclid(5) == 0;
             let (dx, dy) = (px - 0.82 * ASPECT, py - 0.30);
-            let reach = (1.0 - (dx * dx + dy * dy).sqrt() / 1.25).clamp(0.0, 1.0).powf(0.85);
+            let reach = (1.0 - (dx * dx + dy * dy).sqrt() / 1.25)
+                .clamp(0.0, 1.0)
+                .powf(0.85);
             let ink = reach * (line * if index { 1.0 } else { 0.62 } + 0.04);
             let bright = if index && line > 0.25 { reach } else { 0.0 };
             (ink * step(0.0, 0.30, u) * step(1.0, 0.62, v), bright)
@@ -222,14 +256,20 @@ fn scene(pattern: Pattern, u: f32, v: f32) -> (f32, f32) {
             let glow = (-(r / 0.34).powi(2)).exp();
             let ink = reach * (0.07 + 0.78 * fine * (0.35 + 0.65 * broad)) + glow * 0.75;
             let bright = if fine > 0.80 { reach } else { 0.0 } + glow * 0.5;
-            (ink.min(1.0) * step(0.0, 0.30, u) * step(1.0, 0.62, v), bright.clamp(0.0, 1.0))
+            (
+                ink.min(1.0) * step(0.0, 0.30, u) * step(1.0, 0.62, v),
+                bright.clamp(0.0, 1.0),
+            )
         }
     }
 }
 
 /// What one cell is: nothing, a dot in the base tone, or a dot in the bright tone.
 fn cell(cx: u32, cy: u32, pattern: Pattern) -> Option<bool> {
-    let (u, v) = ((cx as f32 + 0.5) / CELLS_W as f32, (cy as f32 + 0.5) / CELLS_H as f32);
+    let (u, v) = (
+        (cx as f32 + 0.5) / CELLS_W as f32,
+        (cy as f32 + 0.5) / CELLS_H as f32,
+    );
     let (ink, bright) = scene(pattern, u, v);
     let threshold = (BAYER[(cy % 8) as usize][(cx % 8) as usize] as f32 + 0.5) / 64.0;
     if ink <= threshold {
@@ -289,7 +329,11 @@ fn crc32(bytes: &[u8]) -> u32 {
     for &b in bytes {
         crc ^= b as u32;
         for _ in 0..8 {
-            crc = if crc & 1 != 0 { (crc >> 1) ^ 0xedb8_8320 } else { crc >> 1 };
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ 0xedb8_8320
+            } else {
+                crc >> 1
+            };
         }
     }
     !crc
@@ -318,10 +362,19 @@ fn zlib_stored(data: &[u8]) -> Vec<u8> {
 mod tests {
     use super::*;
 
-    const ALL: [Pattern; 5] = [Pattern::Ripples, Pattern::Pasture, Pattern::Silk, Pattern::Contours, Pattern::Rays];
+    const ALL: [Pattern; 5] = [
+        Pattern::Ripples,
+        Pattern::Pasture,
+        Pattern::Silk,
+        Pattern::Contours,
+        Pattern::Rays,
+    ];
 
     fn count(pattern: Pattern, x0: u32, y0: u32, w: u32, h: u32) -> usize {
-        (0..h).flat_map(|y| (0..w).map(move |x| (x0 + x, y0 + y))).filter(|&(x, y)| inked(x, y, pattern)).count()
+        (0..h)
+            .flat_map(|y| (0..w).map(move |x| (x0 + x, y0 + y)))
+            .filter(|&(x, y)| inked(x, y, pattern))
+            .count()
     }
 
     #[test]
@@ -337,7 +390,10 @@ mod tests {
             assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
             assert_eq!(&bytes[12..16], b"IHDR");
             assert_eq!(u32::from_be_bytes(bytes[16..20].try_into().unwrap()), WIDTH);
-            assert_eq!(u32::from_be_bytes(bytes[20..24].try_into().unwrap()), HEIGHT);
+            assert_eq!(
+                u32::from_be_bytes(bytes[20..24].try_into().unwrap()),
+                HEIGHT
+            );
             assert!(bytes.ends_with(&[0, 0, 0, 0, b'I', b'E', b'N', b'D', 0xae, 0x42, 0x60, 0x82]));
         }
     }
@@ -345,22 +401,42 @@ mod tests {
     #[test]
     fn the_ripples_gather_at_the_corner_and_die_out_far_from_it() {
         assert!(count(Pattern::Ripples, WIDTH - 200, 0, 200, 200) > 4_000);
-        assert_eq!(count(Pattern::Ripples, 0, HEIGHT - 120, 400, 120), 0, "nothing reaches the far corner");
+        assert_eq!(
+            count(Pattern::Ripples, 0, HEIGHT - 120, 400, 120),
+            0,
+            "nothing reaches the far corner"
+        );
     }
 
     #[test]
     fn no_scene_has_an_edge_where_it_meets_the_window() {
         // The sides that face into the window carry no ink at all, so the picture never shows as a rectangle.
         for pattern in ALL {
-            assert_eq!(count(pattern, 0, 0, 24, HEIGHT), 0, "{pattern:?} has a hard left edge");
+            assert_eq!(
+                count(pattern, 0, 0, 24, HEIGHT),
+                0,
+                "{pattern:?} has a hard left edge"
+            );
             if pattern != Pattern::Pasture {
-                assert_eq!(count(pattern, 0, HEIGHT - 6, WIDTH / 2, 6), 0, "{pattern:?} has a hard bottom edge");
+                assert_eq!(
+                    count(pattern, 0, HEIGHT - 6, WIDTH / 2, 6),
+                    0,
+                    "{pattern:?} has a hard bottom edge"
+                );
             }
         }
         for pattern in [Pattern::Silk, Pattern::Contours, Pattern::Rays] {
-            assert_eq!(count(pattern, 0, HEIGHT - 6, WIDTH, 6), 0, "{pattern:?} has a hard bottom edge on the right");
+            assert_eq!(
+                count(pattern, 0, HEIGHT - 6, WIDTH, 6),
+                0,
+                "{pattern:?} has a hard bottom edge on the right"
+            );
         }
-        assert_eq!(count(Pattern::Pasture, 0, 0, WIDTH, 6), 0, "the pasture has a hard top edge");
+        assert_eq!(
+            count(Pattern::Pasture, 0, 0, WIDTH, 6),
+            0,
+            "the pasture has a hard top edge"
+        );
     }
 
     #[test]
@@ -382,7 +458,10 @@ mod tests {
 
     #[test]
     fn every_scene_draws_its_own_picture_with_both_tones() {
-        let inks: Vec<usize> = ALL.iter().map(|&p| count(p, WIDTH / 3, 0, 400, HEIGHT)).collect();
+        let inks: Vec<usize> = ALL
+            .iter()
+            .map(|&p| count(p, WIDTH / 3, 0, 400, HEIGHT))
+            .collect();
         assert!(inks.iter().all(|&n| n > 500), "{inks:?}");
         for (i, a) in inks.iter().enumerate() {
             for b in &inks[i + 1..] {
@@ -390,7 +469,11 @@ mod tests {
             }
         }
         for pattern in ALL {
-            let glints = (0..CELLS_H).step_by(3).flat_map(|y| (0..CELLS_W).step_by(3).map(move |x| (x, y))).filter(|&(x, y)| cell(x, y, pattern) == Some(true)).count();
+            let glints = (0..CELLS_H)
+                .step_by(3)
+                .flat_map(|y| (0..CELLS_W).step_by(3).map(move |x| (x, y)))
+                .filter(|&(x, y)| cell(x, y, pattern) == Some(true))
+                .count();
             assert!(glints > 20, "{pattern:?} has no bright tone ({glints})");
         }
     }
@@ -398,12 +481,18 @@ mod tests {
     #[test]
     fn the_rays_fan_out_from_the_corner() {
         assert!(count(Pattern::Rays, WIDTH - 300, 0, 300, 300) > 5_000);
-        assert!(count(Pattern::Rays, 0, HEIGHT - 200, 300, 200) < 200, "the rays do not reach the far corner");
+        assert!(
+            count(Pattern::Rays, 0, HEIGHT - 200, 300, 200) < 200,
+            "the rays do not reach the far corner"
+        );
     }
 
     #[test]
     fn the_same_picture_every_time() {
-        assert_eq!(png_as([1, 2, 3], [4, 5, 6], Pattern::Silk), png_as([1, 2, 3], [4, 5, 6], Pattern::Silk));
+        assert_eq!(
+            png_as([1, 2, 3], [4, 5, 6], Pattern::Silk),
+            png_as([1, 2, 3], [4, 5, 6], Pattern::Silk)
+        );
     }
 }
 
@@ -415,15 +504,46 @@ mod preview {
     #[test]
     #[ignore]
     fn write_the_scenes_for_looking_at() {
-        let Ok(dir) = std::env::var("DEVD_ART_OUT") else { return };
+        let Ok(dir) = std::env::var("DEVD_ART_OUT") else {
+            return;
+        };
         for (name, pattern, base, glint) in [
-            ("sling", Pattern::Ripples, [0xd9, 0xd6, 0xcc], [0xd4, 0xf2, 0x4a]),
-            ("dawn", Pattern::Pasture, [0xd9, 0xc9, 0x9a], [0xe9, 0xb8, 0x5c]),
-            ("psalm", Pattern::Silk, [0xc9, 0xb8, 0xd9], [0xf0, 0xc4, 0x6e]),
-            ("sharon", Pattern::Contours, [0x8c, 0x3b, 0x52], [0xb0, 0x2a, 0x58]),
-            ("daybreak", Pattern::Rays, [0x3a, 0x31, 0x5a], [0x86, 0x58, 0x00]),
+            (
+                "sling",
+                Pattern::Ripples,
+                [0xd9, 0xd6, 0xcc],
+                [0xd4, 0xf2, 0x4a],
+            ),
+            (
+                "dawn",
+                Pattern::Pasture,
+                [0xd9, 0xc9, 0x9a],
+                [0xe9, 0xb8, 0x5c],
+            ),
+            (
+                "psalm",
+                Pattern::Silk,
+                [0xc9, 0xb8, 0xd9],
+                [0xf0, 0xc4, 0x6e],
+            ),
+            (
+                "sharon",
+                Pattern::Contours,
+                [0x8c, 0x3b, 0x52],
+                [0xb0, 0x2a, 0x58],
+            ),
+            (
+                "daybreak",
+                Pattern::Rays,
+                [0x3a, 0x31, 0x5a],
+                [0x86, 0x58, 0x00],
+            ),
         ] {
-            std::fs::write(std::path::Path::new(&dir).join(format!("{name}.png")), png_as(base, glint, pattern)).unwrap();
+            std::fs::write(
+                std::path::Path::new(&dir).join(format!("{name}.png")),
+                png_as(base, glint, pattern),
+            )
+            .unwrap();
         }
     }
 }

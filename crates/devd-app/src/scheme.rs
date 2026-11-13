@@ -31,8 +31,16 @@ pub fn windows_registry(exe: &str) -> Vec<Vec<String>> {
     vec![
         add(&base, None, "URL:devd Protocol"),
         add(&base, Some("URL Protocol"), ""),
-        add(&format!(r"{base}\DefaultIcon"), None, &format!("\"{exe}\",0")),
-        add(&format!(r"{base}\shell\open\command"), None, &format!("\"{exe}\" \"%1\"")),
+        add(
+            &format!(r"{base}\DefaultIcon"),
+            None,
+            &format!("\"{exe}\",0"),
+        ),
+        add(
+            &format!(r"{base}\shell\open\command"),
+            None,
+            &format!("\"{exe}\" \"%1\""),
+        ),
     ]
 }
 
@@ -40,8 +48,16 @@ pub fn windows_registry(exe: &str) -> Vec<Vec<String>> {
 pub fn desktop_entry(exe: &str) -> String {
     // `%u` is the one link. Quoting follows the Desktop Entry specification: quote the program,
     // escape what would end the quotation.
-    let quoted = format!("\"{}\"", exe.replace('\\', "\\\\").replace('"', "\\\"").replace('$', "\\$").replace('`', "\\`"));
-    format!("[Desktop Entry]\nType=Application\nName=devd\nComment=Open devd links\nExec={quoted} %u\nTerminal=false\nNoDisplay=true\nMimeType=x-scheme-handler/{SCHEME};\n")
+    let quoted = format!(
+        "\"{}\"",
+        exe.replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('$', "\\$")
+            .replace('`', "\\`")
+    );
+    format!(
+        "[Desktop Entry]\nType=Application\nName=devd\nComment=Open devd links\nExec={quoted} %u\nTerminal=false\nNoDisplay=true\nMimeType=x-scheme-handler/{SCHEME};\n"
+    )
 }
 
 /// Register this program for `devd://` links. Returns what was done, in words.
@@ -49,22 +65,43 @@ pub fn register(exe: &Path) -> Result<String, String> {
     let exe_text = exe.to_string_lossy().to_string();
     if cfg!(windows) {
         for args in windows_registry(&exe_text) {
-            let out = std::process::Command::new("reg").args(&args).output().map_err(|e| format!("could not run reg.exe: {e}"))?;
+            let out = std::process::Command::new("reg")
+                .args(&args)
+                .output()
+                .map_err(|e| format!("could not run reg.exe: {e}"))?;
             if !out.status.success() {
-                return Err(format!("Windows refused: {}", String::from_utf8_lossy(&out.stderr).trim()));
+                return Err(format!(
+                    "Windows refused: {}",
+                    String::from_utf8_lossy(&out.stderr).trim()
+                ));
             }
         }
-        Ok(format!("devd:// links now open {exe_text} (for this Windows user)."))
+        Ok(format!(
+            "devd:// links now open {exe_text} (for this Windows user)."
+        ))
     } else if cfg!(target_os = "linux") {
         let home = std::env::var_os("HOME").ok_or("HOME is not set")?;
         let dir = Path::new(&home).join(".local/share/applications");
-        std::fs::create_dir_all(&dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
         let file = dir.join("devd-link.desktop");
-        std::fs::write(&file, desktop_entry(&exe_text)).map_err(|e| format!("could not write {}: {e}", file.display()))?;
+        std::fs::write(&file, desktop_entry(&exe_text))
+            .map_err(|e| format!("could not write {}: {e}", file.display()))?;
         // Best effort: not every desktop has these, and the entry works without them on most.
-        let _ = std::process::Command::new("xdg-mime").args(["default", "devd-link.desktop", &format!("x-scheme-handler/{SCHEME}")]).status();
-        let _ = std::process::Command::new("update-desktop-database").arg(&dir).status();
-        Ok(format!("devd:// links now open {exe_text} (wrote {}).", file.display()))
+        let _ = std::process::Command::new("xdg-mime")
+            .args([
+                "default",
+                "devd-link.desktop",
+                &format!("x-scheme-handler/{SCHEME}"),
+            ])
+            .status();
+        let _ = std::process::Command::new("update-desktop-database")
+            .arg(&dir)
+            .status();
+        Ok(format!(
+            "devd:// links now open {exe_text} (wrote {}).",
+            file.display()
+        ))
     } else {
         Err("macOS ties a link scheme to an app bundle: install the packaged devd app and it registers itself.".to_string())
     }
@@ -78,12 +115,28 @@ mod tests {
     fn windows_is_told_to_open_the_scheme_with_the_program_for_this_user_only() {
         let cmds = windows_registry(r"C:\Program Files\devd\devd-app.exe");
         assert_eq!(cmds.len(), 4);
-        assert!(cmds.iter().all(|c| c[1].starts_with(r"HKCU\Software\Classes\devd")), "nothing outside this user's own classes");
-        assert!(cmds.iter().all(|c| c.last().map(String::as_str) == Some("/f")));
-        let open = cmds.iter().find(|c| c[1].ends_with(r"shell\open\command")).unwrap();
+        assert!(
+            cmds.iter()
+                .all(|c| c[1].starts_with(r"HKCU\Software\Classes\devd")),
+            "nothing outside this user's own classes"
+        );
+        assert!(
+            cmds.iter()
+                .all(|c| c.last().map(String::as_str) == Some("/f"))
+        );
+        let open = cmds
+            .iter()
+            .find(|c| c[1].ends_with(r"shell\open\command"))
+            .unwrap();
         assert_eq!(open[3], "/d");
-        assert_eq!(open[4], r#""C:\Program Files\devd\devd-app.exe" "%1""#, "a path with a space stays one program, the link one argument");
-        let protocol = cmds.iter().find(|c| c.contains(&"URL Protocol".to_string())).unwrap();
+        assert_eq!(
+            open[4], r#""C:\Program Files\devd\devd-app.exe" "%1""#,
+            "a path with a space stays one program, the link one argument"
+        );
+        let protocol = cmds
+            .iter()
+            .find(|c| c.contains(&"URL Protocol".to_string()))
+            .unwrap();
         assert_eq!(protocol[5], "", "the value follows /d");
     }
 
@@ -91,8 +144,14 @@ mod tests {
     fn a_linux_desktop_entry_names_the_scheme_and_quotes_the_program() {
         let entry = desktop_entry("/home/me/my apps/devd-app");
         assert!(entry.contains("MimeType=x-scheme-handler/devd;"), "{entry}");
-        assert!(entry.contains("Exec=\"/home/me/my apps/devd-app\" %u"), "{entry}");
-        assert!(entry.contains("NoDisplay=true"), "it is a handler, not a launcher");
+        assert!(
+            entry.contains("Exec=\"/home/me/my apps/devd-app\" %u"),
+            "{entry}"
+        );
+        assert!(
+            entry.contains("NoDisplay=true"),
+            "it is a handler, not a launcher"
+        );
         let nasty = desktop_entry("/x/a\"b$c");
         assert!(nasty.contains(r#"Exec="/x/a\"b\$c" %u"#), "{nasty}");
     }

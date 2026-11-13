@@ -57,7 +57,14 @@ pub enum Group {
 
 impl Group {
     /// Every group, in the order of the row.
-    pub const ALL: [Group; 6] = [Group::Overview, Group::Files, Group::Git, Group::Run, Group::Terminal, Group::Agents];
+    pub const ALL: [Group; 6] = [
+        Group::Overview,
+        Group::Files,
+        Group::Git,
+        Group::Run,
+        Group::Terminal,
+        Group::Agents,
+    ];
 
     /// What it says.
     pub fn label(self) -> &'static str {
@@ -103,7 +110,16 @@ impl ProjectTab {
     ];
 
     /// The git views, in the order of their row.
-    pub const GIT: [ProjectTab; 8] = [ProjectTab::Changes, ProjectTab::History, ProjectTab::Branches, ProjectTab::Stashes, ProjectTab::Tags, ProjectTab::Remotes, ProjectTab::Worktrees, ProjectTab::Recover];
+    pub const GIT: [ProjectTab; 8] = [
+        ProjectTab::Changes,
+        ProjectTab::History,
+        ProjectTab::Branches,
+        ProjectTab::Stashes,
+        ProjectTab::Tags,
+        ProjectTab::Remotes,
+        ProjectTab::Worktrees,
+        ProjectTab::Recover,
+    ];
 
     /// Its name in a path.
     pub fn id(self) -> &'static str {
@@ -156,7 +172,14 @@ impl ProjectTab {
         match self {
             ProjectTab::Overview => Group::Overview,
             ProjectTab::Files => Group::Files,
-            ProjectTab::Changes | ProjectTab::History | ProjectTab::Branches | ProjectTab::Stashes | ProjectTab::Tags | ProjectTab::Remotes | ProjectTab::Worktrees | ProjectTab::Recover => Group::Git,
+            ProjectTab::Changes
+            | ProjectTab::History
+            | ProjectTab::Branches
+            | ProjectTab::Stashes
+            | ProjectTab::Tags
+            | ProjectTab::Remotes
+            | ProjectTab::Worktrees
+            | ProjectTab::Recover => Group::Git,
             ProjectTab::Run => Group::Run,
             ProjectTab::Terminal => Group::Terminal,
             ProjectTab::Agents => Group::Agents,
@@ -180,7 +203,13 @@ mod tests {
             assert_eq!(ProjectTab::from_id(tab.id()), Some(tab));
             assert!(Group::ALL.contains(&tab.group()), "{tab:?}");
         }
-        assert_eq!(ProjectTab::GIT.len(), ProjectTab::ALL.iter().filter(|t| t.group() == Group::Git).count());
+        assert_eq!(
+            ProjectTab::GIT.len(),
+            ProjectTab::ALL
+                .iter()
+                .filter(|t| t.group() == Group::Git)
+                .count()
+        );
         assert!(ProjectTab::GIT.iter().all(|t| t.group() == Group::Git));
     }
 
@@ -189,7 +218,11 @@ mod tests {
         for group in Group::ALL {
             assert_eq!(group.first().group(), group, "{group:?}");
         }
-        assert_eq!(ProjectTab::from_id("agents"), Some(ProjectTab::Agents), "the old name still finds the tab");
+        assert_eq!(
+            ProjectTab::from_id("agents"),
+            Some(ProjectTab::Agents),
+            "the old name still finds the tab"
+        );
         assert_eq!(ProjectTab::from_id("nope"), None);
     }
 }

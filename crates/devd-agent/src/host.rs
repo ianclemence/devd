@@ -16,6 +16,11 @@ fn claim_file(paths: &Paths) -> PathBuf {
     paths.root().join("agent-host.pid")
 }
 
+/// Whether a live devd process holds the agents right now: the window, the daemon, or `devd serve`.
+pub fn live(paths: &Paths) -> bool {
+    devd_core::process::live_devd_holder(&claim_file(paths)).is_some()
+}
+
 /// Claim the right to recover interrupted conversations and runs. False when
 /// another live devd process already holds it.
 pub fn claim(paths: &Paths) -> bool {

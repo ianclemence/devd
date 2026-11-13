@@ -8,14 +8,14 @@
 //! the same ones the project's Terminal tab and the assistant's own tools use.
 
 use devd_app_core::surface;
-use gpui::{div, prelude::*, px, AnyElement, App, ClickEvent, Context, Div, ElementId, Window};
+use gpui::{AnyElement, App, ClickEvent, Context, Div, ElementId, Window, div, prelude::*, px};
 use serde_json::json;
 
 use super::pages::read_call;
 use super::term::{self, Home, TermUi};
 use crate::shell::Shell;
 use crate::state::{devd, q};
-use crate::theme::{size, theme, Theme};
+use crate::theme::{Theme, size, theme};
 use crate::ui::{self};
 
 /// How wide the panels are.
@@ -60,7 +60,12 @@ impl PaneUi {
 }
 
 /// A small square button with an icon, for the headers.
-pub fn icon_button(id: &'static str, icon: &'static str, on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static, t: &Theme) -> AnyElement {
+pub fn icon_button(
+    id: &'static str,
+    icon: &'static str,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    t: &Theme,
+) -> AnyElement {
     let hover = t.hover;
     div()
         .id(id)
@@ -118,20 +123,57 @@ pub fn chip(
         .bg(if on { t.active } else { t.hover.opacity(0.0) })
         .hover(move |s| s.bg(hover))
         .children(lead)
-        .child(div().flex_1().min_w_0().truncate().text_size(px(size::TEXT_SM)).text_color(if on { t.text } else { t.muted }).child(label))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_size(px(size::TEXT_SM))
+                .text_color(if on { t.text } else { t.muted })
+                .child(label),
+        )
         .child(closer)
         .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| select(this, window, cx)))
         .into_any_element()
 }
 
 /// A panel's header: its tabs and a button for another on the left, its own controls on the right. With no tab, its name.
-pub fn header(name: &'static str, tabs: Vec<AnyElement>, new: AnyElement, right: Vec<AnyElement>, t: &Theme) -> Div {
-    let mut left = div().flex().items_center().gap(px(2.0)).flex_1().min_w_0().overflow_hidden();
+pub fn header(
+    name: &'static str,
+    tabs: Vec<AnyElement>,
+    new: AnyElement,
+    right: Vec<AnyElement>,
+    t: &Theme,
+) -> Div {
+    let mut left = div()
+        .flex()
+        .items_center()
+        .gap(px(2.0))
+        .flex_1()
+        .min_w_0()
+        .overflow_hidden();
     if tabs.is_empty() {
-        left = left.child(div().px(px(10.0)).text_size(px(size::TEXT_SM)).text_color(t.muted).child(name));
+        left = left.child(
+            div()
+                .px(px(10.0))
+                .text_size(px(size::TEXT_SM))
+                .text_color(t.muted)
+                .child(name),
+        );
     }
     left = left.children(tabs).child(new);
-    div().flex().items_center().justify_between().gap(px(6.0)).px(px(10.0)).h(px(44.0)).flex_none().border_b_1().border_color(t.line).child(left).child(div().flex().items_center().gap(px(2.0)).children(right))
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(px(6.0))
+        .px(px(10.0))
+        .h(px(44.0))
+        .flex_none()
+        .border_b_1()
+        .border_color(t.line)
+        .child(left)
+        .child(div().flex().items_center().gap(px(2.0)).children(right))
 }
 
 /// The folder a shell opens in: the one the conversation is about, else the first project.
@@ -139,7 +181,12 @@ fn folder(cx: &Context<Shell>) -> Option<String> {
     if let Some(root) = devd(cx).link_root.as_ref() {
         return Some(root.display().to_string());
     }
-    devd(cx).sync.watch(&q::projects()).list("").iter().find_map(|p| p["path"].as_str().map(str::to_string))
+    devd(cx)
+        .sync
+        .watch(&q::projects())
+        .list("")
+        .iter()
+        .find_map(|p| p["path"].as_str().map(str::to_string))
 }
 
 impl Shell {
@@ -159,7 +206,10 @@ pub fn strip(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
     let t = theme(cx).clone();
     devd(cx).browser_seen.set(true);
     let status = read_call(cx, &surface::browser::status());
-    let running = status.data.as_deref().is_some_and(|d| d["running"] == json!(true));
+    let running = status
+        .data
+        .as_deref()
+        .is_some_and(|d| d["running"] == json!(true));
     // The assistant started the browser: show it.
     if running && !shell.pane.browser_was && !shell.pane.browser {
         shell.pane.browser = true;
@@ -167,8 +217,16 @@ pub fn strip(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
     shell.pane.browser_was = running;
 
     let terminals = read_call(cx, &surface::terminal::list());
-    let shells = terminals.list("/terminals").iter().any(|s| s["running"] != json!(false));
-    let button = |id: &'static str, icon: &'static str, tab: Tab, on: bool, live: bool, cx: &mut Context<Shell>| {
+    let shells = terminals
+        .list("/terminals")
+        .iter()
+        .any(|s| s["running"] != json!(false));
+    let button = |id: &'static str,
+                  icon: &'static str,
+                  tab: Tab,
+                  on: bool,
+                  live: bool,
+                  cx: &mut Context<Shell>| {
         let hover = t.hover;
         div()
             .id(id)
@@ -182,7 +240,15 @@ pub fn strip(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
             .bg(if on { t.active } else { t.hover.opacity(0.0) })
             .hover(move |s| s.bg(hover))
             .child(ui::icon(icon, 16.0, if on { t.text } else { t.muted }))
-            .children(live.then(|| div().absolute().top(px(6.0)).right(px(6.0)).size(px(6.0)).rounded_full().bg(t.ok)))
+            .children(live.then(|| {
+                div()
+                    .absolute()
+                    .top(px(6.0))
+                    .right(px(6.0))
+                    .size(px(6.0))
+                    .rounded_full()
+                    .bg(t.ok)
+            }))
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.toggle_pane(tab, cx)))
     };
     let (browser_on, terminal_on) = (shell.pane.browser, shell.pane.terminal);
@@ -197,8 +263,22 @@ pub fn strip(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
         .pt(px(10.0))
         .border_l_1()
         .border_color(t.line)
-        .child(button("pane.browser", "globe", Tab::Browser, browser_on, running, cx))
-        .child(button("pane.terminal", "terminal", Tab::Terminal, terminal_on, shells, cx))
+        .child(button(
+            "pane.browser",
+            "globe",
+            Tab::Browser,
+            browser_on,
+            running,
+            cx,
+        ))
+        .child(button(
+            "pane.terminal",
+            "terminal",
+            Tab::Terminal,
+            terminal_on,
+            shells,
+            cx,
+        ))
         .into_any_element()
 }
 
@@ -209,13 +289,38 @@ pub fn pane(shell: &mut Shell, cx: &mut Context<Shell>) -> Option<AnyElement> {
     }
     let t = theme(cx).clone();
     let both = shell.pane.browser && shell.pane.terminal;
-    let mut column = div().w(px(WIDTH)).h_full().flex_none().flex().flex_col().border_l_1().border_color(t.line);
+    let mut column = div()
+        .w(px(WIDTH))
+        .h_full()
+        .flex_none()
+        .flex()
+        .flex_col()
+        .border_l_1()
+        .border_color(t.line);
 
     if shell.pane.browser {
         let parts = super::browser::parts(shell, WIDTH, cx);
-        let close = icon_button("pane.browser.close", "x", cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_pane(Tab::Browser, cx)), &t);
-        let mut panel = div().flex().flex_col().flex_1().min_h_0().child(header("Browser", parts.tabs, parts.new, vec![close], &t));
-        panel = panel.child(div().id("pane.browser.body").flex_1().min_h_0().overflow_y_scroll().child(parts.body));
+        let close = icon_button(
+            "pane.browser.close",
+            "x",
+            cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_pane(Tab::Browser, cx)),
+            &t,
+        );
+        let mut panel = div().flex().flex_col().flex_1().min_h_0().child(header(
+            "Browser",
+            parts.tabs,
+            parts.new,
+            vec![close],
+            &t,
+        ));
+        panel = panel.child(
+            div()
+                .id("pane.browser.body")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .child(parts.body),
+        );
         if both {
             panel = panel.border_b_1().border_color(t.line);
         }
@@ -225,12 +330,32 @@ pub fn pane(shell: &mut Shell, cx: &mut Context<Shell>) -> Option<AnyElement> {
         let panel = match folder(cx) {
             Some(dir) => {
                 let parts = term::shells(shell, Home::Pane, &dir, 62, None, cx);
-                let close = icon_button("pane.terminal.close", "x", cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_pane(Tab::Terminal, cx)), &t);
-                let right: Vec<AnyElement> = parts.copy.into_iter().chain(std::iter::once(close)).collect();
-                div().flex().flex_col().flex_1().min_h_0().child(header("Terminal", parts.tabs, parts.new, right, &t)).child(parts.screen)
+                let close = icon_button(
+                    "pane.terminal.close",
+                    "x",
+                    cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_pane(Tab::Terminal, cx)),
+                    &t,
+                );
+                let right: Vec<AnyElement> = parts
+                    .copy
+                    .into_iter()
+                    .chain(std::iter::once(close))
+                    .collect();
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .child(header("Terminal", parts.tabs, parts.new, right, &t))
+                    .child(parts.screen)
             }
             None => {
-                let close = icon_button("pane.terminal.close", "x", cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_pane(Tab::Terminal, cx)), &t);
+                let close = icon_button(
+                    "pane.terminal.close",
+                    "x",
+                    cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_pane(Tab::Terminal, cx)),
+                    &t,
+                );
                 div()
                     .flex()
                     .flex_col()
@@ -242,5 +367,13 @@ pub fn pane(shell: &mut Shell, cx: &mut Context<Shell>) -> Option<AnyElement> {
         };
         column = column.child(panel);
     }
-    Some(column.into_any_element())
+    Some(
+        ui::motion::slide_in(
+            column.id("pane.panels"),
+            "pane.enter",
+            14.0,
+            ui::motion::BASE,
+        )
+        .into_any_element(),
+    )
 }

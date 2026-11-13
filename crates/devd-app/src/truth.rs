@@ -17,7 +17,9 @@ use serde_json::Value;
 /// Every Rust file under `src`, because a name can be used from any screen.
 fn sources() -> Vec<(PathBuf, String)> {
     fn walk(dir: &Path, out: &mut Vec<(PathBuf, String)>) {
-        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
@@ -108,12 +110,22 @@ fn top_level_strings(body: &str) -> Vec<(String, usize, usize)> {
 
 /// The top-level keys of the object literal inside `json!({ … })` in `body`.
 fn json_keys(body: &str) -> Vec<String> {
-    let Some(at) = body.find("json!") else { return Vec::new() };
-    let Some(paren) = body[at..].find('(').map(|n| at + n) else { return Vec::new() };
-    let Some(close) = matching(body, paren, '(', ')') else { return Vec::new() };
+    let Some(at) = body.find("json!") else {
+        return Vec::new();
+    };
+    let Some(paren) = body[at..].find('(').map(|n| at + n) else {
+        return Vec::new();
+    };
+    let Some(close) = matching(body, paren, '(', ')') else {
+        return Vec::new();
+    };
     let inner = &body[paren + 1..close];
-    let Some(brace) = inner.find('{') else { return Vec::new() };
-    let Some(end) = matching(inner, brace, '{', '}') else { return Vec::new() };
+    let Some(brace) = inner.find('{') else {
+        return Vec::new();
+    };
+    let Some(end) = matching(inner, brace, '{', '}') else {
+        return Vec::new();
+    };
     let object = &inner[brace + 1..end];
     let mut keys = Vec::new();
     let mut depth = 0i32;
@@ -161,8 +173,12 @@ fn calls(text: &str, needle: &str, cap_index: usize) -> Vec<(String, Vec<String>
     let mut from = 0usize;
     while let Some(at) = text[from..].find(needle) {
         let start = from + at;
-        let Some(paren) = text[start..].find('(').map(|n| start + n) else { break };
-        let Some(close) = matching(text, paren, '(', ')') else { break };
+        let Some(paren) = text[start..].find('(').map(|n| start + n) else {
+            break;
+        };
+        let Some(close) = matching(text, paren, '(', ')') else {
+            break;
+        };
         let body = &text[paren + 1..close];
         let strings = top_level_strings(body);
         if let Some((cap, _, _)) = strings.get(cap_index) {
@@ -179,16 +195,22 @@ fn forms(text: &str) -> Vec<(String, Vec<String>)> {
     let mut from = 0usize;
     while let Some(at) = text[from..].find("FormSpec {") {
         let start = from + at;
-        let Some(end) = matching(text, start + "FormSpec ".len(), '{', '}') else { break };
+        let Some(end) = matching(text, start + "FormSpec ".len(), '{', '}') else {
+            break;
+        };
         let body = &text[start..=end];
-        let cap = body.find("capability:").and_then(|at| top_level_strings(&body[at..]).into_iter().next()).map(|(s, _, _)| s);
+        let cap = body
+            .find("capability:")
+            .and_then(|at| top_level_strings(&body[at..]).into_iter().next())
+            .map(|(s, _, _)| s);
         if let Some(cap) = cap {
             let mut keys = json_keys(body);
             for field in ["Field::text(", "Field::optional(", "Field::number("] {
                 let mut at = 0usize;
                 while let Some(found) = body[at..].find(field) {
                     let after = at + found + field.len();
-                    if let Some((key, _, _)) = top_level_strings(&body[after..]).into_iter().next() {
+                    if let Some((key, _, _)) = top_level_strings(&body[after..]).into_iter().next()
+                    {
                         keys.push(key);
                     }
                     at = after;
@@ -203,9 +225,13 @@ fn forms(text: &str) -> Vec<(String, Vec<String>)> {
 
 /// A registry with every built-in capability, in a scratch data home.
 fn registry() -> (devd_bootstrap::Bootstrap, PathBuf) {
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
     let dir = std::env::temp_dir().join(format!("devd-app-truth-{}-{nanos}", std::process::id()));
-    let bootstrap = devd_bootstrap::Bootstrap::at(Paths::rooted(&dir)).expect("the registry assembles");
+    let bootstrap =
+        devd_bootstrap::Bootstrap::at(Paths::rooted(&dir)).expect("the registry assembles");
     (bootstrap, dir)
 }
 
@@ -217,7 +243,9 @@ fn every_icon_named_in_the_window_exists_in_the_asset_table() {
             let mut from = 0usize;
             while let Some(at) = text[from..].find(pattern) {
                 let start = from + at + pattern.len();
-                let Some(end) = text[start..].find('"').map(|n| start + n) else { break };
+                let Some(end) = text[start..].find('"').map(|n| start + n) else {
+                    break;
+                };
                 let name = &text[start..end];
                 if !name.is_empty() && !crate::assets::has_icon(name) {
                     missing.push(format!("{}: {name}", path.display()));
@@ -226,13 +254,21 @@ fn every_icon_named_in_the_window_exists_in_the_asset_table() {
             }
         }
     }
-    assert!(missing.is_empty(), "icons drawn but not compiled in: {missing:#?}");
+    assert!(
+        missing.is_empty(),
+        "icons drawn but not compiled in: {missing:#?}"
+    );
 }
 
 #[test]
 fn every_capability_and_argument_named_by_a_screen_really_exists() {
     let (bootstrap, dir) = registry();
-    let schemas: BTreeMap<String, Value> = bootstrap.registry.list().iter().map(|cap| (cap.id.clone(), cap.args_schema.clone())).collect();
+    let schemas: BTreeMap<String, Value> = bootstrap
+        .registry
+        .list()
+        .iter()
+        .map(|cap| (cap.id.clone(), cap.args_schema.clone()))
+        .collect();
 
     let mut bad_caps = Vec::new();
     let mut bad_keys = Vec::new();
@@ -242,7 +278,11 @@ fn every_capability_and_argument_named_by_a_screen_really_exists() {
     for (path, full) in sources() {
         // Unit tests name made-up capabilities and fields on purpose; only the
         // code that ships is checked against the real registry.
-        let text = full.split("#[cfg(test)]").next().unwrap_or(&full).to_string();
+        let text = full
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap_or(&full)
+            .to_string();
         let mut pairs: Vec<(String, Vec<String>)> = Vec::new();
         for (needle, index) in [
             ("Act::new(", 1),
@@ -265,8 +305,12 @@ fn every_capability_and_argument_named_by_a_screen_really_exists() {
                 bad_caps.push(format!("{}: {cap}", path.display()));
                 continue;
             }
-            let Some(schema) = schemas.get(&cap) else { continue };
-            let Some(properties) = schema["properties"].as_object() else { continue };
+            let Some(schema) = schemas.get(&cap) else {
+                continue;
+            };
+            let Some(properties) = schema["properties"].as_object() else {
+                continue;
+            };
             for key in keys {
                 if !properties.contains_key(&key) {
                     bad_keys.push(format!("{}: {cap} has no argument `{key}`", path.display()));
@@ -275,7 +319,13 @@ fn every_capability_and_argument_named_by_a_screen_really_exists() {
         }
     }
 
-    assert!(bad_caps.is_empty(), "capabilities a screen names but devd does not have: {bad_caps:#?}");
-    assert!(bad_keys.is_empty(), "arguments a screen sends but a capability does not accept: {bad_keys:#?}");
+    assert!(
+        bad_caps.is_empty(),
+        "capabilities a screen names but devd does not have: {bad_caps:#?}"
+    );
+    assert!(
+        bad_keys.is_empty(),
+        "arguments a screen sends but a capability does not accept: {bad_keys:#?}"
+    );
     let _ = std::fs::remove_dir_all(dir);
 }

@@ -13,21 +13,31 @@
 //! the tier is one of three plain choices.
 
 use devd_app_core::sync::Mutation;
-use gpui::{div, prelude::*, px, ClickEvent, Context, Div, Entity, Window};
+use gpui::{ClickEvent, Context, Div, Entity, Window, div, prelude::*, px};
 use serde_json::json;
 
 use crate::shell::Shell;
 use crate::state::devd;
-use crate::theme::{size, theme, Tone};
+use crate::theme::{Tone, size, theme};
 use crate::ui::input::TextInput;
-use crate::ui::{self, card, eyebrow, pill, rule, Button, ButtonKind};
+use crate::ui::{self, Button, ButtonKind, card, eyebrow, pill, rule};
 
 /// Where in the company a role sits.
-const TEAMS: &[(&str, &str)] =
-    &[("engineering", "Engineering"), ("design", "Design"), ("quality", "Quality and security"), ("operations", "Operations"), ("knowledge", "Knowledge"), ("leadership", "Leadership")];
+const TEAMS: &[(&str, &str)] = &[
+    ("engineering", "Engineering"),
+    ("design", "Design"),
+    ("quality", "Quality and security"),
+    ("operations", "Operations"),
+    ("knowledge", "Knowledge"),
+    ("leadership", "Leadership"),
+];
 
 /// What a role may do at most, in plain words.
-const TIERS: &[(&str, &str)] = &[("read", "Read only"), ("write", "Change files"), ("exec", "Change files and run commands")];
+const TIERS: &[(&str, &str)] = &[
+    ("read", "Read only"),
+    ("write", "Change files"),
+    ("exec", "Change files and run commands"),
+];
 
 /// What pressing a choice does to the form.
 type Change = Box<dyn Fn(&mut Shell, &mut Context<Shell>)>;
@@ -57,7 +67,13 @@ impl Form {
             summary: cx.new(|cx| TextInput::new("What this member is for, in one line", cx)),
             skills: cx.new(|cx| TextInput::new("fix-bug, plain-speech", cx)),
             hands_to: cx.new(|cx| TextInput::new("qa, reviewer", cx)),
-            instructions: cx.new(|cx| TextInput::new("What it does, what it reads first, how it proves its work", cx).multiline(10)),
+            instructions: cx.new(|cx| {
+                TextInput::new(
+                    "What it does, what it reads first, how it proves its work",
+                    cx,
+                )
+                .multiline(10)
+            }),
             team: 0,
             tier: 2,
             isolated: true,
@@ -67,8 +83,19 @@ impl Form {
     /// What it would send, or why it cannot be sent yet.
     fn args(&self, cx: &gpui::App) -> Result<serde_json::Value, &'static str> {
         let text = |e: &Entity<TextInput>| e.read(cx).text().trim().to_string();
-        let list = |e: &Entity<TextInput>| -> Vec<String> { text(e).split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect() };
-        let (id, title, summary, instructions) = (text(&self.id), text(&self.title), text(&self.summary), text(&self.instructions));
+        let list = |e: &Entity<TextInput>| -> Vec<String> {
+            text(e)
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        };
+        let (id, title, summary, instructions) = (
+            text(&self.id),
+            text(&self.title),
+            text(&self.summary),
+            text(&self.instructions),
+        );
         if id.is_empty() || title.is_empty() || summary.is_empty() {
             return Err("Give it an id, a name and a one-line summary.");
         }
@@ -93,9 +120,34 @@ impl Form {
 
 fn field(label: &'static str, input: &Entity<TextInput>, cx: &Context<Shell>) -> Div {
     let t = theme(cx);
-    div().flex().items_center().gap(px(12.0)).px(px(14.0)).py(px(7.0)).child(div().w(px(110.0)).flex_none().text_color(t.muted).child(label)).child(
-        div().flex_1().min_w_0().min_h(px(size::CONTROL)).px(px(9.0)).py(px(3.0)).flex().rounded(px(size::RADIUS)).border_1().border_color(t.line_strong).bg(t.bg).text_size(px(size::TEXT)).child(input.clone()),
-    )
+    div()
+        .flex()
+        .items_center()
+        .gap(px(12.0))
+        .px(px(14.0))
+        .py(px(7.0))
+        .child(
+            div()
+                .w(px(110.0))
+                .flex_none()
+                .text_color(t.muted)
+                .child(label),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .min_h(px(size::CONTROL))
+                .px(px(9.0))
+                .py(px(3.0))
+                .flex()
+                .rounded(px(size::RADIUS))
+                .border_1()
+                .border_color(t.line_strong)
+                .bg(t.bg)
+                .text_size(px(size::TEXT))
+                .child(input.clone()),
+        )
 }
 
 /// The form, when it is open.
@@ -117,28 +169,75 @@ pub fn render(shell: &mut Shell, cx: &mut Context<Shell>) -> Option<Div> {
         .flex()
         .flex_col()
         .child(
-            div().flex().items_center().gap(px(12.0)).px(px(14.0)).py(px(7.0)).child(div().w(px(110.0)).flex_none().text_color(t.muted).child("Part of the team")).child(pick(
-                "role.team",
-                TEAMS[team].1.to_string(),
-                Box::new(|this, _| this.role_form.team = (this.role_form.team + 1) % TEAMS.len()),
-                cx,
-            )),
+            div()
+                .flex()
+                .items_center()
+                .gap(px(12.0))
+                .px(px(14.0))
+                .py(px(7.0))
+                .child(
+                    div()
+                        .w(px(110.0))
+                        .flex_none()
+                        .text_color(t.muted)
+                        .child("Part of the team"),
+                )
+                .child(pick(
+                    "role.team",
+                    TEAMS[team].1.to_string(),
+                    Box::new(|this, _| {
+                        this.role_form.team = (this.role_form.team + 1) % TEAMS.len()
+                    }),
+                    cx,
+                )),
         )
         .child(
-            div().flex().items_center().gap(px(12.0)).px(px(14.0)).py(px(7.0)).child(div().w(px(110.0)).flex_none().text_color(t.muted).child("It may")).child(pick(
-                "role.tier",
-                TIERS[tier].1.to_string(),
-                Box::new(|this, _| this.role_form.tier = (this.role_form.tier + 1) % TIERS.len()),
-                cx,
-            )),
+            div()
+                .flex()
+                .items_center()
+                .gap(px(12.0))
+                .px(px(14.0))
+                .py(px(7.0))
+                .child(
+                    div()
+                        .w(px(110.0))
+                        .flex_none()
+                        .text_color(t.muted)
+                        .child("It may"),
+                )
+                .child(pick(
+                    "role.tier",
+                    TIERS[tier].1.to_string(),
+                    Box::new(|this, _| {
+                        this.role_form.tier = (this.role_form.tier + 1) % TIERS.len()
+                    }),
+                    cx,
+                )),
         )
         .child(
-            div().flex().items_center().gap(px(12.0)).px(px(14.0)).py(px(7.0)).child(div().w(px(110.0)).flex_none().text_color(t.muted).child("Works in")).child(pick(
-                "role.copy",
-                if isolated { "Its own copy of the project".to_string() } else { "The project itself".to_string() },
-                Box::new(|this, _| this.role_form.isolated = !this.role_form.isolated),
-                cx,
-            )),
+            div()
+                .flex()
+                .items_center()
+                .gap(px(12.0))
+                .px(px(14.0))
+                .py(px(7.0))
+                .child(
+                    div()
+                        .w(px(110.0))
+                        .flex_none()
+                        .text_color(t.muted)
+                        .child("Works in"),
+                )
+                .child(pick(
+                    "role.copy",
+                    if isolated {
+                        "Its own copy of the project".to_string()
+                    } else {
+                        "The project itself".to_string()
+                    },
+                    Box::new(|this, _| this.role_form.isolated = !this.role_form.isolated),
+                    cx,
+                )),
         );
     let (message, tone) = match &ready {
         Ok(args) => (
@@ -170,23 +269,38 @@ pub fn render(shell: &mut Shell, cx: &mut Context<Shell>) -> Option<Div> {
                 .flex()
                 .items_center()
                 .gap(px(10.0))
-                .child(div().flex_1().min_w_0().text_size(px(size::TEXT_SM)).text_color(t.tone(tone)).child(message))
-                .child(Button::new("role.cancel", "Cancel").kind(ButtonKind::Ghost).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                    this.role_form.open = false;
-                    cx.notify();
-                })))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(px(size::TEXT_SM))
+                        .text_color(t.tone(tone))
+                        .child(message),
+                )
+                .child(
+                    Button::new("role.cancel", "Cancel")
+                        .kind(ButtonKind::Ghost)
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.role_form.open = false;
+                            cx.notify();
+                        })),
+                )
                 .child(
                     Button::new("role.save", "Add to the team")
                         .kind(ButtonKind::Primary)
                         .disabled(ready.is_err())
-                        .on_click(cx.listener(move |this, _: &ClickEvent, _: &mut Window, cx| {
-                            // devd checks it again: a refusal comes back as a notice with the reason.
-                            if let Ok(args) = this.role_form.args(cx) {
-                                devd(cx).sync.mutate(Mutation::new("roles.save", args).invalidating("team"));
-                                this.role_form.open = false;
-                                cx.notify();
-                            }
-                        })),
+                        .on_click(
+                            cx.listener(move |this, _: &ClickEvent, _: &mut Window, cx| {
+                                // devd checks it again: a refusal comes back as a notice with the reason.
+                                if let Ok(args) = this.role_form.args(cx) {
+                                    devd(cx).sync.mutate(
+                                        Mutation::new("roles.save", args).invalidating("team"),
+                                    );
+                                    this.role_form.open = false;
+                                    cx.notify();
+                                }
+                            }),
+                        ),
                 ),
         );
     Some(
@@ -203,9 +317,18 @@ pub fn render(shell: &mut Shell, cx: &mut Context<Shell>) -> Option<Div> {
 /// The mark on a role that is the person's own, with the way to remove it.
 pub fn yours(id: &str, n: usize, cx: &mut Context<Shell>) -> Div {
     let target = id.to_string();
-    div().flex().items_center().gap(px(6.0)).child(pill("yours", Tone::Accent, cx)).child(
-        Button::new(ui::nid("role.remove", n), "Remove").kind(ButtonKind::Ghost).on_click(move |_, _, cx| {
-            devd(cx).sync.mutate(Mutation::new("roles.delete", json!({ "id": target })).invalidating("team"));
-        }),
-    )
+    div()
+        .flex()
+        .items_center()
+        .gap(px(6.0))
+        .child(pill("yours", Tone::Accent, cx))
+        .child(
+            Button::new(ui::nid("role.remove", n), "Remove")
+                .kind(ButtonKind::Ghost)
+                .on_click(move |_, _, cx| {
+                    devd(cx).sync.mutate(
+                        Mutation::new("roles.delete", json!({ "id": target })).invalidating("team"),
+                    );
+                }),
+        )
 }

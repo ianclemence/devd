@@ -183,7 +183,14 @@ impl Commands {
         if query.trim().is_empty() {
             let mut ordered: Vec<&Command> = self.all.iter().collect();
             ordered.sort_by_key(|c| recency(&c.id).unwrap_or(usize::MAX));
-            return ordered.into_iter().take(limit).map(|command| Hit { command, highlight: Vec::new() }).collect();
+            return ordered
+                .into_iter()
+                .take(limit)
+                .map(|command| Hit {
+                    command,
+                    highlight: Vec::new(),
+                })
+                .collect();
         }
         let mut scored: Vec<(i32, usize, &Command, Vec<usize>)> = self
             .all
@@ -201,11 +208,20 @@ impl Commands {
                     (None, None) => return None,
                 };
                 let boost = recency(&command.id).map(|r| 6 - r as i32).unwrap_or(0);
-                Some((best + boost, i, command, on_title.map(|m| m.positions).unwrap_or_default()))
+                Some((
+                    best + boost,
+                    i,
+                    command,
+                    on_title.map(|m| m.positions).unwrap_or_default(),
+                ))
             })
             .collect();
         scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
-        scored.into_iter().take(limit).map(|(_, _, command, highlight)| Hit { command, highlight }).collect()
+        scored
+            .into_iter()
+            .take(limit)
+            .map(|(_, _, command, highlight)| Hit { command, highlight })
+            .collect()
     }
 
     /// The table as an agent reads it: every command with what it does.
@@ -230,7 +246,10 @@ pub fn bindings(commands: &Commands) -> Vec<Binding> {
         .iter()
         .filter_map(|c| {
             let key = c.key.as_ref()?;
-            Some(Binding { keys: key.split_whitespace().map(str::to_string).collect(), command: c.id.clone() })
+            Some(Binding {
+                keys: key.split_whitespace().map(str::to_string).collect(),
+                command: c.id.clone(),
+            })
         })
         .collect()
 }
@@ -241,7 +260,8 @@ pub fn conflicts(commands: &Commands) -> Vec<(String, String, String)> {
     let mut out = Vec::new();
     for (i, a) in all.iter().enumerate() {
         for b in &all[i + 1..] {
-            let clash = a.keys == b.keys || a.keys.starts_with(&b.keys) || b.keys.starts_with(&a.keys);
+            let clash =
+                a.keys == b.keys || a.keys.starts_with(&b.keys) || b.keys.starts_with(&a.keys);
             if clash {
                 out.push((a.keys.join(" "), a.command.clone(), b.command.clone()));
             }
@@ -257,10 +277,38 @@ mod tests {
     fn table() -> Commands {
         let mut t = Commands::new();
         t.add(Command::new("go.home", "Home", "Open Home", Section::Navigate).key("g h"));
-        t.add(Command::new("go.sites", "Sites", "Open Sites", Section::Navigate).key("g s").keywords(&["hosts", "domains"]));
-        t.add(Command::new("go.machine", "Machine", "Services and runtimes", Section::Navigate).key("g m"));
-        t.add(Command::new("conversation.new", "New conversation", "Start a conversation", Section::Create).key("ctrl-n"));
-        t.add(Command::new("view.palette", "Command menu", "Open this menu", Section::View).key("ctrl-k"));
+        t.add(
+            Command::new("go.sites", "Sites", "Open Sites", Section::Navigate)
+                .key("g s")
+                .keywords(&["hosts", "domains"]),
+        );
+        t.add(
+            Command::new(
+                "go.machine",
+                "Machine",
+                "Services and runtimes",
+                Section::Navigate,
+            )
+            .key("g m"),
+        );
+        t.add(
+            Command::new(
+                "conversation.new",
+                "New conversation",
+                "Start a conversation",
+                Section::Create,
+            )
+            .key("ctrl-n"),
+        );
+        t.add(
+            Command::new(
+                "view.palette",
+                "Command menu",
+                "Open this menu",
+                Section::View,
+            )
+            .key("ctrl-k"),
+        );
         t
     }
 
@@ -272,7 +320,10 @@ mod tests {
     fn a_keyword_finds_a_command_whose_title_does_not_contain_it() {
         let t = table();
         assert_eq!(ids(&t.search("domains", 5)), ["go.sites"]);
-        assert!(t.search("domains", 5)[0].highlight.is_empty(), "nothing in the title matched");
+        assert!(
+            t.search("domains", 5)[0].highlight.is_empty(),
+            "nothing in the title matched"
+        );
     }
 
     #[test]
@@ -286,7 +337,10 @@ mod tests {
         let mut t = table();
         t.used("go.machine");
         t.used("view.palette");
-        assert_eq!(ids(&t.search("", 3)), ["view.palette", "go.machine", "go.home"]);
+        assert_eq!(
+            ids(&t.search("", 3)),
+            ["view.palette", "go.machine", "go.home"]
+        );
     }
 
     #[test]
@@ -300,7 +354,12 @@ mod tests {
     #[test]
     fn redeclaring_a_command_replaces_it() {
         let mut t = table();
-        t.add(Command::new("go.home", "Start", "Open Home", Section::Navigate));
+        t.add(Command::new(
+            "go.home",
+            "Start",
+            "Open Home",
+            Section::Navigate,
+        ));
         assert_eq!(t.all().len(), 5);
         assert_eq!(t.get("go.home").unwrap().title, "Start");
     }
@@ -311,7 +370,11 @@ mod tests {
         assert!(conflicts(&t).is_empty());
         t.add(Command::new("git.open", "Git", "Open Git", Section::Navigate).key("g"));
         let found = conflicts(&t);
-        assert_eq!(found.len(), 3, "`g` shadows every `g x` sequence: {found:?}");
+        assert_eq!(
+            found.len(),
+            3,
+            "`g` shadows every `g x` sequence: {found:?}"
+        );
     }
 
     #[test]

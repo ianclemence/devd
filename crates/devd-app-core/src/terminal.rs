@@ -21,7 +21,13 @@ pub struct Press<'a> {
 
 /// What to send the shell for a key, or nothing when the key is not the shell's (a bare modifier).
 pub fn bytes(press: Press<'_>) -> Option<String> {
-    let Press { key, text, ctrl, alt, shift } = press;
+    let Press {
+        key,
+        text,
+        ctrl,
+        alt,
+        shift,
+    } = press;
     let named = match key {
         "enter" => Some("\r"),
         "backspace" => Some("\u{7f}"),
@@ -54,12 +60,18 @@ pub fn bytes(press: Press<'_>) -> Option<String> {
     };
     if let Some(sequence) = named {
         // Alt in front of a key is ESC in front of what it sends.
-        return Some(if alt { format!("\u{1b}{sequence}") } else { sequence.to_string() });
+        return Some(if alt {
+            format!("\u{1b}{sequence}")
+        } else {
+            sequence.to_string()
+        });
     }
     // Ctrl and a letter is that letter's position in the alphabet: Ctrl+C is 3, Ctrl+D is 4.
     if ctrl {
         let mut chars = key.chars();
-        let (Some(c), None) = (chars.next(), chars.next()) else { return None };
+        let (Some(c), None) = (chars.next(), chars.next()) else {
+            return None;
+        };
         return match c {
             'a'..='z' => Some(((c as u8 - b'a' + 1) as char).to_string()),
             '[' => Some("\u{1b}".to_string()),
@@ -70,10 +82,18 @@ pub fn bytes(press: Press<'_>) -> Option<String> {
         };
     }
     if key == "space" {
-        return Some(if alt { "\u{1b} ".to_string() } else { " ".to_string() });
+        return Some(if alt {
+            "\u{1b} ".to_string()
+        } else {
+            " ".to_string()
+        });
     }
     let typed = text.filter(|t| !t.is_empty())?;
-    Some(if alt { format!("\u{1b}{typed}") } else { typed.to_string() })
+    Some(if alt {
+        format!("\u{1b}{typed}")
+    } else {
+        typed.to_string()
+    })
 }
 
 /// Text that is pasted, as a shell wants it: line breaks as the Enter key sends them.
@@ -84,7 +104,10 @@ pub fn pasted(text: &str) -> String {
 /// A terminal's screen as lines: trailing blank lines dropped, so an empty shell is empty and a short one
 /// is not padded.
 pub fn lines(screen: &str) -> Vec<&str> {
-    let mut all: Vec<&str> = screen.split('\n').map(|l| l.trim_end_matches('\r')).collect();
+    let mut all: Vec<&str> = screen
+        .split('\n')
+        .map(|l| l.trim_end_matches('\r'))
+        .collect();
     while all.last().is_some_and(|l| l.trim().is_empty()) {
         all.pop();
     }
@@ -96,7 +119,10 @@ mod tests {
     use super::*;
 
     fn key(key: &str) -> Press<'_> {
-        Press { key, ..Press::default() }
+        Press {
+            key,
+            ..Press::default()
+        }
     }
 
     #[test]
@@ -104,16 +130,65 @@ mod tests {
         assert_eq!(bytes(key("enter")).as_deref(), Some("\r"));
         assert_eq!(bytes(key("backspace")).as_deref(), Some("\u{7f}"));
         assert_eq!(bytes(key("up")).as_deref(), Some("\u{1b}[A"));
-        assert_eq!(bytes(Press { key: "tab", shift: true, ..Press::default() }).as_deref(), Some("\u{1b}[Z"));
-        assert_eq!(bytes(Press { key: "c", ctrl: true, ..Press::default() }).as_deref(), Some("\u{3}"));
-        assert_eq!(bytes(Press { key: "d", ctrl: true, ..Press::default() }).as_deref(), Some("\u{4}"));
-        assert_eq!(bytes(Press { key: "left", alt: true, ..Press::default() }).as_deref(), Some("\u{1b}\u{1b}[D"));
+        assert_eq!(
+            bytes(Press {
+                key: "tab",
+                shift: true,
+                ..Press::default()
+            })
+            .as_deref(),
+            Some("\u{1b}[Z")
+        );
+        assert_eq!(
+            bytes(Press {
+                key: "c",
+                ctrl: true,
+                ..Press::default()
+            })
+            .as_deref(),
+            Some("\u{3}")
+        );
+        assert_eq!(
+            bytes(Press {
+                key: "d",
+                ctrl: true,
+                ..Press::default()
+            })
+            .as_deref(),
+            Some("\u{4}")
+        );
+        assert_eq!(
+            bytes(Press {
+                key: "left",
+                alt: true,
+                ..Press::default()
+            })
+            .as_deref(),
+            Some("\u{1b}\u{1b}[D")
+        );
     }
 
     #[test]
     fn typing_sends_the_text_the_key_types_and_a_bare_modifier_sends_nothing() {
-        assert_eq!(bytes(Press { key: "a", text: Some("A"), shift: true, ..Press::default() }).as_deref(), Some("A"));
-        assert_eq!(bytes(Press { key: "e", text: Some("é"), ..Press::default() }).as_deref(), Some("é"));
+        assert_eq!(
+            bytes(Press {
+                key: "a",
+                text: Some("A"),
+                shift: true,
+                ..Press::default()
+            })
+            .as_deref(),
+            Some("A")
+        );
+        assert_eq!(
+            bytes(Press {
+                key: "e",
+                text: Some("é"),
+                ..Press::default()
+            })
+            .as_deref(),
+            Some("é")
+        );
         assert_eq!(bytes(key("space")).as_deref(), Some(" "));
         assert_eq!(bytes(key("shift")), None);
         assert_eq!(bytes(key("control")), None);

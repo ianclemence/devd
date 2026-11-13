@@ -29,24 +29,26 @@ const FIRST_HOST: &str = "localhost";
 /// How long to wait when asking whether a port is already accepting connections.
 const PROBE: Duration = Duration::from_millis(250);
 
-/// What the person chose on the first run. Nothing set means the defaults.
+/// What the person chose on the first run. Nothing set means the defaults, and the default is the web server alone:
+/// PHP, databases and the rest are installed when someone asks for them (here, in the app, or by the assistant), so a
+/// person who never writes PHP is never given it.
 #[derive(Debug, Default, Clone)]
 pub struct Choices {
-    /// Services beside PHP and the web server. `None` is the default (`mariadb`); `none` is nothing.
+    /// Services beside the web server. `None` and `none` are nothing.
     pub services: Option<Vec<String>>,
-    /// The PHP series, e.g. `8.4`.
+    /// Install PHP, and which series (`8.4`, or `latest`). `None` leaves PHP alone.
     pub php: Option<String>,
     /// The PHP limits profile.
     pub profile: Option<String>,
 }
 
-/// The services a first run may install besides PHP and the web server.
+/// The services a first run may install besides the web server.
 const OPTIONAL: &[&str] = &["mariadb", "redis", "memcached", "mailpit"];
 
 impl Choices {
     /// The optional services to install, validated.
     pub fn extra_services(&self) -> Result<Vec<String>> {
-        let Some(list) = &self.services else { return Ok(vec!["mariadb".to_string()]) };
+        let Some(list) = &self.services else { return Ok(Vec::new()) };
         let mut out = Vec::new();
         for raw in list {
             let name = raw.trim().to_lowercase();
@@ -92,9 +94,12 @@ pub fn run(json: bool, plan_only: bool, assume_yes: bool, choices: Choices) -> R
 
     app = settle_ports(app, &mut steps)?;
 
-    say(&app, "==> Runtime");
+    say(&app, "==> Runtimes");
     let ctx = app.ctx();
-    if devd_runtime::executable(&ctx, "php", None).is_err() {
+    let php_installed = devd_runtime::executable(&ctx, "php", None).is_ok();
+    if choices.php.is_none() && !php_installed {
+        say(&app, "    none yet: PHP, Node.js and Go are installed when you or the assistant ask for them");
+    } else if !php_installed {
         if cfg!(windows) {
             say(
                 &app,
@@ -191,7 +196,7 @@ pub fn run(json: bool, plan_only: bool, assume_yes: bool, choices: Choices) -> R
         }
     }
 
-    // `stack.up` starts the web server, PHP and MariaDB; the other services chosen are started here.
+    // `stack.up` starts the web server and whatever else is installed; the other services chosen are started here.
     for name in extra.iter().filter(|n| n.as_str() != "mariadb") {
         if app.ctx().store.get_service(name)?.is_none() {
             continue;
@@ -208,6 +213,11 @@ pub fn run(json: bool, plan_only: bool, assume_yes: bool, choices: Choices) -> R
     let ctx = app.ctx();
     if ctx.store.list_sites()?.is_empty() {
         say(&app, "==> First site");
+        // Without PHP the first site is a plain page the web server alone can serve. Giving it an index.php would be
+        // a site that answers with an error until a runtime nobody asked for is installed.
+        if devd_runtime::executable(&ctx, "php", None).is_err() {
+            write_welcome_page(&ctx)?;
+        }
         steps.push(invoke(
             &app,
             "site.create",
@@ -253,7 +263,7 @@ pub fn run(json: bool, plan_only: bool, assume_yes: bool, choices: Choices) -> R
     if problems.is_empty() {
         println!("==> Ready");
     } else {
-        println!("==> Ready, with two things left to do");
+        println!("==> Ready, with something left to do");
     }
     if let Some(url) = &url {
         println!("    site   {url}");
@@ -324,17 +334,15 @@ fn plan_lines() -> Vec<&'static str> {
     if cfg!(windows) {
         vec![
             "choose free ports when 80/443 are taken by another program",
-            "install PHP (latest stable) when no PHP runtime is installed",
-            "install nginx and MariaDB when they are not installed",
-            "start php-cgi, MariaDB and nginx",
+            "install nginx when it is not installed (PHP and databases only when you ask: --php, --services)",
+            "start nginx",
             "create the site `welcome` at https://localhost:<https-port>",
             "trust the local certificate authority for this user (with --yes)",
         ]
     } else {
         vec![
             "choose free ports when 80/443 are taken by another program",
-            "use the system PHP (devd publishes Windows PHP builds only)",
-            "use the system nginx and MariaDB (devd installs Windows builds only)",
+            "use the system nginx (devd installs Windows builds only); PHP and databases only when you ask: --php, --services",
             "start the services devd manages",
             "create the site `welcome` at https://localhost:<https-port>",
             "trust the local certificate authority for this user (with --yes)",
@@ -456,4 +464,18 @@ fn say(app: &App, text: &str) {
     if !app.json {
         println!("{text}");
     }
+}
+
+/// The page the first site shows when there is no PHP: static, so the web server alone serves it.
+fn write_welcome_page(ctx: &devd_core::capability::Ctx) -> Result<()> {
+    let dir = ctx.paths.www().join(FIRST_SITE);
+    std::fs::create_dir_all(&dir)?;
+    let page = dir.join("index.html");
+    if !page.exists() {
+        std::fs::write(
+            &page,
+            "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>devd is running</title>\n<style>body{font:16px/1.6 system-ui,sans-serif;max-width:40rem;margin:12vh auto;padding:0 1.25rem;color:#1c1b19}h1{font-size:1.6rem}code{background:#0001;padding:.1em .35em;border-radius:4px}</style>\n</head>\n<body>\n<h1>devd is running.</h1>\n<p>This page is served by devd's web server. Open the devd app to start a project, add a runtime such as PHP, Node.js or Go, or a database, or ask the assistant to set up what you need.</p>\n<p>Your projects live in <code>www</code>; each one can have its own address and certificate.</p>\n</body>\n</html>\n",
+        )?;
+    }
+    Ok(())
 }

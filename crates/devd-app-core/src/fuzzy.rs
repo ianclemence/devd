@@ -26,7 +26,10 @@ const GAP: i32 = 2;
 pub fn matches(query: &str, candidate: &str) -> Option<Match> {
     let needle: Vec<char> = query.chars().filter(|c| !c.is_whitespace()).collect();
     if needle.is_empty() {
-        return Some(Match { score: 0, positions: Vec::new() });
+        return Some(Match {
+            score: 0,
+            positions: Vec::new(),
+        });
     }
     let hay: Vec<(usize, char)> = candidate.char_indices().collect();
     if needle.len() > hay.len() {
@@ -61,7 +64,11 @@ pub fn matches(query: &str, candidate: &str) -> Option<Match> {
                     continue;
                 }
                 let gap = (j - k - 1) as i32;
-                let joined = if gap == 0 { CONSECUTIVE } else { -(gap.min(12) * GAP) };
+                let joined = if gap == 0 {
+                    CONSECUTIVE
+                } else {
+                    -(gap.min(12) * GAP)
+                };
                 if prev + joined > top {
                     top = prev + joined;
                     top_k = k;
@@ -74,7 +81,10 @@ pub fn matches(query: &str, candidate: &str) -> Option<Match> {
         }
     }
     let last = (n - 1) * h;
-    let (end, score) = (0..h).map(|j| (j, best[last + j])).filter(|(_, s)| *s != i32::MIN).max_by_key(|(_, s)| *s)?;
+    let (end, score) = (0..h)
+        .map(|j| (j, best[last + j]))
+        .filter(|(_, s)| *s != i32::MIN)
+        .max_by_key(|(_, s)| *s)?;
     let mut positions = vec![0; n];
     let mut j = end;
     for i in (0..n).rev() {
@@ -83,7 +93,10 @@ pub fn matches(query: &str, candidate: &str) -> Option<Match> {
             j = from[i * h + j];
         }
     }
-    Some(Match { score: score - (h as i32) / 4, positions })
+    Some(Match {
+        score: score - (h as i32) / 4,
+        positions,
+    })
 }
 
 fn same(a: char, b: char) -> bool {
@@ -116,7 +129,10 @@ mod tests {
     use super::*;
 
     fn order<'a>(query: &str, items: &'a [&'a str]) -> Vec<&'a str> {
-        rank(query, items, |s| s).into_iter().map(|(s, _)| *s).collect()
+        rank(query, items, |s| s)
+            .into_iter()
+            .map(|(s, _)| *s)
+            .collect()
     }
 
     #[test]
@@ -137,7 +153,10 @@ mod tests {
     fn a_run_of_letters_beats_the_same_letters_scattered() {
         let items = ["Start nginx", "Sites: new", "Restart nginx"];
         assert_eq!(order("ngin", &items)[0], "Start nginx");
-        assert_eq!(order("site", &["Sign in to the editor", "Sites"])[0], "Sites");
+        assert_eq!(
+            order("site", &["Sign in to the editor", "Sites"])[0],
+            "Sites"
+        );
     }
 
     #[test]
@@ -156,6 +175,9 @@ mod tests {
     #[test]
     fn camel_case_and_separators_start_words() {
         assert!(matches("fb", "fooBar").unwrap().score > matches("fb", "fobar").unwrap().score);
-        assert!(matches("nu", "nairobi_unwind").unwrap().score > matches("nu", "nautilus").unwrap().score - 40);
+        assert!(
+            matches("nu", "nairobi_unwind").unwrap().score
+                > matches("nu", "nautilus").unwrap().score - 40
+        );
     }
 }

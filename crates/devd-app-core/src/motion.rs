@@ -91,7 +91,11 @@ pub struct Tween {
 impl Tween {
     /// A tween that has not started.
     pub fn new(duration: Duration, ease: Ease) -> Self {
-        Self { duration, ease, elapsed: Duration::ZERO }
+        Self {
+            duration,
+            ease,
+            elapsed: Duration::ZERO,
+        }
     }
 
     /// Advance by one frame and return the eased progress.
@@ -105,7 +109,8 @@ impl Tween {
         if self.duration.is_zero() {
             return 1.0;
         }
-        self.ease.at(self.elapsed.as_secs_f32() / self.duration.as_secs_f32())
+        self.ease
+            .at(self.elapsed.as_secs_f32() / self.duration.as_secs_f32())
     }
 
     /// Whether it has reached the end.
@@ -125,11 +130,20 @@ pub struct SpringConfig {
 
 impl SpringConfig {
     /// Quick with no overshoot: panels, sheets, anything a person opens.
-    pub const SNAPPY: Self = Self { stiffness: 520.0, damping: 46.0 };
+    pub const SNAPPY: Self = Self {
+        stiffness: 520.0,
+        damping: 46.0,
+    };
     /// A little softer, still no overshoot: list rows finding their place.
-    pub const SMOOTH: Self = Self { stiffness: 300.0, damping: 35.0 };
+    pub const SMOOTH: Self = Self {
+        stiffness: 300.0,
+        damping: 35.0,
+    };
     /// A slight overshoot: something dropped, something that should feel physical.
-    pub const BOUNCY: Self = Self { stiffness: 380.0, damping: 24.0 };
+    pub const BOUNCY: Self = Self {
+        stiffness: 380.0,
+        damping: 24.0,
+    };
 
     /// A spring described the way a designer thinks of it: how long it takes to
     /// settle, and how much it bounces (0 is none, 1 never stops).
@@ -137,7 +151,10 @@ impl SpringConfig {
         let seconds = settle.as_secs_f32().max(0.01);
         let omega = std::f32::consts::TAU / seconds;
         let ratio = 1.0 - bounce.clamp(0.0, 0.95);
-        Self { stiffness: omega * omega, damping: 2.0 * ratio * omega }
+        Self {
+            stiffness: omega * omega,
+            damping: 2.0 * ratio * omega,
+        }
     }
 }
 
@@ -164,7 +181,12 @@ const MAX_SLICE: f32 = 1.0 / 240.0;
 impl Spring {
     /// A spring at rest at `value`.
     pub fn at(value: f32, config: SpringConfig) -> Self {
-        Self { value, target: value, velocity: 0.0, config }
+        Self {
+            value,
+            target: value,
+            velocity: 0.0,
+            config,
+        }
     }
 
     /// Change where it is going. It keeps moving as it was, so a change of mind
@@ -186,7 +208,8 @@ impl Spring {
         while left > 0.0 {
             let h = left.min(MAX_SLICE);
             // Semi-implicit Euler: stable for a damped spring at this step size.
-            let force = self.config.stiffness * (self.target - self.value) - self.config.damping * self.velocity;
+            let force = self.config.stiffness * (self.target - self.value)
+                - self.config.damping * self.velocity;
             self.velocity += force * h;
             self.value += self.velocity * h;
             left -= h;
@@ -276,7 +299,11 @@ impl Reorder {
 
     /// How far a row is from its final place right now.
     pub fn offset(&self, id: &str) -> f32 {
-        self.rows.iter().find(|(held, ..)| held == id).map(|(_, _, s)| s.value).unwrap_or(0.0)
+        self.rows
+            .iter()
+            .find(|(held, ..)| held == id)
+            .map(|(_, _, s)| s.value)
+            .unwrap_or(0.0)
     }
 }
 
@@ -292,7 +319,12 @@ mod tests {
 
     #[test]
     fn curves_start_at_zero_end_at_one_and_never_go_backwards() {
-        for ease in [Ease::Linear, Ease::Out, Ease::InOut, Ease::Bezier(0.4, 0.0, 0.2, 1.0)] {
+        for ease in [
+            Ease::Linear,
+            Ease::Out,
+            Ease::InOut,
+            Ease::Bezier(0.4, 0.0, 0.2, 1.0),
+        ] {
             assert!(ease.at(0.0).abs() < 0.001, "{ease:?}");
             assert!((ease.at(1.0) - 1.0).abs() < 0.001, "{ease:?}");
             let mut last = 0.0;
@@ -302,7 +334,10 @@ mod tests {
                 last = v;
             }
         }
-        assert!(Ease::Out.at(0.25) > 0.6, "ease-out does most of its work early");
+        assert!(
+            Ease::Out.at(0.25) > 0.6,
+            "ease-out does most of its work early"
+        );
     }
 
     #[test]
@@ -331,7 +366,10 @@ mod tests {
         }
         assert_eq!(spring.value, 1.0);
         assert!(peak <= 1.0005, "overshot to {peak}");
-        assert!(frames <= 30, "took {frames} frames, more than half a second");
+        assert!(
+            frames <= 30,
+            "took {frames} frames, more than half a second"
+        );
     }
 
     #[test]
@@ -359,9 +397,16 @@ mod tests {
         let (value, velocity) = (spring.value, spring.velocity);
         assert!(velocity > 0.0);
         spring.set(0.0);
-        assert_eq!((spring.value, spring.velocity), (value, velocity), "no jump, no stop");
+        assert_eq!(
+            (spring.value, spring.velocity),
+            (value, velocity),
+            "no jump, no stop"
+        );
         spring.step(FRAME);
-        assert!(spring.value > value - 0.2, "it eases round; it does not snap back");
+        assert!(
+            spring.value > value - 0.2,
+            "it eases round; it does not snap back"
+        );
         run(&mut spring, 240);
         assert_eq!(spring.value, 0.0);
     }
@@ -376,7 +421,10 @@ mod tests {
 
     #[test]
     fn a_spring_can_be_described_by_how_long_it_takes() {
-        let mut spring = Spring::at(0.0, SpringConfig::from_duration(Duration::from_millis(300), 0.0));
+        let mut spring = Spring::at(
+            0.0,
+            SpringConfig::from_duration(Duration::from_millis(300), 0.0),
+        );
         spring.set(1.0);
         let frames = run(&mut spring, 240);
         assert!((10..=40).contains(&frames), "{frames} frames");
@@ -395,9 +443,16 @@ mod tests {
         list.set_order(&ids(&["a", "b", "c"]), 40.0);
         assert_eq!(list.offset("a"), 0.0);
         list.set_order(&ids(&["c", "a", "b"]), 40.0);
-        assert_eq!(list.offset("c"), 80.0, "c was two rows down and is drawn there first");
+        assert_eq!(
+            list.offset("c"),
+            80.0,
+            "c was two rows down and is drawn there first"
+        );
         assert_eq!(list.offset("a"), -40.0);
         while list.step(FRAME) {}
-        assert_eq!((list.offset("a"), list.offset("b"), list.offset("c")), (0.0, 0.0, 0.0));
+        assert_eq!(
+            (list.offset("a"), list.offset("b"), list.offset("c")),
+            (0.0, 0.0, 0.0)
+        );
     }
 }

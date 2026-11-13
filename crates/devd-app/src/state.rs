@@ -10,10 +10,10 @@ use std::time::{Duration, Instant};
 
 use devd_app_core::presence::{Doing, Place, Presence, Room, Who};
 use devd_app_core::sync::{Engine, LogSpec, Mutation, MutationId, Outcome, QueryKey, Settled};
-use futures::channel::mpsc::{unbounded, UnboundedSender};
 use futures::StreamExt;
+use futures::channel::mpsc::{UnboundedSender, unbounded};
 use gpui::{App, Global};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::backend::Connection;
 
@@ -68,6 +68,10 @@ pub struct Devd {
     pub terminal_seen: std::cell::Cell<bool>,
     /// The same for the browser's tabs.
     pub browser_seen: std::cell::Cell<bool>,
+    /// Whether a run that is still going was drawn since the last look. A run may be driven by another process (a
+    /// terminal, a script, a window that has since closed), whose events this window's server never hears, so while one
+    /// is on screen it is read again every second or two instead of waiting to be told.
+    pub run_seen: std::cell::Cell<bool>,
     /// The latest picture of the shared browser's page, and where it was taken.
     pub shot: Option<Shot>,
 }
@@ -103,12 +107,20 @@ pub struct Toast {
 impl Toast {
     /// Good news, or a note that is not a failure.
     pub fn new(text: impl Into<String>, failed: bool) -> Self {
-        Self { text: text.into(), failed, at: Instant::now(), go: None }
+        Self {
+            text: text.into(),
+            failed,
+            at: Instant::now(),
+            go: None,
+        }
     }
 
     /// A message that opens a screen when clicked.
     pub fn opening(text: impl Into<String>, go: impl Into<String>) -> Self {
-        Self { go: Some(go.into()), ..Self::new(text, false) }
+        Self {
+            go: Some(go.into()),
+            ..Self::new(text, false)
+        }
     }
 }
 
@@ -135,7 +147,8 @@ impl Toast {
     pub fn stays(&self) -> Duration {
         if self.failed {
             // Time to read a sentence or two, and then some.
-            Duration::from_secs(12).max(Duration::from_millis(self.text.chars().count() as u64 * 70))
+            Duration::from_secs(12)
+                .max(Duration::from_millis(self.text.chars().count() as u64 * 70))
         } else if self.go.is_some() {
             // It invites a click; give the person time to reach it.
             Duration::from_secs(12)
@@ -184,8 +197,40 @@ pub fn start(conn: Arc<Connection>, cx: &mut App) {
     follow_events(conn.clone(), sync.clone(), tx);
 
     let mut room = Room::new();
-    room.seen("you", Presence { who: Who::You, place: Place::default(), doing: Doing::Viewing }, Instant::now());
-    cx.set_global(Devd { conn, sync, room, writing: HashMap::new(), toasts: Vec::new(), running: Vec::new(), decisions: Vec::new(), online: false, opened_thread: None, pending_go: None, pending_ui: Vec::new(), beat: 0, live_seen: std::cell::Cell::new(false), link_root: None, chat_running: std::cell::Cell::new(false), open_projects: std::collections::HashSet::new(), open_groups: std::collections::HashSet::new(), allow_close: std::cell::Cell::new(false), close_asked: std::cell::Cell::new(false), terminal_seen: std::cell::Cell::new(false), browser_seen: std::cell::Cell::new(false), shot: None });
+    room.seen(
+        "you",
+        Presence {
+            who: Who::You,
+            place: Place::default(),
+            doing: Doing::Viewing,
+        },
+        Instant::now(),
+    );
+    cx.set_global(Devd {
+        conn,
+        sync,
+        room,
+        writing: HashMap::new(),
+        toasts: Vec::new(),
+        running: Vec::new(),
+        decisions: Vec::new(),
+        online: false,
+        opened_thread: None,
+        pending_go: None,
+        pending_ui: Vec::new(),
+        beat: 0,
+        live_seen: std::cell::Cell::new(false),
+        link_root: None,
+        chat_running: std::cell::Cell::new(false),
+        open_projects: std::collections::HashSet::new(),
+        open_groups: std::collections::HashSet::new(),
+        allow_close: std::cell::Cell::new(false),
+        close_asked: std::cell::Cell::new(false),
+        terminal_seen: std::cell::Cell::new(false),
+        browser_seen: std::cell::Cell::new(false),
+        run_seen: std::cell::Cell::new(false),
+        shot: None,
+    });
 
     // One task on the window's thread turns signals into redraws. A burst of
     // signals becomes one redraw: everything waiting is taken before drawing.
@@ -211,29 +256,43 @@ pub fn start(conn: Arc<Connection>, cx: &mut App) {
 
     // A shell and a browser tab change whenever their programs do, and nothing tells the window: so while one is
     // on screen it is read again, several times a second. Off screen, not at all.
-    cx.spawn(async move |cx| loop {
-        cx.background_executor().timer(Duration::from_millis(160)).await;
-        let alive = cx.update(|cx| {
-            let state = devd(cx);
-            if state.terminal_seen.replace(false) {
-                state.sync.invalidate("terminal");
+    cx.spawn(async move |cx| {
+        loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(160))
+                .await;
+            let alive = cx.update(|cx| {
+                let state = devd(cx);
+                if state.terminal_seen.replace(false) {
+                    state.sync.invalidate("terminal");
+                }
+            });
+            if alive.is_err() {
+                break;
             }
-        });
-        if alive.is_err() {
-            break;
         }
     })
     .detach();
-    cx.spawn(async move |cx| loop {
-        cx.background_executor().timer(Duration::from_millis(900)).await;
-        let alive = cx.update(|cx| {
-            let state = devd(cx);
-            if state.browser_seen.replace(false) {
-                state.sync.invalidate("browser");
+    cx.spawn(async move |cx| {
+        let mut looks = 0u32;
+        loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(900))
+                .await;
+            looks = looks.wrapping_add(1);
+            let alive = cx.update(|cx| {
+                let state = devd(cx);
+                if state.browser_seen.replace(false) {
+                    state.sync.invalidate("browser");
+                }
+                // A run is read again every second look, about every two seconds.
+                if looks.is_multiple_of(2) && state.run_seen.replace(false) {
+                    state.sync.invalidate("team");
+                }
+            });
+            if alive.is_err() {
+                break;
             }
-        });
-        if alive.is_err() {
-            break;
         }
     })
     .detach();
@@ -244,26 +303,30 @@ pub fn start(conn: Arc<Connection>, cx: &mut App) {
     // long as an agent worked, which on a fast display is hundreds of redraws a
     // second to say "still going". This is two or three, and none at all when
     // no such mark is on screen.
-    cx.spawn(async move |cx| loop {
-        cx.background_executor().timer(BEAT).await;
-        let alive = cx.update(|cx| {
-            let now = Instant::now();
-            let state = cx.global_mut::<Devd>();
-            let before = state.toasts.len();
-            state.toasts.retain(|t| now.duration_since(t.at) < t.stays());
-            state.beat = (state.beat + 1) % 4;
-            let pulsing = state.live_seen.replace(false);
-            // A conversation that is running may be running somewhere else: ask again, not wait.
-            if state.chat_running.replace(false) {
-                state.sync.invalidate("chat");
+    cx.spawn(async move |cx| {
+        loop {
+            cx.background_executor().timer(BEAT).await;
+            let alive = cx.update(|cx| {
+                let now = Instant::now();
+                let state = cx.global_mut::<Devd>();
+                let before = state.toasts.len();
+                state
+                    .toasts
+                    .retain(|t| now.duration_since(t.at) < t.stays());
+                state.beat = (state.beat + 1) % 4;
+                let pulsing = state.live_seen.replace(false);
+                // A conversation that is running may be running somewhere else: ask again, not wait.
+                if state.chat_running.replace(false) {
+                    state.sync.invalidate("chat");
+                }
+                let changed = state.room.sweep(now) || state.toasts.len() != before || pulsing;
+                if changed {
+                    cx.refresh_windows();
+                }
+            });
+            if alive.is_err() {
+                break;
             }
-            let changed = state.room.sweep(now) || state.toasts.len() != before || pulsing;
-            if changed {
-                cx.refresh_windows();
-            }
-        });
-        if alive.is_err() {
-            break;
         }
     })
     .detach();
@@ -275,37 +338,43 @@ pub fn start(conn: Arc<Connection>, cx: &mut App) {
 /// the start once a connection has delivered something. A devd that is
 /// restarting is found again quickly; one that is gone is not hammered.
 fn follow_events(conn: Arc<Connection>, sync: Engine, tx: UnboundedSender<Signal>) {
-    let _ = std::thread::Builder::new().name("devd-events".into()).spawn(move || {
-        let mut last_id = None;
-        let mut pause = Duration::from_millis(500);
-        loop {
-            let mut heard = false;
-            let announce = tx.clone();
-            let result = conn.follow(&mut last_id, |kind, payload| {
-                if !heard {
-                    heard = true;
-                    let _ = announce.unbounded_send(Signal::Online(true));
+    let _ = std::thread::Builder::new()
+        .name("devd-events".into())
+        .spawn(move || {
+            let mut last_id = None;
+            let mut pause = Duration::from_millis(500);
+            loop {
+                let mut heard = false;
+                let announce = tx.clone();
+                let result = conn.follow(&mut last_id, |kind, payload| {
+                    if !heard {
+                        heard = true;
+                        let _ = announce.unbounded_send(Signal::Online(true));
+                    }
+                    // A reply being written is not a change to any query.
+                    if kind != "chat.delta" {
+                        sync.on_event(kind);
+                    }
+                    let _ =
+                        announce.unbounded_send(Signal::Event(kind.to_string(), payload.clone()));
+                });
+                if tx.unbounded_send(Signal::Online(false)).is_err() {
+                    return;
                 }
-                // A reply being written is not a change to any query.
-                if kind != "chat.delta" {
-                    sync.on_event(kind);
+                if heard || result.is_ok() {
+                    pause = Duration::from_millis(500);
                 }
-                let _ = announce.unbounded_send(Signal::Event(kind.to_string(), payload.clone()));
-            });
-            if tx.unbounded_send(Signal::Online(false)).is_err() {
-                return;
+                std::thread::sleep(pause);
+                pause = (pause * 2).min(Duration::from_secs(30));
+                // Whatever happened while the stream was down, the screens may be stale.
+                for domain in [
+                    "chat", "team", "inbox", "approval", "site", "service", "health", "project",
+                    "runtime", "provider", "models",
+                ] {
+                    sync.invalidate(domain);
+                }
             }
-            if heard || result.is_ok() {
-                pause = Duration::from_millis(500);
-            }
-            std::thread::sleep(pause);
-            pause = (pause * 2).min(Duration::from_secs(30));
-            // Whatever happened while the stream was down, the screens may be stale.
-            for domain in ["chat", "team", "inbox", "approval", "site", "service", "health", "project", "runtime", "provider", "models"] {
-                sync.invalidate(domain);
-            }
-        }
-    });
+        });
 }
 
 fn apply(signal: Signal, cx: &mut App) {
@@ -324,8 +393,19 @@ fn apply(signal: Signal, cx: &mut App) {
                         text.clear();
                     }
                     text.push_str(data["text"].as_str().unwrap_or_default());
-                    let place = Place { thread: Some(thread.clone()), ..Place::default() };
-                    state.room.seen(&thread, Presence { who: Who::Assistant, place, doing: Doing::Writing }, Instant::now());
+                    let place = Place {
+                        thread: Some(thread.clone()),
+                        ..Place::default()
+                    };
+                    state.room.seen(
+                        &thread,
+                        Presence {
+                            who: Who::Assistant,
+                            place,
+                            doing: Doing::Writing,
+                        },
+                        Instant::now(),
+                    );
                 }
                 "chat.event" if !thread.is_empty() => {
                     // The logged event replaces the live text in the same place.
@@ -338,17 +418,25 @@ fn apply(signal: Signal, cx: &mut App) {
 }
 
 /// Start a write and, when it is long enough to notice, name it while it runs.
-pub fn start_write(cx: &mut App, mutation: Mutation, text: Option<String>, run_id: Option<String>) -> MutationId {
+pub fn start_write(
+    cx: &mut App,
+    mutation: Mutation,
+    text: Option<String>,
+    run_id: Option<String>,
+) -> MutationId {
     let id = devd(cx).sync.mutate(mutation);
     if let Some(text) = text {
-        cx.global_mut::<Devd>().running.push(Running { id, text, run_id });
+        cx.global_mut::<Devd>()
+            .running
+            .push(Running { id, text, run_id });
     }
     id
 }
 
 /// A project was created and registered, so the toast can open the list.
 fn log_created_project(capability: &str, value: &Value) -> bool {
-    matches!(capability, "project.init" | "project.create") && value["status"].as_str() == Some("ok")
+    matches!(capability, "project.init" | "project.create")
+        && value["status"].as_str() == Some("ok")
 }
 
 /// Report the writes that finished: a toast for a failure, a decision for a plan.
@@ -364,9 +452,11 @@ fn settle_writes(cx: &mut App) {
         match outcome.settled {
             Settled::Done(value) => {
                 // A write whose result is not otherwise visible says that it worked.
-                if let Some(text) = devd_app_core::status::confirmation(&outcome.capability, &value) {
+                if let Some(text) = devd_app_core::status::confirmation(&outcome.capability, &value)
+                {
                     // A check that ran and found a problem is a result, not a success.
-                    let failed = value["ok"] == json!(false) && value["status"].as_str() != Some("cancelled");
+                    let failed = value["ok"] == json!(false)
+                        && value["status"].as_str() != Some("cancelled");
                     let toast = if log_created_project(&outcome.capability, &value) {
                         Toast::opening(text, "/projects")
                     } else {
@@ -377,10 +467,18 @@ fn settle_writes(cx: &mut App) {
                 if outcome.capability == "browser.screenshot"
                     && let Some(file) = value["file"].as_str()
                 {
-                    state.shot = Some(Shot { file: file.to_string(), width: value["width"].as_f64().unwrap_or(0.0) as f32, height: value["height"].as_f64().unwrap_or(0.0) as f32, url: value["url"].as_str().unwrap_or_default().to_string() });
+                    state.shot = Some(Shot {
+                        file: file.to_string(),
+                        width: value["width"].as_f64().unwrap_or(0.0) as f32,
+                        height: value["height"].as_f64().unwrap_or(0.0) as f32,
+                        url: value["url"].as_str().unwrap_or_default().to_string(),
+                    });
                 }
                 if outcome.capability == "chat.send" {
-                    let id = value["id"].as_str().or(value["thread"]["id"].as_str()).or(value["thread"].as_str());
+                    let id = value["id"]
+                        .as_str()
+                        .or(value["thread"]["id"].as_str())
+                        .or(value["thread"].as_str());
                     state.opened_thread = id.map(str::to_string);
                 }
             }
@@ -388,7 +486,11 @@ fn settle_writes(cx: &mut App) {
                 let text = devd_app_core::status::failure(&failure.message);
                 state.toasts.push(Toast::new(text, true));
             }
-            Settled::NeedsApproval { token, plan } => state.decisions.push(Decision { capability: outcome.capability, token, plan }),
+            Settled::NeedsApproval { token, plan } => state.decisions.push(Decision {
+                capability: outcome.capability,
+                token,
+                plan,
+            }),
         }
     }
 }
@@ -425,7 +527,12 @@ pub mod q {
     /// How a conversation's events are read in pieces.
     pub fn thread_log() -> LogSpec {
         // `chat.get` returns at most 500 events for one call.
-        LogSpec { cursor_arg: "after", rows: "/events", id: "id", page: 500 }
+        LogSpec {
+            cursor_arg: "after",
+            rows: "/events",
+            id: "id",
+            page: 500,
+        }
     }
 
     /// Messages and questions waiting for the person.
@@ -499,7 +606,6 @@ pub mod q {
     }
 }
 
-
 /// Type into a shell. Keys go in the order they were pressed, on one thread, and do not wake the screens
 /// that depend on the folder: a keystroke has changed nothing yet, and the shell's own screen is read on
 /// its own clock.
@@ -509,16 +615,18 @@ pub fn send_keys(cx: &App, id: &str, data: String) {
 
 /// Make a call in order with the others sent this way, without waiting for it: what is typed arrives as typed.
 pub fn send_call(cx: &App, capability: &'static str, args: Value) {
-    use std::sync::mpsc::{channel, Sender};
     use std::sync::OnceLock;
+    use std::sync::mpsc::{Sender, channel};
     static LINE: OnceLock<Sender<(Arc<Connection>, &'static str, Value)>> = OnceLock::new();
     let line = LINE.get_or_init(|| {
         let (tx, rx) = channel::<(Arc<Connection>, &'static str, Value)>();
-        let _ = std::thread::Builder::new().name("devd-keys".into()).spawn(move || {
-            while let Ok((conn, capability, args)) = rx.recv() {
-                let _ = devd_app_core::sync::Backend::invoke(&*conn, capability, &args);
-            }
-        });
+        let _ = std::thread::Builder::new()
+            .name("devd-keys".into())
+            .spawn(move || {
+                while let Ok((conn, capability, args)) = rx.recv() {
+                    let _ = devd_app_core::sync::Backend::invoke(&*conn, capability, &args);
+                }
+            });
         tx
     });
     let _ = line.send((devd(cx).conn.clone(), capability, args));

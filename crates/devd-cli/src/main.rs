@@ -159,13 +159,14 @@ pub(crate) enum Command {
     /// `--yes` it stops before anything that needs approval, which today is
     /// trusting the local certificate authority.
     ///
-    /// PHP and the web server are always installed. Pick the rest with `--services`: a comma-separated
-    /// list from mariadb, redis, memcached, mailpit, or `none`. The default is `mariadb`.
+    /// The web server is installed; nothing else is unless asked for. Add PHP with `--php 8.4` (or `--php latest`) and
+    /// pick services with `--services`: a comma-separated list from mariadb, redis, memcached, mailpit, or `none`.
+    /// Runtimes and databases can also be installed later, from the app or by the assistant.
     Setup {
-        /// The services to install besides PHP and the web server.
+        /// The services to install besides the web server.
         #[arg(long, value_delimiter = ',')]
         services: Option<Vec<String>>,
-        /// The PHP series to install, e.g. `8.4`. The default is the latest stable.
+        /// Install PHP, for example `8.4`, or `latest`. Without this, PHP is not installed.
         #[arg(long)]
         php: Option<String>,
         /// The PHP limits profile: `local` (generous) or `production` (a typical production server).
@@ -1986,8 +1987,24 @@ fn run(cli: Cli) -> Result<i32> {
             Ok(0)
         }
         Command::Team { cmd } => {
-            app.resume_agents();
+            // Only a command that stays running to carry a run along takes the agents. A read (`show`, `list`) must not: with no
+            // devd running it would become the owner, restart whatever was half done, and exit a moment later, which is how a
+            // run came to be restarted every time anyone looked at it.
+            let drives = match &cmd {
+                TeamCommand::Start { detach, .. } => !*detach,
+                TeamCommand::Show { follow, .. } => *follow,
+                TeamCommand::Approve { .. } => true,
+                _ => false,
+            };
+            // A command that changes a run and returns leaves it for whatever is running devd to carry on. If nothing is, say so.
+            let leaves_work = matches!(cmd, TeamCommand::Start { detach: true, .. } | TeamCommand::Say { .. } | TeamCommand::Resume { .. } | TeamCommand::Retry { .. } | TeamCommand::Accept { .. });
+            if drives {
+                app.resume_agents();
+            }
             aicat::team(&app, cmd)?;
+            if leaves_work && !drives && !devd_agent::host::live(&app.paths) {
+                eprintln!("note: devd is not running, so nothing will carry this run on until it is. Open the devd window, or run `devd daemon start`.");
+            }
             Ok(0)
         }
         Command::Template { cmd } => {

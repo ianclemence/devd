@@ -6,16 +6,16 @@
 
 use std::ops::Range;
 
-use devd_app_core::markdown::{spans, Align, Block, Inline, Item, WidgetKind};
+use devd_app_core::markdown::{Align, Block, Inline, Item, WidgetKind, spans};
 use gpui::{
-    canvas, div, prelude::*, px, App, Div, ElementId, FontStyle, FontWeight, HighlightStyle, InteractiveText, MouseButton, SharedString,
-    StrikethroughStyle, StyledText, UnderlineStyle,
+    App, Div, ElementId, FontStyle, FontWeight, HighlightStyle, InteractiveText, MouseButton,
+    SharedString, StrikethroughStyle, StyledText, UnderlineStyle, canvas, div, prelude::*, px,
 };
 use serde_json::Value;
 
 use super::links::Link;
 use super::{icon, tint};
-use crate::theme::{mono, size, theme, Tone};
+use crate::theme::{Tone, mono, size, theme};
 
 /// Draw a document. `id` must be unique among documents on screen: it names
 /// the links inside, which is how a click finds the right one.
@@ -31,7 +31,10 @@ fn draw(id: &str, block: &Block, cx: &App) -> Div {
     let t = theme(cx);
     match block {
         Block::Paragraph(inlines) => div().min_w_0().child(text(id, inlines, cx)),
-        Block::Heading { level, text: inlines } => {
+        Block::Heading {
+            level,
+            text: inlines,
+        } => {
             let px_size = match level {
                 1 => size::TEXT_XL,
                 2 => 17.0,
@@ -49,7 +52,10 @@ fn draw(id: &str, block: &Block, cx: &App) -> Div {
         // A patch is drawn as a diff, not as text that happens to start with + and -.
         Block::Code { lang, text } if lang == "diff" || lang == "patch" => {
             let files = devd_app_core::diff::parse(text);
-            if files.iter().all(|file| file.hunks.is_empty() && !file.binary) {
+            if files
+                .iter()
+                .all(|file| file.hunks.is_empty() && !file.binary)
+            {
                 return code(id, lang, text, cx);
             }
             let mut column = div().flex().flex_col().gap(px(8.0));
@@ -65,7 +71,11 @@ fn draw(id: &str, block: &Block, cx: &App) -> Div {
             .border_color(t.line_strong)
             .text_color(t.muted)
             .child(document(id, inner, cx)),
-        Block::List { ordered, start, items } => list(id, *ordered, *start, items, cx),
+        Block::List {
+            ordered,
+            start,
+            items,
+        } => list(id, *ordered, *start, items, cx),
         Block::Table { head, align, rows } => table(id, head, align, rows, cx),
         Block::Widget { kind, data } => widget(id, *kind, data, cx),
         Block::Ui { tree, state } => super::genui::draw(id, tree.as_ref(), state, cx),
@@ -89,7 +99,11 @@ fn text(id: &str, inlines: &[Inline], cx: &App) -> impl IntoElement {
     let mut found: Vec<(Range<usize>, Link)> = Vec::new();
     for span in spans(inlines) {
         // What a person wrote or an agent said can hold a devd:// address: it is drawn as a chip.
-        let (shown, inside_links) = if span.link.is_none() && !span.code { super::links::present(&span.text, root.as_deref()) } else { (span.text.clone(), Vec::new()) };
+        let (shown, inside_links) = if span.link.is_none() && !span.code {
+            super::links::present(&span.text, root.as_deref())
+        } else {
+            (span.text.clone(), Vec::new())
+        };
         let range = content.len()..content.len() + shown.len();
         content.push_str(&shown);
         let mut style = HighlightStyle::default();
@@ -103,7 +117,10 @@ fn text(id: &str, inlines: &[Inline], cx: &App) -> impl IntoElement {
             styled = true;
         }
         if span.strike {
-            style.strikethrough = Some(StrikethroughStyle { thickness: px(1.0), color: Some(t.muted) });
+            style.strikethrough = Some(StrikethroughStyle {
+                thickness: px(1.0),
+                color: Some(t.muted),
+            });
             style.color = Some(t.muted);
             styled = true;
         }
@@ -114,7 +131,11 @@ fn text(id: &str, inlines: &[Inline], cx: &App) -> impl IntoElement {
         }
         if let Some(url) = span.link {
             style.color = Some(t.info);
-            style.underline = Some(UnderlineStyle { thickness: px(1.0), color: Some(tint(t.info, 0.5)), wavy: false });
+            style.underline = Some(UnderlineStyle {
+                thickness: px(1.0),
+                color: Some(tint(t.info, 0.5)),
+                wavy: false,
+            });
             links.push((range.clone(), Link::Url(url)));
             styled = true;
         } else if span.code {
@@ -133,12 +154,20 @@ fn text(id: &str, inlines: &[Inline], cx: &App) -> impl IntoElement {
     }
     let link_style = HighlightStyle {
         color: Some(t.info),
-        underline: Some(UnderlineStyle { thickness: px(1.0), color: Some(tint(t.info, 0.5)), wavy: false }),
+        underline: Some(UnderlineStyle {
+            thickness: px(1.0),
+            color: Some(tint(t.info, 0.5)),
+            wavy: false,
+        }),
         ..HighlightStyle::default()
     };
     for (range, link) in found {
         // The link's colour and underline go over the span's own style (a code span keeps its tint).
-        let mut style = styles.iter().find(|(r, _)| r.start <= range.start && range.end <= r.end).map(|(_, s)| *s).unwrap_or_default();
+        let mut style = styles
+            .iter()
+            .find(|(r, _)| r.start <= range.start && range.end <= r.end)
+            .map(|(_, s)| *s)
+            .unwrap_or_default();
         style.color = link_style.color;
         style.underline = link_style.underline;
         // A place in devd is a chip: tinted, so it reads as something to press.
@@ -173,12 +202,27 @@ fn text(id: &str, inlines: &[Inline], cx: &App) -> impl IntoElement {
     // range after it moves along; the link's own colour and underline start after the room.
     let mut icons: Vec<(usize, String)> = Vec::new();
     if super::favicon::enabled(cx) {
-        let mut points: Vec<(usize, String)> = links.iter().filter_map(|(r, l)| if let Link::Url(url) = l { super::favicon::host_of(url).map(|h| (r.start, h)) } else { None }).collect();
+        let mut points: Vec<(usize, String)> = links
+            .iter()
+            .filter_map(|(r, l)| {
+                if let Link::Url(url) = l {
+                    super::favicon::host_of(url).map(|h| (r.start, h))
+                } else {
+                    None
+                }
+            })
+            .collect();
         points.dedup_by_key(|(at, _)| *at);
         if !points.is_empty() {
             let link_ranges: Vec<Range<usize>> = links.iter().map(|(r, _)| r.clone()).collect();
             let room = super::favicon::ROOM.len();
-            let before = |i: usize, inclusive: bool| points.iter().filter(|(p, _)| *p < i || (inclusive && *p == i)).count() * room;
+            let before = |i: usize, inclusive: bool| {
+                points
+                    .iter()
+                    .filter(|(p, _)| *p < i || (inclusive && *p == i))
+                    .count()
+                    * room
+            };
             let mut widened = String::with_capacity(content.len() + points.len() * room);
             let mut last = 0;
             for (at, host) in &points {
@@ -210,7 +254,8 @@ fn text(id: &str, inlines: &[Inline], cx: &App) -> impl IntoElement {
     // so a quick click on a slow frame is lost. The release is handled here, against the
     // text's layout; the element inside is kept for its pointing-hand cursor over a link.
     let hit = ranges.clone();
-    let pointer = InteractiveText::new(ElementId::Name(id.to_string().into()), styled).on_click(ranges.clone(), |_, _, _| {});
+    let pointer = InteractiveText::new(ElementId::Name(id.to_string().into()), styled)
+        .on_click(ranges.clone(), |_, _, _| {});
     // Start the lookups now, so an icon is on its way even if the text has not been laid out yet.
     for (_, host) in &icons {
         let _ = super::favicon::lookup(host, cx);
@@ -225,7 +270,12 @@ fn text(id: &str, inlines: &[Inline], cx: &App) -> impl IntoElement {
             for (at, host) in &icons {
                 if let Some(pos) = place.position_for_index(*at) {
                     let mut el = super::favicon::tile(host, cx).into_any_element();
-                    el.prepaint_as_root(gpui::point(pos.x - size - px(2.0), pos.y + (line - size) / 2.0), gpui::size(size, size).into(), window, cx);
+                    el.prepaint_as_root(
+                        gpui::point(pos.x - size - px(2.0), pos.y + (line - size) / 2.0),
+                        gpui::size(size, size).into(),
+                        window,
+                        cx,
+                    );
                     tiles.push(el);
                 }
             }
@@ -239,15 +289,18 @@ fn text(id: &str, inlines: &[Inline], cx: &App) -> impl IntoElement {
     )
     .absolute()
     .size_full();
-    div().min_w_0().relative().on_mouse_up(MouseButton::Left, move |event, _window, cx| {
-        if let Ok(at) = layout.index_for_position(event.position)
-            && let Some(n) = hit.iter().position(|range| range.contains(&at))
-        {
-            super::links::open(&targets[n], cx);
-        }
-    })
-    .child(pointer)
-    .child(icon_layer)
+    div()
+        .min_w_0()
+        .relative()
+        .on_mouse_up(MouseButton::Left, move |event, _window, cx| {
+            if let Ok(at) = layout.index_for_position(event.position)
+                && let Some(n) = hit.iter().position(|range| range.contains(&at))
+            {
+                super::links::open(&targets[n], cx);
+            }
+        })
+        .child(pointer)
+        .child(icon_layer)
 }
 
 fn code(id: &str, lang: &str, source: &str, cx: &App) -> Div {
@@ -255,10 +308,19 @@ fn code(id: &str, lang: &str, source: &str, cx: &App) -> Div {
     let mut lines = div().flex().flex_col();
     for line in source.split('\n') {
         // An empty line still takes a line's height.
-        let shown = if line.is_empty() { " ".to_string() } else { line.replace('\t', "    ") };
+        let shown = if line.is_empty() {
+            " ".to_string()
+        } else {
+            line.replace('\t', "    ")
+        };
         lines = lines.child(div().whitespace_nowrap().child(shown));
     }
-    let mut block = div().rounded(px(size::RADIUS)).border_1().border_color(t.line).bg(t.code).overflow_hidden();
+    let mut block = div()
+        .rounded(px(size::RADIUS))
+        .border_1()
+        .border_color(t.line)
+        .bg(t.code)
+        .overflow_hidden();
     if !lang.is_empty() {
         block = block.child(
             div()
@@ -292,8 +354,17 @@ fn list(id: &str, ordered: bool, start: u64, items: &[Item], cx: &App) -> Div {
     for (n, item) in items.iter().enumerate() {
         let marker = match item.checked {
             Some(true) => div().pt(px(3.0)).child(icon("check", 13.0, t.ok)),
-            Some(false) => div().mt(px(4.0)).size(px(12.0)).rounded(px(3.0)).border_1().border_color(t.line_strong),
-            None if ordered => div().font_family(mono()).text_size(px(size::TEXT_SM)).text_color(t.faint).child(format!("{}.", start + n as u64)),
+            Some(false) => div()
+                .mt(px(4.0))
+                .size(px(12.0))
+                .rounded(px(3.0))
+                .border_1()
+                .border_color(t.line_strong),
+            None if ordered => div()
+                .font_family(mono())
+                .text_size(px(size::TEXT_SM))
+                .text_color(t.faint)
+                .child(format!("{}.", start + n as u64)),
             None => div().mt(px(8.0)).size(px(4.0)).rounded_full().bg(t.faint),
         };
         column = column.child(
@@ -301,14 +372,31 @@ fn list(id: &str, ordered: bool, start: u64, items: &[Item], cx: &App) -> Div {
                 .flex()
                 .items_start()
                 .gap(px(9.0))
-                .child(div().w(px(18.0)).flex().flex_none().justify_end().child(marker))
-                .child(div().flex_1().min_w_0().child(document(&format!("{id}.{n}"), &item.blocks, cx))),
+                .child(
+                    div()
+                        .w(px(18.0))
+                        .flex()
+                        .flex_none()
+                        .justify_end()
+                        .child(marker),
+                )
+                .child(div().flex_1().min_w_0().child(document(
+                    &format!("{id}.{n}"),
+                    &item.blocks,
+                    cx,
+                ))),
         );
     }
     column
 }
 
-fn table(id: &str, head: &[Vec<Inline>], align: &[Align], rows: &[Vec<Vec<Inline>>], cx: &App) -> Div {
+fn table(
+    id: &str,
+    head: &[Vec<Inline>],
+    align: &[Align],
+    rows: &[Vec<Vec<Inline>>],
+    cx: &App,
+) -> Div {
     let t = theme(cx);
     let cell = |inner: Div, column: usize| {
         let inner = inner.flex_1().min_w_0().px(px(10.0)).py(px(6.0));
@@ -322,15 +410,31 @@ fn table(id: &str, head: &[Vec<Inline>], align: &[Align], rows: &[Vec<Vec<Inline
     let mut header = div().flex().bg(t.hover);
     for (c, inlines) in head.iter().enumerate() {
         header = header.child(cell(
-            div().text_size(px(size::TEXT_XS)).font_weight(FontWeight::SEMIBOLD).text_color(t.muted).child(text(&format!("{id}.h{c}"), inlines, cx)),
+            div()
+                .text_size(px(size::TEXT_XS))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(t.muted)
+                .child(text(&format!("{id}.h{c}"), inlines, cx)),
             c,
         ));
     }
-    let mut body = div().flex().flex_col().rounded(px(size::RADIUS)).border_1().border_color(t.line).overflow_hidden().child(header);
+    let mut body = div()
+        .flex()
+        .flex_col()
+        .rounded(px(size::RADIUS))
+        .border_1()
+        .border_color(t.line)
+        .overflow_hidden()
+        .child(header);
     for (r, row) in rows.iter().enumerate() {
         let mut line = div().flex().border_t_1().border_color(t.line);
         for (c, inlines) in row.iter().enumerate() {
-            line = line.child(cell(div().text_size(px(size::TEXT)).child(text(&format!("{id}.{r}.{c}"), inlines, cx)), c));
+            line = line.child(cell(
+                div()
+                    .text_size(px(size::TEXT))
+                    .child(text(&format!("{id}.{r}.{c}"), inlines, cx)),
+                c,
+            ));
         }
         body = body.child(line);
     }
@@ -357,8 +461,21 @@ pub(super) fn widget_node(id: &str, kind: WidgetKind, data: &Value, cx: &App) ->
 
 fn widget(id: &str, kind: WidgetKind, data: &Value, cx: &App) -> Div {
     let t = theme(cx);
-    let frame = || div().rounded(px(size::RADIUS_L)).border_1().border_color(t.line).bg(t.surface).p(px(14.0));
-    let title = data["title"].as_str().map(|s| div().pb(px(10.0)).font_weight(FontWeight::MEDIUM).text_color(t.text).child(s.to_string()));
+    let frame = || {
+        div()
+            .rounded(px(size::RADIUS_L))
+            .border_1()
+            .border_color(t.line)
+            .bg(t.surface)
+            .p(px(14.0))
+    };
+    let title = data["title"].as_str().map(|s| {
+        div()
+            .pb(px(10.0))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(t.text)
+            .child(s.to_string())
+    });
     match kind {
         WidgetKind::Metrics => {
             let mut row = div().flex().flex_wrap().gap(px(28.0));
@@ -380,14 +497,30 @@ fn widget(id: &str, kind: WidgetKind, data: &Value, cx: &App) -> Div {
                         .flex()
                         .flex_col()
                         .gap(px(2.0))
-                        .child(div().text_size(px(size::TEXT_XS)).text_color(t.faint).child(item["label"].as_str().unwrap_or_default().to_string()))
+                        .child(
+                            div()
+                                .text_size(px(size::TEXT_XS))
+                                .text_color(t.faint)
+                                .child(item["label"].as_str().unwrap_or_default().to_string()),
+                        )
                         .child(
                             div()
                                 .flex()
                                 .items_baseline()
                                 .gap(px(6.0))
-                                .child(div().text_size(px(22.0)).font_weight(FontWeight::SEMIBOLD).text_color(t.text).child(value))
-                                .child(div().text_size(px(size::TEXT_SM)).text_color(t.tone(tone)).child(delta.to_string())),
+                                .child(
+                                    div()
+                                        .text_size(px(22.0))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(t.text)
+                                        .child(value),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(size::TEXT_SM))
+                                        .text_color(t.tone(tone))
+                                        .child(delta.to_string()),
+                                ),
                         ),
                 );
             }
@@ -396,7 +529,11 @@ fn widget(id: &str, kind: WidgetKind, data: &Value, cx: &App) -> Div {
         WidgetKind::Chart => {
             let bars = data["bars"].as_array().map(Vec::as_slice).unwrap_or(&[]);
             let unit = data["unit"].as_str().unwrap_or_default();
-            let max = bars.iter().filter_map(|b| b["value"].as_f64()).fold(0.0f64, f64::max).max(f64::MIN_POSITIVE);
+            let max = bars
+                .iter()
+                .filter_map(|b| b["value"].as_f64())
+                .fold(0.0f64, f64::max)
+                .max(f64::MIN_POSITIVE);
             let mut column = frame().flex().flex_col().gap(px(7.0)).children(title);
             for bar in bars.iter().take(12) {
                 let value = bar["value"].as_f64().unwrap_or(0.0).max(0.0);
@@ -406,20 +543,56 @@ fn widget(id: &str, kind: WidgetKind, data: &Value, cx: &App) -> Div {
                         .flex()
                         .items_center()
                         .gap(px(10.0))
-                        .child(div().w(px(120.0)).flex_none().truncate().text_size(px(size::TEXT_SM)).text_color(t.muted).child(bar["label"].as_str().unwrap_or_default().to_string()))
-                        .child(div().flex_1().h(px(8.0)).rounded_full().bg(t.hover).child(div().h_full().rounded_full().bg(color).w(gpui::relative((value / max) as f32))))
-                        .child(div().w(px(72.0)).flex_none().font_family(mono()).text_size(px(size::TEXT_SM)).text_color(t.text).child(format!("{value} {unit}"))),
+                        .child(
+                            div()
+                                .w(px(120.0))
+                                .flex_none()
+                                .truncate()
+                                .text_size(px(size::TEXT_SM))
+                                .text_color(t.muted)
+                                .child(bar["label"].as_str().unwrap_or_default().to_string()),
+                        )
+                        .child(
+                            div().flex_1().h(px(8.0)).rounded_full().bg(t.hover).child(
+                                div()
+                                    .h_full()
+                                    .rounded_full()
+                                    .bg(color)
+                                    .w(gpui::relative((value / max) as f32)),
+                            ),
+                        )
+                        .child(
+                            div()
+                                .w(px(72.0))
+                                .flex_none()
+                                .font_family(mono())
+                                .text_size(px(size::TEXT_SM))
+                                .text_color(t.text)
+                                .child(format!("{value} {unit}")),
+                        ),
                 );
             }
             match data["takeaway"].as_str() {
-                Some(takeaway) => column.child(div().pt(px(6.0)).text_size(px(size::TEXT_SM)).text_color(t.muted).child(takeaway.to_string())),
+                Some(takeaway) => column.child(
+                    div()
+                        .pt(px(6.0))
+                        .text_size(px(size::TEXT_SM))
+                        .text_color(t.muted)
+                        .child(takeaway.to_string()),
+                ),
                 None => column,
             }
         }
         WidgetKind::Steps => {
             let current = data["current"].as_u64().unwrap_or(0) as usize;
             let mut row = div().flex().flex_wrap().items_center().gap(px(8.0));
-            for (n, step) in data["items"].as_array().map(Vec::as_slice).unwrap_or(&[]).iter().enumerate() {
+            for (n, step) in data["items"]
+                .as_array()
+                .map(Vec::as_slice)
+                .unwrap_or(&[])
+                .iter()
+                .enumerate()
+            {
                 let (color, weight) = match n.cmp(&current) {
                     std::cmp::Ordering::Less => (t.ok, FontWeight::NORMAL),
                     std::cmp::Ordering::Equal => (t.accent, FontWeight::SEMIBOLD),
@@ -434,7 +607,13 @@ fn widget(id: &str, kind: WidgetKind, data: &Value, cx: &App) -> Div {
                         .items_center()
                         .gap(px(6.0))
                         .child(div().size(px(7.0)).rounded_full().bg(color))
-                        .child(div().text_size(px(size::TEXT_SM)).font_weight(weight).text_color(if n == current { t.text } else { t.muted }).child(step.as_str().unwrap_or_default().to_string())),
+                        .child(
+                            div()
+                                .text_size(px(size::TEXT_SM))
+                                .font_weight(weight)
+                                .text_color(if n == current { t.text } else { t.muted })
+                                .child(step.as_str().unwrap_or_default().to_string()),
+                        ),
                 );
             }
             frame().children(title).child(row)
@@ -447,16 +626,38 @@ fn widget(id: &str, kind: WidgetKind, data: &Value, cx: &App) -> Div {
                         .flex()
                         .items_start()
                         .gap(px(10.0))
-                        .child(div().w(px(52.0)).flex_none().font_family(mono()).text_size(px(size::TEXT_XS)).text_color(t.faint).child(item["at"].as_str().unwrap_or_default().to_string()))
-                        .child(div().mt(px(6.0)).size(px(6.0)).flex_none().rounded_full().bg(named(item["tone"].as_str(), cx)))
-                        .child(div().flex_1().text_size(px(size::TEXT)).child(item["text"].as_str().unwrap_or_default().to_string())),
+                        .child(
+                            div()
+                                .w(px(52.0))
+                                .flex_none()
+                                .font_family(mono())
+                                .text_size(px(size::TEXT_XS))
+                                .text_color(t.faint)
+                                .child(item["at"].as_str().unwrap_or_default().to_string()),
+                        )
+                        .child(
+                            div()
+                                .mt(px(6.0))
+                                .size(px(6.0))
+                                .flex_none()
+                                .rounded_full()
+                                .bg(named(item["tone"].as_str(), cx)),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_size(px(size::TEXT))
+                                .child(item["text"].as_str().unwrap_or_default().to_string()),
+                        ),
                 );
             }
             column
         }
         WidgetKind::Details => {
             let body = devd_app_core::markdown::parse(data["body"].as_str().unwrap_or_default());
-            frame().children(title).child(document(&format!("{id}.d"), &body, cx))
+            frame()
+                .children(title)
+                .child(document(&format!("{id}.d"), &body, cx))
         }
     }
 }
