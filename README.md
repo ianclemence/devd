@@ -95,6 +95,10 @@ Open **`devd-<version>-macos-arm64.dmg`** (Apple silicon) or **`devd-<version>-m
 
 On Debian or Ubuntu: `sudo apt install ./devd_<version>_amd64.deb`. It installs `devd` and `devd-app`, a menu entry, and the libraries they need. On other distributions, unpack `devd-<version>-linux-x86_64.tar.gz` and follow `INSTALL.txt`.
 
+### Updating
+
+devd tells you in its footer when a newer release is out. On a release whose checksums are signed, one click downloads it, checks its signature against the key built into your copy, replaces itself and restarts, keeping your sites and data. A release that is not signed is not installed from inside devd; the footer opens its page and you install it as above, over the old one. `devd update check` and `devd update apply` do the same from a terminal.
+
 ### If the window does not open
 
 - Run `devd-app` from a terminal: the first line it prints says what stopped it (no graphics driver, or no running devd it can start).
