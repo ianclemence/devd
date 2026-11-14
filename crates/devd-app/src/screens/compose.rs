@@ -453,7 +453,6 @@ fn popover(cx: &gpui::App, below: bool) -> gpui::Div {
 pub fn view(
     shell: &Shell,
     hint: &'static str,
-    running: bool,
     widest: f32,
     cx: &mut Context<Shell>,
 ) -> AnyElement {
@@ -835,6 +834,7 @@ pub fn view(
         .find(|(id, _)| Some(*id) == compose.effort)
         .map(|(_, l)| *l)
         .unwrap_or("Medium");
+    let effort = if effort == "Off" { "Thinking off".to_string() } else { effort.to_string() };
     let mode = MODES
         .iter()
         .find(|(id, _, _)| Some(*id) == compose.mode)
@@ -868,22 +868,6 @@ pub fn view(
         under
             .child(model_chip)
             .child(chip("compose.mode.chip", mode.to_string(), Open::Mode, cx));
-    if running {
-        under = under.child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(6.0))
-                .ml(px(6.0))
-                .child(ui::live_dot("compose.live", crate::theme::Tone::Info, cx))
-                .child(
-                    div()
-                        .text_size(px(size::TEXT_SM))
-                        .text_color(t.info)
-                        .child("working"),
-                ),
-        );
-    }
     under = under.child(
         div()
             .flex_1()

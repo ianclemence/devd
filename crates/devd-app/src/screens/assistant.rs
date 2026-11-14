@@ -191,30 +191,43 @@ pub fn fold(events: &[Value], pending: &[&str]) -> Vec<Item> {
 fn fold_steps(items: Vec<Item>) -> Vec<Item> {
     let mut out: Vec<Item> = Vec::with_capacity(items.len());
     let mut run: Vec<Item> = Vec::new();
-    let flush = |run: &mut Vec<Item>, out: &mut Vec<Item>| match run.len() {
-        0 => {}
-        1 => out.append(run),
-        _ => out.push(Item::Steps(std::mem::take(run))),
-    };
+    // What stands apart from the folded line: a step that failed, and the files a step changed. The write
+    // that changed them is not shown twice, so the step before a change is its line.
+    let mut apart: Vec<Item> = Vec::new();
+    fn flush(run: &mut Vec<Item>, apart: &mut Vec<Item>, out: &mut Vec<Item>) {
+        match run.len() {
+            0 => {}
+            1 => out.append(run),
+            _ => out.push(Item::Steps(std::mem::take(run))),
+        }
+        out.append(apart);
+    }
     for item in items {
         match &item {
-            Item::Tool { ok: Some(_), .. } => run.push(item),
+            Item::Tool { ok: Some(true), .. } => run.push(item),
+            Item::Tool { ok: Some(false), .. } => apart.push(item),
+            Item::Changes { .. } => {
+                if matches!(run.last(), Some(Item::Tool { .. })) {
+                    run.pop();
+                }
+                apart.push(item);
+            }
             _ => {
-                flush(&mut run, &mut out);
+                flush(&mut run, &mut apart, &mut out);
                 out.push(item);
             }
         }
     }
-    flush(&mut run, &mut out);
+    flush(&mut run, &mut apart, &mut out);
     out
 }
 
-/// The quiet line under a reply: the model, then what the turn took, such as "deepseek-flash · 2.3k tokens ·
+/// The quiet line under a reply: the model, then what the turn took, such as "deepseek-flash · 2.3k out ·
 /// 41/s · $0.012". A figure that was not recorded is left out rather than shown as zero.
 fn reply_label(model: &str, (tokens, cost, ms): (u64, f64, u64)) -> String {
     let mut parts = vec![model.to_string()];
     if tokens > 0 {
-        parts.push(format!("{} tokens", ui::compact(tokens)));
+        parts.push(format!("{} out", ui::compact(tokens)));
         if ms > 0 {
             parts.push(format!("{:.0}/s", tokens as f64 / (ms as f64 / 1000.0)));
         }
@@ -564,10 +577,9 @@ impl Shell {
 fn composer(
     shell: &Shell,
     hint: &'static str,
-    running: bool,
     cx: &mut Context<Shell>,
 ) -> AnyElement {
-    super::compose::view(shell, hint, running, size::READING, cx)
+    super::compose::view(shell, hint, size::READING, cx)
 }
 
 /// No conversation open: the box, and where to begin.
@@ -599,7 +611,7 @@ fn start(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                 .child(div().text_size(px(size::TEXT_DISPLAY)).font_weight(FontWeight::SEMIBOLD).child("What are we working on?"))
                 .child(div().text_size(px(size::TEXT_MD)).text_color(t.muted).child("Ask a question, describe a change, or hand the team a goal. devd reads the project before it answers.")),
         )
-        .child(composer(shell, "Enter sends · Shift+Enter adds a line", false, cx))
+        .child(composer(shell, "Enter sends · Shift+Enter adds a line", cx))
         .into_any_element()
 }
 
@@ -715,20 +727,6 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
         let stop = id.to_string();
         actions = actions
             .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .pr(px(6.0))
-                    .child(live_dot("conversation.live", Tone::Info, cx))
-                    .child(
-                        div()
-                            .text_size(px(size::TEXT_SM))
-                            .text_color(t.muted)
-                            .child("Working"),
-                    ),
-            )
-            .child(
                 Button::new("conversation.stop", "Stop")
                     .icon("stop")
                     .kind(ButtonKind::Ghost)
@@ -837,16 +835,8 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
     let (doing, glimpse) = match (&thinking, is_writing) {
         (Some((_, tail)), false) => ("Thinking".to_string(), Some(tail.clone())),
         (_, true) => ("Writing".to_string(), None),
-        _ => {
-            let step = items.iter().rev().find_map(|i| match i {
-                Item::Tool { name, input, ok: None, .. } => {
-                    let said = toolname::describe(name, input, Phase::Running);
-                    Some(if said.object.is_empty() { said.action } else { format!("{} {}", said.action, said.object) })
-                }
-                _ => None,
-            });
-            (step.unwrap_or_else(|| "Working".to_string()), None)
-        }
+        // A step that is running has its own row, with its own clock: this line then only keeps the turn's time.
+        _ => ("Working".to_string(), None),
     };
     // The turn began when the person last spoke.
     let turn_began = data["events"]
@@ -974,7 +964,6 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
                     } else {
                         "Enter sends · Shift+Enter adds a line"
                     },
-                    running,
                     cx,
                 )),
         )
@@ -1328,7 +1317,7 @@ fn draw(thread: &str, index: usize, item: &Item, resume: bool, cx: &App) -> AnyE
                 )
                 .child({
                     let object = div()
-                        .min_w_0()
+                        .min_w_0().line_clamp(2)
                         .font_family(mono())
                         .text_size(px(size::TEXT_SM))
                         .text_color(t.text);
@@ -1352,10 +1341,10 @@ fn draw(thread: &str, index: usize, item: &Item, resume: bool, cx: &App) -> AnyE
                                 .cursor_pointer()
                                 .hover(move |s| s.text_color(hover))
                                 .on_click(move |_, _, cx| ui::links::open(&link, cx))
-                                .child(ui::Clip::new(said.object))
+                                .child(said.object)
                                 .into_any_element()
                         }
-                        None => object.child(ui::Clip::new(said.object)).into_any_element(),
+                        None => object.child(said.object).into_any_element(),
                     }
                 });
             if phase == Phase::Failed && !detail.is_empty() {
@@ -1561,6 +1550,27 @@ mod tests {
         let items = fold(&[event("user", json!({ "text": "go" })), call("a"), done("a"), call("b"), done("b"), call("c")], &[]);
         assert!(matches!(&items[1], Item::Steps(steps) if steps.len() == 2), "{items:?}");
         assert!(matches!(&items[2], Item::Tool { ok: None, .. }), "the running step is what is happening now: {items:?}");
+    }
+
+    #[test]
+    fn a_write_is_one_line_a_failure_stays_visible_and_reads_still_fold() {
+        let call = |id: &str, name: &str| event("assistant", json!({ "model": "m", "content": [{ "type": "tool_use", "id": id, "name": name, "input": {} }] }));
+        let done = |id: &str, bad: bool| event("tool_result", json!({ "tool_use_id": id, "is_error": bad, "content": "{}" }));
+        let changes = event("changes", json!({ "files": [{ "status": "M", "path": "a.rs" }] }));
+        let items = fold(
+            &[
+                event("user", json!({ "text": "go" })),
+                call("a", "read_file"), done("a", false),
+                call("b", "read_file"), done("b", false),
+                call("c", "write_file"), done("c", false), changes,
+                call("d", "run_command"), done("d", true),
+            ],
+            &[],
+        );
+        assert!(matches!(&items[1], Item::Steps(s) if s.len() == 2), "{items:?}");
+        assert!(matches!(&items[2], Item::Changes { .. }), "the write is its changes line, once: {items:?}");
+        assert!(matches!(&items[3], Item::Tool { ok: Some(false), .. }), "{items:?}");
+        assert_eq!(items.len(), 4);
     }
 
     #[test]
