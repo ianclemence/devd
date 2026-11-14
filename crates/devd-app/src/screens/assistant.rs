@@ -25,7 +25,7 @@ use serde_json::{Value, json};
 use crate::shell::Shell;
 use crate::state::{devd, q};
 use crate::theme::{Tone, mono, size, theme};
-use crate::ui::{self, Button, ButtonKind, eyebrow, icon, live_dot, markdown as md, pill};
+use crate::ui::{self, Button, ButtonKind, eyebrow, icon, live_dot, markdown as md};
 
 /// One thing a person reads in a conversation.
 #[derive(Debug, Clone, PartialEq)]
@@ -169,6 +169,8 @@ pub struct Transcript {
     /// The reply being written, parsed, with the length of the text it was parsed from.
     writing: Option<(usize, Rc<Vec<Block>>)>,
     list: ListState,
+    /// The failure that offers Resume, if any. It is taller than a plain one, so the list measures it again when this changes.
+    resume_at: Option<usize>,
 }
 
 impl Transcript {
@@ -180,6 +182,7 @@ impl Transcript {
             items: Rc::new(Vec::new()),
             writing: None,
             list: ListState::new(0, ListAlignment::Bottom, px(600.0)),
+            resume_at: None,
         }
     }
 
@@ -661,47 +664,36 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
         )
         .child(actions);
 
-    // A conversation that stopped on an error says so on a line of its own, in full, where it can be read.
-    let stopped = (!running)
-        .then(|| thread["error"].as_str().map(str::to_string))
-        .flatten()
+    // A conversation that stopped on an error says so once. Its last failure in the transcript is where that is read,
+    // beside the message box, and that is where it is resumed from. Only when the transcript holds no such failure is
+    // it said above instead.
+    let items = shell.transcript.items.clone();
+    let failure = (!running).then(|| thread["error"].as_str().map(str::to_string)).flatten();
+    let resume_at = failure
+        .as_ref()
+        .and_then(|_| items.iter().rposition(|i| matches!(i, Item::Failed(_))))
+        .filter(|at| items[at + 1..].iter().all(|i| matches!(i, Item::Notice(_))));
+    if shell.transcript.resume_at != resume_at {
+        let rows = shell.transcript.list.item_count();
+        for at in [shell.transcript.resume_at, resume_at].into_iter().flatten() {
+            if at < rows {
+                shell.transcript.list.splice(at..at + 1, 1);
+            }
+        }
+        shell.transcript.resume_at = resume_at;
+    }
+    let stopped = failure
+        .filter(|_| resume_at.is_none())
         .map(|error| {
-            div()
-                .flex_none()
-                .flex()
-                .items_start()
-                .gap(px(10.0))
-                .px(px(20.0))
-                .py(px(10.0))
-                .border_b_1()
-                .border_color(t.line)
-                .bg(ui::tint(t.danger, 0.06))
-                .child(
-                    div()
-                        .h(px(20.0))
-                        .flex_none()
-                        .flex()
-                        .items_center()
-                        .child(icon("alert", 14.0, t.danger)),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_size(px(size::TEXT_SM))
-                        .line_height(px(20.0))
-                        .text_color(t.muted)
-                        .child(
-                            div()
-                                .text_color(t.text)
-                                .font_weight(FontWeight::MEDIUM)
-                                .child("This conversation stopped."),
-                        )
-                        .child(div().line_clamp(3).child(error)),
-                )
+            div().w_full().max_w(px(size::READING)).mx_auto().pb(px(10.0)).child(
+                ui::Banner::new(Tone::Danger)
+                    .title("This conversation stopped")
+                    .body(div().line_clamp(4).child(error))
+                    .action(resume_button("thread.resume.bottom", id))
+                    .render(cx),
+            )
         });
 
-    let items = shell.transcript.items.clone();
     let live = shell
         .transcript
         .writing
@@ -710,7 +702,7 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
     let key = id.to_string();
     let body = list(shell.transcript.list.clone(), move |index, _window, cx| {
         let content = match items.get(index) {
-            Some(item) => draw(&key, index, item, cx),
+            Some(item) => draw(&key, index, item, resume_at == Some(index), cx),
             None => match &live {
                 Some(blocks) => devd_writes(&format!("{key}.live"), blocks, "", true, cx),
                 None => div().into_any_element(),
@@ -735,15 +727,18 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
         .flex()
         .flex_col()
         .child(head)
-        .children(stopped)
         .children(chain)
         .child(div().flex_1().min_h_0().child(body))
         .child(
+            // Pinned to the column's width, as the transcript rows are, so the box keeps its place and its width
+            // whatever sits above it (a chain opened or closed must not move it).
             div()
                 .flex_none()
+                .w_full()
                 .px(px(24.0))
                 .pb(px(14.0))
                 .pt(px(8.0))
+                .children(stopped)
                 .child(composer(
                     shell,
                     if running {
@@ -909,7 +904,19 @@ fn forget_running(thread: &str, index: usize) -> Option<u64> {
     None
 }
 
-fn draw(thread: &str, index: usize, item: &Item, cx: &App) -> AnyElement {
+/// Pick a stopped conversation back up. Any message does that, from where it stopped; this one asks for nothing new.
+fn resume_button(id: &'static str, thread: &str) -> Button {
+    let thread = thread.to_string();
+    Button::new(id, "Resume").icon("play").kind(ButtonKind::Primary).on_click(move |_, _, cx| {
+        devd(cx).sync.mutate(
+            Mutation::new("chat.send", json!({ "thread": thread, "message": "Carry on from where you stopped." }))
+                .invalidating("chat"),
+        );
+    })
+}
+
+/// One item of a transcript. `resume` marks the failure that stopped the conversation: it says so and offers Resume.
+fn draw(thread: &str, index: usize, item: &Item, resume: bool, cx: &App) -> AnyElement {
     let t = theme(cx);
     match item {
         Item::You { text, pending } => div()
@@ -1061,47 +1068,22 @@ fn draw(thread: &str, index: usize, item: &Item, cx: &App) -> AnyElement {
             .child(icon("info", 13.0, t.faint))
             .child(text.clone())
             .into_any_element(),
-        Item::Failed(text) => div()
-            .p(px(12.0))
-            .flex()
-            .items_start()
-            .gap(px(9.0))
-            .rounded(px(size::RADIUS_L))
-            .border_1()
-            .border_color(ui::tint(t.danger, 0.35))
-            .bg(ui::tint(t.danger, 0.08))
-            .child(icon("alert", 15.0, t.danger))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_size(px(size::TEXT))
-                    .line_height(px(20.0))
-                    .child(md::linked(&format!("{thread}.{index}.failed"), text, cx)),
-            )
-            .into_any_element(),
-        Item::Waiting { summary, .. } => div()
-            .p(px(12.0))
-            .flex()
-            .items_center()
-            .gap(px(9.0))
-            .rounded(px(size::RADIUS_L))
-            .border_1()
-            .border_color(ui::tint(t.warn, 0.35))
-            .bg(ui::tint(t.warn, 0.07))
-            .child(icon("lock", 15.0, t.warn))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_size(px(size::TEXT))
-                    .child(ui::Clip::new(if summary.is_empty() {
-                        "Waiting for your approval".to_string()
-                    } else {
-                        summary.clone()
-                    })),
-            )
-            .child(pill("needs you", Tone::Warn, cx))
+        Item::Failed(text) => {
+            let words = md::linked(&format!("{thread}.{index}.failed"), text, cx);
+            let banner = ui::Banner::new(Tone::Danger).body(words);
+            let banner = if resume {
+                banner
+                    .title("This conversation stopped")
+                    .action(resume_button("thread.resume", thread))
+            } else {
+                banner
+            };
+            banner.render(cx).into_any_element()
+        }
+        Item::Waiting { summary, .. } => ui::Banner::new(Tone::Warn)
+            .title("Waiting for your approval")
+            .text(if summary.is_empty() { "devd will carry on once you answer.".to_string() } else { summary.clone() })
+            .render(cx)
             .into_any_element(),
     }
 }

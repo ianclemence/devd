@@ -1412,6 +1412,42 @@ fn a_specialist_that_says_done_without_proof_is_not_believed() {
 }
 
 #[test]
+fn resuming_a_run_paused_on_a_stopped_task_gives_that_task_another_go() {
+    let e = env();
+    let dir = team_project(&e);
+    let file = dir.join("lazy.txt").display().to_string();
+    let m = mock(move |_, seen| {
+        let step = step_of(seen);
+        let body = match (role_of(seen).as_str(), step) {
+            ("Planner", 0) => invoke("p1", "team.plan_submit", json!({ "tasks": [
+                { "key": "lazy", "role": "implementer", "title": "Write lazy.txt", "instructions": "Create lazy.txt and run the test task to prove it." } ] })),
+            ("Implementer", 0) => invoke("i1", "fs.write", json!({ "path": file, "content": "x" })),
+            ("Implementer", _) => invoke(&format!("i{}", step + 1), "team.report", json!({ "status": "done", "summary": "trust me" })),
+            _ => anthropic_text("ok"),
+        };
+        (200, body)
+    });
+    add_provider(&e, "anthropic", &m.base);
+    let run = call(&e, &e.human, "team.start", json!({ "goal": "Create lazy.txt and verify it", "project": dir.display().to_string(), "parallel": 1, "auto_approve": true }), Approval::None).unwrap();
+    let id = run["id"].as_str().unwrap().to_string();
+    let v = wait_run(&e, &id, &["paused", "done", "failed"]);
+    assert_eq!(v["run"]["state"], "paused", "{v}");
+
+    // Before, resuming left the stopped task as it was: the run found it stopped again and paused at once.
+    let resumed = call(&e, &e.human, "team.resume", json!({ "run": id }), Approval::None).unwrap();
+    assert_eq!(resumed["state"], "running", "{resumed}");
+    let v = wait_run(&e, &id, &["paused", "done", "failed"]);
+    let events = v["events"].as_array().unwrap();
+    assert!(
+        events.iter().any(|e| e["kind"] == "retry" && e["data"]["note"] == "the run was resumed"),
+        "{}",
+        serde_json::to_string_pretty(&v).unwrap()
+    );
+    let lazy = v["tasks"].as_array().unwrap().iter().find(|t| t["key"] == "lazy").unwrap();
+    assert!(lazy["attempts"].as_u64().unwrap_or(1) >= 2, "the task ran again: {lazy}");
+}
+
+#[test]
 fn team_members_stay_inside_their_role_and_their_folder() {
     let e = env();
     let dir = team_project(&e);

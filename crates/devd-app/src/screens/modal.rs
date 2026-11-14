@@ -384,8 +384,9 @@ impl Shell {
                     .flex_col()
                     .gap(px(14.0))
                     .p(px(20.0))
-                    .child(div().flex().items_center().gap(px(8.0)).child(icon(if danger { "alert" } else { "info" }, 16.0, if danger { t.danger } else { t.info })).child(div().text_size(px(size::TEXT_LG)).font_weight(FontWeight::SEMIBOLD).text_color(t.text).child(title)))
-                    .child(div().text_size(px(size::TEXT)).line_height(px(21.0)).text_color(t.muted).child(body))
+                    // Every line here wraps inside the dialog: a long name in a title or a body never runs past its edge.
+                    .child(div().flex().items_start().gap(px(8.0)).child(div().h(px(24.0)).flex_none().flex().items_center().child(icon(if danger { "alert" } else { "info" }, 16.0, if danger { t.danger } else { t.info }))).child(div().flex_1().min_w_0().text_size(px(size::TEXT_LG)).line_height(px(24.0)).font_weight(FontWeight::SEMIBOLD).text_color(t.text).child(title)))
+                    .child(div().min_w_0().text_size(px(size::TEXT)).line_height(px(21.0)).text_color(t.muted).child(body))
                     .child(
                         div()
                             .flex()
@@ -433,7 +434,7 @@ impl Shell {
                     .child(div().text_size(px(size::TEXT_LG)).font_weight(FontWeight::SEMIBOLD).text_color(t.text).child(title))
                     .child(div().text_size(px(size::TEXT)).line_height(px(21.0)).text_color(t.muted).child(intro))
                     .child(fields)
-                    .children(error.map(|e| div().flex().items_center().gap(px(7.0)).text_size(px(size::TEXT_SM)).text_color(t.danger).child(icon("alert", 13.0, t.danger)).child(e)))
+                    .children(error.map(|e| div().flex().items_start().gap(px(7.0)).text_size(px(size::TEXT_SM)).line_height(px(18.0)).text_color(t.danger).child(div().h(px(18.0)).flex_none().flex().items_center().child(icon("alert", 13.0, t.danger))).child(div().flex_1().min_w_0().child(e))))
                     .child(
                         div()
                             .flex()
@@ -646,7 +647,7 @@ fn detail_body(
                         .flex()
                         .items_center()
                         .gap(px(8.0))
-                        .child(heading(name))
+                        .child(div().min_w_0().child(heading(name)))
                         .child(ui::pill(
                             data["kind"].as_str().unwrap_or("skill").to_string(),
                             Tone::Neutral,

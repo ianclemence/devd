@@ -1333,13 +1333,7 @@ impl Team {
             ));
         }
         let imported = self.import_for_agents(caller, &dir);
-        let title: String = goal
-            .lines()
-            .next()
-            .unwrap_or("Team run")
-            .chars()
-            .take(70)
-            .collect();
+        let title = short_title(goal.lines().next().unwrap_or("Team run"), 70);
         let run = self.ctx.store.create_run(
             &title,
             goal,
@@ -1739,15 +1733,9 @@ impl Team {
             )));
         }
         let title = if title.trim().is_empty() {
-            instructions
-                .lines()
-                .next()
-                .unwrap_or("Assigned work")
-                .chars()
-                .take(70)
-                .collect::<String>()
+            short_title(instructions.lines().next().unwrap_or("Assigned work"), 70)
         } else {
-            title.trim().chars().take(70).collect()
+            short_title(title.trim(), 70)
         };
         let run = self.ctx.store.create_run(
             &title,
@@ -1907,6 +1895,25 @@ impl Team {
             // A person resuming the run is a deliberate new decision; the
             // watchdog starts counting again from the resume.
             let _ = self.ctx.store.reset_stalls(&t.id);
+            // A task that stopped is what paused the run. Left as it was, the run would find the same
+            // task stopped, nothing else free to start, and pause again at once: resuming would do nothing.
+            // So resuming gives each stopped task another go, carrying what was wrong as its feedback.
+            if matches!(t.state.as_str(), "unverified" | "blocked" | "failed") {
+                self.ctx.store.update_team_task(
+                    &t.id,
+                    TaskUpdate {
+                        state: "pending",
+                        error: t.error.as_deref(),
+                        ..Default::default()
+                    },
+                )?;
+                self.event(
+                    run_id,
+                    Some(&t.id),
+                    "retry",
+                    json!({ "task": t.key, "by": caller.actor.label(), "note": "the run was resumed" }),
+                );
+            }
         }
         self.ctx.store.set_run_state(
             run_id,
@@ -4020,5 +4027,38 @@ mod plan_rules {
             validate_plan(&prose).is_ok(),
             "describing tests is not running them"
         );
+    }
+}
+
+/// A title from the first line of a goal: whole when it fits, otherwise cut at the last word that fits, with an
+/// ellipsis, so it never ends half way through a word.
+pub fn short_title(text: &str, limit: usize) -> String {
+    let text = text.trim();
+    if text.chars().count() <= limit {
+        return text.to_string();
+    }
+    let cut: String = text.chars().take(limit.saturating_sub(1)).collect();
+    let at = cut.rfind(char::is_whitespace).filter(|at| *at > limit / 2).unwrap_or(cut.len());
+    let mut kept = &cut[..at];
+    // A bracket opened and not closed in what is kept is dropped with what follows it.
+    if kept.matches('(').count() > kept.matches(')').count() {
+        if let Some(open) = kept.rfind('(').filter(|open| *open > limit / 2) {
+            kept = &kept[..open];
+        }
+    }
+    format!("{}…", kept.trim_end_matches(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | ':' | '(' | '-')))
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::short_title;
+
+    #[test]
+    fn a_long_title_is_cut_at_a_word_with_an_ellipsis() {
+        let goal = "Build \"cadence\": a production-quality cron scheduler in Go (standard library only, Go 1.26)";
+        let t = short_title(goal, 70);
+        assert!(t.ends_with('…') && t.chars().count() <= 70, "{t}");
+        assert!(t.ends_with("in Go…"), "{t}");
+        assert_eq!(short_title("Short goal", 70), "Short goal");
     }
 }

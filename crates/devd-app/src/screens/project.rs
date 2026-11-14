@@ -1232,15 +1232,9 @@ fn file_view(dir: &str, rel: &str, view: &ProjectView, cx: &mut Context<Shell>) 
         .child(edit)
         .child(file_actions(dir, rel, cx));
     let head = match &view.edit_error {
-        Some(why) => div().child(head).child(
-            div()
-                .px(px(14.0))
-                .py(px(10.0))
-                .bg(super::super::ui::tint(t.warn, 0.12))
-                .text_size(px(size::TEXT_SM))
-                .text_color(t.text)
-                .child(why.clone()),
-        ),
+        Some(why) => div()
+            .child(head)
+            .child(div().px(px(14.0)).pt(px(10.0)).child(ui::Banner::new(Tone::Warn).text(why.clone()).render(cx))),
         None => div().child(head),
     };
     if snap.is_first_load() {

@@ -357,7 +357,7 @@ fn list(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                     .flex()
                     .flex_col()
                     .child(div().text_size(px(size::TEXT)).child(Clip::new(
-                        run["title"].as_str().unwrap_or("Run").to_string(),
+                        title_of(run),
                     )))
                     .child(
                         div()
@@ -473,14 +473,17 @@ fn run_page(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElement 
         .flex_col()
         .gap(px(28.0))
         .child(heading(id, &run, &data, &tasks, cx));
-    if let Some(line) = attention(id, &run, &data, cx) {
+    let attended = attention(id, &run, &data, cx);
+    // A paused run's banner already says what is holding it; the sentence about where it stands would say it again.
+    let said = attended.is_some() && state == "paused";
+    if let Some(line) = attended {
         column = column.child(line);
     }
     if over(&state) {
         if let Some(result) = result(&run, &tasks, cx) {
             column = column.child(result);
         }
-    } else {
+    } else if !said {
         column = column.child(now(&state, &tasks, cx));
     }
     if let Some(criteria) = criteria(&data, &tasks, cx) {
@@ -593,7 +596,8 @@ fn heading(
     let mut actions = div().flex().items_center().gap(px(4.0));
     let run_id = id.to_string();
     match state.as_str() {
-        "paused" => {
+        // A run paused for a reason says so in a banner, and Resume is there, beside the reason; once is enough.
+        "paused" if run["error"].as_str().is_none_or(str::is_empty) => {
             let resume = run_id.clone();
             actions = actions.child(
                 Button::new("run.resume", "Resume")
@@ -680,7 +684,7 @@ fn heading(
                         .line_height(px(30.0))
                         .line_clamp(2)
                         .text_color(t.text)
-                        .child(run["title"].as_str().unwrap_or("Run").to_string()),
+                        .child(title_of(run)),
                 )
                 .child(
                     div()
@@ -697,33 +701,12 @@ fn heading(
 fn attention(id: &str, run: &Value, data: &Value, cx: &mut Context<Shell>) -> Option<AnyElement> {
     let t = theme(cx).clone();
     let line = |tone: Hsla, text: String, action: Option<AnyElement>| {
-        div()
-            .flex()
-            .items_start()
-            .gap(px(10.0))
-            .px(px(14.0))
-            .py(px(10.0))
-            .rounded(px(size::RADIUS_L))
-            .bg(tint(tone, 0.07))
-            .child(
-                div()
-                    .h(px(20.0))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .child(icon("alert", 14.0, tone)),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_size(px(size::TEXT_SM))
-                    .line_height(px(20.0))
-                    .text_color(t.text)
-                    .child(text),
-            )
-            .children(action)
-            .into_any_element()
+        let tone = if tone == t.danger { Tone::Danger } else { Tone::Warn };
+        let mut banner = ui::Banner::new(tone).text(text);
+        if let Some(action) = action {
+            banner = banner.action(action);
+        }
+        banner.render(cx).into_any_element()
     };
     if data["driver"] == "none" {
         let carry = id.to_string();
@@ -737,6 +720,21 @@ fn attention(id: &str, run: &Value, data: &Value, cx: &mut Context<Shell>) -> Op
         return Some(line(t.warn, "Nothing is carrying this run. Its work is kept; carry it on to continue from where it stopped.".to_string(), Some(button.into_any_element())));
     }
     let error = run["error"].as_str().filter(|e| !e.is_empty())?;
+    // A paused run is answered where it says why: resuming gives the task that stopped it another go.
+    let resume = (run["state"] == "paused").then(|| {
+        let again = id.to_string();
+        Button::new("run.resume.banner", "Resume")
+            .icon("play")
+            .kind(ButtonKind::Primary)
+            .on_click(move |_, _, cx| {
+                devd(cx).sync.mutate(
+                    Mutation::new("team.resume", json!({ "run": again }))
+                        .optimistic(Patch::set(q::run(&again), "/run/state", json!("running")))
+                        .invalidating("team"),
+                );
+            })
+            .into_any_element()
+    });
     Some(line(
         if run["state"] == "failed" {
             t.danger
@@ -744,7 +742,7 @@ fn attention(id: &str, run: &Value, data: &Value, cx: &mut Context<Shell>) -> Op
             t.warn
         },
         error.to_string(),
-        None,
+        resume,
     ))
 }
 
@@ -1515,4 +1513,25 @@ fn agent_panel(run_id: &str, task: &Value, data: &Value, cx: &mut Context<Shell>
         .overflow_y_scroll()
         .child(column)
         .into_any_element()
+}
+
+/// A run's title as it is shown. Runs made before titles were cut at a word end half way through one ("(standard l");
+/// such a title is the start of the goal, so it is cut again from the goal, at a word, with an ellipsis.
+fn title_of(run: &Value) -> String {
+    let title = run["title"].as_str().unwrap_or("Run").trim().to_string();
+    let first = run["goal"].as_str().and_then(|g| g.lines().next()).unwrap_or_default().trim();
+    if title.ends_with('…') || !first.starts_with(&title) || first.chars().count() <= title.chars().count() {
+        return title;
+    }
+    let limit = title.chars().count().max(20);
+    let cut: String = first.chars().take(limit.saturating_sub(1)).collect();
+    let at = cut.rfind(char::is_whitespace).filter(|at| *at > limit / 2).unwrap_or(cut.len());
+    let mut kept = &cut[..at];
+    // A bracket opened and not closed in what is kept is dropped with what follows it.
+    if kept.matches('(').count() > kept.matches(')').count()
+        && let Some(open) = kept.rfind('(').filter(|open| *open > limit / 2)
+    {
+        kept = &kept[..open];
+    }
+    format!("{}…", kept.trim_end_matches(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | ':' | '(' | '-')))
 }

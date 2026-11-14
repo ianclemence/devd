@@ -265,13 +265,61 @@ fn draw(id: &'static str, tasks: &[Value], pick: Pick, cx: &mut Context<Shell>) 
         .h(px(layout.height))
         .child(lines)
         .children(nodes);
-    div()
+    // The wheel belongs to the page: a plain turn scrolls the page past the chain, and only a sideways one (Shift and the
+    // wheel, or a touchpad) moves the chain. That sideways turn stops here, so the page does not read it as a scroll down.
+    let mut view = div()
         .id(ui::nid(id, 1))
         .w_full()
         .overflow_x_scroll()
         .track_scroll(&handle)
-        .child(inner)
-        .into_any_element()
+        .on_scroll_wheel(|event, _, cx| {
+            let delta = event.delta.pixel_delta(px(16.0));
+            if delta.x != px(0.0) {
+                cx.stop_propagation();
+            }
+        });
+    view.style().restrict_scroll_to_axis = Some(true);
+
+    // The chain can also be taken and moved with the mouse, like a map.
+    let (grab, pan, done) = (handle.clone(), handle.clone(), id);
+    let view = view
+        .on_mouse_down(gpui::MouseButton::Left, move |event, _, _| {
+            DRAG.with(|d| *d.borrow_mut() = Some((id, event.position.x, grab.offset().x)));
+        })
+        .on_mouse_move(move |event, window, _| {
+            if event.pressed_button != Some(gpui::MouseButton::Left) {
+                return;
+            }
+            let Some((_, from, start)) = DRAG.with(|d| *d.borrow()).filter(|d| d.0 == id) else {
+                return;
+            };
+            set_x(&pan, start + (event.position.x - from), window);
+        })
+        .on_mouse_up(gpui::MouseButton::Left, move |_, _, _| {
+            DRAG.with(|d| {
+                if d.borrow().is_some_and(|d| d.0 == done) {
+                    *d.borrow_mut() = None;
+                }
+            });
+        })
+        .child(inner);
+
+    view.into_any_element()
+}
+
+thread_local! {
+    /// A chain being moved with the mouse: which one, where the pointer started, and where the chain was then.
+    static DRAG: RefCell<Option<(&'static str, Pixels, Pixels)>> = const { RefCell::new(None) };
+}
+
+/// Move a chain sideways to `x` (zero or less), kept within its ends.
+fn set_x(handle: &ScrollHandle, x: Pixels, window: &mut gpui::Window) {
+    let most = handle.max_offset().width;
+    let x = x.min(px(0.0)).max(-most);
+    if x != handle.offset().x {
+        handle.set_offset(point(x, handle.offset().y));
+        window.refresh();
+    }
 }
 
 /// Where a task stands, as one small glyph.

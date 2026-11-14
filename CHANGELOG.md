@@ -12,6 +12,49 @@ may change capability identifiers where the design was wrong.
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-11-14 - Runs that resume, screens that keep up, and one shape for every banner
+
+### Fixed
+
+- **Resuming a paused run carries it on.** A run paused because one task could not prove its work used to pause again
+  the moment it was resumed: the same task was still stopped and everything else waited for it. Resuming now gives each
+  stopped task another go, with what was wrong as its feedback.
+- **The message box keeps its place.** In a conversation that belongs to a run, opening or closing the team chain no
+  longer shrinks the box and moves it to the left.
+- **A stopped conversation says so once, and can be resumed in one press.** The error was shown twice, at the top and
+  at the bottom; it is now shown once, at the bottom beside the message box, with a Resume button, so a dropped
+  connection does not mean retyping.
+- **A paused run's page says why once.** The banner carries the reason and Resume; the same Resume in the heading and
+  the same sentence under the banner are gone. A run's title that was cut half way through a word now ends at a word,
+  with an ellipsis.
+- **The Mail screen says when the mail catcher is not running**, with a button to start it, instead of the connection
+  error.
+- **The Server screen no longer calls a service that answers "stopped".** One started outside devd says so.
+- **The team chain scrolls sideways without taking the page with it.** A plain mouse wheel scrolls the page past the
+  chain; Shift and the wheel, a touchpad, dragging the chain, or the new bar under it move it sideways, so every agent
+  in a long run can be reached. The same on a run's page.
+- **The model and permission menus close when you click outside them**, on Home and in the Assistant.
+- **The permission menu shows each mode's description in full**, under its name, instead of cutting it off.
+- **Home counts PHP once.** A PHP version runs as several workers; Home now counts and names it as one service, as the
+  Services screen does, and names the services that are not answering first.
+- **The Databases screen says when MariaDB is not running**, once and in words, with a button to start it, instead of
+  showing the client's error twice.
+- **Screens keep up with the machine.** Starting or stopping a database server refreshes the database screens, and
+  services, health and databases are read again every few seconds while they are on screen, so a change made outside
+  devd shows up. A screen showing an error no longer flashes back to loading each time it is read again.
+- **An install that cannot run here is not offered for approval.** The dialog says why and offers Close; on Windows
+  without the Windows Package Manager it says so and how to get it. Long lines in every dialog now wrap inside it.
+
+### Changed
+
+- **Every banner has one shape.** Warnings, failures and notices across the app (a conversation, a run's page, an
+  approval, a file that could not be saved, a screen that could not refresh) share one component: a hairline and a faint
+  wash in their tone, the mark level with the first line, an optional title, and their actions under the words.
+- **Empty states and section labels read the same everywhere.** A wrapped explanation under an empty state is centred
+  like its title, and the Stacks groups use the same small-capital labels as every other screen.
+- **Inbox messages lead with what needs you.** A paused run's message now shows why it stopped as its headline, the
+  run as the line under it, who sent it in words, and Resume beside Open the run.
+
 ## [0.31.0] - 2026-11-14 - Runs that keep going, stay bounded, hand work on, and show how they are going
 
 ### The team keeps working, and says how it is going

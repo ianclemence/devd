@@ -636,7 +636,9 @@ pub fn related(domain: &str) -> &'static [&'static str] {
     match domain {
         "hosts" | "tls" | "dns" => &["site", "health", "activity"],
         "site" => &["hosts", "tls", "health", "project", "activity"],
-        "service" | "toolchain" | "php" | "web" => &["services", "health", "site"],
+        // A database server starting or stopping changes what the database screens can read.
+        "service" | "toolchain" | "php" | "web" => &["services", "health", "site", "db", "backup", "mail"],
+        "db" => &["backup", "health"],
         "runtime" => &["site", "health", "project"],
         "chat" => &["team", "inbox", "approval", "todo", "activity"],
         "team" => &["chat", "inbox", "approval", "runs", "activity"],
@@ -661,10 +663,15 @@ fn invalidate_locked(inner: &Inner, st: &mut State, domains: &[&str]) {
             continue;
         }
         entry.stale = true;
-        entry.error = None;
         let on_screen = entry
             .last_watched
             .is_some_and(|t| now.duration_since(t) < ON_SCREEN);
+        // A failure on screen stays on screen while it is asked again, and is replaced by the answer: clearing it
+        // first would flash the loading state on every refresh. One off screen is cleared, so that the next look
+        // asks again rather than showing an old failure.
+        if !on_screen {
+            entry.error = None;
+        }
         if entry.fetching {
             entry.refetch = true;
         } else if on_screen {
@@ -1181,6 +1188,14 @@ mod tests {
             second.watch(&key).list("/sites").is_empty(),
             "and replaced by the truth"
         );
+    }
+
+    #[test]
+    fn a_database_server_starting_refreshes_what_the_database_screens_read() {
+        for kind in ["service", "toolchain"] {
+            assert!(related(kind).contains(&"db"), "{kind} must refresh db");
+            assert!(related(kind).contains(&"backup"), "{kind} must refresh backup");
+        }
     }
 
     #[test]

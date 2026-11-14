@@ -754,6 +754,94 @@ pub fn age(secs: u64) -> String {
     }
 }
 
+/// A banner: something the person should know before what follows it, or should act on.
+///
+/// Every banner in the app is this one shape, so a warning on a run's page and one in a conversation look like
+/// relatives: a hairline in the tone, a faint wash of it, the tone's mark level with the first line, an optional title
+/// in the text colour, what happened under it, and the actions under that, never squeezed beside the words. Words wrap;
+/// nothing is cut off.
+pub struct Banner {
+    tone: Tone,
+    title: Option<SharedString>,
+    body: Option<AnyElement>,
+    actions: Vec<AnyElement>,
+}
+
+impl Banner {
+    /// A banner in a tone. `Danger` for what stopped or failed, `Warn` for what is held or needs a decision, `Info`
+    /// for what is worth knowing, `Ok` for what went well.
+    pub fn new(tone: Tone) -> Self {
+        Self { tone, title: None, body: None, actions: Vec::new() }
+    }
+
+    /// The line that names what happened.
+    pub fn title(mut self, title: impl Into<SharedString>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    /// What happened, in words.
+    pub fn text(self, text: impl Into<SharedString>) -> Self {
+        let text: SharedString = text.into();
+        self.body(div().child(text))
+    }
+
+    /// What happened, as an element (a formatted message, a list).
+    pub fn body(mut self, body: impl IntoElement) -> Self {
+        self.body = Some(body.into_any_element());
+        self
+    }
+
+    /// Something to do about it. The first one added is the main one.
+    pub fn action(mut self, action: impl IntoElement) -> Self {
+        self.actions.push(action.into_any_element());
+        self
+    }
+
+    /// Draw it.
+    pub fn render(self, cx: &App) -> Div {
+        let t = theme(cx);
+        let colour = t.tone(self.tone);
+        let mark = match self.tone {
+            Tone::Danger | Tone::Warn => "alert",
+            Tone::Ok => "check",
+            _ => "info",
+        };
+        let titled = self.title.is_some();
+        let mut words = div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap(px(3.0))
+            .text_size(px(size::TEXT))
+            .line_height(px(20.0))
+            .text_color(t.text);
+        if let Some(title) = self.title {
+            words = words.child(div().font_weight(FontWeight::SEMIBOLD).child(title));
+        }
+        if let Some(body) = self.body {
+            words = words.child(div().min_w_0().text_color(if titled { t.muted } else { t.text }).child(body));
+        }
+        if !self.actions.is_empty() {
+            words = words.child(div().pt(px(8.0)).flex().flex_wrap().items_center().gap(px(8.0)).children(self.actions));
+        }
+        div()
+            .w_full()
+            .flex()
+            .items_start()
+            .gap(px(10.0))
+            .px(px(14.0))
+            .py(px(12.0))
+            .rounded(px(size::RADIUS_L))
+            .border_1()
+            .border_color(tint(colour, 0.32))
+            .bg(tint(colour, 0.07))
+            .child(div().h(px(20.0)).flex_none().flex().items_center().child(icon(mark, 15.0, colour)))
+            .child(words)
+    }
+}
+
 /// A strip that says what is on screen may be old: the last refresh failed, and what is shown is
 /// what was known before. Never shown as if it were current, and never as "offline" or "stopped":
 /// a failed read says nothing about the thing itself.
@@ -762,26 +850,15 @@ pub fn stale(snapshot: &devd_app_core::sync::Snapshot, cx: &App) -> Option<Div> 
         .error
         .as_ref()
         .filter(|_| snapshot.data.is_some())?;
-    let t = theme(cx);
     Some(
-        div()
-            .flex()
-            .items_center()
-            .gap(px(8.0))
-            .px(px(12.0))
-            .py(px(8.0))
-            .mb(px(14.0))
-            .rounded(px(size::RADIUS))
-            .border_1()
-            .border_color(tint(t.warn, 0.35))
-            .bg(tint(t.warn, 0.08))
-            .text_size(px(size::TEXT_SM))
-            .text_color(t.text)
-            .child(icon("alert", 14.0, t.warn))
-            .child(div().flex_1().min_w_0().child(Clip::new(format!(
-                "Could not refresh just now: {}. What you see may be out of date.",
-                failure.message
-            )))),
+        div().mb(px(14.0)).child(
+            Banner::new(Tone::Warn)
+                .text(format!(
+                    "Could not refresh just now: {}. What you see may be out of date.",
+                    failure.message.trim_end_matches('.')
+                ))
+                .render(cx),
+        ),
     )
 }
 
@@ -834,9 +911,12 @@ pub fn empty(
                 .child(title.into()),
         )
         .child(
+            // Centred like the title above it, so a sentence that wraps does not hang from the left.
             div()
-                .max_w(px(380.0))
+                .max_w(px(420.0))
+                .text_center()
                 .text_size(px(size::TEXT))
+                .line_height(px(21.0))
                 .text_color(t.muted)
                 .child(detail.into()),
         )

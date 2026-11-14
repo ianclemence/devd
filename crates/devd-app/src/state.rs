@@ -289,6 +289,14 @@ pub fn start(conn: Arc<Connection>, cx: &mut App) {
                 if looks.is_multiple_of(2) && state.run_seen.replace(false) {
                     state.sync.invalidate("team");
                 }
+                // The machine changes without devd being told: a service stops, a database server is started from
+                // elsewhere, a port is taken. What shows it is read again about every five seconds. Only what is on
+                // screen is fetched, so a screen that shows none of it costs nothing.
+                if looks.is_multiple_of(5) {
+                    for domain in ["service", "health", "db", "mail"] {
+                        state.sync.invalidate(domain);
+                    }
+                }
             });
             if alive.is_err() {
                 break;
