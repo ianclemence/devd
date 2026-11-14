@@ -186,6 +186,11 @@ pub fn body(r: &ChatRequest) -> Value {
         "contents": contents,
         "generationConfig": { "maxOutputTokens": r.max_tokens },
     });
+    // Gemini 2.5 thinks by default and takes a budget in tokens; its thoughts come back as parts marked
+    // `thought`, shown while they happen and never sent back. Pro cannot think less than 128 tokens.
+    if let Some(budget) = thinking_budget(&r.model, r.effort.as_deref()) {
+        body["generationConfig"]["thinkingConfig"] = json!({ "thinkingBudget": budget, "includeThoughts": true });
+    }
     if !r.tools.is_empty() {
         body["tools"] = json!([{
             "functionDeclarations": r.tools.iter().map(|t| json!({
@@ -215,10 +220,13 @@ struct Accumulator {
 }
 
 impl Accumulator {
-    fn feed(&mut self, v: &Value, on: &mut dyn FnMut(&str)) {
+    fn feed(&mut self, v: &Value, on: &mut dyn FnMut(&str), think: &mut dyn FnMut(&str)) {
         if let Some(parts) = v.pointer("/candidates/0/content/parts").and_then(Value::as_array) {
             for part in parts {
                 if part["thought"] == true {
+                    if let Some(text) = part["text"].as_str().filter(|t| !t.is_empty()) {
+                        think(text);
+                    }
                     continue;
                 }
                 if let Some(text) = part["text"].as_str().filter(|t| !t.is_empty()) {
@@ -301,14 +309,39 @@ pub fn parse(v: &Value) -> Result<ChatResponse> {
         )));
     }
     let mut acc = Accumulator::default();
-    acc.feed(v, &mut |_| {});
+    acc.feed(v, &mut |_| {}, &mut |_| {});
     acc.finish()
+}
+
+/// The thinking budget a Gemini model gets at one of devd's levels. None for models that do not take one.
+fn thinking_budget(model: &str, effort: Option<&str>) -> Option<i64> {
+    let model = model.to_ascii_lowercase();
+    if !model.contains("gemini-2.5") {
+        return None;
+    }
+    let pro = model.contains("pro");
+    let budget = match effort? {
+        "none" => {
+            if pro {
+                128
+            } else {
+                0
+            }
+        }
+        "low" => 1_024,
+        "medium" => 4_096,
+        "high" => 12_288,
+        "extra" => 20_480,
+        _ => 24_576,
+    };
+    Some(budget)
 }
 
 /// Parse a `streamGenerateContent?alt=sse` stream.
 pub fn parse_stream(
     reader: impl BufRead,
     on: &mut dyn FnMut(&str),
+    think: &mut dyn FnMut(&str),
 ) -> Result<ChatResponse> {
     let mut acc = Accumulator::default();
     crate::providers::for_each_event(reader, |payload| {
@@ -318,7 +351,7 @@ pub fn parse_stream(
                     "Gemini refused the prompt: {reason}"
                 )));
             }
-            acc.feed(&v, on);
+            acc.feed(&v, on, think);
         }
         Ok(())
     })?;
@@ -394,6 +427,30 @@ mod tests {
             max_tokens: 1000,
             effort: None,
         }
+    }
+
+    #[test]
+    fn gemini_25_gets_a_thinking_budget_and_its_thoughts_are_shown_not_kept() {
+        let with = |model: &str, level: Option<&str>| {
+            let mut r = request();
+            r.model = model.into();
+            r.effort = level.map(str::to_string);
+            body(&r)["generationConfig"]["thinkingConfig"].clone()
+        };
+        assert_eq!(with("gemini-2.5-flash", Some("none"))["thinkingBudget"], 0, "Flash can think nothing");
+        assert_eq!(with("gemini-2.5-pro", Some("none"))["thinkingBudget"], 128, "Pro cannot think less than 128");
+        assert_eq!(with("gemini-2.5-flash", Some("medium"))["thinkingBudget"], 4096);
+        assert_eq!(with("gemini-2.5-flash", Some("medium"))["includeThoughts"], true);
+        assert!(with("gemini-2.0-flash", Some("high")).is_null(), "an older model takes no budget");
+        assert!(with("gemini-2.5-flash", None).is_null());
+
+        let sse = "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"weighing it\",\"thought\":true},{\"text\":\"Answer.\"}]},\"finishReason\":\"STOP\"}]}
+
+";
+        let (mut thought, mut written) = (String::new(), String::new());
+        let got = parse_stream(std::io::Cursor::new(sse), &mut |t| written.push_str(t), &mut |t| thought.push_str(t)).unwrap();
+        assert_eq!((thought.as_str(), written.as_str()), ("weighing it", "Answer."));
+        assert!(got.content.iter().all(|b| b["text"] != "weighing it"), "a thought is not part of the answer");
     }
 
     #[test]
@@ -482,7 +539,7 @@ mod tests {
             "\"usageMetadata\":{\"promptTokenCount\":4,\"candidatesTokenCount\":2}}\n\n",
         );
         let mut seen = String::new();
-        let r = parse_stream(std::io::Cursor::new(sse), &mut |t| seen.push_str(t)).unwrap();
+        let r = parse_stream(std::io::Cursor::new(sse), &mut |t| seen.push_str(t), &mut |_| {}).unwrap();
         assert_eq!(seen, "Hello");
         assert_eq!(r.content[0]["text"], "Hello");
         assert_eq!(r.stop_reason, "max_tokens");

@@ -31,6 +31,7 @@ pub const BUILTIN: &[(&str, &str)] = &[
     ("finish-the-migration", include_str!("../skills/finish-the-migration.md")),
     ("fix-bug", include_str!("../skills/fix-bug.md")),
     ("fix-the-root-cause", include_str!("../skills/fix-the-root-cause.md")),
+    ("goal", include_str!("../skills/goal.md")),
     ("handoff", include_str!("../skills/handoff.md")),
     ("hardware-bringup", include_str!("../skills/hardware-bringup.md")),
     ("hyperframes", include_str!("../skills/hyperframes.md")),

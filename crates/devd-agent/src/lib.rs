@@ -31,6 +31,7 @@ pub mod budget;
 pub mod caps;
 pub mod caps_autonomy;
 pub mod caps_theme;
+pub mod goal;
 pub mod stepshot;
 pub mod charter;
 pub mod chat;

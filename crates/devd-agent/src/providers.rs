@@ -1271,7 +1271,47 @@ fn anthropic_body(r: &ChatRequest) -> Value {
             body["tool_choice"] = json!({ "type": "tool", "name": name });
         }
     }
+    // Extended thinking, at the budget the chosen level means. Anthropic does not allow it together with a
+    // forced tool, and wants the thinking blocks of a tool-using turn handed back unchanged, signature included;
+    // when it is not asked for, the history carries none, so a turn that was thought through earlier can be
+    // continued with thinking off.
+    match anthropic_thinking_budget(&r.model, r.effort.as_deref(), r.max_tokens, r.tool_choice.is_some()) {
+        Some(budget) => body["thinking"] = json!({ "type": "enabled", "budget_tokens": budget }),
+        None => {
+            if let Some(list) = body["messages"].as_array_mut() {
+                for m in list {
+                    if let Some(blocks) = m["content"].as_array_mut() {
+                        blocks.retain(|b| !matches!(b["type"].as_str(), Some("thinking") | Some("redacted_thinking")));
+                    }
+                }
+            }
+        }
+    }
     body
+}
+
+/// The thinking budget, in tokens, for a Claude model at one of devd's levels. None where the model cannot
+/// think, the level is Off, or there is not room for the budget and an answer after it.
+fn anthropic_thinking_budget(model: &str, effort: Option<&str>, max_tokens: u32, forced_tool: bool) -> Option<u32> {
+    let model = model.to_ascii_lowercase();
+    let thinks = model.starts_with("claude-")
+        && !["claude-2", "claude-instant", "claude-3-haiku", "claude-3-opus", "claude-3-sonnet", "claude-3-5"]
+            .iter()
+            .any(|old| model.starts_with(old));
+    if !thinks || forced_tool {
+        return None;
+    }
+    let want: u32 = match effort? {
+        "none" => return None,
+        "low" => 2_048,
+        "medium" => 8_192,
+        "high" => 16_384,
+        "extra" => 24_576,
+        _ => 32_768,
+    };
+    // Half the room at most, so the answer is never what runs out; the least Anthropic accepts is 1,024.
+    let budget = want.min(max_tokens / 2);
+    (budget >= 1_024).then_some(budget)
 }
 
 fn text_of(blocks: &[Value]) -> String {
@@ -1371,6 +1411,22 @@ fn openai_body(p: &Provider, r: &ChatRequest) -> Value {
     // default. "Medium", devd's ordinary level, is DeepSeek's "low": enough to plan a step, not to stall on it.
     if is_deepseek(p, &r.model) {
         body["reasoning_effort"] = json!(deepseek_effort(r.effort.as_deref()));
+    }
+    // The other families that think by default each switch it their own way, on their own hosts. A field is
+    // sent only to the host that knows it: an unknown field is an error on most others.
+    if let Some(level) = r.effort.as_deref() {
+        let host = p.base_url.to_ascii_lowercase();
+        let model = r.model.to_ascii_lowercase();
+        let on = level != "none";
+        if host.contains("dashscope") && model.contains("qwen") {
+            body["enable_thinking"] = json!(on);
+        } else if host.contains("bigmodel.cn") || host.contains("z.ai") {
+            body["thinking"] = json!({ "type": if on { "enabled" } else { "disabled" } });
+        } else if !is_openrouter(p) && model.contains("gpt-oss") {
+            body["reasoning_effort"] = json!(three_levels(level));
+        } else if host.contains("x.ai") && model.contains("grok-3-mini") {
+            body["reasoning_effort"] = json!(if matches!(level, "none" | "low" | "medium") { "low" } else { "high" });
+        }
     }
     if let Some(effort) = r.effort.as_deref().map(three_levels) {
         // OpenRouter takes the effort as an object, and no filter that would route only to endpoints
@@ -1559,7 +1615,16 @@ pub fn chat_stream(
     on: &mut dyn FnMut(&str),
     think: &mut dyn FnMut(&str),
 ) -> Result<ChatResponse> {
-    chat_with(p, key, req, on, think)
+    let first = chat_with(p, key, req, on, think);
+    // Anthropic refuses a history whose last tool-using turn lost its thinking block (a shortened history can
+    // do that). Thinking is an improvement, never a requirement: ask again without it, once.
+    let thinking_refused = matches!(&first, Err(e) if e.to_string().to_ascii_lowercase().contains("thinking"));
+    if thinking_refused && p.kind == "anthropic" && !matches!(req.effort.as_deref(), None | Some("none")) {
+        let mut plain = req.clone();
+        plain.effort = Some("none".into());
+        return chat_with(p, key, &plain, on, think);
+    }
+    first
 }
 
 fn chat_with(
@@ -1605,7 +1670,7 @@ fn chat_with(
             let answer = match r.answer {
                 Answer::Events(reader) => {
                     return if p.kind == "gemini" {
-                        crate::gemini::parse_stream(reader, on)
+                        crate::gemini::parse_stream(reader, on, think)
                     } else if p.kind == "anthropic" {
                         parse_anthropic_stream(reader, on, think)
                     } else {
@@ -1620,7 +1685,7 @@ fn chat_with(
                         .any(|line| line.trim_start().starts_with("data:"))
                     {
                         return if p.kind == "gemini" {
-                            crate::gemini::parse_stream(std::io::Cursor::new(body), on)
+                            crate::gemini::parse_stream(std::io::Cursor::new(body), on, think)
                         } else if p.kind == "anthropic" {
                             parse_anthropic_stream(std::io::Cursor::new(body), on, think)
                         } else {
@@ -1793,7 +1858,15 @@ fn parse_anthropic_stream(reader: impl BufRead, on: &mut dyn FnMut(&str), think:
                         if !piece.is_empty() {
                             thinking_chars += piece.chars().count();
                             think(piece);
+                            // The block is kept whole: Anthropic wants it back with its signature.
+                            let so_far = block["thinking"].as_str().unwrap_or("").to_string();
+                            block["thinking"] = json!(format!("{so_far}{piece}"));
                         }
+                    }
+                    "signature_delta" => {
+                        let signature = v.pointer("/delta/signature").and_then(|t| t.as_str()).unwrap_or("");
+                        let so_far = block["signature"].as_str().unwrap_or("").to_string();
+                        block["signature"] = json!(format!("{so_far}{signature}"));
                     }
                     "input_json_delta" => {
                         let piece = v
@@ -2035,6 +2108,89 @@ data: [DONE]\n\n";
         // Nor is Anthropic, which would refuse the unknown block.
         let a = anthropic_body(&request("claude", turn, None));
         assert!(!a.to_string().contains(REASONING_BLOCK));
+    }
+
+    fn big(model: &str, effort: Option<&str>) -> ChatRequest {
+        ChatRequest { max_tokens: 24_000, ..request(model, vec![json!({ "role": "user", "content": [{ "type": "text", "text": "x" }] })], effort) }
+    }
+
+    #[test]
+    fn claude_is_given_a_thinking_budget_the_level_means_and_only_where_it_can_use_one() {
+        let budget = |model: &str, level: Option<&str>| anthropic_body(&big(model, level))["thinking"]["budget_tokens"].clone();
+        assert_eq!(budget("claude-sonnet-4-5", Some("low")), 2_048);
+        assert_eq!(budget("claude-sonnet-4-5", Some("medium")), 8_192);
+        assert_eq!(budget("claude-opus-5-5", Some("max")), 12_000, "half the room at most, so the answer never runs out");
+        assert!(budget("claude-sonnet-4-5", Some("none")).is_null(), "Off is off");
+        assert!(budget("claude-sonnet-4-5", None).is_null());
+        assert!(budget("claude-3-5-sonnet-latest", Some("high")).is_null(), "a model that cannot think is not asked to");
+        assert_eq!(anthropic_body(&big("claude-sonnet-4-5", Some("medium")))["thinking"]["type"], "enabled");
+        // No room for the least Anthropic accepts: no thinking, rather than an error.
+        let small = ChatRequest { max_tokens: 1_500, ..big("claude-sonnet-4-5", Some("high")) };
+        assert!(anthropic_body(&small).get("thinking").is_none());
+        // A forced tool and thinking do not go together.
+        let forced = ChatRequest { tool_choice: Some("team_report".into()), ..big("claude-sonnet-4-5", Some("high")) };
+        assert!(anthropic_body(&forced).get("thinking").is_none());
+    }
+
+    #[test]
+    fn thinking_blocks_go_back_with_their_signature_while_thinking_is_on_and_not_at_all_when_it_is_off() {
+        let history = vec![
+            json!({ "role": "user", "content": [{ "type": "text", "text": "go" }] }),
+            json!({ "role": "assistant", "content": [
+                { "type": "thinking", "thinking": "plan", "signature": "sig==" },
+                { "type": "tool_use", "id": "t1", "name": "read_file", "input": {} } ] }),
+            json!({ "role": "user", "content": [{ "type": "tool_result", "tool_use_id": "t1", "content": "ok" }] }),
+        ];
+        let with = |level: Option<&str>| anthropic_body(&ChatRequest { messages: history.clone(), ..big("claude-sonnet-4-5", level) });
+        let on = with(Some("medium"));
+        assert_eq!(on["messages"][1]["content"][0], json!({ "type": "thinking", "thinking": "plan", "signature": "sig==" }));
+        let off = with(Some("none"));
+        assert!(off["messages"][1]["content"].as_array().unwrap().iter().all(|b| b["type"] != "thinking"), "{off}");
+    }
+
+    #[test]
+    fn a_streamed_thinking_block_is_kept_whole_with_its_signature_and_shown_as_it_comes() {
+        let sse = concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5}}}\n\n",
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\",\"signature\":\"\"}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"Let me \"}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"check.\"}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"abc\"}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"def\"}}\n\n",
+            "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            "data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"Done.\"}}\n\n",
+            "data: {\"type\":\"content_block_stop\",\"index\":1}\n\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":9}}\n\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
+        );
+        let (mut thought, mut written) = (String::new(), String::new());
+        let got = parse_anthropic_stream(std::io::Cursor::new(sse), &mut |p| written.push_str(p), &mut |p| thought.push_str(p)).unwrap();
+        assert_eq!((thought.as_str(), written.as_str()), ("Let me check.", "Done."));
+        assert_eq!(got.content[0]["thinking"], "Let me check.");
+        assert_eq!(got.content[0]["signature"], "abcdef", "the signature is whole, or Anthropic refuses the block");
+        assert_eq!(got.thinking_chars, 13);
+    }
+
+    #[test]
+    fn each_family_is_told_to_think_in_its_own_words_on_its_own_host_and_nowhere_else() {
+        let say = vec![json!({ "role": "user", "content": [{ "type": "text", "text": "x" }] })];
+        let on = |host: &str, model: &str, level: &str| {
+            let mut p = provider("groq");
+            p.base_url = host.into();
+            openai_body(&p, &request(model, say.clone(), Some(level)))
+        };
+        assert_eq!(on("https://dashscope.aliyuncs.com/v1", "qwen3-max", "none")["enable_thinking"], false);
+        assert_eq!(on("https://dashscope.aliyuncs.com/v1", "qwen3-max", "high")["enable_thinking"], true);
+        assert_eq!(on("https://open.bigmodel.cn/api/paas/v4", "glm-4.6", "none")["thinking"], json!({ "type": "disabled" }));
+        assert_eq!(on("https://api.z.ai/api/paas/v4", "glm-4.6", "medium")["thinking"], json!({ "type": "enabled" }));
+        assert_eq!(on("https://api.groq.com/openai/v1", "openai/gpt-oss-120b", "extra")["reasoning_effort"], "high");
+        assert_eq!(on("https://api.x.ai/v1", "grok-3-mini", "low")["reasoning_effort"], "low");
+        // A host that does not know a field is never sent it.
+        let plain = on("https://api.example.test/v1", "qwen3-max", "high");
+        for field in ["enable_thinking", "thinking", "reasoning_effort"] {
+            assert!(plain.get(field).is_none(), "{field}: {plain}");
+        }
     }
 
     #[test]

@@ -21,8 +21,19 @@ pub struct Change {
     pub path: String,
 }
 
+/// A folder as git is given it. Windows hands back `\\?\C:\...` for a folder it has resolved, which git does
+/// not accept as a work tree: the same folder without the prefix is what it means.
+fn plain(project: &Path) -> PathBuf {
+    let text = project.to_string_lossy();
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) => PathBuf::from(rest),
+        None => project.to_path_buf(),
+    }
+}
+
 /// The history devd keeps for one project folder.
 fn history(snapshots: &Path, project: &Path) -> PathBuf {
+    let project = &plain(project);
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     project.to_string_lossy().to_lowercase().replace('\\', "/").hash(&mut h);
@@ -30,6 +41,7 @@ fn history(snapshots: &Path, project: &Path) -> PathBuf {
 }
 
 fn git(dir: &Path, project: &Path, args: &[&str]) -> Result<String> {
+    let project = &plain(project);
     let mut cmd = Command::new("git");
     cmd.arg(format!("--git-dir={}", dir.display()))
         .arg(format!("--work-tree={}", project.display()))
@@ -55,6 +67,7 @@ fn git(dir: &Path, project: &Path, args: &[&str]) -> Result<String> {
 /// Record the project's files now. Returns the record's id, or None when the folder cannot be recorded (no
 /// git on this machine, or not a folder). A record is never a reason a step fails.
 pub fn take(snapshots: &Path, project: &Path) -> Option<String> {
+    let project = &plain(project);
     if !project.is_dir() {
         return None;
     }
@@ -89,6 +102,7 @@ pub fn changes(snapshots: &Path, project: &Path, before: &str, after: &str) -> R
 
 /// Put the files a step changed back as they were before it. Returns what was put back.
 pub fn undo(snapshots: &Path, project: &Path, before: &str, after: &str) -> Result<Vec<Change>> {
+    let project = &plain(project);
     let changed = changes(snapshots, project, before, after)?;
     let dir = history(snapshots, project);
     for c in &changed {
@@ -127,6 +141,13 @@ mod tests {
 
     fn git_present() -> bool {
         Command::new("git").arg("--version").output().is_ok_and(|o| o.status.success())
+    }
+
+    #[test]
+    fn a_folder_given_with_windows_resolved_prefix_is_the_same_folder() {
+        assert_eq!(plain(Path::new(r"\\?\C:\work\app")), PathBuf::from(r"C:\work\app"));
+        assert_eq!(plain(Path::new("/srv/app")), PathBuf::from("/srv/app"));
+        assert_eq!(history(Path::new("/tmp/h"), Path::new(r"\\?\C:\work\app")), history(Path::new("/tmp/h"), Path::new(r"C:\work\app")));
     }
 
     #[test]

@@ -82,6 +82,36 @@ struct ImportArgs {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct PinSessionArgs {
+    /// The conversation.
+    thread: String,
+    /// True to pin it (the default), false to unpin.
+    #[serde(default)]
+    pinned: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct GoalArgs {
+    /// The conversation. Left out when the assistant calls it: it is always its own.
+    #[serde(default)]
+    thread: Option<String>,
+    /// `set`, `pause`, `resume`, `clear` or `get`.
+    action: String,
+    /// What is to be achieved, for `set`.
+    #[serde(default)]
+    objective: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct GoalDoneArgs {
+    /// The conversation. Left out when the assistant calls it: it is always its own.
+    #[serde(default)]
+    thread: Option<String>,
+    /// What was run or read that shows the objective is achieved.
+    evidence: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct UnqueueArgs {
     /// The conversation.
     thread: String,
@@ -3802,6 +3832,119 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
         },
     )?;
 
+    reg.define::<PinSessionArgs>("chat.pin_session", "Pin a conversation to the top of the list, or unpin it")
+    .description("Pinned conversations stay at the top of the list, above everything else. Pinning one already pinned, or unpinning one that is not, changes nothing.")
+    .group("chat")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, a| simple("chat.pin_session", format!("{} conversation {}", if a.pinned.unwrap_or(true) { "pin" } else { "unpin" }, a.thread)),
+        |ctx, a| {
+            ctx.store.get_thread(&a.thread)?.ok_or_else(|| DevdError::not_found("no such conversation"))?;
+            let pin = a.pinned.unwrap_or(true);
+            ctx.store.set_pinned(&a.thread, pin)?;
+            ctx.events.emit_with("chat.pinned", format!("{} {}", if pin { "pinned" } else { "unpinned" }, a.thread), json!({ "thread": a.thread, "pinned": pin }));
+            Ok(Outcome::ok(if pin { "Pinned" } else { "Unpinned" }))
+        },
+    )?;
+
+    {
+        let hub = hub.clone();
+        reg.define::<GoalArgs>("chat.goal", "Set, pause, resume, clear or read a conversation's goal")
+    .description("A goal keeps a conversation working until an objective is met: when the model would stop, devd asks whether the objective is met and sends it back to work if not, up to 25 times and $5 of spending, and tells the person in the conversation why if it gives up. Actions: `set` (with `objective`), `pause` (the turn ends as it would), `resume`, `clear`, `get`. The model finishes a goal with goal_done and the evidence.")
+    .group("chat")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers(
+        |_, a| simple("chat.goal", format!("{} the goal", a.action)),
+        move |ctx, a| {
+            let thread = a.thread.clone().ok_or_else(|| DevdError::invalid("which conversation? `thread` is its id"))?;
+            let t = ctx.store.get_thread(&thread)?.ok_or_else(|| DevdError::not_found("no such conversation"))?;
+            let announce = |what: &str| ctx.events.emit_with("chat.goal", format!("goal {what} in {thread}"), json!({ "thread": thread }));
+            match a.action.as_str() {
+                "set" => {
+                    let objective = a.objective.as_deref().unwrap_or("").trim();
+                    if objective.chars().count() < 8 {
+                        return Err(DevdError::invalid("say what is to be achieved, in a sentence: `objective`"));
+                    }
+                    let goal = crate::goal::new(objective, t.cost_usd.unwrap_or(0.0));
+                    crate::goal::put(&ctx.store, &thread, &goal)?;
+                    hub.log(&thread, "notice", json!({ "text": format!("Goal set: {}", goal.objective) }))?;
+                    announce("set");
+                    Ok(Outcome::with_data("Goal set; devd will keep the conversation working until it is met", json!({ "goal": goal })))
+                }
+                "pause" | "resume" | "clear" | "get" => {
+                    let mut goal = crate::goal::get(&ctx.store, &thread).ok_or_else(|| DevdError::not_found("this conversation has no goal"))?;
+                    match a.action.as_str() {
+                        "get" => return Ok(Outcome::with_data(format!("Goal: {} ({})", goal.objective, goal.state), json!({ "goal": goal }))),
+                        "clear" => {
+                            crate::goal::clear(&ctx.store, &thread)?;
+                            hub.log(&thread, "notice", json!({ "text": "Goal cleared." }))?;
+                            announce("cleared");
+                            return Ok(Outcome::ok("Goal cleared"));
+                        }
+                        "pause" => {
+                            goal.state = "paused".into();
+                            crate::goal::put(&ctx.store, &thread, &goal)?;
+                            hub.log(&thread, "notice", json!({ "text": "Goal paused. The conversation will stop when it next finishes a reply." }))?;
+                            announce("paused");
+                            return Ok(Outcome::ok("Goal paused"));
+                        }
+                        _ => {}
+                    }
+                    // Resume: a goal that is done or stopped is not revived by this; set it again.
+                    if !matches!(goal.state.as_str(), "paused" | "active") {
+                        return Err(DevdError::conflict(format!("the goal is {}; set it again to work on it once more", goal.state)));
+                    }
+                    goal.state = "active".into();
+                    crate::goal::put(&ctx.store, &thread, &goal)?;
+                    hub.log(&thread, "notice", json!({ "text": "Goal resumed." }))?;
+                    announce("resumed");
+                    // A conversation that is at rest picks the work up again; one that is working carries on by itself.
+                    if !hub.is_running(&thread) {
+                        let message = format!("Carry on with the goal: {}", goal.objective);
+                        hub.send(ctx, SendRequest { thread_id: Some(thread.clone()), message, project: None, provider: None, model: None, permission: None, effort: None, kind: None, client_id: None })?;
+                    }
+                    Ok(Outcome::ok("Goal resumed"))
+                }
+                other => Err(DevdError::invalid(format!("`{other}` is not an action: set, pause, resume, clear or get"))),
+            }
+        },
+    )?;
+    }
+    {
+        let hub = hub.clone();
+        reg.define::<GoalDoneArgs>("chat.goal_done", "Say the goal is met")
+    .description("Ends the conversation's goal as met, with the evidence: what was run or read that shows the objective is achieved. Call it only when it is true; the evidence is shown to the person.")
+    .group("chat")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers(
+        |_, _| simple("chat.goal_done", "say the goal is met"),
+        move |ctx, a| {
+            let thread = a.thread.clone().ok_or_else(|| DevdError::invalid("which conversation? `thread` is its id"))?;
+            let mut goal = crate::goal::get(&ctx.store, &thread).ok_or_else(|| DevdError::not_found("this conversation has no goal"))?;
+            if goal.state != "active" && goal.state != "paused" {
+                return Err(DevdError::conflict(format!("the goal is already {}", goal.state)));
+            }
+            if a.evidence.trim().chars().count() < 10 {
+                return Err(DevdError::invalid("say what shows it is met: what you ran or read, and what it said"));
+            }
+            goal.state = "met".into();
+            goal.note = Some(a.evidence.trim().to_string());
+            crate::goal::put(&ctx.store, &thread, &goal)?;
+            hub.log(&thread, "notice", json!({ "text": format!("Goal met: {}", goal.objective) }))?;
+            ctx.events.emit_with("chat.goal", format!("goal met in {thread}"), json!({ "thread": thread }));
+            Ok(Outcome::ok("Goal met"))
+        },
+    )?;
+    }
     reg.define::<NoArgs>("team.stats", "How the team is performing")
     .description("Measured from every task the team was given: per role, per project and overall - tasks accepted on proof, rejected and abandoned, the acceptance rate of tasks that ended, rework (extra attempts per task), reviews that asked for changes, the pass rate of verification runs devd recorded, and median time to finish. Output volume is never a score.")
     .tier(Tier::Read)
@@ -3859,10 +4002,15 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                 .into_iter()
                 .map(|l| (l.thread_id.clone(), l))
                 .collect();
+            let marks = ctx.store.thread_marks().unwrap_or_default();
             let rows: Vec<Value> = t
                 .into_iter()
                 .map(|thread| {
                     let mut row = serde_json::to_value(&thread).unwrap_or(Value::Null);
+                    if let Some(m) = marks.get(&thread.id) {
+                        row["pinned_at"] = json!(m.pinned_at);
+                        row["forked_from"] = json!(m.forked_from);
+                    }
                     if let Some(link) = links.get(&thread.id) {
                         row["team"] = json!({
                             "run": link.run_id,
@@ -3924,7 +4072,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                 let queued = ctx.store.queued_count(&a.thread)?;
                 let waiting = ctx.store.list_queued(&a.thread)?;
                 let run = ctx.store.run_for_thread(&a.thread)?;
-                Ok(Outcome::with_data(t.state.clone(), json!({ "thread": t, "events": ev, "pending": pending, "running": hub.is_running(&a.thread), "chapters": chapters, "queued": queued, "waiting": waiting, "run": run })))
+                Ok(Outcome::with_data(t.state.clone(), json!({ "thread": t, "events": ev, "pending": pending, "running": hub.is_running(&a.thread), "chapters": chapters, "queued": queued, "waiting": waiting, "goal": crate::goal::get(&ctx.store, &a.thread), "run": run })))
             },
     )?;
     }
@@ -4054,6 +4202,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             let t = ctx.store.get_thread(&a.thread)?.ok_or_else(|| DevdError::not_found("no such conversation"))?;
             let title = a.title.as_deref().map(str::trim).filter(|x| !x.is_empty()).map(str::to_string).unwrap_or_else(|| format!("Fork of {}", t.title));
             let forked = ctx.store.fork_thread(&a.thread, a.event, &title)?;
+            ctx.store.mark_forked(&forked.id, &a.thread, a.event)?;
             // A new conversation is news to every open window, the same as one a team
             // member opens: announce it, so a list on screen shows it without a refresh.
             ctx.events.emit_with(

@@ -607,7 +607,7 @@ fn settle_writes(cx: &mut App) {
                         url: value["url"].as_str().unwrap_or_default().to_string(),
                     });
                 }
-                if outcome.capability == "chat.send" {
+                if outcome.capability == "chat.send" || outcome.capability == "chat.fork" {
                     let id = value["id"]
                         .as_str()
                         .or(value["thread"]["id"].as_str())

@@ -1729,6 +1729,12 @@ impl Render for Shell {
                 self.warn_before_closing(run_ids, window, cx);
             }
         }
+        // A conversation forked from the one on screen: the new one opens, as one started from Home does.
+        if matches!(self.history.current(), Route::Assistant(Some(_)))
+            && let Some(fork) = cx.global_mut::<Devd>().opened_thread.take()
+        {
+            self.history.go(Route::Assistant(Some(fork)));
+        }
         // A link to a file in a project: the project's files, the file open, the line marked.
         if let Some((dir, rel, line)) = cx.global_mut::<Devd>().pending_file.take() {
             self.project_ui.reveal(&dir, &rel, line);

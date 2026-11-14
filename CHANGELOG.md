@@ -17,6 +17,19 @@ may change capability identifiers where the design was wrong.
 - **Thinking you can control.** Effort now has Off in the message box. devd always tells DeepSeek how much to
   think (it thinks at "high" when left alone, which is what produced replies of 16,000 tokens of thought and no
   words), and a reply that is only thinking is retried once with thinking off. Replies have more room to answer.
+- **Thinking control for every family, not just DeepSeek.** Each level now means something to each provider:
+  Claude gets an extended-thinking budget (its thinking blocks are kept whole, signature included, and handed
+  back as Anthropic requires; if Anthropic ever refuses a shortened history for it, devd asks again without
+  thinking), Gemini 2.5 gets a thinking budget and its thoughts are shown as they happen, Qwen, GLM, gpt-oss and
+  Grok-mini get their own switch, each only on the host that knows it.
+- **`/goal`: keep working until an objective is met.** `/goal make the tests pass` sets a goal on the
+  conversation. While it is open, devd does not take the model stopping for the end: it asks whether the goal is
+  met and sends the model back to work if not. The model finishes it with `goal_done` and its evidence. A banner
+  shows the goal with Pause, Resume and Clear. A goal is bounded: 25 asks and $5 of spending, and it says why in
+  the conversation if it gives up.
+- **Pin and fork a conversation.** Pinned conversations sit under their own heading at the top of the list. Fork
+  in the header makes a new conversation from where this one stands, which says which it was forked from; the
+  original is untouched.
 - **An explorer for wide searches.** `chat.explore` (the `explore` tool) hands a question to a read-only
   conversation of its own and returns its report, so an agent can look across a project without filling its
   context with every file it opened. Every call it makes is checked to only read; at most four run at once.
@@ -33,6 +46,11 @@ may change capability identifiers where the design was wrong.
   not looking at asks for your decision or stops on an error, with a click straight to it.
 - Plain tools for the calls agents made most through the wrapper (`run_command`, `git_stage`, `git_commit`,
   `git_log`, `fetch_page`), taking a turn of lookup off each.
+
+### Fixed
+
+- **Undo works on Windows.** A folder Windows hands back with its `\?\` prefix was refused by git, so a step's
+  changes were silently never recorded there; the prefix is now removed first.
 
 ### Changed
 

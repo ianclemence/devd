@@ -92,6 +92,7 @@ Paths are absolute, or relative to the working directory named under Context.
 - git_status {"repo":"<dir>"} ; git_diff {"repo":"<dir>"} ; git_log {"repo":"<dir>"}
 - git_stage {"repo":"<dir>","paths":["src/a.rs"]} then git_commit {"repo":"<dir>","message":"..."}
 - fetch_page {"url":"https://..."} reads a public web page as text
+- goal_done {"evidence":"what you ran or read that shows the goal is met"} - only when a goal is set and it really is met
 - explore {"description":"where routes are defined","question":"Find every route definition in <dir> and how each maps to a controller","project":"<dir>"} - a read-only explorer searches and hands back a report; use it for wide searches instead of reading many files yourself
 - todo_create {"project":"<dir>","title":"..."} ; todo_complete {"id":"...","expected_revision":N}
 - devd_invoke {"id":"team.overview","args":{}} ; team.get {"run":"<id>"} ; team.assign {"member":"<role>","instructions":"...","project":"<dir>"}
@@ -361,6 +362,7 @@ const DIRECT: &[(&str, &str)] = &[
     ("git_log", "git.log"),
     ("fetch_page", "docs.fetch"),
     ("explore", "chat.explore"),
+    ("goal_done", "chat.goal_done"),
     ("todo_list", "todo.list"),
     ("todo_create", "todo.create"),
     ("todo_complete", "todo.complete"),
@@ -476,7 +478,7 @@ fn route_call(
 /// asked. It is always this conversation: a model that forgets the id, or names another, cannot
 /// send the report somewhere the person is not.
 fn attach_thread(invoke: &mut Value, thread: &str) {
-    if invoke["id"].as_str() != Some("team.start") {
+    if !matches!(invoke["id"].as_str(), Some("team.start" | "chat.goal" | "chat.goal_done")) {
         return;
     }
     if !invoke["args"].is_object() {
@@ -1724,6 +1726,33 @@ impl Hub {
                 // A drawing that cannot be drawn is sent back once or twice with what is wrong with it.
                 if self.fix_drawings(tid, &response.content, &mut drawings_sent_back)? {
                     continue;
+                }
+                // A goal is open: the model stopping is not the end. It is asked whether the objective is met, and
+                // sent back to work if not, until it says so, the person pauses it, or its limits are reached.
+                {
+                    let goal = crate::goal::get(&self.ctx.store, tid);
+                    let cost_now = self.ctx.store.get_thread(tid)?.and_then(|t| t.cost_usd).unwrap_or(0.0);
+                    match crate::goal::next(goal.as_ref(), cost_now) {
+                        crate::goal::Next::End => {}
+                        crate::goal::Next::Continue(reminder) => {
+                            if let Some(mut g) = goal {
+                                g.steps += 1;
+                                crate::goal::put(&self.ctx.store, tid, &g)?;
+                                self.log(tid, "user", json!({ "text": reminder, "from": "devd", "goal": true, "step": g.steps, "of": crate::goal::MAX_STEPS }))?;
+                                self.ctx.events.emit_with("chat.goal", format!("goal step {} in {tid}", g.steps), json!({ "thread": tid }));
+                                continue;
+                            }
+                        }
+                        crate::goal::Next::Stop(why) => {
+                            if let Some(mut g) = goal {
+                                g.state = "stopped".into();
+                                g.note = Some(why.clone());
+                                crate::goal::put(&self.ctx.store, tid, &g)?;
+                                self.log(tid, "notice", json!({ "text": format!("The goal stopped: {why}. What it had reached is above; say \"carry on\" and set the goal again to go further.") }))?;
+                                self.ctx.events.emit_with("chat.goal", format!("goal stopped in {tid}"), json!({ "thread": tid }));
+                            }
+                        }
+                    }
                 }
                 // The model saying it is done is not evidence either: ask before letting the turn end.
                 if self.end_gate(tid, &run_id, &mut objections_used, &hooks)? {

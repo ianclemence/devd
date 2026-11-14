@@ -64,7 +64,7 @@ pub fn fold(events: &[Value], pending: &[&str]) -> Vec<Item> {
     let mut turn: (u64, f64, u64) = (0, 0.0, 0);
     for event in events {
         let data = &event["data"];
-        if event["kind"] == "user" && data["gate"] != json!(true) && data["drawing"] != json!(true) {
+        if event["kind"] == "user" && data["gate"] != json!(true) && data["drawing"] != json!(true) && data["goal"] != json!(true) {
             turn = (0, 0.0, 0);
         }
         match event["kind"].as_str().unwrap_or_default() {
@@ -74,6 +74,14 @@ pub fn fold(events: &[Value], pending: &[&str]) -> Vec<Item> {
                 items.push(Item::Notice(format!(
                     "devd sent it back to finish: {n} thing{} still open",
                     if n == 1 { " was" } else { "s were" }
+                )));
+            }
+            // The goal is still open: devd asked the model again whether it is met.
+            "user" if data["goal"] == json!(true) => {
+                items.push(Item::Notice(format!(
+                    "devd asked again whether the goal is met \u{b7} {} of {}",
+                    data["step"].as_u64().unwrap_or(1),
+                    data["of"].as_u64().unwrap_or(25)
                 )));
             }
             // The same for a drawing devd sent back because it could not be drawn.
@@ -383,16 +391,22 @@ fn sidebar(current: Option<&str>, cx: &mut Context<Shell>) -> impl IntoElement {
         }
     }
     // A specialist's conversation belongs to its run, and is reached from there.
-    let own: Vec<&Value> = threads
+    let mut own: Vec<&Value> = threads
         .list("")
         .iter()
         .filter(|th| !th["team"]["role"].is_string())
         .collect();
+    // What the person pinned is at the top, under a heading of its own, in the order it was pinned.
+    own.sort_by_key(|th| th["pinned_at"].as_str().map(|at| (0, at.to_string())).unwrap_or((1, String::new())));
     let mut last_project: Option<String> = None;
     for thread in own {
         let id = thread["id"].as_str().unwrap_or_default().to_string();
         // A conversation with no project is listed without a heading; a heading says which project the ones under it are about.
-        let project = thread["project"].as_str().map(|p| ui::leaf(p).to_string());
+        let project = if thread["pinned_at"].is_string() {
+            Some("Pinned".to_string())
+        } else {
+            thread["project"].as_str().map(|p| ui::leaf(p).to_string())
+        };
         if project != last_project {
             if let Some(name) = &project {
                 column = column.child(
@@ -685,6 +699,17 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
     if tokens > 0 {
         facts.push(format!("{} tokens", ui::compact(tokens)));
     }
+    if let Some(snap) = devd(cx).sync.peek(&q::threads()) {
+        let origin = snap
+            .list("")
+            .iter()
+            .find(|t| t["id"].as_str() == Some(id))
+            .and_then(|t| t["forked_from"].as_str().map(str::to_string))
+            .and_then(|from| snap.list("").iter().find(|t| t["id"].as_str() == Some(from.as_str())).and_then(|t| t["title"].as_str().map(str::to_string)));
+        if let Some(origin) = origin {
+            facts.push(format!("forked from {}", origin.chars().take(40).collect::<String>()));
+        }
+    }
     let mut actions = div().flex().items_center().gap(px(2.0));
     if running {
         let stop = id.to_string();
@@ -714,6 +739,43 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
                     }),
             );
     }
+    // Pin keeps the conversation at the top of the list; fork branches it into a new one from where it stands.
+    let marks = devd(cx)
+        .sync
+        .peek(&q::threads())
+        .and_then(|snap| snap.list("").iter().find(|t| t["id"].as_str() == Some(id)).cloned());
+    let pinned = marks.as_ref().is_some_and(|m| m["pinned_at"].is_string());
+    let last_event = events.last().and_then(|e| e["id"].as_i64());
+    let (to_pin, to_fork, fork_title) = (id.to_string(), id.to_string(), title.clone());
+    actions = actions
+        .child(
+            div()
+                .id("conversation.pin.wrap")
+                .tooltip(ui::tip(if pinned { "Unpin from the top of the list" } else { "Pin to the top of the list" }))
+                .child(
+                    Button::icon_only("conversation.pin", "pin")
+                        .kind(if pinned { ButtonKind::Secondary } else { ButtonKind::Ghost })
+                        .on_click(move |_, _, cx| {
+                            devd(cx).sync.mutate(
+                                Mutation::new("chat.pin_session", json!({ "thread": to_pin, "pinned": !pinned })).invalidating("chat"),
+                            );
+                        }),
+                ),
+        )
+        .children(last_event.map(|event| {
+            div()
+                .id("conversation.fork.wrap")
+                .tooltip(ui::tip("Fork: a new conversation from here, leaving this one as it is"))
+                .child(Button::icon_only("conversation.fork", "branch").on_click(move |_, _, cx| {
+                    devd(cx).sync.mutate(
+                        Mutation::new(
+                            "chat.fork",
+                            json!({ "thread": to_fork, "event": event, "title": format!("Fork of {fork_title}") }),
+                        )
+                        .invalidating("chat"),
+                    );
+                }))
+        }));
     let (doomed, doomed_title) = (id.to_string(), title.clone());
     actions = actions.child(
         div()
@@ -850,6 +912,38 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
     })
     .size_full();
 
+    // A goal that is open: what it is, how many times devd has asked, and the three things a person does with it.
+    let goal_banner = data["goal"]
+        .as_object()
+        .filter(|g| matches!(g.get("state").and_then(Value::as_str), Some("active" | "paused")))
+        .map(|g| {
+            let active = g.get("state").and_then(Value::as_str) == Some("active");
+            let (toggle, clear) = (id.to_string(), id.to_string());
+            let objective = g.get("objective").and_then(Value::as_str).unwrap_or_default().to_string();
+            let steps = g.get("steps").and_then(Value::as_u64).unwrap_or(0);
+            div().px(px(24.0)).pt(px(10.0)).child(div().w_full().max_w(px(size::READING)).mx_auto().child(
+                ui::Banner::new(if active { Tone::Info } else { Tone::Warn })
+                    .title(if active { "Working toward a goal" } else { "Goal paused" })
+                    .text(format!("{objective} \u{b7} asked {steps} of 25 times"))
+                    .action(
+                        Button::new("goal.toggle", if active { "Pause" } else { "Resume" })
+                            .icon(if active { "stop" } else { "play" })
+                            .kind(ButtonKind::Secondary)
+                            .on_click(move |_, _, cx| {
+                                devd(cx).sync.mutate(
+                                    Mutation::new("chat.goal", json!({ "thread": toggle, "action": if active { "pause" } else { "resume" } }))
+                                        .invalidating("chat"),
+                                );
+                            }),
+                    )
+                    .action(Button::new("goal.clear", "Clear").kind(ButtonKind::Ghost).on_click(move |_, _, cx| {
+                        devd(cx).sync.mutate(
+                            Mutation::new("chat.goal", json!({ "thread": clear, "action": "clear" })).invalidating("chat"),
+                        );
+                    }))
+                    .render(cx),
+            ))
+        });
     let chain = chain(shell, id, thread, cx);
     div()
         .flex_1()
@@ -858,6 +952,7 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
         .flex()
         .flex_col()
         .child(head)
+        .children(goal_banner)
         .children(chain)
         .child(div().flex_1().min_h_0().child(body))
         .child(
@@ -1420,6 +1515,20 @@ mod tests {
 
     fn event(kind: &str, data: Value) -> Value {
         json!({ "kind": kind, "data": data })
+    }
+
+    #[test]
+    fn devd_asking_again_about_a_goal_is_a_notice_not_something_the_person_said() {
+        let items = fold(
+            &[
+                event("user", json!({ "text": "/goal make the tests pass" })),
+                event("user", json!({ "text": "[devd] The goal is still open: make the tests pass", "from": "devd", "goal": true, "step": 3, "of": 25 })),
+            ],
+            &[],
+        );
+        assert!(matches!(&items[0], Item::You { .. }));
+        assert_eq!(items[1], Item::Notice("devd asked again whether the goal is met · 3 of 25".into()));
+        assert_eq!(items.len(), 2);
     }
 
     #[test]
