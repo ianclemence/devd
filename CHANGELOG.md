@@ -12,6 +12,40 @@ may change capability identifiers where the design was wrong.
 
 ## [Unreleased]
 
+### Added
+
+- **Themes of your own.** A theme is a folder in devd's `mods` folder: `mod.toml` says what it is, and
+  `theme.toml` gives three colours (background, text, accent), any others you want, and a picture behind the
+  screens from devd's scenes. devd works out every other colour in the proportions its own themes use. See
+  [`docs/themes.md`](docs/themes.md).
+- **A readability check.** devd measures the contrast of everything a person reads and refuses a theme that
+  falls short, naming the two colours, the contrast they reach, the contrast they need, and which way to move.
+  The five built-in themes pass the same check.
+- **Your themes in Settings**, with the same cards as the built-in ones. A theme that cannot be used is listed
+  with what is wrong and a button that asks the assistant to fix it. Saving a theme file shows the change within
+  a second; a theme in use is repainted in place.
+- **`/theme` in the message box.** Describe a look, or a change to the theme you are wearing ("make the accent
+  greener"), and the assistant makes it. It writes themes only through `theme.save`, which checks a theme before
+  anything is written. `theme.list`, `theme.check`, `theme.use` and `theme.remove` complete the set.
+
+### Fixed
+
+- **A model that thinks before it writes no longer looks stuck.** What it thinks is shown live, above the message
+  box, as "Thinking" with the time it has taken and the latest of its thought. A reply that spent its whole budget
+  thinking and wrote nothing is no longer treated as half an answer to continue, which made an agent think again
+  and again: devd asks it once to act with less thinking, and stops the turn with a plain reason if it happens
+  twice.
+- **An agent's reply reads as one reply.** The model is named once, under the last step of a turn, not under
+  every sentence between its tool calls.
+- **Links in replies go where they point.** A written link to a file, such as `[main.rs](src/main.rs:42)`,
+  `src/main.rs#L42` or a `file://` address, is a file, not a web address. A file in one of your projects opens
+  in devd, in the project's files, scrolled to the line and with it marked; anything else opens as before. A link
+  to a file that is not there is shown as its words instead of a link that does nothing.
+- **Every skill can be reached from `/`.** The `/` and `@` menu showed the first eight matches and could not be
+  scrolled; it now lists all of them, with the count, in a list that scrolls, and the arrow keys reach every row.
+- **The face in the top bar is the agent at work.** A team member writing shows its own initial and colour (the
+  Implementer's "I"), not devd's "D", and pressing it opens that member's conversation.
+
 ## [0.32.0] - 2026-11-14 - Runs that resume, screens that keep up, and one shape for every banner
 
 ### Fixed

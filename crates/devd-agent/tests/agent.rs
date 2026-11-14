@@ -2527,3 +2527,99 @@ fn a_good_drawing_is_never_sent_back_and_a_bad_one_is_sent_back_only_as_often_as
     let v = ask(&e, "show my sites");
     assert_eq!(kinds(&v), ["user", "assistant"], "{v}");
 }
+
+fn paper_values() -> Value {
+    json!({
+        "id": "paper",
+        "mod": { "name": "Paper", "version": "0.1.0", "description": "Cream paper and umber ink." },
+        "theme": {
+            "feel": "Cream and umber",
+            "colours": { "background": "#efe6d3", "text": "#2a241d", "accent": "#8a4b14" },
+            "backdrop": { "scene": "contours" }
+        }
+    })
+}
+
+#[test]
+fn the_assistant_makes_a_theme_that_reads_and_never_writes_one_that_does_not() {
+    let e = env();
+    let mods = e.root.join("home").join("mods");
+    // A theme nothing can read is refused with every problem, and nothing is written.
+    let mut faded = paper_values();
+    faded["theme"]["colours"]["text"] = json!("#e2d8c2");
+    faded["theme"]["backdrop"]["scene"] = json!("waves");
+    let refused = call(&e, &e.agent, "theme.save", faded, Approval::None).unwrap_err().to_string();
+    assert!(refused.contains("The text is too close to the background"), "{refused}");
+    assert!(refused.contains("\"waves\", which is not a scene"), "{refused}");
+    assert!(!mods.join("paper").exists(), "a refused theme leaves nothing behind");
+
+    // A good one is written, by devd, as two files, and the answer says how it reads.
+    let saved = call(&e, &e.agent, "theme.save", paper_values(), Approval::None).unwrap();
+    assert_eq!(saved["theme"], "mod:paper");
+    assert!(saved["contrast"]["text_on_background"].as_f64().unwrap() >= 4.5, "{saved}");
+    assert!(mods.join("paper").join("mod.toml").is_file() && mods.join("paper").join("theme.toml").is_file());
+    assert!(std::fs::read_to_string(mods.join("paper").join("theme.toml")).unwrap().contains("background = \"#efe6d3\""));
+
+    // An existing theme is not overwritten by accident.
+    let again = call(&e, &e.agent, "theme.save", paper_values(), Approval::None).unwrap_err().to_string();
+    assert!(again.contains("replace: true"), "{again}");
+}
+
+#[test]
+fn a_theme_is_changed_by_reading_its_values_changing_one_and_saving_it_again() {
+    let e = env();
+    call(&e, &e.agent, "theme.save", paper_values(), Approval::None).unwrap();
+    std::fs::write(e.root.join("home").join("window-theme"), "mod:paper light\n").unwrap();
+
+    // The list says which theme the window wears, so "make this theme greener" has a subject.
+    let list = call(&e, &e.agent, "theme.list", json!({}), Approval::None).unwrap();
+    assert_eq!(list["in_use"], "mod:paper");
+    assert_eq!(list["themes"][0]["usable"], true);
+
+    // Its values come back in the shape theme.save takes.
+    let checked = call(&e, &e.agent, "theme.check", json!({ "id": "paper" }), Approval::None).unwrap();
+    let mut values = checked["values"].clone();
+    assert_eq!(values["theme"]["colours"]["accent"], "#8a4b14");
+    values["theme"]["colours"]["accent"] = json!("#2f6b3a");
+    values["replace"] = json!(true);
+    let changed = call(&e, &e.agent, "theme.save", values, Approval::None).unwrap();
+    assert_eq!(changed["tokens"]["accent"], "#2f6b3a");
+    assert_eq!(changed["tokens"]["bg"], "#efe6d3", "only what was asked for changed");
+
+    // Values can be checked before anything is saved.
+    let draft = call(&e, &e.agent, "theme.check", json!({ "mod": paper_values()["mod"], "theme": { "feel": "x", "colours": { "background": "#ffffff", "text": "#eeeeee", "accent": "#0055aa" } } }), Approval::None).unwrap();
+    assert_eq!(draft["ok"], false);
+    assert!(draft["problems"].as_array().unwrap().iter().any(|p| p.as_str().unwrap().contains("text is too close")), "{draft}");
+}
+
+#[test]
+fn wearing_a_theme_asks_the_window_and_removing_one_waits_for_the_person() {
+    let e = env();
+    let mut events = e.events.subscribe();
+    call(&e, &e.agent, "theme.save", paper_values(), Approval::None).unwrap();
+    let worn = call(&e, &e.agent, "theme.use", json!({ "id": "paper" }), Approval::None).unwrap();
+    assert_eq!(worn["theme"], "mod:paper");
+    let mut asked = None;
+    while let Ok(event) = events.try_recv() {
+        if event.kind == "app.theme" {
+            asked = Some(event.data["theme"].clone());
+        }
+    }
+    assert_eq!(asked, Some(json!("mod:paper")), "the window is asked to wear it");
+    assert_eq!(call(&e, &e.agent, "theme.use", json!({ "id": "psalm" }), Approval::None).unwrap()["theme"], "psalm");
+    assert!(call(&e, &e.agent, "theme.use", json!({ "id": "nothing" }), Approval::None).is_err());
+
+    // Removing a theme cannot be undone, so the agent cannot do it alone.
+    let code = call(&e, &e.agent, "theme.remove", json!({ "id": "paper" }), Approval::None).unwrap_err().code();
+    assert_eq!(code, "approval_required");
+    call(&e, &e.human, "theme.remove", json!({ "id": "paper" }), Approval::Granted).unwrap();
+    assert!(!e.root.join("home").join("mods").join("paper").exists());
+}
+
+#[test]
+fn the_theme_skill_is_offered_in_the_message_box() {
+    let e = env();
+    let skills = call(&e, &e.agent, "skills.list", json!({}), Approval::None).unwrap();
+    let theme = skills.as_array().or(skills["skills"].as_array()).unwrap().iter().find(|s| s["name"] == "theme").cloned();
+    assert!(theme.is_some(), "the theme skill is listed: {skills}");
+}

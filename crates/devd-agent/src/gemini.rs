@@ -288,6 +288,7 @@ impl Accumulator {
             output_tokens: self.output_tokens,
             cache_read_tokens: self.cache_read_tokens,
             cache_write_tokens: 0,
+            thinking_chars: 0,
         })
     }
 }

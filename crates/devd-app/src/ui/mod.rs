@@ -981,20 +981,24 @@ pub fn page_head(
 /// under dense content: it belongs to the screens that open on a greeting or a question.
 pub fn art(cx: &App) -> Div {
     let t = theme(cx);
-    let file = format!("art/{}.png", t.id);
+    // A theme from a file may have no picture at all.
+    if t.art.is_empty() {
+        return div();
+    }
+    let file = t.art.clone();
     let el = div()
         .absolute()
         .right(px(0.0))
         .w(px(dither::WIDTH as f32))
         .h(px(dither::HEIGHT as f32))
-        .opacity(t.pattern.strength(t.dark));
+        .opacity(t.art_strength);
     let el = if t.pattern.stands_on_the_bottom() {
         el.bottom(px(0.0))
     } else {
         el.top(px(0.0))
     };
     el.child(
-        img(SharedString::from(file))
+        img(file)
             .w(px(dither::WIDTH as f32))
             .h(px(dither::HEIGHT as f32))
             .object_fit(gpui::ObjectFit::Fill),

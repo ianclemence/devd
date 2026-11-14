@@ -1414,6 +1414,8 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
     // What devd may propose, and the rules a project wrote for when it should
     // think about starting some work.
     crate::caps_autonomy::register(reg, team.clone())?;
+    // Themes from files: check, save and wear them.
+    crate::caps_theme::register(reg)?;
     reg.define::<SearchArgs>("search.query", "Search projects, files, text, conversations, models, tasks and activity")
     .description("Searches what devd can see: project names, file paths (walked live, not indexed), literal text inside a project, conversations, the model catalogue, background tasks and the audit trail. Each response lists which sources were searched, how, and whether the search was cut short, so an empty result is never mistaken for a complete search.")
     .tier(Tier::Read)

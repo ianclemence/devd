@@ -123,6 +123,11 @@ impl Paths {
         self.root.join("snapshots")
     }
 
+    /// Mods a person has added: one folder each, such as a theme of their own (`mods/<id>/`).
+    pub fn mods(&self) -> PathBuf {
+        self.root.join("mods")
+    }
+
     /// The SQLite state database.
     pub fn state_db(&self) -> PathBuf {
         self.root.join("state.db")

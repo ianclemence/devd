@@ -73,6 +73,7 @@ pub const BUILTIN: &[(&str, &str)] = &[
     ("technical-writing", include_str!("../skills/technical-writing.md")),
     ("test-the-app", include_str!("../skills/test-the-app.md")),
     ("test-what-callers-see", include_str!("../skills/test-what-callers-see.md")),
+    ("theme", include_str!("../skills/theme.md")),
     ("threat-model", include_str!("../skills/threat-model.md")),
     ("touch-only-what-you-started", include_str!("../skills/touch-only-what-you-started.md")),
     ("ui-design-review", include_str!("../skills/ui-design-review.md")),

@@ -60,6 +60,25 @@ pub enum Pattern {
 }
 
 impl Pattern {
+    /// Every scene, by the name a theme file and a picture's path use.
+    pub const ALL: [(&'static str, Pattern); 5] = [
+        ("ripples", Pattern::Ripples),
+        ("pasture", Pattern::Pasture),
+        ("silk", Pattern::Silk),
+        ("contours", Pattern::Contours),
+        ("rays", Pattern::Rays),
+    ];
+
+    /// The scene's name.
+    pub fn name(self) -> &'static str {
+        Self::ALL.iter().find(|(_, p)| *p == self).map(|(n, _)| *n).unwrap_or("ripples")
+    }
+
+    /// The scene a name means.
+    pub fn named(name: &str) -> Option<Pattern> {
+        Self::ALL.iter().find(|(n, _)| *n == name).map(|(_, p)| *p)
+    }
+
     /// Whether the scene stands on the bottom edge of the window rather than hanging from the top.
     pub fn stands_on_the_bottom(self) -> bool {
         matches!(self, Pattern::Pasture)

@@ -138,7 +138,31 @@ pub fn fold(events: &[Value], pending: &[&str]) -> Vec<Item> {
             _ => {}
         }
     }
+    one_name_per_turn(&mut items);
     items
+}
+
+/// An agent's turn is many model calls: a sentence, a tool, a sentence, a tool. Read together they are one
+/// reply, so the model that wrote it is named once, under the last thing it wrote before the person spoke
+/// again, not under every step.
+fn one_name_per_turn(items: &mut [Item]) {
+    let mut last_in_turn: Option<usize> = None;
+    let mut named: Vec<usize> = Vec::new();
+    for (n, item) in items.iter().enumerate() {
+        match item {
+            Item::Devd { .. } => last_in_turn = Some(n),
+            Item::You { .. } => named.extend(last_in_turn.take()),
+            _ => {}
+        }
+    }
+    named.extend(last_in_turn);
+    for (n, item) in items.iter_mut().enumerate() {
+        if let Item::Devd { model, .. } = item
+            && !named.contains(&n)
+        {
+            model.clear();
+        }
+    }
 }
 
 /// The one line of a tool result worth showing beside the call.
@@ -494,6 +518,7 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
     let state = devd(cx);
     let snap = state.sync.watch_log(&q::thread(id), q::thread_log());
     let writing = state.writing.get(id).cloned();
+    let thinking = state.thinking.get(id).cloned();
     let Some(data) = snap.data.clone() else {
         let body = match &snap.error {
             Some(failure) if failure.code == "not_found" => div()
@@ -739,6 +764,7 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
                 .pb(px(14.0))
                 .pt(px(8.0))
                 .children(stopped)
+                .children(thinking.filter(|_| running && writing.as_deref().is_none_or(|w| w.trim().is_empty())).map(|(since, tail)| thinking_line(&tail, since, cx)))
                 .child(composer(
                     shell,
                     if running {
@@ -902,6 +928,27 @@ fn running_for(thread: &str, index: usize) -> Option<u64> {
 fn forget_running(thread: &str, index: usize) -> Option<u64> {
     RUNNING_SINCE.with(|m| m.borrow_mut().remove(&(thread.to_string(), index)));
     None
+}
+
+/// While a reasoning model thinks before it writes: how long it has been thinking and the latest of it, faint,
+/// so a long think reads as work and not as a hang. It gives way to the words as soon as they come.
+fn thinking_line(tail: &str, since: std::time::Instant, cx: &App) -> AnyElement {
+    let t = theme(cx);
+    let secs = since.elapsed().as_secs();
+    let glimpse: String = tail.split_whitespace().collect::<Vec<_>>().join(" ");
+    div()
+        .w_full()
+        .max_w(px(size::READING))
+        .mx_auto()
+        .pb(px(10.0))
+        .flex()
+        .items_center()
+        .gap(px(10.0))
+        .text_size(px(size::TEXT_SM))
+        .child(live_dot("thread.thinking", Tone::Info, cx))
+        .child(div().flex_none().text_color(t.muted).font_weight(FontWeight::MEDIUM).child(format!("Thinking · {secs}s")))
+        .child(div().flex_1().min_w_0().italic().text_color(t.faint).child(ui::Clip::tail(glimpse)))
+        .into_any_element()
 }
 
 /// Pick a stopped conversation back up. Any message does that, from where it stopped; this one asks for nothing new.
@@ -1130,6 +1177,30 @@ mod tests {
 
     fn event(kind: &str, data: Value) -> Value {
         json!({ "kind": kind, "data": data })
+    }
+
+    #[test]
+    fn the_model_is_named_once_per_reply_not_under_every_step() {
+        let say = |text: &str| event("assistant", json!({ "model": "deepseek-flash", "content": [{ "type": "text", "text": text }] }));
+        let items = fold(
+            &[
+                event("user", json!({ "text": "build it" })),
+                say("First, the module."),
+                say("Now the tests."),
+                say("Done."),
+                event("user", json!({ "text": "thanks" })),
+                say("You're welcome."),
+            ],
+            &[],
+        );
+        let named: Vec<&str> = items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Devd { model, .. } => Some(model.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(named, ["", "", "deepseek-flash", "deepseek-flash"], "under the last step of each turn only");
     }
 
     #[test]
