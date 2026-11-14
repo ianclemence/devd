@@ -12,6 +12,8 @@ may change capability identifiers where the design was wrong.
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-11-14 - Themes of your own, and replies that say what they are doing
+
 ### Added
 
 - **Themes of your own.** A theme is a folder in devd's `mods` folder: `mod.toml` says what it is, and
