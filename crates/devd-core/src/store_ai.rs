@@ -8,6 +8,17 @@ use crate::error::{DevdError, Result};
 use crate::state::Store;
 use crate::util;
 
+/// What marks a conversation apart in the list: pinned, or forked from another.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreadMarks {
+    /// When it was pinned, if it is.
+    pub pinned_at: Option<String>,
+    /// The conversation it was forked from.
+    pub forked_from: Option<String>,
+    /// The last event it took from that conversation.
+    pub forked_at_event: Option<i64>,
+}
+
 /// A message a person wrote while the assistant was working, waiting for the next step.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueuedMessage {
@@ -585,6 +596,37 @@ impl Store {
         })
     }
 
+    /// Pin a conversation to the top of the list, or take it off. True when something changed.
+    pub fn set_pinned(&self, id: &str, pinned: bool) -> Result<bool> {
+        self.with(|c| {
+            let changed = if pinned {
+                c.execute("UPDATE chat_threads SET pinned_at=?2 WHERE id=?1 AND pinned_at IS NULL", params![id, util::now()])?
+            } else {
+                c.execute("UPDATE chat_threads SET pinned_at=NULL WHERE id=?1 AND pinned_at IS NOT NULL", params![id])?
+            };
+            Ok(changed > 0)
+        })
+    }
+
+    /// For each conversation that is pinned or was forked: when it was pinned, where it came from.
+    pub fn thread_marks(&self) -> Result<std::collections::HashMap<String, ThreadMarks>> {
+        self.with(|c| {
+            let mut st = c.prepare("SELECT id, pinned_at, forked_from, forked_at_event FROM chat_threads WHERE pinned_at IS NOT NULL OR forked_from IS NOT NULL")?;
+            let rows = st.query_map([], |r| {
+                Ok((r.get::<_, String>(0)?, ThreadMarks { pinned_at: r.get(1)?, forked_from: r.get(2)?, forked_at_event: r.get(3)? }))
+            })?;
+            Ok(rows.collect::<std::result::Result<std::collections::HashMap<_, _>, _>>()?)
+        })
+    }
+
+    /// Remember that a conversation was forked from another, and the last event it took.
+    pub fn mark_forked(&self, id: &str, from: &str, at_event: i64) -> Result<()> {
+        self.with(|c| {
+            c.execute("UPDATE chat_threads SET forked_from=?2, forked_at_event=?3 WHERE id=?1", params![id, from, at_event])?;
+            Ok(())
+        })
+    }
+
     /// Update a thread's state.
     pub fn set_thread_state(&self, id: &str, state: &str, error: Option<&str>) -> Result<()> {
         self.with(|c| {
@@ -824,6 +866,22 @@ impl Store {
             tx.commit()?;
             Ok(rows)
         })
+    }
+
+    /// The messages waiting for a conversation's next step, oldest first, without taking them.
+    pub fn list_queued(&self, thread_id: &str) -> Result<Vec<QueuedMessage>> {
+        self.with(|c| {
+            let mut st = c.prepare("SELECT id, thread_id, text, from_actor, created_at FROM chat_queue WHERE thread_id=?1 ORDER BY id")?;
+            let rows = st.query_map(params![thread_id], |r| {
+                Ok(QueuedMessage { id: r.get(0)?, thread_id: r.get(1)?, text: r.get(2)?, from_actor: r.get(3)?, created_at: r.get(4)? })
+            })?;
+            Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+        })
+    }
+
+    /// Take back one waiting message before the agent reads it. True when it was still waiting.
+    pub fn remove_queued(&self, thread_id: &str, id: i64) -> Result<bool> {
+        self.with(|c| Ok(c.execute("DELETE FROM chat_queue WHERE thread_id=?1 AND id=?2", params![thread_id, id])? > 0))
     }
 
     /// Discard everything queued for a conversation. Returns how many.

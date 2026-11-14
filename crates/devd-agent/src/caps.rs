@@ -76,6 +76,69 @@ fn simple(id: &str, text: impl Into<String>) -> Result<Plan> {
 // ----------------------------------------------------------------- browser
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct ImportArgs {
+    /// The document `chat.export` returned.
+    document: Value,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct PinSessionArgs {
+    /// The conversation.
+    thread: String,
+    /// True to pin it (the default), false to unpin.
+    #[serde(default)]
+    pinned: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct GoalArgs {
+    /// The conversation. Left out when the assistant calls it: it is always its own.
+    #[serde(default)]
+    thread: Option<String>,
+    /// `set`, `pause`, `resume`, `clear` or `get`.
+    action: String,
+    /// What is to be achieved, for `set`.
+    #[serde(default)]
+    objective: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct GoalDoneArgs {
+    /// The conversation. Left out when the assistant calls it: it is always its own.
+    #[serde(default)]
+    thread: Option<String>,
+    /// What was run or read that shows the objective is achieved.
+    evidence: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct UnqueueArgs {
+    /// The conversation.
+    thread: String,
+    /// The waiting message's id.
+    id: i64,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct UndoArgs {
+    /// The conversation.
+    thread: String,
+    /// The id of the step's `changes` event.
+    event: i64,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct ExploreArgs {
+    /// A few words for what is being looked for, used as the explorer's title: "where routes are defined".
+    description: String,
+    /// Exactly what to find and how thorough to be. The explorer sees this and nothing else of yours.
+    question: String,
+    /// The project to search, as an absolute folder.
+    #[serde(default)]
+    project: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct BrowserOpen {
     /// Page to load. Omit to use the focused tab as it is.
     #[serde(default)]
@@ -3637,6 +3700,251 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             },
     )?;
     }
+    {
+        let hub = hub.clone();
+        reg.define::<ExploreArgs>("chat.explore", "Ask a read-only explorer and wait for its report")
+    .description("Hands a question to an explorer: a conversation of its own that may only read (every call it makes is checked), thinks little and searches in parallel, then reports. Use it to find where something is, how something works across many files, or what a project contains, without filling your own context with every file it opened: you get its report, with paths and line numbers. Say exactly what to find and how thorough to be. Blocks until the report is in, at most 15 minutes. The person can open the explorer's conversation to see the search.")
+    .group("chat")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .handlers(
+        |_, a| simple("chat.explore", format!("explore: {}", util::truncate(&a.description, 60))),
+        move |ctx, a| {
+            if a.question.trim().chars().count() < 10 {
+                return Err(DevdError::invalid("say what the explorer should find, in a sentence or more"));
+            }
+            let (thread, report) = hub.explore(ctx, a.project.clone(), &a.description, &a.question)?;
+            Ok(Outcome::with_data(report.clone(), json!({ "thread": thread, "report": report })))
+        },
+    )?;
+    }
+    {
+        let hub = hub.clone();
+        reg.define::<UndoArgs>("chat.undo", "Undo the files a step changed")
+    .description("Puts back exactly the files one step of a conversation changed, as they were before it: a file it changed is restored, one it made is removed, one it deleted comes back. Files the step did not touch are left alone. The step is the `changes` event of the conversation, by its id.")
+    .group("chat")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .human_only()
+    .dry_run()
+    .handlers(
+        |_, a| simple("chat.undo", format!("undo the files step {} changed", a.event)),
+        move |ctx, a| {
+            let event = ctx
+                .store
+                .list_events(&a.thread, a.event - 1, 1)?
+                .into_iter()
+                .find(|e| e.id == a.event && e.kind == "changes")
+                .ok_or_else(|| DevdError::not_found("there is no such step to undo in this conversation"))?;
+            let undone = ctx.store.list_events(&a.thread, a.event, 100_000)?.iter().any(|e| e.kind == "undone" && e.data["event"] == json!(a.event));
+            if undone {
+                return Err(DevdError::conflict("that step was already undone"));
+            }
+            let project = std::path::PathBuf::from(event.data["project"].as_str().unwrap_or_default());
+            let (before, after) = (event.data["before"].as_str().unwrap_or_default(), event.data["after"].as_str().unwrap_or_default());
+            let put_back = crate::stepshot::undo(&ctx.paths.snapshots(), &project, before, after)?;
+            let n = put_back.len();
+            let message = format!("Undid the step's changes to {n} file{}", if n == 1 { "" } else { "s" });
+            hub.log(&a.thread, "undone", json!({ "event": a.event, "files": put_back }))?;
+            Ok(Outcome::with_data(message, json!({ "files": put_back })))
+        },
+    )?;
+    }
+    reg.define::<UnqueueArgs>("chat.unqueue", "Take back a message before the agent reads it")
+    .description("Removes one message written while the agent was working, before its next step reads it. A message already read cannot be taken back.")
+    .group("chat")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .human_only()
+    .dry_run()
+    .handlers(
+        |_, a| simple("chat.unqueue", format!("take back waiting message {}", a.id)),
+        |ctx, a| {
+            if ctx.store.remove_queued(&a.thread, a.id)? {
+                Ok(Outcome::ok("Taken back; the agent will not read it"))
+            } else {
+                Err(DevdError::conflict("that message was already read"))
+            }
+        },
+    )?;
+    reg.define::<ThreadArgs>("chat.export", "Export a conversation as data")
+    .description("Returns a whole conversation, its title, project and every event in order, as one JSON document that `chat.import` can load again, here or on another machine. Provider keys are never part of a conversation, so none are exported.")
+    .group("chat")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, a| simple("chat.export", format!("export conversation {}", a.thread)),
+        |ctx, a| {
+            let t = ctx.store.get_thread(&a.thread)?.ok_or_else(|| DevdError::not_found("no such conversation"))?;
+            let events = ctx.store.list_events(&a.thread, 0, 1_000_000)?;
+            let n = events.len();
+            let doc = json!({
+                "format": "devd.conversation",
+                "version": 1,
+                "title": t.title,
+                "project": t.project,
+                "model": t.model,
+                "events": events.iter().map(|e| json!({ "kind": e.kind, "data": e.data, "created_at": e.created_at })).collect::<Vec<_>>(),
+            });
+            Ok(Outcome::with_data(format!("Exported \"{}\": {n} events", t.title), doc))
+        },
+    )?;
+
+    reg.define::<ImportArgs>("chat.import", "Load an exported conversation")
+    .description("Creates a new conversation from a document `chat.export` made. Its events are kept as they were, so it reads exactly as it did; it is idle, and writing in it carries on from where it ended. The project path is kept as written and is only used if that folder exists on this machine.")
+    .group("chat")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .dry_run()
+    .handlers(
+        |_, _| simple("chat.import", "load an exported conversation as a new one"),
+        |ctx, a| {
+            let doc = &a.document;
+            if doc["format"] != "devd.conversation" {
+                return Err(DevdError::invalid("this is not a conversation made by chat.export (its format is not devd.conversation)"));
+            }
+            if doc["version"].as_i64().unwrap_or(0) > 1 {
+                return Err(DevdError::invalid("this conversation was exported by a newer devd than this one; update devd to load it"));
+            }
+            let events = doc["events"].as_array().ok_or_else(|| DevdError::invalid("the document has no events"))?;
+            if events.len() > 200_000 {
+                return Err(DevdError::invalid("more than 200,000 events; split the conversation before loading it"));
+            }
+            let project = doc["project"].as_str().filter(|p| std::path::Path::new(p).is_dir());
+            let title: String = format!("{} (imported)", doc["title"].as_str().unwrap_or("Conversation")).chars().take(100).collect();
+            let thread = ctx.store.create_thread_kind(&title, project, None, None, "chat")?;
+            const KINDS: &[&str] = &["user", "assistant", "tool_result", "notice", "error", "changes", "undone"];
+            let mut kept = 0usize;
+            for e in events {
+                let kind = e["kind"].as_str().unwrap_or_default();
+                if KINDS.contains(&kind) {
+                    ctx.store.append_event(&thread.id, kind, &e["data"])?;
+                    kept += 1;
+                }
+            }
+            ctx.store.set_thread_state(&thread.id, "idle", None)?;
+            Ok(Outcome::with_data(format!("Loaded {kept} events as \"{title}\""), json!({ "thread": thread.id, "events": kept })))
+        },
+    )?;
+
+    reg.define::<PinSessionArgs>("chat.pin_session", "Pin a conversation to the top of the list, or unpin it")
+    .description("Pinned conversations stay at the top of the list, above everything else. Pinning one already pinned, or unpinning one that is not, changes nothing.")
+    .group("chat")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, a| simple("chat.pin_session", format!("{} conversation {}", if a.pinned.unwrap_or(true) { "pin" } else { "unpin" }, a.thread)),
+        |ctx, a| {
+            ctx.store.get_thread(&a.thread)?.ok_or_else(|| DevdError::not_found("no such conversation"))?;
+            let pin = a.pinned.unwrap_or(true);
+            ctx.store.set_pinned(&a.thread, pin)?;
+            ctx.events.emit_with("chat.pinned", format!("{} {}", if pin { "pinned" } else { "unpinned" }, a.thread), json!({ "thread": a.thread, "pinned": pin }));
+            Ok(Outcome::ok(if pin { "Pinned" } else { "Unpinned" }))
+        },
+    )?;
+
+    {
+        let hub = hub.clone();
+        reg.define::<GoalArgs>("chat.goal", "Set, pause, resume, clear or read a conversation's goal")
+    .description("A goal keeps a conversation working until an objective is met: when the model would stop, devd asks whether the objective is met and sends it back to work if not, up to 25 times and $5 of spending, and tells the person in the conversation why if it gives up. Actions: `set` (with `objective`), `pause` (the turn ends as it would), `resume`, `clear`, `get`. The model finishes a goal with goal_done and the evidence.")
+    .group("chat")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers(
+        |_, a| simple("chat.goal", format!("{} the goal", a.action)),
+        move |ctx, a| {
+            let thread = a.thread.clone().ok_or_else(|| DevdError::invalid("which conversation? `thread` is its id"))?;
+            let t = ctx.store.get_thread(&thread)?.ok_or_else(|| DevdError::not_found("no such conversation"))?;
+            let announce = |what: &str| ctx.events.emit_with("chat.goal", format!("goal {what} in {thread}"), json!({ "thread": thread }));
+            match a.action.as_str() {
+                "set" => {
+                    let objective = a.objective.as_deref().unwrap_or("").trim();
+                    if objective.chars().count() < 8 {
+                        return Err(DevdError::invalid("say what is to be achieved, in a sentence: `objective`"));
+                    }
+                    let goal = crate::goal::new(objective, t.cost_usd.unwrap_or(0.0));
+                    crate::goal::put(&ctx.store, &thread, &goal)?;
+                    hub.log(&thread, "notice", json!({ "text": format!("Goal set: {}", goal.objective) }))?;
+                    announce("set");
+                    Ok(Outcome::with_data("Goal set; devd will keep the conversation working until it is met", json!({ "goal": goal })))
+                }
+                "pause" | "resume" | "clear" | "get" => {
+                    let mut goal = crate::goal::get(&ctx.store, &thread).ok_or_else(|| DevdError::not_found("this conversation has no goal"))?;
+                    match a.action.as_str() {
+                        "get" => return Ok(Outcome::with_data(format!("Goal: {} ({})", goal.objective, goal.state), json!({ "goal": goal }))),
+                        "clear" => {
+                            crate::goal::clear(&ctx.store, &thread)?;
+                            hub.log(&thread, "notice", json!({ "text": "Goal cleared." }))?;
+                            announce("cleared");
+                            return Ok(Outcome::ok("Goal cleared"));
+                        }
+                        "pause" => {
+                            goal.state = "paused".into();
+                            crate::goal::put(&ctx.store, &thread, &goal)?;
+                            hub.log(&thread, "notice", json!({ "text": "Goal paused. The conversation will stop when it next finishes a reply." }))?;
+                            announce("paused");
+                            return Ok(Outcome::ok("Goal paused"));
+                        }
+                        _ => {}
+                    }
+                    // Resume: a goal that is done or stopped is not revived by this; set it again.
+                    if !matches!(goal.state.as_str(), "paused" | "active") {
+                        return Err(DevdError::conflict(format!("the goal is {}; set it again to work on it once more", goal.state)));
+                    }
+                    goal.state = "active".into();
+                    crate::goal::put(&ctx.store, &thread, &goal)?;
+                    hub.log(&thread, "notice", json!({ "text": "Goal resumed." }))?;
+                    announce("resumed");
+                    // A conversation that is at rest picks the work up again; one that is working carries on by itself.
+                    if !hub.is_running(&thread) {
+                        let message = format!("Carry on with the goal: {}", goal.objective);
+                        hub.send(ctx, SendRequest { thread_id: Some(thread.clone()), message, project: None, provider: None, model: None, permission: None, effort: None, kind: None, client_id: None })?;
+                    }
+                    Ok(Outcome::ok("Goal resumed"))
+                }
+                other => Err(DevdError::invalid(format!("`{other}` is not an action: set, pause, resume, clear or get"))),
+            }
+        },
+    )?;
+    }
+    {
+        let hub = hub.clone();
+        reg.define::<GoalDoneArgs>("chat.goal_done", "Say the goal is met")
+    .description("Ends the conversation's goal as met, with the evidence: what was run or read that shows the objective is achieved. Call it only when it is true; the evidence is shown to the person.")
+    .group("chat")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers(
+        |_, _| simple("chat.goal_done", "say the goal is met"),
+        move |ctx, a| {
+            let thread = a.thread.clone().ok_or_else(|| DevdError::invalid("which conversation? `thread` is its id"))?;
+            let mut goal = crate::goal::get(&ctx.store, &thread).ok_or_else(|| DevdError::not_found("this conversation has no goal"))?;
+            if goal.state != "active" && goal.state != "paused" {
+                return Err(DevdError::conflict(format!("the goal is already {}", goal.state)));
+            }
+            if a.evidence.trim().chars().count() < 10 {
+                return Err(DevdError::invalid("say what shows it is met: what you ran or read, and what it said"));
+            }
+            goal.state = "met".into();
+            goal.note = Some(a.evidence.trim().to_string());
+            crate::goal::put(&ctx.store, &thread, &goal)?;
+            hub.log(&thread, "notice", json!({ "text": format!("Goal met: {}", goal.objective) }))?;
+            ctx.events.emit_with("chat.goal", format!("goal met in {thread}"), json!({ "thread": thread }));
+            Ok(Outcome::ok("Goal met"))
+        },
+    )?;
+    }
     reg.define::<NoArgs>("team.stats", "How the team is performing")
     .description("Measured from every task the team was given: per role, per project and overall - tasks accepted on proof, rejected and abandoned, the acceptance rate of tasks that ended, rework (extra attempts per task), reviews that asked for changes, the pass rate of verification runs devd recorded, and median time to finish. Output volume is never a score.")
     .tier(Tier::Read)
@@ -3694,10 +4002,15 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                 .into_iter()
                 .map(|l| (l.thread_id.clone(), l))
                 .collect();
+            let marks = ctx.store.thread_marks().unwrap_or_default();
             let rows: Vec<Value> = t
                 .into_iter()
                 .map(|thread| {
                     let mut row = serde_json::to_value(&thread).unwrap_or(Value::Null);
+                    if let Some(m) = marks.get(&thread.id) {
+                        row["pinned_at"] = json!(m.pinned_at);
+                        row["forked_from"] = json!(m.forked_from);
+                    }
                     if let Some(link) = links.get(&thread.id) {
                         row["team"] = json!({
                             "run": link.run_id,
@@ -3757,8 +4070,9 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                 let pending = ctx.store.list_requests(true, Some(&a.thread), 50)?;
                 let chapters = ctx.store.list_chapters(&a.thread)?;
                 let queued = ctx.store.queued_count(&a.thread)?;
+                let waiting = ctx.store.list_queued(&a.thread)?;
                 let run = ctx.store.run_for_thread(&a.thread)?;
-                Ok(Outcome::with_data(t.state.clone(), json!({ "thread": t, "events": ev, "pending": pending, "running": hub.is_running(&a.thread), "chapters": chapters, "queued": queued, "run": run })))
+                Ok(Outcome::with_data(t.state.clone(), json!({ "thread": t, "events": ev, "pending": pending, "running": hub.is_running(&a.thread), "chapters": chapters, "queued": queued, "waiting": waiting, "goal": crate::goal::get(&ctx.store, &a.thread), "run": run })))
             },
     )?;
     }
@@ -3888,6 +4202,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             let t = ctx.store.get_thread(&a.thread)?.ok_or_else(|| DevdError::not_found("no such conversation"))?;
             let title = a.title.as_deref().map(str::trim).filter(|x| !x.is_empty()).map(str::to_string).unwrap_or_else(|| format!("Fork of {}", t.title));
             let forked = ctx.store.fork_thread(&a.thread, a.event, &title)?;
+            ctx.store.mark_forked(&forked.id, &a.thread, a.event)?;
             // A new conversation is news to every open window, the same as one a team
             // member opens: announce it, so a list on screen shows it without a refresh.
             ctx.events.emit_with(

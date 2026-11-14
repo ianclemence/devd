@@ -50,6 +50,9 @@ pub enum Item {
     Waiting { capability: String, summary: String },
     /// A run of finished steps, folded into one line ("Read 3 files and ran a command") that opens when pressed.
     Steps(Vec<Item>),
+    /// The files one step changed, with a way back: the `changes` event's id, each file's status and path,
+    /// and whether it has been undone.
+    Changes { event: i64, files: Vec<(String, String)>, undone: bool },
 }
 
 /// Fold a conversation's events into the items a person reads.
@@ -57,8 +60,13 @@ pub fn fold(events: &[Value], pending: &[&str]) -> Vec<Item> {
     let mut items: Vec<Item> = Vec::new();
     // Where each tool call landed, so its result can be attached to it.
     let mut calls: HashMap<String, usize> = HashMap::new();
+    // Output tokens, cost and time of the model's replies since the person last spoke.
+    let mut turn: (u64, f64, u64) = (0, 0.0, 0);
     for event in events {
         let data = &event["data"];
+        if event["kind"] == "user" && data["gate"] != json!(true) && data["drawing"] != json!(true) && data["goal"] != json!(true) {
+            turn = (0, 0.0, 0);
+        }
         match event["kind"].as_str().unwrap_or_default() {
             // devd's own reminder before it lets a turn end is not something the person said.
             "user" if data["gate"] == json!(true) => {
@@ -66,6 +74,14 @@ pub fn fold(events: &[Value], pending: &[&str]) -> Vec<Item> {
                 items.push(Item::Notice(format!(
                     "devd sent it back to finish: {n} thing{} still open",
                     if n == 1 { " was" } else { "s were" }
+                )));
+            }
+            // The goal is still open: devd asked the model again whether it is met.
+            "user" if data["goal"] == json!(true) => {
+                items.push(Item::Notice(format!(
+                    "devd asked again whether the goal is met \u{b7} {} of {}",
+                    data["step"].as_u64().unwrap_or(1),
+                    data["of"].as_u64().unwrap_or(25)
                 )));
             }
             // The same for a drawing devd sent back because it could not be drawn.
@@ -81,7 +97,11 @@ pub fn fold(events: &[Value], pending: &[&str]) -> Vec<Item> {
                 pending: data["pending"] == json!(true),
             }),
             "assistant" => {
-                let model = data["model"].as_str().unwrap_or_default().to_string();
+                // What the turn has cost so far: the label under its last words carries the whole turn.
+                turn.0 += data["usage"]["output"].as_u64().unwrap_or(0);
+                turn.1 += data["usage"]["cost_usd"].as_f64().unwrap_or(0.0);
+                turn.2 += data["took_ms"].as_u64().unwrap_or(0);
+                let model = reply_label(data["model"].as_str().unwrap_or_default(), turn);
                 for block in data["content"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
                     match block["type"].as_str().unwrap_or_default() {
                         "text" => {
@@ -118,6 +138,28 @@ pub fn fold(events: &[Value], pending: &[&str]) -> Vec<Item> {
                 {
                     *ok = Some(!failed);
                     *detail = result_line(text, failed);
+                }
+            }
+            "changes" => items.push(Item::Changes {
+                event: event["id"].as_i64().unwrap_or_default(),
+                files: data["files"]
+                    .as_array()
+                    .map(|f| {
+                        f.iter()
+                            .map(|c| (c["status"].as_str().unwrap_or("M").to_string(), c["path"].as_str().unwrap_or_default().to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                undone: false,
+            }),
+            "undone" => {
+                let which = data["event"].as_i64();
+                for item in items.iter_mut() {
+                    if let Item::Changes { event, undone, .. } = item
+                        && Some(*event) == which
+                    {
+                        *undone = true;
+                    }
                 }
             }
             "notice" => items.push(Item::Notice(
@@ -165,6 +207,23 @@ fn fold_steps(items: Vec<Item>) -> Vec<Item> {
     }
     flush(&mut run, &mut out);
     out
+}
+
+/// The quiet line under a reply: the model, then what the turn took, such as "deepseek-flash · 2.3k tokens ·
+/// 41/s · $0.012". A figure that was not recorded is left out rather than shown as zero.
+fn reply_label(model: &str, (tokens, cost, ms): (u64, f64, u64)) -> String {
+    let mut parts = vec![model.to_string()];
+    if tokens > 0 {
+        parts.push(format!("{} tokens", ui::compact(tokens)));
+        if ms > 0 {
+            parts.push(format!("{:.0}/s", tokens as f64 / (ms as f64 / 1000.0)));
+        }
+    }
+    if cost > 0.0 {
+        parts.push(if cost < 0.01 { format!("${cost:.4}") } else { format!("${cost:.2}") });
+    }
+    parts.retain(|p| !p.is_empty());
+    parts.join(" · ")
 }
 
 /// An agent's turn is many model calls: a sentence, a tool, a sentence, a tool. Read together they are one
@@ -332,16 +391,22 @@ fn sidebar(current: Option<&str>, cx: &mut Context<Shell>) -> impl IntoElement {
         }
     }
     // A specialist's conversation belongs to its run, and is reached from there.
-    let own: Vec<&Value> = threads
+    let mut own: Vec<&Value> = threads
         .list("")
         .iter()
         .filter(|th| !th["team"]["role"].is_string())
         .collect();
+    // What the person pinned is at the top, under a heading of its own, in the order it was pinned.
+    own.sort_by_key(|th| th["pinned_at"].as_str().map(|at| (0, at.to_string())).unwrap_or((1, String::new())));
     let mut last_project: Option<String> = None;
     for thread in own {
         let id = thread["id"].as_str().unwrap_or_default().to_string();
         // A conversation with no project is listed without a heading; a heading says which project the ones under it are about.
-        let project = thread["project"].as_str().map(|p| ui::leaf(p).to_string());
+        let project = if thread["pinned_at"].is_string() {
+            Some("Pinned".to_string())
+        } else {
+            thread["project"].as_str().map(|p| ui::leaf(p).to_string())
+        };
         if project != last_project {
             if let Some(name) = &project {
                 column = column.child(
@@ -539,6 +604,7 @@ fn start(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
 }
 
 fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElement {
+    cx.global_mut::<crate::state::Devd>().open_thread = Some(id.to_string());
     let t = theme(cx).clone();
     let state = devd(cx);
     let snap = state.sync.watch_log(&q::thread(id), q::thread_log());
@@ -633,6 +699,17 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
     if tokens > 0 {
         facts.push(format!("{} tokens", ui::compact(tokens)));
     }
+    if let Some(snap) = devd(cx).sync.peek(&q::threads()) {
+        let origin = snap
+            .list("")
+            .iter()
+            .find(|t| t["id"].as_str() == Some(id))
+            .and_then(|t| t["forked_from"].as_str().map(str::to_string))
+            .and_then(|from| snap.list("").iter().find(|t| t["id"].as_str() == Some(from.as_str())).and_then(|t| t["title"].as_str().map(str::to_string)));
+        if let Some(origin) = origin {
+            facts.push(format!("forked from {}", origin.chars().take(40).collect::<String>()));
+        }
+    }
     let mut actions = div().flex().items_center().gap(px(2.0));
     if running {
         let stop = id.to_string();
@@ -662,6 +739,43 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
                     }),
             );
     }
+    // Pin keeps the conversation at the top of the list; fork branches it into a new one from where it stands.
+    let marks = devd(cx)
+        .sync
+        .peek(&q::threads())
+        .and_then(|snap| snap.list("").iter().find(|t| t["id"].as_str() == Some(id)).cloned());
+    let pinned = marks.as_ref().is_some_and(|m| m["pinned_at"].is_string());
+    let last_event = events.last().and_then(|e| e["id"].as_i64());
+    let (to_pin, to_fork, fork_title) = (id.to_string(), id.to_string(), title.clone());
+    actions = actions
+        .child(
+            div()
+                .id("conversation.pin.wrap")
+                .tooltip(ui::tip(if pinned { "Unpin from the top of the list" } else { "Pin to the top of the list" }))
+                .child(
+                    Button::icon_only("conversation.pin", "pin")
+                        .kind(if pinned { ButtonKind::Secondary } else { ButtonKind::Ghost })
+                        .on_click(move |_, _, cx| {
+                            devd(cx).sync.mutate(
+                                Mutation::new("chat.pin_session", json!({ "thread": to_pin, "pinned": !pinned })).invalidating("chat"),
+                            );
+                        }),
+                ),
+        )
+        .children(last_event.map(|event| {
+            div()
+                .id("conversation.fork.wrap")
+                .tooltip(ui::tip("Fork: a new conversation from here, leaving this one as it is"))
+                .child(Button::icon_only("conversation.fork", "branch").on_click(move |_, _, cx| {
+                    devd(cx).sync.mutate(
+                        Mutation::new(
+                            "chat.fork",
+                            json!({ "thread": to_fork, "event": event, "title": format!("Fork of {fork_title}") }),
+                        )
+                        .invalidating("chat"),
+                    );
+                }))
+        }));
     let (doomed, doomed_title) = (id.to_string(), title.clone());
     actions = actions.child(
         div()
@@ -798,6 +912,38 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
     })
     .size_full();
 
+    // A goal that is open: what it is, how many times devd has asked, and the three things a person does with it.
+    let goal_banner = data["goal"]
+        .as_object()
+        .filter(|g| matches!(g.get("state").and_then(Value::as_str), Some("active" | "paused")))
+        .map(|g| {
+            let active = g.get("state").and_then(Value::as_str) == Some("active");
+            let (toggle, clear) = (id.to_string(), id.to_string());
+            let objective = g.get("objective").and_then(Value::as_str).unwrap_or_default().to_string();
+            let steps = g.get("steps").and_then(Value::as_u64).unwrap_or(0);
+            div().px(px(24.0)).pt(px(10.0)).child(div().w_full().max_w(px(size::READING)).mx_auto().child(
+                ui::Banner::new(if active { Tone::Info } else { Tone::Warn })
+                    .title(if active { "Working toward a goal" } else { "Goal paused" })
+                    .text(format!("{objective} \u{b7} asked {steps} of 25 times"))
+                    .action(
+                        Button::new("goal.toggle", if active { "Pause" } else { "Resume" })
+                            .icon(if active { "stop" } else { "play" })
+                            .kind(ButtonKind::Secondary)
+                            .on_click(move |_, _, cx| {
+                                devd(cx).sync.mutate(
+                                    Mutation::new("chat.goal", json!({ "thread": toggle, "action": if active { "pause" } else { "resume" } }))
+                                        .invalidating("chat"),
+                                );
+                            }),
+                    )
+                    .action(Button::new("goal.clear", "Clear").kind(ButtonKind::Ghost).on_click(move |_, _, cx| {
+                        devd(cx).sync.mutate(
+                            Mutation::new("chat.goal", json!({ "thread": clear, "action": "clear" })).invalidating("chat"),
+                        );
+                    }))
+                    .render(cx),
+            ))
+        });
     let chain = chain(shell, id, thread, cx);
     div()
         .flex_1()
@@ -806,6 +952,7 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
         .flex()
         .flex_col()
         .child(head)
+        .children(goal_banner)
         .children(chain)
         .child(div().flex_1().min_h_0().child(body))
         .child(
@@ -818,6 +965,7 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
                 .pb(px(14.0))
                 .pt(px(8.0))
                 .children(stopped)
+                .children(waiting_rows(id, &data, cx))
                 .children(running.then(|| activity_line(doing.clone(), glimpse.clone(), turn_began, cx)))
                 .child(composer(
                     shell,
@@ -1028,6 +1176,44 @@ fn activity_line(doing: String, glimpse: Option<String>, since: Option<chrono::D
                 .child(g)
         }))
         .into_any_element()
+}
+
+/// Messages written while the agent was working, waiting for its next step: each on a line with a way to
+/// take it back before it is read.
+fn waiting_rows(thread: &str, data: &Value, cx: &App) -> Vec<AnyElement> {
+    let t = theme(cx);
+    data["waiting"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+        .iter()
+        .enumerate()
+        .map(|(n, m)| {
+            let (thread, id) = (thread.to_string(), m["id"].as_i64().unwrap_or_default());
+            let text = m["text"].as_str().unwrap_or_default().split_whitespace().collect::<Vec<_>>().join(" ");
+            div()
+                .w_full()
+                .max_w(px(size::READING))
+                .mx_auto()
+                .pb(px(8.0))
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .text_size(px(size::TEXT_SM))
+                .child(div().flex_none().text_color(t.faint).child("Waiting"))
+                .child(div().flex_1().min_w_0().text_color(t.muted).child(ui::Clip::new(text)))
+                .child(
+                    Button::new(ui::nid("queued.remove", n), "Remove")
+                        .kind(ButtonKind::Ghost)
+                        .on_click(move |_, _, cx| {
+                            devd(cx).sync.mutate(
+                                Mutation::new("chat.unqueue", json!({ "thread": thread, "id": id })).invalidating("chat"),
+                            );
+                        }),
+                )
+                .into_any_element()
+        })
+        .collect()
 }
 
 /// A duration as a person says it: "45s", "7m 17s", "1h 3m".
@@ -1257,6 +1443,44 @@ fn draw(thread: &str, index: usize, item: &Item, resume: bool, cx: &App) -> AnyE
             }
             column.into_any_element()
         }
+        Item::Changes { event, files, undone } => {
+            let n = files.len();
+            let names: Vec<String> = files
+                .iter()
+                .take(3)
+                .map(|(_, path)| path.rsplit('/').next().unwrap_or(path).to_string())
+                .collect();
+            let more = n.saturating_sub(3);
+            let list = format!("{}{}", names.join(", "), if more > 0 { format!(" and {more} more") } else { String::new() });
+            let plural = if n == 1 { "" } else { "s" };
+            let mut row = div()
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .pl(px(2.0))
+                .text_size(px(size::TEXT))
+                .child(div().w(px(16.0)).flex().flex_none().justify_center().child(icon(if *undone { "refresh" } else { "file" }, 13.0, t.faint)))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_color(t.faint)
+                        .child(if *undone { format!("Undid the changes to {n} file{plural}: {list}") } else { format!("Changed {n} file{plural}: {list}") }),
+                );
+            if !*undone {
+                let (thread, event) = (thread.to_string(), *event);
+                row = row.child(
+                    Button::new(ui::nid("changes.undo", index), "Undo")
+                        .kind(ButtonKind::Ghost)
+                        .on_click(move |_, _, cx| {
+                            devd(cx).sync.mutate(
+                                Mutation::new("chat.undo", json!({ "thread": thread, "event": event })).invalidating("chat"),
+                            );
+                        }),
+                );
+            }
+            row.into_any_element()
+        }
         Item::Waiting { summary, .. } => ui::Banner::new(Tone::Warn)
             .title("Waiting for your approval")
             .text(if summary.is_empty() { "devd will carry on once you answer.".to_string() } else { summary.clone() })
@@ -1307,6 +1531,20 @@ mod tests {
 
     fn event(kind: &str, data: Value) -> Value {
         json!({ "kind": kind, "data": data })
+    }
+
+    #[test]
+    fn devd_asking_again_about_a_goal_is_a_notice_not_something_the_person_said() {
+        let items = fold(
+            &[
+                event("user", json!({ "text": "/goal make the tests pass" })),
+                event("user", json!({ "text": "[devd] The goal is still open: make the tests pass", "from": "devd", "goal": true, "step": 3, "of": 25 })),
+            ],
+            &[],
+        );
+        assert!(matches!(&items[0], Item::You { .. }));
+        assert_eq!(items[1], Item::Notice("devd asked again whether the goal is met · 3 of 25".into()));
+        assert_eq!(items.len(), 2);
     }
 
     #[test]

@@ -57,6 +57,7 @@ pub const MODES: &[(&str, &str, &str)] = &[
 
 /// The efforts `chat.send` accepts.
 pub const EFFORTS: &[(&str, &str)] = &[
+    ("none", "Off"),
     ("low", "Low"),
     ("medium", "Medium"),
     ("high", "High"),

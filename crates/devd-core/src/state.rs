@@ -46,6 +46,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (24, include_str!("../sql/024_model_capabilities.sql")),
     (25, include_str!("../sql/025_audit_chain.sql")),
     (26, include_str!("../sql/026_run_budget_handoff.sql")),
+    (27, include_str!("../sql/027_pins_and_forks.sql")),
 ];
 
 /// The newest schema this build knows. A database below it is migrated the first time devd
