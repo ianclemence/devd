@@ -826,6 +826,22 @@ impl Store {
         })
     }
 
+    /// The messages waiting for a conversation's next step, oldest first, without taking them.
+    pub fn list_queued(&self, thread_id: &str) -> Result<Vec<QueuedMessage>> {
+        self.with(|c| {
+            let mut st = c.prepare("SELECT id, thread_id, text, from_actor, created_at FROM chat_queue WHERE thread_id=?1 ORDER BY id")?;
+            let rows = st.query_map(params![thread_id], |r| {
+                Ok(QueuedMessage { id: r.get(0)?, thread_id: r.get(1)?, text: r.get(2)?, from_actor: r.get(3)?, created_at: r.get(4)? })
+            })?;
+            Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+        })
+    }
+
+    /// Take back one waiting message before the agent reads it. True when it was still waiting.
+    pub fn remove_queued(&self, thread_id: &str, id: i64) -> Result<bool> {
+        self.with(|c| Ok(c.execute("DELETE FROM chat_queue WHERE thread_id=?1 AND id=?2", params![thread_id, id])? > 0))
+    }
+
     /// Discard everything queued for a conversation. Returns how many.
     pub fn clear_queued(&self, thread_id: &str) -> Result<usize> {
         self.with(|c| {

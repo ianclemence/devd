@@ -50,14 +50,19 @@ pub const KEEP_RESULTS: usize = 10;
 /// Providers name three reasoning levels, so `extra` and `max` clamp to `high`
 /// there; what makes them different is the room the answer has, which is real
 /// for every model. `None` leaves both at the ordinary default.
+///
+/// The level is handed to the provider as devd names it (`none`, `low`, `medium`, `high`, `extra`, `max`), and
+/// each provider says it in its own words: DeepSeek, for one, thinks at "high" unless told otherwise, so devd
+/// always tells it. A model that thinks needs room to answer after it thinks, so the higher levels have more.
 fn effort_settings(effort: Option<&str>) -> (Option<String>, u32) {
     match effort {
-        Some("low") => (Some("low".into()), 8_000),
-        Some("high") => (Some("high".into()), 24_000),
-        Some("extra") => (Some("high".into()), 32_000),
-        Some("max") => (Some("high".into()), 48_000),
-        Some("medium") => (Some("medium".into()), 16_000),
-        _ => (None, 16_000),
+        Some("none") => (Some("none".into()), 8_000),
+        Some("low") => (Some("low".into()), 16_000),
+        Some("high") => (Some("high".into()), 32_000),
+        Some("extra") => (Some("extra".into()), 48_000),
+        Some("max") => (Some("max".into()), 64_000),
+        Some("medium") => (Some("medium".into()), 24_000),
+        _ => (None, 24_000),
     }
 }
 
@@ -65,6 +70,10 @@ fn effort_settings(effort: Option<&str>) -> (Option<String>, u32) {
 /// hash the text the turn actually ran under.
 pub const ASSISTANT_PROMPT: &str = PROMPT;
 const PROMPT: &str = include_str!("../prompts/assistant.md");
+
+/// What an explorer is told before the question. It only reads, it is quick, and its last message is the
+/// whole of what the agent that asked will see.
+const EXPLORER: &str = "You are an explorer: you find things in a project and report them. You only read: you never create, change, move or delete anything, and every command you run only reads. Search and read in parallel where the calls do not depend on each other. Do not plan, discuss or ask questions; look, then answer. Your last message is the report the agent that asked will read, and nothing else of your work reaches it, so make it complete: the answer first, then the evidence, with absolute file paths and line numbers.";
 
 /// The handful of calls an agent makes constantly, with their exact shapes.
 ///
@@ -79,8 +88,11 @@ Paths are absolute, or relative to the working directory named under Context.
 - several changes to one file go in ONE call: edit_file {"path":"<file>","edits":[{"old":"...","new":"..."},{"old":"...","new":"..."}]} - applied in order, written only if all apply
 - write_file {"path":"<file>","content":"...","create_dirs":true} ; delete_file {"path":"<file or dir>","recursive":false}
 - project_info {"path":"<dir>"} ; project_tasks {"path":"<dir>"} ; run_task {"path":"<dir>","task":"test"}
-- devd_invoke {"id":"project.exec","args":{"path":"<dir>","argv":["php","artisan","migrate"]}}
-- git_status {"repo":"<dir>"} ; git_diff {"repo":"<dir>"}
+- run_command {"path":"<dir>","argv":["php","artisan","migrate"]} - any program the project's stack allows, as argv, no shell
+- git_status {"repo":"<dir>"} ; git_diff {"repo":"<dir>"} ; git_log {"repo":"<dir>"}
+- git_stage {"repo":"<dir>","paths":["src/a.rs"]} then git_commit {"repo":"<dir>","message":"..."}
+- fetch_page {"url":"https://..."} reads a public web page as text
+- explore {"description":"where routes are defined","question":"Find every route definition in <dir> and how each maps to a controller","project":"<dir>"} - a read-only explorer searches and hands back a report; use it for wide searches instead of reading many files yourself
 - todo_create {"project":"<dir>","title":"..."} ; todo_complete {"id":"...","expected_revision":N}
 - devd_invoke {"id":"team.overview","args":{}} ; team.get {"run":"<id>"} ; team.assign {"member":"<role>","instructions":"...","project":"<dir>"}
 - devd_invoke {"id":"browser.open","args":{"url":"https://site.test"}}, then browser.snapshot before any browser.click or browser.type: refs come from the latest snapshot
@@ -341,6 +353,14 @@ const DIRECT: &[(&str, &str)] = &[
     ("run_task", "project.run"),
     ("git_status", "git.status"),
     ("git_diff", "git.diff"),
+    // The calls agents made most through `devd_invoke`, each looked up first: running a command was a third
+    // of all of them. A plain tool for each takes a turn of discovery off every one.
+    ("run_command", "project.exec"),
+    ("git_stage", "git.stage"),
+    ("git_commit", "git.commit"),
+    ("git_log", "git.log"),
+    ("fetch_page", "docs.fetch"),
+    ("explore", "chat.explore"),
     ("todo_list", "todo.list"),
     ("todo_create", "todo.create"),
     ("todo_complete", "todo.complete"),
@@ -585,7 +605,7 @@ impl Hub {
         let _ = self.log(tid, "notice", json!({ "text": text }));
     }
 
-    fn log(&self, tid: &str, kind: &str, data: Value) -> Result<i64> {
+    pub(crate) fn log(&self, tid: &str, kind: &str, data: Value) -> Result<i64> {
         let id = self.ctx.store.append_event(tid, kind, &data)?;
         self.ctx.events.emit_with(
             "chat.event",
@@ -593,6 +613,80 @@ impl Hub {
             json!({ "thread": tid, "kind": kind, "id": id }),
         );
         Ok(id)
+    }
+
+    /// The context the hub works in, for tests that put events in a conversation without a model answering.
+    #[doc(hidden)]
+    pub fn ctx_for_tests(&self) -> &Ctx {
+        &self.ctx
+    }
+
+    /// Hand a question to a read-only explorer and wait for its report.
+    ///
+    /// The explorer is a conversation of its own, in plan mode, so every call it makes is checked to be one
+    /// that only reads; it thinks little and searches in parallel. It is how an agent looks something up
+    /// across a project without filling its own context with every file it opened: what comes back is the
+    /// answer, not the search. The person can open the explorer's conversation to see how it got there.
+    pub fn explore(self: &Arc<Self>, caller: &Ctx, project: Option<String>, title: &str, question: &str) -> Result<(String, String)> {
+        // An explorer may ask another; a handful at once is a search, more is a runaway.
+        static RUNNING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        struct Slot;
+        impl Drop for Slot {
+            fn drop(&mut self) {
+                RUNNING.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
+        if RUNNING.fetch_add(1, Ordering::SeqCst) >= 4 {
+            RUNNING.fetch_sub(1, Ordering::SeqCst);
+            return Err(DevdError::conflict("four explorers are already searching; wait for their reports or read the files yourself"));
+        }
+        let _slot = Slot;
+        let message = format!("{EXPLORER}\n\n# What to find\n{}", question.trim());
+        let thread = self.send(
+            caller,
+            SendRequest {
+                thread_id: None,
+                message,
+                project,
+                provider: None,
+                model: None,
+                permission: Some("plan".into()),
+                effort: Some("low".into()),
+                kind: None,
+                client_id: None,
+            },
+        )?;
+        let label: String = title.trim().chars().take(50).collect();
+        let _ = self.ctx.store.update_thread(&thread.id, Some(&format!("Explore \u{b7} {label}")), None, None);
+        let began = Instant::now();
+        loop {
+            std::thread::sleep(Duration::from_millis(300));
+            let state = self.ctx.store.get_thread(&thread.id)?.map(|t| t.state).unwrap_or_default();
+            let settled = !self.is_running(&thread.id) && state != "running";
+            if settled && began.elapsed() > Duration::from_secs(1) {
+                break;
+            }
+            if began.elapsed() > Duration::from_secs(15 * 60) {
+                let _ = self.stop(caller, &thread.id);
+                return Err(DevdError::conflict(format!("the explorer did not finish within 15 minutes; its conversation is {}", thread.id)));
+            }
+        }
+        let events = self.ctx.store.list_events(&thread.id, 0, 100_000)?;
+        let report = events
+            .iter()
+            .rev()
+            .filter(|e| e.kind == "assistant")
+            .find_map(|e| {
+                let text: String = e.data["content"]
+                    .as_array()?
+                    .iter()
+                    .filter_map(|b| b["text"].as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                (!text.trim().is_empty()).then_some(text)
+            })
+            .ok_or_else(|| DevdError::conflict(format!("the explorer finished without a report; its conversation is {}", thread.id)))?;
+        Ok((thread.id, report))
     }
 
     /// Whether a conversation has a live loop.
@@ -650,9 +744,9 @@ impl Hub {
             }
         }
         if let Some(e) = &req.effort {
-            if !matches!(e.as_str(), "low" | "medium" | "high" | "extra" | "max") {
+            if !matches!(e.as_str(), "none" | "low" | "medium" | "high" | "extra" | "max") {
                 return Err(DevdError::invalid(
-                    "effort must be low, medium, high, extra or max",
+                    "effort must be none, low, medium, high, extra or max",
                 ));
             }
         }
@@ -1225,6 +1319,9 @@ impl Hub {
         // turn stops and says why.
         let mut thought_out = 0usize;
         let mut act_now = false;
+        // The last calls made, as name and arguments. The same call three times running gets the same answer
+        // three times: the agent is going round in a circle, and a fourth is not made.
+        let mut recent_calls: std::collections::VecDeque<String> = std::collections::VecDeque::new();
         // End-of-turn objections made for this prompt: see `gate`.
         let mut objections_used = 0usize;
         let mut drawings_sent_back = 0usize;
@@ -1371,6 +1468,8 @@ impl Hub {
             let uploads = self.ctx.paths.root().join("uploads");
             let pictures = crate::attachments::with_images(&messages, true, &uploads);
             let has_pictures = crate::attachments::has_images(&pictures);
+            // When the model was asked, for the time its reply took.
+            let mut asked_at = Instant::now();
             for (i, (provider, key, model, why)) in candidates.iter().enumerate() {
                 // Privacy first: a provider the person excluded never sees the
                 // project, whatever the fallback order says.
@@ -1413,7 +1512,8 @@ impl Hub {
                 }
                 let (mut reasoning_effort, max_tokens) = effort_settings(effort.as_deref());
                 if thought_out > 0 {
-                    reasoning_effort = Some("low".into());
+                    // It has already spent a reply thinking: this one acts.
+                    reasoning_effort = Some("none".into());
                 }
                 let mut request = ChatRequest {
                     model: model.clone(),
@@ -1476,6 +1576,7 @@ impl Hub {
                 };
                 let mut pending = String::new();
                 let mut last_emit = Instant::now();
+                asked_at = Instant::now();
                 let mut result = attempt(&request, &mut pending, &mut last_emit);
                 if has_pictures && sees && result.as_ref().err().is_some_and(looks_like_image_rejection) {
                     // An unknown model (or a provider whose metadata is wrong)
@@ -1577,6 +1678,7 @@ impl Hub {
                 "content": response.content,
                 "stop_reason": response.stop_reason,
                 "model": model,
+                "took_ms": asked_at.elapsed().as_millis() as u64,
                 "routing": why,
                 "usage": {
                     "input": response.input_tokens,
@@ -1640,10 +1742,34 @@ impl Hub {
                 return Ok(());
             }
             let mut pending = false;
+            // A step that can change files is recorded before and after it runs, so what it changed can be
+            // listed and undone file by file. A step that only reads costs nothing.
+            const ONLY_READS: &[&str] = &[
+                "read_file", "list_files", "search_files", "git_status", "git_diff", "git_log", "project_info",
+                "project_tasks", "todo_list", "fetch_page", "explore", "devd_capabilities", "devd_describe", "devd_groups",
+            ];
+            let may_write = calls.iter().any(|c| !ONLY_READS.contains(&c["name"].as_str().unwrap_or("")));
+            let project_dir = thread.project.clone().map(std::path::PathBuf::from);
+            let snapshots = self.ctx.paths.snapshots();
+            let snap_before = if may_write {
+                project_dir.as_deref().and_then(|dir| crate::stepshot::take(&snapshots, dir))
+            } else {
+                None
+            };
             for call in calls {
                 let id = call["id"].as_str().unwrap_or("").to_string();
                 let name = call["name"].as_str().unwrap_or("").to_string();
                 let input = call["input"].clone();
+                let signature = format!("{name} {input}");
+                if recent_calls.len() >= 2 && recent_calls.iter().all(|c| *c == signature) {
+                    self.log(tid, "tool_result", json!({ "tool_use_id": id, "content": json!({ "ok": false, "error": { "code": "repeated_call", "message": "This exact call, with these exact arguments, was made twice already and answered the same way both times. Making it again will not change the answer: do something different, or say what is blocking you." } }).to_string(), "is_error": true, "tool": name }))?;
+                    self.log(tid, "notice", json!({ "text": format!("{name} was asked for a third time with the same arguments; devd did not run it again and told the agent to change course.") }))?;
+                    continue;
+                }
+                recent_calls.push_back(signature);
+                if recent_calls.len() > 2 {
+                    recent_calls.pop_front();
+                }
                 // A direct name and an external server's tool are both routed through a devd
                 // capability, so they get the same validation, approval queue and audit trail as
                 // everything else. The capability is what decides whether the call is allowed.
@@ -1728,6 +1854,15 @@ impl Hub {
                     }
                 }
                 self.log(tid, "tool_result", json!({ "tool_use_id": id, "content": cap_text(&text, MAX_RESULT_CHARS), "is_error": is_err, "tool": tool_name }))?;
+            }
+            if let (Some(before), Some(dir)) = (snap_before, project_dir.as_deref()) {
+                if let Some(after) = crate::stepshot::take(&snapshots, dir) {
+                    if let Ok(changed) = crate::stepshot::changes(&snapshots, dir, &before, &after) {
+                        if !changed.is_empty() {
+                            self.log(tid, "changes", json!({ "project": dir.display().to_string(), "before": before, "after": after, "files": changed }))?;
+                        }
+                    }
+                }
             }
             if pending {
                 let _ = self

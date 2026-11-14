@@ -50,6 +50,9 @@ pub enum Item {
     Waiting { capability: String, summary: String },
     /// A run of finished steps, folded into one line ("Read 3 files and ran a command") that opens when pressed.
     Steps(Vec<Item>),
+    /// The files one step changed, with a way back: the `changes` event's id, each file's status and path,
+    /// and whether it has been undone.
+    Changes { event: i64, files: Vec<(String, String)>, undone: bool },
 }
 
 /// Fold a conversation's events into the items a person reads.
@@ -57,8 +60,13 @@ pub fn fold(events: &[Value], pending: &[&str]) -> Vec<Item> {
     let mut items: Vec<Item> = Vec::new();
     // Where each tool call landed, so its result can be attached to it.
     let mut calls: HashMap<String, usize> = HashMap::new();
+    // Output tokens, cost and time of the model's replies since the person last spoke.
+    let mut turn: (u64, f64, u64) = (0, 0.0, 0);
     for event in events {
         let data = &event["data"];
+        if event["kind"] == "user" && data["gate"] != json!(true) && data["drawing"] != json!(true) {
+            turn = (0, 0.0, 0);
+        }
         match event["kind"].as_str().unwrap_or_default() {
             // devd's own reminder before it lets a turn end is not something the person said.
             "user" if data["gate"] == json!(true) => {
@@ -81,7 +89,11 @@ pub fn fold(events: &[Value], pending: &[&str]) -> Vec<Item> {
                 pending: data["pending"] == json!(true),
             }),
             "assistant" => {
-                let model = data["model"].as_str().unwrap_or_default().to_string();
+                // What the turn has cost so far: the label under its last words carries the whole turn.
+                turn.0 += data["usage"]["output"].as_u64().unwrap_or(0);
+                turn.1 += data["usage"]["cost_usd"].as_f64().unwrap_or(0.0);
+                turn.2 += data["took_ms"].as_u64().unwrap_or(0);
+                let model = reply_label(data["model"].as_str().unwrap_or_default(), turn);
                 for block in data["content"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
                     match block["type"].as_str().unwrap_or_default() {
                         "text" => {
@@ -118,6 +130,28 @@ pub fn fold(events: &[Value], pending: &[&str]) -> Vec<Item> {
                 {
                     *ok = Some(!failed);
                     *detail = result_line(text, failed);
+                }
+            }
+            "changes" => items.push(Item::Changes {
+                event: event["id"].as_i64().unwrap_or_default(),
+                files: data["files"]
+                    .as_array()
+                    .map(|f| {
+                        f.iter()
+                            .map(|c| (c["status"].as_str().unwrap_or("M").to_string(), c["path"].as_str().unwrap_or_default().to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                undone: false,
+            }),
+            "undone" => {
+                let which = data["event"].as_i64();
+                for item in items.iter_mut() {
+                    if let Item::Changes { event, undone, .. } = item
+                        && Some(*event) == which
+                    {
+                        *undone = true;
+                    }
                 }
             }
             "notice" => items.push(Item::Notice(
@@ -165,6 +199,23 @@ fn fold_steps(items: Vec<Item>) -> Vec<Item> {
     }
     flush(&mut run, &mut out);
     out
+}
+
+/// The quiet line under a reply: the model, then what the turn took, such as "deepseek-flash · 2.3k tokens ·
+/// 41/s · $0.012". A figure that was not recorded is left out rather than shown as zero.
+fn reply_label(model: &str, (tokens, cost, ms): (u64, f64, u64)) -> String {
+    let mut parts = vec![model.to_string()];
+    if tokens > 0 {
+        parts.push(format!("{} tokens", ui::compact(tokens)));
+        if ms > 0 {
+            parts.push(format!("{:.0}/s", tokens as f64 / (ms as f64 / 1000.0)));
+        }
+    }
+    if cost > 0.0 {
+        parts.push(if cost < 0.01 { format!("${cost:.4}") } else { format!("${cost:.2}") });
+    }
+    parts.retain(|p| !p.is_empty());
+    parts.join(" · ")
 }
 
 /// An agent's turn is many model calls: a sentence, a tool, a sentence, a tool. Read together they are one
@@ -539,6 +590,7 @@ fn start(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
 }
 
 fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElement {
+    cx.global_mut::<crate::state::Devd>().open_thread = Some(id.to_string());
     let t = theme(cx).clone();
     let state = devd(cx);
     let snap = state.sync.watch_log(&q::thread(id), q::thread_log());
@@ -818,6 +870,7 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
                 .pb(px(14.0))
                 .pt(px(8.0))
                 .children(stopped)
+                .children(waiting_rows(id, &data, cx))
                 .children(running.then(|| activity_line(doing.clone(), glimpse.clone(), turn_began, cx)))
                 .child(composer(
                     shell,
@@ -1012,6 +1065,44 @@ fn activity_line(doing: String, glimpse: Option<String>, since: Option<chrono::D
                 .children(glimpse.map(|g| ui::Clip::tail(g.split_whitespace().collect::<Vec<_>>().join(" ")))),
         )
         .into_any_element()
+}
+
+/// Messages written while the agent was working, waiting for its next step: each on a line with a way to
+/// take it back before it is read.
+fn waiting_rows(thread: &str, data: &Value, cx: &App) -> Vec<AnyElement> {
+    let t = theme(cx);
+    data["waiting"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+        .iter()
+        .enumerate()
+        .map(|(n, m)| {
+            let (thread, id) = (thread.to_string(), m["id"].as_i64().unwrap_or_default());
+            let text = m["text"].as_str().unwrap_or_default().split_whitespace().collect::<Vec<_>>().join(" ");
+            div()
+                .w_full()
+                .max_w(px(size::READING))
+                .mx_auto()
+                .pb(px(8.0))
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .text_size(px(size::TEXT_SM))
+                .child(div().flex_none().text_color(t.faint).child("Waiting"))
+                .child(div().flex_1().min_w_0().text_color(t.muted).child(ui::Clip::new(text)))
+                .child(
+                    Button::new(ui::nid("queued.remove", n), "Remove")
+                        .kind(ButtonKind::Ghost)
+                        .on_click(move |_, _, cx| {
+                            devd(cx).sync.mutate(
+                                Mutation::new("chat.unqueue", json!({ "thread": thread, "id": id })).invalidating("chat"),
+                            );
+                        }),
+                )
+                .into_any_element()
+        })
+        .collect()
 }
 
 /// A duration as a person says it: "45s", "7m 17s", "1h 3m".
@@ -1240,6 +1331,44 @@ fn draw(thread: &str, index: usize, item: &Item, resume: bool, cx: &App) -> AnyE
                 }
             }
             column.into_any_element()
+        }
+        Item::Changes { event, files, undone } => {
+            let n = files.len();
+            let names: Vec<String> = files
+                .iter()
+                .take(3)
+                .map(|(_, path)| path.rsplit('/').next().unwrap_or(path).to_string())
+                .collect();
+            let more = n.saturating_sub(3);
+            let list = format!("{}{}", names.join(", "), if more > 0 { format!(" and {more} more") } else { String::new() });
+            let plural = if n == 1 { "" } else { "s" };
+            let mut row = div()
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .pl(px(2.0))
+                .text_size(px(size::TEXT))
+                .child(div().w(px(16.0)).flex().flex_none().justify_center().child(icon(if *undone { "refresh" } else { "file" }, 13.0, t.faint)))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_color(t.faint)
+                        .child(if *undone { format!("Undid the changes to {n} file{plural}: {list}") } else { format!("Changed {n} file{plural}: {list}") }),
+                );
+            if !*undone {
+                let (thread, event) = (thread.to_string(), *event);
+                row = row.child(
+                    Button::new(ui::nid("changes.undo", index), "Undo")
+                        .kind(ButtonKind::Ghost)
+                        .on_click(move |_, _, cx| {
+                            devd(cx).sync.mutate(
+                                Mutation::new("chat.undo", json!({ "thread": thread, "event": event })).invalidating("chat"),
+                            );
+                        }),
+                );
+            }
+            row.into_any_element()
         }
         Item::Waiting { summary, .. } => ui::Banner::new(Tone::Warn)
             .title("Waiting for your approval")

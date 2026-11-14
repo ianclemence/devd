@@ -76,6 +76,39 @@ fn simple(id: &str, text: impl Into<String>) -> Result<Plan> {
 // ----------------------------------------------------------------- browser
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct ImportArgs {
+    /// The document `chat.export` returned.
+    document: Value,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct UnqueueArgs {
+    /// The conversation.
+    thread: String,
+    /// The waiting message's id.
+    id: i64,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct UndoArgs {
+    /// The conversation.
+    thread: String,
+    /// The id of the step's `changes` event.
+    event: i64,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct ExploreArgs {
+    /// A few words for what is being looked for, used as the explorer's title: "where routes are defined".
+    description: String,
+    /// Exactly what to find and how thorough to be. The explorer sees this and nothing else of yours.
+    question: String,
+    /// The project to search, as an absolute folder.
+    #[serde(default)]
+    project: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct BrowserOpen {
     /// Page to load. Omit to use the focused tab as it is.
     #[serde(default)]
@@ -3637,6 +3670,138 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             },
     )?;
     }
+    {
+        let hub = hub.clone();
+        reg.define::<ExploreArgs>("chat.explore", "Ask a read-only explorer and wait for its report")
+    .description("Hands a question to an explorer: a conversation of its own that may only read (every call it makes is checked), thinks little and searches in parallel, then reports. Use it to find where something is, how something works across many files, or what a project contains, without filling your own context with every file it opened: you get its report, with paths and line numbers. Say exactly what to find and how thorough to be. Blocks until the report is in, at most 15 minutes. The person can open the explorer's conversation to see the search.")
+    .group("chat")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .handlers(
+        |_, a| simple("chat.explore", format!("explore: {}", util::truncate(&a.description, 60))),
+        move |ctx, a| {
+            if a.question.trim().chars().count() < 10 {
+                return Err(DevdError::invalid("say what the explorer should find, in a sentence or more"));
+            }
+            let (thread, report) = hub.explore(ctx, a.project.clone(), &a.description, &a.question)?;
+            Ok(Outcome::with_data(report.clone(), json!({ "thread": thread, "report": report })))
+        },
+    )?;
+    }
+    {
+        let hub = hub.clone();
+        reg.define::<UndoArgs>("chat.undo", "Undo the files a step changed")
+    .description("Puts back exactly the files one step of a conversation changed, as they were before it: a file it changed is restored, one it made is removed, one it deleted comes back. Files the step did not touch are left alone. The step is the `changes` event of the conversation, by its id.")
+    .group("chat")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .human_only()
+    .dry_run()
+    .handlers(
+        |_, a| simple("chat.undo", format!("undo the files step {} changed", a.event)),
+        move |ctx, a| {
+            let event = ctx
+                .store
+                .list_events(&a.thread, a.event - 1, 1)?
+                .into_iter()
+                .find(|e| e.id == a.event && e.kind == "changes")
+                .ok_or_else(|| DevdError::not_found("there is no such step to undo in this conversation"))?;
+            let undone = ctx.store.list_events(&a.thread, a.event, 100_000)?.iter().any(|e| e.kind == "undone" && e.data["event"] == json!(a.event));
+            if undone {
+                return Err(DevdError::conflict("that step was already undone"));
+            }
+            let project = std::path::PathBuf::from(event.data["project"].as_str().unwrap_or_default());
+            let (before, after) = (event.data["before"].as_str().unwrap_or_default(), event.data["after"].as_str().unwrap_or_default());
+            let put_back = crate::stepshot::undo(&ctx.paths.snapshots(), &project, before, after)?;
+            let n = put_back.len();
+            let message = format!("Undid the step's changes to {n} file{}", if n == 1 { "" } else { "s" });
+            hub.log(&a.thread, "undone", json!({ "event": a.event, "files": put_back }))?;
+            Ok(Outcome::with_data(message, json!({ "files": put_back })))
+        },
+    )?;
+    }
+    reg.define::<UnqueueArgs>("chat.unqueue", "Take back a message before the agent reads it")
+    .description("Removes one message written while the agent was working, before its next step reads it. A message already read cannot be taken back.")
+    .group("chat")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .human_only()
+    .dry_run()
+    .handlers(
+        |_, a| simple("chat.unqueue", format!("take back waiting message {}", a.id)),
+        |ctx, a| {
+            if ctx.store.remove_queued(&a.thread, a.id)? {
+                Ok(Outcome::ok("Taken back; the agent will not read it"))
+            } else {
+                Err(DevdError::conflict("that message was already read"))
+            }
+        },
+    )?;
+    reg.define::<ThreadArgs>("chat.export", "Export a conversation as data")
+    .description("Returns a whole conversation, its title, project and every event in order, as one JSON document that `chat.import` can load again, here or on another machine. Provider keys are never part of a conversation, so none are exported.")
+    .group("chat")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, a| simple("chat.export", format!("export conversation {}", a.thread)),
+        |ctx, a| {
+            let t = ctx.store.get_thread(&a.thread)?.ok_or_else(|| DevdError::not_found("no such conversation"))?;
+            let events = ctx.store.list_events(&a.thread, 0, 1_000_000)?;
+            let n = events.len();
+            let doc = json!({
+                "format": "devd.conversation",
+                "version": 1,
+                "title": t.title,
+                "project": t.project,
+                "model": t.model,
+                "events": events.iter().map(|e| json!({ "kind": e.kind, "data": e.data, "created_at": e.created_at })).collect::<Vec<_>>(),
+            });
+            Ok(Outcome::with_data(format!("Exported \"{}\": {n} events", t.title), doc))
+        },
+    )?;
+
+    reg.define::<ImportArgs>("chat.import", "Load an exported conversation")
+    .description("Creates a new conversation from a document `chat.export` made. Its events are kept as they were, so it reads exactly as it did; it is idle, and writing in it carries on from where it ended. The project path is kept as written and is only used if that folder exists on this machine.")
+    .group("chat")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .dry_run()
+    .handlers(
+        |_, _| simple("chat.import", "load an exported conversation as a new one"),
+        |ctx, a| {
+            let doc = &a.document;
+            if doc["format"] != "devd.conversation" {
+                return Err(DevdError::invalid("this is not a conversation made by chat.export (its format is not devd.conversation)"));
+            }
+            if doc["version"].as_i64().unwrap_or(0) > 1 {
+                return Err(DevdError::invalid("this conversation was exported by a newer devd than this one; update devd to load it"));
+            }
+            let events = doc["events"].as_array().ok_or_else(|| DevdError::invalid("the document has no events"))?;
+            if events.len() > 200_000 {
+                return Err(DevdError::invalid("more than 200,000 events; split the conversation before loading it"));
+            }
+            let project = doc["project"].as_str().filter(|p| std::path::Path::new(p).is_dir());
+            let title: String = format!("{} (imported)", doc["title"].as_str().unwrap_or("Conversation")).chars().take(100).collect();
+            let thread = ctx.store.create_thread_kind(&title, project, None, None, "chat")?;
+            const KINDS: &[&str] = &["user", "assistant", "tool_result", "notice", "error", "changes", "undone"];
+            let mut kept = 0usize;
+            for e in events {
+                let kind = e["kind"].as_str().unwrap_or_default();
+                if KINDS.contains(&kind) {
+                    ctx.store.append_event(&thread.id, kind, &e["data"])?;
+                    kept += 1;
+                }
+            }
+            ctx.store.set_thread_state(&thread.id, "idle", None)?;
+            Ok(Outcome::with_data(format!("Loaded {kept} events as \"{title}\""), json!({ "thread": thread.id, "events": kept })))
+        },
+    )?;
+
     reg.define::<NoArgs>("team.stats", "How the team is performing")
     .description("Measured from every task the team was given: per role, per project and overall - tasks accepted on proof, rejected and abandoned, the acceptance rate of tasks that ended, rework (extra attempts per task), reviews that asked for changes, the pass rate of verification runs devd recorded, and median time to finish. Output volume is never a score.")
     .tier(Tier::Read)
@@ -3757,8 +3922,9 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                 let pending = ctx.store.list_requests(true, Some(&a.thread), 50)?;
                 let chapters = ctx.store.list_chapters(&a.thread)?;
                 let queued = ctx.store.queued_count(&a.thread)?;
+                let waiting = ctx.store.list_queued(&a.thread)?;
                 let run = ctx.store.run_for_thread(&a.thread)?;
-                Ok(Outcome::with_data(t.state.clone(), json!({ "thread": t, "events": ev, "pending": pending, "running": hub.is_running(&a.thread), "chapters": chapters, "queued": queued, "run": run })))
+                Ok(Outcome::with_data(t.state.clone(), json!({ "thread": t, "events": ev, "pending": pending, "running": hub.is_running(&a.thread), "chapters": chapters, "queued": queued, "waiting": waiting, "run": run })))
             },
     )?;
     }

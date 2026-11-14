@@ -1366,7 +1366,13 @@ fn openai_body(p: &Provider, r: &ChatRequest) -> Value {
     body[if p.kind == "openai" { "max_completion_tokens" } else { "max_tokens" }] = json!(r.max_tokens);
     // Only reasoning-capable OpenAI models accept this, and sending it to the
     // others is an error rather than a no-op.
-    if let Some(effort) = &r.effort {
+    // DeepSeek thinks by default, at "high", and can spend a whole reply doing it. Its own levels are none, low,
+    // high and max; devd always names one, so a reply's thinking is what the person chose, not the provider's
+    // default. "Medium", devd's ordinary level, is DeepSeek's "low": enough to plan a step, not to stall on it.
+    if is_deepseek(p, &r.model) {
+        body["reasoning_effort"] = json!(deepseek_effort(r.effort.as_deref()));
+    }
+    if let Some(effort) = r.effort.as_deref().map(three_levels) {
         // OpenRouter takes the effort as an object, and no filter that would route only to endpoints
         // advertising the parameter: that turns an effort setting into a hard 404 on a valid model,
         // and a model that cannot reason simply answers without reasoning.
@@ -1475,6 +1481,30 @@ fn jitter_ms() -> u64 {
 }
 
 /// Whether this provider is OpenRouter, which has its own ways of asking for reasoning and of caching.
+/// devd's levels as the three most providers name: `extra` and `max` are "high", `none` is the least there is.
+fn three_levels(effort: &str) -> &'static str {
+    match effort {
+        "none" | "low" => "low",
+        "high" | "extra" | "max" => "high",
+        _ => "medium",
+    }
+}
+
+/// Whether a model is DeepSeek's, called on DeepSeek's own API or through a compatible one.
+fn is_deepseek(p: &Provider, model: &str) -> bool {
+    !is_openrouter(p) && (p.base_url.contains("deepseek.com") || model.to_ascii_lowercase().starts_with("deepseek"))
+}
+
+/// devd's level in DeepSeek's words: none, low, high or max.
+fn deepseek_effort(effort: Option<&str>) -> &'static str {
+    match effort {
+        Some("none") => "none",
+        Some("high") => "high",
+        Some("extra") | Some("max") => "max",
+        _ => "low",
+    }
+}
+
 fn is_openrouter(p: &Provider) -> bool {
     p.base_url.contains("openrouter.ai")
 }
@@ -2005,6 +2035,21 @@ data: [DONE]\n\n";
         // Nor is Anthropic, which would refuse the unknown block.
         let a = anthropic_body(&request("claude", turn, None));
         assert!(!a.to_string().contains(REASONING_BLOCK));
+    }
+
+    #[test]
+    fn deepseek_is_always_told_how_much_to_think() {
+        let say = vec![json!({ "role": "user", "content": [{ "type": "text", "text": "x" }] })];
+        let effort = |level: Option<&str>| openai_body(&provider("deepseek"), &request("deepseek-flash", say.clone(), level))["reasoning_effort"].clone();
+        // Left to itself it thinks at "high"; devd's ordinary level is its "low".
+        assert_eq!(effort(None), "low");
+        assert_eq!(effort(Some("medium")), "low");
+        assert_eq!(effort(Some("none")), "none", "Off turns thinking off");
+        assert_eq!(effort(Some("high")), "high");
+        assert_eq!(effort(Some("max")), "max");
+        // A model of another vendor on another provider is not sent DeepSeek's field.
+        let other = openai_body(&provider("groq"), &request("llama-3", say.clone(), Some("high")));
+        assert!(other.get("reasoning_effort").is_none(), "{other}");
     }
 
     #[test]

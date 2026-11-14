@@ -89,7 +89,7 @@ pub fn parse(bytes: &[u8]) -> Result<Task, Refused> {
         return Err(Refused(format!("`maxDurationMs` must be between 1 and {MAX_DURATION_MS}")));
     }
     if let Some(e) = &task.effort {
-        if !matches!(e.as_str(), "low" | "medium" | "high" | "extra" | "max") {
+        if !matches!(e.as_str(), "none" | "low" | "medium" | "high" | "extra" | "max") {
             return Err(Refused("`effort` must be low, medium, high, extra or max".into()));
         }
     }

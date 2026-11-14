@@ -44,6 +44,9 @@ pub struct Devd {
     pub pending_go: Option<String>,
     /// A file a link pointed at, inside a project devd knows: the project, the file within it, and the line.
     pub pending_file: Option<(String, String, Option<u32>)>,
+    /// The conversation on screen, if one is: what needs attention elsewhere is told about, what is in front
+    /// of the person is not.
+    pub open_thread: Option<String>,
     /// Folded runs of steps the person opened, as `<conversation>:<row>`.
     pub open_steps: std::collections::HashSet<String>,
     /// A row whose height changed when it was opened or closed, for the conversation's list to measure again.
@@ -227,6 +230,7 @@ pub fn start(conn: Arc<Connection>, cx: &mut App) {
         opened_thread: None,
         pending_go: None,
         pending_file: None,
+        open_thread: None,
         open_steps: Default::default(),
         steps_toggled: None,
         pending_ui: Vec::new(),
@@ -520,6 +524,22 @@ fn apply(signal: Signal, cx: &mut App) {
                     );
                 }
                 "chat.event" if !thread.is_empty() => {
+                    // A conversation the person is not looking at that stops for a decision, or fails, is told
+                    // about, with a way straight to it. The one on screen already says so.
+                    if state.open_thread.as_deref() != Some(thread.as_str()) {
+                        let note = match data["kind"].as_str().unwrap_or_default() {
+                            "approval" => Some(("A conversation is waiting for your decision", false)),
+                            "error" => Some(("A conversation stopped on an error", true)),
+                            _ => None,
+                        };
+                        if let Some((text, failed)) = note
+                            && !state.toasts.iter().any(|t| t.go.as_deref() == Some(&format!("/assistant/{thread}")) && t.at.elapsed().as_secs() < 30)
+                        {
+                            let mut toast = Toast::opening(text, format!("/assistant/{thread}"));
+                            toast.failed = failed;
+                            state.toasts.push(toast);
+                        }
+                    }
                     // The logged event replaces the live text in the same place.
                     state.writing.remove(&thread);
                     state.thinking.remove(&thread);

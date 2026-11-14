@@ -27,7 +27,7 @@ use std::time::Duration;
 
 /// Most objections per prompt. A prompt is one person's message and everything the
 /// agent does until it ends its turn.
-pub const MAX_OBJECTIONS: usize = 3;
+pub const MAX_OBJECTIONS: usize = 1;
 
 /// How long a hook may take before it is treated as having no objection.
 pub const HOOK_TIMEOUT: Duration = Duration::from_millis(2_500);

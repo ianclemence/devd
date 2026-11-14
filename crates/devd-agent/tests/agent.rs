@@ -165,6 +165,21 @@ fn env() -> Env {
     }
 }
 
+impl Env {
+    /// A conversation to put events and waiting messages in, without a model answering it.
+    fn team_thread_for_tests(&self) -> String {
+        self.hub.ctx_for_tests().store.create_thread_kind("A conversation", None, None, None, "chat").unwrap().id
+    }
+
+    fn hub_append(&self, thread: &str, kind: &str, data: Value) -> i64 {
+        self.hub.ctx_for_tests().store.append_event(thread, kind, &data).unwrap()
+    }
+
+    fn queue_for_tests(&self, thread: &str, text: &str) -> i64 {
+        self.hub.ctx_for_tests().store.queue_message(thread, text, "human:test").unwrap()
+    }
+}
+
 fn call(e: &Env, ctx: &Ctx, id: &str, args: Value, approval: Approval) -> devd_core::Result<Value> {
     let r = e.reg.dispatch(
         ctx,
@@ -2622,4 +2637,121 @@ fn the_theme_skill_is_offered_in_the_message_box() {
     let skills = call(&e, &e.agent, "skills.list", json!({}), Approval::None).unwrap();
     let theme = skills.as_array().or(skills["skills"].as_array()).unwrap().iter().find(|s| s["name"] == "theme").cloned();
     assert!(theme.is_some(), "the theme skill is listed: {skills}");
+}
+
+#[test]
+fn a_conversation_exports_and_loads_again_as_a_new_one_and_a_foreign_document_is_refused() {
+    let e = env();
+    let thread = e.team_thread_for_tests();
+    e.hub_append(&thread, "user", json!({ "text": "hello" }));
+    e.hub_append(&thread, "assistant", json!({ "model": "m", "content": [{ "type": "text", "text": "hi there" }] }));
+    let doc = call(&e, &e.human, "chat.export", json!({ "thread": thread }), Approval::None).unwrap();
+    assert_eq!(doc["format"], "devd.conversation");
+    assert_eq!(doc["events"].as_array().unwrap().len(), 2);
+
+    let loaded = call(&e, &e.human, "chat.import", json!({ "document": doc }), Approval::None).unwrap();
+    let again = call(&e, &e.human, "chat.get", json!({ "thread": loaded["thread"] }), Approval::None).unwrap();
+    let kinds: Vec<&str> = again["events"].as_array().unwrap().iter().map(|ev| ev["kind"].as_str().unwrap()).collect();
+    assert_eq!(kinds, ["user", "assistant"], "it reads exactly as it did");
+    assert!(again["thread"]["title"].as_str().unwrap().ends_with("(imported)"));
+    assert_ne!(loaded["thread"], json!(thread), "a new conversation, not the old one");
+
+    let foreign = call(&e, &e.human, "chat.import", json!({ "document": { "format": "something-else", "events": [] } }), Approval::None).unwrap_err().to_string();
+    assert!(foreign.contains("not a conversation made by chat.export"), "{foreign}");
+    let newer = call(&e, &e.human, "chat.import", json!({ "document": { "format": "devd.conversation", "version": 9, "events": [] } }), Approval::None).unwrap_err().to_string();
+    assert!(newer.contains("newer devd"), "{newer}");
+}
+
+#[test]
+fn a_waiting_message_can_be_taken_back_until_the_agent_reads_it_and_only_by_a_person() {
+    let e = env();
+    let thread = e.team_thread_for_tests();
+    let id = e.queue_for_tests(&thread, "wait, not that file");
+    let got = call(&e, &e.human, "chat.get", json!({ "thread": thread }), Approval::None).unwrap();
+    assert_eq!(got["waiting"][0]["text"], "wait, not that file");
+    assert_eq!(call(&e, &e.agent, "chat.unqueue", json!({ "thread": thread, "id": id }), Approval::None).unwrap_err().code(), "permission_denied");
+    call(&e, &e.human, "chat.unqueue", json!({ "thread": thread, "id": id }), Approval::None).unwrap();
+    assert_eq!(call(&e, &e.human, "chat.get", json!({ "thread": thread }), Approval::None).unwrap()["waiting"].as_array().unwrap().len(), 0);
+    let twice = call(&e, &e.human, "chat.unqueue", json!({ "thread": thread, "id": id }), Approval::None).unwrap_err().to_string();
+    assert!(twice.contains("already read"), "{twice}");
+}
+
+#[test]
+fn undoing_a_recorded_step_puts_its_files_back_once_and_only_a_person_can() {
+    let e = env();
+    let project = e.root.join("www").join("proj");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(project.join("a.txt"), "before\n").unwrap();
+    let snapshots = e.root.join("home").join("snapshots");
+    let Some(before) = devd_agent::stepshot::take(&snapshots, &project) else {
+        eprintln!("skipped: no git on this machine");
+        return;
+    };
+    std::fs::write(project.join("a.txt"), "after\n").unwrap();
+    std::fs::write(project.join("b.txt"), "made\n").unwrap();
+    let after = devd_agent::stepshot::take(&snapshots, &project).unwrap();
+    let files = devd_agent::stepshot::changes(&snapshots, &project, &before, &after).unwrap();
+    let thread = e.team_thread_for_tests();
+    let event = e.hub_append(&thread, "changes", json!({ "project": project.display().to_string(), "before": before, "after": after, "files": files }));
+
+    assert_eq!(call(&e, &e.agent, "chat.undo", json!({ "thread": thread, "event": event }), Approval::None).unwrap_err().code(), "permission_denied");
+    call(&e, &e.human, "chat.undo", json!({ "thread": thread, "event": event }), Approval::None).unwrap();
+    assert_eq!(std::fs::read_to_string(project.join("a.txt")).unwrap(), "before\n");
+    assert!(!project.join("b.txt").exists());
+    let twice = call(&e, &e.human, "chat.undo", json!({ "thread": thread, "event": event }), Approval::None).unwrap_err().to_string();
+    assert!(twice.contains("already undone"), "{twice}");
+}
+
+#[test]
+fn review_and_init_are_offered_in_the_message_box() {
+    let e = env();
+    let skills = call(&e, &e.agent, "skills.list", json!({}), Approval::None).unwrap();
+    let names: Vec<String> = skills.as_array().or(skills["skills"].as_array()).unwrap().iter().map(|s| s["name"].as_str().unwrap_or_default().to_string()).collect();
+    for wanted in ["review", "init", "theme"] {
+        assert!(names.iter().any(|n| n == wanted), "{wanted} is listed");
+    }
+}
+
+#[test]
+fn the_same_call_a_third_time_is_not_run_and_the_agent_is_told_to_change_course() {
+    let e = env();
+    let target = e.root.join("www/proj/note.txt").display().to_string();
+    let t2 = target.clone();
+    // A model that makes the identical call four times, then gives up and answers.
+    let m = mock(move |n, _| match n {
+        0..=3 => (200, anthropic_tool_use(&format!("toolu_{n}"), "read_file", json!({ "path": t2 }))),
+        _ => (200, anthropic_text("I could not read it.")),
+    });
+    add_provider(&e, "anthropic", &m.base);
+    let sent = call(&e, &e.human, "chat.send", json!({ "message": "read the note", "project": e.root.join("www/proj").display().to_string() }), Approval::None).unwrap();
+    let v = wait_for(&e, sent["id"].as_str().unwrap(), &["idle", "error"]);
+    let results: Vec<String> = v["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|x| x["kind"] == "tool_result")
+        .map(|x| x["data"]["content"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(results.len(), 4);
+    assert!(!results[0].contains("repeated_call") && !results[1].contains("repeated_call"), "the first two run");
+    assert!(results[2].contains("repeated_call") && results[3].contains("repeated_call"), "the third and fourth do not: {results:?}");
+    assert!(v["events"].as_array().unwrap().iter().any(|x| x["kind"] == "notice" && x["data"]["text"].as_str().unwrap_or_default().contains("a third time")));
+}
+
+#[test]
+fn a_reply_that_is_only_thinking_is_asked_once_to_act_and_then_the_turn_stops_with_a_reason() {
+    let e = env();
+    // Every reply runs out of room before it writes anything.
+    let m = mock(|_, _| {
+        (200, json!({ "id": "x", "type": "message", "role": "assistant", "model": "claude", "content": [], "stop_reason": "max_tokens", "usage": { "input_tokens": 10, "output_tokens": 16000 } }).to_string())
+    });
+    add_provider(&e, "anthropic", &m.base);
+    let sent = call(&e, &e.human, "chat.send", json!({ "message": "do the thing", "project": e.root.join("www/proj").display().to_string() }), Approval::None).unwrap();
+    let v = wait_for(&e, sent["id"].as_str().unwrap(), &["idle", "error"]);
+    assert_eq!(v["thread"]["state"], "error", "{v}");
+    let notice = v["events"].as_array().unwrap().iter().find(|x| x["kind"] == "notice").expect("told once");
+    assert!(notice["data"]["text"].as_str().unwrap().contains("thinking and wrote nothing"), "{notice}");
+    let error = v["thread"]["error"].as_str().unwrap();
+    assert!(error.contains("twice in a row"), "{error}");
+    assert_eq!(m.seen.lock().unwrap().len(), 2, "it was asked twice, not in a loop");
 }

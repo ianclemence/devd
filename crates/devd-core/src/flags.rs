@@ -51,7 +51,9 @@ pub struct Flag {
 /// Every flag.
 pub const ALL: &[Flag] = &[
     Flag { key: "agent.end_gate", summary: "Before the assistant ends a turn, check its plan and proof and send it back to finish", kind: Kind::Bool(true) },
-    Flag { key: "agent.stop_budget", summary: "How many times one prompt may be sent back to finish (0 turns the gate off)", kind: Kind::Int { default: 3, min: 0, max: 10 } },
+    // One clear reminder, then the person decides. Sending a model back again and again to "prove" it is done is
+    // what turned a stuck task into minutes of thinking and a wrong answer; the record says what is left either way.
+    Flag { key: "agent.stop_budget", summary: "How many times one prompt may be sent back to finish (0 turns the gate off)", kind: Kind::Int { default: 1, min: 0, max: 10 } },
     Flag { key: "agent.draw", summary: "Let the assistant draw tables, charts and buttons in the window instead of describing them", kind: Kind::Bool(true) },
     Flag { key: "agent.draw_fixes", summary: "How many times a drawing that does not check is sent back to be written again (0 never sends it back)", kind: Kind::Int { default: 2, min: 0, max: 4 } },
     Flag { key: "ui.site_icons", summary: "Show a site's own icon before each web link in an answer, fetched from the site when the link is on screen", kind: Kind::Bool(true) },
@@ -227,7 +229,7 @@ mod tests {
         let f = flag("agent.stop_budget");
         assert_eq!(resolve(f, Some("5"), None).value, json!(5));
         assert_eq!(resolve(f, Some("0"), None).value, json!(0));
-        assert_eq!(resolve(f, Some("11"), None).value, json!(3), "out of range falls back to the default");
+        assert_eq!(resolve(f, Some("11"), None).value, json!(1), "out of range falls back to the default");
         assert_eq!(resolve(f, Some("-1"), None).source, Source::Default);
     }
 

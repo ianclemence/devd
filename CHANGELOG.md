@@ -12,6 +12,36 @@ may change capability identifiers where the design was wrong.
 
 ## [Unreleased]
 
+### Added
+
+- **Thinking you can control.** Effort now has Off in the message box. devd always tells DeepSeek how much to
+  think (it thinks at "high" when left alone, which is what produced replies of 16,000 tokens of thought and no
+  words), and a reply that is only thinking is retried once with thinking off. Replies have more room to answer.
+- **An explorer for wide searches.** `chat.explore` (the `explore` tool) hands a question to a read-only
+  conversation of its own and returns its report, so an agent can look across a project without filling its
+  context with every file it opened. Every call it makes is checked to only read; at most four run at once.
+- **Undo for each step.** Before and after a step that can change files, devd records the project in a history
+  of its own (never in your git). A line in the conversation says "Changed 3 files: a.rs, b.rs" with Undo, which
+  puts back exactly those files and leaves everything else, including your own edits, alone.
+- **Speed and cost under each reply.** The line under a reply names the model and what the turn took:
+  "deepseek-flash · 2.3k tokens · 41/s · $0.012".
+- **`/review` and `/init`.** `/review` reviews uncommitted changes, a commit, a branch or a pull request and
+  proves each finding; `/init` writes AGENTS.md from what the project shows, running the checks it names.
+- **Messages you can take back.** A message written while the agent is working waits above the message box with
+  a Remove button until the agent reads it.
+- **Export and import of conversations** (`chat.export`, `chat.import`), and a toast when a conversation you are
+  not looking at asks for your decision or stops on an error, with a click straight to it.
+- Plain tools for the calls agents made most through the wrapper (`run_command`, `git_stage`, `git_commit`,
+  `git_log`, `fetch_page`), taking a turn of lookup off each.
+
+### Changed
+
+- **A turn is sent back to prove itself once, not three times.** The reminder before an agent may finish now
+  fires once and then the turn ends with what is left open said plainly. The setting (`agent.stop_budget`) is
+  still there to raise.
+- **The same call a third time is not run.** An agent calling a tool with the same arguments for the third time
+  running is told the answer will not change, and to do something different.
+
 ## [0.33.0] - 2026-11-14 - Themes of your own, and replies that say what they are doing
 
 ### Added

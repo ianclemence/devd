@@ -1716,6 +1716,8 @@ impl Shell {
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Which conversation is in front is decided again every frame, by the screen that draws one.
+        cx.global_mut::<Devd>().open_thread = None;
         // The close button was pressed while a scaffold ran: ask before losing it.
         if devd(cx).close_asked.replace(false) {
             let run_ids: Vec<String> = devd(cx)
