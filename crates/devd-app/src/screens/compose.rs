@@ -81,6 +81,8 @@ pub struct Compose {
     pub selected: usize,
     /// The popover a press outside it just closed, and when: the same press lands on the button that opened it.
     pub dismissed: Option<(Open, std::time::Instant)>,
+    /// What scrolls the `/` and `@` menu, so every match can be reached and the highlighted one stays in view.
+    pub list_scroll: gpui::ScrollHandle,
 }
 
 impl Compose {
@@ -377,16 +379,14 @@ fn menu_row(
     cx: &gpui::App,
 ) -> gpui::Stateful<gpui::Div> {
     let t = theme(cx);
+    // The icon or symbol stands on its own, in a fixed column so the names line up: no tile around it.
     let tile = div()
-        .size(px(24.0))
+        .w(px(14.0))
+        .h(px(20.0))
         .flex_none()
         .flex()
         .items_center()
-        .justify_center()
-        .rounded(px(size::RADIUS))
-        .bg(t.hover)
-        .border_1()
-        .border_color(t.line);
+        .justify_center();
     let tile = match lead {
         Lead::Icon(name) => tile.child(icon(name, 14.0, t.muted)),
         Lead::Symbol(mark) => tile.child(
@@ -398,16 +398,23 @@ fn menu_row(
                 .child(mark.to_string()),
         ),
     };
+    // The mark belongs to its name, so it sits close to it; the description keeps its distance.
     ui::row(id, on, cx)
         .min_h(px(38.0))
         .gap(px(10.0))
-        .child(tile)
         .child(
             div()
+                .flex()
                 .flex_none()
-                .text_size(px(size::TEXT))
-                .font_weight(FontWeight::MEDIUM)
-                .child(title.to_string()),
+                .items_center()
+                .gap(px(7.0))
+                .child(tile)
+                .child(
+                    div()
+                        .text_size(px(size::TEXT))
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(title.to_string()),
+                ),
         )
         .child(
             div()
@@ -470,17 +477,24 @@ pub fn view(
     if let Some((trig, found)) = completion(&text, cx) {
         let at = compose.selected.min(found.len() - 1);
         let mut menu = popover(cx, below).w_full();
-        menu = menu.child(div().px(px(10.0)).py(px(4.0)).child(ui::eyebrow(
-            if trig.mark == '/' {
-                "SKILLS"
-            } else {
-                "THE TEAM"
-            },
-            cx,
-        )));
-        for (n, entry) in found.iter().take(8).enumerate() {
+        let heading = format!(
+            "{} · {}",
+            if trig.mark == '/' { "SKILLS" } else { "THE TEAM" },
+            found.len()
+        );
+        menu = menu.child(div().px(px(10.0)).py(px(4.0)).child(ui::eyebrow(heading, cx)));
+        // Every match, in a list about eight rows tall that scrolls; the highlighted row is kept in view as the
+        // arrow keys move it.
+        let mut list = div()
+            .id("compose.completions")
+            .max_h(px(336.0))
+            .overflow_y_scroll()
+            .track_scroll(&compose.list_scroll)
+            .flex()
+            .flex_col();
+        for (n, entry) in found.iter().enumerate() {
             let (insert, from) = (entry.insert.clone(), trig.clone());
-            menu = menu.child(
+            list = list.child(
                 div()
                     .child(
                         menu_row(
@@ -510,6 +524,7 @@ pub fn view(
                     .into_any_element(),
             );
         }
+        menu = menu.child(list);
         root = root.child(deferred(menu).with_priority(10));
     }
 
@@ -895,6 +910,7 @@ impl Shell {
         let showing = completion(&text, cx).is_some();
         self.composer.update(cx, |input, _| input.steer(showing));
         self.compose.selected = 0;
+        self.compose.list_scroll.scroll_to_item(0);
         self.compose.open = Open::Nothing;
         cx.notify();
     }
@@ -903,8 +919,9 @@ impl Shell {
     pub fn compose_step(&mut self, by: isize, cx: &mut Context<Self>) {
         let text = self.composer.read(cx).text().to_string();
         if let Some((_, found)) = completion(&text, cx) {
-            let n = found.len().min(8) as isize;
+            let n = found.len() as isize;
             self.compose.selected = (self.compose.selected as isize + by).rem_euclid(n) as usize;
+            self.compose.list_scroll.scroll_to_item(self.compose.selected);
             cx.notify();
         }
     }
@@ -929,6 +946,16 @@ impl Shell {
     }
 
     /// Begin a `/` or `@` word at the end of the message.
+    /// Open a new conversation with `text` in the message box, ready to finish and send. Used where a
+    /// screen hands a task to the assistant, such as Make a theme in Settings.
+    pub fn ask_assistant(&mut self, text: &str, window: &mut gpui::Window, cx: &mut Context<Self>) {
+        self.go(devd_app_core::nav::Route::Assistant(None), cx);
+        let text = text.to_string();
+        self.composer.update(cx, |input, cx| input.set_text(text, cx));
+        window.focus(&gpui::Focusable::focus_handle(self.composer.read(cx), cx));
+        cx.notify();
+    }
+
     pub fn start_word(&mut self, mark: &str, cx: &mut Context<Self>) {
         let mut text = self.composer.read(cx).text().to_string();
         if !text.is_empty() && !text.ends_with(char::is_whitespace) {

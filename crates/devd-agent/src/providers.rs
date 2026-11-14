@@ -1229,6 +1229,9 @@ pub struct ChatResponse {
     pub cache_read_tokens: i64,
     /// Input tokens written to the provider's prompt cache.
     pub cache_write_tokens: i64,
+    /// How much the model thought before it answered, in characters of its reasoning, where the provider
+    /// shows it. A reply with thinking and nothing else ran out of room before it could act.
+    pub thinking_chars: usize,
 }
 
 /// Mark where Anthropic may cache the conversation.
@@ -1407,6 +1410,7 @@ fn parse_anthropic(v: &Value) -> Result<ChatResponse> {
         output_tokens: v.pointer("/usage/output_tokens").and_then(|x| x.as_i64()).unwrap_or(0),
         cache_read_tokens: cache_read,
         cache_write_tokens: cache_write,
+        thinking_chars: 0,
     })
 }
 
@@ -1444,6 +1448,7 @@ fn parse_openai(v: &Value) -> Result<ChatResponse> {
             .and_then(|x| x.as_i64())
             .unwrap_or(0),
         cache_write_tokens: 0,
+        thinking_chars: 0,
     })
 }
 
@@ -1508,7 +1513,7 @@ fn cache_breakpoints(msgs: &mut [Value]) {
 
 /// Send one request, retrying transient failures (rate limits, overload).
 pub fn chat(p: &Provider, key: Option<&str>, req: &ChatRequest) -> Result<ChatResponse> {
-    chat_with(p, key, req, &mut |_| {})
+    chat_with(p, key, req, &mut |_| {}, &mut |_| {})
 }
 
 /// Send one request and report the answer as it arrives.
@@ -1522,8 +1527,9 @@ pub fn chat_stream(
     key: Option<&str>,
     req: &ChatRequest,
     on: &mut dyn FnMut(&str),
+    think: &mut dyn FnMut(&str),
 ) -> Result<ChatResponse> {
-    chat_with(p, key, req, on)
+    chat_with(p, key, req, on, think)
 }
 
 fn chat_with(
@@ -1531,6 +1537,7 @@ fn chat_with(
     key: Option<&str>,
     req: &ChatRequest,
     on: &mut dyn FnMut(&str),
+    think: &mut dyn FnMut(&str),
 ) -> Result<ChatResponse> {
     let (url, body) = if p.kind == "gemini" {
         (
@@ -1570,9 +1577,9 @@ fn chat_with(
                     return if p.kind == "gemini" {
                         crate::gemini::parse_stream(reader, on)
                     } else if p.kind == "anthropic" {
-                        parse_anthropic_stream(reader, on)
+                        parse_anthropic_stream(reader, on, think)
                     } else {
-                        parse_openai_stream(reader, on)
+                        parse_openai_stream(reader, on, think)
                     };
                 }
                 Answer::Whole(body) => {
@@ -1585,9 +1592,9 @@ fn chat_with(
                         return if p.kind == "gemini" {
                             crate::gemini::parse_stream(std::io::Cursor::new(body), on)
                         } else if p.kind == "anthropic" {
-                            parse_anthropic_stream(std::io::Cursor::new(body), on)
+                            parse_anthropic_stream(std::io::Cursor::new(body), on, think)
                         } else {
-                            parse_openai_stream(std::io::Cursor::new(body), on)
+                            parse_openai_stream(std::io::Cursor::new(body), on, think)
                         };
                     }
                     body
@@ -1680,7 +1687,8 @@ pub(crate) fn for_each_event(
     Ok(())
 }
 
-fn parse_anthropic_stream(reader: impl BufRead, on: &mut dyn FnMut(&str)) -> Result<ChatResponse> {
+fn parse_anthropic_stream(reader: impl BufRead, on: &mut dyn FnMut(&str), think: &mut dyn FnMut(&str)) -> Result<ChatResponse> {
+    let mut thinking_chars = 0usize;
     let mut blocks: Vec<Value> = Vec::new();
     let mut tool_json: std::collections::HashMap<usize, String> = std::collections::HashMap::new();
     let mut stop_reason = String::from("end_turn");
@@ -1749,6 +1757,14 @@ fn parse_anthropic_stream(reader: impl BufRead, on: &mut dyn FnMut(&str)) -> Res
                             on(piece);
                         }
                     }
+                    // Extended thinking: shown while it happens, so a long think is not mistaken for a hang.
+                    "thinking_delta" => {
+                        let piece = v.pointer("/delta/thinking").and_then(|t| t.as_str()).unwrap_or("");
+                        if !piece.is_empty() {
+                            thinking_chars += piece.chars().count();
+                            think(piece);
+                        }
+                    }
                     "input_json_delta" => {
                         let piece = v
                             .pointer("/delta/partial_json")
@@ -1805,11 +1821,13 @@ fn parse_anthropic_stream(reader: impl BufRead, on: &mut dyn FnMut(&str)) -> Res
         output_tokens,
         cache_read_tokens,
         cache_write_tokens,
+        thinking_chars,
     })
 }
 
-fn parse_openai_stream(reader: impl BufRead, on: &mut dyn FnMut(&str)) -> Result<ChatResponse> {
+fn parse_openai_stream(reader: impl BufRead, on: &mut dyn FnMut(&str), think: &mut dyn FnMut(&str)) -> Result<ChatResponse> {
     let mut text = String::new();
+    let mut thinking_chars = 0usize;
     let mut calls: Vec<(String, String, String)> = Vec::new(); // id, name, arguments
     let mut finish = String::new();
     let (mut input_tokens, mut output_tokens) = (0i64, 0i64);
@@ -1838,6 +1856,14 @@ fn parse_openai_stream(reader: impl BufRead, on: &mut dyn FnMut(&str)) -> Result
             if !piece.is_empty() {
                 text.push_str(piece);
                 on(piece);
+            }
+        }
+        // What a reasoning model thinks before it answers: DeepSeek sends it as `reasoning_content`, others as
+        // `reasoning`. It is shown while it happens and never sent back, so a long think reads as thinking.
+        for key in ["/delta/reasoning_content", "/delta/reasoning"] {
+            if let Some(piece) = choice.pointer(key).and_then(|c| c.as_str()).filter(|p| !p.is_empty()) {
+                thinking_chars += piece.chars().count();
+                think(piece);
             }
         }
         // The reasoning payload arrives in pieces; the whole list is what is handed back.
@@ -1910,12 +1936,35 @@ fn parse_openai_stream(reader: impl BufRead, on: &mut dyn FnMut(&str)) -> Result
         output_tokens,
         cache_read_tokens,
         cache_write_tokens: 0,
+        thinking_chars,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reasoning_models_thinking_is_shown_as_it_comes_and_a_reply_that_is_only_thinking_is_known_as_one() {
+        // DeepSeek thinks in `reasoning_content` before it writes; here it runs out of room before writing.
+        let sse = "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"Let me check the \"}}]}\n\n\
+data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"worktree first.\"}}]}\n\n\
+data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":16000}}\n\n\
+data: [DONE]\n\n";
+        let mut thought = String::new();
+        let mut written = String::new();
+        let got = parse_openai_stream(std::io::Cursor::new(sse), &mut |p| written.push_str(p), &mut |p| thought.push_str(p)).unwrap();
+        assert_eq!(thought, "Let me check the worktree first.");
+        assert!(written.is_empty(), "thinking is not the answer");
+        assert_eq!(got.thinking_chars, thought.chars().count());
+        assert_eq!(got.stop_reason, "max_tokens");
+        assert!(got.content.iter().all(|b| b["type"] != "text"), "nothing written: {:?}", got.content);
+        // Other providers call it `reasoning`.
+        let other = "data: {\"choices\":[{\"delta\":{\"reasoning\":\"hm\",\"content\":\"Done.\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+        let mut seen = String::new();
+        let got = parse_openai_stream(std::io::Cursor::new(other), &mut |_| {}, &mut |p| seen.push_str(p)).unwrap();
+        assert_eq!((seen.as_str(), got.thinking_chars), ("hm", 2));
+    }
 
     #[test]
     fn only_a_failure_that_can_pass_is_retried() {
@@ -1988,7 +2037,7 @@ mod tests {
     #[test]
     fn a_streamed_reasoning_payload_is_collected_and_kept_ahead_of_the_answer() {
         let sse = "data: {\"choices\":[{\"delta\":{\"reasoning_details\":[{\"i\":1}]}}]}\n\ndata: {\"choices\":[{\"delta\":{\"reasoning_details\":[{\"i\":2}],\"content\":\"hi\"}}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
-        let got = parse_openai_stream(std::io::Cursor::new(sse), &mut |_| {}).unwrap();
+        let got = parse_openai_stream(std::io::Cursor::new(sse), &mut |_| {}, &mut |_| {}).unwrap();
         assert_eq!(got.content[0]["type"], REASONING_BLOCK);
         assert_eq!(got.content[0]["details"], json!([{ "i": 1 }, { "i": 2 }]));
         assert_eq!(got.content[1]["text"], "hi");
@@ -2080,7 +2129,7 @@ data: [DONE]\n\n";
             effort: None,
         };
         let mut seen = String::new();
-        let answer = chat_stream(&p, None, &req, &mut |piece| seen.push_str(piece)).unwrap();
+        let answer = chat_stream(&p, None, &req, &mut |piece| seen.push_str(piece), &mut |_| {}).unwrap();
         assert_eq!(
             seen, "Luna is a music app.",
             "each delta reaches the caller as it is read"
@@ -2106,7 +2155,7 @@ data: [DONE]
 ";
         let mut seen = String::new();
         let answer =
-            parse_openai_stream(std::io::Cursor::new(body), &mut |p| seen.push_str(p)).unwrap();
+            parse_openai_stream(std::io::Cursor::new(body), &mut |p| seen.push_str(p), &mut |_| {}).unwrap();
         assert_eq!(
             seen, "Luna is a React Native app.",
             "text arrives as it was written"
@@ -2163,7 +2212,7 @@ data: {\"type\":\"message_stop\"}
         let mut pieces = Vec::new();
         let answer = parse_anthropic_stream(std::io::Cursor::new(body), &mut |p| {
             pieces.push(p.to_string())
-        })
+        }, &mut |_| {})
         .unwrap();
         assert_eq!(pieces.join(""), "Yes, I read it.");
         assert_eq!(answer.content[0]["text"], "Yes, I read it.");
@@ -2176,9 +2225,9 @@ data: {\"type\":\"message_stop\"}
     #[test]
     fn a_stream_that_fails_says_so_instead_of_answering_nothing() {
         let body = "data: {\"type\":\"error\",\"error\":{\"message\":\"overloaded\"}}\n";
-        let err = parse_anthropic_stream(std::io::Cursor::new(body), &mut |_| {}).unwrap_err();
+        let err = parse_anthropic_stream(std::io::Cursor::new(body), &mut |_| {}, &mut |_| {}).unwrap_err();
         assert!(err.to_string().contains("overloaded"), "{err}");
-        let err = parse_anthropic_stream(std::io::Cursor::new(""), &mut |_| {}).unwrap_err();
+        let err = parse_anthropic_stream(std::io::Cursor::new(""), &mut |_| {}, &mut |_| {}).unwrap_err();
         assert!(err.to_string().contains("no content"), "{err}");
     }
 

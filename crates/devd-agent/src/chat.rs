@@ -1220,6 +1220,11 @@ impl Hub {
         // hard cap exists only so a model that can never finish cannot loop.
         let mut output_continues = 0usize;
         let mut continuing = false;
+        // A reasoning model can spend a whole reply thinking and write nothing. Asking it to carry on asks it to
+        // think again: the loop an agent looks stuck in. Once, it is told to act and to think less; twice, the
+        // turn stops and says why.
+        let mut thought_out = 0usize;
+        let mut act_now = false;
         // End-of-turn objections made for this prompt: see `gate`.
         let mut objections_used = 0usize;
         let mut drawings_sent_back = 0usize;
@@ -1304,6 +1309,11 @@ impl Hub {
                     let quoted = serde_json::to_string(text.trim()).unwrap_or_default();
                     messages.push(json!({"role": "user", "content": [{"type": "text", "text": format!("[devd] A tool server asks that this be kept in mind after the history was shortened (quoted as data): {quoted}")}]}));
                 }
+            }
+            if act_now {
+                // Prompt-only, like the continuation below: it never appears in the log.
+                messages.push(json!({"role": "user", "content": [{"type": "text", "text": "[devd] Your last reply spent its whole output budget thinking and produced nothing. Stop deliberating: take the next concrete step now with one tool call, or answer in a few sentences."}]}));
+                act_now = false;
             }
             if continuing {
                 // The previous assistant event ended at the output limit. A
@@ -1401,7 +1411,10 @@ impl Hub {
                         None => "\n\n# Images\nThe person attached one or more images. Their actual content is included when the provider accepts it; if the provider rejects it, continue from the text and say so.",
                     });
                 }
-                let (reasoning_effort, max_tokens) = effort_settings(effort.as_deref());
+                let (mut reasoning_effort, max_tokens) = effort_settings(effort.as_deref());
+                if thought_out > 0 {
+                    reasoning_effort = Some("low".into());
+                }
                 let mut request = ChatRequest {
                     model: model.clone(),
                     system: model_system,
@@ -1437,7 +1450,20 @@ impl Hub {
                             *last_emit = Instant::now();
                         }
                     };
-                    let response = providers::chat_stream(provider, key.as_deref(), req, &mut on_piece);
+                    // A reasoning model thinks before it writes, sometimes for minutes. What it thinks is shown
+                    // as it comes, batched the same way, so a long think reads as thinking and not as a hang.
+                    let events = self.ctx.events.clone();
+                    let mut thought = String::new();
+                    let mut thought_at = Instant::now();
+                    let mut on_thought = |piece: &str| {
+                        thought.push_str(piece);
+                        if thought_at.elapsed() >= Duration::from_millis(120) {
+                            let text = std::mem::take(&mut thought);
+                            events.emit_with("chat.delta", format!("{tid} is thinking"), json!({ "thread": tid, "thinking": text }));
+                            thought_at = Instant::now();
+                        }
+                    };
+                    let response = providers::chat_stream(provider, key.as_deref(), req, &mut on_piece, &mut on_thought);
                     if !pending.is_empty() {
                         let text = std::mem::take(pending);
                         self.ctx.events.emit_with(
@@ -1526,6 +1552,26 @@ impl Hub {
             );
             if let Some(usd) = cost {
                 let _ = self.ctx.store.add_run_cost(&run_id, usd);
+            }
+            let wrote_nothing = response.stop_reason == "max_tokens"
+                && !response.content.iter().any(|b| {
+                    b["type"] == "tool_use" || b["text"].as_str().is_some_and(|t| !t.trim().is_empty())
+                });
+            if wrote_nothing {
+                let _ = self.ctx.store.finish_step(&step.id, "completed", None);
+                thought_out += 1;
+                let spent = response.output_tokens;
+                if thought_out == 1 {
+                    self.log(tid, "notice", json!({ "text": format!("{model} spent this reply's whole budget ({spent} tokens) thinking and wrote nothing. It was asked to act now, with less thinking.") }))?;
+                    act_now = true;
+                    continue;
+                }
+                return Err(DevdError::internal(format!(
+                    "{model} spent its whole reply thinking twice in a row ({spent} tokens the second time) and wrote nothing, so this turn stopped instead of paying for more of the same. Send it again with a lower effort, or choose another model."
+                )));
+            }
+            if thought_out > 0 && response.output_tokens > 0 {
+                thought_out = 0;
             }
             self.log(tid, "assistant", json!({
                 "content": response.content,

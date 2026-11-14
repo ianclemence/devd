@@ -130,14 +130,18 @@ fn text(id: &str, inlines: &[Inline], cx: &App) -> impl IntoElement {
             styled = true;
         }
         if let Some(url) = span.link {
-            style.color = Some(t.info);
-            style.underline = Some(UnderlineStyle {
-                thickness: px(1.0),
-                color: Some(tint(t.info, 0.5)),
-                wavy: false,
-            });
-            links.push((range.clone(), Link::Url(url)));
-            styled = true;
+            // `[main.rs](src/main.rs:42)` is a file, not a web address: what it points at decides where it goes.
+            // A target that leads nowhere is drawn as its words, so nothing promises a dead click.
+            if let Some(link) = super::links::target(&url, root.as_deref()) {
+                style.color = Some(t.info);
+                style.underline = Some(UnderlineStyle {
+                    thickness: px(1.0),
+                    color: Some(tint(t.info, 0.5)),
+                    wavy: false,
+                });
+                links.push((range.clone(), link));
+                styled = true;
+            }
         } else if span.code {
             // `src/main.rs` is a file; `cargo test` is not.
             if let Some(link) = super::links::resolve_token(&span.text, root.as_deref()) {

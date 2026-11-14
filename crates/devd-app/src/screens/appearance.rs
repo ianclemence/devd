@@ -14,8 +14,8 @@ use gpui::{
 };
 
 use crate::shell::Shell;
-use crate::theme::{Theme, Tone, size, theme};
-use crate::ui::{self, eyebrow};
+use crate::theme::{Library, Theme, Tone, size, theme};
+use crate::ui::{self, Button, ButtonKind, eyebrow};
 
 /// What a person is told about each theme: how it feels, and what is behind it.
 const CHARACTER: [(&str, &str, &str); 5] = [
@@ -46,15 +46,15 @@ const CHARACTER: [(&str, &str, &str); 5] = [
     ),
 ];
 
-/// The section: a heading and a grid of the themes, three to a row.
+/// The section: a heading, the built-in themes three to a row, then the themes from files.
 pub fn section(cx: &mut Context<Shell>) -> Div {
     let current = theme(cx).clone();
     let mut grid = div().flex().flex_col().gap(px(14.0));
     for row in CHARACTER.chunks(3) {
         let mut line = div().flex().gap(px(14.0));
         for (id, feel, scene) in row {
-            let card = theme_card(id, feel, scene, &current, cx);
-            line = line.child(card);
+            let shown = Theme::by_id(id);
+            line = line.child(theme_card(shown, (*feel).into(), (*scene).into(), None, &current, cx));
         }
         grid = grid.child(line);
     }
@@ -72,28 +72,145 @@ pub fn section(cx: &mut Context<Shell>) -> Div {
                 .child(div().text_size(px(size::TEXT_SM)).text_color(current.muted).child("Each theme is a whole look: its own colours and its own picture behind every screen.")),
         )
         .child(grid)
+        .child(yours(&current, cx))
+}
+
+/// Themes from files in the mods folder: the ones that can be used, as cards like the built-in ones,
+/// and the ones that cannot, each with what is wrong and a way to fix it.
+fn yours(current: &Theme, cx: &mut Context<Shell>) -> Div {
+    let library = Library::of(cx).clone();
+    let folder = library.dir.clone();
+    let make = Button::new("appearance.make", "Make a theme")
+        .icon("plus")
+        .kind(ButtonKind::Secondary)
+        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+            this.ask_assistant("/theme ", window, cx);
+        }));
+    let open = Button::new("appearance.folder", "Open the folder")
+        .icon("folder")
+        .kind(ButtonKind::Ghost)
+        .on_click(move |_, _, _| {
+            let _ = std::fs::create_dir_all(&folder);
+            let _ = open::that(&folder);
+        });
+    let head = div()
+        .flex()
+        .items_end()
+        .gap(px(12.0))
+        .pt(px(18.0))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .child(div().text_size(px(size::TEXT_LG)).font_weight(FontWeight::SEMIBOLD).child("Your themes"))
+                .child(
+                    div()
+                        .text_size(px(size::TEXT_SM))
+                        .text_color(current.muted)
+                        .child("Describe a look and the assistant makes it, or write a theme file yourself. Saved changes show at once."),
+                ),
+        )
+        .child(div().flex().flex_none().gap(px(6.0)).child(open).child(make));
+
+    let mut column = div().flex().flex_col().gap(px(14.0)).child(head);
+    let usable: Vec<&devd_core::theme::ThemeMod> = library.usable().collect();
+    let broken: Vec<(&str, &Vec<String>)> = library
+        .found
+        .iter()
+        .filter_map(|f| f.theme.as_ref().err().map(|problems| (f.id.as_str(), problems)))
+        .collect();
+
+    for (id, problems) in &broken {
+        let mut list = div().flex().flex_col().gap(px(2.0));
+        for problem in problems.iter().take(4) {
+            list = list.child(div().min_w_0().child(problem.clone()));
+        }
+        if problems.len() > 4 {
+            list = list.child(div().text_color(current.faint).child(format!("and {} more", problems.len() - 4)));
+        }
+        let ask = format!(
+            "/theme Fix the theme in mods/{id}. devd says:\n{}",
+            problems.iter().map(|p| format!("- {p}")).collect::<Vec<_>>().join("\n")
+        );
+        column = column.child(
+            ui::Banner::new(Tone::Warn)
+                .title(format!("\u{201c}{id}\u{201d} cannot be used yet"))
+                .body(list)
+                .action(
+                    Button::new(ui::nid("appearance.fix", id.len()), "Fix it with the assistant")
+                        .kind(ButtonKind::Primary)
+                        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.ask_assistant(&ask, window, cx))),
+                )
+                .render(cx),
+        );
+    }
+
+    if usable.is_empty() {
+        if broken.is_empty() {
+            column = column.child(
+                ui::card(cx).child(
+                    div().px(px(16.0)).child(ui::empty(
+                        "sparkle",
+                        "No themes of your own yet",
+                        "Choose Make a theme and say how it should look, such as cream paper and brown ink. The assistant picks the colours and a picture, and devd checks that every word can be read.",
+                        cx,
+                    )),
+                ),
+            );
+        }
+        return column;
+    }
+
+    let mut grid = div().flex().flex_col().gap(px(14.0));
+    for row in usable.chunks(3) {
+        let mut line = div().flex().gap(px(14.0));
+        for m in row {
+            let shown = Theme::from_mod(m);
+            line = line.child(theme_card(
+                shown,
+                m.spec.feel.clone().into(),
+                m.manifest.description.clone().into(),
+                m.manifest.version.clone(),
+                current,
+                cx,
+            ));
+        }
+        // An unfilled row keeps its cards the width of the ones above.
+        for _ in row.len()..3 {
+            line = line.child(div().flex_1());
+        }
+        grid = grid.child(line);
+    }
+    column.child(grid)
 }
 
 /// One theme: its preview, its name and character, and the colours it is made of.
 fn theme_card(
-    id: &'static str,
-    feel: &'static str,
-    scene: &'static str,
+    shown: Theme,
+    feel: SharedString,
+    scene: SharedString,
+    version: Option<String>,
     current: &Theme,
     cx: &mut Context<Shell>,
 ) -> impl IntoElement {
-    let selected = current.id == id;
-    let shown = Theme::by_id(id);
+    let id = shown.id.clone();
+    let selected = current.id == shown.id;
     let (line, accent, hover, raised) =
         (current.line, current.accent, current.hover, current.raised);
     let mut name = div().flex().items_center().gap(px(8.0)).child(
         div()
             .text_size(px(size::TEXT_MD))
             .font_weight(FontWeight::SEMIBOLD)
-            .child(shown.name),
+            .child(shown.name.clone()),
     );
     if selected {
         name = name.child(ui::pill("In use", Tone::Ok, cx));
+    }
+    if let Some(version) = version {
+        name = name.child(div().flex_none().text_size(px(size::TEXT_XS)).text_color(current.faint).child(version));
     }
     let mut swatches = div().flex().items_center().gap(px(6.0));
     for colour in [
@@ -152,22 +269,17 @@ fn theme_card(
     } else {
         card.border_color(line).hover(move |s| s.bg(hover))
     };
-    card.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.choose_theme(id, cx)))
+    card.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.choose_theme(&id, cx)))
 }
 
 /// A small window, drawn in a theme's own colours with its own scene behind it.
 fn preview(p: &Theme, selected: bool, cx: &App) -> Div {
-    let file = format!("art/{}.png", p.id);
     // The scene is shown stronger than in the window: it is the point of the card.
     let scene = div()
         .absolute()
         .inset_0()
-        .opacity((p.pattern.strength(p.dark) * 3.8).min(0.70))
-        .child(
-            img(SharedString::from(file))
-                .size_full()
-                .object_fit(ObjectFit::Fill),
-        );
+        .opacity((p.art_strength * 3.8).min(0.70))
+        .children((!p.art.is_empty()).then(|| img(p.art.clone()).size_full().object_fit(ObjectFit::Fill)));
     let bar = |w: f32, h: f32, colour: gpui::Hsla| {
         div()
             .w(px(w))

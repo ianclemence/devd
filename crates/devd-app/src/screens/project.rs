@@ -65,6 +65,13 @@ pub struct ProjectUi {
     naming: Option<Naming>,
     /// What scrolls the editor, so it can follow the cursor.
     scroll: ScrollHandle,
+    /// A line a link pointed at: it is highlighted, and brought into view once the file has arrived.
+    goto: Option<u32>,
+    /// Whether the view still has to scroll to that line, and how many more frames it may wait for the file.
+    goto_pending: bool,
+    goto_tries: u8,
+    /// What scrolls the file being read.
+    body_scroll: ScrollHandle,
     /// The shells shown on the Terminal tab.
     pub term: super::term::TermUi,
 }
@@ -92,6 +99,33 @@ struct Naming {
 }
 
 impl ProjectUi {
+    /// Show a file of a project, as a link to it asks: its folders opened in the tree, enough of it read to
+    /// reach the line, and the line marked and brought into view.
+    pub fn reveal(&mut self, dir: &str, rel: &str, line: Option<u32>) {
+        if self.dir != dir {
+            *self = ProjectUi { dir: dir.to_string(), file_lines: FILE_PAGE, ..ProjectUi::default() };
+        }
+        let rel = rel.replace('\\', "/");
+        let mut folder = String::new();
+        for part in rel.split('/').collect::<Vec<_>>().iter().rev().skip(1).rev() {
+            if !folder.is_empty() {
+                folder.push('/');
+            }
+            folder.push_str(part);
+            self.open.insert(folder.clone());
+        }
+        self.file = Some(rel);
+        self.change = None;
+        self.edit_error = None;
+        // A line in a Markdown file is a line of its source.
+        self.source = line.is_some();
+        self.goto = line;
+        self.goto_pending = line.is_some();
+        self.goto_tries = 60;
+        let needed = line.map(|l| l as usize + 100).unwrap_or(0);
+        self.file_lines = self.file_lines.max(FILE_PAGE).max(needed.div_ceil(FILE_PAGE) * FILE_PAGE);
+    }
+
     /// The project on screen and what has been picked on its page: the folder, the file, and a sentence for the assistant.
     pub fn looking_at(&self, route: &Route) -> (Option<String>, Option<String>, Option<String>) {
         let Some(tab) = route.project_tab() else {
@@ -168,6 +202,26 @@ impl Shell {
     }
 }
 
+/// Scroll the file to the line a link pointed at, once the file is laid out and its height is known.
+fn bring_line_into_view(shell: &mut Shell, cx: &mut Context<Shell>) {
+    let u = &mut shell.project_ui;
+    let (true, Some(line)) = (u.goto_pending, u.goto) else {
+        return;
+    };
+    // A file's rows are 18 pixels tall under 8 of padding; the line is put a little below the top.
+    let y = ((line.saturating_sub(1) as f32) * 18.0 - 140.0).max(0.0);
+    let most = u.body_scroll.max_offset().height;
+    if y <= 0.0 || most > px(0.0) {
+        u.body_scroll.set_offset(gpui::point(px(0.0), -px(y).min(most)));
+        u.goto_pending = false;
+    } else if u.goto_tries > 0 {
+        u.goto_tries -= 1;
+        cx.notify();
+    } else {
+        u.goto_pending = false;
+    }
+}
+
 /// Draw one project's page on a tab.
 pub fn render(
     shell: &mut Shell,
@@ -187,6 +241,7 @@ pub fn render(
             Some(cx.new(|cx| TextInput::new("Commit message", cx).multiline(5)));
     }
     refresh_editor(shell, &dir, cx);
+    bring_line_into_view(shell, cx);
     let t = theme(cx).clone();
     let projects = devd(cx).sync.watch(&crate::state::q::projects());
     let entry = projects
@@ -302,6 +357,8 @@ fn view_of(shell: &Shell) -> ProjectView {
             .map(|n| (matches!(n.kind, NamingKind::NewFile), n.input.clone())),
         edit_error: u.edit_error.clone(),
         scroll: u.scroll.clone(),
+        goto: u.goto,
+        body_scroll: u.body_scroll.clone(),
     }
 }
 
@@ -321,6 +378,8 @@ struct ProjectView {
     naming: Option<(bool, Entity<TextInput>)>,
     edit_error: Option<String>,
     scroll: ScrollHandle,
+    goto: Option<u32>,
+    body_scroll: ScrollHandle,
 }
 
 /// The first row: the six places of a project.
@@ -1282,11 +1341,14 @@ fn file_view(dir: &str, rel: &str, view: &ProjectView, cx: &mut Context<Shell>) 
     let mut body = div().flex().flex_col().py(px(8.0));
     for line in content.lines() {
         let (number, code) = line.split_once('\t').unwrap_or(("", line));
+        // The line a link pointed at is marked, so the eye lands on it.
+        let marked = view.goto.is_some_and(|g| number.trim().parse::<u32>().ok() == Some(g));
         body = body.child(
             div()
                 .flex()
                 .gap(px(12.0))
                 .px(px(14.0))
+                .when(marked, |row| row.bg(t.accent_soft))
                 .child(
                     div()
                         .w(px(44.0))
@@ -1321,6 +1383,7 @@ fn file_view(dir: &str, rel: &str, view: &ProjectView, cx: &mut Context<Shell>) 
             .id("file.body")
             .max_h(px(560.0))
             .overflow_scroll()
+            .track_scroll(&view.body_scroll)
             .child(body),
     );
     if data["truncated"] == json!(true) || shown < total {

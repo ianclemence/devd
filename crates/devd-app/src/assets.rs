@@ -259,6 +259,14 @@ impl AssetSource for Assets {
                 include_bytes!("../../../assets/devd-logo.png").as_slice(),
             )));
         }
+        // A scene drawn in a theme file's colours: `art/scene/<scene>-<rrggbb>-<rrggbb>.png`.
+        // The path says everything the picture needs; each one is made once and kept.
+        if let Some(rest) = path
+            .strip_prefix("art/scene/")
+            .and_then(|p| p.strip_suffix(".png"))
+        {
+            return Ok(scene_picture(rest).map(Cow::Owned));
+        }
         // The background art. There is one picture per theme, made the first time it is
         // asked for and kept.
         if let Some(id) = path
@@ -300,6 +308,29 @@ impl AssetSource for Assets {
             .map(SharedString::from)
             .collect())
     }
+}
+
+/// The picture a scene path names, such as `contours-2a241d-8a4b14`, or nothing for a path that does
+/// not name one. Pictures already made are kept, so a theme switched to again costs nothing.
+fn scene_picture(spec: &str) -> Option<Vec<u8>> {
+    static MADE: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>> =
+        std::sync::LazyLock::new(Default::default);
+    let mut parts = spec.split('-');
+    let pattern = crate::ui::dither::Pattern::named(parts.next()?)?;
+    let colour = |hex: &str| -> Option<[u8; 3]> {
+        let n = u32::from_str_radix(hex, 16).ok().filter(|_| hex.len() == 6)?;
+        Some([(n >> 16) as u8, (n >> 8) as u8, n as u8])
+    };
+    let (base, glint) = (colour(parts.next()?)?, colour(parts.next()?)?);
+    if parts.next().is_some() {
+        return None;
+    }
+    let mut made = MADE.lock().unwrap_or_else(|e| e.into_inner());
+    Some(
+        made.entry(spec.to_string())
+            .or_insert_with(|| crate::ui::dither::png_as(base, glint, pattern))
+            .clone(),
+    )
 }
 
 /// Whether an icon of this name exists. Asking for one that does not draws
@@ -359,5 +390,17 @@ mod tests {
             seen.push(bytes.to_vec());
         }
         assert!(Assets.load("art/nope.png").unwrap().is_none());
+    }
+
+    #[test]
+    fn a_scene_is_drawn_in_any_two_colours_a_theme_file_asks_for() {
+        let path = crate::theme::art_path(crate::ui::dither::Pattern::Contours, [0x2a, 0x24, 0x1d], [0x8a, 0x4b, 0x14]);
+        let bytes = Assets.load(&path).unwrap().expect("the scene is served");
+        assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
+        let other = crate::theme::art_path(crate::ui::dither::Pattern::Contours, [0x2a, 0x24, 0x1d], [0x14, 0x4b, 0x8a]);
+        assert_ne!(Assets.load(&other).unwrap().unwrap(), bytes, "other colours, another picture");
+        for bad in ["art/scene/waves-2a241d-8a4b14.png", "art/scene/contours-2a241d.png", "art/scene/contours-zzzzzz-8a4b14.png", "art/scene/contours-2a241d-8a4b14-00.png"] {
+            assert!(Assets.load(bad).unwrap().is_none(), "{bad}");
+        }
     }
 }

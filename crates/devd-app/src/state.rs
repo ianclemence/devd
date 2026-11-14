@@ -27,6 +27,8 @@ pub struct Devd {
     pub room: Room,
     /// The text of replies being written right now, by conversation.
     pub writing: HashMap<String, String>,
+    /// What a model is thinking before it writes, by conversation: when it began and the latest of it.
+    pub thinking: HashMap<String, (Instant, String)>,
     /// Things to tell the person once: a write that failed, one that worked.
     pub toasts: Vec<Toast>,
     /// Work that is still running, named while it runs. A scaffold can take a
@@ -40,6 +42,12 @@ pub struct Devd {
     pub opened_thread: Option<String>,
     /// A place an agent asked the window to show, waiting for the window to go there.
     pub pending_go: Option<String>,
+    /// A file a link pointed at, inside a project devd knows: the project, the file within it, and the line.
+    pub pending_file: Option<(String, String, Option<u32>)>,
+    /// Folded runs of steps the person opened, as `<conversation>:<row>`.
+    pub open_steps: std::collections::HashSet<String>,
+    /// A row whose height changed when it was opened or closed, for the conversation's list to measure again.
+    pub steps_toggled: Option<usize>,
     /// Buttons the assistant drew that were pressed, waiting for the shell to carry them out or ask.
     pub pending_ui: Vec<crate::ui::genui::Act>,
     /// Where the slow pulse of every "happening now" mark is, 0 to 3.
@@ -211,12 +219,16 @@ pub fn start(conn: Arc<Connection>, cx: &mut App) {
         sync,
         room,
         writing: HashMap::new(),
+        thinking: HashMap::new(),
         toasts: Vec::new(),
         running: Vec::new(),
         decisions: Vec::new(),
         online: false,
         opened_thread: None,
         pending_go: None,
+        pending_file: None,
+        open_steps: Default::default(),
+        steps_toggled: None,
         pending_ui: Vec::new(),
         beat: 0,
         live_seen: std::cell::Cell::new(false),
@@ -305,6 +317,28 @@ pub fn start(conn: Arc<Connection>, cx: &mut App) {
     })
     .detach();
 
+    // Themes from files: the mods folder is looked at about once a second, which costs a directory
+    // listing. When something in it changed, it is read again, and a theme in use is repainted in place.
+    cx.spawn(async move |cx| {
+        loop {
+            cx.background_executor().timer(Duration::from_millis(1000)).await;
+            let alive = cx.update(|cx| {
+                if !crate::theme::Library::of(cx).is_stale() {
+                    return;
+                }
+                let home = devd(cx).conn.home.clone();
+                let library = crate::theme::Library::read(std::path::Path::new(&home));
+                refresh_theme(&library, &home, cx);
+                cx.set_global(library);
+                cx.refresh_windows();
+            });
+            if alive.is_err() {
+                break;
+            }
+        }
+    })
+    .detach();
+
     // Presence fades and toasts leave on their own, so something has to look.
     // The same look moves the pulse of whatever is happening now. A mark that
     // animated by itself would redraw the whole window on every frame for as
@@ -385,7 +419,48 @@ fn follow_events(conn: Arc<Connection>, sync: Engine, tx: UnboundedSender<Signal
         });
 }
 
+/// After the mods folder changed: repaint a theme from a file that is in use. A theme that was
+/// removed gives way to Sling; one that a save broke stays as it last was, and Settings says why.
+fn refresh_theme(library: &crate::theme::Library, home: &str, cx: &mut App) {
+    let current = crate::theme::theme(cx).clone();
+    if !current.is_mod() {
+        return;
+    }
+    let folder = current.id.trim_start_matches("mod:");
+    let next = match library.found.iter().find(|f| f.id == folder) {
+        None => crate::theme::Theme::by_id("sling"),
+        Some(found) => match &found.theme {
+            Ok(m) => crate::theme::Theme::from_mod(m),
+            Err(_) => return,
+        },
+    };
+    if next != current {
+        let _ = crate::theme::save(std::path::Path::new(home), &next);
+        cx.set_global(next);
+    }
+}
+
+/// Wear a theme an agent asked for with `theme.use`. The folder is read first, so a theme saved a
+/// moment ago is found.
+fn wear_theme(id: &str, cx: &mut App) {
+    let home = devd(cx).conn.home.clone();
+    let library = crate::theme::Library::read(std::path::Path::new(&home));
+    let next = crate::theme::Theme::resolve(id, &library);
+    let _ = crate::theme::save(std::path::Path::new(&home), &next);
+    cx.set_global(library);
+    cx.set_global(next);
+    cx.refresh_windows();
+}
+
 fn apply(signal: Signal, cx: &mut App) {
+    if let Signal::Event(kind, payload) = &signal
+        && kind == "app.theme"
+    {
+        if let Some(id) = payload["data"]["theme"].as_str() {
+            wear_theme(id, cx);
+        }
+        return;
+    }
     let state = cx.global_mut::<Devd>();
     match signal {
         Signal::Changed => {}
@@ -396,6 +471,22 @@ fn apply(signal: Signal, cx: &mut App) {
             match kind.as_str() {
                 "app.go" => state.pending_go = data["route"].as_str().map(str::to_string),
                 "chat.delta" if !thread.is_empty() => {
+                    if data["start"] == json!(true) {
+                        state.thinking.remove(&thread);
+                    }
+                    // Thinking comes before the words. Only the latest of it is kept: it is shown as a glimpse
+                    // that the model is working, not as something to read back.
+                    if let Some(piece) = data["thinking"].as_str() {
+                        let (_, tail) = state.thinking.entry(thread.clone()).or_insert_with(|| (Instant::now(), String::new()));
+                        tail.push_str(piece);
+                        let keep = tail.char_indices().rev().nth(280).map(|(i, _)| i).unwrap_or(0);
+                        if keep > 0 {
+                            tail.drain(..keep);
+                        }
+                    }
+                    if data["text"].as_str().is_some_and(|t| !t.is_empty()) {
+                        state.thinking.remove(&thread);
+                    }
                     let text = state.writing.entry(thread.clone()).or_default();
                     if data["start"] == json!(true) {
                         text.clear();
@@ -405,10 +496,23 @@ fn apply(signal: Signal, cx: &mut App) {
                         thread: Some(thread.clone()),
                         ..Place::default()
                     };
+                    // A team member writes in a conversation of its own: its face is that member's (the
+                    // Implementer's "I"), not devd's, and pressing it opens that conversation.
+                    let who = state
+                        .sync
+                        .peek(&q::threads())
+                        .and_then(|snap| {
+                            snap.list("")
+                                .iter()
+                                .find(|t| t["id"].as_str() == Some(thread.as_str()))
+                                .and_then(|t| t["team"]["role"].as_str().map(str::to_string))
+                        })
+                        .map(Who::Member)
+                        .unwrap_or(Who::Assistant);
                     state.room.seen(
                         &thread,
                         Presence {
-                            who: Who::Assistant,
+                            who,
                             place,
                             doing: Doing::Writing,
                         },
@@ -418,6 +522,7 @@ fn apply(signal: Signal, cx: &mut App) {
                 "chat.event" if !thread.is_empty() => {
                     // The logged event replaces the live text in the same place.
                     state.writing.remove(&thread);
+                    state.thinking.remove(&thread);
                 }
                 _ => {}
             }

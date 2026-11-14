@@ -425,7 +425,7 @@ impl Shell {
 
     /// Switch theme, keeping the current light or dark choice, and remember it.
     pub fn choose_theme(&mut self, id: &str, cx: &mut Context<Self>) {
-        let next = Theme::by_id(id);
+        let next = Theme::resolve(id, crate::theme::Library::of(cx));
         let _ = crate::theme::save(std::path::Path::new(&devd(cx).conn.home), &next);
         cx.set_global(next);
         cx.refresh_windows();
@@ -510,7 +510,7 @@ impl Shell {
                 return;
             }
             "view.theme" => {
-                let next = theme(cx).next();
+                let next = theme(cx).next(crate::theme::Library::of(cx));
                 let _ = crate::theme::save(std::path::Path::new(&devd(cx).conn.home), &next);
                 cx.set_global(next);
                 cx.refresh_windows();
@@ -1036,6 +1036,9 @@ impl Shell {
         // Everyone else in the room: each face has its role's colour, says who it is and what it is doing when the pointer
         // rests on it, and leads to where it is working when pressed.
         let mut faces = div().flex().items_center().gap(px(4.0));
+        // Which team member owns a conversation is in the conversation list: kept read on every screen, so a
+        // member writing shows its own face wherever the person is.
+        let _ = devd(cx).sync.watch(&q::threads());
         let others: Vec<_> = devd(cx)
             .room
             .everyone()
@@ -1723,6 +1726,12 @@ impl Render for Shell {
             if !run_ids.is_empty() && self.modal.is_none() {
                 self.warn_before_closing(run_ids, window, cx);
             }
+        }
+        // A link to a file in a project: the project's files, the file open, the line marked.
+        if let Some((dir, rel, line)) = cx.global_mut::<Devd>().pending_file.take() {
+            self.project_ui.reveal(&dir, &rel, line);
+            self.history.go(Route::project(dir, devd_app_core::project::ProjectTab::Files));
+            cx.notify();
         }
         // An agent asked to show the person something.
         if let Some(wanted) = cx.global_mut::<Devd>().pending_go.take() {

@@ -55,6 +55,7 @@ pub mod store_schedule;
 pub mod store_stacks;
 pub mod store_team;
 pub mod store_work;
+pub mod theme;
 pub mod update;
 pub mod util;
 

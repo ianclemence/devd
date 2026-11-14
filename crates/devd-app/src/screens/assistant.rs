@@ -48,6 +48,8 @@ pub enum Item {
     Failed(String),
     /// An operation waiting for the person's approval.
     Waiting { capability: String, summary: String },
+    /// A run of finished steps, folded into one line ("Read 3 files and ran a command") that opens when pressed.
+    Steps(Vec<Item>),
 }
 
 /// Fold a conversation's events into the items a person reads.
@@ -138,7 +140,54 @@ pub fn fold(events: &[Value], pending: &[&str]) -> Vec<Item> {
             _ => {}
         }
     }
-    items
+    one_name_per_turn(&mut items);
+    fold_steps(items)
+}
+
+/// Two or more finished steps in a row are one line, the way a person reports them. A step still running is
+/// never folded: it is what is happening now.
+fn fold_steps(items: Vec<Item>) -> Vec<Item> {
+    let mut out: Vec<Item> = Vec::with_capacity(items.len());
+    let mut run: Vec<Item> = Vec::new();
+    let flush = |run: &mut Vec<Item>, out: &mut Vec<Item>| match run.len() {
+        0 => {}
+        1 => out.append(run),
+        _ => out.push(Item::Steps(std::mem::take(run))),
+    };
+    for item in items {
+        match &item {
+            Item::Tool { ok: Some(_), .. } => run.push(item),
+            _ => {
+                flush(&mut run, &mut out);
+                out.push(item);
+            }
+        }
+    }
+    flush(&mut run, &mut out);
+    out
+}
+
+/// An agent's turn is many model calls: a sentence, a tool, a sentence, a tool. Read together they are one
+/// reply, so the model that wrote it is named once, under the last thing it wrote before the person spoke
+/// again, not under every step.
+fn one_name_per_turn(items: &mut [Item]) {
+    let mut last_in_turn: Option<usize> = None;
+    let mut named: Vec<usize> = Vec::new();
+    for (n, item) in items.iter().enumerate() {
+        match item {
+            Item::Devd { .. } => last_in_turn = Some(n),
+            Item::You { .. } => named.extend(last_in_turn.take()),
+            _ => {}
+        }
+    }
+    named.extend(last_in_turn);
+    for (n, item) in items.iter_mut().enumerate() {
+        if let Item::Devd { model, .. } = item
+            && !named.contains(&n)
+        {
+            model.clear();
+        }
+    }
 }
 
 /// The one line of a tool result worth showing beside the call.
@@ -494,6 +543,7 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
     let state = devd(cx);
     let snap = state.sync.watch_log(&q::thread(id), q::thread_log());
     let writing = state.writing.get(id).cloned();
+    let thinking = state.thinking.get(id).cloned();
     let Some(data) = snap.data.clone() else {
         let body = match &snap.error {
             Some(failure) if failure.code == "not_found" => div()
@@ -668,11 +718,40 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
     // beside the message box, and that is where it is resumed from. Only when the transcript holds no such failure is
     // it said above instead.
     let items = shell.transcript.items.clone();
+    // What the status line says devd is doing: thinking, writing, or the step that is running.
+    let is_writing = writing.as_deref().is_some_and(|w| !w.trim().is_empty());
+    let (doing, glimpse) = match (&thinking, is_writing) {
+        (Some((_, tail)), false) => ("Thinking".to_string(), Some(tail.clone())),
+        (_, true) => ("Writing".to_string(), None),
+        _ => {
+            let step = items.iter().rev().find_map(|i| match i {
+                Item::Tool { name, input, ok: None, .. } => {
+                    let said = toolname::describe(name, input, Phase::Running);
+                    Some(if said.object.is_empty() { said.action } else { format!("{} {}", said.action, said.object) })
+                }
+                _ => None,
+            });
+            (step.unwrap_or_else(|| "Working".to_string()), None)
+        }
+    };
+    // The turn began when the person last spoke.
+    let turn_began = data["events"]
+        .as_array()
+        .and_then(|events| events.iter().rev().find(|e| e["kind"] == "user"))
+        .and_then(|e| e["created_at"].as_str())
+        .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+        .map(|at| at.with_timezone(&chrono::Utc));
     let failure = (!running).then(|| thread["error"].as_str().map(str::to_string)).flatten();
     let resume_at = failure
         .as_ref()
         .and_then(|_| items.iter().rposition(|i| matches!(i, Item::Failed(_))))
         .filter(|at| items[at + 1..].iter().all(|i| matches!(i, Item::Notice(_))));
+    // A folded run of steps that was opened or closed changed its height: the list measures that row again.
+    if let Some(row) = cx.global_mut::<crate::state::Devd>().steps_toggled.take()
+        && row < shell.transcript.list.item_count()
+    {
+        shell.transcript.list.splice(row..row + 1, 1);
+    }
     if shell.transcript.resume_at != resume_at {
         let rows = shell.transcript.list.item_count();
         for at in [shell.transcript.resume_at, resume_at].into_iter().flatten() {
@@ -739,6 +818,7 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
                 .pb(px(14.0))
                 .pt(px(8.0))
                 .children(stopped)
+                .children(running.then(|| activity_line(doing.clone(), glimpse.clone(), turn_began, cx)))
                 .child(composer(
                     shell,
                     if running {
@@ -902,6 +982,45 @@ fn running_for(thread: &str, index: usize) -> Option<u64> {
 fn forget_running(thread: &str, index: usize) -> Option<u64> {
     RUNNING_SINCE.with(|m| m.borrow_mut().remove(&(thread.to_string(), index)));
     None
+}
+
+/// While devd works: what it is doing now, and how long since the person last spoke. It sits at the foot of
+/// the reply, above the message box, for the whole turn: a step running ("Running go test"), the model thinking
+/// (with the latest of its thought, faint), or the words being written. Nothing about a long turn should look
+/// like a hang.
+fn activity_line(doing: String, glimpse: Option<String>, since: Option<chrono::DateTime<chrono::Utc>>, cx: &App) -> AnyElement {
+    let t = theme(cx);
+    let took = since.map(|at| took((chrono::Utc::now() - at).num_seconds().max(0) as u64));
+    div()
+        .w_full()
+        .max_w(px(size::READING))
+        .mx_auto()
+        .pb(px(10.0))
+        .flex()
+        .items_center()
+        .gap(px(10.0))
+        .text_size(px(size::TEXT_SM))
+        .child(live_dot("thread.activity", Tone::Accent, cx))
+        .child(div().flex_none().max_w(px(420.0)).text_color(t.muted).font_weight(FontWeight::MEDIUM).child(ui::Clip::new(doing)))
+        .children(took.map(|took| div().flex_none().font_family(mono()).text_size(px(size::TEXT_XS)).text_color(t.faint).child(took)))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .italic()
+                .text_color(t.faint)
+                .children(glimpse.map(|g| ui::Clip::tail(g.split_whitespace().collect::<Vec<_>>().join(" ")))),
+        )
+        .into_any_element()
+}
+
+/// A duration as a person says it: "45s", "7m 17s", "1h 3m".
+fn took(secs: u64) -> String {
+    match secs {
+        0..=59 => format!("{secs}s"),
+        60..=3599 => format!("{}m {}s", secs / 60, secs % 60),
+        _ => format!("{}h {}m", secs / 3600, (secs % 3600) / 60),
+    }
 }
 
 /// Pick a stopped conversation back up. Any message does that, from where it stopped; this one asks for nothing new.
@@ -1080,6 +1199,48 @@ fn draw(thread: &str, index: usize, item: &Item, resume: bool, cx: &App) -> AnyE
             };
             banner.render(cx).into_any_element()
         }
+        Item::Steps(steps) => {
+            let key = format!("{thread}:{index}");
+            let open = cx.try_global::<crate::state::Devd>().is_some_and(|d| d.open_steps.contains(&key));
+            let listed: Vec<(&str, &Value, bool)> = steps
+                .iter()
+                .filter_map(|s| match s {
+                    Item::Tool { name, input, ok, .. } => Some((name.as_str(), input, ok.unwrap_or(true))),
+                    _ => None,
+                })
+                .collect();
+            let failed = listed.iter().any(|(_, _, ok)| !ok);
+            let line = devd_app_core::toolname::summary(&listed);
+            let toggle = key.clone();
+            let head = div()
+                .id(ui::nid("steps.head", index))
+                .flex()
+                .items_start()
+                .gap(px(6.0))
+                .pl(px(2.0))
+                .text_size(px(size::TEXT))
+                .line_height(px(20.0))
+                .text_color(if failed { t.muted } else { t.faint })
+                .cursor_pointer()
+                .hover(|s| s.opacity(0.8))
+                .child(div().w(px(16.0)).h(px(20.0)).flex().flex_none().items_center().justify_center().child(icon(if open { "chevron-down" } else { "chevron-right" }, 12.0, t.faint)))
+                .child(div().flex_1().min_w_0().child(line))
+                .on_click(move |_, _, cx| {
+                    let devd = cx.global_mut::<crate::state::Devd>();
+                    if !devd.open_steps.remove(&toggle) {
+                        devd.open_steps.insert(toggle.clone());
+                    }
+                    devd.steps_toggled = Some(index);
+                    cx.refresh_windows();
+                });
+            let mut column = div().flex().flex_col().gap(px(10.0)).child(head);
+            if open {
+                for (k, step) in steps.iter().enumerate() {
+                    column = column.child(draw(thread, 1_000_000 + index * 100 + k, step, false, cx));
+                }
+            }
+            column.into_any_element()
+        }
         Item::Waiting { summary, .. } => ui::Banner::new(Tone::Warn)
             .title("Waiting for your approval")
             .text(if summary.is_empty() { "devd will carry on once you answer.".to_string() } else { summary.clone() })
@@ -1130,6 +1291,46 @@ mod tests {
 
     fn event(kind: &str, data: Value) -> Value {
         json!({ "kind": kind, "data": data })
+    }
+
+    #[test]
+    fn time_taken_reads_as_a_person_says_it() {
+        assert_eq!(took(45), "45s");
+        assert_eq!(took(437), "7m 17s");
+        assert_eq!(took(3780), "1h 3m");
+    }
+
+    #[test]
+    fn finished_steps_in_a_row_fold_into_one_and_a_running_one_stays_out() {
+        let call = |id: &str| event("assistant", json!({ "model": "m", "content": [{ "type": "tool_use", "id": id, "name": "read_file", "input": { "path": "a.rs" } }] }));
+        let done = |id: &str| event("tool_result", json!({ "tool_use_id": id, "is_error": false, "content": "{}" }));
+        let items = fold(&[event("user", json!({ "text": "go" })), call("a"), done("a"), call("b"), done("b"), call("c")], &[]);
+        assert!(matches!(&items[1], Item::Steps(steps) if steps.len() == 2), "{items:?}");
+        assert!(matches!(&items[2], Item::Tool { ok: None, .. }), "the running step is what is happening now: {items:?}");
+    }
+
+    #[test]
+    fn the_model_is_named_once_per_reply_not_under_every_step() {
+        let say = |text: &str| event("assistant", json!({ "model": "deepseek-flash", "content": [{ "type": "text", "text": text }] }));
+        let items = fold(
+            &[
+                event("user", json!({ "text": "build it" })),
+                say("First, the module."),
+                say("Now the tests."),
+                say("Done."),
+                event("user", json!({ "text": "thanks" })),
+                say("You're welcome."),
+            ],
+            &[],
+        );
+        let named: Vec<&str> = items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Devd { model, .. } => Some(model.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(named, ["", "", "deepseek-flash", "deepseek-flash"], "under the last step of each turn only");
     }
 
     #[test]

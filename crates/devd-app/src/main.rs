@@ -55,12 +55,14 @@ fn main() {
         .nth(1)
         .and_then(|arg| devd_app_core::nav::Route::parse(&arg))
         .unwrap_or(devd_app_core::nav::Route::Home);
-    let start_theme = theme::load(std::path::Path::new(&conn.home));
+    let library = theme::Library::read(std::path::Path::new(&conn.home));
+    let start_theme = theme::load(std::path::Path::new(&conn.home), &library);
     let closing = conn.clone();
     Application::new()
         .with_assets(assets::Assets)
         .run(move |cx: &mut App| {
             cx.set_global(start_theme);
+            cx.set_global(library);
             ui::input::bind_keys(cx);
             shell::bind_keys(cx);
             state::start(conn.clone(), cx);

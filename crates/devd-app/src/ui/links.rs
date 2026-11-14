@@ -140,6 +140,59 @@ pub fn present(text: &str, root: Option<&Path>) -> (String, Vec<(Range<usize>, L
     (shown, links)
 }
 
+/// Where a written link (`[label](target)`) leads. An agent writes web addresses, devd addresses, and paths:
+/// `src/main.rs`, `src/main.rs:42`, `./README.md`, `src/main.rs#L42`, `file:///D:/www/app/main.go`. A path
+/// that does not exist is no link at all, so nothing on screen promises a click that goes nowhere.
+pub fn target(written: &str, root: Option<&Path>) -> Option<Link> {
+    let written = written.trim();
+    let lower = written.to_ascii_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("mailto:") {
+        return Some(Link::Url(written.to_string()));
+    }
+    if lower.starts_with("devd://") {
+        return resolve_token(written, root);
+    }
+    let mut path = written.to_string();
+    if lower.starts_with("file://") {
+        path = path[7..].trim_start_matches('/').to_string();
+        // `file:///home/x` is an absolute path on a machine without drive letters.
+        if !path.as_bytes().get(1).is_some_and(|b| *b == b':') {
+            path = format!("/{path}");
+        }
+        path = path.replace("%20", " ");
+    }
+    // `main.rs#L42` is the line, as a code host writes it.
+    if let Some((file, anchor)) = path.split_once("#L")
+        && let Ok(line) = anchor.split('-').next().unwrap_or_default().parse::<u32>()
+    {
+        path = format!("{file}:{line}");
+    }
+    let path = path.strip_prefix("./").map(str::to_string).unwrap_or(path);
+    resolve_token(&path, root)
+}
+
+/// The project a file belongs to, among the projects devd knows, and the file's path within it. The deepest
+/// project wins, so a file in a project inside another opens in the inner one.
+pub fn within(projects: &[String], file: &Path) -> Option<(String, String)> {
+    let norm = |p: &str| {
+        let p = p.replace('\\', "/").trim_end_matches('/').to_string();
+        if cfg!(windows) { p.to_lowercase() } else { p }
+    };
+    let file_text = file.to_string_lossy().replace('\\', "/");
+    let wanted = norm(&file_text);
+    projects
+        .iter()
+        .filter(|dir| {
+            let d = norm(dir);
+            wanted.len() > d.len() && wanted.starts_with(&d) && wanted.as_bytes()[d.len()] == b'/'
+        })
+        .max_by_key(|dir| dir.len())
+        .map(|dir| {
+            let cut = dir.trim_end_matches(['/', '\\']).len() + 1;
+            (dir.clone(), file_text[cut..].to_string())
+        })
+}
+
 /// Do what a click on a link does. A program is shown in its folder, never started.
 pub fn open(link: &Link, cx: &mut App) {
     match link {
@@ -149,9 +202,24 @@ pub fn open(link: &Link, cx: &mut App) {
             cx.refresh_windows();
         }
         Link::Url(url) => cx.open_url(url),
-        Link::File { path, .. } => {
+        Link::File { path, line } => {
             if !path.exists() {
                 return;
+            }
+            // A file in a project opens in devd, at the line, beside everything else about the project. A
+            // folder, a program, or a file outside every project is handed to the system as before.
+            if path.is_file() && !would_run(&path.to_string_lossy()) {
+                let projects: Vec<String> = cx
+                    .global::<Devd>()
+                    .sync
+                    .peek(&crate::state::q::projects())
+                    .map(|snap| snap.list("").iter().filter_map(|p| p["path"].as_str().map(str::to_string)).collect())
+                    .unwrap_or_default();
+                if let Some((dir, rel)) = within(&projects, path) {
+                    cx.global_mut::<Devd>().pending_file = Some((dir, rel, *line));
+                    cx.refresh_windows();
+                    return;
+                }
             }
             if path.is_dir() {
                 cx.open_with_system(path);
@@ -234,5 +302,45 @@ mod tests {
         assert!(resolve_token("src/main.rs", Some(&root)).is_some());
         assert!(resolve_token("cargo test", Some(&root)).is_none());
         std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_written_link_goes_where_its_target_points() {
+        let root = scratch("target");
+        let file = |link: Option<Link>| match link {
+            Some(Link::File { path, line }) => Some((path.ends_with("main.rs"), line)),
+            _ => None,
+        };
+        // The forms an agent writes a file in.
+        assert_eq!(file(target("src/main.rs", Some(&root))), Some((true, None)));
+        assert_eq!(file(target("src/main.rs:42", Some(&root))), Some((true, Some(42))));
+        assert_eq!(file(target("./src/main.rs", Some(&root))), Some((true, None)));
+        assert_eq!(file(target("src/main.rs#L7-L9", Some(&root))), Some((true, Some(7))));
+        let absolute = format!("file:///{}", root.join("src").join("main.rs").display().to_string().replace('\\', "/"));
+        assert_eq!(file(target(&absolute, None)), Some((true, None)), "{absolute}");
+        // Web and devd addresses stay what they are.
+        assert!(matches!(target("https://devd.test/x", None), Some(Link::Url(_))));
+        assert!(matches!(target("mailto:a@b.test", None), Some(Link::Url(_))));
+        assert!(matches!(target("devd://inbox", None), Some(Link::Route(r)) if r == "/inbox"));
+        // A file that is not there is no link, rather than a dead one.
+        assert!(target("src/missing.rs", Some(&root)).is_none());
+        assert!(target("notes", Some(&root)).is_none());
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_file_opens_in_the_deepest_project_that_holds_it() {
+        let projects = vec!["D:/www/shop".to_string(), "D:/www/shop/admin".to_string(), "D:/www/blog".to_string()];
+        assert_eq!(
+            within(&projects, Path::new(r"D:\www\shop\admin\src\main.rs")),
+            Some(("D:/www/shop/admin".to_string(), "src/main.rs".to_string()))
+        );
+        assert_eq!(
+            within(&projects, Path::new("D:/www/shop/README.md")),
+            Some(("D:/www/shop".to_string(), "README.md".to_string()))
+        );
+        // A neighbour whose name starts the same is not inside.
+        assert_eq!(within(&projects, Path::new("D:/www/shopfront/x.rs")), None);
+        assert_eq!(within(&projects, Path::new("C:/elsewhere/x.rs")), None);
     }
 }
