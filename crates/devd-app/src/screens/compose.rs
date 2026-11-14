@@ -379,16 +379,14 @@ fn menu_row(
     cx: &gpui::App,
 ) -> gpui::Stateful<gpui::Div> {
     let t = theme(cx);
+    // The icon or symbol stands on its own, in a fixed column so the names line up: no tile around it.
     let tile = div()
-        .size(px(24.0))
+        .w(px(14.0))
+        .h(px(20.0))
         .flex_none()
         .flex()
         .items_center()
-        .justify_center()
-        .rounded(px(size::RADIUS))
-        .bg(t.hover)
-        .border_1()
-        .border_color(t.line);
+        .justify_center();
     let tile = match lead {
         Lead::Icon(name) => tile.child(icon(name, 14.0, t.muted)),
         Lead::Symbol(mark) => tile.child(
@@ -400,16 +398,23 @@ fn menu_row(
                 .child(mark.to_string()),
         ),
     };
+    // The mark belongs to its name, so it sits close to it; the description keeps its distance.
     ui::row(id, on, cx)
         .min_h(px(38.0))
         .gap(px(10.0))
-        .child(tile)
         .child(
             div()
+                .flex()
                 .flex_none()
-                .text_size(px(size::TEXT))
-                .font_weight(FontWeight::MEDIUM)
-                .child(title.to_string()),
+                .items_center()
+                .gap(px(7.0))
+                .child(tile)
+                .child(
+                    div()
+                        .text_size(px(size::TEXT))
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(title.to_string()),
+                ),
         )
         .child(
             div()

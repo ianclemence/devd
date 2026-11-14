@@ -44,6 +44,10 @@ pub struct Devd {
     pub pending_go: Option<String>,
     /// A file a link pointed at, inside a project devd knows: the project, the file within it, and the line.
     pub pending_file: Option<(String, String, Option<u32>)>,
+    /// Folded runs of steps the person opened, as `<conversation>:<row>`.
+    pub open_steps: std::collections::HashSet<String>,
+    /// A row whose height changed when it was opened or closed, for the conversation's list to measure again.
+    pub steps_toggled: Option<usize>,
     /// Buttons the assistant drew that were pressed, waiting for the shell to carry them out or ask.
     pub pending_ui: Vec<crate::ui::genui::Act>,
     /// Where the slow pulse of every "happening now" mark is, 0 to 3.
@@ -223,6 +227,8 @@ pub fn start(conn: Arc<Connection>, cx: &mut App) {
         opened_thread: None,
         pending_go: None,
         pending_file: None,
+        open_steps: Default::default(),
+        steps_toggled: None,
         pending_ui: Vec::new(),
         beat: 0,
         live_seen: std::cell::Cell::new(false),

@@ -291,8 +291,9 @@ fn tool_mark_file(name: &str) -> Option<&'static str> {
     find(&name).or_else(|| name.split(['-', '_', '.', ' ']).next().and_then(find))
 }
 
-/// A tool's, runtime's, service's or stack's own mark on a small pale tile, which keeps a dark mark readable on a dark theme.
-/// One with no mark gets its initial, never something made up.
+/// A tool's, runtime's, service's or stack's own mark, standing on its own with no tile around it. A
+/// single-colour mark is drawn in the theme's text colour, so it reads on every theme; a picture is drawn as
+/// it is. One with no mark gets its initial, never something made up.
 pub fn tool_mark(name: &str, label: &str, box_px: f32, cx: &App) -> Div {
     let t = theme(cx);
     let tile = div()
@@ -300,13 +301,18 @@ pub fn tool_mark(name: &str, label: &str, box_px: f32, cx: &App) -> Div {
         .flex()
         .flex_none()
         .items_center()
-        .justify_center()
-        .rounded(px(size::RADIUS));
+        .justify_center();
+    let mark = box_px * 0.72;
     match tool_mark_file(name) {
-        Some(file) => tile
-            .bg(gpui::rgba(0xfffffff0))
-            .child(img(SharedString::from(format!("brands/{file}"))).size(px(box_px * 0.66))),
-        None => tile.bg(t.hover).child(
+        Some(file) if file.ends_with(".svg") => tile.child(
+            svg()
+                .path(format!("brands/{file}"))
+                .size(px(mark))
+                .flex_none()
+                .text_color(t.text),
+        ),
+        Some(file) => tile.child(img(SharedString::from(format!("brands/{file}"))).size(px(mark))),
+        None => tile.child(
             div()
                 .text_size(px(size::TEXT_SM))
                 .font_weight(FontWeight::SEMIBOLD)
@@ -344,19 +350,18 @@ fn brand_file(name: &str) -> Option<(&'static str, bool)> {
         .map(|(_, file, own)| (*file, *own))
 }
 
-/// A vendor's mark on a small tile. A vendor devd has no artwork for gets its
+/// A vendor's mark. A vendor devd has no artwork for gets its
 /// initial: a mark is never invented.
 pub fn brand(name: &str, label: &str, box_px: f32, cx: &App) -> Div {
     let t = theme(cx);
+    // The mark stands on its own, in a fixed square so rows line up: no tile around it.
     let tile = div()
         .size(px(box_px))
         .flex()
         .flex_none()
         .items_center()
-        .justify_center()
-        .rounded(px(size::RADIUS))
-        .bg(t.hover);
-    let mark = box_px * 0.6;
+        .justify_center();
+    let mark = box_px * 0.8;
     match brand_file(name) {
         Some((file, true)) => tile.child(
             img(SharedString::from(format!("brands/{file}")))
@@ -893,16 +898,7 @@ pub fn empty(
         .justify_center()
         .gap(px(8.0))
         .py(px(56.0))
-        .child(
-            div()
-                .size(px(40.0))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(size::RADIUS_L))
-                .bg(t.hover)
-                .child(icon(icon_name, 18.0, t.faint)),
-        )
+        .child(icon(icon_name, 22.0, t.faint))
         .child(
             div()
                 .text_size(px(size::TEXT_MD))

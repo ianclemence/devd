@@ -736,9 +736,72 @@ fn object_of(id: &str, args: &Value) -> String {
         .unwrap_or_default()
 }
 
+/// Finished steps of a turn, said as one line: "Edited a file, read 3 files and ran 2 commands". Each step is
+/// a tool's name, what it was given, and whether it worked. A reply folds a run of finished steps into this
+/// line, the way a person would report them, and opens them again when asked.
+pub fn summary(steps: &[(&str, &Value, bool)]) -> String {
+    let (mut read, mut edited, mut ran, mut searched, mut browsed, mut git, mut other, mut failed) =
+        (0, 0, 0, 0, 0, 0, 0, 0);
+    for (name, input, ok) in steps {
+        if !ok {
+            failed += 1;
+        }
+        let said = describe(name, input, Phase::Done);
+        match said.kind {
+            "file" if only_looks(name, input) => read += 1,
+            "file" => edited += 1,
+            "terminal" => ran += 1,
+            "search" | "lookup" => searched += 1,
+            "browser" => browsed += 1,
+            "git" => git += 1,
+            _ => other += 1,
+        }
+    }
+    let count = |n: usize, one: &str, many: &str| match n {
+        0 => None,
+        1 => Some(one.to_string()),
+        n => Some(many.replace('#', &n.to_string())),
+    };
+    let parts: Vec<String> = [
+        count(edited, "edited a file", "edited # files"),
+        count(read, "read a file", "read # files"),
+        count(ran, "ran a command", "ran # commands"),
+        count(searched, "searched", "searched # times"),
+        count(browsed, "used the browser", "took # steps in the browser"),
+        count(git, "checked git", "took # git steps"),
+        count(other, "took one more step", "took # more steps"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let mut line = match parts.len() {
+        0 => String::new(),
+        1 => parts[0].clone(),
+        n => format!("{} and {}", parts[..n - 1].join(", "), parts[n - 1]),
+    };
+    if let Some(first) = line.get(..1) {
+        line = format!("{}{}", first.to_uppercase(), &line[1..]);
+    }
+    match failed {
+        0 => line,
+        n => format!("{line} · {n} failed"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finished_steps_read_as_one_sentence() {
+        let read = serde_json::json!({ "path": "src/main.rs" });
+        let cmd = serde_json::json!({ "command": "go test ./..." });
+        let steps = [("read_file", &read, true), ("read_file", &read, true), ("write_file", &read, true), ("project_exec", &cmd, false)];
+        let line = summary(&steps);
+        assert!(line.starts_with("Edited a file, read 2 files"), "{line}");
+        assert!(line.ends_with("· 1 failed"), "{line}");
+        assert_eq!(summary(&[("read_file", &read, true)]), "Read a file");
+    }
 
     #[test]
     fn only_a_call_that_looks_is_quiet() {
