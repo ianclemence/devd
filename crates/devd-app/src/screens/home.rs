@@ -163,7 +163,6 @@ pub fn render(shell: &mut Shell, _window: &mut Window, cx: &mut Context<Shell>) 
     column = column.child(super::compose::view(
         shell,
         "Enter to send",
-        false,
         100_000.0,
         cx,
     ));

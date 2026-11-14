@@ -184,7 +184,7 @@ struct ExecArgs {
     path: String,
     /// Program followed by arguments. No shell is involved.
     argv: Vec<String>,
-    /// Seconds before the command is stopped (default 600).
+    /// Seconds before the command is stopped (default 180; raise it for a long build).
     #[serde(default)]
     timeout_secs: Option<u64>,
 }
@@ -1767,7 +1767,7 @@ fn exec_cmd(ctx: &Ctx, a: &ExecArgs, destructive: bool) -> Result<Outcome> {
         c.package_manager.as_deref().unwrap_or(""),
         &dir,
         &a.argv,
-        a.timeout_secs.unwrap_or(600),
+        a.timeout_secs.unwrap_or(180),
     )?;
     let display = exec::redact_argv(&a.argv).join(" ");
     let _ = ctx

@@ -88,7 +88,7 @@ Paths are absolute, or relative to the working directory named under Context.
 - several changes to one file go in ONE call: edit_file {"path":"<file>","edits":[{"old":"...","new":"..."},{"old":"...","new":"..."}]} - applied in order, written only if all apply
 - write_file {"path":"<file>","content":"...","create_dirs":true} ; delete_file {"path":"<file or dir>","recursive":false}
 - project_info {"path":"<dir>"} ; project_tasks {"path":"<dir>"} ; run_task {"path":"<dir>","task":"test"}
-- run_command {"path":"<dir>","argv":["php","artisan","migrate"]} - any program the project's stack allows, as argv, no shell
+- run_command {"path":"<dir>","argv":["php","artisan","migrate"],"timeout_secs":180} - any program the project's stack allows, as argv, no shell. It is stopped after 180 seconds unless you give a longer timeout_secs; never start a program that waits for input or never exits, and delete any debug files you made when you are done
 - git_status {"repo":"<dir>"} ; git_diff {"repo":"<dir>"} ; git_log {"repo":"<dir>"}
 - git_stage {"repo":"<dir>","paths":["src/a.rs"]} then git_commit {"repo":"<dir>","message":"..."}
 - fetch_page {"url":"https://..."} reads a public web page as text

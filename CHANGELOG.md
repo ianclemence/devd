@@ -12,6 +12,20 @@ may change capability identifiers where the design was wrong.
 
 ## [Unreleased]
 
+### Fixed
+
+- **One line per change in a conversation.** A file a step wrote shows once, as its changes line with Undo, not
+  as a write row and again as a changes row. Folding of finished steps now holds across those lines, and a
+  step that failed always stays visible on its own.
+- **One live status.** "Working" no longer appears in three places (the header, the message box and above it).
+  The running step has its own row with its own clock; the line above the box keeps the turn's time.
+- **Step names are not cut when there is room.** A long file name or command wraps onto a second line instead
+  of being clipped.
+- **Honest numbers under a reply.** The label says "out" for the tokens the model wrote, and the message box
+  says "Thinking off" when thinking is off.
+- **Commands that hang.** A command the agent starts is stopped after 180 seconds unless it asks for longer,
+  and the agent is told to set a time limit and to clean up files it made for debugging.
+
 ## [0.34.0] - 2026-11-14 - Replies that think the right amount, goals, and a way back from each step
 
 ### Added
