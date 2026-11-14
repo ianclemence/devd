@@ -12,6 +12,8 @@ may change capability identifiers where the design was wrong.
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-11-14 - Replies that think the right amount, goals, and a way back from each step
+
 ### Added
 
 - **Thinking you can control.** Effort now has Off in the message box. devd always tells DeepSeek how much to
