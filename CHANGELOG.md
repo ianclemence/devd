@@ -49,6 +49,10 @@ may change capability identifiers where the design was wrong.
 
 ### Fixed
 
+- **Stop stops at once.** Stop was honoured only between steps, so a model thinking for minutes kept going
+  until it finished. The reply is now dropped as it arrives, and the conversation says "Stopped." straight away.
+- **The status line stays inside its row.** The label ("Thinking", or the step running) is shown whole, and the
+  glimpse of the model's thought takes only the room that is left.
 - **Undo works on Windows.** A folder Windows hands back with its `\?\` prefix was refused by git, so a step's
   changes were silently never recorded there; the prefix is now removed first.
 

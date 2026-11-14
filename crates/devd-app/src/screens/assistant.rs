@@ -1139,6 +1139,19 @@ fn forget_running(thread: &str, index: usize) -> Option<u64> {
 fn activity_line(doing: String, glimpse: Option<String>, since: Option<chrono::DateTime<chrono::Utc>>, cx: &App) -> AnyElement {
     let t = theme(cx);
     let took = since.map(|at| took((chrono::Utc::now() - at).num_seconds().max(0) as u64));
+    // The label and the time keep their width; the glimpse of thought takes only what is left, and is cut at the
+    // row's edge. It is the latest few words, so the end of the thought is what shows.
+    let glimpse = glimpse.map(|g| {
+        let words: Vec<&str> = g.split_whitespace().collect();
+        let mut tail = String::new();
+        for word in words.iter().rev() {
+            if tail.chars().count() + word.chars().count() > 110 {
+                break;
+            }
+            tail = if tail.is_empty() { word.to_string() } else { format!("{word} {tail}") };
+        }
+        format!("…{tail}")
+    });
     div()
         .w_full()
         .max_w(px(size::READING))
@@ -1147,18 +1160,21 @@ fn activity_line(doing: String, glimpse: Option<String>, since: Option<chrono::D
         .flex()
         .items_center()
         .gap(px(10.0))
+        .overflow_hidden()
         .text_size(px(size::TEXT_SM))
-        .child(live_dot("thread.activity", Tone::Accent, cx))
-        .child(div().flex_none().max_w(px(420.0)).text_color(t.muted).font_weight(FontWeight::MEDIUM).child(ui::Clip::new(doing)))
+        .child(div().flex_none().child(live_dot("thread.activity", Tone::Accent, cx)))
+        .child(div().flex_none().text_color(t.muted).font_weight(FontWeight::MEDIUM).child(doing))
         .children(took.map(|took| div().flex_none().font_family(mono()).text_size(px(size::TEXT_XS)).text_color(t.faint).child(took)))
-        .child(
+        .children(glimpse.map(|g| {
             div()
                 .flex_1()
                 .min_w_0()
+                .overflow_hidden()
+                .whitespace_nowrap()
                 .italic()
                 .text_color(t.faint)
-                .children(glimpse.map(|g| ui::Clip::tail(g.split_whitespace().collect::<Vec<_>>().join(" ")))),
-        )
+                .child(g)
+        }))
         .into_any_element()
 }
 

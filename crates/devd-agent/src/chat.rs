@@ -1565,7 +1565,9 @@ impl Hub {
                             thought_at = Instant::now();
                         }
                     };
-                    let response = providers::chat_stream(provider, key.as_deref(), req, &mut on_piece, &mut on_thought);
+                    let response = providers::stoppable(cancel.clone(), || {
+                        providers::chat_stream(provider, key.as_deref(), req, &mut on_piece, &mut on_thought)
+                    });
                     if !pending.is_empty() {
                         let text = std::mem::take(pending);
                         self.ctx.events.emit_with(
@@ -1580,6 +1582,18 @@ impl Hub {
                 let mut last_emit = Instant::now();
                 asked_at = Instant::now();
                 let mut result = attempt(&request, &mut pending, &mut last_emit);
+                // Stop pressed while the reply was arriving: it ends here, not after the model finishes.
+                if cancel.load(Ordering::SeqCst) {
+                    let _ = self.ctx.store.finish_step(&step.id, "completed", None);
+                    let _ = self.ctx.store.transition_run(
+                        &run_id,
+                        RunState::Cancelled,
+                        Some("the person stopped the conversation"),
+                    );
+                    self.log(tid, "notice", json!({ "text": "Stopped." }))?;
+                    self.ctx.store.set_thread_state(tid, "idle", None)?;
+                    return Ok(());
+                }
                 if has_pictures && sees && result.as_ref().err().is_some_and(looks_like_image_rejection) {
                     // An unknown model (or a provider whose metadata is wrong)
                     // refused the picture. Keep the turn instead of losing it:

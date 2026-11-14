@@ -1740,6 +1740,28 @@ fn chat_with(
     Err(last.unwrap_or_else(|| DevdError::internal("request failed")))
 }
 
+thread_local! {
+    /// The flag that stops the reply being read on this thread: set when the person presses Stop.
+    static STOP: std::cell::RefCell<Option<std::sync::Arc<std::sync::atomic::AtomicBool>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// What a reply cut short by Stop fails with.
+pub const STOPPED: &str = "the person stopped the reply";
+
+/// Read a reply that Stop can cut short. A model can think for minutes before it writes; waiting for it to
+/// finish before honouring Stop is what made Stop look like it did nothing. The stream is checked line by line
+/// and dropped as soon as the flag is set.
+pub fn stoppable<R>(stop: std::sync::Arc<std::sync::atomic::AtomicBool>, read: impl FnOnce() -> R) -> R {
+    STOP.with(|s| *s.borrow_mut() = Some(stop));
+    let out = read();
+    STOP.with(|s| *s.borrow_mut() = None);
+    out
+}
+
+fn stopped() -> bool {
+    STOP.with(|s| s.borrow().as_ref().is_some_and(|f| f.load(std::sync::atomic::Ordering::SeqCst)))
+}
+
 /// Read a server-sent event stream as it arrives.
 ///
 /// Events are separated by a blank line and may spread their payload over
@@ -1752,6 +1774,9 @@ pub(crate) fn for_each_event(
 ) -> Result<()> {
     let mut data = String::new();
     loop {
+        if stopped() {
+            return Err(DevdError::internal(STOPPED));
+        }
         let mut line = String::new();
         let read = reader
             .read_line(&mut line)
@@ -2046,6 +2071,26 @@ fn parse_openai_stream(reader: impl BufRead, on: &mut dyn FnMut(&str), think: &m
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stop_cuts_a_reply_short_while_it_is_still_arriving() {
+        let sse = "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking\"}}]}\n\n".repeat(50);
+        let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stopper = flag.clone();
+        let mut seen = 0;
+        let got = stoppable(flag, || {
+            parse_openai_stream(std::io::Cursor::new(sse), &mut |_| {}, &mut |_| {
+                seen += 1;
+                if seen == 3 {
+                    stopper.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+            })
+        });
+        assert!(got.unwrap_err().to_string().contains(STOPPED));
+        assert!(seen < 50, "reading stopped when Stop was pressed, not at the end: {seen}");
+        // Outside a stoppable read nothing is stopped.
+        assert!(!stopped());
+    }
 
     #[test]
     fn a_reasoning_models_thinking_is_shown_as_it_comes_and_a_reply_that_is_only_thinking_is_known_as_one() {
