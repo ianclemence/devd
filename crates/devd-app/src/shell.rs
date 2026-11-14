@@ -1437,6 +1437,7 @@ impl Shell {
             .unwrap_or(&[])
             .iter()
             .chain(plan["effects"].as_array().map(Vec::as_slice).unwrap_or(&[]))
+            .filter(|s| !s.as_str().is_some_and(|x| x.starts_with("BLOCKED: ")))
         {
             let text = step
                 .as_str()
@@ -1458,12 +1459,24 @@ impl Shell {
                     .child(
                         div()
                             .flex_1()
+                            .min_w_0()
                             .text_size(px(size::TEXT))
                             .text_color(t.muted)
                             .child(text),
                     ),
             );
         }
+        // What devd already knows cannot run here is not offered for approval: approving it would only fail with the same
+        // reason. The dialog says why, and closing it declines.
+        let blocked: Vec<String> = plan["effects"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+            .iter()
+            .filter_map(|e| e.as_str())
+            .filter_map(|e| e.strip_prefix("BLOCKED: "))
+            .map(str::to_string)
+            .collect();
         let destructive = plan["destructive"] == json!(true)
             || matches!(
                 decision.plan["tier"].as_str(),
@@ -1511,51 +1524,64 @@ impl Shell {
                     .items_center()
                     .gap(px(8.0))
                     .child(icon(
-                        if destructive { "alert" } else { "lock" },
+                        if destructive || !blocked.is_empty() { "alert" } else { "lock" },
                         16.0,
                         if destructive { t.danger } else { t.warn },
                     ))
                     .child(
                         div()
+                            .flex_1()
+                            .min_w_0()
                             .text_size(px(size::TEXT_LG))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(t.text)
-                            .child("Approve this?"),
+                            .child(if blocked.is_empty() { "Approve this?" } else { "This can't run here" }),
                     )
-                    .child(div().flex_1())
-                    .child(ui::pill(decision.capability.clone(), Tone::Neutral, cx)),
+                    .child(div().flex_none().child(ui::pill(decision.capability.clone(), Tone::Neutral, cx))),
             )
             .child(
                 div()
+                    .min_w_0()
                     .text_size(px(size::TEXT_MD))
                     .text_color(t.text)
                     .child(summary),
             )
+            .children((!blocked.is_empty()).then(|| {
+                let mut why = div().flex().flex_col().gap(px(4.0));
+                for reason in &blocked {
+                    let mut said = reason.clone();
+                    if let Some(first) = said.get(..1) {
+                        said = format!("{}{}.", first.to_uppercase(), said[1..].trim_end_matches('.'));
+                    }
+                    why = why.child(div().min_w_0().child(said));
+                }
+                ui::Banner::new(Tone::Warn).body(why).render(cx)
+            }))
             .child(body)
             .child(
                 div()
                     .text_size(px(size::TEXT_SM))
                     .text_color(t.faint)
-                    .child("Nothing has changed yet. Declining is recorded too."),
+                    .child(if blocked.is_empty() {
+                        "Nothing has changed yet. Declining is recorded too."
+                    } else {
+                        "Nothing was changed. Fix what is above and ask again."
+                    }),
             )
-            .child(
-                div()
-                    .flex()
-                    .justify_end()
-                    .gap(px(8.0))
-                    .child(
-                        Button::new("decision.deny", "Decline").on_click(answer(false, deny_token)),
-                    )
-                    .child(
-                        Button::new("decision.approve", "Approve")
-                            .kind(if destructive {
-                                ButtonKind::Danger
-                            } else {
-                                ButtonKind::Primary
-                            })
-                            .on_click(answer(true, approve_token)),
-                    ),
-            );
+            .child({
+                let buttons = div().flex().justify_end().gap(px(8.0));
+                if blocked.is_empty() {
+                    buttons
+                        .child(Button::new("decision.deny", "Decline").on_click(answer(false, deny_token)))
+                        .child(
+                            Button::new("decision.approve", "Approve")
+                                .kind(if destructive { ButtonKind::Danger } else { ButtonKind::Primary })
+                                .on_click(answer(true, approve_token)),
+                        )
+                } else {
+                    buttons.child(Button::new("decision.close", "Close").kind(ButtonKind::Primary).on_click(answer(false, deny_token)))
+                }
+            });
         Some(
             div()
                 .absolute()

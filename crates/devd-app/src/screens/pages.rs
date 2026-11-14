@@ -393,6 +393,78 @@ pub(super) fn list_or(
     }
 }
 
+/// When a screen cannot read because the service behind it is down, say that once, in words, with the one thing to do:
+/// start it, or install it. A client's own error ("Can't connect to server on 127.0.0.1 (10061)") is not shown twice.
+fn service_down(
+    snaps: &[&Snapshot],
+    service: &'static str,
+    label: &'static str,
+    icon_name: &'static str,
+    purpose: &'static str,
+    port: u64,
+    cx: &mut Context<Shell>,
+) -> Option<AnyElement> {
+    let down = snaps.iter().any(|snap| {
+        snap.data.is_none()
+            && snap.error.as_ref().is_some_and(|f| {
+                let m = f.message.to_lowercase();
+                ["can't connect", "2002", "10061", "not running", "connection refused", "actively refused", "not installed", "connection failed"]
+                    .iter()
+                    .any(|w| m.contains(w))
+            })
+    });
+    if !down {
+        return None;
+    }
+    let services = devd(cx).sync.watch(&crate::state::q::services());
+    let row = services.list("").iter().find(|s| s["name"] == json!(service)).cloned();
+    let installed = row.as_ref().is_some_and(|s| s["installed"] == json!(true));
+    let answering = row.as_ref().is_some_and(|s| s["ready"] == json!(true));
+    let running = answering || row.as_ref().is_some_and(|s| s["running"] == json!(true));
+    // It answers, yet it cannot be read: that is not a service to start, so say what devd ran into.
+    if answering {
+        let why = snaps
+            .iter()
+            .find_map(|s| s.error.as_ref())
+            .map(|f| devd_app_core::status::failure(&f.message))
+            .unwrap_or_default();
+        let state = ui::empty(icon_name, format!("devd cannot read {label}"), format!("It is answering on port {port}, but: {why}"), cx);
+        return Some(card(cx).child(div().px(px(16.0)).child(state)).into_any_element());
+    }
+    let (title, said) = match (installed, running) {
+        (false, _) => (format!("{label} is not installed"), format!("Install it from the Server screen {purpose}.")),
+        (true, false) => (format!("{label} is not running"), format!("Start it {purpose}.")),
+        (true, true) => (
+            format!("{label} is not answering yet"),
+            format!("It is running but not accepting connections on port {port}. If it has just started, give it a moment; otherwise restart it from the Server screen."),
+        ),
+    };
+    let mut state = ui::empty(icon_name, title, said, cx);
+    if installed && !running {
+        state = state.child(
+            div().pt(px(6.0)).child(
+                Button::new(ui::nid("service.down.start", port as usize), format!("Start {}", if service == "mailpit" { "it" } else { label }))
+                    .icon("play")
+                    .kind(ButtonKind::Primary)
+                    .on_click(move |_, _, cx| {
+                        devd(cx).sync.mutate(
+                            Mutation::new("service.start", json!({ "name": service })).invalidating("db").invalidating("mail").invalidating("service"),
+                        );
+                    }),
+            ),
+        );
+    } else {
+        state = state.child(
+            div().pt(px(6.0)).child(
+                Button::new(ui::nid("service.down.open", port as usize), "Open Server")
+                    .kind(ButtonKind::Secondary)
+                    .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| this.go(Route::Server, cx))),
+            ),
+        );
+    }
+    Some(card(cx).child(div().px(px(16.0)).child(state)).into_any_element())
+}
+
 fn read(cx: &App, capability: &str) -> Snapshot {
     devd(cx).sync.watch(&QueryKey::bare(capability))
 }
@@ -760,10 +832,14 @@ fn databases(cx: &mut Context<Shell>) -> AnyElement {
         "Schedule backups and the copies are listed here.",
         cx,
     );
-    let mut body = vec![
-        section("DATABASES", dbs_list, cx).into_any_element(),
-        section("USERS", users_list, cx).into_any_element(),
-    ];
+    let mut body = if let Some(down) = service_down(&[&dbs, &users], "mariadb", "MariaDB", "database", "to see its databases and users, create new ones and take backups", port, cx) {
+        vec![down]
+    } else {
+        vec![
+            section("DATABASES", dbs_list, cx).into_any_element(),
+            section("USERS", users_list, cx).into_any_element(),
+        ]
+    };
     let add_backup = form_button(
         "databases.schedule",
         "Schedule backups",
@@ -1033,10 +1109,14 @@ fn hosts(cx: &mut Context<Shell>) -> AnyElement {
     if !file.is_empty() {
         body.push(
             div()
+                .flex()
+                .flex_wrap()
+                .items_baseline()
+                .gap(px(6.0))
                 .text_size(px(size::TEXT_XS))
                 .text_color(t.faint)
-                .child("The file is ")
-                .child(div().font_family(mono()).child(file))
+                .child("Hosts file")
+                .child(div().font_family(mono()).text_color(t.muted).child(file))
                 .into_any_element(),
         );
     }
@@ -1231,6 +1311,9 @@ fn mail(cx: &mut Context<Shell>) -> AnyElement {
                 )
             })),
     );
+    if let Some(down) = service_down(&[&snap], "mailpit", "The mail catcher", "inbox", "to catch the mail your sites send", 8025, cx) {
+        return frame("mail", "The mail catcher is not running.", actions, &[], vec![down], cx);
+    }
     let body = vec![list_or(&snap, rows, "mail.row", "inbox", "No mail", "When a site sends an email, it is caught here instead of being delivered, so you can read what it would have sent.", cx).into_any_element()];
     frame("mail", detail, actions, &[&snap], body, cx)
 }
@@ -1943,7 +2026,8 @@ fn stacks(cx: &mut Context<Shell>) -> AnyElement {
             if !rows.is_empty() {
                 body.push(
                     section(
-                        title_case(category),
+                        // Section labels are small capitals on every screen.
+                        title_case(category).to_uppercase(),
                         rows_card(rows, "stacks.catalogue", cx),
                         cx,
                     )

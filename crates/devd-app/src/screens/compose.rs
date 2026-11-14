@@ -51,7 +51,7 @@ pub const MODES: &[(&str, &str, &str)] = &[
     (
         "bypass",
         "Bypass",
-        "Never asks. Only in a copy you can throw away",
+        "Never asks. Use it only in a copy you can throw away",
     ),
 ];
 
@@ -327,6 +327,34 @@ fn option_with(
                 .text_size(px(size::TEXT_SM))
                 .text_color(t.muted)
                 .child(ui::Clip::new(detail.to_string())),
+        )
+}
+
+/// A row whose words matter as much as its name: the name, and under it what it means, in full and wrapped.
+/// What a mode allows is a decision about risk, so none of it is cut short.
+fn choice(id: gpui::ElementId, title: &str, detail: &str, current: bool, cx: &gpui::App) -> gpui::Stateful<gpui::Div> {
+    let t = theme(cx);
+    ui::row(id, false, cx)
+        .items_start()
+        .py(px(7.0))
+        .child(
+            div()
+                .w(px(14.0))
+                .h(px(20.0))
+                .flex_none()
+                .flex()
+                .items_center()
+                .when(current, |d| d.child(icon("check", 13.0, t.accent))),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(1.0))
+                .child(div().text_size(px(size::TEXT)).line_height(px(20.0)).font_weight(FontWeight::MEDIUM).child(title.to_string()))
+                .child(div().text_size(px(size::TEXT_SM)).text_color(t.muted).child(detail.to_string())),
         )
 }
 
@@ -654,13 +682,8 @@ pub fn view(
                         })),
                 );
             }
-            root = root.child(
-                deferred(
-                    menu.child(div().h(px(1.0)).mx(px(8.0)).my(px(4.0)).bg(t.line))
-                        .child(efforts),
-                )
-                .with_priority(10),
-            );
+            let menu = menu.child(div().h(px(1.0)).mx(px(8.0)).my(px(4.0)).bg(t.line)).child(efforts);
+            root = root.child(deferred(dismissable(menu, Open::Model, cx)).with_priority(10));
         }
         Open::Mode => {
             let mut menu = popover(cx, below).w(px(340.0));
@@ -673,12 +696,11 @@ pub fn view(
             for (n, (id, label, detail)) in MODES.iter().enumerate() {
                 let pick = *id;
                 menu = menu.child(
-                    option(
+                    choice(
                         ui::nid("compose.mode", n),
                         label,
                         detail,
                         compose.mode.unwrap_or("auto") == *id,
-                        false,
                         cx,
                     )
                     .on_click(cx.listener(
@@ -690,7 +712,7 @@ pub fn view(
                     )),
                 );
             }
-            root = root.child(deferred(dismissable(menu, Open::Model, cx)).with_priority(10));
+            root = root.child(deferred(dismissable(menu, Open::Mode, cx)).with_priority(10));
         }
         Open::Nothing => {}
     }

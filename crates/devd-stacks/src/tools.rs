@@ -590,6 +590,12 @@ impl ToolDef {
                 host.os,
                 if host.managers.is_empty() { "none".to_string() } else { host.managers.join(", ") }
             ));
+        } else if host.os == "windows" && recipes.iter().any(|r| r.manager == "winget") && !host.has("winget") {
+            // The usual case on Windows: the recipe is there, the Windows Package Manager is not.
+            plan.blockers.push(
+                "this needs winget (the Windows Package Manager), which is not on this machine. Install \"App Installer\" from the Microsoft Store, then try again"
+                    .into(),
+            );
         } else {
             plan.blockers.push(format!(
                 "no {action} recipe matches this machine (package managers found: {})",

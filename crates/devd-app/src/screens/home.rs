@@ -251,15 +251,29 @@ pub fn render(shell: &mut Shell, _window: &mut Window, cx: &mut Context<Shell>) 
         );
     }
 
-    let installed: Vec<&Value> = services
-        .list("")
-        .iter()
-        .filter(|s| s["installed"] == json!(true))
-        .collect();
-    let ready = installed
-        .iter()
-        .filter(|s| s["ready"] == json!(true))
-        .count();
+    // A PHP version runs as several identical workers (`php-cgi-8.4`, `php-cgi-8.4-2`, ...). To a person they are one
+    // service, as the Services screen shows them: one name, answering only when every worker is.
+    let mut installed: Vec<(String, bool)> = Vec::new();
+    for s in services.list("").iter().filter(|s| s["installed"] == json!(true)) {
+        let name = s["name"].as_str().unwrap_or_default();
+        let ready = s["ready"] == json!(true);
+        let shown = match name.strip_prefix("php-cgi-") {
+            Some(rest) => format!("PHP {}", rest.split('-').next().unwrap_or(rest)),
+            None => name.to_string(),
+        };
+        match installed.iter_mut().find(|(n, _)| *n == shown) {
+            Some(unit) => unit.1 &= ready,
+            None => installed.push((shown, ready)),
+        }
+    }
+    let ready = installed.iter().filter(|(_, r)| *r).count();
+    // What needs a look comes first: the ones not answering, when there are any.
+    let quiet: Vec<&str> = installed.iter().filter(|(_, r)| !*r).map(|(n, _)| n.as_str()).collect();
+    let services_detail = if quiet.is_empty() {
+        installed.iter().map(|(n, _)| n.as_str()).take(4).collect::<Vec<_>>().join(", ")
+    } else {
+        format!("Not answering: {}", quiet.iter().take(4).copied().collect::<Vec<_>>().join(", "))
+    };
     let serving = sites
         .list("")
         .iter()
@@ -308,13 +322,7 @@ pub fn render(shell: &mut Shell, _window: &mut Window, cx: &mut Context<Shell>) 
             } else {
                 format!("{ready} of {} answering", installed.len())
             },
-            installed
-                .iter()
-                .filter(|s| s["ready"] == json!(true))
-                .filter_map(|s| s["name"].as_str())
-                .take(4)
-                .collect::<Vec<_>>()
-                .join(", "),
+            services_detail,
             if installed.is_empty() {
                 Tone::Neutral
             } else if ready == installed.len() {

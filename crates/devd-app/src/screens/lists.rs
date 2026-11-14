@@ -107,8 +107,13 @@ pub fn inbox(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
         primary_given |= said.needs_you;
         let run = message["run_id"].as_str().map(str::to_string);
         let id = message["id"].as_str().unwrap_or_default().to_string();
-        let mut actions = div().flex().flex_none().gap(px(6.0));
-        if let Some(run) = run {
+        let shape = Shape::of(
+            message["subject"].as_str().unwrap_or_default(),
+            message["body"].as_str().unwrap_or_default(),
+            &said.label,
+        );
+        let mut actions = div().flex().flex_wrap().items_center().gap(px(6.0));
+        if let Some(run) = run.clone() {
             actions = actions.child(
                 Button::new(ui::nid("inbox.open", n), "Open the run")
                     .kind(if said.needs_you && !asked {
@@ -121,10 +126,32 @@ pub fn inbox(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                     })),
             );
         }
+        // A paused run is answered by carrying it on: resuming gives the task that stopped it another go.
+        if let (true, true, Some(run)) = (is_open, shape.word.eq_ignore_ascii_case("run paused"), run) {
+            let done = id.clone();
+            actions = actions.child(
+                Button::new(ui::nid("inbox.resume", n), "Resume")
+                    .icon("play")
+                    .kind(ButtonKind::Secondary)
+                    .on_click(move |_, _, cx| {
+                        let sync = &devd(cx).sync;
+                        sync.mutate(Mutation::new("team.resume", json!({ "run": run })).invalidating("team").invalidating("inbox"));
+                        sync.mutate(
+                            Mutation::new("inbox.reply", json!({ "id": done })).optimistic(Patch::update_row(
+                                q::inbox(),
+                                "",
+                                "id",
+                                json!(done),
+                                json!({ "state": "answered" }),
+                            )),
+                        );
+                    }),
+            );
+        }
         if is_open {
             let dismiss = id.clone();
             actions = actions.child(
-                Button::new(ui::nid("inbox.done", n), "Mark answered")
+                Button::new(ui::nid("inbox.done", n), "Dismiss")
                     .kind(ButtonKind::Ghost)
                     .on_click(move |_, _, cx| {
                         // The row leaves the open list at once; devd confirms after.
@@ -142,77 +169,108 @@ pub fn inbox(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                     }),
             );
         }
+        // Where it comes from, what kind of thing it is, and when: one quiet line above what it says.
+        let project = message["project"].as_str().map(|p| ui::leaf(p).to_string());
+        let mut context = div()
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .text_size(px(size::TEXT_XS))
+            .text_color(t.faint)
+            .child(div().flex_none().text_color(t.tone(tone)).font_weight(FontWeight::MEDIUM).child(shape.word.clone()));
+        if let Some(project) = project {
+            context = context.child("·").child(div().flex_none().child(project));
+        }
+        context = context
+            .child("·")
+            .child(div().flex_none().child(sender(message["from_actor"].as_str().unwrap_or_default())))
+            .child(div().flex_1())
+            .child(div().flex_none().child(ui::ago(message["created_at"].as_str().unwrap_or_default())));
+
+        let mut words = div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap(px(6.0))
+            .child(context)
+            .child(
+                div()
+                    .text_size(px(size::TEXT_MD))
+                    .line_height(px(22.0))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(t.text)
+                    .line_clamp(3)
+                    .child(shape.headline.clone()),
+            );
+        if let Some(about) = shape.about.clone() {
+            words = words.child(div().text_size(px(size::TEXT_SM)).text_color(t.muted).child(ui::Clip::new(about)));
+        }
+        if is_open {
+            words = words.child(div().pt(px(4.0)).child(actions));
+        }
+
         list = list.child(
             div()
-                .px(px(16.0))
-                .py(px(13.0))
+                .px(px(18.0))
+                .py(px(16.0))
                 .flex()
                 .items_start()
                 .gap(px(12.0))
                 .opacity(if is_open { 1.0 } else { 0.55 })
-                .child(div().pt(px(5.0)).child(ui::dot(tone, cx)))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .flex()
-                        .flex_col()
-                        .gap(px(4.0))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(px(8.0))
-                                .child(div().min_w_0().font_weight(FontWeight::MEDIUM).child(
-                                    ui::Clip::new(
-                                        message["subject"].as_str().unwrap_or_default().to_string(),
-                                    ),
-                                ))
-                                .child(pill(said.label.clone(), tone, cx)),
-                        )
-                        // The opening paragraph says what happened; the rest is on the run.
-                        .child(
-                            div().line_clamp(3).text_color(t.muted).child(
-                                message["body"]
-                                    .as_str()
-                                    .unwrap_or_default()
-                                    .split(
-                                        "
-
-",
-                                    )
-                                    .find(|p| !p.trim().is_empty())
-                                    .unwrap_or_default()
-                                    .split_whitespace()
-                                    .collect::<Vec<_>>()
-                                    .join(" "),
-                            ),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .gap(px(10.0))
-                                .text_size(px(size::TEXT_XS))
-                                .text_color(t.faint)
-                                .child(
-                                    message["project"]
-                                        .as_str()
-                                        .map(|p| ui::leaf(p).to_string())
-                                        .unwrap_or_default(),
-                                )
-                                .child(
-                                    message["from_actor"]
-                                        .as_str()
-                                        .unwrap_or_default()
-                                        .to_string(),
-                                )
-                                .child(ui::ago(message["created_at"].as_str().unwrap_or_default())),
-                        ),
-                )
-                .child(actions),
+                .child(div().h(px(16.0)).flex().items_center().child(ui::dot(tone, cx)))
+                .child(words),
         );
     }
     ui::page("inbox", 860.0, column.child(list)).into_any_element()
+}
+
+/// How an inbox message reads: a word for what kind of thing it is, the sentence that says what needs you, and what it
+/// is about.
+///
+/// A run writes its subject as "Run paused: <the run's goal>" and its body opens with why. The why is what a person
+/// acts on, so it leads; the goal, which can be a paragraph long, is the context under it.
+#[derive(Debug, Clone, PartialEq)]
+struct Shape {
+    word: String,
+    headline: String,
+    about: Option<String>,
+}
+
+impl Shape {
+    fn of(subject: &str, body: &str, label: &str) -> Shape {
+        let opening = body
+            .split("\n\n")
+            .find(|p| !p.trim().is_empty())
+            .unwrap_or_default()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        match subject.split_once(": ") {
+            Some((word, rest)) if word.chars().count() <= 24 && !opening.is_empty() => Shape {
+                word: word.to_string(),
+                headline: opening,
+                about: Some(rest.trim().to_string()).filter(|r| !r.is_empty()),
+            },
+            _ => Shape {
+                word: label.to_string(),
+                headline: if subject.trim().is_empty() { opening.clone() } else { subject.to_string() },
+                about: Some(opening).filter(|o| !o.is_empty() && o != subject),
+            },
+        }
+    }
+}
+
+/// Who sent a message, as a person says it: `agent:devd-team` is the team, `human:cli` is you.
+fn sender(actor: &str) -> String {
+    match actor.split_once(':') {
+        Some(("human", _)) => "You".to_string(),
+        Some((_, "devd-team")) => "The team".to_string(),
+        Some((_, "devd")) | Some((_, "harness")) => "devd".to_string(),
+        Some((_, name)) => name.replace(['-', '_'], " "),
+        None if actor.is_empty() => "devd".to_string(),
+        None => actor.to_string(),
+    }
 }
 
 /// Every project devd knows.
@@ -463,7 +521,10 @@ pub fn server(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
             (_, _, true) => (Tone::Info, "starting"),
             (true, true, _) => (Tone::Ok, "answering"),
             (true, false, _) => (Tone::Warn, "running, not answering"),
-            (false, _, _) => (Tone::Neutral, "stopped"),
+            // Something else started it: it answers, but devd did not start it and does not hold it. Calling that
+            // "stopped" beside "4 of 4 workers answering" says two opposite things.
+            (false, true, _) => (Tone::Info, "answering, started outside devd"),
+            (false, false, _) => (Tone::Neutral, "stopped"),
         };
         let marker: AnyElement = if starting {
             live_dot(ui::nid("service.live", n), tone, cx).into_any_element()
