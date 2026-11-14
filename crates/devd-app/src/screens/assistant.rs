@@ -1215,15 +1215,16 @@ fn draw(thread: &str, index: usize, item: &Item, resume: bool, cx: &App) -> AnyE
             let head = div()
                 .id(ui::nid("steps.head", index))
                 .flex()
-                .items_center()
+                .items_start()
                 .gap(px(6.0))
                 .pl(px(2.0))
                 .text_size(px(size::TEXT))
+                .line_height(px(20.0))
                 .text_color(if failed { t.muted } else { t.faint })
                 .cursor_pointer()
                 .hover(|s| s.opacity(0.8))
-                .child(div().w(px(16.0)).flex().flex_none().justify_center().child(icon(if open { "chevron-down" } else { "chevron-right" }, 12.0, t.faint)))
-                .child(div().min_w_0().child(ui::Clip::new(line)))
+                .child(div().w(px(16.0)).h(px(20.0)).flex().flex_none().items_center().justify_center().child(icon(if open { "chevron-down" } else { "chevron-right" }, 12.0, t.faint)))
+                .child(div().flex_1().min_w_0().child(line))
                 .on_click(move |_, _, cx| {
                     let devd = cx.global_mut::<crate::state::Devd>();
                     if !devd.open_steps.remove(&toggle) {
@@ -1290,6 +1291,22 @@ mod tests {
 
     fn event(kind: &str, data: Value) -> Value {
         json!({ "kind": kind, "data": data })
+    }
+
+    #[test]
+    fn time_taken_reads_as_a_person_says_it() {
+        assert_eq!(took(45), "45s");
+        assert_eq!(took(437), "7m 17s");
+        assert_eq!(took(3780), "1h 3m");
+    }
+
+    #[test]
+    fn finished_steps_in_a_row_fold_into_one_and_a_running_one_stays_out() {
+        let call = |id: &str| event("assistant", json!({ "model": "m", "content": [{ "type": "tool_use", "id": id, "name": "read_file", "input": { "path": "a.rs" } }] }));
+        let done = |id: &str| event("tool_result", json!({ "tool_use_id": id, "is_error": false, "content": "{}" }));
+        let items = fold(&[event("user", json!({ "text": "go" })), call("a"), done("a"), call("b"), done("b"), call("c")], &[]);
+        assert!(matches!(&items[1], Item::Steps(steps) if steps.len() == 2), "{items:?}");
+        assert!(matches!(&items[2], Item::Tool { ok: None, .. }), "the running step is what is happening now: {items:?}");
     }
 
     #[test]

@@ -35,6 +35,13 @@ may change capability identifiers where the design was wrong.
   thinking and wrote nothing is no longer treated as half an answer to continue, which made an agent think again
   and again: devd asks it once to act with less thinking, and stops the turn with a plain reason if it happens
   twice.
+- **devd says what it is doing while it works.** A line at the foot of the reply shows the step running now
+  ("Running go test"), the model thinking, or the words being written, with the time since you last spoke
+  ("7m 17s"). Finished steps in a row fold into one line, such as "Read 8 files, searched 7 times and checked
+  git", which opens to list them.
+- **Icons and logos stand on their own.** The tiles behind the menu icons, the model and tool logos and the
+  empty-state icons are gone; a single-colour logo is drawn in the theme's text colour, so it reads on every
+  theme. The icon in each message box menu row sits closer to its name.
 - **An agent's reply reads as one reply.** The model is named once, under the last step of a turn, not under
   every sentence between its tool calls.
 - **Links in replies go where they point.** A written link to a file, such as `[main.rs](src/main.rs:42)`,
