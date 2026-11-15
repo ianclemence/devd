@@ -582,11 +582,11 @@ fn heading(
             None => format!("${cost:.2} spent"),
         });
     }
-    if let Some(turns) = usage["turns"].as_u64().filter(|n| *n > 0) {
-        facts.push(match budget["turns"].as_u64() {
-            Some(limit) => format!("{turns} of {limit} turns"),
-            None => format!("{turns} turns"),
-        });
+    if let Some(turns) = budget["turns"].as_u64() {
+        // The ceiling is shown even before the first turn, so what a run may spend is visible beside it.
+        facts.push(format!("{} of {turns} turns", usage["turns"].as_u64().unwrap_or(0)));
+    } else if let Some(turns) = usage["turns"].as_u64().filter(|n| *n > 0) {
+        facts.push(format!("{turns} turns"));
     }
     facts.push(format!(
         "started {}",

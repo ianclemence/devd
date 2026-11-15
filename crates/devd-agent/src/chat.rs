@@ -33,7 +33,16 @@ use crate::secrets;
 /// run the suite, fix the failures) routinely needs more than forty calls, and
 /// stopping there made the person type "continue" to finish work the agent was
 /// already doing. The spend policy is the thing that bounds cost.
-pub const MAX_TURNS: usize = 240;
+/// The runaway guard for one conversation: a step is one model request and its tools. It is a
+/// safety limit, not a budget: 96 steps is long enough for real work, and short enough that a loop
+/// is caught while it is still cheap. A task that needs more continues in a fresh attempt.
+pub const MAX_TURNS: usize = 96;
+
+/// How far back the repeated-call guard looks. A call repeated with others in between is the same
+/// circle as one repeated three times running: the answer has not changed, the agent has.
+const REPEAT_WINDOW: usize = 8;
+/// How many times the same call may appear inside that window before devd refuses the next one.
+const REPEAT_LIMIT: usize = 3;
 
 /// How many times one turn may resume after the model's own output limit cut it
 /// off. The answer is continued, not handed back to the person.
@@ -474,20 +483,44 @@ fn route_call(
     (name.to_string(), input, name.to_string())
 }
 
-/// Give a team run started from this conversation this conversation's id.
+/// Whether this call has already been made often enough in the recent window that another would be
+/// the same question again. Consecutive repeats were the old shape; interleaved ones are the same.
+fn blocks_repeat(recent: &std::collections::VecDeque<String>, signature: &str) -> bool {
+    recent.iter().filter(|c| *c == signature).count() + 1 >= REPEAT_LIMIT
+}
+
+/// Whether a successful call changed the files an agent is working on. A test run after an edit is
+/// a new question; the guard's history is cleared so it is not treated as a repeat.
+fn mutates_files(tool: &str, invoke: &Value) -> bool {
+    matches!(tool, "write_file" | "edit_file" | "delete_file")
+        || matches!(
+            invoke["id"].as_str(),
+            Some("fs.write" | "fs.edit" | "fs.delete" | "git.commit" | "git.merge")
+        )
+}
+
+/// Give a team run started from this conversation this conversation's id and its thinking choice.
 ///
-/// The run uses it to bring its plan, its pauses and its result back here, where the person
+/// The run uses the id to bring its plan, its pauses and its result back here, where the person
 /// asked. It is always this conversation: a model that forgets the id, or names another, cannot
-/// send the report somewhere the person is not.
-fn attach_thread(invoke: &mut Value, thread: &str) {
+/// send the report somewhere the person is not. The effort travels with it because the specialists
+/// are other conversations, and a thinking choice that stopped at the handoff would let them think
+/// at the provider's default after the person turned it off.
+fn attach_thread(invoke: &mut Value, thread: &str, effort: Option<&str>) {
     if !matches!(invoke["id"].as_str(), Some("team.start" | "chat.goal" | "chat.goal_done")) {
         return;
     }
     if !invoke["args"].is_object() {
         invoke["args"] = json!({});
     }
+    let team_run = invoke["id"] == "team.start";
     if let Some(args) = invoke["args"].as_object_mut() {
         args.insert("thread".to_string(), json!(thread));
+        if team_run {
+            if let Some(level) = effort {
+                args.insert("effort".to_string(), json!(level));
+            }
+        }
     }
 }
 
@@ -873,6 +906,11 @@ impl Hub {
                 }
             }
         }
+        // A choice the person made is written down, so the next process still knows it. The default
+        // is not: it is the absence of a choice, and it stays the ordinary default.
+        if let Some(e) = &req.effort {
+            let _ = self.ctx.store.set_thread_effort(tid, Some(e));
+        }
     }
 
     fn permission_for(&self, tid: &str) -> String {
@@ -884,13 +922,36 @@ impl Hub {
     }
 
     fn effort_for(&self, tid: &str) -> Option<String> {
-        Some(
-            self.effort
-                .lock()
-                .ok()
-                .and_then(|m| m.get(tid).cloned())
-                .unwrap_or_else(|| "medium".into()),
-        )
+        if let Ok(map) = self.effort.lock() {
+            if let Some(level) = map.get(tid) {
+                return Some(level.clone());
+            }
+        }
+        // Not in this process's memory: a restart may have happened. The conversation remembers the
+        // choice; only a conversation that never had one falls back to the ordinary default.
+        let persisted = self
+            .ctx
+            .store
+            .get_thread(tid)
+            .ok()
+            .flatten()
+            .and_then(|t| t.effort);
+        if let Some(level) = &persisted {
+            if let Ok(mut map) = self.effort.lock() {
+                map.insert(tid.to_string(), level.clone());
+            }
+        }
+        Some(persisted.unwrap_or_else(|| "medium".into()))
+    }
+
+    /// Give a conversation the thinking choice of the run it belongs to. `None` leaves the default.
+    pub fn set_effort(&self, tid: &str, effort: Option<&str>) {
+        if let Some(level) = effort {
+            if let Ok(mut map) = self.effort.lock() {
+                map.insert(tid.to_string(), level.to_string());
+            }
+            let _ = self.ctx.store.set_thread_effort(tid, Some(level));
+        }
     }
 
     /// Append every queued message to the log as an ordinary user turn, and return how many.
@@ -1067,17 +1128,20 @@ impl Hub {
     }
 
     /// Start a conversation for the agent team. The directory was authorised when
-    /// the run started; the thread is not a person's chat, and says so.
+    /// the run started; the thread is not a person's chat, and says so. `effort` is
+    /// the run's thinking choice, so a specialist thinks no more than the person chose.
     pub fn open_thread(
         self: &Arc<Self>,
         project: &str,
         title: &str,
         message: &str,
+        effort: Option<&str>,
     ) -> Result<ChatThread> {
         let thread = self
             .ctx
             .store
             .create_thread(title, Some(project), None, None)?;
+        self.set_effort(&thread.id, effort);
         self.log(
             &thread.id,
             "user",
@@ -1398,9 +1462,17 @@ impl Hub {
                 .unwrap_or_else(|| thread.model.clone().unwrap_or_default());
             // What this family of model, specifically, tends to get wrong.
             let system = format!("{system}{}", crate::modelhints::addendum(&model_hint));
-            let budget = ContextBudget::for_model(
+            let chars_per_token = self
+                .ctx
+                .store
+                .model_chars_per_token(&model_hint)
+                .ok()
+                .flatten()
+                .unwrap_or(devd_core::context::CHARS_PER_TOKEN);
+            let budget = ContextBudget::for_model_with(
                 &model_hint,
                 catalogue_context_window(&self.ctx.store, &model_hint),
+                chars_per_token,
             );
             let working = context::build_working_set(&events, &budget, &system);
             let mut messages = working.messages;
@@ -1466,6 +1538,8 @@ impl Hub {
                 return self.fail(tid, &e.to_string());
             }
             let mut chosen = None;
+            let mut sent_chars = 0usize;
+            let mut sent_tokens = 0i64;
             let mut last_err = String::new();
             // Read the attached pictures once. A turn with no attachments costs
             // one scan of the text and no file reads.
@@ -1618,6 +1692,35 @@ impl Hub {
                         if i > 0 {
                             self.log(tid, "notice", json!({ "text": format!("Used {} ({}) after the first choice failed: {}", model, provider.label, last_err) }))?;
                         }
+                        // Everything the provider counted in this request, split so the estimate learns
+                        // text density rather than the fixed tool schemas: those already have their own
+                        // reserve in the budget. `chars_per_token` is this model's current ratio, used
+                        // only to take the tools' share out of the provider's prompt count.
+                        let text_chars = request.system.chars().count()
+                            + request
+                                .messages
+                                .iter()
+                                .map(|m| m.to_string().chars().count())
+                                .sum::<usize>();
+                        let tool_chars = request
+                            .tools
+                            .iter()
+                            .map(|t| {
+                                t.name.chars().count()
+                                    + t.description.chars().count()
+                                    + t.schema.to_string().chars().count()
+                            })
+                            .sum::<usize>();
+                        let tool_tokens = (tool_chars as f64 / chars_per_token).ceil() as i64;
+                        // Anthropic counts uncached input in `input_tokens`; the others fold the
+                        // cache into the prompt total. Learn against the whole prompt either way.
+                        let prompt_tokens = if provider.kind == "anthropic" {
+                            r.input_tokens + r.cache_read_tokens + r.cache_write_tokens
+                        } else {
+                            r.input_tokens
+                        };
+                        sent_chars = text_chars;
+                        sent_tokens = prompt_tokens.saturating_sub(tool_tokens).max(1);
                         chosen = Some((r, model.clone(), provider.id.clone(), why.clone()));
                         break;
                     }
@@ -1638,6 +1741,10 @@ impl Hub {
                 );
                 return self.fail(tid, &last_err);
             };
+            // Learn this model's text ratio from what the provider just counted: the system prompt
+            // and messages, with the tool schemas' share taken out because the budget reserves for
+            // them separately. The next working set uses this model's ratio, not a guess shared by all.
+            let _ = self.ctx.store.observe_model_chars(&model, sent_chars, sent_tokens);
             let cost = match self.ctx.store.get_provider(&chosen_provider)? {
                 Some(p) => {
                     let caps = crate::policy::model_caps(&self.ctx.store, &p, &model);
@@ -1806,13 +1913,13 @@ impl Hub {
                 let name = call["name"].as_str().unwrap_or("").to_string();
                 let input = call["input"].clone();
                 let signature = format!("{name} {input}");
-                if recent_calls.len() >= 2 && recent_calls.iter().all(|c| *c == signature) {
-                    self.log(tid, "tool_result", json!({ "tool_use_id": id, "content": json!({ "ok": false, "error": { "code": "repeated_call", "message": "This exact call, with these exact arguments, was made twice already and answered the same way both times. Making it again will not change the answer: do something different, or say what is blocking you." } }).to_string(), "is_error": true, "tool": name }))?;
-                    self.log(tid, "notice", json!({ "text": format!("{name} was asked for a third time with the same arguments; devd did not run it again and told the agent to change course.") }))?;
+                if blocks_repeat(&recent_calls, &signature) {
+                    self.log(tid, "tool_result", json!({ "tool_use_id": id, "content": json!({ "ok": false, "error": { "code": "repeated_call", "message": format!("This exact call, with these exact arguments, has been made {REPEAT_LIMIT} times in the last {REPEAT_WINDOW} steps and answered the same way. Making it again will not change the answer: look at the result you already have, or do something different.") } }).to_string(), "is_error": true, "tool": name }))?;
+                    self.log(tid, "notice", json!({ "text": format!("{name} was asked again with the same arguments after {REPEAT_LIMIT} answers; devd did not run it again and told the agent to change course.") }))?;
                     continue;
                 }
                 recent_calls.push_back(signature);
-                if recent_calls.len() > 2 {
+                while recent_calls.len() > REPEAT_WINDOW {
                     recent_calls.pop_front();
                 }
                 // A direct name and an external server's tool are both routed through a devd
@@ -1822,7 +1929,8 @@ impl Hub {
                 // A team run started from the person's conversation answers into it. The model is
                 // told to pass its own conversation id and does not always; the harness does it.
                 if surface == "devd_invoke" && binding.is_none() {
-                    attach_thread(&mut invoke, tid);
+                    let caller_effort = self.effort_for(tid);
+                    attach_thread(&mut invoke, tid, caller_effort.as_deref());
                 }
                 if surface == "devd_invoke" {
                     if let Err(msg) = self.gate(binding.as_ref(), &mut invoke) {
@@ -1897,6 +2005,10 @@ impl Hub {
                             is_err = true;
                         }
                     }
+                }
+                // The files changed: a test run or a read after this is a new question, not a repeat.
+                if !is_err && mutates_files(&tool_name, &invoke) {
+                    recent_calls.clear();
                 }
                 self.log(tid, "tool_result", json!({ "tool_use_id": id, "content": cap_text(&text, MAX_RESULT_CHARS), "is_error": is_err, "tool": tool_name }))?;
             }
@@ -2549,21 +2661,47 @@ mod tests {
         // The run that prompted this: the assistant handed off with team.start and no thread, so
         // the result went to the Inbox and the conversation that asked was never told.
         let mut forgot = json!({ "id": "team.start", "args": { "goal": "email the host", "project": "D:/p" } });
-        attach_thread(&mut forgot, "t-1");
+        attach_thread(&mut forgot, "t-1", Some("none"));
         assert_eq!(forgot["args"]["thread"], "t-1");
+        assert_eq!(forgot["args"]["effort"], "none", "the run inherits the conversation's thinking choice");
         assert_eq!(forgot["args"]["goal"], "email the host", "the rest of the call is untouched");
 
         let mut elsewhere = json!({ "id": "team.start", "args": { "goal": "g", "thread": "someone-else" } });
-        attach_thread(&mut elsewhere, "t-1");
+        attach_thread(&mut elsewhere, "t-1", None);
         assert_eq!(elsewhere["args"]["thread"], "t-1", "a report goes where the person asked, whatever the model named");
+        assert!(elsewhere["args"].get("effort").is_none(), "no choice is not a choice");
 
         let mut bare = json!({ "id": "team.start" });
-        attach_thread(&mut bare, "t-1");
+        attach_thread(&mut bare, "t-1", None);
         assert_eq!(bare["args"]["thread"], "t-1");
 
         let mut other = json!({ "id": "site.list", "args": {} });
-        attach_thread(&mut other, "t-1");
+        attach_thread(&mut other, "t-1", Some("none"));
         assert!(other["args"].get("thread").is_none(), "only a team run is given the conversation");
+    }
+
+    #[test]
+    fn a_call_repeated_with_other_calls_between_is_still_the_same_question() {
+        let mut interleaved = std::collections::VecDeque::new();
+        for call in ["read a", "read b", "read a", "read b"] {
+            interleaved.push_back(call.to_string());
+        }
+        assert!(
+            blocks_repeat(&interleaved, "read a"),
+            "A, B, A, B, A is the same circle as A, A, A"
+        );
+        assert!(!blocks_repeat(&interleaved, "read c"), "a new call is never a repeat");
+        let mut consecutive = std::collections::VecDeque::new();
+        for _ in 0..2 {
+            consecutive.push_back("run test".to_string());
+        }
+        assert!(blocks_repeat(&consecutive, "run test"));
+        // A window that has moved past the earlier calls does not block a genuinely new one.
+        let mut old = std::collections::VecDeque::new();
+        for call in ["a", "b", "c", "d", "e", "f", "g", "h"] {
+            old.push_back(call.to_string());
+        }
+        assert!(!blocks_repeat(&old, "a"), "the window forgot the old call");
     }
 
     fn ev(id: i64, kind: &str, data: Value) -> ChatEvent {

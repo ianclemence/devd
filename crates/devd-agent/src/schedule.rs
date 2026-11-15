@@ -68,6 +68,7 @@ pub fn start_run(team: &Arc<Team>, schedule: &Schedule) -> Result<TeamRun> {
             auto_approve: !production,
             done_when,
             max_rounds: 2,
+            effort: None,
         },
     )
 }

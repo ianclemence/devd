@@ -271,6 +271,7 @@ pub fn register(reg: &mut Registry, team: Arc<Team>) -> Result<()> {
                     auto_approve: false,
                     done_when,
                     max_rounds: 2,
+                    effort: None,
                 })?;
                 ctx.store.decide_suggestion(&s.id, true, Some(&run.id), &ctx.actor.label())?;
                 ctx.events.emit_with("team.suggestion.accepted", s.title.clone(), json!({ "id": s.id, "run": run.id }));

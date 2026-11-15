@@ -55,8 +55,9 @@ pub enum Item {
     Changes { event: i64, files: Vec<(String, String)>, undone: bool },
 }
 
-/// Fold a conversation's events into the items a person reads.
-pub fn fold(events: &[Value], pending: &[&str]) -> Vec<Item> {
+/// Fold a conversation's events into the items a person reads. `running` says the newest turn is still
+/// being written: its model, tokens and cost are not shown until the turn is done.
+pub fn fold(events: &[Value], pending: &[&str], running: bool) -> Vec<Item> {
     let mut items: Vec<Item> = Vec::new();
     // Where each tool call landed, so its result can be attached to it.
     let mut calls: HashMap<String, usize> = HashMap::new();
@@ -183,6 +184,20 @@ pub fn fold(events: &[Value], pending: &[&str]) -> Vec<Item> {
         }
     }
     one_name_per_turn(&mut items);
+    // A turn is many model calls, so naming its last step names it after every couple of sentences: the
+    // label moves down the page as the reply is written, with a token count that is not final yet. The
+    // person reads the model and the turn's cost when the turn is over, not while it is still arriving.
+    if running {
+        let after = items
+            .iter()
+            .rposition(|i| matches!(i, Item::You { .. }))
+            .map_or(0, |at| at + 1);
+        for item in &mut items[after..] {
+            if let Item::Devd { model, .. } = item {
+                model.clear();
+            }
+        }
+    }
     fold_steps(items)
 }
 
@@ -225,6 +240,17 @@ fn fold_steps(items: Vec<Item>) -> Vec<Item> {
 thread_local! {
     /// Whether the conversation on screen is running, so a step in progress is shown once, in the status line.
     static RUNNING_LINE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The three parts of a conversation's token count, said apart: fresh input, cache reads, output.
+/// The provider's prompt total includes the cache, so one number would read as 16× the fresh work.
+fn token_facts(input: u64, cached: u64, out: u64) -> String {
+    format!(
+        "{} fresh in · {} cached · {} out",
+        ui::compact(input.saturating_sub(cached)),
+        ui::compact(cached),
+        ui::compact(out)
+    )
 }
 
 /// The quiet line under a reply: the model, then what the turn took, such as "deepseek-flash · 2.3k out ·
@@ -291,6 +317,8 @@ pub struct Transcript {
     thread: Option<String>,
     /// How many events the items were folded from, to know when to fold again.
     events: usize,
+    /// Whether the newest turn was still running when the items were folded.
+    running: bool,
     items: Rc<Vec<Item>>,
     /// The reply being written, parsed, with the length of the text it was parsed from.
     writing: Option<(usize, Rc<Vec<Block>>)>,
@@ -305,6 +333,7 @@ impl Transcript {
         Self {
             thread: None,
             events: 0,
+            running: false,
             items: Rc::new(Vec::new()),
             writing: None,
             list: ListState::new(0, ListAlignment::Bottom, px(600.0)),
@@ -313,12 +342,14 @@ impl Transcript {
     }
 
     /// Bring the prepared items up to date with the events and the live text.
-    fn update(&mut self, thread: &str, events: &[Value], pending: &[&str], writing: Option<&str>) {
+    fn update(&mut self, thread: &str, events: &[Value], pending: &[&str], writing: Option<&str>, running: bool) {
         let switched = self.thread.as_deref() != Some(thread);
         let before = self.items.len() + usize::from(self.writing.is_some());
-        if switched || events.len() + pending.len() != self.events {
-            self.items = Rc::new(fold(events, pending));
+        // The turn ending changes a label without adding an event, so it is part of what is folded.
+        if switched || events.len() + pending.len() != self.events || running != self.running {
+            self.items = Rc::new(fold(events, pending, running));
             self.events = events.len() + pending.len();
+            self.running = running;
             self.thread = Some(thread.to_string());
         }
         let live_changed = match (writing.filter(|w| !w.trim().is_empty()), &self.writing) {
@@ -684,19 +715,23 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
         .iter()
         .filter_map(|p| p["id"].as_str().or(p["request_id"].as_str()))
         .collect();
-    shell
-        .transcript
-        .update(id, events, &pending, writing.as_deref());
-
-    let thread = &data["thread"];
     // Running in this window's server, or in another process (a terminal, a script, CI) that writes to the
     // same record: the record says so, and is what to believe.
-    let running = data["running"] == json!(true) || thread["state"].as_str() == Some("running");
+    let running = data["running"] == json!(true) || data["thread"]["state"].as_str() == Some("running");
+    shell
+        .transcript
+        .update(id, events, &pending, writing.as_deref(), running);
+
+    let thread = &data["thread"];
     if running {
         devd(cx).chat_running.set(true);
     }
-    let tokens = thread["input_tokens"].as_u64().unwrap_or(0)
-        + thread["output_tokens"].as_u64().unwrap_or(0);
+    // The provider's prompt count includes the cache hits. Shown as one number it reads as fresh
+    // work, which it is not: on a tool-using conversation most of it is the same prefix read again
+    // at a tenth of the price. Say each part, so the fresh work is what the eye lands on.
+    let input = thread["input_tokens"].as_u64().unwrap_or(0);
+    let cached = thread["cache_read_tokens"].as_u64().unwrap_or(0);
+    let out = thread["output_tokens"].as_u64().unwrap_or(0);
     // Relative paths in this conversation's replies are read against its project.
     cx.global_mut::<crate::state::Devd>().link_root =
         thread["project"].as_str().map(std::path::PathBuf::from);
@@ -712,8 +747,8 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
     if let Some(project) = project {
         facts.push(project);
     }
-    if tokens > 0 {
-        facts.push(format!("{} tokens", ui::compact(tokens)));
+    if input + out > 0 {
+        facts.push(token_facts(input, cached, out));
     }
     if let Some(snap) = devd(cx).sync.peek(&q::threads()) {
         let origin = snap
@@ -1549,6 +1584,7 @@ mod tests {
                 event("user", json!({ "text": "[devd] The goal is still open: make the tests pass", "from": "devd", "goal": true, "step": 3, "of": 25 })),
             ],
             &[],
+            false,
         );
         assert!(matches!(&items[0], Item::You { .. }));
         assert_eq!(items[1], Item::Notice("devd asked again whether the goal is met · 3 of 25".into()));
@@ -1566,7 +1602,7 @@ mod tests {
     fn finished_steps_in_a_row_fold_into_one_and_a_running_one_stays_out() {
         let call = |id: &str| event("assistant", json!({ "model": "m", "content": [{ "type": "tool_use", "id": id, "name": "read_file", "input": { "path": "a.rs" } }] }));
         let done = |id: &str| event("tool_result", json!({ "tool_use_id": id, "is_error": false, "content": "{}" }));
-        let items = fold(&[event("user", json!({ "text": "go" })), call("a"), done("a"), call("b"), done("b"), call("c")], &[]);
+        let items = fold(&[event("user", json!({ "text": "go" })), call("a"), done("a"), call("b"), done("b"), call("c")], &[], false);
         assert!(matches!(&items[1], Item::Steps(steps) if steps.len() == 2), "{items:?}");
         assert!(matches!(&items[2], Item::Tool { ok: None, .. }), "the running step is what is happening now: {items:?}");
     }
@@ -1585,6 +1621,7 @@ mod tests {
                 call("d", "run_command"), done("d", true),
             ],
             &[],
+            false,
         );
         assert!(matches!(&items[1], Item::Steps(s) if s.len() == 2), "{items:?}");
         assert!(matches!(&items[2], Item::Changes { .. }), "the write is its changes line, once: {items:?}");
@@ -1605,6 +1642,7 @@ mod tests {
                 say("You're welcome."),
             ],
             &[],
+            false,
         );
         let named: Vec<&str> = items
             .iter()
@@ -1614,6 +1652,55 @@ mod tests {
             })
             .collect();
         assert_eq!(named, ["", "", "deepseek-flash", "deepseek-flash"], "under the last step of each turn only");
+    }
+
+    #[test]
+    fn a_conversations_tokens_are_said_apart_not_as_one_prompt_total() {
+        assert_eq!(
+            token_facts(1_000, 800, 50),
+            "200 fresh in · 800 cached · 50 out",
+            "the prompt total is mostly cache reads and must not read as fresh work"
+        );
+        assert_eq!(token_facts(400, 0, 0), "400 fresh in · 0 cached · 0 out");
+    }
+
+    #[test]
+    fn a_turn_still_being_written_names_its_model_only_after_it_is_done() {
+        let say = |text: &str| event("assistant", json!({ "model": "deepseek-flash", "content": [{ "type": "text", "text": text }] }));
+        let events = [
+            event("user", json!({ "text": "build it" })),
+            say("First, the module."),
+            say("Now the tests."),
+        ];
+        // While the turn runs, a label under the latest step would show a model and a cost for a reply
+        // that is still arriving, and move down the page on every step.
+        let running = fold(&events, &[], true);
+        assert!(
+            running.iter().all(|i| !matches!(i, Item::Devd { model, .. } if !model.is_empty())),
+            "a running turn carries no label: {running:?}"
+        );
+        // A finished turn before it keeps the label it earned.
+        let with_earlier = fold(
+            &[
+                event("user", json!({ "text": "the first thing" })),
+                say("The first answer."),
+                event("user", json!({ "text": "the second thing" })),
+                say("Still working on it."),
+            ],
+            &[],
+            true,
+        );
+        let named: Vec<&str> = with_earlier
+            .iter()
+            .filter_map(|i| match i {
+                Item::Devd { model, .. } => Some(model.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(named, ["deepseek-flash", ""], "only the running turn is quiet");
+        // The same events, finished, name the turn.
+        let done = fold(&events, &[], false);
+        assert!(matches!(done.last(), Some(Item::Devd { model, .. }) if model == "deepseek-flash"));
     }
 
     #[test]
@@ -1638,6 +1725,7 @@ mod tests {
                 ),
             ],
             &[],
+            false,
         );
         assert_eq!(items.len(), 4);
         assert_eq!(
@@ -1668,6 +1756,7 @@ mod tests {
                 ),
             ],
             &[],
+            false,
         );
         assert_eq!(
             items[0],
@@ -1704,6 +1793,7 @@ mod tests {
                 ),
             ],
             &["r1"],
+            false,
         );
         assert_eq!(
             items,

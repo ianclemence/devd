@@ -197,6 +197,11 @@ pub struct ChatThread {
     /// See [`crate::runs::RunKind`].
     #[serde(default = "default_kind")]
     pub kind: String,
+    /// The thinking effort chosen for this conversation: `none`, `low`, `medium`, `high`, `extra`
+    /// or `max`. `None` means the ordinary default. It is persisted because a restart should not
+    /// turn "Thinking off" back on.
+    #[serde(default)]
+    pub effort: Option<String>,
 }
 
 fn default_kind() -> String {
@@ -332,7 +337,7 @@ fn row_provider(r: &rusqlite::Row) -> rusqlite::Result<Provider> {
 
 const PROVIDER_COLS: &str =
     "id,kind,label,base_url,key_env,default_model,is_default,enabled,created_at,updated_at";
-const THREAD_COLS: &str = "id,title,project,provider_id,model,state,error,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,cost_usd,resume_at,pr_url,settled_at,created_at,updated_at,kind";
+const THREAD_COLS: &str = "id,title,project,provider_id,model,state,error,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,cost_usd,resume_at,pr_url,settled_at,created_at,updated_at,kind,effort";
 const REQ_COLS: &str = "id,actor,capability,args,plan,state,result,error,thread_id,tool_use_id,created_at,decided_at,decided_by,approval_id";
 
 fn row_thread(r: &rusqlite::Row) -> rusqlite::Result<ChatThread> {
@@ -355,6 +360,7 @@ fn row_thread(r: &rusqlite::Row) -> rusqlite::Result<ChatThread> {
         created_at: r.get(15)?,
         updated_at: r.get(16)?,
         kind: r.get(17)?,
+        effort: r.get(18)?,
     })
 }
 
@@ -562,11 +568,12 @@ impl Store {
             created_at: now.clone(),
             updated_at: now,
             kind: kind.to_string(),
+            effort: None,
         };
         self.with(|c| {
             c.execute(
-                &format!("INSERT INTO chat_threads ({THREAD_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)"),
-                params![t.id, t.title, t.project, t.provider_id, t.model, t.state, t.error, t.input_tokens, t.output_tokens, t.cache_read_tokens, t.cache_write_tokens, t.cost_usd, t.resume_at, t.pr_url, t.settled_at, t.created_at, t.updated_at, t.kind],
+                &format!("INSERT INTO chat_threads ({THREAD_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)"),
+                params![t.id, t.title, t.project, t.provider_id, t.model, t.state, t.error, t.input_tokens, t.output_tokens, t.cache_read_tokens, t.cache_write_tokens, t.cost_usd, t.resume_at, t.pr_url, t.settled_at, t.created_at, t.updated_at, t.kind, t.effort],
             )?;
             Ok(())
         })?;
@@ -650,6 +657,65 @@ impl Store {
             c.execute(
                 "UPDATE chat_threads SET title=COALESCE(?2,title), provider_id=COALESCE(?3,provider_id), model=COALESCE(?4,model), updated_at=?5 WHERE id=?1",
                 params![id, title, provider_id, model, util::now()],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Remember how much this conversation's model may think. `None` clears an explicit choice.
+    pub fn set_thread_effort(&self, id: &str, effort: Option<&str>) -> Result<()> {
+        self.with(|c| {
+            c.execute(
+                "UPDATE chat_threads SET effort=?2, updated_at=?3 WHERE id=?1",
+                params![id, effort, util::now()],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// The characters-per-token ratio observed for a model from completed calls, when one has been.
+    pub fn model_chars_per_token(&self, model: &str) -> Result<Option<f64>> {
+        self.with(|c| {
+            Ok(c.query_row(
+                "SELECT chars_per_token FROM model_calibration WHERE model=?1",
+                params![model],
+                |r| r.get::<_, f64>(0),
+            )
+            .optional()?)
+        })
+    }
+
+    /// Learn a model's characters-per-token ratio from one completed call.
+    ///
+    /// `chars` is everything the request carried that devd can count (system prompt, messages and
+    /// tool schemas) and `tokens` is the provider's prompt count, cache included. It is smoothed so
+    /// one unusually dense or sparse request cannot move the estimate far, and clamped to a range a
+    /// text model can plausibly have.
+    pub fn observe_model_chars(&self, model: &str, chars: usize, tokens: i64) -> Result<()> {
+        if chars < 500 || tokens < 50 {
+            return Ok(());
+        }
+        let measured = (chars as f64 / tokens as f64).clamp(2.0, 8.0);
+        self.with(|c| {
+            let previous: Option<(f64, i64)> = c
+                .query_row(
+                    "SELECT chars_per_token, samples FROM model_calibration WHERE model=?1",
+                    params![model],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?;
+            let (ratio, samples) = match previous {
+                Some((ratio, samples)) => (ratio * 0.8 + measured * 0.2, samples + 1),
+                None => (measured, 1),
+            };
+            // Quarters, not hundredths: the ratio decides where the history is shortened, and a
+            // boundary that moves every call rewrites the prompt prefix the provider caches. A
+            // quarter-step is fine enough to be accurate and coarse enough to stay put.
+            let ratio = (ratio * 4.0).round() / 4.0;
+            c.execute(
+                "INSERT INTO model_calibration (model, chars_per_token, samples, updated_at) VALUES (?1,?2,?3,?4)
+                 ON CONFLICT(model) DO UPDATE SET chars_per_token=?2, samples=?3, updated_at=?4",
+                params![model, ratio, samples, util::now()],
             )?;
             Ok(())
         })
@@ -1306,6 +1372,42 @@ mod price_tests {
         let rows = s.list_catalogue(Some("manual")).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].input_price, Some(0.20));
+    }
+}
+
+#[cfg(test)]
+mod calibration_tests {
+    use super::*;
+
+    #[test]
+    fn a_conversation_remembers_how_much_it_may_think() {
+        let s = Store::open_in_memory().unwrap();
+        let t = s.create_thread("t", None, None, None).unwrap();
+        assert_eq!(t.effort, None, "no choice is the ordinary default");
+        s.set_thread_effort(&t.id, Some("none")).unwrap();
+        assert_eq!(
+            s.get_thread(&t.id).unwrap().unwrap().effort.as_deref(),
+            Some("none"),
+            "a restart reads the choice from the conversation, not from memory"
+        );
+        s.set_thread_effort(&t.id, None).unwrap();
+        assert_eq!(s.get_thread(&t.id).unwrap().unwrap().effort, None);
+    }
+
+    #[test]
+    fn a_models_ratio_is_learned_from_what_the_provider_counted() {
+        let s = Store::open_in_memory().unwrap();
+        assert_eq!(s.model_chars_per_token("deepseek-flash").unwrap(), None);
+        s.observe_model_chars("deepseek-flash", 4_000, 1_000).unwrap();
+        let first = s.model_chars_per_token("deepseek-flash").unwrap().unwrap();
+        assert!((first - 4.0).abs() < 1e-9, "{first}");
+        // A denser call moves the estimate toward it, not all the way: one call is not a trend.
+        s.observe_model_chars("deepseek-flash", 4_000, 500).unwrap();
+        let second = s.model_chars_per_token("deepseek-flash").unwrap().unwrap();
+        assert!((second - 4.75).abs() < 1e-9, "4.0 moved toward 8.0 and settled on a quarter-step: {second}");
+        // A handful of characters and tokens teaches nothing.
+        s.observe_model_chars("deepseek-flash", 20, 2).unwrap();
+        assert_eq!(s.model_chars_per_token("deepseek-flash").unwrap(), Some(second));
     }
 }
 

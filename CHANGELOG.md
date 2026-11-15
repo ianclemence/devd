@@ -12,6 +12,46 @@ may change capability identifiers where the design was wrong.
 
 ## [Unreleased]
 
+## [0.36.0] - 2026-11-15 - Thinking that stays off, and a context measured per model
+
+### Added
+
+- **A conversation remembers how much it may think.** The thinking level chosen in the message box was held in
+  memory only, so a restart put "Thinking off" back on. It is now written with the conversation and read back the
+  first time that conversation is used, and a run carries its choice in the run itself, so a task started after a
+  restart still inherits it. A run started from a conversation passes its level to the planner and to every
+  specialist, instead of their falling back to the provider's default.
+- **Every run says what it may spend.** A team run with no ceiling of its own now starts with one — 160 model
+  turns — and the run header names it before any work happens ("0 of 160 turns"), beside what has been spent.
+- **The estimator learns each model's density.** Completed calls teach devd how many characters one of that
+  model's tokens actually carried, from the provider's own prompt count, smoothed and rounded to quarter steps so
+  the point at which a conversation is shortened stays put and the prompt cache keeps its prefix. The cold-start
+  figure is 3.5 characters per token rather than 4; the measured one replaces it per model.
+
+### Changed
+
+- **The token count is said in parts.** "566k fresh in · 21M cached · 563k out" instead of one prompt total. The
+  provider's input count includes the cache, so a single number read as sixteen times the fresh work.
+- **The model, its cost and its speed appear when the turn is over.** A turn is many model calls, so the label was
+  moving down the page after every completed call, carrying a total that was not final yet. It is drawn once, on
+  the finished turn.
+- **A repeated call is caught wherever it sits in the recent steps.** The guard now counts the same call three
+  times in the last eight steps, so `A, B, A, B, A` is the same circle as `A, A, A`. A successful write clears
+  the history, so a test run after an edit is a new question and not a repeat.
+- **A retry no longer re-sends the brief it already has.** The first attempt gets the goal, the task, the
+  definition of done and the scope; a restart in the same conversation gets a checkpoint and only what changed.
+- **The runaway guard is smaller.** 96 steps for one conversation and 160 turns for a run, instead of 240 and no
+  ceiling. A task that needs more continues in a fresh attempt.
+- **Old answers are shortened with old tool output.** Clearing tool results alone left a long run of the agent's
+  own prose as most of what was re-sent; the oldest answers are now shortened past the same high-water mark. The
+  goal and the latest exchange are never touched.
+
+### Fixed
+
+- **"Thinking off" reaches DeepSeek as the switch it documents.** DeepSeek has no `none` reasoning level: it turns
+  thinking off with `thinking: {"type": "disabled"}`, and an effort of `none` was ignored, which is how a run set
+  to Off kept thinking. Actual levels are still sent as `reasoning_effort`.
+
 ## [0.35.0] - 2026-11-15 - Backgrounds from a description, distinct themes, a run indicator
 
 ### Added

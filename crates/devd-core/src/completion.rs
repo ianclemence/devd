@@ -435,6 +435,7 @@ mod tests {
             verdict_at: None,
             reviewed_commit: None,
             base_commit: None,
+            effort: None,
         }
     }
 

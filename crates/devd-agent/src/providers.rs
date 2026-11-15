@@ -1406,11 +1406,16 @@ fn openai_body(p: &Provider, r: &ChatRequest) -> Value {
     body[if p.kind == "openai" { "max_completion_tokens" } else { "max_tokens" }] = json!(r.max_tokens);
     // Only reasoning-capable OpenAI models accept this, and sending it to the
     // others is an error rather than a no-op.
-    // DeepSeek thinks by default, at "high", and can spend a whole reply doing it. Its own levels are none, low,
-    // high and max; devd always names one, so a reply's thinking is what the person chose, not the provider's
-    // default. "Medium", devd's ordinary level, is DeepSeek's "low": enough to plan a step, not to stall on it.
+    // DeepSeek thinks by default, at "high", and can spend a whole reply doing it. Its own levels are low,
+    // high and max, and its OpenAI format turns thinking off with `thinking`, not with a level: an effort of
+    // "none" is not one of its levels, so sending it left the model thinking anyway. Name the toggle that
+    // means off, and leave the levels alone.
     if is_deepseek(p, &r.model) {
-        body["reasoning_effort"] = json!(deepseek_effort(r.effort.as_deref()));
+        if r.effort.as_deref() == Some("none") {
+            body["thinking"] = json!({ "type": "disabled" });
+        } else {
+            body["reasoning_effort"] = json!(deepseek_effort(r.effort.as_deref()));
+        }
     }
     // The other families that think by default each switch it their own way, on their own hosts. A field is
     // sent only to the host that knows it: an unknown field is an error on most others.
@@ -1551,7 +1556,8 @@ fn is_deepseek(p: &Provider, model: &str) -> bool {
     !is_openrouter(p) && (p.base_url.contains("deepseek.com") || model.to_ascii_lowercase().starts_with("deepseek"))
 }
 
-/// devd's level in DeepSeek's words: none, low, high or max.
+/// devd's level in DeepSeek's words. Off is not a level it has; `openai_body` sends the `thinking`
+/// toggle for that, and this is only reached for low, medium, high, extra and max.
 fn deepseek_effort(effort: Option<&str>) -> &'static str {
     match effort {
         Some("none") => "none",
@@ -2239,18 +2245,24 @@ data: [DONE]\n\n";
     }
 
     #[test]
-    fn deepseek_is_always_told_how_much_to_think() {
+    fn deepseek_is_always_told_how_much_to_think_and_off_is_its_own_toggle() {
         let say = vec![json!({ "role": "user", "content": [{ "type": "text", "text": "x" }] })];
-        let effort = |level: Option<&str>| openai_body(&provider("deepseek"), &request("deepseek-flash", say.clone(), level))["reasoning_effort"].clone();
+        let body = |level: Option<&str>| openai_body(&provider("deepseek"), &request("deepseek-flash", say.clone(), level));
+        let effort = |level: Option<&str>| body(level)["reasoning_effort"].clone();
         // Left to itself it thinks at "high"; devd's ordinary level is its "low".
         assert_eq!(effort(None), "low");
         assert_eq!(effort(Some("medium")), "low");
-        assert_eq!(effort(Some("none")), "none", "Off turns thinking off");
         assert_eq!(effort(Some("high")), "high");
         assert_eq!(effort(Some("max")), "max");
-        // A model of another vendor on another provider is not sent DeepSeek's field.
+        // Off is not a reasoning level DeepSeek has: it is the documented toggle, and sending "none" as an
+        // effort is ignored, which is how a run set to Off kept thinking.
+        let off = body(Some("none"));
+        assert_eq!(off["thinking"], json!({ "type": "disabled" }), "{off}");
+        assert!(off.get("reasoning_effort").is_none(), "not a level DeepSeek has: {off}");
+        // A model of another vendor on another provider is not sent DeepSeek's fields.
         let other = openai_body(&provider("groq"), &request("llama-3", say.clone(), Some("high")));
         assert!(other.get("reasoning_effort").is_none(), "{other}");
+        assert!(other.get("thinking").is_none(), "{other}");
     }
 
     #[test]
