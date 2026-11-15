@@ -482,17 +482,17 @@ fn tasks_run_with_evidence_and_destructive_ones_need_a_human() {
     .unwrap();
     assert_eq!(fine["data"]["exit_code"], 0);
 
-    // A command that is a capability names the capability instead of a bare
-    // "not allowed"; a shell is never the answer.
+    // git is run for reading and committing, as a person does; publishing is refused, naming who does it.
     let e = dispatch(
         &reg,
         &agent,
         "project.exec",
-        json!({"path": path, "argv": ["git", "status"]}),
+        json!({"path": path, "argv": ["git", "push", "origin", "main"]}),
         Approval::None,
     )
     .unwrap_err();
-    assert!(e.to_string().contains("git.status"), "{e}");
+    assert!(e.to_string().contains("publishes work"), "{e}");
+    // A shell is never the answer.
     let e = dispatch(
         &reg,
         &agent,

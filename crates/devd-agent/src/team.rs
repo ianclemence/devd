@@ -1981,7 +1981,29 @@ impl Team {
         }
         let run = self.run(&t.run_id)?;
         if matches!(run.state.as_str(), "done" | "cancelled") {
-            return Err(DevdError::conflict(format!("the run is {}", run.state)));
+            // Say where the work went on, so the agent goes there instead of asking a person: another run in the
+            // same project that is still open and has this task.
+            let elsewhere = self
+                .ctx
+                .store
+                .list_runs(200)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|r| r.id != run.id && r.project == run.project && !matches!(r.state.as_str(), "done" | "failed" | "cancelled"))
+                .find_map(|r| {
+                    let task = self.ctx.store.list_tasks_of_run(&r.id).ok()?.into_iter().find(|x| x.key == t.key)?;
+                    Some((r.id, r.state, task.id))
+                });
+            return Err(DevdError::conflict(match elsewhere {
+                Some((rid, state, tid)) => format!(
+                    "the run is {}, and a {} run cannot be retried. The same task is in run {rid} ({state}) as task {tid}: retry that one.",
+                    run.state, run.state
+                ),
+                None => format!(
+                    "the run is {}, and a {} run cannot be retried. Start a new run for the remaining work.",
+                    run.state, run.state
+                ),
+            }));
         }
         let feedback = note.map(str::to_string).or(t.error.clone());
         self.ctx.store.update_team_task(

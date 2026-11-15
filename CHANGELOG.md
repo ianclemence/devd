@@ -12,6 +12,42 @@ may change capability identifiers where the design was wrong.
 
 ## [Unreleased]
 
+### Added
+
+- **Describe a background and it is applied.** A theme can now carry a background of its own, not only colours:
+  two smooth scenes (`glow`, soft pools of light, and `mesh`, a blend of colour across the window), a `wash`
+  (a colour gradient across the whole window), a corner (`origin`), a `seed` for another arrangement, and a
+  picture of your own (`image`, with `image_dim`). `theme.image` fetches a picture from a public address, or
+  copies one from this computer, into the theme's folder after checking from its bytes that it is a real png,
+  jpg or webp. `/background` in the message box asks the assistant to do it. Readability is checked, not hoped
+  for: text is measured against both ends of a wash and the strongest place of a smooth scene, a picture is
+  always dimmed, and a theme that would take the text away is refused with the numbers.
+- **A run indicator on the Runs button.** It counts runs going in green, or runs paused in amber with a green dot
+  if others are still going, in the same pill as the Inbox count.
+- **A spinner in the status line**, a ring of dots that turns (it does not pulse), beside what is being done now,
+  such as "Reading a.rs", with the turn's time.
+
+### Changed
+
+- **Built-in themes are different from one another.** Dawn is warm charcoal with a coral accent, Psalm is
+  deep indigo with a violet accent, and Daybreak is cool paper with an azure accent; Sling and Sharon keep
+  theirs. No two share a button colour, and a test keeps it so. Each is made through the same check a theme file
+  goes through, so text is readable on all of them.
+- Agents can run `git` through `run_command` (status, log, diff, commit, branch and the rest). Pushing, and
+  anything that discards work (`reset --hard`, `clean`, `--force`), stays a person's.
+- When a task is retried in a run that is over, the answer now names the open run that has the same task, so the
+  agent goes there instead of asking. Agents are told to settle blockers inside the project themselves and to ask
+  only for what they cannot have.
+
+### Fixed
+
+- **Long text in the message box wraps** onto the next line, on Home and in the Assistant, instead of running
+  under the send button. The box grows to eight rows and then follows the caret.
+- **Metrics blocks always show.** A metrics (or chart, steps or timeline) block is drawn however the model shaped
+  it: the list alone, under another name, a plain mapping of label to value, with a trailing comma, or with a
+  number for the change. A title is now drawn too.
+- The assistant screen no longer paints over a theme's background.
+
 ## [0.34.1] - 2026-11-15 - The live conversation lines
 
 ### Fixed

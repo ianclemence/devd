@@ -57,16 +57,22 @@ pub enum Pattern {
     Contours,
     /// Rays of morning light fanning from the corner. Daybreak.
     Rays,
+    /// Soft pools of coloured light. Smooth: it is not drawn as dots.
+    Glow,
+    /// A mesh of colour across the window. Smooth: it is not drawn as dots.
+    Mesh,
 }
 
 impl Pattern {
     /// Every scene, by the name a theme file and a picture's path use.
-    pub const ALL: [(&'static str, Pattern); 5] = [
+    pub const ALL: [(&'static str, Pattern); 7] = [
         ("ripples", Pattern::Ripples),
         ("pasture", Pattern::Pasture),
         ("silk", Pattern::Silk),
         ("contours", Pattern::Contours),
         ("rays", Pattern::Rays),
+        ("glow", Pattern::Glow),
+        ("mesh", Pattern::Mesh),
     ];
 
     /// The scene's name.
@@ -77,6 +83,11 @@ impl Pattern {
     /// The scene a name means.
     pub fn named(name: &str) -> Option<Pattern> {
         Self::ALL.iter().find(|(n, _)| *n == name).map(|(_, p)| *p)
+    }
+
+    /// Whether the scene is a smooth picture across the whole window rather than dots in a corner.
+    pub fn is_soft(self) -> bool {
+        matches!(self, Pattern::Glow | Pattern::Mesh)
     }
 
     /// Whether the scene stands on the bottom edge of the window rather than hanging from the top.
@@ -92,6 +103,8 @@ impl Pattern {
             Pattern::Silk => 0.18,
             Pattern::Contours => 0.14,
             Pattern::Rays => 0.14,
+            Pattern::Glow => 0.45,
+            Pattern::Mesh => 0.34,
         };
         // Ink on a pale window carries more than light on a dark one, so the pale themes are shown a little quieter.
         if dark { base } else { base * 0.92 }
@@ -100,8 +113,15 @@ impl Pattern {
 
 // ---------------------------------------------------------------------------------------------- noise
 
+thread_local! {
+    /// The picture's own number, which changes every pattern in it without changing its kind. Set for the length of
+    /// one picture, on the thread making it.
+    static STIR: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
 /// A repeatable number in 0..1 for a point and a seed.
-fn hash2(x: i32, y: i32, seed: u32) -> f32 {
+pub(super) fn hash2(x: i32, y: i32, seed: u32) -> f32 {
+    let seed = seed ^ STIR.with(|s| s.get()).wrapping_mul(0x9e37_79b9);
     let mut h = (x as u32).wrapping_mul(0x85eb_ca6b)
         ^ (y as u32).wrapping_mul(0xc2b2_ae35)
         ^ seed.wrapping_mul(0x27d4_eb2f);
@@ -280,14 +300,18 @@ fn scene(pattern: Pattern, u: f32, v: f32) -> (f32, f32) {
                 bright.clamp(0.0, 1.0),
             )
         }
+        // Smooth scenes are made by `soft`, not by dots.
+        Pattern::Glow | Pattern::Mesh => (0.0, 0.0),
     }
 }
 
-/// What one cell is: nothing, a dot in the base tone, or a dot in the bright tone.
-fn cell(cx: u32, cy: u32, pattern: Pattern) -> Option<bool> {
+/// What one cell is: nothing, a dot in the base tone, or a dot in the bright tone. `flip` mirrors the picture across
+/// and down, so a scene can come from another corner.
+fn cell(cx: u32, cy: u32, pattern: Pattern, flip: (bool, bool)) -> Option<bool> {
+    let (fx, fy) = (if flip.0 { CELLS_W - 1 - cx } else { cx }, if flip.1 { CELLS_H - 1 - cy } else { cy });
     let (u, v) = (
-        (cx as f32 + 0.5) / CELLS_W as f32,
-        (cy as f32 + 0.5) / CELLS_H as f32,
+        (fx as f32 + 0.5) / CELLS_W as f32,
+        (fy as f32 + 0.5) / CELLS_H as f32,
     );
     let (ink, bright) = scene(pattern, u, v);
     let threshold = (BAYER[(cy % 8) as usize][(cx % 8) as usize] as f32 + 0.5) / 64.0;
@@ -300,16 +324,25 @@ fn cell(cx: u32, cy: u32, pattern: Pattern) -> Option<bool> {
 /// Whether any ink lands in the pixel at (`x`, `y`), for tests.
 #[cfg(test)]
 fn inked(x: u32, y: u32, pattern: Pattern) -> bool {
-    cell(x / CELL, y / CELL, pattern).is_some()
+    cell(x / CELL, y / CELL, pattern, (false, false)).is_some()
 }
 
 /// The picture as a PNG: dots in `base`, brighter dots in `glint`, everything else transparent.
 pub fn png_as(base: [u8; 3], glint: [u8; 3], pattern: Pattern) -> Vec<u8> {
+    png_with(base, glint, pattern, (false, false), 0)
+}
+
+/// The picture again, mirrored across and down when `flip` says so, with the pattern's own number `seed`.
+pub fn png_with(base: [u8; 3], glint: [u8; 3], pattern: Pattern, flip: (bool, bool), seed: u32) -> Vec<u8> {
+    if pattern.is_soft() {
+        return super::soft::png(base, glint, pattern, flip, seed);
+    }
+    STIR.with(|s| s.set(seed));
     let mut rows = Vec::with_capacity((HEIGHT * (WIDTH * 4 + 1)) as usize);
     for cy in 0..CELLS_H {
         let mut line = Vec::with_capacity((WIDTH * 4) as usize);
         for cx in 0..CELLS_W {
-            let px: [u8; 4] = match cell(cx, cy, pattern) {
+            let px: [u8; 4] = match cell(cx, cy, pattern, flip) {
                 None => [0, 0, 0, 0],
                 Some(false) => [base[0], base[1], base[2], 255],
                 Some(true) => [glint[0], glint[1], glint[2], 255],
@@ -334,7 +367,7 @@ pub fn png_as(base: [u8; 3], glint: [u8; 3], pattern: Pattern) -> Vec<u8> {
     out
 }
 
-fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+pub(super) fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
     out.extend_from_slice(&(data.len() as u32).to_be_bytes());
     let start = out.len();
     out.extend_from_slice(kind);
@@ -359,7 +392,7 @@ fn crc32(bytes: &[u8]) -> u32 {
 }
 
 /// A zlib stream that stores the data uncompressed: valid, simple, and the picture is cut once per run.
-fn zlib_stored(data: &[u8]) -> Vec<u8> {
+pub(super) fn zlib_stored(data: &[u8]) -> Vec<u8> {
     let mut out = vec![0x78, 0x01];
     let mut blocks = data.chunks(65_535).peekable();
     while let Some(block) = blocks.next() {
@@ -491,7 +524,7 @@ mod tests {
             let glints = (0..CELLS_H)
                 .step_by(3)
                 .flat_map(|y| (0..CELLS_W).step_by(3).map(move |x| (x, y)))
-                .filter(|&(x, y)| cell(x, y, pattern) == Some(true))
+                .filter(|&(x, y)| cell(x, y, pattern, (false, false)) == Some(true))
                 .count();
             assert!(glints > 20, "{pattern:?} has no bright tone ({glints})");
         }

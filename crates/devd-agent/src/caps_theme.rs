@@ -56,6 +56,35 @@ struct RemoveArgs {
     id: String,
 }
 
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct ImageArgs {
+    /// The theme's folder in `mods/`, such as `paper`. The folder is made if it is not there yet.
+    id: String,
+    /// A public https address of a picture (png, jpg or webp, up to 8 MB). Give this or `path`.
+    #[serde(default)]
+    url: Option<String>,
+    /// A picture already on this computer. Give this or `url`.
+    #[serde(default)]
+    path: Option<String>,
+}
+
+/// The most a theme's picture may weigh.
+const IMAGE_MAX: usize = 8 * 1024 * 1024;
+
+/// The file extension for a picture's bytes, read from the bytes and not from what the sender called it, or None when
+/// they are not a png, jpg or webp.
+fn image_kind(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]) {
+        Some("png")
+    } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        Some("jpg")
+    } else if bytes.len() > 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("webp")
+    } else {
+        None
+    }
+}
+
 /// The built-in themes, which `theme.use` also accepts.
 const BUILT_IN: [&str; 5] = ["sling", "dawn", "psalm", "sharon", "daybreak"];
 
@@ -150,7 +179,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
                     (id, Some(manifest), Some(spec)) => {
                         let id = id.clone().unwrap_or_else(|| "draft".into());
                         theme::check_values(&id, manifest, spec)
-                            .map(|palette| ThemeMod { id, manifest: manifest.clone(), spec: spec.clone(), palette })
+                            .map(|palette| ThemeMod { dir: dir.join(&id), id, manifest: manifest.clone(), spec: spec.clone(), palette })
                     }
                     (Some(id), None, None) => {
                         if !theme::valid_id(id) {
@@ -170,6 +199,48 @@ pub fn register(reg: &mut Registry) -> Result<()> {
                         json!({ "ok": false, "problems": problems }),
                     )),
                 }
+            },
+        )?;
+
+    reg.define::<ImageArgs>("theme.image", "Put a picture in a theme's folder")
+        .description("Fetches a picture from a public https address (or copies one from this computer) into a theme's folder as `background.png`, `background.jpg` or `background.webp`, after checking from its bytes that it is a real png, jpg or webp of at most 8 MB. It returns the file name: then call theme.save with `replace: true` and `backdrop.image` set to that name (and `backdrop.image_dim`, 0.3 to 0.9, for how far it is dimmed so text reads on it). Use it when the person wants a photograph or a picture of their own behind the window.")
+        .group("theme")
+        .tier(Tier::Write)
+        .effect(Effect::Write)
+        .agent_safe()
+        .dry_run()
+        .handlers(
+            |_, a| plan("theme.image", format!("put a picture in mods/{}", a.id)),
+            |ctx, a| {
+                if !theme::valid_id(&a.id) {
+                    return Err(DevdError::invalid(format!("\"{}\" cannot name a theme's folder: use 1 to 40 lowercase letters, digits and hyphens", a.id)));
+                }
+                let bytes = match (&a.url, &a.path) {
+                    (Some(url), None) => crate::docs::fetch_bytes(url, IMAGE_MAX)?.1,
+                    (None, Some(path)) => {
+                        let meta = std::fs::metadata(path).map_err(|e| DevdError::not_found(format!("{path} cannot be read: {e}")))?;
+                        if meta.len() as usize > IMAGE_MAX {
+                            return Err(DevdError::unsupported(format!("{path} is larger than {IMAGE_MAX} bytes")));
+                        }
+                        std::fs::read(path).map_err(|e| DevdError::internal(format!("{path} cannot be read: {e}")))?
+                    }
+                    _ => return Err(DevdError::invalid("give `url` or `path`, not both and not neither")),
+                };
+                let kind = image_kind(&bytes).ok_or_else(|| DevdError::invalid("that is not a png, jpg or webp picture"))?;
+                let folder = ctx.paths.mods().join(&a.id);
+                std::fs::create_dir_all(&folder).map_err(|e| DevdError::internal(format!("could not make {}: {e}", folder.display())))?;
+                // A picture from before is replaced, whatever its type was.
+                for old in ["png", "jpg", "webp"] {
+                    let _ = std::fs::remove_file(folder.join(format!("background.{old}")));
+                }
+                let name = format!("background.{kind}");
+                let part = folder.join(format!("{name}.part"));
+                std::fs::write(&part, &bytes).map_err(|e| DevdError::internal(format!("could not write {name}: {e}")))?;
+                std::fs::rename(&part, folder.join(&name)).map_err(|e| DevdError::internal(format!("could not write {name}: {e}")))?;
+                Ok(Outcome::with_data(
+                    format!("Saved {name} ({} KB) in {}; set backdrop.image to \"{name}\" with theme.save", bytes.len() / 1024, folder.display()),
+                    json!({ "file": name, "bytes": bytes.len(), "folder": folder.display().to_string() }),
+                ))
             },
         )?;
 

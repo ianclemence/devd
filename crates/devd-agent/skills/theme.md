@@ -16,7 +16,8 @@ to listen to the check.
 ## When to use
 
 - The person asks for a theme, a colour scheme, a look, or a mood for the window.
-- The person asks to change how the window looks: a colour, the contrast, the picture, the name.
+- The person asks to change how the window looks: a colour, the contrast, the picture, the name, or the
+  background ("make the background a night sky", "a sunrise gradient", "move the picture to the left").
 - A theme in Settings cannot be used and the person asks to fix it.
 
 ## Procedure
@@ -34,8 +35,18 @@ to listen to the check.
    - `muted`, `faint`, `surface`, `raised`, `ok`, `warn`, `danger` or `info` only when the person asked for
      them or the description needs them. Left out, devd derives them in the proportions its own themes use.
    - a `scene` for the picture: `ripples` (rings on still water), `pasture` (hills under a low sun), `silk`
-     (folds catching light), `contours` (a hand-drawn map), `rays` (light fanning from a corner) or `none`.
-     `ink` and `glint` colour its dots; leave them out to use the text and the accent. `strength` from 0 to 2.
+     (folds catching light), `contours` (a hand-drawn map), `rays` (light fanning from a corner), `aurora`
+     (curtains of light), `grid` (drawing paper, a blueprint), `stars` (a night sky), `waves` (rolling
+     lines) or `none`. `ink` and `glint` colour its dots; leave them out to use the text and the accent.
+     `strength` from 0 to 2.
+   - the background itself, when the person describes one ("a dusk sky", "deep ocean", "warm sunrise",
+     "starry night", "blueprint"): pick the scene that is that picture, put it in the right place with
+     `origin` ("top-right", "top-left", "bottom-right", "bottom-left"), change its arrangement with `seed`
+     (any whole number; try another for a different pattern of the same scene), and for a colour that fills
+     the whole window give a `wash`: `{ from, to, angle }`, two colours and a direction in degrees (180 runs
+     from the top down, 90 from left to right). The wash goes behind every screen, so the text must read on
+     both ends of it; the check says so when it does not. Keep a wash close to the background colour, a
+     step or two lighter or hotter, never a different brightness: a wash is a mood, not a second theme.
    - a `feel` of a few words ("Cream and umber"), a `name` of a word or two, and a one-sentence
      `description` of how it looks. Never use "light" or "dark" in a name: a theme is one look.
    - an `id` for its folder: lowercase letters, digits and hyphens, from the name ("paper", "night-shift").

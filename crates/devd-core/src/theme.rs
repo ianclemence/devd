@@ -25,6 +25,8 @@ pub const TEXT_MIN: f32 = 4.5;
 pub const MUTED_MIN: f32 = 3.0;
 /// The minimum contrast for faint text against the background.
 pub const FAINT_MIN: f32 = 2.0;
+/// How much of the window's colour a smooth scene can cover at its strongest, for strength 1.
+pub const SOFT_REACH: f32 = 0.45;
 /// The minimum contrast for the accent, and each state colour, against the background.
 pub const SIGNAL_MIN: f32 = 2.5;
 
@@ -97,7 +99,7 @@ pub struct Colours {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Backdrop {
-    /// `ripples`, `pasture`, `silk`, `contours`, `rays` or `none`. Ripples when left out.
+    /// `ripples`, `pasture`, `silk`, `contours`, `rays`, `glow`, `mesh` or `none`. Ripples when left out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scene: Option<String>,
     /// The picture's dots. The text colour when left out.
@@ -109,6 +111,38 @@ pub struct Backdrop {
     /// How strongly the picture shows, 0 to 2, where 1 is the scene's own strength.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strength: Option<f32>,
+    /// Which corner the picture comes from: `top-right`, `top-left`, `bottom-right`, `bottom-left`. The scene's own
+    /// corner when left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
+    /// A number that changes the picture's pattern without changing its kind: the same scene, another arrangement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u32>,
+    /// A colour wash over the whole window behind everything, from one colour to another.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wash: Option<Wash>,
+    /// A picture of your own behind everything: the name of a `.png`, `.jpg` or `.webp` file in the theme's folder, such
+    /// as `background.jpg`. It covers the window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    /// How much the picture is darkened (or lightened, in a light theme) towards the window's colour so text reads on
+    /// it, from 0.5 to 0.9. 0.65 when left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_dim: Option<f32>,
+}
+
+/// A wash of colour across the whole window: `from` at one corner, `to` at the opposite, and every screen drawn over it.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Wash {
+    /// The colour where it starts, `#rrggbb`. Text must be readable on it.
+    pub from: String,
+    /// The colour where it ends, `#rrggbb`. Text must be readable on it.
+    pub to: String,
+    /// The direction in degrees: 0 runs from the bottom up, 90 from the left to the right, 180 from the top down.
+    /// 160 when left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub angle: Option<f32>,
 }
 
 impl Backdrop {
@@ -227,18 +261,78 @@ pub enum Scene {
     Contours,
     /// Rays of light fanning from the corner.
     Rays,
+    /// Soft pools of coloured light, blurred into the window's colour. Smooth, not dotted.
+    Glow,
+    /// A mesh of colour: four corners blended smoothly across the window. Smooth, not dotted.
+    Mesh,
     /// No picture.
     None,
 }
 
+/// The corner a scene comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Origin {
+    /// The scene's own corner.
+    #[default]
+    Own,
+    /// From the top right.
+    TopRight,
+    /// From the top left.
+    TopLeft,
+    /// From the bottom right.
+    BottomRight,
+    /// From the bottom left.
+    BottomLeft,
+}
+
+impl Origin {
+    /// Every origin, by the name a file uses.
+    pub const ALL: [(&'static str, Origin); 4] = [
+        ("top-right", Origin::TopRight),
+        ("top-left", Origin::TopLeft),
+        ("bottom-right", Origin::BottomRight),
+        ("bottom-left", Origin::BottomLeft),
+    ];
+
+    /// The origin a file names.
+    pub fn named(name: &str) -> Option<Origin> {
+        Self::ALL.iter().find(|(n, _)| n.eq_ignore_ascii_case(name.trim())).map(|(_, o)| *o)
+    }
+
+    /// The short code in a picture's path.
+    pub fn code(self) -> &'static str {
+        match self {
+            Origin::Own => "",
+            Origin::TopRight => "tr",
+            Origin::TopLeft => "tl",
+            Origin::BottomRight => "br",
+            Origin::BottomLeft => "bl",
+        }
+    }
+}
+
+/// A wash across the window, worked out: the two colours and the angle.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct WashPaint {
+    /// Where it starts.
+    pub from: Rgba,
+    /// Where it ends.
+    pub to: Rgba,
+    /// Degrees, as [`Wash::angle`] says.
+    pub angle: f32,
+}
+
 impl Scene {
     /// Every scene, by the name a file uses.
-    pub const ALL: [(&'static str, Scene); 6] = [
+    pub const ALL: [(&'static str, Scene); 8] = [
         ("ripples", Scene::Ripples),
         ("pasture", Scene::Pasture),
         ("silk", Scene::Silk),
         ("contours", Scene::Contours),
         ("rays", Scene::Rays),
+        ("glow", Scene::Glow),
+        ("mesh", Scene::Mesh),
         ("none", Scene::None),
     ];
 
@@ -353,6 +447,16 @@ pub struct Palette {
     pub glint: Rgba,
     /// How strongly the picture shows, 0 to 2, against the scene's own strength.
     pub strength: f32,
+    /// The corner the picture comes from.
+    pub origin: Origin,
+    /// The pattern's number.
+    pub seed: u32,
+    /// A wash over the whole window, if there is one.
+    pub wash: Option<WashPaint>,
+    /// The picture's file name in the theme's folder, if there is one.
+    pub image: Option<String>,
+    /// How much it is dimmed towards the window's colour.
+    pub image_dim: f32,
 }
 
 /// Work out a theme in full and check that it can be read. Every problem is returned at once.
@@ -400,6 +504,46 @@ pub fn derive(spec: &ThemeSpec) -> Result<Palette, Vec<String>> {
     let strength = spec.backdrop.strength.unwrap_or(1.0);
     if !(0.0..=2.0).contains(&strength) {
         problems.push(format!("backdrop.strength is {strength}; it goes from 0 (no picture) to 2 (twice the scene's own strength)."));
+    }
+    let origin = match spec.backdrop.origin.as_deref() {
+        None => Origin::Own,
+        Some(name) => Origin::named(name).unwrap_or_else(|| {
+            problems.push(format!(
+                "backdrop.origin is \"{name}\", which is not a corner. Use one of: {}.",
+                Origin::ALL.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(", ")
+            ));
+            Origin::Own
+        }),
+    };
+    let wash = spec.backdrop.wash.as_ref().and_then(|w| {
+        let from = parse_colour(&w.from);
+        let to = parse_colour(&w.to);
+        if from.is_none() {
+            problems.push(bad_colour("backdrop.wash.from", &w.from));
+        }
+        if to.is_none() {
+            problems.push(bad_colour("backdrop.wash.to", &w.to));
+        }
+        let angle = w.angle.unwrap_or(160.0);
+        if !(0.0..=360.0).contains(&angle) {
+            problems.push(format!("backdrop.wash.angle is {angle}; it goes from 0 to 360 degrees."));
+        }
+        Some(WashPaint { from: from?, to: to?, angle })
+    });
+    let image = spec.backdrop.image.as_deref().map(str::trim).filter(|n| !n.is_empty()).map(str::to_string);
+    if let Some(name) = &image {
+        let lower = name.to_ascii_lowercase();
+        let plain = name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'));
+        let kind = [".png", ".jpg", ".jpeg", ".webp"].iter().any(|e| lower.ends_with(e));
+        if !plain || !kind || name.starts_with('.') || name.len() > 64 {
+            problems.push(format!(
+                "backdrop.image is \"{name}\": it must be the name of a .png, .jpg or .webp file in the theme's folder, such as background.jpg (letters, digits, dots, dashes and underscores only)."
+            ));
+        }
+    }
+    let image_dim = spec.backdrop.image_dim.unwrap_or(0.65);
+    if !(0.5..=0.9).contains(&image_dim) {
+        problems.push(format!("backdrop.image_dim is {image_dim}; it goes from 0.5 to 0.9, so text can always be read over a picture."));
     }
     if spec.feel.trim().is_empty() {
         problems.push("feel is empty: give a few words for the colours, such as \"Cream and umber\".".into());
@@ -465,10 +609,58 @@ pub fn derive(spec: &ThemeSpec) -> Result<Palette, Vec<String>> {
         }
     };
     problems.extend(check(&tokens, dark));
+    // Every screen is drawn over the wash, so what is read on it must read at both ends of it.
+    if let Some(w) = wash {
+        let (towards, away) = if dark { ("lighter", "darker") } else { ("darker", "lighter") };
+        for (end, colour) in [("start", w.from), ("end", w.to)] {
+            for (what, ink, min) in [("text", tokens.text, TEXT_MIN), ("muted text", tokens.muted, MUTED_MIN)] {
+                let ratio = contrast(ink, colour);
+                if ratio < min {
+                    problems.push(format!(
+                        "The {what} is too close to the wash's {end} colour: {ratio:.1}:1, and it needs at least {}:1. Make the {what} {towards} or the wash {away}.",
+                        trim(min)
+                    ));
+                }
+            }
+        }
+    }
+    // A smooth scene lays its colour over the window at up to this strength. Text is measured against the strongest
+    // place it can reach, in either of the scene's colours, so no part of the picture can take the text away. A
+    // strength nobody chose is lowered until the text reads; one that was chosen is refused with the numbers.
+    let soft = matches!(scene, Scene::Glow | Scene::Mesh);
+    let ink_colour = ink.unwrap_or(if soft { tokens.bg.mix(accent, 0.55) } else { text });
+    let glint_colour = glint.unwrap_or(accent);
+    let mut strength = strength;
+    if soft && strength > 0.0 {
+        let (towards, away) = if dark { ("lighter", "darker") } else { ("darker", "lighter") };
+        let shortfalls = |strength: f32| -> Vec<String> {
+            let strongest = (strength * SOFT_REACH).min(0.95);
+            let mut found = Vec::new();
+            for (name, colour) in [("ink", ink_colour), ("glint", glint_colour)] {
+                let under = tokens.bg.mix(colour, strongest);
+                for (what, reads, min) in [("text", tokens.text, TEXT_MIN), ("muted text", tokens.muted, MUTED_MIN)] {
+                    let ratio = contrast(reads, under);
+                    if ratio < min {
+                        found.push(format!(
+                            "The {what} is too close to the picture's {name} colour where the picture is strongest: {ratio:.1}:1, and it needs at least {}:1. Lower backdrop.strength, make the {name} colour {away}, or make the {what} {towards}.",
+                            trim(min)
+                        ));
+                    }
+                }
+            }
+            found
+        };
+        if spec.backdrop.strength.is_none() {
+            while strength > 0.1 && !shortfalls(strength).is_empty() {
+                strength -= 0.1;
+            }
+        }
+        problems.extend(shortfalls(strength));
+    }
     if !problems.is_empty() {
         return Err(problems);
     }
-    Ok(Palette { dark, tokens, scene, ink: ink.unwrap_or(text), glint: glint.unwrap_or(accent), strength })
+    Ok(Palette { dark, tokens, scene, ink: ink_colour, glint: glint_colour, strength, origin, seed: spec.backdrop.seed.unwrap_or(0), wash, image, image_dim })
 }
 
 /// Text on the accent: whichever of white and the theme's own darkest colour reads better.
@@ -536,6 +728,8 @@ pub struct ThemeMod {
     pub spec: ThemeSpec,
     /// What the window paints.
     pub palette: Palette,
+    /// The theme's folder, where its picture is kept.
+    pub dir: PathBuf,
 }
 
 /// One folder in `mods/` that holds a theme: worked out, or what is wrong with it.
@@ -601,7 +795,7 @@ pub fn load(dir: &Path) -> Result<ThemeMod, Vec<String>> {
         }
     };
     let palette = check_values(&id, &manifest, &spec)?;
-    Ok(ThemeMod { id, manifest, spec, palette })
+    Ok(ThemeMod { id, manifest, spec, palette, dir: dir.to_path_buf() })
 }
 
 /// A TOML error, said plainly: the file, the line, and what was wrong.
@@ -675,7 +869,7 @@ pub fn write(mods: &Path, id: &str, manifest: &Manifest, spec: &ThemeSpec) -> Re
         std::fs::write(&part, text).map_err(|e| io(file, e))?;
         std::fs::rename(&part, dir.join(file)).map_err(|e| io(file, e))?;
     }
-    Ok(ThemeMod { id: id.to_string(), manifest: manifest.clone(), spec: spec.clone(), palette })
+    Ok(ThemeMod { id: id.to_string(), manifest: manifest.clone(), spec: spec.clone(), palette, dir })
 }
 
 #[cfg(test)]
@@ -723,7 +917,7 @@ mod tests {
         let mut s = spec("#efe6d3", "#2a241d", "#8a4b14");
         s.colours.surface = Some("#e5dac4".into());
         s.colours.ok = Some("#2e6b3a".into());
-        s.backdrop = Backdrop { scene: Some("Contours".into()), ink: Some("#6a5f50".into()), glint: None, strength: Some(1.4) };
+        s.backdrop = Backdrop { scene: Some("Contours".into()), ink: Some("#6a5f50".into()), glint: None, strength: Some(1.4), ..Backdrop::default() };
         let p = derive(&s).unwrap();
         assert_eq!(p.tokens.surface, Rgba::rgb(0xe5dac4));
         assert_eq!(p.tokens.ok, Rgba::rgb(0x2e6b3a));
@@ -752,15 +946,67 @@ mod tests {
     #[test]
     fn every_mistake_in_a_file_is_reported_at_once() {
         let mut s = spec("cream", "#2a241d", "#12345");
-        s.backdrop.scene = Some("waves".into());
+        s.backdrop.scene = Some("tapestry".into());
         s.backdrop.strength = Some(3.0);
         s.feel = " ".into();
         let problems = derive(&s).unwrap_err();
         assert!(problems.iter().any(|p| p.starts_with("colours.background is \"cream\"")), "{problems:?}");
         assert!(problems.iter().any(|p| p.starts_with("colours.accent is \"#12345\"")), "{problems:?}");
-        assert!(problems.iter().any(|p| p.contains("\"waves\", which is not a scene")), "{problems:?}");
+        assert!(problems.iter().any(|p| p.contains("\"tapestry\", which is not a scene")), "{problems:?}");
         assert!(problems.iter().any(|p| p.starts_with("backdrop.strength is 3")), "{problems:?}");
         assert!(problems.iter().any(|p| p.starts_with("feel is empty")), "{problems:?}");
+    }
+
+    #[test]
+    fn a_wash_is_checked_at_both_ends_and_kept_when_it_reads() {
+        let mut s = spec("#14110f", "#efe6d3", "#e0a24a");
+        s.backdrop.scene = Some("glow".into());
+        s.backdrop.origin = Some("Bottom-Left".into());
+        s.backdrop.seed = Some(7);
+        s.backdrop.wash = Some(Wash { from: "#1d1530".into(), to: "#0b1d2a".into(), angle: Some(120.0) });
+        let p = derive(&s).unwrap();
+        assert_eq!((p.scene, p.origin, p.seed), (Scene::Glow, Origin::BottomLeft, 7));
+        assert_eq!(p.wash.map(|w| w.angle), Some(120.0));
+        // A pale end under pale text cannot be read, and the sentence says which end.
+        s.backdrop.wash = Some(Wash { from: "#1d1530".into(), to: "#f3ead6".into(), angle: None });
+        let problems = derive(&s).unwrap_err();
+        assert!(problems.iter().any(|p| p.contains("wash's end colour")), "{problems:?}");
+        s.backdrop.wash = Some(Wash { from: "tomato".into(), to: "#000".into(), angle: Some(500.0) });
+        s.backdrop.origin = Some("middle".into());
+        let problems = derive(&s).unwrap_err();
+        assert!(problems.iter().any(|p| p.starts_with("backdrop.wash.from is")), "{problems:?}");
+        assert!(problems.iter().any(|p| p.starts_with("backdrop.wash.angle is 500")), "{problems:?}");
+        assert!(problems.iter().any(|p| p.starts_with("backdrop.origin is \"middle\"")), "{problems:?}");
+    }
+
+    #[test]
+    fn a_picture_of_your_own_is_a_plain_file_name_and_never_too_bright_to_read_over() {
+        let mut s = spec("#14110f", "#efe6d3", "#e0a24a");
+        s.backdrop.image = Some("background.jpg".into());
+        s.backdrop.image_dim = Some(0.6);
+        let p = derive(&s).unwrap();
+        assert_eq!((p.image.as_deref(), p.image_dim), (Some("background.jpg"), 0.6));
+        for bad in ["../secret.png", "C:/x/a.png", "photo.gif", ".hidden.png", "a b.png"] {
+            s.backdrop.image = Some(bad.into());
+            let problems = derive(&s).unwrap_err();
+            assert!(problems.iter().any(|p| p.starts_with("backdrop.image is")), "{bad}: {problems:?}");
+        }
+        s.backdrop.image = Some("a.png".into());
+        s.backdrop.image_dim = Some(0.1);
+        assert!(derive(&s).unwrap_err().iter().any(|p| p.starts_with("backdrop.image_dim is 0.1")));
+    }
+
+    #[test]
+    fn a_smooth_scene_that_would_take_the_text_away_is_refused_and_a_gentle_one_is_not() {
+        let mut s = spec("#14110f", "#efe6d3", "#e0a24a");
+        s.backdrop.scene = Some("glow".into());
+        s.backdrop.ink = Some("#ffffff".into());
+        s.backdrop.glint = Some("#ffe9a0".into());
+        s.backdrop.strength = Some(2.0);
+        let problems = derive(&s).unwrap_err();
+        assert!(problems.iter().any(|p| p.contains("where the picture is strongest")), "{problems:?}");
+        s.backdrop.strength = Some(0.6);
+        assert!(derive(&s).is_ok());
     }
 
     #[test]

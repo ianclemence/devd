@@ -644,6 +644,14 @@ pub fn exec_allowed(
             allowed.push("composer".into());
         }
     }
+    // git is on every stack: an agent reads history and makes commits with it as a person does. What publishes
+    // (push) or discards work is not here; see `git_refusal`.
+    if base.eq_ignore_ascii_case("git") {
+        if let Some(why) = git_refusal(argv) {
+            return Err(DevdError::denied(why));
+        }
+        allowed.push(base.clone());
+    }
     let ok = allowed.iter().any(|a| {
         a == program
             || Path::new(a).file_name().and_then(|n| n.to_str()) == Some(base.as_str())
@@ -726,6 +734,31 @@ pub fn inline_code(argv: &[String]) -> Option<String> {
     None
 }
 
+/// Why a git command is not run here, or None when it is fine. Reading history, staging, committing, branching and
+/// switching are what an agent needs and a person undoes; publishing, and anything that throws work away, is the
+/// person's.
+pub fn git_refusal(argv: &[String]) -> Option<String> {
+    // The first argument that is not an option (`git -C dir status`) is the subcommand.
+    let mut args = argv.iter().skip(1);
+    let mut sub = None;
+    while let Some(a) = args.next() {
+        if a == "-C" || a == "-c" {
+            args.next();
+        } else if !a.starts_with('-') {
+            sub = Some(a.as_str());
+            break;
+        }
+    }
+    let sub = sub?;
+    match sub {
+        "push" => Some("git push publishes work, so a person does it; commit here and say it is ready to push.".into()),
+        "clean" | "gc" | "filter-branch" | "update-ref" | "reflog" => Some(format!("git {sub} discards or rewrites history, so a person does it.")),
+        "reset" if argv.iter().any(|a| a == "--hard") => Some("git reset --hard discards work; use project.exec_destructive so a person approves it.".into()),
+        "checkout" | "restore" | "switch" if argv.iter().any(|a| a == "--force" || a == "-f") => Some(format!("git {sub} with --force discards work; use project.exec_destructive so a person approves it.")),
+        _ => None,
+    }
+}
+
 /// Whether any argument marks the command destructive for this stack.
 pub fn is_destructive(stack: Option<&StackDef>, argv: &[String]) -> Option<String> {
     let joined = argv.join(" ");
@@ -743,6 +776,17 @@ pub fn is_destructive(stack: Option<&StackDef>, argv: &[String]) -> Option<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn git_is_run_for_reading_and_committing_but_not_for_publishing_or_discarding() {
+        let v = |s: &[&str]| s.iter().map(|x| x.to_string()).collect::<Vec<String>>();
+        for ok in [v(&["git", "status"]), v(&["git", "log", "--oneline", "-5"]), v(&["git", "-C", "app", "diff"]), v(&["git", "commit", "-m", "x"]), v(&["git", "checkout", "-b", "work"])] {
+            assert_eq!(git_refusal(&ok), None, "{ok:?}");
+        }
+        for no in [v(&["git", "push", "origin", "main"]), v(&["git", "clean", "-fd"]), v(&["git", "reset", "--hard", "HEAD~1"]), v(&["git", "checkout", "--force", "main"]), v(&["git", "-C", "x", "push"])] {
+            assert!(git_refusal(&no).is_some(), "{no:?}");
+        }
+    }
 
     #[test]
     fn a_flag_that_carries_code_is_found_whatever_the_program_is_called() {

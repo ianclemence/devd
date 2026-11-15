@@ -1723,7 +1723,6 @@ fn wrong_capability(argv: &[String]) -> Option<String> {
         .trim_end_matches(".exe")
         .to_ascii_lowercase();
     match name.as_str() {
-        "git" => Some("`git` is a capability, not a shell command. Use git.status, git.diff, git.log, git.stage, git.commit, or git.checkout.".into()),
         "curl" | "wget" => Some("Fetching a URL is a capability. Use web.open for a page (title, headings, links, forms) or docs.fetch for documentation; both refuse private addresses.".into()),
         "bash" | "sh" | "zsh" | "fish" | "powershell" | "pwsh" | "cmd" => Some("devd never runs a shell. Use project.exec with a program on the stack's allow-list, or a task from project.tasks.".into()),
         _ => None,
