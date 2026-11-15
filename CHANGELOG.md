@@ -12,6 +12,8 @@ may change capability identifiers where the design was wrong.
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-11-15 - Backgrounds from a description, distinct themes, a run indicator
+
 ### Added
 
 - **Describe a background and it is applied.** A theme can now carry a background of its own, not only colours:
@@ -1776,6 +1778,8 @@ reading the answer on another screen, if it arrived at all.
 ---
 
 ## [Unreleased]
+
+## [0.35.0] - 2026-11-15 - Backgrounds from a description, distinct themes, a run indicator
 
 ## [0.34.1] - 2026-11-15 - The live conversation lines
 
