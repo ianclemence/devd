@@ -869,6 +869,14 @@ impl Shell {
             .filter(|m| m["state"] == json!("open"))
             .count()
             + devd(cx).decisions.len();
+        // Runs going now, and runs held: the Runs button says which, the way the Inbox button counts what waits.
+        let (going, held) = devd(cx).sync.watch(&q::runs()).list("").iter().fold((0usize, 0usize), |(g, h), r| {
+            match r["state"].as_str().unwrap_or_default() {
+                "planning" | "running" => (g + 1, h),
+                "paused" => (g, h + 1),
+                _ => (g, h),
+            }
+        });
         let mut rail = div()
             .w(px(size::RAIL))
             .h_full()
@@ -890,7 +898,7 @@ impl Shell {
                 .flex_none()
                 .rounded(px(7.0)),
         );
-        let item = |route: Route, badge: usize, cx: &mut Context<Self>| {
+        let item = |route: Route, badge: usize, tone: gpui::Hsla, also: Option<gpui::Hsla>, cx: &mut Context<Self>| {
             let selected = current.on_rail(&route);
             let color = if selected { t.text } else { t.faint };
             let hover = t.hover;
@@ -941,22 +949,43 @@ impl Shell {
                         .items_center()
                         .justify_center()
                         .rounded_full()
-                        .bg(t.warn)
+                        .bg(tone)
                         .text_size(px(9.0))
                         .font_weight(FontWeight::BOLD)
                         .text_color(t.bg)
                         .child(badge.to_string()),
                 );
             }
+            // Something else is also true of it: a small dot of that colour at the foot of the button.
+            if let Some(also) = also {
+                el = el.child(
+                    div()
+                        .absolute()
+                        .bottom(px(4.0))
+                        .right(px(5.0))
+                        .size(px(8.0))
+                        .rounded_full()
+                        .border_2()
+                        .border_color(t.surface)
+                        .bg(also),
+                );
+            }
             el
         };
         for route in Route::primary() {
-            let badge = if route == Route::Inbox { waiting } else { 0 };
-            rail = rail.child(item(route, badge, cx));
+            // The Inbox counts what waits, in amber. Runs counts what is paused in amber when anything is, with a green dot if
+            // others are still going; otherwise what is going, in green.
+            let (badge, tone, also) = match route {
+                Route::Inbox => (waiting, t.warn, None),
+                Route::Runs(_) if held > 0 => (held, t.warn, (going > 0).then_some(t.ok)),
+                Route::Runs(_) => (going, t.ok, None),
+                _ => (0, t.warn, None),
+            };
+            rail = rail.child(item(route, badge, tone, also, cx));
         }
         rail.child(div().flex_1())
-            .child(item(Route::Activity, 0, cx))
-            .child(item(Route::Settings, 0, cx))
+            .child(item(Route::Activity, 0, t.warn, None, cx))
+            .child(item(Route::Settings, 0, t.warn, None, cx))
     }
 
     fn topbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1855,7 +1884,10 @@ impl Render for Shell {
                 let f = go(8);
                 move |this, _: &Go9, window, cx| f(this, window, cx)
             }))
-            // One field behind every screen, in the current theme's pattern.
+            // A wash across the window when the theme has one, then one field behind every screen, in the theme's
+            // pattern.
+            .child(ui::wash(cx))
+            .child(ui::picture(cx))
             .child(ui::art(cx))
             .child(self.rail(cx))
             .child(

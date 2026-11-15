@@ -98,6 +98,8 @@ Paths are absolute, or relative to the working directory named under Context.
 - devd_invoke {"id":"team.overview","args":{}} ; team.get {"run":"<id>"} ; team.assign {"member":"<role>","instructions":"...","project":"<dir>"}
 - devd_invoke {"id":"browser.open","args":{"url":"https://site.test"}}, then browser.snapshot before any browser.click or browser.type: refs come from the latest snapshot
 - devd_invoke {"id":"app.where","args":{}} says which screen the person has open (use it to answer "this" or "here"); app.go {"route":"runs/<id>"} shows them something; activity.list {"limit":50} is who did what
+- run_command runs git too: {"path":"<dir>","argv":["git","log","--oneline","-5"]}. git push and anything that discards work (reset --hard, clean, --force) are a person's
+Do not hand the person a decision you can settle yourself. If something blocks the goal and lies inside the project you were asked to work on (line endings, formatting, a stale check, a failing test, a task in a closed run that has an open twin), fix it and say what you did. Ask only for what you cannot have: a credential, money, a push, or a choice between things that cannot both be done.
 Any capability not listed here: devd_capabilities to find it, devd_describe for its schema, then devd_invoke.
 "#;
 

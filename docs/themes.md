@@ -72,7 +72,10 @@ scene = "contours"
 | `colours.muted`, `colours.faint` | no | Supporting text, and the faintest text that is still read. |
 | `colours.surface`, `colours.raised` | no | Lists and side panels, and cards, inputs and menus. |
 | `colours.ok`, `warn`, `danger`, `info` | no | The four state colours. |
-| `backdrop.scene` | no | `ripples`, `pasture`, `silk`, `contours`, `rays` or `none`. The default is `ripples`. |
+| `backdrop.scene` | no | `ripples`, `pasture`, `silk`, `contours`, `rays`, `aurora`, `grid`, `stars`, `waves` or `none`. The default is `ripples`. |
+| `backdrop.origin` | no | The corner the picture comes from: `top-right`, `top-left`, `bottom-right` or `bottom-left`. The scene's own corner when left out. |
+| `backdrop.seed` | no | A whole number that rearranges the picture's pattern without changing its kind. |
+| `backdrop.wash.from`, `wash.to`, `wash.angle` | no | A wash of colour across the whole window, behind every screen: where it starts, where it ends, and its direction in degrees (180 runs from the top down). The text must read on both ends, and devd refuses the theme and says which end if it does not. |
 | `backdrop.ink`, `backdrop.glint` | no | The picture's dots, and its brighter dots. The defaults are the text and the accent. |
 | `backdrop.strength` | no | How strongly the picture shows, from `0` to `2`. `1` is the scene's own strength. |
 

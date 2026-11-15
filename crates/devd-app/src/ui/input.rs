@@ -147,6 +147,8 @@ pub struct TextInput {
     scroller: Option<ScrollHandle>,
     /// Where the cursor was when the view was last brought to it, so a person who scrolls away is left there.
     viewed_cursor: Option<usize>,
+    /// The first row shown, for a field with more rows than it shows: the view follows the cursor.
+    first_row: usize,
 }
 
 impl TextInput {
@@ -172,6 +174,7 @@ impl TextInput {
             code: false,
             scroller: None,
             viewed_cursor: None,
+            first_row: 0,
         }
     }
 
@@ -639,8 +642,8 @@ impl TextInput {
         if position.y > bounds.bottom() {
             return self.content.len();
         }
-        let height = (bounds.bottom() - bounds.top()) / self.lines.len() as f32;
-        let at = (((position.y - bounds.top()) / height) as usize).min(self.lines.len() - 1);
+        let height = window_line_height_hint(*bounds, self.lines.len(), self.first_row, self.multiline);
+        let at = (self.first_row + ((position.y - bounds.top()) / height) as usize).min(self.lines.len() - 1);
         let (start, line) = &self.lines[at];
         start + line.closest_index_for_x(position.x - bounds.left())
     }
@@ -861,6 +864,44 @@ struct PrepaintState {
     lines: Vec<(usize, ShapedLine)>,
     cursor: Option<PaintQuad>,
     selection: Vec<PaintQuad>,
+    first_row: usize,
+    visible: usize,
+}
+
+/// The height of one row, from the field's bounds and the rows it shows.
+fn window_line_height_hint(bounds: Bounds<Pixels>, rows: usize, _first: usize, most: Option<usize>) -> Pixels {
+    let shown = rows.clamp(1, most.unwrap_or(1).max(1));
+    (bounds.bottom() - bounds.top()) / shown as f32
+}
+
+/// Where a line of text breaks so no row is wider than `width`: after the last space that fits, or inside a word
+/// that is wider than the row by itself. Returns each row's start and end within `text`.
+fn breaks(shaped: &ShapedLine, text: &str, width: Pixels) -> Vec<Range<usize>> {
+    let mut rows = Vec::new();
+    let mut from = 0usize;
+    while from < text.len() {
+        let left = shaped.x_for_index(from);
+        if shaped.x_for_index(text.len()) - left <= width {
+            rows.push(from..text.len());
+            return rows;
+        }
+        let mut fit = shaped.closest_index_for_x(left + width).clamp(from, text.len());
+        while fit > from && !text.is_char_boundary(fit) {
+            fit -= 1;
+        }
+        let spaced = text[from..fit].rfind(' ').map(|i| from + i + 1).filter(|c| *c > from);
+        let mut cut = spaced.unwrap_or(fit);
+        if cut <= from {
+            // One character wider than the row still takes a row, so the loop always ends.
+            cut = from + text[from..].chars().next().map_or(1, char::len_utf8);
+        }
+        rows.push(from..cut);
+        from = cut;
+    }
+    if rows.is_empty() {
+        rows.push(0..0);
+    }
+    rows
 }
 
 /// The runs for one line: the base run, underlined wherever `marks` say.
@@ -944,7 +985,32 @@ impl Element for TextElement {
         // As many lines as the text has, up to the most this field shows.
         let input = self.input.read(cx);
         let shown = match input.multiline {
-            Some(most) => input.content.split('\n').count().clamp(1, most),
+            Some(most) if input.code => input.content.split('\n').count().clamp(1, most),
+            Some(most) => {
+                // The rows the text takes at the width it was last drawn at; a change of width is caught in paint.
+                let width = input.last_bounds.map(|b| b.size.width);
+                let base = window.text_style();
+                let font_size = base.font_size.to_pixels(window.rem_size());
+                let mut rows = 0usize;
+                for text in input.content.split('\n') {
+                    rows += match width {
+                        Some(width) if width > px(8.) && !text.is_empty() => {
+                            let run = TextRun {
+                                len: text.len(),
+                                font: base.font(),
+                                color: base.color,
+                                background_color: None,
+                                underline: None,
+                                strikethrough: None,
+                            };
+                            let shaped = window.text_system().shape_line(SharedString::from(text.to_string()), font_size, &[run], None);
+                            breaks(&shaped, text, width).len()
+                        }
+                        _ => 1,
+                    };
+                }
+                rows.clamp(1, most)
+            }
             None => 1,
         };
         style.size.height = (window.line_height() * shown as f32).into();
@@ -1022,6 +1088,11 @@ impl Element for TextElement {
         let line_height = window.line_height();
         let mut lines: Vec<(usize, ShapedLine)> = Vec::new();
         let mut start = 0usize;
+        // A field that is not code breaks a long line into rows at its own width, so text never runs under what is
+        // beside it. The placeholder is not wrapped.
+        let wrap = (input.multiline.is_some() && !input.code && !input.content.is_empty())
+            .then_some(bounds.size.width)
+            .filter(|w| *w > px(8.));
         for text in display_text.split('\n') {
             let end = start + text.len();
             let runs = if text.is_empty() {
@@ -1036,25 +1107,44 @@ impl Element for TextElement {
                 &runs,
                 None,
             );
-            lines.push((start, shaped));
+            match wrap {
+                Some(width) if !text.is_empty() => {
+                    for row in breaks(&shaped, text, width) {
+                        let (from, to) = (start + row.start, start + row.end);
+                        let row_runs = line_runs(&run, from..to, &marks);
+                        let piece = window.text_system().shape_line(
+                            SharedString::from(display_text[from..to].to_string()),
+                            font_size,
+                            &row_runs,
+                            None,
+                        );
+                        lines.push((from, piece));
+                    }
+                }
+                _ => lines.push((start, shaped)),
+            }
             start = end + 1;
         }
 
-        // The line a byte offset is on: a line owns the offset at its end, where the cursor sits before a newline.
-        let line_of = |offset: usize| -> usize {
-            lines
-                .iter()
-                .position(|(s, l)| offset >= *s && offset <= *s + l.len())
-                .unwrap_or(lines.len() - 1)
-        };
+        // The row a byte offset is on: the last that starts at or before it, so at a wrap the caret is at the start of
+        // the next row, and before a newline it is at the end of its own.
+        let line_of = |offset: usize| -> usize { lines.iter().rposition(|(s, _)| *s <= offset).unwrap_or(0) };
         let at = line_of(cursor);
+        // The rows this field shows, when the text has more: the view follows the cursor.
+        let visible = input.multiline.map_or(1, |most| lines.len().clamp(1, most));
+        let mut first_row = input.first_row.min(lines.len().saturating_sub(visible));
+        if at < first_row {
+            first_row = at;
+        } else if at >= first_row + visible {
+            first_row = at + 1 - visible;
+        }
         let x_of = |index: usize, lines: &[(usize, ShapedLine)], at: usize| {
             lines[at]
                 .1
                 .x_for_index(index.saturating_sub(lines[at].0).min(lines[at].1.len()))
         };
         let (selection, cursor) = if selected_range.is_empty() {
-            let top = bounds.top() + line_height * at as f32;
+            let top = bounds.top() + line_height * (at - first_row) as f32;
             (
                 Vec::new(),
                 Some(fill(
@@ -1067,7 +1157,7 @@ impl Element for TextElement {
             )
         } else {
             let (first, last) = (line_of(selected_range.start), line_of(selected_range.end));
-            let quads = (first..=last)
+            let quads = (first.max(first_row)..=last.min(first_row + visible - 1))
                 .map(|n| {
                     let (line_start, line) = &lines[n];
                     let from = if n == first {
@@ -1081,7 +1171,7 @@ impl Element for TextElement {
                     } else {
                         (line.len(), px(6.))
                     };
-                    let top = bounds.top() + line_height * n as f32;
+                    let top = bounds.top() + line_height * (n - first_row) as f32;
                     fill(
                         Bounds::from_corners(
                             point(bounds.left() + line.x_for_index(from), top),
@@ -1100,6 +1190,8 @@ impl Element for TextElement {
             lines,
             cursor,
             selection,
+            first_row,
+            visible,
         }
     }
 
@@ -1124,8 +1216,9 @@ impl Element for TextElement {
         }
         let line_height = window.line_height();
         let lines = std::mem::take(&mut prepaint.lines);
-        for (n, (_, line)) in lines.iter().enumerate() {
-            let origin = point(bounds.origin.x, bounds.origin.y + line_height * n as f32);
+        let (first_row, visible) = (prepaint.first_row, prepaint.visible);
+        for (n, (_, line)) in lines.iter().enumerate().skip(first_row).take(visible) {
+            let origin = point(bounds.origin.x, bounds.origin.y + line_height * (n - first_row) as f32);
             line.paint(origin, line_height, window, cx).unwrap();
         }
 
@@ -1167,11 +1260,20 @@ impl Element for TextElement {
             window.paint_quad(cursor);
         }
 
+        // The height was asked for at the width the text was last drawn at. If the width has changed, the rows it
+        // takes have too, and the field is laid out again at once.
+        let rows_now = lines.len().clamp(1, self.input.read(cx).multiline.unwrap_or(1));
+        let moved = self.input.read(cx).last_bounds.is_some_and(|b| b.size.width != bounds.size.width);
+        let wrong_height = (bounds.size.height - line_height * rows_now as f32).abs() > px(1.) && self.input.read(cx).multiline.is_some();
         self.input.update(cx, |input, _cx| {
             input.lines = lines;
             input.last_bounds = Some(bounds);
             input.viewed_cursor = Some(here);
+            input.first_row = first_row;
         });
+        if moved || wrong_height {
+            window.refresh();
+        }
     }
 }
 

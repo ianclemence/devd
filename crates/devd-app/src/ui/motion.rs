@@ -75,6 +75,44 @@ where
 /// The durations, from `devd_app_core::motion::duration`: 140 ms for a popover or a screen, 200 ms for a panel or a dialog.
 pub use devd_app_core::motion::duration::{BASE, FAST};
 
+/// A small ring of dots with a bright head that travels round it and a tail that fades behind: what is shown beside
+/// something that is happening now. It turns; it does not pulse. `id` is the spinner's own name.
+pub fn spinner(id: impl Into<ElementId>, color: gpui::Hsla) -> impl IntoElement {
+    use gpui::{InteractiveElement as _, ParentElement, div};
+    const DOTS: usize = 8;
+    const BOX: f32 = 14.0;
+    const DOT: f32 = 2.4;
+    let radius = (BOX - DOT) / 2.0;
+    div()
+        .id(id)
+        .relative()
+        .flex_none()
+        .size(px(BOX))
+        .with_animation(
+            "spin",
+            Animation::new(Duration::from_millis(900)).repeat(),
+            move |el, t| {
+                let head = ((t * DOTS as f32) as usize) % DOTS;
+                (0..DOTS).fold(el, |el, i| {
+                    // How far behind the head this dot is, from 0 (the head) to DOTS - 1.
+                    let behind = (head + DOTS - i) % DOTS;
+                    let fade = (1.0 - behind as f32 / DOTS as f32).powf(1.6).max(0.12);
+                    let angle = i as f32 / DOTS as f32 * std::f32::consts::TAU;
+                    el.child(
+                        div()
+                            .absolute()
+                            .left(px(BOX / 2.0 - DOT / 2.0 + radius * angle.sin()))
+                            .top(px(BOX / 2.0 - DOT / 2.0 - radius * angle.cos()))
+                            .size(px(DOT))
+                            .rounded_full()
+                            .bg(color)
+                            .opacity(fade),
+                    )
+                })
+            },
+        )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

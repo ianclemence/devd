@@ -8,6 +8,7 @@
 pub mod clip;
 pub mod diff;
 pub mod dither;
+pub mod soft;
 pub mod favicon;
 pub mod flow;
 pub mod genui;
@@ -973,6 +974,40 @@ pub fn page_head(
         .child(actions)
 }
 
+/// What a whole screen is painted with. The window's own colour, except where the theme has a picture or a wash of its
+/// own to show: then the screen is clear, so the background is seen behind its content.
+pub fn ground(cx: &App) -> Hsla {
+    let t = theme(cx);
+    if t.wash.is_some() || t.is_mod() { gpui::transparent_black() } else { t.bg }
+}
+
+/// A picture of the person's own behind the whole window, dimmed towards the window's colour so what is on top can be
+/// read. Nothing when the theme has none, or its file is gone.
+pub fn picture(cx: &App) -> Div {
+    let t = theme(cx);
+    let Some((file, dim)) = t.image.clone() else {
+        return div();
+    };
+    let veil = Hsla { a: dim, ..t.bg };
+    div()
+        .absolute()
+        .size_full()
+        .child(img(file).size_full().object_fit(gpui::ObjectFit::Cover))
+        .child(div().absolute().size_full().bg(veil))
+}
+
+/// A wash of colour across the whole window, behind the art and every screen, when the theme has one.
+pub fn wash(cx: &App) -> Div {
+    let t = theme(cx);
+    let Some((from, to, angle)) = t.wash else {
+        return div();
+    };
+    div()
+        .absolute()
+        .size_full()
+        .bg(gpui::linear_gradient(angle, gpui::linear_color_stop(from, 0.0), gpui::linear_color_stop(to, 1.0)))
+}
+
 /// The dotted art behind a screen's top corner. Faint, behind everything, and never
 /// under dense content: it belongs to the screens that open on a greeting or a question.
 pub fn art(cx: &App) -> Div {
@@ -982,17 +1017,21 @@ pub fn art(cx: &App) -> Div {
         return div();
     }
     let file = t.art.clone();
+    // A smooth scene is a picture of the whole window, not dots in a corner.
+    if t.pattern.is_soft() {
+        return div().absolute().size_full().opacity(t.art_strength).child(
+            img(file).size_full().object_fit(gpui::ObjectFit::Cover),
+        );
+    }
+    // The corner it comes from: a theme file may ask for any of the four.
+    let (left, bottom) = crate::theme::art_corner(&file, t.pattern);
     let el = div()
         .absolute()
-        .right(px(0.0))
         .w(px(dither::WIDTH as f32))
         .h(px(dither::HEIGHT as f32))
         .opacity(t.art_strength);
-    let el = if t.pattern.stands_on_the_bottom() {
-        el.bottom(px(0.0))
-    } else {
-        el.top(px(0.0))
-    };
+    let el = if left { el.left(px(0.0)) } else { el.right(px(0.0)) };
+    let el = if bottom { el.bottom(px(0.0)) } else { el.top(px(0.0)) };
     el.child(
         img(file)
             .w(px(dither::WIDTH as f32))

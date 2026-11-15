@@ -377,6 +377,92 @@ fn strip_indent(line: &str, indent: usize) -> &str {
     &line[leading.min(indent)..]
 }
 
+/// JSON a model wrote, forgiving what models get wrong: a comma before a closing bracket, and a fence that is
+/// the array or the mapping alone instead of `{"items": ...}`.
+fn lenient(text: &str) -> Option<Value> {
+    if let Ok(v) = serde_json::from_str::<Value>(text) {
+        return Some(v);
+    }
+    // A comma before `]` or `}` (outside strings is the usual case; a string holding ",]" is rare enough).
+    let mut cleaned = String::with_capacity(text.len());
+    let chars: Vec<char> = text.chars().collect();
+    for (i, c) in chars.iter().enumerate() {
+        if *c == ',' {
+            let next = chars[i + 1..].iter().find(|c| !c.is_whitespace());
+            if matches!(next, Some(']') | Some('}')) {
+                continue;
+            }
+        }
+        cleaned.push(*c);
+    }
+    serde_json::from_str::<Value>(&cleaned).ok()
+}
+
+/// What a widget is drawn from, in the shape the drawing reads, or None when the block is not a widget at all.
+///
+/// The documented shape is an object with `items` (`bars` for a chart). Models also write the list alone, the list
+/// under another name, or a plain mapping of label to value; each of those is plain in meaning, so each is drawn.
+fn widget_data(kind: WidgetKind, text: &str) -> Option<Value> {
+    let value = lenient(text)?;
+    let key = if kind == WidgetKind::Chart { "bars" } else { "items" };
+    let mut object = match value {
+        Value::Array(list) => serde_json::json!({ key: list }),
+        Value::Object(map) => Value::Object(map),
+        _ => return None,
+    };
+    if kind == WidgetKind::Details {
+        return object.is_object().then_some(object);
+    }
+    let map = object.as_object_mut()?;
+    if !map.get(key).is_some_and(Value::is_array) {
+        let other = ["items", "bars", "metrics", "stats", "kpis", "cards", "data", "values", "steps", "events", "entries"]
+            .iter()
+            .find(|k| map.get(**k).is_some_and(Value::is_array))
+            .map(|k| (*k).to_string());
+        match other {
+            Some(k) => {
+                let list = map.remove(&k)?;
+                map.insert(key.into(), list);
+            }
+            None => {
+                // `{"Tests": 12, "Coverage": "94%"}`: a mapping of label to a plain value.
+                let pairs: Vec<Value> = map
+                    .iter()
+                    .filter(|(k, v)| !matches!(k.as_str(), "title" | "unit" | "takeaway" | "current") && (v.is_number() || v.is_string() || v.is_boolean()))
+                    .map(|(k, v)| if kind == WidgetKind::Metrics { serde_json::json!({ "label": k, "value": v }) } else { serde_json::json!({ "label": k, "value": v, "text": v }) })
+                    .collect();
+                if pairs.is_empty() {
+                    return None;
+                }
+                map.insert(key.into(), Value::Array(pairs));
+            }
+        }
+    }
+    if kind == WidgetKind::Metrics {
+        // Each item says what it is under whichever name the model used, and its change as text or a number.
+        let list = map.get_mut(key)?.as_array_mut()?;
+        for item in list.iter_mut() {
+            if let Some(o) = item.as_object_mut() {
+                for (want, names) in [("label", &["name", "title", "metric", "key"][..]), ("value", &["count", "amount", "total", "number"][..]), ("delta", &["change", "trend", "diff"][..])] {
+                    if !o.contains_key(want) {
+                        if let Some(found) = names.iter().find_map(|n| o.get(*n).cloned()) {
+                            o.insert(want.into(), found);
+                        }
+                    }
+                }
+                if let Some(d) = o.get("delta").filter(|d| d.is_number()).cloned() {
+                    let n = d.as_f64().unwrap_or(0.0);
+                    o.insert("delta".into(), Value::String(if n > 0.0 { format!("+{d}") } else { d.to_string() }));
+                }
+            } else if !item.is_null() {
+                // A bare value in a list has no label; show it as one.
+                *item = serde_json::json!({ "label": "", "value": item.clone() });
+            }
+        }
+    }
+    Some(object)
+}
+
 fn code_or_widget(lang: &str, text: String, closed: bool) -> Block {
     if lang == devd_genui::FENCE {
         return ui_block(lang, text, closed);
@@ -390,10 +476,8 @@ fn code_or_widget(lang: &str, text: String, closed: bool) -> Block {
         _ => None,
     };
     if let Some(kind) = kind {
-        if let Ok(data) = serde_json::from_str::<Value>(&text) {
-            if data.is_object() {
-                return Block::Widget { kind, data };
-            }
+        if let Some(data) = widget_data(kind, &text) {
+            return Block::Widget { kind, data };
         }
     }
     Block::Code {
@@ -1078,6 +1162,32 @@ mod tests {
             "Note second"
         );
         assert_eq!(doc.len(), 2);
+    }
+
+    #[test]
+    fn a_metrics_block_is_drawn_however_the_model_shaped_it() {
+        let drawn = |text: &str| match &parse(&format!("```metrics
+{text}
+```"))[0] {
+            Block::Widget { kind: WidgetKind::Metrics, data } => data.clone(),
+            other => panic!("not drawn: {other:?} for {text}"),
+        };
+        // The list alone.
+        assert_eq!(drawn(r#"[{"label":"Tests","value":12}]"#)["items"][0]["label"], "Tests");
+        // Another name for the list, and for each field.
+        let d = drawn(r#"{"metrics":[{"name":"Coverage","count":94,"change":2}]}"#);
+        assert_eq!(d["items"][0]["label"], "Coverage");
+        assert_eq!(d["items"][0]["value"], 94);
+        assert_eq!(d["items"][0]["delta"], "+2");
+        // A mapping of label to value.
+        let d = drawn(r#"{"title":"Run","Tests":12,"Coverage":"94%"}"#);
+        assert_eq!(d["items"].as_array().unwrap().len(), 2);
+        // A comma before the closing bracket.
+        assert_eq!(drawn(r#"{"items":[{"label":"a","value":1},]}"#)["items"][0]["value"], 1);
+        // Something that is not a widget stays code.
+        assert!(matches!(&parse("```metrics
+not json
+```")[0], Block::Code { .. }));
     }
 
     #[test]

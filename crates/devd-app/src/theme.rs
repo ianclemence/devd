@@ -38,6 +38,10 @@ pub struct Theme {
     pub art_base: [u8; 3],
     /// The picture's brighter dots: the theme's signal colour.
     pub art_glint: [u8; 3],
+    /// A wash of colour over the whole window behind everything: where it starts, where it ends, and its angle.
+    pub wash: Option<(Hsla, Hsla, f32)>,
+    /// A picture of the person's own behind everything: the file, and how far it is dimmed.
+    pub image: Option<(std::path::PathBuf, f32)>,
     /// Whether this is the dark palette.
     pub dark: bool,
     /// The window behind everything.
@@ -124,8 +128,33 @@ impl Theme {
 
     /// A theme from a file, worked out and checked by devd: its palette, painted as it is.
     pub fn from_mod(m: &devd_core::theme::ThemeMod) -> Self {
+        let mut theme = Self::from_palette(&m.palette);
+        theme.id = format!("mod:{}", m.id).into();
+        theme.name = m.manifest.name.trim().to_string().into();
+        theme.image = m.palette.image.as_ref().map(|n| m.dir.join(n)).filter(|f| f.is_file()).map(|f| (f, m.palette.image_dim));
+        theme
+    }
+
+    /// A built-in theme made from three colours the way a theme file is: every other colour worked out and the contrast
+    /// of everything a person reads checked. A built-in that could not be read is a mistake in devd, caught by a test.
+    fn derived(id: &'static str, name: &'static str, pattern: Pattern, colours: (&str, &str, &str), scene: &str) -> Self {
+        use devd_core::theme::{Backdrop, Colours, ThemeSpec};
+        let spec = ThemeSpec {
+            feel: name.into(),
+            colours: Colours { background: colours.0.into(), text: colours.1.into(), accent: colours.2.into(), ..Colours::default() },
+            backdrop: Backdrop { scene: Some(scene.into()), ..Backdrop::default() },
+        };
+        let palette = devd_core::theme::derive(&spec).unwrap_or_else(|problems| panic!("built-in theme {id} cannot be read: {problems:?}"));
+        let mut theme = Self::from_palette(&palette);
+        theme.id = SharedString::new_static(id);
+        theme.name = SharedString::new_static(name);
+        theme.pattern = pattern;
+        theme
+    }
+
+    /// The window's colours for a worked-out palette.
+    fn from_palette(p: &devd_core::theme::Palette) -> Self {
         use devd_core::theme::Scene;
-        let p = &m.palette;
         let t = &p.tokens;
         let c = |colour: devd_core::theme::Rgba| -> Hsla { rgba(colour.to_u32()).into() };
         let pattern = match p.scene {
@@ -133,21 +162,25 @@ impl Theme {
             Scene::Silk => Pattern::Silk,
             Scene::Contours => Pattern::Contours,
             Scene::Rays => Pattern::Rays,
+            Scene::Glow => Pattern::Glow,
+            Scene::Mesh => Pattern::Mesh,
             Scene::Ripples | Scene::None => Pattern::Ripples,
         };
         let art = if p.scene == Scene::None || p.strength <= 0.0 {
             SharedString::default()
         } else {
-            art_path(pattern, p.ink.rgb3(), p.glint.rgb3()).into()
+            art_path(pattern, p.ink.rgb3(), p.glint.rgb3(), p.origin.code(), p.seed).into()
         };
         Self {
-            id: format!("mod:{}", m.id).into(),
-            name: m.manifest.name.trim().to_string().into(),
+            id: SharedString::default(),
+            name: SharedString::default(),
             pattern,
             art,
             art_strength: (pattern.strength(p.dark) * p.strength).min(0.6),
             art_base: p.ink.rgb3(),
             art_glint: p.glint.rgb3(),
+            wash: p.wash.map(|w| (c(w.from), c(w.to), w.angle)),
+            image: None,
             dark: p.dark,
             bg: c(t.bg),
             surface: c(t.surface),
@@ -179,10 +212,10 @@ impl Theme {
     /// A built-in theme's picture: its own scene in its own colours, made once and kept.
     fn with_art(mut self) -> Self {
         let (base, glint) = match self.id.as_ref() {
-            "dawn" => ([0xd9, 0xc9, 0x9a], [0xe9, 0xb8, 0x5c]),
+            "dawn" => ([0xe6, 0xd0, 0xc4], [0xee, 0x7b, 0x5c]),
             "sharon" => ([0x8c, 0x3b, 0x52], [0xb0, 0x2a, 0x58]),
-            "psalm" => ([0xc9, 0xb8, 0xd9], [0xf0, 0xc4, 0x6e]),
-            "daybreak" => ([0x3a, 0x31, 0x5a], [0x86, 0x58, 0x00]),
+            "psalm" => ([0xb4, 0xaa, 0xd6], [0xa8, 0x93, 0xff]),
+            "daybreak" => ([0x3a, 0x4a, 0x7a], [0x25, 0x59, 0xd6]),
             _ => ([0xd9, 0xd6, 0xcc], [0xd4, 0xf2, 0x4a]),
         };
         self.art_base = base;
@@ -249,46 +282,16 @@ impl Theme {
             art_strength: 0.0,
             art_base: [0; 3],
             art_glint: [0; 3],
+            wash: None,
+            image: None,
         }
     }
 
     /// Dawn over the pasture (dark) and Sharon, a rose-tinted map (light).
     fn shepherd(dark: bool) -> Self {
         if dark {
-            Self {
-                id: SharedString::new_static("dawn"),
-                name: SharedString::new_static("Dawn"),
-                pattern: Pattern::Pasture,
-                dark: true,
-                bg: rgb(0x12110d).into(),
-                surface: rgb(0x191710).into(),
-                raised: rgb(0x211e16).into(),
-                hover: rgba(0xf5e6c012).into(),
-                active: rgba(0xf5e6c01c).into(),
-                line: rgba(0xf5e6c012).into(),
-                line_strong: rgba(0xf5e6c026).into(),
-                text: rgb(0xf0ead9).into(),
-                muted: rgb(0xb3a98f).into(),
-                faint: rgb(0x7d7460).into(),
-                accent: rgb(0xd9a441).into(),
-                on_accent: rgb(0x1a1305).into(),
-                accent_soft: rgba(0xd9a4411f).into(),
-                ok: rgb(0x79bf7d).into(),
-                warn: rgb(0xe0a23a).into(),
-                danger: rgb(0xd25b4d).into(),
-                info: rgb(0x86a9c4).into(),
-                selection: rgba(0xd9a4413d).into(),
-                scrim: rgba(0x0b0905a6).into(),
-                code: rgb(0x18150f).into(),
-                diff_added: rgba(0x79bf7d1a).into(),
-                diff_added_word: rgba(0x79bf7d52).into(),
-                diff_removed: rgba(0xd25b4d1a).into(),
-                diff_removed_word: rgba(0xd25b4d57).into(),
-                art: SharedString::default(),
-                art_strength: 0.0,
-                art_base: [0; 3],
-                art_glint: [0; 3],
-            }
+            // Warm charcoal with a coral accent: the first light on a hill.
+            Self::derived("dawn", "Dawn", Pattern::Pasture, ("#15100e", "#f3e9e2", "#ee7b5c"), "pasture")
         } else {
             Self {
                 id: SharedString::new_static("sharon"),
@@ -323,6 +326,8 @@ impl Theme {
                 art_strength: 0.0,
                 art_base: [0; 3],
                 art_glint: [0; 3],
+                wash: None,
+                image: None,
             }
         }
     }
@@ -330,75 +335,11 @@ impl Theme {
     /// Psalm, silk and gold in the dark (dark), and Daybreak, rays of morning light (light).
     fn harp(dark: bool) -> Self {
         if dark {
-            Self {
-                id: SharedString::new_static("psalm"),
-                name: SharedString::new_static("Psalm"),
-                pattern: Pattern::Silk,
-                dark: true,
-                bg: rgb(0x0d0f16).into(),
-                surface: rgb(0x121520).into(),
-                raised: rgb(0x191d2a).into(),
-                hover: rgba(0xe8e2ff12).into(),
-                active: rgba(0xe8e2ff1e).into(),
-                line: rgba(0xe8e2ff12).into(),
-                line_strong: rgba(0xe8e2ff26).into(),
-                text: rgb(0xeae8f3).into(),
-                muted: rgb(0xa6a3b9).into(),
-                faint: rgb(0x706d84).into(),
-                accent: rgb(0xe0b45c).into(),
-                on_accent: rgb(0x1b1405).into(),
-                accent_soft: rgba(0xe0b45c1f).into(),
-                ok: rgb(0x62c7a0).into(),
-                warn: rgb(0xd9a441).into(),
-                danger: rgb(0xe06a74).into(),
-                info: rgb(0x86a8ff).into(),
-                selection: rgba(0xe0b45c3d).into(),
-                scrim: rgba(0x06070da6).into(),
-                code: rgb(0x111521).into(),
-                diff_added: rgba(0x62c7a01a).into(),
-                diff_added_word: rgba(0x62c7a052).into(),
-                diff_removed: rgba(0xe06a741a).into(),
-                diff_removed_word: rgba(0xe06a7457).into(),
-                art: SharedString::default(),
-                art_strength: 0.0,
-                art_base: [0; 3],
-                art_glint: [0; 3],
-            }
+            // Deep indigo with a violet accent: silk in the dark.
+            Self::derived("psalm", "Psalm", Pattern::Silk, ("#100e1c", "#ece9f7", "#a893ff"), "silk")
         } else {
-            Self {
-                id: SharedString::new_static("daybreak"),
-                name: SharedString::new_static("Daybreak"),
-                pattern: Pattern::Rays,
-                dark: false,
-                bg: rgb(0xf6f3ea).into(),
-                surface: rgb(0xeee9dd).into(),
-                raised: rgb(0xfffdf8).into(),
-                hover: rgba(0x3a315a10).into(),
-                active: rgba(0x3a315a1c).into(),
-                line: rgba(0x3a315a16).into(),
-                line_strong: rgba(0x3a315a2b).into(),
-                text: rgb(0x211d2b).into(),
-                muted: rgb(0x5f5a6e).into(),
-                faint: rgb(0x8c8798).into(),
-                accent: rgb(0x7a5200).into(),
-                on_accent: rgb(0xffffff).into(),
-                accent_soft: rgba(0x7a520018).into(),
-                ok: rgb(0x1f7a5c).into(),
-                warn: rgb(0x9a6400).into(),
-                danger: rgb(0xb83048).into(),
-                info: rgb(0x3559a8).into(),
-                selection: rgba(0x7a520033).into(),
-                scrim: rgba(0x1b17304d).into(),
-                code: rgb(0xefeade).into(),
-                diff_added: rgba(0x1f7a5c17).into(),
-                diff_added_word: rgba(0x1f7a5c47).into(),
-                diff_removed: rgba(0xb8304814).into(),
-                diff_removed_word: rgba(0xb8304842).into(),
-                art: SharedString::default(),
-                art_strength: 0.0,
-                art_base: [0; 3],
-                art_glint: [0; 3],
-            }
+            // Cool paper with an azure accent: morning, clear.
+            Self::derived("daybreak", "Daybreak", Pattern::Rays, ("#f3f6fb", "#14213a", "#2559d6"), "rays")
         }
     }
 
@@ -507,9 +448,28 @@ pub fn load(home: &std::path::Path, library: &Library) -> Theme {
 
 /// The asset that draws a scene in two colours, such as `art/scene/contours-2a241d-8a4b14.png`.
 /// The path says everything the picture needs, so a theme from a file needs nothing kept for it.
-pub fn art_path(pattern: Pattern, base: [u8; 3], glint: [u8; 3]) -> String {
+pub fn art_path(pattern: Pattern, base: [u8; 3], glint: [u8; 3], origin: &str, seed: u32) -> String {
     let hex = |c: [u8; 3]| format!("{:02x}{:02x}{:02x}", c[0], c[1], c[2]);
-    format!("art/scene/{}-{}-{}.png", pattern.name(), hex(base), hex(glint))
+    let mut name = pattern.name().to_string();
+    // The corner and the pattern's number, when they are not the scene's own: `aurora~bl~7`.
+    if !origin.is_empty() {
+        name.push('~');
+        name.push_str(origin);
+    }
+    if seed != 0 {
+        name.push_str(&format!("~{seed}"));
+    }
+    format!("art/scene/{name}-{}-{}.png", hex(base), hex(glint))
+}
+
+/// Which corner a picture is drawn in, from its path: the left side, and the bottom. A scene without a corner of its own
+/// in its path stands where the scene does.
+pub fn art_corner(art: &str, pattern: Pattern) -> (bool, bool) {
+    let name = art.strip_prefix("art/scene/").and_then(|p| p.split('-').next()).unwrap_or_default();
+    match name.split('~').skip(1).find(|t| matches!(*t, "tr" | "tl" | "br" | "bl")) {
+        Some(code) => (code.ends_with('l'), code.starts_with('b')),
+        None => (false, pattern.stands_on_the_bottom()),
+    }
 }
 
 /// The themes in the mods folder, as last read: each worked out, or what is wrong with it.
@@ -674,6 +634,19 @@ mod tests {
             2,
             "two for the day, not three"
         );
+    }
+
+    #[test]
+    fn no_two_themes_share_a_button_colour_and_each_accent_is_a_different_hue() {
+        let themes = all();
+        for (i, a) in themes.iter().enumerate() {
+            for b in &themes[i + 1..] {
+                assert_ne!(a.accent, b.accent, "{} and {} share an accent", a.id, b.id);
+                let gap = (a.accent.h - b.accent.h).abs();
+                let gap = gap.min(1.0 - gap);
+                assert!(gap > 0.04, "{} and {} have accents of nearly the same hue ({gap:.3})", a.id, b.id);
+            }
+        }
     }
 
     /// A window colour as the theme files' check reads it.

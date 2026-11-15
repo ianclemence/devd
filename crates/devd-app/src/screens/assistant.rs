@@ -222,6 +222,11 @@ fn fold_steps(items: Vec<Item>) -> Vec<Item> {
     out
 }
 
+thread_local! {
+    /// Whether the conversation on screen is running, so a step in progress is shown once, in the status line.
+    static RUNNING_LINE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// The quiet line under a reply: the model, then what the turn took, such as "deepseek-flash · 2.3k out ·
 /// 41/s · $0.012". A figure that was not recorded is left out rather than shown as zero.
 fn reply_label(model: &str, (tokens, cost, ms): (u64, f64, u64)) -> String {
@@ -369,7 +374,6 @@ pub fn render(
     _window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> AnyElement {
-    let t = theme(cx).clone();
     // The strip first: it opens the pane when the assistant has just started the browser.
     let strip = super::pane::strip(shell, cx);
     let current = thread.clone();
@@ -384,7 +388,7 @@ pub fn render(
         .child(main)
         .children(super::pane::pane(shell, cx))
         .child(strip)
-        .bg(t.bg)
+        .bg(ui::ground(cx))
         .into_any_element()
 }
 
@@ -835,9 +839,20 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
     let (doing, glimpse) = match (&thinking, is_writing) {
         (Some((_, tail)), false) => ("Thinking".to_string(), Some(tail.clone())),
         (_, true) => ("Writing".to_string(), None),
-        // A step that is running has its own row, with its own clock: this line then only keeps the turn's time.
-        _ => ("Working".to_string(), None),
+        // What is being done right now, said as the step's own row would say it: "Reading a.rs", "Running cargo test".
+        _ => {
+            let step = items.iter().rev().find_map(|i| match i {
+                Item::Tool { name, input, ok: None, .. } => {
+                    let said = toolname::describe(name, input, Phase::Running);
+                    Some(if said.object.is_empty() { said.action } else { format!("{} {}", said.action, said.object) })
+                }
+                _ => None,
+            });
+            (step.unwrap_or_else(|| "Working".to_string()), None)
+        }
     };
+    // The step that is running is this line; its own row in the transcript would say the same thing twice.
+    RUNNING_LINE.with(|c| c.set(running));
     // The turn began when the person last spoke.
     let turn_began = data["events"]
         .as_array()
@@ -1151,8 +1166,8 @@ fn activity_line(doing: String, glimpse: Option<String>, since: Option<chrono::D
         .gap(px(10.0))
         .overflow_hidden()
         .text_size(px(size::TEXT_SM))
-        .child(div().flex_none().child(live_dot("thread.activity", Tone::Accent, cx)))
-        .child(div().flex_none().text_color(t.muted).font_weight(FontWeight::MEDIUM).child(doing))
+        .child(div().flex_none().child(ui::motion::spinner("thread.spinner", t.accent)))
+        .child(div().flex_none().max_w(px(520.0)).overflow_hidden().whitespace_nowrap().text_color(t.muted).child(doing))
         .children(took.map(|took| div().flex_none().font_family(mono()).text_size(px(size::TEXT_XS)).text_color(t.faint).child(took)))
         .children(glimpse.map(|g| {
             div()
@@ -1261,6 +1276,10 @@ fn draw(thread: &str, index: usize, item: &Item, resume: bool, cx: &App) -> AnyE
                 Some(false) => Phase::Failed,
                 None => Phase::Running,
             };
+            // While the turn runs, the status line above the message box says what is running, with its clock.
+            if phase == Phase::Running && RUNNING_LINE.with(|c| c.get()) {
+                return div().into_any_element();
+            }
             let said = toolname::describe(name, input, phase);
             // What only looked recedes; what changed something, and what failed, is read at full strength.
             let quiet = phase == Phase::Done && toolname::only_looks(name, input);

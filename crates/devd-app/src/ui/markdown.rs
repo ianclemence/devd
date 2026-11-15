@@ -484,7 +484,13 @@ fn widget(id: &str, kind: WidgetKind, data: &Value, cx: &App) -> Div {
         WidgetKind::Metrics => {
             let mut row = div().flex().flex_wrap().gap(px(28.0));
             for item in data["items"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
-                let delta = item["delta"].as_str().unwrap_or_default();
+                let delta = match &item["delta"] {
+                    Value::String(d) => d.clone(),
+                    Value::Number(n) if n.as_f64().is_some_and(|n| n > 0.0) => format!("+{n}"),
+                    Value::Number(n) => n.to_string(),
+                    _ => String::new(),
+                };
+                let delta = delta.as_str();
                 let tone = match item["delta_tone"].as_str() {
                     Some("success") => Tone::Ok,
                     Some("error") => Tone::Danger,
@@ -528,7 +534,7 @@ fn widget(id: &str, kind: WidgetKind, data: &Value, cx: &App) -> Div {
                         ),
                 );
             }
-            frame().child(row)
+            frame().children(title).child(row)
         }
         WidgetKind::Chart => {
             let bars = data["bars"].as_array().map(Vec::as_slice).unwrap_or(&[]);

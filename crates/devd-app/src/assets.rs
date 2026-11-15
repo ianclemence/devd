@@ -322,7 +322,20 @@ fn scene_picture(spec: &str) -> Option<Vec<u8>> {
     static MADE: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>> =
         std::sync::LazyLock::new(Default::default);
     let mut parts = spec.split('-');
-    let pattern = crate::ui::dither::Pattern::named(parts.next()?)?;
+    // `aurora~bl~7`: the scene, then optionally the corner it comes from and the pattern's number.
+    let mut head = parts.next()?.split('~');
+    let pattern = crate::ui::dither::Pattern::named(head.next()?)?;
+    let (mut corner, mut seed) = (None::<&str>, 0u32);
+    for token in head {
+        match token {
+            "tr" | "tl" | "br" | "bl" if corner.is_none() => corner = Some(token),
+            n if n.chars().all(|c| c.is_ascii_digit()) && !n.is_empty() && n.len() <= 9 => seed = n.parse().ok()?,
+            _ => return None,
+        }
+    }
+    // The scene's own picture is the one from its own corner; another corner is that picture mirrored.
+    let (left, bottom) = corner.map_or((false, pattern.stands_on_the_bottom()), |c| (c.ends_with('l'), c.starts_with('b')));
+    let flip = (left, bottom != pattern.stands_on_the_bottom());
     let colour = |hex: &str| -> Option<[u8; 3]> {
         let n = u32::from_str_radix(hex, 16).ok().filter(|_| hex.len() == 6)?;
         Some([(n >> 16) as u8, (n >> 8) as u8, n as u8])
@@ -334,7 +347,7 @@ fn scene_picture(spec: &str) -> Option<Vec<u8>> {
     let mut made = MADE.lock().unwrap_or_else(|e| e.into_inner());
     Some(
         made.entry(spec.to_string())
-            .or_insert_with(|| crate::ui::dither::png_as(base, glint, pattern))
+            .or_insert_with(|| crate::ui::dither::png_with(base, glint, pattern, flip, seed))
             .clone(),
     )
 }
@@ -400,12 +413,19 @@ mod tests {
 
     #[test]
     fn a_scene_is_drawn_in_any_two_colours_a_theme_file_asks_for() {
-        let path = crate::theme::art_path(crate::ui::dither::Pattern::Contours, [0x2a, 0x24, 0x1d], [0x8a, 0x4b, 0x14]);
+        let path = crate::theme::art_path(crate::ui::dither::Pattern::Contours, [0x2a, 0x24, 0x1d], [0x8a, 0x4b, 0x14], "", 0);
         let bytes = Assets.load(&path).unwrap().expect("the scene is served");
         assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
-        let other = crate::theme::art_path(crate::ui::dither::Pattern::Contours, [0x2a, 0x24, 0x1d], [0x14, 0x4b, 0x8a]);
+        let other = crate::theme::art_path(crate::ui::dither::Pattern::Contours, [0x2a, 0x24, 0x1d], [0x14, 0x4b, 0x8a], "", 0);
         assert_ne!(Assets.load(&other).unwrap().unwrap(), bytes, "other colours, another picture");
-        for bad in ["art/scene/waves-2a241d-8a4b14.png", "art/scene/contours-2a241d.png", "art/scene/contours-zzzzzz-8a4b14.png", "art/scene/contours-2a241d-8a4b14-00.png"] {
+        let moved = crate::theme::art_path(crate::ui::dither::Pattern::Contours, [0x2a, 0x24, 0x1d], [0x8a, 0x4b, 0x14], "bl", 7);
+        assert_ne!(Assets.load(&moved).unwrap().unwrap(), bytes, "another corner and number, another picture");
+        for kind in crate::ui::dither::Pattern::ALL {
+            let path = crate::theme::art_path(kind.1, [0xd0, 0xd0, 0xc0], [0xe0, 0xa0, 0x40], "tl", 3);
+            let png = Assets.load(&path).unwrap().unwrap_or_else(|| panic!("{path} is served"));
+            assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+        }
+        for bad in ["art/scene/tapestry-2a241d-8a4b14.png", "art/scene/contours~up-2a241d-8a4b14.png", "art/scene/contours~tl~tr-2a241d-8a4b14.png", "art/scene/contours-2a241d.png", "art/scene/contours-zzzzzz-8a4b14.png", "art/scene/contours-2a241d-8a4b14-00.png"] {
             assert!(Assets.load(bad).unwrap().is_none(), "{bad}");
         }
     }

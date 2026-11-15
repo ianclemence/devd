@@ -9,6 +9,7 @@ pub const BUILTIN: &[(&str, &str)] = &[
     ("api-design", include_str!("../skills/api-design.md")),
     ("architect", include_str!("../skills/architect.md")),
     ("arena", include_str!("../skills/arena.md")),
+    ("background", include_str!("../skills/background.md")),
     ("babysit-the-pull-request", include_str!("../skills/babysit-the-pull-request.md")),
     ("benchmark-checklist", include_str!("../skills/benchmark-checklist.md")),
     ("blast-radius", include_str!("../skills/blast-radius.md")),
