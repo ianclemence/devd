@@ -160,6 +160,12 @@ pub struct TeamRun {
     /// The commit the run started from, for baseline comparisons.
     #[serde(default)]
     pub base_commit: Option<String>,
+    /// How much the run's agents may think: `none`, `low`, `medium`, `high`, `extra` or `max`.
+    ///
+    /// The planner and every specialist inherit it, so the choice made in the conversation that
+    /// started the run reaches the agents doing the work instead of dying at the handoff.
+    #[serde(default)]
+    pub effort: Option<String>,
 }
 
 /// The bounds on a run.
@@ -285,7 +291,7 @@ pub struct TeamEvent {
     pub at: String,
 }
 
-const RUN_COLS: &str = "id,title,goal,project,state,plan_approved,summary,error,parallel,created_by,created_at,updated_at,thread_id,verdict,verdict_at,reviewed_commit,base_commit";
+const RUN_COLS: &str = "id,title,goal,project,state,plan_approved,summary,error,parallel,created_by,created_at,updated_at,thread_id,verdict,verdict_at,reviewed_commit,base_commit,effort";
 /// The columns of one task row, for queries that live in other modules.
 /// A conversation that a team specialist works in, and what it belongs to.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -331,6 +337,7 @@ fn row_run(r: &rusqlite::Row) -> rusqlite::Result<TeamRun> {
         verdict_at: r.get(14)?,
         reviewed_commit: r.get(15)?,
         base_commit: r.get(16)?,
+        effort: r.get(17)?,
     })
 }
 
@@ -523,6 +530,19 @@ impl Store {
         parallel: i64,
         by: &str,
     ) -> Result<TeamRun> {
+        self.create_run_with_effort(title, goal, project, parallel, by, None)
+    }
+
+    /// Start a run whose agents think as much as `effort` says. `None` leaves the ordinary default.
+    pub fn create_run_with_effort(
+        &self,
+        title: &str,
+        goal: &str,
+        project: Option<&str>,
+        parallel: i64,
+        by: &str,
+        effort: Option<&str>,
+    ) -> Result<TeamRun> {
         let now = util::now();
         let run = TeamRun {
             id: util::new_id(),
@@ -542,11 +562,12 @@ impl Store {
             verdict_at: None,
             reviewed_commit: None,
             base_commit: None,
+            effort: effort.map(str::to_string),
         };
         self.with(|c| {
             c.execute(
-                "INSERT INTO team_runs (id,title,goal,project,state,plan_approved,summary,error,parallel,created_by,created_at,updated_at,thread_id) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
-                params![run.id, run.title, run.goal, run.project, run.state, run.plan_approved as i32, run.summary, run.error, run.parallel, run.created_by, run.created_at, run.updated_at, run.thread_id],
+                "INSERT INTO team_runs (id,title,goal,project,state,plan_approved,summary,error,parallel,created_by,created_at,updated_at,thread_id,effort) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+                params![run.id, run.title, run.goal, run.project, run.state, run.plan_approved as i32, run.summary, run.error, run.parallel, run.created_by, run.created_at, run.updated_at, run.thread_id, run.effort],
             )?;
             Ok(())
         })?;
@@ -1366,6 +1387,22 @@ mod budget_tests {
                 usd: Some(2.5),
                 turns: Some(60)
             }
+        );
+    }
+
+    #[test]
+    fn a_run_remembers_the_thinking_choice_its_agents_inherit() {
+        let s = Store::open_in_memory().unwrap();
+        let plain = s.create_run("t", "goal", None, 2, "human:test").unwrap();
+        assert_eq!(plain.effort, None, "no choice means the ordinary default");
+        let quiet = s
+            .create_run_with_effort("t", "goal", None, 2, "human:test", Some("none"))
+            .unwrap();
+        assert_eq!(quiet.effort.as_deref(), Some("none"));
+        assert_eq!(
+            s.get_run(&quiet.id).unwrap().unwrap().effort.as_deref(),
+            Some("none"),
+            "a task started after a restart still inherits it"
         );
     }
 

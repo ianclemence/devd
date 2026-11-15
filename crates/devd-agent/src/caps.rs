@@ -368,9 +368,13 @@ struct TeamStart {
     /// The most the run may spend, in US dollars. It pauses, with its work kept, when this is used up. Omit for no ceiling.
     #[serde(default)]
     budget_usd: Option<f64>,
-    /// The most model turns the run's agents may take together. Omit for no ceiling.
+    /// The most model turns the run's agents may take together. Omit for the default ceiling.
     #[serde(default)]
     max_turns: Option<i64>,
+    /// How much the run's agents may think: none, low, medium, high, extra or max. The assistant
+    /// passes the conversation's choice here; omit for the ordinary default.
+    #[serde(default)]
+    effort: Option<String>,
 }
 
 /// A run and the ceilings to give it.
@@ -1718,6 +1722,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                     max_rounds: a.max_rounds.unwrap_or(2),
                     budget_usd: a.budget_usd,
                     max_turns: a.max_turns,
+                    effort: a.effort.clone(),
                 })?;
                 // The run answers into the conversation that asked for it.
                 if let Some(thread) = a.thread.as_deref().filter(|t| !t.is_empty()) {
@@ -4681,6 +4686,7 @@ fn register_automation(reg: &mut Registry, team: Arc<Team>) -> Result<()> {
                     max_rounds: 2,
                     budget_usd: None,
                     max_turns: None,
+                    effort: None,
                 })?;
                 Ok(Outcome::with_data("the planner is working; the team starts as soon as the plan is ready", serde_json::to_value(&run)?))
             },

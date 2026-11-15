@@ -253,6 +253,7 @@ pub fn evaluate_intake(ctx: &Ctx, team: &Arc<Team>) -> Result<usize> {
                                 auto_approve: false,
                                 done_when: Vec::new(),
                                 max_rounds: 2,
+                                effort: None,
                             },
                         ) {
                             Ok(run) => {

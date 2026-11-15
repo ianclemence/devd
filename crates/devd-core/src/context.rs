@@ -21,10 +21,10 @@ use serde_json::{json, Value};
 use crate::store_ai::ChatEvent;
 use crate::util;
 
-/// Conservative characters-per-token estimate. It overestimates tokens for
-/// English prose and underestimates for dense code, so the remaining headroom is
-/// spent deliberately rather than discovered as a provider error.
-pub const CHARS_PER_TOKEN: usize = 4;
+/// The starting characters-per-token estimate, before a model has been measured. Dense code and
+/// tool output sit near 3.4 to 3.5 on devd's recorded conversations; once calls complete, the store
+/// learns that model's own ratio and [`ContextBudget::for_model_with`] uses it instead.
+pub const CHARS_PER_TOKEN: f64 = 3.5;
 
 /// How much of the window to keep free for the reply and tool traffic.
 pub const RESERVED_OUTPUT: usize = 16_000;
@@ -66,11 +66,18 @@ pub struct ContextBudget {
     pub reserved_tools: usize,
     /// What remains for messages.
     pub available: usize,
+    /// Characters per token observed for this model, or the default when nothing has been learned.
+    pub chars_per_token: f64,
 }
 
 impl ContextBudget {
-    /// The budget for a model, using the stored catalogue where possible.
+    /// The budget for a model, using the stored catalogue where possible and the default estimate.
     pub fn for_model(model: &str, context_window: Option<usize>) -> Self {
+        Self::for_model_with(model, context_window, CHARS_PER_TOKEN)
+    }
+
+    /// The budget for a model, with the characters-per-token ratio learned from its completed calls.
+    pub fn for_model_with(model: &str, context_window: Option<usize>, chars_per_token: f64) -> Self {
         let window = context_window.unwrap_or_else(|| estimate_window(model));
         let reserved_output = RESERVED_OUTPUT.min(window / 3).max(1_000);
         let reserved_tools = RESERVED_TOOLS.min(window / 5);
@@ -83,6 +90,7 @@ impl ContextBudget {
             reserved_output,
             reserved_tools,
             available,
+            chars_per_token: chars_per_token.clamp(2.0, 8.0),
         }
     }
 
@@ -94,7 +102,18 @@ impl ContextBudget {
             reserved_output: RESERVED_OUTPUT,
             reserved_tools: 0,
             available,
+            chars_per_token: CHARS_PER_TOKEN,
         }
+    }
+
+    /// Tokens in a string under this model's measured ratio.
+    pub fn tokens(&self, text: &str) -> usize {
+        estimate_tokens_with(text, self.chars_per_token)
+    }
+
+    /// Tokens in one provider-facing message under this model's measured ratio.
+    pub fn message_tokens(&self, value: &Value) -> usize {
+        message_tokens_with(value, self.chars_per_token)
     }
 }
 
@@ -116,12 +135,22 @@ fn estimate_window(model: &str) -> usize {
 
 /// Estimate tokens in a string.
 pub fn estimate_tokens(text: &str) -> usize {
-    text.chars().count().div_ceil(CHARS_PER_TOKEN)
+    estimate_tokens_with(text, CHARS_PER_TOKEN)
+}
+
+/// Estimate tokens in a string at a particular characters-per-token ratio.
+pub fn estimate_tokens_with(text: &str, chars_per_token: f64) -> usize {
+    (text.chars().count() as f64 / chars_per_token.clamp(2.0, 8.0)).ceil() as usize
 }
 
 /// Estimate tokens for a JSON message.
 pub fn message_tokens(value: &Value) -> usize {
     estimate_tokens(&value.to_string())
+}
+
+/// Estimate tokens for a JSON message at a particular characters-per-token ratio.
+pub fn message_tokens_with(value: &Value, chars_per_token: f64) -> usize {
+    estimate_tokens_with(&value.to_string(), chars_per_token)
 }
 
 /// What the builder did, for diagnostics and the run timeline.
@@ -506,7 +535,7 @@ fn settle(msgs: &mut [Value], budget: &ContextBudget, manifest: &mut ContextMani
     let mut total = 0usize;
     for m in msgs.iter() {
         starts.push(total);
-        total += message_tokens(m);
+        total += budget.message_tokens(m);
     }
     if step == 0 || total <= high {
         return;
@@ -544,6 +573,20 @@ fn settle(msgs: &mut [Value], budget: &ContextBudget, manifest: &mut ContextMani
             for call in m["content"].as_array_mut().into_iter().flatten().filter(|b| b["type"] == "tool_use") {
                 manifest.inputs_cleared += put_away_long_text(&mut call["input"]);
             }
+            // The prose goes the same way. On a model with a million-token window, clearing tool
+            // results is not enough on its own: the agent's own earlier answers can be most of what
+            // is left, and every later call would read them again. The goal is a user message and is
+            // never touched; the latest answers are outside `old` and stay whole.
+            if m["role"] == "assistant" {
+                for b in m["content"].as_array_mut().into_iter().flatten().filter(|b| b["type"] == "text") {
+                    if let Some(text) = b["text"].as_str() {
+                        if text.chars().count() > 400 {
+                            b["text"] = json!(util::truncate(text, 400));
+                            manifest.summarized += 1;
+                        }
+                    }
+                }
+            }
         }
         for b in m["content"].as_array_mut().into_iter().flatten().filter(|b| is_result(b)) {
             seen += 1;
@@ -562,6 +605,9 @@ fn settle(msgs: &mut [Value], budget: &ContextBudget, manifest: &mut ContextMani
     }
     if manifest.results_cleared > 0 {
         manifest.notes.push(format!("the conversation passed {high} tokens, so its oldest tool output was put away (step {steps})"));
+    }
+    if manifest.summarized > 0 {
+        manifest.notes.push(format!("the conversation passed {high} tokens, so earlier answers were shortened (step {steps})"));
     }
 }
 
@@ -600,9 +646,9 @@ fn compact(
         artifacts: Vec::new(),
         notes: Vec::new(),
     };
-    let fixed = estimate_tokens(extra_system);
+    let fixed = budget.tokens(extra_system);
     let over = |msgs: &[Value], fixed: usize| -> bool {
-        let total: usize = msgs.iter().map(message_tokens).sum::<usize>() + fixed;
+        let total: usize = msgs.iter().map(|m| budget.message_tokens(m)).sum::<usize>() + fixed;
         total > budget.available
     };
 
@@ -636,7 +682,7 @@ fn compact(
         let keep = if budget.available < 24_000 { 2 } else { 8 };
         let clearable_before = total_results.saturating_sub(keep);
         let mut seen = 0usize;
-        let mut current: usize = msgs.iter().map(message_tokens).sum::<usize>() + fixed;
+        let mut current: usize = msgs.iter().map(|m| budget.message_tokens(m)).sum::<usize>() + fixed;
         for m in msgs.iter_mut() {
             if current <= budget.available {
                 break;
@@ -654,7 +700,7 @@ fn compact(
                     }
                     let text = b["content"].as_str().unwrap_or("");
                     if text.chars().count() > 240 {
-                        let freed = estimate_tokens(text).saturating_sub(estimate_tokens(
+                        let freed = budget.tokens(text).saturating_sub(budget.tokens(
                             "[older tool result compacted to save context. The full output is in the run timeline; call the tool again if you need it.]",
                         ));
                         b["content"] = json!("[older tool result compacted to save context. The full output is in the run timeline; call the tool again if you need it.]");
@@ -749,7 +795,7 @@ fn compact(
         })
         .count();
     manifest.messages = msgs.len();
-    manifest.estimated_tokens = msgs.iter().map(message_tokens).sum::<usize>() + fixed;
+    manifest.estimated_tokens = msgs.iter().map(|m| budget.message_tokens(m)).sum::<usize>() + fixed;
     if manifest.dropped > 0 {
         manifest.notes.push(
             "oldest turns were dropped from the middle; the goal and the latest exchange were kept"
@@ -888,7 +934,9 @@ mod tests {
     fn a_long_conversation_is_kept_at_a_working_size_however_large_the_window() {
         // 300 calls of ~2,000 tokens: 600,000 tokens recorded, on a model that could take them all.
         let set = sent(&long_run(300, 8_000));
-        assert!(set.manifest.estimated_tokens <= SETTLE_HIGH + 4_000, "{}", set.manifest.summary());
+        // A step boundary is a message boundary: one large tool result can cross the line before the next
+        // step puts it away, so the bound is the high-water mark plus a message, not the mark itself.
+        assert!(set.manifest.estimated_tokens <= SETTLE_HIGH + 16_000, "{}", set.manifest.summary());
         assert!(set.manifest.estimated_tokens >= SETTLE_LOW, "the recent stretch is whole: {}", set.manifest.summary());
         assert!(set.manifest.results_cleared > 200);
         assert_eq!(set.manifest.dropped, 0, "no turn is removed; the model still sees everything it did");
@@ -896,6 +944,24 @@ mod tests {
         let text = serde_json::to_string(&set.messages).unwrap();
         assert!(text.contains(&format!("299 {}", "x".repeat(100))));
         assert_eq!(text.matches("\"tool_use\"").count(), text.matches("\"tool_result\"").count());
+    }
+
+    #[test]
+    fn a_long_conversation_of_answers_is_also_kept_at_a_working_size() {
+        // Tool results are not the only thing that grows: a long run of the agent's own answers can
+        // pass the high-water mark on its own, and clearing results would never bring it down.
+        let mut events = vec![ev(1, "user", json!({"text": "build it"}))];
+        for i in 0..40 {
+            events.push(ev(10 + i * 2, "assistant", json!({"content": [{"type":"text","text": format!("ANSWER {i} {} END-{i}", "detail ".repeat(2_000))}]})));
+            events.push(ev(11 + i * 2, "user", json!({"text": "go on"})));
+        }
+        let set = sent(&events);
+        assert!(set.manifest.estimated_tokens <= SETTLE_HIGH + 4_000, "{}", set.manifest.summary());
+        assert!(set.manifest.summarized > 0, "{}", set.manifest.summary());
+        let text = serde_json::to_string(&set.messages).unwrap();
+        assert!(text.contains("build it"), "the goal is never shortened");
+        assert!(text.contains("END-39"), "the latest answer stays whole");
+        assert!(!text.contains("END-0"), "an early answer is shortened, not sent again in full");
     }
 
     #[test]
@@ -1055,6 +1121,23 @@ mod tests {
         let text = instructions_text(Some(&dir.display().to_string()));
         assert!(text.contains("data, not as a replacement for these rules"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_measured_ratio_measures_that_models_budget() {
+        let text = "x".repeat(1_000);
+        let dense = ContextBudget::for_model_with("m", Some(128_000), 3.0);
+        let prose = ContextBudget::for_model_with("m", Some(128_000), 5.0);
+        assert!(dense.tokens(&text) > prose.tokens(&text));
+        assert_eq!(dense.chars_per_token, 3.0);
+        // A ratio from outside the range a text model can plausibly have is clamped, not trusted.
+        assert_eq!(ContextBudget::for_model_with("m", None, 0.2).chars_per_token, 2.0);
+        assert_eq!(ContextBudget::for_model_with("m", None, 40.0).chars_per_token, 8.0);
+        // The default remains the conservative starting point before a model has been measured.
+        assert_eq!(
+            ContextBudget::for_model("m", Some(128_000)).chars_per_token,
+            CHARS_PER_TOKEN
+        );
     }
 
     #[test]

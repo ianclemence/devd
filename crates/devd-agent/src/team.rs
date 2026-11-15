@@ -48,6 +48,10 @@ pub const MAX_TASKS: usize = 14;
 /// Most times a task is started before a person has to look at it.
 pub const MAX_ATTEMPTS: i64 = 3;
 
+/// What a run may spend in model turns when the person set no ceiling: enough for several tasks,
+/// small enough that a runaway is paused and shown beside the run rather than discovered later.
+pub const DEFAULT_RUN_TURNS: i64 = 160;
+
 /// How many times a reviewer's "changes needed" is sent back to the team before the
 /// person is asked to decide.
 pub const MAX_REVIEW_ROUNDS: usize = 2;
@@ -204,8 +208,11 @@ pub struct StartRequest {
     pub max_rounds: i64,
     /// The most the run may spend, in US dollars. `None` is no ceiling.
     pub budget_usd: Option<f64>,
-    /// The most model turns its agents may take together. `None` is no ceiling.
+    /// The most model turns its agents may take together. `None` uses [`DEFAULT_RUN_TURNS`].
     pub max_turns: Option<i64>,
+    /// How much its agents may think: `none`, `low`, `medium`, `high`, `extra` or `max`.
+    /// `None` is the ordinary default. The planner and every specialist inherit it.
+    pub effort: Option<String>,
 }
 
 /// Commands that count as verification when run through `project.run`.
@@ -543,18 +550,28 @@ fn task_brief(
     run: &TeamRun,
     t: &TeamTask,
     tasks: &[TeamTask],
+    full: bool,
 ) -> String {
-    let mut s = format!(
-        "# The goal\n{}\n\n# Your task: {} ({})\n{}\n",
-        run.goal, t.title, t.key, t.instructions
-    );
-    if let Ok(g) = store.goal_loop(&run.id) {
-        if !g.done_when.is_empty() {
-            s.push_str(&format!("\n# Definition of done\nThe run is finished only when all of these hold; plan and work toward them:\n{}\n", g.done_when.iter().map(|c| format!("- {c}")).collect::<Vec<_>>().join("\n")));
+    // A first attempt gets the goal and the task in full. A restart in the same conversation already
+    // has them above; sending them again is the largest duplicated block in a retry, so it gets the
+    // short form and only what has changed since the last attempt below.
+    let mut s = if full {
+        format!(
+            "# The goal\n{}\n\n# Your task: {} ({})\n{}\n",
+            run.goal, t.title, t.key, t.instructions
+        )
+    } else {
+        "# The task starts again\nThis conversation already has the goal and this task's instructions above. Do not repeat work that is finished; continue from where the last attempt stopped.\n".to_string()
+    };
+    if full {
+        if let Ok(g) = store.goal_loop(&run.id) {
+            if !g.done_when.is_empty() {
+                s.push_str(&format!("\n# Definition of done\nThe run is finished only when all of these hold; plan and work toward them:\n{}\n", g.done_when.iter().map(|c| format!("- {c}")).collect::<Vec<_>>().join("\n")));
+            }
         }
-    }
-    if !t.scope.is_empty() {
-        s.push_str(&format!("\nYou may change: {}\n", t.scope.join(", ")));
+        if !t.scope.is_empty() {
+            s.push_str(&format!("\nYou may change: {}\n", t.scope.join(", ")));
+        }
     }
     let mut deps = String::new();
     for k in &t.depends_on {
@@ -1269,6 +1286,7 @@ impl Team {
             max_rounds,
             budget_usd,
             max_turns,
+            effort,
         } = req;
         let (parallel, auto_approve) = (*parallel, *auto_approve);
         let goal = goal.trim();
@@ -1334,23 +1352,25 @@ impl Team {
         }
         let imported = self.import_for_agents(caller, &dir);
         let title = short_title(goal.lines().next().unwrap_or("Team run"), 70);
-        let run = self.ctx.store.create_run(
+        let run = self.ctx.store.create_run_with_effort(
             &title,
             goal,
             Some(&dir.display().to_string()),
             parallel,
             &caller.actor.label(),
+            effort.as_deref(),
         )?;
         self.ctx
             .store
             .set_goal_loop(&run.id, &criteria, *max_rounds)?;
-        if budget_usd.is_some() || max_turns.is_some() {
-            self.ctx.store.set_run_budget(
-                &run.id,
-                budget_usd.filter(|b| *b > 0.0),
-                max_turns.filter(|t| *t > 0),
-            )?;
-        }
+        // A ceiling is not a suggestion: every run gets one, so the heading can always say what is
+        // left and a loop pauses instead of spending the account down.
+        let turns = max_turns.filter(|t| *t > 0).or(Some(DEFAULT_RUN_TURNS));
+        self.ctx.store.set_run_budget(
+            &run.id,
+            budget_usd.filter(|b| *b > 0.0),
+            turns,
+        )?;
         if let Some(note) = imported {
             self.event(&run.id, None, "note", json!({ "text": note }));
         }
@@ -1744,6 +1764,11 @@ impl Team {
             1,
             &caller.actor.label(),
         )?;
+        // An assigned piece of work gets the same default ceiling as a planned run, so it too can
+        // pause and show what it has spent instead of running until someone notices.
+        self.ctx
+            .store
+            .set_run_budget(&run.id, None, Some(DEFAULT_RUN_TURNS))?;
         let key = format!("work-{}", &run.id[..6.min(run.id.len())]);
         // A person wrote this work item, so its authority is explicit; an agent
         // that handed the work over carries the inferred basis.
@@ -2561,7 +2586,14 @@ impl Team {
         } else {
             None
         };
-        let mut message = task_brief(&self.ctx.store, self.ctx.paths.root(), run, t, tasks);
+        let mut message = task_brief(
+            &self.ctx.store,
+            self.ctx.paths.root(),
+            run,
+            t,
+            tasks,
+            existing_thread.is_none(),
+        );
         if completion::is_gatekeeper(&t.role) {
             if let Some(sha) = &reviewed_commit {
                 message.push_str(&format!(
@@ -2593,6 +2625,9 @@ impl Team {
             Some(id) => {
                 // After a restart the assistant may already have resumed this conversation; telling it again would clash.
                 if !self.hub.is_running(&id) {
+                    // The run's thinking choice outlives the process that made it: it is on the run, not
+                    // only in the hub's memory, so a resume does not quietly go back to the default.
+                    self.hub.set_effort(&id, run.effort.as_deref());
                     self.hub
                         .follow_up(&id, &format!("The task starts again.\n\n{}", message))?;
                 }
@@ -2602,6 +2637,7 @@ impl Team {
                 &workdir.display().to_string(),
                 &format!("{} · {}", role.title, t.title),
                 &message,
+                run.effort.as_deref(),
             )?,
         };
         self.ctx.store.update_team_task(
@@ -4003,6 +4039,42 @@ mod verdict_tests {
             "Verdict: approve"
         ));
         assert!(report_needs_changes(None, "qa", "2 failed, 806 passed"));
+    }
+}
+
+#[cfg(test)]
+mod brief_tests {
+    use super::*;
+
+    #[test]
+    fn a_restart_sends_the_short_brief_not_the_whole_task_again() {
+        let s = devd_core::state::Store::open_in_memory().unwrap();
+        let run = s.create_run("t", "THE WHOLE GOAL", None, 1, "human:test").unwrap();
+        let t = s
+            .add_task(
+                &run.id,
+                NewTask {
+                    key: "a",
+                    role: "implementer",
+                    title: "THE TITLE",
+                    instructions: "THE INSTRUCTIONS",
+                    depends_on: &[],
+                    scope: &["src/".to_string()],
+                    criteria: &[],
+                    mandate: None,
+                },
+            )
+            .unwrap();
+        let home = std::env::temp_dir();
+        let tasks = std::slice::from_ref(&t);
+        let full = task_brief(&s, &home, &run, &t, tasks, true);
+        let again = task_brief(&s, &home, &run, &t, tasks, false);
+        assert!(full.contains("THE WHOLE GOAL") && full.contains("THE INSTRUCTIONS"));
+        assert!(
+            !again.contains("THE WHOLE GOAL") && !again.contains("THE INSTRUCTIONS"),
+            "the restart must not pay for the brief it already has: {again}"
+        );
+        assert!(again.contains("The task starts again"), "{again}");
     }
 }
 

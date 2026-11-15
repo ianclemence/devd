@@ -2741,7 +2741,16 @@ fn the_same_call_a_third_time_is_not_run_and_the_agent_is_told_to_change_course(
     assert_eq!(results.len(), 4);
     assert!(!results[0].contains("repeated_call") && !results[1].contains("repeated_call"), "the first two run");
     assert!(results[2].contains("repeated_call") && results[3].contains("repeated_call"), "the third and fourth do not: {results:?}");
-    assert!(v["events"].as_array().unwrap().iter().any(|x| x["kind"] == "notice" && x["data"]["text"].as_str().unwrap_or_default().contains("a third time")));
+    // The notice names what happened rather than counting calls: the guard now counts occurrences
+    // inside a window, so a repeat need not be the third one in a row.
+    assert!(
+        v["events"].as_array().unwrap().iter().any(|x| {
+            x["kind"] == "notice"
+                && x["data"]["text"].as_str().unwrap_or_default().contains("was asked again with the same arguments")
+                && x["data"]["text"].as_str().unwrap_or_default().contains("change course")
+        }),
+        "the person is told the call was not run: {v}"
+    );
 }
 
 #[test]
