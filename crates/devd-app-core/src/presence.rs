@@ -159,6 +159,28 @@ impl Room {
         self.present.remove(session);
     }
 
+    /// Drop everybody whose conversation is no longer running. Returns whether anybody was dropped.
+    ///
+    /// A turn ends by going quiet: the last chunk of a reply arrives and nothing follows it, so the
+    /// window never hears that the agent stopped and counted it as working until the staleness
+    /// sweep ninety seconds later. That is exactly the window in which a person reads the status
+    /// line and sees "1 agent working" beside a run that is paused. `running` answers for a
+    /// conversation the record knows about; one it does not know about is left alone, because
+    /// nothing better is known about it and a wrong drop is worse than a late one.
+    pub fn only_running(&mut self, running: impl Fn(&str) -> Option<bool>) -> bool {
+        let before = self.present.len();
+        self.present.retain(|_, (p, _)| {
+            if p.who == Who::You {
+                return true;
+            }
+            match p.place.thread.as_deref() {
+                Some(thread) => running(thread).unwrap_or(true),
+                None => true,
+            }
+        });
+        self.present.len() != before
+    }
+
     /// Drop everybody not heard from recently. Returns whether anybody was dropped.
     pub fn sweep(&mut self, now: Instant) -> bool {
         let before = self.present.len();
@@ -287,6 +309,48 @@ mod tests {
         assert!(room.sweep(start + STALE_AFTER + Duration::from_secs(1)));
         assert_eq!(room.everyone().len(), 1);
         assert_eq!(room.everyone()[0].who, Who::You);
+    }
+
+    #[test]
+    fn a_conversation_that_stopped_stops_counting_as_working_at_once() {
+        let now = Instant::now();
+        // Where a person is: no conversation, so nothing to ask the record about.
+        let at = |who: Who, thread: Option<&str>| Presence {
+            who,
+            place: Place {
+                project: Some("D:/www/shop".into()),
+                thread: thread.map(str::to_string),
+                ..Place::default()
+            },
+            doing: Doing::Writing,
+        };
+        let mut room = Room::new();
+        room.seen("me", at(Who::You, None), now);
+        // A specialist whose conversation stopped, one still going, and one the record is silent about.
+        room.seen("done", at(Who::Assistant, Some("done")), now);
+        room.seen("busy", at(Who::Member("qa".into()), Some("busy")), now);
+        room.seen("unknown", at(Who::Assistant, Some("unknown")), now);
+        assert_eq!(room.working(), 3, "the person is not an agent; three agents are");
+
+        let dropped = room.only_running(|thread| match thread {
+            "done" => Some(false),
+            "busy" => Some(true),
+            _ => None,
+        });
+
+        assert!(dropped, "the stopped conversation's agent was dropped");
+        assert_eq!(room.working(), 2, "the busy one and the unknown one stay");
+        assert!(
+            room.everyone()
+                .iter()
+                .all(|p| p.place.thread.as_deref() != Some("done")),
+            "a finished conversation keeps no agent in the room"
+        );
+        assert!(
+            room.everyone().iter().any(|p| p.who == Who::You),
+            "the person stays"
+        );
+        assert!(!room.only_running(|_| Some(true)), "nothing left to drop");
     }
 
     #[test]

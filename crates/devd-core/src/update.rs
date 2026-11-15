@@ -28,7 +28,7 @@ use crate::{download, util, DevdError, Result};
 /// The key that signs releases, as 64 hex digits. Releases signed by any other
 /// key are refused.
 pub const RELEASE_PUBLIC_KEY: &str =
-    "a2d470f4f555cf179ae4e72c89b8e19c6241371f5b77e5b36d46619bd0562fae";
+    "61617b2bdd1ff12d0bc870212e6744a49f3ca56b13481ea4263bc8a4a8aae126";
 
 /// Where the latest release is described.
 pub const LATEST_URL: &str = "https://api.github.com/repos/ianclemence/devd/releases/latest";

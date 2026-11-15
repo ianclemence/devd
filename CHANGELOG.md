@@ -12,6 +12,32 @@ may change capability identifiers where the design was wrong.
 
 ## [Unreleased]
 
+## [0.36.1] - 2026-11-15 - An update devd can verify, and a status line that stops when the agent does
+
+### Added
+
+- **A release carries the files `devd update` looks for.** The updater downloads one file and puts
+  it in place, so a release now also publishes `devd-v<version>-<target-triple>` — and the same for
+  the window — for Windows, Linux and both Macs, beside the installers people download. Until now
+  the release shipped only installers and zips, so `update check` reported `asset: null` on every
+  version and `apply` could never install anything.
+- **The checksums are signed in CI.** The draft job signs `SHA256SUMS.txt` with the release key held
+  in a repository secret and uploads `SHA256SUMS.txt.sig`; without the secret the release fails
+  rather than shipping unsigned. A release nobody can verify is a release nobody can update to.
+
+### Changed
+
+- **A new release signing key.** The seed for the previous key was lost, so the public key compiled
+  into devd is replaced. This build is the one that trusts it: updating from 0.36.0 needs this
+  version installed by hand once, and every release after it can be installed with `devd update`.
+
+### Fixed
+
+- **The status line stops when the agent does.** "1 agent working" counted a conversation that had
+  streamed something in the last ninety seconds, and nothing told the window that a turn had ended,
+  so a run that paused kept an agent looking busy for a minute and a half. Each beat now asks the
+  record which conversations are still running and drops the ones that are not.
+
 ## [0.36.0] - 2026-11-15 - Thinking that stays off, and a context measured per model
 
 ### Added

@@ -365,7 +365,26 @@ pub fn start(conn: Arc<Connection>, cx: &mut App) {
                 if state.chat_running.replace(false) {
                     state.sync.invalidate("chat");
                 }
-                let changed = state.room.sweep(now) || state.toasts.len() != before || pulsing;
+                // A turn ends by going quiet, so the window is never told that its agent stopped.
+                // Ask the record which conversations are still running and drop the ones that are
+                // not, so the status line stops counting a run that has paused or finished.
+                let running: std::collections::HashMap<String, bool> = state
+                    .sync
+                    .peek(&q::threads())
+                    .map(|snap| {
+                        snap.list("")
+                            .iter()
+                            .filter_map(|t| {
+                                let id = t["id"].as_str()?;
+                                Some((id.to_string(), t["state"] == json!("running")))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let finished = state
+                    .room
+                    .only_running(|thread| running.get(thread).copied());
+                let changed = state.room.sweep(now) || finished || state.toasts.len() != before || pulsing;
                 if changed {
                     cx.refresh_windows();
                 }
