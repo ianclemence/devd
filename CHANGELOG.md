@@ -12,6 +12,8 @@ may change capability identifiers where the design was wrong.
 
 ## [Unreleased]
 
+## [0.34.1] - 2026-11-15 - The live conversation lines
+
 ### Fixed
 
 - **One line per change in a conversation.** A file a step wrote shows once, as its changes line with Undo, not
@@ -1738,6 +1740,8 @@ reading the answer on another screen, if it arrived at all.
 ---
 
 ## [Unreleased]
+
+## [0.34.1] - 2026-11-15 - The live conversation lines
 
 Nothing yet.
 
