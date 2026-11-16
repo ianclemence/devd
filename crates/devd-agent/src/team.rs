@@ -369,6 +369,30 @@ pub fn evidence(events: &[ChatEvent]) -> Vec<Value> {
                         };
                         out.push(json!({ "kind": if is_verify { "verify" } else { "command" }, "capability": cap, "ok": passed, "exit_code": exit, "summary": label }));
                     }
+                    // A capture is what a person saw; a comparison is a measurement. Neither is
+                    // a verification, and recording them as their own kinds is what keeps a
+                    // similarity figure from satisfying a task's `proves: verify`.
+                    "recreate.capture" => out.push(fact(
+                        "capture",
+                        cap,
+                        outcome_ok,
+                        format!(
+                            "{} at {}",
+                            args["screen"].as_str().unwrap_or("a screen"),
+                            args["width"].as_str().unwrap_or("a width")
+                        ),
+                    )),
+                    "recreate.check" => out.push(fact(
+                        "measurement",
+                        cap,
+                        false,
+                        format!(
+                            "{} at {}; {} gap(s) named",
+                            args["screen"].as_str().unwrap_or("a screen"),
+                            args["width"].as_str().unwrap_or("a width"),
+                            args["gaps"].as_array().map(Vec::len).unwrap_or(0)
+                        ),
+                    )),
                     c if c.starts_with("toolchain.")
                         || c.starts_with("services.")
                         || c.starts_with("service.")
@@ -3626,7 +3650,36 @@ impl Team {
             .store
             .pending_approvals_for_run(&run.id)
             .unwrap_or(0);
-        let completion = completion::check(run, tasks, pending as usize);
+        let mut completion = completion::check(run, tasks, pending as usize);
+        // A recreation is judged on its own record as well as the team's verdict: every screen
+        // at three widths, a comparison written down, and the project's own checks passing. A
+        // similarity figure is only ever one of those observations; it cannot set `proven`.
+        // A person's explicit override is still a person's decision; the gate stops a machine
+        // verdict that rests on a similarity, not a person accepting the unfinished list.
+        if !completion.by_hand {
+            match crate::recreate::gate(&self.ctx.paths, &self.ctx.store, &run.id) {
+                Ok(reasons) => completion.reasons.extend(reasons),
+                Err(e) => completion
+                    .reasons
+                    .push(format!("the recreation record could not be read: {e}")),
+            }
+        }
+        // The review fork runs once the work has something to say. It only stages; a person
+        // accepts. Its failure must not change the run's verdict.
+        if let Ok(Some(staged)) =
+            crate::review::after_run(&self.ctx.paths, &self.ctx.store, &run.id, &lessons)
+        {
+            self.event(
+                &run.id,
+                None,
+                "review_proposed",
+                json!({
+                    "memory": staged.memory.len(),
+                    "skill": staged.skill.as_ref().map(|s| s.name.clone()),
+                    "run": staged.run,
+                }),
+            );
+        }
         // An approval is for a revision, not for a branch. If the tree moved
         // after the final check read it, the approval does not cover the new
         // revision.
@@ -4039,6 +4092,64 @@ mod verdict_tests {
             "Verdict: approve"
         ));
         assert!(report_needs_changes(None, "qa", "2 failed, 806 passed"));
+    }
+}
+
+#[cfg(test)]
+mod recreate_evidence_tests {
+    use super::*;
+
+    fn event(id: i64, kind: &str, data: Value) -> ChatEvent {
+        ChatEvent {
+            id,
+            thread_id: "t".into(),
+            kind: kind.into(),
+            data,
+            created_at: "2026-01-01T00:00:00Z".into(),
+        }
+    }
+
+    fn call(id: &str, capability: &str, args: Value) -> Vec<ChatEvent> {
+        vec![
+            event(
+                1,
+                "assistant",
+                json!({ "content": [{ "type": "tool_use", "name": "devd_invoke", "id": id, "input": { "id": capability, "args": args } }] }),
+            ),
+            event(
+                2,
+                "tool_result",
+                json!({
+                    "tool_use_id": id,
+                    "is_error": false,
+                    "content": json!({ "result": { "outcome": { "ok": true, "data": {} } } }).to_string()
+                }),
+            ),
+        ]
+    }
+
+    #[test]
+    fn a_similarity_is_a_measurement_and_never_a_verification() {
+        let mut events = call(
+            "u1",
+            "recreate.capture",
+            json!({ "run": "r", "screen": "home", "width": "phone", "file": "x.png" }),
+        );
+        events.extend(call(
+            "u2",
+            "recreate.check",
+            json!({ "run": "r", "screen": "home", "width": "phone", "similarity": 98.0, "gaps": [] }),
+        ));
+        let evidence = evidence(&events);
+        let capture = evidence.iter().find(|f| f["capability"] == "recreate.capture").unwrap();
+        assert_eq!(capture["kind"], "capture");
+        let check = evidence.iter().find(|f| f["capability"] == "recreate.check").unwrap();
+        assert_eq!(check["kind"], "measurement");
+        assert_eq!(check["ok"], false, "98% alike is not a pass");
+        assert!(
+            !evidence.iter().any(|f| f["kind"] == "verify" && f["ok"] == true),
+            "nothing here proves the rebuild works"
+        );
     }
 }
 

@@ -1,0 +1,22 @@
+{
+  "id": "recreate",
+  "name": "Recreate (craft-anything)",
+  "version": "1.0.0",
+  "description": "Study a program or a site and build an independent version of it, with the craft-anything engine available as a tool server. Clean room by default.",
+  "engines": { "devd": ">=0.36.0" },
+  "roles": ["roles/recreator.md"],
+  "skills": [
+    "skills/clean-room-rules.md",
+    "skills/study-a-target.md",
+    "skills/compare-at-three-widths.md",
+    "skills/ship-what-you-can-prove.md",
+    "skills/recreate-with-craft-anything.md"
+  ],
+  "mcp": [
+    {
+      "name": "craft-anything",
+      "command": "craft-anything-cli",
+      "args": ["mcp"]
+    }
+  ]
+}

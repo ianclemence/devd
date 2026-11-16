@@ -177,6 +177,7 @@ part comes up.
 | [`docs/limitations.md`](docs/limitations.md) | What carries over from other stacks, what is replaced only with approval, and what devd will not do. |
 | [`docs/app.md`](docs/app.md), [`docs/design.md`](docs/design.md), [`docs/tui.md`](docs/tui.md) | The application window and API, the design system and agent-generated content, and the terminal dashboard. |
 | [`docs/mcp.md`](docs/mcp.md) | The MCP surface: the five tools, the agent actor and approvals. |
+| [`docs/acp.md`](docs/acp.md) | The Agent Client Protocol surface for editors and engines driving devd as a builder. |
 | [`docs/agents.md`](docs/agents.md) | The assistant, the team, skills, models and the runs they record. |
 | [`docs/runs.md`](docs/runs.md) | Runs, evidence, approvals, context, events and recovery. |
 | [`docs/autonomy.md`](docs/autonomy.md) | The rules a feature must keep if it lets devd act without being asked. |

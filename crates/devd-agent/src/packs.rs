@@ -333,6 +333,82 @@ pub fn clashes(paths: &Paths, store: &devd_core::Store, loaded: &Loaded) -> Vec<
     out
 }
 
+/// The packs that ship inside this binary.
+///
+/// A release downloads one executable, so a pack that lives only in the checkout is a pack
+/// nobody who installed devd can reach. These files are the same ones in `packs/` — embedded
+/// rather than copied, so there is one source of truth — and installing one writes them to a
+/// scratch folder only long enough to run the same checked install a folder gets.
+pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[(
+    "recreate",
+    &[
+        (MANIFEST, include_str!("../../../packs/recreate/devd-pack.json")),
+        (
+            "roles/recreator.md",
+            include_str!("../../../packs/recreate/roles/recreator.md"),
+        ),
+        (
+            "skills/clean-room-rules.md",
+            include_str!("../../../packs/recreate/skills/clean-room-rules.md"),
+        ),
+        (
+            "skills/study-a-target.md",
+            include_str!("../../../packs/recreate/skills/study-a-target.md"),
+        ),
+        (
+            "skills/compare-at-three-widths.md",
+            include_str!("../../../packs/recreate/skills/compare-at-three-widths.md"),
+        ),
+        (
+            "skills/ship-what-you-can-prove.md",
+            include_str!("../../../packs/recreate/skills/ship-what-you-can-prove.md"),
+        ),
+        (
+            "skills/recreate-with-craft-anything.md",
+            include_str!("../../../packs/recreate/skills/recreate-with-craft-anything.md"),
+        ),
+    ],
+)];
+
+/// The bundled packs, as (id, name, description), read from their own manifests.
+pub fn bundled_list() -> Vec<(String, String, String)> {
+    BUNDLED
+        .iter()
+        .filter_map(|(id, files)| {
+            let text = files.iter().find(|(p, _)| *p == MANIFEST)?.1;
+            let m = parse_manifest(text).ok()?;
+            Some(((*id).to_string(), m.name, m.description))
+        })
+        .collect()
+}
+
+/// Install a pack that ships with this build.
+pub fn install_bundled(paths: &Paths, store: &devd_core::Store, id: &str) -> Result<Record> {
+    let files = BUNDLED
+        .iter()
+        .find(|(p, _)| *p == id)
+        .map(|(_, f)| *f)
+        .ok_or_else(|| {
+            let known = BUNDLED.iter().map(|(p, _)| *p).collect::<Vec<_>>().join(", ");
+            DevdError::not_found(format!("there is no bundled pack `{id}`; this build ships: {known}"))
+        })?;
+    let dir = std::env::temp_dir().join(format!("devd-bundled-pack-{id}-{}", devd_core::util::new_id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let written = (|| -> Result<Record> {
+        for (rel, text) in files {
+            let file = dir.join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
+            if let Some(parent) = file.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&file, text)?;
+        }
+        let loaded = load(&dir)?;
+        install(paths, store, &loaded, &format!("bundled:{id}"))
+    })();
+    let _ = std::fs::remove_dir_all(&dir);
+    written
+}
+
 /// Install a loaded pack: all of it or none of it.
 pub fn install(paths: &Paths, store: &devd_core::Store, loaded: &Loaded, source: &str) -> Result<Record> {
     let clash = clashes(paths, store, loaded);
@@ -626,6 +702,80 @@ List who would misuse it, how, and what stops them.
         let r = install(&paths, &store, &load(v2.path()).unwrap(), "v2").unwrap();
         assert_eq!(r.version, "1.1.0");
         assert_eq!(installed(&paths).len(), 1, "one record per pack");
+    }
+
+    #[test]
+    fn the_bundled_recreate_pack_installs_its_skill_and_engine_and_removes_both() {
+        let (_d, paths) = temp_paths();
+        let store = devd_core::Store::open_in_memory().unwrap();
+        let listed = bundled_list();
+        assert!(
+            listed.iter().any(|(id, _, _)| id == "recreate"),
+            "the build ships the recreate pack: {listed:?}"
+        );
+        let record = install_bundled(&paths, &store, "recreate").unwrap();
+        assert_eq!(record.source, "bundled:recreate");
+        assert_eq!(
+            record.roles,
+            vec!["recreator".to_string()],
+            "the pack carries the role: {record:?}"
+        );
+        for skill in [
+            "clean-room-rules",
+            "study-a-target",
+            "compare-at-three-widths",
+            "ship-what-you-can-prove",
+            "recreate-with-craft-anything",
+        ] {
+            assert!(
+                record.skills.contains(&skill.to_string()),
+                "the pack carries `{skill}`: {record:?}"
+            );
+            assert!(crate::skills::get(&paths, skill).is_ok(), "`{skill}` is installed");
+        }
+        assert!(
+            crate::roles::get("recreator").is_some(),
+            "the role joins the roster as soon as the pack is installed"
+        );
+        assert!(record.mcp.contains(&"craft-anything".to_string()), "{record:?}");
+        // The tool server is a suggestion: saved, disabled, asking, with the reason.
+        let server = store.mcp_server("craft-anything").unwrap().unwrap();
+        assert!(!server.enabled && server.trust == McpTrust::Ask);
+        assert_eq!(server.command.as_deref(), Some("craft-anything-cli"));
+        assert_eq!(server.args, vec!["mcp".to_string()]);
+        let gone = remove(&paths, &store, "recreate").unwrap();
+        assert_eq!(gone.id, "recreate");
+        assert!(store.mcp_server("craft-anything").unwrap().is_none());
+        assert!(crate::skills::get(&paths, "recreate-with-craft-anything").is_err());
+        assert!(
+            crate::roles::get("recreator").is_none(),
+            "removing the pack removes the role it added"
+        );
+    }
+
+    #[test]
+    fn a_bundled_pack_that_does_not_exist_is_named_by_the_list() {
+        let (_d, paths) = temp_paths();
+        let store = devd_core::Store::open_in_memory().unwrap();
+        let err = install_bundled(&paths, &store, "nope").unwrap_err();
+        assert_eq!(err.code(), "not_found");
+        assert!(err.to_string().contains("recreate"), "{err}");
+    }
+
+    #[test]
+    fn every_bundled_pack_loads_cleanly_from_what_is_embedded() {
+        for (id, files) in BUNDLED {
+            let dir = tempfile::tempdir().unwrap();
+            for (rel, text) in *files {
+                let file = dir.path().join(rel);
+                if let Some(parent) = file.parent() {
+                    std::fs::create_dir_all(parent).unwrap();
+                }
+                std::fs::write(file, text).unwrap();
+            }
+            let loaded = load(dir.path()).unwrap_or_else(|e| panic!("bundled pack {id} does not load: {e}"));
+            assert_eq!(loaded.manifest.id, *id, "a bundled pack's manifest agrees with its key");
+        }
     }
 
     #[test]

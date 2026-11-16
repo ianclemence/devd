@@ -127,6 +127,7 @@ pub fn domain_of(capability: &str) -> &'static str {
         "terminal" => "terminal",
         "todo" => "todo",
         "review" => "review",
+        "recreate" => "recreate",
         "stacks" | "stack" => "stacks",
         _ => "site",
     }
@@ -584,6 +585,7 @@ pub fn render(_shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyEleme
         "schedules" => schedules(cx),
         "automations" => automations(cx),
         "skills" => skills(cx),
+        "recreate" => recreate(cx),
         "mcp" => mcp(cx),
         "notes" => notes(cx),
         "new-project" => new_project(cx),
@@ -1557,32 +1559,79 @@ fn automations(cx: &mut Context<Shell>) -> AnyElement {
 
 fn skills(cx: &mut Context<Shell>) -> AnyElement {
     let snap = read(cx, "skills.list");
+    let usage = read(cx, "skills.usage");
     let all = snap.list("");
     let mut rows: Vec<Row> = all
         .iter()
         .map(|s| {
             let name = text(s, "name");
             let own = text(s, "source") != "builtin";
+            let used = usage
+                .list("")
+                .iter()
+                .find(|u| u["name"].as_str() == Some(name.as_str()))
+                .cloned();
+            let uses = used.as_ref().and_then(|u| u["uses"].as_u64()).unwrap_or(0);
+            let pinned = used.as_ref().is_some_and(|u| u["pinned"] == json!(true));
+            let locked = used.as_ref().is_some_and(|u| u["locked"] == json!(true));
+            let archived = text(s, "source") == "archived"
+                || used.as_ref().is_some_and(|u| u["archived"] == json!(true));
+            let mut sub = text(s, "description");
+            sub.push_str(if uses == 0 {
+                " · never read"
+            } else if uses == 1 {
+                " · read once"
+            } else {
+                " · read often"
+            });
+            let mut acts: Vec<Act> = Vec::new();
+            if archived {
+                acts.push(Act::new("Restore", "skills.restore", json!({ "name": name })));
+            } else if own {
+                acts.push(Act::new(
+                    if pinned { "Unpin" } else { "Pin" },
+                    "skills.pin",
+                    json!({ "name": name, "on": !pinned }),
+                ));
+                acts.push(Act::new(
+                    if locked { "Unlock" } else { "Lock" },
+                    "skills.lock",
+                    json!({ "name": name, "on": !locked }),
+                ));
+                if !pinned {
+                    acts.push(
+                        Act::new("Archive", "skills.archive", json!({ "name": name })).ask(
+                            format!("Archive the skill {name}?"),
+                            "It stops being loadable; the file and a snapshot are kept, and Restore brings it back.",
+                            "Archive skill",
+                        ),
+                    );
+                }
+                acts.push(
+                    Act::new("Delete", "skills.delete", json!({ "name": name })).ask(
+                        format!("Delete the skill {name}?"),
+                        "Agents can no longer load it. This cannot be undone. Archiving keeps a copy instead.",
+                        "Delete skill",
+                    ),
+                );
+            }
             Row {
                 title: name.clone(),
                 tag: text(s, "kind"),
-                sub: text(s, "description"),
-                state: Some(if own {
+                sub,
+                state: Some(if archived {
+                    (Tone::Neutral, "archived".to_string())
+                } else if locked {
+                    (Tone::Danger, "locked".to_string())
+                } else if pinned {
+                    (Tone::Ok, "pinned".to_string())
+                } else if own {
                     (Tone::Info, "yours".to_string())
                 } else {
                     (Tone::Neutral, "built in".to_string())
                 }),
-                acts: if own {
-                    vec![
-                        Act::new("Delete", "skills.delete", json!({ "name": name })).ask(
-                            format!("Delete the skill {name}?"),
-                            "Agents can no longer load it. This cannot be undone.",
-                            "Delete skill",
-                        ),
-                    ]
-                } else {
-                    vec![]
-                },
+                acts,
+                side: uses.to_string(),
                 open: Some((
                     Detail::Skill,
                     QueryKey::new("skills.get", json!({ "name": name })),
@@ -1608,16 +1657,42 @@ fn skills(cx: &mut Context<Shell>) -> AnyElement {
     let detail = if snap.is_first_load() {
         "Reading the skills…".to_string()
     } else {
-        format!("{} agents can load, {} of them yours.", all.len(), mine)
+        format!(
+            "{} agents can load, {} of them yours, {} pinned, {} locked.",
+            all.len(),
+            mine,
+            usage.list("").iter().filter(|u| u["pinned"] == json!(true)).count(),
+            usage.list("").iter().filter(|u| u["locked"] == json!(true)).count()
+        )
     };
-    let actions = div().flex().gap(px(8.0)).child(form_button(
-        "skills.install",
-        "Install from GitHub",
-        "plus",
-        FormSpec { title: "Install skills from GitHub", intro: "devd reads the skill files in a repository and saves them as your own. Nothing in a skill is run: it is text agents read.", verb: "Install skills", capability: "skills.install", domain: "skills", fixed: json!({}), fields: vec![Field::text("source", "Repository", "owner/name")], busy: None },
-        ButtonKind::Primary,
-        cx,
-    ));
+    let actions = div()
+        .flex()
+        .gap(px(8.0))
+        .child(form_button(
+            "skills.install",
+            "Install from GitHub",
+            "plus",
+            FormSpec { title: "Install skills from GitHub", intro: "devd reads the skill files in a repository and saves them as your own. Nothing in a skill is run: it is text agents read.", verb: "Install skills", capability: "skills.install", domain: "skills", fixed: json!({}), fields: vec![Field::text("source", "Repository", "owner/name")], busy: None },
+            ButtonKind::Primary,
+            cx,
+        ))
+        .child(form_button(
+            "skills.tidy",
+            "Tidy",
+            "file",
+            FormSpec {
+                title: "Tidy the skill library",
+                intro: "Moves your skills that nobody has read in a while into the curator's archive. A snapshot is written first, pinned and locked skills are kept, and nothing is deleted; Restore brings one back.",
+                verb: "Tidy",
+                capability: "skills.curate_apply",
+                domain: "skills",
+                fixed: json!({}),
+                fields: vec![Field::number("stale_days", "Days without a read", "90")],
+                busy: Some("Tidying the skill library…"),
+            },
+            ButtonKind::Secondary,
+            cx,
+        ));
     let body = vec![
         list_or(
             &snap,
@@ -1630,7 +1705,113 @@ fn skills(cx: &mut Context<Shell>) -> AnyElement {
         )
         .into_any_element(),
     ];
-    frame("skills", detail, actions, &[&snap], body, cx)
+    frame("skills", detail, actions, &[&snap, &usage], body, cx)
+}
+
+/// Recreations: a study, a build and a check, kept as one record.
+///
+/// The page is deliberately the same list as the rest of devd. What is different is what a row
+/// says: the mode, the captures, the gaps, and whether the run is *verified* or only *measured*.
+/// A similarity figure is shown as a number, never as a verdict.
+fn recreate(cx: &mut Context<Shell>) -> AnyElement {
+    let snap = read(cx, "recreate.list");
+    let all = snap.list("");
+    let rows: Vec<Row> = all
+        .iter()
+        .map(|r| {
+            let run = text(r, "run");
+            let target = text(r, "target");
+            let mode = text(r, "mode").replace('_', " ");
+            let captures = r["captures"].as_u64().unwrap_or(0);
+            let checks = r["checks"].as_u64().unwrap_or(0);
+            let gaps = r["gaps"].as_array().map(Vec::len).unwrap_or(0);
+            let missing = r["screens_missing_a_width"].as_array().map(Vec::len).unwrap_or(0);
+            let proven = r["proven"] == json!(true);
+            let ready = r["ready"] == json!(true);
+            let state = if ready {
+                (Tone::Ok, "ready".to_string())
+            } else if proven {
+                (Tone::Info, "verified".to_string())
+            } else if checks > 0 {
+                (Tone::Warn, "measured only".to_string())
+            } else {
+                (Tone::Neutral, "studying".to_string())
+            };
+            let mut sub = format!("run {run} · {captures} capture(s) · {checks} comparison(s) · {gaps} gap(s)");
+            if missing > 0 {
+                sub.push_str(&format!(" · {missing} screen(s) missing a width"));
+            }
+            if let Some(app) = r["app"].as_str().filter(|a| !a.is_empty()) {
+                sub.push_str(&format!(" · {app}"));
+            }
+            Row {
+                title: target,
+                tag: mode,
+                sub,
+                state: Some(state),
+                form: Some(FormSpec {
+                    title: "Allow reading inside the target",
+                    intro: "Deep mode reads the target's code and files. It is the difference between recreating what a user sees and reading somebody's source, so it is a person's decision and the reason is recorded beside the mode.",
+                    verb: "Switch to deep",
+                    capability: "recreate.deep",
+                    domain: "recreate",
+                    fixed: json!({ "run": run }),
+                    fields: vec![Field::text("reason", "Why", "the site is mine and I need its source")],
+                    busy: None,
+                }),
+                form_label: "Deep",
+                open: Some((
+                    Detail::Recreate,
+                    QueryKey::new("recreate.report", json!({ "run": run })),
+                    text(r, "target"),
+                )),
+                ..Row::default()
+            }
+        })
+        .collect();
+    let detail = if snap.is_first_load() {
+        "Reading the recreations…".to_string()
+    } else {
+        let ready = all.iter().filter(|r| r["ready"] == json!(true)).count();
+        format!(
+            "{} studied and rebuilt from what a user can see; {ready} ready to ship.",
+            all.len()
+        )
+    };
+    let actions = div().flex().gap(px(8.0)).child(form_button(
+        "recreate.start",
+        "Start a recreation",
+        "plus",
+        FormSpec {
+            title: "Recreate a program or a site",
+            intro: "Clean room is the default: study what a visitor can see, build an independent version, then compare the two at three widths. Nothing inside the original is read unless a person switches this recreation to Deep.",
+            verb: "Start",
+            capability: "recreate.begin",
+            domain: "recreate",
+            fixed: json!({ "mode": "clean_room" }),
+            fields: vec![
+                Field::text("target", "Target", "https://example.com"),
+                Field::text("right", "Your right to recreate it", "my own copy of an app I pay for"),
+                Field::optional("app", "Where the rebuild lives", "D:/work/rebuild"),
+            ],
+            busy: Some("Starting the recreation…"),
+        },
+        ButtonKind::Primary,
+        cx,
+    ));
+    let body = vec![
+        list_or(
+            &snap,
+            rows,
+            "recreate.row",
+            "runs",
+            "No recreations",
+            "Start one from a site or a program you have the right to rebuild. The record keeps the captures, the comparisons and the checks together.",
+            cx,
+        )
+        .into_any_element(),
+    ];
+    frame("recreate", detail, actions, &[&snap], body, cx)
 }
 
 fn mcp(cx: &mut Context<Shell>) -> AnyElement {
@@ -1717,7 +1898,47 @@ fn mcp(cx: &mut Context<Shell>) -> AnyElement {
 
 fn notes(cx: &mut Context<Shell>) -> AnyElement {
     let snap = read(cx, "memory.list");
-    let rows: Vec<Row> = snap
+    let reviews = read(cx, "review.proposals");
+    let mut rows: Vec<Row> = reviews
+        .list("")
+        .iter()
+        .filter(|r| r["pending"] == json!(true))
+        .map(|r| {
+            let run = text(r, "run");
+            let memory: Vec<String> = r["memory"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+                .unwrap_or_default();
+            let skill = r["skill"]["name"].as_str().unwrap_or_default().to_string();
+            let mut sub = memory.join(" · ");
+            if !skill.is_empty() {
+                if !sub.is_empty() {
+                    sub.push_str(" · ");
+                }
+                sub.push_str(&format!("skill proposal: {skill}"));
+            }
+            Row {
+                title: format!("What run {} taught", ui::leaf(&run)),
+                tag: "review".to_string(),
+                sub,
+                state: Some((Tone::Warn, "waiting for you".to_string())),
+                acts: vec![
+                    Act::new("Accept all", "review.accept", json!({ "run": run, "which": "all" })).ask(
+                        "Accept this review?",
+                        "The memory lines go into the project's memory and the proposed skill is installed. Every later run then knows both. You can still edit or archive the skill.",
+                        "Accept the review",
+                    ),
+                    Act::new("Drop", "review.drop", json!({ "run": run })).ask(
+                        "Drop this review?",
+                        "Nothing is written: the memory and skills it mentioned are untouched.",
+                        "Drop it",
+                    ),
+                ],
+                ..Row::default()
+            }
+        })
+        .collect();
+    let rows_memory: Vec<Row> = snap
         .list("")
         .iter()
         .map(|n| {
@@ -1739,22 +1960,23 @@ fn notes(cx: &mut Context<Shell>) -> AnyElement {
             }
         })
         .collect();
-    let detail = if snap.is_first_load() {
+    rows.extend(rows_memory);
+    let detail = if snap.is_first_load() || reviews.is_first_load() {
         "Reading the notes…".to_string()
     } else if rows.is_empty() {
         "The team has nothing waiting to be remembered.".to_string()
     } else {
         format!(
-            "{} the team would like to remember.",
+            "{} the team would like to remember or install.",
             if rows.len() == 1 {
-                "1 note".to_string()
+                "1 proposal".to_string()
             } else {
-                format!("{} notes", rows.len())
+                format!("{} proposals", rows.len())
             }
         )
     };
     let body = vec![list_or(&snap, rows, "notes.row", "file", "Nothing to review", "When the team learns something worth keeping about a project, it proposes it here and waits for you.", cx).into_any_element()];
-    frame("notes", detail, div(), &[&snap], body, cx)
+    frame("notes", detail, div(), &[&snap, &reviews], body, cx)
 }
 
 // ----------------------------------------------------------------------------------------- projects

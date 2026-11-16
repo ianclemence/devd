@@ -18,6 +18,8 @@ pub enum Area {
     Projects,
     /// Sites, and what serves and protects them.
     Sites,
+    /// Runs, and the recreations made from what a user can see.
+    Runs,
     /// The team, and the work it does on its own.
     Team,
     /// The machine devd runs on.
@@ -32,6 +34,7 @@ impl Area {
         match self {
             Area::Projects => Route::Projects(None),
             Area::Sites => Route::Sites(None),
+            Area::Runs => Route::Runs(None),
             Area::Team => Route::Team,
             Area::Server => Route::Server,
             Area::Settings => Route::Settings,
@@ -43,6 +46,7 @@ impl Area {
         match self {
             Area::Projects => "All projects",
             Area::Sites => "All sites",
+            Area::Runs => "All runs",
             Area::Team => "The team",
             Area::Server => "Overview",
             Area::Settings => "Settings",
@@ -94,6 +98,12 @@ pub const PAGES: &[Page] = &[
         title: "Mail",
         area: Area::Sites,
         summary: "What your sites tried to send, caught here instead of delivered",
+    },
+    Page {
+        id: "recreate",
+        title: "Recreate",
+        area: Area::Runs,
+        summary: "A study, a build and a check, kept as one record; clean room by default",
     },
     Page {
         id: "schedules",

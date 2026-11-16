@@ -248,6 +248,63 @@ pub struct ChatEvent {
     pub created_at: String,
 }
 
+/// The searchable text of one event, bounded so a huge tool result cannot fill the index.
+///
+/// This is deliberately permissive: what a person remembers is usually a word from their own
+/// message, the agent's answer, or the name of the tool that did the work. Those are all here.
+pub fn chat_event_text(kind: &str, data: &serde_json::Value) -> String {
+    fn keep(text: &str) -> String {
+        text.chars().take(8_000).collect()
+    }
+    let mut parts: Vec<String> = Vec::new();
+    match kind {
+        "user" | "notice" | "assistant" => {
+            if let Some(text) = data["text"].as_str() {
+                parts.push(keep(text));
+            }
+            for block in data["content"].as_array().cloned().unwrap_or_default() {
+                match block["type"].as_str().unwrap_or("") {
+                    "text" => {
+                        if let Some(text) = block["text"].as_str() {
+                            parts.push(keep(text));
+                        }
+                    }
+                    "tool_use" => {
+                        let name = block["name"].as_str().unwrap_or("tool");
+                        parts.push(format!(
+                            "{name} {}",
+                            keep(&block["input"].to_string())
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        "tool_result" => {
+            if let Some(text) = data["content"].as_str() {
+                parts.push(keep(text));
+            }
+        }
+        "error" => {
+            if let Some(text) = data["message"].as_str() {
+                parts.push(keep(text));
+            }
+        }
+        _ => {
+            for key in ["text", "message", "summary", "why"] {
+                if let Some(text) = data[key].as_str() {
+                    parts.push(keep(text));
+                }
+            }
+        }
+    }
+    parts
+        .into_iter()
+        .filter(|p| !p.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// A message to the person, from an agent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InboxMessage {
@@ -990,6 +1047,7 @@ impl Store {
         self.with(|c| {
             c.execute("DELETE FROM chat_chapters WHERE thread_id=?1", params![id])?;
             c.execute("DELETE FROM chat_queue WHERE thread_id=?1", params![id])?;
+            c.execute("DELETE FROM chat_search WHERE thread_id=?1", params![id])?;
             c.execute("DELETE FROM chat_events WHERE thread_id=?1", params![id])?;
             c.execute("DELETE FROM agent_requests WHERE thread_id=?1", params![id])?;
             Ok(c.execute("DELETE FROM chat_threads WHERE id=?1", params![id])? > 0)
@@ -1028,11 +1086,149 @@ impl Store {
                 "INSERT INTO chat_events (thread_id,kind,data,created_at) VALUES (?1,?2,?3,?4)",
                 params![thread_id, kind, data.to_string(), util::now()],
             )?;
+            let id = c.last_insert_rowid();
+            // Searchable text is stored beside the event, so a later search never parses
+            // payloads and never has to agree with a schema.
+            c.execute(
+                "INSERT INTO chat_search (thread_id,event_id,kind,body) VALUES (?1,?2,?3,?4)",
+                params![thread_id, id, kind, chat_event_text(kind, data)],
+            )?;
             c.execute(
                 "UPDATE chat_threads SET updated_at=?2 WHERE id=?1",
                 params![thread_id, util::now()],
             )?;
-            Ok(c.last_insert_rowid())
+            Ok(id)
+        })
+    }
+
+    /// The newest event in the log, indexed or not.
+    pub fn chat_event_max_id(&self) -> Result<i64> {
+        self.with(|c| {
+            Ok(c.query_row("SELECT COALESCE(MAX(id),0) FROM chat_events", [], |r| {
+                r.get(0)
+            })?)
+        })
+    }
+
+    /// The newest event already in the search index.
+    pub fn chat_search_tip(&self) -> Result<i64> {
+        self.with(|c| {
+            Ok(c.query_row(
+                "SELECT COALESCE(MAX(event_id),0) FROM chat_search",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+    }
+
+    /// Index the next batch of events older builds wrote before the index existed.
+    ///
+    /// Returns the newest event id indexed and how many were added. The caller repeats until
+    /// the count is zero, so a large history is indexed in bounded steps.
+    pub fn index_chat_batch(&self, after: i64, limit: usize) -> Result<(i64, usize)> {
+        self.with(|c| {
+            let mut st = c.prepare(
+                "SELECT id,thread_id,kind,data FROM chat_events WHERE id>?1 ORDER BY id LIMIT ?2",
+            )?;
+            let rows: Vec<(i64, String, String, String)> = st
+                .query_map(params![after, limit as i64], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            drop(st);
+            let mut tip = after;
+            if rows.is_empty() {
+                return Ok((tip, 0));
+            }
+            let tx = c.unchecked_transaction()?;
+            for (id, thread, kind, raw) in &rows {
+                let data: serde_json::Value =
+                    serde_json::from_str(raw).unwrap_or(serde_json::Value::Null);
+                tx.execute(
+                    "INSERT INTO chat_search (thread_id,event_id,kind,body) VALUES (?1,?2,?3,?4)",
+                    params![thread, id, kind, chat_event_text(kind, &data)],
+                )?;
+                tip = *id;
+            }
+            tx.commit()?;
+            Ok((tip, rows.len()))
+        })
+    }
+
+    /// Full-text search across conversation events, best match first.
+    ///
+    /// `limit + 1` rows are read so the caller can say whether there is more, without a
+    /// second count over a table that can be large.
+    pub fn search_chat_events(
+        &self,
+        query: &str,
+        thread: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<serde_json::Value>> {
+        let Some(expression) = crate::searchindex::match_expression(query) else {
+            return Ok(Vec::new());
+        };
+        self.with(|c| {
+            let take = (limit + 1) as i64;
+            let mut out = Vec::new();
+            let mut push = |row: &rusqlite::Row<'_>| -> rusqlite::Result<()> {
+                let thread_id: String = row.get(0)?;
+                let event_id: i64 = row.get(1)?;
+                let kind: String = row.get(2)?;
+                let snippet: String = row.get(3)?;
+                let rank: f64 = row.get(4)?;
+                let at: String = row.get(5)?;
+                let title: String = row.get(6)?;
+                let project: String = row.get(7)?;
+                out.push(serde_json::json!({
+                    "thread": thread_id,
+                    "event": event_id,
+                    "kind": kind,
+                    "title": title,
+                    "project": project,
+                    "snippet": snippet,
+                    "at": at,
+                    "score": ((-rank) * 1000.0).round() as i64,
+                    "link": format!("devd://assistant/{thread_id}"),
+                }));
+                Ok(())
+            };
+            if let Some(thread) = thread {
+                let mut st = c.prepare(
+                    "SELECT chat_search.thread_id, chat_search.event_id, chat_search.kind,
+                            snippet(chat_search, 3, '[', ']', '…', 14),
+                            bm25(chat_search), e.created_at,
+                            COALESCE(t.title,''), COALESCE(t.project,'')
+                     FROM chat_search
+                     JOIN chat_events e ON e.id = chat_search.event_id
+                     LEFT JOIN chat_threads t ON t.id = chat_search.thread_id
+                     WHERE chat_search MATCH ?1 AND chat_search.thread_id = ?2
+                     ORDER BY bm25(chat_search) LIMIT ?3 OFFSET ?4",
+                )?;
+                let rows =
+                    st.query_map(params![expression, thread, take, offset as i64], |r| {
+                        push(r).map(|_| ())
+                    })?;
+                rows.collect::<std::result::Result<Vec<_>, _>>()?;
+            } else {
+                let mut st = c.prepare(
+                    "SELECT chat_search.thread_id, chat_search.event_id, chat_search.kind,
+                            snippet(chat_search, 3, '[', ']', '…', 14),
+                            bm25(chat_search), e.created_at,
+                            COALESCE(t.title,''), COALESCE(t.project,'')
+                     FROM chat_search
+                     JOIN chat_events e ON e.id = chat_search.event_id
+                     LEFT JOIN chat_threads t ON t.id = chat_search.thread_id
+                     WHERE chat_search MATCH ?1
+                     ORDER BY bm25(chat_search) LIMIT ?2 OFFSET ?3",
+                )?;
+                let rows = st.query_map(params![expression, take, offset as i64], |r| {
+                    push(r).map(|_| ())
+                })?;
+                rows.collect::<std::result::Result<Vec<_>, _>>()?;
+            }
+            Ok(out)
         })
     }
 
@@ -1480,5 +1676,66 @@ mod provider_tests {
         s.upsert_provider(&provider("openai-compatible", "https://generativelanguage.googleapis.com/v1beta")).unwrap();
         let saved = s.get_provider("gemini").unwrap().unwrap();
         assert_eq!(saved.kind, "gemini");
+    }
+}
+
+#[cfg(test)]
+mod chat_search_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn a_word_said_in_a_conversation_finds_the_message_and_its_tool_call() {
+        let s = Store::open_in_memory().unwrap();
+        let t = s.create_thread("Deploy notes", None, None, None).unwrap();
+        s.append_event(&t.id, "user", &json!({ "text": "How do I rollback the release?" })).unwrap();
+        s.append_event(
+            &t.id,
+            "assistant",
+            &json!({ "content": [
+                { "type": "text", "text": "Restore the previous release with the deploy rollback command." },
+                { "type": "tool_use", "name": "devd_invoke", "input": { "id": "project.run", "args": { "task": "deploy" } } }
+            ]}),
+        )
+        .unwrap();
+        s.append_event(&t.id, "tool_result", &json!({ "content": "rollback complete", "tool_use_id": "x" })).unwrap();
+
+        let hits = s.search_chat_events("rollback", None, 10, 0).unwrap();
+        assert!(hits.len() >= 2, "the message and the tool output both match: {hits:?}");
+        assert!(hits.iter().any(|h| h["kind"] == "user"));
+        assert!(hits.iter().any(|h| h["snippet"].as_str().unwrap_or("").contains("[rollback]")));
+        assert_eq!(hits[0]["title"], "Deploy notes");
+        assert_eq!(hits[0]["link"], format!("devd://assistant/{}", t.id));
+
+        // A tool call is searchable by its capability name, because that is how a person
+        // remembers what the agent did.
+        let tools = s.search_chat_events("project.run", None, 10, 0).unwrap();
+        assert!(!tools.is_empty(), "a tool call is part of the conversation");
+
+        let only = s.search_chat_events("rollback", Some(&t.id), 10, 0).unwrap();
+        assert!(!only.is_empty());
+        assert!(s.search_chat_events("rollback", Some("another-thread"), 10, 0).unwrap().is_empty());
+        assert!(s.search_chat_events("!!!", None, 10, 0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn deleting_a_conversation_removes_its_index_rows() {
+        let s = Store::open_in_memory().unwrap();
+        let t = s.create_thread("Temporary", None, None, None).unwrap();
+        s.append_event(&t.id, "user", &json!({ "text": "a searchable sentence" })).unwrap();
+        assert_eq!(s.search_chat_events("searchable", None, 10, 0).unwrap().len(), 1);
+        s.delete_thread(&t.id).unwrap();
+        assert!(s.search_chat_events("searchable", None, 10, 0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn paging_returns_one_extra_row_so_the_caller_knows_there_is_more() {
+        let s = Store::open_in_memory().unwrap();
+        let t = s.create_thread("Paged", None, None, None).unwrap();
+        for i in 0..5 {
+            s.append_event(&t.id, "user", &json!({ "text": format!("repeated word {i}") })).unwrap();
+        }
+        let page = s.search_chat_events("repeated", None, 2, 0).unwrap();
+        assert_eq!(page.len(), 3, "two rows plus the look-ahead");
     }
 }

@@ -123,6 +123,8 @@ pub enum Detail {
     Mail,
     /// One skill's instructions.
     Skill,
+    /// One recreation's record: the four phases, what was measured, and what is proven.
+    Recreate,
 }
 
 /// The dialog on screen.
@@ -672,6 +674,155 @@ fn detail_body(
                         .line_height(px(21.0))
                         .child(ui::markdown::document("modal.skill", &blocks, cx)),
                 )
+                .into_any_element()
+        }
+        Detail::Recreate => {
+            let target = data["target"].as_str().unwrap_or(title).to_string();
+            let mode = data["mode"].as_str().unwrap_or("clean_room").replace('_', " ");
+            let proven = data["proven"] == json!(true);
+            let ready = data["ready"] == json!(true);
+            let captures = data["captures"].as_u64().unwrap_or(0);
+            let checks = data["checks"].as_u64().unwrap_or(0);
+            let screens = data["screens"].as_array().cloned().unwrap_or_default();
+            let missing: Vec<String> = data["screens_missing_a_width"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+                .unwrap_or_default();
+            let gaps: Vec<String> = data["gaps"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+                .unwrap_or_default();
+            let best = data["check_rows"]
+                .as_array()
+                .and_then(|a| a.iter().filter_map(|c| c["similarity"].as_f64()).reduce(f64::max));
+            let verified: Vec<String> = data["verified"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+                .unwrap_or_default();
+            let phase = |title: &'static str, done: bool, body: String| {
+                div()
+                    .flex()
+                    .gap(px(10.0))
+                    .text_size(px(size::TEXT_SM))
+                    .child(
+                        div()
+                            .w(px(16.0))
+                            .flex_none()
+                            .text_color(if done { t.ok } else { t.faint })
+                            .child(if done { "✓" } else { "·" }),
+                    )
+                    .child(
+                        div()
+                            .w(px(58.0))
+                            .flex_none()
+                            .text_color(if done { t.text } else { t.muted })
+                            .child(title),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_color(t.muted)
+                            .child(ui::Clip::new(body)),
+                    )
+            };
+            let body = |label: &'static str, items: Vec<String>| {
+                if items.is_empty() {
+                    return None;
+                }
+                Some(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(3.0))
+                        .text_size(px(size::TEXT_SM))
+                        .child(
+                            div()
+                                .text_color(t.faint)
+                                .text_size(px(size::TEXT_XS))
+                                .child(label),
+                        )
+                        .children(items.into_iter().map(|g| {
+                            div()
+                                .text_color(t.text)
+                                .child(ui::Clip::new(format!("• {g}")))
+                        })),
+                )
+            };
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(10.0))
+                .min_h_0()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .child(div().min_w_0().child(heading(target)))
+                        .child(ui::pill(mode, Tone::Info, cx))
+                        .child(ui::pill(
+                            if ready {
+                                "ready".to_string()
+                            } else if proven {
+                                "verified".to_string()
+                            } else {
+                                "measured only".to_string()
+                            },
+                            if ready {
+                                Tone::Ok
+                            } else if proven {
+                                Tone::Info
+                            } else {
+                                Tone::Warn
+                            },
+                            cx,
+                        )),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(5.0))
+                        .child(phase(
+                            "Study",
+                            captures > 0,
+                            format!(
+                                "{captures} capture(s) across {} screen(s){}",
+                                screens.len(),
+                                if missing.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!("; missing a width: {}", missing.join(", "))
+                                }
+                            ),
+                        ))
+                        .child(phase(
+                            "Build",
+                            data["app"].as_str().is_some_and(|a| !a.is_empty()),
+                            data["app"].as_str().unwrap_or("no rebuild folder recorded yet").to_string(),
+                        ))
+                        .child(phase(
+                            "Check",
+                            checks > 0,
+                            match best {
+                                Some(s) => format!("{checks} comparison(s); closest measured {s:.0}% alike"),
+                                None => "no comparison recorded yet".to_string(),
+                            },
+                        ))
+                        .child(phase(
+                            "Ready",
+                            proven,
+                            if proven {
+                                format!("{} verification(s) passed; a similarity is not one of them", verified.len())
+                            } else {
+                                "not proven: the rebuild's own checks have not passed".to_string()
+                            },
+                        )),
+                )
+                .child(ui::rule(cx))
+                .children(body("What does not match yet", gaps))
+                .children(body("Verifications", verified))
                 .into_any_element()
         }
     }

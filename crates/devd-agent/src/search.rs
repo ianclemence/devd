@@ -1,15 +1,14 @@
 //! Developer search: one query across what a developer actually looks for.
 //!
-//! Nothing here is an index (the full-text index is `search.index` and
-//! `search.indexed`, a separate capability). Each source is read at query time and every
-//! response says which sources were searched, how, and what was cut off, so a
-//! caller never mistakes "no result" for "searched everything and found
-//! nothing".
+//! Most sources are read at query time. The exception is `sessions`: conversation messages and
+//! tool output live in an FTS5 index, built in bounded batches, so a person can search what was
+//! said and not only a conversation's title. Every response says which sources were searched,
+//! how, and what was cut off, so "no result" is never mistaken for "searched everything".
 //!
-//! * projects, conversations, models, tasks and activity come from devd's own
-//!   state and match on names and titles;
+//! * projects, conversations, models, tasks and activity come from devd's own state;
 //! * files are matched by path on a bounded live walk of the project roots;
-//! * content is a literal text search and only runs inside a named project.
+//! * content is a literal text search inside a named project;
+//! * sessions are full-text matches over chat events.
 
 use std::path::{Path, PathBuf};
 
@@ -25,7 +24,19 @@ use crate::fs;
 const FILE_SCAN_CAP: usize = 30_000;
 
 /// Where a query may look.
-pub const SCOPES: &[&str] = &["projects", "files", "content", "conversations", "models", "tasks", "activity"];
+pub const SCOPES: &[&str] = &[
+    "projects",
+    "files",
+    "content",
+    "conversations",
+    "sessions",
+    "models",
+    "tasks",
+    "activity",
+];
+
+/// How many old events one search may add to the full-text index before it answers.
+const INDEX_PER_SEARCH: usize = 20_000;
 
 fn tokens(q: &str) -> Vec<String> {
     q.split_whitespace().map(|t| t.to_lowercase()).collect()
@@ -92,6 +103,21 @@ pub fn query(ctx: &Ctx, query: &str, scopes: &[String], project: Option<&str>, l
             }
         }
         sources.push(json!({ "source": "projects", "searched": true, "how": "names and paths of projects devd knows", "count": n }));
+    }
+
+    if want("sessions") {
+        let found = sessions(ctx, q, None, 20, 0)?;
+        let count = found["results"].as_array().map(Vec::len).unwrap_or(0);
+        if let Some(rows) = found["results"].as_array() {
+            results.extend(rows.iter().cloned());
+        }
+        sources.push(json!({
+            "source": "sessions",
+            "searched": true,
+            "how": "full-text index of conversation messages and tool calls",
+            "count": count,
+            "index_complete": found["index_complete"],
+        }));
     }
 
     if want("files") {
@@ -208,4 +234,120 @@ pub fn query(ctx: &Ctx, query: &str, scopes: &[String], project: Option<&str>, l
     results.sort_by(|a, b| b["score"].as_i64().cmp(&a["score"].as_i64()));
     results.truncate(limit.max(1) * 3);
     Ok(json!({ "query": q, "results": results, "sources": sources }))
+}
+
+/// Search every conversation by what was said in it, not only by its title.
+///
+/// The index is brought up to date in bounded batches, so a long history is searchable without
+/// the first query waiting for all of it. `offset` and `limit` page the results; `has_more` and
+/// `next_offset` say how to read the next page.
+pub fn sessions(
+    ctx: &Ctx,
+    query: &str,
+    thread: Option<&str>,
+    limit: usize,
+    offset: usize,
+) -> Result<Value> {
+    let q = query.trim();
+    let mut tip = ctx.store.chat_search_tip()?;
+    let mut indexed = 0usize;
+    while indexed < INDEX_PER_SEARCH {
+        let (next, added) = ctx.store.index_chat_batch(tip, 500)?;
+        if added == 0 {
+            break;
+        }
+        tip = next;
+        indexed += added;
+        if added < 500 {
+            break;
+        }
+    }
+    let complete = tip >= ctx.store.chat_event_max_id()?;
+    let limit = limit.clamp(1, 100);
+    let mut results = ctx.store.search_chat_events(q, thread, limit, offset)?;
+    let has_more = results.len() > limit;
+    results.truncate(limit);
+    Ok(json!({
+        "query": q,
+        "thread": thread,
+        "results": results,
+        "offset": offset,
+        "limit": limit,
+        "has_more": has_more,
+        "next_offset": if has_more { Some(offset + limit) } else { None },
+        "indexed": indexed,
+        "index_complete": complete,
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use devd_core::capability::{Actor, Surface};
+    use devd_core::config::Settings;
+    use devd_core::events::EventBus;
+    use devd_core::state::Store;
+    use devd_core::Paths;
+
+    fn ctx() -> (tempfile::TempDir, Ctx) {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::rooted(dir.path());
+        paths.ensure().unwrap();
+        let ctx = Ctx {
+            store: Arc::new(Store::open_in_memory().unwrap()),
+            paths: Arc::new(paths),
+            settings: Arc::new(Settings::default()),
+            events: EventBus::new(),
+            actor: Actor::human(Surface::Cli),
+            run: None,
+            dry_run: false,
+        };
+        (dir, ctx)
+    }
+
+    fn conversation(ctx: &Ctx) -> String {
+        let t = ctx.store.create_thread("Deploy notes", None, None, None).unwrap();
+        ctx.store
+            .append_event(&t.id, "user", &json!({ "text": "How do I rollback a release?" }))
+            .unwrap();
+        ctx.store
+            .append_event(
+                &t.id,
+                "assistant",
+                &json!({ "content": [{ "type": "text", "text": "Use the deploy rollback command." }] }),
+            )
+            .unwrap();
+        t.id
+    }
+
+    #[test]
+    fn a_conversations_words_are_searchable_with_pages_and_a_thread_filter() {
+        let (_d, ctx) = ctx();
+        let thread = conversation(&ctx);
+        let found = sessions(&ctx, "rollback", None, 1, 0).unwrap();
+        assert_eq!(found["results"].as_array().unwrap().len(), 1);
+        assert_eq!(found["has_more"], true);
+        assert_eq!(found["next_offset"], 1);
+        assert_eq!(found["results"][0]["title"], "Deploy notes");
+        assert!(found["index_complete"].as_bool().unwrap());
+        let next = sessions(&ctx, "rollback", None, 1, 1).unwrap();
+        assert_eq!(next["results"].as_array().unwrap().len(), 1);
+        assert_eq!(next["has_more"], false);
+
+        let only = sessions(&ctx, "rollback", Some(&thread), 10, 0).unwrap();
+        assert!(!only["results"].as_array().unwrap().is_empty());
+        let elsewhere = sessions(&ctx, "rollback", Some("other"), 10, 0).unwrap();
+        assert!(elsewhere["results"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_general_search_can_include_sessions_without_reading_every_conversation() {
+        let (_d, ctx) = ctx();
+        conversation(&ctx);
+        let found = query(&ctx, "rollback", &["sessions".to_string()], None, 10).unwrap();
+        assert!(found["results"].as_array().unwrap().len() >= 2);
+        assert_eq!(found["sources"][0]["source"], "sessions");
+        assert_eq!(found["sources"][0]["searched"], true);
+    }
 }

@@ -111,13 +111,21 @@ impl Souls {
     }
 
     /// The section a brief carries, or empty.
+    ///
+    /// The budget is shown with it, the way a context meter is: a soul at 1,430 of 1,500 characters is
+    /// one edit away from losing older lines, and saying so turns a silent cap into an instruction
+    /// to distil. A soul that was cut says that too, in [`Souls::read`].
     pub fn section(&self, project: &str, role: &str) -> String {
         let soul = self.read(project, role);
         if soul.is_empty() {
-            String::new()
-        } else {
-            format!("\n# What you have learned in this project (from your own past work)\n{soul}\n")
+            return String::new();
         }
+        let used = soul.chars().count().min(MAX_SOUL);
+        let free = MAX_SOUL.saturating_sub(used);
+        let percent = (used * 100) / MAX_SOUL;
+        format!(
+            "\n# What you have learned in this project (from your own past work)\n{soul}\n\n_{used}/{MAX_SOUL} characters ({percent}%); {free} left before older lines are cut._\n"
+        )
     }
 }
 
@@ -180,6 +188,8 @@ mod tests {
         let sec = s.section("D:/work/shop", "implementer");
         assert!(sec.contains("What you have learned"), "{sec}");
         assert!(sec.contains("Migrations run before tests."), "{sec}");
+        assert!(sec.contains("/1500 characters ("), "the budget is visible: {sec}");
+        assert!(sec.contains("left before older lines are cut"), "{sec}");
     }
 
     #[test]

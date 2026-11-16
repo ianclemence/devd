@@ -257,7 +257,7 @@ fn flow_errors(roles: &[Role]) -> Vec<(String, String)> {
 
 /// The roles in a folder: every `*.md` that parses, and a message for each that
 /// does not. A person's role can add to the team but never replace a built-in one.
-fn load_custom(dir: &Path, taken: &[Role]) -> (Vec<Role>, Vec<String>) {
+fn load_custom(dir: &Path, taken: &[Role], skills_root: Option<&Path>) -> (Vec<Role>, Vec<String>) {
     let mut roles: Vec<Role> = Vec::new();
     let mut errors = Vec::new();
     let Ok(entries) = std::fs::read_dir(dir) else { return (roles, errors) };
@@ -276,7 +276,16 @@ fn load_custom(dir: &Path, taken: &[Role]) -> (Vec<Role>, Vec<String>) {
             Err(e) => errors.push(e),
             Ok(r) if taken.iter().chain(roles.iter()).any(|t| t.id == r.id) => errors.push(format!("roles/{stem}.md: a role named {} already exists", r.id)),
             Ok(r) if r.max_rank > 2 || !r.extra.is_empty() => errors.push(format!("roles/{stem}.md: your own roles may use up to the exec tier and no extra capabilities")),
-            Ok(r) => match r.skills.iter().find(|name| crate::skills::builtin_description(name).is_none()) {
+            Ok(r) => match r.skills.iter().find(|name| {
+                // A pack installs a role and the skills it carries together, so a skill the
+                // person's own library holds is as real as a built-in one.
+                let named = !name.is_empty()
+                    && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+                crate::skills::builtin_description(name).is_none()
+                    && !(named
+                        && skills_root
+                            .is_some_and(|root| root.join(format!("{name}.md")).is_file()))
+            }) {
                 Some(name) => errors.push(format!("roles/{stem}.md: the skill {name} does not exist")),
                 None => roles.push(r),
             },
@@ -302,7 +311,7 @@ fn build() -> Roster {
     let mut errors = Vec::new();
     let dir = CUSTOM_DIR.read().unwrap_or_else(|e| e.into_inner()).clone();
     if let Some(dir) = dir {
-        let (custom, found) = load_custom(&dir, &roles);
+        let (custom, found) = load_custom(&dir, &roles, dir.parent().map(|home| home.join("skills")).as_deref());
         roles.extend(custom);
         errors = found;
     }
@@ -435,7 +444,8 @@ fn write_custom(dir: &Path, id: &str, markdown: &str, roster: &[Role]) -> Result
     std::fs::write(scratch.join(format!("{id}.md")), markdown).map_err(|e| format!("could not check the role: {e}"))?;
     // The roster without this role, so saving it again is a change and not a clash.
     let others: Vec<Role> = roster.iter().filter(|r| r.id != id).copied().collect();
-    let (loaded, errors) = load_custom(&scratch, &others);
+    let skills_root = dir.parent().map(|home| home.join("skills"));
+    let (loaded, errors) = load_custom(&scratch, &others, skills_root.as_deref());
     let _ = std::fs::remove_dir_all(&scratch);
     if let Some(why) = errors.into_iter().next() {
         return Err(why);
@@ -548,12 +558,12 @@ mod tests {
         std::fs::write(d.path().join("planner.md"), good.replace("copywriter", "planner")).unwrap();
         std::fs::write(d.path().join("ghost.md"), good.replace("copywriter", "ghost").replace("plain-speech", "no-such-skill")).unwrap();
         std::fs::write(d.path().join("broken.md"), "no front matter").unwrap();
-        let (roles, errors) = load_custom(d.path(), all());
+        let (roles, errors) = load_custom(d.path(), all(), None);
         assert_eq!(roles.iter().map(|r| r.id).collect::<Vec<_>>(), vec!["copywriter"]);
         assert_eq!(errors.len(), 3, "{errors:?}");
         let admin = good.replace("copywriter", "gatekeeper").replace("tier: read", "tier: admin");
         std::fs::write(d.path().join("gatekeeper.md"), admin).unwrap();
-        let (_, errors) = load_custom(d.path(), all());
+        let (_, errors) = load_custom(d.path(), all(), None);
         assert!(errors.iter().any(|e| e.contains("up to the exec tier")), "{errors:?}");
         assert!(errors.iter().any(|e| e.contains("already exists")));
         assert!(errors.iter().any(|e| e.contains("no-such-skill")));
@@ -579,7 +589,7 @@ mod tests {
         std::fs::write(d.path().join("scribe.md"), role("scribe", "reviewer, nobody")).unwrap();
         std::fs::write(d.path().join("loop.md"), role("loop", "loop")).unwrap();
         std::fs::write(d.path().join("fine.md"), role("fine", "reviewer, qa")).unwrap();
-        let (roles, errors) = load_custom(d.path(), all());
+        let (roles, errors) = load_custom(d.path(), all(), None);
         assert_eq!(roles.iter().map(|r| r.id).collect::<Vec<_>>(), vec!["fine"]);
         assert!(errors.iter().any(|e| e.contains("nobody") && e.contains("not a role")), "{errors:?}");
         assert!(errors.iter().any(|e| e.contains("the role itself")), "{errors:?}");
@@ -605,7 +615,7 @@ mod tests {
         // The team as a start would read it: the built-ins, then what is in the folder.
         let builtin: Vec<Role> = all().iter().filter(|r| is_built_in(r.id)).copied().collect();
         let team = |dir: &Path| -> Vec<Role> {
-            let (own, _) = load_custom(dir, &builtin);
+            let (own, _) = load_custom(dir, &builtin, None);
             builtin.iter().copied().chain(own).collect()
         };
         // A built-in cannot be replaced; a bad tier, skill, hand-off or text is refused with the reason, and nothing is written.

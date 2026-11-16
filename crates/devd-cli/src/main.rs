@@ -14,6 +14,7 @@ use devd_core::config::Settings;
 use devd_core::paths::Paths;
 use devd_core::{DevdError, Result};
 
+mod acp;
 mod aicat;
 mod app;
 mod daemon;
@@ -256,6 +257,16 @@ pub(crate) enum Command {
     },
     /// Open the terminal dashboard.
     Tui,
+    /// Serve the Agent Client Protocol on stdin/stdout, for editors and engines.
+    ///
+    /// A session is an ordinary devd conversation, so an ACP client gets the same tools,
+    /// approvals and audit trail as the window. Clients that speak ACP (Zed, craft-anything)
+    /// can drive devd as their builder.
+    Acp {
+        /// Print what this build supports and exit, without serving.
+        #[arg(long)]
+        check: bool,
+    },
     /// Serve the Model Context Protocol on stdin/stdout, for agents.
     Mcp {
         /// Name reported to the audit trail for the calling client.
@@ -652,6 +663,23 @@ pub(crate) enum SkillsCommand {
         roles: Vec<String>,
         /// File containing the instructions.
         file: String,
+    },
+    /// Turn a page, file, folder or owner/name README into a skill with references.
+    Learn {
+        /// A public https page, a file or folder on this machine, or owner/name.
+        source: String,
+        /// The skill's name. Default: made from the source.
+        #[arg(long)]
+        name: Option<String>,
+        /// One line. Default: made from the source's title.
+        #[arg(long)]
+        description: Option<String>,
+        /// The stage of work: discover (the default), design, build, and so on.
+        #[arg(long)]
+        kind: Option<String>,
+        /// Roles it is for; repeatable, empty means all.
+        #[arg(long)]
+        roles: Vec<String>,
     },
     /// Remove one of your own skills.
     Remove { name: String },
@@ -2190,6 +2218,20 @@ fn run(cli: Cli) -> Result<i32> {
                 vec![Arc::new(move || vec![git_check(git_executable.as_deref())])];
             devd_tui::run(app.registry.clone(), app.ctx(), extra)?;
             Ok(0)
+        }
+        Command::Acp { check } => {
+            if check {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&acp::initialize_result())
+                        .map_err(|e| DevdError::internal(e.to_string()))?
+                );
+                return Ok(0);
+            }
+            // Conversations are driven in this process, so a run a previous process left half
+            // done is recovered before the client can ask about it.
+            app.resume_agents();
+            acp::serve(app)
         }
         Command::Mcp { client, list } => {
             if list {

@@ -45,6 +45,7 @@ pub const BUILTIN: &[(&str, &str)] = &[
     ("keep-it-readable", include_str!("../skills/keep-it-readable.md")),
     ("keep-your-context-lean", include_str!("../skills/keep-your-context-lean.md")),
     ("land-one-unit-at-a-time", include_str!("../skills/land-one-unit-at-a-time.md")),
+    ("learn", include_str!("../skills/learn.md")),
     ("make-it-safe-to-rerun", include_str!("../skills/make-it-safe-to-rerun.md")),
     ("make-the-narrowest-change", include_str!("../skills/make-the-narrowest-change.md")),
     ("ml-experiments", include_str!("../skills/ml-experiments.md")),

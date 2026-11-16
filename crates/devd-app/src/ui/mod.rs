@@ -69,6 +69,7 @@ pub fn screen_icon(route: &Route) -> &'static str {
         Route::Page(id) => match devd_app_core::pages::find(id).map(|p| p.area) {
             Some(devd_app_core::pages::Area::Projects) => "folder",
             Some(devd_app_core::pages::Area::Sites) => "globe",
+            Some(devd_app_core::pages::Area::Runs) => "runs",
             Some(devd_app_core::pages::Area::Team) => "team",
             Some(devd_app_core::pages::Area::Server) => "machine",
             _ => "settings",
