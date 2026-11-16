@@ -521,17 +521,7 @@ fn apply(signal: Signal, cx: &mut App) {
                     };
                     // A team member writes in a conversation of its own: its face is that member's (the
                     // Implementer's "I"), not devd's, and pressing it opens that conversation.
-                    let who = state
-                        .sync
-                        .peek(&q::threads())
-                        .and_then(|snap| {
-                            snap.list("")
-                                .iter()
-                                .find(|t| t["id"].as_str() == Some(thread.as_str()))
-                                .and_then(|t| t["team"]["role"].as_str().map(str::to_string))
-                        })
-                        .map(Who::Member)
-                        .unwrap_or(Who::Assistant);
+                    let who = who_for(state, &thread);
                     state.room.seen(
                         &thread,
                         Presence {
@@ -559,6 +549,36 @@ fn apply(signal: Signal, cx: &mut App) {
                             state.toasts.push(toast);
                         }
                     }
+                    // What the agent is doing next, in the record's own words. A step that asked for a
+                    // decision is stopped until a person answers; a step whose answer carries a tool call
+                    // is running that tool; a tool that just returned means the model is being asked again.
+                    // Saying "working" through all three is what made a paused run look busy.
+                    let doing = match data["kind"].as_str().unwrap_or_default() {
+                        "approval" => Some(Doing::Waiting("approval".into())),
+                        "assistant" => Some(
+                            last_tool_call(&data["content"])
+                                .map(Doing::Calling)
+                                .unwrap_or(Doing::Thinking),
+                        ),
+                        "tool_result" => Some(Doing::Thinking),
+                        _ => None,
+                    };
+                    if data["kind"] == json!("error") {
+                        // It stopped: it is not working and it is not waiting for anything.
+                        state.room.left(&thread);
+                    }
+                    if let Some(doing) = doing {
+                        let who = who_for(state, &thread);
+                        let place = Place {
+                            thread: Some(thread.clone()),
+                            ..Place::default()
+                        };
+                        state.room.seen(
+                            &thread,
+                            Presence { who, place, doing },
+                            Instant::now(),
+                        );
+                    }
                     // The logged event replaces the live text in the same place.
                     state.writing.remove(&thread);
                     state.thinking.remove(&thread);
@@ -567,6 +587,33 @@ fn apply(signal: Signal, cx: &mut App) {
             }
         }
     }
+}
+
+/// The member who owns a conversation, if it belongs to a team, else devd.
+///
+/// A team member writes in a conversation of its own, and its face in the room is that member's.
+fn who_for(state: &Devd, thread: &str) -> Who {
+    state
+        .sync
+        .peek(&q::threads())
+        .and_then(|snap| {
+            snap.list("")
+                .iter()
+                .find(|t| t["id"].as_str() == Some(thread))
+                .and_then(|t| t["team"]["role"].as_str().map(str::to_string))
+        })
+        .map(Who::Member)
+        .unwrap_or(Who::Assistant)
+}
+
+/// The tool an assistant message ended by calling, when it ended with one.
+fn last_tool_call(content: &Value) -> Option<String> {
+    content
+        .as_array()?
+        .iter()
+        .rfind(|b| b["type"] == "tool_use")
+        .and_then(|b| b["name"].as_str())
+        .map(str::to_string)
 }
 
 /// Start a write and, when it is long enough to notice, name it while it runs.

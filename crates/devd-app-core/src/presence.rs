@@ -226,6 +226,17 @@ impl Room {
             .filter(|(p, _)| p.who != Who::You && p.doing.active())
             .count()
     }
+
+    /// How many agents are stopped until a person decides something.
+    ///
+    /// They are present — a face in the room, on the conversation that needs you — but they are not
+    /// working, and saying they are is how a paused run came to look busy.
+    pub fn waiting(&self) -> usize {
+        self.present
+            .values()
+            .filter(|(p, _)| p.who != Who::You && matches!(p.doing, Doing::Waiting(_)))
+            .count()
+    }
 }
 
 /// Whether `dir` is `project` or inside it. A team member works in a worktree
@@ -366,6 +377,7 @@ mod tests {
             Instant::now(),
         );
         assert_eq!(room.working(), 0);
+        assert_eq!(room.waiting(), 1, "the status line can say what it needs");
         assert_eq!(
             room.in_project("d:\\www\\shop\\").len(),
             1,
@@ -373,6 +385,30 @@ mod tests {
         );
         room.left("t1");
         assert!(room.everyone().is_empty());
+    }
+
+    #[test]
+    fn a_busy_agent_and_a_waiting_one_are_counted_apart() {
+        let mut room = Room::new();
+        let now = Instant::now();
+        room.seen("me", at(Who::You, "D:/www/shop", Doing::Viewing), now);
+        room.seen(
+            "busy",
+            at(Who::Member("qa".into()), "D:/www/shop", Doing::Calling("fs.edit".into())),
+            now,
+        );
+        room.seen(
+            "held",
+            at(
+                Who::Assistant,
+                "D:/www/shop",
+                Doing::Waiting("approval".into()),
+            ),
+            now,
+        );
+        assert_eq!(room.working(), 1, "running a tool is working");
+        assert_eq!(room.waiting(), 1, "waiting for a person is not");
+        assert_eq!(room.everyone().len(), 3, "both are still in the room");
     }
 
     #[test]

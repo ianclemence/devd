@@ -12,6 +12,25 @@ may change capability identifiers where the design was wrong.
 
 ## [Unreleased]
 
+## [0.36.2] - 2026-11-16 - What the agent is doing, and what it is waiting for
+
+### Changed
+
+- **The status line tells working and waiting apart.** An agent stopped for your decision is
+  counted as waiting — "1 agent waiting for your approval", with a warning dot — instead of being
+  rolled into "1 agent working". A run that is paused on you now reads as paused.
+- **Presence follows the record through a step.** A step that asked for a decision is *waiting*, a
+  step whose answer carries a tool call is *running that tool*, a tool that has just returned is
+  *thinking*, and a conversation that stopped leaves the room at once. The face in the room and the
+  phrase beside it come from the same event, so the footer and the conversation agree.
+
+### Fixed
+
+- **`devd update` installs this release.** 0.36.1 was the first release the updater could verify;
+  from it, `devd update apply` downloads the command line for this platform, checks it against the
+  signed checksums, runs it, and puts it in place, keeping the previous program as
+  `devd.exe.before-<version>`.
+
 ## [0.36.1] - 2026-11-15 - An update devd can verify, and a status line that stops when the agent does
 
 ### Added
