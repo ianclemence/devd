@@ -23,7 +23,7 @@ may change capability identifiers where the design was wrong.
   person's right to recreate the target and starts in clean room;
   `recreate.deep` is a separate, human-only decision with a reason.
   `recreate.capture`, `recreate.check` and `recreate.report` separate what was
-  seen and measured from what was proven. A recreation cannot finish without all
+  seen and measured from what was proven. A recreation cannot finish without
   every screen at all three widths, a written comparison, and the project's own
   checks passing: a similarity is `measurement` evidence and never satisfies
   `verify`.
