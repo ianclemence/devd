@@ -1177,6 +1177,7 @@ impl Shell {
             None => (Tone::Neutral, "Checking the machine…".to_string()),
         };
         let working = state.room.working();
+        let waiting = state.room.waiting();
         let pending = state.sync.pending_mutations();
         let mut strip = div()
             .h(px(size::STATUS))
@@ -1209,6 +1210,21 @@ impl Shell {
                     .child(format!(
                         "{working} agent{} working",
                         if working == 1 { "" } else { "s" }
+                    )),
+            );
+        }
+        // Stopped, not busy: an agent held for a decision is named for what it needs, so a run that
+        // is paused reads as paused and the person knows the next move is theirs.
+        if waiting > 0 {
+            strip = strip.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(ui::dot(Tone::Warn, cx))
+                    .child(format!(
+                        "{waiting} agent{} waiting for your approval",
+                        if waiting == 1 { "" } else { "s" }
                     )),
             );
         }
