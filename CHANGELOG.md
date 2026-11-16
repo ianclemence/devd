@@ -10,7 +10,43 @@ may change capability identifiers where the design was wrong.
 
 ---
 
-## [Unreleased]
+## [0.37.0] - 2026-11-16 - Recreation, ACP, conversation search and learning
+
+### Added
+
+- **The `recreate` pack ships inside the build.** `packs.install` with
+  `builtin: "recreate"` (listed by `packs.bundled`) installs the Recreator role,
+  its four skills, the craft-anything skill and a disabled craft-anything tool
+  server. A role may now carry a skill from the person's own library, so a pack
+  can bring both at once. Installation and removal are exact.
+- **A recreation is a record with a gate.** `recreate.begin` records the
+  person's right to recreate the target and starts in clean room;
+  `recreate.deep` is a separate, human-only decision with a reason.
+  `recreate.capture`, `recreate.check` and `recreate.report` separate what was
+  seen and measured from what was proven. A recreation cannot finish without all
+  every screen at all three widths, a written comparison, and the project's own
+  checks passing: a similarity is `measurement` evidence and never satisfies
+  `verify`.
+- **A Recreate page and run-page card.** Both show the four phases, captures,
+  gaps and the measured/proven distinction.
+- **Review forks only propose.** `review.fork` stages at most two memory lines
+  and one skill patch; `review.accept` (human only) and `review.drop` decide.
+- **A skills curator.** `skills.usage`, `skills.pin`, `skills.lock`,
+  `skills.archive`/`skills.restore`, `skills.curate`/`skills.curate_apply` and
+  `skills.ledger`: usage, snapshots and a dry run before anything moves.
+- **`devd acp` exposes devd as an Agent Client Protocol builder.**
+  `initialize`, `session/new`, `session/prompt`, `session/request_permission`
+  and `session/cancel`. A session is an ordinary devd conversation, so every
+  call keeps the same capabilities, approvals and audit chain. See
+  `docs/acp.md`.
+- **Full conversation search.** `search.sessions` and the `sessions` scope of
+  `search.query` search an FTS5 index of messages, replies and tool output,
+  paged with `offset` and `next_offset`. The index is built in bounded batches
+  and kept current as conversations happen.
+- **`/learn <source>`.** `skills.learn` turns a public page, a local file or
+  folder, or an `owner/name` README into a skill with its material kept under
+  `references/`. The built-in `learn` skill makes it available as `/learn` in
+  the composer, and `devd skills learn` does the same from the terminal.
 
 ## [0.36.2] - 2026-11-16 - What the agent is doing, and what it is waiting for
 

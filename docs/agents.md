@@ -28,7 +28,9 @@ The structure follows Anthropic's published guidance on building agents
 
 devd does not launch other coding agents. Its own agents, the assistant and the
 team, run through the providers you configure, and an outside agent that speaks
-MCP can still drive devd through the same capabilities and permission model.
+MCP can drive devd through the same capabilities and permission model. devd also
+speaks the other direction: `devd acp` exposes it as an Agent Client Protocol
+builder with the same approvals and audit chain. See [`acp.md`](acp.md).
 
 ## One run model
 
@@ -340,10 +342,15 @@ checked the same way:
 * **By capability.** `roles.save` and `roles.delete` (human only, because a role
   decides what an agent may do). `team.flow` shows where the new member sits.
 * **As a file**, in the folder above.
+* **From a pack.** `packs.install` (human only) adds the roles, skills and tool
+  servers a pack names, all or nothing. The bundled `recreate` pack adds the
+  Recreator, its four skills and the craft-anything tool server (disabled);
+  `packs.remove` takes exactly those back.
 
-A role of your own may use up to the exec tier, may not name extra capabilities,
-cannot take a built-in's name, may only carry skills that exist, and may hand work
-only to roles that exist. One that does not pass is refused with the reason and
+A role of your own may use up to the exec tier, must not name extra capabilities,
+cannot take a built-in's name, may carry only skills that exist (built in or in
+your own library, including one a pack installed), and may hand work only to
+roles that exist. One that does not pass is refused with the reason and
 nothing is written (or, for a file, reported by `team.roles` while the rest of
 the team is unaffected). It joins the team **at once**, with no restart: the
 roster is read again after every save or removal. A role cannot be removed while
@@ -615,6 +622,10 @@ full text, and the index with one line per skill. Only names and descriptions go
 into the prompt; the body is read on demand. Add your own in
 `<devd home>/skills/*.md` (`devd skills add`); they can add to the built-in set
 but never replace a built-in skill, and only a person can save or delete them.
+`/learn <source>` (`skills.learn`, or `devd skills learn`) turns a public page, a
+local file or folder, or an `owner/name` README into a skill with its material
+kept under `references/`. `/learn` is itself a built-in skill, so it is in the
+composer's `/` menu.
 
 A test checks the wiring rather than trusting it: every file in `skills/` is
 embedded in the binary, is named after itself, belongs to a known stage, names
@@ -624,8 +635,9 @@ refers only to skills and capability groups that exist.
 ## Tools agents have beyond the core set
 
 `search.query` (projects, files by path, literal text in a project, conversations,
-models, tasks, activity — each response says what was searched and whether it
-was cut short), `docs.fetch` (public https pages only; private, loopback and
+full conversation text as `sessions`, models, tasks, activity — each response says
+what was searched and whether it was cut short), `search.sessions` on its own
+(best match first, paged with `offset`/`next_offset`), `docs.fetch` (public https pages only; private, loopback and
 metadata addresses refused and re-checked across redirects), `web.open` (the
 same fetch, returning the page's title, headings, links and form fields as well
 as its text, for a page an agent has to act on), `skills.*`,

@@ -246,6 +246,18 @@ fn list(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
         );
     }
 
+    // Recreations sit beside the runs they produce: same record, same evidence, one click.
+    tabs = tabs
+        .child(div().flex_1())
+        .child(
+            Button::new("runs.recreate", "Recreate")
+                .icon("plus")
+                .kind(ButtonKind::Ghost)
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.go(Route::Page("recreate".to_string()), cx)
+                })),
+        );
+
     let mut column = div().flex().flex_col().gap(px(1.0)).p(px(8.0));
     if let Some(shown) = (snap.is_first_load()).then(|| {
         div()
@@ -479,6 +491,9 @@ fn run_page(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElement 
     if let Some(line) = attended {
         column = column.child(line);
     }
+    if let Some(card) = recreate_card(id, cx) {
+        column = column.child(card);
+    }
     if over(&state) {
         if let Some(result) = result(&run, &tasks, cx) {
             column = column.child(result);
@@ -526,6 +541,95 @@ fn run_page(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElement 
         row = row.child(agent_panel(id, task, &data, cx));
     }
     row.into_any_element()
+}
+
+/// The recreation this run belongs to, when it is one: the four phases, what was measured and
+/// what is proven. A run that is not a recreation draws nothing.
+fn recreate_card(id: &str, cx: &mut Context<Shell>) -> Option<AnyElement> {
+    let snap = devd(cx)
+        .sync
+        .watch(&QueryKey::new("recreate.list", json!({})));
+    let record = snap
+        .list("")
+        .iter()
+        .find(|r| r["run"].as_str() == Some(id))?
+        .clone();
+    let t = theme(cx).clone();
+    let target = record["target"].as_str().unwrap_or("a target").to_string();
+    let mode = record["mode"].as_str().unwrap_or("clean_room").replace('_', " ");
+    let proven = record["proven"] == json!(true);
+    let ready = record["ready"] == json!(true);
+    let captures = record["captures"].as_u64().unwrap_or(0);
+    let checks = record["checks"].as_u64().unwrap_or(0);
+    let missing: Vec<String> = record["screens_missing_a_width"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+        .unwrap_or_default();
+    let gaps: Vec<String> = record["gaps"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+        .unwrap_or_default();
+    let mut body = div().flex().flex_col().gap(px(8.0)).child(
+        div()
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_size(px(size::TEXT))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(t.text)
+                    .child(format!("{target} · {mode}")),
+            )
+            .child(ui::pill(
+                if ready {
+                    "ready".to_string()
+                } else if proven {
+                    "verified".to_string()
+                } else {
+                    "measured only".to_string()
+                },
+                if ready {
+                    Tone::Ok
+                } else if proven {
+                    Tone::Info
+                } else {
+                    Tone::Warn
+                },
+                cx,
+            )),
+    );
+    body = body.child(
+        div()
+            .text_size(px(size::TEXT_SM))
+            .text_color(t.muted)
+            .child(format!(
+                "{captures} capture(s) · {checks} comparison(s){}",
+                if missing.is_empty() {
+                    String::new()
+                } else {
+                    format!(" · missing a width: {}", missing.join(", "))
+                }
+            )),
+    );
+    if !gaps.is_empty() {
+        body = body.child(
+            div()
+                .text_size(px(size::TEXT_SM))
+                .text_color(t.muted)
+                .child(format!("Not matching yet: {}", gaps.iter().take(5).cloned().collect::<Vec<_>>().join("; "))),
+        );
+    }
+    body = body.child(
+        Button::new("run.recreate.open", "Open recreation")
+            .kind(ButtonKind::Secondary)
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.go(Route::Page("recreate".to_string()), cx)
+            })),
+    );
+    Some(section("RECREATION", None, body.into_any_element(), cx))
 }
 
 /// A labelled part of the page.

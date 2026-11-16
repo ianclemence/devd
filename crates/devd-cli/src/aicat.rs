@@ -409,6 +409,10 @@ pub fn skills(app: &App, cmd: SkillsCommand) -> Result<()> {
             let body = std::fs::read_to_string(&file).map_err(|e| DevdError::invalid(format!("cannot read {file}: {e}")))?;
             app.invoke("skills.save", json!({ "name": name, "description": description, "kind": kind, "roles": roles, "body": body }))
         }
+        SkillsCommand::Learn { source, name, description, kind, roles } => app.invoke(
+            "skills.learn",
+            json!({ "source": source, "name": name, "description": description, "kind": kind, "roles": roles }),
+        ),
         SkillsCommand::Remove { name } => app.invoke("skills.delete", json!({ "name": name })),
     }
 }

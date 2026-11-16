@@ -299,7 +299,8 @@ struct VerifyProvider {
 struct SearchArgs {
     /// What to look for. Every word must match.
     query: String,
-    /// Where to look: projects, files, content, conversations, models, tasks, activity. Default: all but content and activity.
+    /// Where to look: projects, files, content, conversations, sessions, models, tasks, activity.
+    /// Default: all but content and activity.
     #[serde(default)]
     scopes: Option<Vec<String>>,
     /// Absolute project directory; limits files and is required for content.
@@ -308,6 +309,41 @@ struct SearchArgs {
     /// Results per source (default 20).
     #[serde(default)]
     limit: Option<usize>,
+}
+
+/// Learn a skill from a source.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct SkillLearn {
+    /// A public https page, a local file or folder, or `owner/name` for a repository README.
+    source: String,
+    /// The skill's name. Default: made from the source.
+    #[serde(default)]
+    name: Option<String>,
+    /// One line. Default: made from the source's title.
+    #[serde(default)]
+    description: Option<String>,
+    /// The stage of work. Default `discover`.
+    #[serde(default)]
+    kind: Option<String>,
+    /// Roles it is for; empty means all.
+    #[serde(default)]
+    roles: Vec<String>,
+}
+
+/// Search inside conversations.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct SessionSearchArgs {
+    /// What was said. Every word must match.
+    query: String,
+    /// Only one conversation, by id.
+    #[serde(default)]
+    thread: Option<String>,
+    /// Results per page (default 20, at most 100).
+    #[serde(default)]
+    limit: Option<usize>,
+    /// Where to start, for the next page.
+    #[serde(default)]
+    offset: Option<usize>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -499,7 +535,84 @@ struct FlagSet {
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct PackSource {
     /// A folder on this machine, or a GitHub repository: `owner/name`, or `owner/name/path`.
+    /// Leave empty when naming a bundled pack.
+    #[serde(default)]
     source: String,
+    /// A pack that ships inside devd itself. `packs.bundled` lists them. Give this or `source`,
+    /// not both.
+    #[serde(default)]
+    builtin: Option<String>,
+}
+
+/// Start a recreation.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct RecreateBegin {
+    /// The address of the site, or the name of the program, being recreated.
+    target: String,
+    /// `clean_room` (the default). Deep is not reachable from here.
+    #[serde(default)]
+    mode: Option<String>,
+    /// The person's own statement that they may recreate this.
+    right: String,
+    /// Where the rebuild will live, when it is known.
+    #[serde(default)]
+    app: Option<String>,
+    /// A team run this recreation belongs to. Give it and the recreation is judged as part of
+    /// that run's completion, instead of starting a record no run reads.
+    #[serde(default)]
+    run: Option<String>,
+}
+
+/// Switch a recreation to deep.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct RecreateDeep {
+    /// The run to switch.
+    run: String,
+    /// Why the target's code has to be read. Recorded beside the mode.
+    reason: String,
+}
+
+/// Record a capture.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct RecreateCapture {
+    /// The run this belongs to.
+    run: String,
+    /// The screen's name, as a person would say it.
+    screen: String,
+    /// `phone`, `tablet`, `desktop`, or a pixel count between 240 and 7680.
+    width: String,
+    /// The picture already on disk.
+    file: String,
+    /// What it shows, in a sentence.
+    #[serde(default)]
+    note: Option<String>,
+}
+
+/// Record a comparison.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct RecreateCheck {
+    /// The run this belongs to.
+    run: String,
+    /// The screen compared.
+    screen: String,
+    /// The width compared.
+    width: String,
+    /// How alike it looked, 0 to 100. A measurement, not a pass.
+    #[serde(default)]
+    similarity: Option<f64>,
+    /// What does not match yet, most noticeable first.
+    #[serde(default)]
+    gaps: Vec<String>,
+    /// A report file already on disk.
+    #[serde(default)]
+    report: Option<String>,
+}
+
+/// A recreation, by run.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct RecreateRun {
+    /// The run id.
+    run: String,
 }
 
 /// A pack by id.
@@ -507,6 +620,81 @@ struct PackSource {
 struct PackId {
     /// The pack's id, as `packs.list` shows it.
     id: String,
+}
+
+/// A skill the curator is asked about.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct SkillNameArg {
+    /// The skill.
+    name: String,
+}
+
+/// A skill flag to turn on or off.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct SkillFlag {
+    /// The skill.
+    name: String,
+    /// `false` clears it. `true` (the default) sets it.
+    #[serde(default)]
+    on: Option<bool>,
+}
+
+/// The curator's plan, or the apply step.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct CurateArgs {
+    /// A skill nobody read for this many days is stale. Defaults to 90.
+    #[serde(default)]
+    stale_days: Option<i64>,
+}
+
+/// The ledger.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct LedgerArgs {
+    /// How many of the newest lines. Defaults to 100.
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+/// A skill patch a review proposes.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct ReviewSkill {
+    /// Lowercase letters, digits and hyphens.
+    name: String,
+    /// One line.
+    description: String,
+    /// The stage of work.
+    kind: String,
+    /// Roles it is for; empty means all.
+    #[serde(default)]
+    roles: Vec<String>,
+    /// The instructions.
+    body: String,
+    /// Why the run suggested it.
+    #[serde(default)]
+    reason: String,
+}
+
+/// What a review fork stages: 0-2 memory lines and at most one skill patch.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct ReviewStage {
+    /// The run it belongs to.
+    run: String,
+    /// Facts for the project's memory. At most two.
+    #[serde(default)]
+    memory: Vec<String>,
+    /// One skill patch.
+    #[serde(default)]
+    skill: Option<ReviewSkill>,
+}
+
+/// One staged review.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct ReviewRun {
+    /// The run the review belongs to.
+    run: String,
+    /// `all` (the default), `memory`, `skill`, or a proposed skill's name. Accept only.
+    #[serde(default)]
+    which: Option<String>,
 }
 
 /// Import skills from another agent on this machine.
@@ -1484,7 +1672,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
     // Themes from files: check, save and wear them.
     crate::caps_theme::register(reg)?;
     reg.define::<SearchArgs>("search.query", "Search projects, files, text, conversations, models, tasks and activity")
-    .description("Searches what devd can see: project names, file paths (walked live, not indexed), literal text inside a project, conversations, the model catalogue, background tasks and the audit trail. Each response lists which sources were searched, how, and whether the search was cut short, so an empty result is never mistaken for a complete search.")
+    .description("Searches what devd can see: project names, file paths (walked live, not indexed), literal text inside a project, conversation titles and full conversation text (`sessions`), the model catalogue, background tasks and the audit trail. Each response lists which sources were searched, how, and whether the search was cut short, so an empty result is never mistaken for a complete search.")
     .tier(Tier::Read)
     .effect(Effect::Read)
     .agent_safe()
@@ -1495,6 +1683,23 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
         |ctx, a| {
             let v = search::query(ctx, &a.query, a.scopes.as_deref().unwrap_or(&[]), a.project.as_deref(), a.limit.unwrap_or(20).clamp(1, 100))?;
             Ok(Outcome::with_data(format!("{} result(s)", v["results"].as_array().map(|r| r.len()).unwrap_or(0)), v))
+        },
+    )?;
+
+    reg.define::<SessionSearchArgs>("search.sessions", "Search inside conversations")
+    .description("Full-text search over what was said in conversations: the person's messages, the agent's replies, the tools it called and their output. Results are best match first, with the conversation title, a snippet around each match and a link. Page with `offset` and `next_offset`; `index_complete` says whether the whole history has been indexed yet. Use `thread` to search one conversation.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, a| simple("search.sessions", format!("search conversations for `{}`", a.query)),
+        |ctx, a| {
+            let v = search::sessions(ctx, &a.query, a.thread.as_deref(), a.limit.unwrap_or(20), a.offset.unwrap_or(0))?;
+            let n = v["results"].as_array().map(|r| r.len()).unwrap_or(0);
+            let more = if v["has_more"] == json!(true) { format!("; next page at {}", v["next_offset"]) } else { String::new() };
+            Ok(Outcome::with_data(format!("{n} match(es){more}"), v))
         },
     )?;
 
@@ -2479,6 +2684,8 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                 return Ok(Outcome::with_data(format!("{} / {file}", a.name), json!({ "name": a.name, "file": file, "content": text })));
             }
             let s = skills::get(&ctx.paths, &a.name)?;
+            // Usage is what makes "is this skill used?" an answer rather than a feeling.
+            crate::curator::note_use(&ctx.paths, &s.name);
             Ok(Outcome::with_data(s.description.clone(), serde_json::to_value(&s)?))
         },
     )?;
@@ -2490,7 +2697,40 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
     .dry_run()
     .handlers(
         |_, a| simple("skills.save", format!("save skill {}", a.name)),
-        |ctx, a| { skills::save(&ctx.paths, &a.name, &a.description, &a.kind, &a.roles, &a.body)?; Ok(Outcome::ok(format!("Saved the skill {}", a.name))) },
+        |ctx, a| {
+            crate::curator::ensure_editable(&ctx.paths, &a.name)?;
+            skills::save(&ctx.paths, &a.name, &a.description, &a.kind, &a.roles, &a.body)?;
+            crate::curator::note_event(&ctx.paths, &a.name, "saved", "by a person");
+            Ok(Outcome::ok(format!("Saved the skill {}", a.name)))
+        },
+    )?;
+    reg.define::<SkillLearn>("skills.learn", "Turn a source into a skill with references")
+    .description("Learns one skill from a source a person named: a public https page, a local file or folder, or `owner/name` for a repository's README. The skill gets a short deterministic body and keeps the material under `references/`, read on demand with `skills.get` and `file`. It never executes the source and never replaces a built-in or an existing skill; a page is data, not instructions.")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .agent_safe()
+    .dry_run()
+    .handlers(
+        |_, a| simple("skills.learn", format!("learn a skill from {}", a.source)),
+        |ctx, a| {
+            let learned = crate::skills_learn::learn(
+                &ctx.paths,
+                &a.source,
+                a.name.as_deref(),
+                a.description.as_deref(),
+                a.kind.as_deref(),
+                &a.roles,
+            )?;
+            crate::curator::note_event(&ctx.paths, &learned.skill.name, "learned", &a.source);
+            Ok(Outcome::with_data(
+                format!("Learned the skill {} with {} reference page(s)", learned.skill.name, learned.files.len()),
+                json!({
+                    "skill": learned.skill,
+                    "files": learned.files,
+                    "sources": learned.sources,
+                }),
+            ))
+        },
     )?;
     reg.define::<SkillName>("skills.delete", "Delete your own skill")
         .description("Removes a skill you added. Built-in skills cannot be deleted. Human only.")
@@ -2501,10 +2741,136 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
         .handlers(
             |_, a| simple("skills.delete", format!("delete skill {}", a.name)),
             |ctx, a| {
+                crate::curator::ensure_editable(&ctx.paths, &a.name)?;
                 skills::delete(&ctx.paths, &a.name)?;
+                crate::curator::note_event(&ctx.paths, &a.name, "deleted", "by a person");
                 Ok(Outcome::ok(format!("Deleted the skill {}", a.name)))
             },
         )?;
+    // ------------------------------------------------------------ skill curator
+    reg.define::<NoArgs>("skills.usage", "How often each skill was read, and when")
+    .description("Every skill with its source, how many times `skills.get` read it, when it was last read, how many days it has been idle, and whether a person pinned, locked or archived it. Built-ins are listed; the curator never archives them.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, _| simple("skills.usage", "read skill usage"),
+        |ctx, _| {
+            let rows = crate::curator::usage_rows(&ctx.paths);
+            Ok(Outcome::with_data(format!("{} skill(s) with usage", rows.len()), serde_json::to_value(&rows)?))
+        },
+    )?;
+    reg.define::<NoArgs>("skills.curator", "The skill library's health in one line")
+    .description("Counts a person can act on: how many skills exist, how many are theirs, pinned, locked, archived, stale or never read. The same numbers the curate plan is built from.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, _| simple("skills.curator", "summarise the skill library"),
+        |ctx, _| {
+            let v = crate::curator::summary(&ctx.paths);
+            Ok(Outcome::with_data(format!("{} skill(s); {} stale", v["skills"], v["stale"]), v))
+        },
+    )?;
+    reg.define::<CurateArgs>("skills.curate", "Plan what the skill curator would tidy")
+    .description("Writes nothing. Names the skills that are stale (never read, or not read for `stale_days`, default 90) and the ones whose text is a near-duplicate of another, with why a pinned or locked one is kept. Apply the plan with skills.curate_apply, which only moves stale skills to the archive and keeps a snapshot.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, _| simple("skills.curate", "plan what the curator would tidy"),
+        |ctx, a| {
+            let days = a.stale_days.unwrap_or(crate::curator::STALE_DAYS).clamp(1, 3650);
+            let plan = crate::curator::curate(&ctx.paths, days);
+            Ok(Outcome::with_data(format!("{} skill(s) the curator would look at", plan.len()), json!({ "stale_days": days, "findings": plan, "apply_with": "skills.curate_apply" })))
+        },
+    )?;
+    reg.define::<CurateArgs>("skills.curate_apply", "Archive the stale skills the curator named")
+    .description("A snapshot of each skill is written first, then the stale ones that are neither pinned nor locked are moved into the curator's archive; nothing is deleted, and skills.restore puts one back. Human only, because it changes which instructions agents can load.")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .human_only()
+    .dry_run()
+    .handlers(
+        |_, a| Ok(Plan::new("skills.curate_apply", format!("archive the skills stale for {} day(s)", a.stale_days.unwrap_or(crate::curator::STALE_DAYS))).destructive(false)),
+        |ctx, a| {
+            let days = a.stale_days.unwrap_or(crate::curator::STALE_DAYS).clamp(1, 3650);
+            let archived = crate::curator::curate_apply(&ctx.paths, days)?;
+            Ok(Outcome::with_data(format!("{} skill(s) archived; nothing was deleted", archived.len()), json!({ "stale_days": days, "archived": archived })))
+        },
+    )?;
+    reg.define::<SkillFlag>("skills.pin", "Keep a skill out of the curator's archive")
+    .description("Pins a skill: it is never archived as stale, whatever its usage. Human only, because it changes the library's lifecycle.")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .human_only()
+    .dry_run()
+    .handlers(
+        |_, a| simple("skills.pin", format!("pin the skill {}", a.name)),
+        |ctx, a| {
+            let flags = crate::curator::pin(&ctx.paths, &a.name, a.on.unwrap_or(true))?;
+            Ok(Outcome::with_data(format!("{} the skill {}", if a.on.unwrap_or(true) { "Pinned" } else { "Unpinned" }, a.name), serde_json::to_value(&flags)?))
+        },
+    )?;
+    reg.define::<SkillFlag>("skills.lock", "Stop a skill from being edited or deleted")
+    .description("Locks a skill: skills.save, skills.delete, the installer and the curator all refuse to touch it until it is unlocked. Human only.")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .human_only()
+    .dry_run()
+    .handlers(
+        |_, a| simple("skills.lock", format!("lock the skill {}", a.name)),
+        |ctx, a| {
+            let flags = crate::curator::lock(&ctx.paths, &a.name, a.on.unwrap_or(true))?;
+            Ok(Outcome::with_data(format!("{} the skill {}", if a.on.unwrap_or(true) { "Locked" } else { "Unlocked" }, a.name), serde_json::to_value(&flags)?))
+        },
+    )?;
+    reg.define::<SkillNameArg>("skills.archive", "Move a skill out of the library, keeping it")
+    .description("Snapshots a user skill and moves its file into the curator's archive. It stops being loadable, nothing is deleted, and skills.restore brings it back. A built-in, a pinned or a locked skill is refused. Human only.")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .human_only()
+    .dry_run()
+    .handlers(
+        |_, a| simple("skills.archive", format!("archive the skill {}", a.name)),
+        |ctx, a| {
+            let flags = crate::curator::archive(&ctx.paths, &a.name)?;
+            Ok(Outcome::with_data(format!("Archived the skill {}; skills.restore brings it back", a.name), serde_json::to_value(&flags)?))
+        },
+    )?;
+    reg.define::<SkillNameArg>("skills.restore", "Put an archived skill back")
+    .description("Moves an archived skill and its reference pages back into the library. Refused when a skill of that name already exists, so a restore never overwrites a newer one. Human only.")
+    .tier(Tier::Write)
+    .effect(Effect::Write)
+    .human_only()
+    .dry_run()
+    .handlers(
+        |_, a| simple("skills.restore", format!("restore the skill {}", a.name)),
+        |ctx, a| {
+            let flags = crate::curator::restore(&ctx.paths, &a.name)?;
+            Ok(Outcome::with_data(format!("Restored the skill {}", a.name), serde_json::to_value(&flags)?))
+        },
+    )?;
+    reg.define::<LedgerArgs>("skills.ledger", "The curator's history of skill changes")
+    .description("One JSON line per change: saved, deleted, archived, restored, pinned, locked, or accepted from a review. Newest last, at most `limit` (default 100). Reads are not here; skills.usage counts them.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, a| simple("skills.ledger", format!("read the last {} skill change(s)", a.limit.unwrap_or(100))),
+        |ctx, a| {
+            let rows = crate::curator::ledger(&ctx.paths, a.limit.unwrap_or(100).clamp(1, 5000));
+            Ok(Outcome::with_data(format!("{} skill change(s)", rows.len()), json!(rows)))
+        },
+    )?;
     reg.define::<SkillInstall>("skills.install", "Install a skill from a GitHub repository")
     .description("Fetches skills from a GitHub repository - the place the skills published on skills.sh live - and saves them in devd's own folder. Give the repository as owner/name, or owner/name/path for one skill. Nothing is executed: a skill is a Markdown file and is read as text. Human only, because a skill changes how every agent works.")
     .tier(Tier::Write)
@@ -2557,21 +2923,56 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
     .human_only()
     .dry_run()
     .handlers(
-        |_, a| simple("packs.install", format!("install the pack from {}", a.source)),
+        |_, a| match &a.builtin {
+            Some(id) => simple("packs.install", format!("install the bundled pack {id}")),
+            None => simple("packs.install", format!("install the pack from {}", a.source)),
+        },
         |ctx, a| {
-            let (root, scratch) = crate::packs::fetch(&ctx.paths, &a.source)?;
-            let loaded = crate::packs::load(&root);
-            let installed = loaded.and_then(|l| crate::packs::install(&ctx.paths, &ctx.store, &l, &a.source));
-            if scratch {
-                // A fetched copy is somebody's repository, not something to keep.
-                let _ = std::fs::remove_dir_all(root.ancestors().find(|p| p.parent().is_some_and(|q| q.ends_with("cache"))).unwrap_or(&root));
-            }
-            let r = installed?;
+            let r = match (&a.builtin, a.source.trim()) {
+                (Some(id), "") => crate::packs::install_bundled(&ctx.paths, &ctx.store, id)?,
+                (Some(_), _) => {
+                    return Err(DevdError::invalid(
+                        "give either `source` or `builtin`, not both: they name different packs",
+                    ));
+                }
+                (None, "") => {
+                    return Err(DevdError::invalid(
+                        "name a pack: `source` for a folder or a GitHub repository, or `builtin` for one devd ships",
+                    ));
+                }
+                (None, source) => {
+                    let (root, scratch) = crate::packs::fetch(&ctx.paths, source)?;
+                    let loaded = crate::packs::load(&root);
+                    let installed = loaded.and_then(|l| crate::packs::install(&ctx.paths, &ctx.store, &l, source));
+                    if scratch {
+                        // A fetched copy is somebody's repository, not something to keep.
+                        let _ = std::fs::remove_dir_all(root.ancestors().find(|p| p.parent().is_some_and(|q| q.ends_with("cache"))).unwrap_or(&root));
+                    }
+                    installed?
+                }
+            };
             let mut o = Outcome::with_data(format!("Installed the pack {} {}: {} role(s), {} skill(s), {} tool server(s)", r.id, r.version, r.roles.len(), r.skills.len(), r.mcp.len()), serde_json::to_value(&r)?);
             if !r.mcp.is_empty() {
                 o = o.warn(format!("The tool server(s) {} were saved disabled. Read the command in Settings, then turn them on.", r.mcp.join(", ")));
             }
             Ok(o)
+        },
+    )?;
+    reg.define::<NoArgs>("packs.bundled", "The packs that ship inside devd")
+    .description("Packs embedded in this build, with the id to pass to packs.install as `builtin`. A release is one executable, so a pack has to travel inside it to be installable on a machine without the checkout.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, _| simple("packs.bundled", "list the bundled packs"),
+        |_, _| {
+            let list: Vec<Value> = crate::packs::bundled_list()
+                .into_iter()
+                .map(|(id, name, description)| json!({ "id": id, "name": name, "description": description, "install": { "builtin": id } }))
+                .collect();
+            Ok(Outcome::with_data(format!("{} bundled pack(s)", list.len()), json!({ "packs": list })))
         },
     )?;
     reg.define::<NoArgs>("packs.list", "The packs that are installed")
@@ -4595,6 +4996,11 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
     // ------------------------------------------------------------ health
     register_automation(reg, team.clone())?;
 
+    // ------------------------------------------------------------ recreate
+    register_recreate(reg)?;
+    // ------------------------------------------------------- review forks
+    register_review(reg)?;
+
     // ------------------------------------------------ reviews, memory, canvases
     crate::workflows::register(reg)?;
 
@@ -4620,6 +5026,231 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
 }
 
 /// Templates and schedules: the team started again and again, by name and on a clock.
+/// Recreation: study what a user sees, build an independent version, check it.
+///
+/// The record is the point. A similarity figure is stored as an observation, and the completion
+/// gate only accepts `verify` evidence, so "it looks the same" can never finish a run.
+/// Review forks: the cheap pass after a run that may propose, never decide.
+fn register_review(reg: &mut Registry) -> Result<()> {
+    reg.define::<ReviewStage>("review.stage", "Propose memory or a skill from what a run taught")
+        .description("Stages at most two memory lines and at most one skill patch for a person to read and accept. Nothing is written into a prompt, a fact or a skill: the proposal waits in the reviews folder, and review.accept is human-only. A skill name that already exists or is built in is refused, because a proposal is not an edit.")
+        .group("review")
+        .tier(Tier::Write)
+        .effect(Effect::Write)
+        .agent_safe()
+        .dry_run()
+        .handlers(
+            |_, a| simple("review.stage", format!("stage a review for run {}", a.run)),
+            |ctx, a| {
+                let skill = a.skill.clone().map(|s| crate::review::SkillProposal {
+                    name: crate::skills::normalise_name(&s.name),
+                    description: s.description,
+                    kind: s.kind,
+                    roles: s.roles,
+                    body: s.body,
+                    reason: s.reason,
+                });
+                let staged = crate::review::stage(&ctx.paths, &ctx.store, &a.run, &a.memory, skill)?;
+                Ok(Outcome::with_data(
+                    format!("Staged {} memory line(s) and {} skill proposal(s) for run {}; a person accepts them", staged.memory.len(), if staged.skill.is_some() { 1 } else { 0 }, a.run),
+                    staged.as_json(),
+                ))
+            },
+        )?;
+    reg.define::<NoArgs>("review.proposals", "Every staged review waiting for a person")
+        .description("One row per run with a staged review: the run, the project, how many memory lines and skill patches it proposes, and what has already been accepted. Nothing here is in a prompt yet.")
+        .group("review")
+        .tier(Tier::Read)
+        .effect(Effect::Read)
+        .agent_safe()
+        .dry_run()
+        .idempotent()
+        .handlers(
+            |_, _| simple("review.proposals", "list staged reviews"),
+            |ctx, _| {
+                let all = crate::review::list(&ctx.paths);
+                Ok(Outcome::with_data(format!("{} staged review(s)", all.len()), json!(all.iter().map(|s| s.as_json()).collect::<Vec<_>>())))
+            },
+        )?;
+    reg.define::<ReviewRun>("review.proposal", "One staged review")
+        .description("The memory lines and the skill patch one run proposes, with what is pending and what a person already accepted.")
+        .group("review")
+        .tier(Tier::Read)
+        .effect(Effect::Read)
+        .agent_safe()
+        .dry_run()
+        .idempotent()
+        .handlers(
+            |_, a| simple("review.proposal", format!("read the review for run {}", a.run)),
+            |ctx, a| {
+                let staged = crate::review::get(&ctx.paths, &a.run)?;
+                Ok(Outcome::with_data(format!("Review for run {}: {} pending", a.run, if staged.pending() { "yes" } else { "no" }), staged.as_json()))
+            },
+        )?;
+    reg.define::<ReviewRun>("review.fork", "Look at what a run taught and stage a proposal")
+        .description("The cheap pass after a run: reads the lessons the team reported and stages 0-2 memory lines, plus one skill patch when two or more lessons read like rules. Deterministic and idempotent - running it twice stages nothing new - and it never writes a soul, a fact or a skill.")
+        .group("review")
+        .tier(Tier::Write)
+        .effect(Effect::Write)
+        .agent_safe()
+        .dry_run()
+        .handlers(
+            |_, a| simple("review.fork", format!("review what run {} taught", a.run)),
+            |ctx, a| {
+                let lessons = crate::review::lessons(&ctx.store, &a.run);
+                let staged = crate::review::after_run(&ctx.paths, &ctx.store, &a.run, &lessons)?;
+                match staged {
+                    Some(s) => Ok(Outcome::with_data(format!("Staged a review for run {}: {} memory line(s), {} skill proposal(s)", a.run, s.memory.len(), if s.skill.is_some() { 1 } else { 0 }), s.as_json())),
+                    None => Ok(Outcome::with_data(format!("Run {} has nothing new to propose", a.run), json!({ "run": a.run, "staged": false }))),
+                }
+            },
+        )?;
+    reg.define::<ReviewRun>("review.accept", "Accept a staged review")
+        .description("The only step that writes it: accepts the memory lines into the project's memory and, when asked, installs the proposed skill. Human only, because this changes what every later run knows. Accepting a proposal twice writes nothing twice.")
+        .group("review")
+        .tier(Tier::Write)
+        .effect(Effect::Write)
+        .human_only()
+        .dry_run()
+        .handlers(
+            |_, a| simple("review.accept", format!("accept the review for run {}", a.run)),
+            |ctx, a| {
+                let staged = crate::review::accept(&ctx.paths, &ctx.store, &a.run, a.which.as_deref())?;
+                Ok(Outcome::with_data(format!("Accepted the review for run {}; {} item(s) applied", a.run, staged.accepted.len()), staged.as_json()))
+            },
+        )?;
+    reg.define::<ReviewRun>("review.drop", "Throw a staged review away")
+        .description("Removes the staged proposal without applying anything. Human only; the memory and skills it mentioned are untouched.")
+        .group("review")
+        .tier(Tier::Write)
+        .effect(Effect::Write)
+        .human_only()
+        .dry_run()
+        .handlers(
+            |_, a| simple("review.drop", format!("drop the review for run {}", a.run)),
+            |ctx, a| {
+                let dropped = crate::review::drop_review(&ctx.paths, &a.run)?;
+                Ok(Outcome::with_data(format!("Dropped the review for run {}", a.run), dropped.as_json()))
+            },
+        )?;
+    Ok(())
+}
+
+fn register_recreate(reg: &mut Registry) -> Result<()> {
+    reg.define::<RecreateBegin>("recreate.begin", "Start recreating a program or a site")
+        .description("Starts a recreation in clean room and creates a run for it, so the study, the build and the check sit in one record. `right` is the person's own statement that they may recreate the target, and it is recorded with the mode. Give `run` to attach the recreation to a team run already under way; its completion then also requires the three-width captures, a written comparison and the project's own checks. Deep mode is not reachable from here: reading a target's code is recreate.deep, which only a person makes, with a reason.")
+        .group("recreate")
+        .tier(Tier::Write)
+        .effect(Effect::Write)
+        .agent_safe()
+        .dry_run()
+        .handlers(
+            |_, a| simple("recreate.begin", format!("start recreating {} in clean room", a.target)),
+            |ctx, a| {
+                let r = crate::recreate::begin(
+                    &ctx.paths,
+                    &ctx.store,
+                    &a.target,
+                    a.mode.as_deref().unwrap_or("clean_room"),
+                    &a.right,
+                    a.app.as_deref(),
+                    &ctx.actor.label(),
+                    a.run.as_deref(),
+                )?;
+                Ok(Outcome::with_data(
+                    format!("Recreation of {} started in {} mode as run {}", r.target, r.mode.replace('_', " "), r.run),
+                    serde_json::to_value(&r)?,
+                ))
+            },
+        )?;
+    reg.define::<RecreateDeep>("recreate.deep", "Allow reading inside the target")
+        .description("Switches one recreation from clean room to deep for the rest of its run, with the reason recorded beside it. Deep reads a target's code and files, which is the difference between recreating what a user sees and reading somebody's source. Destructive, human only: an agent cannot change the mode of the run it is working in.")
+        .group("recreate")
+        .tier(Tier::Destructive)
+        .effect(Effect::Read)
+        .human_only()
+        .dry_run()
+        .handlers(
+            |_, a| Ok(Plan::new("recreate.deep", format!("switch the recreation to deep: {}", a.reason)).destructive(true)),
+            |ctx, a| {
+                let r = crate::recreate::set_mode(&ctx.paths, &ctx.store, &a.run, "deep", &a.reason)?;
+                Ok(Outcome::with_data(
+                    format!("Recreation {} may now read inside {}: {}", r.run, r.target, a.reason),
+                    serde_json::to_value(&r)?,
+                ))
+            },
+        )?;
+    reg.define::<RecreateCapture>("recreate.capture", "Record a picture of one screen at one width")
+        .description("Records a picture that already exists as the capture of a screen at a width (phone, tablet, desktop, or a pixel count). Every screen is expected at three widths: `recreate.report` names the ones that are not. The capture is written into the run's evidence with the note beside it, and the same screen at the same width replaces the earlier one.")
+        .group("recreate")
+        .tier(Tier::Read)
+        .effect(Effect::Read)
+        .agent_safe()
+        .dry_run()
+        .handlers(
+            |_, a| simple("recreate.capture", format!("record {} at {} from {}", a.screen, a.width, a.file)),
+            |ctx, a| {
+                let r = crate::recreate::capture(&ctx.paths, &ctx.store, &a.run, &a.screen, &a.width, &a.file, a.note.as_deref().unwrap_or(""))?;
+                Ok(Outcome::with_data(format!("Recorded {} at {}; {} screen(s) captured", a.screen, a.width, r.screens().len()), serde_json::to_value(&r)?))
+            },
+        )?;
+    reg.define::<RecreateCheck>("recreate.check", "Record how the rebuild compares with the original")
+        .description("Records a comparison of one screen of the rebuild against the original: how alike it looked (0 to 100, optional), what does not match yet, and an optional report file. It is stored as an observation, never as verification: a rebuilt screen that is 98% similar and untested cannot complete a recreation.")
+        .group("recreate")
+        .tier(Tier::Read)
+        .effect(Effect::Read)
+        .agent_safe()
+        .dry_run()
+        .handlers(
+            |_, a| simple("recreate.check", format!("record the comparison of {} at {}", a.screen, a.width)),
+            |ctx, a| {
+                let found = crate::recreate::Check {
+                    screen: a.screen.clone(),
+                    width: a.width.clone(),
+                    similarity: a.similarity,
+                    gaps: a.gaps.clone(),
+                    report: a.report.clone(),
+                    at: String::new(),
+                };
+                let r = crate::recreate::check(&ctx.paths, &ctx.store, &a.run, found)?;
+                Ok(Outcome::with_data(format!("Compared {} at {}: {} gap(s) named", a.screen, a.width, a.gaps.len()), serde_json::to_value(&r)?))
+            },
+        )?;
+    reg.define::<RecreateRun>("recreate.report", "What a recreation has proved and what it has only measured")
+        .description("Reads the recreation's record and the run's evidence and says which behaviours were verified, which screens are missing a width, and every gap named. `proven` is true only when the run has a passing verification: a similarity figure never sets it.")
+        .group("recreate")
+        .tier(Tier::Read)
+        .effect(Effect::Read)
+        .agent_safe()
+        .dry_run()
+        .idempotent()
+        .handlers(
+            |_, a| simple("recreate.report", format!("report on the recreation {}", a.run)),
+            |ctx, a| {
+                let r = crate::recreate::report(&ctx.paths, &ctx.store, &a.run)?;
+                let count = r["captures"].as_u64().unwrap_or(0);
+                let proven = r["proven"].as_bool().unwrap_or(false);
+                Ok(Outcome::with_data(format!("{count} capture(s); {}", if proven { "verified" } else { "not verified yet, only measured" }), r))
+            },
+        )?;
+    reg.define::<NoArgs>("recreate.list", "Every recreation on this machine")
+        .description("Every recreation, newest first, with its target, mode, captures and gaps. Read this before picking one to report on.")
+        .group("recreate")
+        .tier(Tier::Read)
+        .effect(Effect::Read)
+        .agent_safe()
+        .dry_run()
+        .idempotent()
+        .handlers(
+            |_, _| simple("recreate.list", "list the recreations"),
+            |ctx, _| {
+                let all = crate::recreate::summaries(&ctx.paths, &ctx.store);
+                Ok(Outcome::with_data(format!("{} recreation(s)", all.len()), serde_json::to_value(&all)?))
+            },
+        )?;
+    Ok(())
+}
+
 fn register_automation(reg: &mut Registry, team: Arc<Team>) -> Result<()> {
     reg.define::<NoArgs>("template.list", "List the run templates")
     .description("Goals written once with blanks, each with the definition of done every run carries. devd ships five (a spec to a reviewed change, a bug fix, a feature, a security review, a release); your own in <devd home>/templates/ join them. A file that does not load is reported as a warning.")
