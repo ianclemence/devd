@@ -35,11 +35,11 @@ pub enum Filter {
 }
 
 fn needs_you(state: &str) -> bool {
-    matches!(state, "paused" | "failed" | "awaiting_plan")
+    status::of(state).needs_you
 }
 
 fn working(state: &str) -> bool {
-    matches!(state, "planning" | "running")
+    status::of(state).live
 }
 
 fn over(state: &str) -> bool {
@@ -69,6 +69,8 @@ impl Filter {
 /// Where a run stands, as one small glyph: the same glyphs the chain uses for its tasks.
 fn glyph(id: impl Into<gpui::ElementId>, state: &str, cx: &Context<Shell>) -> AnyElement {
     let t = theme(cx);
+    let said = status::of(state);
+    let tone: Tone = said.level.into();
     let frame = || {
         div()
             .size(px(14.0))
@@ -77,15 +79,16 @@ fn glyph(id: impl Into<gpui::ElementId>, state: &str, cx: &Context<Shell>) -> An
             .items_center()
             .justify_center()
     };
-    match state {
-        s if working(s) => frame()
-            .child(ui::live_dot(id, Tone::Accent, cx))
-            .into_any_element(),
-        "done" => frame().child(icon("check", 13.0, t.ok)).into_any_element(),
-        s if needs_you(s) => frame()
-            .child(icon("alert", 13.0, t.warn))
-            .into_any_element(),
-        _ => frame()
+    if said.live {
+        frame()
+            .child(ui::live_dot(id, tone, cx))
+            .into_any_element()
+    } else if said.level == devd_app_core::status::Level::Ok {
+        frame().child(icon("check", 13.0, t.tone(tone))).into_any_element()
+    } else if said.needs_you {
+        frame().child(icon("alert", 13.0, t.tone(tone))).into_any_element()
+    } else {
+        frame()
             .child(
                 div()
                     .size(px(9.0))
@@ -93,7 +96,7 @@ fn glyph(id: impl Into<gpui::ElementId>, state: &str, cx: &Context<Shell>) -> An
                     .border_1()
                     .border_color(t.faint),
             )
-            .into_any_element(),
+            .into_any_element()
     }
 }
 
@@ -246,18 +249,6 @@ fn list(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
         );
     }
 
-    // Recreations sit beside the runs they produce: same record, same evidence, one click.
-    tabs = tabs
-        .child(div().flex_1())
-        .child(
-            Button::new("runs.recreate", "Recreate")
-                .icon("plus")
-                .kind(ButtonKind::Ghost)
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                    this.go(Route::Page("recreate".to_string()), cx)
-                })),
-        );
-
     let mut column = div().flex().flex_col().gap(px(1.0)).p(px(8.0));
     if let Some(shown) = (snap.is_first_load()).then(|| {
         div()
@@ -349,6 +340,8 @@ fn list(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
             id.clone(),
             run["title"].as_str().unwrap_or("this run").to_string(),
         );
+        let said = status::of(&state);
+        let tone = Tone::from(said.level);
         column = column.child(
             ui::row(
                 gpui::ElementId::Name(format!("run.{id}").into()),
@@ -374,7 +367,11 @@ fn list(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                     .child(
                         div()
                             .text_size(px(size::TEXT_XS))
-                            .text_color(if needs_you(&state) { t.warn } else { t.faint })
+                            .text_color(if said.needs_you {
+                                t.tone(tone)
+                            } else {
+                                t.faint
+                            })
                             .child(facts.join(" · ")),
                     ),
             )
@@ -418,14 +415,23 @@ fn list(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
         .border_r_1()
         .border_color(t.line)
         .child(
+            // The same shape as the Assistant's "Conversations" row: the screen's name on the
+            // left, the one action that starts something on the right.
             div()
                 .h(px(44.0))
-                .px(px(16.0))
+                .px(px(14.0))
                 .flex()
                 .flex_none()
                 .items_center()
-                .font_weight(FontWeight::MEDIUM)
-                .child("Runs"),
+                .justify_between()
+                .child(div().font_weight(FontWeight::MEDIUM).child("Runs"))
+                .child(
+                    Button::new("runs.recreate", "Recreate")
+                        .icon("plus")
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.go(Route::Page("recreate".to_string()), cx)
+                        })),
+                ),
         )
         .child(tabs)
         .child(

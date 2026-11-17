@@ -12,6 +12,7 @@ use std::collections::HashMap;
 
 use devd_app_core::flow::{self, Flow, Metrics, Task};
 use devd_app_core::nav::Route;
+use devd_app_core::status;
 use gpui::{
     AnyElement, ClickEvent, Context, FontWeight, Hsla, PathBuilder, Pixels, Point, ScrollHandle,
     canvas, div, point, prelude::*, px,
@@ -325,6 +326,8 @@ fn set_x(handle: &ScrollHandle, x: Pixels, window: &mut gpui::Window) {
 /// Where a task stands, as one small glyph.
 fn glyph(task: &Task, n: usize, cx: &mut Context<Shell>) -> AnyElement {
     let t = theme(cx).clone();
+    let said = status::of(&task.state);
+    let tone: Tone = said.level.into();
     let frame = || {
         div()
             .size(px(14.0))
@@ -333,17 +336,24 @@ fn glyph(task: &Task, n: usize, cx: &mut Context<Shell>) -> AnyElement {
             .items_center()
             .justify_center()
     };
-    match task.state.as_str() {
-        "running" => frame()
-            .child(ui::live_dot(ui::nid("flow.live", n), Tone::Accent, cx))
-            .into_any_element(),
-        s if flow::is_done(s) => frame()
+    if said.live {
+        frame()
+            .child(ui::live_dot(ui::nid("flow.live", n), tone, cx))
+            .into_any_element()
+    } else if flow::is_done(&task.state) {
+        // Accepted by hand is finished even though its status word is neutral.
+        frame()
             .child(ui::icon("check", 13.0, t.ok))
-            .into_any_element(),
-        s if flow::is_stuck(s) => frame()
-            .child(ui::icon("alert", 13.0, t.warn))
-            .into_any_element(),
-        _ => frame()
+            .into_any_element()
+    } else if matches!(
+        said.level,
+        devd_app_core::status::Level::Warn | devd_app_core::status::Level::Danger
+    ) {
+        frame()
+            .child(ui::icon("alert", 13.0, t.tone(tone)))
+            .into_any_element()
+    } else {
+        frame()
             .child(
                 div()
                     .size(px(9.0))
@@ -351,7 +361,7 @@ fn glyph(task: &Task, n: usize, cx: &mut Context<Shell>) -> AnyElement {
                     .border_1()
                     .border_color(t.faint),
             )
-            .into_any_element(),
+            .into_any_element()
     }
 }
 

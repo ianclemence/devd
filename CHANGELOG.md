@@ -10,6 +10,20 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.37.1] - 2026-11-17 - Consistent status colours, and Recreate where it belongs
+
+### Changed
+
+- **The Recreate action is on the Runs header, not in the filter row.** It is the
+  same secondary button, plus icon and 44px row as the Assistant's "New".
+- **One status table colours every indicator.** Failed and error are red and need
+  a person; paused, blocked, unverified and waiting for approval are amber;
+  running is blue; done and verified are green. Run rows, task chains, the home
+  "needs you" list and conversation rows all read it.
+- **Navigation badges take the worst state they count.** Inbox is red when any
+  open message failed, amber when something needs a person, blue for a note. Runs
+  counts held runs (including failed) and keeps a dot for work still going.
+
 ## [0.37.0] - 2026-11-16 - Recreation, ACP, conversation search and learning
 
 ### Added
