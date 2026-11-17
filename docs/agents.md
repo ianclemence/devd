@@ -598,8 +598,10 @@ window does not invent a time series it does not have.
 ## Skills
 
 Skills are short Markdown instructions agents load with `skills.get` when the work
-calls for them. 70 ship with devd, and each belongs to one stage of the work, so
-an agent finds the right one without reading all of them:
+calls for them. 92 ship with devd, and each belongs to one stage of the work, so
+an agent finds the right one without reading all of them. The table below maps the
+stages rather than listing every skill; the prompt index and `skills.list` are the
+authoritative list.
 
 | Stage | What it covers | Skills |
 |---|---|---|
@@ -617,7 +619,7 @@ stages in that order. A skill's file names its own stage in `kind:`, so a person
 who adds a skill picks the stage it belongs to; a stage of their own is shown
 under its own name rather than dropped.
 
-An agent's prompt carries eight core rules, each naming the skill that holds the
+An agent's prompt carries nine core rules, each naming the skill that holds the
 full text, and the index with one line per skill. Only names and descriptions go
 into the prompt; the body is read on demand. Add your own in
 `<devd home>/skills/*.md` (`devd skills add`); they can add to the built-in set
@@ -641,8 +643,17 @@ what was searched and whether it was cut short), `search.sessions` on its own
 metadata addresses refused and re-checked across redirects), `web.open` (the
 same fetch, returning the page's title, headings, links and form fields as well
 as its text, for a page an agent has to act on), `skills.*`,
-`team.*`, `services.inventory`, `environment.get`, and the file, git, project,
-toolchain and stack capabilities.
+`team.*`, `services.inventory`, `environment.get`, `devd.self`, and the file, git,
+project, toolchain and stack capabilities.
+
+`devd.self` is the agent's own record: version and build, platform, home and the
+layout under it, the state database and its schema, the environment mode, the
+model assignment, the window's screens, the surfaces that reach devd, the current
+actor, run, project and conversation, and the limits it works under. The
+assistant's prompt carries a short live brief from the same source at the top of
+every turn, so it does not have to infer its own version, paths or capability
+index. The capability registry is still the authority for what devd can do;
+`devd_groups` lists it.
 
 Tools from **other programs' MCP servers** join the same list when a person
 configures one in *Team > MCP*. They are named `mcp__<server>__<tool>`, they
@@ -719,8 +730,9 @@ status bar says so. Destructive, remote and admin operations need approval in
 both modes, with one scoped exception: removing files inside the conversation's
 project is ordinary work (the project root, `.git` and secrets files are still
 refused), while any path outside that project, and every other destructive
-operation, needs a person. devd has no deploy capability, and agents cannot open
-ports or edit a production database through it.
+operation, needs a person. A local site deploy is an exec action; a deploy that
+reaches another machine (`remote.*`) and a push are remote actions and wait for
+approval. Agents cannot open ports or edit a production database through devd.
 
 ## Services that already exist
 

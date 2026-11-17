@@ -71,6 +71,7 @@ pub mod runview;
 pub mod schedule;
 pub mod search;
 pub mod secrets;
+pub mod selfmodel;
 pub mod skills;
 pub mod souls;
 pub mod skills_data;

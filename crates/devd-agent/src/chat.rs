@@ -107,6 +107,7 @@ Paths are absolute, or relative to the working directory named under Context.
 - devd_invoke {"id":"team.overview","args":{}} ; team.get {"run":"<id>"} ; team.assign {"member":"<role>","instructions":"...","project":"<dir>"}
 - devd_invoke {"id":"browser.open","args":{"url":"https://site.test"}}, then browser.snapshot before any browser.click or browser.type: refs come from the latest snapshot
 - devd_invoke {"id":"app.where","args":{}} says which screen the person has open (use it to answer "this" or "here"); app.go {"route":"runs/<id>"} shows them something; activity.list {"limit":50} is who did what
+- devd_invoke {"id":"devd.self","args":{}} is this devd's own version, paths, database schema, screens, limits and current run
 - run_command runs git too: {"path":"<dir>","argv":["git","log","--oneline","-5"]}. git push and anything that discards work (reset --hard, clean, --force) are a person's
 Do not hand the person a decision you can settle yourself. If something blocks the goal and lies inside the project you were asked to work on (line endings, formatting, a stale check, a failing test, a task in a closed run that has an open twin), fix it and say what you did. Ask only for what you cannot have: a credential, money, a push, or a choice between things that cannot both be done.
 Any capability not listed here: devd_capabilities to find it, devd_describe for its schema, then devd_invoke.
@@ -1332,8 +1333,16 @@ impl Hub {
         // How to draw a table, a chart or a choice instead of describing it. Generated from the same
         // catalog the window draws and checks against, so what the model is told cannot drift from it.
         let drawing = if devd_core::flags::on(&self.ctx.store, "agent.draw") { format!("\n\n{}", devd_genui::prompt()) } else { String::new() };
+        // The stable prompt has one placeholder for the facts of this process:
+        // its version, build, home, database and live capability index. The
+        // static architecture lives in the prompt; the volatile part is
+        // assembled here so it cannot drift from the binary.
+        let prompt = PROMPT.replace(
+            "{{SELF}}",
+            &crate::selfmodel::prompt(&self.ctx, self.registry().ok().map(|r| r.as_ref())),
+        );
         format!(
-            "{PROMPT}\n{COMMON_CALLS}\n\n{}{drawing}\n\n## Skills\n{}\n## Context\nToday is {}.\n{}\n{}{}",
+            "{prompt}\n{COMMON_CALLS}\n\n{}{drawing}\n\n## Skills\n{}\n## Context\nToday is {}.\n{}\n{}{}",
             crate::skills::CORE,
             crate::skills::index_for(&self.ctx.paths, None),
             &util::now()[..10],
@@ -2788,6 +2797,18 @@ mod tests {
         let s = cap_text(&"a".repeat(50_000), 12_000);
         assert!(s.len() < 14_000 && s.contains("omitted"));
         assert_eq!(cap_text("short", 12_000), "short");
+    }
+
+    #[test]
+    fn the_system_prompt_carries_the_live_self_brief() {
+        let ctx = test_ctx("self-brief");
+        let hub = Hub::new(ctx.clone());
+        let thread = ctx.store.create_thread("self", None, None, None).unwrap();
+        let prompt = hub.system_prompt(&thread);
+        assert!(prompt.contains("## This devd, right now"));
+        assert!(prompt.contains(env!("CARGO_PKG_VERSION")));
+        assert!(prompt.contains("`devd.self`"));
+        assert!(!prompt.contains("{{SELF}}"));
     }
 
     #[derive(serde::Deserialize, schemars::JsonSchema)]

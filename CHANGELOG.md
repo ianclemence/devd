@@ -10,6 +10,50 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.38.0] - 2026-11-18 - The agent knows itself
+
+### Added
+
+- **`devd.self` is the agent's own record, and it is live.** A read-only,
+  agent-safe capability returns what this process actually is: version and
+  build, platform, executable, the home folder with every path under it, the
+  state database with its schema version and journal mode, the environment mode
+  and ports, the model assigned to the role, the window's screens, the surfaces
+  that reach devd, the capability tiers and discovery tools, and the current
+  actor, run, step, project and conversation. For the views that change
+  constantly it names `project.list`, `chat.list`, `skills.list`, `team.roles`,
+  `models.roles`, `provider.list`, `health.status`, `flags.list`,
+  `activity.list` and `app.where` instead of copying them.
+- **The assistant's system prompt carries its own brief.** The live self-model
+  is substituted at the top of every turn, so the agent starts from this
+  process's version, paths, schema, screens and limits rather than inferring
+  them from a description.
+- **A Maestro skill** for driving a mobile build through its end-to-end checks.
+
+### Changed
+
+- **The assistant's prompt is rebuilt as one operating contract.** What devd is
+  and how its crates fit together; how a turn goes, from reading the ground to
+  proving the result; how to talk; how to call a capability and how to read a
+  refusal; how to search and read; how to change code without rewriting it; how
+  to debug; when to plan; what the machine allows and what is held for a person;
+  what is refused however it is framed; what to do when nobody is watching; when
+  to hand work to the team; how to be right about facts. It is shorter than what
+  it replaced and says more, because the self-model answers the questions a
+  prompt used to guess at.
+- **The call every agent makes most often is written out.**
+  `COMMON_CALLS` now carries the exact `devd_invoke` shape for `devd.self`, and
+  the MCP server's instructions name it, so an agent on either surface finds its
+  own record in one call.
+
+### Fixed
+
+- **The documentation no longer claims devd never deploys.** `docs/agents.md`,
+  `docs/limitations.md` and the production rule in `environment.get` said devd
+  does not deploy to production. It runs a project's own deploy locally
+  (`deploy.run`) and holds anything that reaches another machine for a person's
+  approval; the text now says that.
+
 ## [0.37.1] - 2026-11-17 - Consistent status colours, and Recreate where it belongs
 
 ### Changed

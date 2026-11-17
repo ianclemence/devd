@@ -1825,10 +1825,26 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                 "Agents need a person's approval for every operation above read, including writing files and running tasks.",
                 "Agent team plans must be approved by a person; approval cannot be waived.",
                 "Destructive, remote and admin operations always need approval, in either mode.",
-                "devd never deploys, opens ports, or changes a production database by itself: those are not capabilities agents have.",
+                "A local deploy is an exec action. A deploy that reaches another machine (`remote.*`), a push and every other remote action wait for a person's approval. devd does not open ports or change a production database by itself.",
             ] })))
         },
     )?;
+    reg.define::<NoArgs>("devd.self", "Everything devd knows about itself")
+    .description("The live self-model: version and build, platform, executable, home and the layout of everything devd owns, the state database and its schema, the environment mode, the model assignment, the window's screens, the surfaces that reach devd, the current actor, run, project and conversation, and the limits an agent works under. Read this before answering a question about devd itself, its version, where it keeps state or what it can do. The capability registry is still the authority for what it can do; use `devd_groups` for the live domains and counts.")
+    .group("devd")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, _| simple("devd.self", "read devd's self-model"),
+        |ctx, _| {
+            let facts = crate::selfmodel::facts(ctx);
+            Ok(Outcome::with_data(crate::selfmodel::summary(ctx), facts))
+        },
+    )?;
+
     reg.define::<EnvSet>("environment.set", "Switch between local and production")
     .description("Marks this machine as `production` or `local`. Production adds safeguards for agents; switching either way needs approval and a person.")
     .tier(Tier::Admin)
