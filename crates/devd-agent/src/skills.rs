@@ -927,6 +927,7 @@ mod tests {
         assert!(docs.contains("- technical-writing: "));
         let qa = index_for(&p, Some("qa"));
         assert!(qa.contains("- prove-it-works: "));
+        assert!(qa.contains("- maestro: "), "QA is offered the mobile flow skill");
     }
 
     #[test]
