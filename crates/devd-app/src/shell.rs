@@ -13,6 +13,7 @@
 use devd_app_core::command::{Command, Commands, Section};
 use devd_app_core::fuzzy;
 use devd_app_core::nav::{History, Route};
+use devd_app_core::status::{self, Level};
 use devd_app_core::sync::Mutation;
 use gpui::{
     AnyElement, App, ClickEvent, Context, Entity, FocusHandle, Focusable, FontWeight, KeyBinding,
@@ -861,22 +862,37 @@ impl Shell {
     fn rail(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx).clone();
         let current = self.history.current().clone();
-        let waiting = devd(cx)
-            .sync
-            .watch(&q::inbox())
-            .list("")
-            .iter()
-            .filter(|m| m["state"] == json!("open"))
-            .count()
-            + devd(cx).decisions.len();
-        // Runs going now, and runs held: the Runs button says which, the way the Inbox button counts what waits.
-        let (going, held) = devd(cx).sync.watch(&q::runs()).list("").iter().fold((0usize, 0usize), |(g, h), r| {
-            match r["state"].as_str().unwrap_or_default() {
-                "planning" | "running" => (g + 1, h),
-                "paused" => (g, h + 1),
-                _ => (g, h),
-            }
-        });
+        // The Inbox badge counts everything open, and speaks in the colour of the most urgent
+        // thing in it: a failed run is red even when other messages only need a look. Decisions
+        // waiting for an answer are at least a warning.
+        let inbox = devd(cx).sync.watch(&q::inbox());
+        let mut inbox_level = Level::Neutral;
+        let mut waiting = devd(cx).decisions.len();
+        for message in inbox.list("").iter().filter(|m| m["state"] == json!("open")) {
+            waiting += 1;
+            inbox_level =
+                inbox_level.worse(status::inbox(message["kind"].as_str().unwrap_or(""), true).level);
+        }
+        if !devd(cx).decisions.is_empty() {
+            inbox_level = inbox_level.worse(Level::Warn);
+        }
+        // Runs going now, and runs held: the badge counts what holds the run up first, and keeps
+        // the colour of the worst state in that group. The dot on its foot says work is still
+        // going on elsewhere.
+        let (going, held, going_level, held_level) =
+            devd(cx).sync.watch(&q::runs()).list("").iter().fold(
+                (0usize, 0usize, Level::Neutral, Level::Neutral),
+                |(g, h, gl, hl), r| {
+                    let said = status::of(r["state"].as_str().unwrap_or_default());
+                    if said.needs_you {
+                        (g, h + 1, gl, hl.worse(said.level))
+                    } else if said.live {
+                        (g + 1, h, gl.worse(said.level), hl)
+                    } else {
+                        (g, h, gl, hl)
+                    }
+                },
+            );
         let mut rail = div()
             .w(px(size::RAIL))
             .h_full()
@@ -973,12 +989,16 @@ impl Shell {
             el
         };
         for route in Route::primary() {
-            // The Inbox counts what waits, in amber. Runs counts what is paused in amber when anything is, with a green dot if
-            // others are still going; otherwise what is going, in green.
+            // One badge, one colour: the colour of the most urgent state it counts. The Inbox and
+            // the Runs button therefore cannot disagree with a red or amber row inside them.
             let (badge, tone, also) = match route {
-                Route::Inbox => (waiting, t.warn, None),
-                Route::Runs(_) if held > 0 => (held, t.warn, (going > 0).then_some(t.ok)),
-                Route::Runs(_) => (going, t.ok, None),
+                Route::Inbox => (waiting, t.tone(Tone::from(inbox_level)), None),
+                Route::Runs(_) if held > 0 => (
+                    held,
+                    t.tone(Tone::from(held_level)),
+                    (going > 0).then(|| t.tone(Tone::from(going_level))),
+                ),
+                Route::Runs(_) => (going, t.tone(Tone::from(going_level)), None),
                 _ => (0, t.warn, None),
             };
             rail = rail.child(item(route, badge, tone, also, cx));

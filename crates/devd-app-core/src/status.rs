@@ -26,6 +26,28 @@ pub enum Level {
     Danger,
 }
 
+impl Level {
+    /// How much it matters when several states share one badge. Higher wins.
+    pub fn priority(self) -> u8 {
+        match self {
+            Level::Neutral => 0,
+            Level::Ok => 1,
+            Level::Info => 2,
+            Level::Warn => 3,
+            Level::Danger => 4,
+        }
+    }
+
+    /// The more urgent of two levels, so one badge can speak for several things.
+    pub fn worse(self, other: Level) -> Level {
+        if other.priority() > self.priority() {
+            other
+        } else {
+            self
+        }
+    }
+}
+
 /// A state, ready to draw.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Status {
@@ -89,8 +111,8 @@ pub fn of(state: &str) -> Status {
         "approved" => Status::new(Ok, "Approved"),
         "resolved" | "answered" | "consumed" => Status::new(Neutral, "Answered"),
         "ok" | "healthy" => Status::new(Ok, "Healthy"),
-        "failed" => Status::new(Danger, "Failed"),
-        "error" => Status::new(Danger, "Stopped on an error"),
+        "failed" => Status::new(Danger, "Failed").yours(),
+        "error" => Status::new(Danger, "Stopped on an error").yours(),
         "critical" => Status::new(Danger, "Not working"),
         "cancelled" => Status::new(Neutral, "Cancelled"),
         "skipped" => Status::new(Neutral, "Skipped"),
@@ -523,6 +545,19 @@ mod tests {
             assert_eq!(status.level, Level::Warn, "{state}");
             assert!(status.needs_you && !status.live, "{state}");
         }
+    }
+
+    #[test]
+    fn a_failure_is_danger_and_asks_for_the_person() {
+        for state in ["failed", "error"] {
+            let status = of(state);
+            assert_eq!(status.level, Level::Danger, "{state}");
+            assert!(status.needs_you && !status.live, "{state}");
+        }
+        // A badge that speaks for several things takes the worst of them, never the last one.
+        assert_eq!(Level::Neutral.worse(Level::Warn), Level::Warn);
+        assert_eq!(Level::Danger.worse(Level::Warn), Level::Danger);
+        assert_eq!(Level::Ok.worse(Level::Info), Level::Info);
     }
 
     #[test]

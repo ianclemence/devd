@@ -77,11 +77,14 @@ pub fn render(shell: &mut Shell, _window: &mut Window, cx: &mut Context<Shell>) 
             }
             let run = message["run_id"].as_str().map(str::to_string);
             let kind = message["kind"].as_str().unwrap_or("message");
-            // A finished run is news, not a problem; only what blocks work is a warning.
-            let (tone, mark) = match kind {
-                "finished" | "done" => (Tone::Ok, "check"),
-                "paused" | "blocked" | "approval" | "question" => (Tone::Warn, "alert"),
-                _ => (Tone::Info, "info"),
+            // The same table the Inbox uses: a failed message is red here too, not merely an
+            // informational note, and a finished one reads as done.
+            let said = devd_app_core::status::inbox(kind, true);
+            let tone = Tone::from(said.level);
+            let mark = match said.level {
+                devd_app_core::status::Level::Ok => "check",
+                devd_app_core::status::Level::Warn | devd_app_core::status::Level::Danger => "alert",
+                _ => "info",
             };
             let hover = t.hover;
             list = list.child(

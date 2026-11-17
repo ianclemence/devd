@@ -93,8 +93,7 @@ fn name_of(source: &str) -> String {
         .trim_start_matches("github:");
     let last = clean
         .split(['/', '\\'])
-        .filter(|p| !p.is_empty())
-        .next_back()
+        .rfind(|p| !p.is_empty())
         .unwrap_or("learned");
     let last = last.split(['?', '#']).next().unwrap_or(last);
     let last = last.trim_end_matches(".md").trim_end_matches(".html");
