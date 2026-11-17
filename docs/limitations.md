@@ -30,8 +30,10 @@ own operation, it is destructive, and it asks first:
 
 ## What it does not do
 
-- **It does not deploy.** There is no deploy capability and no path through an
-  agent to production.
+- **It does not deploy to production by itself.** `deploy.run` runs a site's own
+  deploy script locally. A deploy that reaches another machine (`remote.*`) and a
+  push are remote actions that wait for a person's approval, and an agent cannot
+  approve its own.
 - **It does not open ports** to another machine. The window, the HTTP API and the
   MCP server are loopback only.
 - **It does not edit the hosts file on its own.** `devd hosts sync` does, and
