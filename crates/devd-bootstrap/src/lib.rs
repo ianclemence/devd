@@ -36,6 +36,11 @@ pub struct Bootstrap {
     pub workspace: Arc<Workspace>,
     /// The built-in agent and the team, which a long-lived process starts with [`Bootstrap::resume_agents`].
     pub agents: Agents,
+    /// When each phase of starting finished, in milliseconds since the process's bootstrap began.
+    ///
+    /// A long-lived process prints it once, so "devd takes six seconds" can be answered with the
+    /// list of where the six seconds went rather than with a shrug.
+    pub startup: Vec<(&'static str, f64)>,
 }
 
 /// The built-in agent and the team that drives it.
@@ -202,13 +207,25 @@ impl Bootstrap {
 
     /// Assemble against an explicit layout, for tests and portable installs.
     pub fn at(paths: Paths) -> Result<Self> {
+        // Where the start-up time goes, in the order it is spent. A long-lived process prints this
+        // so "devd takes six seconds" is a list rather than a mystery.
+        let began = std::time::Instant::now();
+        let mut startup: Vec<(&'static str, f64)> = Vec::new();
+        macro_rules! mark {
+            ($label:literal) => {
+                startup.push(($label, began.elapsed().as_secs_f64() * 1000.0))
+            };
+        }
         paths.ensure()?;
+        mark!("paths");
 
         let settings = Settings::load(&paths.settings_file())?;
         settings.validate()?;
+        mark!("settings");
 
         let store = Store::open(&paths.state_db())?;
         store.migrate()?;
+        mark!("store");
 
         // The launchers follow what is installed: written when PHP or Composer
         // arrives, rewritten if devd moved, removed when what they run is gone.
@@ -216,9 +233,11 @@ impl Bootstrap {
         if let Ok(exe) = devd_core::util::cli_exe() {
             let _ = devd_core::shims::ensure(&paths, &exe);
         }
+        mark!("launchers");
 
         let git = Arc::new(GitService::discover(settings.git_executable.as_deref())?);
         let workspace = Workspace::new(Arc::new(store), Arc::new(paths.clone()))?;
+        mark!("git");
 
         let mut registry = Registry::new();
         git_caps::register(&mut registry, git.clone())?;
@@ -230,6 +249,7 @@ impl Bootstrap {
         devd_stacks::caps::register(&mut registry)?;
         devd_ops::caps::register(&mut registry)?;
         devd_mcp::caps::register(&mut registry)?;
+        mark!("capabilities");
 
         // Installing, removing or defaulting a runtime changes which PHP
         // listeners should exist and which upstream a site uses. Reconcile both
@@ -275,6 +295,7 @@ impl Bootstrap {
         let registry = Arc::new(registry);
         hub.attach(registry.clone());
         team.attach(registry.clone());
+        mark!("agents");
 
         Ok(Self {
             paths,
@@ -285,6 +306,7 @@ impl Bootstrap {
             registry,
             workspace,
             agents: Agents { hub, team },
+            startup,
         })
     }
 }

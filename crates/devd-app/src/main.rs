@@ -30,6 +30,10 @@ use gpui::{
 pub static STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
 /// How long it took to be talking to a devd, and to have its theme: the two phases before a window.
 pub static CONNECTED_MS: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+/// How much of the connect was opening the store and building the registry, and how much was
+/// becoming (or reaching) the server.
+pub static BOOTSTRAP_MS: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+pub static SERVE_MS: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
 /// How long it took to read the theme library and load the theme.
 pub static THEME_MS: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
 

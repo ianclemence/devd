@@ -1798,6 +1798,8 @@ fn note_first_frame(home: &str) {
         let record = serde_json::json!({
             "ms": started.elapsed().as_secs_f64() * 1000.0,
             "connect_ms": crate::CONNECTED_MS.get().copied(),
+            "bootstrap_ms": crate::BOOTSTRAP_MS.get().copied(),
+            "serve_ms": crate::SERVE_MS.get().copied(),
             "theme_ms": crate::THEME_MS.get().copied(),
             "version": env!("CARGO_PKG_VERSION"),
             "at": chrono::Utc::now().to_rfc3339(),

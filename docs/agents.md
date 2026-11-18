@@ -876,7 +876,19 @@ The window writes its own launch to `startup.json` beside the state on its first
 
 The split is why they are separate: a single number would say "devd takes six seconds", which is
 true only when nothing was running, and would hide the other five and a half seconds that no longer
-happen. Cold start is measured, visible on the Diagnostics screen, and the next lever.
+happen. Cold start is measured, visible on the Diagnostics screen, and was the next lever — the
+window used to open the store, migrate it and build the whole capability registry *before* asking
+whether a devd was already running, and then throw all of it away to attach. Now it only bootstraps
+on the path where it becomes the server:
+
+| Launch (debug build) | Before | After |
+|---|---|---|
+| Warm devd, window opens | 1.03 s | **0.75 s** (attach: 147 ms → 7 ms) |
+| No devd, one is started | 2.36 s | **1.85 s** |
+
+The daemon prints its own phase line when it starts — `devd started in 176 ms: paths 6 ·
+settings 5 · store 44 · launchers 0 · git 81 · capabilities 24 · agents 16` — so a slow start is a
+list rather than a mystery.
 
 The budgets are **regression lines, not targets**: several times what the work costs on an ordinary
 machine, so a busy afternoon is not a failure and a change that makes the harness ten times slower
