@@ -800,6 +800,17 @@ fn prune_cutoff(days: Option<u64>) -> String {
     }
 }
 
+/// What became of a conversation's worktree when the conversation is deleted, if it had one.
+fn end_worktree(t: &devd_core::store_ai::ChatThread) -> Option<(String, crate::worktree::End)> {
+    let dir = t.workdir.clone()?;
+    let project = t.project.clone()?;
+    let end = crate::worktree::end(
+        std::path::Path::new(&project),
+        std::path::Path::new(&dir),
+    );
+    Some((dir, end))
+}
+
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct RunRef {
     /// Run id.
@@ -1872,6 +1883,27 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
         |ctx, _| {
             let facts = crate::selfmodel::facts(ctx);
             Ok(Outcome::with_data(crate::selfmodel::summary(ctx), facts))
+        },
+    )?;
+
+    reg.define::<NoArgs>("perf.measure", "How fast devd's own work is, against its budgets")
+    .description("Measures the parts of devd a person feels and that live in this process: opening and migrating the state database, writing conversations, listing them, appending the event log, and reading a conversation back. Each reading has a budget, and a budget is a regression line set several times above what the work costs on an ordinary machine, not a target. A miss is a change worth explaining.")
+    .group("devd")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, _| simple("perf.measure", "measure devd's own work"),
+        |_ctx, _| {
+            let measured = crate::perf::measure()?;
+            let said = if measured["ok"].as_bool().unwrap_or(false) {
+                "Every reading is inside its budget"
+            } else {
+                "A reading is over its budget"
+            };
+            Ok(Outcome::with_data(said, measured))
         },
     )?;
 
@@ -4879,10 +4911,32 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                 Ok(Plan::new("chat.delete", format!("delete the conversation \"{}\" and its log", t.title)).destructive(true))
             },
             move |ctx, a| {
-                ctx.store.get_thread(&a.thread)?.ok_or_else(|| DevdError::not_found("no such conversation"))?;
+                let t = ctx.store.get_thread(&a.thread)?.ok_or_else(|| DevdError::not_found("no such conversation"))?;
                 hub.stop(ctx, &a.thread)?;
+                // A worktree with nothing left in it goes with the conversation. One that still
+                // holds work stays, and the answer says where: deleting a conversation is not a way
+                // to throw a change away by accident.
+                let ended = end_worktree(&t);
                 ctx.store.delete_thread(&a.thread)?;
-                Ok(Outcome::with_data("Deleted the conversation", json!({ "deleted": 1 })))
+                let wording = match &ended {
+                    Some((_, crate::worktree::End::Kept(why))) => {
+                        format!("Deleted the conversation. Its worktree was kept because {why}.")
+                    }
+                    Some((_, crate::worktree::End::Removed)) => {
+                        "Deleted the conversation, and the empty worktree it had.".to_string()
+                    }
+                    None => "Deleted the conversation".to_string(),
+                };
+                let worktree = ended.map(|(path, end)| match end {
+                    crate::worktree::End::Removed => json!({ "path": path, "kept": false }),
+                    crate::worktree::End::Kept(why) => {
+                        json!({ "path": path, "kept": true, "reason": why })
+                    }
+                });
+                Ok(Outcome::with_data(
+                    wording,
+                    json!({ "deleted": 1, "worktree": worktree }),
+                ))
             },
         )?;
     }
@@ -4901,11 +4955,20 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             },
             move |ctx, a| {
                 let threads = ctx.store.finished_threads_before(&prune_cutoff(a.days))?;
+                let mut kept = 0;
                 for t in &threads {
                     hub.stop(ctx, &t.id)?;
+                    if matches!(end_worktree(t), Some((_, crate::worktree::End::Kept(_)))) {
+                        kept += 1;
+                    }
                     ctx.store.delete_thread(&t.id)?;
                 }
-                Ok(Outcome::with_data(format!("Deleted {} conversation(s)", threads.len()), json!({ "deleted": threads.len() })))
+                let said = if kept > 0 {
+                    format!("Deleted {} conversation(s). {kept} worktree(s) were kept because they still hold unmerged or uncommitted work.", threads.len())
+                } else {
+                    format!("Deleted {} conversation(s)", threads.len())
+                };
+                Ok(Outcome::with_data(said, json!({ "deleted": threads.len(), "worktrees_kept": kept })))
             },
         )?;
     }

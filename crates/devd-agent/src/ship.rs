@@ -210,14 +210,14 @@ pub fn open_pr(dir: &Path, title: Option<&str>, body: Option<&str>) -> Result<St
             util::truncate(out.stderr.trim(), 600)
         )));
     }
-    let url = out
-        .stdout
-        .lines()
-        .map(str::trim)
-        .filter(|l| l.starts_with("https://"))
-        .last()
-        .unwrap_or_default()
-        .to_string();
+    // `gh` prints the new review's address on its last line, after any progress it wrote.
+    let mut url = String::new();
+    for line in out.stdout.lines() {
+        let line = line.trim();
+        if line.starts_with("https://") {
+            url = line.to_string();
+        }
+    }
     if url.is_empty() {
         return Err(DevdError::conflict(
             "the pull request was created but the host did not print its address",

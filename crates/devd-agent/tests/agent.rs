@@ -2354,6 +2354,64 @@ fn a_template_fills_its_blanks_and_starts_the_team_with_its_definition_of_done()
 }
 
 #[test]
+fn deleting_a_conversation_takes_an_empty_worktree_and_keeps_one_with_work_in_it() {
+    let e = env();
+    let project = e.root.join("www").join("proj");
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&project)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    };
+    git(&["init", "-q"]);
+    git(&["config", "user.email", "test@example.com"]);
+    git(&["config", "user.name", "Test"]);
+    std::fs::write(project.join("README.md"), "# proj\n").unwrap();
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "first"]);
+
+    let start = |title: &str| {
+        let t = e
+            .human
+            .store
+            .create_thread(title, Some(project.to_str().unwrap()), None, None)
+            .unwrap();
+        let made = call(
+            &e,
+            &e.human,
+            "chat.worktree",
+            json!({ "thread": t.id, "action": "create" }),
+            Approval::None,
+        )
+        .unwrap();
+        (t.id, made["workdir"].as_str().unwrap().to_string())
+    };
+
+    // Nothing in it and nothing unmerged: it goes with the conversation.
+    let (clean, clean_dir) = start("Clean");
+    let gone = call(&e, &e.human, "chat.delete", json!({ "thread": clean }), Approval::Granted).unwrap();
+    assert_eq!(gone["worktree"]["kept"], json!(false), "{gone}");
+    assert!(
+        !std::path::Path::new(&clean_dir).exists(),
+        "an empty worktree is taken with the conversation"
+    );
+
+    // A change that was never committed: the conversation goes, the work does not.
+    let (dirty, dirty_dir) = start("Dirty");
+    std::fs::write(std::path::Path::new(&dirty_dir).join("README.md"), "# changed\n").unwrap();
+    let kept = call(&e, &e.human, "chat.delete", json!({ "thread": dirty }), Approval::Granted).unwrap();
+    assert_eq!(kept["worktree"]["kept"], json!(true), "{kept}");
+    assert_eq!(kept["worktree"]["path"], json!(dirty_dir));
+    assert!(
+        std::path::Path::new(&dirty_dir).exists(),
+        "work that was never committed is never deleted with its conversation"
+    );
+}
+
+#[test]
 fn a_conversation_reports_what_it_changed_and_will_not_open_a_review_before_pushing() {
     let e = env();
     let project = e.root.join("www").join("proj");

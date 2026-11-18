@@ -120,6 +120,54 @@ fn exclude_devd(project: &Path) {
     );
 }
 
+/// What became of a conversation's worktree when the conversation went away.
+#[derive(Debug, Clone, PartialEq)]
+pub enum End {
+    /// It had nothing left in it: the folder and its branch are gone.
+    Removed,
+    /// It was left where it is, with the reason a person would want.
+    Kept(String),
+}
+
+/// Take back a worktree that has nothing left in it worth keeping.
+///
+/// Deleting a conversation must never discard work, so only a clean worktree whose branch is fully
+/// merged into the project's current branch is removed. Anything else stays where it is, with the
+/// reason, and the person is told where.
+pub fn end(project: &Path, dir: &Path) -> End {
+    let project = &util::strip_verbatim(project);
+    let dir = &util::strip_verbatim(dir);
+    if !dir.is_dir() {
+        return End::Removed;
+    }
+    let status = match git(dir, &["status", "--porcelain"]) {
+        Ok(o) if o.ok() => o,
+        _ => return End::Kept("it could not be read".into()),
+    };
+    if !status.stdout.trim().is_empty() {
+        return End::Kept("it has changes that were never committed".into());
+    }
+    let branch = match branch_of(dir) {
+        Some(b) => b,
+        None => return End::Kept("it is not on a branch".into()),
+    };
+    let merged = match git(project, &["branch", "--merged", "HEAD", "--format=%(refname:short)"]) {
+        Ok(o) if o.ok() => o.stdout,
+        _ => return End::Kept("the project's branch could not be read".into()),
+    };
+    if !merged.lines().any(|l| l.trim() == branch) {
+        return End::Kept("its commits are not merged into the project".into());
+    }
+    let removed = git(project, &["worktree", "remove", &path_arg(dir)]);
+    if !matches!(removed, Ok(o) if o.ok()) {
+        return End::Kept("git would not remove it".into());
+    }
+    // `-d` refuses an unmerged branch, which is the same rule as above: this can only delete a
+    // branch whose work is already in the project.
+    let _ = git(project, &["branch", "-d", &branch]);
+    End::Removed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

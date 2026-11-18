@@ -822,6 +822,31 @@ as it was until someone merges the branch.
 The folder is kept out of the project's status through `.git/info/exclude`, the same way the team's
 worktrees are, so `git status` in the project stays clean while a conversation works.
 
+Deleting the conversation takes an **empty** worktree with it: the folder and its branch go when
+there is nothing uncommitted and the branch is merged into the project's current branch. Anything
+else is left exactly where it is, and `chat.delete` says where and why — "its worktree was kept
+because it has changes that were never committed". Deleting a conversation is never a way to lose a
+change by accident. `chat.prune`, which deletes many at once, reports how many worktrees it kept.
+
+## Performance
+
+`perf.measure` answers "is devd still fast?" with numbers from this process rather than an adjective:
+opening and migrating the state database, writing 500 conversations, listing them, appending 500
+events to one log, and reading that conversation back. Each reading carries a budget, and the
+answer says whether it is inside it.
+
+The budgets are **regression lines, not targets**: several times what the work costs on an ordinary
+machine, so a busy afternoon is not a failure and a change that makes the harness ten times slower
+is. The same readings run as a test, with a wider line so a loaded build machine does not fail the
+suite; a miss there is a regression worth explaining, not a verdict on the machine.
+
+```bash
+devd call perf.measure
+```
+
+An agent can call it too: it is read-only, and it is the honest answer to "how fast are you" that
+does not depend on the model's opinion of itself.
+
 ## Shipping what a conversation did
 
 The loop from a change to a review has three steps, and each one is a real surface rather than a
