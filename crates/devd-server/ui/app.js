@@ -9205,6 +9205,22 @@ var TERM_POLL_MS = 250;
         if (!full && !quiet) announceEvent(e);
       });
       AI.thread = d.thread; AI.pending = d.pending || []; AI.running = d.running; AI.chapters = d.chapters || []; AI.run = d.run || null;
+      // A conversation that belongs to a run is one room: read the whole run's messages, not only
+      // this conversation's, so a specialist's work shows up where the person already is. Read once
+      // when the conversation opens and again when a poll says something new arrived.
+      var mine = (AI.threads || []).filter(function (t) { return t.id === d.thread.id; })[0];
+      var runId = (mine && mine.team && mine.team.run) || null;
+      if (!runId) {
+        AI.room = null;
+        AI.roomFor = null;
+      } else if (AI.roomFor !== runId || !full) {
+        AI.roomFor = runId;
+        read("chat.team_log", { thread: d.thread.id, limit: 400 }).then(function (log) {
+          if (!AI.thread || AI.thread.id !== d.thread.id) return;
+          AI.room = (log && log.events) || [];
+          if (state.view === "assistant") paintChat(false);
+        }).catch(function () { AI.room = null; });
+      }
       // What the conversation's working tree has changed, read when it opens and after an action
       // that can change it. Not on every poll: git status is cheap, but a chat repaints often.
       if (AI.changesFor !== d.thread.id) {
@@ -9951,7 +9967,10 @@ var TERM_POLL_MS = 250;
   function chatHtml() {
     var results = {};
     var resultAt = {};
-    AI.events.forEach(function (e) {
+    // A conversation that belongs to a run is the room for the whole run. Its events come from
+    // chat.team_log (every member's messages, in order), and each carries the role that said it.
+    var events = (AI.room && AI.room.length) ? AI.room : AI.events;
+    events.forEach(function (e) {
       if (e.kind !== "tool_result") return;
       results[e.data.tool_use_id] = e.data;
       resultAt[e.data.tool_use_id] = e.created_at;
@@ -9990,8 +10009,10 @@ var TERM_POLL_MS = 250;
       if (current) current.items.push(html);
       activity = null;
     };
-    var openTurn = function (at, key) {
-      current = { at: at || "", end: at || "", items: [], copy: null, last: "none", key: key || "", lastText: -1, edits: {}, commands: 0, passed: 0, failed: 0 };
+    // A turn belongs to one speaker. In a single agent's conversation that is always the
+    // conversation's own agent; in a room it is whoever wrote the message, so the turn carries it.
+    var openTurn = function (at, key, role) {
+      current = { at: at || "", end: at || "", items: [], copy: null, last: "none", key: key || "", role: role || null, lastText: -1, edits: {}, commands: 0, passed: 0, failed: 0 };
       blocks.push({ type: "turn", turn: current });
     };
     var endTurn = function () {
@@ -10000,7 +10021,7 @@ var TERM_POLL_MS = 250;
       current = null;
     };
 
-    AI.events.forEach(function (e) {
+    events.forEach(function (e) {
       if (e.kind === "user") {
         // A person's message stands on its own. The assistant's reply is the
         // turn that follows it; it does not share the person's row or avatar.
@@ -10008,8 +10029,18 @@ var TERM_POLL_MS = 250;
         blocks.push({ type: "user", at: e.created_at, text: e.data.text || "", from: e.data.from || "", key: e.id });
         return;
       }
+      // A message one teammate addresses to another: it is speech in the room, not a turn and not
+      // the person speaking, so it sits between turns with who said it and what it answers.
+      if (e.kind === "agent") {
+        endTurn();
+        blocks.push({ type: "said", at: e.created_at, from: e.data.from || "", to: e.data.to || "", about: e.data.about || "", text: e.data.text || "", key: e.id });
+        return;
+      }
       if (e.kind === "assistant") {
-        if (!current) openTurn(e.created_at, e.id);
+        // In a room, a change of speaker starts a new turn: two agents' words must not share one
+        // heading, or the room reads as if one member said both.
+        if (current && (e.role || null) !== (current.role || null)) endTurn();
+        if (!current) openTurn(e.created_at, e.id, e.role);
         current.end = (resultAt && e.created_at) || current.end;
         // Each model call's tools are one run: three searches in one call read
         // as "Searched 3 times", while the next call gets its own line. The
@@ -10101,6 +10132,17 @@ var TERM_POLL_MS = 250;
     var face = roleFace(role);
     var specialist = role !== "devd";
     var html = blocks.map(function (block, i) {
+      // A message one teammate addressed to another: a note in the room with who it is for and
+      // what it is about, quiet because it is conversation rather than the work itself.
+      if (block.type === "said") {
+        var whenS = shortTime(block.at);
+        return '<div class="msg msg-said" data-key="a' + block.key + '"><div class="said">' + faceHtml(block.from, "sm") +
+          '<div class="grow"><div class="said-head"><b>' + esc(roleFace(block.from).name) + "</b>" +
+          (block.to ? '<span class="said-to">@' + esc(roleFace(block.to).name) + "</span>" : "") +
+          (block.about ? '<span class="dim">' + esc(block.about) + "</span>" : "") +
+          (whenS ? '<span class="dim">' + esc(whenS) + "</span>" : "") +
+          '</div><div class="bubble">' + md(block.text) + "</div></div></div></div>";
+      }
       // Every message names who sent it ("human:…" for the person); only the team's own
       // messages are drawn as the team's.
       if (block.type === "user" && block.from === "devd-team") {
@@ -10172,7 +10214,7 @@ var TERM_POLL_MS = 250;
       var tail = active ? '<div class="msg-tail" id="chat-tail" data-morph="skip" hidden></div>' : "";
       var whenA = shortTime(turn.at);
       return '<div class="turn msg-agent" data-key="t' + (turn.key || "live") + '">' +
-        '<div class="turn-who">' + faceHtml(role) + '<b>' + esc(face.name) + "</b>" + (whenA ? '<span class="dim">' + esc(whenA) + "</span>" : "") + "</div>" +
+        '<div class="turn-who">' + faceHtml(turn.role || role) + '<b>' + esc(roleFace(turn.role || role).name) + "</b>" + (whenA ? '<span class="dim">' + esc(whenA) + "</span>" : "") + "</div>" +
         '<div class="turn-body">' + body + typing + tail +
         (turn.copy && !active ? msgActions(turn.copy, 0) : "") +
         "</div></div>";
