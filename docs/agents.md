@@ -967,6 +967,11 @@ suite; a miss there is a regression worth explaining, not a verdict on the machi
 devd call perf.measure
 ```
 
+One of the six readings is the **room**: four members' conversations, 150 events each, read the way
+the window reads them while a run is working. It is separate from the single conversation read
+because it is a different amount of work — four logs merged into one transcript, refreshed while the
+person watches.
+
 An agent can call it too: it is read-only, and it is the honest answer to "how fast are you" that
 does not depend on the model's opinion of itself. The same readings are on **Settings →
 Diagnostics → Speed**, each with its budget and whether it is inside it, so the question "is devd

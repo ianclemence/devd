@@ -10,6 +10,48 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.39.0] - 2026-11-19 - The team is one conversation
+
+A run used to be one private conversation per specialist. To see what the team
+was doing you opened each one, and the conversation you started the run from
+only heard single-line notices. A run is now a room.
+
+### Added
+
+- **`chat.team_log` reads a run as one conversation.** The person's messages, the
+  planner's and every specialist's, tagged with the role that said them and
+  interleaved in the order they happened, from any conversation of the run. It is
+  a read, not a copy: the per-specialist logs stay where they are.
+- **`chat.talk` is speech in that room.** `to` addresses a member, `about` names
+  the task, and both stay with the message. The speaker is derived from the
+  conversation the call came from, and an address to a role the run does not have
+  is refused with the roles it does have.
+- **An addressed message is delivered**, queued into that member's own
+  conversation, so it reads the question at its next step and can answer in the
+  room. The run's budget bounds a conversation between agents, not the harness
+  refusing to deliver.
+- **Every member's brief says the room exists**, on the first attempt and on
+  every restart, so a member that can be heard knows it can speak.
+- **The window's conversation is the room**: one transcript, a bubble per speaker
+  with its own face, name and stable colour, an addressed message as its own
+  block with `@role`, a header titled with the run's goal over its state and
+  roster, and a member's name as the way into that member's own conversation.
+- **The browser client reads the same room**, with the speaker taken from the
+  event rather than from the conversation, the run's roster in its header, and a
+  composer that steers the run.
+- **`perf.measure` has a reading for a room**: four members' conversations, 150
+  events each, as the window reads them while a run works.
+
+### Fixed
+
+- **A room opens on what is happening, not on the first day.** `chat.team_log`
+  read each conversation forward from its first event, so a run longer than the
+  limit came back as its oldest messages and the newest were never shown.
+- **Notices wrap.** A long notice in a transcript ran off the right edge instead
+  of wrapping inside the column.
+
+---
+
 ## [0.38.0] - 2026-11-18 - The agent knows itself
 
 ### Added

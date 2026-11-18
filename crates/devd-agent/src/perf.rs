@@ -55,7 +55,7 @@ impl Reading {
 /// Measure this process's own work against its budgets, and report the last window launch if one
 /// was recorded beside the state.
 pub fn measure(home: &std::path::Path) -> Result<Value> {
-    let mut best = [f64::MAX; 5];
+    let mut best = [f64::MAX; 6];
     for _ in 0..RUNS {
         for (at, ms) in run_once()?.into_iter().enumerate() {
             if ms < best[at] {
@@ -94,6 +94,15 @@ pub fn measure(home: &std::path::Path) -> Result<Value> {
             what: "read those 500 events back, as a window does",
             ms: best[4],
             budget_ms: 150.0,
+        },
+        // A room is a read of one run's merged log, not of one conversation. It is measured
+        // separately because it is the read the window does while a run is working, and a run with
+        // four members is four times the rows of the conversation above.
+        Reading {
+            name: "a run's room read",
+            what: "read a run's four conversations, 150 events each, as the window does",
+            ms: best[5],
+            budget_ms: 200.0,
         },
     ];
 
@@ -144,11 +153,11 @@ pub fn measure(home: &std::path::Path) -> Result<Value> {
 }
 
 /// One pass over the work, timed. The order is the order a session goes through it.
-fn run_once() -> Result<[f64; 5]> {
+fn run_once() -> Result<[f64; 6]> {
     let started = Instant::now();
     let store = Store::open_in_memory()?;
     store.migrate()?;
-    let mut times = [0.0; 5];
+    let mut times = [0.0; 6];
     times[0] = since(started);
 
     let started = Instant::now();
@@ -176,6 +185,29 @@ fn run_once() -> Result<[f64; 5]> {
     let read = store.list_events(&thread, 0, 1000)?;
     times[4] = since(started);
     debug_assert_eq!(read.len(), ROWS);
+
+    // A room: four members' conversations, read the way the window reads them while a run works.
+    // Seeding is not timed; the read is.
+    let mut rooms = Vec::new();
+    for role in ["implementer", "reviewer", "qa", "backend"] {
+        let t = store.create_thread(&format!("{role} on the run"), None, None, None)?;
+        for n in 0..ROWS {
+            store.append_event(
+                &t.id,
+                "assistant",
+                &json!({ "content": [{ "type": "text", "text": format!("step {n}") }] }),
+            )?;
+        }
+        rooms.push(t.id);
+    }
+
+    let started = Instant::now();
+    let mut seen = 0;
+    for thread in &rooms {
+        seen += store.tail_events(thread, 150)?.len();
+    }
+    times[5] = since(started);
+    debug_assert_eq!(seen, 4 * 150);
 
     Ok(times)
 }
