@@ -9156,6 +9156,16 @@ var TERM_POLL_MS = 250;
     if (node) node.textContent = "devd: " + clip(text, 300);
   }
 
+  /* What a conversation's working tree has changed, and where its branch stands.
+   * A conversation with no project, or one that is not a repository, has nothing to say, so a
+   * failure is silence rather than a banner over the chat. */
+  function loadChanges(tid) {
+    return read("chat.changes", { thread: tid }).then(
+      function (c) { if (AI.thread && AI.thread.id === tid) AI.changes = c; },
+      function () { if (AI.thread && AI.thread.id === tid) AI.changes = null; }
+    );
+  }
+
   function applyThread(d, full, quiet) {
       if (full) { AI.events = []; AI.lastId = 0; AI.outputs = []; }
       d.events.forEach(function (e) {
@@ -9169,6 +9179,15 @@ var TERM_POLL_MS = 250;
         if (!full && !quiet) announceEvent(e);
       });
       AI.thread = d.thread; AI.pending = d.pending || []; AI.running = d.running; AI.chapters = d.chapters || []; AI.run = d.run || null;
+      // What the conversation's working tree has changed, read when it opens and after an action
+      // that can change it. Not on every poll: git status is cheap, but a chat repaints often.
+      if (AI.changesFor !== d.thread.id) {
+        AI.changesFor = d.thread.id;
+        AI.changes = null;
+        loadChanges(d.thread.id).then(function () {
+          if (state.view === "assistant") paintChat(true);
+        });
+      }
       if (d.thread.provider_id) AI.pickProvider = d.thread.provider_id;
       if (d.thread.model) AI.pickModel = d.thread.model;
       AI.queued = d.queued || 0;
@@ -11013,6 +11032,9 @@ var TERM_POLL_MS = 250;
       '<div class="chat-title">' + esc(shownTitle) + "</div>" +
       '<div class="chat-head-sub">' + esc(sub.join(" · ")) + "</div></div>" +
       (AI.queued > 0 ? '<span class="chip chip-warn" title="Messages waiting for the next step">' + AI.queued + " queued</span>" : "") +
+      // The branch this conversation works on, when it owns a worktree of the project: the same
+      // quiet fact the window shows, with what is waiting to go out.
+      (AI.changes && AI.changes.branch && AI.changes.thread === t.id ? '<span class="chip" title="' + attr(AI.changes.branch + (AI.changes.ahead ? " · " + AI.changes.ahead + " to push" : "") + (AI.changes.behind ? " · " + AI.changes.behind + " to pull" : "")) + '"><svg class="icon" aria-hidden="true"><use href="#i-branch"></use></svg>' + esc(AI.changes.branch) + "</span>" : "") +
       (t.pr_url ? '<button type="button" class="chip chip-pr" data-action="open-url" data-url="' + attr(t.pr_url) + '" title="' + attr(t.pr_url) + '"><svg class="icon" aria-hidden="true"><use href="#i-branch"></use></svg>' + esc(prLabel(t.pr_url)) + "</button>" : "") +
       (t.settled_at ? '<span class="chip chip-ok" title="Settled ' + attr(ago(t.settled_at)) + '">Settled</span>' : "") +
       // Context links sit together, before the actions: where this conversation
@@ -11020,6 +11042,9 @@ var TERM_POLL_MS = 250;
       (team && team.parent ? '<button type="button" class="btn btn-mini btn-ghost" data-action="open-thread" data-id="' + attr(team.parent) + '" title="The conversation that asked for this work">Back to request</button>' : "") +
       (team ? '<button type="button" class="btn btn-mini btn-ghost" data-action="team-open-from" data-id="' + attr(team.run) + '">See the run</button>' : "") +
       (AI.chapters && AI.chapters.length ? '<button type="button" class="btn btn-mini btn-ghost" data-action="chapters-open">Chapters ' + AI.chapters.length + "</button>" : "") +
+      // Reviewing what the conversation changed is the first action, because it is the one a
+      // person comes back to the conversation to do.
+      ((t.workdir || t.project) ? '<button type="button" class="btn btn-mini btn-ghost" data-action="thread-changes" title="' + attr(AI.changes && AI.changes.clean === false ? "There are uncommitted changes: review them, then commit and push" : "Review the changes, then commit and push") + '">Changes' + (AI.changes && AI.changes.clean === false ? '<span class="dot dot-warn" aria-hidden="true"></span>' : "") + "</button>" : "") +
       // Actions, in the order they are used: find, inspect, act, then the menu.
       '<button type="button" class="btn btn-mini btn-ghost btn-icon" data-action="thread-find" title="Search this conversation (Ctrl F)" aria-label="Search this conversation"><svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg></button>' +
       (r ? '<button type="button" class="btn btn-mini btn-ghost" data-action="open-run" data-id="' + attr(r.id) + '" title="Steps, capability calls, evidence and the durable timeline">Evidence</button>' : "") +
@@ -11035,6 +11060,10 @@ var TERM_POLL_MS = 250;
       '<button type="button" role="menuitemcheckbox" class="more-item" data-action="work-terminal" aria-checked="' + (AI.work.terminal.open ? "true" : "false") + '"><span>Terminal</span><span class="more-hint">' + (AI.work.terminal.open ? "Open — choose to close" : "A shell in the project") + "</span></button>" +
       '<div class="more-sep"></div>' +
       (!team ? '<button type="button" role="menuitem" class="more-item" data-action="thread-rename"><span>Rename</span></button>' : "") +
+      // Where the work happens, and how it leaves: a worktree of its own, the changes, the review.
+      ((t.workdir || t.project) ? '<button type="button" role="menuitem" class="more-item" data-action="thread-changes"><span>Review the changes</span><span class="more-hint">' + esc(AI.changes && AI.changes.clean === false ? (AI.changes.files || []).length + " file(s), then commit and push" : "The project's Git screen, on this conversation's folder") + "</span></button>" : "") +
+      ((t.project && !team) ? '<button type="button" role="menuitem" class="more-item" data-action="thread-worktree" data-on="' + (t.workdir ? "1" : "0") + '"><span>' + (t.workdir ? "Work on the project again" : "Give it a worktree") + '</span><span class="more-hint">' + (t.workdir ? "Its folder and branch are kept" : "Its own branch and folder, so changes cannot collide") + "</span></button>" : "") +
+      ((t.workdir && !t.pr_url) ? '<button type="button" role="menuitem" class="more-item" data-action="thread-open-pr"><span>Open a pull request</span><span class="more-hint">Pushed branch only; the host fills the title from the commits</span></button>' : "") +
       '<button type="button" role="menuitem" class="more-item" data-action="thread-link-pr"><span>' + (t.pr_url ? "Change the pull request" : "Link a pull request") + '</span><span class="more-hint">Shown on the conversation and in the list</span></button>' +
       (t.pr_url ? '<button type="button" role="menuitem" class="more-item" data-action="thread-unlink-pr"><span>Unlink the pull request</span></button>' : "") +
       '<button type="button" role="menuitem" class="more-item" data-action="thread-settle" data-settled="' + (t.settled_at ? "0" : "1") + '"><span>' + (t.settled_at ? "Reopen" : "Mark as settled") + '</span><span class="more-hint">' + (t.settled_at ? "Back among the open work" : "Done: it stays, quieter, in the list") + "</span></button>" +
@@ -14759,6 +14788,46 @@ var TERM_POLL_MS = 250;
       if (!t) return;
       closeMoreMenus();
       run("chat.settle", { thread: t.id, settled: n.dataset.settled === "1" }).then(function () { return pollThread(true); }).then(function () { refreshThreadList(); paintChat(true); });
+    },
+    "thread-changes": function () {
+      var t = AI.thread;
+      if (!t) return;
+      closeMoreMenus();
+      openProject(t.workdir || t.project, "changes");
+    },
+    "thread-worktree": function (n) {
+      var t = AI.thread;
+      if (!t) return;
+      closeMoreMenus();
+      var after = function () {
+        AI.changesFor = null;
+        return loadChanges(t.id).then(function () { return pollThread(true); }).then(function () { refreshThreadList(); paintChat(true); });
+      };
+      if (n.dataset.on === "1") return run("chat.worktree", { thread: t.id, action: "detach" }).then(after);
+      uiConfirm({
+        title: "Give this conversation its own worktree?",
+        text: "Its tools will work in a separate folder on its own branch, in the same repository, so this conversation's changes cannot collide with another piece of work. Nothing is deleted, and going back keeps the folder.",
+        confirm: "Start a worktree"
+      }).then(function (yes) {
+        if (!yes) return null;
+        return run("chat.worktree", { thread: t.id, action: "create" }).then(after);
+      });
+    },
+    "thread-open-pr": function () {
+      var t = AI.thread;
+      if (!t) return;
+      closeMoreMenus();
+      uiConfirm({
+        title: "Open a pull request for this branch?",
+        text: "The branch must already be pushed — a review is of commits the host can see. Its title and body are filled from the commits, and the review is linked to this conversation.",
+        confirm: "Open the pull request"
+      }).then(function (yes) {
+        if (!yes) return null;
+        return run("chat.pr", { thread: t.id }).then(function () {
+          AI.changesFor = null;
+          return loadChanges(t.id);
+        }).then(function () { return pollThread(true); }).then(function () { refreshThreadList(); paintChat(true); });
+      });
     },
     "thread-find": function () {
       var bar = findBar();

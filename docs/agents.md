@@ -868,6 +868,11 @@ copy of one:
 The branch is not forced on anyone: a conversation in the project's own folder can be reviewed and
 committed the same way, minus the isolation.
 
+The browser client carries the same three: the conversation's menu has **Review the changes**, the
+worktree toggle and **Open a pull request**, and its header shows the branch beside the linked
+review. It reads `chat.changes` when a conversation opens rather than on every poll, so the numbers
+in the header and the Git screen are the same ones the window uses.
+
 ## Deleting conversations, runs and messages
 
 Nothing is deleted on its own; a person decides, and every deletion asks for
