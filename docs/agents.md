@@ -782,6 +782,19 @@ never an unhealthy platform. A service is healthy only after it answers. The
 sidebar shows the state compactly, goes stale after 90 seconds, and the
 Diagnostics page lists every component with what it means and the fix.
 
+## Settling a conversation
+
+A finished conversation leaves the working list without being deleted: **Settle**
+in its header moves it to a **Settled** shelf at the bottom of the list, dimmed
+and still one click from being opened, reopened, renamed or deleted. Settling
+keeps the log, the chapters and the linked pull request; only the place in the
+list changes. Speaking to a settled conversation reopens it, so work can never
+carry on out of sight.
+
+A conversation can carry the pull request it is about: `chat.link_pr` records it
+(and the header shows it as a quiet link), and `chat.settle` is the record behind
+the shelf, so an agent, a script and the window agree on what is settled.
+
 ## Deleting conversations, runs and messages
 
 Nothing is deleted on its own; a person decides, and every deletion asks for
