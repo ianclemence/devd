@@ -1013,6 +1013,11 @@ fn start(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
 /// The run a conversation belongs to, when it belongs to one: its origin, or an agent's own.
 fn run_of(shell: &Shell, id: &str, cx: &mut Context<Shell>) -> Option<String> {
     let _ = shell;
+    run_of_self(id, cx)
+}
+
+/// The same, for a caller that has no shell at hand.
+pub fn run_of_self(id: &str, cx: &App) -> Option<String> {
     devd(cx)
         .sync
         .watch(&q::threads())

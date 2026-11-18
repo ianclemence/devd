@@ -812,7 +812,13 @@ room can show what it answers. The role that speaks is the conversation the call
 specialist's own thread says `from: implementer`, the conversation that started the run says
 `from: devd` — and an address to a role the run does not have is refused with the roles it does
 have. A message never starts a turn by itself: it is speech, and the scheduler still decides when an
-agent works.
+agent works. An **addressed** message is also delivered: it is queued into the conversation of the
+role it names, so that agent reads it at its next step and can answer in the room. The run's budget
+is what bounds a conversation between agents, not the harness refusing to deliver.
+
+The composer in a room speaks to the team, not only to the assistant: sending while a run is open
+also records the message as a direction for the run (`team.say`), so speaking during the work steers
+it — tasks that have not started take the instruction, and running tasks get it when they next stop.
 
 ## Settling a conversation
 

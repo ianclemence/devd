@@ -2480,6 +2480,15 @@ fn a_team_run_reads_as_one_group_chat_with_a_bubble_for_each_role() {
     assert_eq!(talk["data"]["to"], json!("reviewer"));
     assert_eq!(talk["data"]["about"], json!("api"));
     assert_eq!(talk["data"]["from"], json!("devd"));
+    // Addressed means delivered: the reviewer's own conversation has it waiting, so it reads the
+    // message at its next step and can answer in the room.
+    let waiting = e.human.store.list_queued(&written[1]).unwrap();
+    assert_eq!(waiting.len(), 1, "the mention reaches the agent it names");
+    assert!(
+        waiting[0].text.contains("can you look at the retry loop"),
+        "{:?}",
+        waiting[0].text
+    );
     // A message addressed to a role the run does not have is refused, with the roles it does have.
     let refused = call(
         &e,

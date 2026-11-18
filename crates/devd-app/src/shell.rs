@@ -610,6 +610,18 @@ impl Shell {
         }
         mutation.args = args;
         devd(cx).sync.mutate(mutation);
+        // In a room, a message is said to the team, not only to the assistant: the run's tasks get
+        // it as a direction, so speaking while it works steers the work instead of waiting for the
+        // assistant to relay it. A conversation outside a run has no one else to tell.
+        if let Some(run) = thread
+            .as_ref()
+            .and_then(|id| screens::assistant::run_of_self(id, cx))
+        {
+            devd(cx).sync.mutate(
+                Mutation::new("team.say", json!({ "run": run, "text": text }))
+                    .invalidating("team"),
+            );
+        }
         self.compose.files.clear();
         self.composer.update(cx, |input, cx| input.clear(cx));
         if thread.is_none() {

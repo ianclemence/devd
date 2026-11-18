@@ -4734,6 +4734,22 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                         "text": a.text,
                     }),
                 )?;
+                // An addressed message is delivered, not only displayed: it goes into the queue of
+                // the conversation of the role it names, so that agent reads it at its next step
+                // (or when the host next starts it) and can answer in the room. A message to nobody
+                // in particular is just speech, and wakes no one.
+                if let Some(to) = a.to.as_deref() {
+                    let target = ctx
+                        .store
+                        .list_tasks_of_run(&run_id)?
+                        .into_iter()
+                        .find(|t| t.role == to)
+                        .and_then(|t| t.thread_id);
+                    if let Some(thread) = target {
+                        let said = format!("@{from} said, about {}: {}", a.about.as_deref().unwrap_or("the run"), a.text);
+                        ctx.store.queue_message(&thread, &said, &format!("agent:{from}"))?;
+                    }
+                }
                 Ok(Outcome::with_data(
                     match a.to.as_deref() {
                         Some(to) => format!("Posted to the room, addressed to {to}"),
