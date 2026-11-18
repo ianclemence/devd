@@ -791,6 +791,15 @@ keeps the log, the chapters and the linked pull request; only the place in the
 list changes. Speaking to a settled conversation reopens it, so work can never
 carry on out of sight.
 
+The conversation's own menu (the three dots at the end of its header) is where
+everything about the conversation rather than the work lives: **Fork from here**,
+**Pin to the top**, **Mark as settled**, **Rename**, **Link a pull request** and
+**Delete**, the last one in the colour that means it cannot be undone. The bar
+keeps only what a person does while working — stop, where the files are, the
+changes, the review — so the header is no longer a row of identical icons.
+Rename and the pull request link are forms: the same dialog a capability with
+fields gets everywhere else in the window, not a bespoke prompt.
+
 A conversation can carry the pull request it is about: `chat.link_pr` records it
 (and the header shows it as a quiet link), and `chat.settle` is the record behind
 the shelf, so an agent, a script and the window agree on what is settled.

@@ -344,6 +344,8 @@ pub struct Shell {
     pub pane: screens::pane::PaneUi,
     /// Whether the chain of agents under a conversation is folded away.
     pub chain_collapsed: bool,
+    /// Whether the conversation's own menu is open: fork, settle, rename, link, delete.
+    pub conversation_menu: bool,
     _watch: Subscription,
 }
 
@@ -406,6 +408,7 @@ impl Shell {
             browser_ui: screens::browser::BrowserUi::default(),
             pane: screens::pane::PaneUi::default(),
             chain_collapsed: false,
+    conversation_menu: false,
             history: History::new(start),
             runs_filter: Default::default(),
             run_focus: None,
@@ -434,6 +437,8 @@ impl Shell {
 
     /// Go to a place.
     pub fn go(&mut self, route: Route, cx: &mut Context<Self>) {
+        // A menu belongs to the screen that opened it, not to the next one.
+        self.conversation_menu = false;
         self.history.select(route);
         self.present(cx);
         cx.notify();

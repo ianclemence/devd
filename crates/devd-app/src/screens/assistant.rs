@@ -23,6 +23,7 @@ use gpui::{
 use serde_json::{Value, json};
 
 use crate::shell::Shell;
+use crate::screens::modal::{Field, FormSpec};
 use crate::state::{devd, q};
 use crate::theme::{Tone, mono, size, theme};
 use crate::ui::{self, Button, ButtonKind, eyebrow, icon, live_dot, markdown as md};
@@ -620,6 +621,194 @@ fn thread_row(
     .into_any_element()
 }
 
+/// The conversation's own menu: everything about the conversation rather than the work.
+///
+/// It is drawn inside the header, anchored under the button that opens it, and closes on any press
+/// outside it or on choosing something. The items are the capabilities the window already had, in
+/// one place: fork, pin, settle, rename, the pull request link, delete.
+fn conversation_panel(
+    id: &str,
+    title: &str,
+    pinned: bool,
+    settled: bool,
+    last_event: Option<i64>,
+    pr_url: Option<&str>,
+    cx: &mut Context<Shell>,
+) -> AnyElement {
+    type Act = Box<dyn Fn(&mut Shell, &mut Window, &mut Context<Shell>)>;
+    // A third field says the row is destructive: it is the only one that is, and it says so in the
+    // colour rather than in the position.
+    let mut items: Vec<(&'static str, bool, Act)> = Vec::new();
+
+    if let Some(event) = last_event {
+        let (tid, ttitle) = (id.to_string(), title.to_string());
+        items.push((
+            "Fork from here",
+            false,
+            Box::new(move |_, _, cx| {
+                devd(cx).sync.mutate(
+                    Mutation::new(
+                        "chat.fork",
+                        json!({ "thread": tid, "event": event, "title": format!("Fork of {ttitle}") }),
+                    )
+                    .invalidating("chat"),
+                );
+            }),
+        ));
+    }
+    {
+        let tid = id.to_string();
+        items.push((
+            if pinned { "Unpin" } else { "Pin to the top" },
+            false,
+            Box::new(move |_, _, cx| {
+                devd(cx).sync.mutate(
+                    Mutation::new("chat.pin_session", json!({ "thread": tid, "pinned": !pinned }))
+                        .invalidating("chat"),
+                );
+            }),
+        ));
+    }
+    {
+        let tid = id.to_string();
+        items.push((
+            if settled { "Reopen" } else { "Mark as settled" },
+            false,
+            Box::new(move |_, _, cx| {
+                devd(cx).sync.mutate(
+                    Mutation::new("chat.settle", json!({ "thread": tid, "settled": !settled }))
+                        .invalidating("chat"),
+                );
+            }),
+        ));
+    }
+    {
+        let tid = id.to_string();
+        items.push((
+            "Rename",
+            false,
+            Box::new(move |this, window, cx| {
+                this.open_form(
+                    FormSpec {
+                        title: "Rename the conversation",
+                        intro: "The name it has in the list. Nothing else changes.",
+                        verb: "Rename",
+                        capability: "chat.update",
+                        domain: "chat",
+                        fixed: json!({ "thread": tid }),
+                        fields: vec![Field::text("title", "Name", "The checkout bug")],
+                        busy: None,
+                    },
+                    window,
+                    cx,
+                );
+            }),
+        ));
+    }
+    {
+        let tid = id.to_string();
+        items.push((
+            if pr_url.is_some() {
+                "Change the pull request"
+            } else {
+                "Link a pull request"
+            },
+            false,
+            Box::new(move |this, window, cx| {
+                this.open_form(
+                    FormSpec {
+                        title: "Link a pull request",
+                        intro: "The review this conversation is about. It shows beside the title and in the list.",
+                        verb: "Link",
+                        capability: "chat.link_pr",
+                        domain: "chat",
+                        fixed: json!({ "thread": tid }),
+                        fields: vec![Field::text(
+                            "url",
+                            "Address",
+                            "https://github.com/owner/repo/pull/1",
+                        )],
+                        busy: None,
+                    },
+                    window,
+                    cx,
+                );
+            }),
+        ));
+    }
+    if pr_url.is_some() {
+        let tid = id.to_string();
+        items.push((
+            "Unlink the pull request",
+            false,
+            Box::new(move |_, _, cx| {
+                devd(cx).sync.mutate(
+                    Mutation::new("chat.link_pr", json!({ "thread": tid })).invalidating("chat"),
+                );
+            }),
+        ));
+    }
+    {
+        let (tid, ttitle) = (id.to_string(), title.to_string());
+        items.push((
+            "Delete",
+            true,
+            Box::new(move |this, window, cx| {
+                this.delete_conversation(tid.clone(), ttitle.clone(), true, window, cx);
+            }),
+        ));
+    }
+
+    let t = theme(cx).clone();
+    let (text, danger, hover) = (t.text, t.danger, t.hover);
+    let mut rows = div().flex().flex_col().gap(px(1.0));
+    for (n, (label, destructive, action)) in items.into_iter().enumerate() {
+        rows = rows.child(
+            div()
+                .id(ui::nid("conversation.menu", n))
+                .h(px(30.0))
+                .px(px(10.0))
+                .flex()
+                .items_center()
+                .rounded(px(6.0))
+                .cursor_pointer()
+                .hover(move |s| s.bg(hover))
+                .child(
+                    div()
+                        .text_size(px(size::TEXT_SM))
+                        .text_color(if destructive { danger } else { text })
+                        .child(label),
+                )
+                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    this.conversation_menu = false;
+                    action(this, window, cx);
+                })),
+        );
+    }
+
+    div()
+        .absolute()
+        .top(px(44.0))
+        .right(px(10.0))
+        .w(px(232.0))
+        .p(px(5.0))
+        .flex()
+        .flex_col()
+        .gap(px(1.0))
+        .rounded(px(size::RADIUS_L))
+        .border_1()
+        .border_color(t.line_strong)
+        .bg(t.raised)
+        .shadow_lg()
+        .occlude()
+        .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+            this.conversation_menu = false;
+            cx.notify();
+        }))
+        .child(rows)
+        .into_any_element()
+}
+
 /// What a linked pull request is called in a conversation's header: `PR 42`, `MR 7`, or the words
 /// alone when the address does not end in a number.
 fn pr_label(url: &str) -> String {
@@ -976,99 +1165,28 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
         );
     }
     let last_event = events.last().and_then(|e| e["id"].as_i64());
-    // A hairline between the work (stop, worktree, changes, review) and the quiet actions that
-    // appear with it, so six icons never read as one undifferentiated row.
+    // Everything about the conversation rather than the work — pin, settle, fork, rename, the pull
+    // request link, delete — lives in one menu, so the bar keeps only what a person does while
+    // working: stop, where the files are, the changes, and the review.
     actions = actions.child(
         div()
-            .w(px(1.0))
-            .h(px(16.0))
-            .mx(px(4.0))
-            .flex_none()
-            .bg(t.line)
-            .opacity(0.4)
-            .group_hover("convo.head", |s| s.opacity(1.0)),
-    );
-    let (to_pin, to_fork, fork_title) = (id.to_string(), id.to_string(), title.clone());
-    actions = actions
-        .child(
-            div()
-                .id("conversation.pin.wrap")
-                .opacity(0.4)
-                .group_hover("convo.head", |s| s.opacity(1.0))
-                .tooltip(ui::tip(if pinned { "Unpin from the top of the list" } else { "Pin to the top of the list" }))
-                .child(
-                    Button::icon_only("conversation.pin", "pin")
-                        .kind(if pinned { ButtonKind::Secondary } else { ButtonKind::Ghost })
-                        .on_click(move |_, _, cx| {
-                            devd(cx).sync.mutate(
-                                Mutation::new("chat.pin_session", json!({ "thread": to_pin, "pinned": !pinned })).invalidating("chat"),
-                            );
-                        }),
-                ),
-        )
-        .child({
-            let to_settle = id.to_string();
-            div()
-                .id("conversation.settle.wrap")
-                .opacity(0.4)
-                .group_hover("convo.head", |s| s.opacity(1.0))
-                .tooltip(ui::tip(if settled_now {
-                    "Reopen: back into the working list"
-                } else {
-                    "Settle: finished work, out of the working list"
-                }))
-                .child(
-                    Button::icon_only(
-                        "conversation.settle",
-                        if settled_now { "arrow-up" } else { "check" },
-                    )
-                    .kind(ButtonKind::Ghost)
-                    .on_click(move |_, _, cx| {
-                        devd(cx).sync.mutate(
-                            Mutation::new(
-                                "chat.settle",
-                                json!({ "thread": to_settle, "settled": !settled_now }),
-                            )
-                            .invalidating("chat"),
-                        );
-                    }),
-                )
-        })
-        .children(last_event.map(|event| {
-            div()
-                .id("conversation.fork.wrap")
-                .opacity(0.4)
-                .group_hover("convo.head", |s| s.opacity(1.0))
-                .tooltip(ui::tip("Fork: a new conversation from here, leaving this one as it is"))
-                .child(Button::icon_only("conversation.fork", "copy").on_click(move |_, _, cx| {
-                    devd(cx).sync.mutate(
-                        Mutation::new(
-                            "chat.fork",
-                            json!({ "thread": to_fork, "event": event, "title": format!("Fork of {fork_title}") }),
-                        )
-                        .invalidating("chat"),
-                    );
-                }))
-        }));
-    let (doomed, doomed_title) = (id.to_string(), title.clone());
-    actions = actions.child(
-        div()
-            .id("conversation.delete.wrap")
-            .opacity(0.4)
-            .group_hover("convo.head", |s| s.opacity(1.0))
-            .tooltip(ui::tip("Delete conversation"))
+            .id("conversation.more.wrap")
+            .tooltip(ui::tip(if shell.conversation_menu {
+                "Close the conversation menu"
+            } else {
+                "Conversation menu"
+            }))
             .child(
-                Button::icon_only("conversation.delete", "trash").on_click(cx.listener(
-                    move |this, _: &ClickEvent, window, cx| {
-                        this.delete_conversation(
-                            doomed.clone(),
-                            doomed_title.clone(),
-                            true,
-                            window,
-                            cx,
-                        )
-                    },
-                )),
+                Button::icon_only("conversation.more", "more")
+                    .kind(if shell.conversation_menu {
+                        ButtonKind::Secondary
+                    } else {
+                        ButtonKind::Ghost
+                    })
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.conversation_menu = !this.conversation_menu;
+                        cx.notify();
+                    })),
             ),
     );
     let head = div()
@@ -1078,10 +1196,7 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
         .flex_none()
         .items_center()
         .gap(px(16.0))
-        // The quiet actions (pin, settle, fork, delete) belong to the header and appear when the
-        // pointer is on it, so the bar shows the work — Stop, Worktree, Changes, a review — not a row
-        // of eight identical icons.
-        .group("convo.head")
+        .relative()
         .border_b_1()
         .border_color(t.line)
         .child(
@@ -1096,7 +1211,7 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
                         .min_w_0()
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(t.text)
-                        .child(ui::Clip::new(title)),
+                        .child(ui::Clip::new(title.clone())),
                 )
                 // The branch, when this conversation works on one of its own: a quiet fact beside
                 // the title, the same weight as the pull request link under it.
@@ -1138,6 +1253,7 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
                 })),
         )
         .child(actions);
+
 
     // A conversation that stopped on an error says so once. Its last failure in the transcript is where that is read,
     // beside the message box, and that is where it is resumed from. Only when the transcript holds no such failure is
@@ -1260,6 +1376,7 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
         });
     let chain = chain(shell, id, thread, cx);
     div()
+        .relative()
         .flex_1()
         .min_w_0()
         .h_full()
@@ -1291,6 +1408,20 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
                     cx,
                 )),
         )
+        // The conversation's menu is the last child of the column, drawn over the transcript rather
+        // than under it: it belongs to the header but it has to be above everything, and painting
+        // later is the only way to be.
+        .children(shell.conversation_menu.then(|| {
+            conversation_panel(
+                id,
+                &title,
+                pinned,
+                settled_now,
+                last_event,
+                thread["pr_url"].as_str(),
+                cx,
+            )
+        }))
         .into_any_element()
 }
 
