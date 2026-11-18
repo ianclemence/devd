@@ -872,7 +872,9 @@ devd call perf.measure
 ```
 
 An agent can call it too: it is read-only, and it is the honest answer to "how fast are you" that
-does not depend on the model's opinion of itself.
+does not depend on the model's opinion of itself. The same readings are on **Settings →
+Diagnostics → Speed**, each with its budget and whether it is inside it, so the question "is devd
+the problem?" is answered on the screen where a person asks it rather than in a terminal.
 
 ## Shipping what a conversation did
 

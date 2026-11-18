@@ -656,16 +656,27 @@ fn thread_row(
 /// It is drawn inside the header, anchored under the button that opens it, and closes on any press
 /// outside it or on choosing something. The items are the capabilities the window already had, in
 /// one place: fork, pin, settle, rename, the pull request link, delete.
-fn conversation_panel(
-    id: &str,
-    title: &str,
+/// What the menu needs to know about the conversation it serves.
+struct PanelFacts<'a> {
+    id: &'a str,
+    title: &'a str,
     pinned: bool,
     settled: bool,
     snoozed: bool,
     last_event: Option<i64>,
-    pr_url: Option<&str>,
-    cx: &mut Context<Shell>,
-) -> AnyElement {
+    pr_url: Option<&'a str>,
+}
+
+fn conversation_panel(facts: PanelFacts<'_>, cx: &mut Context<Shell>) -> AnyElement {
+    let PanelFacts {
+        id,
+        title,
+        pinned,
+        settled,
+        snoozed,
+        last_event,
+        pr_url,
+    } = facts;
     type Act = Box<dyn Fn(&mut Shell, &mut Window, &mut Context<Shell>)>;
     // A third field says the row is destructive: it is the only one that is, and it says so in the
     // colour rather than in the position.
@@ -1503,13 +1514,15 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
         // later is the only way to be.
         .children(shell.conversation_menu.then(|| {
             conversation_panel(
-                id,
-                &title,
-                pinned,
-                settled_now,
-                snoozed_now(thread),
-                last_event,
-                thread["pr_url"].as_str(),
+                PanelFacts {
+                    id,
+                    title: &title,
+                    pinned,
+                    settled: settled_now,
+                    snoozed: snoozed_now(thread),
+                    last_event,
+                    pr_url: thread["pr_url"].as_str(),
+                },
                 cx,
             )
         }))
