@@ -2354,6 +2354,23 @@ fn a_template_fills_its_blanks_and_starts_the_team_with_its_definition_of_done()
 }
 
 #[test]
+fn a_conversation_with_a_recorded_cost_still_shows_what_its_cache_saved() {
+    let e = env();
+    call(&e, &e.human, "provider.save", json!({ "id": "deepseek", "preset": "deepseek", "api_key": "sk-test-0123456789abcdef", "default_model": "deepseek-flash" }), Approval::None).unwrap();
+    let thread = e.human.store.create_thread("Priced work", None, Some("deepseek"), Some("deepseek-flash")).unwrap();
+    // The shape every recent conversation has: a cost recorded per call, beside the cache tokens.
+    // The price map used to be filled only when a cost had to be computed, so this row — the common
+    // one — showed "Saved by caching $0.00" against a 90% cache hit.
+    e.human.store.add_thread_usage_full(&thread.id, 10_000_000, 100_000, 9_000_000, 0, Some(0.30)).unwrap();
+
+    let usage = call(&e, &e.human, "models.usage", json!({}), Approval::None).unwrap();
+    let saved = usage["cache_saved_usd"].as_f64().expect("the price is known, so the saving is a number");
+    assert!(saved > 0.0, "a 90% cache saved nothing? {usage}");
+    assert_eq!(usage["by_model"][0]["cache_saved_usd"].as_f64().unwrap(), saved);
+    assert!((usage["cache_hit_rate"].as_f64().unwrap() - 0.9).abs() < 1e-9);
+}
+
+#[test]
 fn a_conversation_recorded_without_a_cost_is_priced_from_the_catalogue_with_its_cache_discount() {
     let e = env();
     // DeepSeek by preset: nothing listed, no price recorded, exactly as the

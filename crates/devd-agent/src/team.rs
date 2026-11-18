@@ -1081,7 +1081,7 @@ impl Team {
                 false
             }
             crate::budget::Standing::Reached(words) => {
-                let why = format!("Budget reached: {words}. The work so far is kept. Raise the budget (team.budget) and resume to continue.");
+                let why = format!("{}: {words}. The work so far is kept. Raise the budget (team.budget) and resume to continue.", devd_core::runs::BUDGET_REACHED);
                 let _ = self
                     .ctx
                     .store
@@ -1179,7 +1179,7 @@ impl Team {
             && run
                 .error
                 .as_deref()
-                .is_some_and(|e| e.starts_with("Budget reached"));
+                .is_some_and(devd_core::runs::at_budget);
         if was_budget
             && matches!(
                 crate::budget::standing(
@@ -3248,11 +3248,36 @@ impl Team {
                 &format!(
                     "{} finished: {} ({done} of {} tasks done)",
                     t.key,
-                    util::truncate(handoff.summary.lines().next().unwrap_or(""), 140),
+                    Self::first_sentence(&handoff.summary, 180),
                     work.len()
                 ),
             );
         }
+    }
+
+    /// The first sentence of what a task reported, for the line posted into the conversation that
+    /// asked for the run.
+    ///
+    /// A person reads a sentence; the whole report is in the run, one click away. It ends at a full
+    /// stop that ends a sentence (a version or a path dot is not one), otherwise at a word boundary,
+    /// and it never writes a byte count at somebody.
+    fn first_sentence(text: &str, max: usize) -> String {
+        let t = text.trim();
+        let mut end = t.len();
+        for (i, c) in t.char_indices() {
+            if i >= 24 && matches!(c, '.' | '!' | '?') {
+                let after = t[i + c.len_utf8()..].chars().next();
+                if after.is_none() || after == Some(' ') {
+                    end = i + c.len_utf8();
+                    break;
+                }
+            }
+        }
+        let sentence = t[..end].trim();
+        if sentence.chars().count() <= max {
+            return sentence.to_string();
+        }
+        short_title(sentence, max)
     }
 
     /// A gatekeeper asked for changes: hand the findings back to the member who wrote
@@ -4265,5 +4290,38 @@ mod title_tests {
         assert!(t.ends_with('…') && t.chars().count() <= 70, "{t}");
         assert!(t.ends_with("in Go…"), "{t}");
         assert_eq!(short_title("Short goal", 70), "Short goal");
+    }
+}
+
+#[cfg(test)]
+mod notice_tests {
+    use super::Team;
+
+    // The summary this run actually reported: 1,824 bytes, of which the old note kept 140 and then said
+    // "[truncated 1684 bytes]" at the person.
+    const REPORT: &str = "Built the scheduling half of package scheduler (commit e61d108, 5 files, 1702 insertions; store/, cron/ and api/ untouched). scheduler/scheduler.go holds Scheduler/Options/New/Start/Run/Shutdown/Trigger/Done, the due loop over the injectable Clock, crash recovery and the missed-slot report; overlap.go holds the skip/queue/allow decisions plus the busy/pending accounting that lets Shutdown know when nothing is in flight.";
+
+    #[test]
+    fn a_finished_task_is_announced_in_a_sentence_not_a_byte_count() {
+        let said = Team::first_sentence(REPORT, 180);
+        assert_eq!(
+            said,
+            "Built the scheduling half of package scheduler (commit e61d108, 5 files, 1702 insertions; store/, cron/ and api/ untouched)."
+        );
+        assert!(!said.contains("truncated"), "{said}");
+    }
+
+    #[test]
+    fn a_sentence_with_no_full_stop_is_cut_at_a_word_with_an_ellipsis() {
+        let said = Team::first_sentence(&"word ".repeat(200), 60);
+        assert!(said.ends_with('…'), "{said}");
+        assert!(said.chars().count() <= 60, "{said}");
+        assert!(!said.contains("truncated"), "{said}");
+    }
+
+    #[test]
+    fn a_dot_inside_a_path_or_a_version_does_not_end_the_sentence() {
+        let said = Team::first_sentence("Fixed go.mod and api/v2 to agree, then ran the suite. It passed.", 180);
+        assert_eq!(said, "Fixed go.mod and api/v2 to agree, then ran the suite.");
     }
 }

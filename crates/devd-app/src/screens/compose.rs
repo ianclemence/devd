@@ -65,6 +65,18 @@ pub const EFFORTS: &[(&str, &str)] = &[
     ("max", "Max"),
 ];
 
+/// The effort level a conversation's stored choice names, as the composer holds it.
+///
+/// A conversation that never chose one has no level, and the chip then says what the default is
+/// rather than what was last picked somewhere else.
+pub fn level(effort: Option<&str>) -> Option<&'static str> {
+    let effort = effort?;
+    EFFORTS
+        .iter()
+        .find(|(id, _)| *id == effort)
+        .map(|(id, _)| *id)
+}
+
 /// What the message box has chosen, beyond its text.
 #[derive(Debug, Default)]
 pub struct Compose {
@@ -74,6 +86,9 @@ pub struct Compose {
     pub mode: Option<&'static str>,
     /// The effort chosen, or None for the ordinary default.
     pub effort: Option<&'static str>,
+    /// The conversation these choices belong to, so the effort can be read from it when it opens
+    /// instead of showing whatever was last picked in this window.
+    pub thread: Option<String>,
     /// The provider and model chosen, or None for the default one.
     pub model: Option<(String, String)>,
     /// Files and folders attached to the next message.

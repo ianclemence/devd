@@ -34,6 +34,18 @@ use crate::capability::Outcome;
 use crate::error::{DevdError, Result};
 use crate::util;
 
+/// The words a paused run carries when its budget is what stopped it.
+///
+/// The scheduler writes it once and the needs object and the window read it, so
+/// "this run stopped at its budget" is one fact rather than three guesses at a
+/// sentence. A run paused for any other reason must not be mistaken for one.
+pub const BUDGET_REACHED: &str = "Budget reached";
+
+/// Whether a run's own reason says its budget is what stopped it.
+pub fn at_budget(reason: &str) -> bool {
+    reason.starts_with(BUDGET_REACHED)
+}
+
 /// How a run is being driven.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

@@ -723,6 +723,13 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
         .update(id, events, &pending, writing.as_deref(), running);
 
     let thread = &data["thread"];
+    // The composer's effort is this conversation's, not the window's. Opening a conversation reads the
+    // level it has been running at, so the chip cannot say "Thinking off" above an agent that is
+    // thinking at the default, and a conversation set to Off does not come back as Medium.
+    if shell.compose.thread.as_deref() != Some(id) {
+        shell.compose.thread = Some(id.to_string());
+        shell.compose.effort = super::compose::level(thread["effort"].as_str());
+    }
     if running {
         devd(cx).chat_running.set(true);
     }

@@ -36,7 +36,7 @@ pub struct Needs {
     /// One line: the part of the plan that the run is holding on.
     pub line: String,
     /// `no-report`, `not-proved`, `blocked`, `failed`, `merge`, `approval`,
-    /// `plan`, `criteria`.
+    /// `plan`, `criteria`, `verdict`, `budget`.
     pub reason: String,
     /// What is missing, in devd's words, not the model's.
     pub missing: Vec<String>,
@@ -106,6 +106,7 @@ impl Needs {
             "plan" => format!("The plan for \"{}\" is ready to read.", self.title),
             "criteria" => format!("\"{}\" finished, but {} requirement(s) of the definition of done may not hold.", self.title, self.open.len()),
             "verdict" => format!("\"{}\" finished, but the final check did not approve it.", self.title),
+            "budget" => format!("\"{}\" stopped at its budget.", self.title),
             _ => format!("\"{}\" needs you.", self.title),
         }
     }
@@ -336,12 +337,41 @@ pub fn of(run: &TeamRun, tasks: &[TeamTask]) -> Option<Needs> {
         });
     }
     let real: Vec<&TeamTask> = tasks.iter().filter(|t| t.role != "planner").collect();
-    // A run paused because its final check did not approve the work is a
-    // decision for the person: accept it explicitly, or give the team new
-    // direction. It is not a silent failure and not a "done".
+    // A run that stopped at its budget is waiting on a number, not on a check. Asked any other way,
+    // the Inbox used to pick the newest gatekeeper task — one that had never run — and tell the person
+    // its final check had failed. The pause reason is read first, so the question matches the banner.
     if run.state == "paused" {
+        let why = run.error.as_deref().unwrap_or("");
+        if devd_core::runs::at_budget(why) {
+            return Some(Needs {
+                scope: "run".into(),
+                run_id: run.id.clone(),
+                task_id: None,
+                task_key: None,
+                role: None,
+                title: run.title.clone(),
+                line: "the budget".into(),
+                reason: "budget".into(),
+                missing: vec![why.to_string()],
+                actions: vec![NeedAction {
+                    id: "budget".into(),
+                    label: "Raise the budget".into(),
+                    detail: "Opens the run, where the ceiling is raised and the run carries on by itself. Resuming without raising it pauses again at the next step.".into(),
+                    capability: None,
+                    args: json!({ "run": run.id }),
+                    dangerous: false,
+                }],
+                open: Vec::new(),
+            });
+        }
+        // A run paused because its final check did not approve the work is a decision for the person:
+        // accept it explicitly, or give the team new direction. Only a check that answered counts — a
+        // task that never ran has no verdict, and reporting one invents a failure.
         if let Some(t) = real
             .iter()
+            // A task that never started has no verdict to report, and reading one into it invents a
+            // failure. One that ran and could not be parsed is still the question.
+            .filter(|t| t.state != "pending")
             .filter(|t| {
                 devd_core::completion::is_gatekeeper(&t.role)
                     || t.key == "final-verify"
@@ -376,11 +406,12 @@ pub fn of(run: &TeamRun, tasks: &[TeamTask]) -> Option<Needs> {
                     .unwrap_or_default();
                 let mut missing = criteria.clone();
                 if missing.is_empty() {
-                    missing.push(format!(
-                        "the final check on {} says {}",
-                        t.key,
-                        if v.is_empty() { "it is not approved" } else { v }
-                    ));
+                    let said = if v.is_empty() {
+                        "did not report a verdict".to_string()
+                    } else {
+                        format!("says {v}")
+                    };
+                    missing.push(format!("the final check on {} {said}", t.key));
                 }
                 return Some(Needs {
                     scope: "run".into(),
@@ -566,6 +597,72 @@ mod tests {
         let needs = of_criteria(&run, &["the README documents every command".to_string()]);
         assert_eq!(needs.reason, "criteria");
         assert_eq!(needs.primary().unwrap().id, "look");
+    }
+
+    #[test]
+    fn a_run_paused_at_its_budget_asks_for_the_budget_not_for_a_check_that_never_ran() {
+        let (s, mut run, _t) = run_and_task("done", None);
+        // A security task that was planned and never started: no turns, no verdict.
+        s.add_task(
+            &run.id,
+            NewTask {
+                key: "sec-review",
+                role: "security",
+                title: "Security review of the HTTP layer",
+                instructions: "review it",
+                depends_on: &[],
+                scope: &[],
+                criteria: &[],
+                mandate: None,
+            },
+        )
+        .unwrap();
+        run.state = "paused".into();
+        run.error = Some(format!(
+            "{}: Its agents have taken 250 of the 250 model turns it was given. The work so far is kept.",
+            devd_core::runs::BUDGET_REACHED
+        ));
+        let tasks = s.list_tasks_of_run(&run.id).unwrap();
+        let needs = of(&run, &tasks).expect("a paused run needs a person");
+        assert_eq!(needs.reason, "budget");
+        assert_eq!(needs.task_key, None, "no task is blamed for a budget");
+        assert_eq!(needs.question(), "\"Add dark mode\" stopped at its budget.");
+        assert_eq!(needs.primary().unwrap().id, "budget");
+    }
+
+    #[test]
+    fn a_check_that_actually_answered_is_still_the_question_when_it_did_not_approve() {
+        let (s, mut run, _t) = run_and_task("done", None);
+        let review = s
+            .add_task(
+                &run.id,
+                NewTask {
+                    key: "final-verify",
+                    role: "qa",
+                    title: "Final verification",
+                    instructions: "check it",
+                    depends_on: &[],
+                    scope: &[],
+                    criteria: &[],
+                    mandate: None,
+                },
+            )
+            .unwrap();
+        s.update_team_task(
+            &review.id,
+            devd_core::store_team::TaskUpdate {
+                state: "done",
+                verdict: Some("changes_needed"),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        run.state = "paused".into();
+        run.error = Some("the final check did not approve the work".into());
+        let tasks = s.list_tasks_of_run(&run.id).unwrap();
+        let needs = of(&run, &tasks).expect("needs a person");
+        assert_eq!(needs.reason, "verdict");
+        assert_eq!(needs.task_key.as_deref(), Some("final-verify"));
     }
 
     #[test]

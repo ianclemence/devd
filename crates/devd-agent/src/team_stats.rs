@@ -170,6 +170,9 @@ pub fn usage(ctx: &Ctx) -> Result<Value> {
         cache_write: i64,
         cost: f64,
         saved: f64,
+        /// Whether any of this row's conversations had both prices, so its saving is a number and
+        /// not the absence of one. A row of unknowns must not read as "saved $0.00".
+        saved_known: bool,
         priced: i64,
         unpriced: i64,
         errors: i64,
@@ -197,22 +200,31 @@ pub fn usage(ctx: &Ctx) -> Result<Value> {
             .or_else(|| fallback.as_ref().and_then(|p| p.default_model.clone()))
             .unwrap_or_else(|| "default model".into());
         let who = role_of.get(&t.id).cloned().unwrap_or_else(|| "assistant".into());
+        // The prices this conversation's model carries, whether or not its cost was recorded. They were
+        // looked up only on the fallback path, which is why "saved by caching" read $0.00 against a 93%
+        // cache hit: the map was never filled for a conversation that had a recorded cost.
+        let provider = t.provider_id.as_ref().and_then(|id| providers.get(id)).or(fallback.as_ref());
+        let key = provider.map(|p| (p.id.clone(), model.clone()));
+        if let (Some(k), Some(p)) = (key.clone(), provider) {
+            priced
+                .entry(k)
+                .or_insert_with(|| crate::policy::model_caps(&ctx.store, p, &model));
+        }
+        let caps = key.as_ref().and_then(|k| priced.get(k));
         // Prefer what was recorded when the call was made; fall back to the
         // catalogue price for conversations recorded before per-call cost. A
         // recorded cost of nothing against real tokens is such a conversation.
         let recorded = t.cost_usd.filter(|c| *c > 0.0 || t.input_tokens + t.output_tokens == 0);
         let cost = recorded.or_else(|| {
-            let provider = t.provider_id.as_ref().and_then(|id| providers.get(id)).or(fallback.as_ref())?;
-            let caps = priced
-                .entry((provider.id.clone(), model.clone()))
-                .or_insert_with(|| crate::policy::model_caps(&ctx.store, provider, &model));
+            let provider = provider?;
+            let caps = caps?;
             let kind = if provider.base_url.contains("deepseek") { "deepseek" } else { provider.kind.as_str() };
             crate::policy::cost_usd_cached(caps, kind, t.input_tokens, t.output_tokens, t.cache_read_tokens, t.cache_write_tokens)
         });
-        // What the prompt cache saved: the same tokens at the full input price.
+        // What the prompt cache saved: the same tokens at the full input price. A model whose price is
+        // unknown saves nothing that can be counted, and says so by having no number rather than a zero.
         let saved = cost.and_then(|c| {
-            let provider = t.provider_id.as_ref().and_then(|id| providers.get(id)).or(fallback.as_ref())?;
-            let caps = priced.get(&(provider.id.clone(), model.clone()))?;
+            let caps = caps?;
             let full = crate::policy::cost_usd(caps, t.input_tokens, t.output_tokens)?;
             Some((full - c).max(0.0))
         });
@@ -229,7 +241,10 @@ pub fn usage(ctx: &Ctx) -> Result<Value> {
             match cost {
                 Some(c) => {
                     u.cost += c;
-                    u.saved += saved.unwrap_or(0.0);
+                    if let Some(s) = saved {
+                        u.saved += s;
+                        u.saved_known = true;
+                    }
                     u.priced += 1;
                 }
                 None => u.unpriced += 1,
@@ -253,7 +268,7 @@ pub fn usage(ctx: &Ctx) -> Result<Value> {
                 "cache_read": u.cache_read,
                 "cache_write": u.cache_write,
                 "cost_usd": if u.priced > 0 { Some(u.cost) } else { None },
-                "cache_saved_usd": if u.priced > 0 { Some(u.saved) } else { None },
+                "cache_saved_usd": if u.saved_known { Some(u.saved) } else { None },
                 // The share of input that was read from the cache instead of paid for in full.
                 "cache_hit_rate": if u.input > 0 { Some(u.cache_read as f64 / u.input as f64) } else { None },
                 "errors": u.errors,
@@ -267,6 +282,9 @@ pub fn usage(ctx: &Ctx) -> Result<Value> {
     };
     let known: Vec<f64> = by_model.values().filter(|u| u.priced > 0).map(|u| u.cost).collect();
     let saved_total: f64 = by_model.values().map(|u| u.saved).sum();
+    // A saving is only a number when at least one conversation had the prices to compute it. Otherwise
+    // the panel says nothing rather than "$0.00", which reads as "the cache saved you nothing".
+    let saved_known = by_model.values().any(|u| u.saved_known);
     let (all_input, all_output, all_read): (i64, i64, i64) = by_model.values().fold((0, 0, 0), |a, u| (a.0 + u.input, a.1 + u.output, a.2 + u.cache_read));
     let unpriced: i64 = by_model.values().map(|u| u.unpriced).sum();
     Ok(json!({
@@ -275,7 +293,7 @@ pub fn usage(ctx: &Ctx) -> Result<Value> {
         "heaviest": top.into_iter().take(8).map(|(_, v)| v).collect::<Vec<_>>(),
         "total_cost_usd": if known.is_empty() { None } else { Some(known.iter().sum::<f64>()) },
         "unpriced_conversations": unpriced,
-        "cache_saved_usd": if known.is_empty() { None } else { Some(saved_total) },
+        "cache_saved_usd": if saved_known { Some(saved_total) } else { None },
         "input_tokens": all_input,
         "output_tokens": all_output,
         "cache_read_tokens": all_read,

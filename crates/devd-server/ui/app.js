@@ -11524,6 +11524,12 @@ var TERM_POLL_MS = 250;
     return '<div class="run-score" aria-label="Run scorecard">' + items.join("") + "</div>";
   }
 
+  /* The words the scheduler writes when a budget is what stopped a run (devd-core::runs), so this
+   * page and the native window recognise one the same way. */
+  function budgetStopped(r) {
+    return !!(r && r.state === "paused" && String(r.error || "").indexOf("Budget reached") === 0);
+  }
+
   function teamDetail(d) {
     var r = d.run, tasks = d.tasks, events = d.events;
     var planner = tasks.filter(function (t) { return t.role === "planner"; })[0];
@@ -11533,7 +11539,13 @@ var TERM_POLL_MS = 250;
     var primary = "";
     if (r.state === "awaiting_plan") primary = '<button type="button" class="btn btn-mini btn-primary" data-action="team-approve" data-id="' + attr(r.id) + '">Approve plan and start</button>';
     if (r.state === "running") primary = '<button type="button" class="btn btn-mini" data-action="team-pause" data-id="' + attr(r.id) + '">Pause</button>';
-    if (r.state === "paused") primary = '<button type="button" class="btn btn-mini btn-primary" data-action="team-resume" data-id="' + attr(r.id) + '">Resume</button>';
+    if (r.state === "paused") {
+      // A run stopped at its budget cannot be resumed into progress: the scheduler sees the same
+      // usage and pauses it again at the next step. Offer the one action that works.
+      primary = budgetStopped(r)
+        ? '<button type="button" class="btn btn-mini btn-primary" data-action="team-budget" data-id="' + attr(r.id) + '">Raise the budget</button>'
+        : '<button type="button" class="btn btn-mini btn-primary" data-action="team-resume" data-id="' + attr(r.id) + '">Resume</button>';
+    }
     var over0 = ["planning", "awaiting_plan", "running", "paused"].indexOf(r.state) < 0;
     if (!over0) actions += '<button type="button" class="btn btn-mini btn-danger" data-action="team-cancel" data-id="' + attr(r.id) + '">Cancel run</button>';
     // Evidence first, then the run's own control; deleting a finished run is a quiet icon.
@@ -14275,6 +14287,20 @@ var TERM_POLL_MS = 250;
     "team-approve": function (n) { run("team.approve_plan", { run: n.dataset.id }).then(function () { return read("team.get", { run: n.dataset.id }); }).then(function (d) { TEAM.data = d; paintTeam(); loadHealth().then(function () { rail(); }); }); },
     "team-pause": function (n) { run("team.pause", { run: n.dataset.id }); },
     "team-resume": function (n) { run("team.resume", { run: n.dataset.id }); },
+    // A run stopped at its budget: raise the ceiling that stopped it, which carries the run on by
+    // itself. The run page's button and this one use the same rule.
+    "team-budget": function (n) {
+      var id = n.dataset.id;
+      read("team.get", { run: id }).then(function (d) {
+        var usage = (d && d.usage) || {}, budget = (d && d.budget) || {};
+        var used = usage.turns || 0, limit = budget.turns || 0;
+        var spent = usage.cost_usd || 0, usd = budget.usd || 0;
+        var args = { run: id };
+        if (usd > 0) args.budget_usd = spent >= usd ? Math.max(usd * 2, spent * 2) : usd;
+        if (limit > 0) args.max_turns = (limit > used ? limit : used) * 2;
+        return run("team.budget", args);
+      });
+    },
     "team-cancel": function (n) { run("team.cancel", { run: n.dataset.id }); },
     "team-retry": function (n) { uiPrompt({ title: "Try this task again", text: "What should it do differently? You can leave this empty.", input: { placeholder: "Optional note for the agent" }, confirm: "Retry" }).then(function (note) { if (note === null) return; run("team.retry", { task: n.dataset.id, note: note || undefined }); }); },
     "team-accept": function (n) { uiConfirm({ title: "Accept without the proof?", text: "devd asked for proof that this task worked and did not get it. The final report will say you accepted it by hand.", confirm: "Accept anyway", danger: true }).then(function (yes) { if (yes) run("team.accept", { task: n.dataset.id }); }); },
@@ -14927,7 +14953,8 @@ var TERM_POLL_MS = 250;
       }
       var cap = n.dataset.cap, call = {};
       try { call = JSON.parse(n.dataset.args || "{}"); } catch (e) { call = {}; }
-      if (!cap) return;
+      // An action without a capability is a place to look, not a dead button.
+      if (!cap) return ACTIONS["team-open-from"]({ dataset: { id: n.dataset.run } });
       // Accepting without proof is the one action that needs a person to say yes twice.
       if (act === "accept") {
         return uiConfirm({ title: "Accept without the proof?", text: "devd asked for proof that this task worked and did not get it. The final report will say you accepted it by hand.", confirm: "Accept anyway", danger: true }).then(function (yes) {

@@ -115,6 +115,27 @@ runs under) hold three rules, checked before every model call:
 A provider the policy excludes never sees the project: it is skipped, with the
 rule that excluded it named, before any request is built.
 
+### Thinking
+
+Reasoning is a property of a conversation, not of the window. Each conversation
+carries its own effort — `none` (shown as Off), `low`, `medium`, `high`, `extra`
+or `max` — and the chip under the message box shows **that conversation's**
+level, read from the record when the conversation opens. A conversation that
+never chose one shows the ordinary default, Medium.
+
+The level does two things: it is handed to the provider in its own words (a
+token budget for Anthropic and Gemini, an effort level for DeepSeek and the
+OpenAI family, a toggle for the hosts that think by default), and it sets how
+much room the reply has after thinking, from 8k tokens at Off to 64k at Max.
+Off is a real request, not a hint: it is sent as the provider's own way of
+disconnecting reasoning.
+
+The level is read at **every model call**, so changing it while a reply is being
+written applies from the next call; the call already running finishes at the
+level it started with. A team run takes its level from the conversation that
+started it and gives it to every specialist it creates: changing it in your own
+conversation afterwards does not reach a run that is already going.
+
 ## The team
 
 ```
@@ -415,11 +436,17 @@ wrong. `team.get` returns a `needs` object:
 ```
 
 `reason` is one of `no-report`, `not-proved`, `blocked`, `failed`, `merge`,
-`approval`, `plan` or `criteria`. `missing` names the evidence devd actually
-looked for and did not find, in the same words the scheduler rejected the report
-for. The first action is the one that unblocks the work; accepting without proof
-is offered after it, and is marked dangerous because the run's report will say a
-person accepted it by hand.
+`approval`, `plan`, `criteria`, `verdict` or `budget`. `missing` names the
+evidence devd actually looked for and did not find, in the same words the
+scheduler rejected the report for. The first action is the one that unblocks the
+work; accepting without proof is offered after it, and is marked dangerous
+because the run's report will say a person accepted it by hand.
+
+A run that stopped at its budget asks for the budget, not for a check: the pause
+reason is read before any task is considered, so a task that never ran is never
+reported as a failed review. Its one action opens the run, where the ceiling is
+raised; raising it carries the run on by itself, because resuming into the same
+ceiling would pause again at the next step.
 
 The Inbox, the run view and `team.get` all read this one object, so no two
 screens can phrase the same stuck run differently. A run with nothing waiting has
