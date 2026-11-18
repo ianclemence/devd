@@ -890,6 +890,24 @@ The daemon prints its own phase line when it starts — `devd started in 176 ms:
 settings 5 · store 44 · launchers 0 · git 81 · capabilities 24 · agents 16` — so a slow start is a
 list rather than a mystery.
 
+What is left of a warm launch is the window toolkit itself, not devd's work. The launch record
+carries every phase, and on this machine it reads like this:
+
+| Phase | Debug build |
+|---|---|
+| Attach to the running devd | 9 ms |
+| Load the theme | 1 ms |
+| Application and platform start-up, and the agent runtime | 285 ms |
+| Window creation | 450 ms |
+| Building the shell | 1 ms |
+| First frame | 1 ms |
+
+Two experiments in this round tried to cut it and measured nothing: moving the spell-check
+dictionary to a background thread (the dictionary was never the cost — the time between the
+runtime and the first frame is window creation, and the measurement now says so) and reordering
+work inside the shell. Both were reverted rather than kept for looking plausible; the instrumentation
+that disproved them stayed.
+
 The budgets are **regression lines, not targets**: several times what the work costs on an ordinary
 machine, so a busy afternoon is not a failure and a change that makes the harness ten times slower
 is. The same readings run as a test, with a wider line so a loaded build machine does not fail the

@@ -361,6 +361,7 @@ impl Shell {
         let dictionary = std::sync::Arc::new(devd_app_core::spell::Dictionary::for_this_machine(
             &personal,
         ));
+        crate::mark(&crate::DICT_MS);
         let composer = cx.new(|cx| {
             TextInput::new("Ask devd anything. / for skills, @ for a teammate", cx)
                 .multiline(8)
@@ -399,6 +400,7 @@ impl Shell {
         });
         let intel = screens::intelligence::View::new(window, cx);
         let role_form = screens::roles::Form::new(cx);
+        crate::mark(&crate::SHELL_MS);
         Self {
             intel,
             role_form,
@@ -1801,6 +1803,10 @@ fn note_first_frame(home: &str) {
             "bootstrap_ms": crate::BOOTSTRAP_MS.get().copied(),
             "serve_ms": crate::SERVE_MS.get().copied(),
             "theme_ms": crate::THEME_MS.get().copied(),
+            "state_ms": crate::STATE_MS.get().copied(),
+            "dict_ms": crate::DICT_MS.get().copied(),
+            "shell_ms": crate::SHELL_MS.get().copied(),
+            "window_ms": crate::WINDOW_MS.get().copied(),
             "version": env!("CARGO_PKG_VERSION"),
             "at": chrono::Utc::now().to_rfc3339(),
         });

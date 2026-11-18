@@ -34,6 +34,19 @@ pub static CONNECTED_MS: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
 /// becoming (or reaching) the server.
 pub static BOOTSTRAP_MS: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
 pub static SERVE_MS: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+/// How long the agent runtime took to start, and how long the first window took to exist.
+pub static STATE_MS: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+pub static WINDOW_MS: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+/// How long the spell-check dictionary took, and how long the whole shell took to build.
+pub static DICT_MS: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+pub static SHELL_MS: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+
+/// Note how long this launch has taken so far, once.
+pub fn mark(slot: &std::sync::OnceLock<f64>) {
+    if let Some(started) = STARTED.get() {
+        let _ = slot.set(started.elapsed().as_secs_f64() * 1000.0);
+    }
+}
 /// How long it took to read the theme library and load the theme.
 pub static THEME_MS: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
 
@@ -85,6 +98,7 @@ fn main() {
             ui::input::bind_keys(cx);
             shell::bind_keys(cx);
             state::start(conn.clone(), cx);
+            mark(&STATE_MS);
 
             let bounds = Bounds::centered(None, size(px(1360.0), px(860.0)), cx);
             let options = WindowOptions {
@@ -100,6 +114,7 @@ fn main() {
             let opened = cx.open_window(options, |window, cx| {
                 cx.new(|cx| shell::Shell::new(start.clone(), window, cx))
             });
+            mark(&WINDOW_MS);
             if let Err(e) = opened {
                 eprintln!("devd could not open its window: {e}");
                 cx.quit();

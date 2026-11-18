@@ -567,8 +567,7 @@ pub struct Pending {
 
 /// A modal layer over the current view.
 #[derive(Debug, Clone)]
-pub enum Overlay {
-    /// No overlay.
+pub enum Overlay {    /// No overlay.
     None,
     /// A single-line text prompt with the text typed so far.
     Prompt {
@@ -587,7 +586,10 @@ pub enum Overlay {
         scroll: u16,
     },
     /// A destructive or remote operation awaiting approval.
-    Approval(Pending),
+    ///
+    /// Boxed: the request it replays is the biggest thing an overlay can hold, and every other
+    /// overlay — including none at all — would otherwise be as large as this one.
+    Approval(Box<Pending>),
     /// One question of a guided flow, with the explanation above the input.
     Form {
         /// What is being asked.
@@ -597,6 +599,14 @@ pub enum Overlay {
         /// The answer so far.
         input: String,
     },
+}
+
+impl Overlay {
+    /// An operation waiting for a person's decision, boxed so that no other overlay — and no
+    /// overlay at all — has to be the size of the request it replays.
+    pub fn approval(pending: Pending) -> Self {
+        Overlay::Approval(Box::new(pending))
+    }
 }
 
 /// Everything the dashboard needs to draw one frame.

@@ -1182,7 +1182,7 @@ mod tests {
             .step("git restore -- notes.txt")
             .step("uncommitted changes to notes.txt are lost")
             .destructive(true);
-        state.overlay = Overlay::Approval(Pending {
+        state.overlay = Overlay::approval(Pending {
             id: "git.discard".to_string(),
             plan: Some(plan),
             request: devd_core::capability::InvokeRequest {
@@ -1209,7 +1209,7 @@ mod tests {
     #[test]
     fn an_operation_that_cannot_plan_says_so_in_the_prompt() {
         let mut state = State::default();
-        state.overlay = Overlay::Approval(Pending {
+        state.overlay = Overlay::approval(Pending {
             id: "git.push.force".to_string(),
             plan: None,
             request: devd_core::capability::InvokeRequest {
