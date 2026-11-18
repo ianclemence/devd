@@ -2243,6 +2243,42 @@ mod tests {
         assert_eq!(token_facts(400, 0, 0), "400 fresh in · 0 cached · 0 out");
     }
 
+    /// A room is one conversation: a teammate's turn is tagged with the role that said it, and a
+    /// message one teammate addresses to another carries who said it and who it is for.
+    #[test]
+    fn a_room_tags_each_turn_with_its_speaker_and_keeps_what_a_message_answers() {
+        let events = [
+            event("user", json!({ "text": "build it" })),
+            json!({
+                "kind": "assistant",
+                "role": "backend",
+                "data": { "model": "deepseek-flash", "content": [{ "type": "text", "text": "Done: the scheduler." }] }
+            }),
+            json!({
+                "kind": "agent",
+                "role": "backend",
+                "data": { "from": "backend", "to": "reviewer", "about": "scheduler", "text": "Can you look at the retry loop?" }
+            }),
+            json!({
+                "kind": "assistant",
+                "role": null,
+                "data": { "model": "deepseek-flash", "content": [{ "type": "text", "text": "The reviewer has it." }] }
+            }),
+        ];
+        let items = fold(&events, &[], false);
+        // The assistant's own turn keeps no role: it is the room's voice, not a member of it.
+        assert!(
+            matches!(&items[1], Item::Devd { role: Some(role), .. } if role == "backend"),
+            "{items:?}"
+        );
+        assert!(
+            matches!(&items[2], Item::Said { from, to: Some(to), about: Some(about), .. }
+                if from == "backend" && to == "reviewer" && about == "scheduler"),
+            "{items:?}"
+        );
+        assert!(matches!(&items[3], Item::Devd { role: None, .. }), "{items:?}");
+    }
+
     #[test]
     fn a_turn_still_being_written_names_its_model_only_after_it_is_done() {
         let say = |text: &str| event("assistant", json!({ "model": "deepseek-flash", "content": [{ "type": "text", "text": text }] }));
