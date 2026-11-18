@@ -933,8 +933,10 @@ copy of one:
    any project, so the two cannot drift. Each change in the list has a **read mark** — a dot in front
    of it, hollow until it has been looked at — and a heading that says how far the review has got
    ("Changes 2 · 1 read"). A change that has been read dims and steps back, so what has not been
-   read is what the eye finds first. The marks belong to the window's session: they are a review aid,
-   not a record of anything the host should remember.
+   read is what the eye finds first. A group's heading offers **Mark all read** — quiet, because
+   reading is not a change to the repository, and the staging button beside it should be the one the
+   eye lands on. The marks belong to the window's session: they are a review aid, not a record of
+   anything the host should remember.
 2. **Report.** `chat.changes` is the same fact as data: one entry per path with its status and
    whether it is staged, the branch and its upstream, and how many commits are ahead or behind.
    The window uses it to say what is waiting; an agent reads it before it says what it did.

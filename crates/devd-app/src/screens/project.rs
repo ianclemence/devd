@@ -1696,13 +1696,47 @@ fn changes(
                     } else {
                         format!("{title}  {}", items.len())
                     }),
-            )
-            .child(act_button(
-                ElementId::Name(format!("change.all.{}", is_staged as u8).into()),
-                all,
-                ButtonKind::Ghost,
-                cx,
-            ));
+            );
+        // The group's own review control: everything in it read, or nothing. "Stage all" stays
+        // beside it, because both are about the whole group.
+        let all_read = !items.is_empty() && read_here == items.len();
+        let targets: Vec<String> = items.iter().map(|(path, _)| path.clone()).collect();
+        let mut right = div().flex().items_center().gap(px(4.0));
+        if !items.is_empty() {
+            // Quieter than the git action beside it: reading is not a change to the repository, and
+            // the button that stages files should be the one the eye lands on.
+            let label_color = t.faint;
+            let hover_color = t.muted;
+            right = right.child(
+                div()
+                    .id(ElementId::Name(format!("change.read.all:{title}").into()))
+                    .px(px(6.0))
+                    .py(px(2.0))
+                    .rounded(px(4.0))
+                    .text_size(px(size::TEXT_XS))
+                    .text_color(label_color)
+                    .cursor_pointer()
+                    .hover(move |s| s.text_color(hover_color))
+                    .child(if all_read { "Mark all unread" } else { "Mark all read" })
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        for path in &targets {
+                            if all_read {
+                                this.project_ui.read.remove(path);
+                            } else {
+                                this.project_ui.read.insert(path.clone());
+                            }
+                        }
+                        cx.notify();
+                    })),
+            );
+        }
+        right = right.child(act_button(
+            ElementId::Name(format!("change.all.{}", is_staged as u8).into()),
+            all,
+            ButtonKind::Ghost,
+            cx,
+        ));
+        let head = head.child(right);
         Some(div().flex().flex_col().child(head).child(list))
     };
     let mut left = div().flex().flex_col();
