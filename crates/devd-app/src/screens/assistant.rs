@@ -34,7 +34,22 @@ pub enum Item {
     /// What the person wrote. `pending` until devd has stored it.
     You { text: String, pending: bool },
     /// What devd wrote, parsed for drawing.
-    Devd { blocks: Vec<Block>, model: String },
+    ///
+    /// `role` is who said it when the conversation is a team room: `implementer`, `reviewer`, or
+    /// nothing when it is the assistant itself. The room draws a name over each bubble, the way a
+    /// group chat does, so the reader knows who is speaking without opening a conversation per agent.
+    Devd {
+        blocks: Vec<Block>,
+        model: String,
+        role: Option<String>,
+    },
+    /// A message said in a team room, by an agent to the room or to one teammate.
+    Said {
+        from: String,
+        to: Option<String>,
+        about: Option<String>,
+        text: String,
+    },
     /// A tool call as the model made it and, once it has one, its result.
     /// It is put into words when it is drawn, because the words depend on how it ended.
     Tool {
@@ -98,6 +113,13 @@ pub fn fold(events: &[Value], pending: &[&str], running: bool) -> Vec<Item> {
                 text: data["text"].as_str().unwrap_or_default().to_string(),
                 pending: data["pending"] == json!(true),
             }),
+            // A message said in the room: an agent to the room, or to one teammate about a task.
+            "agent" => items.push(Item::Said {
+                from: data["from"].as_str().unwrap_or("devd").to_string(),
+                to: data["to"].as_str().map(str::to_string),
+                about: data["about"].as_str().map(str::to_string),
+                text: data["text"].as_str().unwrap_or_default().to_string(),
+            }),
             "assistant" => {
                 // What the turn has cost so far: the label under its last words carries the whole turn.
                 turn.0 += data["usage"]["output"].as_u64().unwrap_or(0);
@@ -112,6 +134,7 @@ pub fn fold(events: &[Value], pending: &[&str], running: bool) -> Vec<Item> {
                                 items.push(Item::Devd {
                                     blocks: markdown::parse(text),
                                     model: model.clone(),
+                                    role: event["role"].as_str().map(str::to_string),
                                 });
                             }
                         }
@@ -987,6 +1010,27 @@ fn start(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
         .into_any_element()
 }
 
+/// The run a conversation belongs to, when it belongs to one: its origin, or an agent's own.
+fn run_of(shell: &Shell, id: &str, cx: &mut Context<Shell>) -> Option<String> {
+    let _ = shell;
+    devd(cx)
+        .sync
+        .watch(&q::threads())
+        .list("")
+        .iter()
+        .find(|th| th["id"].as_str() == Some(id))
+        .and_then(|th| th["team"]["run"].as_str().map(str::to_string))
+        .or_else(|| {
+            devd(cx)
+                .sync
+                .watch(&q::runs())
+                .list("")
+                .iter()
+                .find(|r| r["thread_id"].as_str() == Some(id))
+                .and_then(|r| r["id"].as_str().map(str::to_string))
+        })
+}
+
 fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElement {
     cx.global_mut::<crate::state::Devd>().open_thread = Some(id.to_string());
     let t = theme(cx).clone();
@@ -1045,6 +1089,17 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
             .into_any_element();
     };
     let events = data["events"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+    // A conversation that belongs to a team run is the room for the whole run: the person's
+    // messages, the planner's and every specialist's, in one transcript. The per-agent
+    // conversations still exist; this is the view that shows them talking to each other.
+    let room = run_of(shell, id, cx);
+    let seat = room.as_ref().map(|_| devd(cx).sync.watch(&q::team_log(id)));
+    let room_events: Vec<Value> = seat
+        .as_ref()
+        .and_then(|s| s.data.as_ref())
+        .and_then(|d| d["events"].as_array().cloned())
+        .unwrap_or_default();
+    let events: &[Value] = if room_events.is_empty() { events } else { &room_events };
     let pending: Vec<&str> = data["pending"]
         .as_array()
         .map(Vec::as_slice)
@@ -1426,7 +1481,7 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
         let content = match items.get(index) {
             Some(item) => draw(&key, index, item, resume_at == Some(index), cx),
             None => match &live {
-                Some(blocks) => devd_writes(&format!("{key}.live"), blocks, "", true, cx),
+                Some(blocks) => devd_writes(&format!("{key}.live"), blocks, "", None, true, cx),
                 None => div().into_any_element(),
             },
         };
@@ -1473,7 +1528,6 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
                     .render(cx),
             ))
         });
-    let chain = chain(shell, id, thread, cx);
     div()
         .relative()
         .flex_1()
@@ -1483,7 +1537,6 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
         .flex_col()
         .child(head)
         .children(goal_banner)
-        .children(chain)
         .child(div().flex_1().min_h_0().child(body))
         .child(
             // Pinned to the column's width, as the transcript rows are, so the box keeps its place and its width
@@ -1525,133 +1578,6 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
             )
         }))
         .into_any_element()
-}
-
-/// The team behind this conversation, as a chain under its heading: every agent in the run, joined by what each waits for.
-///
-/// A conversation belongs to a run in one of two ways: it is the one the person started the run from, or it is one
-/// of the agents' own. Either way the whole run is shown, with the agent whose conversation this is marked.
-fn chain(
-    shell: &mut Shell,
-    id: &str,
-    thread: &Value,
-    cx: &mut Context<Shell>,
-) -> Option<AnyElement> {
-    let t = theme(cx).clone();
-    // The conversation's own record may not say which run it belongs to; the list of conversations always does.
-    let run_id = thread["team"]["run"]
-        .as_str()
-        .map(str::to_string)
-        .or_else(|| {
-            devd(cx)
-                .sync
-                .watch(&q::threads())
-                .list("")
-                .iter()
-                .find(|th| th["id"].as_str() == Some(id))
-                .and_then(|th| th["team"]["run"].as_str().map(str::to_string))
-        })
-        .or_else(|| {
-            devd(cx)
-                .sync
-                .watch(&q::runs())
-                .list("")
-                .iter()
-                .find(|r| r["thread_id"].as_str() == Some(id))
-                .and_then(|r| r["id"].as_str().map(str::to_string))
-        })?;
-    let run = devd(cx).sync.watch(&q::run(&run_id));
-    let data = run.data.clone()?;
-    let tasks: Vec<Value> = data["tasks"].as_array().cloned().unwrap_or_default();
-    if tasks.is_empty() {
-        return None;
-    }
-    let open = !shell.chain_collapsed;
-    let go = run_id.clone();
-    let header = div()
-        .id("chain.header")
-        .h(px(36.0))
-        .flex()
-        .flex_none()
-        .items_center()
-        .gap(px(10.0))
-        .px(px(20.0))
-        .cursor_pointer()
-        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-            this.chain_collapsed = !this.chain_collapsed;
-            cx.notify();
-        }))
-        .child(icon(
-            if open {
-                "chevron-down"
-            } else {
-                "chevron-right"
-            },
-            13.0,
-            t.faint,
-        ))
-        .child(icon("team", 14.0, t.muted))
-        .child(
-            div()
-                .text_size(px(size::TEXT_SM))
-                .font_weight(FontWeight::MEDIUM)
-                .child("The team"),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .text_size(px(size::TEXT_SM))
-                .text_color(t.muted)
-                .child(ui::Clip::new(format!(
-                    "{} · {}",
-                    ui::flow::summary(&tasks),
-                    ui::flow::status_line(
-                        data["run"]["state"].as_str().unwrap_or("running"),
-                        &tasks
-                    )
-                ))),
-        )
-        .child(
-            div()
-                .id("chain.open")
-                .flex()
-                .items_center()
-                .gap(px(5.0))
-                .px(px(8.0))
-                .py(px(3.0))
-                .rounded(px(size::RADIUS))
-                .cursor_pointer()
-                .text_size(px(size::TEXT_SM))
-                .text_color(t.muted)
-                .hover(|s| s.bg(t.hover))
-                .child("Open run")
-                .child(icon("arrow-right", 12.0, t.faint))
-                .on_click(cx.listener(move |this, ev: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    let _ = ev;
-                    this.go(Route::Runs(Some(go.clone())), cx)
-                })),
-        );
-    let mut column = div()
-        .flex_none()
-        .flex()
-        .flex_col()
-        .border_b_1()
-        .border_color(t.line)
-        .child(header);
-    if open {
-        column = column.child(
-            div().px(px(20.0)).pb(px(12.0)).child(
-                div()
-                    .id("chain.scroll")
-                    .max_h(px(300.0))
-                    .overflow_y_scroll()
-                    .child(ui::flow::graph("chain", &tasks, Some(id), cx)),
-            ),
-        );
-    }
-    Some(column.into_any_element())
 }
 
 thread_local! {
@@ -1804,8 +1730,76 @@ fn draw(thread: &str, index: usize, item: &Item, resume: bool, cx: &App) -> AnyE
                     .child(md::linked(&format!("{thread}.{index}.you"), text, cx)),
             )
             .into_any_element(),
-        Item::Devd { blocks, model } => {
-            devd_writes(&format!("{thread}.{index}"), blocks, model, false, cx)
+        Item::Devd { blocks, model, role } => devd_writes(
+            &format!("{thread}.{index}"),
+            blocks,
+            model,
+            role.as_deref(),
+            false,
+            cx,
+        ),
+        // One teammate speaking to the room: a name, who it is for, and what it is about, because
+        // in a room the reply target is half the message.
+        Item::Said {
+            from,
+            to,
+            about,
+            text,
+        } => {
+            let name = if from == "devd" {
+                "devd".to_string()
+            } else {
+                role_title(from)
+            };
+            let initials: String = name
+                .split_whitespace()
+                .filter_map(|w| w.chars().next())
+                .take(2)
+                .collect();
+            let mut head = div()
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .child(ui::face(initials, Tone::Accent, false, cx))
+                .child(
+                    div()
+                        .text_size(px(size::TEXT_XS))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(t.muted)
+                        .child(name),
+                );
+            if let Some(to) = to {
+                head = head.child(
+                    div()
+                        .text_size(px(size::TEXT_XS))
+                        .text_color(t.accent)
+                        .child(format!("@{to}")),
+                );
+            }
+            if let Some(about) = about {
+                head = head.child(
+                    div()
+                        .text_size(px(size::TEXT_XS))
+                        .text_color(t.faint)
+                        .child(format!("· {about}")),
+                );
+            }
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(6.0))
+                .p(px(11.0))
+                .rounded(px(size::RADIUS_L))
+                .bg(t.hover)
+                .child(head)
+                .child(
+                    div()
+                        .text_size(px(size::TEXT_MD))
+                        .line_height(px(22.0))
+                        .text_color(t.text)
+                        .child(text.clone()),
+                )
+                .into_any_element()
         }
         Item::Tool {
             name,
@@ -1930,14 +1924,22 @@ fn draw(thread: &str, index: usize, item: &Item, resume: bool, cx: &App) -> AnyE
             }
             line.into_any_element()
         }
+        // A notice is prose: it wraps inside the transcript's column, and the icon sits with its
+        // first line rather than centred against four lines of text.
         Item::Notice(text) => div()
             .flex()
-            .items_center()
+            .items_start()
             .gap(px(8.0))
             .text_size(px(size::TEXT_SM))
             .text_color(t.muted)
-            .child(icon("info", 13.0, t.faint))
-            .child(text.clone())
+            .child(div().flex_none().mt(px(1.0)).child(icon("info", 13.0, t.faint)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .line_height(px(19.0))
+                    .child(text.clone()),
+            )
             .into_any_element(),
         Item::Failed(text) => {
             let words = md::linked(&format!("{thread}.{index}.failed"), text, cx);
@@ -2040,15 +2042,59 @@ fn draw(thread: &str, index: usize, item: &Item, resume: bool, cx: &App) -> AnyE
 }
 
 /// devd's words: reading text at reading width, with the model named once, quietly.
-fn devd_writes(id: &str, blocks: &[Block], model: &str, live: bool, cx: &App) -> AnyElement {
+/// A role's name as a person reads it: `implementer` is "Implementer", `qa` is "QA".
+fn role_title(role: &str) -> String {
+    if role == "qa" {
+        return "QA".to_string();
+    }
+    let words = role.replace(['-', '_'], " ");
+    let mut chars = words.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+fn devd_writes(
+    id: &str,
+    blocks: &[Block],
+    model: &str,
+    role: Option<&str>,
+    live: bool,
+    cx: &App,
+) -> AnyElement {
     let t = theme(cx);
     let mut column = div()
         .flex()
         .flex_col()
         .gap(px(6.0))
         .text_size(px(size::TEXT_MD))
-        .line_height(px(22.0))
-        .child(md::document(id, blocks, cx));
+        .line_height(px(22.0));
+    // In a team room every bubble says who is speaking: a face and a name, the way a group chat
+    // does, so the room reads without opening a conversation per agent.
+    if let Some(role) = role {
+        let name = role_title(role);
+        let initials: String = name
+            .split_whitespace()
+            .filter_map(|w| w.chars().next())
+            .take(2)
+            .collect();
+        column = column.child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .child(ui::face(initials, Tone::Accent, false, cx))
+                .child(
+                    div()
+                        .text_size(px(size::TEXT_XS))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(t.muted)
+                        .child(name),
+                ),
+        );
+    }
+    column = column.child(md::document(id, blocks, cx));
     if live {
         column = column.child(
             div()
@@ -2071,6 +2117,14 @@ fn devd_writes(id: &str, blocks: &[Block], model: &str, live: bool, cx: &App) ->
                 .text_color(t.faint)
                 .child(model.to_string()),
         );
+    }
+    // A teammate's turn is a bubble, not a wall: the card is what makes a room read as a room.
+    // The assistant's own turns stay flat, because they are the conversation's own voice.
+    if role.is_some() {
+        column = column
+            .p(px(12.0))
+            .rounded(px(size::RADIUS_L))
+            .bg(t.raised);
     }
     column.into_any_element()
 }

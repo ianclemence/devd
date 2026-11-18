@@ -801,10 +801,10 @@ the conversation that started the run, so the assistant's own context never has 
 its team's chatter. Asking from any conversation of the run returns the same list, and a conversation
 that is not part of a run comes back as itself.
 
-The window is being rebuilt on it: one transcript for the whole run, each message a bubble with the
-face and name of the role that wrote it, the person's own messages among them, and the composer
-sending into the room rather than into one agent's ear. The per-specialist conversations remain
-reachable as the detail behind a bubble.
+The window reads it: a conversation that belongs to a run draws the whole run as one transcript —
+each teammate's turn is a bubble with its face and name, the assistant's own turns stay flat as the
+room's voice, and a message someone addresses to a teammate is a bubble of its own with `@role` and
+what it is about. The per-specialist conversations remain reachable as the detail behind a bubble.
 
 **Talking in the room.** `chat.talk` posts a message into the run's conversation: `to` addresses a
 role (`@reviewer`), `about` names the task it is about, and both are kept with the message so the

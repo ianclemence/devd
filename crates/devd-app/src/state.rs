@@ -723,6 +723,11 @@ pub mod q {
         QueryKey::new("chat.get", json!({ "thread": id }))
     }
 
+    /// A run's whole conversation: every agent's messages in one room, in the order they happened.
+    pub fn team_log(id: &str) -> QueryKey {
+        QueryKey::new("chat.team_log", json!({ "thread": id }))
+    }
+
     /// What a conversation's working tree has changed, and where its branch is.
     pub fn thread_changes(id: &str) -> QueryKey {
         QueryKey::new("chat.changes", json!({ "thread": id }))

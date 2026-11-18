@@ -342,8 +342,6 @@ pub struct Shell {
     pub browser_ui: screens::browser::BrowserUi,
     /// The assistant's side pane: shells and the browser.
     pub pane: screens::pane::PaneUi,
-    /// Whether the chain of agents under a conversation is folded away.
-    pub chain_collapsed: bool,
     /// Whether the conversation's own menu is open: fork, settle, rename, link, delete.
     pub conversation_menu: bool,
     _watch: Subscription,
@@ -409,8 +407,7 @@ impl Shell {
             project_ui: screens::project::ProjectUi::default(),
             browser_ui: screens::browser::BrowserUi::default(),
             pane: screens::pane::PaneUi::default(),
-            chain_collapsed: false,
-    conversation_menu: false,
+            conversation_menu: false,
             history: History::new(start),
             runs_filter: Default::default(),
             run_focus: None,
