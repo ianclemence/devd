@@ -1965,6 +1965,23 @@ fn list_hover_is_one_rounded_inset_band() {
 }
 
 #[test]
+fn a_rooms_header_names_everyone_in_it_and_where_the_work_stands() {
+    // The header answers "who is involved" before the transcript is read, and the roster it names
+    // is the run's own task roles, the same list the bubbles come from.
+    assert!(APP.contains("read(\"team.get\", { run: runId })"), "the run is read for the header");
+    let start = APP.find("function chatHeadHtml").unwrap();
+    let head = &APP[start..(start + 9000).min(APP.len())];
+    assert!(head.contains("AI.roomRun"), "the header uses the run it read");
+    let at = head.find("AI.roomRun.roles").expect("the roster is in the header");
+    assert!(head[at..].contains("sub.push"), "the roster joins the quiet line");
+    // A room is cleared when the conversation is not one, so a later conversation cannot inherit it.
+    assert!(
+        APP.contains("AI.roomRun = null"),
+        "leaving a room forgets the run it belonged to"
+    );
+}
+
+#[test]
 fn the_composer_in_a_room_speaks_to_the_run() {
     // Sending in a room is not only a message to the assistant: it is an instruction for the run,
     // so the work is steered by it. The relay must not turn a finished run's refusal into an error

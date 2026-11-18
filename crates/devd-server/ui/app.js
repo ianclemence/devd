@@ -9213,10 +9213,21 @@ var TERM_POLL_MS = 250;
       if (!runId) {
         AI.room = null;
         AI.roomFor = null;
+        AI.roomRun = null;
       } else if (AI.roomFor !== runId || (d.events || []).length) {
         // Read the room when the conversation opens and again whenever a poll brought something
         // new; a poll that brought nothing must not pay for the whole run's log.
         AI.roomFor = runId;
+        // The run itself: its state and who is on it, for the header. One read when the room opens.
+        if (!AI.roomRun || AI.roomRun.run !== runId) {
+          read("team.get", { run: runId }).then(function (g) {
+            var tasks = (g && g.tasks) || [];
+            var roles = tasks.map(function (x) { return roleFace(x.role).name; });
+            roles = roles.filter(function (name, i) { return roles.indexOf(name) === i; });
+            AI.roomRun = { run: runId, state: (g && g.run && g.run.state) || "", roles: roles };
+            if (state.view === "assistant") paintChat(false);
+          }).catch(function () { AI.roomRun = null; });
+        }
         read("chat.team_log", { thread: d.thread.id, limit: 400 }).then(function (log) {
           if (!AI.thread || AI.thread.id !== d.thread.id) return;
           AI.room = (log && log.events) || [];
@@ -11093,6 +11104,12 @@ var TERM_POLL_MS = 250;
       if (runTitle && runTitle !== shownTitle) sub.push(runTitle);
     }
     if (word) sub.push(word);
+    // A room names everyone in it and where the work stands, so the header answers "who is involved"
+    // before the transcript is read. It is the same roster the bubbles come from.
+    if (team && team.run && AI.roomRun && AI.roomRun.run === team.run) {
+      if (AI.roomRun.state) sub.push(AI.roomRun.state);
+      if (AI.roomRun.roles && AI.roomRun.roles.length) sub.push(AI.roomRun.roles.join(", "));
+    }
     if (t.resume_at) sub.push("paused by a usage limit, resumes " + (Date.parse(t.resume_at) > Date.now() ? "at " + new Date(t.resume_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "now"));
     if (used) sub.push(compactCount(used) + " tokens");
     // The head is a quiet line: who this is, what it is for and where it stands. The
