@@ -888,6 +888,58 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
                 ),
         );
     }
+    // Review what this conversation changed, in the project's own Git surface: staging, per-file
+    // diffs, the commit, pull and push. A second changes screen would only drift from that one.
+    if let Some(dir) = thread["workdir"]
+        .as_str()
+        .filter(|w| !w.is_empty())
+        .or_else(|| thread["project"].as_str())
+        .map(str::to_string)
+    {
+        let open = dir.clone();
+        actions = actions.child(
+            div()
+                .id("conversation.changes.wrap")
+                .tooltip(ui::tip("Review the changes, then commit and push"))
+                .child(
+                    Button::icon_only("conversation.changes", "diff")
+                        .kind(ButtonKind::Ghost)
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            this.go(
+                                Route::project(
+                                    open.clone(),
+                                    devd_app_core::project::ProjectTab::Changes,
+                                ),
+                                cx,
+                            )
+                        })),
+                ),
+        );
+    }
+    // The last step of the loop, on a branch of its own: a pushed branch becomes a review.
+    if in_worktree.is_some() && thread["pr_url"].as_str().is_none_or(str::is_empty) {
+        let tid = id.to_string();
+        actions = actions.child(
+            div()
+                .id("conversation.pr.open.wrap")
+                .tooltip(ui::tip("Open a pull request for this branch, once it is pushed"))
+                .child(
+                    Button::icon_only("conversation.pr.open", "external")
+                        .kind(ButtonKind::Ghost)
+                        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                            this.confirm(
+                                "Open a pull request for this branch?".to_string(),
+                                "The branch must already be pushed — a review is of commits the host can see. Its title and body are filled from the commits, and the pull request is linked to this conversation.".to_string(),
+                                "Open the pull request",
+                                false,
+                                Mutation::new("chat.pr", json!({ "thread": tid })).invalidating("chat"),
+                                window,
+                                cx,
+                            );
+                        })),
+                ),
+        );
+    }
     let last_event = events.last().and_then(|e| e["id"].as_i64());
     let (to_pin, to_fork, fork_title) = (id.to_string(), id.to_string(), title.clone());
     actions = actions

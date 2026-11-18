@@ -2354,6 +2354,67 @@ fn a_template_fills_its_blanks_and_starts_the_team_with_its_definition_of_done()
 }
 
 #[test]
+fn a_conversation_reports_what_it_changed_and_will_not_open_a_review_before_pushing() {
+    let e = env();
+    let project = e.root.join("www").join("proj");
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&project)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    };
+    git(&["init", "-q"]);
+    git(&["config", "user.email", "test@example.com"]);
+    git(&["config", "user.name", "Test"]);
+    std::fs::write(project.join("README.md"), "# proj\n").unwrap();
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "first"]);
+
+    let thread = e
+        .human
+        .store
+        .create_thread("Ship it", Some(project.to_str().unwrap()), None, None)
+        .unwrap();
+    let made = call(
+        &e,
+        &e.human,
+        "chat.worktree",
+        json!({ "thread": thread.id, "action": "create" }),
+        Approval::None,
+    )
+    .unwrap();
+    let dir = made["workdir"].as_str().unwrap().to_string();
+    std::fs::write(std::path::Path::new(&dir).join("README.md"), "# changed\n").unwrap();
+
+    let changes = call(
+        &e,
+        &e.human,
+        "chat.changes",
+        json!({ "thread": thread.id }),
+        Approval::None,
+    )
+    .unwrap();
+    assert_eq!(changes["files"][0]["path"], "README.md", "{changes}");
+    assert_eq!(changes["files"][0]["words"], "modified");
+    assert_eq!(changes["clean"], json!(false));
+    assert_eq!(changes["branch"], json!(format!("devd/{}", &thread.id[..8])));
+
+    // No upstream: a review of commits the host cannot see is refused with the step to take.
+    let err = call(
+        &e,
+        &e.human,
+        "chat.pr",
+        json!({ "thread": thread.id }),
+        Approval::Granted,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("push the branch first"), "{err}");
+}
+
+#[test]
 fn a_conversation_can_own_a_worktree_and_give_it_back() {
     let e = env();
     let project = e.root.join("www").join("proj");

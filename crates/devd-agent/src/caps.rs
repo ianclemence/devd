@@ -1282,6 +1282,24 @@ struct ChatWorktree {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct ShipArgs {
+    /// Conversation id.
+    thread: String,
+    /// The pull request title; leave it out and the host fills it from the commits.
+    #[serde(default)]
+    title: Option<String>,
+    /// The pull request body.
+    #[serde(default)]
+    body: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct ShipChangesArgs {
+    /// Conversation id.
+    thread: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct ListRequests {
     /// Only requests still waiting for a decision (default true).
     #[serde(default)]
@@ -4686,6 +4704,91 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                 Ok(Outcome::with_data(
                     format!("This conversation works in {dir}"),
                     json!({ "thread": a.thread, "workdir": dir, "branch": branch }),
+                ))
+            },
+        )?;
+    reg.define::<ShipChangesArgs>("chat.changes", "What this conversation has changed")
+        .description("What the conversation's working tree has changed, and where its branch stands: one entry per path with git's status, whether it is staged, and how many commits are ahead of or behind the published branch. Read it before committing, and to tell a person what a conversation produced. Read only.")
+        .tier(Tier::Read)
+        .effect(Effect::Read)
+        .agent_safe()
+        .dry_run()
+        .idempotent()
+        .handlers(
+            |_, a| simple("chat.changes", format!("what conversation {} changed", a.thread)),
+            |ctx, a| {
+                let t = ctx.store
+                    .get_thread(&a.thread)?
+                    .ok_or_else(|| DevdError::not_found("no such conversation"))?;
+                let dir = t
+                    .workdir
+                    .clone()
+                    .filter(|d| std::path::Path::new(d).is_dir())
+                    .or_else(|| t.project.clone())
+                    .ok_or_else(|| {
+                        DevdError::invalid(
+                            "this conversation has no project, so there is nothing for it to have changed",
+                        )
+                    })?;
+                let s = crate::ship::changes(std::path::Path::new(&dir))?;
+                let files: Vec<Value> = s
+                    .files
+                    .iter()
+                    .map(|f| {
+                        json!({
+                            "path": f.path,
+                            "state": format!("{}{}", f.index, f.work).trim().to_string(),
+                            "words": f.words(),
+                            "staged": f.staged(),
+                        })
+                    })
+                    .collect();
+                Ok(Outcome::with_data(
+                    s.line(),
+                    json!({
+                        "thread": a.thread,
+                        "workdir": dir,
+                        "branch": s.branch,
+                        "upstream": s.upstream,
+                        "ahead": s.ahead,
+                        "behind": s.behind,
+                        "clean": s.clean(),
+                        "files": files,
+                    }),
+                ))
+            },
+        )?;
+    reg.define::<ShipArgs>("chat.pr", "Open a pull request for this conversation")
+        .description("Opens the pull request a conversation's branch becomes, through the GitHub CLI, and links it to the conversation. The branch must already be pushed: a review is of commits the host can see. Without a title the host fills the title and body from the commits themselves. Remote, so a person approves it.")
+        .tier(Tier::Remote)
+        .effect(Effect::Remote)
+        .agent_safe()
+        .dry_run()
+        .handlers(
+            |_, a| simple("chat.pr", format!("open a pull request for conversation {}", a.thread)),
+            |ctx, a| {
+                let t = ctx.store
+                    .get_thread(&a.thread)?
+                    .ok_or_else(|| DevdError::not_found("no such conversation"))?;
+                let dir = t
+                    .workdir
+                    .clone()
+                    .filter(|d| std::path::Path::new(d).is_dir())
+                    .or_else(|| t.project.clone())
+                    .ok_or_else(|| {
+                        DevdError::invalid("this conversation has no project, so it has no branch to review")
+                    })?;
+                let title = a.title.as_deref().map(str::trim).filter(|t| !t.is_empty());
+                let url = crate::ship::open_pr(std::path::Path::new(&dir), title, a.body.as_deref())?;
+                ctx.store.set_thread_pr(&a.thread, Some(&url))?;
+                ctx.events.emit_with(
+                    "chat.event",
+                    format!("conversation {} opened a pull request", a.thread),
+                    json!({ "thread": a.thread, "kind": "pr", "url": url }),
+                );
+                Ok(Outcome::with_data(
+                    format!("Opened {url}"),
+                    json!({ "thread": a.thread, "url": url }),
                 ))
             },
         )?;

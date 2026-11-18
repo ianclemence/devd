@@ -83,6 +83,7 @@ pub mod web;
 pub mod templates;
 pub mod workflows;
 pub mod worktree;
+pub mod ship;
 
 pub use chat::Hub;
 pub use needs::Needs;

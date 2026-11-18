@@ -822,6 +822,27 @@ as it was until someone merges the branch.
 The folder is kept out of the project's status through `.git/info/exclude`, the same way the team's
 worktrees are, so `git status` in the project stays clean while a conversation works.
 
+## Shipping what a conversation did
+
+The loop from a change to a review has three steps, and each one is a real surface rather than a
+copy of one:
+
+1. **Review.** The **Changes** action in a conversation's header opens the project's own Git screen
+   on the folder the conversation works in — the worktree when it has one, the project otherwise.
+   Staging, per-file diffs, the commit message, pull and push are the same screen a person uses for
+   any project, so the two cannot drift.
+2. **Report.** `chat.changes` is the same fact as data: one entry per path with its status and
+   whether it is staged, the branch and its upstream, and how many commits are ahead or behind.
+   The window uses it to say what is waiting; an agent reads it before it says what it did.
+3. **Review the branch.** `chat.pr` opens the pull request a pushed branch becomes, through the
+   GitHub CLI, and links it to the conversation. A branch that has not been pushed is refused with
+   that reason: a review is of commits the host can see. Without a title the host fills the title
+   and body from the commits, so the review starts from what actually changed. It is remote, so a
+   person approves it, and the header then shows the pull request as a link.
+
+The branch is not forced on anyone: a conversation in the project's own folder can be reviewed and
+committed the same way, minus the isolation.
+
 ## Deleting conversations, runs and messages
 
 Nothing is deleted on its own; a person decides, and every deletion asks for
